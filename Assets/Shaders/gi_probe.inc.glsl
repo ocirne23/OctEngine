@@ -570,6 +570,56 @@ vec3 evalProbeVolumeCoverage(vec3 worldPos, vec3 n, out float coverage)
 }
 #endif
 
+#ifdef GI_PROBE_HALF
+// ---- fp16 read side ----------------------------------------------------------------------------------
+// The shading-side reads for includers whose shading is half (define GI_PROBE_HALF and enable
+// GL_EXT_shader_explicit_arithmetic_types): half normal in, half irradiance out, so a half caller converts
+// nothing. Irradiance here is sky + bounce light, single digits: well inside the half range.
+// The CASCADE WALK stays 32-bit inside (evalProbeVolumeCoverage): measured on the RTX 4090, a half walk -
+// half fetch results, half SH basis, half cascade blend, in every combination - cost the lit FS 16 B/thread
+// of spills (64/32 -> 64/48) against the 32-bit walk with the result converted once. The sky SH read is half
+// (measured neutral; the reflection fog shares it).
+f16vec4 giIrradianceBasisH(f16vec3 n)
+{
+    const float16_t A0Y = float16_t(0.282095 * PI);
+    const float16_t A1Y = float16_t(0.488603 * 2.0 * PI / 3.0);
+    return f16vec4(A0Y, A1Y * n.y, A1Y * n.z, A1Y * n.x);
+}
+f16vec3 giEvalSHH(f16vec3 c0, f16vec3 c1, f16vec3 c2, f16vec3 c3, f16vec3 n)
+{
+    const f16vec4 Yk = giIrradianceBasisH(n);
+    return max(c0 * Yk.x + c1 * Yk.y + c2 * Yk.z + c3 * Yk.w, f16vec3(0.0));
+}
+#ifdef GI_VOLUME_TEXTURES_NAME
+f16vec3 giEvalSkySHH(f16vec3 n)
+{
+    const f16vec4 p0 = f16vec4(texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(0, 0, 0), 0));
+    const f16vec4 p1 = f16vec4(texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(1, 0, 0), 0));
+    const f16vec4 p2 = f16vec4(texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(2, 0, 0), 0));
+    return giEvalSHH(p0.xyz, f16vec3(p0.w, p1.xy), f16vec3(p1.zw, p2.x), p2.yzw, n);
+}
+#else
+f16vec3 giEvalSkySHH(f16vec3 n) { return f16vec3(giEvalSkySH(vec3(n))); }
+#endif
+// The probe-field indirect irradiance / pi at a half-shaded point, faded to the sky SH over the field's edge:
+// the whole block every half caller runs (computeLitColor, the ocean's hits, the film's mirror).
+f16vec3 giIndirectOverPiH(vec3 worldPos, f16vec3 n)
+{
+    // 32-bit to the end, converted once (measured: a half coverage / sky blend here cost the lit FS 16 B).
+    const vec3 n32 = vec3(n);
+    float coverage;
+#ifdef GI_VOLUME_TEXTURES_NAME
+    const vec3 E = evalProbeVolumeCoverage(worldPos, n32, coverage);
+#else
+    const vec3 E = evalProbeSHCoverage(worldPos, n32, coverage);
+#endif
+    vec3 indirect = E.x >= 0.0 ? E * INV_PI : vec3(0.0);
+    if (coverage < 1.0)
+        indirect = mix(giEvalSkySH(n32) * INV_PI, indirect, coverage);
+    return f16vec3(indirect);
+}
+#endif // GI_PROBE_HALF
+
 // Debug visualization: hue = cascade (red=0 finest .. yellow=coarsest), brightness checkerboarded per probe.
 vec3 giDebugColor(vec3 worldPos, vec3 n)
 {

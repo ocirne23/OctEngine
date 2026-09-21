@@ -271,8 +271,7 @@ bool Device::initialize()
     if (pipelineExecutableProperties)
     {
         m_pfnGetPipelineExecutableProperties = (PFN_vkGetPipelineExecutablePropertiesKHR)m_device.getProcAddr("vkGetPipelineExecutablePropertiesKHR");
-        m_pfnGetPipelineExecutableStatistics = (PFN_vkGetPipelineExecutableStatisticsKHR)m_device.getProcAddr("vkGetPipelineExecutableStatisticsKHR");
-        if (!m_pfnGetPipelineExecutableProperties)
+        m_pfnGetPipelineExecutableStatistics = (PFN_vkGetPipelineExecutableStatisticsKHR)m_device.getProcAddr("vkGetPipelineExecutableStatisticsKHR");        if (!m_pfnGetPipelineExecutableProperties)
             m_pfnGetPipelineExecutableStatistics = nullptr; // capturePipelineStatistics() checks only this one
     }
 

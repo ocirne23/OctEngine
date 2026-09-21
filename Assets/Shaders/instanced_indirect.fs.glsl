@@ -46,34 +46,36 @@ void main()
 		discard;
 #endif
 
-	float roughness = 0.65;
-	float metalness = 0.0;
+	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
+	// metalness and the normal-map decode + TBN.
+	float16_t roughness = float16_t(0.65);
+	float16_t metalness = float16_t(0.0);
 	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
 	{
-		const vec2 metalRoughness = texture(u_textures[metalRoughnessTexIdx], uv).bg;
+		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], uv).bg);
 		metalness = metalRoughness.x;
-		roughness = max(metalRoughness.y, 0.01);
+		roughness = max(metalRoughness.y, float16_t(0.01));
 	}
 
-	const vec3 materialColor = diffuseSample.xyz;
+	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
 	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
-	const vec3 normalSample = texture(u_textures[normalTexIdx], uv).xyz;
-	vec3 tangentNormal;
+	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], uv).xyz);
+	f16vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
 	{
-		const vec2 normalXY = normalSample.xy * 2.0 - 1.0;
-		tangentNormal = vec3(normalXY, sqrt(max(1.0 - dot(normalXY, normalXY), 0.0)));
+		const f16vec2 normalXY = normalSample.xy * float16_t(2.0) - float16_t(1.0);
+		tangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
 	}
 	else
 	{
-		tangentNormal = normalize(normalSample * 2.0 - 1.0);
+		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
 	}
-	const vec3 geoN = in_normalV.xyz;
-	const vec3 T = in_tangent.xyz;
-	const vec3 B = cross(geoN, T) * (in_tangent.w < 0.0 ? -1.0 : 1.0);
-	const vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+	const f16vec3 geoN = f16vec3(in_normalV.xyz);
+	const f16vec3 T = f16vec3(in_tangent.xyz);
+	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
+	const f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
 
-	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, 1.0);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 }

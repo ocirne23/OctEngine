@@ -19,8 +19,10 @@
 // climate, no noise, no shadowing. In-scatter is the far field's single-scatter collapse: lighting constant
 // over the path, so the integral is 1 - T.
 //
-// Needs the UBO, PI (shared.inc.glsl) and gi_probe.inc.glsl. sunRadiance = the caller's sun tint
-// (transmittance x colour x eclipse), ambientSky = its skyRadiance(up) fetch (the GI-off fallback).
+// Needs the UBO, PI (shared.inc.glsl) and gi_probe.inc.glsl WITH GI_PROBE_HALF (+ the fp16 extension): the
+// blend is half math, on the half sky SH read. The optical depths stay 32-bit (heights, distances).
+// sunRadiance = the caller's sun tint (transmittance x colour x eclipse), ambientSky = its skyRadiance(up)
+// fetch (the GI-off fallback).
 
 #ifndef REFLECTION_FOG_INC_GLSL
 #define REFLECTION_FOG_INC_GLSL
@@ -62,9 +64,10 @@ vec3 reflectionFogBlend(vec3 radiance, float tau, vec3 dir, vec3 sunRadiance, ve
     // The far field's light (vol_apply volFarField): HG-phased sun + the GI sky probe toward the viewer.
     // Not skyRadiance(up) - the zenith is the darkest patch of a sunlit sky - except with GI off, where
     // u_aoParams.y is 0 and the SH is stale.
-    const vec3 skyLight = u_aoParams.y > 0.0 ? giEvalSkySH(-dir) * (u_aoParams.y / PI) : ambientSky;
-    const vec3 inLight = sunRadiance * volPhaseHG(dot(dir, L), u_fogParams1.w) + skyLight + u_ambientColor;
-    return radiance * T + u_fogParams1.rgb * inLight * (1.0 - T);
+    const f16vec3 skyLight = u_aoParams.y > 0.0 ? giEvalSkySHH(f16vec3(-dir)) * float16_t(u_aoParams.y * INV_PI) : f16vec3(ambientSky);
+    const f16vec3 inLight = f16vec3(sunRadiance * volPhaseHG(dot(dir, L), u_fogParams1.w)) + skyLight + f16vec3(u_ambientColor);
+    const float16_t Th = float16_t(T);
+    return vec3(f16vec3(radiance) * Th + f16vec3(u_fogParams1.rgb) * inLight * (float16_t(1.0) - Th));
 }
 
 // shown = the point the ray shows, baseShown = the base there.

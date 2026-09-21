@@ -75,6 +75,9 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
   `App.exe --profile-after <sec> --quit-after <sec> --no-vsync --tweak ...`, and prints the text
   report. This is Claude's measure → change → re-measure loop; the user does not need to be at the
   screen. **Always `-Config RelWithDebInfo`.**
+* **Shader fp16 work:** `Tools/fp16conv.ps1 <shader>.glsl` lists every fp16 <-> fp32 conversion in the
+  shader's SPIR-V dump by source line (glslang never warns about implicit widening). Rules and results in
+  "Half floats" in [`Code/RendererVK/CONTEXT.md`](../Code/RendererVK/CONTEXT.md).
 * No test suite, no linter. Verifying = it compiles, plus the user runs it.
 
 ### Global compile flags

@@ -91,6 +91,7 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 #include "light_grid.inc.glsl"
 
 #define GI_GRID_DATA_NAME      gi_gridData
+#define GI_PROBE_HALF // the fp16 read side (computeLitColor's indirect term is half)
 #include "gi_probe.inc.glsl"
 
 #include "rt_shadow.inc.glsl"
@@ -119,16 +120,18 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 // >= this sentinel = not provided -> fetch it. Default keeps every other lit variant unchanged.
 const float WATER_LEVEL_UNSET = 1e30;
 float g_waterLevelOverride = WATER_LEVEL_UNSET;
-// The sun radiance doSunLight last resolved for this pixel - transmittance, colour, eclipse, shadow
-// visibility (PCSS / RT / terrain march) and the underwater transmittance all applied. A material that
-// adds a second lobe after computeLitColor (the terrain's water film) lights it with THIS through
-// doLight, instead of paying the shadow evaluation again.
-vec3 g_sunRadiance = vec3(0.0);
-// The same BEFORE the underwater factor (no caustic focus, no Beer-Lambert): the sun as it arrives at
-// the water SURFACE above this pixel. A lobe that sits on the surface (the terrain's water film glint
-// and whitewater) is lit with this - with g_sunRadiance the ground's caustic pattern rode into the
-// film's specular and showed as warped caustics on every filmed pixel under a wave.
-vec3 g_sunRadianceSurface = vec3(0.0);
+// The sun's shadow visibility x eclipse that doSunLight resolved for this pixel (PCSS / RT / terrain
+// march), BEFORE the underwater factor (no caustic focus, no Beer-Lambert): the sun as it arrives at the
+// water SURFACE above this pixel. A material that adds a lobe on that surface after computeLitColor (the
+// terrain's water film glint and whitewater) lights it with sunSurfaceRadiance() instead of paying the
+// shadow evaluation again - with the underwater factor the ground's caustic pattern rode into the film's
+// specular and showed as warped caustics on every filmed pixel under a wave. One HALF scalar, not the
+// radiance: it is live across computeLitColor's whole light loop. 0 = sun behind the surface.
+float16_t g_sunVisSurface = float16_t(0.0);
+vec3 sunSurfaceRadiance()
+{
+	return u_sunTransmittance * u_sunColor.rgb * float(g_sunVisSurface);
+}
 // Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data),
 // resolved by doSunLight for every pixel - the same test that gates the caustics/absorption, published
 // so the terrain's water film can gate on it too (ground under the live surface is the ocean's to draw).
@@ -169,8 +172,9 @@ void resolveLiveDepth(vec3 worldPos)
 	g_liveWaterLevel = localWaterLevel;
 }
 
-vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
+	const vec3 N = vec3(Nh); // the facing test and the shadow's normal offset
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
 	if (dot(N, L) <= 0.0)
 		return vec3(0.0);
@@ -205,15 +209,15 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matC
 		}
 	}
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
-	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * u_eclipseParams.x);
-	g_sunRadianceSurface = lightRadiance;
+	visibility *= u_eclipseParams.x;
+	g_sunVisSurface = float16_t(visibility);
+	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * visibility;
 	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption
 	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
 	// the live depth resolved above.
 	if (depthBelow > 0.0)
 		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
-	g_sunRadiance = lightRadiance;
-	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+	return doLightH(lightRadiance, f16vec3(L), V, Nh, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
 // Depth-aware 2x2 upsample of LAST FRAME's half-res AO/bent-normal image, reprojected. The AO is traced
 // from the scene depth, which this pass is still writing - so this pass reads the previous frame's AO
@@ -272,23 +276,26 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 // Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun
 // (with underwater caustics) and the clustered light grid. texAO multiplies only the ambient/indirect
 // term (baked texture AO on top of the screen-space term - pass 1.0 when the material carries none).
-vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float roughness, float metalness, float texAO)
+// The surface arrives HALF (N, colour, roughness = GGX alpha >= 0.01, metalness, AO): the direct-light BRDF
+// is half math end to end (punctual_lights.inc.glsl, the fp16 BRDF), and so is the ambient/indirect term.
+// Only V converts here; no 32-bit copy of the surface exists to stay live across the sun's shadow search.
+vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
-	// The BRDF's colour inputs are HALF and computed in half math, like the colour side of the BRDF itself
-	// (punctual_lights.inc.glsl FresnelSchlick): colours in [0, 1].
-	const f16vec3 materialColorH = f16vec3(materialColor);
-	const f16vec3 specularColor  = mix(f16vec3(0.04), materialColorH, float16_t(metalness));
-	const float roughnessSq = roughness * roughness;
+	const f16vec3 V = f16vec3(Vf);
+	const f16vec3 specularColor = mix(f16vec3(0.04), materialColor, metalness);
 	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so the BRDF's
 	// kD = (1 - F) * (1 - 0) and metalness is not live across the light loop (one register fewer).
-	const f16vec3 diffuseColOverPi = materialColorH * float16_t(INV_PI * (1.0 - metalness));
+	const f16vec3 diffuseColOverPi = materialColor * (float16_t(INV_PI) * (float16_t(1.0) - metalness));
 
 	// The sun FIRST: its shadow search (PCSS taps or the ray-query loop) is the likely register peak, and
 	// here no AO / GI result is live across it yet.
-	vec3 color = doSunLight(worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughness, roughnessSq);
+	// The accumulator is HALF (the scene colour target is RGBA16F): live from here across the GI read and the
+	// whole light loop. Each light's radiance is unbounded, so it is clamped to the half range as it lands.
+	f16vec3 colorH = f16vec3(min(doSunLight(worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH), vec3(MEDIUMP_FLT_MAX)));
 
-	float ao = 1.0;
-	vec3 bentN = N;
+	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
+	float16_t ao = float16_t(1.0);
+	f16vec3 bentN = N;
 	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (0, 1.0) - no occlusion, no
 	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
@@ -299,29 +306,21 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(gl_FragCoord.xy * u_screenSize.zw, worldPos, aoViewDist);
-		ao = aoSample.w;
+		ao = float16_t(aoSample.w);
 		// Evaluate the indirect irradiance along the bent normal rather than the surface normal: in concave
 		// areas it points toward the open hemisphere, so the low-frequency probe SH stops leaking light from
 		// occluded directions. Mix partway toward N so flat, unoccluded surfaces are left untouched.
 		// A zero bent normal = none (past the trace's range, fully occluded, or no history): keep N.
 		const float bentLen2 = dot(aoSample.xyz, aoSample.xyz);
 		if (bentLen2 > 1e-6)
-			bentN = normalize(mix(N, aoSample.xyz * inversesqrt(bentLen2), 0.75));
+			bentN = normalize(mix(bentN, f16vec3(aoSample.xyz * inversesqrt(bentLen2)), float16_t(0.75)));
 	}
 	// Blend to the virtual sky probe over the probe field's outer band (coverage) instead of stepping
 	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.
-	float giCoverage;
-#ifdef GI_VOLUME
-	const vec3 indirectE = evalProbeVolumeCoverage(worldPos, bentN, giCoverage); // ~8 filtered fetches, not ~100 probe loads
-#else
-	const vec3 indirectE = evalProbeSHCoverage(worldPos, bentN, giCoverage);
-#endif
-	vec3 indirect = (indirectE.x >= 0.0) ? (indirectE * INV_PI) : vec3(0.0);
-	if (giCoverage < 1.0)
-		indirect = mix(giEvalSkySH(bentN) * INV_PI, indirect, giCoverage);
+	// Volume mode: ~8 filtered fetches, not ~100 probe loads.
+	const f16vec3 indirect = giIndirectOverPiH(worldPos, bentN);
 	// indirect * strength + ambient, times AO: two scalar folds fewer than the previous grouping.
-	ao *= texAO;
-	color += materialColor * ((indirect * u_aoParams.y + u_ambientColor) * ao);
+	colorH += materialColor * ((indirect * float16_t(u_aoParams.y) + f16vec3(u_ambientColor)) * (ao * texAO));
 
 	const ivec3 gridPos = getGridPos(worldPos);
     uint tableIdx = getTableIdx(gridPos);
@@ -353,7 +352,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 			{
 				const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
 				const LightInfo light = in_lightInfos[lightId];
-				color += doLightShadowed(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughness, roughnessSq);
+				colorH = min(colorH + f16vec3(min(doLightShadowed(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH), vec3(MEDIUMP_FLT_MAX))), f16vec3(MEDIUMP_FLT_MAX));
 #if LIGHT_GRID_DEBUG == 3
 				if (distance(worldPos, light.pos) < abs(light.range))
 					debugRangeTint += vec3(0.0, 0.0, 0.08);
@@ -367,6 +366,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 		tableIdx = getNextTableIdx(tableIdx);
 	}
 
+	vec3 color = vec3(colorH);
 #if LIGHT_GRID_DEBUG == 1 // one random colour per grid (the coarse hash-table entry)
 	color = mix(color, randomColor(gridPos), 0.4);
 #elif LIGHT_GRID_DEBUG == 2 // light count heat: green (1) -> red (the cell cap); magenta = no grid entry
@@ -381,7 +381,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	color += debugRangeTint + vec3(0.0, 0.0, 0.02);
 #endif
 #if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
-	color = shadowDebugOverlay(color, worldPos, N); // "Shadows/Debug mode": baked, see shadows.inc.glsl
+	color = shadowDebugOverlay(color, worldPos, vec3(N)); // "Shadows/Debug mode": baked, see shadows.inc.glsl
 #endif
 	return color;
 }

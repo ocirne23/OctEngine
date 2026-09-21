@@ -53,7 +53,8 @@ public:
     // occupancy - instruction count, ...). "Renderer/Log pipeline stats" (not Saved; the Renderer registers
     // it before the device exists, and F5 re-creates the pipelines): pipelines created while it is on carry
     // CAPTURE_STATISTICS, and logPipelineStatistics writes one line per stage to the log and to
-    // Local/pipeline_stats.txt (appended since startup; a reload appends a new block).
+    // Local/pipeline_stats.txt (appended since startup; a reload appends a new block). (Internal
+    // representations: the NVIDIA driver returns none - tried 2026-09-22 - so there is no SASS dump here.)
     static inline bool s_logPipelineStats = false;
     bool capturePipelineStatistics() const { return s_logPipelineStats && m_pfnGetPipelineExecutableStatistics; }
     void logPipelineStatistics(vk::Pipeline pipeline, const char* name);
@@ -75,8 +76,7 @@ private:
     PFN_vkCmdBeginDebugUtilsLabelEXT m_pfnBeginDebugLabel = nullptr;
     PFN_vkCmdEndDebugUtilsLabelEXT m_pfnEndDebugLabel = nullptr;
     PFN_vkGetPipelineExecutablePropertiesKHR m_pfnGetPipelineExecutableProperties = nullptr;
-    PFN_vkGetPipelineExecutableStatisticsKHR m_pfnGetPipelineExecutableStatistics = nullptr;
-    std::mutex m_pipelineStatsMutex;
+    PFN_vkGetPipelineExecutableStatisticsKHR m_pfnGetPipelineExecutableStatistics = nullptr;    std::mutex m_pipelineStatsMutex;
     oc::string m_pipelineStatsText;
 
     oc::vector<vk::Format> m_supported2DOptimalFormats;

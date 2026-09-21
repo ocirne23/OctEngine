@@ -742,26 +742,55 @@ block). Unattended: `App.exe --quit-after 20 --tweak "Renderer/Log pipeline stat
 * Measure **RelWithDebInfo** for real numbers: Debug adds `SHADER_STATS` to the cull shaders.
 * Compute and graphics pipelines (every variant) report under their debug name; ImGui's do not.
 
-## Half floats (fp16) - measured on the RTX 4090, 2026-09-21
+## Half floats (fp16) - measured on the RTX 4090, 2026-09-21/22
 
-* **16-bit STORAGE of data that is streamed pays; fp16 MATH / stored halves do not.** On Ampere/Ada plain
-  fp16 math runs at the fp32 rate, and a half that is only stored (math still fp32) is NOT packed: it takes
-  a full 32-bit register. Halving the lit core's surface values (colours, roughness) left registers x 4 +
-  local memory unchanged (352 B/thread) - the driver only moved the register/spill split (72 -> 80 regs).
-  Layout (f16vec3 vs f16vec4) and where glslang puts the OpFConvert made no difference at all.
-* **Kept: the BRDF colour side is REAL fp16 math** (`punctual_lights.inc.glsl`, `computeLitColor`):
-  Fresnel, kD, the diffuse colour and the specular colour factor stay f16vec3 from the material inputs and
-  widen ONCE, where they multiply the fp32 radiance. Lit FS local memory 64 -> 48 B (72 regs); terrain and
-  ocean unchanged. The GGX D / visibility terms, NdotL/HdotV and all radiance stay fp32 (roughness^4
-  underflows in half, HDR overflows). Every caller of `doLight*` needs
-  `GL_EXT_shader_explicit_arithmetic_types`.
-* **Kept: the ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x
-  per frame, memory-bound; Ocean sim 0.216 -> 0.179 ms. The butterflies stay fp32 in shared memory.
-* **Tried and dropped** (no gain): the terrain splat's TerrainSample in half; a compact half LightInfo (the
-  compiler loads light fields at use, so the record size does not set the peak); a D16 shadow map (Shadow
-  draw unchanged - geometry-bound, D32 is compressed). **Not worth it:** the GI probe buffer (in volume mode
-  only the trace and the bake read it, and it is the fp32 temporal HISTORY - fp16 would round small blend
-  steps away), BakedWorldMap (heights need fp32), vertex attributes (vertex work is tiny).
+The shading of the lit, terrain and ocean fragment shaders is **fp16 math in whole blocks**; positions, UVs,
+depths, ray origins / directions, ray-query and hit-attribute data stay fp32. Measure with the pipeline
+stats (registers x 4 + local memory per thread); list the fp16 <-> fp32 conversions with
+**`Tools/fp16conv.ps1 <shader>.glsl`** (every OpFConvert by source line - glslang never warns about an
+implicit `float16_t -> float` widening). Totals (regs/local, B/thread), start -> now:
+lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 (368) -> 80/16 (336).
+
+* **The rules that came out of it:**
+  * A half that is only STORED (math still fp32) gains nothing: it is not packed, it takes a full 32-bit
+    register, and the conversions add temporaries. Only whole blocks of fp16 MATH pay.
+  * A value must not be live in BOTH precisions across a peak (a ray query, PCSS, the light loop): convert
+    once, before it, and keep only the half copy (e.g. `computeLitColor` takes the surface half).
+  * **Fold before the peak.** The ocean top side and the terrain film are LINEAR in their traced radiances:
+    `final = body * bodyWeight + mirror * mirrorWeight + C`, so the glint, SSS, turbidity, the blur's sky
+    share and the foam fold into one half `C` BEFORE the traces (see both shaders).
+  * **One light loop per shader** (large + cell lights in one loop): every `doLightShadowed` call inlines
+    all light types plus the shadow ray query. Merging the ocean's and the film's double loops cut 36-40 KB
+    of code each.
+  * The scene colour target is RGBA16F, so radiance may be half where it is bounded; a light's radiance is
+    not, so it is clamped to 65504 as it lands in a half accumulator.
+  * The driver moves its register/spill split by +-16 B on neutral changes (e.g. the order of two
+    independent blocks) - a 16 B difference needs a bisect before it means anything.
+* **The direct-light BRDF** (`punctual_lights.inc.glsl`, the `*H` copies beside the fp32 functions): N, V,
+  L, H, the dots, GGX D + visibility, Fresnel and the colour factors; each light's factor widens once, at
+  the multiply with its fp32 radiance. GGX D is Filament's fp16 form: `1 - NoH^2` as `|N x H|^2` (no
+  cancellation near the peak) and the square after the divide (alpha^4 never forms), clamped to 65504.
+  **Alpha must be >= 0.01** (the lit FS, the splat and the film clamp it).
+* **The lit core:** `computeLitColor(worldPos, V, f16vec3 N, f16vec3 albedo, float16_t alpha, metalness,
+  AO)`, a half accumulator, half AO / bent normal. `g_sunVisSurface` (one half scalar; the film rebuilds the
+  surface sun radiance with `sunSurfaceRadiance()`) replaced two fp32 vec3 globals that were live across the
+  whole light loop.
+* **The terrain splat** (`terrain_splat.inc.glsl`) is half: samples, coverages, blend weights, normals.
+  The climate match and the crag fBm hash stay fp32.
+* **GI:** `GI_PROBE_HALF` (defined by the lit core and the ocean) adds the half interface
+  `giIndirectOverPiH(worldPos, f16vec3 n)` and `giEvalSkySHH`. **The cascade walk inside stays fp32:** a half
+  walk (half fetch results, half SH basis, half cascade blend - every combination tried) cost the lit FS
+  16 B/thread against the fp32 walk converted once. The reflection fog's blend is half on `giEvalSkySHH`.
+* **The ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x per
+  frame, memory-bound; Ocean sim 0.216 -> 0.179 ms. The butterflies stay fp32 in shared memory.
+* **Where the peaks are now** (bisected): terrain without the water film is 72/16 - the film's MIRROR ray
+  query (traversal + alpha test + hit fetch, fp32-bound) is the terrain's peak; the ocean's seabed splat
+  costs 16 B. NVIDIA returns no internal representations (no SASS) through
+  `VK_KHR_pipeline_executable_properties`, so bisecting is the only way to locate a peak.
+* **Tried and dropped:** a compact half LightInfo (the compiler loads light fields at use); a D16 shadow map
+  (geometry-bound, D32 is compressed); the film's lights before its mirror (N / V then live across the
+  lights' own ray-query peak: 368 vs 352 B). **Not worth it:** the GI probe buffer (the fp32 temporal
+  HISTORY - fp16 would round small blend steps away), BakedWorldMap (heights), vertex attributes.
 
 ## The graphics-queue mutex
 

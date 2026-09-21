@@ -82,6 +82,7 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
+#define GI_PROBE_HALF // the fp16 read side (shadeHit)
 #include "gi_probe.inc.glsl"
 
 #include "rt_shadow.inc.glsl"
@@ -139,6 +140,20 @@ float F_Schlick(float u, float f0)
     float x = clamp(1.0 - u, 0.0, 1.0);
     float x2 = x * x;
     return f0 + (1.0 - f0) * (x2 * x2 * x);
+}
+// fp16 copies for the top side's shading block (GGX D is punctual_lights.inc.glsl's D_GGX_H).
+float16_t V_SmithGGX_H(float16_t NoV, float16_t NoL, float16_t a)
+{
+    const float16_t a2 = a * a;
+    const float16_t ggxV = NoL * sqrt(NoV * NoV * (float16_t(1.0) - a2) + a2);
+    const float16_t ggxL = NoV * sqrt(NoL * NoL * (float16_t(1.0) - a2) + a2);
+    return float16_t(0.5) / max(ggxV + ggxL, float16_t(1e-4));
+}
+float16_t F_SchlickH(float16_t u, float16_t f0)
+{
+    const float16_t x = clamp(float16_t(1.0) - u, float16_t(0.0), float16_t(1.0));
+    const float16_t x2 = x * x;
+    return f0 + (float16_t(1.0) - f0) * (x2 * x2 * x);
 }
 // Geometric specular AA. Weight/cap deliberately far below the usual 0.5/0.18: a full-strength term
 // re-widens the lobe by exactly what "Glint sharpness" reveals (cancelling the knob), and water wants
@@ -203,13 +218,13 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     }
     waterLevel = f.waterLevel;
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
-    vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
+    f16vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
     // full wetness (damp x standing film - instanced_indirect_terrain.fs.glsl), so the sand seen through
     // the water and the wet sand the water just left are the same colour at the waterline.
     if (u_terrainWetParams2.x > 0.5)
-        albedo *= u_terrainWetParams5.y * u_terrainWetParams2.y;
-    return albedo;
+        albedo *= float16_t(u_terrainWetParams5.y * u_terrainWetParams2.y);
+    return vec3(albedo);
 }
 
 // underwater: the hit sits in the water column, so its calm level is fetched for shadeHit's absorption
@@ -280,25 +295,19 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, bool underwater, out SceneHit
 // Analytic only - no shadow rays inside what is already a refraction/reflection ray.
 vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
 {
-    const vec3 sun = sunRadiance * max(dot(hit.N, L), 0.0);
-    float giCoverage;
-#ifdef GI_VOLUME
-    const vec3 probeE = evalProbeVolumeCoverage(hit.pos, hit.N, giCoverage);
-#else
-    const vec3 probeE = evalProbeSHCoverage(hit.pos, hit.N, giCoverage);
-#endif
-    vec3 indirect = probeE.x >= 0.0 ? probeE / PI : vec3(0.0);
-    if (giCoverage < 1.0)
-        indirect = mix(giEvalSkySH(hit.N) / PI, indirect, giCoverage);
-    indirect *= u_aoParams.y;
+    // Half shading (the hit's colour terms, the GI read, the column absorption), widened once at the end.
+    const f16vec3 hitN = f16vec3(hit.N);
+    const f16vec3 albedo = f16vec3(hit.albedo);
+    const f16vec3 sunOverPi = f16vec3(sunRadiance * (max(dot(hit.N, L), 0.0) * INV_PI));
+    const f16vec3 indirect = giIndirectOverPiH(hit.pos, hitN) * float16_t(u_aoParams.y);
     // Ambient/GI reaching an underwater hit must Beer-Lambert down the column too - the probes don't
     // know about the water (it's not in the TLAS), so the seabed would read open-air-lit at any depth.
-    const vec3 ambientAtten = exp(-u_oceanAbsorption.rgb * max(hit.waterLevel - hit.pos.y, 0.0));
-    vec3 radiance = hit.albedo * (sun / PI + (indirect + u_ambientColor) * ambientAtten);
+    const f16vec3 ambientAtten = f16vec3(exp(-u_oceanAbsorption.rgb * max(hit.waterLevel - hit.pos.y, 0.0)));
+    vec3 radiance = vec3(albedo * (sunOverPi + (indirect + f16vec3(u_ambientColor)) * ambientAtten));
 
 #ifdef OCEAN_HIT_LIGHTS
-    const f16vec3 matColOverPi = f16vec3(hit.albedo / PI); // half: the BRDF colour side (punctual_lights.inc.glsl)
-    const vec3 V = -rayDir;
+    const f16vec3 matColOverPi = albedo * float16_t(INV_PI); // half: the BRDF colour side (punctual_lights.inc.glsl)
+    const f16vec3 V = f16vec3(-rayDir);
     const ivec3 gridPos = getGridPos(hit.pos);
     uint tableIdx = getTableIdx(gridPos);
     while (true)
@@ -309,13 +318,15 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
         const ivec3 gridMin = getGridMin(gridIdx);
         if (gridMin == gridPos)
         {
-            const uint numLargeLights = getLargeLightCount(gridIdx);
-            for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-                radiance += doLight(in_lightInfos[getLargeLightId(gridIdx, i)], hit.pos, V, hit.N, f16vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
-            const uint cellOffset = calcCellOffset(gridIdx, gridMin, hit.pos);
-            const uint numLights = getNumLightsForCell(cellOffset);
-            for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                radiance += doLight(in_lightInfos[getLightId(cellOffset, i)], hit.pos, V, hit.N, f16vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
+            // ONE loop over large + cell lights: each loop inlines every light type.
+            const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+            const uint cellOffset     = calcCellOffset(gridIdx, gridMin, hit.pos);
+            const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+            for (uint i = 0; i < numLights; ++i)
+            {
+                const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
+                radiance += doLight(in_lightInfos[lightId], hit.pos, V, hitN, f16vec3(0.04), matColOverPi, 0.0, float16_t(0.7));
+            }
             break;
         }
         tableIdx = getNextTableIdx(tableIdx);
@@ -563,12 +574,6 @@ void main()
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
         N = -N;
 
-    const float NoV = clamp(dot(N, V), 1e-3, 1.0);
-    const float NoL = max(dot(N, L), 0.0);
-    const vec3  H   = normalize(L + V);
-    const float NoH = max(dot(N, H), 0.0);
-    const float LoH = max(dot(L, H), 0.0);
-
     // Microfacet roughness = base + spec AA + LEAN slope variance (both scaled by "Glint filtering")
     // + the sub-grid capillary band + turbulence micro-roughness. The variance terms stretch the sun
     // glitter toward the horizon.
@@ -584,40 +589,87 @@ void main()
     const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
         + (normalVariance(N) + 2.0 * slopeVariance) * u_oceanParams6.y + 2.0 * microVariance
         + turbulence * u_oceanParams5.y * 0.35;
-    const float alphaF = clamp(sqrt(alphaSq), 0.02, 1.0);
+
+    // From here the top side shades in HALF math: the vectors, the dots, the roughness, the ray weights
+    // and the colours (the scene colour is RGBA16F and the sun intensity is single digits, so the radiance
+    // fits). Positions, ray origins and the traced ray directions stay 32-bit (widened from the half
+    // N / V), and each traced result converts to half ONCE. The scene lights accumulate in 32-bit (a
+    // light's radiance has no bound).
+    const float16_t alphaF = float16_t(clamp(sqrt(alphaSq), 0.02, 1.0));
+    // "Reflection max rough"'s gate value (see the mirror below), resolved here so alphaSq dies before the body trace.
+    const float alphaGate = sqrt(max(alphaSq - 2.0 * microVariance, 0.0));
+    const f16vec3 Nh = f16vec3(N);
+    const f16vec3 Vh = f16vec3(V);
+    const f16vec3 Lh = f16vec3(L);
+    const f16vec3 Hh = normalize(Lh + Vh);
+    const float16_t NoV = clamp(dot(Nh, Vh), float16_t(1e-3), float16_t(1.0));
+    const float16_t NoL = max(dot(Nh, Lh), float16_t(0.0));
+    const float16_t NoH = max(dot(Nh, Hh), float16_t(0.0));
+    const float16_t LoH = max(dot(Lh, Hh), float16_t(0.0));
+    const float16_t foamH = float16_t(foamW);
+    const f16vec3 sunTintH = f16vec3(sunTint);
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest
     // SSS is on - the subsurface glow must stay shadow-gated.
-    const bool sunUp = L.y > 0.0 && (NoL > 0.0 || u_oceanParams6.z > 0.0);
-    const float sunVis = !sunUp ? 0.0
-        : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0)
-                               : sampleSunShadowHard(in_pos, N)); // one tap: the moving water hides a penumbra
-    const vec3 ambientSky = skyAmbientUp(up);
-    const vec3 whitewater = u_oceanFoam.rgb * (sunTint * (NoL * sunVis) / PI + ambientSky + u_ambientColor);
+    const bool sunUp = L.y > 0.0 && (NoL > float16_t(0.0) || u_oceanParams6.z > 0.0);
+    const float16_t sunVis = float16_t(!sunUp ? 0.0
+        : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + vec3(Nh) * 0.1, L, 0.05, 10000.0)
+                               : sampleSunShadowHard(in_pos, vec3(Nh)))); // one tap: the moving water hides a penumbra
+    const f16vec3 ambientSky = f16vec3(skyAmbientUp(up));
+    const f16vec3 whitewater = f16vec3(u_oceanFoam.rgb) * (sunTintH * (NoL * sunVis * float16_t(INV_PI)) + ambientSky + f16vec3(u_ambientColor));
 
-    const vec3 inscatter = u_oceanScatter.rgb * u_oceanScatter.w * (ambientSky + sunTint * max(L.y, 0.0) / PI);
+    const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + sunTintH * float16_t(max(L.y, 0.0) * INV_PI));
 
-    const float F = F_Schlick(NoV, 0.02);
+    const float16_t F = F_SchlickH(NoV, float16_t(0.02));
 
     // Each scene ray's weight in the final pixel, resolved before it is traced: foam covers both,
     // turbidity replaces the body, Fresnel splits the rest, the roughness blur hands part of the mirror
     // to the average sky. Under 2% the ray is skipped.
-    const float milk = clamp(turbulence * u_oceanParams5.y, 0.0, 1.0); // entrained bubbles ("Turbidity")
-    const float reflBlur = clamp(alphaF * 2.0 - 0.05, 0.0, 0.6);
-    const float bodyWeight = (1.0 - F) * (1.0 - milk) * (1.0 - foamW);
-    const float mirrorWeight = F * (1.0 - reflBlur) * (1.0 - foamW);
+    const float16_t milk = float16_t(clamp(turbulence * u_oceanParams5.y, 0.0, 1.0)); // entrained bubbles ("Turbidity")
+    const float16_t reflBlur = clamp(alphaF * float16_t(2.0) - float16_t(0.05), float16_t(0.0), float16_t(0.6));
+    const float16_t clearW = float16_t(1.0) - foamH;
+    const float16_t bodyWeight = (float16_t(1.0) - F) * (float16_t(1.0) - milk) * clearW;
+    const float16_t mirrorWeight = F * (float16_t(1.0) - reflBlur) * clearW;
+
+    // The pixel is LINEAR in the two traced radiances: body * bodyWeight + mirror * mirrorWeight + C.
+    //   color = mix(mix(body, whitewater * 0.55, milk) + sss, mix(mirror, ambientSky, reflBlur), F) + glint
+    //   final = mix(color, whitewater, foam)
+    // Everything that is not traced - the glint, the crest SSS, the turbidity, the blur's sky share and the
+    // foam - folds into C BEFORE the traces, so only C, the weights and the light inputs stay live across
+    // them (the ray-query loops are the register peak).
+    f16vec3 C = whitewater * (float16_t(0.55) * milk);
+    // Crest SSS: sun through back-lit crests glows the scatter color, scaled by height above the calm
+    // line. In the transmitted body so Fresnel fades it at grazing like all subsurface light.
+    const float sssStrength = u_oceanParams6.z;
+    if (sssStrength > 0.0)
+    {
+        const float16_t waveH = float16_t(max(in_pos.y - shoreHW.y, 0.0));
+        const float16_t towardSun = pow(clamp(dot(Vh, -Lh), float16_t(0.0), float16_t(1.0)), float16_t(u_oceanParams6.w));
+        const float16_t backSlope = float16_t(0.5) - float16_t(0.5) * dot(Lh, Nh);
+        C += f16vec3(u_oceanScatter.rgb) * sunTintH * (float16_t(sssStrength) * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
+    }
+    // Sun glint: Cook-Torrance specular, shadow-gated. D * (Vis * NoL) is clamped to the half range
+    // (<= ~2e4 at the 0.02 alpha floor), and so is the tinted glint.
+    const float16_t D  = D_GGX_H(alphaF, NoH, cross(Nh, Hh));
+    const float16_t Vv = V_SmithGGX_H(NoV, NoL, alphaF);
+    const float16_t glint = min(D * (Vv * NoL), float16_t(MEDIUMP_FLT_MAX)) * (sunVis * F_SchlickH(LoH, float16_t(0.02)));
+    // Crest foam + shoreline surf: the final mix over everything (no longer gated at 0.3% foam - the
+    // branch saved nothing once the terms fold here).
+    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur) * ambientSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
+      + foamH * whitewater;
 
     // Refracted body: the traced water column (Beer-Lambert both ways).
-    vec3 body = inscatter;
-    if (bodyWeight > 0.02)
+    f16vec3 body = inscatter;
+    if (bodyWeight > float16_t(0.02))
     {
-        const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
+        const vec3 refrDir = refract(-vec3(Vh), vec3(Nh), 1.0 / 1.33);
         if (dot(refrDir, refrDir) > 1e-6)
-            body = traceWaterBody(in_pos + N * 0.05, refrDir, in_pos, shoreHW, sunTint, sunVis, L, inscatter, rtInRange);
+            body = f16vec3(traceWaterBody(in_pos + vec3(Nh) * 0.05, refrDir, in_pos, shoreHW, sunTint, float(sunVis), L, vec3(inscatter), rtInRange));
     }
+    f16vec3 color = C + body * bodyWeight;
 
     // Reflection: ray-traced mirror, sky fallback, roughness-blurred toward the average sky.
-    vec3 R = reflect(-V, N);
+    vec3 R = reflect(-vec3(Vh), vec3(Nh));
     R.y = max(R.y, 0.02); // keep grazing reflections just above the horizon
     R = normalize(R);
     vec3 reflColor;
@@ -625,32 +677,31 @@ void main()
     // "Reflection max rough": a wide lobe can't be one mirror sample. The gate reads the roughness WITHOUT
     // "Micro roughness" - a constant floor on every pixel, which would switch the mirror off everywhere.
 #ifdef OCEAN_RT_REFLECTIONS // "Ocean/RT/Reflections"
-    const float alphaGate = sqrt(max(alphaSq - 2.0 * microVariance, 0.0));
-    if (mirrorWeight > 0.02 && alphaGate < u_oceanParams9.w && rtInRange)
+    if (mirrorWeight > float16_t(0.02) && alphaGate < u_oceanParams9.w && rtInRange)
     {
         SceneHit hit;
-        mirrorHit = traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, hit); // "Reflection range"
+        mirrorHit = traceScene(in_pos + vec3(Nh) * 0.05, R, u_oceanParams9.z, false, hit); // "Reflection range"
         if (mirrorHit)
-            reflColor = applyReflectionFog(shadeHit(hit, R, sunTint, L), in_pos, R, hit.t, sunTint, L, ambientSky);
+            reflColor = applyReflectionFog(shadeHit(hit, R, sunTint, L), in_pos, R, hit.t, sunTint, L, vec3(ambientSky));
     }
 #endif
     // Sky fallback, fogged too (the baked mirror sky carries none). Only on a miss: a hit replaces it whole.
     if (!mirrorHit)
-        reflColor = applyReflectionFogSky(reflectedSkyRadiance(R), in_pos, R, sunTint, L, ambientSky);
+        reflColor = applyReflectionFogSky(reflectedSkyRadiance(R), in_pos, R, sunTint, L, vec3(ambientSky));
 #if OCEAN_DEBUG_MODE == 6
     {
         vec3 dbg = vec3(0.0);
 #ifdef OCEAN_RT_REFLECTIONS
         SceneHit dbgHit;
-        if (mirrorWeight <= 0.02)
+        if (mirrorWeight <= float16_t(0.02))
             dbg = vec3(1.0, 0.0, 0.0);
         else if (alphaGate >= u_oceanParams9.w)
             dbg = vec3(1.0, 1.0, 0.0);
         else if (!rtInRange)
             dbg = vec3(1.0, 0.0, 1.0);
-        else if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, dbgHit))
+        else if (traceScene(in_pos + vec3(Nh) * 0.05, R, u_oceanParams9.z, false, dbgHit))
             dbg = vec3(0.0, 1.0, 0.0) + vec3(0.8, 0.0, 0.8) * exp(-dbgHit.t * 0.05);
-        else if (rtShadowVisibility(in_pos + N * 0.05, R, 0.05, 100000.0) < 0.5)
+        else if (rtShadowVisibility(in_pos + vec3(Nh) * 0.05, R, 0.05, 100000.0) < 0.5)
             dbg = vec3(1.0);           // WHITE: a hit exists, but past "Reflection range"
         else if (rtShadowVisibility(u_viewPos, vec3(0.0, -1.0, 0.0), 0.05, 100000.0) < 0.5)
             dbg = vec3(0.0, 0.0, 1.0); // BLUE: this ray missed, but the TLAS holds geometry (straight below the camera)
@@ -661,39 +712,15 @@ void main()
         return;
     }
 #endif
-    const vec3 reflection = mix(reflColor, ambientSky, reflBlur);
-
-    // Entrained bubbles: turbulent water turns milky ("Turbidity").
-    body = mix(body, whitewater * 0.55, milk);
-
-    // Crest SSS: sun through back-lit crests glows the scatter color, scaled by height above the calm
-    // line. In the transmitted body so Fresnel fades it at grazing like all subsurface light.
-    const float sssStrength = u_oceanParams6.z;
-    if (sssStrength > 0.0)
-    {
-        const float waveH = max(in_pos.y - shoreHW.y, 0.0);
-        const float towardSun = pow(clamp(dot(V, -L), 0.0, 1.0), u_oceanParams6.w);
-        const float backSlope = 0.5 - 0.5 * dot(L, N);
-        body += u_oceanScatter.rgb * sunTint * (sssStrength * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
-    }
-
-    vec3 color = mix(body, reflection, F);
-
-    // Sun glint: Cook-Torrance specular, shadow-gated.
-    const float D  = D_GGX(NoH, alphaF);
-    const float Vv = V_SmithGGX(NoV, NoL, alphaF);
-    color += sunTint * (D * Vv * NoL * sunVis) * F_Schlick(LoH, 0.02);
-
-    // Crest foam + shoreline surf.
-    if (foamW > 0.003)
-        color = mix(color, whitewater, foamW);
+    // The mirror's share (its blurred sky share is in C).
+    color += f16vec3(reflColor) * mirrorWeight;
 
     // Scene lights (shared light-grid walk, RT-shadowed): dielectric specular + in-scatter "diffuse";
     // foam patches respond as lambertian whitewater instead.
+    vec3 outColor = vec3(color);
     {
-        const f16vec3 matColOverPi = f16vec3(mix(u_oceanScatter.rgb * u_oceanScatter.w, u_oceanFoam.rgb, foamW) / PI);
-        const float lightRough = clamp(mix(alphaF, 0.85, foamW), 0.02, 1.0);
-        const float lightRoughSq = lightRough * lightRough;
+        const f16vec3 matColOverPi = mix(f16vec3(u_oceanScatter.rgb * u_oceanScatter.w), f16vec3(u_oceanFoam.rgb), foamH) * float16_t(INV_PI);
+        const float16_t lightRough = clamp(mix(alphaF, float16_t(0.85), foamH), float16_t(0.02), float16_t(1.0));
         const f16vec3 waterSpec = f16vec3(0.02);
 
         const ivec3 gridPos = getGridPos(in_pos);
@@ -706,18 +733,16 @@ void main()
             const ivec3 gridMin = getGridMin(gridIdx);
             if (gridMin == gridPos)
             {
-                const uint numLargeLights = getLargeLightCount(gridIdx);
-                for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
+                // ONE loop over the grid's large lights, then the cell's lights (as the lit core): each loop
+                // inlines doLightShadowed whole, light types plus shadow ray queries.
+                const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+                const uint cellOffset     = calcCellOffset(gridIdx, gridMin, in_pos);
+                const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+                for (uint i = 0; i < numLights; ++i)
                 {
-                    const LightInfo light = in_lightInfos[getLargeLightId(gridIdx, i)];
-                    color += doLightShadowed(light, in_pos, V, N, waterSpec, matColOverPi, 0.0, lightRough, lightRoughSq);
-                }
-                const uint cellOffset = calcCellOffset(gridIdx, gridMin, in_pos);
-                const uint numLights = getNumLightsForCell(cellOffset);
-                for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                {
-                    const LightInfo light = in_lightInfos[getLightId(cellOffset, i)];
-                    color += doLightShadowed(light, in_pos, V, N, waterSpec, matColOverPi, 0.0, lightRough, lightRoughSq);
+                    const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
+                    const LightInfo light = in_lightInfos[lightId];
+                    outColor += doLightShadowed(light, in_pos, Vh, Nh, waterSpec, matColOverPi, 0.0, lightRough);
                 }
                 break;
             }
@@ -729,5 +754,5 @@ void main()
     // without motion vectors, so taa.cs.glsl caps the history weight here). The Ocean variant does not
     // blend, every other opaque surface writes its material alpha (> 0), and the stages layered over
     // the scene write RGB only.
-    out_color = vec4(color, 0.0);
+    out_color = vec4(outColor, 0.0);
 }

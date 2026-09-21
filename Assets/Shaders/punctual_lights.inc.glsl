@@ -9,7 +9,7 @@
 //   - rtShadowVisibility (rt_shadow.inc.glsl) + its geometry/texture requirements
 //   - UBO (ubo.inc.glsl via shared.inc.glsl) + PI
 //   - fragment stage (gl_FragCoord-based shadow jitter)
-//   - GL_EXT_shader_explicit_arithmetic_types (the BRDF colour side is half math, see FresnelSchlick)
+//   - GL_EXT_shader_explicit_arithmetic_types (the light types evaluate through the fp16 BRDF, see D_GGX_H)
 
 #ifndef PUNCTUAL_LIGHTS_INC_GLSL
 #define PUNCTUAL_LIGHTS_INC_GLSL
@@ -148,16 +148,75 @@ vec3 doLight(vec3 lightRadiance, vec3 L, vec3 V, vec3 N, f16vec3 specularCol, f1
 	vec3 specular = doPointLightSpecular(lightRadiance, F, NdotL, NdotV, NdotH, roughness, roughnessSq);
 	return specular + doLightDiffuseOnly(lightRadiance, F, matColOverPi, metalness, NdotL);
 }
-vec3 doPointLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+
+// ---- fp16 BRDF ------------------------------------------------------------------------------------------
+// Copies of the BRDF above in HALF math end to end: N, V, L, H, the dots, GGX, visibility, Fresnel and the
+// colour factors. Positions, distances and the HDR radiance stay 32-bit; each light's BRDF factor widens
+// ONCE, at the multiply with its radiance. `alpha` is the GGX alpha, >= 0.01 at every caller (smaller
+// underflows (NoH * alpha)^2).
+#define MEDIUMP_FLT_MAX 65504.0
+// Filament's fp16 GGX: 1 - NoH^2 taken as |N x H|^2 (no cancellation near the highlight, where NoH has no
+// half precision left), and the square taken AFTER the divide, so alpha^4 never forms on its own.
+float16_t D_GGX_H(float16_t alpha, float16_t NoH, f16vec3 NxH)
+{
+	const float16_t a = NoH * alpha;
+	const float16_t k = alpha / (dot(NxH, NxH) + a * a);
+	return min(k * k * float16_t(INV_PI), float16_t(MEDIUMP_FLT_MAX));
+}
+float16_t V_SmithGGXCorrelatedFastH(float16_t NoV, float16_t NoL, float16_t alpha)
+{
+	const float16_t ggxV = NoL * (NoV * (float16_t(1.0) - alpha) + alpha);
+	const float16_t ggxL = NoV * (NoL * (float16_t(1.0) - alpha) + alpha);
+	return float16_t(0.5) / max(ggxV + ggxL, float16_t(1e-4));
+}
+f16vec3 FresnelSchlickH(float16_t HoV, f16vec3 F0)
+{
+	const float16_t x = clamp(float16_t(1.0) - HoV, float16_t(0.0), float16_t(1.0));
+	const float16_t x2 = x * x;
+	return F0 + (f16vec3(1.0) - F0) * (x2 * x2 * x);
+}
+vec3 doLightDiffuseOnlyH(vec3 lightRadiance, f16vec3 F, f16vec3 matColOverPi, float16_t metalness, float16_t NoL)
+{
+	return vec3((f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
+}
+// (D * Vis * NoL) is clamped to the half range: Vis * NoL <= 0.5 / alpha, so D * that can overflow at the
+// peak of a very smooth lobe. Vis * NoL is formed first, so NoL = 0 gives 0, never inf * 0.
+vec3 doAreaLightSpecularH(vec3 lightRadiance, f16vec3 Lspec, f16vec3 V, f16vec3 N, f16vec3 specularCol, float lightSize, float distSpec, float16_t alpha)
+{
+	const float16_t alphaPrime = float16_t(clamp(float(alpha) + lightSize / (2.0 * distSpec), 0.0, 1.0));
+	const float16_t normRatio  = alpha / alphaPrime;
+
+	const f16vec3 H       = normalize(Lspec + V);
+	const float16_t NoL   = max(dot(N, Lspec), float16_t(0.0));
+	const float16_t NoV   = max(dot(N, V), float16_t(0.0));
+	const float16_t NoH   = max(dot(N, H), float16_t(0.0));
+	const f16vec3 F       = FresnelSchlickH(max(dot(H, V), float16_t(0.0)), specularCol);
+	const float16_t spec  = min(D_GGX_H(alphaPrime, NoH, cross(N, H)) * (normRatio * normRatio)
+		* (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL), float16_t(MEDIUMP_FLT_MAX));
+	return vec3(F * spec) * lightRadiance;
+}
+vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float16_t metalness, float16_t alpha)
+{
+	const f16vec3 H     = normalize(L + V);
+	const float16_t NoL = max(dot(N, L), float16_t(0.0));
+	const float16_t NoV = max(dot(N, V), float16_t(0.0));
+	const float16_t NoH = max(dot(N, H), float16_t(0.0));
+	const f16vec3 F     = FresnelSchlickH(max(dot(H, V), float16_t(0.0)), specularCol);
+	const float16_t spec = min(D_GGX_H(alpha, NoH, cross(N, H)) * (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL),
+		float16_t(MEDIUMP_FLT_MAX));
+	return vec3(F * spec + (f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
+}
+// The light types evaluate through the fp16 BRDF: V and N arrive half, and roughness is the half GGX alpha.
+vec3 doPointLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	vec3 lightVec = light.pos - pos;
 	float dist = length(lightVec);
 	vec3 L = lightVec / dist;
 	float falloff = squareFalloff(dist, light.range);
 	vec3 lightRadiance = light.color * falloff;
-	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+	return doLightH(lightRadiance, f16vec3(L), V, N, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
-vec3 doSpotLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doSpotLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	vec3 lightVec = light.pos - pos;
 	float dist = length(lightVec);
@@ -171,7 +230,7 @@ vec3 doSpotLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 	float cosInner = mix(cosOuter, 1.0, softness);
 	float spot = smoothstep(cosOuter, cosInner, cosAngle);
 	vec3 lightRadiance = light.color * falloff * spot;
-	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+	return doLightH(lightRadiance, f16vec3(L), V, N, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
 vec3 closestPointOnSegment(vec3 p, vec3 a, vec3 b)
 {
@@ -198,7 +257,7 @@ void areaLightBasis(LightInfo light, out vec3 right, out vec3 up, out float half
 	halfWidth   = light.width * 0.5;
 	halfHeight  = height * 0.5;
 }
-vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doAreaLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	vec3 right, up;
 	float halfWidth, halfHeight;
@@ -220,13 +279,13 @@ vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 
 	// Horizon clamp: smoothstep the center N.L over the quad's angular half-extent.
 	// As the quad clips below the horizon it fades out proportionally to its apparent size.
-	float NdotLcenter = dot(N, normalize(center - pos));
+	float NdotLcenter = dot(vec3(N), normalize(center - pos));
 	float halfExtent  = lightSize / max(distDiff, 1e-5);
 	float horizonVis  = smoothstep(-halfExtent, halfExtent, NdotLcenter);
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, light.range) * facingDiff;
-	vec3 Hdiff        = normalize(Ldiff + V);
-	f16vec3 Fdiff     = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
-	vec3 diffuse      = doLightDiffuseOnly(diffRadiance, Fdiff, matColOverPi, metalness, horizonVis);
+	f16vec3 Hdiff     = normalize(f16vec3(Ldiff) + V);
+	f16vec3 Fdiff     = FresnelSchlickH(max(dot(Hdiff, V), float16_t(0.0)), specularCol);
+	vec3 diffuse      = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
 	// ---- Specular (representative point) -------------------------------------
 	// Intersect the mirror ray with the quad plane and clamp to the rectangle, then shade from
@@ -234,10 +293,10 @@ vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 	vec3 Lspec;
 	float distSpec;
 	vec3 specRadiance;
-	if (roughness < 0.6)
+	if (roughness < float16_t(0.6))
 	{
 		vec3 specPoint = closest;
-		vec3 R  = reflect(-V, N);
+		vec3 R  = reflect(-vec3(V), vec3(N));
 		float d = dot(R, quadNormal);
 		if (d < 0.0)
 		{
@@ -261,11 +320,11 @@ vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 	}
 	// Widen and renormalize the lobe by the quad's apparent size (lightSize) so the highlight spreads
 	// out and dims as the light gets close to the surface, instead of staying a tiny punctual spike.
-	vec3 specular = doAreaLightSpecular(specRadiance, Lspec, V, N, specularCol, lightSize, distSpec, roughness, roughnessSq);
+	vec3 specular = doAreaLightSpecularH(specRadiance, f16vec3(Lspec), V, N, specularCol, lightSize, distSpec, roughness);
 
 	return diffuse + specular;
 }
-vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doTubeLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	float height   = length(light.direction);
 	float halfLen  = height * 0.5;
@@ -287,25 +346,25 @@ vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 	float distDiff = max(coreDist - radius, 1e-4); // shade from the tube surface, not its core
 
 	// Horizon clamp: fade as the tube sinks below the tangent plane, scaled by its apparent size.
-	float NdotLcenter = dot(N, normalize(light.pos - pos));
+	float NdotLcenter = dot(vec3(N), normalize(light.pos - pos));
 	float halfExtent  = (halfLen + radius) / max(coreDist, 1e-5);
 	float horizonVis  = smoothstep(-halfExtent, halfExtent, NdotLcenter);
 
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, absRange);
-	vec3 Hdiff = normalize(Ldiff + V);
-	f16vec3 Fdiff = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
-	vec3 diffuse = doLightDiffuseOnly(diffRadiance, Fdiff, matColOverPi, metalness, horizonVis);
+	f16vec3 Hdiff = normalize(f16vec3(Ldiff) + V);
+	f16vec3 Fdiff = FresnelSchlickH(max(dot(Hdiff, V), float16_t(0.0)), specularCol);
+	vec3 diffuse = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
 	// ---- Specular (representative point) -------------------------------------
 	// Find the point on the tube surface most aligned with the mirror ray R, then shade it as a
 	// punctual light *from that point* (its own distance/direction) with a size-widened lobe.
 	vec3  Lspec;
 	float distSpec;
-	if (roughness < 0.6)
+	if (roughness < float16_t(0.6))
 	{
 		vec3 l0      = pa - pos;
 		vec3 l1      = pb - pos;
-		vec3 R       = reflect(-V, N);
+		vec3 R       = reflect(-vec3(V), vec3(N));
 		vec3 ld      = l1 - l0;
 		float RdotLd = dot(R, ld);
 		float ldLen2 = dot(ld, ld);
@@ -325,21 +384,21 @@ vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol,
 		Lspec    = Ldiff;
 	}
 	vec3 specRadiance = light.color * squareFalloff(distSpec, absRange);
-	vec3 specular = doAreaLightSpecular(specRadiance, Lspec, V, N, specularCol, radius, distSpec, roughness, roughnessSq);
+	vec3 specular = doAreaLightSpecularH(specRadiance, f16vec3(Lspec), V, N, specularCol, radius, distSpec, roughness);
 
 	return diffuse + specular;
 }
-vec3 doLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	if (light.width > 0.0)
 	{
 		if (light.range < 0.0)
-			return doTubeLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
-		return doAreaLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+			return doTubeLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
+		return doAreaLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
 	}
 	if (light.width < 0.0)
-		return doSpotLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
-	return doPointLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+		return doSpotLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
+	return doPointLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness);
 }
 // Area and tube shadows: ONE ray per pixel per frame, aimed at a jittered point on the emitter. The jitter
 // is spatiotemporal (shadowJitter), so TAA integrates the penumbra over frames. A per-pixel loop of up to 4
@@ -367,9 +426,10 @@ float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 	const vec2 u = shadowJitter() * 2.0 - 1.0;
 	return traceLightVisibility(pos, N, light.pos + axis * (u.x * halfLen) + side * (u.y * radius));
 }
-vec3 doLightShadowed(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
-	vec3 lit = doLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
+	vec3 lit = doLight(light, pos, V, Nh, specularCol, matColOverPi, metalness, roughness);
+	const vec3 N = vec3(Nh); // the shadow rays' origin offset
 	// The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The
 	// ocean has no define and reads the uniform.
 #ifdef LIT_RT_LIGHT_SHADOWS
