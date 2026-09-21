@@ -562,6 +562,12 @@ void Renderer::buildUboTerrain()
         tex.snowAridity, 0.0f);
     ubo.terrainTexParams5 = glm::vec4(glm::max(tex.cragWanderAmp, 0.0f),
         1.0f / glm::max(tex.cragWanderWavelength, 1.0f), 0.0f, 0.0f);
+    // Climate boxes: temperature arrives as t01, precipitation as mm/yr - its divisor is a live tweak.
+    const float invPrecipFull = 1.0f / glm::max(tex.precipFullMm, 1.0f);
+    const glm::vec4* climate = m_terrain.getSplatClimate();
+    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
+        ubo.terrainSplatClimate[i] = glm::vec4(climate[i].x, climate[i].y,
+            glm::clamp(climate[i].z * invPrecipFull, 0.0f, 1.0f), glm::clamp(climate[i].w * invPrecipFull, 0.0f, 1.0f));
 
     // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
     // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
@@ -603,7 +609,6 @@ void Renderer::buildUboTerrain()
         ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f),
             glm::max(wet.rippleStrength, 0.0f), glm::max(wet.surfaceNormalScale, 0.0f));
     }
-    memcpy(ubo.terrainSplatClimate, m_terrain.getSplatClimate(), sizeof(ubo.terrainSplatClimate));
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can
     // always display roughly a screen's worth of texels.

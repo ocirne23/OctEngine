@@ -29,11 +29,6 @@ import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
 
-// Renderer construction, the frame loop (waitFrameSlot -> beginFrame -> present) and the frame UBO
-// build. The other three implementation units of this class: RendererScene.cpp (GPU scene residency),
-// RendererRecord.cpp (command-buffer recording) and RendererSubmit.cpp (the per-frame submission
-// registries).
-
 
 Renderer::~Renderer()
 {
@@ -502,11 +497,6 @@ void Renderer::setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mat
     m_textures.queueFree(retired);
 }
 
-void Renderer::setTerrainSplatClimate(oc::span<const glm::vec4> boxes)
-{
-    m_terrain.setSplatClimate(boxes);
-}
-
 bool Renderer::waitFrameSlot(uint64 timeoutNs)
 {
     // This frame slot's fence must be waited BEFORE anything writes its host-visible per-frame buffers
@@ -544,8 +534,8 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
     return true;
 }
 
-// The one place the culling/center view-projection is built - beginFrame (via buildUboViews) and
-// computeCullFrustum must agree bit-exactly, or the spatial cull and the GPU cull would disagree.
+// THE one place the centre view-projection is built. Its two callers - setFrameView before the frame
+// and buildUboViews inside it - must agree bit-exactly, or the spatial cull and the GPU cull disagree.
 glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
 {
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
@@ -559,20 +549,10 @@ glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
     return projection * camera.viewMatrix;
 }
 
-Frustum Renderer::computeCullFrustum(const Camera& camera, const Rect& viewportRect)
-{
-    assert(!Globals::openXR.isEnabled() && "VR: the culling view needs the head pose, only known inside beginFrame");
-    setViewportRect(viewportRect); // same apply beginFrame does (idempotent there)
-    m_centerViewProj = computeCenterViewProj(camera);
-    Frustum frustum;
-    frustum.fromMatrixZO(m_centerViewProj);
-    return frustum;
-}
-
-const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)
+void Renderer::beginFrame()
 {
     ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
-    setViewportRect(viewportRect); // first: this frame's projection is built from the viewport's aspect below
+    assert(m_frameViewSet && "Renderer::setFrameView() must run before the frame's begin-frame work");
 
     // The slot's fence is waited at the loop top (waitFrameSlot); anything that reached here without
     // it is a main-loop ordering bug - but never run unsynchronized, so wait now (asserting).
@@ -588,9 +568,9 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     Globals::jobSystem.submit([this, collectFrameIdx = m_swapChain.getCurrentFrameIndex()] { m_gpuProfiler.collect(collectFrameIdx); },
         { "GPU timestamps collect", EProfileCategory::Renderer }, EJobPriority::Normal, &m_gpuCollectCounter);
 
-    Camera camera = cameraIn;
+    Camera camera = m_frameCamera;
     glm::quat vrBaseOrientation;
-    applyVrHeadPose(cameraIn, camera, vrBaseOrientation);
+    applyVrHeadPose(m_frameCamera, camera, vrBaseOrientation);
 
     checkFrameCapacities();
 
@@ -604,7 +584,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         snapshotLodStats(frameData);
     }
 
-    buildFrameUbo(cameraIn, camera, vrBaseOrientation, frameData);
+    buildFrameUbo(m_frameCamera, camera, vrBaseOrientation, frameData);
 
     m_submission.beginFrame();
     // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
@@ -618,20 +598,17 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         m_lastCullCamera = camera; // head-swapped: next frame's spatial cull runs on this view (see hasCullView)
         m_hasCullView = true;
     }
-    return m_ubo.frustum;
 }
 
-void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
+void Renderer::kickBeginFrameJob()
 {
     ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
-    m_beginFrameJobCamera = camera;
-    m_beginFrameJobRect = viewportRect;
     if (Globals::openXR.isEnabled())
     {
         m_beginFrameDeferred = true; // xrWaitFrame owns VR pacing and would pin a worker - run at the join instead
         return;
     }
-    Globals::jobSystem.submit([this] { beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); },
+    Globals::jobSystem.submit([this] { beginFrame(); },
         { "Begin frame job", EProfileCategory::Renderer }, EJobPriority::High, &m_beginFrameJobCounter,
         EJobFlag_ForeignWait); // the body waits on m_gpuCollectCounter
 }
@@ -677,20 +654,27 @@ void Renderer::joinBeginFrameJob()
     if (m_beginFrameDeferred)
     {
         m_beginFrameDeferred = false;
-        beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); // VR: synchronous, on the caller's (main) thread
+        beginFrame(); // VR: synchronous, on the caller's (main) thread
         return;
     }
     Globals::jobSystem.wait(m_beginFrameJobCounter); // helps; near-zero when the kick-to-join work covered it
 }
 
-CullView Renderer::getCullView(const Camera& camera, const Rect& viewportRect)
+CullView Renderer::setFrameView(const Camera& camera, const Rect& viewportRect)
 {
-    ProfileScope scope("Cull view", EProfileCategory::Renderer);
+    ProfileScope scope("Frame view", EProfileCategory::Renderer);
+    m_frameCamera = camera;
+    m_frameRect = viewportRect;
+    m_frameViewSet = true;
+    setViewportRect(viewportRect); // before anything builds a projection from its aspect
+
     CullView view;
     if (!Globals::openXR.isEnabled())
     {
-        view.camera = camera;
-        view.frustum = computeCullFrustum(camera, viewportRect); // publishes m_centerViewProj - read below
+        // Same builder buildUboViews uses, so this frustum and the GPU cull's agree bit-exactly.
+        m_centerViewProj = computeCenterViewProj(m_frameCamera);
+        view.camera = m_frameCamera;
+        view.frustum.fromMatrixZO(m_centerViewProj);
         view.valid = true;
     }
     else
@@ -994,6 +978,7 @@ void Renderer::present()
     // Latch this frame's rain occlusion request for the NEXT frame's begin-frame job (the request is
     // main-thread state written between the join and here); a frame with no request switches it off.
     m_particles.latchRainVolume();
+    m_frameViewSet = false; // the next frame must publish its own view
     // This frame's submission is now new GPU work that could read the shared mesh/material/instance-offset
     // buffers; any upload into them from here on needs a fresh drain. See StagingManager::ensureDrainedForSharedWrite.
     Globals::stagingManager.resetSharedWriteGate();

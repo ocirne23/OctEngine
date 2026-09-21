@@ -127,7 +127,8 @@ members (the job outlives the caller's stack), ONE High `"Begin frame job"`.
 
 ## The cull view
 
-`getCullView(camera, viewportRect)` gives the spatial cull its frustum BEFORE `beginFrame`:
+`setFrameView(camera, viewportRect)` publishes the frame's view and gives the spatial cull its
+frustum BEFORE `beginFrame`:
 
 * **Desktop** — `computeCullFrustum` builds **the exact frustum `beginFrame` will build**, because the
   camera and viewport are final by then and **TAA jitter is never baked into the mvp.** It is
@@ -675,12 +676,19 @@ Both push params in every frame; the renderer owns none of the tweaks.
   drawn (`getTerrainMeshRadius()`). `lapseRate` is the other half of the temperature reconstruction:
   the map bakes the SEA-LEVEL baseline and the shaders multiply this by the height THEY shade
   (`terrainTemperatureAt`) — **ONE value for the world, so no consumer can disagree with another.**
-* **`setTerrainSplatMaterials` / `setTerrainSplatClimate`** are deliberately split: **textures are heavy
-  and change ~never; the climate boxes are two dozen floats and track live tweaks**, so a tweak change
-  must reach the shader without dragging a texture re-upload behind it. Materials lay out
-  `[numGround][numRock][beach?][snow?]`, and **beach and snow are OVERLAYS, not materials the climate
-  blend can pick** — beach paints over the waterline whatever the climate, and snow paints over
-  everything else, ground AND rock.
+* **`setTerrainSplatMaterials`** registers the textures AND each material's climate box in one call,
+  once, when the background DDS bake finishes. The box (`TerrainSplatMaterial::climate`) arrives with
+  temperature already in t01 but **precipitation still in mm/yr: its divisor is the live tweak
+  "Terrain/V3/Precip for full humidity"**, which rides `TerrainTexTweaks::precipFullMm` (pushed every
+  frame), and `buildUboTerrain` normalizes it per frame — so that tweak reaches the shader without a
+  texture re-upload. Materials lay out
+  `[numGround][numRock][beach?][snow?]` as ONE contiguous range (climate boxes index the same slots),
+  but **that is slot order, not draw order: the shader composites ground → beach → rock → snow**, so
+  rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
+  beach paints over the waterline whatever the climate, and snow paints over everything else, ground
+  AND rock. Per material: diffuse (sRGB), normal (linear; BC5 sets `MATERIAL_FLAG_BC5_NORMAL`), ARM
+  (linear; R = AO, G = roughness, B = metalness, stored in `metalRoughnessTexIdx`). The full contract is
+  on the definition in `Renderer.cpp`.
 * **`setTerrainTextureParams`** carries the shaping tweaks. Notable reasoning baked into the defaults:
   the rock slope thresholds read as angles (0.30 = 45°, 0.55 = 63°) because **soil genuinely stops
   holding around 45°, which is also about the steepest the diffusion model's 30 m/px field reaches**;

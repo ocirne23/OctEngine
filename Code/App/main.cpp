@@ -256,10 +256,8 @@ int main(int argc, char* argv[])
         if (!headlessServer)
         {
             ProfileScope kickScope("Frame kicks", EProfileCategory::App);
-            const Rect viewportRect = Globals::ui.getViewportRect();
-            CullView cullView = Globals::rendererVK.getCullView(camera, viewportRect);
-            Globals::spatialIndex.kickUpdateJob(cullView);
-            Globals::rendererVK.kickBeginFrameJob(camera, viewportRect);
+            Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, Globals::ui.getViewportRect()));
+            Globals::rendererVK.kickBeginFrameJob();
         }
         Globals::physics.update(simDeltaSec);
         if (!headlessServer)

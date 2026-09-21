@@ -90,7 +90,7 @@ static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
         constexpr float c_tintStrength = 0.55f;
         if (friendly)
             color = glm::mix(color, c_friendlyGreen, c_tintStrength);
-        renderNode.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(color));
+        renderNode.setMaterialOverride(Globals::rendererVK.getOrCreateSolidColorMaterial(color));
     };
     if (RenderComponent* rc = getComponent<RenderComponent>(node))
         tint(rc->node, getRenderSpawnInfo(node));

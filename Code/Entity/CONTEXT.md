@@ -680,7 +680,7 @@ renderer state.** It fires, for each side:
   `prefabWouldCycle` guards recursion.
 * **Per-entity tint:** `Component Render` takes `Color r g b`. `RenderComponent::spawn` overrides
   every mesh instance's material through `RenderNode::setMaterialOverride` plus
-  `Renderer::createSolidColorMaterial`, cached per RGB8 — a 1×1 texture and a MaterialInfo minted once
+  `Renderer::getOrCreateSolidColorMaterial`, cached per RGB8 — a 1×1 texture and a MaterialInfo minted once
   per colour. Instances carry `materialIdx` per record, **so there are no shader or layout changes.**
   All Game prefabs author unique colours this way.
 
@@ -998,7 +998,7 @@ it overwrote the push entirely — a launch / snap-back oscillation.
   that stands still writes nothing. The model's authored rotation is replaced by the yaw.
   **COLOUR:** `Component GameUnit` `Color r g b` is the unit's colour on EVERY render node of its
   subtree (the shared model has none): `spawn` applies it (Scene, bit 0, has spawned the model by
-  then; `createSolidColorMaterial` is spawn-mutex safe on workers) and `applyTeamTint` mixes the
+  then; `getOrCreateSolidColorMaterial` is spawn-mutex safe on workers) and `applyTeamTint` mixes the
   friendly green onto it, over the whole subtree (`tintSubtree`). With no `Color`, each node
   keeps its own authored Render `Color`, as before.
 * **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, its bake-tap

@@ -37,7 +37,7 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 13 | `networkManager.receive(dt)` | Snapshot targets and events land before the sim reads them. |
 | 14 | `game->updatePlayer(simDt)` | ONLY the player-body writes (pre-physics). |
 | 15 | `scriptContext.update(...)` | |
-| 16 | **`world.joinSelection()`**, then **KICKS: `getCullView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`, it had the whole frame) must be done before the commit inside the spatial kick — normally a no-op. Kicks under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
+| 16 | **`world.joinSelection()`**, then **KICKS: `renderer.setFrameView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`, it had the whole frame) must be done before the commit inside the spatial kick — normally a no-op. Kicks under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
 | 17 | `physics.update(simDt)` | ≤ 1 step; contact events stay buffered. |
 | 18 | `audio.update` → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()`. |
 | 19 | `game->update(simDt)` **or** `world.setSimLodFocus(&camera.position, 1)` | The rest of the game tick; also publishes the SIM LOD focus. |

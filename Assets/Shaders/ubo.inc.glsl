@@ -201,9 +201,10 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // z = penumbra growth per metre along the sun ray, w unused
 
     // TERRAIN variant texture splatting (keep in sync with RendererVKLayout::Ubo). Materials are
-    // contiguous, in the order the shader composites them bottom-up:
+    // contiguous:
     //   [base .. +numGround) climate-blended ground, [.. +numRock) bedrock exposed by slope/crag,
     //   then the optional beach entry, then the optional snow entry (always last).
+    // Slot order only - terrainSplat composites ground -> beach -> rock -> snow.
     vec4 u_terrainTexParams0; // x = base material idx (< 0 = no texture set: flat-color fallback),
                               // y = ground entry count, z = rock entry count,
                               // w = climate kernel sigma (Gaussian falloff OUTSIDE a climate box)

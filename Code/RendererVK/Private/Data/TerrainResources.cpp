@@ -51,13 +51,9 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
 
     m_splatBaseMaterial = (int32)io.addMaterials(materialInfos);
     m_splatCounts = counts;
+    for (size_t i = 0; i < mats.size(); ++i)
+        m_splatClimate[i] = mats[i].climate;
     return retired;
-}
-
-void TerrainResources::setSplatClimate(oc::span<const glm::vec4> boxes)
-{
-    assert(boxes.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
-    memcpy(m_splatClimate, boxes.data(), boxes.size() * sizeof(glm::vec4));
 }
 
 TerrainResources::WetnessTick TerrainResources::advanceWetness(float simDeltaSec, const glm::vec3& focus)

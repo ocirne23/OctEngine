@@ -165,7 +165,7 @@ public:
 
     // update() as the High "Spatial cull" job: kick copies the view into members (the job outlives
     // the caller's stack) and submits; join waits, helping. An INVALID view (the first VR frame - see
-    // Renderer::getCullView) skips the whole update for that frame: stamps stay a frame stale (the
+    // Renderer::setFrameView) skips the whole update for that frame: stamps stay a frame stale (the
     // spawn guard keeps fresh entries visible) and the commit's pending ops just wait one frame. The
     // index must stay QUIESCENT between kick and join - no registers, commits, queries or traversals
     // (see main.cpp's window comment).

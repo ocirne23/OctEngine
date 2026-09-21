@@ -141,9 +141,9 @@ export namespace Procedural
 		void updateDisabled(Renderer& renderer, const Camera& camera);
 		void rebuildMaps();                             // (re)builds the active generator from the tweak-backed config
 		void clearResidents();
-		// Pushes the splat shaping params + the live climate boxes every frame, and registers the texture
-		// set once the background DDS bake finishes (the TERRAIN shader falls back to flat colors until
-		// then).
+		// Pushes the splat shaping params (with the live precipitation divisor the climate boxes need) every
+		// frame, and registers the texture set + climate boxes once the background DDS bake finishes (the
+		// TERRAIN shader falls back to flat colors until then).
 		void updateTerrainTextures(Renderer& renderer);
 		void registerTerrainTextures(Renderer& renderer); // one-shot, from updateTerrainTextures
 		oc::shared_ptr<const ITerrainSampler> currentMaps();
@@ -246,11 +246,6 @@ export namespace Procedural
 		oc::atomic<bool> m_texBakeStop{ false };
 		oc::atomic<bool> m_texBakeDone{ false };
 		bool              m_texSetRegistered = false;
-		// Climate of each entry that survived the bake, in registered material order. Kept in REAL units
-		// (x,y = temperature C range, z,w = precipitation mm/yr range) and renormalized into m_texClimateBoxes
-		// every frame, because the mm-per-full-humidity divisor is a live tweak.
-		oc::vector<glm::vec4> m_texClimateReal;
-		oc::vector<glm::vec4> m_texClimateBoxes;
 
 		// --- Terrain/Textures tweaks: splat shaping, pushed to Renderer::setTerrainTextureParams every
 		// frame from updateTerrainTextures (mirrors Renderer::TerrainTexTweaks) ---

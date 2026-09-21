@@ -13,7 +13,7 @@ hierarchy**. Links Threading only.
 High job**:
 
 ```cpp
-Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.getCullView(camera, viewportRect));
+Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, viewportRect));
 ...
 Globals::spatialIndex.joinUpdateJob();
 ```
@@ -227,7 +227,7 @@ that may hang far above the scene) is the wrong shape for shadow relevance. `upd
 stamps a third render pass every frame: **the inflated Main frustum swept toward the sun on the
 horizontal plane by `shadowReach`** — the Minkowski sum with that segment, which keeps the face
 normals and moves only the planes facing against the sweep (by reach × −(n·s)). The sun direction
-rides in `CullView::sunDirection` (the renderer fills it in `getCullView`); a near-vertical sun skips
+rides in `CullView::sunDirection` (the renderer fills it in `setFrameView`); a near-vertical sun skips
 the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow`-only entries push
 `PASS_SHADOW` alone (Entity.cpp); Near-only still pushes `PASS_SHADOW | PASS_GI`.
 

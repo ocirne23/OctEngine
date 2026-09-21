@@ -54,7 +54,7 @@ void spawnBoneNodes(const BoneModelRig& rig, const Transform& base, Bones& bones
         // The first placement puts it where it belongs.
         bones[i].node = render->container->spawnNodeForIdx(render->nodeIdx, composeTransform(base, bones[i].nodeLocal));
         if (bones[i].node.isValid() && render->color.x >= 0.0f)
-            bones[i].node.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(render->color));
+            bones[i].node.setMaterialOverride(Globals::rendererVK.getOrCreateSolidColorMaterial(render->color));
     }
 }
 

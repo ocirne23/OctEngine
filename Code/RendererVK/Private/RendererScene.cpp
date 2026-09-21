@@ -122,7 +122,7 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, Instance
 
 
 
-uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
+uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
     const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);

@@ -331,7 +331,9 @@ copy), terrain colouring and the terrain sun march.
 It also bakes the splat textures, BC-compressed to `Assets/Local/TerrainTex` — a background job
 kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextures` when it is
 enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
-shader falls back to flat colours until that bake finishes.**
+shader falls back to flat colours until that bake finishes.** Each entry's climate box registers with
+its textures (`TerrainSplatMaterial::climate`: temperature as t01, precipitation in mm/yr); only the
+mm-per-full-humidity divisor stays live, pushed every frame as `TerrainTexTweaks::precipFullMm`.
 
 The streamer also owns the **"Terrain/Wetness" tweaks** (enabled, texel size, dry time, temperature
 sensitivity, rain, wet albedo scale / roughness), pushed every frame from `updateTerrainTextures` through

@@ -146,23 +146,15 @@ namespace
 		return oc::format("{}{}_{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, map);
 	}
 
-	// The entry's climate in REAL units, as the streamer stores it: (tempMinC, tempMaxC, precipMinMm,
-	// precipMaxMm).
-	glm::vec4 terrainClimateReal(const TerrainTexSource& src)
+	// The entry's climate box as TerrainSplatMaterial::climate takes it: temperature normalized to t01,
+	// precipitation left in mm/yr. The renderer divides that by the GENERATOR'S live mm-per-full-humidity
+	// scale (TerrainTexTweaks::precipFullMm) rather than the shared constant: V3 exposes it as a tweak,
+	// and if the two ever drift the whole table slides along the humidity axis while still looking
+	// perfectly reasonable in this file.
+	glm::vec4 terrainSplatClimate(const TerrainTexSource& src)
 	{
-		return glm::vec4(src.tempMinC, src.tempMaxC, src.precipMinMm, src.precipMaxMm);
-	}
-
-	// Real climate -> the normalized (t01, h01) box the shader tests against. Precipitation converts
-	// through the GENERATOR'S live mm-per-full-humidity scale rather than the shared constant: V3 exposes
-	// that as a tweak, and if the two ever drift the whole table slides along the humidity axis while
-	// still looking perfectly reasonable in this file.
-	glm::vec4 terrainClimateBox(const glm::vec4& real, float precipFullMm)
-	{
-		const float invFull = 1.0f / glm::max(precipFullMm, 1.0f);
-		return glm::vec4(Procedural::temperatureTo01(real.x), Procedural::temperatureTo01(real.y),
-		                 glm::clamp(real.z * invFull, 0.0f, 1.0f),
-		                 glm::clamp(real.w * invFull, 0.0f, 1.0f));
+		return glm::vec4(Procedural::temperatureTo01(src.tempMinC), Procedural::temperatureTo01(src.tempMaxC),
+		                 src.precipMinMm, src.precipMaxMm);
 	}
 
 	// True when outPath exists and is newer than its source (a missing source doesn't invalidate a bake).
@@ -514,6 +506,7 @@ namespace Procedural
 			.snowAridity = m_texSnowAridity,
 			.cragWanderAmp = m_texCragWanderAmp * cragScale,
 			.cragWanderWavelength = m_texCragWanderWavelength * cragScale,
+			.precipFullMm = m_v3PrecipFullHumidity,
 		});
 		renderer.setTerrainWetParams({
 			.enabled = m_wetEnabled,
@@ -545,28 +538,64 @@ namespace Procedural
 			.liveMargin = m_wetLiveMargin,
 		});
 
+		// Until the bake finishes, chunks draw with the flat-color fallback. A bake with nothing usable
+		// leaves the set unregistered; registerTerrainTextures' warnings say what.
 		if (!m_texSetRegistered)
 		{
 			kickTexBake(); // terrain enabled after startup: the bake starts here, once
-			if (!m_texBakeDone.load(oc::memory_order_acquire))
-				return; // still baking: chunks draw with the flat-color fallback
-			registerTerrainTextures(renderer);
-			if (!m_texSetRegistered)
-				return; // nothing usable baked; the warnings above say what
+			if (m_texBakeDone.load(oc::memory_order_acquire))
+				registerTerrainTextures(renderer);
 		}
-
-		// Live: the boxes are authored in mm/yr and divided by the generator's precipitation scale, which
-		// is a tweak. Pushing them every frame is a memcpy of two dozen vec4s and means the table can never
-		// be reading a scale the generator has already moved off.
-		const float precipFullMm = m_v3PrecipFullHumidity;
-		for (size_t i = 0; i < m_texClimateReal.size(); ++i)
-			m_texClimateBoxes[i] = terrainClimateBox(m_texClimateReal[i], precipFullMm);
-		renderer.setTerrainSplatClimate(m_texClimateBoxes);
 	}
 
-	// Hands the baked DDS set to the renderer as [ground][rock][beach?][snow?], which is the order the
-	// shader composites it in (Renderer::setTerrainSplatMaterials). Built in four passes over the table
+	// Hands the baked DDS set to the renderer as [ground][rock][beach?][snow?], the slot order
+	// Renderer::setTerrainSplatMaterials expects (NOT the composite order). Built in four passes over the table
 	// rather than trusting its declaration order, so entries stay grouped however reads best there.
+	// --
+	// Renderer::setTerrainSplatMaterials docs
+	// Registers the terrain splat set - textures AND climate boxes - as ONE contiguous material range.
+	// counts must describe the whole span.
+	//
+	//   SLOT ORDER - mats[i] is material base + i
+	//
+	//   0                   numGround           numGround+numRock
+	//   v                   v                   v
+	//   +-------------------+-------------------+---------+---------+
+	//   | GROUND            | ROCK              | BEACH   | SNOW    |
+	//   | numGround entries | numRock entries   | 0 or 1  | 0 or 1  |
+	//   | climate-picked    | climate-picked    | overlay | overlay |
+	//   | world-XZ UV       | triplanar UV      | XZ UV   | XZ UV   |
+	//   +-------------------+-------------------+---------+---------+
+	//
+	//   DRAW ORDER - terrainSplat composites bottom-up; this is NOT the slot order
+	//
+	//   4  SNOW     over everything cold enough; slides off steep slopes
+	//   3  ROCK     steep slope or crag; covers the beach
+	//   2  BEACH    band just above the waterline
+	//   1  GROUND   the base layer
+	//
+	//   TEXTURES PER MATERIAL
+	//
+	//   field        -> MaterialInfo          space    channels                 fallback *
+	//   diffuseDds   -> diffuseTexIdx         sRGB     RGB albedo               white
+	//   normalDds    -> normalTexIdx          linear   tangent normal (BC5 **)  flat normal
+	//   armDds       -> metalRoughnessTexIdx  linear   R AO, G rough, B metal   AO 1, rough 0.9, metal 0
+	//
+	//   *  on an empty path or a failed upload
+	//   ** a BC5 file sets MATERIAL_FLAG_BC5_NORMAL; the shader rebuilds Z
+	//
+	//   CLIMATE BOX PER MATERIAL (ground and rock only; beach and snow ignore it)
+	//
+	//   component    range of        units
+	//   climate.xy   temperature     t01, normalized by the caller
+	//   climate.zw   precipitation   mm/yr; buildUboTerrain divides it by TerrainTexTweaks::precipFullMm
+	//                                every frame, so that live tweak needs no re-register
+	//
+	//   Weight is 1 inside the box and a Gaussian falloff outside it; a full-width axis means "this axis
+	//   does not matter" for the entry.
+	//
+	// Re-registering frees the old textures but leaks the old material slots - a config refresh, not a
+	// per-frame path.
 	void TerrainStreamer::registerTerrainTextures(Renderer& renderer)
 	{
 		// One-shot (the F10 pattern): setTerrainSplatMaterials uploads the DDS set, and the texture
@@ -580,6 +609,7 @@ namespace Procedural
 			mat.diffuseDds = terrainTexCachePath(src, "diff");
 			mat.normalDds = terrainTexCachePath(src, "nor");
 			mat.armDds = terrainTexCachePath(src, "arm");
+			mat.climate = terrainSplatClimate(src);
 			if (!FileSystem::exists(mat.diffuseDds, /*allowMainThread*/ true) || !FileSystem::exists(mat.normalDds, true)
 				|| !FileSystem::exists(mat.armDds, true))
 			{
@@ -595,7 +625,6 @@ namespace Procedural
 
 		oc::vector<Renderer::TerrainSplatMaterial> mats;
 		Renderer::TerrainSplatCounts counts;
-		m_texClimateReal.clear();
 		const auto append = [&](ESourceKind kind, uint32* count)
 		{
 			for (const TerrainTexSource& src : TERRAIN_TEX_SOURCES)
@@ -605,10 +634,6 @@ namespace Procedural
 				if (auto mat = tryBuildMat(src))
 				{
 					mats.push_back(oc::move(*mat));
-					// Parallel to mats, INCLUDING the overlays (whose climate is never read): the shader
-					// indexes climate boxes by material slot, so a skipped entry has to drop out of both
-					// or every box after it describes the wrong texture.
-					m_texClimateReal.push_back(terrainClimateReal(src));
 					if (count)
 						(*count)++;
 				}
@@ -628,7 +653,6 @@ namespace Procedural
 			Log::error("Terrain: no ground splat textures baked - terrain stays flat-shaded");
 			return;
 		}
-		m_texClimateBoxes.assign(mats.size(), glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
 		renderer.setTerrainSplatMaterials(mats, counts);
 		m_texSetRegistered = true;
 	}

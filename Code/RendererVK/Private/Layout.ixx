@@ -646,10 +646,10 @@ export namespace RendererVKLayout
                                    // z = penumbra growth per metre along the sun ray, w unused
 
         // TERRAIN variant texture splatting (Renderer::setTerrainSplatMaterials; keep in sync with
-        // ubo.inc.glsl). Materials are CONTIGUOUS in the material buffer, in the order the shader
-        // composites them bottom-up: [base .. +numGround) climate-blended ground, [.. +numRock) the
-        // bedrock exposed by slope/crag, then the optional single beach entry, then the optional single
-        // snow entry.
+        // ubo.inc.glsl). Materials are CONTIGUOUS in the material buffer: [base .. +numGround)
+        // climate-blended ground, [.. +numRock) the bedrock exposed by slope/crag, then the optional
+        // single beach entry, then the optional single snow entry. Slot order only - the shader
+        // composites ground -> beach -> rock -> snow.
         glm::vec4 terrainTexParams0; // x = base material idx (< 0 = no texture set: flat-color fallback),
                                      // y = ground entry count, z = rock entry count,
                                      // w = climate kernel sigma (Gaussian falloff OUTSIDE a climate box)

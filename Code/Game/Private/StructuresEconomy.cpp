@@ -93,7 +93,7 @@ void StructureSystem::applyStructureTint(const Ref& s)
         if (isCrossingType(s.type))
             color = mediumHue(crossingMediumOf(s.type));
     }
-    const auto material = Globals::rendererVK.createSolidColorMaterial(color);
+    const auto material = Globals::rendererVK.getOrCreateSolidColorMaterial(color);
     rc->node.setMaterialOverride(material);
     // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along -
     // this is also what turns them blueprint-gray and back.

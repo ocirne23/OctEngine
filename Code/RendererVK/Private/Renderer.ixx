@@ -65,12 +65,8 @@ import :RayTracingScene;
 
 import Core.fwd;
 
-static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS,
-    "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.ixx doesn't import :Layout)");
-
 export enum class EValidation { ENABLED, DISABLED };
 export enum class EVr { ENABLED, DISABLED };
-
 
 export class Renderer final
 {
@@ -79,191 +75,133 @@ public:
     Renderer() {}
     ~Renderer();
 
+    // -- Main API --
     bool initialize(Window& window, EValidation validation, EVr vr = EVr::DISABLED);
-    // False in headless server mode; anything that may run headless must gate on it.
-    bool isInitialized() const { return m_initialized; }
+    bool isInitialized() const { return m_initialized; }  // false in headless server mode; anything that may run headless must gate on it.
 
-    // Waits this frame slot's fence - the vsync/GPU throttle of the whole loop. Call it FIRST THING,
-    // before input: nothing else may write the slot's host-visible buffers, and waiting at the top
-    // keeps the sampled input fresh. False = timed out (Time::beginFrame polls, then blocks).
-    bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);
-    // viewportRect: the editor's sub-rect of the swapchain (ignored in VR); a change re-records.
-    // [Concurrency: SERIAL OWNER of the render chain - ONE call in flight, and its outputs are valid
-    // only after the join. Nothing may touch renderer frame state in between.]
-    const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect);
-    // beginFrame as a job. VR defers instead: the join runs it on main, because xrWaitFrame owns VR
-    // pacing and would pin a worker.
-    void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
+    bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX); // VSync/GPU throttle of the whole loop. used by Time::beginFrame for frame pacing
+    CullView setFrameView(const Camera& camera, const Rect& viewportRect); // returns the spatial cull's view of of this frame, call before kickBeginFrameJob().
+    void kickBeginFrameJob(); // The frame's setup pass, as a job. VR defers instead: the join runs it on main, because xrWaitFrame owns VR pacing and would pin a worker.
     void joinBeginFrameJob();
-    // Call after the frame's LAST light add and the force update.
-    void kickGridBuilds();
-    // The spatial cull's view, computable BEFORE beginFrame. VR serves LAST frame's head view (the
-    // pose arrives inside beginFrame), so it lags a frame and is invalid on the first one.
-    CullView getCullView(const Camera& camera, const Rect& viewportRect);
-    // Desktop only (asserts !VR): bit-identical to the frustum beginFrame will build, so the cull can
-    // start while beginFrame runs. Publishes m_centerViewProj, so getCenterViewProj() serves it too.
-    Frustum computeCullFrustum(const Camera& camera, const Rect& viewportRect);
 
-    // passMask (PASS_* bits): which culled passes may draw/trace the node this frame.
-    // [Concurrency: LOCK-FREE between beginFrame and present. An overflow frame drops the tail that
-    // no longer fits; capacity regrows at the next beginFrame.]
-    void renderNode(const RenderNode& node, uint32 passMask = RendererVKLayout::PASS_ALL);
-    void addLightInfo(const RendererVKLayout::LightInfo& light);         // [Concurrency: LOCK-FREE]
-    void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume); // [Concurrency: LOCK-FREE]
-    void addPointLight(const PointLight& light);                         // [Concurrency: LOCK-FREE]
-    void addAreaLight(const AreaLight& areaLight);                       // [Concurrency: LOCK-FREE]
-    void addSpotLight(const SpotLight& spotLight);                       // [Concurrency: LOCK-FREE]
+    void renderNode(const RenderNode& node, uint32 passMask = RendererVKLayout::PASS_ALL); // [Concurrency: LOCK-FREE]
+    void addLightInfo(const RendererVKLayout::LightInfo& light);                           // [Concurrency: LOCK-FREE]
+    void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);                   // [Concurrency: LOCK-FREE]
+    void addPointLight(const PointLight& light);                                           // [Concurrency: LOCK-FREE]
+    void addAreaLight(const AreaLight& areaLight);                                         // [Concurrency: LOCK-FREE]
+    void addSpotLight(const SpotLight& spotLight);                                         // [Concurrency: LOCK-FREE]
 
-    // One frame's world-space overlay line; color is packed RGBA8, R in the low byte. [Concurrency: LOCK-FREE - per-worker staging, merged in present]
-    void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color) 
+    void kickGridBuilds(); // Call after the frame's LAST light add and the force update.
+    void present();
+
+    void reloadShaders();
+    void setWindowMinimized(bool minimized);
+    void recreateWindowSurface(Window& window); // Call on resize
+
+    // -- View settings --
+    // The world point every distance-based falloff measures from (u_sceneFocus). Sun cascades, RTAO fade, GI clipmap window, TLAS range. Cleared = camera pos.
+    void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
+    void clearSceneFocus() { m_sceneFocusEnabled = false; }
+    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
+    const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
+    const glm::vec3& cameraPos() const { return m_cameraPos; } // Valid after joinBeginFrameJob().
+
+    // -- Metrics --
+    Stats getStats();
+    uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
+    uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
+    uint32 getNumMaterials() const { return m_materials.count(); }
+
+    // -- GPU particles + projected decals (driven by the Particle library) --
+    uint32 createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc); // [Concurrency: LOCKING]
+    void updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc);
+    void emitParticles(uint32 slot, uint32 count);
+    void destroyParticleEmitter(uint32 slot); // [Concurrency: LOCKING]
+    void resetParticles() { m_particles.requestReset(); }
+    void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
+    void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
+    void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
+    uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
+
+    // -- Forcefield bubbles (driven by the Force library) --
+    uint32 createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc); // [Concurrency: LOCKING]
+    void updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc);
+    void destroyForceEmitter(uint32 slot); // [Concurrency: LOCKING]
+    uint32 createForceQuerySlot(); // [Concurrency: LOCKING]
+    void setForceQuery(uint32 slot, const glm::vec3& pos);
+    void setForceBakeChunks(oc::span<const glm::ivec4> chunks, float sampleY) { m_force.setBakeChunks(chunks, sampleY); }
+    RendererVKLayout::ForceBakeReadback getForceBakeReadback() const;
+    void destroyForceQuerySlot(uint32 slot); // [Concurrency: LOCKING]
+    glm::vec4 getForceEmitterReadback(uint32 slot) const; // ~2 frames old, between beginFrame and present. xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
+    RendererVKLayout::ForceQueryResult getForceQueryReadback(uint32 slot) const;
+    void setForceFieldParams(const ForceFieldParams& params);
+
+    // -- Global rendering parameters --
+    void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
+    void setAmbientLight(const glm::vec3& color, float intensity) { m_skyParams.ambientColor = color; m_skyParams.ambientIntensity = intensity; }
+    void setSkyRadiance(const glm::vec3& color, float intensity) { m_skyParams.skyRadianceColor = color; m_skyParams.skyRadianceIntensity = intensity; }
+    void setSkyParams(const SkyParams& sky) { m_skyParams = sky; }
+    const SkyParams& getSkyParams() const { return m_skyParams; }
+    void setFogParams(const FogParams& fog) { m_fogParams = fog; }
+    void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
+    const ShadowParams& shadowParams() const { return m_shadowParams; }
+    void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
+
+	// -- Terrain parameters --
+    void setTerrainParams(float meshRadius, float seaLevel, float temperatureLapseRate = 0.0f) { m_terrain.setParams(meshRadius, temperatureLapseRate, seaLevel); }
+    float getTerrainMeshRadius() const { return m_terrain.getMeshRadius(); }
+    using TerrainSplatMaterial = ::TerrainSplatMaterial;
+    using TerrainSplatCounts = ::TerrainSplatCounts;
+    using TerrainTexTweaks = ::TerrainTexTweaks;
+    using TerrainWetTweaks = ::TerrainWetTweaks;
+    void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
+    void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrain.setTexTweaks(params); }
+    void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrain.setWetTweaks(params); }
+    // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first: R = terrain height, G = water surface level, B = regional fog thickness [0,1], A = spare.
+    // Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water depth/level read it. Staged ping-pong: live next frame, no GPU sync and no re-record.
+    void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
+    void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // fog reverts to the flat height base
+    float giTlasRange() const { return m_giProbePipeline.getTlasRange(); } // Metres from sceneFocusOrCamera, for TerrainStreamer
+
+    // -- Ocean generator -> sim piping --
+    void setOceanWaveTrough(float meters) { m_oceanSimPipeline.setWaveTrough(meters); }
+    void setOceanDisplacementExtent(float meters) { m_oceanSimPipeline.setDisplacementExtent(meters); }
+    void setCameraWaterSurface(float worldY) { m_oceanSimPipeline.setCameraWaterSurface(worldY); }
+    void clearCameraWaterSurface() { m_oceanSimPipeline.clearCameraWaterSurface(); }
+    void setOceanParams(const OceanParams& ocean);
+    // RGBA16F (Dx, h, Dz, dDxz), outRes^2 per cascade, cascades packed consecutively. Copy between beginFrame and present, the slot resubmits after that. ~2 frames old.
+    oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
+    {
+        outRes = OceanSimulationPipeline::READBACK_RES;
+        return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
+    }
+
+    // -- UI --
+    void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
+    void updateImGuiTextures(); // MAIN THREAD, between the widget pass's join and the next UI::update. Uploads the queued font-atlas changes, which present() would otherwise do while the widget pass mutates the atlas.
+
+    // -- VR --
+    bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
+    bool isVSyncEnabled() const { return m_vsyncEnabled; } // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
+    bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
+    IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
+
+    // -- Mesh streaming. -- A streamed-out mesh keeps its bounds but draws zero indices, so the cull's DGC draws, the shadow pass and the TLAS-instance writer all no-op for it.
+    void setMeshStreamedOut(uint16 meshInfoIdx);
+    void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
+    const MeshLodParams& getLodParams() const { return m_lodParams; }
+
+    // -- Debug rendering -- 
+    uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
+    void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color) // [Concurrency:LOCK - FREE - per - worker staging, merged in present]
     {
         oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
         const ThreadLocalScope tlsPin;
         verts.push_back({ a, color });
         verts.push_back({ b, color });
     }
-    void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
-
-    // The world point every distance-based falloff measures from (u_sceneFocus). Set: the sun cascades
-    // become nested SPHERES around it and the RTAO fades are metres from it. Cleared = the camera.
-    // The GI clipmap window and the TLAS range bound centre on this too.
-    void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
-    void clearSceneFocus() { m_sceneFocusEnabled = false; }
-    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
-
-    const ShadowParams& shadowParams() const { return m_shadowParams; }
-    void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
-    float giTlasRange() const { return m_giProbePipeline.getTlasRange(); } // Metres from sceneFocusOrCamera: a PASS_GI push farther out never reaches the TLAS, so drop it.
-    void present();
-    void reloadShaders();
-
-    // ---- GPU particles + projected decals (driven by the Particle library) ----
-    // Slot management is main-thread. The slot's config re-uploads every frame, so an update drives
-    // already-spawned particles too. UINT32_MAX = all MAX_PARTICLE_EMITTERS slots taken.
-    uint32 createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc);
-    void updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc);
-    // Queues count spawns from the slot this frame (clamped to MAX_PARTICLE_SPAWNS_PER_FRAME total).
-    void emitParticles(uint32 slot, uint32 count);
-    // Flags the slot's live particles for retirement; the slot recycles once the kill has drained.
-    void destroyParticleEmitter(uint32 slot);
-    void resetParticles() { m_particles.requestReset(); }
-    // The world box the NEXT frame's shelter depth pass covers (PARTICLE_FLAG_OCCLUDE). Main thread,
-    // once per frame; the request expires each present, and no request = no pass and no shelter test.
-    void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
-    // Valid after the begin-frame join.
-    const glm::vec3& cameraPos() const { return m_cameraPos; }
-    // The emitter ocean_spray.cs.glsl spawns into; UINT32_MAX = no spray. Main thread, after the join.
-    void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
-    void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
-    // Into the bindless array, for ParticleEmitterGpu::texFlags.x / DecalInfo::params.x to reference.
-    uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
-    // The per-entity TINT path: feed the result to RenderNode::setMaterialOverride. Cached per
-    // quantized colour; main thread.
-    uint16 createSolidColorMaterial(const glm::vec3& color);
-
-    // ---- Forcefield bubbles (driven by the Force library) ----
-    // Main-thread, and every live slot re-uploads each frame, so update is the per-frame push.
-    // UINT32_MAX = all MAX_FORCE_EMITTERS slots taken.
-    uint32 createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc);
-    void updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc);
-    // Deactivates the slot; it recycles once the in-flight frames drain, because the readback below
-    // is slot-indexed and must never pair a new emitter with stale results.
-    void destroyForceEmitter(uint32 slot);
-    // Persistent point-query slots - indices must stay stable across the readback latency, so this is
-    // deliberately not a per-frame push. Same contract as the emitter slots.
-    uint32 createForceQuerySlot();
-    void setForceQuery(uint32 slot, const glm::vec3& pos);
-    // This frame's chunk set, pushed with the emitters; read back ~2 frames later.
-    void setForceBakeChunks(oc::span<const glm::ivec4> chunks, float sampleY) { m_force.setBakeChunks(chunks, sampleY); }
-    // The baked field + the chunk list it was evaluated for (~2 frames old).
-    RendererVKLayout::ForceBakeReadback getForceBakeReadback() const;
-    void destroyForceQuerySlot(uint32 slot);
-    // Slot-indexed, ~2 frames old, readable between beginFrame and present.
-    // xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
-    glm::vec4 getForceEmitterReadback(uint32 slot) const;
-    RendererVKLayout::ForceQueryResult getForceQueryReadback(uint32 slot) const;
-    // Pushed every frame; all live except useGrid, which rebuilds the force pipelines (GPU stall).
-    void setForceFieldParams(const ForceFieldParams& params);
-
-    void setAmbientLight(const glm::vec3& color, float intensity) { m_skyParams.ambientColor = color; m_skyParams.ambientIntensity = intensity; }
-    void setSkyRadiance(const glm::vec3& color, float intensity) { m_skyParams.skyRadianceColor = color; m_skyParams.skyRadianceIntensity = intensity; }
-    void setSkyParams(const SkyParams& sky) { m_skyParams = sky; }
-    const SkyParams& getSkyParams() const { return m_skyParams; }
-    void setFogParams(const FogParams& fog) { m_fogParams = fog; }
-    // Per frame. meshRadius: m from the camera XZ inside which streamed chunks are resident, the fence
-    // for the ocean's land cull (0 = no terrain, cull off). lapseRate: temperature change per world
-    // metre above sea level (<= 0) - ONE value for the world, so no two consumers can disagree.
-    void setTerrainParams(float meshRadius, float seaLevel, float lapseRate = 0.0f) { m_terrain.setParams(meshRadius, lapseRate, seaLevel); }
-    // CPU ocean culling must fence on the SAME value its vertex shaders do, or it deletes water the
-    // VS would have drawn.
-    float getTerrainMeshRadius() const { return m_terrain.getMeshRadius(); }
-    // Defined with the terrain state; re-spelled here for the call sites.
-    using TerrainSplatMaterial = ::TerrainSplatMaterial;
-    using TerrainSplatCounts = ::TerrainSplatCounts;
-    using TerrainTexTweaks = ::TerrainTexTweaks;
-    using TerrainWetTweaks = ::TerrainWetTweaks;
-    // mats must be laid out [numGround][numRock][beach?][snow?] to match counts. Re-registering frees
-    // the old textures but leaks the old material slots - a config refresh, not a per-frame path.
-    void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts);
-    // One climate box per ground/rock entry, parallel to the mats (beach/snow are overlays, ignored).
-    // xy = (t01 min, max), zw = (h01 min, max); weight is 1 inside and Gaussian-decays outside, so an
-    // entry that does not care about an axis leaves it full width. Cheap - push it per frame.
-    void setTerrainSplatClimate(oc::span<const glm::vec4> boxes);
-    void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrain.setTexTweaks(params); }
-    void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrain.setWetTweaks(params); }
-    // Deepest wave trough below the calm water level (m, >= 0). Sizes the waterline band inside which
-    // the fog scatter samples the live wave height for the underwater boundary.
-    void setOceanWaveTrough(float meters) { m_oceanSimPipeline.setWaveTrough(meters); }
-    // Worst-case distance the ocean VS moves a vertex off its lattice position. The cull pads the ocean
-    // sectors' UNDISPLACED bounding spheres by it; without that, crests still on screen get culled.
-    void setOceanDisplacementExtent(float meters) { m_oceanSimPipeline.setDisplacementExtent(meters); }
-    // The live water surface Y under the camera (~2 frames of latency), or none: the Underwater /
-    // AboveWater particle gate reads it instead of sampling the waves per particle.
-    void setCameraWaterSurface(float worldY) { m_oceanSimPipeline.setCameraWaterSurface(worldY); }
-    void clearCameraWaterSurface() { m_oceanSimPipeline.clearCameraWaterSurface(); }
-    // Flipping OceanParams::hitLighting rebuilds the ocean fragment variant (GPU idle + shader reload).
-    void setOceanParams(const OceanParams& ocean);
-    // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first:
-    // R = terrain height, G = water surface level, B = regional fog thickness [0,1], A = spare.
-    // Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water
-    // depth/level read it. Staged ping-pong: live next frame, no GPU sync and no re-record.
-    void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
-    void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // fog reverts to the flat height base
-    // RGBA16F (Dx, h, Dz, dDxz), outRes^2 per cascade, cascades packed consecutively. COPY IT OUT
-    // between beginFrame and present - the slot resubmits after that. ~2 frames old.
-    oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
-    {
-        outRes = OceanSimulationPipeline::READBACK_RES;
-        return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
-    }
-    void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
-    void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
-    void updateImGuiTextures(); // MAIN THREAD, between the widget pass's join and the next UI::update. Uploads the queued font-atlas changes, which present() would otherwise do while the widget pass mutates the atlas.
-
-    uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
-    uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
-    uint32 getNumMaterials() const { return m_materials.count(); }
-    uint32 getCurrentFrameIndex() const { return m_swapChain.getCurrentFrameIndex(); }
-
-    const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
-
-    bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
-    bool isVSyncEnabled() const { return m_vsyncEnabled; } // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
-    bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
-    IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
-
-    void toggleGiProbeDebug()    { m_giProbePipeline.toggleDebug(); }
+    void toggleGiProbeDebug() { m_giProbePipeline.toggleDebug(); }
     void cycleGiProbeDebugMode() { m_giProbePipeline.cycleDebugMode(); setHaveToRecordCommandBuffers(); }
-
-    void setWindowMinimized(bool minimized);
-    void recreateWindowSurface(Window& window);
-
-    Stats getStats();
-    const MeshLodParams& getLodParams() const { return m_lodParams; }
-
-    // Mesh streaming (MeshStreamer). A streamed-out mesh keeps its bounds but draws zero indices, so the cull's DGC draws, the shadow pass and the TLAS-instance writer all no-op for it.
-    void setMeshStreamedOut(uint16 meshInfoIdx);
-    void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
 
 private:
     struct PerFrameData;
@@ -273,7 +211,10 @@ private:
     Renderer& operator=(const Renderer&) = delete;
     Renderer& operator=(const Renderer&&) = delete;
 
+    uint32 getCurrentFrameIndex() const { return m_swapChain.getCurrentFrameIndex(); }
     CommandBuffer& getCurrentCommandBuffer() { return m_perFrameData[m_swapChain.getCurrentFrameIndex()].primaryCommandBuffer; }
+
+	void beginFrame(); // through kickBeginFrameJob() and joinBeginFrameJob(): sets up the frame's per-frame data, cull, and UBOs.
 
     void recordCommandBuffers();
     void recordSceneSecondaries(uint32 frameIdx);
@@ -420,14 +361,15 @@ private:
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;
     JobCounter m_gpuCollectCounter;    // the in-flight timestamp-collect job (beginFrame kicks -> recordCommandBuffers joins)
-    Camera m_beginFrameJobCamera;      // The job reads these, so they only change while no job is in flight.
-    Rect m_beginFrameJobRect;
+    Camera m_frameCamera;              // setFrameView; the begin-frame job reads these, so they only
+    Rect m_frameRect;                  // change while no job is in flight.
     JobCounter m_beginFrameJobCounter;
+    bool m_frameViewSet = false;       // setFrameView ran for this frame (cleared by present)
     bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
     JobCounter m_gridJobCounter;       // Both grid jobs share it; what each measured lives in the object that owns that grid.
     bool m_gridBuildsKicked = false;
     void joinGridBuilds(uint32 frameIdx, PerFrameData& frameData);
-    Camera m_lastCullCamera;           // VR one-frame-latent cull view (see getCullView); written at the end of beginFrame, VR only.
+    Camera m_lastCullCamera;           // VR one-frame-latent cull view (see setFrameView); written at the end of beginFrame, VR only.
     bool m_hasCullView = false;
     RenderPass m_renderPass;
     Framebuffers m_framebuffers;
@@ -580,3 +522,5 @@ export namespace Globals
 OC_INIT_SEG(OC_SEG_VK_RENDERER)
     Renderer rendererVK;
 } // namespace Globals
+
+static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS, "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.ixx doesn't import :Layout)");

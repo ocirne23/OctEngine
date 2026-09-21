@@ -13,17 +13,21 @@ import :BakedWorldMap;
 //
 // The Renderer keeps buildUboTerrain (every field ends up in the frame UBO) and the record side; this
 // owns the STATE those read, and the one piece of logic that is not a straight copy - the wetness tick.
-// One terrain splat material: BC-compressed .dds paths (relative to Assets/). Which climate it covers
-// is NOT here - see TerrainResources::setSplatClimate; textures are heavy and change ~never, the
-// climate boxes are two dozen floats and track live tweaks.
+// One terrain splat material: BC-compressed .dds paths (relative to Assets/) plus the climate box the
+// ground/rock climate blend matches it against (ignored for beach/snow).
 export struct TerrainSplatMaterial
 {
     oc::string diffuseDds;
     oc::string normalDds;
     oc::string armDds; // packed AO (R) / roughness (G) / metalness (B); sampled linear
+    // xy = temperature range, already t01; zw = precipitation range in mm/yr. Precipitation stays in real
+    // units because its divisor is a live tweak (TerrainTexTweaks::precipFullMm): buildUboTerrain
+    // normalizes it every frame. The default is full width on both axes (matches any climate).
+    glm::vec4 climate{ 0.0f, 1.0f, 0.0f, 1.0e6f };
 };
 
-// Layout of a registered set, in the order the shader composites it bottom-up. The beach and snow
+// Layout of a registered set, in slot order [ground][rock][beach?][snow?] (the shader composites
+// ground -> beach -> rock -> snow; see Renderer::setTerrainSplatMaterials). The beach and snow
 // entries are OVERLAYS, not materials the climate blend can pick: beach paints over the waterline
 // whatever the climate, and snow paints over everything else (ground AND rock) where it is cold
 // enough and the slope is shallow enough to hold it.
@@ -71,6 +75,10 @@ export struct TerrainTexTweaks
     // TerrainStreamer scales these by V3's world scale, like the crag thresholds.
     float cragWanderAmp = 150.0f;      // metres at the model's true scale; 0 = off
     float cragWanderWavelength = 2000.0f; // metres at the model's true scale
+    // mm/yr that reads as humidity 1.0: the divisor for TerrainSplatMaterial::climate's precipitation.
+    // Mirrors the generator's live "Terrain/V3/Precip for full humidity" tweak; if the two drift, the
+    // whole climate table slides along the humidity axis.
+    float precipFullMm = 2200.0f;
 };
 
 // Terrain wetness clipmap (TerrainWetnessPipeline): the decaying memory of where water touched the
@@ -164,12 +172,11 @@ public:
     };
     // Returns the retired set's textures; the caller queues them for a deferred free.
     oc::vector<uint16> setSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts, const SplatUpload& io);
-    void setSplatClimate(oc::span<const glm::vec4> boxes);
 
     int32 getSplatBaseMaterial() const { return m_splatBaseMaterial; } // -1 = no set (flat-colour fallback)
     const TerrainSplatCounts& getSplatCounts() const { return m_splatCounts; }
     oc::span<const uint16> getSplatTextures() const { return m_splatTextures; }
-    const glm::vec4* getSplatClimate() const { return m_splatClimate; }
+    const glm::vec4* getSplatClimate() const { return m_splatClimate; } // per slot, TerrainSplatMaterial::climate units
 
     // ---- The CPU-baked height/water map (fog's height base, the ocean's coarse shore fallback) ----
     BakedWorldMap& getHeightMap() { return m_heightMap; }
