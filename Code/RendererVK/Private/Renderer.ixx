@@ -621,8 +621,6 @@ private:
     // the main thread has to grow + upload after the join.
     JobCounter m_gridJobCounter;
     bool m_gridBuildsKicked = false;
-    LightGridComputePipeline::Demand m_lightGridDemand;
-    bool m_lightGridNeedsGrow = false;
     void joinGridBuilds(uint32 frameIdx, PerFrameData& frameData);
     // VR one-frame-latent cull view (see getCullView); written at the end of beginFrame, VR only.
     Camera m_lastCullCamera;

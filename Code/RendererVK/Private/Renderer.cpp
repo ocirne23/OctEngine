@@ -65,7 +65,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     assert(Globals::jobSystem.getNumContexts() != 0 && "initialize the JobSystem before the Renderer");
     m_debugLineVerts.initialize();
     m_particles.initialize();
-    m_force.initialize();
+    m_force.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
     registerTweaks(); // before the device: a Saved/override value must be live when the swapchain is made
     if (!initDeviceAndSwapchain(window, validation, vr))
@@ -648,46 +648,14 @@ void Renderer::kickGridBuilds()
     m_gridBuildsKicked = true;
     m_submission.settleCounts(); // settle the lock-free claims (present repeats it, harmless)
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
-    Globals::jobSystem.submit([this, frameIdx]
-        {
-            m_lightGridDemand = m_lightGridComputePipeline.build(m_submission.getLights(frameIdx));
-            m_lightGridNeedsGrow = m_submission.lightGridNeedsGrow(m_lightGridDemand, m_lightGridComputePipeline);
-            if (!m_lightGridNeedsGrow)
-                m_lightGridComputePipeline.upload(m_submission.slot(frameIdx).lightTable, m_submission.getLightTableEntries());
-        },
+    Globals::jobSystem.submit([this, frameIdx] { m_submission.buildLightGrid(m_lightGridComputePipeline, frameIdx); },
         { "Light grid job", EProfileCategory::Renderer }, EJobPriority::High, &m_gridJobCounter); // no waits inside: no ForeignWait
 
-    // The force compaction's shell-cull inputs (cheap, main): the CENTER view (TAA jitter never bakes into it).
-    ForceFieldPipeline::ShellCull& shellCull = m_force.getShellCull();
-    shellCull = ForceFieldPipeline::ShellCull{};
-    shellCull.sampledRadius = m_force.getParams().sampledShellRadius > 0.0f
-        ? m_force.getParams().sampledShellRadius : FLT_MAX;
-    if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
-    {
-        shellCull.enabled = true;
-        shellCull.frustum = Frustum(getCenterViewProj());
-        shellCull.cameraPos = m_cameraPos;
-        shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
-        shellCull.minPixels = m_force.getParams().minShellPixels;
-        // One analytic march per pixel; the density DEBUG view stays per-proxy (the union FS
-        // does not implement it), so it forces the old path while on.
-        shellCull.unionPass = m_force.getParams().unionMarch && !m_force.getParams().densityView;
-    }
-    shellCull.bakeVolume = m_force.isShellBakeActive(); // set by buildUboForce (this frame's fit)
-    shellCull.logTierDebug = m_force.getParams().logTierDebug;
-    Globals::jobSystem.submit([this, frameIdx]
-        {
-            // Compacts the ACTIVE emitter slots + uploads query positions (this slot's fence was waited).
-            m_forceFieldPipeline.upload(frameIdx, m_force.getEmitters(), m_force.getQueries(), m_force.getBakeChunks(), m_force.getBakeSampleY(), m_force.getShellCull());
-            m_force.setGridNeedsGrow(false);
-            if (m_force.isEnabled() && m_forceFieldPipeline.getUseGrid())
-            {
-                m_force.getGridDemand() = m_forceFieldPipeline.buildGrid();
-                m_force.setGridNeedsGrow(!m_forceFieldPipeline.gridFits(m_force.getGridDemand()));
-                if (!m_force.getGridNeedsGrow())
-                    m_forceFieldPipeline.uploadGrid(frameIdx);
-            }
-        },
+    // The force compaction's size-cull inputs (cheap, main): the CENTRE view, whose TAA jitter never
+    // bakes in. VR is excluded - one centre frustum cannot serve both eyes.
+    m_force.buildShellCull(!isVrEnabled(), Frustum(getCenterViewProj()), m_cameraPos,
+        m_mipPixelScale * 0.5f); // pixelScale: viewportH/2 / tan(fov/2)
+    Globals::jobSystem.submit([this, frameIdx] { m_force.buildGrid(m_forceFieldPipeline, frameIdx); },
         { "Force grid job", EProfileCategory::Force }, EJobPriority::High, &m_gridJobCounter); // waits only on its own parallelFor: no ForeignWait
 }
 
@@ -698,21 +666,10 @@ void Renderer::joinGridBuilds(uint32 frameIdx, PerFrameData& frameData)
         ProfileScope profileScope("Grid builds join", EProfileCategory::Wait);
         Globals::jobSystem.wait(m_gridJobCounter);
     }
-    // The rare main-thread part: an exact-fit growth (GPU idle + re-record), then the upload the job skipped.
-    if (m_lightGridNeedsGrow)
-    {
-        m_lightGridNeedsGrow = false;
-        m_submission.growLightGrid(m_lightGridDemand, m_lightGridComputePipeline);
-        m_lightGridComputePipeline.upload(m_submission.slot(frameIdx).lightTable, m_submission.getLightTableEntries());
-    }
-    if (m_force.getGridNeedsGrow())
-    {
-        m_force.setGridNeedsGrow(false);
-        waitForGpuAndFlushStaging();
-        m_forceFieldPipeline.growGridBuffers(m_force.getGridDemand());
-        setHaveToRecordCommandBuffers();
-        m_forceFieldPipeline.uploadGrid(frameIdx);
-    }
+    // The rare main-thread part: an exact-fit growth (GPU idle + re-record), then the upload the
+    // job skipped. Both are no-ops on the frames that fit, which is nearly all of them.
+    m_submission.applyLightGridGrowth(m_lightGridComputePipeline, frameIdx);
+    m_force.applyGridGrowth(m_forceFieldPipeline, frameIdx);
 }
 
 void Renderer::joinBeginFrameJob()

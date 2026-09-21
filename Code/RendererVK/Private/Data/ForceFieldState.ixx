@@ -1,7 +1,8 @@
-export module RendererVK:ForceFieldState;
+﻿export module RendererVK:ForceFieldState;
 
 import Core;
 import Core.glm;
+import Core.Frustum;
 import :Layout;
 import :Settings;
 import :SlotTable;
@@ -20,8 +21,11 @@ import :ForceFieldPipeline;
 export class ForceFieldState final
 {
 public:
-    void initialize()
+    // onGpuIdle runs before the grid buffers are re-created, onInvalidate re-records afterwards.
+    void initialize(oc::function<void()> onGpuIdle, oc::function<void()> onInvalidate)
     {
+        m_onGpuIdle = oc::move(onGpuIdle);
+        m_onInvalidate = oc::move(onInvalidate);
         m_emitters.initialize(RendererVKLayout::MAX_FORCE_EMITTERS);
         m_queries.initialize(RendererVKLayout::MAX_FORCE_QUERIES);
     }
@@ -90,10 +94,14 @@ public:
     bool isShellBakeActive() const { return m_shellBakeActive; }
 
     // ---- The between-frames grid job (kickGridBuilds -> joinGridBuilds) ----
-    ForceFieldPipeline::ShellCull& getShellCull() { return m_shellCull; }   // compaction inputs, set at the kick
-    ForceFieldPipeline::GridDemand& getGridDemand() { return m_gridDemand; } // what the job measured
-    void setGridNeedsGrow(bool needsGrow) { m_gridNeedsGrow = needsGrow; }
-    bool getGridNeedsGrow() const { return m_gridNeedsGrow; }
+    // The compaction's size-cull inputs, built on the main thread at the kick from the CENTER view (TAA
+    // jitter never bakes into it). VR passes enabled = false: one centre frustum cannot serve both eyes.
+    void buildShellCull(bool enabled, const Frustum& centerFrustum, const glm::vec3& cameraPos, float pixelScale);
+    // The job body: compact the ACTIVE emitter slots, upload the query positions, and build the CPU grid
+    // when the grid path is on. Records whether the result fits - the main thread grows at the join.
+    void buildGrid(ForceFieldPipeline& pipeline, uint32 frameIdx);
+    // The join's rare main-thread half: an exact-fit growth, then the upload the job skipped.
+    void applyGridGrowth(ForceFieldPipeline& pipeline, uint32 frameIdx);
 
 private:
     ForceFieldParams m_params;
@@ -104,6 +112,8 @@ private:
     float m_bakeSampleY = 1.0f;
     bool m_shellBakeActive = false;
 
+    oc::function<void()> m_onGpuIdle;
+    oc::function<void()> m_onInvalidate;
     ForceFieldPipeline::ShellCull m_shellCull;
     ForceFieldPipeline::GridDemand m_gridDemand;
     bool m_gridNeedsGrow = false;

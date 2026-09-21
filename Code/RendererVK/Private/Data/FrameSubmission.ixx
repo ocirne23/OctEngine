@@ -1,4 +1,4 @@
-export module RendererVK:FrameSubmission;
+﻿export module RendererVK:FrameSubmission;
 
 import Core;
 import :Buffer;
@@ -55,15 +55,19 @@ public:
 
     uint32 getLightTableEntries() const { return m_lightTableEntries; }
     size_t getLightGridBufferSize() const { return m_lightGridBufferSize; }
-    // True when this frame's exact demand does not fit; growLightGrid then fits it with headroom.
-    bool lightGridNeedsGrow(const LightGridComputePipeline::Demand& demand, const LightGridComputePipeline& pipeline) const;
-    // Synchronous, from present(): the CPU build knows the exact demand before anything is uploaded,
-    // so growth fits it and no frame ever drops a light. The table stays under a quarter full (hash
-    // collision quality), the grid data gets 1.5x.
-    void growLightGrid(const LightGridComputePipeline::Demand& demand, LightGridComputePipeline& pipeline);
+
+    // ---- The between-frames light grid job (kickGridBuilds -> joinGridBuilds) ----
+    // The job body: merge this frame's lights into the grid (the per-light work already ran inline in
+    // addLight) and upload, unless the result does not fit - the main thread then grows at the join.
+    void buildLightGrid(LightGridComputePipeline& pipeline, uint32 frameIdx);
+    // The join's rare main-thread half. The CPU build knows the exact demand before anything is
+    // uploaded, so a growth fits it and no frame ever drops a light: the table stays under a quarter
+    // full (hash collision quality), the grid data gets 1.5x.
+    void applyLightGridGrowth(LightGridComputePipeline& pipeline, uint32 frameIdx);
 
 private:
     void createLightGridBuffers();
+    void growLightGrid(LightGridComputePipeline& pipeline);
 
     oc::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
     oc::function<void()> m_onGpuIdle;
@@ -73,6 +77,8 @@ private:
     uint32 m_fogVolumeCount = 0;
     uint32 m_decalCount = 0;
 
+    LightGridComputePipeline::Demand m_gridDemand; // what the job measured
+    bool m_gridNeedsGrow = false;
     size_t m_lightGridBufferSize = RendererVKLayout::INITIAL_LIGHT_GRID_BUFFER_SIZE;
     uint32 m_lightTableEntries = RendererVKLayout::INITIAL_LIGHT_TABLE_NUM_ENTRIES;
 };

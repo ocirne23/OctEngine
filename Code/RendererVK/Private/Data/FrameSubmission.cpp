@@ -1,4 +1,4 @@
-module RendererVK;
+﻿module RendererVK;
 
 import Core;
 import :FrameSubmission;
@@ -92,14 +92,27 @@ oc::span<const RendererVKLayout::LightInfo> FrameSubmission::getLights(uint32 fr
     return oc::span<const RendererVKLayout::LightInfo>(m_slots[frameIdx].mappedLightInfos.data(), m_lightCount);
 }
 
-bool FrameSubmission::lightGridNeedsGrow(const LightGridComputePipeline::Demand& demand, const LightGridComputePipeline& pipeline) const
+void FrameSubmission::buildLightGrid(LightGridComputePipeline& pipeline, uint32 frameIdx)
 {
+    m_gridDemand = pipeline.build(getLights(frameIdx));
     // hostBuffersFit covers the table: its entries are 4x the pipeline's grid capacity (the claim table IS the GPU table)
-    return demand.gridDataBytes > m_lightGridBufferSize || !pipeline.hostBuffersFit(demand);
+    m_gridNeedsGrow = m_gridDemand.gridDataBytes > m_lightGridBufferSize || !pipeline.hostBuffersFit(m_gridDemand);
+    if (!m_gridNeedsGrow)
+        pipeline.upload(m_slots[frameIdx].lightTable, m_lightTableEntries);
 }
 
-void FrameSubmission::growLightGrid(const LightGridComputePipeline::Demand& demand, LightGridComputePipeline& pipeline)
+void FrameSubmission::applyLightGridGrowth(LightGridComputePipeline& pipeline, uint32 frameIdx)
 {
+    if (!m_gridNeedsGrow)
+        return;
+    m_gridNeedsGrow = false;
+    growLightGrid(pipeline);
+    pipeline.upload(m_slots[frameIdx].lightTable, m_lightTableEntries);
+}
+
+void FrameSubmission::growLightGrid(LightGridComputePipeline& pipeline)
+{
+    const LightGridComputePipeline::Demand& demand = m_gridDemand;
     const size_t neededGridBytes = demand.gridDataBytes + demand.gridDataBytes / 2;
     while (m_lightGridBufferSize < neededGridBytes)
         m_lightGridBufferSize *= 2;
