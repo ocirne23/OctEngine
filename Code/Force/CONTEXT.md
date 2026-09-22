@@ -50,6 +50,12 @@ ForceSystem.ixx. `ForceQuery` stays in ForceSystem.ixx.
 > (`phi[t] += team == t ? c : 0.0`), which compiles to predicated adds and is correct at every team
 > count ([force_field.inc.glsl:183](../../Assets/Shaders/force_field.inc.glsl#L183)). Reads by a loop
 > induction variable unroll statically and are fine.
+>
+> **Reads at a RUN-TIME team index go through `forcePhiAt(phi, team)`** (the same unrolled select):
+> `phi[team]` is correct, but it lets the compiler put the whole private array in LOCAL memory. The
+> union march went 72 regs / **176 B → 48 B** local with it. `force_shell.fs` defines
+> `FORCE_PHI_DYNAMIC_READ` (plain index): there the select measured no clear win (64 / 48 B with +17 %
+> code, or 72 / 16 B mixed), so it stays at its original 64 / 48 B.
 
 ## `Globals::forceSystem`
 

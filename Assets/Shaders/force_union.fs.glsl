@@ -171,8 +171,8 @@ void main()
                     float phiW[NUM_FORCE_TEAMS];
                     float phiVisW[NUM_FORCE_TEAMS];
                     forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
-                    const float visPrev = phiVisW[prevTeam] / max(phiW[prevTeam], 1e-6);
-                    const float visBest = phiVisW[bestTeam] / max(phiW[bestTeam], 1e-6);
+                    const float visPrev = forcePhiAt(phiVisW, prevTeam) / max(forcePhiAt(phiW, prevTeam), 1e-6);
+                    const float visBest = forcePhiAt(phiVisW, bestTeam) / max(forcePhiAt(phiW, bestTeam), 1e-6);
                     if (min(visPrev, visBest) < 0.05)
                     {
                         wallSkinTeam = visPrev > visBest ? prevTeam : bestTeam;

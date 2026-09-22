@@ -796,6 +796,22 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   OVERLAY pass (64/16 itself; it was 80/32 inside the ground's shader). The film's scene mirror ray is
   disabled (`TERRAIN_FILM_RT_MIRROR`). The ocean's seabed splat costs 16 B. The film surface (wave taps,
   slopes, Jacobians, foam) and the terrain's wetness block are half math.
+* **Bisected 2026-09-22 - NO single peak left** (regs/local, "demand" = regs + local / 4):
+  * Lit core (lit 64/32, terrain ground 72/16, demand ~72-76): the terrain splat alone is 54 (63
+    tessellated), so the peak is `computeLitColor`. Removing the PCSS search (64/48), the light shadow rays
+    (72/0), the underwater sun transmittance (64/48), the relief sun gate (72/16) or the two-cascade border
+    PCSS (a dithered cascade pick: 64/48) - EACH ONE alone - leaves the demand the same. Several sites
+    reach it; the terrain pays ~4 registers over lit.
+  * Ocean (80/16, demand ~84): no underside path 72/32, no light loop 72/32, no scene rays 64/64, no rays AND
+    no seabed splat 64/48. Same pattern.
+  * `gi_probe_trace` (96/0): the sun ray, the light loop and the bounce each add ~16 over a ~80 base; the
+    hit path whole is 72. `[[dont_unroll]]` on the ray loop: 96. Shared-memory accumulators instead of the
+    per-thread ones: 109 (RMW) / 108 (`atomicAdd`, VK_EXT_shader_atomic_float).
+  * The AO upsample's tap arrays as index bits: terrain 72/0 but lit 72/48; fully unrolled: terrain 72/32.
+  * Rebuilding `specularColor` / `diffuseColOverPi` from albedo + metalness per light (4 live values, not
+    6): a BYTE-IDENTICAL binary - the compiler hoists the loop-invariant values back out.
+  * What is left is structural: split a peak into its own pass (the film's overlay precedent), or a
+    thread-per-ray trace.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
@@ -1119,7 +1135,12 @@ calls `reloadShaders()`.
 * **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
   `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
   atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
-  normalized on the CPU, so shaders use it raw; the PCSS Vogel disk rotates its compile-time tap angles
+  normalized on the CPU, so shaders use it raw; PCSS takes 12 blocker + 12 filter taps (16 + 16 before:
+  the same registers, 8 fewer fetches per pixel, ~3.5 KB less code). **Umbra early-out** (`pcssCascade`, not
+  the border path): all 12 search taps occluded AND one hardware-PCF tap at the centre = 0 → return 0, the
+  filter skipped. The centre tap guards a small hole over the pixel that the sparse 15-texel search misses
+  (a close grate / canopy gap the filter's small disk would see). Static meshes 1.635 → 1.606 ms (sandbox,
+  3-4 runs each, no overlap); lit FS 64/48 → 72/16, terrain unchanged. The PCSS Vogel disk rotates its compile-time tap angles
   by ONE per-pixel `(cos, sin)` (`rotSC`) instead of a sincos per tap (keep the tap loops fully
   unrolled: 4-tap batches with a run-time-indexed offset table measured 93 registers against 83); `u_cascadeSunSizeTexels` holds
   the per-cascade PCSS penumbra scale (`buildUboSunShadow`, from the matrices' bottom-row scalars);

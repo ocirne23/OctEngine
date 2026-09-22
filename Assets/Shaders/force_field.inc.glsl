@@ -194,6 +194,26 @@ void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
     forceAccumulateCell(x, forceCandidateCell(x), phi);
 }
 
+// A per-team array READ at a RUN-TIME team index, as an unrolled select. `phi[team]` itself is correct,
+// but a dynamic index into a private array lets the compiler put the WHOLE array in local memory (an
+// L1TEX round trip per access, on every march sample); the select keeps every element in registers.
+// The same shape as the accumulate's predicated adds. Read per-team arrays through this when the index
+// is not a loop induction variable.
+// Measured (pipeline stats, RTX 4090): force_union.fs 72 regs / 176 B local -> 72 / 48 B. force_shell.fs
+// keeps the plain index (FORCE_PHI_DYNAMIC_READ): the select there measured 64 / 48 B with +17 % code, or
+// 72 / 16 B when mixed - no clear win, so it stays at its original 64 / 48 B.
+float forcePhiAt(float phi[NUM_FORCE_TEAMS], uint team)
+{
+#ifdef FORCE_PHI_DYNAMIC_READ
+    return phi[team];
+#else
+    float r = phi[0];
+    for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
+        r = team == t ? phi[t] : r;
+    return r;
+#endif
+}
+
 // forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
 // scaled by its emitter's shell alpha (outputParams.y). The shading path weighs team colors and
 // contact glow by the VISIBLE fields, so an invisible emitter (alpha 0 - e.g. a map-scale gameplay
@@ -248,7 +268,7 @@ float forceSurfaceForTeam(vec3 x, uint team, float iso)
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != team)
             opposing = max(opposing, phi[t]);
-    return phi[team] - forceOpposingBound(iso, opposing);
+    return forcePhiAt(phi, team) - forceOpposingBound(iso, opposing);
 }
 
 // A fixed team's own field and its best opposing field at x.
@@ -256,7 +276,7 @@ void forceTeamSample(vec3 x, uint team, out float own, out float opposing)
 {
     float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
-    own = phi[team];
+    own = forcePhiAt(phi, team);
     opposing = 0.0;
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != team)
@@ -318,7 +338,7 @@ float forceTeamDiff(vec3 x, uint teamA, uint teamB)
 {
     float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
-    return phi[teamA] - phi[teamB];
+    return forcePhiAt(phi, teamA) - forcePhiAt(phi, teamB);
 }
 
 // Normal of the equilibrium wall (gradient of the team difference), pointing toward teamA's side.

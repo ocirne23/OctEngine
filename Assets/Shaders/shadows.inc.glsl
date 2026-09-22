@@ -5,8 +5,8 @@
 #define GOLDEN_RATIO_FRACT 0.6180339887
 #define PCSS_MAX_PENUMBRA_TEXELS 15.0  // cap so the kernel never gets too sparse/noisy
 #define PCSS_MIN_PENUMBRA_TEXELS 1.0   // floor so contact shadows stay crisp
-#define PCSS_BLOCKER_SAMPLES 16
-#define PCSS_FILTER_SAMPLES 16
+#define PCSS_BLOCKER_SAMPLES 12
+#define PCSS_FILTER_SAMPLES 12
 #define GOLDEN_ANGLE 2.39996323
 
 // Per-cascade scalars are stashed in the matrix's bottom row; restore [0,0,0,1] before using it.
@@ -109,6 +109,13 @@ float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 	float blockers = blockerSearch(p.xy, cascade, p.z, searchRadiusUV, rotSC, avgBlocker);
 	if (blockers <= 0.0)
 		return 1.0; // no occluders found
+	// Umbra: every search tap (the whole max-penumbra disk) is occluded, and so is the hardware-PCF tap at the
+	// centre - fully shadowed, skip the filter. The filter disk lies inside the search disk and uses the
+	// same compare (LEQUAL is the complement of the search's d < ref), so it would find ~0 too. The centre
+	// tap guards the one case the sparse search can miss: a small hole straight over the pixel (a gap in a
+	// grate or canopy with the caster close by, where the filter's small disk would see the light).
+	if (blockers >= float(PCSS_BLOCKER_SAMPLES) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
+		return 0.0;
 	// Directional penumbra: width grows with the world gap to the blocker (constant across cascades
 	// once expressed in texels). Caster touching the surface => ~MIN texels (sharp); far => up to MAX.
 	float penumbraTexels = clamp((p.z - avgBlocker) * pcssSunSizeTexels(cascade), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS);

@@ -13,6 +13,9 @@
 // layer on top.
 
 #include "shared.inc.glsl"
+// Plain run-time index for the per-team reads here: the unrolled select (forcePhiAt) measured no clear
+// win in this shader, unlike the union march - see forcePhiAt.
+#define FORCE_PHI_DYNAMIC_READ
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
 layout (binding = 2) uniform sampler2D u_sceneDepth;

@@ -79,7 +79,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     float phi[NUM_FORCE_TEAMS];
     float phiVis[NUM_FORCE_TEAMS]; // shell-alpha-weighted: invisible fields shape, never tint
     forceAccumulateVisible(hitPos, phi, phiVis);
-    const float ownPhi = phi[hitTeam];
+    const float ownPhi = forcePhiAt(phi, hitTeam);
     if (ownPhi <= 0.0)
         return vec4(0.0);
     float opposingPhiVis = 0.0;
