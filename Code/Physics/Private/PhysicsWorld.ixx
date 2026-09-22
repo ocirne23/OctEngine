@@ -217,7 +217,7 @@ private:
     // Buoyancy (see setWaterSurface)
     WaterSurfaceFn m_waterSurface;
     WaterActiveFn m_waterActive; // global gate; empty = always on
-    float m_waterDensity = 2000.0f;//1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
+    float m_waterDensity = 200.0f;//1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
     float m_waterLinearDrag = 0.5f;//3.0f;  // 1/s: drag on each submerged probe's point velocity
 
     // Debug draw tweaks (Physics/Debug)
