@@ -138,7 +138,7 @@ export struct TerrainWetTweaks
                                  // frame - at high fps a per-frame change is below the R16F image's step
                                  // (0.0005 at wetness 0.5) and rounds away, so rain and drying stall and the
                                  // result depends on the framerate. Keep it well under the fps.
-    float diffusionRate = 2.0f;  // 1/s: sideways spread through the 3x3 tent (packed per frame as
+    float diffusionRate = 20.0f; // 1/s: sideways spread through the 3x3 tent (packed per frame as
                                  // 1 - exp(-rate * dt), so it is framerate independent)
     float rain = 0.0f;           // wetness added per second everywhere (the weather driver sets it)
     float dryTime = 10.0f;       // s to decay to 1/e on cool ground
@@ -150,7 +150,7 @@ export struct TerrainWetTweaks
     // --- The water surface ---
     // The LEVEL inside the relief: 0 = its low points, 1 = its top (the film flat over it). The fill happens
     // between these two wetnesses, shaped by the curve (1 = linear, > 1 = fills late, < 1 = early).
-    float fillStart = 0.35f;     // wetness at which water begins to stand in the low points
+    float fillStart = 0.5f;      // wetness at which water begins to stand in the low points
     float fillFull = 1.0f;       // wetness that submerges the relief
     float fillCurve = 1.0f;      // exponent between them
     float edgeFade = 0.2f;       // m of water depth the film fades out over, so it always dies exactly where
@@ -160,20 +160,31 @@ export struct TerrainWetTweaks
                                  // ocean's surface (a hard edge where the depth test cut it)
     float oceanEdgeFade = 0.7f;  // m of water column the OCEAN blends out over at its edge onto the ground and
                                  // the film drawn before it; 0 = the ocean's hard edge
-    float filmMaxSlope = 30.0f;  // degrees: no standing water on ground steeper than this (the smooth mesh
+    float filmMaxSlope = 25.0f;  // degrees: no standing water on ground steeper than this (the smooth mesh
                                  // slope); 90 = off. The wetness itself is untouched
-    float filmSlopeFade = 10.0f; // degrees below the max over which the pool level sinks to nothing (the
+    float filmSlopeFade = 5.0f;  // degrees below the max over which the pool level sinks to nothing (the
                                  // film recedes into the relief's low points instead of fading)
     // --- The water's look (the ocean's own terms, so the two meet seamlessly) ---
     float waviness = 1.0f;       // film normal: 0 = the level water plane, 1 = the live FFT wave normal
     float normalScale = 2.0f;    // film wave normal strength, on top of the ocean's "Normal strength"
     float rippleStrength = 0.1f; // inland wind ripples (0 = off): the finest ocean cascade's slope weight
                                  // where the shore weight is 0. Amplitude follows the ocean's wind.
-    float roughness = 0.08f;     // ground roughness at full wetness
+    float roughness = 0.08f;     // the water FILM's perceptual roughness (as the ocean's own)
+    float wetRoughness = 0.3f;   // ground roughness (GGX alpha, as the splat's) where fully wet
+    // --- The drying pattern: the wet look (darkening + gloss) dries in islands, not uniformly ---
+    float dryingPattern = 1.0f;  // 0..1: uniform drying (0) to the patterned one (1)
+    float darkeningEdge = 0.5f;  // soft band around the darkening's drying level (pattern units): wide = the
+                                 // darkening fades over a larger range
+    float roughnessEdge = 0.5f;  // the same for the wet gloss: small = crisp gloss islands
+    float dryingPatternSize = 0.4f;   // m: the size of the drying blotches (world value fBm)
+    float dryingPatternRelief = 0.6f; // 0..1: share of the splat relief in the pattern (fine edge breakup)
+    float dryingPatternContrast = 2.5f; // stretch of the noise toward fully dry / fully wet: higher = stronger islands
+    float underwaterRoughness = 0.9f; // ground roughness under the live ocean and under the film
     float darkening = 0.55f;     // ground albedo multiplier at full wetness
-    float darkeningReach = 1.5f; // decades of wetness below fill start the darkening ramps over, on the log of
-                                 // the wetness (each decade = the same drying time): higher = a larger damp
-                                 // region and a longer fade as the ground dries
+    float darkeningThreshold = 0.3f;  // wetness above which the ground's darkening is full (smooth fade below)
+    float roughnessThreshold = 1.0f;  // wetness above which the ground's wet gloss is full (smooth fade below)
+    float wetNormalScale = 1.5f;  // the normal map's tilt at full gloss: 1 = unchanged, < 1 = flatter (water
+                                   // fills the micro relief: a sharper highlight), > 1 = exaggerated
 };
 
 export class TerrainResources final

@@ -279,13 +279,13 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// exactly at the shore) turns the water milky ("Turbidity") and rougher. The surf beside the film
 	// carries it, so the film carries it too.
 	const float16_t milk = clamp(turbulence * float16_t(u_oceanParams5.y), float16_t(0.0), one);
-	// The ocean's microfacet alpha: perceptual roughness^2, plus the LEAN slope variance (scaled by
+	// The ocean's microfacet alpha on the film's own base ("Water roughness"): perceptual roughness^2, plus the LEAN slope variance (scaled by
 	// "Glint filtering") that stretches the glitter toward the horizon, plus the turbulence
 	// micro-roughness. No spec-AA term: that is a screen derivative, undefined in this branch.
 	// NOTE: the lit core's `roughness` parameter IS the GGX alpha, so it goes in directly - passing a
 	// perceptual value there gave the film a wider glint than the water beside it.
 	// alpha^2 in 32-bit (its perceptual^4 term underflows half); the half terms widen into it.
-	const float baseRough = clamp(u_oceanAbsorption.w, 0.02, 1.0);
+	const float baseRough = clamp(u_terrainWetParams2.z, 0.02, 1.0); // "Water roughness" (perceptual, as the ocean's)
 	const float slopeVariance = float(float16_t(0.5) * (slopeVar.x + slopeVar.y) * (ns * ns));
 	const float alphaSq = baseRough * baseRough * baseRough * baseRough
 		+ 2.0 * slopeVariance * u_oceanParams6.y + float(turbulence) * u_oceanParams5.y * 0.35;
@@ -694,21 +694,69 @@ void main()
 	// instead of snapping to wet, and a cliff a wave splashes only ever gets damp.
 	float16_t wet, aboveLive;
 	terrainWetness(coverN, fields, 0.0, wet, aboveLive);
+	float16_t skyReflW = float16_t(0.0); // the wet ground's sky reflection weight (after the lighting, below)
 	if (terrainWetPresent())
 	{
 		// Damp ground: darker and glossier with the wetness itself. The STANDING water's own highlights are
 		// the film's (the overlay draws exactly where water stands), so nothing here tries to double them.
 		// Under the live ocean the ground is seabed: it keeps the darkening - the ocean's traced seabed
-		// carries the same - but no gloss, since a sky reflection has no business under the ocean's own.
-		// The darkening is full at "Fill start": the ground is soaked by the time water starts to stand on it.
-		// It ramps up over "Darkening reach" DECADES of wetness below that (u_terrainWetParams6.w = 1 / reach),
-		// on the LOG of the wetness: the field dries as exp(-t / dry time), so each decade takes the same time
-		// and the damp look fades evenly as the ground dries (a curve on the linear wetness could not reach
-		// into the faint tail). Smoothstepped: soft at both ends. 32-bit: the log of the tail.
-		const float logRatio = log2(max(float(wet), 1e-8) / max(u_terrainWetParams4.x, 1e-3)) * 0.30103; // log10
-		const float16_t damp = float16_t(smoothstep(0.0, 1.0, 1.0 + logRatio * u_terrainWetParams6.w));
+		// carries the same - and takes "Underwater roughness" instead of the wet gloss (a sky reflection has
+		// no business under the ocean's own; the ocean's edge fade shows this ground).
+		// The darkening and the gloss each hold full above their own wetness THRESHOLD ("Darkening threshold",
+		// "Roughness threshold": u_terrainWetParams8.xy) - a plateau while the ground is soaked - and fade
+		// smoothly to dry below it.
+		const float16_t darkAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWetParams8.x), wet);
+		const float16_t glossAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWetParams8.y), wet);
+		// THE DRYING PATTERN: ground does not dry uniformly - a beach breaks into metre-scale blotches
+		// (porosity, micro-drainage) that dry first while the rest stays dark. P (0..1, low = holds its water
+		// longest) is a world-anchored value fBm of "Drying pattern size (m)" (u_terrainWetParams9.y = 1 / size),
+		// with "Drying pattern relief" (9.z) of the splat's height composite mixed in for the fine breakup at
+		// the island edges. Each amount becomes a LEVEL through P: below it wet, above it a dry ISLAND, and the
+		// islands grow as the level sinks. The darkening and the gloss share P, so an island loses its gloss
+		// first (a higher roughness threshold), then its darkness. The soft band around each level is its own:
+		// "Darkening edge" (9.x) - wide, the darkening fades over a larger range - and "Roughness edge" (7.z) -
+		// crisp gloss islands. "Drying pattern" (7.w, 0..1) mixes from the uniform amount (0) to the patterned
+		// one, and fades out where the blotches shrink to a few pixels (the noise would shimmer).
+		// (The relief ALONE, tried before, tiles at the splat texture's scale: speckle, not drying patches.)
+		const float16_t darkBand = float16_t(max(u_terrainWetParams9.x, 1e-3));
+		const float16_t band = float16_t(max(u_terrainWetParams7.z, 1e-3));
+		const float footprint = length(fwidth(TERRAIN_LIT_POS.xz)) * u_terrainWetParams9.y; // pattern cells per pixel
+		const float16_t patternW = float16_t(u_terrainWetParams7.w * (1.0 - smoothstep(0.15, 0.4, footprint)));
+		float16_t damp = darkAmount, glossW = glossAmount;
+		if (patternW > float16_t(0.0))
+		{
+			// The fBm stays 32-bit (its hash is fract() of large products); stretched from its central
+			// bunching toward the full 0..1 by "Drying pattern contrast" (9.w, pre-halved): higher = more of the
+			// ground at the extremes, so the islands separate more strongly (clamped: fully dry / fully wet).
+			const float n = clamp(terrainFbm(TERRAIN_LIT_POS.xz * u_terrainWetParams9.y) * u_terrainWetParams9.w + 0.5, 0.0, 1.0);
+			const float16_t P = mix(float16_t(n), surf.height, float16_t(u_terrainWetParams9.z));
+			damp = mix(damp, smoothstep(P - darkBand, P + darkBand, darkAmount * (one + darkBand + darkBand) - darkBand), patternW);
+			glossW = mix(glossW, smoothstep(P - band, P + band, glossAmount * (one + band + band) - band), patternW);
+		}
 		surf.albedo *= mix(one, float16_t(u_terrainWetParams2.y), damp);
-		surf.rough = mix(surf.rough, float16_t(u_terrainWetParams2.z), wet * aboveLive);
+		// Where the FILM stands over this ground: the same pool level through the relief the film's coverage
+		// uses, faded over its "Edge fade (m)" (the ground/beach relief depth as the metres). The ground there is
+		// UNDER water - its wet gloss would sit beneath the film's own surface - so it takes the underwater
+		// roughness, as under the live ocean (not a wetness gate: this follows the film's actual outline).
+		const float16_t poolOver = (float16_t(terrainPoolLevel(float(wet), coverN.y)) - surf.height)
+			* float16_t(u_terrainTessParams1.z / max(u_terrainWetParams4.w, 1e-4));
+		const float16_t underFilm = clamp(poolOver, float16_t(0.0), one);
+		// "Wet roughness" with the gloss, "Underwater roughness" under the film and the live ocean.
+		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWetParams7.x), glossW), float16_t(u_terrainWetParams7.y),
+			max(one - aboveLive, underFilm));
+		// "Wet normal scale" (u_terrainWetParams8.z): the normal map's tilt off the shading base, scaled with the
+		// gloss - below 1 the water fills the micro relief (a sharper highlight: at full, the bumps scattered
+		// it over the whole wet area), above 1 it is exaggerated. Kept on the base's side of the horizon (an
+		// extrapolated tilt can pass it).
+		{
+			const f16vec3 baseN = f16vec3(geoN);
+			f16vec3 n = baseN + (surf.normal - baseN) * mix(one, float16_t(u_terrainWetParams8.z), glossW);
+			n += baseN * max(float16_t(0.05) - dot(n, baseN), float16_t(0.0));
+			surf.normal = normalize(n);
+		}
+		// The sky reflection's weight: the gloss above the live ocean, minus where the film stands (it mirrors
+		// the sky itself there).
+		skyReflW = glossW * aboveLive * (one - underFilm);
 	}
 #ifdef TERRAIN_TESS
 	// Where the relief is displaced, the normal maps carry the same relief a second time: their tilt re-lit the
@@ -720,7 +768,30 @@ void main()
 	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
 #endif
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
-	const vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
+	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
+	// THE WET SKY REFLECTION: the lit core has no environment
+	// specular (diffuse GI + the lights' GGX lobes only), so wet ground showed one sun highlight and read as
+	// merely darker. The film's sky: the baked mirror sky along R, water Fresnel (F0 0.02), the film's
+	// roughness-to-blur rule (rough wet ground mirrors nothing), the texture AO as the specular occlusion and
+	// the mirror fog rule (the bake carries no fog). After the lighting, past the light loop's register peak.
+	if (skyReflW > float16_t(0.0))
+	{
+		const f16vec3 Vh = f16vec3(V);
+		const float16_t x = one - clamp(dot(surf.normal, Vh), float16_t(0.0), one);
+		const float16_t x2 = x * x;
+		const float16_t F = float16_t(0.02) + float16_t(0.98) * (x2 * x2 * x);
+		const float16_t blur = clamp(surf.rough * float16_t(2.0) - float16_t(0.05), float16_t(0.0), one);
+		const float16_t w = skyReflW * F * (one - blur) * surf.ao;
+		if (w > float16_t(0.002))
+		{
+			vec3 R = reflect(-V, vec3(surf.normal));
+			R.y = max(R.y, 0.02);
+			R = normalize(R);
+			const vec3 ambientSky = textureLod(u_skyMap, vec3(skyMapUV(normalize(u_skyUp)), SKY_MAP_LAYER_GI), 0.0).rgb;
+			const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x;
+			color += applyReflectionFogSky(terrainReflectedSkyRadiance(R), TERRAIN_LIT_POS, R, sunTint, u_sunDirection.xyz, ambientSky) * float(w);
+		}
+	}
 	out_color = vec4(color, 1.0); // opaque terrain
 #endif
 }

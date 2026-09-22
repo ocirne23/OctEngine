@@ -116,7 +116,7 @@ export namespace Procedural
 		// x sqrt(s) (a miniature races), so the spectrum clock runs at sqrt(s) (OceanParams::timeScale) and
 		// the periods stay the model sea's. Applied ONCE, in pushOceanParams: the shaders and the CPU
 		// buoyancy mirror both read the scaled set (m_params), so neither can disagree with the other.
-		float m_worldScale = 0.1f;  // 1 = the model sea; a 10x sea against the default terrain (mpp 0.3, 100x), tuned by eye
+		float m_worldScale = 0.2f;  // 1 = the model sea; a 10x sea against the default terrain (mpp 0.3, 100x), tuned by eye
 		OceanParams m_params;      // the SCALED param set last pushed to the renderer; the CPU mirror reads it
 		// Reach = ringCell * res/2 * 2^(rings-1), and every ring costs the same vertex count whatever its
 		// cell size - so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip

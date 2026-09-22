@@ -340,8 +340,18 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Water", "Normal scale", &m_wetNormalScale, 0.0f, 4.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Wind ripples", &m_wetRippleStrength, 0.0f, 4.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Water roughness", &m_wetRoughness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Wet roughness", &m_wetGroundRoughness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Drying pattern", &m_wetDryingPattern, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Darkening edge", &m_wetDarkeningEdge, 0.001f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Roughness edge", &m_wetRoughnessEdge, 0.001f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Drying pattern size (m)", &m_wetDryingPatternSize, 0.1f, 50.0f, 0.1f);
+		Tweak::floatVar("Terrain/Water", "Drying pattern relief", &m_wetDryingPatternRelief, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Drying pattern contrast", &m_wetDryingPatternContrast, 0.0f, 10.0f, 0.05f);
+		Tweak::floatVar("Terrain/Water", "Underwater roughness", &m_wetUnderwaterRoughness, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Wet darkening", &m_wetDarkening, 0.1f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Darkening reach (decades)", &m_wetDarkeningReach, 0.05f, 8.0f, 0.05f);
+		Tweak::floatVar("Terrain/Water", "Darkening threshold", &m_wetDarkeningThreshold, 0.0001f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Roughness threshold", &m_wetRoughnessThreshold, 0.0001f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Wet normal scale", &m_wetGroundNormalScale, 0.0f, 4.0f, 0.01f);
 
 		Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &m_texUvScaleGround, 0.005f, 2.0f);
 		Tweak::floatVar("Terrain/Textures", "Rock uv scale (1/m)", &m_texUvScaleRock, 0.005f, 2.0f);
@@ -567,8 +577,18 @@ namespace Procedural
 			.normalScale = m_wetNormalScale,
 			.rippleStrength = m_wetRippleStrength,
 			.roughness = m_wetRoughness,
+			.wetRoughness = m_wetGroundRoughness,
+			.dryingPattern = m_wetDryingPattern,
+			.darkeningEdge = m_wetDarkeningEdge,
+			.roughnessEdge = m_wetRoughnessEdge,
+			.dryingPatternSize = m_wetDryingPatternSize,
+			.dryingPatternRelief = m_wetDryingPatternRelief,
+			.dryingPatternContrast = m_wetDryingPatternContrast,
+			.underwaterRoughness = m_wetUnderwaterRoughness,
 			.darkening = m_wetDarkening,
-			.darkeningReach = m_wetDarkeningReach,
+			.darkeningThreshold = m_wetDarkeningThreshold,
+			.roughnessThreshold = m_wetRoughnessThreshold,
+			.wetNormalScale = m_wetGroundNormalScale,
 		});
 
 		// Until the bake finishes, chunks draw with the flat-color fallback. A bake with nothing usable

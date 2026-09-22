@@ -943,7 +943,7 @@ Both push params in every frame; the renderer owns none of the tweaks.
 # Terrain surface water
 
 ONE wetness field feeds ONE water surface ("Terrain/Water" tweaks, `TerrainWetTweaks`,
-`terrainWetParams0..6`). It is both the rain puddles on the ground and the continuation of the ocean onto
+`terrainWetParams0..9`). It is both the rain puddles on the ground and the continuation of the ocean onto
 the sand, so the two can never disagree.
 
 * **The field** is the wetness clipmap (`TerrainWetnessPipeline`, see its entry below): rain everywhere,
@@ -978,15 +978,57 @@ the sand, so the two can never disagree.
   discards a pixel whose UNDISPLACED face (derivatives of `TERRAIN_LIT_POS`) is vertical (|n.y| < 0.05):
   the skirt is exactly vertical there, the terrain surface never is. Without this, the film showed as a
   translucent wall along chunk edges.
-* **The GROUND** under it: albedo x "Wet darkening", reaching it in full at "Fill start" (the ground is
-  soaked by the time water starts to stand on it). It ramps up over "Darkening reach (decades)" of
-  wetness below fill start (`u_terrainWetParams6.w` = 1 / reach), smoothstepped on log10(wet). The field
-  dries as exp(-t / dry time), so each decade takes the same time: the damp look fades evenly as the
-  ground dries, over dry time x ln 10 x reach, and a larger reach = a larger damp region. Earlier
-  attempts: a gain on the linear wetness gave a hard edge where it saturated, and an exponential curve
-  could not reach into the faint tail (its gain at 0 is only k). Roughness toward "Water
-  roughness" with the wetness. The gloss fades out under the live ocean (`aboveLive`), which draws its own
-  surface; the darkening stays (the ocean's traced seabed is darkened the same).
+* **The GROUND** under it: albedo x "Wet darkening" and the wet gloss, each with its own wetness
+  threshold ("Darkening threshold", "Roughness threshold", `u_terrainWetParams8.xy`, both 0.35 by
+  default). Each amount is `smoothstep(0, threshold, wet)`: a plateau while the ground is soaked, and a
+  smooth fade to dry below the threshold, as the pre-rewrite "damp knee" did.
+  * Replaced along the way: log10 ramps with "reach" tweaks (decades of wetness), a gain on the wetness
+    (a hard edge where it saturated), and an exponential curve.
+* **THE DRYING PATTERN** (the ground pass's darkening + gloss): ground dries in metre-scale ISLANDS, not
+  uniformly.
+  * P (0..1, low = holds its water longest) is a world-anchored value fBm (`terrainFbm`) of "Drying
+    pattern size (m)" (`9.y` = 1 / size), stretched from its central bunching toward 0..1 by "Drying
+    pattern contrast" (`9.w` = contrast / 2, clamped: higher = more ground fully dry or fully wet, stronger
+    islands). "Drying
+    pattern relief" (`9.z`) of `surf.height` is mixed in, for fine breakup at the island edges.
+  * Each wet amount (above) becomes a LEVEL through P. Ground below it is wet, and above it is a dry
+    island. The islands grow as the ground dries. Darkening and gloss share P, so with a higher roughness
+    threshold an island loses its gloss first, then its darkness.
+  * Each level has its own soft band. "Darkening edge" (`9.x`, 0.3) is wide, so the darkening fades over
+    a larger range. "Roughness edge" (`7.z`, 0.1) is narrow, so the gloss islands stay crisp. "Drying
+    pattern" (`7.w`, 0..1) mixes from uniform drying to the patterned look. The pattern fades out where its cells shrink below a few pixels
+    (`fwidth`), because the noise would shimmer there.
+  * Where the field is at 1 (under the swash), the level is above all of P: all wet.
+  * History:
+    * This is the pre-rewrite look (an fBm pooling mask).
+    * The relief ALONE as the pattern was tried in between. It tiles at the splat texture's scale, so it
+      gave speckle, not drying patches.
+    * A faster-drying power on the peaks' wetness gave no islands at all, because it has no threshold.
+* **The wet SPECULAR** (the ground pass, with the gloss weight `glossW`):
+  * The lit core has NO environment specular (diffuse GI + the lights' GGX lobes only), so wet ground
+    showed one sun highlight and read as merely darker - "diffuse". It was not the fp16 BRDF: its GGX takes
+    1 - NoH^2 as |N x H|^2, and at the wet alpha that error is ~1e-6 against a^2 = 0.0064.
+  * "Wet normal scale" (`8.z`): with the gloss, the normal map's tilt off the shading base is scaled
+    (1 = unchanged). Below 1, water fills the micro relief and the highlight stays sharp instead of
+    scattering over the wet area. Above 1, the tilt is exaggerated. It is kept on the base's side of the
+    horizon.
+  * The wet SKY REFLECTION (no tweak, always on at full strength): after `computeLitColor` (past the light
+    loop's register peak), the film's sky model: the baked mirror sky along R, water Fresnel (F0 0.02), the
+    film's roughness-to-blur rule (rough wet ground mirrors nothing), the texture AO as specular
+    occlusion, and the mirror fog rule. Gated by `aboveLive` and off under the film (`underFilm`, below),
+    so the two never both mirror the sky. Two sky-map fetches on reflecting pixels only. Its register
+    cost is unmeasured.
+* **Three ROUGHNESSES:**
+  * "Water roughness" (`u_terrainWetParams2.z`, perceptual) is the FILM's base, in the ocean's microfacet
+    model. The film used the ocean's own "Roughness" before.
+  * "Wet roughness" (`7.x`, GGX alpha like the splat's `rough`) is the wet ground's roughness. It is full at
+    the "Roughness threshold" and is broken into islands by the drying pattern (above).
+  * "Underwater roughness" (`7.y`, GGX alpha) is the ground's roughness under WATER: the live ocean
+    (`1 - aboveLive`, shows through the ocean's edge fade) and the FILM (`underFilm`). `underFilm` is the
+    film's own coverage recomputed in the ground pass: the pool level through `surf.height`, over its
+    "Edge fade (m)", with the ground relief depth as the metres. It is not a wetness gate, so the wet
+    gloss stops exactly at the film's outline instead of sitting under its surface.
+  * The darkening stays under the ocean, because the ocean's traced seabed is darkened the same.
 * **The HAND-OVER to the ocean** (two tweaks, so the seam is neither the film's nor the ocean's hard edge):
   * "Ocean blend (m)" (`u_terrainWetParams5.x`): `aboveLive` fades from 1 to 0 over this much LIVE water
     over the GROUND (`g_liveDepthBelow` at the tested point + that point's height over the relief ground).

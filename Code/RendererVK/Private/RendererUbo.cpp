@@ -624,8 +624,15 @@ void Renderer::buildUboTerrain()
         const float slopeCut = maxSlope >= 90.0f ? -2.0f : std::cos(glm::radians(maxSlope));
         const float slopeFull = maxSlope >= 90.0f ? -1.5f
             : std::cos(glm::radians(glm::max(maxSlope - glm::max(wet.filmSlopeFade, 0.0f), 0.0f))) + 1e-4f;
-        ubo.terrainWetParams6 = glm::vec4(glm::max(wet.oceanEdgeFade, 0.0f), slopeCut, slopeFull,
-            1.0f / glm::clamp(wet.darkeningReach, 0.05f, 8.0f));
+        ubo.terrainWetParams6 = glm::vec4(glm::max(wet.oceanEdgeFade, 0.0f), slopeCut, slopeFull, 0.0f);
+        ubo.terrainWetParams7 = glm::vec4(glm::clamp(wet.wetRoughness, 0.0f, 1.0f),
+            glm::clamp(wet.underwaterRoughness, 0.0f, 1.0f), glm::clamp(wet.roughnessEdge, 0.001f, 1.0f),
+            glm::clamp(wet.dryingPattern, 0.0f, 1.0f));
+        ubo.terrainWetParams8 = glm::vec4(glm::clamp(wet.darkeningThreshold, 1e-3f, 1.0f),
+            glm::clamp(wet.roughnessThreshold, 1e-3f, 1.0f), glm::clamp(wet.wetNormalScale, 0.0f, 4.0f), 0.0f);
+        ubo.terrainWetParams9 = glm::vec4(glm::clamp(wet.darkeningEdge, 0.001f, 1.0f),
+            1.0f / glm::max(wet.dryingPatternSize, 0.05f), glm::clamp(wet.dryingPatternRelief, 0.0f, 1.0f),
+            0.5f * glm::max(wet.dryingPatternContrast, 0.0f));
     }
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can

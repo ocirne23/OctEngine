@@ -739,8 +739,20 @@ export namespace RendererVKLayout
                                      // y = mesh normal.y below which no pool stands (cos "Film max slope"),
                                      // z = normal.y where the pool level is full ("Film slope fade" flatter;
                                      //     terrainPoolLevel sinks the level between them),
-                                     // w = 1 / darkening reach: the ground's wet darkening ramps to full at fill
-                                     //     start over "Darkening reach" decades of wetness below it (log ramp)
+                                     // w unused
+        glm::vec4 terrainWetParams7; // x = wet terrain roughness, y = underwater terrain roughness (ground
+                                     // under the live ocean), z = roughness edge (soft band of the gloss's
+                                     // drying level through the pattern), w = drying pattern (0..1: uniform
+                                     // drying to dry islands)
+        glm::vec4 terrainWetParams8; // x = darkening threshold, y = roughness threshold: the wetness above
+                                     // which the ground's darkening / wet gloss is full (smoothstep from 0
+                                     // below it), z = wet normal scale
+                                     // (the normal map's tilt off the shading base at full gloss: 1 = unchanged,
+                                     // < 1 flatter, > 1 stronger), w unused
+        glm::vec4 terrainWetParams9; // x = darkening edge (soft band of the darkening's drying level through
+                                     // the pattern), y = 1 / drying pattern size
+                                     // (m; the world value fBm), z = drying pattern relief share, w = 0.5 x
+                                     // drying pattern contrast (the noise's stretch toward 0 / 1)
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a
