@@ -16,6 +16,14 @@
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal; // geometric (interpolated vertex) normal; terrain builds its own tangent bases
 layout (location = 2) in vec4 in_terrainFields; // VS-evaluated baked fields: x = macro altitude, y = temperature C, z = humidity, w = water level
+#ifdef TERRAIN_TESS
+// The tessellated terrain: in_pos is DISPLACED, this is the flat mesh under it - what the shadow map and the TLAS
+// hold. Every shadow / light evaluation uses it (terrain_tess.tes.glsl has why); the splat samples in_pos.
+layout (location = 3) in vec3 in_meshPos;
+#define TERRAIN_LIT_POS in_meshPos
+#else
+#define TERRAIN_LIT_POS in_pos
+#endif
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
@@ -429,6 +437,9 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 
 // The splat itself (TerrainFields / TerrainSample / terrainSplat) is terrain_splat.inc.glsl - shared with
 // the ocean shader, which evaluates it at refraction-ray hits so the seabed IS this terrain.
+// RELIEF: the height blend + the parallax march, here only (it needs screen derivatives). All of it runs
+// before computeLitColor and nothing of it but the shifted texture position outlives the splat.
+#define TERRAIN_SPLAT_RELIEF
 #include "terrain_splat.inc.glsl"
 
 // Baked terrain fields at one point (terrain-data cascades), mild-climate fallbacks without a map.
@@ -591,9 +602,9 @@ void main()
 	if (dot(geoN, L) > 0.0)
 	{
 #if LIT_RT_SUN_SHADOW
-		sunVis = rtShadowVisibility(in_pos + geoN * 0.1, L, 0.05, 10000.0);
+		sunVis = rtShadowVisibility(TERRAIN_LIT_POS + geoN * 0.1, L, 0.05, 10000.0);
 #else
-		sunVis = sampleSunShadowHard(in_pos, geoN);
+		sunVis = sampleSunShadowHard(TERRAIN_LIT_POS, geoN);
 #endif
 	}
 	g_sunVisSurface = float16_t(sunVis * u_eclipseParams.x);
@@ -660,7 +671,7 @@ void main()
 		surf.rough = mix(surf.rough, float16_t(u_terrainWetParams2.z), gloss); // a water film flattens the microfacets
 	}
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
-	const vec3 color = computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
+	const vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	out_color = vec4(color, 1.0); // opaque terrain
 #endif
 }

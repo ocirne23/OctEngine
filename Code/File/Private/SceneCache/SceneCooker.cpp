@@ -173,18 +173,19 @@ namespace
         return img;
     }
 
-    // Compress one RGBA8 mip into BC1/BC3/BC5 blocks (edge-clamped 4x4 fetch handles non-multiple-of-4 dims).
+    // Compress one RGBA8 mip into BC1/BC3/BC4/BC5 blocks (edge-clamped 4x4 fetch handles non-multiple-of-4 dims).
     void compressMip(const uint8* pRgba, uint32 width, uint32 height, dds::DXGI_FORMAT format, oc::vector<uint8>& out)
     {
         const uint32 blocksX = (width + 3) / 4;
         const uint32 blocksY = (height + 3) / 4;
-        const uint32 blockSize = (format == dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM) ? 8 : 16;
+        const uint32 blockSize = (format == dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM || format == dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM) ? 8 : 16;
         const size_t base = out.size();
         out.resize(base + (size_t)blocksX * blocksY * blockSize);
         uint8* pDst = out.data() + base;
 
         uint8 blockRgba[16 * 4];
         uint8 blockRg[16 * 2];
+        uint8 blockR[16];
         for (uint32 by = 0; by < blocksY; ++by)
         {
             for (uint32 bx = 0; bx < blocksX; ++bx)
@@ -199,12 +200,14 @@ namespace
                         memcpy(&blockRgba[(y * 4 + x) * 4], pSrc, 4);
                         blockRg[(y * 4 + x) * 2 + 0] = pSrc[0];
                         blockRg[(y * 4 + x) * 2 + 1] = pSrc[1];
+                        blockR[y * 4 + x] = pSrc[0];
                     }
                 }
                 switch (format)
                 {
                 case dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM: stb_compress_dxt_block(pDst, blockRgba, 0, STB_DXT_HIGHQUAL); break;
                 case dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM: stb_compress_dxt_block(pDst, blockRgba, 1, STB_DXT_HIGHQUAL); break;
+                case dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM: stb_compress_bc4_block(pDst, blockR); break;
                 default:                                      stb_compress_bc5_block(pDst, blockRg); break;
                 }
                 pDst += blockSize;
@@ -318,6 +321,8 @@ namespace
         dds::DXGI_FORMAT format = dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM;
         if (usage == TextureConvert::EUsage::NormalMap)
             format = dds::DXGI_FORMAT::DXGI_FORMAT_BC5_UNORM;
+        else if (usage == TextureConvert::EUsage::Height)
+            format = dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM;
         else if (usage == TextureConvert::EUsage::Color)
         {
             const uint8* pA = pRgba + 3;

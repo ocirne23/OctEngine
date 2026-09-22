@@ -220,6 +220,18 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // z = humidity at/below which cold ground stays bare (polar desert), w unused
     vec4 u_terrainTexParams5; // x = crag wander amplitude (m; 0 = off), y = crag wander frequency (1/m),
                               // zw unused
+    vec4 u_terrainTexParams6; // splat HEIGHT maps: x = ground/beach/snow parallax depth (m), y = rock parallax
+                              // depth (m), z = parallax fade start (m from the camera), w = height blend
+                              // contrast (0 = linear layer blend)
+    vec4 u_terrainTexParams7; // x = parallax fade end (m; 0 = parallax off), y = max march steps,
+                              // z = relief self-shadow strength (0 = off), w unused
+    vec4 u_terrainTessParams0; // x = tessellation on (0/1: the cull routes terrain to the tess draws),
+                              // y = max tess factor, z = target subdivided edge length (px),
+                              // w = fade falloff exponent p (strength = 1 - t^p across the fade band)
+    vec4 u_terrainTessParams1; // x = fade start (m), y = fade end (m: factor 1 and no displacement past it),
+                              // z = ground/beach/snow relief depth (m), w = rock relief depth (m)
+    vec4 u_terrainTessParams2; // x = freeze distance (m: closer in, the factor and the height mip use it instead
+                              // of the camera distance - nothing moves), yzw unused
     // Terrain wetness clipmap (terrain_wetness.inc.glsl; keep in sync with RendererVKLayout::Ubo): a
     // TERRAIN_WET_RES^2 toroidal window of texels around the scene focus, lattice = integer texel index.
     vec4 u_terrainWetParams0; // xy = window origin lattice coord (min corner, exact ints as floats),
@@ -262,6 +274,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".
                               // Unused for the beach/snow overlays.
+    uvec4 u_terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the BC4
+                              // height texture index, 0xFFFF = none (flat: no parallax, linear blend)
 
     // GPU mesh LOD selection (indirect + shadow cull; keep in sync with RendererVKLayout::Ubo)
     vec4 u_lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,

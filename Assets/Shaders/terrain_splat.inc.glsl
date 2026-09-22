@@ -18,6 +18,14 @@
 //   TERRAIN_SPLAT_ALBEDO_ONLY   - skip the normal + ARM taps (the seabed only needs colour: the water
 //                                 column blurs any detail normal away). TerrainSample.normal is then the
 //                                 geometric normal and rough/metal/ao are constants.
+//   TERRAIN_SPLAT_RELIEF        - the splat HEIGHT maps (u_terrainSplatHeightTex, u_terrainTexParams6/7):
+//                                 the height blend at layer borders plus parallax occlusion mapping near the
+//                                 camera. Needs screen derivatives (the terrain FS only); without it every
+//                                 layer blend is linear, so the ocean's seabed is the terrain minus relief.
+//                                 Writes the relief self-shadow to g_sunVisMaterial (the lit core's).
+//   TERRAIN_SPLAT_HEIGHT_ONLY   - (with RELIEF) only the coverages (terrainLayers) and the height composite
+//                                 (terrainReliefAt): no material sampling, no screen derivatives - for the
+//                                 tessellation evaluation shader, which declares only the UBO + u_textures.
 // Requires GL_EXT_shader_explicit_arithmetic_types: the splat is HALF math - the samples, the layer
 // coverages and the blend weights (all in [0, 1]) and the normals. Positions, UVs, the climate match and
 // the crag fBm (a hash: it needs the 32-bit mantissa) stay 32-bit.
@@ -44,8 +52,42 @@ struct TerrainSample
 	float16_t rough;  // GGX alpha, >= 0.01 (the fp16 BRDF's floor)
 	float16_t metal;
 	float16_t ao;
+	float16_t height; // relief 0..1, 1 = top (the mesh surface); 0.5 without TERRAIN_SPLAT_RELIEF or a height map
 };
 
+#ifdef TERRAIN_SPLAT_RELIEF
+uint terrainHeightTexIdx(uint matIdx)
+{
+	const uint slot = matIdx - uint(u_terrainTexParams0.x);
+	return u_terrainSplatHeightTex[slot >> 2][slot & 3u];
+}
+
+// The parallax march runs in non-uniform flow: explicit gradients (the pixel's own, scaled to the layer's UV).
+float16_t terrainHeightGrad(uint matIdx, vec2 uv, vec2 dx, vec2 dy)
+{
+	const uint texIdx = terrainHeightTexIdx(matIdx);
+	return texIdx != 0xFFFFu ? float16_t(textureGrad(u_textures[nonuniformEXT(texIdx)], uv, dx, dy).r) : float16_t(0.5);
+}
+
+#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+float16_t terrainHeightTap(uint matIdx, vec2 uv)
+{
+	const uint texIdx = terrainHeightTexIdx(matIdx);
+	return texIdx != 0xFFFFu ? float16_t(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(texIdx)], uv).r) : float16_t(0.5);
+}
+#endif
+
+// Height blend: coverage w of a layer standing dh above the one beneath becomes a steeper ramp shifted by
+// dh, so the higher texels win first (sand fills the gaps between stones before it covers them). Keeps
+// w = 0 -> 0 and w = 1 -> 1 for any |dh| <= 1; contrast 0 = linear.
+float16_t terrainHeightWeight(float16_t w, float16_t dh)
+{
+	const float16_t k = float16_t(u_terrainTexParams6.w);
+	return clamp((w - float16_t(0.5)) * (float16_t(1.0) + k) + dh * (k * float16_t(0.5)) + float16_t(0.5), float16_t(0.0), float16_t(1.0));
+}
+#endif
+
+#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
 // One splat material with world-XZ UVs; tangent basis = world X/Z reoriented onto the geometric
 // normal. matIdx diverges between neighbouring pixels at climate borders -> nonuniformEXT.
 TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
@@ -55,6 +97,11 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 
 	TerrainSample s;
 	s.albedo = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uv).rgb);
+#ifdef TERRAIN_SPLAT_RELIEF
+	s.height = terrainHeightTap(matIdx, uv);
+#else
+	s.height = float16_t(0.5);
+#endif
 #ifdef TERRAIN_SPLAT_ALBEDO_ONLY
 	s.ao = float16_t(1.0);
 	s.rough = float16_t(0.9);
@@ -152,6 +199,13 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 
 	TerrainSample s;
 	s.albedo = albedo;
+	// The height is the TOP plane's alone (uvY), for every slope: the parallax march works in world XZ, and on
+	// the steep faces where the other planes carry the colour the rock is opaque, so no blend reads it.
+#ifdef TERRAIN_SPLAT_RELIEF
+	s.height = terrainHeightTap(matIdx, uvY);
+#else
+	s.height = float16_t(0.5);
+#endif
 #ifdef TERRAIN_SPLAT_ALBEDO_ONLY
 	s.ao = float16_t(1.0);
 	s.rough = float16_t(0.9);
@@ -167,6 +221,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 #endif
 	return s;
 }
+#endif // !TERRAIN_SPLAT_HEIGHT_ONLY
 
 // Crag wander noise (value fBm over world XZ). Lives HERE and not in the generator: the wander must be
 // scaled by local relief, which the generator's coarse path cannot supply (its relief is 0 by
@@ -201,9 +256,13 @@ float terrainFbm(vec2 p)
 	return (v / norm) * 2.0 - 1.0;
 }
 
-// Lay `s` over `acc` with coverage `w`.
+// Lay `s` over `acc` with coverage `w` (height-blended under TERRAIN_SPLAT_RELIEF).
 void terrainMixInto(inout TerrainSample acc, TerrainSample s, float16_t w)
 {
+#ifdef TERRAIN_SPLAT_RELIEF
+	w = terrainHeightWeight(w, s.height - acc.height);
+#endif
+	acc.height = mix(acc.height, s.height, w);
 	acc.albedo = mix(acc.albedo, s.albedo, w);
 	acc.normal = mix(acc.normal, s.normal, w);
 	acc.rough  = mix(acc.rough, s.rough, w);
@@ -260,18 +319,31 @@ ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 // texture taps are skipped entirely and the covering layer REPLACES the accumulator instead of mixing.
 #define TERRAIN_LAYER_OPAQUE 0.997
 
-// The full splatted terrain surface; neutral mid-gray before a texture set is registered.
+// The four layer coverages and the climate picks of one pixel: everything the composite (terrainSplat) and
+// the parallax march's height composite (terrainReliefAt) decide from, so the two cannot disagree.
+struct TerrainLayers
+{
+	int baseMat, numGround, numRock;
+	uint snowMatIdx;
+	float16_t snowW, beachW, rockW;
+	ClimatePick g, r; // g read only while the ground shows, r only while the rock does
+};
+
 // All four layer coverages are computed FIRST (cheap ALU) so fully buried layers never sample: a
 // snow-capped peak collapses to the 3 snow taps, a sheer cliff face skips ground + beach.
-TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
+TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 {
-	const int baseMat = int(u_terrainTexParams0.x);
-	const int numGround = int(u_terrainTexParams0.y);
-	const int numRock = int(u_terrainTexParams0.z);
-	const f16vec3 geoNh = f16vec3(geoN);
-	if (baseMat < 0 || numGround <= 0)
-		return TerrainSample(f16vec3(0.5), geoNh, float16_t(0.92), float16_t(0.0), float16_t(1.0));
-
+	TerrainLayers L;
+	L.baseMat = int(u_terrainTexParams0.x);
+	L.numGround = int(u_terrainTexParams0.y);
+	L.numRock = int(u_terrainTexParams0.z);
+	L.g = ClimatePick(0, 0, 0, float16_t(0.0), float16_t(0.0));
+	L.r = L.g;
+	L.beachW = float16_t(0.0);
+	L.rockW = float16_t(0.0);
+	const int baseMat = L.baseMat;
+	const int numGround = L.numGround;
+	const int numRock = L.numRock;
 	const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
 
 	// --- Coverages ---
@@ -286,21 +358,17 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		const float wet = smoothstep(0.0, max(u_terrainTexParams4.z, 1e-3), f.humidity);
 		snowW = float16_t(cold * holds * wet);
 	}
-	const uint snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
+	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
+	L.snowW = snowW;
 
 	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
 	if (snowW >= float16_t(TERRAIN_LAYER_OPAQUE))
-	{
-		TerrainSample surf = sampleTerrainXZ(snowMatIdx, worldPos.xz * u_terrainTexParams2.w, geoNh);
-		surf.normal = normalize(surf.normal);
-		return surf;
-	}
+		return L;
 
 	// The baked temperature already carries the altitude lapse, so elevation enters the selection as
 	// the cold it causes - snow line and vegetation cannot disagree.
 	const vec2 climate = vec2(clamp((f.temperature + 25.0) / 75.0, 0.0, 1.0), f.humidity);
 	const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
-	const vec2 uvGround = worldPos.xz * u_terrainTexParams1.x;
 
 	// Beach: the band just above the local waterline.
 	float16_t beachW = float16_t(0.0);
@@ -326,15 +394,278 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		const float crag = smoothstep(u_terrainTexParams2.x, u_terrainTexParams2.y, relief);
 		rockW = float16_t(max(smoothstep(u_terrainTexParams1.z, u_terrainTexParams1.w, slope), crag * 0.85));
 	}
+	L.beachW = beachW;
+	L.rockW = rockW;
+
+	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
+	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
+	if (beachW < opaque && rockW < opaque)
+		L.g = pickClimate(climate, 0, numGround, invS2);
+	if (rockW > blendEps)
+		L.r = pickClimate(climate, numGround, numRock, invS2);
+	return L;
+}
+
+#ifdef TERRAIN_SPLAT_RELIEF
+float16_t terrainMixHeight(float16_t acc, float16_t h, float16_t w)
+{
+	return mix(acc, h, terrainHeightWeight(w, h - acc));
+}
+
+// The composite HEIGHT at world xz: terrainSplat's layer chain on the height maps alone (same skips, same
+// height-blended mixes), with explicit gradients - dx / dy are the pixel's world-XZ derivatives. Rock
+// reads its top plane, as sampleTerrainTriplanar does. Most pixels are one tap: the flat interior of a
+// climate box with no overlay.
+float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
+{
+	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
+	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
+	const float sG = u_terrainTexParams1.x, sR = u_terrainTexParams1.y, sS = u_terrainTexParams2.w;
+	if (L.snowW >= opaque)
+		return terrainHeightGrad(L.snowMatIdx, xz * sS, dx * sS, dy * sS);
+
+	float16_t h = float16_t(0.0);
+	if (L.beachW < opaque && L.rockW < opaque)
+	{
+		h = terrainHeightGrad(uint(L.baseMat + L.g.i0), xz * sG, dx * sG, dy * sG);
+		if (L.g.n1 > blendEps)
+			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat + L.g.i1), xz * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
+		if (L.g.n2 > blendEps)
+			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat + L.g.i2), xz * sG, dx * sG, dy * sG), L.g.n2);
+	}
+	if (L.beachW > blendEps && L.rockW < opaque)
+	{
+		const float16_t hb = terrainHeightGrad(uint(L.baseMat + L.numGround + L.numRock), xz * sG, dx * sG, dy * sG);
+		h = L.beachW >= opaque ? hb : terrainMixHeight(h, hb, L.beachW);
+	}
+	if (L.rockW > blendEps)
+	{
+		float16_t hr = terrainHeightGrad(uint(L.baseMat + L.r.i0), xz * sR, dx * sR, dy * sR);
+		if (L.r.n1 > blendEps)
+			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat + L.r.i1), xz * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
+		if (L.r.n2 > blendEps)
+			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat + L.r.i2), xz * sR, dx * sR, dy * sR), L.r.n2);
+		h = L.rockW >= opaque ? hr : terrainMixHeight(h, hr, L.rockW);
+	}
+	if (L.snowW > blendEps)
+		h = terrainMixHeight(h, terrainHeightGrad(L.snowMatIdx, xz * sS, dx * sS, dy * sS), L.snowW);
+	return h;
+}
+
+#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+// Parallax occlusion mapping, displaced along the GEOMETRIC NORMAL (what tessellation would do): the mesh is
+// the top of the relief (height 1), height 0 lies "depth" metres below it along -N. A ray point at depth d
+// maps back up along N onto the surface point whose texels it sees, so the texture offset is the ray's
+// TANGENTIAL part: -(V - N * NoV) / NoV * d. (A march along world Y instead ignores the base slope: over the
+// ray's sideways run the slope itself rises or falls by more than the relief, and slopes broke.)
+// One 3D offset serves every layer - each with its own UV scale, the triplanar rock planes too - so one march
+// covers the whole composite. Faded with the camera distance and on steep ground (the XZ projection
+// stretches there), skipped past the fade end. Returns the texture-position offset; lighting and coverages
+// stay on the mesh.
+//  - Linear search with steps ~ 1 / NoV (a grazing ray crosses 1 / NoV times more relief per unit of depth),
+//    then TERRAIN_POM_BISECT bisection steps on the bracket and a secant inside it: the one secant alone
+//    left the linear steps visible as slices at grazing angles.
+//  - Relief SELF-SHADOW (Tatarchuk 2006): a second march from the hit up toward the sun in the same
+//    tangential frame; the texels standing above the light ray darken it, the nearer ones more (soft
+//    penumbra). Written to g_sunVisMaterial, which scales the ground's sun in doSunLight only.
+//  - SILHOUETTES (TERRAIN_POM_SILHOUETTE; SPOM for a surface with no UV border): the base surface is CURVED
+//    (curved relief mapping, Oliveira & Policarpo 2005). Along the ray's tangential run u the surface falls
+//    away by 0.5 k u^2 (k = normal curvature in that direction, > 0 on a crest), so in height fraction the
+//    ray is rayH(s) = 1 - s + c s^2. With c > 1/4 it turns back up before the bottom of the relief; a ray
+//    that climbs back out of the top (s = 1/c) without a hit passed OVER the crest's relief - the pixel is
+//    discarded and whatever is behind the crest shows. The fade scales depth, and c with it, so the
+//    silhouette fades out with the parallax.
+//    COST: a discard in the ground pass defers its depth write for every terrain pixel. Set it to 0 to
+//    compile the discard out (then c = 0 and the march is the flat one).
+#define TERRAIN_POM_BISECT 4
+#define TERRAIN_POM_SHADOW_STEPS 6
+#define TERRAIN_POM_SHADOW_SHARPNESS 6.0
+// OFF: on 2 m facets with smooth normals a crest has no clean silhouette - measured by eye, it left holes in
+// front of the terrain behind and a strip on the sky. Kept for reference; tessellation is the planned fix.
+#ifndef TERRAIN_POM_SILHOUETTE
+#define TERRAIN_POM_SILHOUETTE 0
+#endif
+
+#if TERRAIN_POM_SILHOUETTE
+// Normal curvature of the base surface along the unit tangent direction D, from the screen derivatives of
+// the position and the geometric normal (taken by the caller in uniform flow): D expressed in the two
+// derivative directions (2x2 least squares), then the normal's change along it. > 0 on a crest.
+float terrainCurvatureAlong(vec3 D, vec3 dPx, vec3 dPy, vec3 dNx, vec3 dNy)
+{
+	const float xx = dot(dPx, dPx), xy = dot(dPx, dPy), yy = dot(dPy, dPy);
+	const float det = xx * yy - xy * xy;
+	if (abs(det) < 1e-12)
+		return 0.0;
+	const float dx = dot(dPx, D), dy = dot(dPy, D);
+	const float a = (yy * dx - xy * dy) / det;
+	const float b = (xx * dy - xy * dx) / det;
+	return dot(a * dNx + b * dNy, D);
+}
+#endif
+
+// curv: the base surface's curvature along the view ray's tangential direction (0 = flat march).
+// faceN: the rasterized FACET's normal, facing the camera (geoN when the silhouette is off). The march frame
+// eases from the interpolated normal to it as the interpolated one turns edge-on: the facets are chords
+// UNDER the smooth surface the vertex normals describe, so along a coarse ridge a mesh-sized band has
+// NoV <= 0 on the interpolated normal while its facet still faces the camera - often inside the relief
+// shell. Discarding that whole band cut mesh-sized holes (the terrain behind showed through); on the facet
+// frame those pixels march like any other and only the curvature test discards: a ray nearly edge-on to its
+// facet gets a large c and leaves the shell, the rest hit relief.
+vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3 faceN, vec2 dx, vec2 dy, float curv)
+{
+	const float fadeEnd = u_terrainTexParams7.x;
+	const vec3 toView = u_viewPos - worldPos;
+	const float dist = length(toView);
+	if (fadeEnd <= 0.0 || dist >= fadeEnd)
+		return vec3(0.0);
+	const float strength = (1.0 - smoothstep(u_terrainTexParams6.z, fadeEnd, dist)) * smoothstep(0.35, 0.6, geoNInterp.y);
+	const float depth = mix(mix(u_terrainTexParams6.x, u_terrainTexParams6.y, float(L.rockW)), u_terrainTexParams6.x, float(L.snowW)) * strength;
+	const vec3 V = toView / dist;
+	if (depth < 1e-3)
+		return vec3(0.0);
+	const vec3 geoN = normalize(mix(faceN, geoNInterp, smoothstep(0.0, 0.2, dot(geoNInterp, V))));
+	const float NoV = dot(geoN, V);
+	if (NoV <= 0.0)
+	{
+#if TERRAIN_POM_SILHOUETTE
+		discard; // edge-on to the facet itself (SPOM's back-facing case): nothing of the shell is in view
+#endif
+		return vec3(0.0);
+	}
+
+	// s = tangential run as a fraction of the flat march's (maxOffset at s = 1); rayH(s) = 1 - s + c s^2.
+	// NoV floor 0.05: a higher one underestimated c for grazing rays, and they missed the silhouette test.
+	// On a crest the search ends at s = 1 / c anyway; only flat and concave ground runs the full 20x depth.
+	const vec3 maxOffset = -(V - geoN * NoV) / max(NoV, 0.05) * depth; // the flat march's shift at the bottom
+	const float c = 0.5 * curv * dot(maxOffset, maxOffset) / depth;
+	// Where the search ends: the bottom of the relief (rayH = 0), or - on a crest where the ray turns before
+	// it - back at the top (rayH = 1).
+	float sEnd = 1.0;
+	if (c > 0.25)
+		sEnd = 1.0 / c;
+	else if (abs(c) > 1e-4)
+		sEnd = (1.0 - sqrt(1.0 - 4.0 * c)) / (2.0 * c);
+	const float maxSteps = u_terrainTexParams7.y;
+	const float baseSteps = max(maxSteps * 0.25, 4.0); // looking straight on
+	const int steps = int(clamp(baseSteps / max(NoV, 0.05), baseSteps, maxSteps));
+	const float ds = sEnd / float(steps);
+	float s = 0.0, prevS = 0.0;
+	float16_t h = terrainReliefAt(L, worldPos.xz, dx, dy);
+	float16_t prevH = h;
+	for (int i = 0; i < steps && 1.0 - s + c * s * s > float(h); ++i)
+	{
+		prevS = s;
+		prevH = h;
+		s += ds;
+		h = terrainReliefAt(L, worldPos.xz + maxOffset.xz * s, dx, dy);
+	}
+#if TERRAIN_POM_SILHOUETTE
+	// Still above the relief at the end: only possible when the ray climbed back out over a crest (at the
+	// flat end rayH = 0 <= h). The mesh here is not what this ray sees.
+	if (c > 0.25 && 1.0 - s + c * s * s > float(h))
+		discard;
+#endif
+	// Bracket: prevS above the surface, s at or under it. The first tap hitting leaves no bracket.
+	if (s > prevS)
+	{
+		for (int i = 0; i < TERRAIN_POM_BISECT; ++i)
+		{
+			const float midS = 0.5 * (s + prevS);
+			const float16_t hm = terrainReliefAt(L, worldPos.xz + maxOffset.xz * midS, dx, dy);
+			if (float(hm) >= 1.0 - midS + c * midS * midS) { s = midS; h = hm; }
+			else { prevS = midS; prevH = hm; }
+		}
+	}
+	const float after = float(h) - (1.0 - s + c * s * s);                  // >= 0: at or under the surface
+	const float before = float(prevH) - (1.0 - prevS + c * prevS * prevS); // <= 0: above it (0: no bracket)
+	const float t = clamp(after / max(after - before, 1e-4), 0.0, 1.0);
+	const float sHit = mix(s, prevS, t);
+	const float hitH = 1.0 - sHit + c * sHit * sHit;
+	const vec3 offset = maxOffset * sHit;
+
+	// Self-shadow: skipped off the sun, at the top of the relief (nothing stands above it) and when off.
+	const vec3 Ls = u_sunDirection.xyz;
+	const float NoL = dot(geoN, Ls);
+	const float shadowStrength = u_terrainTexParams7.z;
+	if (shadowStrength > 0.0 && NoL > 0.0 && hitH < 0.98)
+	{
+		// Per unit of height fraction climbed toward the sun, the texture position moves by this.
+		const vec2 lightStep = ((Ls - geoN * NoL) / max(NoL, 0.1) * depth).xz;
+		const float climb = (1.0 - hitH) / float(TERRAIN_POM_SHADOW_STEPS);
+		float occlusion = 0.0;
+		for (int i = 1; i <= TERRAIN_POM_SHADOW_STEPS; ++i)
+		{
+			const float lh = hitH + climb * float(i);
+			const float16_t hs = terrainReliefAt(L, worldPos.xz + offset.xz + lightStep * (lh - hitH), dx, dy);
+			occlusion = max(occlusion, (float(hs) - lh) * (1.0 - float(i - 1) / float(TERRAIN_POM_SHADOW_STEPS)));
+		}
+		g_sunVisMaterial = float16_t(1.0 - clamp(occlusion * TERRAIN_POM_SHADOW_SHARPNESS, 0.0, 1.0) * shadowStrength * strength);
+	}
+	return offset;
+}
+#endif // !TERRAIN_SPLAT_HEIGHT_ONLY
+#endif // TERRAIN_SPLAT_RELIEF
+
+#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+// The full splatted terrain surface; neutral mid-gray before a texture set is registered.
+TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
+{
+	const f16vec3 geoNh = f16vec3(geoN);
+#ifdef TERRAIN_SPLAT_RELIEF
+	// The march's gradients (and the silhouette's curvature inputs), taken here in uniform flow.
+	const vec3 dP3x = dFdx(worldPos), dP3y = dFdy(worldPos);
+	const vec2 dPdx = dP3x.xz, dPdy = dP3y.xz;
+#if TERRAIN_POM_SILHOUETTE
+	const vec3 dNx = dFdx(geoN), dNy = dFdy(geoN);
+#endif
+#endif
+	if (u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0)
+		return TerrainSample(f16vec3(0.5), geoNh, float16_t(0.92), float16_t(0.0), float16_t(1.0), float16_t(0.5));
+
+	const TerrainLayers L = terrainLayers(worldPos, geoN, f);
+	const int baseMat = L.baseMat;
+	const int numGround = L.numGround;
+	const int numRock = L.numRock;
+	const float16_t snowW = L.snowW, beachW = L.beachW, rockW = L.rockW;
+
+	// Every layer samples at the parallax-shifted position; the coverages above stay at the mesh point.
+	vec3 texPos = worldPos;
+#ifdef TERRAIN_SPLAT_RELIEF
+	float curv = 0.0;
+	vec3 faceN = geoN;
+#if TERRAIN_POM_SILHOUETTE
+	{
+		const vec3 V = normalize(u_viewPos - worldPos);
+		// The facet's own normal, turned toward the camera (the derivative cross's sign follows the screen).
+		faceN = normalize(cross(dP3x, dP3y));
+		if (dot(faceN, V) < 0.0)
+			faceN = -faceN;
+		// Along the direction the march runs: the view vector's tangential part, reversed.
+		const vec3 run = geoN * dot(geoN, V) - V;
+		const float runLen = length(run);
+		if (runLen > 1e-3)
+			curv = terrainCurvatureAlong(run / runLen, dP3x, dP3y, dNx, dNy);
+	}
+#endif
+	texPos += terrainParallaxOffset(L, worldPos, geoN, faceN, dPdx, dPdy, curv);
+#endif
+
+	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
+	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
+	if (snowW >= opaque)
+	{
+		TerrainSample surf = sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTexParams2.w, geoNh);
+		surf.normal = normalize(surf.normal);
+		return surf;
+	}
+	const vec2 uvGround = texPos.xz * u_terrainTexParams1.x;
 
 	// --- Composite bottom-up, sampling only what shows ---
 	// 1. Ground - buried under a full beach band or a full-coverage cliff face: placeholder, mixed away.
-	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
-	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 	TerrainSample surf;
 	if (beachW < opaque && rockW < opaque)
 	{
-		const ClimatePick g = pickClimate(climate, 0, numGround, invS2);
+		const ClimatePick g = L.g;
 		surf = sampleTerrainXZ(uint(baseMat + g.i0), uvGround, geoNh);
 		if (g.n1 > blendEps)
 			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat + g.i1), uvGround, geoNh), g.n1 / max(float16_t(1.0) - g.n2, float16_t(1e-4)));
@@ -342,7 +673,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat + g.i2), uvGround, geoNh), g.n2);
 	}
 	else
-		surf = TerrainSample(f16vec3(0.0), geoNh, float16_t(0.9), float16_t(0.0), float16_t(1.0));
+		surf = TerrainSample(f16vec3(0.0), geoNh, float16_t(0.9), float16_t(0.0), float16_t(1.0), float16_t(0.0));
 
 	// 2. Beach (invisible under a full rock face).
 	if (beachW > blendEps && rockW < opaque)
@@ -357,12 +688,12 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 	// 3. Rock
 	if (rockW > blendEps)
 	{
-		const ClimatePick r = pickClimate(climate, numGround, numRock, invS2);
-		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat + r.i0), worldPos, geoNh, u_terrainTexParams1.y);
+		const ClimatePick r = L.r;
+		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat + r.i0), texPos, geoNh, u_terrainTexParams1.y);
 		if (r.n1 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i1), worldPos, geoNh, u_terrainTexParams1.y), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i1), texPos, geoNh, u_terrainTexParams1.y), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
 		if (r.n2 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i2), worldPos, geoNh, u_terrainTexParams1.y), r.n2);
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i2), texPos, geoNh, u_terrainTexParams1.y), r.n2);
 		if (rockW >= opaque)
 			surf = rock;
 		else
@@ -371,10 +702,12 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 
 	// 4. Snow (partial cover; full cover returned above).
 	if (snowW > blendEps)
-		terrainMixInto(surf, sampleTerrainXZ(snowMatIdx, worldPos.xz * u_terrainTexParams2.w, geoNh), snowW);
+		terrainMixInto(surf, sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTexParams2.w, geoNh), snowW);
 
 	surf.normal = normalize(surf.normal);
 	return surf;
 }
+
+#endif // !TERRAIN_SPLAT_HEIGHT_ONLY
 
 #endif // TERRAIN_SPLAT_INC_GLSL

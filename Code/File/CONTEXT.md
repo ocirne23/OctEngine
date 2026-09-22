@@ -155,6 +155,7 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
   | Color (sRGB) | BC1, or **BC3 when the alpha channel is actually used** (any texel below 250) |
   | NormalMap | BC5, XY only — the material flags Z reconstruction |
   | Data (roughness / AO / masks) | BC1 |
+  | Height (displacement; `TextureConvert` only, the terrain splat heights) | BC4, the source's R |
 
   **Alpha-masked diffuse mips are alpha-coverage-rescaled**: each mip's alpha is binary-searched so
   the fraction of texels passing the material's alpha-test cutoff matches level 0. Only meaningful

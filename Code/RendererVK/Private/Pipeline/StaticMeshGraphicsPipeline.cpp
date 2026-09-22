@@ -223,8 +223,9 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // rather than per-variant; shaders that don't reference STEREO just ignore the define.
     if (m_stereo)
     {
+        // The tess stages too: the tessellated terrain (buildTerrainTessLayout) shares this layout's ranges.
         graphicsPipelineLayout.pushConstantRanges.push_back(vk::PushConstantRange{
-            .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
+            .stageFlags = VIEW_PUSH_STAGES, .offset = 0, .size = sizeof(uint32) });
 
         auto defineStereo = [](ShaderSource& shader) {
             if (!shader.text.empty()) // empty = falls back to the default shader, which already gets it
@@ -323,12 +324,15 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .offset = 0,
     });
 
+    // The tessellated terrain's pipeline copies these bindings, so its control / evaluation stages are named on
+    // the ones they read: the UBO (factors, fade, frustum) and the texture array (the height maps).
+    constexpr vk::ShaderStageFlags TESS_STAGES = vk::ShaderStageFlagBits::eTessellationControl | vk::ShaderStageFlagBits::eTessellationEvaluation;
     auto& descriptorSetBindings = graphicsPipelineLayout.descriptorSetLayoutBindings;
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // UBO
         .binding = 0,
         .descriptorType = vk::DescriptorType::eUniformBuffer,
         .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | TESS_STAGES
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // InMeshInstances
         .binding = 1,
@@ -443,7 +447,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 22,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
-        .stageFlags = vk::ShaderStageFlagBits::eFragment
+        .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
     });
 
     // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18),
@@ -463,6 +467,42 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         else if (descriptorSetBindings[i].binding == 22)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
+}
+
+void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& tess)
+{
+    const PipelineVariant& ground = main.additionalVariants[(size_t)RendererVKLayout::EPipelineIndex::TerrainLit - 1];
+    const PipelineVariant& overlay = main.additionalVariants[(size_t)RendererVKLayout::EPipelineIndex::TerrainOverlay - 1];
+
+    tess.vertexLayoutInfo = main.vertexLayoutInfo;
+    tess.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    tess.descriptorBindingFlags = main.descriptorBindingFlags;
+    tess.pushConstantRanges = main.pushConstantRanges;
+    tess.indirectBindable = false;
+    tess.patchControlPoints = 3;
+
+    // One VS / TCS / TES for both variants: the overlay's EQUAL depth test needs bit-identical positions. The
+    // VS's TERRAIN_TESS path hands control points on instead of projecting.
+    oc::vector<ShaderDefine> tessDefines = { { "TERRAIN_TESS", "1" } };
+    if (m_stereo)
+        tessDefines.push_back({ "STEREO", "1" });
+    const auto source = [&](const char* path) {
+        return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = tessDefines };
+    };
+    tess.vertexShader = ShaderSource{ .text = ground.vertexShader.text, .debugFilePath = ground.vertexShader.debugFilePath, .defines = tessDefines };
+    tess.tessControlShader = source("Shaders/terrain_tess.tcs.glsl");
+    tess.tessEvalShader = source("Shaders/terrain_tess.tes.glsl");
+
+    // Variant 0: the ground (layout defaults: opaque, depth write, back-face culled). TERRAIN_TESS on the
+    // fragment shaders too: they light from the evaluation stage's undisplaced position.
+    tess.fragmentShader = ground.fragmentShader;
+    tess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
+    tess.polygonMode = ground.polygonMode;
+    // Variant 1: the overlay, the untessellated overlay's state.
+    PipelineVariant overlayTess = overlay;
+    overlayTess.vertexShader = ShaderSource{}; // the layout's (TERRAIN_TESS) VS
+    overlayTess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
+    tess.additionalVariants.push_back(oc::move(overlayTess));
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
@@ -536,6 +576,9 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
     GraphicsPipelineLayout graphicsPipelineLayout;
     buildPipelineLayout(graphicsPipelineLayout, maxTextures);
     m_graphicsPipeline.initialize(renderPass, graphicsPipelineLayout);
+    GraphicsPipelineLayout terrainTessLayout;
+    buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
+    m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
 
     m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
@@ -591,6 +634,10 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
         printf("StaticMeshGraphicsPipeline: shader reload failed, keeping previous pipeline\n");
         return;
     }
+    GraphicsPipelineLayout terrainTessLayout;
+    buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
+    if (!m_terrainTessPipeline.reloadShaders(m_renderPass, terrainTessLayout))
+        printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
 
     m_indirectExecutionSet.destroy();
     m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
@@ -758,14 +805,36 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     if (updateDescriptors)
         commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet,
             oc::span<DescriptorSetUpdateInfo>(graphicsDescriptorSetUpdateInfos.data(), numUpdates));
-    vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
-    vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-    if (m_stereo) // select the eye matrix/view pos for the generated draws (vertex + fragment read it)
-        vkCommandBuffer.pushConstants(m_graphicsPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &params.viewIndex);
-    vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer() }, { 0 });
-    vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, {0});
-    vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+    // Pipeline, set, view index and vertex/index buffers: bound again after every generated-commands execute,
+    // which leaves the graphics state it bound undefined.
+    const auto bindForDraws = [&](vk::Pipeline pipeline, vk::PipelineLayout layout)
+    {
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, 1, &descriptorSet, 0, nullptr);
+        if (m_stereo) // select the eye matrix/view pos for the draws (every stage that reads a view)
+            vkCommandBuffer.pushConstants(layout, VIEW_PUSH_STAGES, 0, sizeof(uint32), &params.viewIndex);
+        vkCommandBuffer.bindVertexBuffers(0, { params.vertexBuffer.getBuffer() }, { 0 });
+        vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
+        vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
+    };
+    bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
     recordExecuteGeneratedCommands(vkCommandBuffer, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.meshCountBuffer);
+
+    // The TESSELLATED terrain: ground, then its overlay (EQUAL depth against the ground just drawn), before the
+    // transparent execute - where the untessellated overlay runs. Plain indexed indirect draws over the cull's
+    // per-mesh-slot sequences (offset 4 skips the pipelineIndex word); the count is meshCount[1], which the CPU
+    // sets to 0 while tessellation is off, so these recorded draws then walk nothing.
+    constexpr vk::DeviceSize sequenceStride = sizeof(RendererVKLayout::IndirectDrawSequence);
+    const auto drawTerrainTess = [&](uint32 variant, Buffer& sequences)
+    {
+        bindForDraws(m_terrainTessPipeline.getPipelineVariant(variant), m_terrainTessPipeline.getPipelineLayout());
+        vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
+            params.meshCountBuffer.getBuffer(), sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
+    };
+    drawTerrainTess(0, params.terrainTessCommandBuffer);
+    drawTerrainTess(1, params.terrainTessOverlayCommandBuffer);
+
+    bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
     recordExecuteGeneratedCommands(vkCommandBuffer, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.meshCountBuffer);
 }
 

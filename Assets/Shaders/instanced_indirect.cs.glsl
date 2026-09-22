@@ -122,6 +122,17 @@ layout (binding = 15, std430) buffer OutLodStatsBuffer
 {
     uint out_lodStats[]; // per-level pick counts this frame (stats readback; written under SHADER_STATS only)
 };
+// The TESSELLATED terrain (u_terrainTessParams0.x): its ground and overlay draws, same per-mesh-slot layout,
+// consumed by plain vkCmdDrawIndexedIndirectCount (the pipelineIndex word is skipped) - a tess pipeline
+// cannot join the DGC execution set, whose pipelines must all share the vertex + fragment stages.
+layout (binding = 16, std430) buffer OutTerrainTessCommandBuffer
+{
+    OutIndirectCommand out_terrainTessCommands[];
+};
+layout (binding = 17, std430) buffer OutTerrainTessOverlayCommandBuffer
+{
+    OutIndirectCommand out_terrainTessOverlayCommands[];
+};
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -249,14 +260,34 @@ void main()
         }
         else
         {
+            // Tessellated terrain: the DGC sequence still allocates the instance slots (atomicAdd below) but
+            // draws NO indices; the draw itself goes to the tess sequence, its count raised to cover this slot
+            // (as the overlay's), every writer storing the same other fields.
+            const bool terrainTess = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && u_terrainTessParams0.x > 0.5;
             idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {
                 out_indirectCommands[meshIdx].pipelineIndex = pipelineIdx;
-                out_indirectCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_indirectCommands[meshIdx].indexCount    = terrainTess ? 0u : drawMeshInfo.indexCount;
                 out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_indirectCommands[meshIdx].firstInstance = firstInstance;
+            }
+            if (terrainTess)
+            {
+                atomicMax(out_terrainTessCommands[meshIdx].instanceCount, idx + 1u);
+                out_terrainTessCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_terrainTessCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                out_terrainTessCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                out_terrainTessCommands[meshIdx].firstInstance = firstInstance;
+                if (terrainOverlayCovers(centerPos, radius))
+                {
+                    atomicMax(out_terrainTessOverlayCommands[meshIdx].instanceCount, idx + 1u);
+                    out_terrainTessOverlayCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                    out_terrainTessOverlayCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                    out_terrainTessOverlayCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                    out_terrainTessOverlayCommands[meshIdx].firstInstance = firstInstance;
+                }
             }
             // The TERRAIN OVERLAY (EPipelineIndex::TerrainOverlay: the surface-water film, later more terrain
             // surface layers): the same chunk drawn again over the ground, as the mesh's TRANSPARENT sequence
@@ -265,7 +296,7 @@ void main()
             // raised to this instance's slot + 1, so every overlapping instance lies inside the drawn range
             // (a non-overlapping instance drawn along with it discards every pixel); the other fields are the
             // same values from every writer.
-            if (pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
+            if (!terrainTess && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
             {
                 atomicMax(out_transparentIndirectCommands[meshIdx].instanceCount, idx + 1u);
                 out_transparentIndirectCommands[meshIdx].pipelineIndex = PIPELINE_IDX_TERRAIN_OVERLAY;

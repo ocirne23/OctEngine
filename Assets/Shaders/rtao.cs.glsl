@@ -14,7 +14,6 @@ layout (binding = 4, rgba16f) uniform restrict writeonly image2D u_aoOut; // rgb
 
 // Alpha-masked rays are a compile-time variant (RTAO_ALPHA_TEST injected by the pipeline when the
 // "RTAO/Alpha Test" tweak is on); the opaque path compiles out the geometry fetch + alpha test entirely.
-#ifdef RTAO_ALPHA_TEST
 struct MaterialInfo
 {
     uint flags;
@@ -22,6 +21,17 @@ struct MaterialInfo
     uint diffuseNormalTexIdx;
     uint metalRoughnessTexIdxAlphaMode;
 };
+struct InMeshInstance
+{
+    uint renderNodeIdx;
+    uint instanceOffsetIdx;
+    uint meshIdxMaterialIdx;
+    uint pipelineIdxAlphaMode;
+};
+// Both variants: a hit's material flags (the tessellated terrain's underside skip, below).
+layout (binding = 8, std430) readonly buffer InInstances { InMeshInstance in_instances[]; };
+layout (binding = 9, std430) readonly buffer InMaterials { MaterialInfo in_materialInfos[]; };
+#ifdef RTAO_ALPHA_TEST
 struct InMeshInfo
 {
     vec3 center;
@@ -31,20 +41,11 @@ struct InMeshInfo
     int  vertexOffset;
     uint _padding;
 };
-struct InMeshInstance
-{
-    uint renderNodeIdx;
-    uint instanceOffsetIdx;
-    uint meshIdxMaterialIdx;
-    uint pipelineIdxAlphaMode;
-};
 // Geometry for the alpha-masked candidate test. Same buffers/layout the GI trace uses; rt_shadow.inc.glsl
-// supplies the alpha test against them.
+// supplies the alpha test against them (with the instances + materials above).
 layout (binding = 5, std430) readonly buffer InVertices  { float in_vertices[]; }; // MeshVertex as 12 floats
 layout (binding = 6, std430) readonly buffer InIndices   { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos { InMeshInfo in_meshInfos[]; };
-layout (binding = 8, std430) readonly buffer InInstances { InMeshInstance in_instances[]; };
-layout (binding = 9, std430) readonly buffer InMaterials { MaterialInfo in_materialInfos[]; };
 layout (binding = 10) uniform sampler2D u_textures[]; // highest binding: variable descriptor count
 
 #include "rt_shadow.inc.glsl"
@@ -133,6 +134,13 @@ void main()
     vec2 jitter = vec2(ign(vec2(px) + frameRot * 1.6180339),
                        ign(vec2(px.yx) + frameRot * 3.1415926 + vec2(17.3, 5.1)));
 
+    // The TESSELLATED terrain: the depth holds the displaced relief, centred on the flat mesh the TLAS holds, so
+    // a relief low sits UNDER its own mesh and every ray hit the mesh's underside at once (dark blotches in the
+    // lows, strongest in shadow where only the ambient shows). A TERRAIN hit nearer than the relief depth,
+    // inside the tessellation's reach, is that underside: the ray continues past it once.
+    const float terrainSkip = (u_terrainTessParams0.x > 0.5 && viewDist < u_terrainTessParams1.y)
+        ? max(u_terrainTessParams1.z, u_terrainTessParams1.w) : 0.0;
+
     const uint n = max(pc.numRays, 1u);
     float occ = 0.0;
     vec3 bent = vec3(0.0); // sum of unoccluded ray directions -> bent normal (average open direction)
@@ -143,24 +151,41 @@ void main()
         float phi = 6.2831853 * u.y;
         vec3 dir = T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(max(0.0, 1.0 - u.x));
 
-        rayQueryEXT rq;
+        bool hit = false;
+        float t = 0.0;
+        float tStart = 0.01;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            rayQueryEXT rq;
 #ifdef RTAO_ALPHA_TEST
-        // Masked geometry is non-opaque in the TLAS; run the alpha test on candidates, hardware still
-        // auto-commits opaque hits. Terminate-on-first-hit gives the nearest confirmed hit for falloff.
-        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, rayOrigin, 0.01, dir, pc.radius);
-        while (rayQueryProceedEXT(rq))
-        {
-            if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
-                && rtsCandidateBlocks(rq))
-                rayQueryConfirmIntersectionEXT(rq);
-        }
+            // Masked geometry is non-opaque in the TLAS; run the alpha test on candidates, hardware still
+            // auto-commits opaque hits. Terminate-on-first-hit gives the nearest confirmed hit for falloff.
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, rayOrigin, tStart, dir, pc.radius);
+            while (rayQueryProceedEXT(rq))
+            {
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
+                    && rtsCandidateBlocks(rq))
+                    rayQueryConfirmIntersectionEXT(rq);
+            }
 #else
-        rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFFu, rayOrigin, 0.01, dir, pc.radius);
-        while (rayQueryProceedEXT(rq)) {}
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFFu, rayOrigin, tStart, dir, pc.radius);
+            while (rayQueryProceedEXT(rq)) {}
 #endif
-        if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT)
+            hit = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
+            if (!hit)
+                break;
+            t = rayQueryGetIntersectionTEXT(rq, true);
+            if (pass > 0 || t >= terrainSkip)
+                break;
+            const uint instanceIdx = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true));
+            const uint materialIdx = instanceIdx < uint(in_instances.length()) ? in_instances[instanceIdx].meshIdxMaterialIdx >> 16 : 0xFFFFu;
+            if (materialIdx >= uint(in_materialInfos.length()) || (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) == 0u)
+                break;
+            tStart = t + 0.01; // the terrain's underside: continue past it
+            hit = false;
+        }
+        if (hit)
         {
-            float t = rayQueryGetIntersectionTEXT(rq, true);
             occ += 1.0 - clamp(t / pc.radius, 0.0, 1.0); // closer hits darken more
         }
         else

@@ -300,6 +300,8 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
         .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
+        .terrainTessCommandBuffer = m_indirectCullComputePipeline.getTerrainTessCommandBuffer(frameIdx),
+        .terrainTessOverlayCommandBuffer = m_indirectCullComputePipeline.getTerrainTessOverlayCommandBuffer(frameIdx),
         .meshCountBuffer = instances.meshCount,
         .lightInfosBuffer = submission.lightInfos,
         .lightGridsBuffer = submission.lightGrids,

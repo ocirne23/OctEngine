@@ -128,6 +128,10 @@ float g_waterLevelOverride = WATER_LEVEL_UNSET;
 // specular and showed as warped caustics on every filmed pixel under a wave. One HALF scalar, not the
 // radiance: it is live across computeLitColor's whole light loop. 0 = sun behind the surface.
 float16_t g_sunVisSurface = float16_t(0.0);
+// The material's own sun occlusion, set before computeLitColor: the terrain's relief self-shadow
+// (terrain_splat.inc.glsl, TERRAIN_SPLAT_RELIEF). Scales the ground's sun only - not g_sunVisSurface, so the
+// water film on top keeps its glint. A constant 1 (folded away) for every other material.
+float16_t g_sunVisMaterial = float16_t(1.0);
 vec3 sunSurfaceRadiance()
 {
 	return u_sunTransmittance * u_sunColor.rgb * float(g_sunVisSurface);
@@ -211,7 +215,7 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
 	visibility *= u_eclipseParams.x;
 	g_sunVisSurface = float16_t(visibility);
-	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * visibility;
+	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
 	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption
 	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
 	// the live depth resolved above.

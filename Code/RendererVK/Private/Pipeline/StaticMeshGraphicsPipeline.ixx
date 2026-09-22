@@ -34,7 +34,9 @@ public:
         Buffer& meshInstanceBuffer;
         Buffer& indirectCommandBuffer;            // opaque draw sequences
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
-        Buffer& meshCountBuffer;                  // uint32 live mesh count (DGC sequenceCountAddress), CPU-written per frame
+        Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)
+        Buffer& terrainTessOverlayCommandBuffer;  // tessellated terrain overlay sequences
+        Buffer& meshCountBuffer;                  // [0] live mesh count (DGC sequenceCountAddress), [1] terrain tess draw count; CPU-written per frame
 
         Buffer& lightInfosBuffer;
 		Buffer& lightGridsBuffer;
@@ -93,10 +95,20 @@ public:
     const IndirectCommandsLayout& getIndirectCommandsLayout() const { return m_indirectCommandsLayout; }
 
 private:
+    // Every stage that reads the view index push constant (VR); the tess terrain's evaluation stage projects.
+    static constexpr vk::ShaderStageFlags VIEW_PUSH_STAGES = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+        | vk::ShaderStageFlagBits::eTessellationControl | vk::ShaderStageFlagBits::eTessellationEvaluation;
 
     void buildPipelineLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
+    // The tessellated terrain from the main layout: its bindings (so the SAME descriptor set binds - the set
+    // layouts are identically defined), vertex input and push ranges, and the terrain ground / overlay
+    // variants' fragment shaders with every baked define. Variant 0 = ground, 1 = overlay.
+    void buildTerrainTessLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& tess);
 
     GraphicsPipeline m_graphicsPipeline;
+    // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
+    // draws in record(), between the opaque and the transparent executes.
+    GraphicsPipeline m_terrainTessPipeline;
     IndirectExecutionSet m_indirectExecutionSet;
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler;

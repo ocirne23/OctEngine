@@ -12,6 +12,7 @@ export namespace TextureConvert
 		Color,     // sRGB content -> BC1 (BC3 when an alpha channel is used)
 		NormalMap, // tangent normals -> BC5 (XY only; the material flags Z reconstruction)
 		Data,      // linear data (roughness/AO/masks) -> BC1
+		Height,    // one linear channel (displacement / height, the source's R) -> BC4
 	};
 
 	// Converts srcPath (png/jpg/tga/...) into a full-mip-chain .dds at outPath. Returns false when the

@@ -120,6 +120,8 @@ bool Device::initialize()
     deviceFeatures.features.samplerAnisotropy = vk::True;
     deviceFeatures.features.wideLines = vk::True; // debug lines and wireframe rasterize LINE_WIDTH px wide
     deviceFeatures.features.dualSrcBlend = vk::True; // the terrain overlay composites src0 + dst * src1
+    deviceFeatures.features.tessellationShader = vk::True; // the tessellated terrain (StaticMeshGraphicsPipeline)
+    deviceFeatures.features.multiDrawIndirect = vk::True;  // its per-mesh-slot indirect draws
     vk::PhysicalDeviceVulkan11Features vk11Features
     {
         .pNext = &deviceFeatures,
@@ -131,6 +133,7 @@ bool Device::initialize()
     vk::PhysicalDeviceVulkan12Features vk12Features
     {
         .pNext = &vk11Features,
+        .drawIndirectCount = vk::True, // the tessellated terrain's draws: GPU-written sequences, CPU-written count
         .storageBuffer8BitAccess = vk::True,
         .shaderFloat16 = vk::True,
 		.shaderInt8 = vk::True,

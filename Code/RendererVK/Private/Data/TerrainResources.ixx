@@ -20,6 +20,7 @@ export struct TerrainSplatMaterial
     oc::string diffuseDds;
     oc::string normalDds;
     oc::string armDds; // packed AO (R) / roughness (G) / metalness (B); sampled linear
+    oc::string heightDds; // optional BC4 height (R, 0..1, 1 = top): the parallax march + the height blend
     // xy = temperature range, already t01; zw = precipitation range in mm/yr. Precipitation stays in real
     // units because its divisor is a live tweak (TerrainTexTweaks::precipFullMm): buildUboTerrain
     // normalizes it every frame. The default is full width on both axes (matches any climate).
@@ -75,6 +76,35 @@ export struct TerrainTexTweaks
     // TerrainStreamer scales these by V3's world scale, like the crag thresholds.
     float cragWanderAmp = 150.0f;      // metres at the model's true scale; 0 = off
     float cragWanderWavelength = 2000.0f; // metres at the model's true scale
+    // Relief from the splat HEIGHT maps (terrain_splat.inc.glsl). Parallax occlusion mapping: ONE march in
+    // world space over the height-blended composite of the visible layers, near the camera only. Relief is in
+    // metres of the height range 0..1, the mesh at the top (1).
+    float parallaxDepthGround = 0.12f; // m: ground, beach and snow
+    float parallaxDepthRock = 0.35f;   // m
+    float parallaxFadeStart = 15.0f;   // m from the camera: full parallax inside
+    float parallaxFadeEnd = 30.0f;     // m: none past it (the march is skipped); 0 = parallax off
+    float parallaxSteps = 24.0f;       // linear search steps at a grazing view (~1/NoV, a quarter looking straight on)
+    float parallaxShadow = 1.0f;       // relief self-shadow from the sun: 0 = off, 1 = full
+    // Height blend: a layer laid over another with coverage w shows where it stands HIGHER, so the borders
+    // follow the texture relief (sand in the gaps between rocks) instead of a linear cross-fade. 0 = linear.
+    float heightBlendContrast = 3.0f;
+    // TESSELLATION (StaticMeshGraphicsPipeline's terrain tess pipeline; terrain_tess.tcs/.tes.glsl): the
+    // ground and the overlay pass subdivide near the camera and DISPLACE along the vertex normal by the same
+    // height composite the parallax march uses, CENTRED on the mesh (height 0.5 = the mesh), so the flat
+    // mesh the TLAS, the collider and the shadow map still see is the relief's mean surface.
+    bool  tessEnabled = true;
+    float tessMaxFactor = 16.0f;    // per edge; LOD0 is 2 m, so 16 = ~12 cm triangles
+    float tessTargetPx = 7.0f;      // screen length of a subdivided edge: smaller costs FS helper lanes
+    float tessFadeStart = 15.0f;    // m from the camera: full displacement inside
+    float tessFadeEnd = 100.0f;     // m: no displacement and no subdivision past it
+    // Shape of the fade between start and end, for the displacement AND the tess factor: strength = 1 - t^p
+    // (t = 0..1 across the band). 1 = linear, 2 = quadratic (holds, drops late), 0.5 = square root (drops early).
+    float tessFalloffExponent = 1.0f;
+    // Closer than this the factor and the height mip use it instead of the camera distance: the vertices and
+    // their heights stop changing as the camera approaches (they swam and breathed without it).
+    float tessFreezeDistance = 15.0f;
+    float tessDepthGround = 0.5f;   // m of relief (height 0..1): ground, beach, snow
+    float tessDepthRock = 0.5f;     // m
     // mm/yr that reads as humidity 1.0: the divisor for TerrainSplatMaterial::climate's precipitation.
     // Mirrors the generator's live "Terrain/V3/Precip for full humidity" tweak; if the two drift, the
     // whole climate table slides along the humidity axis.
@@ -177,6 +207,7 @@ public:
     const TerrainSplatCounts& getSplatCounts() const { return m_splatCounts; }
     oc::span<const uint16> getSplatTextures() const { return m_splatTextures; }
     const glm::vec4* getSplatClimate() const { return m_splatClimate; } // per slot, TerrainSplatMaterial::climate units
+    const uint16* getSplatHeightTex() const { return m_splatHeightTex; } // per slot, UINT16_MAX = no height map
 
     // ---- The CPU-baked height/water map (fog's height base, the ocean's coarse shore fallback) ----
     BakedWorldMap& getHeightMap() { return m_heightMap; }
@@ -212,6 +243,7 @@ private:
     TerrainSplatCounts m_splatCounts;
     oc::vector<uint16> m_splatTextures; // for the per-frame streaming noteUse + replacement frees
     glm::vec4 m_splatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
+    uint16 m_splatHeightTex[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{}; // read only once a set is registered
     TerrainTexTweaks m_texTweaks;
     TerrainWetTweaks m_wetTweaks;
 

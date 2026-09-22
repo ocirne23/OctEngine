@@ -50,6 +50,15 @@ export struct GraphicsPipelineLayout
 {
     ShaderSource vertexShader;
     ShaderSource fragmentShader;
+    // Optional TESSELLATION, for EVERY variant (one module each, so the variants' positions are bit-identical -
+    // what an EQUAL-depth re-draw needs): both set = patch-list topology with patchControlPoints. The domain
+    // origin is LOWER_LEFT, so the evaluation shader's winding keywords follow the GL rules.
+    ShaderSource tessControlShader;
+    ShaderSource tessEvalShader;
+    uint32 patchControlPoints = 3;
+    // INDIRECT_BINDABLE (DGC execution sets). Off for a pipeline drawn only by plain commands - a tess pipeline
+    // cannot join an execution set whose initial pipeline has other stages anyway.
+    bool indirectBindable = true;
     VertexLayoutInfo vertexLayoutInfo;
     oc::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     // Optional, parallel to descriptorSetLayoutBindings. If non-empty, the set layout is created

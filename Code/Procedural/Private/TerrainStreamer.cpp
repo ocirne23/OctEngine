@@ -82,13 +82,15 @@ namespace
 		float tempMinC = ANY_COLD, tempMaxC = ANY_HOT;
 		float precipMinMm = ANY_DRY, precipMaxMm = ANY_WET;
 		// Texture set name under Assets/Textures/Terrain/. Sources default to the Poly Haven layout,
-		// <stem>/<stem>_{diff,nor_gl,arm}_2k.jpg, and bake to Local/TerrainTex/<stem>_{diff,nor,arm}.dds -
-		// so the cache is keyed by the texture, and swapping one here can never read a stale bake.
+		// <stem>/<stem>_{diff,nor_gl,arm}_2k.jpg + <stem>_disp_2k.png, and bake to
+		// Local/TerrainTex/<stem>_{diff,nor,arm,disp}.dds - so the cache is keyed by the texture, and
+		// swapping one here can never read a stale bake.
 		const char* stem;
 		// Only for sets that name their files differently (the ambientCG ones). Relative to Assets/.
 		const char* diffSrc = nullptr;
 		const char* norSrc = nullptr;
 		const char* armSrc = nullptr;
+		const char* dispSrc = nullptr;
 	};
 	const TerrainTexSource TERRAIN_TEX_SOURCES[] =
 	{
@@ -103,10 +105,12 @@ namespace
 		{ .tempMinC = -1.0f,    .tempMaxC = 5.0f,    .precipMinMm = 300.0f,   .precipMaxMm = 1500.0f, .stem = "forest_ground_04" },        // taiga / boreal forest floor: needle litter
 		{ .tempMinC = 4.0f,     .tempMaxC = 19.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = 400.0f,  .stem = "dry_ground_01" },           // cold desert / dry steppe
 		{ .tempMinC = 4.0f,     .tempMaxC = 20.0f,   .precipMinMm = 400.0f,   .precipMaxMm = 1000.0f, .stem = "Grass001",                  // temperate grassland / prairie
-		  .diffSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Grass001/Grass001_arm_2k.jpg" },
+		  .diffSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Grass001/Grass001_arm_2k.jpg",
+		  .dispSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Displacement.jpg" },
 		{ .tempMinC = 5.0f,     .tempMaxC = 18.0f,   .precipMinMm = 1000.0f,  .precipMaxMm = 1900.0f, .stem = "forest_floor" },            // temperate seasonal forest: broadleaf litter
 		{ .tempMinC = 3.0f,     .tempMaxC = 15.0f,   .precipMinMm = 1800.0f,  .precipMaxMm = ANY_WET, .stem = "Moss002",                   // temperate rainforest: deep moss
-		  .diffSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Moss002/Moss002_arm_2k.jpg" },
+		  .diffSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Moss002/Moss002_arm_2k.jpg",
+		  .dispSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Displacement.jpg" },
 		{ .tempMinC = 20.0f,    .tempMaxC = ANY_HOT, .precipMinMm = ANY_DRY,  .precipMaxMm = 300.0f,  .stem = "sand_01" },                 // subtropical desert: dune sand
 		{ .tempMinC = 19.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 450.0f,   .precipMaxMm = 1300.0f, .stem = "red_laterite_soil_stones" },// savanna / dry tropics: iron-red laterite. 450 floor: at 250 this box bridged the steppe|sand seam and drew a red isotherm sliver across every desert
 		{ .tempMinC = 18.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 1300.0f,  .precipMaxMm = 2100.0f, .stem = "leaves_forest_ground" },    // tropical forest floor: leaf litter
@@ -131,14 +135,14 @@ namespace
 
 	constexpr const char* TERRAIN_TEX_CACHE_DIR = "Local/TerrainTex/";
 
-	// Poly Haven layout; the two ambientCG sets override it per map.
+	// Poly Haven layout; the two ambientCG sets override it per map. map: "diff", "nor_gl", "arm", "disp".
 	oc::string terrainTexSrcPath(const TerrainTexSource& src, const char* map)
 	{
-		const char* const overrides[] = { src.diffSrc, src.norSrc, src.armSrc };
-		const int slot = map[0] == 'd' ? 0 : (map[0] == 'n' ? 1 : 2);
-		if (overrides[slot])
-			return overrides[slot];
-		return oc::format("Textures/Terrain/{}/{}_{}_2k.jpg", src.stem, src.stem, map);
+		const oc::string_view m = map;
+		const char* override = m == "diff" ? src.diffSrc : m == "nor_gl" ? src.norSrc : m == "arm" ? src.armSrc : src.dispSrc;
+		if (override)
+			return override;
+		return oc::format("Textures/Terrain/{}/{}_{}_2k.{}", src.stem, src.stem, map, m == "disp" ? "png" : "jpg");
 	}
 
 	oc::string terrainTexCachePath(const TerrainTexSource& src, const char* map)
@@ -175,7 +179,7 @@ namespace
 	{
 		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
 
-		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diff, 1 = nor, 2 = arm
+		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diff, 1 = nor, 2 = arm, 3 = disp
 		oc::vector<BakeTask> tasks;
 		for (const TerrainTexSource& src : TERRAIN_TEX_SOURCES)
 		{
@@ -185,6 +189,8 @@ namespace
 				tasks.push_back({ &src, 1 });
 			if (!terrainTexCacheFresh(terrainTexCachePath(src, "arm"), terrainTexSrcPath(src, "arm")))
 				tasks.push_back({ &src, 2 });
+			if (!terrainTexCacheFresh(terrainTexCachePath(src, "disp"), terrainTexSrcPath(src, "disp")))
+				tasks.push_back({ &src, 3 });
 		}
 		if (tasks.empty())
 			return;
@@ -205,6 +211,7 @@ namespace
 				case 0: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "diff").c_str(), TextureConvert::EUsage::Color, terrainTexCachePath(src, "diff").c_str()); break;
 				case 1: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "nor_gl").c_str(), TextureConvert::EUsage::NormalMap, terrainTexCachePath(src, "nor").c_str()); break;
 				case 2: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "arm").c_str(), TextureConvert::EUsage::Data, terrainTexCachePath(src, "arm").c_str()); break;
+				case 3: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "disp").c_str(), TextureConvert::EUsage::Height, terrainTexCachePath(src, "disp").c_str()); break;
 				}
 				if (!ok)
 					Log::warning(oc::format("Terrain: failed to bake splat texture '{}' map {}", src.stem, tasks[i].map));
@@ -379,6 +386,29 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Textures", "Snow slope start", &m_texSnowSlopeStart, 0.0f, 1.0f);
 		Tweak::floatVar("Terrain/Textures", "Snow slope full", &m_texSnowSlopeFull, 0.0f, 1.0f);
 		Tweak::floatVar("Terrain/Textures", "Snow min humidity", &m_texSnowAridity, 0.0f, 0.5f, 0.005f);
+		// Relief from the splat height maps: parallax occlusion mapping near the camera (one world-space
+		// march over the blended height of the visible layers) and the height blend at layer borders.
+		Tweak::boolean("Terrain/Textures", "Parallax", &m_texParallaxEnabled);
+		Tweak::floatVar("Terrain/Textures", "Parallax depth ground (m)", &m_texParallaxDepthGround, 0.0f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Textures", "Parallax depth rock (m)", &m_texParallaxDepthRock, 0.0f, 2.0f, 0.01f);
+		Tweak::floatVar("Terrain/Textures", "Parallax fade start (m)", &m_texParallaxFadeStart, 0.0f, 200.0f, 0.5f);
+		Tweak::floatVar("Terrain/Textures", "Parallax fade end (m)", &m_texParallaxFadeEnd, 1.0f, 300.0f, 0.5f);
+		Tweak::intVar("Terrain/Textures", "Parallax steps", &m_texParallaxSteps, 2, 64, 1.0f);
+		Tweak::floatVar("Terrain/Textures", "Parallax self-shadow", &m_texParallaxShadow, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Textures", "Height blend contrast", &m_texHeightBlendContrast, 0.0f, 16.0f, 0.1f);
+		// Tessellation: the ground + overlay subdivide near the camera and displace by the same height
+		// composite, centred on the mesh. Independent of "Parallax" (both on = relief twice near the camera).
+		Tweak::boolean("Terrain/Tessellation", "Enabled", &m_texTessEnabled);
+		Tweak::intVar("Terrain/Tessellation", "Max factor", &m_texTessMaxFactor, 1, 64, 1.0f);
+		Tweak::floatVar("Terrain/Tessellation", "Target edge (px)", &m_texTessTargetPx, 2.0f, 64.0f, 0.5f);
+		Tweak::floatVar("Terrain/Tessellation", "Fade start (m)", &m_texTessFadeStart, 0.0f, 300.0f, 0.5f);
+		Tweak::floatVar("Terrain/Tessellation", "Fade end (m)", &m_texTessFadeEnd, 1.0f, 500.0f, 0.5f);
+		// strength = 1 - t^p across the fade band: 1 linear, 2 quadratic (holds, drops late), 0.5 square root (drops early)
+		Tweak::floatVar("Terrain/Tessellation", "Falloff exponent", &m_texTessFalloffExponent, 0.05f, 16.0f, 0.05f);
+		// Closer than this nothing moves: the subdivision and the height mip hold at this distance's values.
+		Tweak::floatVar("Terrain/Tessellation", "Freeze distance (m)", &m_texTessFreezeDistance, 0.1f, 100.0f, 0.5f);
+		Tweak::floatVar("Terrain/Tessellation", "Depth ground (m)", &m_texTessDepthGround, 0.0f, 2.0f, 0.005f);
+		Tweak::floatVar("Terrain/Tessellation", "Depth rock (m)", &m_texTessDepthRock, 0.0f, 4.0f, 0.01f);
 
 
 		// V3 (Terrain Diffusion). The model resolves 30 m/px, which is what makes its continents
@@ -506,6 +536,22 @@ namespace Procedural
 			.snowAridity = m_texSnowAridity,
 			.cragWanderAmp = m_texCragWanderAmp * cragScale,
 			.cragWanderWavelength = m_texCragWanderWavelength * cragScale,
+			.parallaxDepthGround = m_texParallaxDepthGround,
+			.parallaxDepthRock = m_texParallaxDepthRock,
+			.parallaxFadeStart = m_texParallaxFadeStart,
+			.parallaxFadeEnd = m_texParallaxEnabled ? m_texParallaxFadeEnd : 0.0f,
+			.parallaxSteps = (float)m_texParallaxSteps,
+			.parallaxShadow = m_texParallaxShadow,
+			.heightBlendContrast = m_texHeightBlendContrast,
+			.tessEnabled = m_texTessEnabled,
+			.tessMaxFactor = (float)m_texTessMaxFactor,
+			.tessTargetPx = m_texTessTargetPx,
+			.tessFadeStart = m_texTessFadeStart,
+			.tessFadeEnd = m_texTessFadeEnd,
+			.tessFalloffExponent = m_texTessFalloffExponent,
+			.tessFreezeDistance = m_texTessFreezeDistance,
+			.tessDepthGround = m_texTessDepthGround,
+			.tessDepthRock = m_texTessDepthRock,
 			.precipFullMm = m_v3PrecipFullHumidity,
 		});
 		renderer.setTerrainWetParams({
@@ -580,6 +626,8 @@ namespace Procedural
 	//   diffuseDds   -> diffuseTexIdx         sRGB     RGB albedo               white
 	//   normalDds    -> normalTexIdx          linear   tangent normal (BC5 **)  flat normal
 	//   armDds       -> metalRoughnessTexIdx  linear   R AO, G rough, B metal   AO 1, rough 0.9, metal 0
+	//   heightDds    -> terrainSplatHeightTex linear   R height (BC4)           flat (0.5): no parallax,
+	//                   (UBO, per slot)                                         linear layer blend
 	//
 	//   *  on an empty path or a failed upload
 	//   ** a BC5 file sets MATERIAL_FLAG_BC5_NORMAL; the shader rebuilds Z
@@ -620,6 +668,9 @@ namespace Procedural
 				Log::warning(oc::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
 				return oc::nullopt;
 			}
+			// Optional: without it the material is flat for the parallax and the height blend.
+			if (const oc::string heightDds = terrainTexCachePath(src, "disp"); FileSystem::exists(heightDds, true))
+				mat.heightDds = heightDds;
 			return mat;
 		};
 

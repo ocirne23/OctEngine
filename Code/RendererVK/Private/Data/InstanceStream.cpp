@@ -27,13 +27,15 @@ void InstanceStream::initialize(uint32 maxUniqueMeshes, oc::function<void()> onG
         createNodeBuffers(s);
         createInstanceBuffer(s);
         createFirstInstanceBuffer(s);
-        // Indirect usage: consumed by DGC (sequenceCountAddress requires an INDIRECT_BUFFER).
-        s.meshCount.initialize(sizeof(uint32),
+        // Indirect usage: consumed by DGC (sequenceCountAddress requires an INDIRECT_BUFFER). [0] = the DGC
+        // sequence count, [1] = the tessellated terrain's draw count (the countBuffer of its indirect draws).
+        s.meshCount.initialize(2 * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "MeshCount", BufferHostAccess::eSequentialWrite);
         s.mappedMeshCount = s.meshCount.mapMemory<uint32>();
         s.mappedMeshCount[0] = 0;
-        s.meshCount.flushMappedMemory(sizeof(uint32));
+        s.mappedMeshCount[1] = 0;
+        s.meshCount.flushMappedMemory(2 * sizeof(uint32));
     }
 }
 

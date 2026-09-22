@@ -128,6 +128,7 @@ bool GraphicsPipeline::reloadShaders(vk::RenderPass renderPass, GraphicsPipeline
 bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, bool assertOnFailure)
 {
     vk::Device vkDevice = Globals::device.getDevice();
+    const bool hasTess = !layout.tessControlShader.text.empty() && !layout.tessEvalShader.text.empty();
 
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo
     {
@@ -140,8 +141,13 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo
     {
         .flags = {},
-        .topology = layout.topology,
+        .topology = hasTess ? vk::PrimitiveTopology::ePatchList : layout.topology,
         .primitiveRestartEnable = vk::False,
+    };
+    vk::PipelineTessellationDomainOriginStateCreateInfo tessDomainOrigin{ .domainOrigin = vk::TessellationDomainOrigin::eLowerLeft };
+    vk::PipelineTessellationStateCreateInfo pipelineTessellationStateCreateInfo{
+        .pNext = &tessDomainOrigin,
+        .patchControlPoints = layout.patchControlPoints,
     };
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo
     {
@@ -228,12 +234,22 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .dynamicStateCount = static_cast<uint32>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),
     };
-    oc::array<vk::PipelineShaderStageCreateInfo, 2> pipelineShaderStageCreateInfos =
+    // VS, then (tess) TCS + TES, then FS: fsSlot is where the fragment stage sits.
+    oc::array<vk::PipelineShaderStageCreateInfo, 4> pipelineShaderStageCreateInfos =
     {
         vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eVertex,   .pName = "main", },
         vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eFragment, .pName = "main", },
+        vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eFragment, .pName = "main", },
+        vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eFragment, .pName = "main", },
     };
-    vk::PipelineCreateFlags2CreateInfo pipelineFlags2{ .flags = vk::PipelineCreateFlagBits2::eIndirectBindableEXT };
+    const uint32 fsSlot = hasTess ? 3u : 1u;
+    if (hasTess)
+    {
+        pipelineShaderStageCreateInfos[1].stage = vk::ShaderStageFlagBits::eTessellationControl;
+        pipelineShaderStageCreateInfos[2].stage = vk::ShaderStageFlagBits::eTessellationEvaluation;
+    }
+    const bool hasFS = !layout.depthOnly || !layout.fragmentShader.text.empty();
+    vk::PipelineCreateFlags2CreateInfo pipelineFlags2{ .flags = layout.indirectBindable ? vk::PipelineCreateFlagBits2::eIndirectBindableEXT : vk::PipelineCreateFlags2{} };
     if (Globals::device.capturePipelineStatistics())
         pipelineFlags2.flags |= vk::PipelineCreateFlagBits2::eCaptureStatisticsKHR;
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo
@@ -242,11 +258,11 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .flags = {},
         // Depth-only passes may still carry a fragment shader (e.g. alpha-masked shadow discard); they
         // simply write no color attachments.
-        .stageCount = (!layout.depthOnly || !layout.fragmentShader.text.empty()) ? 2u : 1u,
+        .stageCount = fsSlot + (hasFS ? 1u : 0u),
         .pStages = pipelineShaderStageCreateInfos.data(),
         .pVertexInputState = &pipelineVertexInputStateCreateInfo,
         .pInputAssemblyState = &pipelineInputAssemblyStateCreateInfo,
-        .pTessellationState = nullptr,
+        .pTessellationState = hasTess ? &pipelineTessellationStateCreateInfo : nullptr,
         .pViewportState = &pipelineViewportStateCreateInfo,
         .pRasterizationState = &pipelineRasterizationStateCreateInfo,
         .pMultisampleState = &pipelineMultisampleStateCreateInfo,
@@ -260,12 +276,21 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .basePipelineIndex = 0,
     };
 
-    Shader defaultVS, defaultFS;
+    Shader defaultVS, defaultFS, tessControl, tessEval;
     if (!defaultVS.initialize(vk::ShaderStageFlagBits::eVertex, layout.vertexShader.text, layout.vertexShader.debugFilePath, layout.vertexShader.defines, assertOnFailure))
         return false;
-    if ((!layout.depthOnly || !layout.fragmentShader.text.empty()) &&
+    if (hasFS &&
         !defaultFS.initialize(vk::ShaderStageFlagBits::eFragment, layout.fragmentShader.text, layout.fragmentShader.debugFilePath, layout.fragmentShader.defines, assertOnFailure))
         return false;
+    if (hasTess)
+    {
+        if (!tessControl.initialize(vk::ShaderStageFlagBits::eTessellationControl, layout.tessControlShader.text, layout.tessControlShader.debugFilePath, layout.tessControlShader.defines, assertOnFailure))
+            return false;
+        if (!tessEval.initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, layout.tessEvalShader.text, layout.tessEvalShader.debugFilePath, layout.tessEvalShader.defines, assertOnFailure))
+            return false;
+        pipelineShaderStageCreateInfos[1].module = tessControl.getModule();
+        pipelineShaderStageCreateInfos[2].module = tessEval.getModule();
+    }
 
     // Compile per-variant shader overrides; entries with no override keep a null module.
     const size_t additionalCount = layout.additionalVariants.size();
@@ -285,7 +310,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     // Variant 0: both defaults, no blending, depth write on.
     outPipelines.reserve(1 + additionalCount);
     pipelineShaderStageCreateInfos[0].module = defaultVS.getModule();
-    pipelineShaderStageCreateInfos[1].module = defaultFS.getModule();
+    pipelineShaderStageCreateInfos[fsSlot].module = defaultFS.getModule();
     {
         vk::Result   result;
         vk::Pipeline pipeline;
@@ -305,7 +330,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     {
         const PipelineVariant& variant = layout.additionalVariants[i];
         pipelineShaderStageCreateInfos[0].module = overrideVS[i].getModule() ? overrideVS[i].getModule() : defaultVS.getModule();
-        pipelineShaderStageCreateInfos[1].module = overrideFS[i].getModule() ? overrideFS[i].getModule() : defaultFS.getModule();
+        pipelineShaderStageCreateInfos[fsSlot].module = overrideFS[i].getModule() ? overrideFS[i].getModule() : defaultFS.getModule();
 
         // Per-variant blend/depth/raster state (mutated in place; the create info points at these structs).
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;

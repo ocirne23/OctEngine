@@ -44,6 +44,8 @@ public:
 
     Buffer& getIndirectCommandBuffer(uint32 idx)   { return m_perFrameData[idx].outIndirectCommandBuffer; }
     Buffer& getTransparentIndirectCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTransparentIndirectCommandBuffer; }
+    Buffer& getTerrainTessCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessCommandBuffer; }
+    Buffer& getTerrainTessOverlayCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessOverlayCommandBuffer; }
     Buffer& getInstanceIdxBuffer(uint32 idx)      { return m_perFrameData[idx].outMeshInstanceIndexesBuffer; }
     Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; }
     // Dispatch-size buffer { numInstances, 1, 1 }; reused by the shadow cull which dispatches the
@@ -65,6 +67,8 @@ private:
         Buffer outMeshInstanceIndexesBuffer;      // 7
         Buffer outIndirectCommandBuffer;          // 8 - opaque
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
+        Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
+        Buffer outTerrainTessOverlayCommandBuffer;  // 17 - tessellated terrain overlay
 
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };

@@ -562,6 +562,19 @@ void Renderer::buildUboTerrain()
         tex.snowAridity, 0.0f);
     ubo.terrainTexParams5 = glm::vec4(glm::max(tex.cragWanderAmp, 0.0f),
         1.0f / glm::max(tex.cragWanderWavelength, 1.0f), 0.0f, 0.0f);
+    const float parallaxFadeEnd = tex.parallaxFadeEnd > 0.0f ? glm::max(tex.parallaxFadeEnd, tex.parallaxFadeStart + 0.1f) : 0.0f;
+    ubo.terrainTexParams6 = glm::vec4(glm::max(tex.parallaxDepthGround, 0.0f), glm::max(tex.parallaxDepthRock, 0.0f),
+        glm::max(tex.parallaxFadeStart, 0.0f), glm::max(tex.heightBlendContrast, 0.0f));
+    ubo.terrainTexParams7 = glm::vec4(parallaxFadeEnd, glm::clamp(tex.parallaxSteps, 2.0f, 64.0f),
+        glm::clamp(tex.parallaxShadow, 0.0f, 1.0f), 0.0f);
+    ubo.terrainTessParams0 = glm::vec4(tex.tessEnabled ? 1.0f : 0.0f, glm::clamp(tex.tessMaxFactor, 1.0f, 64.0f),
+        glm::max(tex.tessTargetPx, 1.0f), glm::clamp(tex.tessFalloffExponent, 0.05f, 16.0f));
+    ubo.terrainTessParams1 = glm::vec4(glm::max(tex.tessFadeStart, 0.0f), glm::max(tex.tessFadeEnd, tex.tessFadeStart + 0.1f),
+        glm::max(tex.tessDepthGround, 0.0f), glm::max(tex.tessDepthRock, 0.0f));
+    ubo.terrainTessParams2 = glm::vec4(glm::max(tex.tessFreezeDistance, 0.1f), 0.0f, 0.0f, 0.0f);
+    const uint16* heightTex = m_terrain.getSplatHeightTex();
+    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
+        ubo.terrainSplatHeightTex[i >> 2][i & 3] = heightTex[i];
     // Climate boxes: temperature arrives as t01, precipitation as mm/yr - its divisor is a live tweak.
     const float invPrecipFull = 1.0f / glm::max(tex.precipFullMm, 1.0f);
     const glm::vec4* climate = m_terrain.getSplatClimate();

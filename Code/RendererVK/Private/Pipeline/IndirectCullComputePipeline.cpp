@@ -52,6 +52,12 @@ void IndirectCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDraws");
         perFrame.outTransparentIndirectCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 9
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTransparent");
+        // The tessellated terrain's ground + overlay: same per-mesh-slot layout, drawn by plain indexed
+        // indirect draws (a tess pipeline cannot join the DGC execution set - its stages differ).
+        perFrame.outTerrainTessCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 16
+            usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainTess");
+        perFrame.outTerrainTessOverlayCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 17
+            usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainTessOverlay");
     }
 }
 
@@ -134,7 +140,9 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
-    for (uint32 binding = 11; binding <= 15; ++binding) // LOD selection: group idx / groups / state / node bias / stats
+    // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16, 17 the tessellated terrain's
+    // ground + overlay sequences.
+    for (uint32 binding = 11; binding <= 17; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -158,7 +166,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 16> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 18> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -320,6 +328,26 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                     .range = recordParams.outLodStatsBuffer.getSize(),
                 }
             }
+        },
+        DescriptorSetUpdateInfo { // OutTerrainTessCommandBuffer
+            .binding = 16,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = {
+                vk::DescriptorBufferInfo {
+                    .buffer = frameData.outTerrainTessCommandBuffer.getBuffer(),
+                    .range = frameData.outTerrainTessCommandBuffer.getSize(),
+                }
+            }
+        },
+        DescriptorSetUpdateInfo { // OutTerrainTessOverlayCommandBuffer
+            .binding = 17,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = {
+                vk::DescriptorBufferInfo {
+                    .buffer = frameData.outTerrainTessOverlayCommandBuffer.getBuffer(),
+                    .range = frameData.outTerrainTessOverlayCommandBuffer.getSize(),
+                }
+            }
         }
     };
 
@@ -334,6 +362,8 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         // how many meshes are registered - new meshes spawn without a re-record.
         vkCommandBuffer.fillBuffer(frameData.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // opaque
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
+        vkCommandBuffer.fillBuffer(frameData.outTerrainTessCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
+        vkCommandBuffer.fillBuffer(frameData.outTerrainTessOverlayCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         {
             vk::MemoryBarrier2 memoryBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eClear,

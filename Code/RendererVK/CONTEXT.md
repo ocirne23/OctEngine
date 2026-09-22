@@ -856,8 +856,92 @@ Both push params in every frame; the renderer owns none of the tweaks.
   rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
   beach paints over the waterline whatever the climate, and snow paints over everything else, ground
   AND rock. Per material: diffuse (sRGB), normal (linear; BC5 sets `MATERIAL_FLAG_BC5_NORMAL`), ARM
-  (linear; R = AO, G = roughness, B = metalness, stored in `metalRoughnessTexIdx`). The full contract is
+  (linear; R = AO, G = roughness, B = metalness, stored in `metalRoughnessTexIdx`), and an optional BC4
+  HEIGHT map. **`MaterialInfo` has no free slot, so the height index rides the UBO per slot**
+  (`u_terrainSplatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat), like the climate boxes. The full contract is
   on the definition in `Renderer.cpp`.
+* **Terrain relief** (`TERRAIN_SPLAT_RELIEF`, defined by the terrain FS only; "Terrain/Textures/Parallax*",
+  "Height blend contrast"; `u_terrainTexParams6/7`):
+  * **Height blend:** `terrainMixInto` steepens each layer's coverage ramp and shifts it by the height
+    difference, so borders follow the texture relief. Contrast 0 = the old linear blend.
+  * **Parallax occlusion mapping, displaced along the geometric normal** (mesh = top of the relief). The
+    texture offset is the ray's TANGENTIAL part, `-(V - N NoV) / NoV * depth`, so ONE 3D offset serves
+    every layer, each with its own UV scale. **Never march along world Y:** that ignores the base slope, and
+    over the ray's sideways run the slope changes height by more than the relief (slopes broke).
+    `terrainReliefAt` runs the SAME layer chain on the height maps alone (explicit gradients; one tap in a
+    climate-box interior), and `terrainParallaxOffset` marches it: a linear search with steps ~ 1/NoV
+    (capped by "Parallax steps"), 4 bisection steps, then a secant. Grazing angles need the bisection:
+    a secant alone leaves the linear steps visible as slices. `NoV` is clamped at 0.1.
+    **Silhouettes** (`TERRAIN_POM_SILHOUETTE`, a define in the include, **default 0 - it did not work**:
+    holes in front of the terrain behind a ridge plus a strip on the sky, whatever the facet handling):
+    curved relief mapping.
+    The base surface's curvature along the ray (from `dFdx/dFdy` of the position and the geometric normal)
+    bends the ray: `rayH(s) = 1 - s + c s^2`. A ray that climbs back out over a crest with no hit is
+    discarded, the terrain's form of SPOM's "ray left the UV square". As the interpolated normal turns
+    edge-on, the march frame eases to the FACET normal (`cross(dFdx P, dFdy P)`). The facets are chords
+    under the smooth vertex-normal surface, so a coarse ridge has a mesh-sized band with NoV <= 0 on the
+    interpolated normal. Keeping that band left a floating strip on the sky, and discarding it all cut
+    mesh-sized holes in front of the terrain behind. On the facet frame, only the curvature test decides.
+    `c` uses a NoV floor of 0.05; a higher one underestimates `c` for grazing rays, so they miss the test.
+    **This puts a `discard` in the
+    ground pass**, which defers the depth write for every terrain pixel: measure it, and set it to 0 to
+    compile it out. The TLAS, the shadow map and the collider keep the mesh crest.
+    **Relief self-shadow** ("Parallax self-shadow"): 6 steps from the hit up toward the sun (Tatarchuk soft
+    shadow), written to the lit core's `g_sunVisMaterial`. It scales the ground's sun radiance in
+    `doSunLight` only, not `g_sunVisSurface`, so the water film keeps its glint. It is faded by
+    camera distance and on slopes past ~50°, and skipped past the fade end. The coverages and the lighting
+    stay at the mesh point. Rock uses its TOP plane's height only.
+    `pom.inc.glsl` (UV-space SPOM, height in the normal-map alpha, needs `in_tbn`/`in_uv`) does not fit
+    the splat: several layers, no TBN, BC5 normals with no alpha.
+  * All of it runs before `computeLitColor`; only the shifted XZ outlives the splat, so it should not move
+    the lit core's register peak. **Measure it (pipeline stats + profile) before you extend it.**
+  * The ocean's seabed splat has no relief (no derivatives at a ray hit): its layer borders stay linear.
+* **Terrain TESSELLATION** ("Terrain/Tessellation/*", `u_terrainTessParams0/1`; default OFF):
+  * **It cannot live in the DGC execution set.** Every pipeline in an indirect execution set must have the
+    initial pipeline's shader stages (VUID-vkUpdateIndirectExecutionSetPipelineEXT-11152), plus identical
+    static state and fragment outputs. So `StaticMeshGraphicsPipeline` owns a second `GraphicsPipeline`,
+    `m_terrainTessPipeline` (variant 0 ground, 1 overlay), built by `buildTerrainTessLayout` from the main
+    layout: the same bindings (identically defined set layout, so the SAME descriptor set binds), vertex
+    input, push ranges and baked fragment defines. `indirectBindable = false`.
+  * **Routing (the cull):** with tessellation on, a `TerrainLit` instance still allocates its slot in the
+    DGC sequence (`atomicAdd`), but that sequence draws `indexCount = 0`. The real draw goes to
+    `out_terrainTessCommands` (binding 16, `atomicMax(idx + 1)` like the overlay), and the overlay goes to
+    binding 17 instead of the transparent sequence. Same 24 B per-mesh-slot layout.
+  * **Draws:** `record()` draws them with `drawIndexedIndirectCount` (offset 4 skips `pipelineIndex`, stride
+    24) between the opaque and the transparent executes, then rebinds everything (a generated-commands
+    execute leaves the bound state undefined). The count is `meshCount[1]`: the CPU writes the mesh count
+    while tessellation is on and 0 while it is off, so the recorded draws in the cached command buffers walk
+    nothing when off.
+  * **Shaders:** `instanced_indirect_terrain.vs.glsl` with `TERRAIN_TESS` hands on control points (the baked
+    fields still per vertex). `terrain_tess.tcs.glsl` computes an edge factor from the edge's two end points
+    only (projected length / "Target edge (px)", eased to 1 across the fade band with the same
+    `1 - t^p` falloff as the displacement, "Falloff exponent" = `u_terrainTessParams0.w`), which keeps the edges
+    crack-free, and culls patches outside the frustum. `terrain_tess.tes.glsl` displaces along the
+    interpolated normal by `terrainReliefAt` (splat include with `TERRAIN_SPLAT_HEIGHT_ONLY`), CENTRED
+    (height 0.5 = the mesh), faded by distance and on slopes past ~50°. The domain origin is LOWER_LEFT, so
+    `ccw` follows the GL rules.
+  * **Lighting uses the UNDISPLACED position** (`in_meshPos`, location 3; `TERRAIN_LIT_POS` in the terrain FS
+    under `TERRAIN_TESS`). The shadow map and the TLAS hold the flat mesh, and the centred relief puts half
+    the surface below it: lit from the displaced point, that half self-shadowed in bands. The splat samples
+    the displaced `in_pos`.
+  * **RTAO** rebuilds its origins from that displaced depth but traces the flat TLAS, so a relief low hit
+    its own mesh's underside at once (dark blotches in the lows). A TERRAIN hit nearer than the relief depth,
+    inside the tess fade, continues once past it (`rtao.cs.glsl`). The instance + material buffers (bindings
+    8, 9) are therefore declared and written in BOTH RTAO variants, not only the alpha-test one.
+  * **No swimming near the camera:** the edge factor comes from the DISTANCE (edge length × projection
+    y scale / distance), not from projecting the end points, because a projected length changes under a
+    pure camera rotation and every factor change slides the fractional vertices onto other heights. Closer
+    than "Freeze distance (m)" (`u_terrainTessParams2.x`), the factor and the TES's height mip footprint hold
+    at that distance, so nothing moves there. Past it, the fractional spacing still slides vertices slowly
+    with the distance.
+  * **Crack-free vertices:** a vertex on an edge interpolates its two corners in a fixed (lexicographic)
+    order, and a corner is the control point itself. The height mip footprint is a function of the position
+    only (the pixel size at that distance), not of the patch.
+  * One VS/TCS/TES module serves both variants, with `invariant gl_Position`: the overlay's EQUAL depth test
+    needs the positions bit-identical. **No `precise`**: the engine's glslang crashes (access violation in
+    `PropagateNoContraction`) on it, although the SDK's glslc accepts it.
+  * **Not tessellated:** the shadow map (a user decision: near relief casts the flat mesh's shadow), the
+    TLAS, the collider.
 * **`setTerrainTextureParams`** carries the shaping tweaks. Notable reasoning baked into the defaults:
   the rock slope thresholds read as angles (0.30 = 45°, 0.55 = 63°) because **soil genuinely stops
   holding around 45°, which is also about the steepest the diffusion model's 30 m/px field reaches**;

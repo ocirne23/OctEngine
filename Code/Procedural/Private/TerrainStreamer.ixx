@@ -273,6 +273,24 @@ export namespace Procedural
 		float m_texSnowSlopeStart = 0.26f;
 		float m_texSnowSlopeFull = 0.60f;
 		float m_texSnowAridity = 0.10f;    // humidity at/below which cold ground stays bare (polar desert)
+		// Relief from the splat height maps (Renderer::TerrainTexTweaks has the reasoning).
+		bool  m_texParallaxEnabled = false;
+		float m_texParallaxDepthGround = 0.12f; // m
+		float m_texParallaxDepthRock = 0.35f;   // m
+		float m_texParallaxFadeStart = 15.0f;   // m from the camera
+		float m_texParallaxFadeEnd = 30.0f;     // m
+		int   m_texParallaxSteps = 24;
+		float m_texParallaxShadow = 1.0f;       // relief self-shadow strength (0 = off)
+		float m_texHeightBlendContrast = 3.0f;  // 0 = linear layer blend
+		bool  m_texTessEnabled = true;          // Terrain/Tessellation (Renderer::TerrainTexTweaks has the reasoning)
+		int   m_texTessMaxFactor = 16;
+		float m_texTessTargetPx = 7.0f;
+		float m_texTessFadeStart = 15.0f;       // m
+		float m_texTessFadeEnd = 100.0f;        // m
+		float m_texTessFalloffExponent = 1.0f;  // strength = 1 - t^p across the fade band
+		float m_texTessFreezeDistance = 15.0f;  // m: closer in, the factor and the height mip hold
+		float m_texTessDepthGround = 0.5f;      // m
+		float m_texTessDepthRock = 0.5f;        // m
 
 		// --- Terrain/Wetness tweaks: the wetness clipmap (Renderer::TerrainWetTweaks), pushed every frame
 		// from updateTerrainTextures. The renderer bakes ocean swash + rain into it; the TERRAIN shader

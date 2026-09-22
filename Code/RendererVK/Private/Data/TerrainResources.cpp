@@ -19,6 +19,7 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
 
     oc::vector<RendererVKLayout::MaterialInfo> materialInfos;
     materialInfos.reserve(mats.size());
+    oc::fill(oc::begin(m_splatHeightTex), oc::end(m_splatHeightTex), UINT16_MAX);
     for (const TerrainSplatMaterial& mat : mats)
     {
         RendererVKLayout::MaterialInfo& info = materialInfos.emplace_back();
@@ -47,6 +48,8 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
         }
         if (const uint16 idx = upload(mat.armDds, false); idx != UINT16_MAX)
             info.metalRoughnessTexIdx = idx;
+        // MaterialInfo has no free slot: the height index rides the UBO per slot, like the climate box.
+        m_splatHeightTex[materialInfos.size() - 1] = upload(mat.heightDds, false);
     }
 
     m_splatBaseMaterial = (int32)io.addMaterials(materialInfos);

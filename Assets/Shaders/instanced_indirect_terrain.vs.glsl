@@ -83,8 +83,13 @@ void main()
     }
     out_terrainFields = vec4(altitude, temperature, humidity, waterLevel);
 
+#ifndef TERRAIN_TESS
     // The terrain overlay (TERRAIN_OVERLAY_PASS) rasterizes the SAME surface again and depth-tests EQUAL
     // against it: no lift (a lift along the normal put the overlay in front of water shallower than the lift).
     gl_Position = u_mvp * vec4(out_pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+#endif
+    // TERRAIN_TESS (the tessellated terrain, terrain_tess.tcs/.tes.glsl): these outputs are control points; the
+    // evaluation shader interpolates them (the fields are band-limited far below the lattice, as above),
+    // displaces and projects.
 }
