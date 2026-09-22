@@ -861,6 +861,9 @@ export namespace RendererVKLayout
         TerrainLit     = 8, // lit opaque, procedural height/slope albedo (no textures) for procedural terrain chunks
         Ocean          = 9, // GPU-animated Gerstner-spectrum water: vertex displacement + analytic-normal water shading
         LitMasked      = 10, // LitOpaque + the alpha-mask discard (ALPHA_MASK); ObjectContainer routes Mask materials here
+        TerrainOverlay = 11, // the terrain chunks drawn AGAIN over the ground (surface-water film, later snow ...):
+                             // never on a material - the main cull emits it for TerrainLit instances inside the
+                             // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
     };
 
     // MaterialInfo::flags bits.

@@ -37,7 +37,8 @@ layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 void main()
 {
-    // z runs over every cascade's voxel slabs; a volume dim is a multiple of 4, so a workgroup never spans two.
+    // z runs over every cascade's voxel slabs; a volume dim is a multiple of 4, so a workgroup never spans two
+    // (so `cascade` is uniform across the workgroup - the image-array stores below rely on it).
     const ivec3 gid     = ivec3(gl_GlobalInvocationID);
     // Before any early-out: the sky SH changes every frame, whatever the partial bake skips.
     if (all(equal(gid, ivec3(0))))
@@ -130,8 +131,10 @@ void main()
     const vec3 l0 = clamp(a0, vec3(0.0), vec3(65000.0));
     const vec3 inv = mix(vec3(0.0), 1.0 / (max(a0, vec3(1e-8)) * GI_SQRT3), greaterThan(a0, vec3(1e-8)));
     const vec3 q1 = clamp(a1 * inv, -1.0, 1.0), q2 = clamp(a2 * inv, -1.0, 1.0), q3 = clamp(a3 * inv, -1.0, 1.0);
-    imageStore(u_volumeL0[nonuniformEXT(cascade)], vslot, vec4(l0, 0.0));
-    imageStore(u_volumeL1[nonuniformEXT(2 * cascade + 0)], vslot, vec4(q1, q2.r));
-    imageStore(u_volumeL1[nonuniformEXT(2 * cascade + 1)], vslot, vec4(q2.gb, q3.rg));
-    imageStore(u_volumeTail[nonuniformEXT(cascade)], vslot, vec4(q3.b, W, 0.0, 0.0));
+    // `cascade` is uniform across the workgroup (see main's first comment), so these index the storage-image
+    // arrays DYNAMICALLY UNIFORM - no nonuniformEXT, which would need shaderStorageImageArrayNonUniformIndexing.
+    imageStore(u_volumeL0[cascade], vslot, vec4(l0, 0.0));
+    imageStore(u_volumeL1[2 * cascade + 0], vslot, vec4(q1, q2.r));
+    imageStore(u_volumeL1[2 * cascade + 1], vslot, vec4(q2.gb, q3.rg));
+    imageStore(u_volumeTail[cascade], vslot, vec4(q3.b, W, 0.0, 0.0));
 }

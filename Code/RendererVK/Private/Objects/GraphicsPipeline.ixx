@@ -28,10 +28,17 @@ export struct PipelineVariant
     // Per-variant pipeline state. Transparent variants enable alpha blending and disable depth
     // writes; opaque variants (the default) keep blending off and depth writes on.
     bool blendEnable = false;
+    // DUAL-SOURCE composite instead of the "over" blend (with blendEnable): out = src0 + dst * src1, per
+    // channel - the fragment shader writes location 0 index 0 (added colour) and index 1 (dst multiplier).
+    // The dst alpha is kept, as for every blended variant.
+    bool dualSourceBlend = false;
     bool depthWrite = true;
     // Gizmo/overlay variants disable the depth test so they draw on top of everything regardless
     // of scene depth; everything else keeps the layout's depthTestEnable.
     bool depthTest = true;
+    // Depth test EQUAL instead of the layout's compare: a variant that re-draws a surface already in the depth
+    // buffer (the terrain overlay) - its VS must produce bit-identical depth (`invariant gl_Position`).
+    bool depthEqual = false;
     // Wireframe variants set eLine; everything else keeps the solid fill of variant 0.
     vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
     // Per-variant face culling. Defaults to the back-face culling variant 0 uses; set eFront or eNone

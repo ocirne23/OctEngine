@@ -175,6 +175,32 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.defines = { { "ALPHA_MASK", "1" } },
 		},
 	});
+	// Variant 11 (EPipelineIndex::TerrainOverlay): the terrain chunks inside the wetness clipmap drawn AGAIN
+	// over the ground - the surface-water film today, the place for later terrain surface layers (snow ...).
+	// The terrain VS and FS compiled with TERRAIN_OVERLAY_PASS: depth test EQUAL against the ground it re-draws
+	// (the terrain VS's `invariant gl_Position` makes the depth bit-identical), so it shows exactly where the
+	// terrain is the visible surface and anything in front - an ocean wave running up the sand - hides it as
+	// it hides the ground (a lift along the normal instead put the film IN FRONT of water shallower than the
+	// lift: a bright band where the waves meet the sand). The FS composites DUAL-SOURCE, out = K + ground *
+	// factor, so it never reads the scene colour. No depth write. Kept out of the ground's shader so the
+	// film's work no longer sets the register allocation of every terrain pixel. The main cull emits it
+	// (never a material): see instanced_indirect.cs.glsl.
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = FileSystem::readFileStr(terrainVertexPath),
+			.debugFilePath = terrainVertexPath,
+			.defines = { { "TERRAIN_OVERLAY_PASS", "1" } },
+		},
+		.fragmentShader = ShaderSource{
+			.text = FileSystem::readFileStr(terrainVariantPath),
+			.debugFilePath = terrainVariantPath,
+			.defines = { { "TERRAIN_OVERLAY_PASS", "1" } },
+		},
+		.blendEnable = true,
+		.dualSourceBlend = true,
+		.depthWrite = false,
+		.depthEqual = true,
+	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
 	// gizmo overlays stay solid so the view keeps a background and the editor gizmos stay usable.

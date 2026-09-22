@@ -138,6 +138,18 @@ vec4 quat_multiply(vec4 q, vec4 p)
     return r;
 }
 
+// The terrain overlay's reach: the wetness clipmap window (terrain_wetness.inc.glsl's packing - origin lattice
+// coord in u_terrainWetParams0.xy, texel size in u_terrainWetParams1.x, present flag u_terrainWetParams2.x).
+bool terrainOverlayCovers(vec3 pos, float radius)
+{
+    if (u_terrainWetParams2.x < 0.5)
+        return false;
+    const vec2 lo = u_terrainWetParams0.xy * u_terrainWetParams1.x;
+    const vec2 hi = lo + float(TERRAIN_WET_RES) * u_terrainWetParams1.x;
+    const vec2 d = pos.xz - clamp(pos.xz, lo, hi);
+    return dot(d, d) <= radius * radius;
+}
+
 bool frustumCheck(vec3 pos, float radius)
 {
     // Check sphere against frustum planes
@@ -245,6 +257,22 @@ void main()
                 out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_indirectCommands[meshIdx].firstInstance = firstInstance;
+            }
+            // The TERRAIN OVERLAY (EPipelineIndex::TerrainOverlay: the surface-water film, later more terrain
+            // surface layers): the same chunk drawn again over the ground, as the mesh's TRANSPARENT sequence
+            // (a terrain mesh has no transparent instances, so it is free, and it executes after every opaque
+            // draw) over the SAME instance list. Only for chunks overlapping the wetness clipmap. The count is
+            // raised to this instance's slot + 1, so every overlapping instance lies inside the drawn range
+            // (a non-overlapping instance drawn along with it discards every pixel); the other fields are the
+            // same values from every writer.
+            if (pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
+            {
+                atomicMax(out_transparentIndirectCommands[meshIdx].instanceCount, idx + 1u);
+                out_transparentIndirectCommands[meshIdx].pipelineIndex = PIPELINE_IDX_TERRAIN_OVERLAY;
+                out_transparentIndirectCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_transparentIndirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                out_transparentIndirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                out_transparentIndirectCommands[meshIdx].firstInstance = firstInstance;
             }
         }
 

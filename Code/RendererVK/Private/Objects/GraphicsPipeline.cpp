@@ -310,6 +310,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         // Per-variant blend/depth/raster state (mutated in place; the create info points at these structs).
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;
         pipelineDepthStencilStateCreateInfo.depthWriteEnable = variant.depthWrite ? vk::True : vk::False;
+        pipelineDepthStencilStateCreateInfo.depthCompareOp = variant.depthEqual ? vk::CompareOp::eEqual : layout.depthCompareOp;
         pipelineColorBlendAttachmentState.blendEnable = variant.blendEnable ? vk::True : vk::False;
         // A blended variant KEEPS the dst alpha (the opaque surface behind it owns the scene colour's
         // alpha = TAA's ocean flag; a near-zero material alpha must not read as ocean).
@@ -320,9 +321,10 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         pipelineRasterizationStateCreateInfo.cullMode = variant.cullMode;
         if (variant.blendEnable)
         {
-            // Standard "over" alpha blending: src.rgb*src.a + dst.rgb*(1-src.a), keep dst alpha.
-            pipelineColorBlendAttachmentState.srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
-            pipelineColorBlendAttachmentState.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+            // Standard "over" alpha blending: src.rgb*src.a + dst.rgb*(1-src.a), keep dst alpha. Dual-source:
+            // src0.rgb + dst.rgb*src1.rgb (see PipelineVariant::dualSourceBlend).
+            pipelineColorBlendAttachmentState.srcColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eOne : vk::BlendFactor::eSrcAlpha;
+            pipelineColorBlendAttachmentState.dstColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eSrc1Color : vk::BlendFactor::eOneMinusSrcAlpha;
             pipelineColorBlendAttachmentState.colorBlendOp = vk::BlendOp::eAdd;
             pipelineColorBlendAttachmentState.srcAlphaBlendFactor = vk::BlendFactor::eOne;
             pipelineColorBlendAttachmentState.dstAlphaBlendFactor = vk::BlendFactor::eZero;

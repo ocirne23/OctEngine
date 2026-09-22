@@ -20,7 +20,16 @@ layout (location = 2) in vec4 in_terrainFields; // VS-evaluated baked fields: x 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
+#ifdef TERRAIN_OVERLAY_PASS
+// The terrain overlay (EPipelineIndex::TerrainOverlay, see main): a DUAL-SOURCE composite over the lit ground,
+// out = out_color + ground * out_factor per channel. Depth write off, so the discard of an uncovered pixel
+// keeps early depth testing.
+layout (early_fragment_tests) in;
+layout (location = 0, index = 0) out vec4 out_color;  // added colour
+layout (location = 0, index = 1) out vec4 out_factor; // the ground's multiplier
+#else
 layout (location = 0) out vec4 out_color;
+#endif
 
 #include "instanced_indirect_lit.inc.glsl"
 
@@ -276,18 +285,19 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	return TerrainFilm(N, float16_t(clamp(sqrt(alphaSq), 0.02, 1.0)), foam, milk);
 }
 
-// body = the ground's lit colour (computeLitColor), wet = the raw wetness (the virtual water depth follows
-// it, not the mask, so the tint keeps thinning above the mask's ramp too). Shaded in HALF math, as the ocean's top side:
-// the vectors, the weights and the colours (the scene colour is RGBA16F). The sky ray's direction stays
-// 32-bit (widened from the half N / V).
-vec3 terrainFilmShade(vec3 body, vec3 worldPos, TerrainFilm film, float16_t maskH, float16_t wetH)
+// The film over the lit ground (the "body"), as the overlay composites it: final = body * groundFactor +
+// addColor, per channel (the dual-source blend supplies the body - the pass never reads the scene colour).
+// wet = the raw wetness (the virtual water depth follows it, not the mask, so the tint keeps thinning above
+// the mask's ramp too). Shaded in HALF math, as the ocean's top side: the vectors, the weights and the
+// colours (the scene colour is RGBA16F). The sky ray's direction stays 32-bit (widened from the half N / V).
+void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_t wetH, out f16vec3 addColor, out f16vec3 groundFactor)
 {
 	const f16vec3 Nh = film.N;
 	const f16vec3 Vh = f16vec3(normalize(u_viewPos - worldPos));
 	const float16_t alphaH = film.alpha;
 	const float16_t foamH = film.foam;
 	const float16_t milk = film.milk;
-	const f16vec3 bodyH = f16vec3(min(body, vec3(65504.0)));
+	const float16_t one = float16_t(1.0);
 	const float16_t NoV = clamp(dot(Nh, Vh), float16_t(1e-3), float16_t(1.0));
 	const float16_t x = float16_t(1.0) - NoV;
 	const float16_t x2 = x * x;
@@ -301,15 +311,17 @@ vec3 terrainFilmShade(vec3 body, vec3 worldPos, TerrainFilm film, float16_t mask
 	// Body: the ground seen through the film - Beer-Lambert absorbed along the refracted path through a
 	// virtual "Surface water depth" of water (a real film is too thin to tint; the ocean beside it has a
 	// shallow column, and this is what keeps the two the same colour at the waterline), with the
-	// ocean's in-scatter filling in what was absorbed. Exactly the ocean shader's body mix.
-	f16vec3 tinted = bodyH;
+	// ocean's in-scatter filling in what was absorbed. Exactly the ocean shader's body mix:
+	// tinted = body * T + tintAdd.
+	f16vec3 T = f16vec3(1.0);
+	f16vec3 tintAdd = f16vec3(0.0);
 	if (u_terrainWetParams6.w > 0.0)
 	{
 		const vec3 refrDir = refract(-vec3(Vh), vec3(Nh), 1.0 / 1.33);
 		const float path = u_terrainWetParams6.w * float(wetH) / max(-refrDir.y, 0.2);
-		const f16vec3 T = f16vec3(exp(-u_oceanAbsorption.rgb * path));
+		T = f16vec3(exp(-u_oceanAbsorption.rgb * path));
 		const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + f16vec3(sunTint * (max(L.y, 0.0) * INV_PI)));
-		tinted = bodyH * T + inscatter * (f16vec3(1.0) - T);
+		tintAdd = inscatter * (f16vec3(1.0) - T);
 	}
 
 	// Whitewater: lambertian foam lit by the pixel's ALREADY-RESOLVED sun radiance AT THE SURFACE
@@ -321,15 +333,15 @@ vec3 terrainFilmShade(vec3 body, vec3 worldPos, TerrainFilm film, float16_t mask
 	if (milk > float16_t(0.003) || foamH > float16_t(0.003))
 		whitewater = f16vec3(doLightH(sunSurfaceRadiance(), f16vec3(L), Vh, Nh, f16vec3(0.0), f16vec3(u_oceanFoam.rgb * INV_PI), float16_t(0.0), float16_t(0.85)))
 			+ f16vec3(u_oceanFoam.rgb) * (ambientSky + f16vec3(u_ambientColor));
-	tinted = mix(tinted, whitewater * float16_t(0.55), milk);
+	// Turbidity: tinted = mix(body * T + tintAdd, whitewater * 0.55, milk).
 
-	// The film is LINEAR in its two remaining unknowns, the mirror (the sky; the traced scene mirror when
-	// TERRAIN_FILM_RT_MIRROR is on) and the scene lights:
+	// The film is LINEAR in the body and in its remaining unknowns, the mirror (the sky; the traced scene
+	// mirror when TERRAIN_FILM_RT_MIRROR is on) and the scene lights:
 	//   film  = mix(mix(tinted, mix(mirror, ambientSky, reflBlur), F) + glint + lights, whitewater, foam)
-	//   final = mix(body, film, mask) = C + mirror * mirrorWeight + lights * clearW
-	// so everything else - the body, the tint, the milk, the blur's sky share, the glint, the foam - folds
-	// into C (the lights arrive summed from the lit core's loop; with TERRAIN_FILM_RT_MIRROR, C is live
-	// across the mirror trace, not the shading inputs). The foam mix is not gated at 0.3% (it folds here).
+	//   final = mix(body, film, mask) = body * groundFactor + C + mirror * mirrorWeight + lights * clearW
+	// so everything else - the tint, the milk, the blur's sky share, the glint, the foam - folds into C
+	// (with TERRAIN_FILM_RT_MIRROR, C is live across the mirror trace, not the shading inputs). The foam
+	// mix is not gated at 0.3% (it folds here).
 	const float16_t reflBlur = clamp(alphaH * float16_t(2.0) - float16_t(0.05), float16_t(0.0), float16_t(0.6));
 	const float16_t clearW = maskH * (float16_t(1.0) - foamH);
 	const float16_t mirrorWeight = clearW * F * (float16_t(1.0) - reflBlur);
@@ -340,8 +352,9 @@ vec3 terrainFilmShade(vec3 body, vec3 worldPos, TerrainFilm film, float16_t mask
 	// distorted caustics on every filmed pixel under a wave). Specular only (no diffuse term: the body
 	// already carries the ground's diffuse light, caustics included).
 	const f16vec3 glint = f16vec3(min(doLightH(sunSurfaceRadiance(), f16vec3(L), Vh, Nh, f16vec3(0.02), f16vec3(0.0), float16_t(0.0), alphaH), vec3(65504.0)));
-	f16vec3 color = (float16_t(1.0) - maskH) * bodyH + (maskH * foamH) * whitewater
-		+ clearW * ((float16_t(1.0) - F) * tinted + (F * reflBlur) * ambientSky + glint);
+	groundFactor = (one - maskH) + (clearW * (one - F) * (one - milk)) * T;
+	f16vec3 color = (maskH * foamH) * whitewater
+		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur) * ambientSky + glint);
 
 	// Reflection: the sky (the ray-traced scene mirror is disabled, TERRAIN_FILM_RT_MIRROR), roughness-
 	// blurred toward the average sky (the blur's sky share is in the fold above). Before the lights: with the
@@ -411,7 +424,7 @@ vec3 terrainFilmShade(vec3 body, vec3 worldPos, TerrainFilm film, float16_t mask
 		}
 		color += lights * clearW;
 	}
-	return vec3(color);
+	addColor = min(color, f16vec3(MEDIUMP_FLT_MAX));
 }
 
 // The splat itself (TerrainFields / TerrainSample / terrainSplat) is terrain_splat.inc.glsl - shared with
@@ -493,37 +506,23 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 }
 #endif
 
-void main()
+// The wetness after the slope drain and the SURFACE-WATER MASK, shared by both passes so they agree on every
+// pixel: the ground reads them for its damp darkening and wet gloss (none under the film), the terrain
+// overlay for the film's coverage.
+// wet: deliberately the raw field and NOT the pooled film - the field is spatially smooth (bilinear +
+// diffusion) and highest where the water left most recently, so the water look covers the whole tongue
+// behind a wave and fades out smoothly with it; the pools are a noise pattern, and keying on them drew
+// random water blobs.
+// waterMask: where the wetness is still near full the ground is drawn AS WATER - the ocean shader's own
+// surface terms over the lit ground - so the ocean's depth-buffer intersection with the sand lands on
+// ground that already looks like the water leaving it, instead of a hard line. The mask ramps up to the
+// surface water threshold (fully water) over the smooth wetness field, starting at the HIGHER of the wet
+// spike start (where the standing-film darkening begins, so the water look never starts before the film
+// does) and threshold - softness (so softness narrows the ramp). It blends out over the tongue as the field
+// decays, never at an edge, and fades out on ground under the LIVE water surface (aboveLive: the ocean
+// draws the water there, a film would only double it).
+void terrainWetMask(vec3 geoN, TerrainFields fields, out float16_t wet, out float16_t waterMask, out float16_t aboveLive)
 {
-#ifdef STEREO
-	g_viewIndex = int(u_viewIndex);
-#endif
-	const vec3 toView = u_viewPos - in_pos;
-	const float viewDist = length(toView);
-	const vec3 V = toView / viewDist;
-	const vec3 geoN = normalize(in_normal);
-	const TerrainFields fields = terrainFields();
-	// Pixel footprint for the surface-water wave taps; a derivative, so taken here in uniform flow.
-	const float16_t wetFootprint = float16_t(length(fwidth(in_pos.xz)));
-
-#if TERRAIN_DEBUG_MODE != 0
-	out_color = vec4(terrainDebugColor(fields, in_pos), 1.0); // unlit: the field itself, not its shading
-	return;
-#endif
-
-	TerrainSample surf = terrainSplat(in_pos, geoN, fields);
-	// Wetness: darker, glossier ground where water touched it recently (the clipmap holds the memory).
-	// Deliberately the MAP ALONE - no instantaneous "under the live surface" override here: the map
-	// accumulates at the wet-in rate (slower on slopes), so ground under a wave soaks up visibly
-	// rather than snapping to wet, and a cliff face a wave splashes only ever gets damp. The lit core
-	// still lights the covered pixels as underwater from the live surface, so the water itself reads.
-	// Wetness AFTER the slope drain, for the surface-water pass below. Deliberately the raw field and
-	// NOT the pooled film: the field is spatially smooth (bilinear + diffusion) and highest where the
-	// water left most recently, so the water look covers the whole tongue behind a wave and fades out
-	// smoothly with it - the pools are a noise pattern, and keying on them drew random water blobs.
-	// Both are live across the lit core's stages, so half (the film takes them half).
-	float16_t wetSurface = float16_t(0.0);
-	float16_t waterMask = float16_t(0.0); // how much of the pixel the surface water pass draws (0 without wetness)
 	// We already sampled the terrain data cascade for fields.waterLevel; hand it to the lit core so its
 	// underwater test reuses it instead of re-fetching the same cascade - then resolve that test NOW
 	// (doSunLight would, but the gloss below needs it first; it runs once per pixel either way).
@@ -544,19 +543,83 @@ void main()
 	const float16_t one = float16_t(1.0);
 	const float liveMargin = u_terrainWetParams7.y;
 	const float waterAtCamera = u_weatherWind2.w > 0.5 ? u_weatherWind2.z : fields.waterLevel;
-	const float16_t aboveLive = float16_t(u_viewPos.y < waterAtCamera ? 0.0
+	aboveLive = float16_t(u_viewPos.y < waterAtCamera ? 0.0
 		: 1.0 - smoothstep(liveMargin - 0.1, liveMargin, g_liveDepthBelow));
+	wet = float16_t(0.0);
+	waterMask = float16_t(0.0);
+	if (!terrainWetPresent())
+		return;
+	wet = float16_t(terrainWetnessAt(in_pos.xz));
+	// Slope drain: water runs off a face instead of soaking in, so steep ground dries faster. The
+	// stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster decay - evaluated here per
+	// pixel against the exact geometric normal (the map's 8 m texels cannot see a cliff face), with no
+	// extra state. k = 1 + slope * drain: at drain 4 a 45-degree face dries ~2.2x faster, a wall 5x.
+	// Ground under water is 1 either way; the film only leaves faster once the wave has gone.
+	const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));
+	wet = pow(wet, one + slope * float16_t(u_terrainWetParams5.x));
+	const float th = u_terrainWetParams6.x;
+	const float16_t start = float16_t(min(max(u_terrainWetParams5.w, th - u_terrainWetParams6.y), th - 1e-3));
+	waterMask = smoothstep(start, float16_t(th), wet) * aboveLive;
+}
+
+void main()
+{
+#ifdef STEREO
+	g_viewIndex = int(u_viewIndex);
+#endif
+	const vec3 toView = u_viewPos - in_pos;
+	const float viewDist = length(toView);
+	const vec3 V = toView / viewDist;
+	const vec3 geoN = normalize(in_normal);
+	const TerrainFields fields = terrainFields();
+	const float16_t one = float16_t(1.0);
+
+#ifdef TERRAIN_OVERLAY_PASS
+	// THE TERRAIN OVERLAY (EPipelineIndex::TerrainOverlay): the surface-water film, composited over the lit
+	// ground (out = K + ground * factor, dual-source). Every other pixel discards.
+	// Pixel footprint for the film's wave taps; a derivative, so taken here in uniform flow.
+	const float16_t wetFootprint = float16_t(length(fwidth(in_pos.xz)));
+	float16_t wet, waterMask, aboveLive;
+	terrainWetMask(geoN, fields, wet, waterMask, aboveLive);
+	if (waterMask <= float16_t(0.0))
+		discard;
+	// The film's sun visibility (glint, whitewater), the ground pass's resolve is not available here: ONE
+	// hard tap (the moving water hides a penumbra), or one ray with the RT sun, as the ocean does. The
+	// ground's gate: no sun on a surface facing away from it.
+	const vec3 L = u_sunDirection.xyz;
+	float sunVis = 0.0;
+	if (dot(geoN, L) > 0.0)
+	{
+#if LIT_RT_SUN_SHADOW
+		sunVis = rtShadowVisibility(in_pos + geoN * 0.1, L, 0.05, 10000.0);
+#else
+		sunVis = sampleSunShadowHard(in_pos, geoN);
+#endif
+	}
+	g_sunVisSurface = float16_t(sunVis * u_eclipseParams.x);
+	const TerrainFilm film = terrainFilmSurface(in_pos, wetFootprint, waterMask, fields.waterLevel - in_pos.y, fields.waterLevel);
+	f16vec3 addColor, groundFactor;
+	terrainFilmShade(in_pos, film, waterMask, wet, addColor, groundFactor);
+	out_color = vec4(addColor, 0.0);
+	out_factor = vec4(groundFactor, 1.0);
+#else
+
+#if TERRAIN_DEBUG_MODE != 0
+	out_color = vec4(terrainDebugColor(fields, in_pos), 1.0); // unlit: the field itself, not its shading
+	return;
+#endif
+
+	TerrainSample surf = terrainSplat(in_pos, geoN, fields);
+	// Wetness: darker, glossier ground where water touched it recently (the clipmap holds the memory).
+	// Deliberately the MAP ALONE - no instantaneous "under the live surface" override here: the map
+	// accumulates at the wet-in rate (slower on slopes), so ground under a wave soaks up visibly
+	// rather than snapping to wet, and a cliff face a wave splashes only ever gets damp. The lit core
+	// still lights the covered pixels as underwater from the live surface, so the water itself reads.
+	// The surface water itself is the terrain overlay's (TERRAIN_OVERLAY_PASS above).
+	float16_t wet, waterMask, aboveLive;
+	terrainWetMask(geoN, fields, wet, waterMask, aboveLive);
 	if (terrainWetPresent())
 	{
-		float16_t wet = float16_t(terrainWetnessAt(in_pos.xz));
-		// Slope drain: water runs off a face instead of soaking in, so steep ground dries faster. The
-		// stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster decay - evaluated here per
-		// pixel against the exact geometric normal (the map's 8 m texels cannot see a cliff face), with no
-		// extra state. k = 1 + slope * drain: at drain 4 a 45-degree face dries ~2.2x faster, a wall 5x.
-		// Ground under water is 1 either way; the film only leaves faster once the wave has gone.
-		const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));
-		wet = pow(wet, one + slope * float16_t(u_terrainWetParams5.x));
-		wetSurface = wet;
 		// Pooling: draining water retreats into the crevices. A world-anchored value fBm stands in for the
 		// micro-relief; a point is POOLED where the noise sits below the wetness, so at full wetness the
 		// whole surface is filmed, and as it dries only the low spots (low noise) keep their film - the
@@ -590,33 +653,14 @@ void main()
 		// Under the live water surface (aboveLive) the ground is seabed: it keeps the darkening - the
 		// ocean's traced seabed carries the same - but no gloss (a sky reflection has no business under
 		// the ocean's own).
-		// ...and none under the surface water pass either (waterMask): that pass carries the highlights on
+		// ...and none under the surface water either (waterMask): the overlay carries the highlights on
 		// the level water normal, and a second one under it would sit on the slope's angle.
-		{
-			const float th = u_terrainWetParams6.x;
-			const float16_t start = float16_t(min(max(u_terrainWetParams5.w, th - u_terrainWetParams6.y), th - 1e-3));
-			waterMask = smoothstep(start, float16_t(th), wet) * aboveLive;
-		}
 		const float16_t gloss = max(film, damp * float16_t(u_terrainWetParams4.z)) * aboveLive * (one - waterMask);
 		surf.albedo *= mix(one, float16_t(u_terrainWetParams5.y), damp) * mix(one, float16_t(u_terrainWetParams2.y), film);
 		surf.rough = mix(surf.rough, float16_t(u_terrainWetParams2.z), gloss); // a water film flattens the microfacets
 	}
-	// Surface water: where the wetness is still near full the ground is drawn AS WATER - the ocean
-	// shader's own surface terms over the lit ground - so the ocean's depth-buffer intersection with
-	// the sand lands on ground that already looks like the water leaving it, instead of a hard line.
-	// The mask ramps up to the surface water threshold (fully water) over the smooth wetness field,
-	// starting at the HIGHER of the wet spike start (where the standing-film darkening begins, so the
-	// water look never starts before the film does) and threshold - softness (so softness narrows the
-	// ramp). It blends out over the tongue as the field decays, never at an edge.
-	// waterMask (resolved above with the gloss) is faded out on ground under the LIVE water surface
-	// (aboveLive: the ocean draws the water there, a film would only double it).
-	const bool hasFilm = waterMask > float16_t(0.0);
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
-	vec3 color = computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
-	if (hasFilm)
-	{
-		const TerrainFilm film = terrainFilmSurface(in_pos, wetFootprint, waterMask, fields.waterLevel - in_pos.y, fields.waterLevel);
-		color = terrainFilmShade(color, in_pos, film, waterMask, wetSurface);
-	}
+	const vec3 color = computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	out_color = vec4(color, 1.0); // opaque terrain
+#endif
 }

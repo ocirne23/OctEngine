@@ -36,6 +36,10 @@ layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal;
 layout (location = 4) in uint inst_idx;
 
+// INVARIANT: the ground and the terrain overlay (TERRAIN_OVERLAY_PASS, depth test EQUAL) are two pipelines
+// computing the same position from the same inputs - their depth must match bit for bit.
+invariant gl_Position;
+
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = temperature C, z = humidity, w = water level
@@ -79,6 +83,8 @@ void main()
     }
     out_terrainFields = vec4(altitude, temperature, humidity, waterLevel);
 
+    // The terrain overlay (TERRAIN_OVERLAY_PASS) rasterizes the SAME surface again and depth-tests EQUAL
+    // against it: no lift (a lift along the normal put the overlay in front of water shallower than the lift).
     gl_Position = u_mvp * vec4(out_pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 }

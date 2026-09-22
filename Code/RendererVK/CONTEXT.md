@@ -792,10 +792,10 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   16 B/thread against the fp32 walk converted once. The reflection fog's blend is half on `giEvalSkySHH`.
 * **The ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x per
   frame, memory-bound; Ocean sim 0.216 -> 0.179 ms. The butterflies stay fp32 in shared memory.
-* **Where the peaks are now** (bisected): terrain 80/32 with the film's own light walk; without film
-  lights at all 72/48; without the film 72/16. The film's scene mirror ray is disabled
-  (`TERRAIN_FILM_RT_MIRROR`). The ocean's seabed splat costs 16 B. The film surface (wave taps, slopes,
-  Jacobians, foam) and the terrain's wetness block are half math.
+* **Where the peaks are now:** the terrain's ground FS is 72/16 since the film moved to the TERRAIN
+  OVERLAY pass (64/16 itself; it was 80/32 inside the ground's shader). The film's scene mirror ray is
+  disabled (`TERRAIN_FILM_RT_MIRROR`). The ocean's seabed splat costs 16 B. The film surface (wave taps,
+  slopes, Jacobians, foam) and the terrain's wetness block are half math.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
@@ -869,16 +869,31 @@ Both push params in every frame; the renderer owns none of the tweaks.
 * **`setOceanParams`** — flipping `hitLighting` (`OCEAN_HIT_LIGHTS`) or `rtReflections`
   (`OCEAN_RT_REFLECTIONS`, the scene mirror ray; "Ocean/RT/Reflections") or `debugMode`
   (`OCEAN_DEBUG_MODE`, "Ocean/Debug mode"; the mode legend is at the top of `ocean.fs.glsl`) rebuilds the ocean fragment
-  variant (GPU idle + shader reload). **The surface-water film (`terrainWaterFilm`) reflects the SKY
-  only** (the baked mirror sky, fogged). Its scene mirror ray (`terrainFilmMirror`, the ocean's ray under
+  variant (GPU idle + shader reload).
+  **The surface-water film is the TERRAIN OVERLAY pass** (`EPipelineIndex::TerrainOverlay`, variant 11):
+  the terrain chunks overlapping the wetness clipmap drawn a SECOND time over the ground - the main cull
+  (`instanced_indirect.cs.glsl`) emits it for `TerrainLit` instances into the mesh's otherwise unused
+  TRANSPARENT sequence (after every opaque draw, same instance list, count raised with `atomicMax` so every
+  overlapping instance is inside the drawn range). The terrain VS/FS compiled with `TERRAIN_OVERLAY_PASS`:
+  the VS lifts the rasterized surface 2 cm along its normal (no depth fight; the FS still shades the ground
+  point), depth test on / write off, `early_fragment_tests`, uncovered pixels discard, and the FS composites
+  DUAL-SOURCE (`PipelineVariant::dualSourceBlend`: out = K + ground * factor per channel, the film being
+  linear in the ground colour) - it never reads the scene colour. Both passes read the same mask
+  (`terrainWetMask`). The overlay resolves its own sun visibility: ONE hard shadow tap (one ray with the RT
+  sun), as the ocean. Why a separate pass: the film set the terrain FS's register allocation for every
+  pixel (80/32 regs/local -> ground 72/16, overlay 64/16), and Nsight showed the Static meshes pixel warps
+  launch-stalled on register allocation ~75% of the range. **The overlay is meant to grow** (snow,
+  deformation, other surface layers): any layer that is a K + factor composite fits as is; deformation
+  would need displaced geometry and depth writes, which it does not do.
+  **The film reflects the SKY only** (the baked mirror sky, fogged). Its scene mirror ray (`terrainFilmMirror`, the ocean's ray under
   the ocean's gates) is DISABLED behind `TERRAIN_FILM_RT_MIRROR` (a `constexpr false` in
   StaticMeshGraphicsPipeline): a ray query sets the terrain's register allocation for every pixel, filmed
   or not, and Nsight showed the Static meshes pixel warps launch-stalled on register allocation 72% of the
   range. **The film's base normal is the LEVEL water plane, not the ground normal** (sun, sky and lights
   match the ocean on sloped ground); it eases to the ground normal as the view flattens onto
-  the plane (`V.y` 0.35 -> 0.05), because a hard switch drew a line at eye height. The film runs after
-  `computeLitColor` in two stages (`terrainFilmSurface`, `terrainFilmShade`) with its OWN grid-light walk
-  (specular only, full light shapes); the ground's wet gloss is off under it. (Merging the film's lights
+  the plane (`V.y` 0.35 -> 0.05), because a hard switch drew a line at eye height. The overlay runs the
+  film in two stages (`terrainFilmSurface`, `terrainFilmShade` -> K + ground factor) with its OWN grid-light
+  walk (specular only, full light shapes); the ground's wet gloss is off under it. (Merging the film's lights
   into the lit core's loop - one shadow ray per light for both - was tried and dropped, see Half floats.) **Inland**
   (above the swash run-up, where the FFT depth weight is 0) the film takes wind ripples: the finest
   cascade keeps a slope weight of its own there ("Terrain/Wetness/Wind ripple strength",

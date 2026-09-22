@@ -119,6 +119,7 @@ bool Device::initialize()
     m_physicalDevice.getFeatures2(&deviceFeatures);
     deviceFeatures.features.samplerAnisotropy = vk::True;
     deviceFeatures.features.wideLines = vk::True; // debug lines and wireframe rasterize LINE_WIDTH px wide
+    deviceFeatures.features.dualSrcBlend = vk::True; // the terrain overlay composites src0 + dst * src1
     vk::PhysicalDeviceVulkan11Features vk11Features
     {
         .pNext = &deviceFeatures,
