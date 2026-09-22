@@ -34,7 +34,7 @@ public:
         Buffer& indexBuffer;
         Buffer& instanceIdxBuffer;     // vertex binding 2 - shadow cull's compacted instance indices
         Buffer& indirectCommandBuffer; // shadow cull's IndirectDrawSequence buffer (opaque region)
-        Buffer& meshCountBuffer;       // uint32 live mesh count (DGC sequenceCountAddress), CPU-written per frame
+        Buffer& drawCountBuffer;       // uint32 compacted sequence count (DGC sequenceCountAddress), GPU-written by the cull
     };
 
     // rainOcclusion: the RAIN_OCCLUSION vertex variant - projects through u_rainOcclusionViewProj (one

@@ -854,11 +854,8 @@ void Renderer::present()
     instances.firstInstances.flushMappedMemory(numMeshInfos * sizeof(uint32));
     m_submission.flushFrame(frameIdx);
 
-    instances.mappedMeshCount[0] = m_meshInfos.count(); // DGC sequence count for this frame
-    // The tessellated terrain's draws walk every mesh slot; with tessellation off they walk none (the
-    // recorded draws stay in the cached command buffers either way).
-    instances.mappedMeshCount[1] = m_terrain.getTexTweaks().tessEnabled ? m_meshInfos.count() : 0u;
-    instances.meshCount.flushMappedMemory(2 * sizeof(uint32));
+    instances.mappedMeshCount[0] = m_meshInfos.count(); // the mesh slots the culls' draw-list compaction walks
+    instances.meshCount.flushMappedMemory(sizeof(uint32));
 
 
     bucketScope.stop();

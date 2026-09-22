@@ -832,32 +832,32 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
     };
     bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
-    recordExecuteGeneratedCommands(vkCommandBuffer, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.meshCountBuffer);
+    recordExecuteGeneratedCommands(vkCommandBuffer, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
 
     // The TESSELLATED terrain: ground, then its overlay (EQUAL depth against the ground just drawn), before the
     // transparent execute - where the untessellated overlay runs. Plain indexed indirect draws over the cull's
-    // per-mesh-slot sequences (offset 4 skips the pipelineIndex word); the count is meshCount[1], which the CPU
-    // sets to 0 while tessellation is off, so these recorded draws then walk nothing.
+    // compacted sequences (offset 4 skips the pipelineIndex word); with tessellation off the cull routes nothing
+    // there, so the counts are 0.
     constexpr vk::DeviceSize sequenceStride = sizeof(RendererVKLayout::IndirectDrawSequence);
-    const auto drawTerrainTess = [&](uint32 variant, Buffer& sequences)
+    const auto drawTerrainTess = [&](uint32 variant, Buffer& sequences, uint32 countIdx)
     {
         bindForDraws(m_terrainTessPipeline.getPipelineVariant(variant), m_terrainTessPipeline.getPipelineLayout());
         vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
-            params.meshCountBuffer.getBuffer(), sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
+            params.drawCountBuffer.getBuffer(), countIdx * sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
     };
     if (m_terrainTess && m_terrainTessBuilt)
     {
-        drawTerrainTess(0, params.terrainTessCommandBuffer);
-        drawTerrainTess(1, params.terrainTessOverlayCommandBuffer);
+        drawTerrainTess(0, params.terrainTessCommandBuffer, 2);
+        drawTerrainTess(1, params.terrainTessOverlayCommandBuffer, 3);
         bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
     }
-    recordExecuteGeneratedCommands(vkCommandBuffer, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.meshCountBuffer);
+    recordExecuteGeneratedCommands(vkCommandBuffer, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
 }
 
-void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& meshCountBuffer)
+void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx)
 {
-    // The live sequence count comes from the CPU-written mesh-count buffer (clamped by maxSequenceCount =
-    // the buffer capacity the preprocess scratch was sized for), so registering meshes never re-records.
+    // The sequence count is the cull's compacted count (DrawCompactPipeline), clamped by maxSequenceCount = the
+    // buffer capacity the preprocess scratch was sized for, so registering meshes never re-records.
     const uint32 maxSequences = (uint32)(indirectCommandBuffer.getSize() / sizeof(RendererVKLayout::IndirectDrawSequence));
     vk::GeneratedCommandsInfoEXT generatedCommandsInfo{
         .shaderStages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -868,7 +868,7 @@ void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffe
         .preprocessAddress = m_preprocessSize > 0 ? preprocessBuffer.getDeviceAddress() : 0,
         .preprocessSize = m_preprocessSize,
         .maxSequenceCount = maxSequences,
-        .sequenceCountAddress = meshCountBuffer.getDeviceAddress(),
+        .sequenceCountAddress = drawCountBuffer.getDeviceAddress() + countIdx * sizeof(uint32),
         .maxDrawCount = maxSequences,
     };
     vkCommandBuffer.executeGeneratedCommandsEXT(vk::False, generatedCommandsInfo);

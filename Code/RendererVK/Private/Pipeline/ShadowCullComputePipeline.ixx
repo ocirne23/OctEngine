@@ -8,6 +8,7 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :Layout;
 import :DescriptorSet;
+import :DrawCompactPipeline;
 
 export class ShadowCullComputePipeline final
 {
@@ -30,6 +31,7 @@ public:
         Buffer& inNodePassMasksBuffer;        // 10
         Buffer& inMeshLodGroupIdxBuffer;      // 11 - per mesh: LOD group index (GPU LOD selection)
         Buffer& inMeshLodGroupsBuffer;        // 12
+        Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
     };
 
     // rainOcclusion: the RAIN_OCCLUSION shader variant - one view (u_rainOcclusionViewProj) instead of
@@ -42,6 +44,7 @@ public:
     void resizeCommandBuffers(uint32 maxUniqueMeshes);
 
     Buffer& getIndirectCommandBuffer(uint32 frameIdx) { return m_perFrameData[frameIdx].outIndirectCommandBuffer; }
+    Buffer& getDrawCountBuffer(uint32 frameIdx)       { return m_perFrameData[frameIdx].drawCountBuffer; } // the compacted list's count
     Buffer& getInstanceIdxBuffer(uint32 frameIdx)     { return m_perFrameData[frameIdx].outMeshInstanceIndexesBuffer; }
     Buffer& getOutMeshInstancesBuffer(uint32 frameIdx){ return m_perFrameData[frameIdx].outMeshInstancesBuffer; }
 
@@ -52,6 +55,7 @@ private:
     void buildComputeLayout(ComputePipelineLayout& layout);
 
     ComputePipeline m_computePipeline;
+    DrawCompactPipeline m_compact;
     bool m_rainOcclusion = false;
 
     struct PerFrameData
@@ -59,6 +63,7 @@ private:
         Buffer outMeshInstancesBuffer;       // 6
         Buffer outMeshInstanceIndexesBuffer; // 7
         Buffer outIndirectCommandBuffer;     // 8 - single opaque region
+        Buffer drawCountBuffer;              // its count after compaction
     };
     oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

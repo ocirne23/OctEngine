@@ -155,7 +155,7 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fram
 
     // One multiview execute renders all cascades (gl_ViewIndex selects the layer/matrix).
     // With no execution set, the target pipeline must be supplied via pNext (matches the memory-requirements query).
-    // Live sequence count read from the CPU-written mesh-count buffer (see StaticMeshGraphicsPipeline).
+    // The sequence count is the cull's compacted count (see StaticMeshGraphicsPipeline).
     const uint32 maxSequences = (uint32)(params.indirectCommandBuffer.getSize() / sizeof(RendererVKLayout::IndirectDrawSequence));
     vk::GeneratedCommandsPipelineInfoEXT pipelineInfo{ .pipeline = m_graphicsPipeline.getPipeline() };
     vk::GeneratedCommandsInfoEXT generatedCommandsInfo{
@@ -168,7 +168,7 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fram
         .preprocessAddress = m_preprocessSize > 0 ? m_preprocessBuffers[frameIdx].getDeviceAddress() : 0,
         .preprocessSize = m_preprocessSize,
         .maxSequenceCount = maxSequences,
-        .sequenceCountAddress = params.meshCountBuffer.getDeviceAddress(),
+        .sequenceCountAddress = params.drawCountBuffer.getDeviceAddress(),
         .maxDrawCount = maxSequences,
     };
     vkCommandBuffer.executeGeneratedCommandsEXT(vk::False, generatedCommandsInfo);

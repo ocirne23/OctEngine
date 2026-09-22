@@ -76,6 +76,7 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .lodLevelStateBuffer = m_meshLods.getStateBuffer(),
         .inNodeLodStateBiasBuffer = instances.lodStateBias,
         .outLodStatsBuffer = frameData.lodStatsBuffer,
+        .meshCountBuffer = instances.meshCount,
     };
     m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
     cb.end();
@@ -163,6 +164,7 @@ void Renderer::recordShadowCull(uint32 frameIdx)
         .inNodePassMasksBuffer = instances.passMasks,
         .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
         .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
+        .meshCountBuffer = instances.meshCount,
     };
     m_shadowCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -171,7 +173,6 @@ void Renderer::recordShadowCull(uint32 frameIdx)
 void Renderer::recordShadowDraw(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     ShadowMap& shadowMap = frameData.shadowMap;
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getRenderPass() };
     CommandBuffer& cb = frameData.shadowDrawCommandBuffer;
@@ -193,7 +194,7 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
         .instanceIdxBuffer = m_shadowCullComputePipeline.getInstanceIdxBuffer(frameIdx),
         .indirectCommandBuffer = m_shadowCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .meshCountBuffer = instances.meshCount,
+        .drawCountBuffer = m_shadowCullComputePipeline.getDrawCountBuffer(frameIdx),
     };
     m_shadowMapGraphicsPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -222,6 +223,7 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
         .inNodePassMasksBuffer = instances.passMasks,
         .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
         .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
+        .meshCountBuffer = instances.meshCount,
     };
     m_rainCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -230,7 +232,6 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
 void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     ShadowMap& map = frameData.rainOcclusionMap;
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = map.getRenderPass() };
     CommandBuffer& cb = frameData.rainDrawCommandBuffer;
@@ -250,7 +251,7 @@ void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
         .instanceIdxBuffer = m_rainCullComputePipeline.getInstanceIdxBuffer(frameIdx),
         .indirectCommandBuffer = m_rainCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .meshCountBuffer = instances.meshCount,
+        .drawCountBuffer = m_rainCullComputePipeline.getDrawCountBuffer(frameIdx),
     };
     m_rainMapGraphicsPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -302,7 +303,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
         .terrainTessCommandBuffer = m_indirectCullComputePipeline.getTerrainTessCommandBuffer(frameIdx),
         .terrainTessOverlayCommandBuffer = m_indirectCullComputePipeline.getTerrainTessOverlayCommandBuffer(frameIdx),
-        .meshCountBuffer = instances.meshCount,
+        .drawCountBuffer = m_indirectCullComputePipeline.getDrawCountBuffer(frameIdx),
         .lightInfosBuffer = submission.lightInfos,
         .lightGridsBuffer = submission.lightGrids,
         .lightTableBuffer = submission.lightTable,

@@ -19,6 +19,9 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
             vk::BufferUsageFlagBits2::eIndirectBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "IndirectCullCmd", BufferHostAccess::eSequentialWrite);
         perFrame.mappedIndirectCommands = perFrame.inIndirectCommandBuffer.mapMemory<vk::DispatchIndirectCommand>();
+        perFrame.drawCountBuffer.initialize(4 * sizeof(uint32),
+            vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullDrawCounts");
     }
     resizeInstanceBuffers(maxMeshInstances);
     resizeCommandBuffers(maxUniqueMeshes);
@@ -26,6 +29,7 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
     m_computePipeline.initialize(computePipelineLayout);
+    m_compact.initialize(4);
 }
 
 void IndirectCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
@@ -67,6 +71,7 @@ void IndirectCullComputePipeline::reloadShaders()
     buildComputeLayout(computePipelineLayout);
     if (!m_computePipeline.reloadShaders(computePipelineLayout))
         printf("IndirectCullComputePipeline: shader reload failed, keeping previous pipeline\n");
+    m_compact.reloadShaders();
 }
 
 void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& computePipelineLayout)
@@ -376,6 +381,10 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         }
 
         vkCommandBuffer.dispatchIndirect(frameData.inIndirectCommandBuffer.getBuffer(), 0);
+
+        Buffer* const lists[] = { &frameData.outIndirectCommandBuffer, &frameData.outTransparentIndirectCommandBuffer,
+            &frameData.outTerrainTessCommandBuffer, &frameData.outTerrainTessOverlayCommandBuffer };
+        m_compact.record(vkCommandBuffer, recordParams.meshCountBuffer, lists, frameData.drawCountBuffer);
 
         {
             vk::PipelineStageFlags2 dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eCommandPreprocessEXT;

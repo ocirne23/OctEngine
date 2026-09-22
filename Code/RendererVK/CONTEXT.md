@@ -671,14 +671,39 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 
 ---
 
+# Draw-list compaction (`DrawCompactPipeline`, `draw_compact.cs.glsl`)
+
+The culls (main, shadow, rain) accumulate into **PER-MESH-SLOT** sequences: one 24 B entry per registered
+mesh, LOD levels and streamed-out meshes included (`out_indirectCommands[meshIdx]`, `atomicAdd` on its
+`instanceCount`). Walking them all cost one front-end draw per slot and list: Nsight counted 66k draws in
+Scene opaque, nearly all with 0 instances.
+
+* Right after each cull's dispatch, ONE workgroup (1024 threads, subgroup ballots) moves the entries with
+  `instanceCount > 0 && indexCount > 0` to the front of the SAME buffer and writes one count per list:
+  main cull `[0]` opaque, `[1]` transparent, `[2]` tess ground, `[3]` tess overlay; shadow / rain cull one
+  count. The DGC executes take them as `sequenceCountAddress`, the tess draws as the `countBuffer`.
+* **Slot order is kept**, so it is the same every frame: the transparent list is not depth sorted, and a
+  per-frame order change would flicker its overlaps. That is why it is one workgroup and not a global
+  atomic append.
+* In place is safe: a kept entry moves to an index <= its own slot, the chunk's reads finish before its
+  writes (barrier), and later chunks are never written. Past the count the entries are stale; the cull's
+  full-capacity fill clears them next frame. **Nothing may read these buffers by meshIdx after the
+  compaction.**
+* No descriptor set: the buffers go in as device addresses (push constants). `meshCount[0]` (the CPU's
+  registered mesh count) is the slot count it walks.
+* Measured (sandbox, RelWithDebInfo): Static meshes 1.621 → 1.569 ms, GPU frame 3.075 → 3.019 ms (3-4 runs
+  each, no overlap); the main cull + compaction 15 µs (17 µs before). Shadow draw unchanged (~0.36 ms).
+
+---
+
 # Layout under `Private/`
 
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
-| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. |
+| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |
 | | **`SkinnedMeshRegistry`** — the skinning jobs + their parallel skinned-BLAS builds, the bone palette store, the per-container sources, and the spawn BUNDLES (parked in place on death, reused wholesale by the next spawn of the same container). |
 | | **`MeshLodRegistry`** — the LOD chains, the per-mesh chain mapping, the three GPU selection buffers and `IndexRangeFreeList`. The Renderer keeps only the RT-alias half of `addMeshLodGroup`, because aliases are AccelerationStructure state. |
@@ -917,8 +942,8 @@ Both push params in every frame; the renderer owns none of the tweaks.
   * "Terrain/Textures/Parallax" → `TERRAIN_POM` 0/1 on the terrain fragment shaders. With 0, the march,
     the self-shadow and their derivatives are compiled out; the height blend stays.
   * "Terrain/Tessellation/Enabled" → the cull's `TERRAIN_TESS_ROUTE` 0/1, and whether
-    `m_terrainTessPipeline` is built and its draws recorded. `meshCount[1]` and the RTAO skip still read the
-    runtime flag, which always matches.
+    `m_terrainTessPipeline` is built and its draws recorded. The RTAO skip still reads the runtime flag, which
+    always matches.
   * The pipeline defaults match `TerrainTexTweaks` (parallax off, tessellation on), so the first push
     rebuilds nothing.
 * **Terrain TESSELLATION** ("Terrain/Tessellation/*", `u_terrainTessParams0/1/2`; default ON):
@@ -928,15 +953,21 @@ Both push params in every frame; the renderer owns none of the tweaks.
     `m_terrainTessPipeline` (variant 0 ground, 1 overlay), built by `buildTerrainTessLayout` from the main
     layout: the same bindings (identically defined set layout, so the SAME descriptor set binds), vertex
     input, push ranges and baked fragment defines. `indirectBindable = false`.
+  * **Distance routing (the cull):** only a chunk whose bounding sphere reaches inside "Fade end" (+1 m for the
+    VR eyes) goes to the tess draws; a chunk wholly past it is the same surface (edge factor 1, no
+    displacement) and takes the plain DGC path and the plain overlay. Nsight showed the geometry stages
+    launch-stalled on ISBE 31% of Static meshes while every chunk out to ~33 km ran them. Measured in the
+    sandbox view: 1.559 → 1.552 ms, inside the noise. Relies on ONE instance per terrain mesh (one
+    ObjectContainer per chunk): the DGC entry is per mesh, the routing per instance.
   * **Routing (the cull):** with tessellation on, a `TerrainLit` instance still allocates its slot in the
     DGC sequence (`atomicAdd`), but that sequence draws `indexCount = 0`. The real draw goes to
     `out_terrainTessCommands` (binding 16, `atomicMax(idx + 1)` like the overlay), and the overlay goes to
     binding 17 instead of the transparent sequence. Same 24 B per-mesh-slot layout.
   * **Draws:** `record()` draws them with `drawIndexedIndirectCount` (offset 4 skips `pipelineIndex`, stride
     24) between the opaque and the transparent executes, then rebinds everything (a generated-commands
-    execute leaves the bound state undefined). The count is `meshCount[1]`: the CPU writes the mesh count
-    while tessellation is on and 0 while it is off, so the recorded draws in the cached command buffers walk
-    nothing when off.
+    execute leaves the bound state undefined). The counts are the compacted ones (draw counts [2] / [3], see
+    Draw-list compaction); with tessellation off the cull routes nothing there, so the recorded draws walk
+    nothing.
   * **Shaders:** `instanced_indirect_terrain.vs.glsl` with `TERRAIN_TESS` hands on control points (the baked
     fields still per vertex). `terrain_tess.tcs.glsl` computes an edge factor from the edge's two end points
     only (projected length / "Target edge (px)", eased to 1 across the fade band with the same

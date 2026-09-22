@@ -36,7 +36,7 @@ public:
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)
         Buffer& terrainTessOverlayCommandBuffer;  // tessellated terrain overlay sequences
-        Buffer& meshCountBuffer;                  // [0] live mesh count (DGC sequenceCountAddress), [1] terrain tess draw count; CPU-written per frame
+        Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] tess overlay
 
         Buffer& lightInfosBuffer;
 		Buffer& lightGridsBuffer;
@@ -137,5 +137,5 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
 
     void createPreprocessBuffers(uint32 maxUniqueMeshes);
-    void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& meshCountBuffer);
+    void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx);
 };

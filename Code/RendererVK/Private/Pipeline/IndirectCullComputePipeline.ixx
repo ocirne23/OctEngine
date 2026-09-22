@@ -9,6 +9,7 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :Layout;
 import :DescriptorSet;
+import :DrawCompactPipeline;
 
 export class IndirectCullComputePipeline final
 {
@@ -32,6 +33,7 @@ public:
         Buffer& lodLevelStateBuffer;          // 13 - per-instance hysteresis state (RW)
         Buffer& inNodeLodStateBiasBuffer;     // 14 - per node: state slot bias
         Buffer& outLodStatsBuffer;            // 15 - per-level pick counts (stats readback)
+        Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
     };
 
     void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);
@@ -48,6 +50,8 @@ public:
     Buffer& getTransparentIndirectCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTransparentIndirectCommandBuffer; }
     Buffer& getTerrainTessCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessCommandBuffer; }
     Buffer& getTerrainTessOverlayCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessOverlayCommandBuffer; }
+    // The compacted lists' draw counts: [0] opaque, [1] transparent, [2] terrain tess ground, [3] its overlay.
+    Buffer& getDrawCountBuffer(uint32 idx) { return m_perFrameData[idx].drawCountBuffer; }
     Buffer& getInstanceIdxBuffer(uint32 idx)      { return m_perFrameData[idx].outMeshInstanceIndexesBuffer; }
     Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; }
     // Dispatch-size buffer { numInstances, 1, 1 }; reused by the shadow cull which dispatches the
@@ -61,6 +65,7 @@ private:
     void buildComputeLayout(ComputePipelineLayout& layout);
 
     ComputePipeline m_computePipeline;
+    DrawCompactPipeline m_compact;
     bool m_terrainTess = true; // TERRAIN_TESS_ROUTE; the default matches TerrainTexTweaks::tessEnabled
 
     struct PerFrameData
@@ -72,6 +77,7 @@ private:
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
         Buffer outTerrainTessOverlayCommandBuffer;  // 17 - tessellated terrain overlay
+        Buffer drawCountBuffer;                     // the four lists' counts after compaction
 
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };

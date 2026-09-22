@@ -267,7 +267,12 @@ void main()
             // draws NO indices; the draw itself goes to the tess sequence, its count raised to cover this slot
             // (as the overlay's), every writer storing the same other fields.
             // TERRAIN_TESS_ROUTE: baked by IndirectCullComputePipeline ("Terrain/Tessellation/Enabled").
-            const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
+            // Only chunks REACHING INTO the fade end: past it the edge factor is 1 and nothing is displaced, so
+            // a chunk wholly beyond it is the same surface through the plain DGC path, without the control /
+            // evaluation stages (their ISBE storage was the pass's second launch limiter). The margin covers
+            // the VR eyes' offset from the centre view.
+            const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT)
+                && distance(centerPos, u_views[VIEW_CENTER].viewPos.xyz) - radius < u_terrainTessParams1.y + 1.0;
             idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {

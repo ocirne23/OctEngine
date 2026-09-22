@@ -11,12 +11,17 @@ ShadowCullComputePipeline::~ShadowCullComputePipeline() {}
 void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes, bool rainOcclusion)
 {
     m_rainOcclusion = rainOcclusion;
+    for (PerFrameData& perFrame : m_perFrameData)
+        perFrame.drawCountBuffer.initialize(sizeof(uint32),
+            vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullDrawCount");
     resizeInstanceBuffers(maxMeshInstances);
     resizeCommandBuffers(maxUniqueMeshes);
 
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
     m_computePipeline.initialize(computePipelineLayout);
+    m_compact.initialize(1);
 }
 
 void ShadowCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
@@ -49,6 +54,7 @@ void ShadowCullComputePipeline::reloadShaders()
     buildComputeLayout(computePipelineLayout);
     if (!m_computePipeline.reloadShaders(computePipelineLayout))
         printf("ShadowCullComputePipeline: shader reload failed, keeping previous pipeline\n");
+    m_compact.reloadShaders();
 }
 
 void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& computePipelineLayout)
@@ -122,6 +128,9 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
     }
 
     vkCommandBuffer.dispatchIndirect(params.dispatchIndirectBuffer.getBuffer(), 0);
+
+    Buffer* const lists[] = { &frameData.outIndirectCommandBuffer };
+    m_compact.record(vkCommandBuffer, params.meshCountBuffer, lists, frameData.drawCountBuffer);
 
     {
         vk::PipelineStageFlags2 dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eCommandPreprocessEXT;

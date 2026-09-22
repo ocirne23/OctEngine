@@ -31,8 +31,7 @@ public:
         Buffer lodStateBias; // int per render node: LOD state slot bias (stateBase - startIdx), at push time
         Buffer meshInstances;
         Buffer firstInstances;
-        Buffer meshCount;    // [0] DGC sequence count (INDIRECT_BUFFER: sequenceCountAddress requires it),
-                             // [1] tessellated terrain draw count (mesh count while tessellation is on, else 0)
+        Buffer meshCount;    // [0] registered mesh count: the slots the culls' draw-list compaction walks
 
         oc::span<RendererVKLayout::RenderNodeTransform> mappedTransforms;
         oc::span<uint32> mappedPassMasks;
