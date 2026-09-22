@@ -90,6 +90,11 @@ public:
     // LIT_RT_SUN_SHADOW / LIT_RT_LIGHT_SHADOWS (0/1) on the same shaders: the EFFECTIVE flags (RT master AND
     // the toggle), matching the UBO's u_rtSunShadow / u_rtLightShadows. Same reload rule.
     void setRtShadows(bool sun, bool lights) { m_rtSunShadow = sun; m_rtLightShadows = lights; }
+    // The terrain relief, BAKED (same reload rule): TERRAIN_POM on the terrain fragment shaders; tess = whether
+    // the tessellated terrain pipeline is built and its draws recorded (the cull's routing is baked apart).
+    void setTerrainRelief(bool pom, bool tess) { m_terrainPom = pom; m_terrainTess = tess; }
+    bool getTerrainPom() const { return m_terrainPom; }
+    bool getTerrainTess() const { return m_terrainTess; }
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_graphicsPipeline.getDescriptorSetLayout(); }
     const IndirectExecutionSet& getIndirectExecutionSet() const { return m_indirectExecutionSet; }
     const IndirectCommandsLayout& getIndirectCommandsLayout() const { return m_indirectCommandsLayout; }
@@ -122,6 +127,10 @@ private:
     int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)
     bool m_rtSunShadow = false;    // baked as LIT_RT_SUN_SHADOW
     bool m_rtLightShadows = true;  // baked as LIT_RT_LIGHT_SHADOWS
+    // Defaults match TerrainTexTweaks (parallax off, tessellation on), so the first push rebuilds nothing.
+    bool m_terrainPom = false;     // baked as TERRAIN_POM on the terrain fragment shaders
+    bool m_terrainTess = true;     // m_terrainTessPipeline built + its draws recorded
+    bool m_terrainTessBuilt = false; // m_terrainTessPipeline initialized (later changes reload it)
 
     vk::DeviceSize m_preprocessSize = 0;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass

@@ -36,6 +36,8 @@ public:
 
     void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);
     void reloadShaders();
+    // TERRAIN_TESS_ROUTE (0/1): the tessellated terrain's routing, baked. Takes effect on the next reloadShaders.
+    void setTerrainTess(bool enabled) { m_terrainTess = enabled; }
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& recordParams);
     void update(uint32 frameIdx, uint32 numMeshInstances);
     // Capacity growth (caller must have the GPU idle and re-record command buffers afterwards).
@@ -59,6 +61,7 @@ private:
     void buildComputeLayout(ComputePipelineLayout& layout);
 
     ComputePipeline m_computePipeline;
+    bool m_terrainTess = true; // TERRAIN_TESS_ROUTE; the default matches TerrainTexTweaks::tessEnabled
 
     struct PerFrameData
     {

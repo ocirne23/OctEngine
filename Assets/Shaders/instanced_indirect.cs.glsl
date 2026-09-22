@@ -122,7 +122,10 @@ layout (binding = 15, std430) buffer OutLodStatsBuffer
 {
     uint out_lodStats[]; // per-level pick counts this frame (stats readback; written under SHADER_STATS only)
 };
-// The TESSELLATED terrain (u_terrainTessParams0.x): its ground and overlay draws, same per-mesh-slot layout,
+#ifndef TERRAIN_TESS_ROUTE
+#define TERRAIN_TESS_ROUTE 0
+#endif
+// The TESSELLATED terrain (TERRAIN_TESS_ROUTE): its ground and overlay draws, same per-mesh-slot layout,
 // consumed by plain vkCmdDrawIndexedIndirectCount (the pipelineIndex word is skipped) - a tess pipeline
 // cannot join the DGC execution set, whose pipelines must all share the vertex + fragment stages.
 layout (binding = 16, std430) buffer OutTerrainTessCommandBuffer
@@ -263,7 +266,8 @@ void main()
             // Tessellated terrain: the DGC sequence still allocates the instance slots (atomicAdd below) but
             // draws NO indices; the draw itself goes to the tess sequence, its count raised to cover this slot
             // (as the overlay's), every writer storing the same other fields.
-            const bool terrainTess = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && u_terrainTessParams0.x > 0.5;
+            // TERRAIN_TESS_ROUTE: baked by IndirectCullComputePipeline ("Terrain/Tessellation/Enabled").
+            const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
             idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {

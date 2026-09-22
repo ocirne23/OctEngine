@@ -479,6 +479,24 @@ void Renderer::setOceanParams(const OceanParams& ocean)
     }
 }
 
+void Renderer::setTerrainTextureParams(const TerrainTexTweaks& params)
+{
+    m_terrain.setTexTweaks(params);
+    // The terrain relief's two BAKED switches: TERRAIN_POM (the terrain fragment shaders) and the tessellation
+    // (the cull's TERRAIN_TESS_ROUTE + whether the tess pipeline exists and its draws are recorded). Compared
+    // against what the pipelines were last built with, so the first push only rebuilds on a real difference.
+    if (params.parallaxEnabled == m_staticMeshGraphicsPipeline.getTerrainPom()
+        && params.tessEnabled == m_staticMeshGraphicsPipeline.getTerrainTess())
+        return;
+    if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+        return;
+    m_staticMeshGraphicsPipeline.setTerrainRelief(params.parallaxEnabled, params.tessEnabled);
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+    m_indirectCullComputePipeline.setTerrainTess(params.tessEnabled);
+    m_indirectCullComputePipeline.reloadShaders();
+    setHaveToRecordCommandBuffers();
+}
+
 void Renderer::setWindowMinimized(bool minimized)
 {
     m_windowMinimized = minimized;

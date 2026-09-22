@@ -155,7 +155,8 @@ public:
     using TerrainTexTweaks = ::TerrainTexTweaks;
     using TerrainWetTweaks = ::TerrainWetTweaks;
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
-    void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrain.setTexTweaks(params); }
+    // Flipping parallaxEnabled / tessEnabled rebakes (GPU idle + shader reload + re-record): see Renderer.cpp.
+    void setTerrainTextureParams(const TerrainTexTweaks& params);
     void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrain.setWetTweaks(params); }
     // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first: R = terrain height, G = water surface level, B = regional fog thickness [0,1], A = spare.
     // Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water depth/level read it. Staged ping-pong: live next frame, no GPU sync and no re-record.

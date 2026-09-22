@@ -73,6 +73,7 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
 {
     computePipelineLayout.computeShaderDebugFilePath = "Shaders/instanced_indirect.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
+    computePipelineLayout.defines.push_back({ "TERRAIN_TESS_ROUTE", m_terrainTess ? "1" : "0" });
     auto& descriptorSetBindings = computePipelineLayout.descriptorSetLayoutBindings;
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // UBO
         .binding = 0,

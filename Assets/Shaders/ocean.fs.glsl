@@ -218,7 +218,7 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     }
     waterLevel = f.waterLevel;
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
-    f16vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
+    f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
     // full wetness (damp x standing film - instanced_indirect_terrain.fs.glsl), so the sand seen through
     // the water and the wet sand the water just left are the same colour at the waterline.

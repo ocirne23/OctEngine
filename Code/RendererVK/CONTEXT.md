@@ -896,7 +896,16 @@ Both push params in every frame; the renderer owns none of the tweaks.
   * All of it runs before `computeLitColor`; only the shifted XZ outlives the splat, so it should not move
     the lit core's register peak. **Measure it (pipeline stats + profile) before you extend it.**
   * The ocean's seabed splat has no relief (no derivatives at a ray hit): its layer borders stay linear.
-* **Terrain TESSELLATION** ("Terrain/Tessellation/*", `u_terrainTessParams0/1`; default OFF):
+* **Both relief switches are BAKED** (`Renderer::setTerrainTextureParams` compares them against what the
+  pipelines were built with; a flip → GPU idle, reload, re-record, the ocean's pattern):
+  * "Terrain/Textures/Parallax" → `TERRAIN_POM` 0/1 on the terrain fragment shaders. With 0, the march,
+    the self-shadow and their derivatives are compiled out; the height blend stays.
+  * "Terrain/Tessellation/Enabled" → the cull's `TERRAIN_TESS_ROUTE` 0/1, and whether
+    `m_terrainTessPipeline` is built and its draws recorded. `meshCount[1]` and the RTAO skip still read the
+    runtime flag, which always matches.
+  * The pipeline defaults match `TerrainTexTweaks` (parallax off, tessellation on), so the first push
+    rebuilds nothing.
+* **Terrain TESSELLATION** ("Terrain/Tessellation/*", `u_terrainTessParams0/1/2`; default ON):
   * **It cannot live in the DGC execution set.** Every pipeline in an indirect execution set must have the
     initial pipeline's shader stages (VUID-vkUpdateIndirectExecutionSetPipelineEXT-11152), plus identical
     static state and fragment outputs. So `StaticMeshGraphicsPipeline` owns a second `GraphicsPipeline`,
@@ -928,6 +937,25 @@ Both push params in every frame; the renderer owns none of the tweaks.
     its own mesh's underside at once (dark blotches in the lows). A TERRAIN hit nearer than the relief depth,
     inside the tess fade, continues once past it (`rtao.cs.glsl`). The instance + material buffers (bindings
     8, 9) are therefore declared and written in BOTH RTAO variants, not only the alpha-test one.
+  * **Displaced normals = the PER-PIXEL height gradient** (ground pass): `terrainTessPixelNormal` is the TES's
+    displacement function (the same layers, height composite, depth and falloff, at `in_meshPos`)
+    differentiated per pixel by forward differences over the whole displacement range. **The step and the
+    mip are the TES's footprint** (the target edge at `max(distance, freeze)`), not the pixel's: at a pixel
+    step close up, mip 0 magnified the height map's texel grid (a constant bilinear gradient per texel) and
+    its BC4 steps into a pixelated contour pattern. The 3 points come from ONE walk of the layer chain (`terrainReliefAt3`: 3 taps per visited layer,
+    vectorized height blends). The coverages are computed ONCE, at `in_meshPos`, and shared with the splat
+    (`terrainSplatLayers`; `terrainSplat` is its wrapper for everyone else).
+    Tried and dropped: an interpolated TES normal (only roughly matched the geometry), the displaced facet
+    normal (flat-shaded the coarse mid-range tessellation), and the relief's facet tilt
+    `facet(in_pos) - facet(in_meshPos)` (facets close up).
+    **The normal maps are faded to half** toward that normal at full displacement (they carry the same
+    relief again and re-tilted faces toward the sun), and **the relief normal gates the sun**: N·L <= 0 on
+    it → no ground sun (`g_sunVisMaterial`), whatever the normal map says.
+    `in_normal` stays the SMOOTH normal (`coverN`), and it drives the splat's layer coverages
+    (`terrainSplat(pos, geoN, coverN, f)`) and the wet slope drain, so the bumps do not scatter rock or
+    snow. Without it, rock faces turned away from the sun were lit as if facing it. An interpolated TES
+    normal (forward differences of the height composite) was tried first: better, but it only roughly
+    matched the geometry, and it cost two more height evaluations per vertex.
   * **No swimming near the camera:** the edge factor comes from the DISTANCE (edge length × projection
     y scale / distance), not from projecting the end points, because a projected length changes under a
     pure camera rotation and every factor change slides the fractional vertices onto other heights. Closer

@@ -573,6 +573,44 @@ void terrainWetMask(vec3 geoN, TerrainFields fields, out float16_t wet, out floa
 	waterMask = smoothstep(start, float16_t(th), wet) * aboveLive;
 }
 
+#if defined(TERRAIN_TESS) && !defined(TERRAIN_OVERLAY_PASS)
+// The normal of the CONTINUOUS displaced surface at this pixel - terrain_tess.tes.glsl's displacement function
+// (the same layers, height composite, depth and falloff, evaluated at the undisplaced point) differentiated by
+// forward differences along world X and Z: the shading follows the geometry 1:1 at any distance (a facet-normal
+// tilt showed the tessellated triangles as facets close up). L = the coverages at in_meshPos, shared with the
+// splat; the relief taps take explicit gradients (non-uniform flow).
+// The step AND the mip are the TES's own footprint (the target edge at max(distance, freeze distance)), not the
+// pixel's: at a pixel step close up, mip 0 magnified the height map's TEXEL GRID (bilinear = a constant
+// gradient per texel, jumping at every texel edge) and its BC4 steps into a pixelated contour pattern. Finer
+// detail than the geometry's is the normal maps' (kept at half strength).
+// strength = how much of the relief is displaced here (0..1), for the normal map's fade-down.
+vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
+{
+	strengthOut = 0.0;
+	const float dist = distance(in_meshPos, u_viewPos);
+	const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
+	if (dist >= fadeEnd || u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0)
+		return N;
+	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+	const float strength = (1.0 - pow(t, u_terrainTessParams0.w)) * smoothstep(0.35, 0.6, N.y);
+	const float depth = mix(mix(u_terrainTessParams1.z, u_terrainTessParams1.w, float(L.rockW)), u_terrainTessParams1.z, float(L.snowW)) * strength;
+	if (depth <= 1e-4)
+		return N;
+	strengthOut = strength;
+	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the mvp's 3x3.
+	const float projY = length(vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]));
+	const float e = max(max(dist, u_terrainTessParams2.x) * 2.0 * u_terrainTessParams0.z / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
+	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
+	const float invE = 1.0 / e;
+	const float hx = (h3.y - h3.x) * invE;
+	const float hz = (h3.z - h3.x) * invE;
+	// On the local base plane a step of 1 m in world X / Z is Tx / Tz (N.y >= ~0.35 wherever depth > 0).
+	const vec3 Tx = vec3(1.0, -N.x / N.y, 0.0) + N * (depth * hx);
+	const vec3 Tz = vec3(0.0, -N.z / N.y, 1.0) + N * (depth * hz);
+	return normalize(cross(Tz, Tx));
+}
+#endif
+
 void main()
 {
 #ifdef STEREO
@@ -581,8 +619,22 @@ void main()
 	const vec3 toView = u_viewPos - in_pos;
 	const float viewDist = length(toView);
 	const vec3 V = toView / viewDist;
-	const vec3 geoN = normalize(in_normal);
 	const TerrainFields fields = terrainFields();
+	// coverN: the smooth mesh normal - the layer coverages and the slope drain read it (the relief's bumps must
+	// not scatter rock / snow). geoN: the shading base - the same, except on the tessellated terrain.
+	const vec3 coverN = normalize(in_normal);
+#if defined(TERRAIN_TESS) && !defined(TERRAIN_OVERLAY_PASS)
+	// The shading base: the displaced surface's own normal (terrainTessPixelNormal). reliefStrength fades the
+	// normal maps down below (they carry the same relief again).
+	// The coverages ONCE, at the undisplaced point the TES displaced from: the pixel normal and the splat share
+	// them (terrainLayers is the costly part: the climate walk, the crag fBm).
+	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
+	float reliefStrength;
+	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
+#else
+	// (The tessellated overlay too: the film shades on its own normals.)
+	const vec3 geoN = coverN;
+#endif
 	const float16_t one = float16_t(1.0);
 
 #ifdef TERRAIN_OVERLAY_PASS
@@ -591,7 +643,7 @@ void main()
 	// Pixel footprint for the film's wave taps; a derivative, so taken here in uniform flow.
 	const float16_t wetFootprint = float16_t(length(fwidth(in_pos.xz)));
 	float16_t wet, waterMask, aboveLive;
-	terrainWetMask(geoN, fields, wet, waterMask, aboveLive);
+	terrainWetMask(coverN, fields, wet, waterMask, aboveLive);
 	if (waterMask <= float16_t(0.0))
 		discard;
 	// The film's sun visibility (glint, whitewater), the ground pass's resolve is not available here: ONE
@@ -620,7 +672,11 @@ void main()
 	return;
 #endif
 
-	TerrainSample surf = terrainSplat(in_pos, geoN, fields);
+#ifdef TERRAIN_TESS
+	TerrainSample surf = terrainSplatLayers(in_pos, geoN, tessLayers);
+#else
+	TerrainSample surf = terrainSplat(in_pos, geoN, coverN, fields);
+#endif
 	// Wetness: darker, glossier ground where water touched it recently (the clipmap holds the memory).
 	// Deliberately the MAP ALONE - no instantaneous "under the live surface" override here: the map
 	// accumulates at the wet-in rate (slower on slopes), so ground under a wave soaks up visibly
@@ -628,7 +684,7 @@ void main()
 	// still lights the covered pixels as underwater from the live surface, so the water itself reads.
 	// The surface water itself is the terrain overlay's (TERRAIN_OVERLAY_PASS above).
 	float16_t wet, waterMask, aboveLive;
-	terrainWetMask(geoN, fields, wet, waterMask, aboveLive);
+	terrainWetMask(coverN, fields, wet, waterMask, aboveLive);
 	if (terrainWetPresent())
 	{
 		// Pooling: draining water retreats into the crevices. A world-anchored value fBm stands in for the
@@ -670,6 +726,15 @@ void main()
 		surf.albedo *= mix(one, float16_t(u_terrainWetParams5.y), damp) * mix(one, float16_t(u_terrainWetParams2.y), film);
 		surf.rough = mix(surf.rough, float16_t(u_terrainWetParams2.z), gloss); // a water film flattens the microfacets
 	}
+#ifdef TERRAIN_TESS
+	// Where the relief is displaced, the normal maps carry the same relief a second time: their tilt re-lit the
+	// faces the displacement turned away from the sun. Half of it is kept at full displacement (the fine detail
+	// finer than the height composite). And the relief surface itself gates the sun: a face turned away from it
+	// gets none, whatever the normal map says (through g_sunVisMaterial - the ground's sun only).
+	surf.normal = normalize(mix(surf.normal, f16vec3(geoN), float16_t(0.5 * reliefStrength)));
+	const float reliefSunGate = mix(1.0, smoothstep(0.0, 0.1, dot(geoN, u_sunDirection.xyz)), reliefStrength);
+	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
+#endif
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
 	const vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	out_color = vec4(color, 1.0); // opaque terrain

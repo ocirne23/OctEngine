@@ -116,7 +116,7 @@ void main()
 	}
 
 	out_pos = pos;
-	out_normal = Ni; // unnormalized, as the untessellated VS hands it on (the FS normalizes)
+	out_normal = Ni; // the SMOOTH mesh normal: the coverages read it, the FS adds the relief's facet tilt to it
 	out_terrainFields = fieldsV;
 	gl_Position = u_mvp * vec4(pos, 1.0);
 	gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

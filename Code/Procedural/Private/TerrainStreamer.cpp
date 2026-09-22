@@ -388,6 +388,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Textures", "Snow min humidity", &m_texSnowAridity, 0.0f, 0.5f, 0.005f);
 		// Relief from the splat height maps: parallax occlusion mapping near the camera (one world-space
 		// march over the blended height of the visible layers) and the height blend at layer borders.
+		// Baked (TERRAIN_POM): flipping it reloads the terrain shaders.
 		Tweak::boolean("Terrain/Textures", "Parallax", &m_texParallaxEnabled);
 		Tweak::floatVar("Terrain/Textures", "Parallax depth ground (m)", &m_texParallaxDepthGround, 0.0f, 1.0f, 0.005f);
 		Tweak::floatVar("Terrain/Textures", "Parallax depth rock (m)", &m_texParallaxDepthRock, 0.0f, 2.0f, 0.01f);
@@ -398,6 +399,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Textures", "Height blend contrast", &m_texHeightBlendContrast, 0.0f, 16.0f, 0.1f);
 		// Tessellation: the ground + overlay subdivide near the camera and displace by the same height
 		// composite, centred on the mesh. Independent of "Parallax" (both on = relief twice near the camera).
+		// Baked: flipping it reloads the cull (TERRAIN_TESS_ROUTE) and builds / drops the tess pipeline's draws.
 		Tweak::boolean("Terrain/Tessellation", "Enabled", &m_texTessEnabled);
 		Tweak::intVar("Terrain/Tessellation", "Max factor", &m_texTessMaxFactor, 1, 64, 1.0f);
 		Tweak::floatVar("Terrain/Tessellation", "Target edge (px)", &m_texTessTargetPx, 2.0f, 64.0f, 0.5f);
@@ -536,6 +538,7 @@ namespace Procedural
 			.snowAridity = m_texSnowAridity,
 			.cragWanderAmp = m_texCragWanderAmp * cragScale,
 			.cragWanderWavelength = m_texCragWanderWavelength * cragScale,
+			.parallaxEnabled = m_texParallaxEnabled,
 			.parallaxDepthGround = m_texParallaxDepthGround,
 			.parallaxDepthRock = m_texParallaxDepthRock,
 			.parallaxFadeStart = m_texParallaxFadeStart,

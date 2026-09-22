@@ -79,6 +79,9 @@ export struct TerrainTexTweaks
     // Relief from the splat HEIGHT maps (terrain_splat.inc.glsl). Parallax occlusion mapping: ONE march in
     // world space over the height-blended composite of the visible layers, near the camera only. Relief is in
     // metres of the height range 0..1, the mesh at the top (1).
+    // BAKED (TERRAIN_POM on the terrain fragment shaders; flipping it reloads StaticMeshGraphicsPipeline): off
+    // compiles the march and the self-shadow out. The height blend stays (its own path).
+    bool  parallaxEnabled = false;
     float parallaxDepthGround = 0.12f; // m: ground, beach and snow
     float parallaxDepthRock = 0.35f;   // m
     float parallaxFadeStart = 15.0f;   // m from the camera: full parallax inside
@@ -92,6 +95,8 @@ export struct TerrainTexTweaks
     // ground and the overlay pass subdivide near the camera and DISPLACE along the vertex normal by the same
     // height composite the parallax march uses, CENTRED on the mesh (height 0.5 = the mesh), so the flat
     // mesh the TLAS, the collider and the shadow map still see is the relief's mean surface.
+    // BAKED: flipping it reloads the pipelines - the cull's routing (TERRAIN_TESS_ROUTE) and whether the tess
+    // pipeline is built and its draws recorded at all.
     bool  tessEnabled = true;
     float tessMaxFactor = 16.0f;    // per edge; LOD0 is 2 m, so 16 = ~12 cm triangles
     float tessTargetPx = 7.0f;      // screen length of a subdivided edge: smaller costs FS helper lanes

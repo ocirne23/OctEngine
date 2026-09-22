@@ -279,6 +279,11 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     };
     defineLit("LIT_RT_SUN_SHADOW", m_rtSunShadow);
     defineLit("LIT_RT_LIGHT_SHADOWS", m_rtLightShadows);
+    // TERRAIN_POM (0/1, "Terrain/Textures/Parallax"): the parallax march + its self-shadow, compiled in or out of
+    // the terrain fragment shaders (the tessellated copies inherit it through buildTerrainTessLayout).
+    for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
+        if (variant.fragmentShader.debugFilePath == terrainVariantPath)
+            variant.fragmentShader.defines.push_back({ "TERRAIN_POM", m_terrainPom ? "1" : "0" });
 
     auto& bindingDescriptions = graphicsPipelineLayout.vertexLayoutInfo.bindingDescriptions;
     bindingDescriptions.push_back(vk::VertexInputBindingDescription{
@@ -576,9 +581,12 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
     GraphicsPipelineLayout graphicsPipelineLayout;
     buildPipelineLayout(graphicsPipelineLayout, maxTextures);
     m_graphicsPipeline.initialize(renderPass, graphicsPipelineLayout);
-    GraphicsPipelineLayout terrainTessLayout;
-    buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
-    m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
+    if (m_terrainTess)
+    {
+        GraphicsPipelineLayout terrainTessLayout;
+        buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
+        m_terrainTessBuilt = m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
+    }
 
     m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
@@ -634,10 +642,16 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
         printf("StaticMeshGraphicsPipeline: shader reload failed, keeping previous pipeline\n");
         return;
     }
-    GraphicsPipelineLayout terrainTessLayout;
-    buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
-    if (!m_terrainTessPipeline.reloadShaders(m_renderPass, terrainTessLayout))
-        printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
+    // The tess pipeline only while tessellation is on (off: kept as last built, never recorded).
+    if (m_terrainTess)
+    {
+        GraphicsPipelineLayout terrainTessLayout;
+        buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
+        if (!m_terrainTessBuilt)
+            m_terrainTessBuilt = m_terrainTessPipeline.initialize(m_renderPass, terrainTessLayout);
+        else if (!m_terrainTessPipeline.reloadShaders(m_renderPass, terrainTessLayout))
+            printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
+    }
 
     m_indirectExecutionSet.destroy();
     m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
@@ -831,10 +845,12 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
             params.meshCountBuffer.getBuffer(), sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
     };
-    drawTerrainTess(0, params.terrainTessCommandBuffer);
-    drawTerrainTess(1, params.terrainTessOverlayCommandBuffer);
-
-    bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
+    if (m_terrainTess && m_terrainTessBuilt)
+    {
+        drawTerrainTess(0, params.terrainTessCommandBuffer);
+        drawTerrainTess(1, params.terrainTessOverlayCommandBuffer);
+        bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
+    }
     recordExecuteGeneratedCommands(vkCommandBuffer, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.meshCountBuffer);
 }
 
