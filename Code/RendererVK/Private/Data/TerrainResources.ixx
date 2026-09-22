@@ -119,62 +119,61 @@ export struct TerrainTexTweaks
 // Terrain wetness clipmap (TerrainWetnessPipeline): the decaying memory of where water touched the
 // ground - the ocean swash tongue, permanently submerged seabed, rain - read by the TERRAIN shader
 // to darken and gloss it. A TERRAIN_WET_RES^2 toroidal window of texelSize metres around the scene
-// focus. Pushed every frame by the terrain streamer (mirrors its "Terrain/Wetness" tweaks).
+// focus. Pushed every frame by the terrain streamer (mirrors its "Terrain/Water" tweaks).
 export struct TerrainWetTweaks
 {
-    bool enabled = false;
-    float texelSize = 0.5f;      // m; 1024 texels = 512 m of coverage
-    float dryTime = 90.0f;       // s for wetness to decay to 1/e on cool ground
-    float dryTempSens = 0.00f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
-    float dryRate = 0.005f;      // 1/s: the CONSTANT part of the drain, next to the proportional dry time -
-                                 // d(wet)/dt = rain - dryRate - wet / dryTime, so rain below the rate never
-                                 // keeps ground wet and above it settles at dryTime x (rain - dryRate)
-    float rain = 0.0f;           // wetness added per second everywhere (0 = no rain)
-    float wetInTime = 0.4f;      // s for ground under water to reach full wetness (0 = instant)
-    float filmDepth = 0.03f;     // m of water over which the wetting target ramps 0 -> 1 (softens the tongue edge)
-    float diffusionRate = 15.0f; // 1/s: sideways spread through the 3x3 tent (packed per frame as
-                                 // 1 - exp(-rate * dt), so it is framerate independent); the toggle is
-                                 // the pipeline's own "Diffusion" tweak (a baked define)
-    float updateRate = 20.0f;    // Hz: the pass runs on a FIXED TICK with the accumulated sim delta, not
-                                 // every frame - at high fps a per-frame change is below the R16F image's
-                                 // step (0.0005 at wetness 0.5) and rounds away, so rain and drying stalled
-                                 // there and wetness depended on the framerate. Keep it well under the fps.
-    // Two darkening layers (the terrain shader): DAMP = soaked ground everywhere, a plateau above the
-    // damp knee that fades smoothly to dry below it; FILM = standing water on top - the whole surface
-    // just after a wave (above the spike start) and the pools once it drains. Fully wet = both.
-    float albedoScale = 0.55f;   // FILM albedo multiplier (on top of damp)
-    float dampAlbedoScale = 0.75f; // DAMP albedo multiplier
-    float dampKnee = 0.25f;      // wetness below which damp fades to dry (0.25 = ~1.4 dry times of plateau)
-    float spikeStart = 0.7f;     // wetness above which the whole surface carries the film darkening
-    float roughness = 0.15f;     // roughness at full wetness
-    // Pooling: as the ground dries, the film retreats into the low spots of a world-anchored noise
-    // (the crevices), so gloss breaks up into blobs instead of fading uniformly.
-    float poolScale = 3.0f;      // 1/m noise scale (~30 cm pools; 0 = off, uniform film)
-    float poolSoftness = 0.15f;  // noise band around the wetness that half-pools (edge softness)
-    float dampGloss = 0.3f;      // fraction of the roughness drop the damp ground between pools keeps
-    float poolHold = 2.0f;       // >= 1: pool threshold = wet^(1/hold), so the crevices keep their
-                                 // water long after the surface between them has drained
-    float slopeDrain = 4.0f;     // steep ground sheds water: decay rate x (1 + slope * drain) in the
-                                 // terrain shader (per pixel, mesh normal) AND wet-in / rain rate
-                                 // / (1 + slope * drain) in the compute pass (map gradient, 8 m);
-                                 // slope = 1 - N.y (a 45-degree face ~2.2x at 4, a wall 5x); 0 = off
-    // Surface water: where the WETNESS is still near full the terrain shader draws the ground AS
-    // water - the ocean shader's Fresnel sky reflection and dielectric sun glint over the lit ground
-    // - so the ocean's depth-buffer intersection with the sand lands on ground that already looks
-    // like water. Keyed on the smooth wetness field, not the pooled noise (that drew water blobs);
-    // it ramps over [threshold - softness, threshold + softness] so it blends out, never edges.
-    float surfaceThreshold = 0.7f; // wetness at which the water look is half in
-    float surfaceSoftness = 0.25f; // half-width of the ramp
-    float surfaceWaviness = 0.5f;  // film normal: 0 = the level water plane, 1 = the live FFT wave normal
-    float surfaceDepth = 0.15f;    // m of virtual water the ground is tinted through (the ocean's
-                                   // absorption + in-scatter), so the colours match at the waterline
-    float rippleStrength = 0.1f;   // inland film: the finest ocean cascade's slope weight where the shore
-                                   // weight is 0 (0 = off). Amplitude follows the ocean's wind via the spectrum
-    float surfaceNormalScale = 1.0f; // film wave normal strength, on top of the ocean's "Normal strength"
-    float liveMargin = 0.08f;      // m: the film + gloss stay on ground up to this far BELOW the estimated
-                                   // live surface (the estimate sits under the drawn ocean edge: no choppy
-                                   // XZ, no tongue thickness - without the margin a bare band shows above
-                                   // the waterline)
+    // TERRAIN SURFACE WATER. ONE wetness field feeds ONE water surface:
+    //  - the FIELD is a TERRAIN_WET_RES^2 toroidal clipmap of texelSize metres around the scene focus,
+    //    integrated on a fixed tick by the wetness compute pass: rain everywhere, full wetness under the
+    //    ocean (its swash tongue included), drying back with time;
+    //  - the SURFACE fills the splat relief (the height maps the tessellation displaces by) to a LEVEL:
+    //    rain puddles standing in the crevices. Where the LIVE OCEAN stands higher, the film follows the
+    //    ocean instead, so the water continues across the waterline onto the sand instead of ending at the
+    //    ocean mesh's hard intersection with it.
+    //  - the GROUND under it darkens and glosses with the same wetness.
+    bool enabled = true;
+    // --- The field ---
+    float texelSize = 0.5f;      // m; 1024 texels = 512 m of coverage around the scene focus
+    float updateRate = 20.0f;    // Hz: the pass runs on a FIXED TICK with the accumulated sim delta, never per
+                                 // frame - at high fps a per-frame change is below the R16F image's step
+                                 // (0.0005 at wetness 0.5) and rounds away, so rain and drying stall and the
+                                 // result depends on the framerate. Keep it well under the fps.
+    float diffusionRate = 2.0f;  // 1/s: sideways spread through the 3x3 tent (packed per frame as
+                                 // 1 - exp(-rate * dt), so it is framerate independent)
+    float rain = 0.0f;           // wetness added per second everywhere (the weather driver sets it)
+    float dryTime = 10.0f;       // s to decay to 1/e on cool ground
+    float dryTempSens = 0.04f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
+    float wetInTime = 5.0f;      // s for ground under water to reach full wetness (0 = instant)
+    float slopeDrain = 20.0f;    // steep ground sheds water: the shader decays at rate x (1 + slope * drain)
+                                 // per pixel (mesh normal) and the pass divides wet-in / rain by the same
+                                 // factor (map gradient); slope = 1 - N.y, 0 = off
+    // --- The water surface ---
+    // The LEVEL inside the relief: 0 = its low points, 1 = its top (the film flat over it). The fill happens
+    // between these two wetnesses, shaped by the curve (1 = linear, > 1 = fills late, < 1 = early).
+    float fillStart = 0.35f;     // wetness at which water begins to stand in the low points
+    float fillFull = 1.0f;       // wetness that submerges the relief
+    float fillCurve = 1.0f;      // exponent between them
+    float edgeFade = 0.2f;       // m of water depth the film fades out over, so it always dies exactly where
+                                 // its surface meets the terrain
+    float oceanBlend = 0.3f;     // m of LIVE ocean water over the ground the film fades out over: it lies over
+                                 // the ocean's shallow edge and fades into it, done before it sinks under the
+                                 // ocean's surface (a hard edge where the depth test cut it)
+    float oceanEdgeFade = 0.7f;  // m of water column the OCEAN blends out over at its edge onto the ground and
+                                 // the film drawn before it; 0 = the ocean's hard edge
+    float filmMaxSlope = 30.0f;  // degrees: no standing water on ground steeper than this (the smooth mesh
+                                 // slope); 90 = off. The wetness itself is untouched
+    float filmSlopeFade = 10.0f; // degrees below the max over which the pool level sinks to nothing (the
+                                 // film recedes into the relief's low points instead of fading)
+    // --- The water's look (the ocean's own terms, so the two meet seamlessly) ---
+    float waviness = 1.0f;       // film normal: 0 = the level water plane, 1 = the live FFT wave normal
+    float normalScale = 2.0f;    // film wave normal strength, on top of the ocean's "Normal strength"
+    float rippleStrength = 0.1f; // inland wind ripples (0 = off): the finest ocean cascade's slope weight
+                                 // where the shore weight is 0. Amplitude follows the ocean's wind.
+    float roughness = 0.08f;     // ground roughness at full wetness
+    float darkening = 0.55f;     // ground albedo multiplier at full wetness
+    float darkeningReach = 1.5f; // decades of wetness below fill start the darkening ramps over, on the log of
+                                 // the wetness (each decade = the same drying time): higher = a larger damp
+                                 // region and a longer fade as the ground dries
 };
 
 export class TerrainResources final

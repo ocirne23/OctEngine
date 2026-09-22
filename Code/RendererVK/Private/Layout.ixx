@@ -708,44 +708,39 @@ export namespace RendererVKLayout
                                      // it instead of the camera distance - nothing moves), yzw unused
         // Terrain wetness clipmap (TerrainWetnessPipeline; terrain_wetness.inc.glsl). A TERRAIN_WET_RES^2
         // toroidal window of texels around the scene focus; lattice coords are integer texel indices.
+        // TERRAIN SURFACE WATER (TerrainWetTweaks; the wetness compute pass writes the field, the terrain
+        // shaders read it). ONE field - rain, ocean swash, submersion - drives ONE water surface: it fills the
+        // splat relief to a LEVEL (rain puddles) and, where the live ocean stands higher, follows the ocean
+        // (the waterline continues onto the sand). terrain_wetness.inc.glsl + the terrain FS / tess film.
         glm::vec4 terrainWetParams0; // xy = window origin lattice coord (min corner, as floats),
                                      // zw = LAST frame's origin (texels that scrolled in start dry)
         glm::vec4 terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
                                      // (exp(-dt / dry time)), w = rain wetting added this frame
         glm::vec4 terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full
-                                     // wetness, z = roughness at full wetness, w = drying temperature
-                                     // sensitivity (extra decay rate per C above 15 C; 0 = uniform)
+                                     // wetness (wet darkening), z = roughness at full wetness, w = drying
+                                     // temperature sensitivity (extra decay rate per C above 15 C; 0 = uniform)
         glm::vec4 terrainWetParams3; // x = ping/pong layer written this frame (the reader samples it),
                                      // y = wet-in added per frame under water (dt / wet-in time),
-                                     // z = film depth (m) of water over which the wetting target ramps
-                                     // 0 -> 1 (softens the tongue's edge), w = diffusion spread this
-                                     // frame (1 - exp(-rate * dt): fraction of the 3x3 tent replacing
-                                     // the centre; framerate independent)
-        glm::vec4 terrainWetParams4; // pooling (the terrain shader): x = pool noise scale (1/m; 0 = off:
-                                     // uniform film), y = pool softness (noise band around the wetness
-                                     // that half-pools), z = damp gloss (fraction of the roughness drop
-                                     // the ground BETWEEN pools keeps), w = pool hold (>= 1: the pool
-                                     // threshold is wet^(1/hold), so pools outlast the wetness)
-        glm::vec4 terrainWetParams5; // x = slope drain (the terrain shader raises the wetness to
-                                     // 1 + slope * drain, i.e. steep faces decay that much faster;
-                                     // 0 = off), y = damp albedo multiplier (soaked ground, pools and
-                                     // between them alike), z = damp knee (wetness below which the damp
-                                     // plateau fades to dry), w = wet spike start (wetness above which
-                                     // the whole surface carries the standing-film darkening)
-        glm::vec4 terrainWetParams6; // surface water (the terrain shader draws near-full-wetness ground AS
-                                     // water, with the ocean's surface terms): x = wetness at which the
-                                     // look is half in, y = half-width of that ramp, z = waviness (0 = the
-                                     // level water plane, 1 = the live FFT wave normal), w = virtual water
-                                     // depth (m) the ground is tinted through (Beer-Lambert + in-scatter)
-        glm::vec4 terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the
-                                     // drain, next to the proportional exp(-dt / dry time) - together
-                                     // rain settles at dryTime x (rain - dryRate)),
-                                     // y = live-surface margin (m): the film + gloss stay on ground up to this
-                                     //     far below the estimated live surface (it sits under the drawn ocean
-                                     //     edge),
-                                     // z = inland wind ripple strength on the film (0 = off): the finest ocean
-                                     //     cascade's slope weight where the shore weight is 0,
-                                     // w = film wave normal scale (x the ocean's normal strength; 1 = the ocean's)
+                                     // z = slope drain (steep ground: decay x (1 + slope * drain) in the
+                                     //     shader, wet-in / rain divided by it in the pass; 0 = off),
+                                     // w = diffusion spread this frame (1 - exp(-rate * dt): fraction of the
+                                     //     3x3 tent replacing the centre; framerate independent)
+        glm::vec4 terrainWetParams4; // the WATER LEVEL in the relief (terrainPoolLevel), 0 = the relief's low
+                                     // points, 1 = its top: x = fill start, y = fill full (both wetnesses),
+                                     // z = fill curve (exponent between them), w = edge fade (m of water
+                                     // depth the film fades out over, so it dies where it meets the terrain)
+        glm::vec4 terrainWetParams5; // x = ocean blend (m): the film fades out over this much LIVE ocean water
+                                     //     over the ground (it lies over the ocean's shallow edge, fading into it),
+                                     // y = waviness (0 = a level plane, 1 = the live FFT wave normal),
+                                     // z = film wave normal scale (x the ocean's "Normal strength"),
+                                     // w = inland wind ripple strength (0 = off)
+        glm::vec4 terrainWetParams6; // x = ocean edge fade (m of water column the OCEAN blends out over at its
+                                     //     edge onto the ground and film; 0 = off),
+                                     // y = mesh normal.y below which no pool stands (cos "Film max slope"),
+                                     // z = normal.y where the pool level is full ("Film slope fade" flatter;
+                                     //     terrainPoolLevel sinks the level between them),
+                                     // w = 1 / darkening reach: the ground's wet darkening ramps to full at fill
+                                     //     start over "Darkening reach" decades of wetness below it (log ramp)
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

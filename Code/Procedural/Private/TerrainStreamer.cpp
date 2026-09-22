@@ -305,55 +305,43 @@ namespace Procedural
 		// Terrain texture splatting (TERRAIN pipeline variant; pushed to the renderer every frame from
 		// updateTerrainTextures via Renderer::setTerrainTextureParams). The surface composites bottom-up
 		// as ground -> beach -> rock -> snow; these shape where each layer takes over.
-		// Terrain wetness clipmap (Renderer::setTerrainWetParams; the renderer bakes ocean swash + rain
-		// into a toroidal window around the scene focus, the TERRAIN shader darkens and glosses wet ground).
-		Tweak::boolean("Terrain/Wetness", "Enabled", &m_wetEnabled);
-		Tweak::floatVar("Terrain/Wetness", "Texel size (m)", &m_wetTexelSize, 0.1f, 4.0f, 0.1f);
-		Tweak::floatVar("Terrain/Wetness", "Dry time (s)", &m_wetDryTime, 1.0f, 600.0f, 1.0f);
-		Tweak::floatVar("Terrain/Wetness", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
-		// The constant part of the drain, next to the proportional "Dry time": d(wet)/dt = rain - rate -
-		// wet / dryTime. Rain below the rate never keeps ground wet; above it the ground settles at
-		// dryTime x (rain - rate) - an equilibrium you can dial with "Rain".
-		Tweak::floatVar("Terrain/Wetness", "Dry rate (1/s)", &m_wetDryRate, 0.0f, 0.2f, 0.001f);
-		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 0.1f, 0.001f);
-		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 10.0f, 0.05f);
-		Tweak::floatVar("Terrain/Wetness", "Film depth (m)", &m_wetFilmDepth, 0.0f, 0.5f, 0.005f);
-		// Sideways spread rate; the on/off toggle is the renderer's own "Diffusion" tweak (a baked define
-		// on terrain_wetness.cs.glsl, reloaded on change).
-		Tweak::floatVar("Terrain/Wetness", "Diffusion rate (1/s)", &m_wetDiffusionRate, 0.0f, 60.0f, 0.5f);
+		// TERRAIN SURFACE WATER (Renderer::TerrainWetTweaks). ONE wetness field - rain, the ocean's swash,
+		// submersion - drives ONE water surface: it fills the splat relief to a level (rain puddles) and
+		// follows the LIVE OCEAN where that stands higher, so the water continues across the waterline onto
+		// the sand. The ground under it darkens and glosses with the same wetness.
+		Tweak::boolean("Terrain/Water", "Enabled", &m_wetEnabled);
+		// --- The field: a toroidal clipmap around the scene focus, integrated on a fixed tick.
+		Tweak::floatVar("Terrain/Water", "Texel size (m)", &m_wetTexelSize, 0.1f, 4.0f, 0.1f);
 		// The pass integrates on a fixed tick, not per frame: a per-frame change at high fps is below the
 		// R16F image's step and rounds away (framerate-dependent wetness). Keep it well under the fps.
-		Tweak::floatVar("Terrain/Wetness", "Update rate (Hz)", &m_wetUpdateRate, 1.0f, 30.0f, 0.5f);
-		// Pooling: draining water retreats into the low spots of a world-anchored noise, so the gloss
-		// breaks up into blobs instead of fading uniformly.
-		Tweak::floatVar("Terrain/Wetness", "Pool scale (1/m)", &m_wetPoolScale, 0.0f, 20.0f, 0.1f);
-		Tweak::floatVar("Terrain/Wetness", "Pool softness", &m_wetPoolSoftness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Damp gloss", &m_wetDampGloss, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Pool hold", &m_wetPoolHold, 1.0f, 8.0f, 0.1f);
-		// Steep ground sheds water: the terrain shader raises the wetness to 1 + slope * drain (= that
-		// much faster decay, per pixel against the mesh normal) and the compute pass divides the wet-in
-		// and rain rates by the same factor (map gradient), so a cliff also takes longer to soak.
-		Tweak::floatVar("Terrain/Wetness", "Slope drain", &m_wetSlopeDrain, 0.0f, 20.0f, 0.1f);
-		// Surface water: above the threshold the standing film is drawn AS water (the ocean shader's
-		// surface terms over the lit ground), so the ocean's intersection with the sand has no hard line.
-		Tweak::floatVar("Terrain/Wetness", "Surface water threshold", &m_wetSurfaceThreshold, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Surface water softness", &m_wetSurfaceSoftness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Live surface margin (m)", &m_wetLiveMargin, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Surface water waviness", &m_wetSurfaceWaviness, 0.0f, 1.0f, 0.01f);
-		// Inland film (away from the shore, where the FFT wave weight is 0): wind ripples, no foam. The
-		// amplitude follows the ocean's wind speed - they are the ocean's own finest-cascade slopes (the
-		// film's existing taps, so the ripple size is "Ocean/Waves/Cascade 2").
-		Tweak::floatVar("Terrain/Wetness", "Surface water normal scale", &m_wetSurfaceNormalScale, 0.0f, 4.0f, 0.01f); // x the ocean's "Normal strength"
-		Tweak::floatVar("Terrain/Wetness", "Wind ripple strength",&m_wetRippleStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)",&m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
-		// Albedo: DAMP (soaked ground everywhere) is a plateau above the knee that fades smoothly to dry;
-		// the WET scale is the standing-film layer on top - the whole surface just after a wave (above
-		// the spike start) and the pools once it drains. Fully wet = damp x wet.
-		Tweak::floatVar("Terrain/Wetness", "Wet albedo scale", &m_wetAlbedoScale, 0.1f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Damp albedo scale", &m_wetDampAlbedoScale, 0.1f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Damp knee", &m_wetDampKnee, 0.01f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Wet spike start", &m_wetSpikeStart, 0.0f, 0.99f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Wet roughness", &m_wetRoughness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Update rate (Hz)", &m_wetUpdateRate, 1.0f, 30.0f, 0.5f);
+		// Sideways spread rate; the on/off toggle is the renderer's own "Diffusion" tweak (a baked define
+		// on terrain_wetness.cs.glsl, reloaded on change).
+		Tweak::floatVar("Terrain/Water", "Diffusion (1/s)", &m_wetDiffusionRate, 0.0f, 60.0f, 0.5f);
+		Tweak::floatVar("Terrain/Water", "Rain (1/s)", &m_wetRain, 0.0f, 0.1f, 0.001f);
+		Tweak::floatVar("Terrain/Water", "Dry time (s)", &m_wetDryTime, 1.0f, 600.0f, 1.0f);
+		Tweak::floatVar("Terrain/Water", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Wet-in time (s)", &m_wetInTime, 0.0f, 10.0f, 0.05f);
+		// Steep ground sheds water: the terrain shader decays at rate x (1 + slope * drain) per pixel
+		// (mesh normal) and the compute pass divides wet-in / rain by the same factor (map gradient).
+		Tweak::floatVar("Terrain/Water", "Slope drain", &m_wetSlopeDrain, 0.0f, 20.0f, 0.1f);
+		// --- The water surface: the LEVEL it fills the relief to (0 = its low points, 1 = its top), the
+		// fade at its intersection with the terrain, and how far it follows the live ocean.
+		Tweak::floatVar("Terrain/Water", "Fill start", &m_wetFillStart, 0.0f, 0.99f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Fill full", &m_wetFillFull, 0.01f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Fill curve", &m_wetFillCurve, 0.05f, 16.0f, 0.05f);
+		Tweak::floatVar("Terrain/Water", "Edge fade (m)", &m_wetEdgeFade, 0.0f, 0.5f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Ocean blend (m)", &m_wetOceanBlend, 0.01f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &m_wetOceanEdgeFade, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Film max slope (deg)", &m_wetFilmMaxSlope, 0.0f, 90.0f, 0.5f);
+		Tweak::floatVar("Terrain/Water", "Film slope fade (deg)", &m_wetFilmSlopeFade, 0.0f, 45.0f, 0.5f);
+		// --- The look: the ocean's own surface terms, so the two meet seamlessly.
+		Tweak::floatVar("Terrain/Water", "Waviness", &m_wetWaviness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Normal scale", &m_wetNormalScale, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Wind ripples", &m_wetRippleStrength, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Water roughness", &m_wetRoughness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Wet darkening", &m_wetDarkening, 0.1f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Darkening reach (decades)", &m_wetDarkeningReach, 0.05f, 8.0f, 0.05f);
 
 		Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &m_texUvScaleGround, 0.005f, 2.0f);
 		Tweak::floatVar("Terrain/Textures", "Rock uv scale (1/m)", &m_texUvScaleRock, 0.005f, 2.0f);
@@ -560,31 +548,27 @@ namespace Procedural
 		renderer.setTerrainWetParams({
 			.enabled = m_wetEnabled,
 			.texelSize = m_wetTexelSize,
+			.updateRate = m_wetUpdateRate,
+			.diffusionRate = m_wetDiffusionRate,
+			.rain = m_wetRain,
 			.dryTime = m_wetDryTime,
 			.dryTempSens = m_wetDryTempSens,
-			.dryRate = m_wetDryRate,
-			.rain = m_wetRain,
 			.wetInTime = m_wetInTime,
-			.filmDepth = m_wetFilmDepth,
-			.diffusionRate = m_wetDiffusionRate,
-			.updateRate = m_wetUpdateRate,
-			.albedoScale = m_wetAlbedoScale,
-			.dampAlbedoScale = m_wetDampAlbedoScale,
-			.dampKnee = m_wetDampKnee,
-			.spikeStart = m_wetSpikeStart,
-			.roughness = m_wetRoughness,
-			.poolScale = m_wetPoolScale,
-			.poolSoftness = m_wetPoolSoftness,
-			.dampGloss = m_wetDampGloss,
-			.poolHold = m_wetPoolHold,
 			.slopeDrain = m_wetSlopeDrain,
-			.surfaceThreshold = m_wetSurfaceThreshold,
-			.surfaceSoftness = m_wetSurfaceSoftness,
-			.surfaceWaviness = m_wetSurfaceWaviness,
-			.surfaceDepth = m_wetSurfaceDepth,
+			.fillStart = m_wetFillStart,
+			.fillFull = m_wetFillFull,
+			.fillCurve = m_wetFillCurve,
+			.edgeFade = m_wetEdgeFade,
+			.oceanBlend = m_wetOceanBlend,
+			.oceanEdgeFade = m_wetOceanEdgeFade,
+			.filmMaxSlope = m_wetFilmMaxSlope,
+			.filmSlopeFade = m_wetFilmSlopeFade,
+			.waviness = m_wetWaviness,
+			.normalScale = m_wetNormalScale,
 			.rippleStrength = m_wetRippleStrength,
-			.surfaceNormalScale = m_wetSurfaceNormalScale,
-			.liveMargin = m_wetLiveMargin,
+			.roughness = m_wetRoughness,
+			.darkening = m_wetDarkening,
+			.darkeningReach = m_wetDarkeningReach,
 		});
 
 		// Until the bake finishes, chunks draw with the flat-color fallback. A bake with nothing usable

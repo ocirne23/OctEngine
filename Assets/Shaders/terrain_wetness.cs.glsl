@@ -99,7 +99,7 @@ void main()
         const float reach = u_oceanParams7.w;
         if (reach > 0.0 && abs(depth) < reach)
             depth += underwaterLiveWaveY(worldXZ, depth, d.y);
-        target = smoothstep(0.0, max(u_terrainWetParams3.z, 1e-3), depth);
+        target = depth > 0.0 ? 1.0 : 0.0; // under the live surface = fully wet
         if (target <= 0.0 && u_terrainWetParams2.w > 0.0)
         {
             // Warm ground dries faster: the decay exponent scales with the temperature above 15 C
@@ -113,22 +113,18 @@ void main()
         // takes that much longer to soak. The slope comes from the map's height gradient - its 8 m
         // texels see cliffs and steep banks, not sub-metre ledges (those only drain faster, per pixel).
         // Only paid where something is accumulating.
-        if (u_terrainWetParams5.x > 0.0 && (target > 0.0 || u_terrainWetParams1.w > 0.0))
+        if (u_terrainWetParams3.z > 0.0 && (target > 0.0 || u_terrainWetParams1.w > 0.0))
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field
             const float gx = (terrainHeightAt(worldXZ + vec2(h, 0.0)) - terrainHeightAt(worldXZ - vec2(h, 0.0))) * (0.5 / h);
             const float gz = (terrainHeightAt(worldXZ + vec2(0.0, h)) - terrainHeightAt(worldXZ - vec2(0.0, h))) * (0.5 / h);
             const float ny = inversesqrt(1.0 + gx * gx + gz * gz); // the surface normal's Y
-            soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWetParams5.x);
+            soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWetParams3.z);
         }
     }
-    // Rise toward the target at the wet-in rate, never fall below the decayed carry.
-    // Drain = the proportional decay (exp(-dt / dry time)) PLUS a constant per-second rate: purely
-    // exponential drying settles against rain at a level that is hard to reason about, purely linear
-    // never settles at all. With both, d(wet)/dt = rain - rate - wet / dryTime: rain below the rate
-    // never keeps ground wet, above it the ground settles at dryTime x (rain - rate).
-    const float drained = max(wet * decay - u_terrainWetParams7.x * dryMul, 0.0);
-    wet = max(drained, min(wet + u_terrainWetParams3.y * soak, target));
+    // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt =
+    // rain - wet / dryTime, so rain settles the ground at rain x dryTime.
+    wet = max(wet * decay, min(wet + u_terrainWetParams3.y * soak, target));
     wet += u_terrainWetParams1.w * soak; // rain
     imageStore(u_wet, ivec3(slot, writeLayer), vec4(clamp(wet, 0.0, 1.0)));
 }

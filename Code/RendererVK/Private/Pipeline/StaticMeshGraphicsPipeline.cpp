@@ -138,7 +138,11 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// Variant 9 (EPipelineIndex::Ocean): FFT/Tessendorf water. A dedicated vertex shader (same pipeline
 	// layout/interface as the shared one) displaces the clipmap grid by the OceanSimulationPipeline's
 	// displacement maps (binding 7); a dedicated fragment shader shades the surface (Fresnel, GGX sun
-	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Opaque + depth write.
+	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Depth write on, and a
+	// DUAL-SOURCE composite (out = ocean * a + scene * (1 - a), the alpha too - it owns TAA's ocean flag):
+	// the ocean fades out over its last "Ocean edge fade (m)" of water column onto the ground and the film
+	// under it. That needs the ground drawn first, so the cull routes the ocean into the TRANSPARENT sequence
+	// (after the opaque execute and the tessellated ground + film). Elsewhere it writes a = 1: opaque.
 	// Back-face culled: the clipmap carries
 	// every triangle in both windings (OceanGenerator::rebuildGrid), so the underside draws from below.
 	const oc::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
@@ -164,6 +168,9 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.debugFilePath = oceanVariantPath,
 			.defines = oc::move(oceanFragDefines),
 		},
+		.blendEnable = true,
+		.dualSourceBlend = true,
+		.dualSourceAlpha = true,
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
 	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant
@@ -379,7 +386,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 7,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+        // The tessellated film's evaluation stage too: its surface follows the LIVE ocean at the waterline.
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_shadowMap (sun CSM, comparison)
         .binding = 8,
@@ -428,13 +436,16 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 18,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eFragment
+        // The tessellated film's evaluation stage reads it too: its surface stands at the water level the
+        // local wetness fills the relief to.
+        .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_terrainHeight (terrain-data cascades: ocean depth/water level)
         .binding = 19,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
+        // + the tessellated film's evaluation stage: the baked water level under the live ocean.
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
     });
 
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_skyMap (GI's per-frame sky bake: layer 0 skyRadiance, layer 1 mirror sky; GENERAL layout)
@@ -503,10 +514,15 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
     tess.fragmentShader = ground.fragmentShader;
     tess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
     tess.polygonMode = ground.polygonMode;
-    // Variant 1: the overlay, the untessellated overlay's state.
+    // Variant 1: the overlay. Its evaluation stage displaces to the film's WATER LEVEL, not to the relief, so
+    // it has its own vertices and CANNOT depth-test EQUAL any more: the ordinary reversed-Z test keeps it where
+    // it stands above the ground and lets the ground hide it where it does not (rock out of a puddle).
     PipelineVariant overlayTess = overlay;
     overlayTess.vertexShader = ShaderSource{}; // the layout's (TERRAIN_TESS) VS
     overlayTess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
+    overlayTess.tessEvalShader = tess.tessEvalShader;
+    overlayTess.tessEvalShader.defines.push_back({ "TERRAIN_OVERLAY_PASS", "1" });
+    overlayTess.depthEqual = false;
     tess.additionalVariants.push_back(oc::move(overlayTess));
 }
 

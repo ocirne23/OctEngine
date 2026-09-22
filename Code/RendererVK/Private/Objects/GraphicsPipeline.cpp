@@ -296,6 +296,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     const size_t additionalCount = layout.additionalVariants.size();
     oc::vector<Shader> overrideVS(additionalCount);
     oc::vector<Shader> overrideFS(additionalCount);
+    oc::vector<Shader> overrideTES(additionalCount);
     for (size_t i = 0; i < additionalCount; i++)
     {
         const PipelineVariant& v = layout.additionalVariants[i];
@@ -304,6 +305,9 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
                 return false;
         if (!v.fragmentShader.text.empty())
             if (!overrideFS[i].initialize(vk::ShaderStageFlagBits::eFragment, v.fragmentShader.text, v.fragmentShader.debugFilePath, v.fragmentShader.defines, assertOnFailure))
+                return false;
+        if (hasTess && !v.tessEvalShader.text.empty())
+            if (!overrideTES[i].initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, v.tessEvalShader.text, v.tessEvalShader.debugFilePath, v.tessEvalShader.defines, assertOnFailure))
                 return false;
     }
 
@@ -331,6 +335,8 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         const PipelineVariant& variant = layout.additionalVariants[i];
         pipelineShaderStageCreateInfos[0].module = overrideVS[i].getModule() ? overrideVS[i].getModule() : defaultVS.getModule();
         pipelineShaderStageCreateInfos[fsSlot].module = overrideFS[i].getModule() ? overrideFS[i].getModule() : defaultFS.getModule();
+        if (hasTess)
+            pipelineShaderStageCreateInfos[2].module = overrideTES[i].getModule() ? overrideTES[i].getModule() : tessEval.getModule();
 
         // Per-variant blend/depth/raster state (mutated in place; the create info points at these structs).
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;
@@ -338,8 +344,10 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         pipelineDepthStencilStateCreateInfo.depthCompareOp = variant.depthEqual ? vk::CompareOp::eEqual : layout.depthCompareOp;
         pipelineColorBlendAttachmentState.blendEnable = variant.blendEnable ? vk::True : vk::False;
         // A blended variant KEEPS the dst alpha (the opaque surface behind it owns the scene colour's
-        // alpha = TAA's ocean flag; a near-zero material alpha must not read as ocean).
-        pipelineColorBlendAttachmentState.colorWriteMask = variant.blendEnable
+        // alpha = TAA's ocean flag; a near-zero material alpha must not read as ocean), unless it composites
+        // the alpha itself (dualSourceAlpha: the ocean's edge).
+        const bool blendsAlpha = variant.dualSourceBlend && variant.dualSourceAlpha;
+        pipelineColorBlendAttachmentState.colorWriteMask = variant.blendEnable && !blendsAlpha
             ? colorComponentFlags & ~vk::ColorComponentFlags(vk::ColorComponentFlagBits::eA) : colorComponentFlags;
         pipelineRasterizationStateCreateInfo.polygonMode = variant.polygonMode;
         pipelineRasterizationStateCreateInfo.lineWidth = rasterizesLines(layout.topology, variant.polygonMode) ? LINE_WIDTH : 1.0f;
@@ -352,7 +360,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
             pipelineColorBlendAttachmentState.dstColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eSrc1Color : vk::BlendFactor::eOneMinusSrcAlpha;
             pipelineColorBlendAttachmentState.colorBlendOp = vk::BlendOp::eAdd;
             pipelineColorBlendAttachmentState.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-            pipelineColorBlendAttachmentState.dstAlphaBlendFactor = vk::BlendFactor::eZero;
+            pipelineColorBlendAttachmentState.dstAlphaBlendFactor = blendsAlpha ? vk::BlendFactor::eSrc1Alpha : vk::BlendFactor::eZero;
             pipelineColorBlendAttachmentState.alphaBlendOp = vk::BlendOp::eAdd;
         }
 

@@ -106,7 +106,7 @@ void TerrainWetnessPipeline::createImage()
 
 void TerrainWetnessPipeline::initialize(oc::function<void()> onDefinesChanged)
 {
-    Tweak::boolean("Terrain/Wetness", "Diffusion", &m_diffusion, onDefinesChanged);
+    Tweak::boolean("Terrain/Water", "Diffusion on", &m_diffusion, onDefinesChanged);
 
     m_sampler.initialize(vk::SamplerAddressMode::eClampToEdge);
     createImage();

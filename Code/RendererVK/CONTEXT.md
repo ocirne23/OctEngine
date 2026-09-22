@@ -179,7 +179,8 @@ GPU Frame
 >   layered over the opaque scene may write alpha: `GraphicsPipelineLayout::colorWriteAlpha = false`
 >   on decals, debug lines, force shells / union / upsample, particles and fog apply, and
 >   `GraphicsPipeline` masks alpha on every BLENDED variant (a transparent mesh keeps the alpha of
->   the opaque surface behind it). **A new pipeline that draws into scene colour after the opaque
+>   the opaque surface behind it). The ONE exception is the Ocean variant (`dualSourceAlpha`): it blends
+>   its edge over the ground, so it composites the flag itself (see "Terrain surface water"). **A new pipeline that draws into scene colour after the opaque
 >   stages sets `colorWriteAlpha = false`.**
 > * **The Sky variant does not write depth** (`depthWrite = false`): a sky pixel's depth stays at the
 >   cleared far plane, which is how every reader tells "sky". (The prepass did this by skipping the
@@ -937,6 +938,83 @@ Both push params in every frame; the renderer owns none of the tweaks.
   * All of it runs before `computeLitColor`; only the shifted XZ outlives the splat, so it should not move
     the lit core's register peak. **Measure it (pipeline stats + profile) before you extend it.**
   * The ocean's seabed splat has no relief (no derivatives at a ray hit): its layer borders stay linear.
+  * The relief also carries the SURFACE WATER: see "Terrain surface water" below.
+
+# Terrain surface water
+
+ONE wetness field feeds ONE water surface ("Terrain/Water" tweaks, `TerrainWetTweaks`,
+`terrainWetParams0..6`). It is both the rain puddles on the ground and the continuation of the ocean onto
+the sand, so the two can never disagree.
+
+* **The field** is the wetness clipmap (`TerrainWetnessPipeline`, see its entry below): rain everywhere,
+  1 under the live ocean surface (its swash tongue included), decaying back with "Dry time (s)" and
+  spreading with "Diffusion (1/s)". "Slope drain" applies on both sides: the compute pass divides wet-in and
+  rain by it (map gradient), the terrain FS raises the decay by it per pixel (mesh normal).
+* **The LEVEL** (`terrainPoolLevel`, `terrain_wetness.inc.glsl`) is how far that wetness fills the splat
+  RELIEF - the same height composite the tessellation displaces by: 0 = the relief's low points, 1 = its top.
+  "Fill start" / "Fill full" bracket it in wetness, "Fill curve" shapes the rise. **The SLOPE sinks it**
+  ("Film max slope (deg)" / "Film slope fade (deg)", `u_terrainWetParams6.yz` as smooth-normal y): full
+  below max - fade, 0 at the max, so a pool on a steepening slope recedes into the relief's low points and is
+  gone, instead of alpha-fading. The slope drain only thins the wetness, and a wet enough slope still
+  filled its relief. The live-ocean part of the film is NOT slope-limited. Clamped to 1: the level is
+  a height INSIDE the relief, and an unclamped one lifts the film off the ground.
+* **The SURFACE** is the tessellated overlay's own geometry (`terrainFilmLevel`, `terrain_tess.tes.glsl`):
+  it displaces to `max(relief, level, live ocean surface)`, all in the relief band. A pool's surface is flat
+  across a crevice, and at the waterline the film rides the ocean's own live displaced surface (the baked
+  water level + `underwaterLiveWaveY`), so the water continues onto the sand instead of ending at the ocean
+  mesh's hard intersection with it. Capped at the relief top - above that the ocean draws its own surface and
+  a film lifted to the same height would z-fight it. **So the tessellated overlay variant does NOT depth-test
+  EQUAL** (it cannot, having its own geometry): it takes the ordinary reversed-Z test, which also hides it
+  wherever it lands under the ground. The untessellated overlay is unchanged (EQUAL, the ground's vertices).
+  This is what `PipelineVariant::tessEvalShader` (a per-variant evaluation-stage override) exists for, and
+  why the wetness clipmap (18), the ocean maps (7) and the terrain data (19) are bound to that stage too.
+* **The COVERAGE** is how much water stands over a pixel: `(level - relief height) x relief depth` METRES
+  (or the live ocean over the ground where deeper, see the hand-over below), faded over the last "Edge
+  fade (m)". The film therefore always dies exactly where
+  its surface meets the terrain, per pixel and shaped by the texture relief - the geometry's own outline is
+  the film surface crossing the ground (a per-triangle, stepped edge) over the clipmap's 0.5 m texel contour,
+  which pops in blocky on its own.
+* **No SKIRT:** the film re-draws the chunk's whole index range, the border skirt walls included. The FS
+  discards a pixel whose UNDISPLACED face (derivatives of `TERRAIN_LIT_POS`) is vertical (|n.y| < 0.05):
+  the skirt is exactly vertical there, the terrain surface never is. Without this, the film showed as a
+  translucent wall along chunk edges.
+* **The GROUND** under it: albedo x "Wet darkening", reaching it in full at "Fill start" (the ground is
+  soaked by the time water starts to stand on it). It ramps up over "Darkening reach (decades)" of
+  wetness below fill start (`u_terrainWetParams6.w` = 1 / reach), smoothstepped on log10(wet). The field
+  dries as exp(-t / dry time), so each decade takes the same time: the damp look fades evenly as the
+  ground dries, over dry time x ln 10 x reach, and a larger reach = a larger damp region. Earlier
+  attempts: a gain on the linear wetness gave a hard edge where it saturated, and an exponential curve
+  could not reach into the faint tail (its gain at 0 is only k). Roughness toward "Water
+  roughness" with the wetness. The gloss fades out under the live ocean (`aboveLive`), which draws its own
+  surface; the darkening stays (the ocean's traced seabed is darkened the same).
+* **The HAND-OVER to the ocean** (two tweaks, so the seam is neither the film's nor the ocean's hard edge):
+  * "Ocean blend (m)" (`u_terrainWetParams5.x`): `aboveLive` fades from 1 to 0 over this much LIVE water
+    over the GROUND (`g_liveDepthBelow` at the tested point + that point's height over the relief ground).
+    The tessellated film now draws BEFORE the ocean (below), so the ocean covers it and only its fade band
+    shows the film. The far (untessellated) film still draws after the ocean. There, and in the ocean's
+    fade band, the film must be gone before its surface sinks under the ocean's. The old gate (a 10 cm
+    step at "Ocean margin") let the film run over the whole shallow band in a different tone, then the
+    depth test cut it with a hard edge. Keep the blend under the relief depth.
+  * The film's coverage depth is `max(pool depth, live water over the ground)`. So the film always covers
+    the ocean's thin edge, also where the wetness has not caught up yet. The Beer-Lambert tint runs on the
+    same value.
+  * "Ocean edge fade (m)" (`u_terrainWetParams6.x`, 0 = off): **the ocean** (`ocean.fs.glsl`) fades out
+    over this much water column, so its mesh no longer ends in a hard line where it cuts the ground; the
+    film under it carries the water. A real blend: the Ocean variant composites DUAL-SOURCE
+    (out = ocean x a + scene x (1 - a)), and **the cull puts ocean instances in the TRANSPARENT sequence** so
+    they draw after the ground: order = opaque execute → tess ground → tess film → transparent execute
+    (ocean, far films, blended meshes). The ALPHA blends too (`PipelineVariant::dualSourceAlpha`):
+    out.a = 0 + dst.a x (a > 0.5 ? 0 : 1), the TAA ocean flag where the ocean is most of the pixel.
+    Top side only; a fully faded pixel returns before the shading. The column is to the BAKED terrain
+    height, without the splat relief.
+    * **Not a dither:** an IGN discard (TAA-resolved) was tried first. TAA caps the history on ocean
+      pixels (the ocean flag, to keep the glints), so the dither stayed as flickering noise.
+    * **Cost:** the ocean no longer early-Z rejects the tessellated seabed under it (the tess ground drew
+      after it before); that ground is now shaded, then covered. Profile a shoreline view if it matters.
+* **The LOOK** is the ocean's own (`terrainFilmSurface` / `terrainFilmShade`, below): "Waviness",
+  "Normal scale", "Wind ripples". The film's Beer-Lambert TINT runs on the SAME water depth as the
+  coverage - a puddle deepens toward its middle - instead of a fixed "virtual depth" tweak.
+
 * **Both relief switches are BAKED** (`Renderer::setTerrainTextureParams` compares them against what the
   pipelines were built with; a flip → GPU idle, reload, re-record, the ocean's pattern):
   * "Terrain/Textures/Parallax" → `TERRAIN_POM` 0/1 on the terrain fragment shaders. With 0, the march,
@@ -1055,11 +1133,11 @@ Both push params in every frame; the renderer owns none of the tweaks.
   walk (specular only, full light shapes); the ground's wet gloss is off under it. (Merging the film's lights
   into the lit core's loop - one shadow ray per light for both - was tried and dropped, see Half floats.) **Inland**
   (above the swash run-up, where the FFT depth weight is 0) the film takes wind ripples: the finest
-  cascade keeps a slope weight of its own there ("Terrain/Wetness/Wind ripple strength",
-  `u_terrainWetParams7.z`) - the film loop's existing taps, no extra fetch. The film also carries the
+  cascade keeps a slope weight of its own there ("Terrain/Water/Wind ripples",
+  `u_terrainWetParams5.w`) - the film loop's existing taps, no extra fetch. The film also carries the
   ocean's sub-band DETAIL slope (the `oceanDetailSlope` math inlined, "Ocean/Shading/Detail *", one
   extra tap), its crest foam (`oceanInstantFoam` inlined, shore-gated) and its own normal knob
-  ("Surface water normal scale", `u_terrainWetParams7.w`, x the ocean's normal strength); no foam inland, and the amplitude follows the ocean wind through the spectrum.
+  ("Normal scale", `u_terrainWetParams5.z`, x the ocean's normal strength); no foam inland, and the amplitude follows the ocean wind through the spectrum.
   **Every scene ray is gated on its VISIBLE weight (2%)**, resolved before it is traced: the ocean's
   refraction on `(1 - F)(1 - milk)(1 - foam)`, its mirror on `F (1 - reflBlur)(1 - foam)`, the film's
   shadowed light walk on coverage x `(1 - foam)`, the
@@ -1106,11 +1184,10 @@ Both push params in every frame; the renderer owns none of the tweaks.
   was drawn, and permanently submerged seabed stays 1 until a drawdown exposes it — plus a uniform
   rain term. GENERAL for life, two layers ping/ponged (the diffusion tent reads neighbours). The
   TERRAIN fragment shader (binding 18, UPDATE_AFTER_BIND) manual-bilinears it (never across the wrap
-  seam), ORs in the current wave's own footprint at mesh resolution, and scales albedo / lerps
-  roughness. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
+  seam) and derives EVERYTHING from it - see "Terrain surface water" below. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
   origin out of range so nothing stale shows. Rain from weather, particle hits and script splats are
   the planned injection sources.
-  **The pass runs on a FIXED TICK** ("Terrain/Wetness/Update rate (Hz)", default 20), not per frame:
+  **The pass runs on a FIXED TICK** ("Terrain/Water/Update rate (Hz)", default 20), not per frame:
   the UBO build accumulates the sim delta and ticks when it reaches the interval, integrating the whole
   accumulated delta at once; the primary executes the pass on tick frames only (`m_terrainWetTick`).
   **Why:** the image is R16F, whose step is ~0.0005 at wetness 0.5 — a per-frame change at 165 fps is

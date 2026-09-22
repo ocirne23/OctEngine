@@ -194,7 +194,7 @@ export namespace Procedural
 		float m_foamBreakAccel = 0.2f; // breaking threshold (downward crest accel, g units)
 		float m_foamSoftness = 0.50f; // edge width of both thresholds
 		float m_foamDecay = 0.999f;  // turbulence retention per frame (wake persistence)
-		float m_foamSpread = 1.2f;   // turbulence diffusion per frame (wake spreads as it lives)
+		float m_foamSpread = 0.25f;   // turbulence diffusion per frame (wake spreads as it lives)
 		float m_foamBoost = 0.67f;    // turbulence -> fold-threshold relaxation (aged-foam amount)
 		float m_turbidity = 0.0f;    // entrained bubbles: milky brightening + roughness of the wake
 
@@ -210,10 +210,10 @@ export namespace Procedural
 		// that looks exactly like wind 0. Only the seabed moves, never the surface. 0 range = off.
 		float m_horizonDepth = 2.0f;
 		float m_horizonDepthRange = 3000.0f;
-		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
+		float m_shoreFoamDepth = 3.0f;  // surf band: water-column height (m) that churns white; 0 = off
 		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
 		float m_swashAmp = 0.5f;        // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
-		float m_shoreFoamBias = -0.80f;   // surf fold-threshold shift: negative = sparser/more transparent surf
+		float m_shoreFoamBias = 0.0f;   // surf fold-threshold shift: negative = sparser/more transparent surf
 		float m_swashFlow = 0.5f;       // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
 		float m_cullMargin = 1.0f;      // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)
 		float m_farCullError = 4.0f;    // land cull from the FAR terrain cascade: flat error allowance (m); 0 = near-only

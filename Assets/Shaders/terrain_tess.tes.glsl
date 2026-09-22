@@ -12,8 +12,12 @@
 // distance (to nothing where the control stage stops subdividing) and on steep ground, where the world-XZ
 // projection of the height maps stretches into streaks.
 //
-// INVARIANT: the ground and the overlay (EQUAL depth) run this ONE module on the same inputs, with
-// `invariant gl_Position`. NO `precise`: the engine's glslang crashed in its PropagateNoContraction pass on it.
+// TERRAIN_OVERLAY_PASS (the surface-water film): the same surface, but displaced to the WATER LEVEL the local
+// wetness fills the relief to (terrainPoolLevel) instead of to the relief itself - a flat pool in the crevices
+// that rises as the ground wets, with the rock standing out of it. The film is NOT depth-tested EQUAL any more
+// (it could not be, having its own vertices): where it ends up under the ground, the ground's depth hides it.
+//
+// NO `precise`: the engine's glslang crashed in its PropagateNoContraction pass on it.
 
 #include "shared.inc.glsl"
 
@@ -42,6 +46,38 @@ layout (binding = 22) uniform sampler2D u_textures[]; // the splat height maps
 #define TERRAIN_SPLAT_RELIEF
 #define TERRAIN_SPLAT_HEIGHT_ONLY
 #include "terrain_splat.inc.glsl"
+
+#ifdef TERRAIN_OVERLAY_PASS
+#define TERRAIN_WET_BINDING 18
+#include "terrain_wetness.inc.glsl"  // the film's water level: terrainWetnessAt + terrainPoolLevel
+#define TERRAIN_HEIGHT_BINDING 19
+#include "terrain_height.inc.glsl"   // the baked water level under the live ocean
+#define UNDERWATER_OCEAN_BINDING 7
+#include "underwater_light.inc.glsl" // underwaterLiveWaveY: the live displaced ocean surface
+
+// The film's surface, as a height in the relief band (0 = its low points, 1 = its top): the WATER LEVEL the
+// local wetness fills the relief to (rain puddles), or the LIVE OCEAN surface where that stands higher -
+// the waterline then continues onto the sand instead of ending at the ocean mesh's intersection with it.
+// Capped at the relief top: past that the ocean's own surface is what is drawn, and a film lifted to the
+// same height would z-fight it.
+// normalY = the smooth mesh normal's y (the FS's coverN: the pool level sinks on slopes).
+float terrainFilmLevel(vec3 meshPos, float normalY, float reliefDepth)
+{
+    float level = terrainPoolLevel(terrainWetnessAt(meshPos.xz), normalY);
+    if (terrainHeightMapPresent())
+    {
+        const float waterLevel = terrainDataAt(meshPos.xz).y;
+        float depthBelow = waterLevel - meshPos.y; // calm column over this point (negative on dry land)
+        // The swash band rides the live displaced surface (the lit core's gate; underwater_light.inc.glsl).
+        // Ground deeper than the reach is under water at any wave phase and skips the wave taps.
+        const float reach = u_oceanParams7.w;
+        if (reach > 0.0 && abs(depthBelow) < reach)
+            depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
+        level = max(level, clamp(0.5 + depthBelow / max(reliefDepth, 1e-3), 0.0, 1.0));
+    }
+    return level;
+}
+#endif
 
 bool terrainTessBefore(vec3 a, vec3 b)
 {
@@ -110,8 +146,15 @@ void main()
 			// The projection's y scale is the length of row 1 of the mvp's 3x3 (P11 x a unit view row).
 			const float projY = length(vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]));
 			const float spacing = max(dist, u_terrainTessParams2.x) * 2.0 * u_terrainTessParams0.z / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
-			const float16_t h = terrainReliefAt(L, pos.xz, vec2(spacing, 0.0), vec2(0.0, spacing));
-			pos += N * ((float(h) - 0.5) * depth);
+			float height = float(terrainReliefAt(L, pos.xz, vec2(spacing, 0.0), vec2(0.0, spacing)));
+#ifdef TERRAIN_OVERLAY_PASS
+			// The FILM's surface: the water level (rain pools, or the live ocean where it stands higher), so a
+			// pool's surface is flat across a crevice and the ocean continues onto the sand. Never below the
+			// ground - the ground would hide it anyway, and a dry-side peak keeps the two coincident instead
+			// of the film sinking away from it.
+			height = max(height, terrainFilmLevel(pos, N.y, depth));
+#endif
+			pos += N * ((height - 0.5) * depth);
 		}
 	}
 

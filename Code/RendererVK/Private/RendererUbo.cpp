@@ -588,7 +588,7 @@ void Renderer::buildUboTerrain()
     // a window that was not live last frame (first enable, re-enable) parks the previous origin out of
     // range and every texel starts dry instead of inheriting a stale slot.
     //
-    // FIXED TICK ("Terrain/Wetness/Update rate"): the pass runs only when the accumulated sim delta
+    // FIXED TICK ("Terrain/Water/Update rate (Hz)"): the pass runs only when the accumulated sim delta
     // reaches the tick interval, and integrates that whole delta at once. Per frame the change was below
     // the R16F image's representable step at high fps and rounded away, so wetness depended on the
     // framerate. Between ticks the pass is skipped and the reader keeps the last tick's layer + origin.
@@ -604,7 +604,7 @@ void Renderer::buildUboTerrain()
         const float decay = wet.dryTime > 0.0f ? std::exp(-dt / wet.dryTime) : 0.0f;
         ubo.terrainWetParams0 = glm::vec4((float)origin.x, (float)origin.y, (float)prevOrigin.x, (float)prevOrigin.y);
         ubo.terrainWetParams1 = glm::vec4(texel, 1.0f / texel, decay, glm::max(wet.rain, 0.0f) * dt);
-        ubo.terrainWetParams2 = glm::vec4(wet.enabled ? 1.0f : 0.0f, glm::clamp(wet.albedoScale, 0.0f, 1.0f),
+        ubo.terrainWetParams2 = glm::vec4(wet.enabled ? 1.0f : 0.0f, glm::clamp(wet.darkening, 0.0f, 1.0f),
             glm::clamp(wet.roughness, 0.0f, 1.0f), glm::max(wet.dryTempSens, 0.0f));
         const float writeLayer = (float)tick.writeLayer;
         const float wetIn = wet.wetInTime > 0.0f ? dt / wet.wetInTime : 1.0f;
@@ -612,15 +612,20 @@ void Renderer::buildUboTerrain()
         // grows by ~rate * texel^2 per second at any framerate (a fixed per-frame fraction would spread
         // twice as fast at twice the fps).
         const float spread = 1.0f - std::exp(-glm::max(wet.diffusionRate, 0.0f) * dt);
-        ubo.terrainWetParams3 = glm::vec4(writeLayer, wetIn, glm::max(wet.filmDepth, 0.0f), spread);
-        ubo.terrainWetParams4 = glm::vec4(glm::max(wet.poolScale, 0.0f), glm::clamp(wet.poolSoftness, 0.0f, 1.0f),
-            glm::clamp(wet.dampGloss, 0.0f, 1.0f), glm::max(wet.poolHold, 1.0f));
-        ubo.terrainWetParams5 = glm::vec4(glm::max(wet.slopeDrain, 0.0f), glm::clamp(wet.dampAlbedoScale, 0.0f, 1.0f),
-            glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
-        ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
-            glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
-        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f),
-            glm::max(wet.rippleStrength, 0.0f), glm::max(wet.surfaceNormalScale, 0.0f));
+        ubo.terrainWetParams3 = glm::vec4(writeLayer, wetIn, glm::max(wet.slopeDrain, 0.0f), spread);
+        ubo.terrainWetParams4 = glm::vec4(glm::clamp(wet.fillStart, 0.0f, 0.99f),
+            glm::clamp(wet.fillFull, wet.fillStart + 0.01f, 1.0f), glm::clamp(wet.fillCurve, 0.05f, 16.0f),
+            glm::max(wet.edgeFade, 1e-4f));
+        ubo.terrainWetParams5 = glm::vec4(glm::max(wet.oceanBlend, 0.01f), glm::clamp(wet.waviness, 0.0f, 1.0f),
+            glm::max(wet.normalScale, 0.0f), glm::max(wet.rippleStrength, 0.0f));
+        // Film max slope as mesh normal.y thresholds for terrainPoolLevel: no pool below cos(max), the full
+        // level above cos(max - fade). 90 = off (both below any normal).
+        const float maxSlope = glm::clamp(wet.filmMaxSlope, 0.0f, 90.0f);
+        const float slopeCut = maxSlope >= 90.0f ? -2.0f : std::cos(glm::radians(maxSlope));
+        const float slopeFull = maxSlope >= 90.0f ? -1.5f
+            : std::cos(glm::radians(glm::max(maxSlope - glm::max(wet.filmSlopeFade, 0.0f), 0.0f))) + 1e-4f;
+        ubo.terrainWetParams6 = glm::vec4(glm::max(wet.oceanEdgeFade, 0.0f), slopeCut, slopeFull,
+            1.0f / glm::clamp(wet.darkeningReach, 0.05f, 8.0f));
     }
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can

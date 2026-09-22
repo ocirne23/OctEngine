@@ -58,4 +58,24 @@ float terrainWetnessAt(vec2 worldXZ)
     return w * (1.0 - smoothstep(0.44, 0.49, edge));
 }
 
+// THE WATER LEVEL this wetness fills the splat relief to (height 0..1): 0 = the relief's low points,
+// 1 = its top (every crevice full, the surface flat over the relief). Water stands where the relief height
+// is below it, so rain first shows in the crevices and spreads as the ground keeps wetting.
+// "Fill start" / "Fill full" are the wetnesses that bracket it, "Fill curve" the exponent between them
+// (1 = linear, > 1 = fills late, < 1 = early). CLAMPED to 1: the level is a height INSIDE the relief -
+// unclamped, the film rises off the ground and floats.
+// SLOPE ("Film max slope" / "Film slope fade", u_terrainWetParams6.yz as mesh normal.y): water does not
+// stand on a slope, so the level sinks with it - a pool drains back into the relief's low points and is gone
+// at the max slope. A smooth recede instead of an alpha fade; the slope drain only thins the wetness, so a
+// wet enough slope still filled its relief. normalY = the SMOOTH mesh normal (the slope drain's slope).
+// Shared by the film's coverage (the terrain FS) and its surface (terrain_tess.tes.glsl), so the two are
+// always the same water.
+float terrainPoolLevel(float wet, float normalY)
+{
+    const float start = u_terrainWetParams4.x, full = u_terrainWetParams4.y;
+    const float t = clamp((wet - start) / max(full - start, 1e-3), 0.0, 1.0);
+    const float slope = smoothstep(u_terrainWetParams6.y, u_terrainWetParams6.z, normalY);
+    return clamp(pow(t, max(u_terrainWetParams4.z, 1e-3)), 0.0, 1.0) * slope;
+}
+
 #endif

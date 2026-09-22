@@ -22,16 +22,21 @@ export struct ShaderSource
 
 export struct PipelineVariant
 {
-    // Per-variant shader overrides; an empty text field falls back to the layout default.
+    // Per-variant shader overrides; an empty text field falls back to the layout default. The tess ones only
+    // where the layout itself has tessellation (the terrain film displaces to its own water level).
     ShaderSource vertexShader;
     ShaderSource fragmentShader;
+    ShaderSource tessEvalShader;
     // Per-variant pipeline state. Transparent variants enable alpha blending and disable depth
     // writes; opaque variants (the default) keep blending off and depth writes on.
     bool blendEnable = false;
     // DUAL-SOURCE composite instead of the "over" blend (with blendEnable): out = src0 + dst * src1, per
     // channel - the fragment shader writes location 0 index 0 (added colour) and index 1 (dst multiplier).
-    // The dst alpha is kept, as for every blended variant.
+    // The dst alpha is kept, as for every blended variant, unless dualSourceAlpha.
     bool dualSourceBlend = false;
+    // With dualSourceBlend: the ALPHA composites the same way (out.a = src0.a + dst.a * src1.a) instead of
+    // being kept. For a surface that owns the scene colour's alpha (TAA's ocean flag) where it is opaque.
+    bool dualSourceAlpha = false;
     bool depthWrite = true;
     // Gizmo/overlay variants disable the depth test so they draw on top of everything regardless
     // of scene depth; everything else keeps the layout's depthTestEnable.

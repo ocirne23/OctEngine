@@ -67,7 +67,7 @@ private:
     vk::ImageView m_view{};
     Sampler m_sampler; // the reader uses texelFetch; the sampler only satisfies the combined binding
 
-    // "Terrain/Wetness" Diffusion toggle, BAKED as the WET_DIFFUSION define on the compute shader (the
+    // "Terrain/Water" Diffusion toggle, BAKED as the WET_DIFFUSION define on the compute shader (the
     // tent reads per texel are not worth a uniform branch); a change reloads it. The spread RATE is
     // UBO-driven (Renderer::TerrainWetTweaks::diffusionRate, packed per frame with dt), so it is live
     // and framerate independent - a define could not carry the frame delta.

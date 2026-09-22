@@ -246,7 +246,9 @@ void main()
         const uint firstInstance      = in_firstInstances[meshIdx];
         const uint16_t pipelineIdx    = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
         const uint16_t alphaMode      = uint16_t((instance.pipelineIdxAlphaMode & 0xFFFF0000) >> 16);
-        const bool isTransparent      = alphaMode == ALPHA_MODE_BLEND;
+        // The OCEAN draws in the transparent sequence too: it blends its edge over the ground (ocean.fs.glsl), so
+        // it must come after every terrain draw - the tessellated ground and film run between the two executes.
+        const bool isTransparent      = alphaMode == ALPHA_MODE_BLEND || pipelineIdx == uint16_t(PIPELINE_IDX_OCEAN);
 
         uint idx;
         if (isTransparent)

@@ -292,36 +292,33 @@ export namespace Procedural
 		float m_texTessDepthGround = 0.5f;      // m
 		float m_texTessDepthRock = 0.5f;        // m
 
-		// --- Terrain/Wetness tweaks: the wetness clipmap (Renderer::TerrainWetTweaks), pushed every frame
-		// from updateTerrainTextures. The renderer bakes ocean swash + rain into it; the TERRAIN shader
-		// darkens and glosses wet ground.
+		// --- Terrain/Water tweaks: the surface water (Renderer::TerrainWetTweaks), pushed every frame from
+		// updateTerrainTextures. ONE wetness field (rain, ocean swash, submersion) drives ONE water surface:
+		// the level it fills the splat relief to, the live ocean it follows at the waterline, and the
+		// darkening / gloss of the ground under it.
 		bool  m_wetEnabled = true;
-		float m_wetTexelSize = 0.5f;   // m per texel (1024 texels = 512 m around the scene focus)
-		float m_wetDryTime = 9.0f;    // s to decay to 1/e on cool ground
-		float m_wetDryTempSens = 0.04f;// extra decay rate per C above 15 C
-		float m_wetDryRate = 0.005f;   // 1/s constant drain next to the proportional dry time (rain equilibrium = dryTime x (rain - rate))
-		float m_wetRain = 0.0f;        // wetness per second added everywhere (a weather driver later)
-		float m_wetInTime = 5.0f;      // s for ground under water to reach full wetness (no per-texel popping)
-		float m_wetFilmDepth = 0.00f;  // m of water over which the wetting target ramps 0 -> 1
-		float m_wetDiffusionRate = 2.0f; // 1/s sideways spread (framerate independent; the on/off toggle is the renderer's define tweak)
-		float m_wetUpdateRate = 20.0f;   // Hz: the wetness pass's fixed tick (see Renderer::TerrainWetTweaks::updateRate)
-		float m_wetPoolScale = 3.0f;      // 1/m: pooling noise scale as the ground dries (0 = uniform film)
-		float m_wetPoolSoftness = 0.15f;  // noise band around the wetness that half-pools
-		float m_wetDampGloss = 0.7f;      // fraction of the roughness drop the damp ground between pools keeps
-		float m_wetPoolHold = 2.0f;       // >= 1: pool threshold = wet^(1/hold), pools outlast the wetness
-		float m_wetSlopeDrain = 20.0f;     // steep ground dries faster: decay rate x (1 + slope * drain); 0 = off
-		float m_wetSurfaceThreshold = 0.9f; // wetness at which the ground is drawn AS water (ocean look), half in
-		float m_wetSurfaceSoftness = 0.4f; // half-width of that ramp (it blends out, never edges)
-		float m_wetLiveMargin = 0.4f;     // m: film + gloss stay on ground up to this far below the estimated live surface
-		float m_wetSurfaceWaviness = 1.0f;  // film normal: 0 = level water plane, 1 = live FFT wave normal
-		float m_wetSurfaceNormalScale = 2.0f; // film wave normal strength, x the ocean's "Normal strength"
-		float m_wetRippleStrength =0.1f;  // inland film wind ripples (0 = off): the finest ocean cascade's weight there
-		float m_wetSurfaceDepth = 0.1f;   // m of virtual water the ground is tinted through (ocean absorption + scatter)
-		float m_wetAlbedoScale = 0.80f;// FILM albedo multiplier (standing water: the near-full spike + the pools), on top of damp
-		float m_wetDampAlbedoScale = 0.55f; // DAMP albedo multiplier (soaked ground everywhere, between the pools too)
-		float m_wetDampKnee = 0.2f;   // wetness below which the damp plateau fades to dry (~1.4 dry times)
-		float m_wetSpikeStart = 0.2f;  // wetness above which the whole surface carries the film darkening
-		float m_wetRoughness = 0.15f;  // roughness at full wetness
+		float m_wetTexelSize = 0.5f;      // m per texel (1024 texels = 512 m around the scene focus)
+		float m_wetUpdateRate = 20.0f;    // Hz: the pass's fixed tick
+		float m_wetDiffusionRate = 60.0f;  // 1/s sideways spread (framerate independent)
+		float m_wetRain = 0.0f;           // wetness per second added everywhere
+		float m_wetDryTime = 10.0f;       // s to decay to 1/e on cool ground
+		float m_wetDryTempSens = 0.04f;   // extra decay rate per C above 15 C
+		float m_wetInTime = 5.0f;         // s for ground under water to reach full wetness
+		float m_wetSlopeDrain = 20.0f;    // steep ground dries faster / soaks slower; 0 = off
+		float m_wetFillStart = 0.5f;     // wetness at which water begins to stand in the relief's low points
+		float m_wetFillFull = 1.0f;       // wetness that submerges the relief (level 1)
+		float m_wetFillCurve = 1.0f;      // exponent between them: 1 = linear, > 1 = fills late, < 1 = early
+		float m_wetEdgeFade = 0.2f;       // m of water depth the film fades out over at the terrain intersection
+		float m_wetOceanBlend = 0.3f;     // m of live ocean water over the ground the film fades into the ocean over
+		float m_wetOceanEdgeFade = 0.7f;  // m of column the ocean blends out over at its edge (0 = hard edge)
+		float m_wetFilmMaxSlope = 25.0f;  // degrees: no standing water on steeper ground (90 = off)
+		float m_wetFilmSlopeFade = 5.0f; // degrees below the max over which the pool level sinks to nothing
+		float m_wetWaviness = 1.0f;       // film normal: 0 = level plane, 1 = the live FFT wave normal
+		float m_wetNormalScale = 2.0f;    // film wave normal strength, x the ocean's "Normal strength"
+		float m_wetRippleStrength = 0.1f; // inland wind ripples (0 = off)
+		float m_wetRoughness = 0.08f;     // ground roughness at full wetness
+		float m_wetDarkening = 0.55f;     // ground albedo multiplier at full wetness
+		float m_wetDarkeningReach = 2.5f; // decades of wetness below fill start the darkening ramps over (log ramp)
 
 		// --- Threading: generation runs on up to m_maxGenJobs Low-priority pump jobs; V3 waits
 		// inside them park their fibers (several pumps joining one cold tile all proceed when it

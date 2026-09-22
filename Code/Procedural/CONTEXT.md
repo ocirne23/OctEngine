@@ -337,10 +337,14 @@ shader falls back to flat colours until that bake finishes.** Each entry's clima
 its textures (`TerrainSplatMaterial::climate`: temperature as t01, precipitation in mm/yr); only the
 mm-per-full-humidity divisor stays live, pushed every frame as `TerrainTexTweaks::precipFullMm`.
 
-The streamer also owns the **"Terrain/Wetness" tweaks** (enabled, texel size, dry time, temperature
-sensitivity, rain, wet albedo scale / roughness), pushed every frame from `updateTerrainTextures` through
-`Renderer::setTerrainWetParams`. The wetness clipmap itself — swash injection, decay, the toroidal window
-— is the renderer's (`TerrainWetnessPipeline`; see the Terrain and ocean integration section of
+The streamer also owns the **"Terrain/Water" tweaks** - ONE wetness field (rain, the ocean's swash,
+submersion) driving ONE water surface: the field (texel size, update rate, diffusion, rain, dry time +
+temperature sensitivity, wet-in, slope drain), the surface (fill start / full / curve = how far the wetness
+fills the splat relief, the film max slope + slope fade that sink it on slopes, edge fade), the hand-over to the ocean (ocean blend = the film fading into the
+ocean's water, ocean edge fade = the ocean dithering out at its edge under the film) and the look (waviness, normal scale, wind ripples,
+water roughness, wet darkening + darkening reach). They push every frame from `updateTerrainTextures` through
+`Renderer::setTerrainWetParams`; the clipmap itself - swash injection, decay, the toroidal window - is the
+renderer's (`TerrainWetnessPipeline`; see Terrain surface water in
 [`Code/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md)).
 
 ---

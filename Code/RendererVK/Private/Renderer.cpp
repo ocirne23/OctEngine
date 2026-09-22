@@ -218,7 +218,7 @@ void Renderer::initPipelines()
     m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
 
-    // "Terrain/Wetness" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
+    // "Terrain/Water" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
     m_terrainWetnessPipeline.initialize([this]() {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;

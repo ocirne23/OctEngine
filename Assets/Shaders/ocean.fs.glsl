@@ -101,7 +101,10 @@ layout (location = 5) in flat uint in_meshIdxMaterialIdx;
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-layout (location = 0) out vec4 out_color;
+// DUAL-SOURCE composite (the Ocean variant): out = out_color + scene * out_factor, the alpha too. Opaque
+// (factor 0, alpha 0 = TAA's ocean flag) except over the edge fade, where the ground and film show through.
+layout (location = 0, index = 0) out vec4 out_color;
+layout (location = 0, index = 1) out vec4 out_factor;
 
 // --- Debug view ("Ocean/Debug mode" tweak). Paints the depth-keyed terms instead of shading, to find which
 // one's boundary a visible line on the water follows.
@@ -220,10 +223,10 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
     f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
-    // full wetness (damp x standing film - instanced_indirect_terrain.fs.glsl), so the sand seen through
-    // the water and the wet sand the water just left are the same colour at the waterline.
+    // full wetness ("Wet darkening" - instanced_indirect_terrain.fs.glsl), so the sand seen through the
+    // water and the wet sand the water just left are the same colour at the waterline.
     if (u_terrainWetParams2.x > 0.5)
-        albedo *= float16_t(u_terrainWetParams5.y * u_terrainWetParams2.y);
+        albedo *= float16_t(u_terrainWetParams2.y);
     return vec3(albedo);
 }
 
@@ -383,6 +386,9 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
+    // Opaque unless the top side's edge fade (end of main) says otherwise: every early return, the debug
+    // views and the underside keep this.
+    out_factor = vec4(0.0);
     const vec3 up = normalize(u_skyUp);
     const vec3 L  = normalize(u_sunDirection.xyz);
     const vec3 toCam = u_viewPos - in_pos;
@@ -571,6 +577,23 @@ void main()
         return;
     }
 
+    // THE EDGE FADE ("Terrain/Water/Ocean edge fade (m)"; 0 = off): over its last centimetres of water
+    // column the ocean composites over the ground and the film drawn before it (the cull puts the ocean in
+    // the transparent sequence for this), so its mesh no longer ends in a hard line where it cuts the ground -
+    // the film carries the water on (instanced_indirect_terrain.fs.glsl covers the live ocean's thin edge).
+    // The column is to the BAKED terrain height (no splat relief). Fully faded: nothing to shade.
+    float cover = 1.0;
+    if (u_terrainWetParams6.x > 0.0)
+    {
+        cover = smoothstep(0.0, u_terrainWetParams6.x, in_pos.y - shoreHW.x);
+        if (cover <= 0.0)
+        {
+            out_color = vec4(0.0);
+            out_factor = vec4(1.0);
+            return;
+        }
+    }
+
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
         N = -N;
 
@@ -751,8 +774,10 @@ void main()
     }
 
     // Scene colour ALPHA = TAA's animated-surface flag: 0 marks this pixel as ocean (the waves move
-    // without motion vectors, so taa.cs.glsl caps the history weight here). The Ocean variant does not
-    // blend, every other opaque surface writes its material alpha (> 0), and the stages layered over
-    // the scene write RGB only.
-    out_color = vec4(outColor, 0.0);
+    // without motion vectors, so taa.cs.glsl caps the history weight here). Every other opaque surface
+    // writes its material alpha (> 0), and the stages layered over the scene write RGB only. The blend
+    // composites the alpha too (out.a = 0 + dst.a * out_factor.a): the flag where the ocean is the larger
+    // part of the pixel, the ground's own alpha where the fade shows mostly the ground.
+    out_color = vec4(outColor * cover, 0.0);
+    out_factor = vec4(vec3(1.0 - cover), cover > 0.5 ? 0.0 : 1.0);
 }

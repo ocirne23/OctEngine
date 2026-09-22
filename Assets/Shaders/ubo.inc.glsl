@@ -234,42 +234,26 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // of the camera distance - nothing moves), yzw unused
     // Terrain wetness clipmap (terrain_wetness.inc.glsl; keep in sync with RendererVKLayout::Ubo): a
     // TERRAIN_WET_RES^2 toroidal window of texels around the scene focus, lattice = integer texel index.
+    // TERRAIN SURFACE WATER (keep in sync with RendererVKLayout::Ubo): ONE wetness field - rain, ocean swash,
+    // submersion - drives ONE water surface. It fills the splat relief to a LEVEL (rain puddles) and, where the
+    // live ocean stands higher, follows the ocean, so the waterline continues onto the sand.
     vec4 u_terrainWetParams0; // xy = window origin lattice coord (min corner, exact ints as floats),
                               // zw = the PREVIOUS TICK's origin (texels that scrolled in start dry)
-                              // (the pass runs on a fixed tick: "this frame" below = this tick, dt = the
-                              // sim time accumulated since the last one; between ticks xy/layer hold)
-    vec4 u_terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
-                              // (exp(-dt / dry time)), w = rain wetting added this frame
-    vec4 u_terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full
-                              // wetness, z = roughness at full wetness, w = drying temperature
-                              // sensitivity (extra decay rate per C above 15 C; 0 = uniform)
-    vec4 u_terrainWetParams3; // x = ping/pong layer written this frame (the reader samples it),
-                              // y = wet-in added per frame under water (dt / wet-in time),
-                              // z = film depth (m) of water over which the wetting target ramps 0 -> 1
-                              // (softens the tongue's edge), w = diffusion spread this frame
-                              // (1 - exp(-rate * dt): fraction of the 3x3 tent replacing the centre)
-    vec4 u_terrainWetParams4; // pooling (terrain FS): x = pool noise scale (1/m; 0 = off: uniform film),
-                              // y = pool softness (noise band around the wetness that half-pools),
-                              // z = damp gloss (fraction of the roughness drop the ground BETWEEN pools
-                              // keeps), w = pool hold (>= 1: pool threshold = wet^(1/hold), so pools
-                              // outlast the wetness)
-    vec4 u_terrainWetParams5; // x = slope drain (terrain FS raises the wetness to 1 + slope * drain:
-                              // steep faces decay that much faster; 0 = off), y = damp albedo multiplier
-                              // (soaked ground, pools and between them alike), z = damp knee (wetness
-                              // below which the damp plateau fades to dry), w = wet spike start (wetness
-                              // above which the whole surface carries the standing-film darkening)
-    vec4 u_terrainWetParams6; // surface water (terrain FS draws near-full-wetness ground AS water, with
-                              // the ocean's surface terms): x = wetness at which the look is half in,
-                              // y = half-width of that ramp, z = waviness (0 = level water plane, 1 = live
-                              // FFT wave normal), w = virtual water depth (m) the ground is tinted
-                              // through (Beer-Lambert + in-scatter)
-    vec4 u_terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the drain,
-                              // next to the proportional exp(-dt / dry time) - together rain settles at
-                              // dryTime x (rain - dryRate)),
-                              // y = live-surface margin (m): the film + gloss stay on ground up to this far
-                              //     below the estimated live surface (it sits under the drawn ocean edge),
-                              // z = inland wind ripple strength on the film (0 = off),
-                              // w = film wave normal scale (x the ocean's normal strength; 1 = the ocean's)
+    vec4 u_terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame,
+                              // w = rain wetting added this frame
+    vec4 u_terrainWetParams2; // x = enabled (0/1), y = albedo multiplier at full wetness (wet darkening),
+                              // z = roughness at full wetness, w = drying temperature sensitivity
+    vec4 u_terrainWetParams3; // x = ping/pong layer written this frame, y = wet-in added per frame under water,
+                              // z = slope drain, w = diffusion spread this frame
+    vec4 u_terrainWetParams4; // the WATER LEVEL in the relief (terrainPoolLevel): x = fill start, y = fill full,
+                              // z = fill curve, w = edge fade (m of water depth the film fades out over)
+    vec4 u_terrainWetParams5; // x = ocean blend (m of live ocean water over the ground the film fades out
+                              // over), y = waviness, z = film wave normal scale, w = inland wind ripple strength
+    vec4 u_terrainWetParams6; // x = ocean edge fade (m of column the ocean blends out over; 0 = off),
+                              // y = mesh normal.y below which no pool stands (cos max slope), z = normal.y
+                              // where the pool level is full (terrainPoolLevel sinks it between),
+                              // w = 1 / darkening reach (decades of wetness below fill start the darkening
+                              // ramps over, on log10(wet))
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".
