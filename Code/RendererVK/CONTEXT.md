@@ -1047,8 +1047,21 @@ the sand, so the two can never disagree.
     they draw after the ground: order = opaque execute → tess ground → tess film → transparent execute
     (ocean, far films, blended meshes). The ALPHA blends too (`PipelineVariant::dualSourceAlpha`):
     out.a = 0 + dst.a x (a > 0.5 ? 0 : 1), the TAA ocean flag where the ocean is most of the pixel.
-    Top side only; a fully faded pixel returns before the shading. The column is to the BAKED terrain
-    height, without the splat relief.
+    Top side only; a fully faded pixel returns before the shading. The band is an ease-out,
+    cover = 1 - (1 - t)^2 with t = column / fade: always 0 at the bottom (the mesh edge stays hidden) and
+    mostly opaque above it. The fade width alone sets how fast.
+    **The column is to the FILM's water surface**, where the ocean hands over to it. That is the film's
+    tessellated surface without the splat relief: `terrainHeightAt(in_pos.xz)` + (`terrainPoolLevel(`the
+    wetness clipmap`)` - 0.5) x the ground/beach relief depth, with the tessellation's distance falloff
+    (0 past it or with tessellation off). The ocean therefore samples the wetness clipmap (binding 18,
+    `terrain_wetness.inc.glsl`). It reads at the pixel's own position, not `in_uv`'s undisplaced lattice
+    point. The slope term of the pool level is left out (normal.y = 1): the ocean has no ground normal.
+    * **Edge foam was tried and REMOVED.** It added surf foam across the fade band that held the ocean's
+      opacity. Its patches kept shifting with the camera through several fixes: calm-plane noise, a
+      calm-depth band read on that plane, and the same patches continued on the film. The likely remaining
+      cause: the ocean's own edge (its LOD'd, clipmap-snapped surface sinking under the ground) steps as the
+      clipmap scrolls, and any foam that makes the fading edge opaque shows that outline ("delayed, stepping
+      like a clipmap scrolling").
     * **Not a dither:** an IGN discard (TAA-resolved) was tried first. TAA caps the history on ocean
       pixels (the ocean flag, to keep the glints), so the dither stayed as flickering noise.
     * **Cost:** the ocean no longer early-Z rejects the tessellated seabed under it (the tess ground drew

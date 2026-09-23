@@ -17,6 +17,8 @@
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
 #include "ocean_wave.inc.glsl"
+#define TERRAIN_WET_BINDING 18
+#include "terrain_wetness.inc.glsl" // the edge fade's film surface: the pool level the wetness fills to
 
 struct MaterialInfo
 {
@@ -581,11 +583,31 @@ void main()
     // column the ocean composites over the ground and the film drawn before it (the cull puts the ocean in
     // the transparent sequence for this), so its mesh no longer ends in a hard line where it cuts the ground -
     // the film carries the water on (instanced_indirect_terrain.fs.glsl covers the live ocean's thin edge).
-    // The column is to the BAKED terrain height (no splat relief). Fully faded: nothing to shade.
+    // The column is to the FILM's water surface under this pixel, where the ocean hands over to it: the film's
+    // tessellated surface (terrain_tess.tes.glsl) without the splat relief - the terrain height, plus the pool
+    // level the wetness fills the relief band to (terrainPoolLevel), in the ground/beach relief depth with the
+    // tessellation's distance falloff (0 past it, and with tessellation off: the film then lies on the mesh).
+    // At the pixel's own position (in_pos.xz), not in_uv's undisplaced lattice point. Ease-out over the band,
+    // 1 - (1 - t)^2: always transparent at the bottom and mostly opaque above it; the fade width is how fast.
+    // Fully faded: nothing to shade.
     float cover = 1.0;
     if (u_terrainWetParams6.x > 0.0)
     {
-        cover = smoothstep(0.0, u_terrainWetParams6.x, in_pos.y - shoreHW.x);
+        float filmY = shoreHW.x;
+        if (terrainHeightMapPresent())
+        {
+            filmY = terrainHeightAt(in_pos.xz);
+            float reliefDepth = 0.0;
+            if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
+            {
+                const float tf = clamp((distance(in_pos, u_viewPos) - u_terrainTessParams1.x)
+                    / max(u_terrainTessParams1.y - u_terrainTessParams1.x, 1e-3), 0.0, 1.0);
+                reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams0.w));
+            }
+            filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), 1.0) - 0.5) * reliefDepth;
+        }
+        const float s = 1.0 - clamp((in_pos.y - filmY) / u_terrainWetParams6.x, 0.0, 1.0);
+        cover = 1.0 - s * s;
         if (cover <= 0.0)
         {
             out_color = vec4(0.0);
