@@ -18,12 +18,16 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     enabled = info.enabled;
     bodyType = info.bodyType;
     lockRotation = info.lockRotation;
-    buoyancyStep = uint16(Globals::physics.getStepCount());
+    lastStep = buoyancyStep = uint16(Globals::physics.getStepCount());
 
     // `base` is parent-local for a prefab child; the ancestor chain is already positioned by now.
     Transform world = base;
     for (const Entity* p = entity.parent; p; p = p->parent)
         world = composeTransform(Transform(p->pos, p->scale, p->rot), world);
+
+    lastPos = world.pos;
+    lastRot = world.quat;
+    shownAlpha = 0xFFFF; // the entity shows the body pose
 
     PhysicsBodyDesc desc;
     desc.type = info.bodyType;
@@ -187,20 +191,42 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
             poseHeld = false; // a snap wrote the entity pose; the queued teleport may not have moved the body yet
         else
         {
-            // THE POSE BETWEEN TWO STEPS, with no stored pose: box3d integrates x1 = x0 + v1 * h,
-            // so the pose `backSec` before the body pose is the body pose moved back along its
-            // velocity. Not exact with sub-steps and contact correction (free fall at 20 Hz: about
-            // 9 mm per step), and a velocity written between two steps moves the shown pose at once.
-            const float backSec = (1.0f - Globals::physics.getInterpolationAlpha()) / float(Globals::physics.getStepHz());
-            const glm::vec3 pos = body.getPosition() - body.getLinearVelocity() * backSec;
-            glm::quat rot = body.getRotation();
-            if (!lockRotation)
+            // THE POSE BETWEEN TWO STEPS: mix(pose at the previous step, body pose, alpha), from
+            // stored step poses only, so a velocity written between two steps never moves it.
+            //  - One new step: lastPos/lastRot IS the previous step pose.
+            //  - Same step: the entity pose is mix(prev, body, shownAlpha), so moving it toward the
+            //    body by (alpha - shownAlpha) / (1 - shownAlpha) lands exactly on mix(prev, body, alpha).
+            //  - A gap (throttled, parked, resumed): no previous step pose, so ease from the shown
+            //    pose over the rest of this step.
+            const float alpha = Globals::physics.getInterpolationAlpha();
+            const uint16 steps = uint16(stepCount - lastStep);
+            const glm::vec3 bodyPos = body.getPosition();
+            const glm::quat bodyRot = lockRotation ? lastRot : body.getRotation();
+            glm::vec3 pos;
+            glm::quat rot = bodyRot;
+            if (steps == 1)
             {
-                const glm::vec3 angVel = body.getAngularVelocity();
-                const float speed = glm::length(angVel);
-                if (speed * backSec > 1e-5f)
-                    rot = glm::normalize(glm::angleAxis(-speed * backSec, angVel / speed) * rot);
+                pos = glm::mix(lastPos, bodyPos, alpha);
+                if (!lockRotation)
+                    rot = glm::slerp(lastRot, bodyRot, alpha);
             }
+            else
+            {
+                const Transform shown = composeTransform(parentWorld, Transform(entity.pos, entity.scale, entity.rot));
+                const float from = steps == 0 ? float(shownAlpha) * (1.0f / 65535.0f) : 0.0f;
+                const float t = from < 1.0f ? glm::clamp((alpha - from) / (1.0f - from), 0.0f, 1.0f) : 1.0f;
+                pos = glm::mix(shown.pos, bodyPos, t);
+                if (!lockRotation)
+                    rot = glm::slerp(shown.quat, bodyRot, t);
+            }
+            if (steps != 0)
+            {
+                lastPos = bodyPos;
+                lastRot = bodyRot;
+                lastStep = stepCount;
+            }
+            shownAlpha = uint16(alpha * 65535.0f + 0.5f);
+
             const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
             entity.pos = local.pos;
             if (!lockRotation)
@@ -245,14 +271,27 @@ void PhysicsComponent::snapPose(Entity& entity, const glm::vec3& pos, const glm:
     const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
     entity.pos = local.pos;
     if (!lockRotation)
+    {
         entity.rot = local.quat; // a locked body does not own entity.rot (see update)
-    poseHeld = true;
+        lastRot = rot;
+    }
+    holdPose(pos);
 }
 
 void PhysicsComponent::snapPose(Entity& entity, const glm::vec3& pos)
 {
     const Transform parentWorld = parentWorldOf(entity);
     entity.pos = (parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))).pos;
+    holdPose(pos);
+}
+
+void PhysicsComponent::holdPose(const glm::vec3& pos)
+{
+    // The snap is the step pose to interpolate from: the next step mixes from it, and until then
+    // the entity shows the (teleported) body pose.
+    lastPos = pos;
+    lastStep = uint16(Globals::physics.getStepCount());
+    shownAlpha = 0xFFFF;
     poseHeld = true;
 }
 

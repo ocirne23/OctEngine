@@ -297,12 +297,13 @@ one import serves, then derives hulls, BVHs and occluder sets per container|node
 `Col_*` meshes and nodes are collision proxies: they replace the same-named render mesh for physics
 and are never rendered.
 
-### Size: 32 bytes, `static_assert`ed
+### Size: 64 bytes, `static_assert`ed
 
 The component is inline in every physics entity (16-byte slots), so it holds only per-body state.
-**The 32 bytes are full: a new member costs a whole 16-byte slot** (4 run-time flag bits are spare).
+**The 64 bytes are full: a new member costs a whole 16-byte slot** (4 run-time flag bits are spare).
 
-* There is NO stored pose at all — the body is the pose (see *The pose between two steps*).
+* ONE stored pose: `lastPos` / `lastRot` / `lastStep` / `shownAlpha` (see *The pose between two
+  steps*). The pose before it lives in the entity pose.
 * `buoyancyStep` holds the low 16 bits of the step count; the compare is modulo 65536. A body that
   was out of the loop for N steps with `N mod 65536` in 1..4 (0.006 % of the returns) gets one
   catch-up force of that many steps.
@@ -338,29 +339,36 @@ The component is inline in every physics entity (16-byte slots), so it holds onl
 
 ### The pose between two steps
 
-**No pose is stored.** box3d integrates `x1 = x0 + v1·h`, so each update shows
-`body − velocity × (1 − alpha) / stepHz`, and the rotation the same with the angular velocity (a
-`lockRotation` body skips it). That costs four box3d reads per dynamic body per update.
+Each update shows `mix(pose at step N−1, body pose at step N, alpha)` — built from STEP POSES only,
+so a velocity written between two steps (player jump, unit steering, a queued `SetLinearVelocity`)
+or a contact bounce never moves it. Two box3d reads (position, rotation) per dynamic body per update.
 
-Known weaknesses, accepted for the memory:
+Only ONE pose is stored: `lastPos` / `lastRot`, the world body pose at step `lastStep` (low 16 bits).
+The pose before it is carried by the ENTITY pose:
 
-* Not exact with sub-steps and contact correction: about 9 mm per step in free fall at 20 Hz.
-* **A velocity written between two steps (player jump, unit steering, a queued
-  `SetLinearVelocity`) moves the shown pose at once**, by up to `Δv / stepHz`.
+| Steps since `lastStep` | Shown pose |
+|---|---|
+| 1 | `mix(lastPos, body, alpha)` — `lastPos` is exactly step N−1. Then `lastPos` = body. |
+| 0 | The entity shows `mix(prev, body, shownAlpha)`, so moving it toward the body by `(alpha − shownAlpha) / (1 − shownAlpha)` lands exactly on `mix(prev, body, alpha)`. |
+| > 1 | A gap (SIM LOD throttle, park, resume): no step-N−1 pose, so ease from the shown pose toward the body over the rest of the step. |
+
+`shownAlpha` (unorm16) is the alpha the last update wrote — per component, so a throttled entity
+that skips frames still continues exactly. A `lockRotation` body skips the rotation half.
 
 **REJECTED alternatives:**
 
 * `prev` = the pose the entity SHOWS when the step arrives, mixed toward the body. Near the step
   rate a step arrives on almost every frame with a small alpha, so each frame covers only `alpha` of
   the gap that is left: at 25 fps / 20 Hz the frame-to-frame motion was 0.91, 0.64, 0.39, 0, 2.06
-  steps.
-* `prev` = `body − velocity / stepHz`, made ONCE on the first update after a step, mixed toward the
-  body. Immune to the between-steps velocity write, but it needs `prevPos` / `prevRot` / `lastStep`
-  (a 64-byte component). **This is the fallback if the velocity pop shows.**
+  steps. (The table above uses the shown pose only BETWEEN steps and on a gap, never at a step.)
+* No stored pose: `body − velocity × (1 − alpha) / stepHz`. Fits 32 bytes, but a velocity written
+  between two steps moved the shown pose at once, by up to `Δv / stepHz` — visible on rapid
+  velocity changes.
 
 `snapPose(entity, pos[, rot])` is the teleport contract (see Entity's CONTEXT): it writes the WORLD
 pose into the entity at once (the rotation only when the body owns `entity.rot`) and sets `poseHeld`,
-so the next update leaves the entity pose alone. `PhysicsComponent::getShownPosition(entity)` is the
+so the next update leaves the entity pose alone. It also makes the snap the stored step pose
+(`shownAlpha` = 1), so later updates show the teleported body, and the next step mixes from the snap. `PhysicsComponent::getShownPosition(entity)` is the
 entity's world position — read before the entity pass (the player camera, frame row 10) it is the pose
 the mesh showed last frame.
 

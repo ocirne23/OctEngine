@@ -25,8 +25,13 @@ export struct PhysicsComponent
     // the same events through the "On Physics Event" node. A plain function pointer, not an
     // oc::function (32 bytes in every body): per-entity state comes from `self`.
     void (*onContact)(Entity& self, Entity& other, bool begin) = nullptr;
-    // NO STORED POSE: the body is the pose. update() shows the body pose moved back along the body
-    // velocity by the part of the step that is not shown yet (see update).
+    // THE POSE BETWEEN TWO STEPS (see update). lastPos/lastRot = the WORLD body pose at step
+    // `lastStep` (low 16 bits); the pose before that step is not stored - the entity pose carries it,
+    // as the mix the last update wrote at `shownAlpha` (unorm16 of the interpolation alpha).
+    glm::vec3 lastPos = glm::vec3(0.0f);
+    glm::quat lastRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    uint16 lastStep = 0;
+    uint16 shownAlpha = 0;
     float buoyancyVolume = 0.0f; // the shape's exact displaced volume (box3d mass / density) at spawn; 0 = never floats
     // The LOW 16 BITS of the step count the last buoyancy application was read after; the gap to the
     // current step (modulo 65536) is what the next application owes (see applyBuoyancy). A body that
@@ -105,8 +110,11 @@ export struct PhysicsComponent
     // mass (the off-centre probes give righting torque and tumbling damping for free). Reads
     // only; the writes ride the body-command queue and land at the next drain, before the step.
     void applyBuoyancy(uint32 steps);
+
+private:
+    void holdPose(const glm::vec3& pos);
 };
-static_assert(sizeof(PhysicsComponent) <= 32, "PhysicsComponent is inline in every physics entity: keep it in two 16-byte slots");
+static_assert(sizeof(PhysicsComponent) <= 64, "PhysicsComponent is inline in every physics entity: keep it in four 16-byte slots");
 
 // Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled -
 // updateTree stops reaching it, so the bodies would otherwise keep colliding invisibly).
