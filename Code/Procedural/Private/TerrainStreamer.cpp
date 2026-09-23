@@ -335,6 +335,9 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &m_wetOceanEdgeFade, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Film max slope (deg)", &m_wetFilmMaxSlope, 0.0f, 90.0f, 0.5f);
 		Tweak::floatVar("Terrain/Water", "Film slope fade (deg)", &m_wetFilmSlopeFade, 0.0f, 45.0f, 0.5f);
+		Tweak::floatVar("Terrain/Water", "Film flow speed (m/s)", &m_wetFilmFlowSpeed, 0.0f, 10.0f, 0.05f);
+		Tweak::floatVar("Terrain/Water", "Film flow min slope (deg)", &m_wetFilmFlowMinSlope, 0.0f, 45.0f, 0.5f);
+		Tweak::floatVar("Terrain/Water", "Film flow cycle (s)", &m_wetFilmFlowCycle, 0.05f, 10.0f, 0.05f);
 		// --- The look: the ocean's own surface terms, so the two meet seamlessly.
 		Tweak::floatVar("Terrain/Water", "Waviness", &m_wetWaviness, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Normal scale", &m_wetNormalScale, 0.0f, 4.0f, 0.01f);
@@ -573,6 +576,9 @@ namespace Procedural
 			.oceanEdgeFade = m_wetOceanEdgeFade,
 			.filmMaxSlope = m_wetFilmMaxSlope,
 			.filmSlopeFade = m_wetFilmSlopeFade,
+			.filmFlowSpeed = m_wetFilmFlowSpeed,
+			.filmFlowMinSlope = m_wetFilmFlowMinSlope,
+			.filmFlowCycle = m_wetFilmFlowCycle,
 			.waviness = m_wetWaviness,
 			.normalScale = m_wetNormalScale,
 			.rippleStrength = m_wetRippleStrength,

@@ -739,7 +739,8 @@ export namespace RendererVKLayout
                                      // y = mesh normal.y below which no pool stands (cos "Film max slope"),
                                      // z = normal.y where the pool level is full ("Film slope fade" flatter;
                                      //     terrainPoolLevel sinks the level between them),
-                                     // w unused
+                                     // w = film flow speed (m/s downhill at 45 degrees, x sqrt(tan slope), gated
+                                     //     by terrainWetParams10)
         glm::vec4 terrainWetParams7; // x = wet terrain roughness, y = underwater terrain roughness (ground
                                      // under the live ocean), z = roughness edge (soft band of the gloss's
                                      // drying level through the pattern), w = drying pattern (0..1: uniform
@@ -748,11 +749,14 @@ export namespace RendererVKLayout
                                      // which the ground's darkening / wet gloss is full (smoothstep from 0
                                      // below it), z = wet normal scale
                                      // (the normal map's tilt off the shading base at full gloss: 1 = unchanged,
-                                     // < 1 flatter, > 1 stronger), w unused
+                                     // < 1 flatter, > 1 stronger), w = film flow cycle (s: the flow map's
+                                     //     two-phase period)
         glm::vec4 terrainWetParams9; // x = darkening edge (soft band of the darkening's drying level through
                                      // the pattern), y = 1 / drying pattern size
                                      // (m; the world value fBm), z = drying pattern relief share, w = 0.5 x
                                      // drying pattern contrast (the noise's stretch toward 0 / 1)
+        glm::vec4 terrainWetParams10; // film flow slope gate ("Film flow min slope"): x = tan(min slope / 2)
+                                     // (no flow below), y = tan(min slope) (full flow above), zw unused
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

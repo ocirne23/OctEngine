@@ -313,6 +313,9 @@ export namespace Procedural
 		float m_wetOceanEdgeFade = 0.33f;  // m of column the ocean blends out over at its edge (0 = hard edge)
 		float m_wetFilmMaxSlope = 25.0f;  // degrees: no standing water on steeper ground (90 = off)
 		float m_wetFilmSlopeFade = 5.0f; // degrees below the max over which the pool level sinks to nothing
+		float m_wetFilmFlowSpeed = 1.0f;  // m/s the film's ripples run downhill at 45 degrees (x sqrt(tan slope))
+		float m_wetFilmFlowMinSlope = 8.0f; // degrees: flow full from here, fading in from half of it
+		float m_wetFilmFlowCycle = 1.0f;  // s: the flow map's phase cycle
 		float m_wetWaviness = 1.0f;       // film normal: 0 = level plane, 1 = the live FFT wave normal
 		float m_wetNormalScale = 2.0f;    // film wave normal strength, x the ocean's "Normal strength"
 		float m_wetRippleStrength = 0.1f; // inland wind ripples (0 = off)

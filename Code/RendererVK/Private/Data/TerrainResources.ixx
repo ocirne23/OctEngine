@@ -164,6 +164,11 @@ export struct TerrainWetTweaks
                                  // slope); 90 = off. The wetness itself is untouched
     float filmSlopeFade = 5.0f;  // degrees below the max over which the pool level sinks to nothing (the
                                  // film recedes into the relief's low points instead of fading)
+    float filmFlowSpeed = 1.0f;  // m/s the film's ripples run DOWNHILL at a 45 degree slope (x sqrt(tan slope));
+                                 // 0 = no flow
+    float filmFlowMinSlope = 8.0f; // degrees: the flow is full from this slope, fading in from half of it (still
+                                 // below): gentle ground and flats do not flow
+    float filmFlowCycle = 1.0f;  // s: the flow map's phase cycle (longer = less repetition, more stretch)
     // --- The water's look (the ocean's own terms, so the two meet seamlessly) ---
     float waviness = 1.0f;       // film normal: 0 = the level water plane, 1 = the live FFT wave normal
     float normalScale = 2.0f;    // film wave normal strength, on top of the ocean's "Normal strength"

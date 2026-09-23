@@ -624,12 +624,17 @@ void Renderer::buildUboTerrain()
         const float slopeCut = maxSlope >= 90.0f ? -2.0f : std::cos(glm::radians(maxSlope));
         const float slopeFull = maxSlope >= 90.0f ? -1.5f
             : std::cos(glm::radians(glm::max(maxSlope - glm::max(wet.filmSlopeFade, 0.0f), 0.0f))) + 1e-4f;
-        ubo.terrainWetParams6 = glm::vec4(glm::max(wet.oceanEdgeFade, 0.0f), slopeCut, slopeFull, 0.0f);
+        ubo.terrainWetParams6 = glm::vec4(glm::max(wet.oceanEdgeFade, 0.0f), slopeCut, slopeFull,
+            glm::max(wet.filmFlowSpeed, 0.0f));
+        // Film flow slope gate as tan values: none below half the min slope, full at it.
+        const float flowMinSlope = glm::radians(glm::clamp(wet.filmFlowMinSlope, 0.0f, 80.0f));
+        ubo.terrainWetParams10 = glm::vec4(std::tan(0.5f * flowMinSlope), std::tan(flowMinSlope) + 1e-4f, 0.0f, 0.0f);
         ubo.terrainWetParams7 = glm::vec4(glm::clamp(wet.wetRoughness, 0.0f, 1.0f),
             glm::clamp(wet.underwaterRoughness, 0.0f, 1.0f), glm::clamp(wet.roughnessEdge, 0.001f, 1.0f),
             glm::clamp(wet.dryingPattern, 0.0f, 1.0f));
         ubo.terrainWetParams8 = glm::vec4(glm::clamp(wet.darkeningThreshold, 1e-3f, 1.0f),
-            glm::clamp(wet.roughnessThreshold, 1e-3f, 1.0f), glm::clamp(wet.wetNormalScale, 0.0f, 4.0f), 0.0f);
+            glm::clamp(wet.roughnessThreshold, 1e-3f, 1.0f), glm::clamp(wet.wetNormalScale, 0.0f, 4.0f),
+            glm::max(wet.filmFlowCycle, 0.05f));
         ubo.terrainWetParams9 = glm::vec4(glm::clamp(wet.darkeningEdge, 0.001f, 1.0f),
             1.0f / glm::max(wet.dryingPatternSize, 0.05f), glm::clamp(wet.dryingPatternRelief, 0.0f, 1.0f),
             0.5f * glm::max(wet.dryingPatternContrast, 0.0f));

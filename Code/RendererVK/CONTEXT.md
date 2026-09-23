@@ -1074,7 +1074,9 @@ the sand, so the two can never disagree.
     wetness clipmap`)` - 0.5) x the ground/beach relief depth, with the tessellation's distance falloff
     (0 past it or with tessellation off). The ocean therefore samples the wetness clipmap (binding 18,
     `terrain_wetness.inc.glsl`). It reads at the pixel's own position, not `in_uv`'s undisplaced lattice
-    point. The slope term of the pool level is left out (normal.y = 1): the ocean has no ground normal.
+    point. The pool level's slope term ("Film max slope") takes the ground normal's y from the baked map's
+    forward gradient over 4 m: two more taps. The film reads its smooth mesh normal, and the map is what the
+    ocean has. The whole fade is `oceanEdgeCover`; it adds no registers (80/16).
     * **Edge foam was tried and REMOVED.** It added surf foam across the fade band that held the ocean's
       opacity. Its patches kept shifting with the camera through several fixes: calm-plane noise, a
       calm-depth band read on that plane, and the same patches continued on the film. The likely remaining
@@ -1085,6 +1087,26 @@ the sand, so the two can never disagree.
       pixels (the ocean flag, to keep the glints), so the dither stayed as flickering noise.
     * **Cost:** the ocean no longer early-Z rejects the tessellated seabed under it (the tess ground drew
       after it before); that ground is now shaded, then covered. Profile a shoreline view if it matters.
+* **The FLOW** ("Film flow speed (m/s)" `u_terrainWetParams6.w`, "Film flow min slope (deg)"
+  `u_terrainWetParams10.xy`, "Film flow cycle (s)" `8.w`;
+  `terrainFilmSurface`): the inland ripples run DOWNHILL.
+  * Direction: `+N.xz` of the smooth mesh normal (a normal leans toward the DOWNHILL side), exact per
+    pixel. The terrain-data map's flow bits
+    (`terrainFlowEncAt`: toward land offshore, downhill on land, authored rivers) are 8-bit angles on ~8 m
+    NEAREST texels, which would step. They stay available for rivers.
+  * Speed: the tweak (at 45 degrees) x sqrt(tan slope), x a slope GATE: none below half of "Film flow min
+    slope", full from it (smoothstep on tan; default 8 degrees). Gentle ground and flats stay still and pools
+    lie still, while the slopes keep sqrt(tan)'s speed. Measured alternatives: sqrt(tan) alone moved gentle
+    beaches too much; a tan^2 curve stilled them but slowed the moderate slopes with them. Off the shore only (x (1 - shore)): the shore band
+    carries the ocean's own waves.
+  * A two-phase flow map on the finest cascade's slope tap and the detail tap. Each is sampled again half a
+    cycle apart and crossfaded by a triangle, so neither phase's reset shows. The finest cascade's
+    phase 1 is one slope-only tap after the cascade loop. The moments and the Jacobian (shore foam,
+    turbulence) do not flow.
+  * **TESSELLATED film only.** Any second-phase tap cost the untessellated film 16 B (56/48 -> 56/64), in
+    the loop or after it. That variant draws the far terrain past the tessellation range, where flowing
+    ripples do not read, so its flow span is 0 and folds away. The tessellated film stays 64/16. With
+    tessellation off, the film does not flow.
 * **The LOOK** is the ocean's own (`terrainFilmSurface` / `terrainFilmShade`, below): "Waviness",
   "Normal scale", "Wind ripples". The film's Beer-Lambert TINT runs on the SAME water depth as the
   coverage - a puddle deepens toward its middle - instead of a fixed "virtual depth" tweak.

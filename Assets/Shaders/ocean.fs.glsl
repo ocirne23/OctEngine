@@ -410,7 +410,12 @@ float oceanEdgeCover()
                 / max(u_terrainTessParams1.y - u_terrainTessParams1.x, 1e-3), 0.0, 1.0);
             reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams0.w));
         }
-        filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), 1.0) - 0.5) * reliefDepth;
+        // The pool level sinks on slopes ("Film max slope"), as the film's: the ground normal's y from the
+        // baked map's forward gradient over 4 m (the film reads its smooth mesh normal; the map is what the
+        // ocean has).
+        const vec2 grad = (vec2(terrainHeightAt(in_pos.xz + vec2(4.0, 0.0)), terrainHeightAt(in_pos.xz + vec2(0.0, 4.0))) - filmY) * 0.25;
+        const float normalY = inversesqrt(1.0 + dot(grad, grad));
+        filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), normalY) - 0.5) * reliefDepth;
     }
     const float s = 1.0 - clamp((in_pos.y - filmY) / u_terrainWetParams6.x, 0.0, 1.0);
     return 1.0 - s * s;

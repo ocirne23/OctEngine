@@ -340,7 +340,7 @@ mm-per-full-humidity divisor stays live, pushed every frame as `TerrainTexTweaks
 The streamer also owns the **"Terrain/Water" tweaks** - ONE wetness field (rain, the ocean's swash,
 submersion) driving ONE water surface: the field (texel size, update rate, diffusion, rain, dry time +
 temperature sensitivity, wet-in, slope drain), the surface (fill start / full / curve = how far the wetness
-fills the splat relief, the film max slope + slope fade that sink it on slopes, edge fade), the hand-over to the ocean (ocean blend = the film fading into the
+fills the splat relief, the film max slope + slope fade that sink it on slopes, the film flow speed + min slope + cycle (ripples running downhill), edge fade), the hand-over to the ocean (ocean blend = the film fading into the
 ocean's water, ocean edge fade = the ocean blending out at its edge over the film) and the look (waviness, normal scale, wind ripples,
 water (film) / wet ground / underwater ground roughness, wet darkening, darkening / roughness thresholds, wet normal scale, the drying pattern = dry islands from a world fBm: strength, darkening / roughness edge, size, relief share, contrast). They push every frame from `updateTerrainTextures` through
 `Renderer::setTerrainWetParams`; the clipmap itself - swash injection, decay, the toroidal window - is the

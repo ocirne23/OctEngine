@@ -252,17 +252,19 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_terrainWetParams6; // x = ocean edge fade (m of column the ocean blends out over; 0 = off),
                               // y = mesh normal.y below which no pool stands (cos max slope), z = normal.y
                               // where the pool level is full (terrainPoolLevel sinks it between),
-                              // w unused
+                              // w = film flow speed (m/s downhill at 45 degrees, x sqrt(tan slope))
     vec4 u_terrainWetParams7; // x = wet terrain roughness, y = underwater terrain roughness, z = roughness edge
                               // (soft band of the gloss's drying level through the pattern), w = drying pattern
                               // (0..1: uniform drying to dry islands)
     vec4 u_terrainWetParams8; // x = darkening threshold, y = roughness threshold: the wetness above which the
                               // ground's darkening / wet gloss is full (smoothstep from 0 below); z = wet normal scale
-                              // (the normal map's tilt at full gloss: 1 = unchanged), w unused
+                              // (the normal map's tilt at full gloss: 1 = unchanged), w = film flow cycle (s)
     vec4 u_terrainWetParams9; // x = darkening edge (soft band of the darkening's drying level through the
                               // pattern), y = 1 / drying pattern size (m),
                               // z = drying pattern relief share (0..1), w = 0.5 x drying pattern contrast
                               // (the noise's stretch toward 0 / 1)
+    vec4 u_terrainWetParams10; // film flow slope gate: x = tan(min slope / 2) (no flow below), y = tan(min
+                              // slope) (full flow above), zw unused
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

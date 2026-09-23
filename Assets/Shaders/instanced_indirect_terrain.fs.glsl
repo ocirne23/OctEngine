@@ -180,19 +180,57 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// ocean's wind through the spectrum.
 	const float16_t ripple = float16_t(u_terrainWetParams5.w) * (one - shore);
 	const float16_t lodBase = log2(max(footprintH, float16_t(1e-3)) * float16_t(OCEAN_FFT_SIZE));
+	// THE FLOW ("Film flow speed (m/s)" u_terrainWetParams6.w, "Film flow cycle (s)" u_terrainWetParams8.w):
+	// water on a slope runs DOWNHILL, so the inland ripples - the finest cascade's slope tap and the detail
+	// tap - travel that way. Direction: +N.xz of the smooth mesh normal - a normal leans toward the DOWNHILL
+	// side (y = x has N = (-1, 1)/sqrt2: downhill is -x) - exact per pixel (the terrain-data
+	// map's 8-bit flow angles are 8 m nearest texels). Speed: "Film flow speed" x sqrt(tan slope) - a thin
+	// sheet speeds up with the slope - gated by the slope ("Film flow min slope (deg)", u_terrainWetParams10.xy
+	// = tan of half of it and of it): still on gentle ground and flats, so pools lie still. (A tan^2 curve
+	// instead stilled the flats but slowed the moderate slopes with them.)
+	// Off the shore only (x (1 - shore)): the shore band carries the ocean's own waves. A two-phase flow map:
+	// each tap twice, offset along the flow by a sawtooth half a cycle apart, crossfaded by a triangle so
+	// neither phase's reset shows (the offsets stay within +-speed x cycle / 2).
+	// Only the velocity x cycle (m) and the phase stay live through the taps; the offsets derive at use.
+	// TESSELLATED film only: the untessellated variant draws the far terrain past the tessellation range,
+	// where flowing ripples do not read, and any second-phase tap cost it 16 B/thread (56/48 -> 56/64, the
+	// tessellated film 64/16 either way). There the span stays 0 and the flow folds away.
+	vec2 flowSpan = vec2(0.0); // velocity x cycle: the distance one phase travels
+#ifdef TERRAIN_TESS
+	{
+		const vec3 n = normalize(in_normal);
+		const float horiz = length(n.xz);
+		const float tanSlope = horiz / max(n.y, 0.1);
+		const float speed = u_terrainWetParams6.w * sqrt(tanSlope)
+			* smoothstep(u_terrainWetParams10.x, u_terrainWetParams10.y, tanSlope) * float(one - shore);
+		if (speed > 1e-3 && horiz > 1e-4)
+			flowSpan = n.xz * (speed * max(u_terrainWetParams8.w, 0.05) / horiz);
+	}
+#endif
+	const float flowPh0 = fract(u_timeSeconds / max(u_terrainWetParams8.w, 0.05));
+	const vec2 flowOff0 = flowSpan * (flowPh0 - 0.5);
+	const vec2 flowOff1 = flowSpan * (fract(flowPh0 + 0.5) - 0.5);
+	const float16_t flowMix = dot(flowSpan, flowSpan) > 0.0 ? float16_t(abs(2.0 * flowPh0 - 1.0)) : float16_t(0.0); // phase 1's share
 
 	// Wave slopes, LEAN variance, vertical acceleration and the RAW fold Jacobian sums of the cascades.
 	f16vec2 slopeSum = f16vec2(0.0), varSum = f16vec2(0.0);
 	float16_t rxx = float16_t(0.0), rzz = float16_t(0.0), rxz = float16_t(0.0);
 	float16_t turbulence = float16_t(0.0);
 	float16_t accel = float16_t(0.0);
+	f16vec2 lastSlope = f16vec2(0.0); // the finest cascade's phase-0 slope, for the phase-1 blend after the loop
 	for (int c = 0; c < OCEAN_CASCADES; ++c)
 	{
 		const float16_t wc = c == OCEAN_CASCADES - 1 ? max(w, ripple) : w; // this cascade's slope weight
 		const float L = u_oceanParams2[c];
 		const float16_t lod = max(lodBase - float16_t(log2(L)), float16_t(0.0));
 		const vec2 uvc = worldPos.xz / L;
-		const vec4 g32 = textureLod(u_uwOceanMaps, vec3(uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
+		// The finest cascade's slopes FLOW (above; the offsets are 0 without it): the ripple normal travels,
+		// the moments / Jacobian (shore-gated foam, turbulence) stay put. Its phase 1 blends in AFTER the loop:
+		// inside it, the second tap cost 16 B/thread.
+		const bool flows = c == OCEAN_CASCADES - 1;
+		const vec4 g32 = textureLod(u_uwOceanMaps, vec3(flows ? (worldPos.xz - flowOff0) / L : uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
+		if (flows)
+			lastSlope = f16vec2(g32.xy);
 		const vec4 m32 = textureLod(u_uwOceanMaps, vec3(uvc, float(2 * OCEAN_CASCADES + c)), lod); // LEAN moments, accel, turbulence (c0)
 		const float16_t dxz = float16_t(textureLod(u_uwOceanMaps, vec3(uvc, float(c)), lod).w); // displacement layer w = dDx/dz
 		// Slope variance lost to mip filtering (Bruneton 2010): the cancelling difference in 32-bit.
@@ -203,6 +241,15 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		accel += float16_t(m32.z);
 		if (c == 0)
 			turbulence = float16_t(m32.w); // the accumulated breaking memory rides cascade 0's moments
+	}
+	// The finest cascade's flow phase 1, crossfaded in: slope only.
+	if (flowMix > float16_t(0.0))
+	{
+		const int fc = OCEAN_CASCADES - 1;
+		const float Lf = u_oceanParams2[fc];
+		const float16_t lodF = max(lodBase - float16_t(log2(Lf)), float16_t(0.0));
+		const f16vec2 s1 = f16vec2(textureLod(u_uwOceanMaps, vec3((worldPos.xz - flowOff1) / Lf, float(OCEAN_CASCADES + fc)), lodF).xy);
+		slopeSum += (s1 - lastSlope) * (flowMix * max(w, ripple));
 	}
 	accel *= w;
 	turbulence *= shore; // the map tiles over the whole world; off the shore it would milk and roughen a puddle
@@ -225,9 +272,18 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 			const int dc = OCEAN_CASCADES - 1;
 			const float Ld = max(u_oceanParams2[dc] * u_oceanParams11.y, 1e-3);
 			const vec2 rot = vec2(cos(u_oceanParams11.w), sin(u_oceanParams11.w));
-			const vec2 p = vec2(rot.x * worldPos.x + rot.y * worldPos.z, -rot.y * worldPos.x + rot.x * worldPos.z);
 			const float16_t lodD = max(lodBase - float16_t(log2(Ld)), float16_t(0.0));
-			const f16vec2 s = f16vec2(textureLod(u_uwOceanMaps, vec3(p / Ld, float(OCEAN_CASCADES + dc)), lodD).xy) * (float16_t(u_oceanParams11.x) * detailFade);
+			// Flowing too (the same two phases).
+			const vec2 q0 = worldPos.xz - flowOff0;
+			const vec2 p0 = vec2(rot.x * q0.x + rot.y * q0.y, -rot.y * q0.x + rot.x * q0.y);
+			vec2 s32 = textureLod(u_uwOceanMaps, vec3(p0 / Ld, float(OCEAN_CASCADES + dc)), lodD).xy;
+			if (flowMix > float16_t(0.0))
+			{
+				const vec2 q1 = worldPos.xz - flowOff1;
+				const vec2 p1 = vec2(rot.x * q1.x + rot.y * q1.y, -rot.y * q1.x + rot.x * q1.y);
+				s32 = mix(s32, textureLod(u_uwOceanMaps, vec3(p1 / Ld, float(OCEAN_CASCADES + dc)), lodD).xy, float(flowMix));
+			}
+			const f16vec2 s = f16vec2(s32) * (float16_t(u_oceanParams11.x) * detailFade);
 			const f16vec2 rotH = f16vec2(rot);
 			slope += f16vec2(rotH.x * s.x - rotH.y * s.y, rotH.y * s.x + rotH.x * s.y); // back into world space
 		}
