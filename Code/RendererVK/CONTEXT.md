@@ -1093,6 +1093,15 @@ the sand, so the two can never disagree.
     occlusion, and the mirror fog rule. Gated by `aboveLive` and off under the film (`underFilm`, below),
     so the two never both mirror the sky. Two sky-map fetches on reflecting pixels only. Its register
     cost is unmeasured.
+* **GLINTS** ("Glint size (m)" `u_terrainWetParams10.z` = 1 / size, "Glint coverage" `10.w` (0 = off),
+  "Glint roughness" `11.x`): wet sand is not uniformly glossy. Beaded water and flat wet grains catch
+  the sun in small sharp points.
+  * Sparse world-anchored patches: a single-octave `terrainValueNoise` over glint-size cells, its peaks
+    thresholded (`smoothstep(1 - coverage, 1 - coverage / 2, n)`). They drop the roughness to a near-mirror
+    alpha, on the wet gloss only (x `glossW`, not under the film or the live ocean).
+  * Small and sparse, so the overall specular barely changes. They fade out where a cell shrinks below
+    ~0.3-0.7 pixel (`fwidth`, shared with the drying pattern), where they would only shimmer.
+  * Register cost: none measured (ground 72/16 both variants).
 * **Three ROUGHNESSES:**
   * "Water roughness" (`u_terrainWetParams2.z`, perceptual) is the FILM's base, in the ocean's microfacet
     model. The film used the ocean's own "Roughness" before.

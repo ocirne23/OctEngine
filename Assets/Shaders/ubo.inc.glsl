@@ -264,7 +264,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // z = drying pattern relief share (0..1), w = 0.5 x drying pattern contrast
                               // (the noise's stretch toward 0 / 1)
     vec4 u_terrainWetParams10; // film flow slope gate: x = tan(min slope / 2) (no flow below), y = tan(min
-                              // slope) (full flow above), zw unused
+                              // slope) (full flow above); wet ground glints: z = 1 / glint size (m),
+                              // w = glint coverage (0 = off)
+    vec4 u_terrainWetParams11; // x = glint roughness (GGX alpha), yzw unused
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

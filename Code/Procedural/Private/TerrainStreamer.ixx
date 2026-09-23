@@ -339,7 +339,10 @@ export namespace Procedural
 		float m_wetDarkening = 0.55f;     // ground albedo multiplier at full wetness
 		float m_wetDarkeningThreshold = 0.3f;  // wetness at which the ground's darkening is full
 		float m_wetRoughnessThreshold = 1.0f;  // wetness at which the ground's wet gloss is full
-		float m_wetGroundNormalScale = 1.5f;   // normal map tilt at full gloss: 1 = unchanged, < 1 flatter, > 1 stronger
+		float m_wetGroundNormalScale = 1.75f;  // normal map tilt at full gloss: 1 = unchanged, < 1 flatter, > 1 stronger
+		float m_wetGlintSize = 0.04f;          // m: glint patch cell size
+		float m_wetGlintCoverage = 0.15f;      // ~ share of the wet ground that glints (0 = off)
+		float m_wetGlintRoughness = 0.15f;     // GGX alpha inside a glint patch
 
 		// --- Threading: generation runs on up to m_maxGenJobs Low-priority pump jobs; V3 waits
 		// inside them park their fibers (several pumps joining one cold tile all proceed when it

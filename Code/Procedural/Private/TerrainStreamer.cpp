@@ -356,6 +356,9 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Water", "Darkening threshold", &m_wetDarkeningThreshold, 0.0001f, 1.0f, 0.005f);
 		Tweak::floatVar("Terrain/Water", "Roughness threshold", &m_wetRoughnessThreshold, 0.0001f, 1.0f, 0.005f);
 		Tweak::floatVar("Terrain/Water", "Wet normal scale", &m_wetGroundNormalScale, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Glint size (m)", &m_wetGlintSize, 0.005f, 1.0f, 0.005f);
+		Tweak::floatVar("Terrain/Water", "Glint coverage", &m_wetGlintCoverage, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Glint roughness", &m_wetGlintRoughness, 0.01f, 1.0f, 0.005f);
 
 		Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &m_texUvScaleGround, 0.005f, 2.0f);
 		Tweak::floatVar("Terrain/Textures", "Rock uv scale (1/m)", &m_texUvScaleRock, 0.005f, 2.0f);
@@ -596,6 +599,9 @@ namespace Procedural
 			.darkeningThreshold = m_wetDarkeningThreshold,
 			.roughnessThreshold = m_wetRoughnessThreshold,
 			.wetNormalScale = m_wetGroundNormalScale,
+			.glintSize = m_wetGlintSize,
+			.glintCoverage = m_wetGlintCoverage,
+			.glintRoughness = m_wetGlintRoughness,
 		});
 
 		// Until the bake finishes, chunks draw with the flat-color fallback. A bake with nothing usable

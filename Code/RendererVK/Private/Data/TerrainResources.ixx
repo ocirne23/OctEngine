@@ -188,8 +188,12 @@ export struct TerrainWetTweaks
     float darkening = 0.55f;     // ground albedo multiplier at full wetness
     float darkeningThreshold = 0.3f;  // wetness above which the ground's darkening is full (smooth fade below)
     float roughnessThreshold = 1.0f;  // wetness above which the ground's wet gloss is full (smooth fade below)
-    float wetNormalScale = 1.5f;  // the normal map's tilt at full gloss: 1 = unchanged, < 1 = flatter (water
+    float wetNormalScale = 1.75f; // the normal map's tilt at full gloss: 1 = unchanged, < 1 = flatter (water
                                    // fills the micro relief: a sharper highlight), > 1 = exaggerated
+    // --- Glints: sparse near-mirror patches on the wet gloss (beaded water, flat wet grains) ---
+    float glintSize = 0.04f;       // m: the patch cell size (faded out where it shrinks toward a pixel)
+    float glintCoverage = 0.15f;   // ~ share of the wet ground that glints (0 = off)
+    float glintRoughness = 0.15f;  // GGX alpha inside a patch
 };
 
 export class TerrainResources final

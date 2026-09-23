@@ -766,7 +766,9 @@ export namespace RendererVKLayout
                                      // (m; the world value fBm), z = drying pattern relief share, w = 0.5 x
                                      // drying pattern contrast (the noise's stretch toward 0 / 1)
         glm::vec4 terrainWetParams10; // film flow slope gate ("Film flow min slope"): x = tan(min slope / 2)
-                                     // (no flow below), y = tan(min slope) (full flow above), zw unused
+                                     // (no flow below), y = tan(min slope) (full flow above); wet ground
+                                     // glints: z = 1 / glint size (m), w = glint coverage (0 = off)
+        glm::vec4 terrainWetParams11; // x = glint roughness (GGX alpha of the glint patches), yzw unused
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

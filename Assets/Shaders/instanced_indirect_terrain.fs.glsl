@@ -776,7 +776,8 @@ void main()
 		// (The relief ALONE, tried before, tiles at the splat texture's scale: speckle, not drying patches.)
 		const float16_t darkBand = float16_t(max(u_terrainWetParams9.x, 1e-3));
 		const float16_t band = float16_t(max(u_terrainWetParams7.z, 1e-3));
-		const float footprint = length(fwidth(TERRAIN_LIT_POS.xz)) * u_terrainWetParams9.y; // pattern cells per pixel
+		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
+		const float footprint = pixelWidth * u_terrainWetParams9.y; // pattern cells per pixel
 		const float16_t patternW = float16_t(u_terrainWetParams7.w * (1.0 - smoothstep(0.15, 0.4, footprint)));
 		float16_t damp = darkAmount, glossW = glossAmount;
 		if (patternW > float16_t(0.0))
@@ -798,8 +799,25 @@ void main()
 			* float16_t(u_terrainTessParams1.z / max(u_terrainWetParams4.w, 1e-4));
 		const float16_t underFilm = clamp(poolOver, float16_t(0.0), one);
 		// "Wet roughness" with the gloss, "Underwater roughness" under the film and the live ocean.
-		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWetParams7.x), glossW), float16_t(u_terrainWetParams7.y),
-			max(one - aboveLive, underFilm));
+		const float16_t submerged = max(one - aboveLive, underFilm);
+		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWetParams7.x), glossW), float16_t(u_terrainWetParams7.y), submerged);
+		// GLINTS ("Glint size (m)" u_terrainWetParams10.z = 1 / size, "Glint coverage" 10.w, "Glint roughness"
+		// 11.x): wet sand is not uniformly glossy - beaded water and flat wet grains catch the sun in small sharp
+		// points. Sparse world-anchored patches - a single-octave value noise over glint-size cells, its peaks
+		// (the high corner hashes) thresholded so roughly "Glint coverage" of the ground qualifies - drop the
+		// roughness to a near-mirror alpha, on the wet gloss only (not under the film or the ocean). Small and
+		// sparse, so the overall specular barely changes. Faded out where the patches shrink toward a pixel:
+		// there they would only shimmer.
+		if (u_terrainWetParams10.w > 0.0)
+		{
+			const float glintFade = 1.0 - smoothstep(0.3, 0.7, pixelWidth * u_terrainWetParams10.z);
+			if (glintFade > 0.0)
+			{
+				const float n = terrainValueNoise(TERRAIN_LIT_POS.xz * u_terrainWetParams10.z);
+				const float glint = smoothstep(1.0 - u_terrainWetParams10.w, 1.0 - 0.5 * u_terrainWetParams10.w, n) * glintFade;
+				surf.rough = mix(surf.rough, float16_t(u_terrainWetParams11.x), float16_t(glint) * glossW * (one - submerged));
+			}
+		}
 		// "Wet normal scale" (u_terrainWetParams8.z): the normal map's tilt off the shading base, scaled with the
 		// gloss - below 1 the water fills the micro relief (a sharper highlight: at full, the bumps scattered
 		// it over the whole wet area), above 1 it is exaggerated. Kept on the base's side of the horizon (an

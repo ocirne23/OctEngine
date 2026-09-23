@@ -628,7 +628,9 @@ void Renderer::buildUboTerrain()
             glm::max(wet.filmFlowSpeed, 0.0f));
         // Film flow slope gate as tan values: none below half the min slope, full at it.
         const float flowMinSlope = glm::radians(glm::clamp(wet.filmFlowMinSlope, 0.0f, 80.0f));
-        ubo.terrainWetParams10 = glm::vec4(std::tan(0.5f * flowMinSlope), std::tan(flowMinSlope) + 1e-4f, 0.0f, 0.0f);
+        ubo.terrainWetParams10 = glm::vec4(std::tan(0.5f * flowMinSlope), std::tan(flowMinSlope) + 1e-4f,
+            1.0f / glm::max(wet.glintSize, 0.005f), glm::clamp(wet.glintCoverage, 0.0f, 1.0f));
+        ubo.terrainWetParams11 = glm::vec4(glm::clamp(wet.glintRoughness, 0.01f, 1.0f), 0.0f, 0.0f, 0.0f);
         ubo.terrainWetParams7 = glm::vec4(glm::clamp(wet.wetRoughness, 0.0f, 1.0f),
             glm::clamp(wet.underwaterRoughness, 0.0f, 1.0f), glm::clamp(wet.roughnessEdge, 0.001f, 1.0f),
             glm::clamp(wet.dryingPattern, 0.0f, 1.0f));
