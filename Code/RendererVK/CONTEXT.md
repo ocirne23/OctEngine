@@ -397,15 +397,20 @@ top-down camera hanging in empty sky shapes none of these:
   any more (CPU-built, see the light grid section). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
   mask-0 nodes.
-* **THE GI RECORD IS SPLIT IN TWO.** `recordGlobalIllumPrep` is the PER-FRAME secondary — the work whose
-  content changes frame to frame: one-shot static BLAS builds, compaction copies, the skinned BLAS
-  rebuild, the one-time probe clear — and is empty on most frames. `recordGlobalIllum` is a CACHED
-  secondary (recorded with the scene secondaries): the sky map, the TLAS-instance write, the TLAS build
-  and the probe trace. **Everything per-frame in it rides the UBO** — `u_giTlasNumInstances`,
-  `u_giTrace0/1` (the trace tweaks, last frame's focus, the TLAS range), `u_frameIndex`, `u_sceneFocus`
-  — so neither shader has push constants. The instance dispatch and the TLAS build cover the instance
-  buffer's whole CAPACITY (`m_maxGiTlasInstances`); the shader writes every slot past the live count
-  INACTIVE. **`u_giTlasNumInstances` is patched in `present()`, not written by the beginFrame UBO
+* **THE GI RECORD IS SPLIT IN TWO.** `recordGlobalIllumPrep` is the PER-FRAME secondary (GPU scope
+  "BLAS builds") — the work whose content changes frame to frame: one-shot static BLAS builds, compaction
+  copies, the skinned BLAS rebuild, **the TLAS-instance write and the TLAS build over this frame's LIVE
+  instance count**, the one-time probe clear. `recordGlobalIllum` is a CACHED secondary (recorded with the
+  scene secondaries, scope "TLAS + probe trace"): the sky map and the probe trace. **Everything per-frame
+  in it rides the UBO** — `u_giTrace0/1` (the trace tweaks, last frame's focus, the TLAS range),
+  `u_frameIndex`, `u_sceneFocus` — so neither shader has push constants.
+  **Why the TLAS is per frame:** a build's primitive count is a recorded CPU value, so the cached build had
+  to cover the instance buffer's whole CAPACITY, which only ever doubles — every frame read and filtered
+  every slot of the largest scene seen. The live count is final before the record (`present()` sets
+  `m_ubo.giTlasNumInstances` before `recordCommandBuffers`), and an indirect build is no option
+  (NVIDIA offers no `accelerationStructureIndirectBuild`). The build always runs, at count 0 too (an
+  empty TLAS): a skipped one would keep records that may reference freed BLASes.
+  **`u_giTlasNumInstances` is patched in `present()`, not written by the beginFrame UBO
   build** — that build runs right after `m_meshInstanceCounter = 0`, so a count taken there is always 0:
   every slot inactive, an empty TLAS, and no ray hits anywhere (RT shadows, RTAO, GI, ocean rays) with
   no validation error. `AccelerationStructure::ensureTlasCapacity` (CPU, at the top of `recordCommandBuffers`)

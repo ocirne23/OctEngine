@@ -612,8 +612,8 @@ namespace
 
 bool AccelerationStructure::ensureTlasCapacity(uint32 frameIdx, uint32 capacity)
 {
-    // Recreated only when the capacity (the instance buffer's slot count) changes; the build then always
-    // covers the whole capacity, so the recorded build command stays valid until the next growth.
+    // Recreated only when the capacity (the instance buffer's slot count) changes; the per-frame build
+    // covers the live count, which never exceeds it.
     if (m_tlas[frameIdx] && capacity == m_tlasCapacity[frameIdx])
         return false;
     vk::Device dev = Globals::device.getDevice();
@@ -638,14 +638,14 @@ bool AccelerationStructure::ensureTlasCapacity(uint32 frameIdx, uint32 capacity)
     return true;
 }
 
-void AccelerationStructure::recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer)
+void AccelerationStructure::recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer, uint32 count)
 {
     assert(m_tlas[frameIdx] && "ensureTlasCapacity must precede recordBuildTlas");
     TlasBuildDesc desc(instanceBuffer.getDeviceAddress());
     desc.buildInfo.dstAccelerationStructure = m_tlas[frameIdx];
     desc.buildInfo.scratchData.deviceAddress = m_tlasScratchAlignedAddr[frameIdx];
     const vk::AccelerationStructureBuildRangeInfoKHR range{
-        .primitiveCount = m_tlasCapacity[frameIdx], // inactive tail records (reference 0) are skipped by the build
+        .primitiveCount = oc::min(count, m_tlasCapacity[frameIdx]), // 0 = an empty TLAS
         .primitiveOffset = 0,
         .firstVertex = 0,
         .transformOffset = 0,

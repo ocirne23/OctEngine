@@ -10,9 +10,8 @@
 // Reuses the exact world-transform composition (renderNode * instanceOffset) from instanced_indirect.cs,
 // so ray-traced geometry matches what the raster path draws. No frustum culling: GI needs off-screen
 // geometry too.
-// Dispatched over the instance buffer's whole CAPACITY (the TLAS is built over the same count, so the
-// GI command buffer records once): the live count u_giTlasNumInstances comes from the UBO and every
-// slot past it is written INACTIVE (reference 0), which the TLAS build skips.
+// Dispatched PER FRAME over the live count u_giTlasNumInstances, which the TLAS build covers too; the
+// last group's padding threads past it write INACTIVE records (reference 0), which nothing reads.
 
 struct RenderNodeTransform { vec4 posScale; vec4 quat; };
 struct InMeshInstance      { uint renderNodeIdx; uint instanceOffsetIdx; uint meshIdxMaterialIdx; uint pipelineIdxAlphaMode; };

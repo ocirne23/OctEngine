@@ -717,9 +717,9 @@ void Renderer::recordComposite(uint32 frameIdx)
 
 // The PER-FRAME half of GI: the work whose content changes frame to frame - one-shot static BLAS builds
 // for meshes added since last frame, compaction copies whose size queries matured, the skinned BLAS rebuild
-// from this frame's deformed vertices, and the one-time probe-volume clear. Empty on most frames. Executed
-// by the primary right before the cached GI secondary (recordGlobalIllum), which builds the TLAS from
-// these BLASes and traces.
+// from this frame's deformed vertices, the TLAS over this frame's live instance count, and the one-time
+// probe-volume clear. Executed by the primary right before the cached GI secondary (recordGlobalIllum),
+// which traces.
 void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -777,9 +777,46 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
     {
         m_rt.accel().recordBuildSkinnedBlas(vkPrepCommandBuffer, frameIdx,
             Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(), m_skinned.getBlasBuilds());
-        // Skinned BLAS builds -> TLAS build reads them (in the cached secondary executed next).
+        // Skinned BLAS builds -> the TLAS build below reads them.
         fullBarrier(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
             vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureReadKHR);
+    }
+
+    // 1c. This frame's TLAS over the LIVE instance count only (present() set it before this record): the
+    // instance write and the build. PER FRAME because a build's primitive count is a recorded CPU value -
+    // cached, it had to cover the whole capacity, which only ever doubles, so the build read and filtered
+    // every slot of the largest scene seen. Always recorded, even at count 0 (an empty TLAS): a skipped
+    // build would leave last frame's records, which may reference freed BLASes.
+    if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
+    {
+        InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
+        const uint32 liveCount = m_ubo.giTlasNumInstances;
+        GIProbePipeline::TlasInstanceParams tlasParams{
+            .renderNodeTransforms = instances.transforms,
+            .meshInstances = instances.meshInstances,
+            .instanceOffsets = m_instanceOffsets.getBuffer(),
+            .blasAddresses = m_rt.accel().getBlasAddressBuffer(frameIdx),
+            .rtMeshAlias = m_rt.accel().getMeshAliasBuffer(),
+            .materialInfos = m_materials.getBuffer(),
+            .nodePassMasks = instances.passMasks,
+            .ubo = frameData.ubo,
+            .count = liveCount,
+        };
+        m_giProbePipeline.recordTlasInstances(prepCommandBuffer, frameIdx, tlasParams);
+
+        // Instance write -> TLAS build. The build reads the instance buffer as SHADER_READ (AS_READ covers
+        // the source acceleration structures, not the instance data); the static BLAS builds and compaction
+        // above end in their own build -> build barriers.
+        fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+            vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderRead);
+
+        m_rt.accel().recordBuildTlas(vkPrepCommandBuffer, frameIdx, m_giProbePipeline.getTlasInstanceBuffer(frameIdx), liveCount);
+
+        // TLAS build -> ray-query reads (the GI trace and RTAO compute, the forward fragment pass).
+        fullBarrier(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+            vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+            vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderStorageRead);
     }
 
     // 2. One-time clear of the persistent probe table/SH (it accumulates across frames thereafter).
@@ -792,8 +829,8 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 }
 
 // The CACHED half of GI (recorded only on invalidation frames, with the scene secondaries): the sky map
-// bake, the TLAS-instance write, the TLAS build and the probe trace. Everything per-frame rides the UBO
-// (u_giTlasNumInstances, u_giTrace0/1, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
+// bake and the probe trace (the TLAS it traces is built per frame, in recordGlobalIllumPrep). Everything
+// per-frame rides the UBO (u_giTrace0/1, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
 // buffers are stable per slot between invalidations (ensureTlasCapacity / the instance-capacity growth
 // both invalidate), and the RT / GI toggles re-record through their tweak callbacks.
 void Renderer::recordGlobalIllum(uint32 frameIdx)
@@ -837,35 +874,7 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
         vk::PipelineStageFlagBits2::eComputeShader,
         vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead);
 
-    // 3. Write the per-instance TLAS records on the GPU (over the whole instance capacity; the live count and
-    // the range bound around the scene focus come from the UBO).
-    GIProbePipeline::TlasInstanceParams tlasParams{
-        .renderNodeTransforms = instances.transforms,
-        .meshInstances = instances.meshInstances,
-        .instanceOffsets = m_instanceOffsets.getBuffer(),
-        .blasAddresses = m_rt.accel().getBlasAddressBuffer(frameIdx),
-        .rtMeshAlias = m_rt.accel().getMeshAliasBuffer(),
-        .materialInfos = m_materials.getBuffer(),
-        .nodePassMasks = instances.passMasks,
-        .ubo = frameData.ubo,
-        .capacity = m_rt.getMaxTlasInstances(),
-    };
-    m_giProbePipeline.recordTlasInstances(globalIllumCommandBuffer, frameIdx, tlasParams);
-
-    // instance write -> TLAS build read. The build reads the instance buffer as SHADER_READ (AS_READ
-    // covers the source acceleration structures, not the instance data), so the dst access must include it.
-    fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-        vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-        vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderRead);
-
-    // 4. Rebuild this frame's TLAS (double-buffered) over the whole capacity; ensureTlasCapacity (in
-    // recordCommandBuffers, before anything records) sized it and invalidated on a handle change.
-    m_rt.accel().recordBuildTlas(vkGlobalIllumCommandBuffer, frameIdx, m_giProbePipeline.getTlasInstanceBuffer(frameIdx));
-
-    // TLAS build -> ray-query read (GI/AO compute, and the forward fragment pass for RT light shadows)
-    fullBarrier(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderStorageRead);
+    // (The TLAS instance write + build are per frame, in recordGlobalIllumPrep, executed right before this.)
 
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
     // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
@@ -1374,7 +1383,7 @@ void Renderer::recordCommandBuffers()
     }
 
     {
-        // The per-frame GI half: one-shot BLAS builds / compaction / the skinned rebuild (empty most frames).
+        // The per-frame GI half: one-shot BLAS builds / compaction / the skinned rebuild, the live-count TLAS.
         ProfileScope giScope("Record GI", EProfileCategory::Renderer);
         if (m_instances.getInstanceCount() > 0)
             recordGlobalIllumPrep(frameIdx);

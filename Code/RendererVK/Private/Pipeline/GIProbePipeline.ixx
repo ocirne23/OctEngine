@@ -101,9 +101,9 @@ public:
         Buffer& materialInfos;   // MATERIAL_FLAG_NO_RAYTRACING -> instance mask 0
         Buffer& nodePassMasks;   // nodes without PASS_GI|PASS_SHADOW -> instance mask 0
         Buffer& ubo;             // u_giTlasNumInstances (live count), u_giTrace1.w (range bound), u_sceneFocus (its center)
-        uint32 capacity;         // the instance buffer's slot count: the dispatch covers all of it (tail written inactive)
+        uint32 count;            // this frame's live instance count (= u_giTlasNumInstances): the dispatch and the build cover it
     };
-    // Cached (recorded once per invalidation): the live instance count and the range bound ride the UBO.
+    // Per frame (the GI prep secondary): one thread per live instance; the range bound rides the UBO.
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
 
     // Bakes this frame's sky into the sky map: layer 0 = skyRadiance (GI miss rays, the forward pass's

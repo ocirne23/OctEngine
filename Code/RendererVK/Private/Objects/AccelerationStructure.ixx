@@ -99,9 +99,8 @@ public:
     // buffer's slot count). Returns true when the handle changed (first build / capacity growth) - every
     // command buffer that bakes the handle (GI, RTAO, fog, the forward set's descriptor) must then re-record.
     bool ensureTlasCapacity(uint32 frameIdx, uint32 capacity);
-    // Cached (recorded once per invalidation): builds over the slot's whole capacity; the instance writer
-    // marks the slots past the live count INACTIVE, which the build skips.
-    void recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer);
+    // Per frame: builds over this frame's live instance count (clamped to the capacity; 0 = empty).
+    void recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer, uint32 count);
 
     // mesh idx -> BLAS device address (uint64), consumed by the TLAS-instance compute shader. Per frame
     // in flight: skinned meshes have a different BLAS per slot, so the address differs between frames.

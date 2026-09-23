@@ -520,11 +520,10 @@ void GIProbePipeline::buildUpdateScratch()
     m_updateScratchBuilt = true;
 }
 
-// Recorded ONCE (cached secondary): the dispatch covers the instance buffer's whole capacity and the shader
-// reads the live count from the UBO, writing the tail inactive.
+// Recorded PER FRAME (the GI prep secondary) over the live count, which the TLAS build then covers too.
 void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params)
 {
-    if (params.capacity == 0)
+    if (params.count == 0)
         return;
     if (!m_updateScratchBuilt)
         buildUpdateScratch();
@@ -546,7 +545,7 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_tlasUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    cmd.dispatch((params.capacity + 63) / 64, 1, 1);
+    cmd.dispatch((params.count + 63) / 64, 1, 1);
 }
 
 void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params)
