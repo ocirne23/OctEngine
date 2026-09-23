@@ -153,7 +153,7 @@ static uint32 spatialRenderPassMask(SpatialHandle handle)
 
 void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
 {
-    //ProfileScope profileScope("Entity::updateSelf", EProfileCategory::Entity);
+    // ProfileScope profileScope("Entity::updateSelf", EProfileCategory::Entity);
     const ComponentOffsets offsets = getComponentOffsets(typeBits);
 
     SceneComponent* sc = getComponent<SceneComponent>(this, offsets);
@@ -169,23 +169,12 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     if (isPhysicsSuspended())
         setPhysicsSuspended(false);
 
-    // The global pause freezes every entity's sim ticks exactly like Frozen (the delta is already 0,
-    // but scripts/components could still act per-call); transform compose, rendering, spatial refresh
-    // and the placement components below keep running so the frozen world stays inspectable.
     const bool frozen = isFrozen() || Globals::time.isPaused();
-
-    // deltaSeconds is whatever the World scheduled for this visit (its SIM LOD hands throttled
-    // entities a 0 on skipped frames and the accumulated catch-up on ticking ones): ZERO = no
-    // simulation step - the sim components are not called at all - while the sync parts (network
-    // correction, physics pose read) and the placement tail below still run every visit.
     const bool simStep = !frozen && deltaSeconds > 0.0f;
-
     if (!frozen)
     {
         if (simStep)
         {
-            // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
-            // gating and thread-safety live inside the components (see Components/Game/GameUnitComponent.ixx).
             if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this, offsets))
                 gameUnit->update(*this, deltaSeconds);
             if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this, offsets))
@@ -197,33 +186,26 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
                 script->update(*this, deltaSeconds);
         }
 
-        // before Physics/composeTransform: a client-side correction to pos/rot lands this same frame
         if (NetworkComponent* network = getComponent<NetworkComponent>(this, offsets))
             network->update(*this, deltaSeconds);
 
         if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this, offsets); animator && simStep)
-            animator->update(*this, renderer, deltaSeconds); // advance animation + refresh skinning palette
+            animator->update(*this, renderer, deltaSeconds);
 
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this, offsets))
-            physics->update(*this, parentWorld); // dynamic bodies write the simulated pose into pos/rot
+            physics->update(*this, parentWorld);
 
-        // after Physics: the walk follows the distance this entity moved, this frame's pose included
         if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets); humanoid && simStep)
             humanoid->update(*this, deltaSeconds);
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
-    // The node is empty when spawned without a container, or after destroy().
     RenderComponent* render = getComponent<RenderComponent>(this, offsets);
     if (render && !render->node.isValid())
         render = nullptr;
     if (render)
         render->place(world);
 
-    // CULLING. An entity with an entry refreshes it - a RootOnly cull root from the cached subtree
-    // bounds, else from the render bounds, else the entity position - and culls itself; a
-    // RootOnly root hands its pass mask down, so its entry-less subtree does no spatial work at
-    // all. No entry and no covering root (CullMode None): never culled.
     const EEntityCullMode cullMode = getCullMode();
     uint32 passMask = RendererVKLayout::PASS_ALL;
     uint32 childCullPassMask = cullPassMask;
@@ -250,24 +232,21 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     else if (cullPassMask != EntityCullPass_Own && cullMode != EEntityCullMode::None)
         passMask = cullPassMask;
     if (render && passMask != 0)
-        renderer.renderNode(render->node, passMask); // lock-free (the parallel entity pass)
+        renderer.renderNode(render->node, passMask);
+
     if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets))
-        humanoid->place(renderer, world, passMask); // its bones ride this entity's pass mask
+        humanoid->place(renderer, world, passMask);
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
-        audio->update(*this, world); // playing follow-sounds track the entity
+        audio->update(*this, world);
 
     if (ParticleComponent* particle = getComponent<ParticleComponent>(this, offsets))
         if (!frozen)
-            particle->update(*this, world, deltaSeconds); // effect follows the entity (position + velocity)
+            particle->update(*this, world, deltaSeconds);
 
-    // Not frozen-gated: placing the bubble is not simulation, and an editor document being dragged by the
-    // gizmo still has to carry its field along.
     if (ForceComponent* force = getComponent<ForceComponent>(this, offsets))
         force->update(*this, world);
 
-    // Also not frozen-gated: a light is placement, not simulation, so an editor document lights its
-    // own scene while frozen. Pushes are lock-free (addLightInfo/addDebugLine), like renderNode.
     if (LightComponent* light = getComponent<LightComponent>(this, offsets))
         light->update(*this, renderer, world);
 
