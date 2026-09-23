@@ -6,7 +6,7 @@
 //   - u_tlas (accelerationStructureEXT)
 //   - in_instances[]    (InMeshInstance: meshIdxMaterialIdx in .z)
 //   - in_meshInfos[]    (InMeshInfo: firstIndex / vertexOffset)
-//   - in_indices[] / in_vertices[] (MeshVertex as 12 floats, uv at offset 10)
+//   - in_indices[] / in_vertices[] (MeshVertex[]: mesh_vertex.inc.glsl)
 //   - in_materialInfos[] (MaterialInfo: diffuseNormalTexIdx, opacity)
 //   - u_textures[] + GL_EXT_nonuniform_qualifier
 //   - GL_EXT_ray_query
@@ -16,7 +16,7 @@
 
 #define RT_SHADOW_ALPHA_LOD 3.0 // coarse mip: no derivatives on rays, and shadows don't need alpha detail
 
-vec2 rtsVertexUV(uint vi) { uint b = vi * 12u; return vec2(in_vertices[b + 10u], in_vertices[b + 11u]); }
+vec2 rtsVertexUV(uint vi) { return meshVertexUV(in_vertices[vi]); }
 
 // Alpha test for a non-opaque candidate triangle. Returns true if the hit blocks the ray. Any
 // out-of-range index is treated as blocking (same bounded-access policy as the GI trace).
@@ -38,7 +38,7 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 	const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
 	const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
 	const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-	if ((max(max(v0, v1), v2) * 12u + 11u) >= in_vertices.length())
+	if (max(max(v0, v1), v2) >= in_vertices.length())
 		return true;
 	const vec2 bc = rayQueryGetIntersectionBarycentricsEXT(rq, false);
 	const vec2 uv = (1.0 - bc.x - bc.y) * rtsVertexUV(v0) + bc.x * rtsVertexUV(v1) + bc.y * rtsVertexUV(v2);

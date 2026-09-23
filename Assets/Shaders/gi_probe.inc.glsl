@@ -139,7 +139,7 @@ ivec3 giWaveMin(ivec3 lc, ivec3 origin)
 //   80% of the near cascades is behind or beside the camera: an unseen probe only has to be converged
 //   WHEN it is turned into view, where it gets the boost at once; what it loses meanwhile is response
 //   time to a lighting change nobody sees.
-// The block's bounding sphere (FRUSTUM test only) carries one extra spacing (a probe lights its whole
+// The block's bounding sphere (the frustum test AND the focus distance) carries one extra spacing (a probe lights its whole
 // trilinear cell), which is also the guard band that keeps blocks at the screen edge in the in-view class.
 // Identical for every lane of the wave, so the wave exits as a unit. Shared by the trace and the debug
 // view's priority colour mode.
@@ -151,8 +151,9 @@ float giWavePriority(ivec3 waveMin, int spacing)
     float outDist = 0.0;          // planes are normalized and point inward (Core.Frustum)
     for (int i = 0; i < 6; ++i)
         outDist = max(outDist, -dot(vec4(center, 1.0), u_frustumPlanes[i]) - radius);
-    // To the block CENTRE, radius not subtracted: the radius is 3.6 spacings - 7 m in cascade 0, 58 m in
-    // cascade 3 - so subtracting it gave the same world distance a different priority per cascade.
+    // To the block's bounding sphere (centre distance minus the radius). The radius is 3.6 spacings - 7 m in
+    // cascade 0, 58 m in cascade 3 - so a coarse block counts as nearer than a fine one at the same centre
+    // distance, and the same world distance gets a different priority per cascade.
     const float focusDist = (distance(center, u_sceneFocus.xyz) - radius);// * (GI_CASCADE_BASE_SPACING / s);
     const float priorityDist = max(u_giPriorityDist, 1.0);
     const float viewBoost    = mix(max(u_giPriorityFrustumWeight, 1.0), 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
@@ -171,7 +172,7 @@ float giWavePriority(ivec3 waveMin, int spacing)
 
 // True when NO lookup can reach the wave's probes except the all-dead fall-through: every point inside the
 // trilinear support of its 4x4x4 probes (one spacing around the block) lies in the fade-free interior of the
-// next FINER cascade's window, so evalProbeSHCoverage and giEvalBounce both return the finer cascade there.
+// next FINER cascade's window, so evalProbeCoverage and giEvalBounce both return the finer cascade there.
 // The priority distance is in CELLS, so without this the centre of every coarse cascade - exactly this
 // region - got the cascade's highest update rate. In finer-cascade cells (spacing / 2), against the
 // fade == 1 box of giCascadeFade (centred on the UNSNAPPED focus); the half cell covers the finer/coarser
@@ -286,7 +287,7 @@ vec3 giEvalCell(uint cellBase, vec3 n)
 // with no geometry hits, so leaving the probe field hands over to the same integral the probes converge
 // to in open space - instead of a differently-shaped cheap approximation that diverges at low sun angles
 // (a single sky sample along the normal misses the bright horizon in-scatter band the probes gather).
-// Returns cosine-convolved irradiance E(n), like evalProbeSHCoverage.
+// Returns cosine-convolved irradiance E(n), like evalProbeCoverage.
 #define GI_SKY_SH_BASE (uint(GI_NUM_CASCADES) * uint(GI_CASCADE_PROBES) * GI_PROBE_STRIDE_V4) // vec4 index; 3 vec4s of SH
 #ifdef GI_VOLUME_TEXTURES_NAME
 // Volume mode: the bake's copy of the same 3 vec4s (the image at GI_VOLUME_SKY_IMAGE), so a consumer in volume
@@ -301,18 +302,6 @@ vec3 giEvalSkySH(vec3 n)
 #else
 vec3 giEvalSkySH(vec3 n) { return giEvalCell(GI_SKY_SH_BASE, n); }
 #endif
-
-// True when cascade c's 8-probe stencil around p fully fits inside its toroidal window (so the slots are
-// the ones actually resident for this camera position, and we never interpolate across the wrap seam).
-bool giCascadeFits(int c, vec3 p, out ivec3 base, out ivec3 origin, out int s, out vec3 frac)
-{
-    s      = giCascadeSpacing(c);
-    origin = giCascadeOrigin(c, u_sceneFocus.xyz);
-    vec3 pf = p / float(s);
-    base   = ivec3(floor(pf));
-    frac   = pf - vec3(base);
-    return !(any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_PROBE_DIMS)));
-}
 
 // The Chebyshev test's two inputs for direction dir FROM the probe: the mean distance to geometry and its
 // variance, both after the mean scale. Shared with the debug view's visibility mode.
@@ -334,6 +323,28 @@ void giVisMoments(vec4 dsh, vec4 d2sh, vec3 dir, int s, out float mean, out floa
     const float minDev = u_giVisParams.x * float(s);
     mean     = min(raw * k, GI_DEPTH_CAP_SPACING * float(s));
     variance = max((raw2 - raw * raw) * k * k, minDev * minDev);
+}
+
+// Directional visibility (DDGI-style Chebyshev on SH-L1 depth) of a point len away from the probe at cellBase,
+// in direction dir FROM the probe: the probe's mean and second-moment distance that way; when the point lies
+// beyond the mean, the variance bounds how likely it is still visible. Shared by the lookup (giSampleCascade)
+// and the volume bake (from the voxel centre).
+// * No depth data yet (freshly cleared buffer) -> don't occlude. That is tested on the DC coefficient, NOT on
+//   the reconstructed mean2: toward a close wall the L1 reconstruction of d^2 rings to <= 0, and the old
+//   `mean2 > 1e-3` test read that as "no data" and switched the occlusion OFF exactly where it matters most (a
+//   leak through every wall a probe sits next to). The variance floor softens the blurry L1 reconstruction.
+// * u_giVisParams.z = weight floor. The power is the GI_VIS_CHEB_POWER define: a chain of multiplies instead of
+//   a pow per probe (16 probes a pixel).
+float giVisibilityWeight(uint cellBase, vec3 dir, float len, int s)
+{
+    vec4 dsh, d2sh;
+    giReadDepthSH(cellBase, dsh, d2sh);
+    float mean, variance;
+    giVisMoments(dsh, d2sh, dir, s, mean, variance);
+    const float d = min(len, GI_DEPTH_CAP_SPACING * float(s) * 0.95);
+    const float delta = d - mean;
+    const float vis = max(giChebPow(variance / (variance + delta * delta)), u_giVisParams.z);
+    return (d2sh.x > 1e-4 && d > mean) ? vis : 1.0;
 }
 
 // Trilinear irradiance from one cascade's 8 nearest probes, with DDGI-style backface weighting (probes
@@ -383,27 +394,7 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
             // behind the surface to limit leaking, but with gentler position-dependent modulation so flat
             // surfaces don't ripple as the per-probe direction sweeps across them.
             w *= dot(n, dirToProbe) * 0.5 + 0.5;
-
-            // Directional visibility (DDGI-style Chebyshev on SH-L1 depth): reconstruct the probe's mean
-            // and second-moment distance toward the surface; when the surface lies beyond the mean, the
-            // variance bounds how likely it is still visible. No depth data yet (freshly cleared buffer)
-            // -> don't occlude. That is tested on the DC coefficient, NOT on the reconstructed mean2: toward
-            // a close wall the L1 reconstruction of d^2 rings to <= 0, and the old `mean2 > 1e-3` test read
-            // that as "no data" and switched the occlusion OFF exactly where it matters most (a leak
-            // through every wall a probe sits next to). The variance floor softens the blurry L1 reconstruction.
-            vec4 dsh, d2sh;
-            giReadDepthSH(cellBase, dsh, d2sh);
-            float mean, variance;
-            giVisMoments(dsh, d2sh, -dirToProbe, s, mean, variance);
-            float d = min(len, GI_DEPTH_CAP_SPACING * float(s) * 0.95);
-            if (d2sh.x > 1e-4 && d > mean)
-            {
-                // u_giVisParams.z = weight floor. The power is the GI_VIS_CHEB_POWER define: a chain of
-                // multiplies instead of a pow per probe (16 probes a pixel).
-                float delta    = d - mean;
-                float cheb     = variance / (variance + delta * delta);
-                w *= max(giChebPow(cheb), u_giVisParams.z);
-            }
+            w *= giVisibilityWeight(cellBase, -dirToProbe, len, s);
         }
         if (w <= 0.0)
             continue;
@@ -426,7 +417,8 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
 // * Measured from the UNSNAPPED focus, not from the window: the window snaps a whole cell at a time, and a
 //   band tied to it jumped a cell (2 m .. 16 m) along the entire seam whenever the focus crossed a cell
 //   line. The snapped window always holds the 8-probe stencil of every point within DIM/2 - 2 cells of the
-//   focus, so fade > 0 implies giCascadeFits. giWaveCovered uses the same box.
+//   focus, so fade > 0 implies the stencil is resident (no read across the wrap seam). giWaveCovered uses
+//   the same box.
 float giCascadeFade(int s, vec3 p, float bandCells)
 {
     const vec3 center = u_sceneFocus.xyz + vec3(0.0, GI_FOCUS_Y_OFFSET, 0.0);
@@ -434,10 +426,6 @@ float giCascadeFade(int s, vec3 p, float bandCells)
     return smoothstep(0.0, 1.0, min(min(inside.x, inside.y), inside.z) / bandCells);
 }
 
-// Trilinear probe irradiance with cross-cascade blending. Walks coarse-to-fine and uses the finest cascade
-// that both fits and has front-facing probes; near that cascade's outer window faces it cross-fades into
-// the next coarser cascade so the LOD/spacing change is gradual instead of a hard, wavy seam. Returns
-// vec3(-1) when no cascade covers the point (caller falls back to ambient).
 // Normal-biased sample point for a cascade. The bias grows with the cascade's probe spacing so distant,
 // coarse lookups sit cleanly between probes (and off the surface) instead of grazing it and picking up
 // contaminated / in-geometry probes.
@@ -446,63 +434,53 @@ vec3 giBiasedSample(vec3 worldPos, vec3 n, int s)
     return worldPos + n * (GI_NORMAL_BIAS + GI_NORMAL_BIAS_SPACING * float(s));
 }
 
-// coverage = 1 deep inside the probe field, falling to 0 over the OUTERMOST cascade's edge band (and 0
-// where no cascade covers the point). Callers blend their ambient fallback in by it - without the fade,
-// leaving the probe field dropped the bounce light in a single step, which read as a bright square zone
-// around the camera at the last cascade's window face.
-// The walk tests the FADE only, not giCascadeFits: fade > 0 already implies the 8-probe stencil fits (see
-// giCascadeFade), and the next coarser cascade of a blend always fits (its box is twice as wide around the
-// same focus). Past the outermost box (fade 0) nothing is sampled: coverage 0 means every caller uses only
-// its sky fallback, so a sample there would be thrown away.
-vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
+// giCascadeFade's band in cells: the outermost cascade hands over to the sky fallback (its fade is the
+// COVERAGE), over a wider band than the inter-cascade one.
+float giFadeBandCells(int c)
 {
-    coverage = 1.0;
-    const vec4 Yk = giIrradianceBasis(n);
-    for (int c = 0; c < GI_NUM_CASCADES; ++c)
-    {
-        const int s = giCascadeSpacing(c);
-        const vec3 p = giBiasedSample(worldPos, n, s);
-        // Outermost cascade: there is nothing coarser to fade into, so the fade is the COVERAGE instead
-        // (wider band than the inter-cascade one - this hands over to a fallback, not to more data).
-        const bool  last = c == GI_NUM_CASCADES - 1;
-        const float fade = giCascadeFade(s, p, float(GI_PROBE_DIM_MIN) * (last ? 0.2 : GI_CASCADE_FADE_BAND));
-        if (fade <= 0.0)
-            continue; // past the fade box: the coarser cascade alone (the window's snap slack is not sampled)
-
-        // Weight/visibility terms measure from the biased point (DDGI surface bias): querying from the
-        // raw surface point puts the Chebyshev direction exactly in the wall plane, where the blurry L1
-        // depth reconstruction underestimates distance and false-occludes everything lateral to a probe
-        // (bright probe-footprint circles on walls).
-        const vec3 pf = p / float(s);
-        const ivec3 base = ivec3(floor(pf));
-        vec3 e0; float w0;
-        giSampleCascade(c, s, base, pf - vec3(base), p, n, Yk, e0, w0);
-        if (w0 <= 1e-4)
-            continue; // every probe backfaced -> try a coarser (differently-aligned) cascade
-
-        if (last)
-            coverage = fade;
-        else if (fade < 1.0)
-        {
-            const int  s2 = giCascadeSpacing(c + 1);
-            const vec3 p2 = giBiasedSample(worldPos, n, s2);
-            const vec3 pf2 = p2 / float(s2);
-            const ivec3 base2 = ivec3(floor(pf2));
-            vec3 e1; float w1;
-            giSampleCascade(c + 1, s2, base2, pf2 - vec3(base2), p2, n, Yk, e1, w1);
-            if (w1 > 1e-4)
-                e0 = mix(e1, e0, fade);
-        }
-        return max(e0, vec3(0.0));
-    }
-    coverage = 0.0;
-    return vec3(-1.0);
+    return float(GI_PROBE_DIM_MIN) * (c == GI_NUM_CASCADES - 1 ? 0.2 : GI_CASCADE_FADE_BAND);
 }
 
-vec3 evalProbeSH(vec3 worldPos, vec3 n)
+// The finest cascade whose fade box holds the biased sample point, with that point and its fade (> 0), or -1
+// when none does. No walk: with |n.a| <= 1, |p - center| >= |worldPos - center| - (GI_NORMAL_BIAS +
+// GI_NORMAL_BIAS_SPACING * s) per axis, so giCascadeFade is 0 when s <= (|d| - GI_NORMAL_BIAS) /
+// (DIMS/2 - 2 + GI_NORMAL_BIAS_SPACING) on any axis: the smallest s past that bound is the first candidate.
+// The bound is normal-free, so the candidate can be one cascade early; the next one then always holds the
+// point while 2 GI_NORMAL_BIAS / BASE + 3 GI_NORMAL_BIAS_SPACING <= DIM/2 - 2 (any probe dim >= 16) - below
+// that the rare second miss takes the sky fallback. The same argument (GI_NORMAL_BIAS_SPACING <= DIM/2 - 2)
+// puts the point inside the fade box of c + 1 whenever it is inside c's: the blend / fall-through cascade.
+int giStartCascade(vec3 worldPos, vec3 n, out vec3 p, out float fade)
 {
-    float coverage;
-    return evalProbeSHCoverage(worldPos, n, coverage);
+    const vec3  center = u_sceneFocus.xyz + vec3(0.0, GI_FOCUS_Y_OFFSET, 0.0);
+    const vec3  r = (abs(worldPos - center) - GI_NORMAL_BIAS) / (vec3(GI_PROBE_DIMS / 2 - 2) + GI_NORMAL_BIAS_SPACING);
+    const float x = max(max(r.x, r.y), r.z) / float(GI_CASCADE_BASE_SPACING);
+    int c = findMSB(uint(clamp(x, 0.0, 65536.0))) + 1; // the smallest c with 2^c > x
+    if (c >= GI_NUM_CASCADES)
+        return -1;
+    p    = giBiasedSample(worldPos, n, giCascadeSpacing(c));
+    fade = giCascadeFade(giCascadeSpacing(c), p, giFadeBandCells(c));
+    if (fade > 0.0)
+        return c;
+    if (++c >= GI_NUM_CASCADES)
+        return -1;
+    p    = giBiasedSample(worldPos, n, giCascadeSpacing(c));
+    fade = giCascadeFade(giCascadeSpacing(c), p, giFadeBandCells(c));
+    return fade > 0.0 ? c : -1;
+}
+
+// giSampleCascade at a biased sample point p: returns the summed weight (<= 1e-4 = every probe dead).
+// Weight/visibility terms measure from the biased point (DDGI surface bias): querying from the raw surface
+// point puts the Chebyshev direction exactly in the wall plane, where the blurry L1 depth reconstruction
+// underestimates distance and false-occludes everything lateral to a probe (bright probe-footprint circles
+// on walls).
+float giSampleCascadeAt(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+{
+    const int   s    = giCascadeSpacing(c);
+    const vec3  pf   = p / float(s);
+    const ivec3 base = ivec3(floor(pf));
+    float w;
+    giSampleCascade(c, s, base, pf - vec3(base), p, n, Yk, eLin, w);
+    return w;
 }
 
 #ifdef GI_VOLUME_TEXTURES_NAME
@@ -514,12 +492,12 @@ vec3 evalProbeSH(vec3 worldPos, vec3 n)
 // caller falls through to a coarser cascade, like giSampleCascade).
 // The ratios filter unweighted while L0 filters weight-correct: where L0 changes fast between voxels the
 // blended direction is slightly off, and a dead voxel's ratio 0 pulls the neighbours' L1 a little toward 0.
-float giVolumeCascade(int c, int s, vec3 p, vec4 Yk, out vec3 eLin)
+float giVolumeCascade(int c, vec3 p, vec4 Yk, out vec3 eLin)
 {
     // Voxel centres sit at (fine lattice coord + 0.5), which is exactly the texel-centre convention, and the
     // toroidal slot is the coord mod the dims, which is exactly REPEAT: the normalized coord is the fine
     // lattice position over the dims. fract keeps it small for the texture unit's fixed-point conversion.
-    const vec3 uvw = fract(p * (float(GI_VOLUME_RES) / float(s)) / vec3(GI_PROBE_DIMS * GI_VOLUME_RES));
+    const vec3 uvw = fract(p * (float(GI_VOLUME_RES) / float(giCascadeSpacing(c))) / vec3(GI_PROBE_DIMS * GI_VOLUME_RES));
     const int  i   = c * GI_VOLUME_IMAGES_PER_CASCADE;
     // textureLod: the call sits in divergent control flow, where implicit derivatives are undefined.
     const vec3 l0W = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 0)], uvw, 0.0).rgb;
@@ -534,48 +512,81 @@ float giVolumeCascade(int c, int s, vec3 p, vec4 Yk, out vec3 eLin)
     return W;
 }
 
-// evalProbeSHCoverage against the volume: the same cascade walk (fade-only, see there), cross-cascade fade,
-// coverage and dead fall-through, with giVolumeCascade in place of giSampleCascade. The normal still biases the
-// sample point (per pixel); only the probe-direction half-Lambert weight is gone (see the bake).
-vec3 evalProbeVolumeCoverage(vec3 worldPos, vec3 n, out float coverage)
+// One cascade's unclamped irradiance at the biased point p and its summed weight: the irradiance volume when the
+// includer binds it (the normal still biases p per pixel; only the probe-direction half-Lambert weight is gone,
+// see the bake), else the probe loop.
+float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
 {
-    coverage = 1.0;
-    const vec4 Yk = giIrradianceBasis(n);
-    for (int c = 0; c < GI_NUM_CASCADES; ++c)
-    {
-        const int s = giCascadeSpacing(c);
-        const vec3 p = giBiasedSample(worldPos, n, s);
-        const bool  last = c == GI_NUM_CASCADES - 1;
-        const float fade = giCascadeFade(s, p, float(GI_PROBE_DIM_MIN) * (last ? 0.2 : GI_CASCADE_FADE_BAND));
-        if (fade <= 0.0)
-            continue;
-
-        vec3 e0;
-        if (giVolumeCascade(c, s, p, Yk, e0) <= 1e-4)
-            continue;
-
-        if (last)
-            coverage = fade;
-        else if (fade < 1.0)
-        {
-            const int s2 = giCascadeSpacing(c + 1);
-            vec3 e1;
-            if (giVolumeCascade(c + 1, s2, giBiasedSample(worldPos, n, s2), Yk, e1) > 1e-4)
-                e0 = mix(e1, e0, fade);
-        }
-        return max(e0, vec3(0.0));
-    }
-    coverage = 0.0;
-    return vec3(-1.0);
+    return giVolumeCascade(c, p, Yk, eLin);
+}
+#else
+float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+{
+    return giSampleCascadeAt(c, p, n, Yk, eLin);
 }
 #endif
+
+// THE shading lookup: cosine-convolved irradiance E(n) with the cross-cascade fade.
+// coverage = 1 deep inside the probe field, falling to 0 over the OUTERMOST cascade's edge band (and 0
+// where no cascade covers the point). Callers blend their ambient fallback in by it - without the fade,
+// leaving the probe field dropped the bounce light in a single step, which read as a bright square zone
+// around the camera at the last cascade's window face.
+// No walk: giStartCascade picks cascade c directly (fade > 0 there implies the 8-probe stencil fits, see
+// giCascadeFade), and at most ONE more cascade, c + 1, is sampled - as the blend partner in c's fade band, or
+// as the fall-through when every probe of c is dead (a coarser, differently-aligned lattice). c dead with
+// c + 1 in ITS band does not blend on into c + 2. Dead in both, or past the outermost box: vec3(-1) with
+// coverage 0, and every caller uses only its sky fallback.
+vec3 evalProbeCoverage(vec3 worldPos, vec3 n, out float coverage)
+{
+    coverage = 0.0;
+    vec3 p; float fade;
+    const int c = giStartCascade(worldPos, n, p, fade);
+    if (c < 0)
+        return vec3(-1.0);
+
+    const vec4 Yk = giIrradianceBasis(n);
+    vec3 e0;
+    const bool alive0 = giLookupCascade(c, p, n, Yk, e0) > 1e-4;
+    const bool last   = c == GI_NUM_CASCADES - 1;
+    if (alive0 && (last || fade >= 1.0))
+    {
+        coverage = last ? fade : 1.0;
+        return max(e0, vec3(0.0));
+    }
+    if (last)
+        return vec3(-1.0);
+
+    const vec3 p1 = giBiasedSample(worldPos, n, giCascadeSpacing(c + 1));
+    vec3 e1;
+    const bool alive1 = giLookupCascade(c + 1, p1, n, Yk, e1) > 1e-4;
+    if (alive0)
+    {
+        coverage = 1.0;
+        return max(alive1 ? mix(e1, e0, fade) : e0, vec3(0.0));
+    }
+    if (!alive1)
+        return vec3(-1.0);
+    coverage = c + 1 == GI_NUM_CASCADES - 1 ? giCascadeFade(giCascadeSpacing(c + 1), p1, giFadeBandCells(c + 1)) : 1.0;
+    return max(e1, vec3(0.0));
+}
+
+// E(n) with the sky SH faded in over the field's edge: the whole block every shading consumer runs. The sky is
+// read only where it contributes; the vec3(-1) "no data" result always comes with coverage 0, so the mix drops it.
+vec3 giIrradiance(vec3 worldPos, vec3 n)
+{
+    float coverage;
+    vec3 E = evalProbeCoverage(worldPos, n, coverage);
+    if (coverage < 1.0)
+        E = mix(giEvalSkySH(n), E, coverage);
+    return E;
+}
 
 #ifdef GI_PROBE_HALF
 // ---- fp16 read side ----------------------------------------------------------------------------------
 // The shading-side reads for includers whose shading is half (define GI_PROBE_HALF and enable
 // GL_EXT_shader_explicit_arithmetic_types): half normal in, half irradiance out, so a half caller converts
 // nothing. Irradiance here is sky + bounce light, single digits: well inside the half range.
-// The CASCADE WALK stays 32-bit inside (evalProbeVolumeCoverage): measured on the RTX 4090, a half walk -
+// The CASCADE LOOKUP stays 32-bit inside (evalProbeCoverage): measured on the RTX 4090, a half walk -
 // half fetch results, half SH basis, half cascade blend, in every combination - cost the lit FS 16 B/thread
 // of spills (64/32 -> 64/48) against the 32-bit walk with the result converted once. The sky SH read is half
 // (measured neutral; the reflection fog shares it).
@@ -606,107 +617,81 @@ f16vec3 giEvalSkySHH(f16vec3 n) { return f16vec3(giEvalSkySH(vec3(n))); }
 f16vec3 giIndirectOverPiH(vec3 worldPos, f16vec3 n)
 {
     // 32-bit to the end, converted once (measured: a half coverage / sky blend here cost the lit FS 16 B).
-    const vec3 n32 = vec3(n);
-    float coverage;
-#ifdef GI_VOLUME_TEXTURES_NAME
-    const vec3 E = evalProbeVolumeCoverage(worldPos, n32, coverage);
-#else
-    const vec3 E = evalProbeSHCoverage(worldPos, n32, coverage);
-#endif
-    vec3 indirect = E.x >= 0.0 ? E * INV_PI : vec3(0.0);
-    if (coverage < 1.0)
-        indirect = mix(giEvalSkySH(n32) * INV_PI, indirect, coverage);
-    return f16vec3(indirect);
+    return f16vec3(giIrradiance(worldPos, vec3(n)) * INV_PI);
 }
 #endif // GI_PROBE_HALF
 
-// Debug visualization: hue = cascade (red=0 finest .. yellow=coarsest), brightness checkerboarded per probe.
-vec3 giDebugColor(vec3 worldPos, vec3 n)
-{
-    vec3 p = worldPos + n * GI_NORMAL_BIAS;
-    for (int c = 0; c < GI_NUM_CASCADES; ++c)
-    {
-        int   s      = giCascadeSpacing(c);
-        ivec3 origin = giCascadeOrigin(c, u_sceneFocus.xyz);
-        ivec3 base   = ivec3(floor(p / float(s)));
-        if (any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_PROBE_DIMS)))
-            continue;
-
-        vec3 lod;
-        if      (c == 0) lod = vec3(1.0, 0.2, 0.2);
-        else if (c == 1) lod = vec3(0.2, 1.0, 0.2);
-        else if (c == 2) lod = vec3(0.3, 0.5, 1.0);
-        else             lod = vec3(1.0, 1.0, 0.2);
-        float checker = (((base.x + base.y + base.z) & 1) == 0) ? 1.0 : 0.55;
-        return lod * checker;
-    }
-    return vec3(0.0);
-}
-
 #ifdef GI_PROBE_WRITE
 
-// Multi-bounce lookup for the trace's gather HITS - the cheap cousin of evalProbeSHCoverage. The result
+// One cascade of giEvalBounce: giSampleCascade without the Chebyshev test (no depth-moment loads, no
+// reconstruction). Unclamped irradiance and the summed weight, like giSampleCascadeAt.
+float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+{
+    const int   s    = giCascadeSpacing(c);
+    const vec3  pf   = p / float(s);
+    const ivec3 base = ivec3(floor(pf));
+    const vec3  frac = pf - vec3(base);
+    eLin = vec3(0.0);
+    float totalW = 0.0;
+    for (int i = 0; i < 8; ++i)
+    {
+        ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+        vec3 w3 = mix(1.0 - frac, frac, vec3(off));
+        float w = w3.x * w3.y * w3.z;
+        if (w <= 0.0)
+            continue;
+        ivec3 lc = base + off;
+        uint cellBase = giProbeBase(c, lc);
+        vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4]; // x = backface fraction, yzw = offset
+        w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, misc.x);
+        if (w <= 0.0)
+            continue;
+        vec3 toProbe = vec3(lc) * float(s) + misc.yzw - p;
+        float len = length(toProbe);
+        if (len > 1e-4)
+            w *= dot(n, toProbe / len) * 0.5 + 0.5;
+        if (w <= 0.0)
+            continue;
+        vec3 c0, c1, c2, c3;
+        giReadSH(cellBase, c0, c1, c2, c3);
+        eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
+        totalW += w;
+    }
+    if (totalW > 1e-4)
+        eLin *= 1.0 / totalW;
+    return totalW;
+}
+
+// Multi-bounce lookup for the trace's gather HITS - the cheap cousin of evalProbeCoverage. The result
 // is albedo-scaled and temporally blended at a few permille per visit, so noise is free: no Chebyshev
-// visibility (skips the two depth-moment loads and the reconstruction per probe) and no cross-cascade
-// fade. The walk starts at the FINEST cascade, like the shading lookup (a failed fit is arithmetic only):
-// starting at the tracing probe's own cascade read the coarse probes UNDER a finer window, which
-// giWaveCovered now lets go stale. 4 vec4 loads per probe (misc + SH) instead of 6, one cascade instead
-// of up to two. Backface-dead rejection and the half-Lambert probe-direction fade stay - they are what
-// keeps a wall from leaking into the bounce.
-// coverage behaves like evalProbeSHCoverage's (1 inside, fading over the outermost window's edge band).
+// visibility (giBounceCascade) and no cross-cascade blend. The same cascade pick as the shading lookup
+// (giStartCascade: the finest cascade whose fade box holds the point - starting at the tracing probe's own
+// cascade read the coarse probes UNDER a finer window, which giWaveCovered lets go stale) and the same
+// one-cascade dead fall-through. 4 vec4 loads per probe (misc + SH) instead of 6, one cascade instead of up
+// to two. Backface-dead rejection and the half-Lambert probe-direction fade stay - they are what keeps a
+// wall from leaking into the bounce.
+// coverage behaves like evalProbeCoverage's (1 inside, fading over the outermost window's edge band).
 vec3 giEvalBounce(vec3 worldPos, vec3 n, out float coverage)
 {
-    coverage = 1.0;
-    for (int c = 0; c < GI_NUM_CASCADES; ++c)
-    {
-        vec3  p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
-        ivec3 base, origin; int s; vec3 frac;
-        if (!giCascadeFits(c, p, base, origin, s, frac))
-            continue;
-        // The outermost cascade's coverage BEFORE sampling: at 0 the caller scales the bounce by 0, so the
-        // 8-probe loop would be thrown away. (Inner cascades walk by the fit test on purpose: this lookup has
-        // no fade band and uses the whole window.)
-        const bool last = c == GI_NUM_CASCADES - 1;
-        const float lastCoverage = last ? giCascadeFade(s, p, float(GI_PROBE_DIM_MIN) * 0.2) : 1.0;
-        if (lastCoverage <= 0.0)
-            continue;
-
-        vec3 a0 = vec3(0.0), a1 = vec3(0.0), a2 = vec3(0.0), a3 = vec3(0.0);
-        float totalW = 0.0;
-        for (int i = 0; i < 8; ++i)
-        {
-            ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
-            vec3 w3 = mix(1.0 - frac, frac, vec3(off));
-            float w = w3.x * w3.y * w3.z;
-            if (w <= 0.0)
-                continue;
-            ivec3 lc = base + off;
-            uint cellBase = giProbeBase(c, lc);
-            vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4]; // x = backface fraction, yzw = offset
-            w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, misc.x);
-            if (w <= 0.0)
-                continue;
-            vec3 toProbe = vec3(lc) * float(s) + misc.yzw - p;
-            float len = length(toProbe);
-            if (len > 1e-4)
-                w *= dot(n, toProbe / len) * 0.5 + 0.5;
-            if (w <= 0.0)
-                continue;
-            vec3 c0, c1, c2, c3;
-            giReadSH(cellBase, c0, c1, c2, c3);
-            a0 += w * c0; a1 += w * c1; a2 += w * c2; a3 += w * c3;
-            totalW += w;
-        }
-        if (totalW <= 1e-4)
-            continue; // every probe backfaced -> try a coarser cascade
-
-        if (last)
-            coverage = lastCoverage;
-        float inv = 1.0 / totalW;
-        return giEvalSH(a0 * inv, a1 * inv, a2 * inv, a3 * inv, n);
-    }
     coverage = 0.0;
-    return vec3(-1.0);
+    vec3 p; float fade;
+    int c = giStartCascade(worldPos, n, p, fade);
+    if (c < 0)
+        return vec3(-1.0);
+
+    const vec4 Yk = giIrradianceBasis(n);
+    vec3 e;
+    if (giBounceCascade(c, p, n, Yk, e) <= 1e-4)
+    {
+        if (++c >= GI_NUM_CASCADES)
+            return vec3(-1.0);
+        p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
+        if (giBounceCascade(c, p, n, Yk, e) <= 1e-4)
+            return vec3(-1.0);
+        fade = giCascadeFade(giCascadeSpacing(c), p, giFadeBandCells(c));
+    }
+    coverage = c == GI_NUM_CASCADES - 1 ? fade : 1.0;
+    return max(e, vec3(0.0));
 }
 
 void giStoreCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3)

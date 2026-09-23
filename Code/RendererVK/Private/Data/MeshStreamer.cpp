@@ -196,11 +196,8 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
                 const glm::vec3* pTexCoords = attributes[4].data();
                 for (uint32 i = 0; i < numVertices; ++i)
                 {
-                    pVertices[i].position = pPositions[i];
-                    pVertices[i].normal = pNormals[i];
                     const float handedness = glm::dot(pNormals[i], glm::cross(pTangents[i], pBitangents[i])) >= 0.0f ? 1.0f : -1.0f;
-                    pVertices[i].tangent = glm::vec4(pTangents[i], handedness);
-                    pVertices[i].texCoord = glm::vec2(pTexCoords[i]);
+                    pVertices[i].set(pPositions[i], pNormals[i], glm::vec4(pTangents[i], handedness), glm::vec2(pTexCoords[i]));
                 }
                 completion.ok = true;
             }

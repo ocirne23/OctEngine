@@ -7,6 +7,7 @@
 //#extension GL_EXT_debug_printf : enable
 
 #include "shared.inc.glsl"
+#include "mesh_vertex.inc.glsl"
 
 #define GI_ALBEDO_LOD 3.0 // sample a coarse mip for hit albedo (no ray-hit derivatives anyway)
 
@@ -53,7 +54,7 @@ layout (binding = 3, std430) readonly buffer InGridTable
     uint in_gridTable[];
 };
 layout (binding = 4) uniform accelerationStructureEXT u_tlas;
-layout (binding = 5, std430) readonly buffer InVertices    { float in_vertices[]; }; // MeshVertex as 12 floats
+layout (binding = 5, std430) readonly buffer InVertices    { MeshVertex in_vertices[]; };
 layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
@@ -121,9 +122,6 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
     return vec3(r * cos(phi), r * sin(phi), z);
 }
 
-vec3 vNormal(uint vi) { uint b = vi * 12u; return vec3(in_vertices[b + 3u], in_vertices[b + 4u], in_vertices[b + 5u]); }
-vec2 vUV(uint vi)     { uint b = vi * 12u; return vec2(in_vertices[b + 10u], in_vertices[b + 11u]); }
-
 // Miss radiance: the per-frame sky bake (skyRadiance layer) instead of the analytic march per ray. The
 // virtual sky probe (projectSkySH) samples the same bake, so the two agree by construction.
 vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
@@ -169,16 +167,19 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
     const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
     const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-    if ((max(max(v0, v1), v2) * 12u + 11u) >= in_vertices.length())
+    if (max(max(v0, v1), v2) >= in_vertices.length())
         return skyMiss(dir);
 
     const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float t    = rayQueryGetIntersectionTEXT(rq, true);
     const mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
     const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-    const vec3 objN = normalize(b.x * vNormal(v0) + b.y * vNormal(v1) + b.z * vNormal(v2));
+    // Two wide loads per vertex: the normal and the uv's v share normalV, the u rides positionU.w.
+    const vec4 nv0 = in_vertices[v0].normalV, nv1 = in_vertices[v1].normalV, nv2 = in_vertices[v2].normalV;
+    const vec3 objN = normalize(b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz);
     vec3 worldN = normalize(mat3(o2w) * objN);
-    const vec2 uv = b.x * vUV(v0) + b.y * vUV(v1) + b.z * vUV(v2);
+    const vec2 uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
+                  + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
     const vec3 worldPos = origin + dir * t;
     hitDist = t; // committed surface hit -> actual distance to geometry along this ray
     if (dot(worldN, dir) > 0.0)
@@ -199,13 +200,13 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     // fetches per cascade, WITH the baked Chebyshev visibility, cheaper than either probe loop.
     float giCov;
 #ifdef GI_VOLUME
-    vec3 prevE = evalProbeVolumeCoverage(worldPos, worldN, giCov);
+    vec3 prevE = evalProbeCoverage(worldPos, worldN, giCov);
 #else
     vec3 prevE = giEvalBounce(worldPos, worldN, giCov);
 #endif
-    if (prevE.x >= 0.0) // fade the multi-bounce with coverage so traced hits near the field's edge don't step
-        radiance += albedo * (prevE / PI) * giCov;
-    return radiance;
+    // Faded with coverage so traced hits near the field's edge don't step; the vec3(-1) "no data" result always
+    // comes with coverage 0.
+    return radiance + albedo * prevE * (giCov * INV_PI);
 }
 
 layout(local_size_x = 64) in;
@@ -376,14 +377,17 @@ void main()
             }
         }
         const vec4 Y = shBasisL1(dir);
-        c0 += radiance * (Y.x * wsh);
-        c1 += radiance * (Y.y * wsh);
-        c2 += radiance * (Y.z * wsh);
-        c3 += radiance * (Y.w * wsh);
+        c0 += radiance * Y.x;
+        c1 += radiance * Y.y;
+        c2 += radiance * Y.z;
+        c3 += radiance * Y.w;
         const float dc = min(hitDist, depthCap);
-        dsh  += Y * (dc * wsh);
-        d2sh += Y * (dc * dc * wsh);
+        dsh  += Y * dc;
+        d2sh += Y * (dc * dc);
     }
+    // The Monte Carlo weight once, not per ray.
+    c0 *= wsh; c1 *= wsh; c2 *= wsh; c3 *= wsh;
+    dsh *= wsh; d2sh *= wsh;
 
     // Sky radiance (moonlight / space light): a directional delta light can't be hit by gather rays, so
     // its direct irradiance is projected straight into the probe SH (one SH-L1 delta projection; eval's
@@ -427,7 +431,6 @@ void main()
     const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
     const bool  replace = fresh || oldLuma <= 0.0;
     const float frameAlpha = u_giTrace0.y;
-    //const float visitAlpha = max(frameAlpha, frameAlpha * float(updateInterval)); //max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     const float visitAlpha = max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     float alpha = replace ? 1.0 : visitAlpha;
     if (!replace)

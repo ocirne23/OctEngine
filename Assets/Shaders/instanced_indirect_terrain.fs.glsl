@@ -94,13 +94,11 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 			const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
 			const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
 			const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
-			if ((max(max(v0, v1), v2) * 12u + 11u) < in_vertices.length())
+			if (max(max(v0, v1), v2) < in_vertices.length())
 			{
 				const vec2 bc = rayQueryGetIntersectionBarycentricsEXT(rq, true);
 				const vec3 w = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
-				#define FILM_RT_V(vi, o) vec3(in_vertices[(vi) * 12u + (o)], in_vertices[(vi) * 12u + (o) + 1u], in_vertices[(vi) * 12u + (o) + 2u])
-				const vec3 objN = FILM_RT_V(v0, 3u) * w.x + FILM_RT_V(v1, 3u) * w.y + FILM_RT_V(v2, 3u) * w.z;
-				#undef FILM_RT_V
+				const vec3 objN = in_vertices[v0].normalV.xyz * w.x + in_vertices[v1].normalV.xyz * w.y + in_vertices[v2].normalV.xyz * w.z;
 				const vec2 uv = w.x * rtsVertexUV(v0) + w.y * rtsVertexUV(v1) + w.z * rtsVertexUV(v2);
 				hitN = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true)) * objN);
 				if (dot(hitN, dir) > 0.0)

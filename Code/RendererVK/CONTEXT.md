@@ -256,8 +256,13 @@ top-down camera hanging in empty sky shapes none of these:
   addressing stays constant-folded. Dims are powers of two (the `lc & (DIM-1)` mask) and every dim ≥ 4
   keeps the probe count a multiple of 64 (the trace's sky workgroup). A change runs
   `GIProbePipeline::registerGridTweaks`'s callback: GPU idle → `resizeGrid()` (SH buffer re-allocated,
-  clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. A
-  positive Y offset lifts the grid centre so more probes sit above the ground than below.
+  clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. The grid
+  tweaks register in `Renderer::registerTweaks`, BEFORE any pipeline compiles, so a `--tweak` override or
+  a Saved value is live for every shader and for the buffer `GIProbePipeline::initialize` allocates.
+  **Every reload callback in `Renderer` returns while `!m_initialized`** (state the pipelines read at
+  creation is handed over before that test): such a value fires the callback at registration, before the
+  device and the pipelines exist, and a reload there crashed. A positive Y offset lifts the grid centre
+  so more probes sit above the ground than below.
 * **`DescriptorSetUpdateInfo` holds small-buffer vectors** (`oc::small_vector<…, 2>`,
   CommandBuffer.ixx): the per-frame passes build these as temporaries with one info each, and with
   `oc::vector` every entry was a heap allocation per record — the bulk of "Record primary"'s churn.
@@ -289,9 +294,10 @@ top-down camera hanging in empty sky shapes none of these:
   distance, 2 = to its square (the far field all but stops), 0.5 = gentle, 0 = no distance term. The
   curve pivots on `priorityDist`, so CLOSER than it a higher falloff is a FASTER rate.
   `focusDist` is measured from **`u_sceneFocus`**, not the camera (the dominant term; the cascades
-  centre on it, and in first person it is the camera) **to the block CENTRE — the block radius is
-  used by the frustum test only**: it is 3.6 spacings (7 m in cascade 0, 58 m in cascade 3), so
-  subtracting it gave one world distance a different priority per cascade.
+  centre on it, and in first person it is the camera) **to the block's bounding sphere: centre
+  distance MINUS the block radius** (3.6 spacings: 7 m in cascade 0, 58 m in cascade 3, the same radius
+  the frustum test uses). So one world distance has a different priority per cascade: a coarse block
+  counts as nearer, and updates faster, than a fine block at the same centre distance.
   `"GI/Priority Distance (m)"` = the NOMINAL-RATE distance of a block OUT of view: a block there has
   factor 1 and traces at exactly the interval multiplier, whatever the falloff.
   **`viewBoost` = `"GI/Priority Frustum Weight"` (>= 1) for a block IN `u_frustumPlanes`
@@ -367,20 +373,26 @@ top-down camera hanging in empty sky shapes none of these:
   register peak). The outermost
   cascade's coverage fade (shading and `giEvalBounce`) uses the same function with a 0.2 band.
   **Not a skip:** the probes stay warm for the all-dead fall-through and for the moment the finer
-  window scrolls off them. The test reads `GI_CASCADE_FADE_BAND` (0.05 of the narrowest dim, shared
-  with `evalProbeSHCoverage`) — **widen the band and fewer blocks are covered; the two cannot drift
+  window scrolls off them. The test reads `GI_CASCADE_FADE_BAND` (0.1 of the narrowest dim, shared
+  with `evalProbeCoverage`) — **widen the band and fewer blocks are covered; the two cannot drift
   apart because both read the define.** **Direct light at a gather hit is ray-traced-shadowed for
   EVERY light:** the sun through `g_sunShadowOverride`, the grid lights through
   `giLightIrradianceShadowed` (lighting.inc.glsl, compiled in by the trace's `GI_LIGHT_RT_SHADOWS`;
   one ray to the light's centre, only past `GI_LIGHT_SHADOW_MIN`, and only while `u_rtLightShadows`
   is on). Unshadowed, a lamp lit every hit in its range through walls — a leak the probe visibility
-  test cannot see. The trace includes rt_shadow.inc.glsl BEFORE lighting.inc.glsl for this. **Miss
+  test cannot see. The trace includes rt_shadow.inc.glsl BEFORE lighting.inc.glsl for this. **Every
+  ray-hit vertex fetch** (the trace, RTAO, `rt_shadow.inc.glsl`, the ocean's and the terrain's mirror hits)
+  reads `MeshVertex in_vertices[]` from `mesh_vertex.inc.glsl` (plain std430; the skinning pass uses it
+  too). **`MeshVertex` is 3 × vec4 — `positionU`, `normalV`, `tangent` — with the texCoord in the two `.w`**,
+  so every member is 16 B-aligned (one wide load each) and position stays at offset 0 for the BLAS build.
+  The vertex input binds locations 0 / 1 as vec4s (a shader without uv declares vec3 there); the shadow
+  pass binds `normalV.w` alone at location 3. **Miss
   rays AND the virtual sky probe sample THE SKY MAP** instead of marching the
   atmosphere, so the out-of-field fallback matches the misses by construction. **Gather hits use
-  `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
-  cross-cascade fade — because the result is temporally blended. Its walk starts at the FINEST
-  cascade, like the shading lookup: starting at the tracing probe's own cascade read the covered
-  coarse probes, which are now nearly stale. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
+  `giEvalBounce`** (gi_probe.inc.glsl, write side; probe path only): the cheap multi-bounce lookup — no
+  Chebyshev, no cross-cascade blend — because the result is temporally blended. It picks its cascade with
+  the shading lookup's `giStartCascade` (the finest fade box, not the tracing probe's own cascade, whose
+  covered coarse probes are nearly stale) and has the same one-cascade dead fall-through. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
   probe; stale cross-probe reads are by design). The light and force grids have no GPU insert pass
   any more (CPU-built, see the light grid section). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
@@ -427,9 +439,9 @@ top-down camera hanging in empty sky shapes none of these:
   the ratios filter unweighted, so where L0 changes fast the direction is slightly off, and a dead voxel's
   zero ratio pulls its neighbours' L1 a little toward 0. `createVolume` asserts storage + linear-filter
   support for the formats; B10G11R11 / RG16 storage need `shaderStorageImageExtendedFormats`, which
-  `Device` enables with every other supported core feature. `evalProbeVolumeCoverage` (gi_probe.inc.glsl — same
-  cascade walk, fade, coverage and dead fall-through as `evalProbeSHCoverage`) reads 4 filtered fetches per
-  cascade instead of 8 probes × 6 vec4 loads.
+  `Device` enables with every other supported core feature. `evalProbeCoverage` (gi_probe.inc.glsl) reads the
+  volume through `giLookupCascade` whenever the includer defines `GI_VOLUME_TEXTURES_NAME` (every consumer does
+  under `GI_VOLUME`): 4 filtered fetches per cascade instead of 8 probes × 6 vec4 loads.
   **The price: the half-Lambert probe-direction weight needs the surface normal and is NOT baked, and the
   Chebyshev test runs from the voxel centre — more leaking through geometry thinner than a voxel** (the
   per-pixel normal bias of the sample point is kept).
@@ -462,10 +474,17 @@ top-down camera hanging in empty sky shapes none of these:
   `createVolume` and when a Chebyshev knob moves (the baked value depends on them), held until a frame with
   RT + GI on. **The two volume tweaks reload through their own callback** (`resizeVolume` + reload): they
   never re-allocate the probe buffer, so the traced history survives a volume toggle.
-  **The cascade walks test the FADE only** (`evalProbeSHCoverage` / `evalProbeVolumeCoverage`): fade > 0
-  implies the stencil fits, the coarser cascade of a blend always fits, and past the outermost box
-  (coverage 0) nothing is sampled, because every caller then uses only its sky fallback. `giEvalBounce`
-  keeps the fit test on purpose (no fade band) but skips the outermost cascade at coverage 0.
+  **ONE shading lookup, `evalProbeCoverage`**, for the probe and the volume path alike (`giLookupCascade`
+  picks the per-cascade sampler at compile time). **`giIrradiance(worldPos, n)`** wraps it with the sky SH
+  fade — the lit core (`giIndirectOverPiH`), decals, particles and the fog scatter all call that; only the
+  trace (scales by coverage, no sky) calls `evalProbeCoverage` itself. **It has NO cascade walk**:
+  `giStartCascade` computes c from the Chebyshev focus distance (a normal-free bound, the bias taken at its
+  per-axis maximum, so at most one cascade early — then c + 1, which always holds the point for probe dims
+  >= 16), and returns the biased point and its fade (> 0 implies the stencil fits). **At most TWO cascades
+  are sampled: c, and c + 1** as either the blend partner in c's band or the fall-through when c is all
+  dead; a dead c does NOT blend on from c + 1 into c + 2. Dead in both, or past the outermost box: coverage
+  0, and every caller uses only its sky fallback. `giEvalBounce` uses the same pick and fall-through, with
+  no blend.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
   lists as members (`buildUpdateScratch`, handles patched per record), and
   `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it that way: a

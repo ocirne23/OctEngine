@@ -305,29 +305,25 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     });
 
     auto& attributeDescriptions = graphicsPipelineLayout.vertexLayoutInfo.attributeDescriptions;
-    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // position
+    // The texCoord rides positionU.w / normalV.w (see MeshVertex): a vertex shader that needs no uv declares
+    // vec3 inputs at locations 0 / 1 and the extra component is dropped.
+    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // position + u
         .location = 0,
         .binding = 0,
-        .format = vk::Format::eR32G32B32Sfloat,
-        .offset = offsetof(RendererVKLayout::MeshVertex, position),
+        .format = vk::Format::eR32G32B32A32Sfloat,
+        .offset = offsetof(RendererVKLayout::MeshVertex, positionU),
     });
-    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // normals
+    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // normal + v
         .location = 1,
         .binding = 0,
-        .format = vk::Format::eR32G32B32Sfloat,
-        .offset = offsetof(RendererVKLayout::MeshVertex, normal),
+        .format = vk::Format::eR32G32B32A32Sfloat,
+        .offset = offsetof(RendererVKLayout::MeshVertex, normalV),
     });
-    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // tangents
+    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // tangent + bitangent sign
         .location = 2,
         .binding = 0,
         .format = vk::Format::eR32G32B32A32Sfloat,
         .offset = offsetof(RendererVKLayout::MeshVertex, tangent),
-    });
-    attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // texcoords
-        .location = 3,
-        .binding = 0,
-        .format = vk::Format::eR32G32Sfloat,
-        .offset = offsetof(RendererVKLayout::MeshVertex, texCoord),
     });
     attributeDescriptions.push_back(vk::VertexInputAttributeDescription{ // inst_idx
         .location = 4,

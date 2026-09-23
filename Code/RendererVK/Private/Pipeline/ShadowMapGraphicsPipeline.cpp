@@ -34,8 +34,9 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
     bindings.push_back(vk::VertexInputBindingDescription{ .binding = 2, .stride = sizeof(uint32), .inputRate = vk::VertexInputRate::eInstance });
 
     auto& attributes = layout.vertexLayoutInfo.attributeDescriptions;
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, position) });
-    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 3, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, texCoord) });
+    // Position + u, and v alone (normalV.w): 20 B, not the whole normal.
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, positionU) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = 3, .binding = 0, .format = vk::Format::eR32Sfloat, .offset = offsetof(RendererVKLayout::MeshVertex, normalV) + 3 * sizeof(float) });
     attributes.push_back(vk::VertexInputAttributeDescription{ .location = 4, .binding = 2, .format = vk::Format::eR32Uint, .offset = 0 });
 
     auto& descriptorSetBindings = layout.descriptorSetLayoutBindings;

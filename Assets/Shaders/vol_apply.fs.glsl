@@ -125,7 +125,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     const vec3 sunDir = normalize(u_sunDirection.xyz);
     vec3 inLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * u_eclipseParams.x);
-    // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeSHCoverage
+    // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
     // would report zero coverage out here and hand over to exactly this.
     inLight += giEvalSkySH(-dir) * u_aoParams.y / PI + u_ambientColor;
 

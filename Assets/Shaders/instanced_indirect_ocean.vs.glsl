@@ -37,8 +37,9 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 3) in vec2 in_uv; // (ring cell size, morph weight) baked by OceanGenerator
+// MeshVertex: the texCoord - (ring cell size, morph weight), baked by OceanGenerator - rides the two .w.
+layout (location = 0) in vec4 in_posU;
+layout (location = 1) in vec4 in_normalV;
 layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
@@ -70,10 +71,10 @@ void main()
     // Negative cell size = HORIZON BAND vertex: exempt from the land cull. Its triangles run from the
     // ring edge out to the far plane, so they break the cull's +-3-cell footprint assumption - culling
     // one buried inner vertex would tear a huge slice out of the horizon.
-    const float ringCell = abs(in_uv.x);
-    const bool horizonBand = in_uv.x < 0.0;
-    const float ringMorph = in_uv.y;
-    vec3 localPos = in_pos;
+    const float ringCell = abs(in_posU.w);
+    const bool horizonBand = in_posU.w < 0.0;
+    const float ringMorph = in_normalV.w;
+    vec3 localPos = in_posU.xyz;
     localPos.xz = mix(localPos.xz, floor(localPos.xz / (2.0 * ringCell) + 0.5) * (2.0 * ringCell), ringMorph);
     vec3 basePos = quat_transform(localPos * inst_scale, inst_quat) + inst_pos;
     // ONE shore fetch per vertex, shared by the land cull, the water-table lift and the displacement

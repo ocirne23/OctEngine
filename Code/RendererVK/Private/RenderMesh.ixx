@@ -31,13 +31,12 @@ export struct RenderMeshData
             const glm::vec3 normal = geometry.normals[i];
             const glm::vec3 tangent = geometry.tangents ? geometry.tangents[i] : glm::vec3(1.0f, 0.0f, 0.0f);
             const glm::vec3 bitangent = geometry.bitangents ? geometry.bitangents[i] : glm::vec3(0.0f, 0.0f, 1.0f);
-            RendererVKLayout::MeshVertex& v = vertices[i];
-            v.position = geometry.positions[i];
-            v.normal = normal;
-            v.tangent = glm::vec4(tangent, glm::dot(normal, glm::cross(tangent, bitangent)) >= 0.0f ? 1.0f : -1.0f);
-            v.texCoord = geometry.texCoords ? glm::vec2(geometry.texCoords[i]) : glm::vec2(0.0f);
-            mn = glm::min(mn, v.position);
-            mx = glm::max(mx, v.position);
+            const glm::vec3 position = geometry.positions[i];
+            vertices[i].set(position, normal,
+                glm::vec4(tangent, glm::dot(normal, glm::cross(tangent, bitangent)) >= 0.0f ? 1.0f : -1.0f),
+                geometry.texCoords ? glm::vec2(geometry.texCoords[i]) : glm::vec2(0.0f));
+            mn = glm::min(mn, position);
+            mx = glm::max(mx, position);
         }
         indices.assign(geometry.indices, geometry.indices + geometry.numIndices);
         bounds.pos = (mn + mx) * 0.5f;

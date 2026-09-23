@@ -5,6 +5,8 @@
 #ifndef INSTANCED_INDIRECT_LIT_INC_GLSL
 #define INSTANCED_INDIRECT_LIT_INC_GLSL
 
+#include "mesh_vertex.inc.glsl"
+
 struct MaterialInfo
 {
 	uint flags;
@@ -74,7 +76,7 @@ struct InMeshInstance
 	uint meshIdxMaterialIdx;
 	uint pipelineIdxAlphaMode;
 };
-layout (binding = 14, std430) readonly buffer InRTVertices  { float in_vertices[]; }; // MeshVertex as 12 floats
+layout (binding = 14, std430) readonly buffer InRTVertices  { MeshVertex in_vertices[]; };
 layout (binding = 15, std430) readonly buffer InRTIndices   { uint in_indices[]; };
 layout (binding = 16, std430) readonly buffer InRTMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_instances[]; };

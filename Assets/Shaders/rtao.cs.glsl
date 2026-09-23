@@ -7,6 +7,7 @@
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #include "shared.inc.glsl"
+#include "mesh_vertex.inc.glsl"
 
 layout (binding = 2) uniform sampler2D u_sceneDepth;  // hardware depth (the normal is derived from it)
 layout (binding = 3) uniform accelerationStructureEXT u_tlas;
@@ -43,7 +44,7 @@ struct InMeshInfo
 };
 // Geometry for the alpha-masked candidate test. Same buffers/layout the GI trace uses; rt_shadow.inc.glsl
 // supplies the alpha test against them (with the instances + materials above).
-layout (binding = 5, std430) readonly buffer InVertices  { float in_vertices[]; }; // MeshVertex as 12 floats
+layout (binding = 5, std430) readonly buffer InVertices  { MeshVertex in_vertices[]; };
 layout (binding = 6, std430) readonly buffer InIndices   { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 10) uniform sampler2D u_textures[]; // highest binding: variable descriptor count

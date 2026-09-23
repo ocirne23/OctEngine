@@ -73,6 +73,9 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     return true;
 }
 
+// EVERY reload callback below returns while !m_initialized: a --tweak override or a Saved value fires its
+// callback AT REGISTRATION, before the device and the pipelines exist. State the pipelines read at creation
+// is handed over BEFORE that test, so initialize() builds with it.
 void Renderer::registerTweaks()
 {
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
@@ -80,16 +83,15 @@ void Renderer::registerTweaks()
     // "Shadows/Debug mode" is the SHADOW_DEBUG define on the lit fragment variants: GPU-idle + pipeline
     // rebuild, the wireframe pattern below.
     m_shadowParams.registerTweaks([this]() {
-        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
         m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     m_fogParams.registerTweaks();
     // The master + GI toggles are baked into the cached GI secondary; the master, "RT Sun" and "RT Lights"
-    // also into the lit fragments (LIT_RT_*). The flags are handed over BEFORE the idle test: a Saved value
-    // fires at registration, before the device exists, and initialize() must then build with it.
+    // also into the lit fragments (LIT_RT_*).
     m_rtParams.registerTweaks(rerecordCallback, [this]() {
         m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
@@ -98,26 +100,49 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
-    m_rtaoParams.registerTweaks(rerecordCallback, [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_rtaoPipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
+    m_rtaoParams.registerTweaks(rerecordCallback, [this]() {
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_rtaoPipeline.reloadShaders();
+        setHaveToRecordCommandBuffers();
+    });
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
     m_lightGridParams.registerTweaks( // the LOD params are read by the CPU build every frame: no reload
         [this]() { // "Debug Mode" = the LIGHT_GRID_DEBUG define on the lit fragments (the wireframe pattern below)
-            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
             m_staticMeshGraphicsPipeline.setLightGridDebugMode(m_lightGridParams.debugMode);
+            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
             m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
             setHaveToRecordCommandBuffers();
         });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
     m_staticMeshGraphicsPipeline.registerTweaks([this]() {
-        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
+    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid), so it registers HERE,
+    // before any pipeline compiles: an override is then live for every shader and for the probe buffer that
+    // GIProbePipeline::initialize allocates. A later change waits for the GPU, re-allocates the SH clipmap and
+    // reloads EVERY shader (reloadShaders waits + re-records).
+    m_giProbePipeline.registerGridTweaks(
+        [this]() {
+            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
+            m_giProbePipeline.resizeGrid();
+            reloadShaders();
+        },
+        // The irradiance-volume tweaks: only the volume images and the defines change - the probe history stays.
+        [this]() {
+            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
+            m_giProbePipeline.resizeVolume();
+            reloadShaders();
+        });
     // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
     m_particles.registerTweaks();
     m_oceanSimPipeline.registerSprayTweaks();
@@ -219,8 +244,8 @@ void Renderer::initPipelines()
     m_oceanSimPipeline.initialize();
 
     // "Terrain/Water" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
-    m_terrainWetnessPipeline.initialize([this]() {
-        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+    m_terrainWetnessPipeline.initialize([this]() { // registers before it builds: an override is live for the first compile
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_terrainWetnessPipeline.reloadShaders();
         setHaveToRecordCommandBuffers();
@@ -246,22 +271,6 @@ void Renderer::initPipelines()
             setHaveToRecordCommandBuffers(); // the cached GI secondary bakes the instance buffers + dispatch size
         });
     m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
-
-    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
-    m_giProbePipeline.registerGridTweaks(
-        [this]() {
-            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
-            m_giProbePipeline.resizeGrid();
-            reloadShaders();
-        },
-        // The irradiance-volume tweaks: only the volume images and the defines change - the probe history stays.
-        [this]() {
-            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
-            m_giProbePipeline.resizeVolume();
-            reloadShaders();
-        });
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);

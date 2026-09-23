@@ -393,13 +393,23 @@ export namespace RendererVKLayout
     constexpr uint32 MAX_TERRAIN_SPLAT_MATERIALS = 24; // UBO capacity for terrain splat materials (ground + rock + beach + snow)
     static_assert(MAX_TERRAIN_SPLAT_MATERIALS % 4 == 0, "terrainSplatHeightTex packs four slots per uvec4");
 
+    // 3 x vec4 = 48 B, every member 16 B-aligned: the GLSL mirror (mesh_vertex.inc.glsl) is plain std430 and a
+    // shader reads a member with one wide load. The texCoord rides the two .w components. Position stays at
+    // offset 0 (the BLAS builds read it as R32G32B32 with this stride).
     struct MeshVertex
     {
-        glm::vec3 position;
-        glm::vec3 normal;
-        glm::vec4 tangent;
-        glm::vec2 texCoord;
+        glm::vec4 positionU; // xyz = position, w = texCoord.x
+        glm::vec4 normalV;   // xyz = normal,   w = texCoord.y
+        glm::vec4 tangent;   // xyz = tangent,  w = bitangent sign
+
+        void set(const glm::vec3& position, const glm::vec3& normal, const glm::vec4& tangentSign, const glm::vec2& texCoord)
+        {
+            positionU = glm::vec4(position, texCoord.x);
+            normalV   = glm::vec4(normal, texCoord.y);
+            tangent   = tangentSign;
+        }
     };
+    static_assert(sizeof(MeshVertex) == 48);
     using MeshIndex = uint32;
 
     // Per-vertex skinning influences for skeletal meshes. Stored as a parallel stream (not folded into

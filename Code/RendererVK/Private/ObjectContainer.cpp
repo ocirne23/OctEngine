@@ -165,11 +165,8 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
 
         for (uint32 i = 0; i < meshData.getNumVertices(); i++)
         {
-            vertices[i].position   = pVertices[i];
-            vertices[i].normal     = pNormals[i];
             const float handedness = glm::dot(pNormals[i], glm::cross(pTangents[i], pBitangents[i])) >= 0.0f ? 1.0f : -1.0f;
-            vertices[i].tangent    = glm::vec4(pTangents[i], handedness);
-            vertices[i].texCoord   = glm::vec2(pTexCoords[i]);
+            vertices[i].set(pVertices[i], pNormals[i], glm::vec4(pTangents[i], handedness), glm::vec2(pTexCoords[i]));
         }
 
         Sphere sphereBounds;
@@ -241,7 +238,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
                 oc::vector<uint32> lodIndices(numIndices);
                 uint32 prevIndexCount = numIndices;
                 float targetF = (float)numIndices;
-                const float meshScale = meshopt_simplifyScale(&vertices[0].position.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex));
+                const float meshScale = meshopt_simplifyScale(&vertices[0].positionU.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex));
                 for (int level = 1; level <= lodParams.generateLevels && level < (int)RendererVKLayout::MAX_MESH_LODS; ++level)
                 {
                     targetF *= reduction;
@@ -251,7 +248,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
                     const float targetError = 0.01f * (float)(1u << (level - 1));
                     float resultError = 0.0f;
                     const size_t resultCount = meshopt_simplify(lodIndices.data(), pIndices, numIndices,
-                        &vertices[0].position.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex),
+                        &vertices[0].positionU.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex),
                         targetIndexCount, targetError, 0, &resultError);
                     if (resultCount < 3 || resultCount >= (size_t)((float)prevIndexCount * 0.9f))
                         break;
@@ -306,7 +303,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
             uint32 prevIndexCount = numIndices;
             uint8 numLevels = 0;
             float targetF = (float)numIndices;
-            const float meshScale = meshopt_simplifyScale(&vertices[0].position.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex));
+            const float meshScale = meshopt_simplifyScale(&vertices[0].positionU.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex));
             for (int level = 1; level <= lodParams.generateLevels && level < (int)RendererVKLayout::MAX_MESH_LODS; ++level)
             {
                 targetF *= reduction;
@@ -316,7 +313,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
                 const float targetError = 0.01f * (float)(1u << (level - 1));
                 float resultError = 0.0f;
                 const size_t resultCount = meshopt_simplify(lodIndices.data(), pIndices, numIndices,
-                    &vertices[0].position.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex),
+                    &vertices[0].positionU.x, vertices.size(), sizeof(RendererVKLayout::MeshVertex),
                     targetIndexCount, targetError, 0, &resultError);
                 if (resultCount < 3 || resultCount >= (size_t)((float)prevIndexCount * 0.9f))
                     break; // simplification stalled; deeper levels won't gain anything

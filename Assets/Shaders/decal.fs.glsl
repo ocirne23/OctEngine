@@ -71,15 +71,9 @@ void main()
     vec3 color = texel.rgb;
     if ((decal.params.y & DECAL_FLAG_LIT) != 0u)
     {
-        float coverage;
-#ifdef GI_VOLUME
-        const vec3 E = evalProbeVolumeCoverage(worldPos, n, coverage);
-#else
-        const vec3 E = evalProbeSHCoverage(worldPos, n, coverage);
-#endif
         // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
         // like every other GI consumer.
-        const vec3 irr = mix(giEvalSkySH(n), E, coverage) * u_aoParams.y;
+        const vec3 irr = giIrradiance(worldPos, n) * u_aoParams.y;
         const vec3 sun = atmosTransmittanceToLight(0.0, normalize(u_sunDirection), u_skyUp)
             * u_sunColor.rgb * u_eclipseParams.x * max(dot(n, normalize(u_sunDirection)), 0.0);
         color *= (irr + sun) * (1.0 / PI) + u_ambientColor;

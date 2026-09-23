@@ -24,10 +24,9 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 1) in vec3 in_normal;
+layout (location = 0) in vec4 in_posU;    // MeshVertex: xyz = position, w = uv.x
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent;
-layout (location = 3) in vec2 in_uv;
 layout (location = 4) in uint inst_idx;
 
 // Packed into 4 locations (was 6: a full mat3 TBN + a separate uv): fewer ISBE / TRAM slots per vertex.
@@ -54,9 +53,9 @@ void main()
 
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
-    const vec3 pos = quat_transform(in_pos * inst_scale, inst_quat) + inst_pos;
-    out_posU    = vec4(pos, in_uv.x);
-    out_normalV = vec4(quat_transform(in_normal, inst_quat), in_uv.y);
+    const vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
+    out_posU    = vec4(pos, in_posU.w);
+    out_normalV = vec4(quat_transform(in_normalV.xyz, inst_quat), in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
 
     // Per-eye projection in VR (g_viewIndex set above) / centre view on desktop, with the same TAA

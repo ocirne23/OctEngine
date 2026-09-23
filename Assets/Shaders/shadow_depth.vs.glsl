@@ -23,8 +23,8 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 3) in vec2 in_uv;
+layout (location = 0) in vec4 in_posU; // MeshVertex: xyz = position, w = uv.x
+layout (location = 3) in float in_v;   // MeshVertex normalV.w = uv.y (bound alone, not the normal)
 layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec2 out_uv;
@@ -39,14 +39,14 @@ void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];
     const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000FFFFu;
-    out_uv = in_uv;
+    out_uv = vec2(in_posU.w, in_v);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
     if ((cascadeMask & (1u << gl_ViewIndex)) == 0u)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0); // not in this cascade: degenerate -> discarded
         return;
     }
-    vec3 worldPos = quat_transform(in_pos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
+    vec3 worldPos = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
 #ifdef RAIN_OCCLUSION
     // The weather volume's top-down shelter map: one view, a plain matrix.
     gl_Position = u_rainOcclusionViewProj * vec4(worldPos, 1.0);

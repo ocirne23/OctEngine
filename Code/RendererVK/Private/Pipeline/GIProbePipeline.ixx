@@ -136,7 +136,7 @@ public:
 
     // THE IRRADIANCE VOLUME (g_giGrid.volume, "GI/Irradiance volume"): bakes the probe field into per-cascade
     // 3D textures (gi_volume_bake.cs.glsl) right after the trace, plus the sky SH into its own small image,
-    // for every probe consumer's filtered lookup (evalProbeVolumeCoverage / giEvalSkySH). Its own barriers:
+    // for every probe consumer's filtered lookup (evalProbeCoverage / giEvalSkySH). Its own barriers:
     // the trace's writes and last frame's reads -> the bake -> this frame's fragment, vertex and compute
     // reads (the next frame's trace reads it for the bounce). No-op while the volume is off.
     void recordVolumeBake(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);

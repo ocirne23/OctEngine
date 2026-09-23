@@ -228,15 +228,9 @@ void main()
         // the colour across the quad), so a lamp beside a 2 m mist sprite lights its near edge more than
         // its far edge and the sprite reads as a gradient rather than a flat card.
         const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
-        float coverage;
-#ifdef GI_VOLUME
-        vec3 E = evalProbeVolumeCoverage(world, n, coverage);
-#else
-        vec3 E = evalProbeSHCoverage(world, n, coverage);
-#endif
         // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
         // like every other GI consumer.
-        const vec3 irr = mix(giEvalSkySH(n), E, coverage) * u_aoParams.y;
+        const vec3 irr = giIrradiance(world, n) * u_aoParams.y;
         // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
         // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
         const vec3 toEye = n;

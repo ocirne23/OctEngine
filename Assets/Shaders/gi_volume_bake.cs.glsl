@@ -5,7 +5,7 @@
 // IRRADIANCE VOLUME BAKE (GIProbePipeline::recordVolumeBake). One invocation per voxel of every cascade: the
 // voxel lattice is the probe lattice refined GI_VOLUME_RES times per axis, stored toroidally exactly like the
 // probes (slot = fine lattice coord & (dims - 1)), so the forward shaders sample it with REPEAT addressing and
-// hardware trilinear filtering (evalProbeVolumeCoverage in gi_probe.inc.glsl).
+// hardware trilinear filtering (evalProbeCoverage in gi_probe.inc.glsl).
 //
 // A voxel holds the visibility-weighted blend of its 8 probes, evaluated AT THE VOXEL CENTRE: the trilinear
 // weight, the backface-dead fade and the Chebyshev depth test of giSampleCascade. The half-Lambert term toward
@@ -104,19 +104,7 @@ void main()
         const vec3  toProbe = vec3(lc) * float(s) + misc.yzw - center;
         const float len     = length(toProbe);
         if (len > 1e-4)
-        {
-            vec4 dsh, d2sh;
-            giReadDepthSH(cellBase, dsh, d2sh);
-            float mean, variance;
-            giVisMoments(dsh, d2sh, -toProbe / len, s, mean, variance);
-            const float d = min(len, GI_DEPTH_CAP_SPACING * float(s) * 0.95);
-            if (d2sh.x > 1e-4 && d > mean)
-            {
-                const float delta = d - mean;
-                const float cheb  = variance / (variance + delta * delta);
-                w *= max(giChebPow(cheb), u_giVisParams.z);
-            }
-        }
+            w *= giVisibilityWeight(cellBase, -toProbe / len, len, s);
 
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);

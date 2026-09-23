@@ -413,20 +413,7 @@ void main()
         // band (coverage) instead of stepping at its boundary. For an SH-L1 field the isotropically
         // in-scattered radiance is E_mean / PI; E(-dir) is the single-sample stand-in for E_mean.
         // u_ambientColor is an isotropic radiance, so its phase integral is just itself.
-        float giCov = 0.0;
-        vec3 amb = vec3(0.0);
-        if (u_fogParams4.z > 0.5)
-        {
-#ifdef GI_VOLUME
-            amb = evalProbeVolumeCoverage(worldPos, -dir, giCov);
-#else
-            amb = evalProbeSHCoverage(worldPos, -dir, giCov);
-#endif
-            if (amb.x < 0.0)
-                amb = vec3(0.0);
-        }
-        if (giCov < 1.0)
-            amb = mix(giEvalSkySH(-dir), amb, giCov);
+        const vec3 amb = u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySH(-dir);
         inLight += amb * u_aoParams.y / PI + u_ambientColor;
 
         // Local lights from the world-space hash grid cell containing this froxel.

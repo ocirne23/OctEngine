@@ -5,14 +5,12 @@
 // region of the shared vertex buffer. One indirect dispatch covers every skinned instance: the job list
 // lives in a per-frame SSBO and gl_WorkGroupID.y selects the job, so adding/removing skinned instances
 // never re-records the command buffer (dispatch dims come from a CPU-written indirect buffer).
-//
-// MeshVertex is tightly packed at 48 bytes { vec3 position; vec3 normal; vec4 tangent; vec2 texCoord; }.
-// A std430 struct with vec3 members would pad to 64, so the vertex buffer is indexed as a raw float array
-// (12 floats per vertex) to match the CPU/vertex-input layout exactly.
+
+#include "mesh_vertex.inc.glsl"
 
 layout(local_size_x = 64) in;
 
-layout(binding = 0, std430) buffer VertexBuffer { float v_data[]; };
+layout(binding = 0, std430) buffer VertexBuffer { MeshVertex v_data[]; };
 
 struct SkinningVertex { uvec4 boneIndices; vec4 boneWeights; };
 layout(binding = 1, std430) readonly buffer SkinningBuffer { SkinningVertex s_data[]; };
@@ -37,13 +35,7 @@ void main()
     if (i >= job.vertexCount)
         return;
 
-    const uint baseF = (job.baseVertexOffset + i) * 12u;
-    const uint outF  = (job.outVertexOffset + i) * 12u;
-
-    const vec3 pos = vec3(v_data[baseF + 0u], v_data[baseF + 1u], v_data[baseF + 2u]);
-    const vec3 nrm = vec3(v_data[baseF + 3u], v_data[baseF + 4u], v_data[baseF + 5u]);
-    const vec4 tan = vec4(v_data[baseF + 6u], v_data[baseF + 7u], v_data[baseF + 8u], v_data[baseF + 9u]);
-    const vec2 uv  = vec2(v_data[baseF + 10u], v_data[baseF + 11u]);
+    const MeshVertex v = v_data[job.baseVertexOffset + i];
 
     const SkinningVertex sv = s_data[job.skinVertexOffset + i];
     mat4 skin = mat4(0.0);
@@ -54,13 +46,10 @@ void main()
             skin += palette[job.paletteOffset + sv.boneIndices[b]] * w;
     }
 
-    const vec3 skPos = (skin * vec4(pos, 1.0)).xyz;
     const mat3 skRot = mat3(skin);
-    const vec3 skNrm = normalize(skRot * nrm);
-    const vec3 skTan = skRot * tan.xyz;
-
-    v_data[outF + 0u] = skPos.x; v_data[outF + 1u] = skPos.y; v_data[outF + 2u] = skPos.z;
-    v_data[outF + 3u] = skNrm.x; v_data[outF + 4u] = skNrm.y; v_data[outF + 5u] = skNrm.z;
-    v_data[outF + 6u] = skTan.x; v_data[outF + 7u] = skTan.y; v_data[outF + 8u] = skTan.z; v_data[outF + 9u] = tan.w;
-    v_data[outF + 10u] = uv.x; v_data[outF + 11u] = uv.y;
+    MeshVertex o;
+    o.positionU = vec4((skin * vec4(v.positionU.xyz, 1.0)).xyz, v.positionU.w); // .w = uv.x, carried
+    o.normalV   = vec4(normalize(skRot * v.normalV.xyz), v.normalV.w);          // .w = uv.y, carried
+    o.tangent   = vec4(skRot * v.tangent.xyz, v.tangent.w);
+    v_data[job.outVertexOffset + i] = o;
 }
