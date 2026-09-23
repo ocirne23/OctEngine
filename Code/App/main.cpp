@@ -200,9 +200,7 @@ int main(int argc, char* argv[])
     {
         if (!headlessServer)
         {
-            // Menus (main menu pages, the lobby, the escape overlay) never need more than 60 fps; the
-            // ceiling sits on top of the "Max FPS" tweaks and leaves them as they are.
-            Globals::time.setFpsCeiling(Globals::ui.isMainMenuActive() || Globals::ui.isEscapeMenuOpen() ? 60 : 0);
+            Globals::time.setFpsCeiling(Globals::ui.isMainMenuActive() ? 60 : 0);
             Globals::time.beginFrame(Globals::input.isWindowHasFocus() || unattendedRun, Globals::rendererVK.isVrEnabled(),
                 Globals::rendererVK.isVSyncEnabled(), window.getDisplayRefreshHz(), &window,
                 [](uint64 timeoutNs) { return Globals::rendererVK.waitFrameSlot(timeoutNs); });
@@ -296,8 +294,8 @@ int main(int argc, char* argv[])
             uiJobKicked = true;
 
             Globals::jobSystem.kickPostUpdateJobs();
-            Globals::terrain.joinRender(); // the chunk render pushes must land before present
-            Globals::ocean.joinRender();   // the sector pushes + the wave-extent stores, likewise
+            Globals::terrain.joinRender();
+            Globals::ocean.joinRender();
             Globals::rendererVK.present();
         }
         else

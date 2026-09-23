@@ -1094,8 +1094,8 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
     m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
     vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
     vk::CommandBuffer vkGlobalIllumCommandBuffer = frameData.globalIllumCommandBuffer.getCommandBuffer();
-    vkCommandBuffer.executeCommands(1, &vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
-    vkCommandBuffer.executeCommands(1, &vkGlobalIllumCommandBuffer);
+    executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
+    executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
     if (m_fogParams.enabled)
         executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
@@ -1207,8 +1207,8 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
     vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
     vk::CommandBuffer vkGlobalIllumCommandBuffer = frameData.globalIllumCommandBuffer.getCommandBuffer();
-    vkCommandBuffer.executeCommands(1, &vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
-    vkCommandBuffer.executeCommands(1, &vkGlobalIllumCommandBuffer);
+    executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
+    executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
     // Fog scatter/integrate compute (the integrated grid was cleared to "no fog" at init when disabled).
     if (m_fogParams.enabled)

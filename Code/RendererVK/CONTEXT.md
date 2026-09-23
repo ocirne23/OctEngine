@@ -548,7 +548,10 @@ The tweak carries `onReRecord`, so toggling rebuilds the descriptors either way.
 
 Everything upstream of composite is **linear HDR**. `EyeAdaptationPipeline` (log-luminance histogram
 auto-exposure) feeds `CompositePipeline` (HDR → display into the swapchain before ImGui; tonemap
-off / Reinhard / ACES / AgX).
+off / Reinhard / ACES / AgX). The histogram bins EVERY viewport pixel (the reduce divides by the area),
+4×4 pixels per thread: a run of equal bins is one shared atomic and only non-empty bins go global. One
+pixel per thread measured 0.155 ms at 1440p (Nsight: 43% long-scoreboard + 36% misc stalls on the
+atomics). `PIXELS_PER_THREAD` in the shader and the dispatch's group size must match.
 
 ---
 

@@ -117,8 +117,9 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_histogramPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
         HistogramPC pc{ .vpMin = params.viewportMin, .vpSize = params.viewportSize };
         cmd.pushConstants(m_histogramPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-        const uint32 gx = ((uint32)params.viewportSize.x + 15) / 16;
-        const uint32 gy = ((uint32)params.viewportSize.y + 15) / 16;
+        constexpr uint32 pixelsPerGroup = 16 * 4; // 16x16 threads x PIXELS_PER_THREAD (eyeadapt_histogram.cs.glsl)
+        const uint32 gx = ((uint32)params.viewportSize.x + pixelsPerGroup - 1) / pixelsPerGroup;
+        const uint32 gy = ((uint32)params.viewportSize.y + pixelsPerGroup - 1) / pixelsPerGroup;
         cmd.dispatch(gx, gy, 1);
     }
 
