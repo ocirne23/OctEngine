@@ -402,6 +402,8 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// Scene lights: the ocean's grid walk, SPECULAR ONLY on the film normal - the body already carries the
 	// ground's diffuse light, and the ground's wet gloss is off under this pass, so this is the one
 	// highlight, on the water's angle. Each light may cost a shadow ray: skipped under 2% visible.
+	// THIS LOOP IS THE PASS'S REGISTER PEAK, and it is the shadow rays: doLight instead measured 56/0
+	// against 56/48 (demand 56 vs 68). Lights-first, or no separate accumulator, measured the same.
 	if (clearW > float16_t(0.02))
 	{
 		f16vec3 lights = f16vec3(0.0);
@@ -767,13 +769,17 @@ void main()
 	const float reliefSunGate = mix(1.0, smoothstep(0.0, 0.1, dot(geoN, u_sunDirection.xyz)), reliefStrength);
 	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
 #endif
-	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
-	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	// THE WET SKY REFLECTION: the lit core has no environment
 	// specular (diffuse GI + the lights' GGX lobes only), so wet ground showed one sun highlight and read as
 	// merely darker. The film's sky: the baked mirror sky along R, water Fresnel (F0 0.02), the film's
 	// roughness-to-blur rule (rough wet ground mirrors nothing), the texture AO as the specular occlusion and
-	// the mirror fog rule (the bake carries no fog). After the lighting, past the light loop's register peak.
+	// the mirror fog rule (the bake carries no fog). After the lighting. It costs the TESSELLATED ground 16 B
+	// (72/16 -> 72/32; untessellated unchanged): the normal, roughness, AO and weight it reads stay live across
+	// the lit core's peak. Measured alternatives, none better (tessellated / untessellated): the weight before
+	// and the normal across 72/32 / 72/16; R.xz + the weight across 72/32 / 72/32; the whole reflection
+	// before, its half result across 72/32 / 72/32.
+	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
+	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	if (skyReflW > float16_t(0.0))
 	{
 		const f16vec3 Vh = f16vec3(V);

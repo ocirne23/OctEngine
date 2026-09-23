@@ -383,14 +383,47 @@ vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunT
     return hitRadiance * T + inscatter * (1.0 - T);
 }
 
+// THE EDGE FADE ("Terrain/Water/Ocean edge fade (m)"; 0 = off, returns 1): over its last centimetres of water
+// column the ocean composites over the ground and the film drawn before it (the cull puts the ocean in the
+// transparent sequence for this), so its mesh no longer ends in a hard line where it cuts the ground - the
+// film carries the water on (instanced_indirect_terrain.fs.glsl covers the live ocean's thin edge).
+// The column is to the FILM's water surface under this pixel, where the ocean hands over to it: the film's
+// tessellated surface (terrain_tess.tes.glsl) without the splat relief - the terrain height, plus the pool
+// level the wetness fills the relief band to (terrainPoolLevel), in the ground/beach relief depth with the
+// tessellation's distance falloff (0 past it, and with tessellation off: the film then lies on the mesh). At
+// the pixel's own position (in_pos.xz), not in_uv's undisplaced lattice point. Ease-out over the band,
+// 1 - (1 - t)^2: always transparent at the bottom and mostly opaque above it; the fade width is how fast.
+// From nothing main computed: no value of main's stays live for it (the no-map fallback is the open-ocean
+// floor oceanSampleShoreData returns, re-derived from the UBO).
+float oceanEdgeCover()
+{
+    if (u_terrainWetParams6.x <= 0.0)
+        return 1.0;
+    float filmY = u_oceanParams2.w - u_oceanParams1.z;
+    if (terrainHeightMapPresent())
+    {
+        filmY = terrainHeightAt(in_pos.xz);
+        float reliefDepth = 0.0;
+        if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
+        {
+            const float tf = clamp((distance(in_pos, u_viewPos) - u_terrainTessParams1.x)
+                / max(u_terrainTessParams1.y - u_terrainTessParams1.x, 1e-3), 0.0, 1.0);
+            reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams0.w));
+        }
+        filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), 1.0) - 0.5) * reliefDepth;
+    }
+    const float s = 1.0 - clamp((in_pos.y - filmY) / u_terrainWetParams6.x, 0.0, 1.0);
+    return 1.0 - s * s;
+}
+
 void main()
 {
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    // Opaque unless the top side's edge fade (end of main) says otherwise: every early return, the debug
-    // views and the underside keep this.
-    out_factor = vec4(0.0);
+    // out_factor (the dual-source dst multiplier) is written AT each return, never as a default up here: an
+    // early store plus the edge fade's dynamic one at the end kept the output live through the whole shader
+    // (80/16 -> 80/32). Every early return (the debug views, the underside) writes it opaque: vec4(0).
     const vec3 up = normalize(u_skyUp);
     const vec3 L  = normalize(u_sunDirection.xyz);
     const vec3 toCam = u_viewPos - in_pos;
@@ -469,6 +502,7 @@ void main()
         dbg = vec3(u_oceanParams5.z > 0.0 ? 1.0 - smoothstep(u_oceanParams5.z, 4.0 * u_oceanParams5.z, depthDbg) : 0.0);
 #endif
         out_color = vec4(dbg, 1.0);
+        out_factor = vec4(0.0);
         return;
     }
 #endif
@@ -491,6 +525,7 @@ void main()
         if (max(pathAbsorb.r, max(pathAbsorb.g, pathAbsorb.b)) < 0.001)
         {
             out_color = vec4(0.0, 0.0, 0.0, 1.0);
+            out_factor = vec4(0.0);
             return;
         }
         const vec3 ambientSkyU = skyAmbientUp(up);
@@ -531,6 +566,7 @@ void main()
             }
 #endif
             out_color = vec4(dbg, 1.0);
+            out_factor = vec4(0.0);
             return;
         }
 #endif
@@ -576,44 +612,17 @@ void main()
         }
         color *= pathAbsorb;
         out_color = vec4(color, 0.0); // alpha 0 = TAA's ocean flag (see the end of main)
+        out_factor = vec4(0.0);
         return;
     }
 
-    // THE EDGE FADE ("Terrain/Water/Ocean edge fade (m)"; 0 = off): over its last centimetres of water
-    // column the ocean composites over the ground and the film drawn before it (the cull puts the ocean in
-    // the transparent sequence for this), so its mesh no longer ends in a hard line where it cuts the ground -
-    // the film carries the water on (instanced_indirect_terrain.fs.glsl covers the live ocean's thin edge).
-    // The column is to the FILM's water surface under this pixel, where the ocean hands over to it: the film's
-    // tessellated surface (terrain_tess.tes.glsl) without the splat relief - the terrain height, plus the pool
-    // level the wetness fills the relief band to (terrainPoolLevel), in the ground/beach relief depth with the
-    // tessellation's distance falloff (0 past it, and with tessellation off: the film then lies on the mesh).
-    // At the pixel's own position (in_pos.xz), not in_uv's undisplaced lattice point. Ease-out over the band,
-    // 1 - (1 - t)^2: always transparent at the bottom and mostly opaque above it; the fade width is how fast.
-    // Fully faded: nothing to shade.
-    float cover = 1.0;
-    if (u_terrainWetParams6.x > 0.0)
+    // The edge fade (oceanEdgeCover); fully faded: nothing to shade.
+    const float cover = oceanEdgeCover();
+    if (cover <= 0.0)
     {
-        float filmY = shoreHW.x;
-        if (terrainHeightMapPresent())
-        {
-            filmY = terrainHeightAt(in_pos.xz);
-            float reliefDepth = 0.0;
-            if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
-            {
-                const float tf = clamp((distance(in_pos, u_viewPos) - u_terrainTessParams1.x)
-                    / max(u_terrainTessParams1.y - u_terrainTessParams1.x, 1e-3), 0.0, 1.0);
-                reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams0.w));
-            }
-            filmY += (terrainPoolLevel(terrainWetnessAt(in_pos.xz), 1.0) - 0.5) * reliefDepth;
-        }
-        const float s = 1.0 - clamp((in_pos.y - filmY) / u_terrainWetParams6.x, 0.0, 1.0);
-        cover = 1.0 - s * s;
-        if (cover <= 0.0)
-        {
-            out_color = vec4(0.0);
-            out_factor = vec4(1.0);
-            return;
-        }
+        out_color = vec4(0.0);
+        out_factor = vec4(1.0);
+        return;
     }
 
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
@@ -754,6 +763,7 @@ void main()
             dbg = vec3(0.3);           // GREY: no ray hits anything - the TLAS is empty or not the bound one
 #endif
         out_color = vec4(dbg, 1.0);
+        out_factor = vec4(0.0);
         return;
     }
 #endif

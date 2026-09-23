@@ -838,6 +838,25 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
     6): a BYTE-IDENTICAL binary - the compiler hoists the loop-invariant values back out.
   * What is left is structural: split a peak into its own pass (the film's overlay precedent), or a
     thread-per-ray trace.
+* **Measured 2026-09-23** (the surface-water rework; regs/local):
+  * **A dual-source OUTPUT written early costs registers.** The ocean wrote `out_factor = vec4(0)` at the
+    top of main as the default for its early returns. With the edge fade's dynamic store at the end, that
+    kept the output live through the whole shader: 80/32 against 80/16. Write every output AT each return,
+    never as an up-front default. Constant stores at both ends fold, so the bug only shows once one store
+    becomes dynamic.
+  * The ocean's edge fade (`oceanEdgeCover`: terrain height + the wetness pool level, 5 taps) costs nothing
+    once it reads no value of main's. A fallback to `shoreHW.x` alone kept that value live across the
+    traces and the light loop. It sits after the underside path with its early-out: 80/16.
+  * **The film's peak is its light loop's shadow rays**: `doLight` in place of `doLightShadowed` measured
+    56/0 against 56/48 (demand 56 vs 68); without the loop, 48/0. Lights-first ordering (the RT mirror is
+    off now) and accumulating straight into `color` measured the same 56/48. Shadowless film highlights
+    would be the lever, a visual trade (a light behind a wall would glint on a puddle).
+  * The ground's wet sky reflection costs the TESSELLATED ground 16 B (72/16 -> 72/32; untessellated
+    unchanged): its inputs stay live across `computeLitColor`. Every split (weight before, R.xz across,
+    the whole reflection before) measured the same or worse; see the comment at the reflection.
+  * The terrain TES is 70/0 for both the ground and the film: the relief taps are 6 of it (64 without),
+    the rest is `terrainLayers` (the climate walk, per tessellated vertex). Its per-layer indices cannot be
+    interpolated across a patch, so moving it per control point is not a small change.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
