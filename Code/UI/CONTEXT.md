@@ -127,7 +127,7 @@ never a requirement.**
 | Panel | What prepare does |
 |---|---|
 | **ProfilerPanel** | Auto-pause check plus a ring snapshot. `snapshotTracks` is itself a `parallelFor` over the tracks — per-track copy and sort, with record buffers handed back to per-track scratch slots to keep capacity; the `m_trackMaxDepth` map merge stays serial — plus `aggregateStats` when the Stats tab was open. **`selectFrame` from a worker only ever SETS paused (an atomic exchange); resume stays in render.** |
-| **MemoryPanel** | `buildSnapshot` — the tracker's atomic tree is reader-safe. |
+| **MemoryPanel** | `buildSnapshot` — the tracker's atomic tree is reader-safe. Under the VRAM metric, `buildVramSnapshot` instead — the GPU allocation registry, under its lock. |
 | **OutputLog** | Log snapshot under its mutex, plus the level and text filter into `m_visible`. |
 | **AssetBrowser** | The filesystem rescans. See below. |
 

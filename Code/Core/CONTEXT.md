@@ -585,6 +585,21 @@ live / self / churn / rate.
 | Live bytes | Currently allocated. |
 | Cumulative | Total allocated since startup — the churn finder. |
 | Churn/s | **ALLOCATOR BANDWIDTH**: per-path bytes/sec. |
+| VRAM | **Not the tracker:** every live GPU allocation (RendererVK's `GpuAllocator` registry), by debug name. |
+
+**VRAM** builds the tree from names, not scopes. The top level is Images / Buffers (device-local) /
+Host-visible (system RAM) / VMA block slack (reserved − used). Below it, the name splits into a path —
+on `/` or `\` when it has one (texture file paths), else on `.` (`GI.volumeSky`) — and **equal names
+merge into one box.** The snapshot stores each name with a `'\0'` after every segment, so one byte sort
+puts siblings next to each other and every segment is a C string in place. A node's zoom id is the
+FNV hash of its path, so zoom survives the rebuild. The header shows used / VMA blocks and the
+driver's device-local usage against the budget. VRAM mode does not sample the churn rates; switching
+back reseeds them.
+
+Every node has a zoom `id` (the `MemScopeNode` pointer, or the VRAM path hash) and a `parent` index;
+the breadcrumb and tooltip path walk the parent indices. **`sortChildren` re-points the grandchildren's
+parent after each sibling sort.** The drawing reads `m_snapshotMetric`, not `m_metric`, because the
+header can switch the metric after this frame's snapshot was built.
 
 Churn/s is computed **panel-side**, by sampling each node's cumulative counters every prepare and
 folding the delta into a 0.5 s-half-life EMA keyed by `MemScopeNode` pointer (stable and

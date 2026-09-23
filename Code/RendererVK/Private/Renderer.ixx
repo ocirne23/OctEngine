@@ -111,6 +111,9 @@ public:
     uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
     uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
     uint32 getNumMaterials() const { return m_materials.count(); }
+    // The Memory panel's VRAM view: every live GPU allocation by debug name, plus the heap totals.
+    void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
+    GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
 
     // -- GPU particles + projected decals (driven by the Particle library) --
     uint32 createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc); // [Concurrency: LOCKING]

@@ -736,8 +736,14 @@ not only with validation — the validation messenger stays validation-only.
   file name). Put no defines or other decoration into a name.
 * **Named automatically:** shader modules (the file path), pipelines + their layouts / set layouts /
   caches (`Shader::debugName`: the file name only; a graphics pipeline takes its FRAGMENT shader, or the
-  vertex shader when it has none, extra variants add `#i`), every `Allocator` image and buffer that passes
-  a name, textures (their file path). Variants of one file with different defines share a name.
+  vertex shader when it has none, extra variants add `#i`), every `GpuAllocator` image and buffer that
+  passes a name, textures (their file path). Variants of one file with different defines share a name.
+* **The same name is the VRAM view's box.** `GpuAllocator` keeps a registry of every live allocation
+  (a vector under a mutex; each allocation's VMA `pUserData` holds its index, swap-remove on destroy).
+  `Renderer::forEachGpuAllocation` visits it for the UI Memory panel's VRAM metric, which splits the
+  name into a path (`/` or `\`, else `.`). **An unnamed allocation shows as `<unnamed>`**, so pass a
+  name. The class is `GpuAllocator`, NOT `Allocator`: Core exports a global `Allocator` class too, and a
+  TU that imports both resolves to the wrong one.
 * **Named by the caller — the parameter is REQUIRED so the compiler finds every site:**
   `CommandBuffer::initialize(level, name)`, `DescriptorSet::initialize(layout, name, count)`,
   `ShadowMap::initialize(name, ...)`, `IndirectCommandsLayout::initialize(name, ...)`,

@@ -1102,7 +1102,7 @@ Stats Renderer::getStats()
     stats.lightGridMemUsageBytes = info.inout_gridDataCounter * sizeof(uint32);
     stats.maxLightGridMemUsageBytes = m_submission.getLightGridBufferSize();
 
-    const Allocator::MemoryUsage gpuMem = Globals::gpuAllocator.getMemoryUsage();
+    const GpuAllocator::MemoryUsage gpuMem = Globals::gpuAllocator.getMemoryUsage();
     stats.gpuMemoryUsedBytes = gpuMem.usedBytes;
     stats.gpuMemoryReservedBytes = gpuMem.reservedBytes;
     stats.gpuMemoryBudgetBytes = gpuMem.budgetBytes;

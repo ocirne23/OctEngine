@@ -31,15 +31,20 @@ export enum class BufferHostAccess
     eSequentialWrite,
 };
 
+// GpuAllocator::forEachAllocation's visit. name = the debug name (or nullptr), pointing into VMA's own
+// copy: valid only inside the call. deviceLocal = in a DEVICE_LOCAL heap (VRAM, ReBAR included).
+export using GpuAllocationVisit = void (*)(void* ctx, const char* name, uint64 bytes, bool image, bool deviceLocal);
+
 // Thin wrapper around the VulkanMemoryAllocator. Owns a single VmaAllocator for the whole renderer and
 // is the one place GPU buffer/image memory is allocated; everything else goes through Buffer / the image
 // helpers which call into here.
-export class Allocator final
+// (Not "Allocator": Core exports a global class of that name, and a TU importing both would clash.)
+export class GpuAllocator final
 {
 public:
-    Allocator();
-    ~Allocator();
-    Allocator(const Allocator&) = delete;
+    GpuAllocator();
+    ~GpuAllocator();
+    GpuAllocator(const GpuAllocator&) = delete;
 
     bool initialize();
     void destroy();
@@ -67,18 +72,36 @@ public:
         uint64 usedBytes;     // sum of live allocations (the bytes our resources actually occupy)
         uint64 reservedBytes; // memory VMA has reserved in blocks (>= usedBytes, includes free space)
         uint64 budgetBytes;   // how many bytes the process may use across device-local heaps
+        uint64 deviceLocalUsageBytes; // what the driver reports the process uses in device-local heaps
+                                      // (VK_EXT_memory_budget): also swapchain + driver-internal memory
     };
     MemoryUsage getMemoryUsage() const;
 
     // Size of a single live allocation (0 for null).
     uint64 getAllocationSize(VmaAllocation allocation) const;
 
+    // Visits every live image/buffer allocation under the registry lock: creates and destroys on
+    // other threads block meanwhile, so keep the visit short and never touch this allocator in it.
+    void forEachAllocation(GpuAllocationVisit visit, void* ctx) const;
+
 private:
+    void registerAllocation(VmaAllocation allocation, bool image);
+    void unregisterAllocation(VmaAllocation allocation);
+
+    struct LiveAllocation
+    {
+        VmaAllocation allocation;
+        bool image;
+    };
+
     VmaAllocator m_allocator = nullptr;
+    // Every live allocation; each one's pUserData holds its index here (swap-remove on destroy).
+    oc::vector<LiveAllocation> m_live;
+    mutable std::mutex m_liveMutex;
 };
 
 export namespace Globals
 {
 OC_INIT_SEG(OC_SEG_VK_DEVICE)
-    Allocator gpuAllocator;
+    GpuAllocator gpuAllocator;
 }

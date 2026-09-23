@@ -15,13 +15,13 @@ import :VK;
 import :Instance;
 import :Device;
 
-Allocator::Allocator() {}
-Allocator::~Allocator()
+GpuAllocator::GpuAllocator() {}
+GpuAllocator::~GpuAllocator()
 {
     destroy();
 }
 
-bool Allocator::initialize()
+bool GpuAllocator::initialize()
 {
     VmaAllocatorCreateInfo createInfo{};
     createInfo.instance = Globals::instance.getInstance();
@@ -42,7 +42,7 @@ bool Allocator::initialize()
     return true;
 }
 
-void Allocator::destroy()
+void GpuAllocator::destroy()
 {
     if (m_allocator)
     {
@@ -64,10 +64,50 @@ void Allocator::destroy()
 #endif
         vmaDestroyAllocator(m_allocator);
         m_allocator = nullptr;
+        std::lock_guard lock(m_liveMutex);
+        m_live.clear();
     }
 }
 
-bool Allocator::createImage(const vk::ImageCreateInfo& info, vk::Image& outImage, VmaAllocation& outAllocation,
+void GpuAllocator::registerAllocation(VmaAllocation allocation, bool image)
+{
+    std::lock_guard lock(m_liveMutex);
+    vmaSetAllocationUserData(m_allocator, allocation, (void*)(uintptr_t)m_live.size());
+    m_live.push_back(LiveAllocation{ allocation, image });
+}
+
+void GpuAllocator::unregisterAllocation(VmaAllocation allocation)
+{
+    std::lock_guard lock(m_liveMutex);
+    VmaAllocationInfo info{};
+    vmaGetAllocationInfo(m_allocator, allocation, &info);
+    const size_t index = (size_t)(uintptr_t)info.pUserData;
+    assert(index < m_live.size() && m_live[index].allocation == allocation);
+    if (index + 1 != m_live.size())
+    {
+        m_live[index] = m_live.back();
+        vmaSetAllocationUserData(m_allocator, m_live[index].allocation, (void*)(uintptr_t)index);
+    }
+    m_live.pop_back();
+}
+
+void GpuAllocator::forEachAllocation(GpuAllocationVisit visit, void* ctx) const
+{
+    std::lock_guard lock(m_liveMutex);
+    if (!m_allocator)
+        return;
+    const VkPhysicalDeviceMemoryProperties* memProps = nullptr;
+    vmaGetMemoryProperties(m_allocator, &memProps);
+    for (const LiveAllocation& live : m_live)
+    {
+        VmaAllocationInfo info{};
+        vmaGetAllocationInfo(m_allocator, live.allocation, &info);
+        const uint32 heap = memProps->memoryTypes[info.memoryType].heapIndex;
+        visit(ctx, info.pName, info.size, live.image, (memProps->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0);
+    }
+}
+
+bool GpuAllocator::createImage(const vk::ImageCreateInfo& info, vk::Image& outImage, VmaAllocation& outAllocation,
     const char* debugName)
 {
     const VkImageCreateInfo ci = info;
@@ -85,17 +125,22 @@ bool Allocator::createImage(const vk::ImageCreateInfo& info, vk::Image& outImage
         // VMA's allocation name is leak-report only; the VkImage itself gets the debug-utils object name.
         Globals::device.setDebugName(vk::Image(image), debugName);
     }
+    registerAllocation(outAllocation, true);
     outImage = vk::Image(image);
     return true;
 }
 
-void Allocator::destroyImage(vk::Image image, VmaAllocation allocation)
+void GpuAllocator::destroyImage(vk::Image image, VmaAllocation allocation)
 {
     if (image)
+    {
+        if (allocation)
+            unregisterAllocation(allocation);
         vmaDestroyImage(m_allocator, (VkImage)image, allocation);
+    }
 }
 
-bool Allocator::createBuffer(const vk::BufferCreateInfo& info, vk::MemoryPropertyFlags properties,
+bool GpuAllocator::createBuffer(const vk::BufferCreateInfo& info, vk::MemoryPropertyFlags properties,
     vk::Buffer& outBuffer, VmaAllocation& outAllocation, void*& outMappedData, BufferHostAccess hostAccess,
     const char* debugName)
 {
@@ -126,24 +171,29 @@ bool Allocator::createBuffer(const vk::BufferCreateInfo& info, vk::MemoryPropert
         vmaSetAllocationName(m_allocator, outAllocation, debugName);
         Globals::device.setDebugName(vk::Buffer(buffer), debugName);
     }
+    registerAllocation(outAllocation, false);
     outBuffer = vk::Buffer(buffer);
     outMappedData = allocInfo.pMappedData;
     return true;
 }
 
-void Allocator::destroyBuffer(vk::Buffer buffer, VmaAllocation allocation)
+void GpuAllocator::destroyBuffer(vk::Buffer buffer, VmaAllocation allocation)
 {
     if (buffer)
+    {
+        if (allocation)
+            unregisterAllocation(allocation);
         vmaDestroyBuffer(m_allocator, (VkBuffer)buffer, allocation);
+    }
 }
 
-void Allocator::flushAllocation(VmaAllocation allocation, vk::DeviceSize offset, vk::DeviceSize size)
+void GpuAllocator::flushAllocation(VmaAllocation allocation, vk::DeviceSize offset, vk::DeviceSize size)
 {
     if (allocation)
         (void)vmaFlushAllocation(m_allocator, allocation, offset, size);
 }
 
-uint64 Allocator::getAllocationSize(VmaAllocation allocation) const
+uint64 GpuAllocator::getAllocationSize(VmaAllocation allocation) const
 {
     if (!allocation)
         return 0;
@@ -152,7 +202,7 @@ uint64 Allocator::getAllocationSize(VmaAllocation allocation) const
     return info.size;
 }
 
-Allocator::MemoryUsage Allocator::getMemoryUsage() const
+GpuAllocator::MemoryUsage GpuAllocator::getMemoryUsage() const
 {
     MemoryUsage usage{};
     if (!m_allocator)
@@ -162,14 +212,17 @@ Allocator::MemoryUsage Allocator::getMemoryUsage() const
     vmaGetMemoryProperties(m_allocator, &memProps);
 
     // One budget entry per memory heap (cheap; backed by VK_EXT_memory_budget where available).
-    oc::vector<VmaBudget> budgets(memProps->memoryHeapCount);
-    vmaGetHeapBudgets(m_allocator, budgets.data());
+    VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+    vmaGetHeapBudgets(m_allocator, budgets);
     for (uint32 i = 0; i < memProps->memoryHeapCount; i++)
     {
         usage.usedBytes += budgets[i].statistics.allocationBytes;
         usage.reservedBytes += budgets[i].statistics.blockBytes;
         if (memProps->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+        {
             usage.budgetBytes += budgets[i].budget;
+            usage.deviceLocalUsageBytes += budgets[i].usage;
+        }
     }
     return usage;
 }

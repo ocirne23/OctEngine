@@ -6,6 +6,7 @@ import Core.imgui;
 import Core.Windows;
 import Core.MemoryTracker;
 import Core.Time;
+import RendererVK;
 import :MemoryPanel;
 
 namespace
@@ -16,6 +17,23 @@ namespace
     constexpr uint32 kMaxDrawDepth = 12;
     constexpr double kRateHalfLifeSec = 0.5;   // churn-rate EMA half-life (per-frame deltas are bursty)
     constexpr double kRateMaxGapSec = 1.0;     // sample gap past this (panel closed) = reseed, no fold
+
+    // Indexed by MemoryPanel::EVramGroup
+    constexpr const char* kVramGroupNames[] = { "GPU memory", "Images", "Buffers", "Host-visible", "VMA block slack" };
+    constexpr uint32 kVramGroupColors[] = { 0xFF403C3C, 0xFFC88246, 0xFF5AA050, 0xFF3C8CC8, 0xFF6E6E6E };
+    constexpr uint64 kVramRootId = 14695981039346656037ull; // FNV-1a offset basis
+
+    uint64 hashSegment(uint64 parentId, const char* segment, uint32 len)
+    {
+        uint64 hash = parentId ^ 0x2F; // separator byte, so "ab"+"c" and "a"+"bc" differ
+        hash *= 1099511628211ull;
+        for (uint32 i = 0; i < len; ++i)
+        {
+            hash ^= (uint8)segment[i];
+            hash *= 1099511628211ull;
+        }
+        return hash != 0 ? hash : 1; // 0 = the root zoom sentinel
+    }
 
     void formatBytes(char* buf, size_t bufSize, double bytes)
     {
@@ -129,6 +147,12 @@ void MemoryPanel::prepare()
     ProfileScope scope("Memory panel prepare", EProfileCategory::UI);
     m_prepared = true;
     m_nodes.clear();
+    m_snapshotMetric = m_metric;
+    if (m_metric == EMetric::Vram)
+    {
+        buildVramSnapshot();
+        return;
+    }
 
     // Churn-rate sample window for this frame: the delta of each node's cumulative counters since
     // the previous prepare, folded into the EMA. A long gap (panel just opened) only reseeds the
@@ -156,20 +180,25 @@ void MemoryPanel::render()
     if (!m_prepared)
         prepare(); // nothing ran ahead of us - inline
     m_prepared = false;
-    const MemScopeNode* root = Globals::memoryTracker.getRoot();
-    if (root == nullptr || m_nodes.empty())
+
+    m_zoomIdx = 0;
+    if (m_zoomId != 0)
+        for (uint32 i = 1; i < (uint32)m_nodes.size(); ++i)
+            if (m_nodes[i].id == m_zoomId) { m_zoomIdx = i; break; }
+
+    drawHeader();
+    if (m_nodes.empty())
     {
         ImGui::TextDisabled("MemoryTracker not initialized");
         return;
     }
-
-    drawHeader();
+    drawBreadcrumb();
     drawTreemap();
 
-    if (m_clickedZoom != nullptr)
+    if (m_clickedZoom != UINT32_MAX)
     {
-        m_zoom = m_clickedZoom == root ? nullptr : m_clickedZoom;
-        m_clickedZoom = nullptr;
+        m_zoomId = m_clickedZoom == 0 ? 0 : m_nodes[m_clickedZoom].id;
+        m_clickedZoom = UINT32_MAX;
     }
 }
 
@@ -179,6 +208,7 @@ void MemoryPanel::buildSnapshot(uint32 idx, const MemScopeNode* node)
         ViewNode& view = m_nodes[idx];
         view = ViewNode();
         view.src = node;
+        view.id = (uint64)(uintptr_t)node;
         view.name = node->name;
         view.category = node->category;
         const int64 liveBytes = node->selfBytes.load(oc::memory_order_relaxed);
@@ -223,11 +253,159 @@ void MemoryPanel::buildSnapshot(uint32 idx, const MemScopeNode* node)
          child = child->nextSibling.load(oc::memory_order_relaxed), ++k)
     {
         buildSnapshot(first + k, child);
+        m_nodes[first + k].parent = idx;
         inclusive += m_nodes[first + k].inclusiveBytes;
     }
     m_nodes[idx].inclusiveBytes = inclusive;
-    oc::sort(m_nodes.begin() + first, m_nodes.begin() + first + numChildren,
+    sortChildren(first, numChildren);
+}
+
+void MemoryPanel::sortChildren(uint32 first, uint32 count)
+{
+    oc::sort(m_nodes.begin() + first, m_nodes.begin() + first + count,
         [](const ViewNode& a, const ViewNode& b) { return a.inclusiveBytes > b.inclusiveBytes; });
+    // The sort moved the children: re-point their own children's parent index at the new slots.
+    for (uint32 c = first; c < first + count; ++c)
+        for (uint32 g = 0; g < m_nodes[c].numChildren; ++g)
+            m_nodes[m_nodes[c].firstChild + g].parent = c;
+}
+
+void MemoryPanel::addVramEntry(uint8 group, const char* name, uint64 bytes)
+{
+    const uint32 offset = (uint32)m_vramNames.size();
+    const char* label = kVramGroupNames[group];
+    m_vramNames.insert(m_vramNames.end(), label, label + strlen(label));
+    if (name != nullptr)
+    {
+        // A path splits on its slashes; a plain name like "GI.volumeSky" on its dots.
+        const bool isPath = strpbrk(name, "/\\") != nullptr;
+        bool inSegment = false;
+        for (const char* c = name; *c != '\0'; ++c)
+        {
+            if (*c == '/' || *c == '\\' || (!isPath && *c == '.'))
+            {
+                inSegment = false;
+                continue;
+            }
+            if (!inSegment)
+                m_vramNames.push_back('\0');
+            inSegment = true;
+            m_vramNames.push_back(*c);
+        }
+    }
+    const uint32 nameLen = (uint32)m_vramNames.size() - offset;
+    m_vramNames.push_back('\0');
+    m_vramEntries.push_back(VramEntry{ offset, nameLen, bytes, group });
+}
+
+void MemoryPanel::buildVramSnapshot()
+{
+    m_vramEntries.clear();
+    m_vramNames.clear();
+    Globals::rendererVK.forEachGpuAllocation(+[](void* ctx, const char* name, uint64 bytes, bool image, bool deviceLocal)
+        {
+            const uint8 group = !deviceLocal ? VramHost : image ? VramImages : VramBuffers;
+            static_cast<MemoryPanel*>(ctx)->addVramEntry(group, name != nullptr && name[0] != '\0' ? name : "<unnamed>", bytes);
+        }, this);
+
+    const auto usage = Globals::rendererVK.getGpuMemoryUsage();
+    m_vramUsed = usage.usedBytes;
+    m_vramReserved = usage.reservedBytes;
+    m_vramBudget = usage.budgetBytes;
+    m_vramDriverUsage = usage.deviceLocalUsageBytes;
+    if (usage.reservedBytes > usage.usedBytes)
+        addVramEntry(VramSlack, nullptr, usage.reservedBytes - usage.usedBytes);
+
+    const char* names = m_vramNames.data();
+    oc::sort(m_vramEntries.begin(), m_vramEntries.end(), [names](const VramEntry& a, const VramEntry& b)
+        {
+            const int order = memcmp(names + a.nameOffset, names + b.nameOffset, oc::min(a.nameLen, b.nameLen));
+            return order != 0 ? order < 0 : a.nameLen < b.nameLen;
+        });
+
+    m_nodes.resize(1);
+    ViewNode& root = m_nodes[0];
+    root = ViewNode();
+    root.name = kVramGroupNames[VramRoot];
+    root.id = kVramRootId;
+    root.category = VramRoot;
+    buildVramNode(0, 0, (uint32)m_vramEntries.size(), 0);
+}
+
+void MemoryPanel::buildVramNode(uint32 idx, uint32 begin, uint32 end, uint32 prefixLen)
+{
+    const char* names = m_vramNames.data();
+    // Entries whose whole name IS the prefix are this node's own bytes; they sort first.
+    int64 selfBytes = 0, selfCount = 0;
+    uint32 i = begin;
+    for (; i < end && m_vramEntries[i].nameLen == prefixLen; ++i)
+    {
+        selfBytes += (int64)m_vramEntries[i].bytes;
+        ++selfCount;
+    }
+
+    // The rest groups into runs of equal next segments, one child each.
+    const uint32 segStart = prefixLen == 0 ? 0 : prefixLen + 1; // past the '\0' separator
+    auto runEnd = [&](uint32 j, uint32 segLen)
+    {
+        const char* segment = names + m_vramEntries[j].nameOffset + segStart;
+        uint32 k = j + 1;
+        while (k < end)
+        {
+            const VramEntry& entry = m_vramEntries[k];
+            if (entry.nameLen < segStart + segLen || names[entry.nameOffset + segStart + segLen] != '\0'
+                || memcmp(names + entry.nameOffset + segStart, segment, segLen) != 0)
+                break;
+            ++k;
+        }
+        return k;
+    };
+    auto segmentLen = [&](uint32 j) { return (uint32)strlen(names + m_vramEntries[j].nameOffset + segStart); };
+
+    uint32 numChildren = 0;
+    for (uint32 j = i; j < end; j = runEnd(j, segmentLen(j)))
+        ++numChildren;
+
+    // Reserve the children's contiguous block before descending (see buildSnapshot)
+    const uint32 first = (uint32)m_nodes.size();
+    m_nodes.resize(first + numChildren);
+    int64 inclusive = selfBytes;
+    uint64 inclusiveCount = (uint64)selfCount;
+    uint32 child = first;
+    for (uint32 j = i; j < end; ++child)
+    {
+        const uint32 segLen = segmentLen(j);
+        const uint32 k = runEnd(j, segLen);
+        {
+            ViewNode& view = m_nodes[child];
+            view = ViewNode();
+            view.name = names + m_vramEntries[j].nameOffset + segStart;
+            view.id = hashSegment(m_nodes[idx].id, view.name, segLen);
+            view.parent = idx;
+            view.category = m_vramEntries[j].group;
+        }
+        buildVramNode(child, j, k, segStart + segLen);
+        inclusive += m_nodes[child].inclusiveBytes;
+        inclusiveCount += m_nodes[child].cumCount;
+        j = k;
+    }
+
+    ViewNode& view = m_nodes[idx];
+    view.selfBytes = selfBytes;
+    view.liveCount = selfCount;
+    view.inclusiveBytes = inclusive;
+    view.cumBytes = (uint64)inclusive;
+    view.cumCount = inclusiveCount;
+    view.firstChild = first;
+    view.numChildren = numChildren;
+    sortChildren(first, numChildren);
+}
+
+uint32 MemoryPanel::nodeColor(const ViewNode& view) const
+{
+    if (m_snapshotMetric == EMetric::Vram)
+        return kVramGroupColors[view.category < VramGroupCount ? view.category : VramRoot];
+    return profileCategoryColor((EProfileCategory)view.category);
 }
 
 void MemoryPanel::drawHeader()
@@ -235,10 +413,13 @@ void MemoryPanel::drawHeader()
     MemoryTracker& tracker = Globals::memoryTracker;
     char bytesBuf[64], bytesBuf2[64];
 
-    bool enabled = tracker.isEnabled();
-    if (ImGui::Checkbox("Track", &enabled))
-        tracker.setEnabled(enabled);
-    ImGui::SameLine();
+    if (m_metric != EMetric::Vram)
+    {
+        bool enabled = tracker.isEnabled();
+        if (ImGui::Checkbox("Track", &enabled))
+            tracker.setEnabled(enabled);
+        ImGui::SameLine();
+    }
     int metric = (int)m_metric;
     bool metricChanged = ImGui::RadioButton("Live", &metric, (int)EMetric::Live);
     if (ImGui::IsItemHovered())
@@ -251,10 +432,47 @@ void MemoryPanel::drawHeader()
     metricChanged |= ImGui::RadioButton("Churn/s", &metric, (int)EMetric::Churn);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Box sizes from ALLOCATOR BANDWIDTH: bytes allocated per second at each path,\nsmoothed - shows what code churns memory every frame");
+    ImGui::SameLine();
+    metricChanged |= ImGui::RadioButton("VRAM", &metric, (int)EMetric::Vram);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Box sizes from live GPU allocations (VMA), grouped by resource debug name:\na name with '/' splits into folders, else on '.'. Equal names merge into one box.");
     if (metricChanged)
     {
         m_metric = (EMetric)metric;
-        m_zoom = nullptr; // metric switch: restart from the top
+        m_zoomId = 0; // metric switch: restart from the top
+    }
+
+    if (m_snapshotMetric == EMetric::Vram)
+    {
+        const uint64 numAllocs = m_nodes.empty() ? 0 : m_nodes[0].cumCount;
+        formatBytes(bytesBuf, sizeof(bytesBuf), (double)m_vramUsed);
+        formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)m_vramReserved);
+        ImGui::SameLine();
+        ImGui::Text("used: %s in %llu allocs  |  VMA blocks: %s", bytesBuf, (unsigned long long)numAllocs, bytesBuf2);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("used = the live allocations, every heap (host-visible included)\nVMA blocks = the memory VMA holds; the difference is the 'VMA block slack' box");
+        formatBytes(bytesBuf, sizeof(bytesBuf), (double)m_vramDriverUsage);
+        formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)m_vramBudget);
+        ImGui::SameLine();
+        ImGui::TextDisabled("|  device-local: %s of %s budget", bytesBuf, bytesBuf2);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("What the driver reports this process uses in device-local heaps (VK_EXT_memory_budget),\nagainst the budget it grants. Past the VMA blocks it holds swapchain images and driver-internal memory.");
+
+        // Per-group totals: the root's children are the groups
+        bool first = true;
+        if (!m_nodes.empty())
+            for (uint32 i = 0; i < m_nodes[0].numChildren; ++i)
+            {
+                const ViewNode& group = m_nodes[m_nodes[0].firstChild + i];
+                if (!first)
+                    ImGui::SameLine();
+                first = false;
+                formatBytes(bytesBuf, sizeof(bytesBuf), (double)group.inclusiveBytes);
+                ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(nodeColor(group)), "%s %s", group.name, bytesBuf);
+            }
+        if (first)
+            ImGui::TextDisabled("no GPU allocations");
+        return;
     }
 
     formatBytes(bytesBuf, sizeof(bytesBuf), (double)(Globals::allocator.getUsedSize() + getAlignedAllocatedSize()));
@@ -284,8 +502,8 @@ void MemoryPanel::drawHeader()
     }
 
     // Total allocator bandwidth (root inclusive = every path) while the churn metric is up
-    const char* suffix = m_metric == EMetric::Churn ? "/s" : "";
-    if (m_metric == EMetric::Churn && !m_nodes.empty())
+    const char* suffix = m_snapshotMetric == EMetric::Churn ? "/s" : "";
+    if (m_snapshotMetric == EMetric::Churn && !m_nodes.empty())
     {
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)m_nodes[0].inclusiveBytes);
         formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)m_nodes[0].inclusiveBytes * m_rateDt);
@@ -312,25 +530,28 @@ void MemoryPanel::drawHeader()
     }
     if (first)
         ImGui::TextDisabled("no attributed allocations yet");
+}
 
-    // Breadcrumb for the zoom path
-    if (m_zoom != nullptr)
+void MemoryPanel::drawBreadcrumb()
+{
+    if (m_zoomIdx == 0)
+        return;
+    // walk up to build the path root-first
+    uint32 path[64];
+    uint32 pathLen = 0;
+    for (uint32 walk = m_zoomIdx; walk != UINT32_MAX && pathLen < 64; walk = m_nodes[walk].parent)
+        path[pathLen++] = walk;
+    for (uint32 i = pathLen; i-- > 0;)
     {
-        // walk up to build the path root-first
-        const MemScopeNode* path[64];
-        uint32 pathLen = 0;
-        for (const MemScopeNode* walk = m_zoom; walk != nullptr && pathLen < 64; walk = walk->parent)
-            path[pathLen++] = walk;
-        for (uint32 i = pathLen; i-- > 0;)
+        ImGui::PushID((int)i);
+        if (ImGui::SmallButton(m_nodes[path[i]].name))
+            m_clickedZoom = path[i];
+        ImGui::PopID();
+        if (i != 0)
         {
-            if (ImGui::SmallButton(path[i]->name))
-                m_clickedZoom = path[i];
-            if (i != 0)
-            {
-                ImGui::SameLine();
-                ImGui::TextDisabled(">");
-                ImGui::SameLine();
-            }
+            ImGui::SameLine();
+            ImGui::TextDisabled(">");
+            ImGui::SameLine();
         }
     }
 }
@@ -338,11 +559,7 @@ void MemoryPanel::drawHeader()
 void MemoryPanel::drawTreemap()
 {
     ProfileScope scope("Memory treemap", EProfileCategory::UI);
-    // Find the zoomed node's snapshot index (fall back to root if it vanished from view).
-    uint32 rootIdx = 0;
-    if (m_zoom != nullptr)
-        for (uint32 i = 0; i < (uint32)m_nodes.size(); ++i)
-            if (m_nodes[i].src == m_zoom) { rootIdx = i; break; }
+    const uint32 rootIdx = m_zoomIdx;
 
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -363,42 +580,62 @@ void MemoryPanel::drawTreemap()
         const ViewNode& view = m_nodes[m_hoveredNode];
         char bytesBuf[64];
         ImGui::BeginTooltip();
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(profileCategoryColor((EProfileCategory)view.category)), "%s", view.name);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(nodeColor(view)), "%s", view.name);
         // full path
         char pathBuf[256] = {};
-        const MemScopeNode* path[64];
+        uint32 path[64];
         uint32 pathLen = 0;
-        for (const MemScopeNode* walk = view.src; walk != nullptr && pathLen < 64; walk = walk->parent)
+        for (uint32 walk = m_hoveredNode; walk != UINT32_MAX && pathLen < 64; walk = m_nodes[walk].parent)
             path[pathLen++] = walk;
         size_t pathOffset = 0;
-        for (uint32 i = pathLen; i-- > 0 && pathOffset + 4 < sizeof(pathBuf);)
-            pathOffset += (size_t)sprintf_s(pathBuf + pathOffset, sizeof(pathBuf) - pathOffset, i == pathLen - 1 ? "%s" : " > %s", path[i]->name);
+        for (uint32 i = pathLen; i-- > 0;)
+        {
+            const int written = _snprintf_s(pathBuf + pathOffset, sizeof(pathBuf) - pathOffset, _TRUNCATE,
+                i == pathLen - 1 ? "%s" : " > %s", m_nodes[path[i]].name);
+            if (written < 0)
+                break; // truncated: the buffer is full
+            pathOffset += (size_t)written;
+        }
         ImGui::TextDisabled("%s", pathBuf);
 
-        const char* metricLabel = m_metric == EMetric::Live ? "Live"
-            : m_metric == EMetric::Cumulative ? "Cumulative" : "Churn";
-        const char* suffix = m_metric == EMetric::Churn ? "/s" : "";
-        formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
-        ImGui::Text("%s: %s%s", metricLabel, bytesBuf, suffix);
-        formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.selfBytes);
-        if (m_metric == EMetric::Churn)
-            ImGui::Text("Self: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
-        else
-            ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
-        formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.cumBytes);
-        ImGui::Text("Churn: %s in %llu allocs total", bytesBuf, (unsigned long long)view.cumCount);
-        if (m_metric != EMetric::Churn)
+        if (m_snapshotMetric == EMetric::Vram)
         {
-            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.rateBytes);
-            ImGui::Text("Rate: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
+            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
+            ImGui::Text("Size: %s in %llu allocs", bytesBuf, (unsigned long long)view.cumCount);
+            if (view.numChildren != 0 && view.liveCount != 0)
+            {
+                formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.selfBytes);
+                ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
+            }
+            ImGui::Text("Group: %s", kVramGroupNames[view.category < VramGroupCount ? view.category : VramRoot]);
         }
-        ImGui::Text("Category: %s", profileCategoryName((EProfileCategory)view.category));
+        else
+        {
+            const char* metricLabel = m_snapshotMetric == EMetric::Live ? "Live"
+                : m_snapshotMetric == EMetric::Cumulative ? "Cumulative" : "Churn";
+            const char* suffix = m_snapshotMetric == EMetric::Churn ? "/s" : "";
+            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
+            ImGui::Text("%s: %s%s", metricLabel, bytesBuf, suffix);
+            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.selfBytes);
+            if (m_snapshotMetric == EMetric::Churn)
+                ImGui::Text("Self: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
+            else
+                ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
+            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.cumBytes);
+            ImGui::Text("Churn: %s in %llu allocs total", bytesBuf, (unsigned long long)view.cumCount);
+            if (m_snapshotMetric != EMetric::Churn)
+            {
+                formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.rateBytes);
+                ImGui::Text("Rate: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
+            }
+            ImGui::Text("Category: %s", profileCategoryName((EProfileCategory)view.category));
+        }
         if (view.numChildren != 0)
             ImGui::TextDisabled("click to zoom");
         ImGui::EndTooltip();
     }
-    if (m_canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && m_zoom != nullptr)
-        m_clickedZoom = m_zoom->parent != nullptr ? m_zoom->parent : m_zoom; // right-click = up one level
+    if (m_canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && m_zoomIdx != 0)
+        m_clickedZoom = m_nodes[m_zoomIdx].parent; // right-click = up one level
 }
 
 void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y1, uint32 depth)
@@ -409,7 +646,7 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
         return;
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const uint32 baseColor = profileCategoryColor((EProfileCategory)view.category);
+    const uint32 baseColor = nodeColor(view);
     const uint32 fillColor = scaleColor(baseColor, 1.0f - 0.07f * (float)oc::min(depth, 6u));
 
     drawList->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), fillColor);
@@ -422,7 +659,7 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
     {
         m_hoveredNode = nodeIdx;
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && view.numChildren != 0)
-            m_clickedZoom = view.src;
+            m_clickedZoom = nodeIdx;
     }
 
     const bool drawTitle = h >= kTitleHeight * 2.0f && w >= 40.0f && view.numChildren != 0;
@@ -430,8 +667,8 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
     {
         char bytesBuf[64], labelBuf[160];
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
-        sprintf_s(labelBuf, sizeof(labelBuf), "%s  %s%s", view.name, bytesBuf,
-            m_metric == EMetric::Churn ? "/s" : "");
+        _snprintf_s(labelBuf, sizeof(labelBuf), _TRUNCATE, "%s  %s%s", view.name, bytesBuf,
+            m_snapshotMetric == EMetric::Churn ? "/s" : "");
         drawList->PushClipRect(ImVec2(x0 + 2.0f, y0), ImVec2(x1 - 2.0f, y0 + kTitleHeight), true);
         drawList->AddText(ImVec2(x0 + 4.0f, y0 + 1.0f), boxTextColor(fillColor), labelBuf);
         drawList->PopClipRect();
