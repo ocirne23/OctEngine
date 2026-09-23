@@ -18,9 +18,6 @@ export module Core.Allocator;
 
 import Core;
 
-oc::atomic<size_t> g_alignedAllocMemory = 0;
-export size_t getAlignedAllocatedSize() { return g_alignedAllocMemory.load(); }
-
 // Allocation tracking hooks (installed by the Memory library's MemoryTracker; Core stays
 // dependency-free). Called on EVERY allocate/deallocate that flows through the engine allocators
 // and the aligned operator new/delete paths - null until installed, one relaxed load + branch of
@@ -70,37 +67,26 @@ public:
 
     [[nodiscard]] T* allocate(std::size_t n)
     {
-        if constexpr (alignof(T) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-            return reinterpret_cast<T*>(m_allocator.allocate(n));
-        else
-        {
-            g_alignedAllocMemory += n;
-            T* p = reinterpret_cast<T*>(_aligned_malloc(n, alignof(T)));
-            callMemoryAllocHook(p, n);
-            return p;
-        }
+        return reinterpret_cast<T*>(m_allocator.allocateAligned(n * sizeof(T), alignof(T)));
     }
     void deallocate(T* p, [[maybe_unused]] std::size_t n = 0)
     {
-        if constexpr (alignof(T) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-            m_allocator.deallocate((void*)p);
-        else
-        {
-            callMemoryFreeHook(p);
-            g_alignedAllocMemory -= _aligned_msize(p, alignof(T), 0);
-            _aligned_free(p);
-        }
+        m_allocator.deallocate((void*)p);
     }
 
     Alloc& m_allocator;
 };
 
+// Sits directly before the user pointer. An over-aligned block (allocateAligned) puts it there too,
+// with alignPad = the bytes between the malloc base and the header, so EVERY block frees through
+// the same deallocate - plain delete[] included (EASTL frees aligned blocks that way).
 struct AllocationHeader
 {
-    static constexpr uint32 CHECK = 0x69696969;
+    static constexpr uint16 CHECK = 0x6969;
     void* pAllocator;
-    uint32 size;
-    uint32 checkVal;
+    uint32 size;     // header + user bytes + tail (not the alignPad)
+    uint16 alignPad;
+    uint16 checkVal;
 };
 static_assert(sizeof(AllocationHeader) == __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 
@@ -130,30 +116,17 @@ public:
     [[nodiscard]]
     virtual void* allocate(size_t size)
     {
-        const size_t sizeWithHeader = size
-#ifdef CHECK_BOUNDS
-            + sizeof(AllocationTail)
-#endif
-            + sizeof(AllocationHeader);
-        AllocationHeader* pAllocation = static_cast<AllocationHeader*>(std::malloc(sizeWithHeader));
-        pAllocation->pAllocator = this;
-        pAllocation->size = (uint32)sizeWithHeader;
-#ifdef TRACK_ALLOCATION_SIZE
-        m_usedSize += size
-#ifdef CHECK_BOUNDS
-            + sizeof(AllocationTail)
-#endif
-            + sizeof(AllocationHeader);
-        m_maxUsedSize = m_usedSize > m_maxUsedSize ? (size_t)m_usedSize : m_maxUsedSize;
-#endif
+        return allocateWithPad(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+    }
 
-#ifdef CHECK_BOUNDS
-        pAllocation->checkVal = AllocationHeader::CHECK;
-        AllocationTail* pTail = (AllocationTail*)((uint8_t*)(pAllocation)+sizeWithHeader - sizeof(AllocationTail));
-        pTail->checkVal = AllocationTail::CHECK;
-#endif
-        callMemoryAllocHook(pAllocation + 1, size);
-        return pAllocation + 1;
+    // Any power-of-two alignment; the block frees through deallocate like every other one. Not
+    // virtual: StackAllocator inherits it (its deallocate honours alignPad on the malloc fallback).
+    [[nodiscard]]
+    void* allocateAligned(size_t size, size_t align)
+    {
+        if (align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+            return allocate(size);
+        return allocateWithPad(size, align);
     }
 
     virtual void deallocate(void* ptr)
@@ -161,14 +134,14 @@ public:
         callMemoryFreeHook(ptr); // before the release: a recycled address must not race its own tracking entry
         AllocationHeader* pAllocation = static_cast<AllocationHeader*>(ptr) - 1;
 #ifdef TRACK_ALLOCATION_SIZE
-        m_usedSize -= pAllocation->size;
+        m_usedSize -= pAllocation->size + pAllocation->alignPad;
 #endif
 #ifdef CHECK_BOUNDS
         AllocationTail* pTail = (AllocationTail*)(((uint8_t*)pAllocation) + pAllocation->size - sizeof(AllocationTail));
         if (pAllocation->checkVal != AllocationHeader::CHECK) { assert(false && "Buffer underflow detected!"); __debugbreak(); }
         if (pTail->checkVal != AllocationTail::CHECK) { assert(false && "Buffer overflow detected!"); __debugbreak(); }
 #endif
-        std::free(pAllocation);
+        std::free(reinterpret_cast<uint8_t*>(pAllocation) - pAllocation->alignPad);
     }
 
     inline static void globalFree(void* ptr)
@@ -187,6 +160,41 @@ public:
 
     inline size_t getUsedSize() const { return m_usedSize; }
     inline size_t getMaxUsedSize() const { return m_maxUsedSize; }
+
+private:
+
+    // malloc returns 16-aligned memory, so a block aligned to `align` needs at most align - 16 bytes
+    // of pad in front of its header.
+    void* allocateWithPad(size_t size, size_t align)
+    {
+        assert((align & (align - 1)) == 0 && align - __STDCPP_DEFAULT_NEW_ALIGNMENT__ <= 0xFFFF);
+        const size_t sizeWithHeader = size
+#ifdef CHECK_BOUNDS
+            + sizeof(AllocationTail)
+#endif
+            + sizeof(AllocationHeader);
+        const size_t maxPad = align - __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+        uint8_t* base = static_cast<uint8_t*>(std::malloc(sizeWithHeader + maxPad));
+        const uintptr_t user = (reinterpret_cast<uintptr_t>(base) + sizeof(AllocationHeader) + align - 1) & ~uintptr_t(align - 1);
+        AllocationHeader* pAllocation = reinterpret_cast<AllocationHeader*>(user) - 1;
+        pAllocation->pAllocator = this;
+        pAllocation->size = (uint32)sizeWithHeader;
+        pAllocation->alignPad = uint16(reinterpret_cast<uint8_t*>(pAllocation) - base);
+#ifdef TRACK_ALLOCATION_SIZE
+        m_usedSize += sizeWithHeader + pAllocation->alignPad;
+        m_maxUsedSize = m_usedSize > m_maxUsedSize ? (size_t)m_usedSize : m_maxUsedSize;
+#endif
+
+#ifdef CHECK_BOUNDS
+        pAllocation->checkVal = AllocationHeader::CHECK;
+        AllocationTail* pTail = (AllocationTail*)((uint8_t*)(pAllocation)+sizeWithHeader - sizeof(AllocationTail));
+        pTail->checkVal = AllocationTail::CHECK;
+#endif
+        callMemoryAllocHook(pAllocation + 1, size);
+        return pAllocation + 1;
+    }
+
+public:
 
     oc::atomic<size_t> m_usedSize = 0;
     size_t m_maxUsedSize = 0;
@@ -248,6 +256,7 @@ public:
 #endif
         pAllocation->pAllocator = this;
         pAllocation->size = (uint32)sizeWithHeader;
+        pAllocation->alignPad = 0;
 #ifdef CHECK_BOUNDS
         pAllocation->checkVal = AllocationHeader::CHECK;
         AllocationTail* pTail = (AllocationTail*)((uint8_t*)(pAllocation + 1) + size);
@@ -299,7 +308,7 @@ public:
             if constexpr (ThreadSafe) m_usedFallbackSize.fetch_sub(size, oc::memory_order_relaxed);
             else                      m_usedFallbackSize -= size;
 #endif
-            std::free(pMem);
+            std::free(pMem - pAllocation->alignPad); // allocateAligned (inherited) blocks always come from malloc
         }
     }
 
@@ -591,17 +600,11 @@ void* operator new(std::size_t n)
     return Globals::allocator.allocate(n);
 }
 
+// Every form - aligned or not - allocates through Globals::allocator and frees through its
+// deallocate (the header carries the alignment pad), so any delete form frees any new form's block.
 void* operator new(std::size_t n, std::align_val_t align)
 {
-    if ((size_t)align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-        return Globals::allocator.allocate(n);
-    else
-    {
-        g_alignedAllocMemory += n;
-        void* p = _aligned_malloc(n, (size_t)align);
-        callMemoryAllocHook(p, n);
-        return p;
-    }
+    return Globals::allocator.allocateAligned(n, (size_t)align);
 }
 
 void* operator new[](std::size_t n)
@@ -611,28 +614,15 @@ void* operator new[](std::size_t n)
 
 void* operator new[](std::size_t n, std::align_val_t align)
 {
-    if ((size_t)align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-        return Globals::allocator.allocate(n);
-    else
-    {
-        g_alignedAllocMemory += n;
-        void* p = _aligned_malloc(n, (size_t)align);
-        callMemoryAllocHook(p, n);
-        return p;
-    }
+    return Globals::allocator.allocateAligned(n, (size_t)align);
 }
 
 // EASTL (the oc:: container backing -- see Core.OcSTL) routes every container allocation through
 // these two named/aligned operator new[] forms rather than plain new[], so it can carry a debug name
 // and an alignment. It DECLARES them and expects the application to define them; without these two
-// the engine does not link.
-//
-// They must hand back memory the PLAIN operator delete[] above can free: eastl::allocator::deallocate
-// frees with delete[] whichever form allocated the block. That rules out the _aligned_malloc path the
-// align_val_t overloads take -- an _aligned_malloc block passed to Allocator::deallocate corrupts the
-// heap. So the engine allocator's own alignment is all EASTL can get here, and a stronger request
-// asserts instead of failing silently. EASTL only calls the aligned form when the element type is
-// over-aligned (alignment > EASTL_ALLOCATOR_MIN_ALIGNMENT), so nothing reaches it today.
+// the engine does not link. eastl::allocator::deallocate frees with plain delete[] whichever form
+// allocated the block - fine, see above. EASTL calls the aligned form for over-aligned element
+// types (alignment > EASTL_ALLOCATOR_MIN_ALIGNMENT).
 void* operator new[](std::size_t n, const char*, int, unsigned, const char*, int)
 {
     return Globals::allocator.allocate(n);
@@ -640,9 +630,8 @@ void* operator new[](std::size_t n, const char*, int, unsigned, const char*, int
 
 void* operator new[](std::size_t n, std::size_t align, std::size_t alignOffset, const char*, int, unsigned, const char*, int)
 {
-    assert(align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__ && alignOffset == 0
-        && "over-aligned EASTL allocation: it would come back through plain operator delete[]");
-    return Globals::allocator.allocate(n);
+    assert(alignOffset == 0 && "EASTL aligned allocation with an offset: not supported");
+    return Globals::allocator.allocateAligned(n, align);
 }
 
 void operator delete(void* p)
@@ -651,19 +640,10 @@ void operator delete(void* p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete(void* p, std::align_val_t align)
+void operator delete(void* p, std::align_val_t)
 {
     if (p)
-    {
-        if ((size_t)align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-            return Globals::allocator.deallocate(p);
-        else
-        {
-            callMemoryFreeHook(p);
-            g_alignedAllocMemory -= _aligned_msize(p, (size_t)align, 0);
-            return _aligned_free(p);
-        }
-    }
+        Globals::allocator.deallocate(p);
 }
 
 void operator delete[](void* p)
@@ -672,19 +652,10 @@ void operator delete[](void* p)
         Globals::allocator.deallocate(p);
 }
 
-void operator delete[](void* p, std::align_val_t align)
+void operator delete[](void* p, std::align_val_t)
 {
     if (p)
-    {
-        if ((size_t)align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
-            return Globals::allocator.deallocate(p);
-        else
-        {
-            callMemoryFreeHook(p);
-            g_alignedAllocMemory -= _aligned_msize(p, (size_t)align, 0);
-            return _aligned_free(p);
-        }
-    }
+        Globals::allocator.deallocate(p);
 }
 
 }

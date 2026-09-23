@@ -70,6 +70,15 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
 * **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
   never visit empty space.
+* **Children are classified 8 at a time BEFORE their hash probe** (`forEachChild`, testers with
+  `classify8`: sphere and frustum). The batch centers come from the parent's float min plus the
+  4×4×4 grid offset (`g_childOffsets`), tested with a box inflated by a bound on the float rounding,
+  so "outside" and "fully inside" stay conservative; only survivors pay the `CellMap` probe and the
+  exact double `cellMinWorld`. AABB and ray fall back to a probe + scalar classify per child.
+* **Plane masking.** A traversal carries an `active` mask down the tree: the bounds a cell still
+  STRADDLES (frustum: bits 0–5 the planes, bit 6 the distance band; the others one bit), 0 = fully
+  inside. A child's loose box sits inside its parent's, so it tests only the parent's active bounds,
+  and `test8` does too — deep in a frustum that is usually one or two planes, not six.
 * **Small bounded queries skip the descent** (`traverse`, testers with `boundHalf()`: sphere and
   AABB): per level holding any entry (`m_levelEntityCount`), the cells the volume overlaps — the
   bound plus that level's loose half cell — are addressed straight from the key math (`quantize`,
@@ -127,13 +136,16 @@ sectors and scatter groups all pass false.
 |---|---|---|
 | `SpatialLayer_Render` | 0 | Entities that have a RenderComponent. **This is the gameplay-query layer.** |
 | `SpatialLayer_Stress` | 1 | Synthetic stress-test entries. |
-| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, scatter groups. |
+| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean clipmap sectors, scatter groups. |
 | `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
-| `SpatialLayer_Ocean` | 4 | Ocean clipmap sectors (userData = sector index + 1). Its own layer so the ocean's hand-over list (collect slot 2) holds nothing else. |
 
-> **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is the
-> streamer's chunk key + 1 (so it can resolve its own hand-over list), ocean sectors and scatter
-> groups carry 0. **Gameplay queries must never include that layer**
+> **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is its
+> `RenderNode*`, an ocean sector's is its `RenderNode*` **with `SpatialTerrainTag_Ocean` (bit 63, above
+> the 47-bit user address range) set**, and scatter groups carry 0. The streamer and the ocean share
+> ONE hand-over list (collect slot 1), walked ONCE by `TerrainStreamer::render`'s job, which masks the
+> tag off and pushes every node blindly with its own pass mask; the tag only keeps the sectors out of
+> the terrain's shadow ball. The owners keep a dead node's memory until `visibleCollectGeneration`
+> moves on (see the hand-over below). **Gameplay queries must never include that layer**
 > ([Types.ixx:58](Private/Types.ixx#L58)).
 
 ## Visibility stamps
@@ -150,8 +162,12 @@ invalidates that pass's previous generation — one consumer per pass by design.
 | `UpdateRoot` / `VisibleRoot` | The World's ROOT-DEDUPE stamps: "this root is in the current periodic selection result" (advances with the selection job) / "already queued from this frame's visible set" (advances every pass). No visibility meaning — read with the exact accessors only. |
 
 **Stamps are 16-bit** (`SpatialStamp`): a generation counts 1..65534, and `advanceStamp` sweeps the
-pass's pool row back to `SpatialStamp_Linked` when it wraps, so a stale value can never read as
-current again. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
+pass's pool column back to `SpatialStamp_Linked` when it wraps, so a stale value can never read as
+current again. **The 8 pass stamps of an entry sit together** (`RecordPool::stamps`, one 16-byte
+`PassStamps` per entry, not one array per pass): `getPassMask` / `getPassMaskExact` are one
+`__m128i` load compared against the 8 current generations (`m_visibleQueryId`, 16-aligned) with
+`_mm_cmpeq_epi16`, the spawn guard one more compare against 0 — one cache line per call instead of
+one per pass. The traversal's stamp stores are random by pool index either way. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
 `storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
 a reused slot.
 
@@ -175,7 +191,9 @@ Both `markVisibleSet` and `markVisibleSphere` run `traverseParallel`
 2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial traverse chunk"` spans
    show on the worker tracks. High because the render gate waits on these stamps.
 
-A chunk-aware emit `(idx, pos, chunk)` gets `prepareChunks(n)` before any emit with `chunk < n`, so
+Every emit gets the lane's layer mask (`(idx, pos, layers)`), so a consumer never reads the pool's
+`layerMask` row per hit. A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
+before any emit with `chunk < n`, so
 a caller can keep an owner-sliced list per chunk (slot 0 = the serial expansion, `1 + root index`
 = the fan-out). `registerLock = true` makes the expansion and every chunk take the index's SHARED
 lock per phase — never across the parallelFor's wait, which could park the fiber and carry the lock
@@ -196,19 +214,31 @@ job through `advanceUpdateTiers` + `queryUpdateTiers` (below), off the frame-cri
 
 ### The visible set hand-over (`setVisibleCollect`)
 
-The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask, slot)` set, the stamp
-lambda appends the `SpatialHandle` of every hit carrying one of that slot's layers to the slot's
-owner-sliced per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx, pos, chunk)` —
-list 0 for its serial expansion, 1 + the chunk's first frontier index for the fan-out), merged once
-inside the job. **Three collect slots** (`NumVisibleCollectSlots`): slot 0 is the World's
-(`SpatialLayer_Entity`, the default argument), slot 1 the terrain streamer's
-(`SpatialLayer_Terrain`, its main-visible chunk push) and slot 2 the ocean's (`SpatialLayer_Ocean`,
-its sector push) — see Procedural. `visibleHandles(slot)` is
-valid from `joinUpdateJob` until the next kick, and a FROZEN cull keeps the last list, like the
-stamps; `userData(handle)` resolves one and reads 0 for an entry that died in between (the destroy
-windows sit between the join and the World's pass). **This is how the World selects what is on
-screen every frame without a traversal of its own**, and how the streamer pushes the on-screen
-chunks without walking its ring.
+The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask, slot, what)` set, the
+stamp lambda appends every hit carrying one of that slot's layers to the slot's owner-sliced
+per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx, pos, layers, chunk)` — list 0
+for its serial expansion, 1 + the chunk's first frontier index for the fan-out), merged once inside
+the job. A slot collects either **`ECollect::Handles`** (`visibleHandles(slot)`) or
+**`ECollect::UserData`** (`visibleUserData(slot)`: the value is read from the pool IN THE JOB and
+zeros are dropped, so the consumer's walk touches no pool row at all — but it gets a value, not a
+live check, and must tolerate an entry that changed or died since the stamp). **Two collect slots**
+(`NumVisibleCollectSlots`):
+* slot 0 — the World's (`SpatialLayer_Entity`, Handles, the default arguments): entities die in the
+  destroy windows between the join and the World's pass, and `userData(handle)` reads 0 for those.
+* slot 1 — the terrain streamer's (`SpatialLayer_Terrain`, UserData): `RenderNode` pointers of its
+  chunks and of the ocean's sectors, pushed in ONE walk by `TerrainStreamer::render`'s job (scatter
+  groups carry 0 and never enter the list) — see Procedural.
+
+The lists are valid from `joinUpdateJob` until the next kick, and a FROZEN cull keeps the last list,
+like the stamps. **`visibleCollectGeneration()`** counts the list rebuilds (real Main stamps only —
+not while culling is Off, frozen or the view invalid). An owner whose userData is an object ADDRESS
+retires a dying object instead of freeing it: everything that draws goes at once, the memory stays
+until the generation moves past the value at retirement — from then on no list can name it. The
+terrain residents and the ocean grids work this way.
+
+`forEachInSphere(..., skipStampedIn)` drops hits currently stamped in any of the given passes (exact
+compare, read in the traversal): the terrain's shadow ball skips what the Main set already pushed. **This is how the World selects what is on screen every frame without a traversal
+of its own**, and how the streamer and the ocean push their on-screen geometry without walking it all.
 
 ### The Near ball's hysteresis
 
@@ -314,7 +344,9 @@ legal.
 
 Every linked entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
 `CellRecord.head`), so the 8-wide AVX2 testers (`test8`) load a block transpose-free and **every
-mutation costs the size of its cell, never the level**. There is no separate dynamic list and no
+mutation costs the size of its cell, never the level**. A `CellBlock` is `alignas(64)`, 256 bytes,
+so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets the alignment from the
+engine allocator — see Core). The fully-inside emit masks live lanes with one AVX2 compare (`liveLanes`). There is no separate dynamic list and no
 static tier: a settled entry and a moving one are the same lane, the difference is only whether
 `updateEntry` writes it this frame. (The tier existed when static entries were sorted level-wide
 ranges; per-cell blocks made the split pointless, since a block lane takes an in-place write as
@@ -335,7 +367,10 @@ cheaply as the pool did.)
   cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED
   lanes — a tombstoned lane whose Unlink op is still queued this commit is still owned, dropping it
   would strand that op's `storeIdx` — into the kept `m_compactScratch`, refill from the head, free
-  the tail) — at least one block freed per pass, so one cell walk per 8 retirements.
+  the tail) — at least one block freed per pass, so one cell walk per 8 retirements. The chain's
+  block count for that test lives in the HEAD block (`CellBlock::chainBlocks`, in the alignment
+  padding, so `CellRecord` stays 16 bytes); `insert`, the block unlink in `retireLane` and
+  `compactCell` keep it, and a Debug assert re-walks the chain to check it.
 * Sphere, AABB and frustum testers test blocks 8-wide; the ray tester goes lane by lane. Stats:
   `Blocks` (entries / blocks = the lane fill) and `Cell moves`.
 

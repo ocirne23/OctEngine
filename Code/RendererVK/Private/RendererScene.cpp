@@ -45,6 +45,8 @@ import :LightingUtils;
 void Renderer::renderNode(const RenderNode& node, uint32 passMask)
 {
     const uint32 numInstances = (uint32)node.m_meshInstances.size();
+    if (numInstances == 0 || passMask == 0)
+        return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
     const uint32 startIdx = m_instances.claimInstances(numInstances);
     if (startIdx == UINT32_MAX)
         return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame
@@ -160,6 +162,90 @@ uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
     // (TextureManager::upload -> TextureStreamer::queueDescriptorWrite), and the material row is a
     // shared-buffer upload. Capacity growth (textures or materials) invalidates on its own.
     return materialIdx;
+}
+
+uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced)
+{
+    // What ObjectContainer builds for a textureless procedural scene with a pipeline override.
+    RendererVKLayout::MaterialInfo material{};
+    material.flags = 0;
+    material.opacity = 1.0f;
+    material.diffuseTexIdx = RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX;
+    material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
+    material.metalRoughnessTexIdx = UINT16_MAX;
+    material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Opaque;
+    if (!rayTraced)
+        material.flags |= RendererVKLayout::MATERIAL_FLAG_NO_RAYTRACING;
+    if (pipeline == RendererVKLayout::EPipelineIndex::Ocean)
+        material.flags |= RendererVKLayout::MATERIAL_FLAG_OCEAN;
+    if (pipeline == RendererVKLayout::EPipelineIndex::TerrainLit)
+        material.flags |= RendererVKLayout::MATERIAL_FLAG_TERRAIN;
+    const vk::Format normalFormat = Globals::textureManager.getTexture(material.normalTexIdx).getFormat();
+    if (normalFormat == vk::Format::eBc5UnormBlock || normalFormat == vk::Format::eBc5SnormBlock)
+        material.flags |= RendererVKLayout::MATERIAL_FLAG_BC5_NORMAL;
+    return (uint16)addMaterialInfos({ material });
+}
+
+RenderMesh Renderer::createMesh(const RenderMeshData& data)
+{
+    RenderMesh mesh;
+    if (data.vertices.empty() || data.indices.empty())
+        return mesh;
+    MeshDataManager& meshDataManager = Globals::meshDataManager;
+    mesh.m_numVertices = (uint32)data.vertices.size();
+    mesh.m_numIndices = (uint32)data.indices.size();
+    mesh.m_firstVertex = (uint32)(meshDataManager.uploadVertexData(data.vertices.data(), size_t(mesh.m_numVertices) * sizeof(RendererVKLayout::MeshVertex))
+        / sizeof(RendererVKLayout::MeshVertex));
+    mesh.m_firstIndex = (uint32)(meshDataManager.uploadIndexData(data.indices.data(), size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex))
+        / sizeof(RendererVKLayout::MeshIndex));
+    mesh.m_bounds = data.bounds;
+
+    RendererVKLayout::MeshInfo info{};
+    info.center = data.bounds.pos;
+    info.radius = data.bounds.radius;
+    info.indexCount = mesh.m_numIndices;
+    info.firstIndex = mesh.m_firstIndex;
+    info.vertexOffset = (int32)mesh.m_firstVertex;
+    info.firstInstance = 0;
+    mesh.m_meshIdx = (uint16)addMeshInfos({ info }, oc::span<const uint32>(&mesh.m_numVertices, 1));
+    return mesh;
+}
+
+RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform)
+{
+    RenderNode node;
+    if (!mesh.isValid())
+        return node;
+    if (m_identityInstanceOffsetIdx == UINT32_MAX)
+        m_identityInstanceOffsetIdx = addMeshInstanceOffsets({ RendererVKLayout::MeshInstanceOffset{} });
+    node.m_transformIdx = addRenderNodeTransform(transform);
+    node.m_bounds = mesh.m_bounds;
+    RendererVKLayout::InMeshInstance& instance = node.m_meshInstances.emplace_back();
+    instance.renderNodeIdx = node.m_transformIdx;
+    instance.instanceOffsetIdx = m_identityInstanceOffsetIdx;
+    instance.meshIdx = mesh.m_meshIdx;
+    instance.materialIdx = materialIdx;
+    instance.pipelineIndex = (uint16)pipeline;
+    instance.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Opaque;
+    return node;
+}
+
+void RenderMesh::destroy()
+{
+    if (m_meshIdx != UINT16_MAX)
+        Globals::rendererVK.destroyMesh(*this);
+}
+
+void Renderer::destroyMesh(RenderMesh& mesh)
+{
+    // The same free as removeObjectContainer's for an unstreamed mesh: the data ranges, then the
+    // neutralized MeshInfo slot (its BLAS and side tables go with it).
+    Globals::meshDataManager.freeVertexData(size_t(mesh.m_firstVertex) * sizeof(RendererVKLayout::MeshVertex),
+        size_t(mesh.m_numVertices) * sizeof(RendererVKLayout::MeshVertex));
+    Globals::meshDataManager.freeIndexData(size_t(mesh.m_firstIndex) * sizeof(RendererVKLayout::MeshIndex),
+        size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex));
+    freeMeshInfoRange(mesh.m_meshIdx, 1);
+    mesh.m_meshIdx = UINT16_MAX;
 }
 
 uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)

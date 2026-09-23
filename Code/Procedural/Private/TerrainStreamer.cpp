@@ -15,6 +15,7 @@ import :TerrainStreamer;
 import :TerrainSampler;
 import :TerrainGenerator;
 import :TerrainChunk;
+import :OceanGenerator;
 
 namespace
 {
@@ -242,9 +243,9 @@ namespace Procedural
 		ProfileScope scope("TerrainStreamer::initialize", EProfileCategory::Procedural);
 		auto dirty = [this]() { m_configDirty = true; };
 
-		// The cull job's Main stamp hands over the main-visible chunk handles (see update's render
-		// push), so the push never walks every resident.
-		Globals::spatialIndex.setVisibleCollect(SpatialLayer_Terrain, 1);
+		// The cull job's Main stamp hands over the main-visible chunks AND ocean sectors as userData
+		// values (see render), so neither push walks its whole set.
+		Globals::spatialIndex.setVisibleCollect(SpatialLayer_Terrain, 1, SpatialIndex::ECollect::UserData);
 
 		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
 		// never loads the 2.28 GB of models onto the GPU).
@@ -839,11 +840,24 @@ namespace Procedural
 		joinRender();   // the render job reads m_residents
 		joinRingScan(); // so does the ring scan; its output is against the residents being cleared
 		m_ringScanOut.clear();
+		for (auto& entry : m_residents)
+			retireResident(oc::move(entry.second));
 		m_residents.clear();
 		m_evictCandidates.clear();
 		m_pending.clear();
 		m_readyBacklog.clear();
 		m_ringScanNeeded = true;
+	}
+
+	// Everything that draws is released NOW (the node - which the hand-over push then skips -, the
+	// mesh, the culling entry); only the Resident's memory waits for the next real stamp, because the
+	// current hand-over list may still hold &node.
+	void TerrainStreamer::retireResident(oc::unique_ptr<Resident> resident)
+	{
+		resident->spatialEntry.reset();
+		resident->node.destroy();
+		resident->mesh.destroy();
+		m_retired.push_back({ Globals::spatialIndex.visibleCollectGeneration(), oc::move(resident) });
 	}
 
 	void TerrainStreamer::kickPump(size_t numNew)
@@ -973,7 +987,7 @@ namespace Procedural
 				generateChunk(*req.maps, req.params, mesh);
 				if (!mesh.indices.empty())
 				{
-					ProfileScope meshScope("TerrainStreamer::createMeshScene", EProfileCategory::Procedural); // pure, never parks
+					ProfileScope meshScope("TerrainStreamer::buildMesh", EProfileCategory::Procedural); // pure, never parks
 					MeshGeometryDesc geom;
 					geom.positions = mesh.positions.data();
 					geom.normals = mesh.normals.data();
@@ -983,8 +997,7 @@ namespace Procedural
 					geom.numVertices = (uint32)mesh.positions.size();
 					geom.indices = mesh.indices.data();
 					geom.numIndices = (uint32)mesh.indices.size();
-					geom.name = "TerrainChunk";
-					res.scene = ISceneData::createMeshScene(geom); // copies; mesh dies here, halving what ships
+					res.mesh.build(geom); // the upload layout; the source arrays die here, halving what ships
 				}
 			}
 
@@ -1086,10 +1099,88 @@ namespace Procedural
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
 	}
 
+	// Push resident chunks through the spatial culling gate, WITHOUT walking every resident (the ring
+	// holds thousands of chunks; a handful are on screen):
+	//  1. Main-visible chunks come straight from the cull job's Main stamp, which collects the
+	//     SpatialLayer_Terrain userData values for us (setVisibleCollect slot 1, installed in
+	//     initialize). Every value is a RenderNode* (an ocean sector's tagged with
+	//     SpatialTerrainTag_Ocean), so the job's ONE walk pushes chunks and sectors alike, each with
+	//     its own node pass mask (chunks PASS_ALL, sectors PASS_MAIN or 0 when dry) - no lookup, no
+	//     routing. These chunks feed every pass.
+	//  2. Main-culled chunks keep their shadow/GI passes - terrain is the ground everywhere, and
+	//     dropping the ground behind the camera from the TLAS/shadow maps visibly breaks GI and
+	//     long sun shadows - but only within the range those GPU consumers actually read: the
+	//     TLAS range bound, and the sun cascades' maxDistance plus the up-sun casterPad, both
+	//     measured from the scene focus. A sphere query of that radius replaces the full walk;
+	//     the GPU shadow cull and the TLAS range bound would have dropped anything past it.
+	//     Past that, the terrain sun march shades from the baked height map, chunk-free.
+	//     MainOnly debug mode drops main-culled chunks entirely, like entities.
+	// A chunk in both sets is pushed once: the sphere pass skips main-stamped entries. Every chunk
+	// registers with spawnVisible = false, so a fresh chunk simply waits one stamp for its main
+	// pass and rides the sphere pass meanwhile. A node that died between the stamp and this push
+	// (an evicted chunk, a rebuilt ocean grid) is still addressable - its owner retires the memory
+	// until the next real stamp - and renderNode skips it, being destroyed. Culling Off (or headless:
+	// no stamps, empty hand-over) keeps the plain walk, so nothing is ever culled there; the ocean then
+	// pushes its own sectors.
+	//
+	// The walk and the pushes run on a WORKER (renderNode is lock-free from any job between
+	// beginFrame and present): the list holds VALUES (it reads no pool row the scatter's registrations
+	// on main could reallocate) and holds until the next spatial kick. main.cpp joins m_renderCounter
+	// right before present, and update/clearResidents join it before touching m_residents (nothing
+	// mutates it until then; this frame's ring scan only reads it). The ocean's sectors, their pass
+	// masks and transforms hold until its next update, which follows that same join. The sphere query
+	// locks the index itself.
+	void TerrainStreamer::render(Renderer& renderer, OceanGenerator& ocean)
+	{
+		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
+		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
+		const bool chunks = m_renderReady;
+		m_renderReady = false;
+		ocean.render(gate); // its own job: the readbacks, and every sector itself while the hand-over cannot name them
+		if (!gate)
+		{
+			if (chunks)
+				Globals::jobSystem.submit([this, &renderer]
+				{
+					for (const auto& entry : m_residents)
+						renderer.renderNode(entry.second->node);
+				}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
+			return;
+		}
+
+		const bool sphere = chunks && culling.mode != int(ESpatialCullMode::MainOnly);
+		const ShadowParams& shadow = renderer.shadowParams();
+		const float reach = glm::max(shadow.maxDistance + shadow.casterPad, renderer.giTlasRange());
+		const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
+		Globals::jobSystem.submit([&renderer, sphere, reach, focus]
+		{
+			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect).
+			for (const uint64 userData : Globals::spatialIndex.visibleUserData(1))
+				renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
+			if (!sphere)
+				return;
+			Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
+			{
+				if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
+					renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData), RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI);
+			}, SpatialPassBit_Main); // main-stamped: pushed above
+		}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
+	}
+
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
 	{
 		joinRender();   // last frame's render job (already joined before present; a cheap no-op)
 		joinRingScan(); // last frame's ring scan: applied below (enabled) or dropped here
+		m_renderReady = false;
+		{
+			// Retired in increasing generation order: free the prefix no hand-over list can name any more.
+			const uint32 generation = Globals::spatialIndex.visibleCollectGeneration();
+			size_t freed = 0;
+			while (freed < m_retired.size() && m_retired[freed].generation != generation)
+				++freed;
+			if (freed > 0)
+				m_retired.erase(m_retired.begin(), m_retired.begin() + freed);
+		}
 		if (!m_enabled)
 		{
 			m_ringScanOut.clear();
@@ -1253,7 +1344,7 @@ namespace Procedural
             ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
             for (Result& res : ready)
             {
-                if (!res.scene) // pump-dropped (stale at dequeue) or generation failed: just release the key
+                if (res.mesh.indices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
                 {
                     m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
                     m_ringScanNeeded = true;
@@ -1275,40 +1366,31 @@ namespace Procedural
                 m_pending.erase(res.key);
                 m_ringScanNeeded = true; // conservative: covers the failure continue below
 
-                // Route the chunk onto the terrain pipeline variant (procedural height/slope albedo). Keep the
-                // material's own texture indices (fallback) - terrain carries no textures.
-                ObjectContainer::MaterialOverrides overrides;
-                overrides.pipelineIdx = RendererVKLayout::EPipelineIndex::TerrainLit;
-                overrides.useSceneTextures = true;
-                // Chunks are already LOD'd by the streamer (resolution picked per ring distance), so the
-                // renderer's per-chunk meshopt LOD chains are pure redundant churn: 5x the MeshInfos plus LOD
-                // groups and BLAS-alias sharing, all recreated on every re-LOD. Disable them so each chunk is a
-                // single mesh with one identity-aliased BLAS - far less churn through the mesh/RT free lists.
-                overrides.disableGeneratedLods = true;
-                auto container = oc::make_unique<ObjectContainer>();
-                if (!container->initialize(*res.scene, &overrides))
+                // ONE mesh per chunk (no ObjectContainer: no per-chunk material, names or node tables) on the
+                // terrain pipeline variant (procedural height/slope albedo), with the material every chunk
+                // shares. No LOD chain: the streamer already LODs by ring distance.
+                if (m_material == UINT16_MAX)
+                    m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::TerrainLit, true);
+                auto resident = oc::make_unique<Resident>();
+                resident->mesh = renderer.createMesh(res.mesh);
+                if (!resident->mesh.isValid())
                     continue;
-
                 const Transform transform(
                     glm::vec3((float)res.coord.x * chunkSize, 0.0f, (float)res.coord.y * chunkSize),
                     1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-                RenderNode node = container->spawnRootNode(transform);
-
-                Resident resident;
-                resident.container = oc::move(container);
-                resident.coord = res.coord;
-                resident.lod = res.lod;
-                resident.node = oc::move(node);
+                resident->node = renderer.spawnMeshNode(resident->mesh, m_material, RendererVKLayout::EPipelineIndex::TerrainLit, transform);
+                resident->coord = res.coord;
+                resident->lod = res.lod;
                 // Culling registration: chunks live in the SpatialIndex like entity render components, but on
-                // their own layer (the userData is the chunk key + 1, NOT an Entity* - gameplay queries
-                // must not see them; +1 because userData 0 means "dead" to the visible-set hand-over and
-                // key 0 is a real chunk), registered ONCE (chunks never move, so they promote straight
-                // into the static tier), and WITHOUT the spawn-visibility guard (chunks stream in
-                // off-screen constantly; the guard would pin each one in the main pass until it first
-                // enters the frustum).
-                const Sphere bounds = resident.node.getWorldBounds();
-                resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
-                    glm::dvec3(bounds.pos), bounds.radius, res.key + 1, SpatialLayer_Terrain, false));
+                // their own layer (the userData is the chunk's RenderNode*, NOT an Entity* - gameplay queries
+                // must not see them - so the hand-over push needs no lookup; the Resident is heap-held and
+                // retired, never freed, while a list may still name it), registered ONCE (chunks never move,
+                // so they promote straight into the static tier), and WITHOUT the spawn-visibility guard
+                // (chunks stream in off-screen constantly; the guard would pin each one in the main pass
+                // until it first enters the frustum).
+                const Sphere bounds = resident->node.getWorldBounds();
+                resident->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
+                    glm::dvec3(bounds.pos), bounds.radius, (uint64)&resident->node, SpatialLayer_Terrain, false));
                 m_residents.emplace(res.key, oc::move(resident));
                 ++uploads;
             }
@@ -1336,8 +1418,8 @@ namespace Procedural
                 m_evictCandidates.clear();
                 for (const auto& entry : m_residents)
                 {
-                    const int want = ringLod(entry.second.coord);
-                    if (want < 0 || (uint32)want != entry.second.lod)
+                    const int want = ringLod(entry.second->coord);
+                    if (want < 0 || (uint32)want != entry.second->lod)
                         m_evictCandidates.push_back({ entry.first, want });
                 }
             }
@@ -1349,7 +1431,7 @@ namespace Procedural
                 bool evict = it == m_residents.end(); // already gone: drop the candidate
                 if (!evict)
                 {
-                    const Resident& res = it->second;
+                    const Resident& res = *it->second;
                     if (cand.want < 0)
                         evict = true; // column outside the ring
                     else
@@ -1360,15 +1442,18 @@ namespace Procedural
                         {
                             // Hole-free handover: the replacement is main-visible, or the old chunk isn't
                             // on screen either (an off-screen swap can't show a hole).
-                            const bool newVis = repIt->second.spatialEntry.isValid()
-                                && (Globals::spatialIndex.getPassMask(repIt->second.spatialEntry.handle()) & SpatialPassBit_Main);
+                            const bool newVis = repIt->second->spatialEntry.isValid()
+                                && (Globals::spatialIndex.getPassMask(repIt->second->spatialEntry.handle()) & SpatialPassBit_Main);
                             const bool oldVis = res.spatialEntry.isValid()
                                 && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
                             evict = newVis || !oldVis;
                         }
                     }
                     if (evict)
+                    {
+                        retireResident(oc::move(it->second)); // this frame's hand-over may still hold &node
                         m_residents.erase(it);
+                    }
                 }
 
                 if (evict)
@@ -1381,81 +1466,7 @@ namespace Procedural
             }
         }
 
-		// --- Push resident chunks through the spatial culling gate, WITHOUT walking every resident
-		// (the ring holds thousands of chunks; a handful are on screen):
-		//  1. Main-visible chunks come straight from the cull job's Main stamp, which collects the
-		//     SpatialLayer_Terrain hits for us (setVisibleCollect slot 1, installed in initialize).
-		//     They feed every pass.
-		//  2. Main-culled chunks keep their shadow/GI passes - terrain is the ground everywhere, and
-		//     dropping the ground behind the camera from the TLAS/shadow maps visibly breaks GI and
-		//     long sun shadows - but only within the range those GPU consumers actually read: the
-		//     TLAS range bound, and the sun cascades' maxDistance plus the up-sun casterPad, both
-		//     measured from the scene focus. A sphere query of that radius replaces the full walk;
-		//     the GPU shadow cull and the TLAS range bound would have dropped anything past it.
-		//     Past that, the terrain sun march shades from the baked height map, chunk-free.
-		//     MainOnly debug mode drops main-culled chunks entirely, like entities.
-		// A chunk in both sets is pushed once: the sphere pass skips main-stamped chunks. Every chunk
-		// registers with spawnVisible = false, so a fresh chunk simply waits one stamp for its main
-		// pass and rides the sphere pass meanwhile - and a chunk evicted between the stamp and this
-		// push reads userData 0 (dead handle) and is skipped. Culling Off (or headless: no stamps,
-		// empty hand-over) keeps the plain walk, so nothing is ever culled there.
-		//
-		// The pushes run on a WORKER (renderNode is lock-free from any job between beginFrame and
-		// present); main.cpp joins m_renderCounter right before present, and update/clearResidents
-		// join it before touching m_residents. The main-visible handles resolve to nodes HERE on main:
-		// userData(handle) is an unlocked pool read, and the scatter registers entries (pool growth)
-		// on main while the job runs. The sphere query locks the index itself, and its getPassMask
-		// reads sit inside the emit, under that lock. Resident pointers are stable: the map is a
-		// node container and nothing mutates it until the join.
-        {
-            ProfileScope profileScope2("renderResidents", EProfileCategory::Procedural);
-
-            m_renderMainNodes.clear();
-            if (gate)
-            {
-                for (SpatialHandle handle : Globals::spatialIndex.visibleHandles(1))
-                {
-                    const uint64 userData = Globals::spatialIndex.userData(handle);
-                    if (!userData)
-                        continue;
-                    const auto it = m_residents.find(userData - 1);
-                    if (it != m_residents.end() && it->second.node.isValid())
-                        m_renderMainNodes.push_back(&it->second.node);
-                }
-            }
-            const bool sphere = gate && culling.mode != int(ESpatialCullMode::MainOnly);
-            const ShadowParams& shadow = renderer.shadowParams();
-            const float reach = glm::max(shadow.maxDistance + shadow.casterPad, renderer.giTlasRange());
-            const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
-
-            Globals::jobSystem.submit([this, &renderer, gate, sphere, reach, focus]
-            {
-                if (!gate)
-                {
-                    for (auto& entry : m_residents)
-                        if (entry.second.node.isValid())
-                            renderer.renderNode(entry.second.node);
-                    return;
-                }
-                for (const RenderNode* node : m_renderMainNodes)
-                    renderer.renderNode(*node, RendererVKLayout::PASS_ALL);
-                if (!sphere)
-                    return;
-                Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
-                {
-                    if (!userData)
-                        return;
-                    const auto it = m_residents.find(userData - 1);
-                    if (it == m_residents.end() || !it->second.node.isValid())
-                        return;
-                    const Resident& res = it->second;
-                    if (res.spatialEntry.isValid()
-                        && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main))
-                        return; // pushed above
-                    renderer.renderNode(res.node, RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI);
-                });
-            }, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
-        }
+		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
 
 		// --- Kick THIS frame's ring scan for the next update to apply. Last in update on purpose: the
 		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and

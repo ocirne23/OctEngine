@@ -475,7 +475,7 @@ void MemoryPanel::drawHeader()
         return;
     }
 
-    formatBytes(bytesBuf, sizeof(bytesBuf), (double)(Globals::allocator.getUsedSize() + getAlignedAllocatedSize()));
+    formatBytes(bytesBuf, sizeof(bytesBuf), (double)Globals::allocator.getUsedSize());
     formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)tracker.getTrackedBytes());
     ImGui::SameLine();
     ImGui::Text("engine: %s  |  tracked: %s in %u allocs, %u paths", bytesBuf, bytesBuf2, tracker.getTrackedCount(), tracker.getNumNodes());

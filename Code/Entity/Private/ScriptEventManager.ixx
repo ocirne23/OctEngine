@@ -141,7 +141,8 @@ private:
 export namespace Globals
 {
 // The deferred EntityChange queue holds EntityPtrs (requests queued after the last drain) -
-// releasing them needs the job system and networkManager still alive, see InitSeg.h.
+// releasing them needs World's spawn templates, so ~World (XCU8, destructs first) empties the
+// queue; this object itself must outlive ~World, whose dying ScriptComponents unregister here.
 OC_INIT_SEG(OC_SEG_SCRIPT_EVENTS)
     ScriptEventManager scriptEvents;
 }

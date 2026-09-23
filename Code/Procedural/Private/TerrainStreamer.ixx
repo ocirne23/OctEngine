@@ -14,6 +14,7 @@ import :TerrainSampler;
 import :TerrainGenerator;
 import :TerrainChunk;
 import :HeightMapBaker;
+import :OceanGenerator;
 
 export namespace Procedural
 {
@@ -34,8 +35,13 @@ export namespace Procedural
 		TerrainStreamer& operator=(const TerrainStreamer&) = delete;
 
 		void initialize();                                     // registers Tweaks + starts the worker thread
-		void update(Renderer& renderer, const Camera& camera); // per-frame: stream, drain, render (call after beginFrame)
-		// Joins the render-push job update() kicked (the renderNode pushes run on a worker). main.cpp
+		void update(Renderer& renderer, const Camera& camera); // per-frame: stream, drain, evict (call after beginFrame)
+		// Per-frame, after update() AND ocean.update(): kicks ocean.render, then this render job, whose
+		// ONE walk of the Spatial visible hand-over (slot 1: RenderNode pointers, an ocean sector's
+		// tagged SpatialTerrainTag_Ocean) pushes every node with its own pass mask - chunks and sectors
+		// alike. Runs with the terrain disabled too (the walk still pushes the ocean's sectors).
+		void render(Renderer& renderer, OceanGenerator& ocean);
+		// Joins the render-push job render() kicked (the renderNode pushes run on a worker). main.cpp
 		// calls it right before Renderer::present; update() and clearResidents() join it too before
 		// they touch m_residents, so a caller never sees the map change under the job.
 		void joinRender();
@@ -118,19 +124,21 @@ export namespace Procedural
 			uint32 generation = 0;
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
-			// Built IN the pump job (createMeshScene is pure per-instance copying - audited): the
-			// main thread only does the GPU-facing ObjectContainer::initialize. null = dropped/failed;
-			// the key is released and the ring scan re-requests it if still wanted.
-			oc::unique_ptr<ISceneData> scene;
+			// Built IN the pump job (the final vertex layout, pure): the main thread only uploads it
+			// (Renderer::createMesh). Empty = dropped/failed; the key is released and the ring scan
+			// re-requests it if still wanted.
+			RenderMeshData mesh;
 		};
 
+		// Heap-held (m_residents maps to a unique_ptr): the SpatialIndex hands &node over as userData,
+		// so the address must outlive the frame's hand-over - see retireResident.
 		struct Resident
 		{
-			oc::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER node
+			RenderMesh mesh;           // declared first -> destroyed AFTER the node that draws it
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
-			RenderNode node;                            // references container's meshes; destroyed first
-			SpatialEntry spatialEntry;                  // culling registration (SpatialLayer_Terrain, static)
+			RenderNode node;           // the culling entry's userData is &node
+			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static)
 		};
 
 		void pumpJob();                 // self-continuing Low-priority generation job
@@ -364,18 +372,25 @@ export namespace Procedural
 		uint32                  m_generation = 0;
 
 		// --- Main-thread residency state ---
-		oc::unordered_map<uint64, Resident> m_residents;
+		oc::unordered_map<uint64, oc::unique_ptr<Resident>> m_residents;
 		oc::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
+		// Residents that left m_residents: node, mesh and culling entry released at once, the MEMORY
+		// kept until the Spatial collect generation moves past `generation` - until then a hand-over
+		// list may still hold &node (whose destroyed node the push skips). Freed at the top of update.
+		struct RetiredResident { uint32 generation; oc::unique_ptr<Resident> resident; };
+		oc::vector<RetiredResident>         m_retired;
+		void retireResident(oc::unique_ptr<Resident> resident);
+		uint16                              m_material = UINT16_MAX; // shared by every chunk (created at first upload)
 		// Eviction candidates: the residents whose column left the ring (want < 0) or wants another
 		// LOD. A pure function of (ring, residents), so the list is rebuilt by ONE walk only when the
 		// ring moved or a chunk uploaded; the per-frame eviction pass checks just these against the
 		// culling stamps (the hole-free handover) instead of walking every resident.
 		struct EvictCandidate { uint64 key; int want; };
 		oc::vector<EvictCandidate>          m_evictCandidates;
-		// The render push runs on a worker (see update / joinRender): the main-visible nodes are
-		// resolved on main (unlocked SpatialIndex pool reads), the sphere query runs in the job.
+		// The render push runs on a worker (see render / joinRender): the hand-over walk and the
+		// sphere query both run in the job.
 		JobCounter                          m_renderCounter;
-		oc::vector<const RenderNode*>       m_renderMainNodes;
+		bool                                m_renderReady = false; // update() ran enabled: render() pushes chunks
 		// The ring scan runs on a worker too: kicked at the END of update (after the drain and the
 		// eviction, the frame's last writers of m_residents / m_pending, which it only reads) and
 		// applied at the START of the next one (m_pending inserts, the publish, kickPump). One frame

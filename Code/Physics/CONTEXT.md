@@ -267,8 +267,9 @@ overlap per step (box3d has no body-list API), which scaled with every enabled b
 unprimed — and every component skips. An empty `activeFn` means always active; an empty `fn`
 disables buoyancy entirely.
 
-The sampler is read from workers, so it must be a const read: the ocean's CPU tile is refreshed on
-main in `ocean.update`, after the entity pass has joined.
+The sampler is read from workers, so it must be a const read: the ocean's CPU tile is refreshed by
+the ocean's render job (kicked from `TerrainStreamer::render`, after the entity pass has joined, and
+joined before present), so no buoyancy read overlaps it.
 
 ## Debug draw
 

@@ -1082,7 +1082,11 @@ Lives here, not in Script.
   looks up), so **a fire is one key lookup plus an `LPMultiMap` dispatch**, not a string compare per
   listener. Its `initialize()` must run from main before any scripted entity spawns.
 * Deferred script-driven mutations — destroy, reparent, spawn requests — are a mutex-guarded
-  `EntityChange` queue drained by the main loop through `takeEntityChanges()`.
+  `EntityChange` queue drained by the main loop through `takeEntityChanges()`. **At exit `~World`
+  drains it** (a Delete queued after the last frame's drain): `Entity::destroy` reads the entity's
+  `spawnTemplate`, which World's template maps own, and `scriptEvents` (XCU7) must outlive `~World`
+  (XCU8) because dying ScriptComponents unregister from it — so the queue cannot simply die with
+  its owner.
 
 ## Thunk thread-safety
 

@@ -50,6 +50,7 @@ import :Light;
 import :GpuCrashTracker;
 import :Settings;
 import :RenderNode;
+import :RenderMesh;
 import :SlotTable;
 import :MeshLodRegistry;
 import :SkinnedMeshRegistry;
@@ -84,7 +85,9 @@ public:
     void kickBeginFrameJob(); // The frame's setup pass, as a job. VR defers instead: the join runs it on main, because xrWaitFrame owns VR pacing and would pin a worker.
     void joinBeginFrameJob();
 
-    void renderNode(const RenderNode& node, uint32 passMask = RendererVKLayout::PASS_ALL); // [Concurrency: LOCK-FREE]
+    // Skips an empty or destroyed node and a 0 mask. The one-argument form pushes the node's own mask.
+    void renderNode(const RenderNode& node, uint32 passMask);                                          // [Concurrency: LOCK-FREE]
+    void renderNode(const RenderNode& node) { renderNode(node, node.m_passMask); }                     // [Concurrency: LOCK-FREE]
     void addLightInfo(const RendererVKLayout::LightInfo& light);                           // [Concurrency: LOCK-FREE]
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);                   // [Concurrency: LOCK-FREE]
     void addPointLight(const PointLight& light);                                           // [Concurrency: LOCK-FREE]
@@ -195,7 +198,17 @@ public:
     void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
     const MeshLodParams& getLodParams() const { return m_lodParams; }
 
-    // -- Debug rendering -- 
+    // -- Single meshes (no ObjectContainer; see RenderMesh) -- MAIN THREAD.
+    // A material for createMesh'd geometry: the fallback textures, opaque, onto `pipeline` (Ocean /
+    // TerrainLit add their material flag, like an ObjectContainer override). Permanent: create one per
+    // system and share it between its meshes.
+    uint16 createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
+    RenderMesh createMesh(const RenderMeshData& data); // uploads + one MeshInfo (and its BLAS); invalid when empty
+    // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity
+    // instance offset: the mesh is its own root).
+    RenderNode spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform);
+
+    // -- Debug rendering --
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color) // [Concurrency:LOCK - FREE - per - worker staging, merged in present]
     {
@@ -313,6 +326,10 @@ private:
     void addObjectContainer(ObjectContainer* pObjectContainer);
     void removeObjectContainer(ObjectContainer* pObjectContainer);
     void freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count);
+
+    friend class RenderMesh;
+    void destroyMesh(RenderMesh& mesh);
+    uint32 m_identityInstanceOffsetIdx = UINT32_MAX; // spawnMeshNode's shared identity offset (first spawn)
 
     friend class RenderNode;
     uint32 addRenderNodeTransform(const Transform& transform);

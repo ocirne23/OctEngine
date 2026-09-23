@@ -23,6 +23,15 @@ import Animation;
 import Physics;
 import Audio;
 
+// Globals::scriptEvents (XCU7) must outlive the World (dying ScriptComponents unregister from it),
+// but its undrained EntityChange queue (a Delete requested after the last drain) holds EntityPtrs
+// whose Entity::destroy reads spawnTemplate - owned by m_templates. Release the queue here, while
+// the templates are alive; a handle that is not the last reference dies with m_rootEntities below.
+World::~World()
+{
+    oc::vector<EntityChange> pending = Globals::scriptEvents.takeEntityChanges();
+}
+
 bool World::initialize()
 {
     ProfileScope scope("World::initialize", EProfileCategory::Entity);

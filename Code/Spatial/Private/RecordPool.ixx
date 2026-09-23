@@ -6,6 +6,14 @@ import :Types;
 
 constexpr uint32 NumSpatialPasses = uint32(ESpatialPass::Count);
 
+// One entry's stamp generation per pass, together: a pass mask is one 16-byte load (one cache line)
+// instead of a read per pass array, and SpatialIndex::getPassMask compares all passes at once.
+struct alignas(16) PassStamps
+{
+    SpatialStamp pass[NumSpatialPasses];
+};
+static_assert(sizeof(PassStamps) == 16, "getPassMask loads the stamps as one __m128i");
+
 // Module-internal SoA storage for every registered entry. Slots come from a BitRangeAllocator so
 // indices stay low and dense; positions are stored relative to the owning cell's min corner
 // (bounded by the cell size, so float keeps full precision at planet-scale coordinates). The
@@ -71,7 +79,7 @@ public:
     oc::vector<uint64> userData;
     oc::vector<uint8> layerMask;        // SpatialLayer_* bits (4 in use; static_assert in Types)
     oc::vector<uint32> gen;             // handle generation: 32-bit so a stale handle can never match a reused slot
-    oc::array<oc::vector<SpatialStamp>, NumSpatialPasses> lastVisible; // stamp generation per pass (see SpatialStamp)
+    oc::vector<PassStamps> stamps;      // stamp generation per pass (see SpatialStamp)
     oc::vector<uint32> storeIdx;        // linked: block * 8 + lane in the level's BlockStore; UINT32_MAX while Unlinked
     oc::vector<uint8> level;
     oc::vector<uint8> flags;
@@ -86,8 +94,7 @@ private:
         userData.resize(m_capacity);
         layerMask.resize(m_capacity);
         gen.resize(m_capacity);
-        for (oc::vector<SpatialStamp>& pass : lastVisible)
-            pass.resize(m_capacity);
+        stamps.resize(m_capacity);
         storeIdx.resize(m_capacity);
         level.resize(m_capacity);
         flags.resize(m_capacity);

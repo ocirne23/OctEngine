@@ -100,8 +100,7 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
         m_pool.cellKey[idx] = key;
         m_pool.userData[idx] = userData;
         m_pool.layerMask[idx] = uint8(layerMask);
-        for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
-            m_pool.lastVisible[p][idx] = 0; // never stamped: reports visible until the first query, unless NoSpawnGuard
+        m_pool.stamps[idx] = {}; // never stamped: reports visible until the first query, unless NoSpawnGuard
         m_pool.storeIdx[idx] = UINT32_MAX;
         m_pool.level[idx] = uint8(level);
         m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
@@ -219,11 +218,12 @@ void SpatialIndex::commitFrame()
                 // get the LINKED sentinel instead (hasStamp false: the World derives the tier from
                 // the distance until the job stamps it). The root-dedupe passes stay 0: a fresh
                 // root must not read as held.
+                PassStamps& stamps = m_pool.stamps[op.idx];
                 if (!(opFlags & RecordFlag_NoSpawnGuard))
                     for (uint32 p = 0; p < uint32(ESpatialPass::UpdateTier0); ++p)
-                        m_pool.lastVisible[p][op.idx] = m_visibleQueryId[p];
+                        stamps.pass[p] = m_visibleQueryId[p];
                 for (uint32 p = uint32(ESpatialPass::UpdateTier0); p <= uint32(ESpatialPass::UpdateTier2); ++p)
-                    m_pool.lastVisible[p][op.idx] = SpatialStamp_Linked;
+                    stamps.pass[p] = SpatialStamp_Linked;
             }
             break;
         case PendingOp::Move:
@@ -332,23 +332,26 @@ void SpatialIndex::retireLane(uint32 idx)
     }
     if (block.live == 0)
     {
-        // unlink the emptied block from the cell's chain
+        // unlink the emptied block from the cell's chain (rec->count > 0, so another block remains)
         if (rec->head == b)
+        {
             rec->head = block.next;
+            store.blocks[rec->head].chainBlocks = block.chainBlocks - 1;
+        }
         else
         {
             uint32 prev = rec->head;
             while (store.blocks[prev].next != b)
                 prev = store.blocks[prev].next;
             store.blocks[prev].next = block.next;
+            --store.blocks[rec->head].chainBlocks;
         }
         store.freeBlock(b);
     }
     // compact once the dead lanes would fill a whole block (frees at least one block per pass, so
     // the cost stays one cell walk per 8 retirements)
-    uint32 numBlocks = 0;
-    for (uint32 cur = rec->head; cur != UINT32_MAX; cur = store.blocks[cur].next)
-        ++numBlocks;
+    const uint32 numBlocks = store.blocks[rec->head].chainBlocks;
+    assert(numBlocks == [&]() { uint32 n = 0; for (uint32 cur = rec->head; cur != UINT32_MAX; cur = store.blocks[cur].next) ++n; return n; }());
     if (numBlocks >= 2 && numBlocks * CellBlock::Lanes - rec->count >= CellBlock::Lanes)
         compactCell(level, *rec);
 }
@@ -377,7 +380,8 @@ void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
     // refill the chain's blocks from the head, then free the surplus tail
     uint32 cur = rec.head;
     uint32 prev = UINT32_MAX;
-    for (uint32 i = 0; i < uint32(live.size()); cur = store.blocks[cur].next)
+    uint32 keptBlocks = 0;
+    for (uint32 i = 0; i < uint32(live.size()); cur = store.blocks[cur].next, ++keptBlocks)
     {
         CellBlock& block = store.blocks[cur];
         const uint32 n = glm::min(CellBlock::Lanes, uint32(live.size()) - i);
@@ -399,7 +403,10 @@ void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
     if (prev == UINT32_MAX)
         rec.head = UINT32_MAX;
     else
+    {
         store.blocks[prev].next = UINT32_MAX;
+        store.blocks[rec.head].chainBlocks = keptBlocks; // the head stays the head: refilled first
+    }
     while (cur != UINT32_MAX)
     {
         const uint32 next = store.blocks[cur].next;

@@ -72,6 +72,12 @@ public:
     // handle lives in the node's skinned bundle).
     inline bool isSkinned() const { return m_skinnedBundleHandle != UINT32_MAX; }
 
+    // The PASS_* bits Renderer::renderNode(node) pushes this node with (PASS_ALL by default; 0 = the
+    // push is skipped). Lets an owner decide per node once and push a whole list blindly - the ocean
+    // marks its sectors PASS_MAIN (or 0 when dry). Set on main; read by the pushing job.
+    inline void setPassMask(uint32 passMask) { m_passMask = uint8(passMask); }
+    inline uint32 getPassMask() const { return m_passMask; }
+
     inline const Sphere& getLocalBounds() const { return m_bounds; }
     inline Sphere getWorldBounds() const
     {
@@ -90,6 +96,7 @@ private:
         m_skinnedBundleHandle = other.m_skinnedBundleHandle;
         m_lodStateBase = other.m_lodStateBase;
         m_transformUploadState = other.m_transformUploadState;
+        m_passMask = other.m_passMask;
         m_bounds = other.m_bounds;
         m_meshInstances = oc::move(other.m_meshInstances);
         other.m_transformIdx = UINT32_MAX;
@@ -115,6 +122,8 @@ private:
     static constexpr uint8 ALL_FRAMES_DIRTY = uint8((1u << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) - 1);
     static_assert(8 - RendererVKLayout::NUM_FRAMES_IN_FLIGHT >= 6, "generation needs 6 bits");
     mutable uint8 m_transformUploadState = ALL_FRAMES_DIRTY;
+    uint8 m_passMask = uint8(RendererVKLayout::PASS_ALL); // in the padding before m_bounds
+    static_assert(RendererVKLayout::PASS_ALL <= 0xFF);
     Sphere m_bounds;
     oc::vector<RendererVKLayout::InMeshInstance> m_meshInstances;
 };

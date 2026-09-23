@@ -267,13 +267,28 @@ void OceanSimulationPipeline::initialize()
     createImages();
 
     // Displacement readback: per frame slot, GPU-written (transfer dst), host-read for buoyancy.
-    // Coherent so the fence wait alone makes the copy visible (no invalidate path in Buffer).
+    // Coherent so the fence wait alone makes the copy visible (no invalidate path in Buffer), and
+    // CACHED where the device has such a type (the ocean job reads all ~384 KB every frame). The RANDOM
+    // access hint only PREFERS a cached type, so it is required explicitly when one exists. Measured:
+    // no change on the dev machine (VMA had picked a cached type already) - the ~0.1 ms copy is the
+    // GPU-written data coming from DRAM, not the memory type.
     // Zeroed so pre-first-simulation reads decode as flat water instead of garbage waves.
     constexpr vk::DeviceSize readbackBytes = (vk::DeviceSize)READBACK_RES * READBACK_RES * CASCADES * 4 * sizeof(uint16);
+    vk::MemoryPropertyFlags readbackFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    {
+        const vk::MemoryPropertyFlags cached = readbackFlags | vk::MemoryPropertyFlagBits::eHostCached;
+        const vk::PhysicalDeviceMemoryProperties memory = Globals::device.getPhysicalDevice().getMemoryProperties();
+        for (uint32 t = 0; t < memory.memoryTypeCount; ++t)
+            if ((memory.memoryTypes[t].propertyFlags & cached) == cached)
+            {
+                readbackFlags = cached;
+                break;
+            }
+    }
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         (void)m_readbackBuffers[i].initialize(readbackBytes, vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "OceanReadback");
+            readbackFlags, false, "OceanReadback");
         m_readbackMapped[i] = m_readbackBuffers[i].mapMemory();
         memset(m_readbackMapped[i].data(), 0, m_readbackMapped[i].size());
     }

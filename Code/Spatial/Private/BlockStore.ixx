@@ -10,7 +10,9 @@ import Core;
 // lane (negative radius - fails every test, including the unused lanes past `count`). A block
 // whose owned-lane count reaches zero is freed at once, and a cell whose dead lanes would fill a
 // whole block compacts itself. The cost of a change is the size of its cell, never the level.
-struct CellBlock
+// Cache-line aligned (256 bytes): every 32-byte lane row sits inside one line, so no test8 load
+// splits. The hot rows (position, radius, layer) come first; poolIdx is read only on a hit.
+struct alignas(64) CellBlock
 {
     static constexpr uint32 Lanes = 8;
     static constexpr float Tombstone = -1e30f;
@@ -23,11 +25,15 @@ struct CellBlock
     uint32 count;                                 // lanes handed out (owned + retired)
     uint32 live;                                  // lanes the pool still OWNS (retireLane settles them; a
                                                   // tombstone from unregisterEntry alone keeps its lane owned)
+    uint32 chainBlocks;                           // HEAD block only: blocks in the cell's chain (the
+                                                  // compaction test; sits in the alignment padding, so
+                                                  // CellRecord stays 16 bytes)
 };
+static_assert(sizeof(CellBlock) == 256);
 
 struct BlockStore
 {
-    oc::vector<CellBlock> blocks;
+    oc::vector<CellBlock> blocks; // 64-aligned: the engine allocator serves over-aligned EASTL requests
     uint32 freeHead = UINT32_MAX; // freed blocks, chained through `next`
     uint32 numBlocksInUse = 0;
 
@@ -73,7 +79,11 @@ struct BlockStore
     uint32 insert(uint32& head, float x, float y, float z, float r, uint32 layerMask, uint32 poolIdx)
     {
         if (head == UINT32_MAX || blocks[head].count == CellBlock::Lanes)
+        {
+            const uint32 chainBlocks = head == UINT32_MAX ? 0 : blocks[head].chainBlocks; // before allocBlock may grow the vector
             head = allocBlock(head);
+            blocks[head].chainBlocks = chainBlocks + 1;
+        }
         CellBlock& block = blocks[head];
         const uint32 lane = block.count++;
         block.posX[lane] = x; block.posY[lane] = y; block.posZ[lane] = z;

@@ -549,7 +549,10 @@ buffer (one memcpy per list, no merged CPU copy) and clears it.
 
 **Pass masks** `PASS_MAIN` / `PASS_SHADOW` / `PASS_GI` (Layout.ixx — the same bits Spatial uses). Main
 cull, shadow cull and the GI TLAS writer each early-out on their bit; TLAS also range-bounds by
-`RT/TLAS Range`.
+`RT/TLAS Range`. **A node carries its own default mask** (`RenderNode::setPassMask`, a byte in the
+padding, `PASS_ALL` unless set): `renderNode(node)` pushes with it, `renderNode(node, mask)` overrides
+it. `renderNode` returns at once for a 0 mask and for a node with no instances (never spawned, or
+destroyed — `freeRenderNode` clears them), so an owner can push a list of node pointers blindly.
 
 **GPU stats atomics are debug-build only:** `buildLayoutPreamble` defines `SHADER_STATS` under
 `#ifndef NDEBUG`, and the main cull's per-level LOD pick counter (`out_lodStats`) is written only under
@@ -578,7 +581,7 @@ is BEST-FIT so small requests do not shred the large holes.**
   variant, where AnimatorComponent feeds the bone palette through `allocateSkinningPalette` /
   `setSkinningPalette`.
 * **`RenderNode` is ONE CACHE LINE** (`static_assert`): transform slot, skinned bundle handle, LOD
-  state base, the upload-state byte, local bounds and the mesh-instance vector. Everything else the
+  state base, the upload-state byte, the default pass-mask byte, local bounds and the mesh-instance vector. Everything else the
   push needs is derived from renderer tables: per-mesh instance counts from the instances themselves,
   an instance's LOD chain from `MeshLodRegistry::getGroupIdxForMesh` (instances reference the LOD0 mesh), the
   skinning palette from the bundle (`setSkinningPalette(node, palette)`). Do not add per-node side
@@ -588,6 +591,26 @@ is BEST-FIT so small requests do not shred the large holes.**
 * `~ObjectContainer` frees ALL renderer resources (`Renderer::removeObjectContainer`).
 * The container keeps its own copy of the source `Skeleton`, **so animators can retarget against it at
   spawn.**
+
+## Single meshes (`RenderMesh`)
+
+For generated geometry that lives and dies one mesh at a time with a SHARED material (terrain chunks,
+ocean sectors), a container is pure overhead: its own material slot, node tables, name strings and
+path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
+
+* `RenderMeshData::build(MeshGeometryDesc)` — pure, from any job: the final `MeshVertex` array (the
+  container's tangent-handedness formula and null-attribute defaults), the indices, the bounds.
+* `createMeshMaterial(pipeline, rayTraced)` — one permanent material per SYSTEM (fallback textures,
+  opaque, `MATERIAL_FLAG_OCEAN` / `_TERRAIN` by pipeline, `NO_RAYTRACING` unless ray traced, BC5 flag
+  from the fallback normal's format — exactly what a container override produced).
+* `createMesh(data)` → a move-only RAII `RenderMesh`: the vertex/index uploads and ONE `MeshInfo`
+  (through `addMeshInfos`, so the BLAS registers like any mesh). No LOD chain, no stream set. Offsets
+  and counts are stored as 32-bit element units.
+* `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
+  shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn).
+* `~RenderMesh` frees the ranges and neutralizes the `MeshInfo` slot (`freeMeshInfoRange`), like
+  `removeObjectContainer` for an unstreamed mesh. **Destroy its nodes first** (owners declare the
+  mesh before the node).
 
 ## Per-entity tint
 
@@ -1138,7 +1161,7 @@ the sand, so the two can never disagree.
     displacement) and takes the plain DGC path and the plain overlay. Nsight showed the geometry stages
     launch-stalled on ISBE 31% of Static meshes while every chunk out to ~33 km ran them. Measured in the
     sandbox view: 1.559 → 1.552 ms, inside the noise. Relies on ONE instance per terrain mesh (one
-    ObjectContainer per chunk): the DGC entry is per mesh, the routing per instance.
+    `RenderMesh` + node per chunk): the DGC entry is per mesh, the routing per instance.
   * **Routing (the cull):** with tessellation on, a `TerrainLit` instance still allocates its slot in the
     DGC sequence (`atomicAdd`), but that sequence draws `indexCount = 0`. The real draw goes to
     `out_terrainTessCommands` (binding 16, `atomicMax(idx + 1)` like the overlay), and the overlay goes to

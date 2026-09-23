@@ -95,6 +95,7 @@ public:
 
     bool initialize();
     void update(Renderer& renderer, float deltaSeconds);
+    ~World(); // releases Globals::scriptEvents' undrained EntityChange queue, see World.cpp
 
     // SIM LOD focus points (see SimLodConfig): set every frame BEFORE update() by whoever knows
     // where the players are - GameMatch::update publishes every player capsule, main.cpp the

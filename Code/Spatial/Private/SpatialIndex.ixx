@@ -1,3 +1,7 @@
+module;
+
+#include <immintrin.h>
+
 export module Spatial:SpatialIndex;
 
 import Core;
@@ -48,10 +52,12 @@ public:
     // so a caller on a job fiber needs no scratch at all (a thread_local one would follow the
     // THREAD across a park, not the job). Zero-allocation type erasure: the functor stays on the
     // caller's stack. Do NOT wait inside emit (the index's shared lock is held).
+    // skipStampedIn: SpatialPassBit_* - hits CURRENTLY stamped in any of these passes are not emitted
+    // (exact compare, no spawn guard; e.g. the terrain's shadow ball skips what the Main set pushed).
     template<typename Func>
-    void forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit) const
+    void forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit, uint32 skipStampedIn = 0) const
     {
-        forEachInSphereImpl(center, radius, layerMask, &emit,
+        forEachInSphereImpl(center, radius, layerMask, skipStampedIn, &emit,
             [](void* ctx, uint64 userData) { (*static_cast<std::remove_reference_t<Func>*>(ctx))(userData); });
     }
     template<typename Func>
@@ -67,7 +73,7 @@ public:
     uint32 queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask,
                     oc::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
     uint64 queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData = 0) const;
-    void forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, void* ctx, void (*emit)(void*, uint64)) const;
+    void forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, uint32 skipStampedIn, void* ctx, void (*emit)(void*, uint64)) const;
     void forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
                               IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const;
 
@@ -95,19 +101,32 @@ public:
         if (!m_pool.isValidAlive(handle))
             return false;
         const SpatialStamp id = m_visibleQueryId[uint32(pass)];
-        return oc::atomic_ref<SpatialStamp>(m_pool.lastVisible[uint32(pass)][handle.idx]).exchange(id, oc::memory_order_relaxed) != id;
+        return oc::atomic_ref<SpatialStamp>(m_pool.stamps[handle.idx].pass[uint32(pass)]).exchange(id, oc::memory_order_relaxed) != id;
     }
     // The VISIBLE set for a consumer, straight from the cull job's Main frustum pass - no second
     // traversal: the Main stamp also appends the HANDLE of every hit carrying one of a slot's
-    // layers (per-chunk lists, merged once inside the job). Three slots: 0 = the World's update
-    // selection (SpatialLayer_Entity), 1 = the terrain streamer's render push (SpatialLayer_Terrain),
-    // 2 = the ocean's sector push (SpatialLayer_Ocean). Valid from joinUpdateJob until the next
-    // kick; empty when nothing collects (headless, layers 0); frozen culling keeps the last list,
-    // like the stamps. Handles, not userData: entities may die between the join and the consumer
-    // (the destroy windows sit there) - userData(handle) reads 0 for a dead one.
-    static constexpr uint32 NumVisibleCollectSlots = 3;
-    void setVisibleCollect(uint32 layerMask, uint32 slot = 0) { m_visibleCollectLayers[slot] = layerMask; }
+    // layers (per-chunk lists, merged once inside the job). Two slots: 0 = the World's update
+    // selection (SpatialLayer_Entity, HANDLES: entities may die between the join and the consumer -
+    // the destroy windows sit there - and userData(handle) reads 0 for a dead one), 1 = the terrain
+    // streamer's walk for its chunks and the ocean's sectors (SpatialLayer_Terrain, told apart by
+    // SpatialTerrainTag_Ocean; USERDATA values read in the job, zeros dropped, so the consumer's walk
+    // touches no pool row - it must tolerate a value whose entry changed since the stamp). Valid from
+    // joinUpdateJob until the next kick; empty when nothing collects (headless, layers 0); frozen
+    // culling keeps the last list, like the stamps.
+    static constexpr uint32 NumVisibleCollectSlots = 2;
+    enum class ECollect : uint8 { Handles, UserData };
+    void setVisibleCollect(uint32 layerMask, uint32 slot = 0, ECollect what = ECollect::Handles)
+    {
+        m_visibleCollectLayers[slot] = layerMask;
+        m_visibleCollectWhat[slot] = what;
+    }
     const oc::vector<SpatialHandle>& visibleHandles(uint32 slot = 0) const { return m_visibleCollected[slot]; }
+    const oc::vector<uint64>& visibleUserData(uint32 slot) const { return m_visibleCollectedUserData[slot]; }
+    // Bumped each time the cull job rebuilds the collect lists (a real Main stamp - not while culling
+    // is Off, frozen, or the view invalid). An owner that hands its OBJECT ADDRESSES over as userData
+    // keeps a retired object's memory until this moves past the value at retirement: from then on no
+    // list can name it. Read on main after joinUpdateJob.
+    uint32 visibleCollectGeneration() const { return m_visibleCollectGeneration; }
     uint64 userData(SpatialHandle handle) const { return m_pool.isValidAlive(handle) ? m_pool.userData[handle.idx] : 0; }
     // PARALLEL (traverseParallel, so one call at a time - the World's selection runs its spheres
     // in sequence): the hits come back as owner-sliced lists, one per traversal chunk (some
@@ -126,11 +145,7 @@ public:
     {
         if (!m_pool.isValidAlive(handle))
             return 0;
-        uint32 mask = 0;
-        for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
-            if (m_pool.lastVisible[p][handle.idx] == m_visibleQueryId[p])
-                mask |= 1u << p;
-        return mask;
+        return passBits(currentLanes(stampLanes(handle.idx)));
     }
     // Whether a stamp generation was EVER written in `pass` (neither the spawn-guard 0 nor the
     // link-time SpatialStamp_Linked): for the tier passes, "the selection job placed this entry
@@ -139,17 +154,17 @@ public:
     {
         if (!m_pool.isValidAlive(handle))
             return false;
-        const SpatialStamp stamp = m_pool.lastVisible[uint32(pass)][handle.idx];
+        const SpatialStamp stamp = m_pool.stamps[handle.idx].pass[uint32(pass)];
         return stamp != 0 && stamp != SpatialStamp_Linked;
     }
     bool isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const
     {
-        return m_pool.isValidAlive(handle) && m_pool.lastVisible[uint32(pass)][handle.idx] == m_visibleQueryId[uint32(pass)];
+        return m_pool.isValidAlive(handle) && m_pool.stamps[handle.idx].pass[uint32(pass)] == m_visibleQueryId[uint32(pass)];
     }
     void stampCurrent(SpatialHandle handle, ESpatialPass pass)
     {
         if (m_pool.isValidAlive(handle))
-            m_pool.lastVisible[uint32(pass)][handle.idx] = m_visibleQueryId[uint32(pass)];
+            m_pool.stamps[handle.idx].pass[uint32(pass)] = m_visibleQueryId[uint32(pass)];
     }
 
     // THE per-frame visibility pass, in one call (the App's only spatial step): commits the cell moves
@@ -178,7 +193,7 @@ public:
     {
         if (!m_pool.isValidAlive(handle))
             return false;
-        const SpatialStamp stamp = m_pool.lastVisible[uint32(ESpatialPass::Main)][handle.idx];
+        const SpatialStamp stamp = m_pool.stamps[handle.idx].pass[uint32(ESpatialPass::Main)];
         return stamp == m_visibleQueryId[uint32(ESpatialPass::Main)]
             || (stamp == 0 && !(m_pool.flags[handle.idx] & RecordFlag_NoSpawnGuard));
     }
@@ -187,15 +202,11 @@ public:
     {
         if (!m_pool.isValidAlive(handle))
             return 0;
-        const bool spawnGuard = !(m_pool.flags[handle.idx] & RecordFlag_NoSpawnGuard);
-        uint32 mask = 0;
-        for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
-        {
-            const SpatialStamp stamp = m_pool.lastVisible[p][handle.idx];
-            if (stamp == m_visibleQueryId[p] || (spawnGuard && stamp == 0))
-                mask |= 1u << p;
-        }
-        return mask;
+        const __m128i stamps = stampLanes(handle.idx);
+        __m128i lanes = currentLanes(stamps);
+        if (!(m_pool.flags[handle.idx] & RecordFlag_NoSpawnGuard))
+            lanes = _mm_or_si128(lanes, _mm_cmpeq_epi16(stamps, _mm_setzero_si128()));
+        return passBits(lanes);
     }
 
     glm::dvec3 getPosition(SpatialHandle handle) const;
@@ -208,6 +219,15 @@ public:
     void setCullMaxDist(float maxDist) { m_culling.maxDist = maxDist; }
 
 private:
+
+    // The pass-mask helpers: one entry's 8 stamps as 16-bit lanes, compared with the 8 current
+    // generations at once; passBits packs a 16-bit lane mask to SpatialPassBit_* bits.
+    __m128i stampLanes(uint32 idx) const { return _mm_load_si128(reinterpret_cast<const __m128i*>(&m_pool.stamps[idx])); }
+    __m128i currentLanes(__m128i stamps) const
+    {
+        return _mm_cmpeq_epi16(stamps, _mm_load_si128(reinterpret_cast<const __m128i*>(m_visibleQueryId)));
+    }
+    static uint32 passBits(__m128i lanes) { return uint32(_mm_movemask_epi8(_mm_packs_epi16(lanes, _mm_setzero_si128()))); }
 
     // kickUpdateJob storage: the job reads these, so they only change while no job is in flight.
     Camera m_updateJobCamera;
@@ -247,12 +267,14 @@ private:
     };
 
     // A subtree root the parallel markVisible* fan-out hands to a worker (see traverseParallel).
+    // Already classified: it passed its cell test with `active` left (0 = fully inside).
     struct FrontierCell
     {
         uint64 key;
         const CellRecord* rec; // stable: the cell maps only mutate in commitFrame
+        glm::vec3 cellMin;     // relative to the traversal's refPos
         uint32 level;
-        bool fullyInside;
+        uint32 active;
     };
 
     uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
@@ -268,30 +290,42 @@ private:
     template <typename Tester, typename EmitFunc>
     void traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const;
 
+    // `active` is the tester's still-undecided bounds (a frustum: the planes and the distance band the
+    // cell straddles; others: one bit), 0 = the cell is fully inside. Children and entries test only
+    // the active bounds.
+
+    // A cell that PASSED its test: emits its entries, then recurses into the children that pass.
     template <typename Tester, typename EmitFunc>
     void traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                      uint64 key, uint32 level, const CellRecord& rec, bool fullyInside,
+                      uint64 key, uint32 level, const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
                       TraverseStats& stats, const EmitFunc& emit) const;
 
-    // The cell-level classification split out of traverseCell so the parallel frontier expansion
-    // shares it. Returns false when the cell is culled; flips fullyInside when the tester contains
-    // the cell's loose bounds outright.
+    // One cell's classification (top-level cells, the direct cell path). Returns the cell's new
+    // active mask, or UINT32_MAX when it is culled.
     template <typename Tester>
-    bool testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
-                  bool& fullyInside, TraverseStats& stats) const;
+    uint32 testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
+                    uint32 active, TraverseStats& stats) const;
+
+    // Classifies a cell's children (8 at a time for the SIMD testers, BEFORE their hash probe) and
+    // calls onChild(childKey, childRecord, childMin, childActive) for each one that passes.
+    template <typename Tester, typename ChildFunc>
+    void forEachChild(const Tester& tester, const glm::dvec3& refPos, uint64 key, uint32 level,
+                      const CellRecord& rec, const glm::vec3& cellMin, uint32 active,
+                      TraverseStats& stats, const ChildFunc& onChild) const;
 
     // The cell's own entry emission (its block chain, 8 lanes at a time) split out of traverseCell,
     // shared by the frontier expansion for the upper-level cells it consumes while splitting.
+    // emit(poolIdx, posRelRef, layerMask).
     template <typename Tester, typename EmitFunc>
     void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
-                         const CellRecord& rec, uint32 level, bool fullyInside,
+                         const CellRecord& rec, uint32 level, uint32 active,
                          TraverseStats& stats, const EmitFunc& emit) const;
 
     // Multithreaded traversal for the markVisible* stamps and the update-tier query: expands a
     // frontier of subtree roots serially (emitting the upper cells' own entries as it goes), then
     // parallelFors traverseCell over the roots. emit must be thread-safe; the stamps are (each
     // entry lives in exactly ONE cell, so no two roots ever emit the same index). A chunk-aware
-    // emit (idx, pos, chunk) gets prepareChunks(n) called before any emit with chunk < n, so an
+    // emit (idx, pos, layers, chunk) gets prepareChunks(n) called before any emit with chunk < n, so an
     // owner-sliced list per chunk can be sized. registerLock: see the definition. Uses the
     // m_frontier scratch: ONE traverseParallel at a time (the cull job, or the post-update
     // selection - never both in flight).
@@ -315,7 +349,7 @@ private:
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
-    SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep)
+    alignas(16) SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep); one __m128i
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
     // growth), shared over queries - see the threading contract above.
@@ -326,10 +360,14 @@ private:
     oc::vector<FrontierCell> m_frontierNext;
     // setVisibleCollect, per collect slot: chunk list 0 = the serial frontier expansion, 1 + i =
     // fan-out chunk i (owner-sliced: a chunk appends to its own list only), merged into
-    // m_visibleCollected[slot].
+    // m_visibleCollected[slot] (Handles) or m_visibleCollectedUserData[slot] (UserData).
     uint32 m_visibleCollectLayers[NumVisibleCollectSlots] = {};
+    ECollect m_visibleCollectWhat[NumVisibleCollectSlots] = {};
     oc::vector<oc::vector<SpatialHandle>> m_visibleCollectChunks[NumVisibleCollectSlots];
     oc::vector<SpatialHandle> m_visibleCollected[NumVisibleCollectSlots];
+    oc::vector<oc::vector<uint64>> m_visibleCollectUserDataChunks[NumVisibleCollectSlots];
+    oc::vector<uint64> m_visibleCollectedUserData[NumVisibleCollectSlots];
+    uint32 m_visibleCollectGeneration = 0;
     oc::vector<oc::vector<uint64>> m_tierHitChunks; // queryUpdateTiers' owner-sliced hits (kept: one query per selection sphere)
 
     // Near-ball requery hysteresis, see update.

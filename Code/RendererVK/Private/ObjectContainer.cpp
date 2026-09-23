@@ -74,7 +74,7 @@ bool ObjectContainer::initialize(const ISceneData& sceneData, const MaterialOver
 ObjectContainer::~ObjectContainer()
 {
     // All RenderNodes spawned from this container must be destroyed first (they reference its meshes;
-    // TerrainStreamer::Resident declares the container before the node for exactly this reason).
+    // an owner declares the container before the node for exactly this reason).
     Globals::rendererVK.removeObjectContainer(this);
 }
 

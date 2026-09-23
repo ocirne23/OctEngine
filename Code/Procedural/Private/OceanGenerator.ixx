@@ -41,7 +41,10 @@ export namespace Procedural
 		OceanGenerator& operator=(const OceanGenerator&) = delete;
 
 		void initialize();                                     // registers Tweaks
-		// Per-frame: push params + render (after beginFrame). terrainData = the streamer's active baked
+		// Per-frame: push params, rebuild / re-center the clipmap, set each sector node's pass mask (the
+		// dry test) (after beginFrame). The draw is NOT here: TerrainStreamer::render calls render(),
+		// and its job's one walk of the Spatial visible hand-over pushes the visible sector nodes along
+		// with its chunks. terrainData = the streamer's active baked
 		// terrain-data map (TerrainStreamer::activeTerrainData(), nullptr = no terrain). The GPU passes
 		// read the SAME bake (the fog terrain cascades) for water depth/level - shoaling, surf, swash,
 		// the land cull - and this CPU copy feeds buoyancy and wind steering, so the drawn water and the
@@ -53,10 +56,16 @@ export namespace Procedural
 		// the swash off everywhere rather than just looking off.
 		void update(Renderer& renderer, const Camera& camera,
 		            oc::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
-		// Joins the job update() kicked (the sector renderNode pushes, the displacement readback copy,
+		// Kicks this frame's render job (after update; a no-op when it had nothing to draw - disabled,
+		// no grid). The visible sectors come through TerrainStreamer's walk of the Spatial hand-over
+		// (their nodes ARE the userData); this job pushes every sector itself only when culled = false
+		// (culling Off). Either way each push uses the node's own pass mask (the dry test).
+		void render(bool culled);
+		// Joins the job render() kicked (the sector renderNode pushes, the displacement readback copy,
 		// the wave-extent re-scan and the camera water-surface sample) and applies its three renderer
 		// stores. main.cpp calls it right before Renderer::present; update(), rebuildGrid() and the dtor
-		// join it too before they touch m_sectors.
+		// join it too before they touch m_sectors. TerrainStreamer's render job also pushes sector nodes
+		// (from the hand-over): main.cpp joins it before present too, so it is done before any of those.
 		void joinRender();
 
 		// Water surface world Y at (x, z), CPU-evaluated from the GPU displacement readback (a full mirror
@@ -251,10 +260,13 @@ export namespace Procedural
 		// One clipmap sector per draw (see the class comment). Registered in the SpatialIndex like
 		// terrain chunks (SpatialLayer_Terrain, no spawn guard); unlike chunks they MOVE - updateEntry
 		// re-centers them on the snapped node position every frame, so they stay in the dynamic tier.
+		// The SpatialIndex hands &node over as userData (| SpatialTerrainTag_Ocean), so a grid's
+		// sectors never move in memory: registered only after the grid is complete, and retired whole
+		// (m_retiredGrids) instead of freed while a hand-over list may still name them.
 		struct Sector
 		{
-			oc::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER the node
-			RenderNode node;
+			RenderMesh mesh;           // declared first -> destroyed AFTER the node that draws it
+			RenderNode node;           // pass mask PASS_MAIN, or 0 while the dry test drops it (update)
 			SpatialEntry spatialEntry;
 			glm::vec3 localCenter = glm::vec3(0.0f); // mesh-local bounds center (the node snap adds on top)
 			glm::vec2 halfXZ = glm::vec2(0.0f);      // mesh-local XZ half extents (dry-sector test footprint)
@@ -267,22 +279,19 @@ export namespace Procedural
 		};
 		oc::vector<Sector> m_sectors;
 		bool sectorDry(const Sector& s, float px, float pz, glm::vec2 camXZ, float meshRadius, float wetNeed) const;
+		// A replaced / released grid: nodes, meshes and culling entries released at once, the vector (so
+		// every Sector's address) kept until the Spatial collect generation moves past `generation`.
+		struct RetiredGrid { uint32 generation; oc::vector<Sector> sectors; };
+		oc::vector<RetiredGrid> m_retiredGrids;
+		void retireGrid();
+		uint16 m_material = UINT16_MAX;  // shared by every sector (created at the first grid)
 
-		// The render job (see update / joinRender). The job captures `this` only (inline job storage
-		// is small): its inputs are snapshotted here on main at the kick, its outputs (the wave
-		// extents, m_dispTile, m_cameraSurfaceY) are stored to the renderer in joinRender.
-		struct RenderInput
-		{
-			Renderer* renderer = nullptr;
-			glm::vec3 camPos = glm::vec3(0.0f);
-			glm::vec2 camXZ = glm::vec2(0.0f);
-			float px = 0.0f, pz = 0.0f, meshRadius = 0.0f, wetNeed = 0.0f;
-			bool dryCull = false;
-		};
+		// The render job (see render / joinRender). Its outputs (the wave extents, m_dispTile,
+		// m_cameraSurfaceY) are stored to the renderer in joinRender.
 		JobCounter          m_renderCounter;
-		RenderInput         m_renderIn;
-		oc::vector<Sector*> m_renderVisible;   // resolved from the hand-over on main; the job walks these
+		glm::vec3           m_cameraPos = glm::vec3(0.0f); // update's camera: the job samples the surface under it
 		bool                m_renderPending = false; // a kicked job's stores still owed to the renderer
+		bool                m_renderReady = false;   // update() ran with a grid: render() may kick
 		float               m_cameraSurfaceY = -FLT_MAX;
 		// Last re-centering of the sector entries (update): re-run only when one of these changes.
 		float m_lastPx = FLT_MAX, m_lastPz = FLT_MAX, m_lastSeaLevel = FLT_MAX, m_lastPad = -1.0f;

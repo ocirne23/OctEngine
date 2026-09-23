@@ -112,7 +112,7 @@ diffuse/normal/metalRoughness texture index overrides where −1 keeps the defau
 |---|---|
 | `createAssimpLoader()` | Model files. |
 | `createProceduralLoader()` | Generated geometry by shape name — terrain, skysphere, debug shapes. |
-| `createMeshScene(MeshGeometryDesc, colorRGBA, w, h)` | Wraps caller-supplied geometry as a single-mesh, single-material scene ready for `ObjectContainer`. Optional RGBA8 image becomes the material's diffuse texture; null gives a fallback checkerboard. **This is how a generated terrain chunk becomes renderable.** Pointers are borrowed only for the call. |
+| `createMeshScene(MeshGeometryDesc, colorRGBA, w, h)` | Wraps caller-supplied geometry as a single-mesh, single-material scene ready for `ObjectContainer`. Optional RGBA8 image becomes the material's diffuse texture; null leaves the material on the renderer's shared fallback textures. Terrain chunks and ocean sectors no longer go through it: they build RendererVK's `RenderMeshData` from the same `MeshGeometryDesc` (no container). Pointers are borrowed only for the call. |
 
 Queries: `getRootNode`, `getMesh(name|idx)`, `getMaterial`, `getTexture`, plus the skeletal set
 `getSkeleton` / `getAnimations` / `getAnimation` (null and 0 when the scene has no bones).

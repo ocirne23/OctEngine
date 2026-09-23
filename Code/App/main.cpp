@@ -148,7 +148,7 @@ int main(int argc, char* argv[])
             char windowTitleBuf[320];
             sprintf_s(windowTitleBuf, sizeof(windowTitleBuf), "%s%sFPS: %i mem: %.2fmb instances: %i meshtypes: %i materials: %i, pos: %.1f, %.1f, %.1f, dir: %.1f, %.1f, %.1f",
                 netStatus.c_str(), netStatus.empty() ? "" : " | ",
-                fps, (double)(Globals::allocator.getUsedSize() + getAlignedAllocatedSize()) / 1024.0 / 1024.0,
+                fps, (double)Globals::allocator.getUsedSize() / 1024.0 / 1024.0,
                 Globals::rendererVK.getNumMeshInstances(), Globals::rendererVK.getNumMeshTypes(), Globals::rendererVK.getNumMaterials(), pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);
             window.setTitle(windowTitleBuf);
             return Timer::REPEAT;
@@ -283,6 +283,7 @@ int main(int argc, char* argv[])
             Globals::terrain.update(Globals::rendererVK, camera);
             Globals::terrainCollider.update(camera.position, Globals::terrain.activeClimateMaps());
             Globals::ocean.update(Globals::rendererVK, camera, Globals::terrain.activeTerrainData(), Globals::terrain.seaLevel());
+            Globals::terrain.render(Globals::rendererVK, Globals::ocean); // one walk of the visible hand-over for chunks + sectors; kicks both pushes
             Globals::scatter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);

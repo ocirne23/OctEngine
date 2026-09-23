@@ -34,7 +34,7 @@
 #define OC_SEG_JOB_SYSTEM      ".CRT$XCU5" // ~JobSystem joins workers, after every entity holder released
 #define OC_SEG_PHYSICS         ".CRT$XCU51" // ~PhysicsWorld's b3DestroyWorld fans tasks onto the job system, so it must beat ~JobSystem; bodies died in ~World above
 #define OC_SEG_NETWORK_MANAGER ".CRT$XCU6" // host closes after ~World's NetworkComponents unregistered
-#define OC_SEG_SCRIPT_EVENTS   ".CRT$XCU7" // undrained EntityChange queue holds EntityPtrs
+#define OC_SEG_SCRIPT_EVENTS   ".CRT$XCU7" // outlives ~World (ScriptComponents unregister); ~World releases its undrained EntityChange queue (needs World's spawn templates)
 #define OC_SEG_WORLD           ".CRT$XCU8" // root entities die, then caches -> live renderer/audio
 #define OC_SEG_UI              ".CRT$XCU9" // panel EntityPtrs + EntityChange queues
 

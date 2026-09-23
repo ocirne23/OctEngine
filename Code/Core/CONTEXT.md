@@ -109,10 +109,16 @@ APPLICATION to define:
   the MemoryTracker.**
 * `EA::StdC::Vsnprintf` — the one that is not an allocation — sits in `Core/Private/Core.cpp`.
 
-**The ALIGNED form deliberately does not over-align.** `eastl::allocator::deallocate` frees every
-block with plain `delete[]`, so an `_aligned_malloc` block (what the `align_val_t` overloads return)
-would reach `Allocator::deallocate` and corrupt the heap. It asserts instead; EASTL only calls it for
-over-aligned element types, so nothing reaches it today.
+**Over-alignment works everywhere, through ONE free path.** `eastl::allocator::deallocate` frees
+every block with plain `delete[]`, whatever form allocated it — so no allocation form may hand out a
+block that `Allocator::deallocate` cannot free. `Allocator::allocateAligned(size, align)` therefore
+over-allocates by `align - 16` from `malloc` and puts the `AllocationHeader` directly before the
+aligned user pointer, with `alignPad` (a `uint16` in the header) = the bytes back to the `malloc`
+base; `deallocate` frees `header - alignPad` (0 for a plain block). The EASTL aligned hook, the
+`align_val_t` `new`/`delete` forms and `STLAllocator` all use it, so `oc::vector<alignas(64) T>`
+works (Spatial's `CellBlock`), the MemoryTracker hooks see aligned blocks like any other, and
+`getUsedSize()` counts them (there is no separate `_aligned_malloc` path or counter any more). The
+EASTL hook still asserts on a non-zero `alignOffset`.
 
 ## Debugger visualizers
 

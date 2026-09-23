@@ -296,6 +296,9 @@ The constraints that shape it:
 * `~PhysicsWorld`'s `b3DestroyWorld` fans tasks onto the job system, so it must beat `~JobSystem` —
   and bodies died in `~World` above it.
 * NetworkComponents unregister before `~NetworkManager` closes the host.
+* ScriptComponents unregister from `scriptEvents` in `~World`, so `scriptEvents` goes after World —
+  but its undrained EntityChange queue needs World's spawn templates, so **`~World` releases that
+  queue first**.
 * World's caches release into the still-live renderer and audio.
 * The procedural systems go FIRST — they free render residency and collider bodies and may wait on
   in-flight jobs. **Order among them is link-order-undefined and deliberately independent.**
