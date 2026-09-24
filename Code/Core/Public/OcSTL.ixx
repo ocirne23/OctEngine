@@ -435,6 +435,7 @@ export namespace oc
     using ocstl::partition;
     using ocstl::stable_partition;
     using ocstl::search;
+    using ocstl::lexicographical_compare;
     using ocstl::min_element;
     using ocstl::max_element;
     using ocstl::erase;
