@@ -1,3 +1,10 @@
+module;
+
+// Keys are the paths' positions in symbol order instead of ids stored per key: leaves and buckets keep only the
+// first key, and the bucket key array is gone. insert() takes an id, orderedKeys() maps each key back to it.
+// Comment out to store the id passed to insert() as the key.
+#define OC_PATH_TRIE_IMPLICIT_KEYS
+
 export module Core.BitPathTrie;
 
 import Core;
@@ -17,9 +24,12 @@ import Core;
 //   position and is not stored, only its case is (in the child).
 // - Leaves reuse the mask for 9 more inline symbols (14 in total). Longer endings go to the symbol pool.
 // - Subtrees with at most maxBucketKeys keys (see build()) are stored as a bucket instead of nodes: a sorted list of
-//   front coded entries in the symbol pool, their keys bit packed in a separate array. Every entry is one header
-//   symbol (symbols to drop from the end of the previous entry + number of new symbols, the split chosen per trie to
-//   minimize size) followed by the new symbols. Lookups scan the bucket linearly, iteration decodes it in order.
+//   front coded entries in the symbol pool. Every entry is one header symbol (symbols to drop from the end of the
+//   previous entry + number of new symbols, the split chosen per bucket to minimize size) followed by the new
+//   symbols. Lookups scan the bucket linearly, iteration decodes it in order.
+// - OC_PATH_TRIE_IMPLICIT_KEYS: the key of a path is its position in symbol order. Leaves store their key, buckets
+//   the key of their first entry. Data that belongs to the paths is expected in that order (see orderedKeys()).
+//   Otherwise the key passed to insert() is stored: in the leaf, or bit packed in a separate bucket key array.
 // - The symbol pool's case stream is only stored when at least one path has uppercase characters.
 // - Lookups compare up to 5 (label) or 9 (leaf / tail) symbols at once by xor-ing packed symbol words.
 // - Nodes and bucket entries shared by several keys store one case (from the first key in symbol order). Keys whose
@@ -51,11 +61,12 @@ export namespace oc
         oc::span<const pathTrieDetail::Node> nodes;
         oc::span<const uint8> poolSymbols;                          // 6 bit symbol stream (tails and buckets) + padding
         oc::span<const uint8> poolCase;                             // 1 uppercase bit per pool symbol + padding, empty when no path has uppercase
-        oc::span<const uint8> bucketKeys;                           // bucketKeyBits per key + padding
         oc::span<const BitmapPathTrieCaseException> caseExceptions; // empty when paths sharing a prefix also share its case
         oc::span<const uint16> casePositions;                       // character positions to flip to the other case
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        oc::span<const uint8> bucketKeys;                           // bucketKeyBits per key + padding
         uint32 bucketKeyBits = 0;
-        uint32 bucketDropBits = 0;                                  // bits of a bucket entry header used for the drop count
+#endif
     };
 
     // Node breakdown of a trie, see BitmapPathTrieView::stats().
@@ -141,7 +152,7 @@ export namespace oc
         uint32 poolSymbol(uint32 index) const;
         bool isPoolUpper(uint32 index) const;
         uint32 readBucketCount(uint32& index) const;
-        void readBucketEntryHeader(uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const;
+        void readBucketEntryHeader(uint32 dropBits, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const;
         uint32 bucketKey(uint32 index) const;
 
         template<typename Func>
@@ -159,19 +170,27 @@ export namespace oc
     };
 
     // Collects paths and bakes them into a BitmapPathTrieStorage.
+    // OC_PATH_TRIE_IMPLICIT_KEYS: a path's key is its position in symbol order, the order forEach() reports them in. The
+    // id passed to insert() is not stored in the trie; orderedKeys() maps every key back to it. Otherwise the id IS the key.
     class BitmapPathTrie final
     {
     public:
 
         using Node = pathTrieDetail::Node;
         static constexpr uint32 InvalidKey = BitmapPathTrieView::InvalidKey;
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        static constexpr uint32 MaxPathCount = pathTrieDetail::MaxChildOrKey + 1; // keys have to fit Node::childOrKey
+#else
         static constexpr uint32 MaxKey = pathTrieDetail::MaxChildOrKey;
+#endif
         static constexpr uint32 DefaultMaxBucketKeys = 64; // subtrees with at most this many keys become a bucket instead of nodes
 
-        // Queues a path. False if it has characters outside the alphabet, is too long, or key > MaxKey.
-        // Duplicate paths (case insensitive) are caught by build().
-        bool insert(oc::string_view path, uint32 key);
-        // (Re)builds the storage from every inserted path. False (and an empty trie) if a path was inserted twice.
+        // Queues a path. False if it has characters outside the alphabet or is too long (or, with stored keys,
+        // id > MaxKey). Duplicate paths (case insensitive) are caught by build().
+        bool insert(oc::string_view path, uint32 id);
+
+        // (Re)builds the storage from every inserted path. False (and an empty trie) if a path was inserted twice, or,
+        // with implicit keys, if there are more than MaxPathCount paths.
         // Subtrees with 2 to maxBucketKeys keys become a bucket; 0 or 1 disables buckets.
         bool build(uint32 maxBucketKeys = DefaultMaxBucketKeys);
 
@@ -181,6 +200,12 @@ export namespace oc
         BitmapPathTrieStorage storage() const;
         BitmapPathTrieView view() const;
 
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        // The id passed to insert() for every key: orderedKeys()[key] == id. Valid from a successful build() until
+        // clearPending(). Reorders data indexed by the caller's ids so it can be indexed by key directly.
+        oc::vector<uint32> orderedKeys() const;
+#endif
+
     private:
 
         static constexpr uint8 PendingUpperFlag = 1u << pathTrieDetail::SymbolBits;
@@ -189,7 +214,7 @@ export namespace oc
         {
             uint32 symbolOffset = 0;
             uint32 symbolCount = 0;
-            uint32 key = InvalidKey;
+            uint32 id = InvalidKey; // passed to insert()
         };
 
         struct PendingBucket
@@ -202,6 +227,7 @@ export namespace oc
 
         uint32 symbolAt(const PendingEntry& entry, uint32 pos) const;
         bool isUpper(const PendingEntry& entry, uint32 pos) const;
+        uint32 getKey(const PendingEntry& entry) const;
         void packLabel(const PendingEntry& entry, uint32 pos, uint32 count, Node& node) const;
         uint32 allocateNodes(uint32 count);
         uint32 sharedSymbolCount(uint32 begin, uint32 end, uint32 depth) const;
@@ -214,23 +240,25 @@ export namespace oc
         void appendPoolSymbol(uint32 symbol, bool upper);
         void appendPoolCount(uint32 count);
         void writeBuckets();
-        void packBucketKeys();
         void buildCaseExceptions();
 
         oc::vector<uint8> m_pendingSymbols;                         // symbols of all inserted paths back to back, symbol | PendingUpperFlag
         oc::vector<PendingEntry> m_pending;                         // one entry per inserted path, sorted by build()
         oc::vector<PendingBucket> m_pendingBuckets;                 // buckets whose entries writeBuckets() writes
-        oc::vector<uint32> m_pendingBucketKeys;                     // bucket keys in bucket order, packed at the end of build()
         oc::vector<Node> m_nodes;                                   // the trie: root at index 0, children of a node contiguous
         oc::vector<uint8> m_poolSymbols;                            // 6 bit symbol stream holding leaf tails and bucket entries
         oc::vector<uint8> m_poolCase;                               // 1 uppercase bit per pool symbol, empty when no path has uppercase
-        oc::vector<uint8> m_bucketKeys;                             // bucket keys, bit packed with m_bucketKeyBits each
         oc::vector<BitmapPathTrieCaseException> m_caseExceptions;   // keys whose case differs from the trie, sorted by key + sentinel
         oc::vector<uint16> m_casePositions;                         // character positions to toggle per case exception
         uint32 m_poolSymbolCount = 0;
-        uint32 m_bucketKeyBits = 0;
-        uint32 m_bucketDropBits = 0;
         uint32 m_maxBucketKeys = 0;
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        void packBucketKeys();
+
+        oc::vector<uint32> m_pendingBucketKeys;                     // bucket keys in bucket order, packed at the end of build()
+        oc::vector<uint8> m_bucketKeys;                             // bucket keys, bit packed with m_bucketKeyBits each
+        uint32 m_bucketKeyBits = 0;
+#endif
         bool m_hasUpper = false;                                    // any inserted path has uppercase; otherwise no case stream is written
     };
 
@@ -245,7 +273,7 @@ export namespace oc
         inline constexpr uint32 SymbolsPerLoad = (64 - 7) / SymbolBits; // symbols a loadBits() result always holds whole
 
         // A bucket entry starts with a header symbol of two fields: the symbols to drop from the end of the previous entry
-        // (the low bucketDropBits bits) and the number of new symbols that follow (the rest). A field with all bits set is
+        // (the low Node::Bucket::dropBits bits) and the number of new symbols that follow (the rest). A field with all bits set is
         // an escape: the value follows as an explicit count, one symbol below CountEscape, otherwise the escape and two
         // symbols (12 bits).
         inline constexpr uint32 CountEscape = SymbolMask;
@@ -353,7 +381,8 @@ export namespace oc
 
                 uint64 poolOffset : 32; // symbol pool offset of the first entry
                 uint64 keyCount : 7;
-                uint64 unused : 25;
+                uint64 dropBits : 3;    // entry header bits used for the drop count, chosen per bucket
+                uint64 unused : 22;
             };
             static_assert(sizeof(Bucket) == 8);
 
@@ -388,7 +417,8 @@ export namespace oc
             uint32 labelUpper : 5 = 0; // uppercase mask of the label symbols
 
             // internal: index of the first child
-            // bucket:   index of the first bucket key
+            // bucket:   implicit keys: key of the first entry, entry i has key childOrKey + i
+            //           stored keys: index of the first bucket key
             // leaf:     the key (inline and tail leaves, 67 million max)
             uint32 childOrKey : 26 = 0;
             uint32 branchUpper : 1 = 0; // the branch symbol leading to this node is uppercase
@@ -479,7 +509,9 @@ export namespace oc
         return m_storage.nodes.size_bytes()
             + m_storage.poolSymbols.size_bytes()
             + m_storage.poolCase.size_bytes()
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
             + m_storage.bucketKeys.size_bytes()
+#endif
             + m_storage.caseExceptions.size_bytes()
             + m_storage.casePositions.size_bytes();
     }
@@ -658,6 +690,7 @@ export namespace oc
         [[maybe_unused]] char entry[Output ? MaxPath : 1]; // Output: the current entry's characters, written before they are read
         uint32 symbolIndex = static_cast<uint32>(node.bucket.poolOffset);
         const uint32 keyCount = static_cast<uint32>(node.bucket.keyCount);
+        const uint32 dropBits = static_cast<uint32>(node.bucket.dropBits);
         uint32 matched = 0;
         uint32 previousLength = 0;
 
@@ -665,7 +698,7 @@ export namespace oc
         {
             uint32 shared = 0;
             uint32 added = 0;
-            readBucketEntryHeader(symbolIndex, previousLength, shared, added);
+            readBucketEntryHeader(dropBits, symbolIndex, previousLength, shared, added);
             if (shared < matched)
                 return InvalidKey; // differs from the previous entry where that one still matched, so it sorts after the query
 
@@ -756,13 +789,12 @@ export namespace oc
         return (high << pathTrieDetail::SymbolBits) | low;
     }
 
-    // Reads a bucket entry's header and advances index to its new symbols. outShared = the symbols the entry shares with
-    // the previous one (of length previousLength), outAdded = the new symbols that follow.
-    inline void BitmapPathTrieView::readBucketEntryHeader(uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const
+    // Reads a bucket entry's header (split at the bucket's dropBits) and advances index to its new symbols. outShared = the
+    // symbols the entry shares with the previous one (of length previousLength), outAdded = the new symbols that follow.
+    inline void BitmapPathTrieView::readBucketEntryHeader(uint32 dropBits, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const
     {
         using namespace pathTrieDetail;
 
-        const uint32 dropBits = m_storage.bucketDropBits;
         const uint32 dropEscape = (1u << dropBits) - 1;
         const uint32 addEscape = (1u << (SymbolBits - dropBits)) - 1;
         assert(dropBits >= MinDropBits && dropBits <= MaxDropBits);
@@ -780,11 +812,16 @@ export namespace oc
         outAdded = added;
     }
 
+    // index = the bucket node's childOrKey + the entry index. With implicit keys that already is the key.
     inline uint32 BitmapPathTrieView::bucketKey(uint32 index) const
     {
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        return index;
+#else
         const uint32 bits = m_storage.bucketKeyBits;
         assert(bits > 0 && bits <= 32);
         return static_cast<uint32>(pathTrieDetail::loadBits(m_storage.bucketKeys.data(), size_t(index) * bits) & ((1ull << bits) - 1));
+#endif
     }
 
     // Appends symbol's character to the path buffer. False when the walk must not go below this point: the path no longer
@@ -917,6 +954,7 @@ export namespace oc
 
         const uint32 prefixLength = static_cast<uint32>(context.prefix.size());
         const uint32 keyCount = static_cast<uint32>(node.bucket.keyCount);
+        const uint32 dropBits = static_cast<uint32>(node.bucket.dropBits);
         uint32 symbolIndex = static_cast<uint32>(node.bucket.poolOffset);
         uint32 previousLength = 0; // symbols of the previous entry after length
         bool hasDirectory = false; // a directory was reported for an earlier entry of this bucket
@@ -927,7 +965,7 @@ export namespace oc
         {
             uint32 shared = 0;
             uint32 added = 0;
-            readBucketEntryHeader(symbolIndex, previousLength, shared, added);
+            readBucketEntryHeader(dropBits, symbolIndex, previousLength, shared, added);
             sharedWithDir = oc::min(sharedWithDir, shared); // the minimum over every entry since that one
             previousLength = shared + added;
 
@@ -990,7 +1028,7 @@ export namespace oc
                 uint32 shared = 0;
                 uint32 added = 0;
                 const uint32 headerStart = symbolIndex;
-                readBucketEntryHeader(symbolIndex, previousLength, shared, added);
+                readBucketEntryHeader(static_cast<uint32>(node.bucket.dropBits), symbolIndex, previousLength, shared, added);
                 out.bucketHeaderSymbols += symbolIndex - headerStart;
                 symbolIndex += added;
                 previousLength = shared + added;
@@ -1041,10 +1079,14 @@ export namespace oc
 
     // ---- Implementation: BitmapPathTrie ----------------------------------------------------------------------------
 
-    inline bool BitmapPathTrie::insert(oc::string_view path, uint32 key)
+    inline bool BitmapPathTrie::insert(oc::string_view path, uint32 id)
     {
-        if (key > MaxKey || path.size() >= pathTrieDetail::MaxPath)
+        if (path.size() >= pathTrieDetail::MaxPath)
             return false;
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        if (id > MaxKey)
+            return false;
+#endif
 
         const size_t offset = m_pendingSymbols.size();
         assert(offset + path.size() < InvalidKey && "Too many path symbols for 32 bit offsets");
@@ -1063,7 +1105,7 @@ export namespace oc
         PendingEntry entry;
         entry.symbolOffset = static_cast<uint32>(offset);
         entry.symbolCount = static_cast<uint32>(path.size());
-        entry.key = key;
+        entry.id = id;
         m_pending.push_back(entry);
         return true;
     }
@@ -1075,14 +1117,15 @@ export namespace oc
         m_nodes.clear();
         m_poolSymbols.clear();
         m_poolCase.clear();
-        m_bucketKeys.clear();
         m_pendingBuckets.clear();
-        m_pendingBucketKeys.clear();
         m_caseExceptions.clear();
         m_casePositions.clear();
         m_poolSymbolCount = 0;
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        m_bucketKeys.clear();
+        m_pendingBucketKeys.clear();
         m_bucketKeyBits = 0;
-        m_bucketDropBits = 0;
+#endif
         m_maxBucketKeys = oc::min(maxBucketKeys, Node::Bucket::MaxKeys);
         // decides whether a case stream and case exceptions are needed at all
         m_hasUpper = oc::any_of(m_pendingSymbols.begin(), m_pendingSymbols.end(), [](uint8 symbol) { return (symbol & PendingUpperFlag) != 0; });
@@ -1090,8 +1133,14 @@ export namespace oc
         if (m_pending.empty())
             return true;
 
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        if (m_pending.size() > MaxPathCount)
+            return false; // keys would not fit Node::childOrKey
+#endif
+
         // Sorted by folded symbols: a path sorts before the paths it is a prefix of, which matches the end symbol being
-        // bit 0. Stable, so the first inserted path decides the case of shared nodes.
+        // bit 0. Stable, so the first inserted path decides the case of shared nodes. With implicit keys, the position
+        // in this order is the key of a path.
         const uint8* symbols = m_pendingSymbols.data();
         auto pathLess = [symbols](const PendingEntry& a, const PendingEntry& b)
         {
@@ -1108,9 +1157,11 @@ export namespace oc
 
         const uint32 rootIndex = allocateNodes(1);
         buildNode(rootIndex, 0, static_cast<uint32>(m_pending.size()), 0); // nodes, leaf tails and bucket nodes
-        writeBuckets();                                                    // bucket entries: needs every bucket to pick the header split
+        writeBuckets();                                                    // bucket entries, each bucket picks its own header split
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
         packBucketKeys();                                                  // needs every bucket key to pick the key width
-        buildCaseExceptions();                                             // needs the finished trie to see which case it returns
+#endif
+        buildCaseExceptions();                                            // needs the finished trie to see which case it returns
         return true;
     }
 
@@ -1120,12 +1171,13 @@ export namespace oc
         m_nodes.clear();
         m_poolSymbols.clear();
         m_poolCase.clear();
-        m_bucketKeys.clear();
         m_caseExceptions.clear();
         m_casePositions.clear();
         m_poolSymbolCount = 0;
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        m_bucketKeys.clear();
         m_bucketKeyBits = 0;
-        m_bucketDropBits = 0;
+#endif
     }
 
     inline void BitmapPathTrie::clearPending()
@@ -1142,17 +1194,41 @@ export namespace oc
         result.nodes = { m_nodes.data(), m_nodes.size() };
         result.poolSymbols = { m_poolSymbols.data(), m_poolSymbols.size() };
         result.poolCase = { m_poolCase.data(), m_poolCase.size() };
-        result.bucketKeys = { m_bucketKeys.data(), m_bucketKeys.size() };
         result.caseExceptions = { m_caseExceptions.data(), m_caseExceptions.size() };
         result.casePositions = { m_casePositions.data(), m_casePositions.size() };
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        result.bucketKeys = { m_bucketKeys.data(), m_bucketKeys.size() };
         result.bucketKeyBits = m_bucketKeyBits;
-        result.bucketDropBits = m_bucketDropBits;
+#endif
         return result;
     }
 
     inline BitmapPathTrieView BitmapPathTrie::view() const
     {
         return BitmapPathTrieView(storage());
+    }
+
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+    inline oc::vector<uint32> BitmapPathTrie::orderedKeys() const
+    {
+        // build() sorted m_pending, so an entry's index is its key
+        oc::vector<uint32> ids;
+        ids.reserve(m_pending.size());
+        for (const PendingEntry& entry : m_pending)
+            ids.push_back(entry.id);
+        return ids;
+    }
+#endif
+
+    // Implicit keys: the entry's position in the sorted m_pending. Stored keys: the id passed to insert().
+    inline uint32 BitmapPathTrie::getKey(const PendingEntry& entry) const
+    {
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        assert(&entry >= m_pending.data() && &entry < m_pending.data() + m_pending.size());
+        return static_cast<uint32>(&entry - m_pending.data());
+#else
+        return entry.id;
+#endif
     }
 
     inline uint32 BitmapPathTrie::symbolAt(const PendingEntry& entry, uint32 pos) const
@@ -1293,22 +1369,26 @@ export namespace oc
     }
 
     // Turns the sorted range [begin, end) into a bucket node. The prefix the whole range shares (up to 5 symbols) becomes
-    // the node label. writeBuckets() writes the entries once every bucket is known; the keys are collected in bucket order
-    // and bit packed by packBucketKeys().
+    // the node label. writeBuckets() writes the entries once every bucket is known. Implicit keys: the range holds
+    // consecutive keys, so only the first one is stored. Stored keys: collected in bucket order and bit packed by
+    // packBucketKeys().
     inline void BitmapPathTrie::buildBucket(uint32 nodeIndex, uint32 begin, uint32 end, uint32 depth)
     {
         const uint32 labelCount = oc::min(sharedSymbolCount(begin, end, depth), Node::LabelSymbols);
+#ifdef OC_PATH_TRIE_IMPLICIT_KEYS
+        const uint32 firstKey = getKey(m_pending[begin]);
+#else
         const uint32 firstKey = static_cast<uint32>(m_pendingBucketKeys.size());
         assert(firstKey <= pathTrieDetail::MaxChildOrKey && "Too many bucket keys for 26 bit key indices");
+        for (uint32 i = begin; i < end; ++i)
+            m_pendingBucketKeys.push_back(m_pending[i].id);
+#endif
 
         Node& node = m_nodes[nodeIndex];
         packLabel(m_pending[begin], depth, labelCount, node);
         node.childOrKey = firstKey;
         node.setKind(Node::ENodeKind::Bucket);
-        node.bucket.keyCount = end - begin; // poolOffset is set by writeBuckets()
-
-        for (uint32 i = begin; i < end; ++i)
-            m_pendingBucketKeys.push_back(m_pending[i].key);
+        node.bucket.keyCount = end - begin; // poolOffset and dropBits are set by writeBuckets()
 
         m_pendingBuckets.push_back(PendingBucket{ nodeIndex, begin, end, depth + labelCount });
     }
@@ -1324,7 +1404,7 @@ export namespace oc
 
         Node& node = m_nodes[nodeIndex];
         packLabel(entry, depth, labelCount, node);
-        node.childOrKey = entry.key;
+        node.childOrKey = getKey(entry);
         node.childMask = 0;
 
         const uint32 restDepth = depth + labelCount;
@@ -1425,19 +1505,16 @@ export namespace oc
         appendPoolSymbol(count & SymbolMask, false);
     }
 
-    // Picks the header split between drop and added count that needs the fewest pool symbols over every bucket, then
-    // writes every bucket's entries and points the bucket nodes at them.
+    // Writes every bucket's entries and points the bucket nodes at them. Each bucket uses the header split between drop
+    // and added count that needs the fewest pool symbols for its own entries.
     inline void BitmapPathTrie::writeBuckets()
     {
         using namespace pathTrieDetail;
 
-        if (m_pendingBuckets.empty())
-            return;
-
-        // the header symbols (escaped counts included) each possible split would need
-        size_t headerSymbols[MaxDropBits + 1] = {};
         for (const PendingBucket& bucket : m_pendingBuckets)
         {
+            // the header symbols (escaped counts included) each possible split would need for this bucket
+            uint32 headerSymbols[MaxDropBits + 1] = {};
             forEachBucketEntry(bucket, [&headerSymbols](uint32 drop, uint32 added, const PendingEntry&, uint32)
             {
                 for (uint32 dropBits = MinDropBits; dropBits <= MaxDropBits; ++dropBits)
@@ -1449,25 +1526,24 @@ export namespace oc
                         + (added >= addEscape ? countSymbols(added) : 0);
                 }
             });
-        }
 
-        m_bucketDropBits = MinDropBits;
-        for (uint32 dropBits = MinDropBits; dropBits <= MaxDropBits; ++dropBits)
-            if (headerSymbols[dropBits] < headerSymbols[m_bucketDropBits])
-                m_bucketDropBits = dropBits;
+            uint32 bestDropBits = MinDropBits;
+            for (uint32 dropBits = MinDropBits; dropBits <= MaxDropBits; ++dropBits)
+                if (headerSymbols[dropBits] < headerSymbols[bestDropBits])
+                    bestDropBits = dropBits;
 
-        // every entry as a header symbol, the escaped counts (if any) and the new symbols
-        const uint32 dropEscape = (1u << m_bucketDropBits) - 1;
-        const uint32 addEscape = (1u << (SymbolBits - m_bucketDropBits)) - 1;
-        for (const PendingBucket& bucket : m_pendingBuckets)
-        {
-            m_nodes[bucket.nodeIndex].bucket.poolOffset = m_poolSymbolCount;
+            Node& node = m_nodes[bucket.nodeIndex];
+            node.bucket.poolOffset = m_poolSymbolCount;
+            node.bucket.dropBits = bestDropBits;
 
+            // every entry as a header symbol, the escaped counts (if any) and the new symbols
+            const uint32 dropEscape = (1u << bestDropBits) - 1;
+            const uint32 addEscape = (1u << (SymbolBits - bestDropBits)) - 1;
             forEachBucketEntry(bucket, [&](uint32 drop, uint32 added, const PendingEntry& entry, uint32 firstAddedPos)
             {
                 const uint32 dropField = oc::min(drop, dropEscape);
                 const uint32 addField = oc::min(added, addEscape);
-                appendPoolSymbol(dropField | (addField << m_bucketDropBits), false);
+                appendPoolSymbol(dropField | (addField << bestDropBits), false);
                 if (dropField == dropEscape)
                     appendPoolCount(drop);
                 if (addField == addEscape)
@@ -1482,6 +1558,7 @@ export namespace oc
         m_pendingBuckets.shrink_to_fit();
     }
 
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
     // Packs the bucket keys at the smallest bit width that fits the largest one.
     inline void BitmapPathTrie::packBucketKeys()
     {
@@ -1505,6 +1582,7 @@ export namespace oc
         m_pendingBucketKeys.clear();
         m_pendingBucketKeys.shrink_to_fit();
     }
+#endif
 
     // Compares the case every key gets from the trie with its original case and records the differences.
     inline void BitmapPathTrie::buildCaseExceptions()
@@ -1532,7 +1610,7 @@ export namespace oc
                 lower[i] = pathTrieDetail::symbolToChar(symbolAt(entry, i), false);
 
             const uint32 key = trieView.findKey<true>(oc::string_view(lower, entry.symbolCount), canonical);
-            assert(key == entry.key);
+            assert(key == getKey(entry));
             (void)key;
 
             const uint32 firstPosition = static_cast<uint32>(positions.size());
@@ -1541,14 +1619,17 @@ export namespace oc
                     positions.push_back(static_cast<uint16>(i));
 
             if (positions.size() > firstPosition)
-                keys.push_back(KeyPositions{ entry.key, firstPosition, static_cast<uint32>(positions.size()) - firstPosition });
+                keys.push_back(KeyPositions{ getKey(entry), firstPosition, static_cast<uint32>(positions.size()) - firstPosition });
         }
 
         if (keys.empty())
             return;
 
-        // sorted by key for the binary search in applyCaseExceptions(); the positions follow in the same order
+        // sorted by key for the binary search in applyCaseExceptions(); the positions follow in the same order.
+        // Implicit keys: m_pending is in key order, so keys already is.
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
         oc::sort(keys.begin(), keys.end(), [](const KeyPositions& a, const KeyPositions& b) { return a.key < b.key; });
+#endif
 
         m_caseExceptions.reserve(keys.size() + 1);
         m_casePositions.reserve(positions.size());
