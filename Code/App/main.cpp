@@ -10,6 +10,7 @@ import Core.Tweaks;
 import Core.Windows;
 
 import App.Session;
+import App.Tools;
 import App.InputControls;
 import App.UnattendedRun;
 
@@ -38,6 +39,8 @@ int main(int argc, char* argv[])
     oc::optional<FileSystem::AllowMainThreadIO> startupIo;
     startupIo.emplace();
     installFileHooks();
+
+    runCommandLineTool(argc, argv);
 
     const LaunchOptions options = parseCommandLine(argc, argv);
     const bool headlessServer = options.headlessServer();

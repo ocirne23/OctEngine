@@ -78,11 +78,20 @@ and `physics.setWaterSurface`.
 | `--server` / `--connect <ip>` / `--port N` / `--tickrate N` / `--headless` / `--no-encrypt` | |
 | `--scenario <save\|default>` / `--scenario-at <sec>` | |
 | `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` / `--profile-workers` | |
+| `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
 | `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. **Either unattended flag also installs `App.UnattendedRun`'s failure handling**: no modal dialogs (assert / abort / OS fault box — the run FAILS instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the debugger break. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
 
 **The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
 `--game`, not an unattended run (`--profile-after` or `--quit-after`), and no `--scenario`.
+
+## One-shot tools (`App.Tools`)
+
+A flag that runs one job instead of the engine and exits 0 (success) or 1. main calls
+`runCommandLineTool(argc, argv)` right after `FileSystem::initialize`, before `parseCommandLine` (so the
+tool flags never reach its unknown-argument warning) and before anything else initializes. **A new tool is
+one function plus a row in `c_tools`** — never a branch in main. The exit is `_Exit` after a flush: the
+global destructors assume a live renderer (`~StagingManager` destroys its fences on the device).
 
 ---
 
