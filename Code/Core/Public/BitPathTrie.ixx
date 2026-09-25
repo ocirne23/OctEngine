@@ -23,10 +23,11 @@ import Core;
 // - Every node stores up to 5 symbols of path compression inline. The branch symbol is implicit in the child's
 //   position and is not stored, only its case is (in the child).
 // - Leaves reuse the mask for 9 more inline symbols (14 in total). Longer endings go to the symbol pool.
-// - Subtrees with at most maxBucketKeys keys (see build()) are stored as a bucket instead of nodes: a sorted list of
+// - Subtrees with at most BitmapPathTrie::MaxBucketKeys keys are stored as a bucket instead of nodes: a sorted list of
 //   front coded entries in the symbol pool. Every entry is one header symbol (symbols to drop from the end of the
 //   previous entry + number of new symbols, the split chosen per bucket to minimize size) followed by the new
-//   symbols. Lookups scan the bucket linearly, iteration decodes it in order.
+//   symbols. The first entry has no header; its length is in the node. Lookups scan the bucket linearly, starting at
+//   a split entry near the middle when the query sorts after it. Iteration decodes it in order.
 // - OC_PATH_TRIE_IMPLICIT_KEYS: the key of a path is its position in symbol order. Leaves store their key, buckets
 //   the key of their first entry. Data that belongs to the paths is expected in that order (see orderedKeys()).
 //   Otherwise the key passed to insert() is stored: in the leaf, or bit packed in a separate bucket key array.
@@ -34,13 +35,14 @@ import Core;
 // - Lookups compare up to 5 (label) or 9 (leaf / tail) symbols at once by xor-ing packed symbol words.
 // - Nodes and bucket entries shared by several keys store one case (from the first key in symbol order). Keys whose
 //   case differs get a list of positions to flip in a sparse case exception table.
+// - Limits: paths up to 511 characters, 67 million paths.
 
 export namespace oc
 {
     namespace pathTrieDetail
     {
         inline constexpr uint32 SymbolBits = 6; // 64 possible characters in paths
-        inline constexpr uint32 MaxPath = 1024;
+        inline constexpr uint32 MaxPath = 512; // paths are shorter than this
         inline constexpr uint32 MaxChildOrKey = (1u << 26) - 1; // Node::childOrKey
 
         struct Node;
@@ -78,6 +80,7 @@ export namespace oc
         size_t bucketKeys = 0;
         size_t bucketSymbols = 0;       // pool symbols used by buckets (headers and new symbols)
         size_t bucketHeaderSymbols = 0; // pool symbols used by bucket entry headers, escaped counts included
+        size_t splitBucketNodes = 0;    // buckets with a split entry, lookups scan only half of those
         size_t leafNodes = 0;
         size_t endLeafNodes = 0;        // leaves of keys that end where other keys continue (end symbol children)
         size_t tailLeafNodes = 0;       // leaves with their ending in the symbol pool
@@ -152,7 +155,8 @@ export namespace oc
         uint32 poolSymbol(uint32 index) const;
         bool isPoolUpper(uint32 index) const;
         uint32 readBucketCount(uint32& index) const;
-        void readBucketEntryHeader(uint32 dropBits, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const;
+        void readBucketEntryHeader(uint32 dropBits, uint32& index, uint32& outDrop, uint32& outAdded) const;
+        void readBucketEntry(const Node& node, uint32 entry, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const;
         uint32 bucketKey(uint32 index) const;
 
         template<typename Func>
@@ -183,16 +187,15 @@ export namespace oc
 #else
         static constexpr uint32 MaxKey = pathTrieDetail::MaxChildOrKey;
 #endif
-        static constexpr uint32 DefaultMaxBucketKeys = 64; // subtrees with at most this many keys become a bucket instead of nodes
+        static constexpr uint32 MaxBucketKeys = 127; // subtrees with at most this many keys become a bucket instead of nodes
 
         // Queues a path. False if it has characters outside the alphabet or is too long (or, with stored keys,
         // id > MaxKey). Duplicate paths (case insensitive) are caught by build().
         bool insert(oc::string_view path, uint32 id);
 
-        // (Re)builds the storage from every inserted path. False (and an empty trie) if a path was inserted twice, or,
-        // with implicit keys, if there are more than MaxPathCount paths.
-        // Subtrees with 2 to maxBucketKeys keys become a bucket; 0 or 1 disables buckets.
-        bool build(uint32 maxBucketKeys = DefaultMaxBucketKeys);
+        // (Re)builds the storage from every inserted path. False (and an empty trie) if a path was inserted twice, the
+        // symbol pool outgrows Node::Bucket::MaxPoolOffset, or, with implicit keys, there are more than MaxPathCount paths.
+        bool build();
 
         void clear();
         void clearPending(); // releases the inserted paths; build() cannot run after this
@@ -239,7 +242,7 @@ export namespace oc
         static uint32 countSymbols(uint32 count);
         void appendPoolSymbol(uint32 symbol, bool upper);
         void appendPoolCount(uint32 count);
-        void writeBuckets();
+        bool writeBuckets();
         void buildCaseExceptions();
 
         oc::vector<uint8> m_pendingSymbols;                         // symbols of all inserted paths back to back, symbol | PendingUpperFlag
@@ -251,7 +254,6 @@ export namespace oc
         oc::vector<BitmapPathTrieCaseException> m_caseExceptions;   // keys whose case differs from the trie, sorted by key + sentinel
         oc::vector<uint16> m_casePositions;                         // character positions to toggle per case exception
         uint32 m_poolSymbolCount = 0;
-        uint32 m_maxBucketKeys = 0;
 #ifndef OC_PATH_TRIE_IMPLICIT_KEYS
         void packBucketKeys();
 
@@ -272,10 +274,10 @@ export namespace oc
         inline constexpr uint32 StreamPadding = sizeof(uint64); // zero bytes after every bit stream, so a 64 bit load at any used byte stays in bounds
         inline constexpr uint32 SymbolsPerLoad = (64 - 7) / SymbolBits; // symbols a loadBits() result always holds whole
 
-        // A bucket entry starts with a header symbol of two fields: the symbols to drop from the end of the previous entry
-        // (the low Node::Bucket::dropBits bits) and the number of new symbols that follow (the rest). A field with all bits set is
-        // an escape: the value follows as an explicit count, one symbol below CountEscape, otherwise the escape and two
-        // symbols (12 bits).
+        // A bucket entry (except the first, see Node::Bucket::firstLength) starts with a header symbol of two fields: the
+        // symbols to drop from the end of the previous entry (the low Node::Bucket::dropBits bits) and the number of new
+        // symbols that follow (the rest). A field with all bits set is an escape: the value follows as an explicit count,
+        // one symbol below CountEscape, otherwise the escape and two symbols (12 bits).
         inline constexpr uint32 CountEscape = SymbolMask;
         inline constexpr uint32 MaxCount = (1u << (2 * SymbolBits)) - 1;
         inline constexpr uint32 MinDropBits = 1;
@@ -377,12 +379,24 @@ export namespace oc
 
             struct Bucket
             {
-                static constexpr uint32 MaxKeys = (1u << 7) - 1; // keyCount
+                static constexpr uint32 MaxPoolOffset = (1u << 29) - 1;  // poolOffset
+                static constexpr uint32 MaxKeys = (1u << 7) - 1;         // keyCount
+                static constexpr uint32 MaxFirstLength = (1u << 9) - 1;  // firstLength
+                static constexpr uint32 MaxSplitOffset = (1u << 9) - 1;  // splitOffset
 
-                uint64 poolOffset : 32; // symbol pool offset of the first entry
-                uint64 keyCount : 7;
+                uint64 poolOffset : 29; // symbol pool offset of the first entry
+                uint64 keyCount : 7;    // number of entries
                 uint64 dropBits : 3;    // entry header bits used for the drop count, chosen per bucket
-                uint64 unused : 22;
+                uint64 firstLength : 9; // symbols of the first entry, which has no header in the pool
+
+                // Split entry (unrelated to the header split of dropBits): an entry sharing nothing with the previous one is
+                // stored in full, so a lookup can start scanning there without decoding the entries before it. The builder
+                // picks the one closest to the middle; lookups then scan only the half that can hold the query.
+                // Example: in "a1", "a2", "b1", "b2", "c1", the entries "b1" and "c1" differ from their previous entry at the
+                // first symbol, and "b1" (index 2) is the split entry. A query "b2" starts scanning at "b1"; a query "a2"
+                // only scans the entries before it.
+                uint64 splitIndex : 7;  // index of that entry, 0 = no split (scans start at the first entry anyway)
+                uint64 splitOffset : 9; // pool offset of its header relative to poolOffset, reaches the middle of most buckets
             };
             static_assert(sizeof(Bucket) == 8);
 
@@ -401,7 +415,7 @@ export namespace oc
                 static constexpr uint32 MaxLength = (1u << 16) - 1; // length
 
                 uint64 poolOffset : 32; // symbol pool offset of the tail
-                uint64 length : 16;
+                uint64 length : 16;     // symbols of the tail in the pool
                 uint64 unused : 16;
             };
             static_assert(sizeof(TailLeaf) == 8);
@@ -436,6 +450,9 @@ export namespace oc
         };
         static_assert(sizeof(Node) == 16);
         static_assert(Node::TailLeaf::MaxLength >= MaxPath, "Tail length field too small for MaxPath");
+        static_assert(Node::Bucket::MaxFirstLength >= MaxPath - 1, "First entry length field too small for MaxPath");
+        static_assert(Node::Bucket::MaxKeys <= (1u << 7) - 1, "Split index field too small for Node::Bucket::MaxKeys");
+        static_assert(BitmapPathTrie::MaxBucketKeys <= Node::Bucket::MaxKeys, "BitmapPathTrie::MaxBucketKeys too large for Node::Bucket::keyCount");
 
         inline Node::ENodeKind Node::getKind() const { return static_cast<ENodeKind>(kind); }
         inline void Node::setKind(ENodeKind newKind) { kind = static_cast<uint32>(newKind); }
@@ -689,16 +706,46 @@ export namespace oc
 
         [[maybe_unused]] char entry[Output ? MaxPath : 1]; // Output: the current entry's characters, written before they are read
         uint32 symbolIndex = static_cast<uint32>(node.bucket.poolOffset);
-        const uint32 keyCount = static_cast<uint32>(node.bucket.keyCount);
-        const uint32 dropBits = static_cast<uint32>(node.bucket.dropBits);
+        uint32 begin = 0;
+        uint32 end = static_cast<uint32>(node.bucket.keyCount);
         uint32 matched = 0;
         uint32 previousLength = 0;
 
-        for (uint32 i = 0; i < keyCount; ++i)
+        const uint32 splitIndex = static_cast<uint32>(node.bucket.splitIndex);
+        if (splitIndex != 0)
+        {
+            // The split entry differs from the previous entry at its first symbol, so every entry before it starts with a
+            // smaller symbol and every entry from it on with the same or a larger one. The first query symbol picks the half.
+            const uint32 splitHeader = symbolIndex + static_cast<uint32>(node.bucket.splitOffset);
+
+            // read past its header to its first symbol; the split entry shares nothing, so that symbol is in the pool
+            uint32 splitSymbol = splitHeader;
+            uint32 splitDrop = 0;
+            uint32 splitAdded = 0;
+            readBucketEntryHeader(static_cast<uint32>(node.bucket.dropBits), splitSymbol, splitDrop, splitAdded);
+            assert(splitAdded > 0); // it sorts after an entry, so it is never the empty entry
+
+            // a query that ends here has the end symbol (0) next, smaller than any symbol, which picks the first half
+            if (query.symbolAt(pos) >= poolSymbol(splitSymbol))
+            {
+                // second half: scan from the split entry's header as if every entry before it was skipped. matched stays
+                // 0: the query cannot match anything the split entry would share with its previous entry.
+                begin = splitIndex;
+                symbolIndex = splitHeader;
+                previousLength = splitDrop; // the split entry drops the whole previous entry, so it shares nothing
+            }
+            else
+            {
+                // first half: the query sorts before the split entry, so the entries from it on cannot match
+                end = splitIndex;
+            }
+        }
+
+        for (uint32 i = begin; i < end; ++i)
         {
             uint32 shared = 0;
             uint32 added = 0;
-            readBucketEntryHeader(dropBits, symbolIndex, previousLength, shared, added);
+            readBucketEntry(node, i, symbolIndex, previousLength, shared, added);
             if (shared < matched)
                 return InvalidKey; // differs from the previous entry where that one still matched, so it sorts after the query
 
@@ -789,9 +836,9 @@ export namespace oc
         return (high << pathTrieDetail::SymbolBits) | low;
     }
 
-    // Reads a bucket entry's header (split at the bucket's dropBits) and advances index to its new symbols. outShared = the
-    // symbols the entry shares with the previous one (of length previousLength), outAdded = the new symbols that follow.
-    inline void BitmapPathTrieView::readBucketEntryHeader(uint32 dropBits, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const
+    // Reads a bucket entry's header (split at the bucket's dropBits) and advances index to its new symbols. outDrop = the
+    // symbols to drop from the end of the previous entry, outAdded = the new symbols that follow.
+    inline void BitmapPathTrieView::readBucketEntryHeader(uint32 dropBits, uint32& index, uint32& outDrop, uint32& outAdded) const
     {
         using namespace pathTrieDetail;
 
@@ -800,16 +847,30 @@ export namespace oc
         assert(dropBits >= MinDropBits && dropBits <= MaxDropBits);
 
         const uint32 header = poolSymbol(index++);
-        uint32 drop = header & dropEscape;
-        uint32 added = header >> dropBits;
-        if (drop == dropEscape)
-            drop = readBucketCount(index);
-        if (added == addEscape)
-            added = readBucketCount(index);
+        outDrop = header & dropEscape;
+        outAdded = header >> dropBits;
+        if (outDrop == dropEscape)
+            outDrop = readBucketCount(index);
+        if (outAdded == addEscape)
+            outAdded = readBucketCount(index);
+    }
 
+    // Reads entry `entry` of bucket node and advances index to its new symbols. outShared = the symbols the entry shares
+    // with the previous one (of length previousLength), outAdded = the new symbols that follow.
+    inline void BitmapPathTrieView::readBucketEntry(const Node& node, uint32 entry, uint32& index, uint32 previousLength, uint32& outShared, uint32& outAdded) const
+    {
+        // the first entry has no header: it shares nothing and its length is in the node
+        if (entry == 0)
+        {
+            outShared = 0;
+            outAdded = static_cast<uint32>(node.bucket.firstLength);
+            return;
+        }
+
+        uint32 drop = 0;
+        readBucketEntryHeader(static_cast<uint32>(node.bucket.dropBits), index, drop, outAdded);
         assert(drop <= previousLength);
         outShared = previousLength - drop;
-        outAdded = added;
     }
 
     // index = the bucket node's childOrKey + the entry index. With implicit keys that already is the key.
@@ -954,7 +1015,6 @@ export namespace oc
 
         const uint32 prefixLength = static_cast<uint32>(context.prefix.size());
         const uint32 keyCount = static_cast<uint32>(node.bucket.keyCount);
-        const uint32 dropBits = static_cast<uint32>(node.bucket.dropBits);
         uint32 symbolIndex = static_cast<uint32>(node.bucket.poolOffset);
         uint32 previousLength = 0; // symbols of the previous entry after length
         bool hasDirectory = false; // a directory was reported for an earlier entry of this bucket
@@ -965,7 +1025,7 @@ export namespace oc
         {
             uint32 shared = 0;
             uint32 added = 0;
-            readBucketEntryHeader(dropBits, symbolIndex, previousLength, shared, added);
+            readBucketEntry(node, i, symbolIndex, previousLength, shared, added);
             sharedWithDir = oc::min(sharedWithDir, shared); // the minimum over every entry since that one
             previousLength = shared + added;
 
@@ -1028,13 +1088,14 @@ export namespace oc
                 uint32 shared = 0;
                 uint32 added = 0;
                 const uint32 headerStart = symbolIndex;
-                readBucketEntryHeader(static_cast<uint32>(node.bucket.dropBits), symbolIndex, previousLength, shared, added);
+                readBucketEntry(node, i, symbolIndex, previousLength, shared, added);
                 out.bucketHeaderSymbols += symbolIndex - headerStart;
                 symbolIndex += added;
                 previousLength = shared + added;
             }
 
             ++out.bucketNodes;
+            out.splitBucketNodes += node.bucket.splitIndex != 0 ? 1 : 0;
             out.bucketKeys += keyCount;
             out.bucketSymbols += symbolIndex - static_cast<uint32>(node.bucket.poolOffset);
             out.keyDepthSum += depth * keyCount;
@@ -1110,10 +1171,8 @@ export namespace oc
         return true;
     }
 
-    inline bool BitmapPathTrie::build(uint32 maxBucketKeys)
+    inline bool BitmapPathTrie::build()
     {
-        assert(maxBucketKeys <= Node::Bucket::MaxKeys && "maxBucketKeys is larger than Node::Bucket::MaxKeys");
-
         m_nodes.clear();
         m_poolSymbols.clear();
         m_poolCase.clear();
@@ -1126,7 +1185,6 @@ export namespace oc
         m_pendingBucketKeys.clear();
         m_bucketKeyBits = 0;
 #endif
-        m_maxBucketKeys = oc::min(maxBucketKeys, Node::Bucket::MaxKeys);
         // decides whether a case stream and case exceptions are needed at all
         m_hasUpper = oc::any_of(m_pendingSymbols.begin(), m_pendingSymbols.end(), [](uint8 symbol) { return (symbol & PendingUpperFlag) != 0; });
 
@@ -1157,11 +1215,24 @@ export namespace oc
 
         const uint32 rootIndex = allocateNodes(1);
         buildNode(rootIndex, 0, static_cast<uint32>(m_pending.size()), 0); // nodes, leaf tails and bucket nodes
-        writeBuckets();                                                    // bucket entries, each bucket picks its own header split
+
+        // bucket entries, each bucket picks its own header split. Fails when the pool is too large for the bucket offsets.
+        if (!writeBuckets())
+        {
+            m_nodes.clear();
+            m_poolSymbols.clear();
+            m_poolCase.clear();
+            m_pendingBuckets.clear();
+            m_poolSymbolCount = 0;
 #ifndef OC_PATH_TRIE_IMPLICIT_KEYS
-        packBucketKeys();                                                  // needs every bucket key to pick the key width
+            m_pendingBucketKeys.clear();
 #endif
-        buildCaseExceptions();                                            // needs the finished trie to see which case it returns
+            return false;
+        }
+#ifndef OC_PATH_TRIE_IMPLICIT_KEYS
+        packBucketKeys(); // needs every bucket key to pick the key width
+#endif
+        buildCaseExceptions(); // needs the finished trie to see which case it returns
         return true;
     }
 
@@ -1290,7 +1361,7 @@ export namespace oc
             return;
         }
 
-        if (end - begin <= m_maxBucketKeys)
+        if (end - begin <= MaxBucketKeys)
         {
             buildBucket(nodeIndex, begin, end, depth);
             return;
@@ -1431,8 +1502,9 @@ export namespace oc
             appendPoolSymbol(symbolAt(entry, restDepth + i), isUpper(entry, restDepth + i));
     }
 
-    // func(drop, added, entry, firstAddedPos) for every entry of a bucket: the symbols to drop from the end of the
-    // previous entry, the number of new symbols, and the position of the first new symbol in entry.
+    // func(index, drop, added, entry, firstAddedPos) for every entry of a bucket: the entry's index in the bucket, the
+    // symbols to drop from the end of the previous entry, the number of new symbols, and the position of the first new
+    // symbol in entry.
     template<typename Func>
     inline void BitmapPathTrie::forEachBucketEntry(const PendingBucket& bucket, Func func) const
     {
@@ -1451,7 +1523,7 @@ export namespace oc
                 previousLength = previous.symbolCount - bucket.entryDepth;
             }
 
-            func(previousLength - shared, entry.symbolCount - bucket.entryDepth - shared, entry, bucket.entryDepth + shared);
+            func(i - bucket.begin, previousLength - shared, entry.symbolCount - bucket.entryDepth - shared, entry, bucket.entryDepth + shared);
         }
     }
 
@@ -1506,17 +1578,24 @@ export namespace oc
     }
 
     // Writes every bucket's entries and points the bucket nodes at them. Each bucket uses the header split between drop
-    // and added count that needs the fewest pool symbols for its own entries.
-    inline void BitmapPathTrie::writeBuckets()
+    // and added count that needs the fewest pool symbols for its own entries. False if the pool grows past what
+    // Node::Bucket::poolOffset can address.
+    inline bool BitmapPathTrie::writeBuckets()
     {
         using namespace pathTrieDetail;
 
         for (const PendingBucket& bucket : m_pendingBuckets)
         {
+            if (m_poolSymbolCount > Node::Bucket::MaxPoolOffset)
+                return false;
+
             // the header symbols (escaped counts included) each possible split would need for this bucket
             uint32 headerSymbols[MaxDropBits + 1] = {};
-            forEachBucketEntry(bucket, [&headerSymbols](uint32 drop, uint32 added, const PendingEntry&, uint32)
+            forEachBucketEntry(bucket, [&headerSymbols](uint32 index, uint32 drop, uint32 added, const PendingEntry&, uint32)
             {
+                if (index == 0)
+                    return; // the first entry has no header
+
                 for (uint32 dropBits = MinDropBits; dropBits <= MaxDropBits; ++dropBits)
                 {
                     const uint32 dropEscape = (1u << dropBits) - 1;
@@ -1533,21 +1612,47 @@ export namespace oc
                     bestDropBits = dropBits;
 
             Node& node = m_nodes[bucket.nodeIndex];
+            const uint32 keyCount = bucket.end - bucket.begin;
             node.bucket.poolOffset = m_poolSymbolCount;
             node.bucket.dropBits = bestDropBits;
 
-            // every entry as a header symbol, the escaped counts (if any) and the new symbols
+            // The first entry as its new symbols only, every other entry as a header symbol, the escaped counts (if any)
+            // and the new symbols. Meanwhile, pick the split entry (see Node::Bucket::splitIndex) closest to the middle.
             const uint32 dropEscape = (1u << bestDropBits) - 1;
             const uint32 addEscape = (1u << (SymbolBits - bestDropBits)) - 1;
-            forEachBucketEntry(bucket, [&](uint32 drop, uint32 added, const PendingEntry& entry, uint32 firstAddedPos)
+            uint32 splitDistance = UINT32_MAX; // the current split entry's distance to the middle, doubled so odd key counts need no rounding
+            forEachBucketEntry(bucket, [&](uint32 index, uint32 drop, uint32 added, const PendingEntry& entry, uint32 firstAddedPos)
             {
-                const uint32 dropField = oc::min(drop, dropEscape);
-                const uint32 addField = oc::min(added, addEscape);
-                appendPoolSymbol(dropField | (addField << bestDropBits), false);
-                if (dropField == dropEscape)
-                    appendPoolCount(drop);
-                if (addField == addEscape)
-                    appendPoolCount(added);
+                if (index == 0)
+                {
+                    assert(added <= Node::Bucket::MaxFirstLength);
+                    node.bucket.firstLength = added;
+                }
+                else
+                {
+                    // An entry sharing nothing with the previous one (its new symbols start right after the bucket label) can
+                    // start a scan, if splitOffset reaches its header. The header is written below, so it starts here.
+                    const uint32 offset = m_poolSymbolCount - static_cast<uint32>(node.bucket.poolOffset);
+                    if (firstAddedPos == bucket.entryDepth && offset <= Node::Bucket::MaxSplitOffset)
+                    {
+                        // |2 * index - keyCount|: keep the candidate closest to the middle
+                        const uint32 distance = 2 * index > keyCount ? 2 * index - keyCount : keyCount - 2 * index;
+                        if (distance < splitDistance)
+                        {
+                            splitDistance = distance;
+                            node.bucket.splitIndex = index;
+                            node.bucket.splitOffset = offset;
+                        }
+                    }
+
+                    const uint32 dropField = oc::min(drop, dropEscape);
+                    const uint32 addField = oc::min(added, addEscape);
+                    appendPoolSymbol(dropField | (addField << bestDropBits), false);
+                    if (dropField == dropEscape)
+                        appendPoolCount(drop);
+                    if (addField == addEscape)
+                        appendPoolCount(added);
+                }
 
                 for (uint32 pos = firstAddedPos; pos < entry.symbolCount; ++pos)
                     appendPoolSymbol(symbolAt(entry, pos), isUpper(entry, pos));
@@ -1556,6 +1661,7 @@ export namespace oc
 
         m_pendingBuckets.clear();
         m_pendingBuckets.shrink_to_fit();
+        return true;
     }
 
 #ifndef OC_PATH_TRIE_IMPLICIT_KEYS
