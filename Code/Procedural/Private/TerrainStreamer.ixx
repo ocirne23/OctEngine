@@ -291,14 +291,14 @@ export namespace Procedural
 		float m_texParallaxShadow = 1.0f;       // relief self-shadow strength (0 = off)
 		float m_texHeightBlendContrast = 3.0f;  // 0 = linear layer blend
 		bool  m_texTessEnabled = true;          // Terrain/Tessellation (Renderer::TerrainTexTweaks has the reasoning)
-		int   m_texTessMaxFactor = 16;
+		int   m_texTessMaxFactor = 8;
 		float m_texTessTargetPx = 7.0f;
 		float m_texTessFadeStart = 15.0f;       // m
 		float m_texTessFadeEnd = 100.0f;        // m
 		float m_texTessFalloffExponent = 1.0f;  // strength = 1 - t^p across the fade band
 		float m_texTessFreezeDistance = 15.0f;  // m: closer in, the factor and the height mip hold
-		float m_texTessDepthGround = 0.5f;      // m
-		float m_texTessDepthRock = 0.5f;        // m
+		float m_texTessDepthGround = 0.6f;      // m
+		float m_texTessDepthRock = 0.7f;       // m
 
 		// --- Terrain/Water tweaks: the surface water (Renderer::TerrainWetTweaks), pushed every frame from
 		// updateTerrainTextures. ONE wetness field (rain, ocean swash, submersion) drives ONE water surface:
