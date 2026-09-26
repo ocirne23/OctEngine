@@ -201,7 +201,7 @@ one run.
 | Caller | Behaviour |
 |---|---|
 | A job fiber | **Parks the fiber** (`fiberWait`); the worker keeps running other jobs. |
-| A registered non-worker thread (main, the window helper) | **Helps** — runs ready jobs until the counter clears (`helpWait`). |
+| A registered non-worker thread (main, the window helper) | **Helps** — runs ready **High and Normal** jobs until the counter clears (`helpWait` → `getHelpWork`). **Never a Low job**: Low carries the multi-second work (V3 tiles, the terrain pumps, the collider tile builds), and main once took the collider's Low build inside the short `"Terrain collider"` join, holding the frame for the build. A stolen Low job goes back to the shared Low ring. A wait ON a Low job therefore spins/yields until a worker runs it. |
 | Any unregistered thread | Blocks on the count atomic, notified on the zero transition. |
 
 The fast path — an already-done counter — returns without opening a scope at all. Both waiting paths

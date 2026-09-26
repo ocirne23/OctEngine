@@ -41,7 +41,7 @@ layout (location = 3) out vec3 out_meshPos;
 
 invariant gl_Position;
 
-layout (binding = 22) uniform sampler2D u_textures[]; // the splat height maps
+layout (binding = 23) uniform sampler2D u_textures[]; // the splat height maps
 
 #define TERRAIN_SPLAT_RELIEF
 #define TERRAIN_SPLAT_HEIGHT_ONLY

@@ -46,6 +46,8 @@ public:
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   sceneDepthSampler;
+        vk::ImageView cloudShadowView;  // the cloud Beer shadow map (GENERAL; LIT decals)
+        vk::Sampler   cloudShadowSampler;
     };
     // Records the indirect instanced box draw; the caller has begun a command buffer inside the
     // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/views.

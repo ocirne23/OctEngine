@@ -235,7 +235,7 @@ namespace Procedural
 		m_texBakeStop.store(true, oc::memory_order_relaxed);
 		Globals::jobSystem.wait(m_pumpCounter);   // main thread helps while waiting
 		Globals::jobSystem.wait(m_texBakeCounter);
-		clearResidents(); // main thread: free RenderNodes/containers while the renderer is still alive
+		clearResidents(); // main thread: free RenderNodes/containers while the renderer is still alive (joins the upload job)
 	}
 
 	void TerrainStreamer::initialize()
@@ -263,6 +263,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain", "Full-res distance (chunks)", &m_fullResDist, 0.0f, 8.0f, 0.05f); // edge distance forced to LOD0 before bands begin
 		Tweak::intVar("Terrain", "Max LOD", &m_maxLod, 0, 6, 1.0f);
 		Tweak::intVar("Terrain", "Uploads/frame", &m_maxUploadsPerFrame, 1, 32, 1.0f);
+		Tweak::floatVar("Terrain", "Upload MB/frame", &m_maxUploadMBPerFrame, 4.0f, 96.0f, 1.0f);
 		// Concurrent generation jobs: >1 lets warm-tile mesh builds overlap a cold V3 tile wait
 		// (inference itself still serializes on the pipeline lock).
 		Tweak::intVar("Terrain", "Gen jobs", &m_maxGenJobs, 1, 16, 1.0f);
@@ -841,10 +842,33 @@ namespace Procedural
 		Globals::jobSystem.wait(m_ringScanCounter);
 	}
 
+	void TerrainStreamer::kickUploads(Renderer& renderer)
+	{
+		if (m_uploads.empty())
+			return;
+		Globals::jobSystem.submit([this, &renderer]
+		{
+			for (Upload& upload : m_uploads)
+			{
+				if (upload.mesh.isValid() || upload.result.mesh.indices.empty())
+					continue; // uploaded (or failed) by an earlier kick
+				upload.mesh = renderer.createMesh(upload.result.mesh);
+				upload.result.mesh = RenderMeshData{}; // the copy is in the staging ring now
+			}
+		}, { "terrainUpload", EProfileCategory::Procedural }, EJobPriority::Normal, &m_uploadCounter);
+	}
+
+	void TerrainStreamer::joinUploads()
+	{
+		Globals::jobSystem.wait(m_uploadCounter); // main helps; a no-op once the job is done
+	}
+
 	void TerrainStreamer::clearResidents()
 	{
 		joinRender();   // the render job reads m_residents
 		joinRingScan(); // so does the ring scan; its output is against the residents being cleared
+		joinUploads();  // writes m_uploads
+		m_uploads.clear();
 		m_ringScanOut.clear();
 		for (auto& entry : m_residents)
 			retireResident(oc::move(entry.second));
@@ -1177,6 +1201,7 @@ namespace Procedural
 	{
 		joinRender();   // last frame's render job (already joined before present; a cheap no-op)
 		joinRingScan(); // last frame's ring scan: applied below (enabled) or dropped here
+		joinUploads();  // already joined before the frame kicks; a cheap no-op
 		m_renderReady = false;
 		{
 			// Retired in increasing generation order: free the prefix no hand-over list can name any more.
@@ -1347,30 +1372,27 @@ namespace Procedural
 
 		int uploads = 0;
         {
-            ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
-            for (Result& res : ready)
+            // --- Adopt LAST frame's upload batch (the job ran through present and the frame-pacing wait
+            // and was joined before this frame's kicks): only the node spawn and the culling
+            // registration are left, both cheap.
+            ProfileScope profileScope2("adoptUploads", EProfileCategory::Procedural);
+            size_t kept = 0;
+            for (Upload& upload : m_uploads)
             {
-                if (res.mesh.indices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
+                Result& res = upload.result;
+                if (!upload.mesh.isValid() && !res.mesh.indices.empty())
                 {
-                    m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
-                    m_ringScanNeeded = true;
+                    if (&m_uploads[kept] != &upload)
+                        m_uploads[kept] = oc::move(upload); // not kicked yet: stays in the batch
+                    ++kept;
                     continue;
                 }
-                const bool valid = (res.generation == generation) && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
-                if (!valid)
-                {
-                    m_pending.erase(res.key); // stale / no longer wanted / duplicate: done with it
-                    m_ringScanNeeded = true;
-                    continue;
-                }
-                if (uploads >= m_maxUploadsPerFrame)
-                {
-                    m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
-                    continue;
-                }
-
                 m_pending.erase(res.key);
-                m_ringScanNeeded = true; // conservative: covers the failure continue below
+                m_ringScanNeeded = true;
+                const bool valid = upload.mesh.isValid() && res.generation == generation
+                    && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
+                if (!valid)
+                    continue; // failed / stale / no longer wanted: the mesh frees here, on main
 
                 // ONE mesh per chunk (no ObjectContainer: no per-chunk material, names or node tables) on the
                 // terrain pipeline variant (procedural height/slope albedo), with the material every chunk
@@ -1378,9 +1400,7 @@ namespace Procedural
                 if (m_material == UINT16_MAX)
                     m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::TerrainLit, true);
                 auto resident = oc::make_unique<Resident>();
-                resident->mesh = renderer.createMesh(res.mesh);
-                if (!resident->mesh.isValid())
-                    continue;
+                resident->mesh = oc::move(upload.mesh);
                 const Transform transform(
                     glm::vec3((float)res.coord.x * chunkSize, 0.0f, (float)res.coord.y * chunkSize),
                     1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
@@ -1399,6 +1419,39 @@ namespace Procedural
                     glm::dvec3(bounds.pos), bounds.radius, (uint64)&resident->node, SpatialLayer_Terrain, false));
                 m_residents.emplace(res.key, oc::move(resident));
                 ++uploads;
+            }
+            m_uploads.resize(kept);
+        }
+        {
+            // --- Pick THIS frame's upload batch (kickUploads, after present). The picks stay "pending"
+            // until they are adopted, so the ring scan does not re-request them.
+            ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
+            const size_t maxBytes = (size_t)(glm::max(m_maxUploadMBPerFrame, 1.0f) * 1024.0f * 1024.0f);
+            size_t batchBytes = 0;
+            for (Result& res : ready)
+            {
+                if (res.mesh.indices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
+                {
+                    m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
+                    m_ringScanNeeded = true;
+                    continue;
+                }
+                const bool valid = (res.generation == generation) && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
+                if (!valid)
+                {
+                    m_pending.erase(res.key); // stale / no longer wanted / duplicate: done with it
+                    m_ringScanNeeded = true;
+                    continue;
+                }
+                const size_t bytes = res.mesh.vertices.size() * sizeof(res.mesh.vertices[0])
+                    + res.mesh.indices.size() * sizeof(res.mesh.indices[0]);
+                if ((int)m_uploads.size() >= m_maxUploadsPerFrame || (!m_uploads.empty() && batchBytes + bytes > maxBytes))
+                {
+                    m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
+                    continue;
+                }
+                batchBytes += bytes;
+                m_uploads.push_back(Upload{ oc::move(res), RenderMesh() });
             }
         }
 

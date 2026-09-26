@@ -265,7 +265,7 @@ void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
     fillTextureDescriptors(); // fresh sets: the pending-write path only carries slots swapped from now on
 }
 
-// Writes every live texture view into the trace sets' texture array (binding 15). Called when the sets are
+// Writes every live texture view into the trace sets' texture array (binding 16). Called when the sets are
 // (re)allocated; afterwards new uploads and streamed swaps arrive one slot at a time through
 // updateTextureDescriptor (the TextureStreamer's pending-write path), so the per-frame record writes none.
 void GIProbePipeline::fillTextureDescriptors()
@@ -279,7 +279,7 @@ void GIProbePipeline::fillTextureDescriptors()
         infos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        vk::WriteDescriptorSet write{ .dstSet = m_traceSets[i].getDescriptorSet(), .dstBinding = 15, .dstArrayElement = 0, .descriptorCount = numTextures,
+        vk::WriteDescriptorSet write{ .dstSet = m_traceSets[i].getDescriptorSet(), .dstBinding = 16, .dstArrayElement = 0, .descriptorCount = numTextures,
             .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = infos.data() };
         Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
     }
@@ -331,6 +331,7 @@ void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO (sun / sky params)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });  // the sky map
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // the sky clouds
 }
 
 void GIProbePipeline::createSkyMap()
@@ -399,7 +400,7 @@ void GIProbePipeline::createSkyMap()
     Globals::device.setDebugName(m_skyMapSampler, "GI.skyMap");
 }
 
-void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
+void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyCloudsView, vk::Sampler skyCloudsSampler)
 {
     if (!m_updateScratchBuilt)
         buildUpdateScratch();
@@ -407,6 +408,7 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     m_skyUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
     m_skyUpdates[1].imageInfos[0] = vk::DescriptorImageInfo{ .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
+    m_skyUpdates[2].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = skyCloudsSampler, .imageView = skyCloudsView, .imageLayout = vk::ImageLayout::eGeneral };
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_skyMapPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_skyUpdates);
@@ -454,11 +456,12 @@ void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 max
     b.push_back(storageBinding(12)); // GI clipmap SH volume (read + write)
     b.push_back(GiVolumeDescriptors::layoutBinding(13, vk::ShaderStageFlagBits::eCompute)); // the irradiance volume (hit bounce lookup)
     b.push_back(storageBinding(14)); // the per-wave visit stamps (written, for the volume's partial bake)
-    // Texture array last (15 = the set's highest binding number, required for eVariableDescriptorCount):
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 15, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
+    // Texture array last (16 = the set's highest binding number, required for eVariableDescriptorCount):
     // the layout declares the fixed device-limit cap, the live size comes from the set allocation.
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 15, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // textures
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 16, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // textures
     layout.descriptorBindingFlags.resize(b.size());
-    layout.descriptorBindingFlags[b.size() - 3] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
+    layout.descriptorBindingFlags[b.size() - 4] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume (13): live cascades only
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
@@ -468,7 +471,7 @@ void GIProbePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, v
     // after fillTextureDescriptors (the record never rewrites the array). UPDATE_AFTER_BIND, so the cached
     // command buffer that binds the set needs no re-record.
     vk::DescriptorImageInfo imageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = m_traceSets[frameIdx].getDescriptorSet(), .dstBinding = 15, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = m_traceSets[frameIdx].getDescriptorSet(), .dstBinding = 16, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -513,10 +516,15 @@ void GIProbePipeline::buildUpdateScratch()
     sky.imageInfos.resize(1);
     m_traceUpdates.push_back(oc::move(sky));
     m_traceUpdates.push_back(buf(14));                                                                  // [12] per-wave visit stamps
+    DescriptorSetUpdateInfo cloudShadow{ .binding = 15, .type = vk::DescriptorType::eCombinedImageSampler }; // [13] cloud shadow map
+    cloudShadow.imageInfos.resize(1);
+    m_traceUpdates.push_back(oc::move(cloudShadow));
 
     m_skyUpdates[0] = buf(0, vk::DescriptorType::eUniformBuffer);
     m_skyUpdates[1] = DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage };
     m_skyUpdates[1].imageInfos.resize(1);
+    m_skyUpdates[2] = DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler };
+    m_skyUpdates[2].imageInfos.resize(1);
     m_updateScratchBuilt = true;
 }
 
@@ -570,6 +578,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     m_traceUpdates[10].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = params.shadowMapSampler, .imageView = params.shadowMapView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
     m_traceUpdates[11].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = m_skyMapSampler, .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
     m_traceUpdates[12].bufferInfos[0] = bufInfo(m_waveStamps);
+    m_traceUpdates[13].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = params.cloudShadowSampler, .imageView = params.cloudShadowView, .imageLayout = vk::ImageLayout::eGeneral };
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_traceUpdates);
@@ -582,7 +591,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
         volume.fillUpdates(13, volumeUpdates[0], volumeUpdates[1]);
         commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, volumeUpdates);
     }
-    // The texture array (binding 15) is NOT rewritten here: filled at set allocation (fillTextureDescriptors)
+    // The texture array (binding 16) is NOT rewritten here: filled at set allocation (fillTextureDescriptors)
     // and kept current per slot by the TextureStreamer's pending-write path (updateTextureDescriptor).
 
     // The acceleration-structure descriptor (binding 4) needs a pNext'd write the buffer/image helper

@@ -429,6 +429,25 @@ Job* JobSystem::getWork(WorkerContext& ctx)
     return trySteal(ctx);
 }
 
+// Main and the window helper wait on the FRAME path, and Low carries the multi-second work (V3 tile
+// inference, the terrain pumps, the collider tile builds). One of those taken inside a short join
+// held the frame for its whole run, so a helping thread takes High and Normal only and leaves Low
+// to the workers.
+Job* JobSystem::getHelpWork(WorkerContext& ctx)
+{
+    Job* job;
+    for (uint32 p = 0; p < uint32(EJobPriority::Low); ++p)
+        if (m_readyQueues[p].pop(job))
+            return job;
+    job = trySteal(ctx);
+    if (job && job->effectivePriority == EJobPriority::Low)
+    {
+        submitReady(job); // back to the shared Low ring (a non-worker has no deque) + wake a worker
+        return nullptr;
+    }
+    return job;
+}
+
 Job* JobSystem::trySteal(WorkerContext& ctx)
 {
     uint32 seed = ctx.stealSeed;
@@ -857,7 +876,7 @@ void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
     while (!counter.isDone())
     {
         if (mayExecute)
-            if (Job* job = getWork(ctx))
+            if (Job* job = getHelpWork(ctx))
             {
                 if (refuseForeignWait && (job->flags & EJobFlag_ForeignWait))
                 {

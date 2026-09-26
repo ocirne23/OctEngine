@@ -45,6 +45,13 @@ export namespace Procedural
 		// calls it right before Renderer::present; update() and clearResidents() join it too before
 		// they touch m_residents, so a caller never sees the map change under the job.
 		void joinRender();
+		// The chunk mesh upload (Renderer::createMesh: the staging copy into the mesh mega-buffers, which
+		// can wait on staging fences and the per-frame shared-write GPU drain) runs on a job. update()
+		// picks the chunks; main.cpp kicks the job right AFTER Renderer::present, so it overlaps the
+		// frame-pacing wait, and joins it before the next frame's kicks (the begin-frame job and the
+		// entity pass read the mesh tables it grows). The next update() spawns the nodes.
+		void kickUploads(Renderer& renderer);
+		void joinUploads();
 
 		// The live height/climate field, for systems that must agree with the rendered terrain (the
 		// ocean's shore-depth bake). nullptr while terrain rendering is disabled - consumers treat that
@@ -181,6 +188,9 @@ export namespace Procedural
 		float m_seaLevel = 0.0f;
 		float m_skirtDepth = 5.0f;
 		int   m_maxUploadsPerFrame = 16;
+		// Byte cap on one frame's upload batch. It is below the 100 MB staging ring, so one batch does not
+		// wrap the ring more than once (each wrap waits a staging fence). The first chunk always goes.
+		float m_maxUploadMBPerFrame = 48.0f;
 
 		// --- The Terrain Diffusion generator. ONNX-model backed: it needs 2.28 GB of
 		// weights on disk and a DirectML-capable GPU, and it generates 7.68 km tiles rather than evaluating
@@ -371,6 +381,16 @@ export namespace Procedural
 		uint32 m_ringMaxLod = 0;
 		oc::vector<Result>     m_results;      // filled by worker, drained on the main thread
 		oc::vector<Result>     m_readyBacklog; // main-thread only: generated chunks over the per-frame upload cap
+		// The upload batch (see kickUploads): update() appends the picked results (they stay in m_pending),
+		// the "terrainUpload" job turns each `data` into `mesh` and frees the data, and the next update()
+		// adopts them after the join. A result with an invalid mesh and non-empty data is not uploaded yet.
+		struct Upload
+		{
+			Result result;
+			RenderMesh mesh;
+		};
+		oc::vector<Upload>     m_uploads;
+		JobCounter             m_uploadCounter;
 		oc::shared_ptr<const ITerrainSampler> m_maps;
 		uint32                  m_generation = 0;
 

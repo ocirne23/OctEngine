@@ -17,26 +17,37 @@ export namespace Procedural
 	// Kept performant by never touching the render chunks (a LOD0 chunk is ~500k triangles; a collider
 	// only needs the ground near dynamic bodies): tiles are a few tens of meters, only exist within
 	// "Radius" of the focus (the camera - thrown bodies start there), and each is built off the main
-	// thread (sampleGrid + BVH build) with ONE build in flight, nearest-first. The main thread only
-	// creates/destroys the static bodies, which is cheap in box3d. Tiles clear and rebuild when the
-	// sampler identity changes (terrain regenerated), exactly like the streamer's residents.
+	// thread (sampleGrid + BVH build) with ONE build in flight, nearest-first. The per-frame body
+	// create/destroy and tile scan run on the "Terrain collider" job, joined before the post-update
+	// kick. Tiles clear and rebuild when the sampler identity changes (terrain regenerated), exactly
+	// like the streamer's residents.
 	class TerrainCollider
 	{
 	public:
 		TerrainCollider() = default;
 		TerrainCollider(const TerrainCollider&) = delete;
 		TerrainCollider& operator=(const TerrainCollider&) = delete;
-		// Wait out the in-flight build job (main thread helps), then tiles destroy their
+		// Wait out the in-flight jobs (main thread helps), then tiles destroy their
 		// bodies/meshes - Globals::physics outlives any stack-local instance.
-		~TerrainCollider() { Globals::jobSystem.wait(m_buildCounter); }
+		~TerrainCollider()
+		{
+			Globals::jobSystem.wait(m_updateCounter);
+			Globals::jobSystem.wait(m_buildCounter);
+		}
 
 		void initialize(void* terrainUserData); // registers the Tweaks ("Terrain/Collision")
 
-		// Per frame, after TerrainStreamer::update. maps == nullptr (terrain disabled, models still
-		// loading) clears every collider.
+		// Per frame, after TerrainStreamer::update. Kicks the update job. maps == nullptr (terrain
+		// disabled, models still loading) clears every collider.
 		void update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps);
 
+		// Main thread, before kickPostUpdateJobs: the job creates/destroys box3d bodies, and the Sim
+		// batch (the game's nav feed) and the next frame's main-thread physics users read the world.
+		void joinUpdate() { Globals::jobSystem.wait(m_updateCounter); }
+
 	private:
+		void runUpdate();
+
 		struct Tile
 		{
 			PhysicsMesh mesh; // declared first -> destroyed AFTER the body referencing it
@@ -60,6 +71,16 @@ export namespace Procedural
 		float m_friction = 0.8f;
 		bool  m_configDirty = false; // geometry-affecting tweak changed: rebuild everything
 		bool  m_inactiveIdle = false; // inactive AND cleared: update() only polls the in-flight build
+
+		// The update job's inputs, written by update() on main before the kick. The config is a
+		// snapshot so the job never reads a tweak member.
+		JobCounter m_updateCounter;
+		oc::shared_ptr<const ITerrainSampler> m_jobMaps;
+		glm::vec2 m_jobFocus{ 0.0f, 0.0f };
+		float m_jobTileSize = 32.0f;
+		float m_jobRadius = 96.0f;
+		float m_jobSpacing = 1.0f;
+		float m_jobFriction = 0.8f;
 
 		// ONE build in flight, submitted to the job system; the counter is the "future", the job
 		// writes m_buildResult before signaling (single producer, consumed only after isDone).

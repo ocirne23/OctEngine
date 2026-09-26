@@ -54,7 +54,9 @@ layout (binding = 6, std430) readonly buffer InGridTable
 #include "light_grid.inc.glsl"
 
 layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 22) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 23) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+#define CLOUD_SHADOW_BINDING 22
+#include "cloud_shadow.inc.glsl"
 layout (binding = 11) uniform accelerationStructureEXT u_tlas;
 
 // Scene geometry for ray hits (custom index = index into in_instances; RT meshIdx rides the sbtOffset).
@@ -434,7 +436,8 @@ void main()
     const vec3 toCam = u_viewPos - in_pos;
     const float viewDist = length(toCam);
     const vec3 V = toCam / max(viewDist, 1e-4);
-    const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x; // per-frame atmosTransmittanceToLight
+    // per-frame atmosTransmittanceToLight, and the cloud shadow at the surface (the glint, the body, the foam)
+    const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(in_pos));
     // "Ray cutoff dist": beyond it no scene rays at all - the body uses the analytic bottom (the path
     // misses already take), reflection the sky. 0 = unlimited.
     const bool rtInRange = u_oceanParams8.w <= 0.0 || viewDist < u_oceanParams8.w;

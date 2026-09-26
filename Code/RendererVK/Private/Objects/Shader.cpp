@@ -159,6 +159,17 @@ static oc::string buildLayoutPreamble()
     def("GI_VOLUME_MAX_IMAGES", GI_VOLUME_MAX_IMAGES);
     if (g_giGrid.volume)
         def("GI_VOLUME", 1);
+    // The cloud toggles (g_cloudShaders, the "Sky/Clouds" bools): each implies the one before it.
+    if (g_cloudShaders.clouds)
+    {
+        def("CLOUDS", 1);
+        if (g_cloudShaders.shadows)
+        {
+            def("CLOUD_SHADOWS", 1);
+            if (g_cloudShaders.selfShadowFromMap)
+                def("CLOUD_SELF_SHADOW_MAP", 1);
+        }
+    }
     def("VOL_FROXEL_X", VOL_FROXEL_X);
     def("VOL_FROXEL_Y", VOL_FROXEL_Y);
     def("VOL_FROXEL_Z", VOL_FROXEL_Z);

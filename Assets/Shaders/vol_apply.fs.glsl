@@ -9,14 +9,25 @@
 //
 // Everything beyond the froxel volume's far plane is added analytically by volFarField instead of by more
 // slices, so Fog/Range is a near-field quality knob rather than a view distance.
+//
+// THE CLOUDS ARE COMPOSITED HERE while the fog is on (the separate cloud apply runs only with the fog off):
+// fog laid over the finished clouds would fog them as if they stood at the scene depth - over far terrain,
+// tens of km of fog in front of a cloud a few km away. With the cloud's in-scatter S and transmittance T at
+// distance tc, fog (in-scatter, transmittance) to the scene F and to the cloud C:
+//   out = T * F.rgb + C.a * S + (1 - T) * C.rgb  +  scene * (T * F.a)
+// exact for a cloud at one distance (fog in front of it over it, the rest behind it), and linear in the
+// scene, so the blend state stays the same.
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
+#include "cloud_upsample.inc.glsl"
 
 layout (location = 0) in vec2 v_uv;
 layout (binding = 1) uniform sampler2D u_depth;
 layout (binding = 2) uniform sampler3D u_integrated;
 layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
+layout (binding = 6) uniform sampler2D u_cloudColor; // the accumulated clouds (half res), this eye / slot
+layout (binding = 7) uniform sampler2D u_cloudDepth;
 
 #define TERRAIN_HEIGHT_BINDING 3
 #include "terrain_height.inc.glsl"
@@ -132,15 +143,32 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     return vec4(u_fogParams1.rgb * inLight * (1.0 - T), T);
 }
 
-void main()
+// The ray for this pixel from u_mvp's x/y/w ROWS, not from a reconstructed position: u_invMvp is a float32 CPU
+// inverse whose error re-rolls every frame, and a sky pixel's far field is a pure function of this ray, so that
+// wobble would be unfilterable flicker. Same derivation as sky.fs.glsl / vol_scatter.cs.glsl. u_mvp is
+// unjittered while the depth image was rasterized jittered, hence -u_taaJitter (the NDC form of
+// shared.inc.glsl's taaJitterUv subtraction). invCos: the volume is bounded by view-Z, the far field
+// integrates along the ray.
+void fogRay(out vec3 dir, out float invCos)
 {
-    g_viewIndex = int(u_viewIndex);
-    const float depth = texture(u_depth, v_uv).r;
-    // Reconstruct this eye's world position (current view), then reproject it through the shared CENTRE view
-    // that the froxel volume was built in, so the lookup lands at the correct froxel regardless of which eye
-    // is sampling (on desktop the centre view IS this view, so vpUv collapses back to v_uv). Sampling the
-    // centre-built volume at the eye's own screen UV would offset the fog by the eye/head parallax.
-    const vec3 worldPos = worldPosFromDepth(v_uv, depth);
+    const vec2 rayVpUv = (v_uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 rayNdc = vec2(rayVpUv.x * 2.0 - 1.0, 1.0 - rayVpUv.y * 2.0) - u_taaJitter.xy;
+    const mat3 rayFromNdc = inverse(mat3(
+        vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
+        vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
+        vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
+    dir = normalize(vec3(rayNdc, 1.0) * rayFromNdc);
+    const vec3 camFwd = normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc);
+    invCos = 1.0 / max(dot(dir, camFwd), 1e-3);
+}
+
+// Fog (in-scatter, transmittance) from the camera to worldPos: the froxel volume, then the far field out to
+// t1 along dir (VOL_FAR_INFINITY for the sky; < 0 = worldPos itself, from its view-Z).
+vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
+{
+    // Reproject through the shared CENTRE view that the froxel volume was built in, so the lookup lands at the
+    // correct froxel regardless of which eye is sampling (on desktop the centre view IS this view). Sampling
+    // the centre-built volume at the eye's own screen UV would offset the fog by the eye/head parallax.
     const vec4 centerClip = u_views[VIEW_CENTER].mvp * vec4(worldPos, 1.0);
     const float viewZ = centerClip.w;
     const vec2 ndc = centerClip.xy / centerClip.w;
@@ -148,10 +176,7 @@ void main()
     // Outside the centre view (a sliver an eye can see past the volume's coverage): emit no fog rather than
     // letting the clamp sampler smear the edge froxels across the screen.
     if (centerClip.w <= 0.0 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
-    {
-        out_color = vec4(0.0, 0.0, 0.0, 1.0); // inScatter 0, transmittance 1 -> scene unchanged
-        return;
-    }
+        return vec4(0.0, 0.0, 0.0, 1.0); // inScatter 0, transmittance 1 -> scene unchanged
     // Texel z of the integrated volume stores the fog state at slice z's FAR edge, so the matching
     // texture coordinate sits half a slice below the continuous slice coordinate (texel centers are at
     // +0.5). Sampling without that shift read fog from half a slice too deep and anchored the linear
@@ -170,30 +195,47 @@ void main()
 
     if (u_fogParams9.x > 0.5) // far field: picks up exactly where the volume's last slice ends
     {
-        // Ray from u_mvp's x/y/w ROWS, not from worldPos: u_invMvp is a float32 CPU inverse whose error
-        // re-rolls every frame, and a sky pixel's far field is a pure function of this ray, so that wobble
-        // would be unfilterable flicker. Same derivation as sky.fs.glsl / vol_scatter.cs.glsl. u_mvp is
-        // unjittered while the depth image was rasterized jittered, hence -u_taaJitter (the NDC form of
-        // shared.inc.glsl's taaJitterUv subtraction).
-        const vec2 rayVpUv = (v_uv - u_viewportRect.xy) / u_viewportRect.zw;
-        const vec2 rayNdc = vec2(rayVpUv.x * 2.0 - 1.0, 1.0 - rayVpUv.y * 2.0) - u_taaJitter.xy;
-        const mat3 rayFromNdc = inverse(mat3(
-            vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
-            vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
-            vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
-        const vec3 dir = normalize(vec3(rayNdc, 1.0) * rayFromNdc);
-        const vec3 camFwd = normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc);
-        // The volume is bounded by view-Z, the far field integrates along the ray.
-        const float invCos = 1.0 / max(dot(dir, camFwd), 1e-3);
         const float t0 = volFogFar() * invCos;
-        // Sky runs to infinity, which the closed form handles: a level ray saturates at the horizon, an
-        // upward one converges on a finite optical depth and stays see-through.
-        const float t1 = (depth <= 0.0) ? VOL_FAR_INFINITY : viewZ * invCos;
-        if (t1 > t0)
+        // t1 < 0: the point itself (the scene surface). Sky runs to infinity, which the closed form handles:
+        // a level ray saturates at the horizon, an upward one converges on a finite optical depth.
+        const float tEnd = t1 < 0.0 ? viewZ * invCos : t1;
+        if (tEnd > t0)
         {
-            const vec4 far = volFarField(dir, t0, t1);
+            const vec4 far = volFarField(dir, t0, tEnd);
             fog = vec4(fog.rgb + fog.a * far.rgb, fog.a * far.a);
         }
     }
-    out_color = vec4(fog.rgb, fog.a);
+    return fog;
+}
+
+void main()
+{
+    g_viewIndex = int(u_viewIndex);
+    const float depth = texture(u_depth, v_uv).r;
+    vec3 dir;
+    float invCos;
+    fogRay(dir, invCos);
+    const vec4 fog = fogTo(worldPosFromDepth(v_uv, depth), depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
+    out_color = fog;
+
+    // CLOUDS is baked ("Sky/Clouds/Enabled"); u_cloudShape0.w = the cloud march ran this frame (the game
+    // suppresses it at runtime).
+#ifdef CLOUDS
+    if (u_cloudShape0.w < 0.5)
+        return;
+    const float logScene = depth > 0.0
+        ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
+        : 1e30;
+    float logCloudDist;
+    const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
+    if (cloud.a >= 0.999)
+    {
+        out_color = vec4(fog.rgb + cloud.rgb, fog.a * cloud.a);
+        return;
+    }
+    // The fog in front of the cloud: the same two parts, to the cloud's weighted distance.
+    const float tCloud = exp2(logCloudDist);
+    const vec4 fogCloud = fogTo(u_viewPos + dir * tCloud, tCloud, dir, invCos);
+    out_color = vec4(cloud.a * fog.rgb + fogCloud.a * cloud.rgb + (1.0 - cloud.a) * fogCloud.rgb, cloud.a * fog.a);
+#endif
 }

@@ -59,7 +59,9 @@ layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; 
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials   { MaterialInfo in_materialInfos[]; };
-layout (binding = 15) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 16) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+#define CLOUD_SHADOW_BINDING 15
+#include "cloud_shadow.inc.glsl"
 // Per-wave visit stamps (one uint per trace workgroup): u_frameIndex + 1 on a regular visit, for the irradiance
 // volume's partial bake (gi_volume_bake.cs.glsl), which re-bakes only the voxels over this frame's waves.
 layout (binding = 14, std430) writeonly buffer GiWaveStamps { uint gi_waveStamp[]; };
@@ -191,7 +193,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
     const vec3 albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, GI_ALBEDO_LOD).rgb;
 
-    g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02);
+    g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02) * cloudSunTransmittance(worldPos);
     vec3 radiance = giGatherDirect(worldPos, worldN, albedo);
     // Previous-frame indirect at the hit -> multi-bounce (infinite, temporally). The cur SH already holds
     // the carried-forward irradiance for this frame. Probe path: the CHEAP lookup (no Chebyshev, no

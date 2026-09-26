@@ -53,6 +53,8 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         preset.normalBias = 0.0f;
         Globals::rendererVK.setShadowParams(preset);
     }
+    // The volumetric clouds are a sandbox feature: the top-down camera sits under them and never sees them.
+    Globals::rendererVK.setCloudsSuppressed(true);
 
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
@@ -194,6 +196,7 @@ GameMatch::~GameMatch()
     ShadowParams restored = m_sandboxShadowParams;
     restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
     Globals::rendererVK.setShadowParams(restored);
+    Globals::rendererVK.setCloudsSuppressed(false);
     // Exit-to-menu can destroy a GameMatch MID-RUN: every tweak registered on a member (the ctor's
     // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
     // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.

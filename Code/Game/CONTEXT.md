@@ -571,6 +571,9 @@ tweak block through `Renderer::setShadowParams` (Max distance 250 m from the pla
 Caster pad 500 m, both biases 0) and the dtor restores whatever the sandbox had. They remain editable
 in the tweak panel during the match.
 
+**No volumetric clouds in a match:** the ctor calls `Renderer::setCloudsSuppressed(true)` and the dtor
+clears it. The clouds are a sandbox feature; the top-down camera sits under them.
+
 **Off-screen casters** are not a game concern: the spatial `Shadow` pass (the view frustum swept
 toward the sun by "Spatial/Culling/Shadow reach (m)") keeps walls and units outside the view casting
 into it — see the Spatial CONTEXT.

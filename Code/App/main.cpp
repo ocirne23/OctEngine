@@ -256,6 +256,7 @@ int main(int argc, char* argv[])
         Globals::world.joinSelection();
         if (!headlessServer)
         {
+            Globals::terrain.joinUploads(); // the begin-frame job and the entity pass read the mesh tables it grows
             ProfileScope kickScope("Frame kicks", EProfileCategory::App);
             Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, Globals::ui.getViewportRect()));
             Globals::rendererVK.kickBeginFrameJob();
@@ -296,10 +297,12 @@ int main(int argc, char* argv[])
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec);
             uiJobKicked = true;
 
+            Globals::terrainCollider.joinUpdate(); // its box3d body writes end before the Sim batch reads bodies
             Globals::jobSystem.kickPostUpdateJobs();
             Globals::terrain.joinRender();
             Globals::ocean.joinRender();
             Globals::rendererVK.present();
+            Globals::terrain.kickUploads(Globals::rendererVK); // overlaps the frame-pacing wait; joined before the next kicks
         }
         else
             Globals::jobSystem.kickPostUpdateJobs();

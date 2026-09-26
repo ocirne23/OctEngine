@@ -82,22 +82,44 @@ vec3 atmosTransmittanceToLight(float height, vec3 lightDir, vec3 up)
 	return exp(-atmosTau(atmosLightOpticalDepth(up * (ATMOS_R_PLANET + height), lightDir)));
 }
 
+// (Rayleigh, Mie) optical depth between a planet-centred ro and ro + dir * tEnd, as a difference of two
+// Chapman evaluations taken in the UPWARD direction of each half. A downward ray's "to space" optical
+// depth goes through the planet (Chapman's below-horizon branch, up to ~e^60): the difference of two of
+// those is float noise - a descending ray is measured backwards instead, and one that dips to its lowest
+// point and rises again is split there.
+vec2 atmosSegmentOD(vec3 ro, vec3 dir, float tEnd)
+{
+	const float tLow = -dot(ro, dir); // the ray's lowest point
+	const vec3 p = ro + dir * tEnd;
+	if (tLow <= 0.0) // rising all the way
+		return max(atmosLightOpticalDepth(ro, dir) - atmosLightOpticalDepth(p, dir), vec2(0.0));
+	if (tLow >= tEnd) // descending all the way: measured from p back up to ro
+		return max(atmosLightOpticalDepth(p, -dir) - atmosLightOpticalDepth(ro, -dir), vec2(0.0));
+	const vec3 m = ro + dir * tLow;
+	return max(atmosLightOpticalDepth(m, -dir) - atmosLightOpticalDepth(ro, -dir), vec2(0.0))
+	     + max(atmosLightOpticalDepth(m, dir) - atmosLightOpticalDepth(p, dir), vec2(0.0));
+}
+
 // In-scattered radiance along dir for one directional light of unit radiance (multiply by the light
 // color outside), plus the view ray's total transmittance (attenuates the sun disc / stars behind the
-// atmosphere). `steps` trades quality for cost: the sky raymarch uses 12, the indirect paths fewer.
-vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, out vec3 transmittance)
+// atmosphere), for an observer `observerHeight` metres above the ground (the visible sky passes the
+// camera altitude: from altitude the sky darkens and the horizon dips). The ray ends at the atmosphere
+// edge or at the ground. `steps` trades quality for cost: the sky raymarch uses 12.
+vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observerHeight, out vec3 transmittance)
 {
-	vec3 ro = up * (ATMOS_R_PLANET + ATMOS_OBSERVE_HEIGHT);
+	vec3 ro = up * (ATMOS_R_PLANET + observerHeight);
 	float tFar = max(atmosRaySphere(ro, dir, ATMOS_R_ATMOS).y, 0.0);
+	const vec2 tGround = atmosRaySphere(ro, dir, ATMOS_R_PLANET);
+	if (tGround.x > 0.0 && tGround.x < tGround.y)
+		tFar = min(tFar, tGround.x);
 
 	float mu = dot(dir, lightDir);
 	float pR = phaseRayleigh(mu);
 	float pM = phaseHG(mu, u_skySunParams.y);
 
-	// View optical depth per sample as a difference of two Chapman evaluations - exact for an
+	// View optical depth per sample as a difference of Chapman evaluations (atmosSegmentOD) - exact for an
 	// exponential atmosphere. The numerically-accumulated version diverges per channel at grazing
 	// angles (rainbow/green hue artifacts), and gets worse the fewer steps are taken.
-	vec2 odViewFull = atmosLightOpticalDepth(ro, dir);
 	vec3 sumR = vec3(0.0), sumM = vec3(0.0);
 	float dt = tFar / float(steps);
 	float t = 0.5 * dt;
@@ -106,15 +128,14 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, out vec3 tra
 		vec3 p = ro + dir * t;
 		float h = length(p) - ATMOS_R_PLANET;
 		vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-		vec2 odView = max(odViewFull - atmosLightOpticalDepth(p, dir), vec2(0.0));
+		vec2 odView = atmosSegmentOD(ro, dir, t);
 		vec2 odSun = atmosLightOpticalDepth(p, lightDir);
 		vec3 atten = exp(-atmosTau(odView + odSun));
 		sumR += atten * dens.x;
 		sumM += atten * dens.y;
 		t += dt;
 	}
-	vec2 odViewEnd = max(odViewFull - atmosLightOpticalDepth(ro + dir * tFar, dir), vec2(0.0));
-	transmittance = exp(-atmosTau(odViewEnd));
+	transmittance = exp(-atmosTau(atmosSegmentOD(ro, dir, tFar)));
 	// Scatter boost (u_skySunParams.x) scales how much of the light gets in-scattered - more indirect
 	// sky light - without touching the transmittance. Applied here so every consumer (visible sky,
 	// GI miss rays, fog ambient, surface fallback) scales consistently.
@@ -202,8 +223,11 @@ vec3 mirrorSkyRadiance(vec3 dir)
 // mirrorSkyRadiance. Consumers declare `sampler2DArray u_skyMap` on their own binding and sample
 // textureLod(u_skyMap, vec3(skyMapUV(dir), layer), 0.0). World +Y pole: u = atan(d.x, d.z) / 2pi + 0.5
 // (the sampler repeats U), v = acos(d.y) / pi (clamped V).
+// Layers 0 and 1 carry the volumetric clouds (seen from the ground under the camera); layer 2 is the same
+// skyRadiance WITHOUT them - the clouds' own ambient, so they never light themselves through their image.
 #define SKY_MAP_LAYER_GI     0.0
 #define SKY_MAP_LAYER_MIRROR 1.0
+#define SKY_MAP_LAYER_CLEAR  2.0
 vec2 skyMapUV(vec3 d)
 {
 	return vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));

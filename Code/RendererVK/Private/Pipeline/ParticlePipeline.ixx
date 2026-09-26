@@ -93,6 +93,8 @@ public:
         Buffer* lightInfosBuffer = nullptr; // the scene's lights + light grid (LIT particles), this frame slot's
         Buffer* lightGridsBuffer = nullptr;
         Buffer* lightTableBuffer = nullptr;
+        vk::ImageView cloudShadowView;  // the cloud Beer shadow map (GENERAL; LIT particles)
+        vk::Sampler   cloudShadowSampler;
     };
     // Records the indirect billboard draw; the caller has begun a command buffer inside the
     // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/view.

@@ -107,6 +107,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     ubo.timeSeconds = (float)Globals::time.getSimElapsedSec();
 
     buildUboSky();
+    buildUboClouds(camera);
     buildUboSunShadow(camera);
     buildUboRainOcclusion();
     buildUboFog();
@@ -210,11 +211,7 @@ void Renderer::buildUboSky()
     ubo.ambientColor = sky.ambientColor * sky.ambientIntensity;
     ubo.skyUp = sky.up;
 
-    ubo.cloudCoverage = sky.cloudCoverage;
-    ubo.cloudThickness = sky.cloudThickness * sky.cloudThickness;
-    ubo.cloudParams0 = glm::vec4(sky.cloudHeight, 0.00012f * sky.cloudScale, 0.0043f * sky.cloudWindSpeed, sky.cloudWindAngle);
-    ubo.cloudParams1 = glm::vec4(sky.cloudSoftness, sky.cloudShading, 0.0f, 0.0f);
-    ubo.cloudParams2 = glm::vec4(sky.cloudDensity, sky.cloudSharpness, sky.cloudBaseVar, sky.moonBrightness);
+    ubo.moonBrightness = sky.moonBrightness;
     ubo.skySunParams = glm::vec4(sky.scatterBoost, sky.mieG, sky.sunRolloff, sky.starDensity);
 
     ubo.moonParams = glm::vec4(glm::normalize(sky.moonDirection), cosf(glm::radians(sky.moonSizeDeg)));
@@ -246,6 +243,103 @@ void Renderer::buildUboSky()
         ubo.sunTransmittance = glm::exp(-tau);
     }
     ubo.groundParams = glm::vec4(sky.groundColor * sky.groundIntensity, glm::clamp(sky.groundHorizon, 0.0f, 1.0f));
+}
+
+// Volumetric clouds (clouds.inc.glsl). The noise is world-anchored and tiles: base and detail repeat an
+// integer number of times per weather tile, so ONE wrap of (camera + wind) by the weather period keeps
+// every texture continuous and the shader's noise coordinates small at any camera position. The wind
+// and the detail drift accumulate here in double on the SIM clock (they stop with the global pause).
+void Renderer::buildUboClouds(const Camera& camera)
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
+    const CloudParams& c = m_cloudParams;
+    const bool enabled = cloudsEnabled();
+
+    const double weatherPeriod = glm::max((double)c.weatherSizeKm, 1.0) * 1000.0;
+    const int baseRepeats = glm::max(c.baseRepeats, 1);
+    const int detailRepeats = glm::max(c.detailRepeats, 1);
+    const double basePeriod = weatherPeriod / baseRepeats;
+    const double detailPeriod = basePeriod / detailRepeats;
+
+    const double dt = glm::min((double)Globals::time.getSimDeltaSec(), 0.25);
+    const double windAngle = glm::radians((double)c.windAngleDeg);
+    const glm::dvec2 windStep = glm::dvec2(std::cos(windAngle), std::sin(windAngle)) * ((double)c.windSpeed * dt);
+    m_cloudWindOffset = glm::mod(m_cloudWindOffset + windStep, glm::dvec2(weatherPeriod));
+    m_cloudEvolveOffset = std::fmod(m_cloudEvolveOffset + (double)c.evolveSpeed * dt, detailPeriod);
+    // Noise space = world - wind, so the field travels WITH the wind.
+    const glm::dvec2 origin = glm::mod(glm::dvec2(camera.position.x, camera.position.z) - m_cloudWindOffset, glm::dvec2(weatherPeriod));
+
+    const float bottom = glm::max(c.bottom, 0.0f);
+    const float top = glm::max(c.top, bottom + 100.0f);
+    ubo.cloudShape0 = glm::vec4(bottom, top, glm::clamp(c.coverage, 0.0f, 1.0f), enabled ? 1.0f : 0.0f);
+    ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
+    ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
+    ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 0.0f, 0.0f);
+    ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, 0.0f, (float)origin.y, (float)m_cloudEvolveOffset);
+    ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
+    // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
+    // Scattering Function for Fog and Cloud Rendering"), valid for diameters 5 .. 50 um.
+    {
+        const float d = glm::clamp(c.dropletSize, 5.0f, 50.0f);
+        const float gHG = std::exp(-0.0990567f / (d - 1.67154f));
+        const float gD = std::exp(-2.20679f / (d + 3.91029f) - 0.428934f);
+        const float alpha = std::exp(3.62489f - 8.29288f / (d + 5.52825f));
+        const float wD = std::exp(-0.599085f / (d - 0.641583f) - 0.665888f);
+        ubo.cloudLight0 = glm::vec4(gHG, gD, alpha, wD);
+    }
+    ubo.cloudLight1 = glm::vec4(c.ambient, c.groundAlbedo, c.powder, c.multiScatter);
+    ubo.cloudMarch0 = glm::vec4((float)glm::max(c.maxSteps, 1), c.maxDistanceKm * 1000.0f, glm::max(c.nearStep, 0.5f), glm::max(c.stepGrowth, 0.0f));
+    ubo.cloudMarch1 = glm::vec4((float)glm::max(c.lightSteps, 0), c.lightDistance, glm::clamp(c.temporalBlend, 0.0f, 0.98f), (float)c.debugMode);
+
+    // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
+    // texels in light space (in double, world space) so the map does not swim when the camera moves. The near
+    // cascade renders every frame; the far one every "Far update interval" frames, and at once when the sun
+    // or its extent changes - between its updates its world centre is kept, and only the camera-relative
+    // offset the shaders read is rebuilt.
+    const glm::dvec3 sun = glm::normalize(glm::dvec3(m_skyParams.sunDirection));
+    const bool shadowOn = enabled && c.shadows && sun.y > 0.01;
+    m_cloudShadowMask = 0;
+    if (!shadowOn)
+    {
+        m_cloudShadowFarValid = false;
+        ubo.cloudShadow4 = glm::vec4(0.0f);
+        return;
+    }
+    const glm::dvec3 e0 = glm::abs(sun.y) < 0.999 ? glm::normalize(glm::cross(glm::dvec3(0.0, 1.0, 0.0), sun)) : glm::dvec3(1.0, 0.0, 0.0);
+    const glm::dvec3 e1 = glm::cross(sun, e0);
+    const glm::dvec3 camPos(camera.position);
+    const double extents[2] = { glm::max((double)c.shadowNearKm, 0.1) * 1000.0, glm::max((double)c.shadowFarKm, 0.2) * 1000.0 };
+    const bool sunChanged = sun != m_cloudShadowSun;
+    m_cloudShadowSun = sun;
+    for (uint32 cascade = 0; cascade < CloudPipeline::SHADOW_CASCADES; ++cascade)
+    {
+        bool update = true;
+        if (cascade == 1)
+            update = !m_cloudShadowFarValid || sunChanged || extents[1] != m_cloudShadowExtent[1]
+                || m_frameCounter - m_cloudShadowFarFrame >= (uint32)glm::max(c.shadowFarInterval, 1);
+        if (update)
+        {
+            const double texel = extents[cascade] / CloudPipeline::SHADOW_RESOLUTION;
+            const double su = std::floor(glm::dot(camPos, e0) / texel + 0.5) * texel;
+            const double sv = std::floor(glm::dot(camPos, e1) / texel + 0.5) * texel;
+            m_cloudShadowCenter[cascade] = e0 * su + e1 * sv + sun * glm::dot(camPos, sun);
+            m_cloudShadowExtent[cascade] = extents[cascade];
+            m_cloudShadowMask |= 1u << cascade;
+        }
+    }
+    if (m_cloudShadowMask & 2u)
+    {
+        m_cloudShadowFarValid = true;
+        m_cloudShadowFarFrame = m_frameCounter;
+    }
+    const glm::vec3 rel0(m_cloudShadowCenter[0] - camPos);
+    const glm::vec3 rel1(m_cloudShadowCenter[1] - camPos);
+    ubo.cloudShadow0 = glm::vec4(rel0, (float)(1.0 / m_cloudShadowExtent[0]));
+    ubo.cloudShadow1 = glm::vec4(rel1, (float)(1.0 / m_cloudShadowExtent[1]));
+    ubo.cloudShadow2 = glm::vec4(glm::vec3(e0), glm::clamp(c.shadowStrength, 0.0f, 1.0f));
+    // Past the cascades: a rough mean transmittance of the layer from its coverage (not measured).
+    ubo.cloudShadow3 = glm::vec4(glm::vec3(e1), glm::mix(1.0f, 0.3f, glm::clamp(c.coverage, 0.0f, 1.0f)));
+    ubo.cloudShadow4 = glm::vec4(1.0f, (float)glm::max(c.shadowSteps, 1), 0.0f, 0.0f);
 }
 
 // Sun shadow route: the RT-sun toggle, else the PCSS cascade matrices (also consumed CPU-side via

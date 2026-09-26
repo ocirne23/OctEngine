@@ -61,6 +61,9 @@ layout (binding = 9, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 // the same surface (light shafts: caustic focus + Beer-Lambert; see underwater_light.inc.glsl).
 #define UNDERWATER_OCEAN_BINDING 11
 #include "underwater_light.inc.glsl"
+// The cloud shadow map: fog under a cloud is in shadow, fog inside one too - the gaps cast the shafts.
+#define CLOUD_SHADOW_BINDING 13
+#include "cloud_shadow.inc.glsl"
 
 // Light grid (read) + giSquareFalloff/giSunShadow from the shared lighting helpers.
 #define GRID_DATA_NAME  in_gridData
@@ -381,6 +384,7 @@ void main()
         }
         else
             sunVis = giSunShadow(worldPos, vec3(0.0));
+        sunVis *= cloudSunTransmittance(worldPos);
 
         // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
         // + Beer-Lambert absorption (underwater_light.inc.glsl) - weighted by the slice's SUBMERGED

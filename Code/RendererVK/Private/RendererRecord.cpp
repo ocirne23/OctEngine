@@ -366,8 +366,60 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .cloudColorView = m_cloudPipeline.getAccumColorView(frameIdx, eyeIndex),
+        .cloudDepthView = m_cloudPipeline.getAccumDepthView(frameIdx, eyeIndex),
+        .cloudSampler = m_cloudPipeline.getLinearSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, eyeIndex, params);
+}
+
+// Cloud march + temporal for one eye (compute, no render pass): reads this frame's scene depth, so it runs
+// after the depth-writing stages; its result is composited by the "Cloud apply" scene stage.
+void Renderer::recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CloudPipeline::RecordParams params{
+        .ubo = frameData.ubo,
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .skyMapView = m_giProbePipeline.getSkyMapView(),
+        .skyMapSampler = m_giProbePipeline.getSkyMapSampler(),
+    };
+    m_cloudPipeline.record(cb, frameIdx, eyeIndex, params);
+}
+
+void Renderer::recordClouds(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].cloudCommandBuffer;
+    beginComputeSecondary(cb);
+    recordCloudsInto(cb, frameIdx, 0);
+    cb.end();
+}
+
+// Cloud apply draw for one eye, inside the eye's scene-colour render pass (the fog apply's viewport setup).
+void Renderer::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    vk::CommandBuffer vkCb = cb.getCommandBuffer();
+    const vk::Extent2D extent = m_swapChain.getLayout().extent;
+    const glm::ivec2 vpMin = m_viewportRect.min;
+    const glm::ivec2 vpSize = m_viewportRect.getSize();
+    vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
+    vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
+    CloudPipeline::ApplyParams params{
+        .ubo = frameData.ubo,
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+    };
+    m_cloudPipeline.recordApply(cb, frameIdx, eyeIndex, params);
+}
+
+void Renderer::recordCloudApply(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].cloudApplyCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
+    recordCloudApplyInto(cb, frameIdx, 0);
+    cb.end();
 }
 
 // TAA resolve for one eye (compute, no render pass); reads that eye's scene colour + depth, writes its history.
@@ -449,6 +501,8 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
         .lightInfosBuffer = &submission.lightInfos,
         .lightGridsBuffer = &submission.lightGrids,
         .lightTableBuffer = &submission.lightTable,
+        .cloudShadowView = m_cloudPipeline.getShadowView(),
+        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_particlePipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
@@ -474,6 +528,8 @@ void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .cloudShadowView = m_cloudPipeline.getShadowView(),
+        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_decalPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
@@ -616,6 +672,8 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
             .oceanMapsView = m_oceanSimPipeline.getMapsView(),
             .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
             .tlas = tlas,
+            .cloudShadowView = m_cloudPipeline.getShadowView(),
+            .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
         };
         m_volumetricFogPipeline.record(cb, frameIdx, params);
     }
@@ -642,6 +700,9 @@ void Renderer::recordFogApply(uint32 frameIdx)
         .sceneDepthView = frameData.sceneColor.getDepthView(),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .cloudColorView = m_cloudPipeline.getAccumColorView(frameIdx, 0),
+        .cloudDepthView = m_cloudPipeline.getAccumDepthView(frameIdx, 0),
+        .cloudSampler = m_cloudPipeline.getLinearSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, 0, params);
     cb.end();
@@ -846,7 +907,7 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
     // forward pass) is baked on EVERY frame, ahead of the RT toggle: the forward shaders sample it whether
     // or not anything is ray traced. Its own barriers order last frame's reads before the write and the
     // write before this frame's compute + fragment reads.
-    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo);
+    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo, m_cloudPipeline.getSkyCloudsView(), m_cloudPipeline.getLinearSampler());
 
     // RT master toggle off, or no TLAS yet (no instances when this slot last invalidated): the sky map alone.
     const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx);
@@ -896,6 +957,8 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
         .tlas = tlas,
         .shadowMapView = frameData.shadowMap.getSampleView(),
         .shadowMapSampler = frameData.shadowMap.getSampler(),
+        .cloudShadowView = m_cloudPipeline.getShadowView(),
+        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
 
@@ -947,7 +1010,7 @@ void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::C
 // Table order is draw order - the opaque group first (it writes the depth), then the layered group.
 // The GI probe impostors WRITE depth (they sort among themselves through gl_FragDepth), so they run
 // with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
-oc::array<Renderer::SceneStage, 8> Renderer::buildSceneStages(uint32 frameIdx)
+oc::array<Renderer::SceneStage, Renderer::NUM_SCENE_STAGES> Renderer::buildSceneStages(uint32 frameIdx)
 {
     PerFrameData& f = m_perFrameData[frameIdx];
     const bool force = m_force.isEnabled();
@@ -959,6 +1022,8 @@ oc::array<Renderer::SceneStage, 8> Renderer::buildSceneStages(uint32 frameIdx)
         SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &Renderer::recordForceShells,  &Renderer::recordForceFieldBothInto },
         SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &Renderer::recordForceUnion,   nullptr },
         SceneStage{ "Particles",         false, m_particles.isEnabled(),         false, &f.particleCommandBuffer,     &Renderer::recordParticles,    &Renderer::recordParticlesInto },
+        // With the fog on, the fog apply composites the clouds itself (inside the fog); this stage is the fog-off path.
+        SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &Renderer::recordCloudApply,   &Renderer::recordCloudApplyInto },
         SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &Renderer::recordFogApply,     &Renderer::recordFogApplyInto },
     };
 }
@@ -1006,6 +1071,7 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
                 (this->*stage.recordCached)(frameIdx);
         recordForceMarch(frameIdx);
         recordAO(frameIdx);
+        recordClouds(frameIdx);
         if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
             recordTaa(frameIdx);
     }
@@ -1111,7 +1177,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
 
     // The same stage table the desktop path executes; VR records the stages inline instead, skipping
     // the ones with no inline recorder (the debug overlays).
-    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
+    const oc::array<SceneStage, NUM_SCENE_STAGES> stages = buildSceneStages(frameIdx);
     bool layered = false;
     for (const SceneStage& stage : stages)
         layered = layered || (!stage.opaque && stage.enabled && stage.recordInline);
@@ -1136,6 +1202,8 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
 
         if (m_rtaoParams.enabled)
             recordAOInto(commandBuffer, frameIdx, eye); // compute AO for this eye (NEXT frame's forward pass reads it)
+        if (cloudsEnabled())
+            recordCloudsInto(commandBuffer, frameIdx, eye); // march + temporal against this eye's depth; the "Cloud apply" stage composites it
 
         if (layered)
         { // the stages layered over the opaque scene: read-only depth, which they also sample
@@ -1230,7 +1298,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // the last hands colour to TAA - are compatible with the pass the secondaries/pipelines were built
     // against, since only load/store ops and layouts differ. The deps must stay identical for that
     // compatibility, so the inter-instance attachment hazards get an explicit barrier.
-    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
+    const oc::array<SceneStage, NUM_SCENE_STAGES> stages = buildSceneStages(frameIdx);
     const SceneStage* lastStage = &stages[0]; // static meshes are always on
     for (const SceneStage& stage : stages)
         if (stage.enabled)
@@ -1267,6 +1335,9 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
 
     if (m_rtaoParams.enabled)
         executeScoped(vkCommandBuffer, "RTAO", frameData.aoCommandBuffer.getCommandBuffer());
+    // Cloud march + temporal: reads this frame's (now read-only) depth; the "Cloud apply" scene stage composites it.
+    if (cloudsEnabled())
+        executeScoped(vkCommandBuffer, "Cloud march", frameData.cloudCommandBuffer.getCommandBuffer());
 
     // The union march's interval pass + the half-res march: their render passes begin/end HERE (a
     // secondary cannot begin one), the draws are cached secondaries (recordForceMarch). Gated like the
@@ -1361,14 +1432,16 @@ void Renderer::recordCommandBuffers()
         m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_oceanSimPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_particlePipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
-        // The wetness clipmap and the GI sky map never change handle; rewritten alongside so a recreated
-        // set gets them.
+        // The wetness clipmap, the GI sky map and the cloud shadow map never change handle; rewritten
+        // alongside so a recreated set gets them.
         for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
         {
             m_staticMeshGraphicsPipeline.updateTerrainWetnessDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
                 m_terrainWetnessPipeline.getView(), m_terrainWetnessPipeline.getSampler());
             m_staticMeshGraphicsPipeline.updateSkyMapDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
                 m_giProbePipeline.getSkyMapView(), m_giProbePipeline.getSkyMapSampler());
+            m_staticMeshGraphicsPipeline.updateCloudShadowDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_cloudPipeline.getShadowView(), m_cloudPipeline.getShadowSampler());
         }
     }
 
@@ -1440,6 +1513,20 @@ void Renderer::recordCommandBuffers()
     if (m_instances.getInstanceCount() > 0)
     {
         recordPrimaryPreScene(frameIdx, vkCommandBuffer);
+        // The cloud shadow map, before every reader (GI trace, fog scatter, the scene, the cloud march).
+        if (m_cloudShadowMask != 0)
+        {
+            m_gpuProfiler.beginScope(vkCommandBuffer, "Cloud shadow");
+            m_cloudPipeline.recordShadow(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, m_cloudShadowMask);
+            m_gpuProfiler.endScope(vkCommandBuffer);
+        }
+        // The clouds of the GI sky map (reflections, GI miss rays, sky SH), before GI bakes the sky map.
+        if (cloudsEnabled())
+        {
+            m_gpuProfiler.beginScope(vkCommandBuffer, "Cloud sky");
+            m_cloudPipeline.recordSky(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, m_giProbePipeline.getSkyMapView(), m_giProbePipeline.getSkyMapSampler());
+            m_gpuProfiler.endScope(vkCommandBuffer);
+        }
         if (m_sceneViewCount > 1)
             recordPrimaryVR(frameIdx, commandBuffer);
         else

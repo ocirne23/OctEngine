@@ -33,6 +33,7 @@ namespace Procedural
 
 	void TerrainCollider::update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
 	{
+		joinUpdate(); // normally a no-op: main joins it before the post-update kick every frame
 		const bool active = m_enabled && maps != nullptr && Globals::physics.isInitialized();
 		if (!active)
 		{
@@ -56,7 +57,18 @@ namespace Procedural
 		}
 		m_inactiveIdle = false;
 
-		ProfileScope profileScope("Terrain collider", EProfileCategory::Procedural);
+		m_jobMaps = oc::move(maps);
+		m_jobFocus = glm::vec2(focusPos.x, focusPos.z);
+		m_jobTileSize = glm::clamp(m_tileSize, 8.0f, 128.0f);
+		m_jobRadius = glm::max(m_radius, m_jobTileSize);
+		m_jobSpacing = glm::clamp(m_spacing, 0.25f, m_jobTileSize);
+		m_jobFriction = m_friction;
+		Globals::jobSystem.submit([this]() { runUpdate(); },
+			{ "Terrain collider", EProfileCategory::Procedural }, EJobPriority::Normal, &m_updateCounter);
+	}
+
+	void TerrainCollider::runUpdate()
+	{
 		// Drain the in-flight build FIRST: even on a reset frame the result must be consumed, and a
 		// completed tile should land the same frame it finishes.
 		BuildResult done;
@@ -68,17 +80,19 @@ namespace Procedural
 			haveDone = true;
 		}
 
+		const oc::shared_ptr<const ITerrainSampler> maps = oc::move(m_jobMaps);
 		if (maps.get() != m_mapsIdentity || m_configDirty)
 		{
+			ProfileScope clearScope("Terrain collider clear", EProfileCategory::Procedural);
 			m_tiles.clear();
 			++m_generation; // in-flight/finished results built against the old world are stale now
 			m_configDirty = false;
 			m_mapsIdentity = maps.get();
 		}
 
-		const float tileSize = glm::clamp(m_tileSize, 8.0f, 128.0f);
-		const float radius = glm::max(m_radius, tileSize);
-		const glm::vec2 focus(focusPos.x, focusPos.z);
+		const float tileSize = m_jobTileSize;
+		const float radius = m_jobRadius;
+		const glm::vec2 focus = m_jobFocus;
 
 		// Distance from the focus to a tile's XZ footprint, per axis (0 inside).
 		const auto tileDist = [&](glm::ivec2 coord) -> glm::vec2
@@ -91,6 +105,7 @@ namespace Procedural
 		// tile-local in XZ with world Y, like render chunks - keeps float precision high).
 		if (haveDone && done.generation == m_generation && done.mesh.isValid() && !oc::contains(m_tiles, done.key))
 		{
+			ProfileScope createScope("Terrain collider create body", EProfileCategory::Procedural);
 			PhysicsBodyDesc desc;
 			desc.userData = m_terrainUserData;
 			desc.type = EPhysicsBodyType::Static;
@@ -101,7 +116,7 @@ namespace Procedural
 			PhysicsShape shape;
 			shape.type = EPhysicsShapeType::Mesh;
 			shape.mesh = &done.mesh; // box3d copies the b3MeshData* out; moving the wrapper after is fine
-			shape.friction = m_friction;
+			shape.friction = m_jobFriction;
 			shape.categoryBits = PhysicsLayers::bit("Terrain");
 
 			Tile tile;
@@ -117,7 +132,10 @@ namespace Procedural
 		{
 			const glm::vec2 d = tileDist(it->second.coord);
 			if (glm::max(d.x, d.y) > radius + tileSize * 0.5f)
+			{
+				ProfileScope evictScope("Terrain collider evict", EProfileCategory::Procedural);
 				it = m_tiles.erase(it);
+			}
 			else
 				++it;
 		}
@@ -155,7 +173,7 @@ namespace Procedural
 		if (bestDist2 == FLT_MAX)
 			return; // every wanted tile is resident
 
-		const float spacing = glm::clamp(m_spacing, 0.25f, tileSize);
+		const float spacing = m_jobSpacing;
 		const uint32 res = glm::clamp((uint32)std::lround(tileSize / spacing), 1u, 512u);
 		const uint32 generation = m_generation;
 		const uint64 key = tileKey(bestCoord);
@@ -202,6 +220,6 @@ namespace Procedural
 			// Standalone BVH build (no world touched), safe off the main thread.
 			out.mesh = Globals::physics.createCollisionMesh(positions, indices);
 			m_buildResult = oc::move(out); // single producer; read only after the counter completes
-		}, { "TerrainCollider::update", EProfileCategory::Procedural }, EJobPriority::Low, &m_buildCounter);
+		}, { "Terrain collider build", EProfileCategory::Procedural }, EJobPriority::Low, &m_buildCounter);
 	}
 }

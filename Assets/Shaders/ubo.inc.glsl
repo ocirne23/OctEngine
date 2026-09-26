@@ -65,13 +65,10 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_weatherWind2;   // xy = wind direction unit vector in XZ, z = live water surface Y under the camera, w = z valid (0/1)
 
     float u_rtLightShadows; // > 0.5: ray-traced shadows for punctual/area/tube lights
-    float u_timeSeconds;    // elapsed app time (cloud wind / sky animation)
-    float u_cloudCoverage;  // 0 = clear sky, 1 = overcast
-    float u_cloudThickness; // cloud slab thickness (m)
+    float u_timeSeconds;    // elapsed sim time (sky animation)
+    float u_moonBrightness;
+    float u_skyPad0;
 
-    vec4 u_cloudParams0;    // x = layer height (m), y = noise scale, z = wind speed (noise units/s), w = wind angle (rad)
-    vec4 u_cloudParams1;    // x = edge softness, y = sun shading strength, z = silver lining, w = unused
-    vec4 u_cloudParams2;    // x = density (extinction), y = sharpness, z = base/top height variation, w = moon brightness
     vec4 u_skySunParams;    // x = atmosphere scatter boost (in-scatter only), y = Mie anisotropy g, z = sky highlight roll-off, w = star density
 
     vec4 u_screenSize;   // xy = full render-target resolution (px); zw = 1/xy
@@ -296,6 +293,24 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
     vec4 u_forceBake2;   // x = union march step size (m), y = union march max steps,
                          // z = px per (radius/dist) - the union march's distance LOD, w unused
+
+    // Volumetric clouds (keep in sync with RendererVKLayout::Ubo; clouds.inc.glsl consumes these)
+    vec4 u_cloudShape0;  // x = shell bottom altitude (m), y = shell top altitude (m), z = coverage, w = enabled (0/1)
+    vec4 u_cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
+    vec4 u_cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
+    vec4 u_cloudShape3;  // x = coverage variation, y = near detail radius (m), zw unused
+    vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
+    vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
+    vec4 u_cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
+    vec4 u_cloudLight1;  // x = ambient strength, y = ground albedo, z = powder strength, w = multi-scatter attenuation
+    vec4 u_cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
+    vec4 u_cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = debug mode
+    // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
+    vec4 u_cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)
+    vec4 u_cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
+    vec4 u_cloudShadow2; // xyz = light-space axis e0, w = shadow strength
+    vec4 u_cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
+    vec4 u_cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps, zw unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

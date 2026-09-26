@@ -393,6 +393,7 @@ private:
     bool hasHigherPriorityReady(EJobPriority mine) const;
     bool runHigherPriorityJobs(EJobPriority mine);
     Job* getWork(WorkerContext& ctx);
+    Job* getHelpWork(WorkerContext& ctx); // helpWait's pick: never a Low job
     Job* trySteal(WorkerContext& ctx);
     void pushReadyJob(Job* job);
     void idle(WorkerContext& ctx, bool forceSleep); // forceSleep: ignore the "looks non-empty" checks (see the definition)

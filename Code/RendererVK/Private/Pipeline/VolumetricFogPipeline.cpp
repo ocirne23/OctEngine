@@ -43,6 +43,8 @@ void VolumetricFogPipeline::buildScatterLayout(ComputePipelineLayout& layout)
     b.push_back(GiVolumeDescriptors::layoutBinding(12, vk::ShaderStageFlagBits::eCompute)); // the GI irradiance volume + sky SH
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 13, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
+    layout.descriptorBindingFlags.resize(b.size());
 }
 
 void VolumetricFogPipeline::buildIntegrateLayout(ComputePipelineLayout& layout)
@@ -82,6 +84,10 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     b.push_back(GiVolumeDescriptors::layoutBinding(5, vk::ShaderStageFlagBits::eFragment)); // the volume's sky SH (volume mode)
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound;
+    // 6 + 7 = the accumulated clouds (color, depth): the fog apply composites them inside the fog.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 7, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    layout.descriptorBindingFlags.resize(b.size());
     // Eye index (per-eye depth reconstruction + projection; 0 on desktop / left eye).
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
@@ -252,7 +258,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     { // -------- Pass 1: scatter (write scatter[cur], read scatter[prev] as history) --------
         DescriptorSet& set = m_scatterSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 12> updates{
+        oc::array<DescriptorSetUpdateInfo, 13> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightInfosBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightGridsBuffer) } },
@@ -263,13 +269,14 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
             DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_scatter.view[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.oceanMapsSampler, params.oceanMapsView) } },
-            DescriptorSetUpdateInfo{}, // [10] + [11] the GI volume cascades + sky: written only while it exists
+            DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
+            DescriptorSetUpdateInfo{}, // [11] + [12] the GI volume cascades + sky: written only while it exists
             DescriptorSetUpdateInfo{},
         };
         if (!params.giVolume.empty())
-            params.giVolume.fillUpdates(12, updates[10], updates[11]);
+            params.giVolume.fillUpdates(12, updates[11], updates[12]);
         commandBuffer.cmdUpdateDescriptorSets(m_scatterPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet,
-            oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 10 : 12));
+            oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 11 : 13));
         vk::WriteDescriptorSetAccelerationStructureKHR asInfo{ .accelerationStructureCount = 1, .pAccelerationStructures = &params.tlas };
         vk::WriteDescriptorSet asWrite{ .pNext = &asInfo, .dstSet = vkSet, .dstBinding = 4, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eAccelerationStructureKHR };
         Globals::device.getDevice().updateDescriptorSets(1, &asWrite, 0, nullptr);
@@ -320,20 +327,22 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
     DescriptorSet& set = m_applySets[applySlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
-    oc::array<DescriptorSetUpdateInfo, 6> updates{
+    oc::array<DescriptorSetUpdateInfo, 8> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_integrated.view[frameIdx]) } },
         // Binding 3 (terrain) is UPDATE_AFTER_BIND, written per frame by updateTerrainDescriptor.
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
-        DescriptorSetUpdateInfo{}, // [4] + [5] the GI volume (its sky SH): written only while it exists
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudColorView) } },
+        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudDepthView) } },
+        DescriptorSetUpdateInfo{}, // [6] + [7] the GI volume (its sky SH): written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(5, updates[4], updates[5]);
+        params.giVolume.fillUpdates(5, updates[6], updates[7]);
     commandBuffer.cmdUpdateDescriptorSets(m_applyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
-        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 4 : 6));
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 6 : 8));
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_applyPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);

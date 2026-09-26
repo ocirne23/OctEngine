@@ -45,7 +45,9 @@ layout (binding = 6, std430) readonly buffer InGridTable
 };
 
 layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 22) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 23) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+#define CLOUD_SHADOW_BINDING 22
+#include "cloud_shadow.inc.glsl"
 #ifdef GI_VOLUME
 // The baked irradiance volume (GIProbePipeline, gi_volume_bake.cs.glsl): 4 images per cascade, partially bound.
 layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
@@ -215,7 +217,7 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 		}
 	}
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
-	visibility *= u_eclipseParams.x;
+	visibility *= u_eclipseParams.x * cloudSunTransmittance(worldPos);
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
 	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption

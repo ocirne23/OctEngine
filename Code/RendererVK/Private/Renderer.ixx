@@ -36,6 +36,7 @@ import :RTAOPipeline;
 import :OceanSimulationPipeline;
 import :TerrainWetnessPipeline;
 import :VolumetricFogPipeline;
+import :CloudPipeline;
 import :BakedWorldMap;
 import :SceneColor;
 import :DebugLinePipeline;
@@ -152,6 +153,8 @@ public:
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
     const ShadowParams& shadowParams() const { return m_shadowParams; }
     void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
+    // The game turns the volumetric clouds off without touching the user's "Sky/Clouds/Enabled" tweak.
+    void setCloudsSuppressed(bool suppressed) { m_cloudsSuppressed = suppressed; }
 
 	// -- Terrain parameters --
     void setTerrainParams(float meshRadius, float seaLevel, float temperatureLapseRate = 0.0f) { m_terrain.setParams(meshRadius, temperatureLapseRate, seaLevel); }
@@ -274,6 +277,16 @@ private:
     void recordAO(uint32 frameIdx);
     void recordVolumetricFog(uint32 frameIdx);
     void recordFogApply(uint32 frameIdx);
+    void recordClouds(uint32 frameIdx);
+    void recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
+    void recordCloudApply(uint32 frameIdx);
+    void recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
+    bool cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
+    void syncCloudDefines() // CloudParams bools -> the baked shader defines (buildLayoutPreamble)
+    {
+        RendererVKLayout::g_cloudShaders = { .clouds = m_cloudParams.enabled, .shadows = m_cloudParams.shadows,
+                                             .selfShadowFromMap = m_cloudParams.selfShadowFromMap };
+    }
     void recordTaa(uint32 frameIdx);
     void recordEyeAdaptation(uint32 frameIdx);
     void recordComposite(uint32 frameIdx);
@@ -289,6 +302,7 @@ private:
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
     void buildUboSky();
+    void buildUboClouds(const Camera& camera);
     void buildUboSunShadow(const Camera& camera);
     void buildUboRainOcclusion();
     void buildUboFog();
@@ -308,7 +322,8 @@ private:
         void (Renderer::*recordCached)(uint32);                         // fills cb
         void (Renderer::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
     };
-    oc::array<SceneStage, 8> buildSceneStages(uint32 frameIdx);
+    static constexpr uint32 NUM_SCENE_STAGES = 9;
+    oc::array<SceneStage, NUM_SCENE_STAGES> buildSceneStages(uint32 frameIdx);
 
     void recreateVrEyeTargets();
     void recordGlobalIllumPrep(uint32 frameIdx); // per frame: one-shot BLAS builds, compaction, the skinned rebuild, the one-time clear
@@ -404,6 +419,7 @@ private:
     OceanSimulationPipeline m_oceanSimPipeline;
     TerrainWetnessPipeline m_terrainWetnessPipeline;
     VolumetricFogPipeline m_volumetricFogPipeline;
+    CloudPipeline m_cloudPipeline;
     TaaPipeline m_taaPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
@@ -425,6 +441,17 @@ private:
     SkyParams m_skyParams;
     ShadowParams m_shadowParams;
     FogParams m_fogParams;
+    CloudParams m_cloudParams;
+    bool m_cloudsSuppressed = false;
+    glm::dvec2 m_cloudWindOffset = glm::dvec2(0.0); // accumulated wind (m), wrapped by the weather period
+    double m_cloudEvolveOffset = 0.0;              // accumulated detail drift (m), wrapped by the detail period
+    // The cloud shadow map cascades (buildUboClouds): world-space centres + extents of what each layer holds.
+    oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
+    oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};
+    glm::dvec3 m_cloudShadowSun = glm::dvec3(0.0);
+    uint32 m_cloudShadowFarFrame = 0;
+    bool m_cloudShadowFarValid = false;
+    uint32 m_cloudShadowMask = 0; // the cascades the primary renders this frame (bit per cascade)
     TerrainResources m_terrain;
     PostParams m_postParams;
     RTParams m_rtParams;
@@ -514,6 +541,8 @@ private:
         CommandBuffer giPrepCommandBuffer;
         CommandBuffer volumetricFogCommandBuffer;
         CommandBuffer fogApplyCommandBuffer;
+        CommandBuffer cloudCommandBuffer;
+        CommandBuffer cloudApplyCommandBuffer;
         CommandBuffer giProbeDebugCommandBuffer;
         CommandBuffer debugLineCommandBuffer;
         CommandBuffer particleSimCommandBuffer;

@@ -454,29 +454,37 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // u_giVolume: the baked GI irradiance volume + sky SH, GENERAL layout, sized for the cascade tweak's max.
     descriptorSetBindings.push_back(GiVolumeDescriptors::layoutBinding(21, vk::ShaderStageFlagBits::eFragment));
 
-    // 22 = the set's highest binding number: required for eVariableDescriptorCount.
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_cloudShadow (the cloud Beer shadow map, GENERAL layout)
         .binding = 22,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
+
+    // 23 = the set's highest binding number: required for eVariableDescriptorCount.
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+        .binding = 23,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
     });
 
     // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18),
-    // baked terrain height (19) and sky map (20) bindings are refreshed after the (cached) draw CB is
-    // recorded -> UPDATE_AFTER_BIND; the GI volume (21) is written at record only for the live cascades
-    // (partially bound; the images change only with the grid, which re-records); the texture array (22) is
-    // variable-count (allocated at the live texture capacity), only partially written, and UPDATE_AFTER_BIND
-    // so the TextureStreamer can rewrite swapped slots without re-recording the cached draw CBs.
+    // baked terrain height (19), sky map (20) and cloud shadow map (22) bindings are refreshed after the
+    // (cached) draw CB is recorded -> UPDATE_AFTER_BIND; the GI volume (21) is written at record only for the
+    // live cascades (partially bound; the images change only with the grid, which re-records); the texture
+    // array (23) is variable-count (allocated at the live texture capacity), only partially written, and
+    // UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
     {
         if (descriptorSetBindings[i].binding == 11 || descriptorSetBindings[i].binding == 13
-            || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19 || descriptorSetBindings[i].binding == 20)
+            || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19 || descriptorSetBindings[i].binding == 20
+            || descriptorSetBindings[i].binding == 22)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
         else if (descriptorSetBindings[i].binding == 21)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-        else if (descriptorSetBindings[i].binding == 22)
+        else if (descriptorSetBindings[i].binding == 23)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
 }
@@ -526,7 +534,16 @@ void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descr
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
     vk::DescriptorImageInfo imageInfo{ .sampler = m_sampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 22, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 23, .dstArrayElement = slotIdx, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+}
+
+void StaticMeshGraphicsPipeline::updateCloudShadowDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView shadowView, vk::Sampler shadowSampler)
+{
+    // The cloud Beer shadow map (22): one image for life, GENERAL, rewritten in place by CloudPipeline::recordShadow.
+    vk::DescriptorImageInfo imageInfo{ .sampler = shadowSampler, .imageView = shadowView, .imageLayout = vk::ImageLayout::eGeneral };
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 22, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -804,7 +821,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.rtMeshInstancesBuffer.getBuffer(), .range = params.rtMeshInstancesBuffer.getSize() } }
         },
         DescriptorSetUpdateInfo{ // [15] the texture array
-            .binding = 22,
+            .binding = 23,
             .type = vk::DescriptorType::eCombinedImageSampler,
         },
         DescriptorSetUpdateInfo{}, // [16] + [17] the GI volume cascades + sky: written only while it exists

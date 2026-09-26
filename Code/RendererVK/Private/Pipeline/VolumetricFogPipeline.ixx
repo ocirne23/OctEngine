@@ -47,6 +47,8 @@ public:
         vk::ImageView oceanMapsView;   // FFT displacement maps: the scatter pass samples the live wave
         vk::Sampler   oceanMapsSampler; // height around the waterline (underwater fog boundary)
         vk::AccelerationStructureKHR tlas;
+        vk::ImageView cloudShadowView;  // the cloud Beer shadow map (GENERAL): the sun in-scatter under / in clouds
+        vk::Sampler   cloudShadowSampler;
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
 
@@ -59,6 +61,11 @@ public:
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   sceneDepthSampler;
+        // The accumulated clouds of this eye / slot (GENERAL; CloudPipeline): composited inside the fog. Read
+        // only while u_cloudShape0.w says the cloud march ran; always bound (the images exist from init).
+        vk::ImageView cloudColorView;
+        vk::ImageView cloudDepthView;
+        vk::Sampler   cloudSampler;
     };
     // Records the fullscreen apply draw; the caller has begun a command buffer inside the scene-color
     // render pass and set the viewport/scissor. eye selects the per-eye depth/projection (0 = desktop/left).

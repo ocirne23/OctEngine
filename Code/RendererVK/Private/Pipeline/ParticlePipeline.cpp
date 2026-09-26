@@ -112,12 +112,13 @@ void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 ma
     for (uint32 binding = 7; binding <= 9; ++binding) // light infos, light grid, grid table (LIT particles pick up the scene's lights)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     b.push_back(GiVolumeDescriptors::layoutBinding(10, vk::ShaderStageFlagBits::eVertex)); // the GI irradiance volume + sky SH (LIT particles)
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex }); // cloud shadow map (LIT particles)
     // 20 = the set's highest binding number: required for eVariableDescriptorCount.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 20, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
     // Binding 6 (terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
     layout.descriptorBindingFlags[6] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-    layout.descriptorBindingFlags[b.size() - 2] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
+    layout.descriptorBindingFlags[b.size() - 3] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume (10): live cascades only
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound
         | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 
@@ -396,7 +397,7 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 13> updates{
+    oc::array<DescriptorSetUpdateInfo, 14> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[1 - parity]) } },
@@ -409,7 +410,9 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.lightGridsBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.lightTableBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler },
-        DescriptorSetUpdateInfo{}, // [11] + [12] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = params.cloudShadowSampler, .imageView = params.cloudShadowView, .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{}, // [12] + [13] the GI volume cascades + sky: written only while it exists
         DescriptorSetUpdateInfo{},
     };
     const size_t numTextures = Globals::textureManager.getNumTextures();
@@ -420,10 +423,10 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(10, updates[11], updates[12]);
+        params.giVolume.fillUpdates(10, updates[12], updates[13]);
 
     commandBuffer.cmdUpdateDescriptorSets(m_drawPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
-        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 11 : 13));
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 12 : 14));
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_drawPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_drawPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_drawPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);

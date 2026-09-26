@@ -90,6 +90,15 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_fogParams.registerTweaks();
+    // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
+    // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
+    m_cloudParams.registerTweaks([this]() {
+        syncCloudDefines();
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        reloadShaders();
+    });
+    syncCloudDefines();
     // The master + GI toggles are baked into the cached GI secondary; the master, "RT Sun" and "RT Lights"
     // also into the lit fragments (LIT_RT_*).
     m_rtParams.registerTweaks(rerecordCallback, [this]() {
@@ -252,6 +261,7 @@ void Renderer::initPipelines()
     });
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
+    m_cloudPipeline.initialize(ext.width, ext.height, sceneRenderPass, m_sceneViewCount);
     m_terrain.initialize();
     m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
     m_eyeAdaptationPipeline.initialize();
@@ -323,6 +333,8 @@ void Renderer::initPerFrameResources()
         perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giPrep");
         perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.volumetricFog");
         perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.fogApply");
+        perFrame.cloudCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.clouds");
+        perFrame.cloudApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudApply");
         perFrame.giProbeDebugCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giProbeDebug");
         perFrame.debugLineCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.debugLines");
         perFrame.particleSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.particleSim");
@@ -392,6 +404,7 @@ void Renderer::recreateWindowSurface(Window& window)
 
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
     m_rtaoPipeline.recreateImages(ext.width, ext.height);
+    m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
 
     for (PerFrameData& perFrame : m_perFrameData)
@@ -422,6 +435,7 @@ void Renderer::recreateSwapchain()
     m_framebuffers.initialize(m_renderPass, m_swapChain);
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
     m_rtaoPipeline.recreateImages(ext.width, ext.height);
+    m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
@@ -448,6 +462,7 @@ void Renderer::reloadShaders()
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_cloudPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_indirectCullComputePipeline.reloadShaders();
     m_skinningComputePipeline.reloadShaders();
     m_lightGridComputePipeline.reloadShaders();

@@ -21,6 +21,8 @@ layout (binding = 10) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
 #include "gi_probe.inc.glsl"
+#define CLOUD_SHADOW_BINDING 11
+#include "cloud_shadow.inc.glsl" // LIT particles: the sun through the clouds
 // The terrain-data cascades (height / water level) for the ground fade (PARTICLE_FLAG_GROUND_FADE).
 #define TERRAIN_HEIGHT_BINDING 6
 #include "terrain_height.inc.glsl"
@@ -236,7 +238,7 @@ void main()
         const vec3 toEye = n;
         const vec3 sunDir = normalize(u_sunDirection);
         const vec3 sun = atmosTransmittanceToLight(0.0, sunDir, u_skyUp)
-            * u_sunColor.rgb * u_eclipseParams.x * particlePhase(dot(-sunDir, toEye));
+            * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(world)) * particlePhase(dot(-sunDir, toEye));
         // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
         // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);

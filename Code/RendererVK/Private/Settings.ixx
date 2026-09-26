@@ -52,19 +52,6 @@ export struct SkyParams
     float ozone = 2.0f;                 // ozone absorption strength (1 = Earth-like); absorbs green/yellow,
                                         // suppresses the green horizon band single scattering produces
 
-    // Clouds
-    float cloudCoverage = 0.35f;
-    float cloudHeight = 6300.0f;        // meters above the viewer (slab base)
-    float cloudThickness = 86.0f;    // slab thickness sqrt(m)
-    float cloudScale = 0.7f;            // multiplier on the base noise frequency
-    float cloudWindSpeed = 3.00f;       // multiplier on the base wind drift
-    float cloudWindAngle = 0.0f;       // radians
-    float cloudSoftness = 0.26f;        // density smoothstep width (small = crisp edges)
-    float cloudDensity = 1.58f;          // extinction strength (high = opaque cores)
-    float cloudSharpness = 1.0f;       // density remap contrast (high = hard-edged shapes)
-    float cloudBaseVar = 0.78f;          // per-column base/top height variation (0 = flat slab)
-    float cloudShading = 2.00f;          // directional sun-shading strength
-
     // Stars
     float starDensity = 0.63f;
     float starSize = 1.3f;              // base star core size multiplier
@@ -85,6 +72,58 @@ export struct SkyParams
     float moonBrightness = 0.3f;
 
     void registerTweaks();
+};
+
+// Volumetric clouds (CloudPipeline) - the TweakPanel's "Sky/Clouds" categories. All UBO-driven, so
+// changes apply live. A spherical shell [bottom, top] above sea level (world Y 0) around a planet
+// centre under the camera; the noise is world-anchored and moves with the wind.
+export struct CloudParams
+{
+    bool  enabled = true;
+    // Shape
+    float bottom = 1000.0f;            // shell bottom altitude (m)
+    float top = 3000.0f;               // shell top altitude (m)
+    float coverage = 0.3f;             // 0 = clear, 1 = overcast
+    float coverageVariation = 1.0f;    // weather-map spread around the coverage (0 = uniform)
+    float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
+    float typeVariation = 1.0f;       // weather-map spread around the type
+    float densityScale = 0.025f;       // extinction (1/m) at density 1
+    float erosion = 0.45f;             // detail noise erosion of the base shapes
+    float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
+    float weatherSizeKm = 30.0f;      // weather map period (km): the size of cloud clusters and gaps
+    int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
+    int   detailRepeats = 12;          // detail noise tiles per base tile
+    float windSpeed = 10.0f;           // m/s
+    float windAngleDeg = 30.0f;        // wind direction in XZ (degrees)
+    float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
+    // Lighting
+    float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
+    float multiScatter = 0.75f;       // octave attenuation of the multiple-scattering approximation (0 = single scattering)
+    float ambient = 1.0f;              // sky ambient strength
+    float groundAlbedo = 0.25f;        // ground bounce onto the cloud bottoms
+    float powder = 0.3f;               // dark-edge "powder" term strength (0 = off)
+    // Shadows (the Beer shadow map)
+    bool  shadows = true;
+    float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
+    float shadowNearKm = 1.0f;         // near cascade extent (km)
+    float shadowFarKm = 16.0f;         // far cascade extent (km)
+    int   shadowSteps = 16;            // map march steps per texel
+    int   shadowFarInterval = 2;       // the far cascade updates every N frames
+    bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
+    // Quality
+    int   maxSteps = 192;              // view march step budget per pixel
+    float maxDistanceKm = 120.0f;      // view march range (km)
+    float nearStep = 15.0f;            // step length at the camera (m)
+    float stepGrowth = 0.01f;          // step length growth per metre of distance
+    int   lightSteps = 3;              // sun march steps per dense sample
+    float lightDistance = 2000.0f;     // sun march reach (m)
+    float temporalBlend = 0.9f;        // history weight of the temporal accumulation
+    float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
+    int   debugMode = 0;               // 0 off, 1 step count, 2 density only, 3 history rejection
+
+    // The three bools (enabled, shadows, selfShadowFromMap) are BAKED shader defines (CLOUDS, CLOUD_SHADOWS,
+    // CLOUD_SELF_SHADOW_MAP - Shader.cpp's preamble): onDefinesChanged reloads the shaders.
+    void registerTweaks(const oc::function<void()>& onDefinesChanged);
 };
 
 // Sun shadow cascade distribution (raster path; RT sun shadows ignore these) - the TweakPanel's

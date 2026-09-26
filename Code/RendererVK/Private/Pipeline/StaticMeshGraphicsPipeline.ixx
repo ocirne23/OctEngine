@@ -71,6 +71,7 @@ public:
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the sky map binding (20) at GI's per-frame sky bake (GENERAL layout).
     void updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler);
+    void updateCloudShadowDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView shadowView, vk::Sampler shadowSampler);
     // Points the terrain-data cascade binding (19) at the active ping-pong image (refreshed per frame).
     void updateTerrainHeightDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView terrainView, vk::Sampler terrainSampler);
     // Points the terrain wetness clipmap binding (18) at the wetness image (GENERAL layout).

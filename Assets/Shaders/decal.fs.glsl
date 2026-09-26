@@ -17,6 +17,8 @@ layout (binding = 1, std430) readonly buffer Decals { Decal d_decals[]; };
 layout (binding = 2) uniform sampler2D u_sceneDepth;
 layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
+#define CLOUD_SHADOW_BINDING 6
+#include "cloud_shadow.inc.glsl"
 
 #define GI_GRID_DATA_NAME gi_gridData
 #ifdef GI_VOLUME
@@ -75,7 +77,7 @@ void main()
         // like every other GI consumer.
         const vec3 irr = giIrradiance(worldPos, n) * u_aoParams.y;
         const vec3 sun = atmosTransmittanceToLight(0.0, normalize(u_sunDirection), u_skyUp)
-            * u_sunColor.rgb * u_eclipseParams.x * max(dot(n, normalize(u_sunDirection)), 0.0);
+            * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(worldPos)) * max(dot(n, normalize(u_sunDirection)), 0.0);
         color *= (irr + sun) * (1.0 / PI) + u_ambientColor;
     }
     color += decal.emissiveFadeWidth.rgb;

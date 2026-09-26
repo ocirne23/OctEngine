@@ -151,9 +151,12 @@ GPU Frame
     → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
     → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
+    → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
+    → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
     → GI → Volumetric fog
     → Scene opaque                         (WRITES the scene depth, then parks it read-only)
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
+    → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
     → Scene forward → TAA → Eye adaptation
   Composite + UI
@@ -177,7 +180,7 @@ GPU Frame
 > * **TAA's ocean flag is the scene colour's ALPHA:** `ocean.fs.glsl` writes 0, every other opaque
 >   surface its material alpha (> 0), and TAA reads `alpha < 0.004` on non-sky pixels. So nothing
 >   layered over the opaque scene may write alpha: `GraphicsPipelineLayout::colorWriteAlpha = false`
->   on decals, debug lines, force shells / union / upsample, particles and fog apply, and
+>   on decals, debug lines, force shells / union / upsample, particles, cloud apply and fog apply, and
 >   `GraphicsPipeline` masks alpha on every BLENDED variant (a transparent mesh keeps the alpha of
 >   the opaque surface behind it). The ONE exception is the Ocean variant (`dualSourceAlpha`): it blends
 >   its edge over the ground, so it composites the flag itself (see "Terrain surface water"). **A new pipeline that draws into scene colour after the opaque
@@ -191,7 +194,7 @@ attachment barriers between instances — `sceneInstanceBarrier`, RendererRecord
 
 ```
 Scene opaque   (depth WRITTEN):            Static meshes → GI probe debug
-Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Fog apply
+Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Cloud apply → Fog apply
 ```
 
 `SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance clears, the last
@@ -236,7 +239,7 @@ effect immediately.**
 * **Lights** culled through a world-space hash table into distance-scaled grids. `MAX_LIGHTS` is
   `USHRT_MAX - 1`.
 * **GI** through scrolling clipmap radiance cascades (ray-traced probes).
-* **RTAO**, **TAA**, **PCSS cascades**, **volumetric fog**, **GPU compute skinning**.
+* **RTAO**, **TAA**, **PCSS cascades**, **volumetric fog**, **volumetric clouds** (sandbox), **GPU compute skinning**.
 * **"RT/RT Sun" replaces the PCSS cascades entirely** — the shadow cull and draw are skipped.
 
 ## The scene focus
@@ -421,12 +424,14 @@ top-down camera hanging in empty sky shapes none of these:
   per slot by the streamer's pending-write path — the record never rewrites it.
 * **THE SKY MAP** (`gi_sky_map.cs.glsl`, owned by `GIProbePipeline`, `recordSkyMap` at the top of
   the cached `recordGlobalIllum` — ahead of the RT toggle — with its own read→write→read barriers):
-  a 256×128 RGBA16F lat-long 2-layer array, GENERAL for life. Layer 0 = `skyRadiance` (GI miss rays,
+  a 256×128 RGBA16F lat-long 3-layer array, GENERAL for life. Layer 0 = `skyRadiance` (GI miss rays,
   the forward pass's per-frame-constant `skyRadiance(up)` ambient), layer 1 = `mirrorSkyRadiance`
   (atmosphere.inc.glsl: the ocean's and the terrain wet film's reflection-ray sky, 12-step march +
-  saturation). Mapping + layer ids live in atmosphere.inc.glsl (`skyMapUV` / `skyMapDir`,
-  `SKY_MAP_LAYER_*`); the forward set binds it at **20** (binding **21** is the GI irradiance volume, and
-  the texture array is **22**, still the set's highest binding for the variable count). Anything that
+  saturation), both WITH the volumetric clouds (CloudPipeline's sky clouds, composited as
+  `inScatter + sky * transmittance`; see "Volumetric clouds"); layer 2 = `skyRadiance` CLEAR, the clouds'
+  own ambient (so they never light themselves through their image). Mapping + layer ids live in atmosphere.inc.glsl (`skyMapUV` / `skyMapDir`,
+  `SKY_MAP_LAYER_*`); the forward set binds it at **20** (binding **21** is the GI irradiance volume, **22**
+  the cloud shadow map, and the texture array is **23**, still the set's highest binding for the variable count). Anything that
   would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map instead.
 * **THE GI IRRADIANCE VOLUME** ("GI/Irradiance volume", on by default; "GI/Volume voxels per probe" 1–2,
   default 2 — both in `g_giGrid`; they reload every shader but keep the probe buffer, see below). Per
@@ -453,7 +458,7 @@ top-down camera hanging in empty sky shapes none of these:
   **EVERY probe consumer switches with the toggle** (`GI_VOLUME` define; the probe code stays for the off
   path): the lit core, the ocean and the terrain's mirror hits (static-mesh set binding 21), decals (5),
   particles (10, vertex), fog scatter (12) and fog apply (5, sky only), and the TRACE's multi-bounce lookup at
-  gather hits (13 — the wave stamps are 14, its texture array moved to 15), which reads LAST frame's bake with the baked Chebyshev
+  gather hits (13 — the wave stamps are 14, the cloud shadow map 15, its texture array moved to 16), which reads LAST frame's bake with the baked Chebyshev
   instead of `giEvalBounce`. **The sky SH (the out-of-field fallback)** is copied by the bake every frame,
   before the partial early-out, into one extra 3×1×1 RGBA16F image at the fixed slot `GI_VOLUME_SKY_IMAGE`;
   in volume mode `giEvalSkySH` `texelFetch`es it. So in volume mode no consumer reads the probe buffer —
@@ -536,6 +541,104 @@ take `min` with the shadow term.
 **The march fades in inside cascade range, so the handover is seamless.** Steps double from
 `Terrain march bias`, which is also the self-shadow bias. **Deterministic — no jitter, no temporal
 integration.**
+
+## Volumetric clouds (`CloudPipeline`, "Sky/Clouds" tweaks)
+
+**A SANDBOX feature: full 3D clouds the camera flies through.** The game turns them off
+(`setCloudsSuppressed`, GameMatch ctor/dtor) without touching the user's `Enabled` tweak. The sky
+variant (`sky.fs.glsl`) draws NO clouds any more.
+
+* **The shell:** altitudes `[Bottom, Top]` above world Y 0 on a sphere of `ATMOS_R_PLANET` whose centre
+  lies straight under the camera (the terrain is flat; from altitude the deck still curves to the
+  horizon). All cloud math is CAMERA-RELATIVE. **Precision:** `cloudAltitude` forms `(r² - R²) / (r + R)`
+  and `cloudRaySphere` the stable quadratic, because float differences of two ~6.4e6 values are
+  metres off.
+* **The density model is `clouds.inc.glsl`**, shared by every cloud pass: weather map (coverage, type,
+  density, tower height) × height profile per type (stratus → cumulus → cumulonimbus) × Perlin-Worley
+  base, eroded by curl-distorted Worley detail, plus a near-camera octave inside `Near detail radius`.
+  **The profile raises the coverage THRESHOLD** (only the strongest noise passes near the top and base, so
+  tops round into domes); a profile that only scaled the density against one fixed threshold cut every
+  cloud at the same height. The tower height stretches the profile per column over `[0.45, 1]` of the shell.
+* **The noise is world-anchored and tiles.** Base repeats `Base repeats` times per weather tile and detail
+  `Detail repeats` times per base tile — integers, so `buildUboClouds` wraps (camera − wind) by the
+  weather period ONCE, in double, and every texture stays continuous. The wind and the detail's vertical
+  drift (`Evolve speed`) accumulate in double on the SIM clock. **A new noise lookup must use an integer
+  multiple of these frequencies**, or it seams when the origin wraps.
+* **The noise textures are generated on the GPU** (`cloud_noise.cs.glsl`) at initialize and on every
+  shader reload, with a blit mip chain: base 128³, detail 32³, weather 512², curl 128², all RGBA8.
+* **Three passes per eye:** the march (compute, half res, EVERY pixel EVERY frame — a fly-through has
+  parallax at every depth, so a 1-in-16 update would smear), the temporal accumulation, and the apply.
+  * **March** (`cloud_march.cs.glsl`, right after RTAO): up to the FARTHEST scene surface of the pixel's
+    2x2 block; steps grow with distance (`Near step`, `Step growth`) but never so small that `Max steps`
+    cannot reach the end. **The march itself is `cloudRaymarch` (`cloud_raymarch.inc.glsl`), shared with
+    the sky clouds.** Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
+    multiple-scattering octaves — octave 0 on the HG + Draine phase (Jendersie & d'Eon 2023: a fit to Mie
+    scattering on water droplets; the CPU turns `Droplet size (um)` into its four parameters,
+    `u_cloudLight0`), octaves 1 and 2 ISOTROPIC (a flattened droplet phase kept ~half the energy in a g ≈ 0.66
+    forward lobe, and the side away from the sun went far too dark), a
+    powder term, and an ambient from the sky map's CLEAR layer blended to a ground bounce by the height in
+    the shell; the energy-conserving step integral.
+    The sun at the cloud uses the atmosphere transmittance along the LOCAL up of the entry point (the
+    sunset on distant clouds). The aerial perspective in front of the cloud is a 4-step single-scatter
+    segment from the camera altitude (`cloudAerialScatter`). The sun march runs only where the shadow map
+    does not cover the sample (or "Self-shadow from map" is off). Output: in-scatter + transmittance, and
+    log2 distances (first hit, transmittance-weighted, march limit).
+  * **Temporal** (`cloud_temporal.cs.glsl`): reprojects the weighted cloud distance minus this frame's
+    wind displacement, rejects on a distance change, clamps to the 3x3 neighbourhood. The history is the
+    OTHER frame slot's accumulation; all images are cleared to "no cloud" at creation, so there is no
+    history-valid flag.
+  * **Apply** — the depth-aware 4-tap upsample is `cloud_upsample.inc.glsl` (a texel whose first cloud
+    lies behind this pixel's surface counts as "no cloud"), used by TWO passes:
+    * **Fog ON: the fog apply composites the clouds** (`vol_apply.fs.glsl`, bindings 6/7). Fog laid over
+      finished clouds fogged them as if they stood at the scene depth (over far terrain: a grey band over
+      every cloud). With the cloud (S, T) at its weighted distance tc and the fog F to the scene, C to tc:
+      `out = T·F.rgb + C.a·S + (1−T)·C.rgb + scene·(T·F.a)` — exact for a cloud at one distance and linear
+      in the scene, so the blend state is unchanged. `fogTo` (froxel volume + far field) runs twice on
+      cloudy pixels.
+    * **Fog OFF: the "Cloud apply" scene stage** (`cloud_apply.fs.glsl`, before the fog apply slot, gated on
+      `cloudsEnabled() && !fog`). `colorWriteAlpha = false`.
+* **THE CLOUD SHADOW MAP** (a Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl`
+  reads). Two sun-aligned ortho cascades in ONE 2-layer RGBA32F array (`SHADOW_RESOLUTION` 1024), recorded
+  straight into the primary after the pre-scene stages (before GI, fog and the scene).
+  * A texel = one line along the sun through the shell: x = the along-light coordinate `dot(p - centre, L)`
+    of the first cloud coming from the sun, y = the mean extinction to the last cloud, z = the whole optical
+    depth. A receiver's optical depth is `min(y * max(x - a, 0), z)`, so ONE fetch serves the ground, a
+    mountain or fog froxel inside a cloud, and the clouds' own samples. Because x is a coordinate and not a
+    distance from a start plane, the map needs no per-cascade start distance.
+  * `buildUboClouds` snaps each centre to whole texels in light space (double, world space). The near
+    cascade renders every frame; the far one every `Far update interval` frames, and at once when the sun
+    or its extent changes — between updates its WORLD centre is kept and only the camera-relative offset is
+    rebuilt. **So the map is ONE image, not per frame slot.** It is cleared to "no cloud" at creation and
+    stays bound while the clouds are off (`u_cloudShadow4.x = 0` makes the lookup return 1).
+  * Past the far cascade the transmittance fades to a rough mean from the coverage (not measured).
+  * **Consumers** multiply their sun term by `cloudSunTransmittance(worldPos)`: the lit core (lit, masked,
+    transparent, terrain; forward set binding 22), the ocean (`sunTint`, so glint, body, foam and SSS),
+    the fog scatter (13 — the shafts through cloud gaps), the GI trace's gather-hit sun (15), LIT particles
+    (draw set 11, vertex stage), LIT decals (6), and the cloud march's self-shadow (9; outside the map it
+    falls back to the sun march).
+* **THE SKY CLOUDS** (`cloud_sky.cs.glsl`, `CloudPipeline::recordSky`, in the primary after the shadow map
+  and before GI): one invocation per sky-map texel, `cloudRaymarch` with 64 steps, written as (in-scatter,
+  transmittance) into a lat-long image on the sky map's own texel grid; the sky-map bake composites it
+  into its GI and mirror layers. So the ocean / wet-film reflections, the GI miss rays, the sky SH and the
+  forward pass's sky ambient all see the clouds (overcast darkens the ground's sky light). **The observer
+  stands on the GROUND under the camera** (`ATMOS_OBSERVE_HEIGHT`), not at the camera: every reader of the
+  sky map sits under the clouds, even while the camera flies above them. The ambient reads the sky map's
+  CLEAR layer from LAST frame (no feedback loop through the clouds' own image).
+* **The visible sky is seen from the camera altitude** (`sky.fs.glsl`, `atmosphereScatter`'s observer
+  height): the air above thins, and the horizon dips (`cosHorizon`). Below the dipped horizon the march ends
+  at the ground, so the pixel is the haze in front of it plus the lit ground through the march's
+  transmittance; the sun disc, moon and stars are left out there. The view optical depth is
+  `atmosSegmentOD` (atmosphere.inc.glsl), stable for descending rays (see the cloud haze fix: a "to space"
+  depth through the planet is float noise). The sky MAP and every indirect path keep the ground observer.
+* **Known limitation:** particles and transparents draw before the apply, so one inside a cloud gets the
+  cloud of the opaque pixel behind it — the fog apply has the same limitation.
+* **The three toggles are BAKED defines**, injected into every shader compile by `buildLayoutPreamble` from
+  `RendererVKLayout::g_cloudShaders` (`Renderer::syncCloudDefines`): `CLOUDS` ("Sky/Clouds/Enabled"),
+  `CLOUD_SHADOWS` (+ "Shadows/Enabled"), `CLOUD_SELF_SHADOW_MAP` (+ "Self-shadow from map", off by
+  default). A toggle waits for the GPU and reloads every shader, like the GI grid tweaks. What a define
+  cannot hold stays a runtime UBO flag: `u_cloudShape0.w` = the march ran this frame (the game suppresses
+  it), `u_cloudShadow4.x` = the map was rendered this frame (suppressed, or the sun at the horizon).
+* **Debug mode** ("Sky/Clouds/Quality"): step count heat, density only, history rejection.
 
 ## TAA off bypasses the pass completely
 
@@ -752,7 +855,7 @@ Scene opaque, nearly all with 0 instances.
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
 | | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |

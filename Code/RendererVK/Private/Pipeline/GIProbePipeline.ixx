@@ -108,10 +108,12 @@ public:
 
     // Bakes this frame's sky into the sky map: layer 0 = skyRadiance (GI miss rays, the forward pass's
     // skyRadiance(up) ambient), layer 1 = the mirror sky (ocean / terrain-film reflection rays: 12-step
-    // march, saturation curve, no ground term). Self-contained barriers: last frame's compute + fragment
-    // reads of the single image -> this write -> this frame's compute + fragment reads. Recorded on EVERY
-    // frame (ahead of the RT toggle) because the forward pass samples it.
-    void recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
+    // march, saturation curve, no ground term), both with the volumetric clouds composited from
+    // skyClouds (CloudPipeline's lat-long cloud image, rendered earlier in the frame); layer 2 = skyRadiance
+    // without clouds (the clouds' ambient). Self-contained barriers: last frame's compute + fragment reads
+    // of the single image -> this write -> this frame's compute + fragment reads. Recorded on EVERY frame
+    // (ahead of the RT toggle) because the forward pass samples it.
+    void recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyCloudsView, vk::Sampler skyCloudsSampler);
     vk::ImageView getSkyMapView() const { return m_skyMapView; }
     vk::Sampler getSkyMapSampler() const { return m_skyMapSampler; }
 
@@ -129,6 +131,8 @@ public:
         vk::AccelerationStructureKHR tlas;
         vk::ImageView shadowMapView;
         vk::Sampler shadowMapSampler;
+        vk::ImageView cloudShadowView; // the cloud Beer shadow map (GENERAL): the sun at gather hits
+        vk::Sampler cloudShadowSampler;
     };
     // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
     // UBO (u_frameIndex, u_giTrace0/1 - see getTraceParams0 / getTlasRange).
@@ -220,10 +224,14 @@ private:
     int   m_debugMode = 0;        // recorded as a push constant: changes re-record ("GI/Debug probe colour")
     float m_debugRadius = 0.12f;  // idem, cube half-extent as a fraction of sqrt(spacing)
 
-    // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 2-layer array (0 = skyRadiance, 1 = mirror
-    // sky), GENERAL layout for life, rewritten every frame. Single-buffered under recordSkyMap's barriers.
-    // 256x128: reflections look along the horizon band, where the sunset gradient needs ~1.4 deg rows.
-    static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 2;
+    // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 3-layer array, GENERAL layout for life, rewritten
+    // every frame. Single-buffered under recordSkyMap's barriers. 256x128: reflections look along the horizon
+    // band, where the sunset gradient needs ~1.4 deg rows.
+public:
+    // Layers: skyRadiance + clouds, mirror sky + clouds, skyRadiance clear (atmosphere.inc.glsl SKY_MAP_LAYER_*).
+    // CloudPipeline's sky clouds image uses the same width / height (one texel per sky-map texel).
+    static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 3;
+private:
     vk::Image m_skyMapImage;
     VmaAllocation m_skyMapMemory{};
     vk::ImageView m_skyMapView;
@@ -302,7 +310,7 @@ private:
     void buildUpdateScratch();
     bool m_updateScratchBuilt = false;
     oc::array<DescriptorSetUpdateInfo, 9> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set + the UBO (8)
-    oc::array<DescriptorSetUpdateInfo, 2> m_skyUpdates;    // the sky-map set: UBO + storage image
+    oc::array<DescriptorSetUpdateInfo, 3> m_skyUpdates;    // the sky-map set: UBO + storage image + the sky clouds
     oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
     // Writes every live texture view into the trace sets' array (binding 15) - at (re)allocation only.
     void fillTextureDescriptors();

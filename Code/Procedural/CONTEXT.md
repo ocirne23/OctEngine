@@ -254,7 +254,7 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   `fullResDist` 0.3, `skirtDepth` 5, `maxUploadsPerFrame` 16.
 * Generated on up to "Gen jobs" **self-continuing Low-priority pump jobs** (`kickPump` CAS-claim +
   exit-recheck protocol, nearest-first). **The upload layout is built IN the pump**
-  (`RenderMeshData::build`, pure) and the main thread only does the GPU-facing `Renderer::createMesh`,
+  (`RenderMeshData::build`, pure) and `Renderer::createMesh` runs on the upload job (below),
   **so warm-tile mesh builds overlap cold V3 waits, which park fibers.**
 * **Pre-emption points** (see Threading): the pump yields to higher-priority jobs between chunks,
   `generateChunk` after its `sampleGrid` and per vertex row, and `TerrainGenV3::sampleGrid` per row.
@@ -309,10 +309,23 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   get published and kick the pump. One frame of request latency against seconds of generation; a
   request the ring moved away from is stale like any other and dropped by the pump.
 
+* **The mesh upload is a job too** (`"terrainUpload"`, Normal, `m_uploadCounter`).
+  `Renderer::createMesh` copies the chunk into the staging ring. A LOD0 chunk is ~15 MB, a wrap of the
+  100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
+  uploads on main were ~45 ms. `update` only PICKS the batch into `m_uploads` (cap "Uploads/frame"
+  AND "Upload MB/frame", 48 MB default; the first chunk always goes; the picks stay in `m_pending`).
+  **main.cpp kicks it right AFTER `present`** (`kickUploads`), so it runs through the frame-pacing
+  wait, and **joins it before the next frame's "Frame kicks"** (`joinUploads`): `createMesh` grows the
+  MeshInfo / per-mesh tables that the begin-frame job and the entity pass's `renderNode` read.
+  Everything it calls is thread-safe (the MeshDataManager alloc mutex, the staging mutex, the renderer
+  `m_spawnMutex`), like parallel entity spawning. The next `update` adopts the batch (`"adoptUploads"`:
+  re-validate, `spawnMeshNode`, the spatial registration — all cheap, all on main). One more frame of
+  latency. `clearResidents` joins it and drops the batch.
+
   What stays on main: the config/model polling, the terrain/texture/wet param setters, the fog
   height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the
-  result drain (`ObjectContainer::initialize` is GPU-facing) and the candidate eviction (a
-  `~Resident` releases GPU residency into the renderer).
+  upload pick + adopt, and the candidate eviction (a `~Resident` releases GPU residency into the
+  renderer).
 
 ## It owns THE world datum
 
@@ -618,13 +631,23 @@ It **never touches the render chunks**: a LOD0 chunk is ~500k triangles, and a c
 ground near dynamic bodies. Tiles are a few tens of metres and exist only within "Radius" of the focus
 (the camera — thrown bodies start there).
 
-Each tile is `sampleGrid`'d and BVH-built on **ONE in-flight job, nearest-first**; the main thread only
-creates and destroys the static bodies (layer "Terrain"), which is cheap in box3d. `createCollisionMesh`
-is standalone and thread-safe, **which is what lets the build run off-main at all.**
+Each tile is `sampleGrid`'d and BVH-built on **ONE in-flight job, nearest-first** (`"Terrain collider
+build"`, Low). `createCollisionMesh` is standalone and thread-safe, **which is what lets the build run
+off-main at all.**
+
+**The per-frame work is a job too** (`"Terrain collider"`, Normal, `m_updateCounter`): `update` on main
+only snapshots the inputs (maps, focus, the clamped tweaks) and kicks it. The job drains the finished
+build, creates / destroys the static bodies (layer "Terrain"; box3d create/destroy serialize on
+`g_bodyLifecycleMutex`), scans for the nearest missing tile and kicks its build. **main.cpp joins it
+(`joinUpdate`) right before `kickPostUpdateJobs`**: the Sim batch (the game's nav feed) reads body
+positions, and the next frame's main-thread physics users (player controls, scripts, net receive, the
+step) must not overlap a body create/destroy. Between the kick and the join only ocean / scatter /
+particles / force / UI kick run on main — none touches box3d. Sub-scopes `"Terrain collider clear"` /
+`"... create body"` / `"... evict"` show the box3d cost.
 
 Tiles clear and rebuild on a sampler identity change, exactly like the streamer's residents; eviction
-has half-tile hysteresis. `maps == nullptr` clears everything. The dtor waits out the in-flight build
-(main helps).
+has half-tile hysteresis. `maps == nullptr` clears everything (on main, once, after joining the update
+job). The dtor waits out the update job, then the in-flight build (main helps).
 
 Verify with `Physics/Debug/Draw colliders`.
 

@@ -384,6 +384,16 @@ export namespace RendererVKLayout
     // shader compile, so a change must be followed by a full shader reload (see registerGridTweaks).
     inline GiGridConfig g_giGrid;
 
+    // The cloud feature toggles as BAKED shader defines (buildLayoutPreamble: CLOUDS, CLOUD_SHADOWS,
+    // CLOUD_SELF_SHADOW_MAP), copied from CloudParams by Renderer::syncCloudDefines; a change reloads every shader.
+    struct CloudShaderConfig
+    {
+        bool clouds = true;
+        bool shadows = true;
+        bool selfShadowFromMap = false;
+    };
+    inline CloudShaderConfig g_cloudShaders;
+
     constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 256; // grown when the instance count exceeds it
     constexpr size_t GI_TLAS_INSTANCE_SIZE = 64;                                         // sizeof(VkAccelerationStructureInstanceKHR)
 
@@ -545,13 +555,10 @@ export namespace RendererVKLayout
                                   // w = 1 when z is valid (the particle draw's camera-side water gate)
 
         float rtLightShadows;   // > 0.5: ray-traced shadows for punctual/area/tube lights
-        float timeSeconds;      // elapsed app time (cloud wind / sky animation)
-        float cloudCoverage;    // 0 = clear sky, 1 = overcast
-        float cloudThickness;   // cloud slab thickness (m)
+        float timeSeconds;      // elapsed sim time (sky animation)
+        float moonBrightness;
+        float skyPad0;
 
-        glm::vec4 cloudParams0; // x = layer height (m), y = noise scale, z = wind speed (noise units/s), w = wind angle (rad)
-        glm::vec4 cloudParams1; // x = edge softness, y = sun shading strength, z = unused, w = unused
-        glm::vec4 cloudParams2; // x = density (extinction), y = sharpness, z = base/top height variation, w = moon brightness
         glm::vec4 skySunParams; // x = atmosphere scatter boost (in-scatter only), y = Mie anisotropy g, z = sky highlight roll-off, w = star density
 
         glm::vec4 screenSize;   // xy = full render-target resolution (px); zw = 1/xy (screen-space AO lookup)
@@ -800,6 +807,24 @@ export namespace RendererVKLayout
         glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
         glm::vec4 forceBake2;   // x = union march step size (m), y = union march max steps,
                                 // z = px per (radius/dist) - the union march's distance LOD, w unused
+
+        // Volumetric clouds (keep in sync with ubo.inc.glsl; clouds.inc.glsl consumes these)
+        glm::vec4 cloudShape0;  // x = shell bottom altitude (m), y = shell top altitude (m), z = coverage, w = enabled (0/1)
+        glm::vec4 cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
+        glm::vec4 cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
+        glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), zw unused
+        glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
+        glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
+        glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
+        glm::vec4 cloudLight1;  // x = ambient strength, y = ground albedo, z = powder strength, w = multi-scatter attenuation
+        glm::vec4 cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
+        glm::vec4 cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = debug mode
+        // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
+        glm::vec4 cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)
+        glm::vec4 cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
+        glm::vec4 cloudShadow2; // xyz = light-space axis e0, w = shadow strength
+        glm::vec4 cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
+        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps, zw unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
