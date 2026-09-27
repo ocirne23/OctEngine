@@ -67,14 +67,20 @@ void main()
     // the surface sampled at uv truly sits at uv - jitter. Compensate every
     // GEOMETRIC use of the sampled depth - reconstruction and reprojection - with the known jitter;
     // this is exact, and what keeps reprojection wobble-free with a jittered reference.
-    const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
+    const vec2 jitterUv = taaJitterUv(u_taaJitter.xy);
+    const vec2 uvUnjit = uv - jitterUv;
     float clipW;
     // Clip-space reprojection (u_reprojClip): the world-space round trip drifts pixel-scale away from
     // the world origin, which made TAA fetch history off-target and turned every stochastic input
     // (jitter accumulation, shadow dither, RTAO, sky clouds) into visible per-frame noise.
     const vec2 prevUv = prevScreenUVClip(uvUnjit, depth, clipW);
+    // The HISTORY is the converged, UNJITTERED image (the jitter averages out): its pixel q is the surface
+    // at q. This output pixel converges to the surface at uv, which is the sampled surface shifted by
+    // +jitter, so fetch history at the reprojection + jitter (= uv under a still camera). Fetching at
+    // prevUv shifted the whole history by this frame's jitter every frame: sub-pixel image wobble.
+    const vec2 historyUv = prevUv + jitterUv;
 
-    const bool histValid = clipW > 0.0 && insideViewport(prevUv);
+    const bool histValid = clipW > 0.0 && insideViewport(historyUv);
     if (!histValid)
     {
         imageStore(u_resolveOut, px, vec4(current, 1.0));
@@ -107,7 +113,7 @@ void main()
     const vec3 cmin  = max(nmin, mean - clampWidth * sigma);
     const vec3 cmax  = min(nmax, mean + clampWidth * sigma);
 
-    vec3 history = texture(u_historyColor, prevUv).rgb;
+    vec3 history = texture(u_historyColor, historyUv).rgb;
     history = clamp(history, cmin, cmax);
 
     // Disocclusion: reconstruct last frame's world position at the reprojected pixel and reject the history
