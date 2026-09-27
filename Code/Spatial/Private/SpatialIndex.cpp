@@ -364,15 +364,18 @@ void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
     // Keep every lane the pool still OWNS, tombstoned or not: an entry unregistered this frame has
     // its lane tombstoned already but its Unlink op (retireLane, which settles the counters through
     // storeIdx) may still be queued behind this op - dropping the lane here would strand that slot.
-    // Ownership = a live or pending-free record whose storeIdx names this lane (a released slot has
-    // flags 0; a recycled one is Unlinked with storeIdx reset).
+    // Ownership = a live or pending-free record at THIS level whose storeIdx names this lane (a released
+    // slot has flags 0; a recycled one is Unlinked with storeIdx reset). The level test matters: slots
+    // are numbered per level's BlockStore, so a record that moved to another level can land on the
+    // same slot number there while its retired lane here still names it.
     for (uint32 cur = rec.head; cur != UINT32_MAX; cur = store.blocks[cur].next)
     {
         const CellBlock& block = store.blocks[cur];
         for (uint32 lane = 0; lane < block.count; ++lane)
         {
             const uint32 idx = block.poolIdx[lane];
-            if ((m_pool.flags[idx] & (RecordFlag_Alive | RecordFlag_PendingFree)) && m_pool.storeIdx[idx] == BlockStore::slotOf(cur, lane))
+            if ((m_pool.flags[idx] & (RecordFlag_Alive | RecordFlag_PendingFree)) && m_pool.level[idx] == level
+                && m_pool.storeIdx[idx] == BlockStore::slotOf(cur, lane))
                 live.push_back({ block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane], block.layer[lane], idx });
         }
     }

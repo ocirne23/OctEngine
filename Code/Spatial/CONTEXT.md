@@ -366,7 +366,9 @@ cheaply as the pool did.)
 * **Blocks free as soon as they empty**, so `count == 0` <=> no chain (the sweep relies on it). A
   cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED
   lanes — a tombstoned lane whose Unlink op is still queued this commit is still owned, dropping it
-  would strand that op's `storeIdx` — into the kept `m_compactScratch`, refill from the head, free
+  would strand that op's `storeIdx`; owned = the record's `level` is this level AND its `storeIdx`
+  names the lane — slots are numbered per level, so a record that moved levels can hold the same
+  slot number elsewhere) — into the kept `m_compactScratch`, refill from the head, free
   the tail) — at least one block freed per pass, so one cell walk per 8 retirements. The chain's
   block count for that test lives in the HEAD block (`CellBlock::chainBlocks`, in the alignment
   padding, so `CellRecord` stays 16 bytes); `insert`, the block unlink in `retireLane` and
