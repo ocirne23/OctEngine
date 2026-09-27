@@ -630,7 +630,12 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     exactly where the raw march is noisiest (diagonal stripes of the old interleaved-gradient jitter; the
     jitter is now a per-pixel hash + golden-ratio step, grain instead of lines where history is missing).
     The history is the OTHER frame slot's accumulation; all images are cleared to "no cloud" at creation, so
-    there is no history-valid flag.
+    there is no history-valid flag. **The history's march LIMIT must also match this frame's** (±0.15 in
+    log2): at a silhouette the bilinear history fetch pulled part of the sky neighbour's cloud into the texel
+    over the near surface, the neighbourhood clamp let it through, and the feedback built it up - that texel's
+    first-cloud distance is the surface's own, so the upsample kept it: a cloud-coloured outline on every edge
+    against clouds, thicker with a higher blend. The checkerboard fill takes its front only from neighbours
+    that hold cloud (an empty march stores its limit as the front - the same leak).
   * **Apply** — the depth-aware 4-tap upsample is `cloud_upsample.inc.glsl` (a texel whose first cloud
     lies behind this pixel's surface counts as "no cloud"), used by TWO passes:
     * **Fog ON: the fog apply composites the clouds** (`vol_apply.fs.glsl`, bindings 6/7). Fog laid over

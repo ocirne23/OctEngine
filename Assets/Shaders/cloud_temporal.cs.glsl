@@ -75,7 +75,10 @@ void main()
     else
     {
         // The 4 side neighbours (marched this frame): their average is the current value, their nearest
-        // front and mean weighted distance its depth. The limit is this pixel's own (the march's rule).
+        // front and mean weighted distance its depth. The limit is this pixel's own (the march's rule). The
+        // front comes only from neighbours that HOLD cloud: an empty march stores its own limit as the front, so
+        // at a silhouette the near neighbour's limit became the front of cloud from the sky neighbours, and the
+        // upsample let that cloud onto the near surface.
         cur = vec4(0.0);
         lo = vec4(1e30);
         hi = vec4(-1e30);
@@ -90,7 +93,8 @@ void main()
             cur += n;
             lo = min(lo, n);
             hi = max(hi, n);
-            front = min(front, d.x);
+            if (n.a < 0.999)
+                front = min(front, d.x);
             weighted += d.y;
             dLo = min(dLo, d.y);
             dHi = max(dHi, d.y);
@@ -147,7 +151,14 @@ void main()
         // pixel's own distance: a ray that runs flat through the layer passes clouds at very different
         // distances, so its one weighted distance jumps with the step jitter every frame, and a per-pixel
         // test rejected the history exactly where the raw march is noisiest.
-        valid = (histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995);
+        // And the history's MARCH LIMIT must match this frame's (0.15 in log2 = 11 %): at a silhouette the
+        // bilinear history fetch pulls in part of the sky neighbour's cloud, the neighbourhood clamp lets it
+        // through (the sky neighbours hold cloud), and the feedback builds it up in the texel over the near
+        // surface - whose first-cloud distance is that surface's own, so the upsample kept it: a cloud-coloured
+        // outline on every edge against clouds, thicker the higher the blend. The sky keeps its history (both
+        // limits are the max distance there).
+        valid = ((histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995))
+             && abs(histDepth.z - curDepth.z) < 0.15;
         if (valid)
         {
             const vec4 pad = (hi - lo) * 0.1 + vec4(0.002);
