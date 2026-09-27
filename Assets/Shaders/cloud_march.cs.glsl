@@ -11,6 +11,10 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#ifndef CLOUD_DEBUG_MODE
+#define CLOUD_DEBUG_MODE 0 // baked by the preamble while the clouds are on ("Sky/Clouds/Quality/Debug mode")
+#endif
+
 #include "shared.inc.glsl"
 #define CLOUD_NOISE_BINDING 5
 #include "clouds.inc.glsl"
@@ -32,7 +36,16 @@ layout (push_constant) uniform CloudPC
     uint u_pad;
 };
 
-float ign(vec2 p) { return fract(52.9829189 * fract(0.06711056 * p.x + 0.00583715 * p.y)); }
+// The step jitter: a per-pixel hash, advanced by the golden ratio each frame (R1: a well-spread sequence per
+// pixel). Interleaved-gradient noise has a diagonal line structure that only hides under accumulation; where
+// the history is missing (disocclusion, the first frame) it showed as diagonal stripes - this shows as grain.
+float marchJitter(ivec2 p)
+{
+    uint h = uint(p.x) * 1597334673u ^ uint(p.y) * 3812015801u;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h ^= h >> 15u;
+    return fract(float(h) * (1.0 / 4294967296.0) + float(u_frameIndex & 1023u) * 0.61803398875);
+}
 
 vec3 stepHeat(float x)
 {
@@ -45,9 +58,23 @@ void writeEmpty(ivec2 px, float logLimit)
     imageStore(u_outDepth, px, vec4(logLimit, logLimit, logLimit, 0.0));
 }
 
+// The pixel of this invocation. CLOUD_CHECKERBOARD (baked, "Quality/Checkerboard"): the dispatch covers half
+// the columns and each thread takes the pixel of this frame's parity ((x + y + frame) even) in its row pair, so
+// the warps stay full (an early-out per pixel would idle half of every warp); cloud_temporal.cs.glsl fills in
+// the other half.
+ivec2 marchPixel()
+{
+#ifdef CLOUD_CHECKERBOARD
+    const uint y = gl_GlobalInvocationID.y;
+    return ivec2(gl_GlobalInvocationID.x * 2u + ((y + u_frameIndex) & 1u), y);
+#else
+    return ivec2(gl_GlobalInvocationID.xy);
+#endif
+}
+
 void main()
 {
-    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 px = marchPixel();
     if (px.x >= int(u_width) || px.y >= int(u_height))
         return;
     g_viewIndex = int(u_viewIndex);
@@ -84,18 +111,21 @@ void main()
         return;
     }
 
-    const int maxSteps = int(u_cloudMarch0.x);
-    const float jitter = ign(vec2(px) + float(u_frameIndex % 64u) * 5.588238);
-    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, maxSteps, jitter, pixelAngle, u_cloudMarch1.w == 2.0);
+    const float jitter = marchJitter(px);
+    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_cloudMarch0.x), jitter, pixelAngle, CLOUD_DEBUG_MODE == 2);
+    // Past the march, re-derived instead of held live across it: the pixel and the limit's log.
+    const ivec2 outPx = marchPixel();
+    const float outLogLimit = log2(max(limit, 1.0));
     if (r.front < 0.0)
     {
-        writeEmpty(px, logLimit);
+        writeEmpty(outPx, outLogLimit);
         return;
     }
 
     vec4 color = vec4(r.inScatter, r.transmittance);
-    if (u_cloudMarch1.w == 1.0)
-        color = vec4(stepHeat(float(r.steps) / float(maxSteps)), 0.0);
-    imageStore(u_outColor, px, color);
-    imageStore(u_outDepth, px, vec4(log2(max(r.front, 1.0)), log2(max(r.weighted, 1.0)), logLimit, float(r.steps)));
+#if CLOUD_DEBUG_MODE == 1
+    color = vec4(stepHeat(float(r.steps) / u_cloudMarch0.x), 0.0);
+#endif
+    imageStore(u_outColor, outPx, color);
+    imageStore(u_outDepth, outPx, vec4(log2(max(r.front, 1.0)), log2(max(r.weighted, 1.0)), outLogLimit, float(r.steps)));
 }

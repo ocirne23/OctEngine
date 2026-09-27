@@ -569,12 +569,27 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
 * **Three passes per eye:** the march (compute, half res, EVERY pixel EVERY frame — a fly-through has
   parallax at every depth, so a 1-in-16 update would smear), the temporal accumulation, and the apply.
   * **March** (`cloud_march.cs.glsl`, right after RTAO): up to the FARTHEST scene surface of the pixel's
-    2x2 block; steps grow with distance (`Near step`, `Step growth`) but never so small that `Max steps`
-    cannot reach the end. **The march itself is `cloudRaymarch` (`cloud_raymarch.inc.glsl`), shared with
+    2x2 block; steps are `max(Near step, g * t)`, and **g rises PER RAY** until that schedule fits ~75 % of
+    `Max steps` (a fixed-point solve of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`):
+    short steps near the camera, faster growth far away. The uniform floor (distance left / steps left) is
+    only a safety net: as the rule it made a long ray's EVERY step long (400 m from the camera on, flat
+    through the layer: one density sample per step, opaque at once - a grainy band at the camera's altitude).
+    **Known issue, open:** with a small budget (200) a darker band remains on the LIT side of far clouds at
+    the camera's altitude - lighting only ("Density only" is clean), gone with the sun march off, with
+    "Max distance" 20 km, or with 600 steps. An in-cloud step cap of one mean free path did NOT remove it
+    (tried and removed 2026-09-27). The default `Max steps` is 600: only long (flat) rays use the extra steps. **The march itself is `cloudRaymarch` (`cloud_raymarch.inc.glsl`), shared with
     the sky clouds.** **Empty-space skipping:** in clear air it takes 3x steps that test only the cheap
     shape (weather + base); the detail only erodes that shape, so a zero there is a zero of the full
     density. A hit backs up and marches finely; 4 empty fine steps return it to coarse. The sun march reads
-    the detail noise on its first step only. Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
+    the detail noise on its first step only. **Past `Detail distance`** the detail erosion is off (its
+    weight fades over the last 20 %; `cloudDensity` takes a detail WEIGHT) and the detail fetches are
+    skipped. **The march ends at transmittance 0.02**, and below 0.3 its fine steps double.
+  * **Checkerboard** (`CLOUD_CHECKERBOARD`, "Quality/Checkerboard", on): the march dispatch covers half the
+    columns, each thread on this frame's parity (`marchPixel`) - full warps, half the rays. The parity flips
+    every frame and so does the frame slot, so a slot's march image only ever holds ONE parity; the
+    temporal pass reads only this frame's. A marched pixel clamps to its 4 diagonals; the others take the
+    mean of their 4 side neighbours as the current value, last frame's march at the same pixel as history,
+    and their own march limit from the scene depth (temporal binding 7). Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
     multiple-scattering octaves — octave 0 on the HG + Draine phase (Jendersie & d'Eon 2023: a fit to Mie
     scattering on water droplets; the CPU turns `Droplet size (um)` into its four parameters,
     `u_cloudLight0`), octaves 1 and 2 ISOTROPIC (a flattened droplet phase kept ~half the energy in a g ≈ 0.66
@@ -587,9 +602,14 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     does not cover the sample (or "Self-shadow from map" is off). Output: in-scatter + transmittance, and
     log2 distances (first hit, transmittance-weighted, march limit).
   * **Temporal** (`cloud_temporal.cs.glsl`): reprojects the weighted cloud distance minus this frame's
-    wind displacement, rejects on a distance change, clamps to the 3x3 neighbourhood. The history is the
-    OTHER frame slot's accumulation; all images are cleared to "no cloud" at creation, so there is no
-    history-valid flag.
+    wind displacement, rejects a history whose cloud distance lies OUTSIDE the neighbourhood's range of
+    this frame's distances (+-0.2 in log2), clamps its colour to the neighbourhood. **Not a per-pixel
+    distance test:** a ray flat through the layer passes clouds at very different distances, so its one
+    weighted distance jumps with the step jitter every frame - the per-pixel test rejected the history
+    exactly where the raw march is noisiest (diagonal stripes of the old interleaved-gradient jitter; the
+    jitter is now a per-pixel hash + golden-ratio step, grain instead of lines where history is missing).
+    The history is the OTHER frame slot's accumulation; all images are cleared to "no cloud" at creation, so
+    there is no history-valid flag.
   * **Apply** — the depth-aware 4-tap upsample is `cloud_upsample.inc.glsl` (a texel whose first cloud
     lies behind this pixel's surface counts as "no cloud"), used by TWO passes:
     * **Fog ON: the fog apply composites the clouds** (`vol_apply.fs.glsl`, bindings 6/7). Fog laid over
@@ -597,7 +617,9 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       every cloud). With the cloud (S, T) at its weighted distance tc and the fog F to the scene, C to tc:
       `out = T·F.rgb + C.a·S + (1−T)·C.rgb + scene·(T·F.a)` — exact for a cloud at one distance and linear
       in the scene, so the blend state is unchanged. `fogTo` (froxel volume + far field) runs twice on
-      cloudy pixels.
+      cloudy pixels - ONCE when the cloud and the scene both lie past the froxel volume and "Fog/Far
+      Field/Max distance" (default 40 km, `u_fogParams8.z`; the far field adds no fog past it): both then
+      see the same fog.
     * **Fog OFF: the "Cloud apply" scene stage** (`cloud_apply.fs.glsl`, before the fog apply slot, gated on
       `cloudsEnabled() && !fog`). `colorWriteAlpha = false`.
 * **THE CLOUD SHADOW MAP** (a Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl`
@@ -639,7 +661,24 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
 * **The three toggles are BAKED defines**, injected into every shader compile by `buildLayoutPreamble` from
   `RendererVKLayout::g_cloudShaders` (`Renderer::syncCloudDefines`): `CLOUDS` ("Sky/Clouds/Enabled"),
   `CLOUD_SHADOWS` (+ "Shadows/Enabled"), `CLOUD_SELF_SHADOW_MAP` (+ "Self-shadow from map", off by
-  default). A toggle waits for the GPU and reloads every shader, like the GI grid tweaks. What a define
+  default), `CLOUD_POWDER` ("Lighting/Powder" above 0; the strength stays in the UBO), `CLOUD_CHECKERBOARD`
+  ("Quality/Checkerboard"; also sizes the march dispatch, which the reload re-records) and `CLOUD_DEBUG_MODE`
+  ("Quality/Debug mode": the march / temporal debug views compile out at 0). A change of a DEFINE waits for
+  the GPU and reloads every shader, like the GI grid tweaks; `syncCloudDefines` returns whether one changed,
+  so dragging the Powder slider reloads only when it crosses 0.
+* **The aerial perspective's distance is NOT the weighted cloud distance:** the loop also sums
+  `absorbed * exp(-kAir * t)` (kAir = the ray's mean air extinction), and the haze is taken where the air
+  transmittance equals that in-scatter-weighted mean. A flat ray at the camera's altitude holds the fog
+  around the camera AND clouds tens of km out; at the weighted distance the near cloud's light was dimmed by
+  the far cloud's air - a dark band at the camera's altitude (gone with "Max distance" 20 km, absent in
+  "Density only").
+* **Register budget** (pipeline stats, 2026-09-27; registers / local bytes): march 56/0, sky clouds 48/16
+  (the driver's +-16 B split; a 32k-thread pass),
+  temporal 43/0, shadow map 36/0, cloud apply 39/0; the fog apply 48/0 with clouds (44 without). The cloud
+  lookup adds nothing to the lit, terrain, ocean, fog scatter, GI trace, particle and decal shaders. Two rules
+  came out of it: **the march applies its four light colours AFTER the loop** (the in-scatter is linear in
+  them, so the loop sums three scalar weights: 56 -> 48 on the sky pass), and **the fog apply folds the
+  cloud part before the scene's fog** (4 live values across the second `fogTo`, not 8: 56 -> 48). What a define
   cannot hold stays a runtime UBO flag: `u_cloudShape0.w` = the march ran this frame (the game suppresses
   it), `u_cloudShadow4.x` = the map was rendered this frame (suppressed, or the sun at the horizon).
 * **Debug mode** ("Sky/Clouds/Quality"): step count heat, density only, history rejection.
@@ -861,7 +900,7 @@ Scene opaque, nearly all with 0 instances.
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
 | `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
-| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. |
+| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |
 | | **`SkinnedMeshRegistry`** — the skinning jobs + their parallel skinned-BLAS builds, the bone palette store, the per-container sources, and the spawn BUNDLES (parked in place on death, reused wholesale by the next spawn of the same container). |
 | | **`MeshLodRegistry`** — the LOD chains, the per-mesh chain mapping, the three GPU selection buffers and `IndexRangeFreeList`. The Renderer keeps only the RT-alias half of `addMeshLodGroup`, because aliases are AccelerationStructure state. |

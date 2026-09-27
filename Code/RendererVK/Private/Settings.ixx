@@ -98,10 +98,10 @@ export struct CloudParams
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
     // Lighting
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
-    float multiScatter = 0.75f;       // octave attenuation of the multiple-scattering approximation (0 = single scattering)
-    float ambient = 1.0f;              // sky ambient strength
+    float multiScatter = 0.9f;        // octave attenuation of the multiple-scattering approximation (0 = single scattering)
+    float ambient = 2.0f;              // sky ambient strength
     float groundAlbedo = 0.25f;        // ground bounce onto the cloud bottoms
-    float powder = 0.3f;               // dark-edge "powder" term strength (0 = off)
+    float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
@@ -111,18 +111,21 @@ export struct CloudParams
     int   shadowFarInterval = 2;       // the far cascade updates every N frames
     bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
     // Quality
-    int   maxSteps = 192;              // view march step budget per pixel
-    float maxDistanceKm = 120.0f;      // view march range (km)
+    int   maxSteps = 600;             // view march step budget per pixel
+    float maxDistanceKm = 50.0f;       // view march range (km)
     float nearStep = 15.0f;            // step length at the camera (m)
     float stepGrowth = 0.01f;          // step length growth per metre of distance
     int   lightSteps = 3;              // sun march steps per dense sample
     float lightDistance = 2000.0f;     // sun march reach (m)
     float temporalBlend = 0.9f;        // history weight of the temporal accumulation
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
+    float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
+    bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
     int   debugMode = 0;               // 0 off, 1 step count, 2 density only, 3 history rejection
 
-    // The three bools (enabled, shadows, selfShadowFromMap) are BAKED shader defines (CLOUDS, CLOUD_SHADOWS,
-    // CLOUD_SELF_SHADOW_MAP - Shader.cpp's preamble): onDefinesChanged reloads the shaders.
+    // The three bools (enabled, shadows, selfShadowFromMap), the debug mode and "powder above 0" are BAKED shader
+    // defines (CLOUDS, CLOUD_SHADOWS, CLOUD_SELF_SHADOW_MAP, CLOUD_DEBUG_MODE, CLOUD_POWDER - Shader.cpp's
+    // preamble): onDefinesChanged reloads the shaders when one of them changes.
     void registerTweaks(const oc::function<void()>& onDefinesChanged);
 };
 
@@ -191,7 +194,10 @@ export struct FogParams
     float farFieldThickness = 0.5f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
-    int   farFieldSteps = 4;       // ground samples along the far segment. Each sub-segment between them is
+    float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (0 = unbounded).
+                                   // Past it a cloud and the scene behind it see the SAME fog, so the fog apply
+                                   // evaluates it once for both (vol_apply.fs.glsl)
+    int   farFieldSteps = 4;      // ground samples along the far segment. Each sub-segment between them is
                                    // solved exactly, so this sets how finely terrain-follow tracks the
                                    // ground, and low counts smooth it rather than adding noise
     float slicePower = 1.0f;       // froxel Z distribution exponent: 1 = plain exponential slices, < 1

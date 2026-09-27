@@ -47,6 +47,8 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
     const uint32 numInstances = (uint32)node.m_meshInstances.size();
     if (numInstances == 0 || passMask == 0)
         return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
+    if (node.m_transformIdx >= m_instances.getMaxRenderNodes())
+        return; // spawned past the node buffers this frame: skipped until the capacity grows at the next beginFrame
     const uint32 startIdx = m_instances.claimInstances(numInstances);
     if (startIdx == UINT32_MAX)
         return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame

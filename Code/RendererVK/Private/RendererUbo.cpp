@@ -274,7 +274,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudShape0 = glm::vec4(bottom, top, glm::clamp(c.coverage, 0.0f, 1.0f), enabled ? 1.0f : 0.0f);
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
-    ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 0.0f, 0.0f);
+    ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));
     ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, 0.0f, (float)origin.y, (float)m_cloudEvolveOffset);
     ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
@@ -289,7 +289,8 @@ void Renderer::buildUboClouds(const Camera& camera)
     }
     ubo.cloudLight1 = glm::vec4(c.ambient, c.groundAlbedo, c.powder, c.multiScatter);
     ubo.cloudMarch0 = glm::vec4((float)glm::max(c.maxSteps, 1), c.maxDistanceKm * 1000.0f, glm::max(c.nearStep, 0.5f), glm::max(c.stepGrowth, 0.0f));
-    ubo.cloudMarch1 = glm::vec4((float)glm::max(c.lightSteps, 0), c.lightDistance, glm::clamp(c.temporalBlend, 0.0f, 0.98f), (float)c.debugMode);
+    ubo.cloudMarch1 = glm::vec4((float)glm::max(c.lightSteps, 0), c.lightDistance, glm::clamp(c.temporalBlend, 0.0f, 0.98f),
+        1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f));
 
     // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
     // texels in light space (in double, world space) so the map does not swim when the camera moves. The near
@@ -453,7 +454,8 @@ void Renderer::buildUboFog()
         waveBand,
         glm::max(fog.causticStrength, 0.0f),   // z: underwater caustic focus strength (surfaces + fog shafts)
         glm::max(fog.causticDepthFade, 0.0f)); // w: caustic contrast decay with depth (1/m)
-    ubo.fogParams8 = glm::vec4(fog.underwaterOffset, glm::max(fog.causticShoreFade, 0.0f), 0.0f, 0.0f);
+    ubo.fogParams8 = glm::vec4(fog.underwaterOffset, glm::max(fog.causticShoreFade, 0.0f),
+        fog.farFieldMaxDistanceKm > 0.0f ? fog.farFieldMaxDistanceKm * 1000.0f : 1e30f, 0.0f);
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
         1.0f / glm::clamp(fog.farFieldThickness, 0.01f, 100.0f), (float)glm::max(fog.farFieldSteps, 1));

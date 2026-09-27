@@ -163,6 +163,11 @@ static oc::string buildLayoutPreamble()
     if (g_cloudShaders.clouds)
     {
         def("CLOUDS", 1);
+        def("CLOUD_DEBUG_MODE", g_cloudShaders.debugMode); // the march / temporal debug views, compiled out at 0
+        if (g_cloudShaders.powder)
+            def("CLOUD_POWDER", 1);
+        if (g_cloudShaders.checkerboard)
+            def("CLOUD_CHECKERBOARD", 1);
         if (g_cloudShaders.shadows)
         {
             def("CLOUD_SHADOWS", 1);

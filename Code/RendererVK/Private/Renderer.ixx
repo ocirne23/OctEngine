@@ -282,10 +282,17 @@ private:
     void recordCloudApply(uint32 frameIdx);
     void recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     bool cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
-    void syncCloudDefines() // CloudParams bools -> the baked shader defines (buildLayoutPreamble)
+    // CloudParams toggles -> the baked shader defines (buildLayoutPreamble). Returns whether they changed, so a
+    // strength slider that only crosses 0 at the ends (Powder) reloads the shaders only when its define flips.
+    bool syncCloudDefines()
     {
-        RendererVKLayout::g_cloudShaders = { .clouds = m_cloudParams.enabled, .shadows = m_cloudParams.shadows,
-                                             .selfShadowFromMap = m_cloudParams.selfShadowFromMap };
+        const RendererVKLayout::CloudShaderConfig config{ .clouds = m_cloudParams.enabled, .shadows = m_cloudParams.shadows,
+            .selfShadowFromMap = m_cloudParams.selfShadowFromMap, .powder = m_cloudParams.powder > 0.0f,
+            .checkerboard = m_cloudParams.checkerboard, .debugMode = m_cloudParams.debugMode };
+        if (config == RendererVKLayout::g_cloudShaders)
+            return false;
+        RendererVKLayout::g_cloudShaders = config;
+        return true;
     }
     void recordTaa(uint32 frameIdx);
     void recordEyeAdaptation(uint32 frameIdx);

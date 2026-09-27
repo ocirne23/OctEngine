@@ -92,7 +92,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                          // 0 = ocean off; sized from the readback trough estimate),
                          // z = underwater caustic strength (0 = off), w = caustic depth fade (1/m)
     vec4 u_fogParams8;   // x = underwater fog boundary offset off the local water surface (m),
-                         // y = caustic shore fade depth (m; contrast ramps in over this much water, 0 = off), zw unused
+                         // y = caustic shore fade depth (m; contrast ramps in over this much water, 0 = off),
+                         // z = far field max distance (m; 1e30 = unbounded), w unused
     vec4 u_fogParams9;   // far field (past the froxel volume; vol_apply): x = enabled, y = density scale,
                          // z = multiplier on the near field's height falloff (fogParams0.z), w = ground samples
 
@@ -298,13 +299,13 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudShape0;  // x = shell bottom altitude (m), y = shell top altitude (m), z = coverage, w = enabled (0/1)
     vec4 u_cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
     vec4 u_cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
-    vec4 u_cloudShape3;  // x = coverage variation, y = near detail radius (m), zw unused
+    vec4 u_cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
     vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
     vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
     vec4 u_cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
     vec4 u_cloudLight1;  // x = ambient strength, y = ground albedo, z = powder strength, w = multi-scatter attenuation
     vec4 u_cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
-    vec4 u_cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = debug mode
+    vec4 u_cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = 1 / detail distance (1/m)
     // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
     vec4 u_cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)
     vec4 u_cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent

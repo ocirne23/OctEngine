@@ -63,7 +63,8 @@ public:
 
     // ---- Per-frame bookkeeping ----
     void beginFrame();                   // clears the counters for a fresh push pass
-    // Applies a capacity last frame's claims overflowed past (called before this frame writes anything).
+    // Applies a capacity last frame's claims or transform allocations overflowed past (called before
+    // this frame writes anything - growing mid-frame would drop the nodes already pushed).
     void growToPendingDemand(uint32 currentFrameIdx);
     uint32 getInstanceCount() const { return m_instanceCounter; }
     // present(): claims past the capacity never wrote, so the valid prefix ends at the smallest one.
@@ -103,5 +104,6 @@ private:
 
     uint32 m_instanceCounter = 0;
     uint32 m_pendingMaxInstances = 0;
+    uint32 m_pendingMaxRenderNodes = 0; // transform slots allocated (spawn path); grown at the next beginFrame
     uint32 m_instanceOverflowStart = UINT32_MAX; // smallest failed claim this frame
 };

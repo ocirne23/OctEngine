@@ -66,7 +66,7 @@ void main()
         // The detail erosion in BOTH cascades: it removes much of the base density, so a base-only far
         // cascade shadows far darker and its border shows as a box. At the far texel size the detail's mip
         // is close to its mean, which is what the far cascade needs.
-        const float dens = cloudDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, true, lodBase, lodDetail);
+        const float dens = cloudDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
         if (dens <= 0.0)
             continue;
         od += dens * u_cloudShape1.w * dt;

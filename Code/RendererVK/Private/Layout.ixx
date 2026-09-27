@@ -385,12 +385,18 @@ export namespace RendererVKLayout
     inline GiGridConfig g_giGrid;
 
     // The cloud feature toggles as BAKED shader defines (buildLayoutPreamble: CLOUDS, CLOUD_SHADOWS,
-    // CLOUD_SELF_SHADOW_MAP), copied from CloudParams by Renderer::syncCloudDefines; a change reloads every shader.
+    // CLOUD_SELF_SHADOW_MAP, CLOUD_POWDER, CLOUD_DEBUG_MODE), copied from CloudParams by Renderer::syncCloudDefines;
+    // a change reloads every shader.
     struct CloudShaderConfig
     {
         bool clouds = true;
         bool shadows = true;
         bool selfShadowFromMap = false;
+        bool powder = false; // CLOUD_POWDER: the "Powder" strength is above 0
+        bool checkerboard = true; // CLOUD_CHECKERBOARD: the march covers half the pixels per frame (also sizes its dispatch)
+        int debugMode = 0; // CLOUD_DEBUG_MODE: 0 off, 1 step count, 2 density only, 3 history rejection
+
+        bool operator==(const CloudShaderConfig&) const = default;
     };
     inline CloudShaderConfig g_cloudShaders;
 
@@ -585,7 +591,7 @@ export namespace RendererVKLayout
                               // (m; 0 = ocean off; sized from the readback trough estimate),
                               // z = underwater caustic strength (0 = off), w = caustic depth fade (1/m)
         glm::vec4 fogParams8; // x = underwater fog boundary offset off the local water surface (m),
-                              // y = caustic shore fade depth (m; 0 = off), zw unused
+                              // y = caustic shore fade depth (m; 0 = off), z = far field max distance (m; 1e30 = unbounded), w unused
         glm::vec4 fogParams9; // far field (past the froxel volume; vol_apply): x = enabled, y = density
                               // scale, z = multiplier on the near field's height falloff, w = ground samples
 
@@ -812,13 +818,13 @@ export namespace RendererVKLayout
         glm::vec4 cloudShape0;  // x = shell bottom altitude (m), y = shell top altitude (m), z = coverage, w = enabled (0/1)
         glm::vec4 cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
         glm::vec4 cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
-        glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), zw unused
+        glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
         glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
         glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
         glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
         glm::vec4 cloudLight1;  // x = ambient strength, y = ground albedo, z = powder strength, w = multi-scatter attenuation
         glm::vec4 cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
-        glm::vec4 cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = debug mode
+        glm::vec4 cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = 1 / detail distance (1/m)
         // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
         glm::vec4 cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)
         glm::vec4 cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent

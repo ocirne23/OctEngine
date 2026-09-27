@@ -105,8 +105,10 @@ uint32 InstanceStream::allocateTransform(const Transform& transform)
     }
     const uint32 idx = (uint32)m_transforms.size();
     m_transforms.emplace_back(transform);
-    if ((uint32)m_transforms.size() > m_maxRenderNodes)
-        growRenderNodes((uint32)m_transforms.size());
+    // NEVER grow here: this runs mid-frame, and re-creating the node buffers would drop the transforms,
+    // pass masks and LOD biases every node already pushed this frame (a one-frame flicker of everything).
+    // A node past the capacity is skipped by renderNode until growToPendingDemand grows at the next beginFrame.
+    oc::atomic_ref<uint32>(m_pendingMaxRenderNodes).store((uint32)m_transforms.size(), oc::memory_order_relaxed);
     return idx;
 }
 
@@ -121,6 +123,9 @@ void InstanceStream::growToPendingDemand(uint32 currentFrameIdx)
 {
     if (m_pendingMaxInstances > m_maxInstances)
         growInstances(m_pendingMaxInstances, currentFrameIdx);
+    const uint32 pendingNodes = oc::atomic_ref<uint32>(m_pendingMaxRenderNodes).load(oc::memory_order_relaxed);
+    if (pendingNodes > m_maxRenderNodes)
+        growRenderNodes(pendingNodes);
 }
 
 void InstanceStream::growRenderNodes(uint32 needed)

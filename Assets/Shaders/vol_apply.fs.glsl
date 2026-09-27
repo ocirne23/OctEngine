@@ -198,7 +198,8 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
         const float t0 = volFogFar() * invCos;
         // t1 < 0: the point itself (the scene surface). Sky runs to infinity, which the closed form handles:
         // a level ray saturates at the horizon, an upward one converges on a finite optical depth.
-        const float tEnd = t1 < 0.0 ? viewZ * invCos : t1;
+        // "Far Field/Max distance" (u_fogParams8.z) bounds it: past it no fog is added.
+        const float tEnd = min(t1 < 0.0 ? viewZ * invCos : t1, u_fogParams8.z);
         if (tEnd > t0)
         {
             const vec4 far = volFarField(dir, t0, tEnd);
@@ -215,27 +216,40 @@ void main()
     vec3 dir;
     float invCos;
     fogRay(dir, invCos);
-    const vec4 fog = fogTo(worldPosFromDepth(v_uv, depth), depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
-    out_color = fog;
 
-    // CLOUDS is baked ("Sky/Clouds/Enabled"); u_cloudShape0.w = the cloud march ran this frame (the game
-    // suppresses it at runtime).
+    // The cloud part FIRST, folded into (partial in-scatter, cloud transmittance) = 4 live values across the
+    // scene's fog evaluation below; the other order kept the scene fog AND the cloud (8) live across the
+    // second fogTo (+12 registers). CLOUDS is baked ("Sky/Clouds/Enabled"); u_cloudShape0.w = the cloud
+    // march ran this frame (the game suppresses it at runtime).
+    vec4 cloudPart = vec4(0.0, 0.0, 0.0, 1.0); // rgb = C.a * S + (1 - T) * C.rgb, a = T
+    bool sameFog = false; // the cloud sees the scene's own fog: cloudPart.rgb still holds S, folded below
 #ifdef CLOUDS
-    if (u_cloudShape0.w < 0.5)
-        return;
-    const float logScene = depth > 0.0
-        ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
-        : 1e30;
-    float logCloudDist;
-    const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
-    if (cloud.a >= 0.999)
+    if (u_cloudShape0.w > 0.5)
     {
-        out_color = vec4(fog.rgb + cloud.rgb, fog.a * cloud.a);
-        return;
+        const float logScene = depth > 0.0
+            ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
+            : 1e30;
+        float logCloudDist;
+        const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
+        cloudPart = cloud;
+        if (cloud.a < 0.999)
+        {
+            // The fog in front of the cloud: the same two parts, to the cloud's weighted distance - unless the
+            // cloud AND the scene lie past both the froxel volume and the far field's max distance: then both
+            // see the same (whole) fog, and the scene's evaluation below serves the cloud too.
+            const float tCloud = exp2(logCloudDist);
+            const float fogEnd = max(u_fogParams8.z, u_fogParams0.w * invCos);
+            sameFog = min(logCloudDist, logScene) >= log2(fogEnd);
+            if (!sameFog)
+            {
+                const vec4 fogCloud = fogTo(u_viewPos + dir * tCloud, tCloud, dir, invCos);
+                cloudPart.rgb = fogCloud.a * cloud.rgb + (1.0 - cloud.a) * fogCloud.rgb;
+            }
+        }
     }
-    // The fog in front of the cloud: the same two parts, to the cloud's weighted distance.
-    const float tCloud = exp2(logCloudDist);
-    const vec4 fogCloud = fogTo(u_viewPos + dir * tCloud, tCloud, dir, invCos);
-    out_color = vec4(cloud.a * fog.rgb + fogCloud.a * cloud.rgb + (1.0 - cloud.a) * fogCloud.rgb, cloud.a * fog.a);
 #endif
+    const vec4 fog = fogTo(worldPosFromDepth(v_uv, depth), depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
+    if (sameFog)
+        cloudPart.rgb = fog.a * cloudPart.rgb + (1.0 - cloudPart.a) * fog.rgb;
+    out_color = vec4(cloudPart.a * fog.rgb + cloudPart.rgb, cloudPart.a * fog.a);
 }

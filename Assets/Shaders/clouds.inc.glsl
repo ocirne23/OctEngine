@@ -38,12 +38,13 @@ vec2 cloudNoiseOffset()
 }
 
 // Altitude of a camera-relative point. h = (r^2 - R^2) / (r + R): no cancellation between two ~6.4e6 values.
+// r + R is taken to first order, 2R + y: the dropped term xz^2 / (2 (R + y)) is a relative error of about
+// xz^2 / 4R^2 in h (1.4e-4 at 150 km: under a metre), and it saves the sqrt on every march, sun-march and
+// shadow-map sample.
 float cloudAltitude(vec3 rel, float camAlt)
 {
     const float y = rel.y + camAlt;
-    const float xz2 = dot(rel.xz, rel.xz);
-    const float r = sqrt(xz2 + (y + ATMOS_R_PLANET) * (y + ATMOS_R_PLANET));
-    return (xz2 + y * (y + 2.0 * ATMOS_R_PLANET)) / (r + ATMOS_R_PLANET);
+    return (dot(rel.xz, rel.xz) + y * (y + 2.0 * ATMOS_R_PLANET)) / (2.0 * ATMOS_R_PLANET + y);
 }
 
 // The two roots (near, far) of a ray from a point at altitude originAlt against the sphere at altitude H;
@@ -100,13 +101,14 @@ float cloudHeightProfile(float hf, float type)
 
 float cloudHeightFraction(float alt)
 {
-    return (alt - u_cloudShape0.x) / (u_cloudShape0.y - u_cloudShape0.x);
+    return (alt - u_cloudShape0.x) * u_cloudShape3.z; // z = 1 / (top - bottom)
 }
 
 // Normalized density [0, 1+] at a noise-space XZ and an altitude. Multiply by u_cloudShape1.w for the
-// extinction (1/m). detail = false is the cheap shape (weather + base only). lodBase / lodDetail are the
-// explicit mip levels (the march derives them from the pixel footprint); camDist fades in the near octave.
-float cloudDensity(vec2 nxz, float alt, float camDist, bool detail, float lodBase, float lodDetail)
+// extinction (1/m). detail = the weight of the detail erosion (0 = the cheap shape, weather + base only, no
+// detail fetches; the march fades it out with distance). lodBase / lodDetail are the explicit mip levels (the
+// march derives them from the pixel footprint); camDist fades in the near octave.
+float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
 {
     const float hf = cloudHeightFraction(alt);
     if (hf <= 0.0 || hf >= 1.0)
@@ -135,7 +137,7 @@ float cloudDensity(vec2 nxz, float alt, float camDist, bool detail, float lodBas
     if (d <= 0.0)
         return 0.0;
 
-    if (detail)
+    if (detail > 0.0)
     {
         // Curl-distorted detail: stronger toward the base (wispy undersides), rising with the evolve drift.
         const vec2 curl = textureLod(u_cloudCurl, nxz * (u_cloudShape1.y * 4.0), 0.0).xy * 2.0 - 1.0;
@@ -145,11 +147,11 @@ float cloudDensity(vec2 nxz, float alt, float camDist, bool detail, float lodBas
         if (camDist < u_cloudShape3.y)
         {
             const float nearFbm = dot(textureLod(u_cloudDetailNoise, pd * CLOUD_NEAR_DETAIL_MULT, 0.0).rg, vec2(0.7, 0.3));
-            hfFbm = mix(hfFbm, hfFbm * 0.7 + nearFbm * 0.3, 1.0 - camDist / u_cloudShape3.y);
+            hfFbm = mix(hfFbm, hfFbm * 0.7 + nearFbm * 0.3, 1.0 - camDist * u_cloudShape3.w);
         }
         // Wispy (inverted) at the base, billowy at the top.
         const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hf * 5.0, 0.0, 1.0));
-        d = clamp(cloudRemap(d, erodeBy * u_cloudShape2.z, 1.0, 0.0, 1.0), 0.0, 1.0);
+        d = clamp(cloudRemap(d, erodeBy * (u_cloudShape2.z * detail), 1.0, 0.0, 1.0), 0.0, 1.0);
     }
     return d * mix(0.6, 1.4, weather.b);
 }

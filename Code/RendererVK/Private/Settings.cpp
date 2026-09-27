@@ -72,7 +72,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &multiScatter, 0.0f, 0.95f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &ambient, 0.0f, 4.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground albedo", &groundAlbedo, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &powder, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &powder, 0.0f, 1.0f, 0.01f, onDefinesChanged); // CLOUD_POWDER while > 0
 
     Tweak::boolean("Sky/Clouds/Shadows", "Enabled", &shadows, onDefinesChanged);
     Tweak::floatVar("Sky/Clouds/Shadows", "Strength", &shadowStrength, 0.0f, 1.0f);
@@ -90,7 +90,9 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 10000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near detail radius (m)", &nearDetailRadius, 0.0f, 2000.0f, 5.0f);
-    Tweak::enumVar("Sky/Clouds/Quality", "Debug mode", &debugMode, s_cloudDebugNames);
+    Tweak::floatVar("Sky/Clouds/Quality", "Detail distance (km)", &detailDistanceKm, 0.5f, 400.0f, 0.1f);
+    Tweak::boolean("Sky/Clouds/Quality", "Checkerboard", &checkerboard, onDefinesChanged); // CLOUD_CHECKERBOARD
+    Tweak::enumVar("Sky/Clouds/Quality", "Debug mode", &debugMode, s_cloudDebugNames, onDefinesChanged); // CLOUD_DEBUG_MODE
 }
 
 void ShadowParams::registerTweaks(const oc::function<void()>& onReloadShaders)
@@ -120,6 +122,7 @@ void FogParams::registerTweaks()
     Tweak::floatVar("Fog/Far Field", "Density Scale", &farFieldDensity, 0.0f, 4.0f, 0.05f);
     Tweak::floatVar("Fog/Far Field", "Thickness Scale", &farFieldThickness, 0.1f, 20.0f, 0.1f);
     Tweak::intVar("Fog/Far Field", "Ground Steps", &farFieldSteps, 1, 32);
+    Tweak::floatVar("Fog/Far Field", "Max distance (km)", &farFieldMaxDistanceKm, 0.0f, 400.0f, 0.5f);
     Tweak::floatVar("Fog", "Slice Power", &slicePower, 0.4f, 1.5f, 0.01f);
     Tweak::floatVar("Fog", "Noise Scale", &noiseScale, 0.005f, 1.0f, 0.005f);
     Tweak::floatVar("Fog", "Noise Strength", &noiseStrength, 0.0f, 1.0f, 0.01f);

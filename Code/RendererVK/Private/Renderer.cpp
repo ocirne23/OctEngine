@@ -93,8 +93,7 @@ void Renderer::registerTweaks()
     // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
     // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
     m_cloudParams.registerTweaks([this]() {
-        syncCloudDefines();
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+        if (!syncCloudDefines() || !m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         reloadShaders();
     });
@@ -840,7 +839,7 @@ void Renderer::present()
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
 
-    assert(instances.mappedTransforms.size() >= m_instances.getNumTransforms());
+    assert(instances.mappedTransforms.size() >= m_instances.getMaxRenderNodes());
     assert(instances.mappedMeshInstances.size() >= m_instances.getInstanceCount());
     assert(instances.mappedFirstInstances.size() >= m_meshInfos.count());
     assert(m_instances.getNumTransforms() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
@@ -870,7 +869,7 @@ void Renderer::present()
     if (instanceCounter > m_instances.getMaxInstances())
         m_instances.growInstances(instanceCounter, frameIdx);
 
-    const uint32 numNodes = m_instances.getNumTransforms();
+    const uint32 numNodes = oc::min(m_instances.getNumTransforms(), m_instances.getMaxRenderNodes()); // spawns past it grow next beginFrame
     instances.transforms.flushMappedMemory(numNodes * sizeof(RendererVKLayout::RenderNodeTransform));
     instances.passMasks.flushMappedMemory(numNodes * sizeof(uint32));
     instances.lodStateBias.flushMappedMemory(numNodes * sizeof(int32));

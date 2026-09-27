@@ -239,6 +239,7 @@ void CloudPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
         b.push_back(binding(i, vk::DescriptorType::eCombinedImageSampler));
     b.push_back(binding(5, vk::DescriptorType::eStorageImage));
     b.push_back(binding(6, vk::DescriptorType::eStorageImage));
+    b.push_back(binding(7, vk::DescriptorType::eCombinedImageSampler)); // scene depth (the checkerboard's unmarched pixels)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(CloudPC) });
 }
 
@@ -643,7 +644,10 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_marchPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_marchPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
         cmd.pushConstants(m_marchPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-        cmd.dispatch(gx, gy, 1);
+        // CLOUD_CHECKERBOARD: half the columns, each thread on this frame's parity (cloud_march.cs.glsl marchPixel).
+        // Baked like the define it pairs with: a toggle reloads the shaders, which re-records this.
+        const uint32 marchWidth = RendererVKLayout::g_cloudShaders.checkerboard ? (m_width + 1) / 2 : m_width;
+        cmd.dispatch((marchWidth + 7) / 8, gy, 1);
     }
 
     vk::MemoryBarrier2 marchToTemporal{
@@ -656,8 +660,9 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
 
     { // -------- Temporal (read march[cur] + accum[prev], write accum[cur]) --------
         const vk::DescriptorSet vkSet = m_temporalSets[cur].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 7> updates{
+        oc::array<DescriptorSetUpdateInfo, 8> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
+            DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.sceneDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_marchColor.view[cur]) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_marchDepth.view[cur]) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumColor.view[prev]) } },
