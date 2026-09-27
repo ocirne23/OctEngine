@@ -179,6 +179,7 @@ vec3 cloudAerialScatter(vec3 ro, vec3 dir, float tEnd, vec3 lightDir, out vec3 t
     const float mu = dot(dir, lightDir);
     const float pR = phaseRayleigh(mu);
     const float pM = phaseHG(mu, u_skySunParams.y);
+    const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
     vec3 sumR = vec3(0.0), sumM = vec3(0.0);
     const float dt = tEnd / float(steps);
     float t = 0.5 * dt;
@@ -187,12 +188,12 @@ vec3 cloudAerialScatter(vec3 ro, vec3 dir, float tEnd, vec3 lightDir, out vec3 t
         const vec3 p = ro + dir * t;
         const float h = length(p) - ATMOS_R_PLANET;
         const vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-        const vec3 atten = exp(-atmosTau(atmosSegmentOD(ro, dir, t) + atmosLightOpticalDepth(p, lightDir)));
+        const vec3 atten = exp(-atmosTau(atmosRayOD(ray, t) + atmosLightOpticalDepth(p, lightDir)));
         sumR += atten * dens.x;
         sumM += atten * dens.y;
         t += dt;
     }
-    transmittance = exp(-atmosTau(atmosSegmentOD(ro, dir, tEnd)));
+    transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
     return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
 }
 

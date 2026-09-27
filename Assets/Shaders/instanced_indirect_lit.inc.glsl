@@ -217,7 +217,9 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 		}
 	}
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
-	visibility *= u_eclipseParams.x * cloudSunTransmittance(worldPos);
+	visibility *= u_eclipseParams.x;
+	if (visibility > 0.0) // in full shadow the cloud lookup (one or two fetches) changes nothing
+		visibility *= cloudSunTransmittance(worldPos);
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
 	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption

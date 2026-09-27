@@ -81,16 +81,16 @@ export struct CloudParams
 {
     bool  enabled = true;
     // Shape
-    float bottom = 1000.0f;            // shell bottom altitude (m)
-    float top = 3000.0f;               // shell top altitude (m)
-    float coverage = 0.3f;             // 0 = clear, 1 = overcast
+    float bottom = 300.0f;             // shell bottom altitude (m)
+    float top = 2500.0f;               // shell top altitude (m)
+    float coverage = 0.25f;            // 0 = clear, 1 = overcast
     float coverageVariation = 1.0f;    // weather-map spread around the coverage (0 = uniform)
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     float densityScale = 0.025f;       // extinction (1/m) at density 1
     float erosion = 0.45f;             // detail noise erosion of the base shapes
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
-    float weatherSizeKm = 30.0f;      // weather map period (km): the size of cloud clusters and gaps
+    float weatherSizeKm = 25.0f;      // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeed = 10.0f;           // m/s

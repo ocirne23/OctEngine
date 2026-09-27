@@ -87,17 +87,55 @@ vec3 atmosTransmittanceToLight(float height, vec3 lightDir, vec3 up)
 // depth goes through the planet (Chapman's below-horizon branch, up to ~e^60): the difference of two of
 // those is float noise - a descending ray is measured backwards instead, and one that dips to its lowest
 // point and rises again is split there.
+// The per-ray part of atmosSegmentOD, for a march that asks many distances along one ray: the Chapman
+// values at the origin and at the lowest point are constant, so each distance costs ONE evaluation.
+struct AtmosRay
+{
+	vec3 ro;
+	vec3 dir;
+	float tLow;     // the ray's lowest point (<= 0: rising all the way)
+	vec2 odRoFwd;   // rising: origin -> space along dir
+	vec2 odRoBack;  // descending: origin -> space along -dir
+	vec2 odLowPart; // descending: origin -> lowest point
+	vec2 odLowFwd;  // descending: lowest point -> space along dir
+};
+
+AtmosRay atmosRayBegin(vec3 ro, vec3 dir)
+{
+	AtmosRay r;
+	r.ro = ro;
+	r.dir = dir;
+	r.tLow = -dot(ro, dir);
+	r.odRoFwd = vec2(0.0);
+	r.odRoBack = vec2(0.0);
+	r.odLowPart = vec2(0.0);
+	r.odLowFwd = vec2(0.0);
+	if (r.tLow <= 0.0)
+		r.odRoFwd = atmosLightOpticalDepth(ro, dir);
+	else
+	{
+		r.odRoBack = atmosLightOpticalDepth(ro, -dir);
+		const vec3 m = ro + dir * r.tLow;
+		r.odLowPart = max(atmosLightOpticalDepth(m, -dir) - r.odRoBack, vec2(0.0));
+		r.odLowFwd = atmosLightOpticalDepth(m, dir);
+	}
+	return r;
+}
+
+// (Rayleigh, Mie) optical depth from the ray's origin to distance t (atmosSegmentOD's three cases).
+vec2 atmosRayOD(AtmosRay r, float t)
+{
+	const vec3 p = r.ro + r.dir * t;
+	if (r.tLow <= 0.0) // rising all the way
+		return max(r.odRoFwd - atmosLightOpticalDepth(p, r.dir), vec2(0.0));
+	if (t <= r.tLow) // still descending: measured from p back up to the origin
+		return max(atmosLightOpticalDepth(p, -r.dir) - r.odRoBack, vec2(0.0));
+	return r.odLowPart + max(r.odLowFwd - atmosLightOpticalDepth(p, r.dir), vec2(0.0));
+}
+
 vec2 atmosSegmentOD(vec3 ro, vec3 dir, float tEnd)
 {
-	const float tLow = -dot(ro, dir); // the ray's lowest point
-	const vec3 p = ro + dir * tEnd;
-	if (tLow <= 0.0) // rising all the way
-		return max(atmosLightOpticalDepth(ro, dir) - atmosLightOpticalDepth(p, dir), vec2(0.0));
-	if (tLow >= tEnd) // descending all the way: measured from p back up to ro
-		return max(atmosLightOpticalDepth(p, -dir) - atmosLightOpticalDepth(ro, -dir), vec2(0.0));
-	const vec3 m = ro + dir * tLow;
-	return max(atmosLightOpticalDepth(m, -dir) - atmosLightOpticalDepth(ro, -dir), vec2(0.0))
-	     + max(atmosLightOpticalDepth(m, dir) - atmosLightOpticalDepth(p, dir), vec2(0.0));
+	return atmosRayOD(atmosRayBegin(ro, dir), tEnd);
 }
 
 // In-scattered radiance along dir for one directional light of unit radiance (multiply by the light
@@ -120,6 +158,7 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observ
 	// View optical depth per sample as a difference of Chapman evaluations (atmosSegmentOD) - exact for an
 	// exponential atmosphere. The numerically-accumulated version diverges per channel at grazing
 	// angles (rainbow/green hue artifacts), and gets worse the fewer steps are taken.
+	const AtmosRay ray = atmosRayBegin(ro, dir);
 	vec3 sumR = vec3(0.0), sumM = vec3(0.0);
 	float dt = tFar / float(steps);
 	float t = 0.5 * dt;
@@ -128,14 +167,14 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observ
 		vec3 p = ro + dir * t;
 		float h = length(p) - ATMOS_R_PLANET;
 		vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-		vec2 odView = atmosSegmentOD(ro, dir, t);
+		vec2 odView = atmosRayOD(ray, t);
 		vec2 odSun = atmosLightOpticalDepth(p, lightDir);
 		vec3 atten = exp(-atmosTau(odView + odSun));
 		sumR += atten * dens.x;
 		sumM += atten * dens.y;
 		t += dt;
 	}
-	transmittance = exp(-atmosTau(atmosSegmentOD(ro, dir, tFar)));
+	transmittance = exp(-atmosTau(atmosRayOD(ray, tFar)));
 	// Scatter boost (u_skySunParams.x) scales how much of the light gets in-scattered - more indirect
 	// sky light - without touching the transmittance. Applied here so every consumer (visible sky,
 	// GI miss rays, fog ambient, surface fallback) scales consistently.

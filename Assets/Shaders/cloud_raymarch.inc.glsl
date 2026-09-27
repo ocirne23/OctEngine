@@ -7,7 +7,8 @@
 #define CLOUD_RAYMARCH_INC_GLSL
 
 // Optical depth toward the sun from a camera-relative point: quadratically growing steps out to the
-// light distance; the first two carry the detail noise.
+// light distance. Only the first (short) step carries the detail noise: the longer ones integrate over
+// the detail scale anyway, and each detail sample costs two or three more fetches (curl, detail, near).
 float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lodBase, float lodDetail)
 {
     const int n = int(u_cloudMarch1.x);
@@ -23,7 +24,7 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lod
         const float alt = cloudAltitude(p, camAlt);
         if (alt > u_cloudShape0.y)
             break;
-        od += cloudDensity(nxz + L.xz * tm, alt, 1e30, i < 2, lodBase, lodDetail) * (t1 - tPrev);
+        od += cloudDensity(nxz + L.xz * tm, alt, 1e30, i == 0, lodBase, lodDetail) * (t1 - tPrev);
         tPrev = t1;
     }
     return od * u_cloudShape1.w;
@@ -92,32 +93,63 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 #endif
     const vec3 toCentreView = u_viewPos - u_views[VIEW_CENTER].viewPos.xyz;
 
+    // The mip levels are log2(distance) + a per-ray constant each: one log2 per step.
+    const float lodBaseBias = log2(pixelAngle * u_cloudShape1.y * CLOUD_BASE_RES);
+    const float lodDetailBias = log2(pixelAngle * u_cloudShape1.z * CLOUD_DETAIL_RES);
+
+    // EMPTY-SPACE SKIPPING: in clear air the march takes COARSE steps (CLOUD_COARSE_MULT x the step) that
+    // test only the cheap shape (weather + base, no detail). The detail only ERODES that shape, so a zero
+    // there is a zero of the full density: the coarse test never misses a cloud the fine march would see,
+    // it can only step over one thinner than a coarse step. On a hit the march backs up (the coarse step is
+    // not taken) and marches finely; CLOUD_COARSE_AFTER empty fine steps in a row return it to coarse.
+    const float CLOUD_COARSE_MULT = 3.0;
+    const int CLOUD_COARSE_AFTER = 4;
     float tSum = 0.0;
     float wSum = 0.0;
     for (int s = 0; s < 2; ++s)
     {
         const vec2 seg = s == 0 ? seg0 : seg1;
         float t = seg.x;
+        bool coarse = true;
+        int emptyRun = 0;
         while (t < seg.y && r.steps < maxSteps && r.transmittance > 0.005)
         {
             // Fine near the origin, growing with distance - but never so fine that the budget cannot reach
             // the end of the segment.
             float dt = max(u_cloudMarch0.z, t * u_cloudMarch0.w);
             dt = max(dt, (seg.y - t) / float(max(maxSteps - r.steps, 1)));
+            if (coarse)
+                dt *= CLOUD_COARSE_MULT;
             dt = min(dt, seg.y - t);
             const float ts = t + dt * jitter;
-            t += dt;
             ++r.steps;
 
             const vec3 rel = origin + dir * ts;
             const float alt = cloudAltitude(rel, camAlt);
             const vec2 nxz = rel.xz + noiseOffset;
-            const float footprint = ts * pixelAngle;
-            const float lodBase = max(log2(footprint * u_cloudShape1.y * CLOUD_BASE_RES), 0.0);
-            const float lodDetail = max(log2(footprint * u_cloudShape1.z * CLOUD_DETAIL_RES), 0.0);
+            const float logDist = log2(ts);
+            const float lodBase = max(logDist + lodBaseBias, 0.0);
+            const float lodDetail = max(logDist + lodDetailBias, 0.0);
+            if (coarse)
+            {
+                if (cloudDensity(nxz, alt, ts, false, lodBase, lodDetail) > 0.0)
+                {
+                    coarse = false; // back up: this interval is marched again, finely
+                    emptyRun = 0;
+                }
+                else
+                    t += dt;
+                continue;
+            }
+            t += dt;
             const float dens = cloudDensity(nxz, alt, ts, true, lodBase, lodDetail);
             if (dens <= 0.0)
+            {
+                if (++emptyRun >= CLOUD_COARSE_AFTER)
+                    coarse = true;
                 continue;
+            }
+            emptyRun = 0;
 
             const float sigmaT = dens * u_cloudShape1.w;
             const float hf = clamp(cloudHeightFraction(alt), 0.0, 1.0);

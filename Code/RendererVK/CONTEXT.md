@@ -571,7 +571,10 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   * **March** (`cloud_march.cs.glsl`, right after RTAO): up to the FARTHEST scene surface of the pixel's
     2x2 block; steps grow with distance (`Near step`, `Step growth`) but never so small that `Max steps`
     cannot reach the end. **The march itself is `cloudRaymarch` (`cloud_raymarch.inc.glsl`), shared with
-    the sky clouds.** Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
+    the sky clouds.** **Empty-space skipping:** in clear air it takes 3x steps that test only the cheap
+    shape (weather + base); the detail only erodes that shape, so a zero there is a zero of the full
+    density. A hit backs up and marches finely; 4 empty fine steps return it to coarse. The sun march reads
+    the detail noise on its first step only. Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
     multiple-scattering octaves — octave 0 on the HG + Draine phase (Jendersie & d'Eon 2023: a fit to Mie
     scattering on water droplets; the CPU turns `Droplet size (um)` into its four parameters,
     `u_cloudLight0`), octaves 1 and 2 ISOTROPIC (a flattened droplet phase kept ~half the energy in a g ≈ 0.66
@@ -628,7 +631,8 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   height): the air above thins, and the horizon dips (`cosHorizon`). Below the dipped horizon the march ends
   at the ground, so the pixel is the haze in front of it plus the lit ground through the march's
   transmittance; the sun disc, moon and stars are left out there. The view optical depth is
-  `atmosSegmentOD` (atmosphere.inc.glsl), stable for descending rays (see the cloud haze fix: a "to space"
+  `atmosSegmentOD` / `atmosRayBegin` + `atmosRayOD` (atmosphere.inc.glsl; the per-ray form keeps the
+  origin's Chapman values, so a march pays one evaluation per step), stable for descending rays (see the cloud haze fix: a "to space"
   depth through the planet is float noise). The sky MAP and every indirect path keep the ground observer.
 * **Known limitation:** particles and transparents draw before the apply, so one inside a cloud gets the
   cloud of the opaque pixel behind it — the fog apply has the same limitation.
