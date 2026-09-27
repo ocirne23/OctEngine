@@ -222,6 +222,15 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 // bounce) PLUS the sun's direct contribution albedo/PI * E_sun - the dominant daytime term. Without the
 // sun term, downward GI rays and the out-of-field ambient fallback sat well below the brightness of the
 // sunlit ground the probes actually see.
+// The below-horizon ground's direct-sun term (constant over directions). The GI trace counts it as SUN light
+// on its downward misses, so the lookup's cloud dimming reaches it (GI_SUN_V4 in gi_probe.inc.glsl).
+vec3 skyGroundSun(vec3 up)
+{
+	const vec3 sunDir = normalize(u_sunDirection.xyz);
+	return u_groundParams.rgb * atmosTransmittanceToLight(0.0, sunDir, up) * u_sunColor.rgb
+		* (u_eclipseParams.x * max(dot(sunDir, up), 0.0) / PI);
+}
+
 vec3 skyRadiance(vec3 dir)
 {
 	const vec3 up = normalize(u_skyUp);
@@ -232,9 +241,7 @@ vec3 skyRadiance(vec3 dir)
 	{
 		dir = normalize(dir - up * (cosUp - 0.02));
 		groundAtten = u_groundParams.rgb;
-		const vec3 sunDir = normalize(u_sunDirection.xyz);
-		groundSun = u_groundParams.rgb * atmosTransmittanceToLight(0.0, sunDir, up) * u_sunColor.rgb
-			* (u_eclipseParams.x * max(dot(sunDir, up), 0.0) / PI);
+		groundSun = skyGroundSun(up);
 	}
 	vec3 radiance = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 4) * u_sunColor.rgb * u_eclipseParams.x;
 	if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)

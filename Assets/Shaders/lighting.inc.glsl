@@ -116,11 +116,15 @@ vec3 giLightIrradianceShadowed(LightInfo light, vec3 pos, vec3 N)
 // off-screen probes are shadowed correctly (the camera shadow maps only cover the view frustum). The
 // fragment shader never sets it, so it keeps using giSunShadow.
 float g_sunShadowOverride = -1.0;
+// Output: the SUN's part of the last giGatherDirect's result (albedo/PI included). The GI trace keeps it apart
+// as the probe's sun fraction (GI_SUN_V4 in gi_probe.inc.glsl); dead code for everyone else.
+vec3 g_gatherSunRadiance = vec3(0.0);
 
 // Full diffuse direct lighting at a world position: sun (shadowed) + all grid lights, times albedo/PI.
 vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
 {
     vec3 E = vec3(0.0);
+    g_gatherSunRadiance = vec3(0.0);
 
     vec3 sunL = normalize(u_sunDirection.xyz);
     float sunNdotL = max(dot(N, sunL), 0.0);
@@ -132,6 +136,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         // out-of-field skyGroundRadiance fallback) dims with transmittance. u_sunTransmittance = the
         // Chapman evaluation, done ONCE per frame on the CPU (this ran per gather hit before).
         E += u_sunTransmittance * u_sunColor.rgb * sunShadow * sunNdotL * u_eclipseParams.x;
+        g_gatherSunRadiance = albedo * (E / PI);
     }
 
     // The sky radiance light is intentionally absent here: it is injected directly into the probe SH

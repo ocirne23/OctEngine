@@ -5,6 +5,10 @@
 // (both intervals; the ground ends it) with a fixed step count. Writes the front's along-light coordinate,
 // the mean extinction between the first and the last cloud, and the whole optical depth - the layout and
 // the lookup are in cloud_shadow.inc.glsl.
+//
+// PROGRESSIVE (Renderer::buildUboClouds): a frame renders one texel of every 2x2 (split 1) or 4x4 (split 2)
+// block - the phase's - one thread per rendered texel. The phases rotate in an order that spreads each frame's
+// texels evenly (the 2x2 order (0,0) (1,1) (1,0) (0,1), applied at both levels of the 4x4).
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -18,11 +22,25 @@ layout (push_constant) uniform CloudShadowPC
 {
     uint u_cascade;
     uint u_resolution;
+    uint u_split; // 0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4
+    uint u_phase;
 };
+
+ivec2 phaseOffset2(uint p) { return ivec2(int((p & 1u) ^ ((p >> 1u) & 1u)), int(p & 1u)); }
+
+ivec2 shadowTexel()
+{
+    const ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (u_split == 0u)
+        return id;
+    if (u_split == 1u)
+        return id * 2 + phaseOffset2(u_phase);
+    return id * 4 + phaseOffset2(u_phase & 3u) * 2 + phaseOffset2(u_phase >> 2u);
+}
 
 void main()
 {
-    const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 px = shadowTexel();
     if (px.x >= int(u_resolution) || px.y >= int(u_resolution))
         return;
     const ivec3 dst = ivec3(px, int(u_cascade));
@@ -50,7 +68,7 @@ void main()
         return;
     }
 
-    const int steps = max(int(u_cloudShadow4.y), 1);
+    const int steps = max(int(u_cascade == 0u ? u_cloudShadow4.y : u_cloudShadow4.z), 1); // per cascade: the far one updates less often
     const float dt = total / float(steps);
     const vec2 noiseOffset = cloudNoiseOffset();
     const float lodBase = max(log2(texel * u_cloudShape1.y * CLOUD_BASE_RES), 0.0);

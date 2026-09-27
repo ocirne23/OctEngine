@@ -354,6 +354,9 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_t waterDepth, out f16vec3 addColor, out f16vec3 groundFactor)
 {
 	const f16vec3 Nh = film.N;
+	// The GI's sky visibility on both sky reflections (the blurred share and the mirror): a puddle under a roof
+	// or an overhang mirrors no sky. First: its lookup peaks before the body's and the foam's values are live.
+	const float16_t skyVis = float16_t(giSkyVisibility(worldPos, vec3(Nh)));
 	const f16vec3 Vh = f16vec3(normalize(u_viewPos - worldPos));
 	const float16_t alphaH = film.alpha;
 	const float16_t foamH = film.foam;
@@ -415,7 +418,7 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	const f16vec3 glint = f16vec3(min(doLightH(sunSurfaceRadiance(), f16vec3(L), Vh, Nh, f16vec3(0.02), f16vec3(0.0), float16_t(0.0), alphaH), vec3(65504.0)));
 	groundFactor = (one - maskH) + (clearW * (one - F) * (one - milk)) * T;
 	f16vec3 color = (maskH * foamH) * whitewater
-		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur) * ambientSky + glint);
+		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur * skyVis) * ambientSky + glint);
 
 	// Reflection: the sky (the ray-traced scene mirror is disabled, TERRAIN_FILM_RT_MIRROR), roughness-
 	// blurred toward the average sky (the blur's sky share is in the fold above). Before the lights: with the
@@ -428,7 +431,7 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// folded in whole: a hit swaps its share for the hit below. So neither R's sky lookup nor the ground
 	// normal is live across the trace - only the half sky colour and the hit's slope share. (A hit pixel
 	// pays the one sky fetch it could have skipped; hits are the minority of film pixels.)
-	const f16vec3 skyMirror = f16vec3(min(applyReflectionFogSky(terrainReflectedSkyRadiance(R), worldPos, R, sunTint, L, vec3(ambientSky)), vec3(65504.0))) * mirrorWeight;
+	const f16vec3 skyMirror = f16vec3(min(applyReflectionFogSky(terrainReflectedSkyRadiance(R), worldPos, R, sunTint, L, vec3(ambientSky)), vec3(65504.0))) * (mirrorWeight * skyVis);
 	color += skyMirror;
 #ifdef TERRAIN_FILM_RT_MIRROR // DISABLED - see terrainFilmMirror; the film reflects the sky only
 	// The ocean's gates: the mirror's weight in the pixel (under 2% = skipped), "Reflection max rough"
@@ -830,7 +833,11 @@ void main()
 		}
 		// The sky reflection's weight: the gloss above the live ocean, minus where the film stands (it mirrors
 		// the sky itself there).
+		// The GI's sky visibility (no sky mirrored under a roof or an overhang), folded in HERE: skyReflW is live
+		// across the lit core anyway, and the lookup runs before its peak, not after it with the colour live.
 		skyReflW = glossW * aboveLive * (one - underFilm);
+		if (skyReflW > float16_t(0.0))
+			skyReflW *= float16_t(giSkyVisibility(TERRAIN_LIT_POS, geoN));
 	}
 #ifdef TERRAIN_TESS
 	// Where the relief is displaced, the normal maps carry the same relief a second time: their tilt re-lit the

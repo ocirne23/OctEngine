@@ -456,8 +456,9 @@ private:
     oc::array<glm::dvec3, CloudPipeline::SHADOW_CASCADES> m_cloudShadowCenter{};
     oc::array<double, CloudPipeline::SHADOW_CASCADES> m_cloudShadowExtent{};
     glm::dvec3 m_cloudShadowSun = glm::dvec3(0.0);
-    uint32 m_cloudShadowFarFrame = 0;
-    bool m_cloudShadowFarValid = false;
+    oc::array<bool, CloudPipeline::SHADOW_CASCADES> m_cloudShadowValid{};    // the centre is set (else: re-centre + full)
+    oc::array<uint32, CloudPipeline::SHADOW_CASCADES> m_cloudShadowSplit{};  // THIS frame: 0 = all texels, 1 = 1/4, 2 = 1/16
+    oc::array<uint32, CloudPipeline::SHADOW_CASCADES> m_cloudShadowPhase{};  // THIS frame's texel of the 2x2 / 4x4 pattern
     uint32 m_cloudShadowMask = 0; // the cascades the primary renders this frame (bit per cascade)
     TerrainResources m_terrain;
     PostParams m_postParams;

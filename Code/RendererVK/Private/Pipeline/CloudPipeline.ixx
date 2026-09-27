@@ -58,8 +58,10 @@ public:
     // The fullscreen apply draw; the caller is inside the scene-colour render pass with the viewport set.
     void recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const ApplyParams& params);
 
-    // The shadow map cascades in cascadeMask (bit c = cascade c), recorded straight into the primary.
-    void recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask);
+    // The shadow map cascades in cascadeMask (bit c = cascade c), recorded straight into the primary. Per cascade
+    // split (0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4) and the phase = which texel of the pattern.
+    void recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask,
+        const oc::array<uint32, SHADOW_CASCADES>& split, const oc::array<uint32, SHADOW_CASCADES>& phase);
     // The clouds of the GI sky map (cloud_sky.cs.glsl), recorded straight into the primary after the shadow map
     // and before GI's sky-map bake. skyMap = the sky map itself (last frame's clear layer: the ambient).
     void recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyMapView, vk::Sampler skyMapSampler);

@@ -20,11 +20,12 @@ layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_GRID_DATA_NAME gi_gridData
 #include "gi_probe.inc.glsl"
 
-// Cascade c's images, 16 B per voxel (the layout is documented at RendererVKLayout::GI_VOLUME_FORMATS):
-//   L0 x W at u_volumeL0[c], the L1 ratios at u_volumeL1[2c], [2c + 1], the last ratio + W at u_volumeTail[c].
+// Cascade c's images, 20 B per voxel (the layout is documented at RendererVKLayout::GI_VOLUME_FORMATS):
+//   L0 x W at u_volumeL0[c], the L1 ratios at u_volumeL1[2c], [2c + 1], the last ratio + W + the sun fraction
+//   x W + the sky visibility x W at u_volumeTail[c].
 layout (binding = 2, r11f_g11f_b10f) uniform writeonly image3D u_volumeL0[GI_MAX_CASCADES];
 layout (binding = 3, rgba8_snorm)    uniform writeonly image3D u_volumeL1[GI_MAX_CASCADES * 2];
-layout (binding = 5, rg16f)          uniform writeonly image3D u_volumeTail[GI_MAX_CASCADES];
+layout (binding = 5, rgba16f)        uniform writeonly image3D u_volumeTail[GI_MAX_CASCADES];
 // The virtual sky probe's 3 SH vec4s (the out-of-field fallback, giEvalSkySH), copied every frame: the trace
 // re-projects the sky each frame, and the consumers in volume mode read nothing from the probe buffer.
 layout (binding = 4, rgba16f) uniform writeonly image3D u_volumeSky;
@@ -82,7 +83,7 @@ void main()
     }
 
     vec3 a0 = vec3(0.0), a1 = vec3(0.0), a2 = vec3(0.0), a3 = vec3(0.0);
-    float W = 0.0;
+    float W = 0.0, aSun = 0.0, aVis = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         const ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -109,6 +110,9 @@ void main()
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);
         a0 += w * c0; a1 += w * c1; a2 += w * c2; a3 += w * c3;
+        const vec2 sunVis = GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].xy;
+        aSun += w * sunVis.x;
+        aVis += w * sunVis.y;
         W += w;
     }
 
@@ -124,5 +128,10 @@ void main()
     imageStore(u_volumeL0[cascade], vslot, vec4(l0, 0.0));
     imageStore(u_volumeL1[2 * cascade + 0], vslot, vec4(q1, q2.r));
     imageStore(u_volumeL1[2 * cascade + 1], vslot, vec4(q2.gb, q3.rg));
-    imageStore(u_volumeTail[cascade], vslot, vec4(q3.b, W, 0.0, 0.0));
+    // The sun fraction s = aSun / luma(a0) (the weights cancel), stored premultiplied by W like L0, so the
+    // filtered fetch is weight-correct and a dead voxel adds nothing. The sky visibility is a plain weighted
+    // mean, so aVis already is it x W.
+    const float lumaA0 = dot(a0, GI_LUMA_W);
+    const float sunW   = lumaA0 > 1e-8 ? clamp(aSun / lumaA0, 0.0, 1.0) * W : 0.0;
+    imageStore(u_volumeTail[cascade], vslot, vec4(q3.b, W, sunW, min(aVis, W)));
 }

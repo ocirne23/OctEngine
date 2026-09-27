@@ -59,9 +59,7 @@ layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; 
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials   { MaterialInfo in_materialInfos[]; };
-layout (binding = 16) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
-#define CLOUD_SHADOW_BINDING 15
-#include "cloud_shadow.inc.glsl"
+layout (binding = 15) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 // Per-wave visit stamps (one uint per trace workgroup): u_frameIndex + 1 on a regular visit, for the irradiance
 // volume's partial bake (gi_volume_bake.cs.glsl), which re-bakes only the voxels over this frame's waves.
 layout (binding = 14, std430) writeonly buffer GiWaveStamps { uint gi_waveStamp[]; };
@@ -81,8 +79,14 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_DEAD_INTERVAL 8 // a backface-dead probe traces every N-th regular visit
 #define GI_VISIT_ALPHA_MAX 0.15    // cap on the per-visit blend alpha the update interval can scale up to
 #define GI_FRESH_RAY_MULT 4        // ray count multiplier for a fresh (just scrolled-in) probe's replace visit
-#define GI_STEP_LIMIT_REL 2.0      // a visit brighter than (1 + this) x the stored luminance has its blend step limited (huge = off)
-#define GI_STEP_LIMIT_MIN 0.25     // ... but never below this fraction of the asked step (bounds the switch-on lag)
+// The visit clamp and change detection (main, after the trace): see the comment there.
+#define GI_CLAMP_SIGMA 2.5         // a visit's DC luminance is clamped to the stored luminance +- this many sigma
+#define GI_SIGMA_MIN_REL 0.1       // sigma floor, relative to the stored luminance (a converged, quiet probe still moves)
+#define GI_SIGMA_INIT_REL 0.5      // the sigma a replaced probe starts from, relative to its luminance
+#define GI_FAST_MEAN_ALPHA 0.3     // blend of the fast visit-luminance mean (change detection)
+#define GI_CHANGE_SIGMA 2.0        // the fast mean this many sigma off the stored luminance ...
+#define GI_CHANGE_CONFIRM_SIGMA 1.0 // ... and the previous fast mean this many, on the same side = a real change
+#define GI_CHANGE_ALPHA 0.3        // the blend of a visit in a real change (unclamped)
 
 // Alpha-masked-aware shadow rays: sun visibility at gather-ray hits, and the grid lights' shadows there
 // (GI_LIGHT_RT_SHADOWS - lighting.inc.glsl needs rtShadowVisibility in scope, so this comes first).
@@ -128,6 +132,31 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
 // virtual sky probe (projectSkySH) samples the same bake, so the two agree by construction.
 vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
 
+// A gather MISS: the sky map, and its sun luminance for the probe's sun fraction. Below the horizon the map
+// holds a sunlit ground (skyRadiance) whose direct-sun term must count as SUN, or the lookup's cloud dimming
+// misses it: every visit's random downward misses (past rayMax or the TLAS range) then added undimmed sun
+// under a cloud shadow - flashing probes at shadow borders, worst with a low sun (more long, shallow rays).
+// Above the horizon the same holds for a CONE around the sun: the Mie aureole and the sunlit cloud edges there
+// are sun light that the shadowing cloud blocks at a shaded point, yet a small, bright target - a few rays per
+// visit hit it or not. The whole miss radiance inside the cone counts as sun, fading out toward its edge.
+#define GI_SUN_CONE_INNER_COS 0.9659 // cos 15 deg: all sun
+#define GI_SUN_CONE_OUTER_COS 0.8660 // cos 30 deg: all sky
+// skyOpen = the miss's weight in the sky visibility (its cosine to up, 0 below the horizon).
+// Everything from the UBO is derived HERE, per miss, not hoisted into main: a value held across the ray loop
+// is a register through the whole ray query (measured: 96 -> 128 with the sun direction, the ground sun, up and
+// the loop's sky sums held there).
+vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
+{
+    const vec3  radiance = skyMiss(d);
+    const vec3  up       = normalize(u_skyUp);
+    const float cosUp    = dot(d, up);
+    skyOpen = max(cosUp, 0.0);
+    sunLuma = cosUp < 0.0
+        ? dot(skyGroundSun(up), GI_LUMA_W)
+        : dot(radiance, GI_LUMA_W) * smoothstep(GI_SUN_CONE_OUTER_COS, GI_SUN_CONE_INNER_COS, dot(d, normalize(u_sunDirection.xyz)));
+    return radiance;
+}
+
 // View-independent sun visibility from a point: one shadow ray toward the sun via the TLAS. Returns 1
 // (lit) or 0 (occluded). Used per gather-ray hit (RT sun mode) so off-screen hits are shadowed
 // correctly, unlike the camera-frustum-fit shadow maps.
@@ -136,41 +165,46 @@ float sunVisibility(vec3 origin)
     return rtShadowVisibility(origin, normalize(u_sunDirection.xyz), 0.05, 1.0e4);
 }
 
-vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out float backface)
+// sunLuma = the luminance of the returned radiance's SUN part (the direct sun + its share of the multi-bounce),
+// traced WITHOUT the cloud shadow - see GI_SUN_V4 in gi_probe.inc.glsl. skyOpen = a miss's sky-visibility
+// weight (traceMiss), 0 on a hit.
+vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out float backface, out float sunLuma, out float skyOpen)
 {
     const float rayMax = GI_MAX_RAY_DIST * (cascade + 1);
     hitDist = rayMax; // misses (and out-of-bounds hits) count as open space at the gather range
     backface = 0.0;   // 1 when the committed hit faces away (ray started inside/behind the geometry)
+    sunLuma = 0.0;
+    skyOpen = 0.0;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.05, dir, rayMax);
     while (rayQueryProceedEXT(rq)) {}
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
-        return skyMiss(dir);
+        return traceMiss(dir, sunLuma, skyOpen);
 
     // Bound every post-hit buffer access. A bad meshIdx/triBase/vertex index would otherwise read wildly
     // out of bounds and MMU-fault; treat any out-of-range hit as a miss.
     const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
     if (uint(instanceIdx) >= in_instances.length())
-        return skyMiss(dir);
+        return traceMiss(dir, sunLuma, skyOpen);
     // Geometry comes from the RT meshIdx the TLAS writer packed into the instance's sbtOffset (a LOD
     // chain traces one shared BLAS, which may differ from the raster-selected level the instance
     // references); the material still comes from the instance.
     const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
     const uint materialIdx = in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
     if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
-        return skyMiss(dir);
+        return traceMiss(dir, sunLuma, skyOpen);
     const InMeshInfo mi    = in_meshInfos[meshIdx];
 
     const int  prim    = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
     const uint triBase = mi.firstIndex + uint(prim) * 3u;
     if (triBase + 2u >= in_indices.length())
-        return skyMiss(dir);
+        return traceMiss(dir, sunLuma, skyOpen);
     const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
     const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
     const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
     if (max(max(v0, v1), v2) >= in_vertices.length())
-        return skyMiss(dir);
+        return traceMiss(dir, sunLuma, skyOpen);
 
     const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float t    = rayQueryGetIntersectionTEXT(rq, true);
@@ -193,22 +227,27 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
     const vec3 albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, GI_ALBEDO_LOD).rgb;
 
-    g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02) * cloudSunTransmittance(worldPos);
+    // NO cloud shadow here: the probe keeps its sun part apart and the LOOKUP dims it by the cloud shadow at the
+    // shaded point (giIrradiance). Cloud-shadowed hits made every probe lag a moving cloud shadow by its update
+    // interval - flashing GI under shadows that fall away from the camera, where the intervals are long.
+    g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02);
     vec3 radiance = giGatherDirect(worldPos, worldN, albedo);
     // Previous-frame indirect at the hit -> multi-bounce (infinite, temporally). The cur SH already holds
     // the carried-forward irradiance for this frame. Probe path: the CHEAP lookup (no Chebyshev, no
     // cross-cascade fade): the result is albedo-scaled and blended at temporalAlpha, so its noise is free
     // and the shading-quality path's ~2x loads are not. Volume path: the shading lookup itself - 4 filtered
     // fetches per cascade, WITH the baked Chebyshev visibility, cheaper than either probe loop.
-    float giCov;
+    float giCov, prevSun;
 #ifdef GI_VOLUME
-    vec3 prevE = evalProbeCoverage(worldPos, worldN, giCov);
+    vec3 prevE = evalProbeCoverage(worldPos, worldN, giCov, prevSun);
 #else
-    vec3 prevE = giEvalBounce(worldPos, worldN, giCov);
+    vec3 prevE = giEvalBounce(worldPos, worldN, giCov, prevSun);
 #endif
     // Faded with coverage so traced hits near the field's edge don't step; the vec3(-1) "no data" result always
     // comes with coverage 0.
-    return radiance + albedo * prevE * (giCov * INV_PI);
+    const vec3 bounce = albedo * prevE * (giCov * INV_PI);
+    sunLuma = dot(g_gatherSunRadiance + bounce * prevSun, GI_LUMA_W);
+    return radiance + bounce;
 }
 
 layout(local_size_x = 64) in;
@@ -361,14 +400,20 @@ void main()
     const float escapeMargin = 0.125  * float(spacing); // how far past the backface the probe lands
     const float maxLen       = 0.45 * float(spacing);
     float backfaceSum = 0.0;
+    float sunSum = 0.0; // sun luminance over the rays: the sun part of luma(c0) after the Y.x * wsh below
+    // The cosine-weighted open share of the upper hemisphere: the misses' cosines to up over the whole
+    // hemisphere's, which is N / 4 in expectation for sphere-uniform rays - ONE accumulator through the loop.
+    float skyOpenSum = 0.0;
     float closestBack = 1e30;
     vec3  escapeOffset = vec3(0.0);
     for (uint i = 0u; i < N; ++i)
     {
         const vec3 dir = sampleSphere(i, N, jitter);
-        float hitDist, backface;
-        const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface);
+        float hitDist, backface, sunLuma, skyOpen;
+        const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface, sunLuma, skyOpen);
         backfaceSum += backface;
+        sunSum += sunLuma;
+        skyOpenSum += skyOpen;
         if (backface > 0.5 && hitDist < closestBack)
         {
             const vec3 target = probeOffset + dir * (hitDist + escapeMargin);
@@ -398,10 +443,10 @@ void main()
     // the temporal blend smooths it further. Bounces arrive for free through the prevE multi-bounce.
     if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
     {
-        const vec3 skyL = normalize(u_skyUp);
-        const float skyVis = u_rtSkyRadiance > 0.5 ? rtShadowVisibility(probePos, skyL, 0.05, 1.0e4) : 1.0;
-        const vec3 cd = u_skyRadianceColor * skyVis;
-        const vec4 Ysky = shBasisL1(skyL);
+        const vec3 up = normalize(u_skyUp);
+        const float upVis = u_rtSkyRadiance > 0.5 ? rtShadowVisibility(probePos, up, 0.05, 1.0e4) : 1.0;
+        const vec3 cd = u_skyRadianceColor * upVis;
+        const vec4 Ysky = shBasisL1(up);
         c0 += cd * Ysky.x;
         c1 += cd * Ysky.y;
         c2 += cd * Ysky.z;
@@ -427,9 +472,9 @@ void main()
     // history and the probe would flicker at its visit rate, so the slow tiers converge slower instead.
     // (A per-frame alpha already above the cap is taken as asked.)
     // A CLEARED slot (all-zero irradiance: grid reset, start-up) is replaced like a fresh one - blending up
-    // from zero is ~1/alpha visits of a too-dark field, and the step limiter below would read it as an
-    // infinite relative change. (A truly black probe replaces black with black.)
-    const vec3  lumaW   = vec3(0.2126, 0.7152, 0.0722);
+    // from zero is ~1/alpha visits of a too-dark field, and the visit clamp below would hold it near zero.
+    // (A truly black probe replaces black with black.)
+    const vec3  lumaW   = GI_LUMA_W;
     const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
     const bool  replace = fresh || oldLuma <= 0.0;
     const float frameAlpha = u_giTrace0.y;
@@ -451,24 +496,45 @@ void main()
             alpha = max(alpha, 0.35);
     }
 
-    // Step limiter (the irradiance blend only; the depth stats take the plain alpha). One N-ray visit of a
-    // high-variance integrand - a small sunlit patch, a lamp: a ray hits it or not - can land several times
-    // above the converged value, and each such visit kicks the blend; the kicks are what reads as flicker.
-    // Only BRIGHTENING can be an outlier (a visit cannot go below zero), so only a visit more than
-    // (1 + GI_STEP_LIMIT_REL) x the stored DC luminance is limited: its step shrinks to what a visit AT
-    // that bound would have made, but never below GI_STEP_LIMIT_MIN of the asked step - so a real
-    // switch-on is slowed by a bounded factor, and only until the history has climbed to within the bound.
-    // Costs: a small downward bias in probes whose visits are often limited, and that switch-on lag.
-    // Boosted visits (relocation, just escaped) are deliberate fast replaces and skip it.
+    // VISIT CLAMP + CHANGE DETECTION (the irradiance blend only; the depth stats take the plain alpha). One
+    // N-ray visit of a high-variance integrand - a small sunlit patch, a lamp: a ray hits it or not - lands far
+    // from the converged value, and each such visit kicks the blend; the kicks are what reads as flicker. The
+    // probe keeps the history of its visits' DC luminance (GI_SUN_V4.zw): a SLOW second moment (plain alpha)
+    // gives the visit variance around the stored luminance, sigma, and a FAST mean follows the recent visits.
+    // * A regular visit outside stored +- GI_CLAMP_SIGMA sigma is SCALED onto that bound (every SH coefficient
+    //   and the sun part alike: direction and sun fraction kept) - both ways, a dark outlier too.
+    // * A REAL change (a light switched, a door opened) moves the fast mean, which noise does not: the fast mean
+    //   GI_CHANGE_SIGMA off the stored luminance, with the previous one already GI_CHANGE_CONFIRM_SIGMA off on
+    //   the same side (two visits: one spike alone cannot trigger it), blends that visit unclamped at
+    //   GI_CHANGE_ALPHA. The moments are never clamped, so sigma widens while a change passes.
+    // Replaced / boosted visits (relocation, just escaped) skip both; a replace restarts the moments at the
+    // visit, with GI_SIGMA_INIT_REL of it as sigma.
+    const vec4  prevStats = fresh ? vec4(0.0) : gi_gridData[cellBase + GI_SUN_V4];
+    const float visitLuma = dot(c0, lumaW);
+    float fastMean = mix(prevStats.z, visitLuma, GI_FAST_MEAN_ALPHA);
+    float secondMoment = mix(prevStats.w, visitLuma * visitLuma, alpha);
     float shAlpha = alpha;
-    if (!replace && alpha == visitAlpha)
+    float visitScale = 1.0;
+    if (replace)
     {
-        const float rel = (dot(c0, lumaW) - oldLuma) / oldLuma;
-        if (rel > GI_STEP_LIMIT_REL)
-            shAlpha *= max(GI_STEP_LIMIT_REL / rel, GI_STEP_LIMIT_MIN);
+        fastMean = visitLuma;
+        secondMoment = visitLuma * visitLuma * (1.0 + GI_SIGMA_INIT_REL * GI_SIGMA_INIT_REL);
+    }
+    else if (alpha == visitAlpha)
+    {
+        const float sigma   = max(sqrt(max(prevStats.w - oldLuma * oldLuma, 0.0)), GI_SIGMA_MIN_REL * oldLuma);
+        const float devPrev = prevStats.z - oldLuma;
+        const float devNew  = fastMean - oldLuma;
+        if (abs(devNew) > GI_CHANGE_SIGMA * sigma && abs(devPrev) > GI_CHANGE_CONFIRM_SIGMA * sigma && devPrev * devNew > 0.0)
+            shAlpha = max(alpha, GI_CHANGE_ALPHA);
+        else if (visitLuma > 0.0)
+            visitScale = clamp(visitLuma, oldLuma - GI_CLAMP_SIGMA * sigma, oldLuma + GI_CLAMP_SIGMA * sigma) / visitLuma;
     }
 
-    giBlendCell(cellBase, c0, c1, c2, c3, shAlpha);
+    giBlendCell(cellBase, c0 * visitScale, c1 * visitScale, c2 * visitScale, c3 * visitScale, shAlpha);
+    const float skyVis = min(skyOpenSum * (4.0 / float(N)), 1.0);
+    giStoreSunStats(cellBase, vec4(mix(prevStats.x, sunSum * (0.282095 * wsh) * visitScale, shAlpha),
+                                   mix(prevStats.y, skyVis, alpha), fastMean, secondMoment));
     // An escape visit pins the stored fraction to exactly DEAD_MAX: still dead at lookup and still
     // triggering the just-escaped flush above (>=), but not skipped by the dead-probe interval (>), so the
     // probe traces from its new position on the very next visit instead of GI_DEAD_INTERVAL visits later.

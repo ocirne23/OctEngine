@@ -131,8 +131,6 @@ public:
         vk::AccelerationStructureKHR tlas;
         vk::ImageView shadowMapView;
         vk::Sampler shadowMapSampler;
-        vk::ImageView cloudShadowView; // the cloud Beer shadow map (GENERAL): the sun at gather hits
-        vk::Sampler cloudShadowSampler;
     };
     // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
     // UBO (u_frameIndex, u_giTrace0/1 - see getTraceParams0 / getTlasRange).

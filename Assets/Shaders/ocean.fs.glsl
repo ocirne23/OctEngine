@@ -678,6 +678,9 @@ void main()
         : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + vec3(Nh) * 0.1, L, 0.05, 10000.0)
                                : sampleSunShadowHard(in_pos, vec3(Nh)))); // one tap: the moving water hides a penumbra
     const f16vec3 ambientSky = f16vec3(skyAmbientUp(up));
+    // The GI's sky visibility on the SKY reflections (the blurred share in C, the mirror's sky fallback): water
+    // under a roof or an overhang mirrors no sky. A traced mirror hit is geometry and keeps its full weight.
+    const float16_t skyVis = float16_t(giSkyVisibility(in_pos, up));
     const f16vec3 whitewater = f16vec3(u_oceanFoam.rgb) * (sunTintH * (NoL * sunVis * float16_t(INV_PI)) + ambientSky + f16vec3(u_ambientColor));
 
     const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + sunTintH * float16_t(max(L.y, 0.0) * INV_PI));
@@ -717,7 +720,7 @@ void main()
     const float16_t glint = min(D * (Vv * NoL), float16_t(MEDIUMP_FLT_MAX)) * (sunVis * F_SchlickH(LoH, float16_t(0.02)));
     // Crest foam + shoreline surf: the final mix over everything (no longer gated at 0.3% foam - the
     // branch saved nothing once the terms fold here).
-    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur) * ambientSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
+    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur * skyVis) * ambientSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
       + foamH * whitewater;
 
     // Refracted body: the traced water column (Beer-Lambert both ways).
@@ -749,7 +752,7 @@ void main()
 #endif
     // Sky fallback, fogged too (the baked mirror sky carries none). Only on a miss: a hit replaces it whole.
     if (!mirrorHit)
-        reflColor = applyReflectionFogSky(reflectedSkyRadiance(R), in_pos, R, sunTint, L, vec3(ambientSky));
+        reflColor = applyReflectionFogSky(reflectedSkyRadiance(R), in_pos, R, sunTint, L, vec3(ambientSky)) * float(skyVis);
 #if OCEAN_DEBUG_MODE == 6
     {
         vec3 dbg = vec3(0.0);

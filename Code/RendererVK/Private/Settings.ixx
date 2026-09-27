@@ -106,9 +106,13 @@ export struct CloudParams
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
     float shadowNearKm = 1.0f;         // near cascade extent (km)
-    float shadowFarKm = 16.0f;         // far cascade extent (km)
-    int   shadowSteps = 16;            // map march steps per texel
-    int   shadowFarInterval = 2;       // the far cascade updates every N frames
+    float shadowFarKm = 8.0f;        // far cascade extent (km)
+    int   shadowNearSteps = 16;        // map march steps per texel, near cascade
+    int   shadowFarSteps = 32;         // map march steps per texel, far cascade
+    // PROGRESSIVE UPDATES: each frame a cascade renders 1 / split of its texels (interleaved), so the cost is
+    // the same every frame. 0 = every texel every frame, 1 = 1/4 (2x2), 2 = 1/16 (4x4).
+    int   shadowNearSplit = 1;
+    int   shadowFarSplit = 2;
     bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
     // Quality
     int   maxSteps = 600;             // view march step budget per pixel

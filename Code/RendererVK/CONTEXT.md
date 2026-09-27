@@ -351,11 +351,31 @@ top-down camera hanging in empty sky shapes none of these:
   **Temporal stability** (the blend is an average over the last ~1/alpha visits, so per-visit noise
   reads as a slow DRIFT, and ray count only buys sqrt(N)): the per-visit shift of the ray lattice is
   an **R2 sequence over the wave's visit number** (integer fixed point; the per-probe hash only
-  decorrelates neighbours), so the blended shifts are stratified instead of white; and a **step
-  limiter** on the irradiance blend — a visit brighter than `(1 + GI_STEP_LIMIT_REL)` x the stored DC
-  luminance (only brightening can be an outlier) has its step shrunk to the bound's, never below
-  `GI_STEP_LIMIT_MIN` of the asked step, which bounds the switch-on lag. Boosted visits (relocation,
-  just escaped) skip it, and a CLEARED (all-zero) slot is replaced like a fresh one.
+  decorrelates neighbours), so the blended shifts are stratified instead of white; and a **visit clamp
+  with change detection** on the irradiance blend (it replaced a brightening-only step limiter). Each
+  probe keeps its visits' DC luminance history in `GI_SUN_V4.zw`: a slow second moment (plain alpha)
+  gives sigma around the stored luminance (floored at `GI_SIGMA_MIN_REL`), a fast mean
+  (`GI_FAST_MEAN_ALPHA`) follows the recent visits. A regular visit outside stored ± `GI_CLAMP_SIGMA`
+  sigma is SCALED onto the bound (all SH coefficients and the sun part: direction and sun fraction kept),
+  both ways. A REAL change moves the fast mean, noise does not: the fast mean `GI_CHANGE_SIGMA` off and
+  the previous one `GI_CHANGE_CONFIRM_SIGMA` off on the same side (two visits, so one spike cannot
+  trigger it) blends that visit unclamped at `GI_CHANGE_ALPHA`. The moments are never clamped, so
+  sigma widens while a change passes; a replace restarts them with `GI_SIGMA_INIT_REL` as sigma.
+  Boosted visits (relocation, just escaped) skip both, and a CLEARED (all-zero) slot is replaced like
+  a fresh one.
+  **Sky visibility** (`GI_SUN_V4.y`): the cosine-weighted share of the upper hemisphere (about
+  `u_skyUp`) whose rays miss, blended at the plain alpha, baked × W into the volume tail's `.a`.
+  `giSkyVisibility(pos, n)` reads it (one tail fetch, the next cascade where the first is dead, open sky
+  past the field; 1 without the volume). It occludes the sky reflections the diffuse GI does not carry:
+  the terrain's wet sky reflection and the film overlay's sky mirror + blurred sky share (a puddle under a
+  roof mirrors no sky), and the ocean's top side: its blurred sky share (in C) and the mirror's sky
+  fallback - a traced mirror HIT is geometry and keeps its weight. (Not on the view from below the surface.)
+  **Registers (measured 2026-09-27): unchanged everywhere, but only in this form.** The first version cost
+  the trace 96 -> 128 (the sun direction, the ground sun, up, the ray max and two sky sums held across the
+  ray-query loop - now derived per miss in `traceMiss`, one accumulator left, the hemisphere total taken as
+  its expectation N / 4) and the terrain +8 regs / +16 B (the lookup after the lit core - now folded into
+  `skyReflW` before it; the film's lookup is first in `terrainFilmShade`). The ocean's lookup (before its
+  traces, one half live across them) measured 80/16 -> 80/16.
   **Dead-probe skipping:** a probe whose stored backface fraction is past
   `GI_BACKFACE_DEAD_MAX` (under the terrain, inside a wall — the lookup rejects it anyway) traces only
   every `GI_DEAD_INTERVAL` (8) regular visits, enough for the escape relocation and the wake-up; an
@@ -439,26 +459,27 @@ top-down camera hanging in empty sky shapes none of these:
   (`gi_volume_bake.cs.glsl`) bakes every cascade into 3D images: the probe lattice refined `volumeRes`
   times per axis, stored TOROIDALLY like the probes (slot = fine coord & (dims − 1)), so the lookup is
   REPEAT addressing + hardware trilinear. A voxel = the visibility-weighted blend of its 8 probes AT THE
-  VOXEL CENTRE (trilinear × backface-dead fade × Chebyshev). **16 B per voxel, 4 images per cascade**
+  VOXEL CENTRE (trilinear × backface-dead fade × Chebyshev). **20 B per voxel, 4 images per cascade**
   (`RendererVKLayout::GI_VOLUME_FORMATS`): L0 × W in B10G11R11_UFLOAT (PREMULTIPLIED by the summed weight,
   so a pixel's trilinear fetch is a weight-correct blend and a dead voxel adds nothing instead of black; a
   small float keeps the HDR range at ~1.5 % steps), the 9 L1 terms as RATIOS to L0 scaled by 1/√3 (for a
-  non-negative radiance every ratio is within ±√3) in 2 × RGBA8_SNORM + the 9th in RG16F next to W (fp16,
-  because L0 = fetch / W needs W's precision when it is small). Low precision is safe here because the
+  non-negative radiance every ratio is within ±√3) in 2 × RGBA8_SNORM + the 9th in RGBA16F next to W (fp16,
+  because L0 = fetch / W needs W's precision when it is small) and the sun fraction × W (the cloud dimming,
+  see "GI under cloud shadows"). Low precision is safe here because the
   volume is never accumulated — every bake writes a finished value from the fp32 probe history. The price:
   the ratios filter unweighted, so where L0 changes fast the direction is slightly off, and a dead voxel's
   zero ratio pulls its neighbours' L1 a little toward 0. `createVolume` asserts storage + linear-filter
-  support for the formats; B10G11R11 / RG16 storage need `shaderStorageImageExtendedFormats`, which
+  support for the formats; B10G11R11 storage needs `shaderStorageImageExtendedFormats`, which
   `Device` enables with every other supported core feature. `evalProbeCoverage` (gi_probe.inc.glsl) reads the
   volume through `giLookupCascade` whenever the includer defines `GI_VOLUME_TEXTURES_NAME` (every consumer does
-  under `GI_VOLUME`): 4 filtered fetches per cascade instead of 8 probes × 6 vec4 loads.
+  under `GI_VOLUME`): 4 filtered fetches per cascade instead of 8 probes × 7 vec4 loads.
   **The price: the half-Lambert probe-direction weight needs the surface normal and is NOT baked, and the
   Chebyshev test runs from the voxel centre — more leaking through geometry thinner than a voxel** (the
   per-pixel normal bias of the sample point is kept).
   **EVERY probe consumer switches with the toggle** (`GI_VOLUME` define; the probe code stays for the off
   path): the lit core, the ocean and the terrain's mirror hits (static-mesh set binding 21), decals (5),
   particles (10, vertex), fog scatter (12) and fog apply (5, sky only), and the TRACE's multi-bounce lookup at
-  gather hits (13 — the wave stamps are 14, the cloud shadow map 15, its texture array moved to 16), which reads LAST frame's bake with the baked Chebyshev
+  gather hits (13 — the wave stamps are 14, its texture array 15), which reads LAST frame's bake with the baked Chebyshev
   instead of `giEvalBounce`. **The sky SH (the out-of-field fallback)** is copied by the bake every frame,
   before the partial early-out, into one extra 3×1×1 RGBA16F image at the fixed slot `GI_VOLUME_SKY_IMAGE`;
   in volume mode `giEvalSkySH` `texelFetch`es it. So in volume mode no consumer reads the probe buffer —
@@ -630,17 +651,43 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     depth. A receiver's optical depth is `min(y * max(x - a, 0), z)`, so ONE fetch serves the ground, a
     mountain or fog froxel inside a cloud, and the clouds' own samples. Because x is a coordinate and not a
     distance from a start plane, the map needs no per-cascade start distance.
-  * `buildUboClouds` snaps each centre to whole texels in light space (double, world space). The near
-    cascade renders every frame; the far one every `Far update interval` frames, and at once when the sun
-    or its extent changes — between updates its WORLD centre is kept and only the camera-relative offset is
-    rebuilt. **So the map is ONE image, not per frame slot.** It is cleared to "no cloud" at creation and
+  * **PROGRESSIVE UPDATES, one buffer, no toroidal addressing.** Each frame a cascade renders 1 / split of
+    its texels ("Near update split" 1/4, "Far update split" 1/16): one texel of each 2x2 / 4x4 block, the
+    rotating phase's (`shadowTexel` in cloud_shadow.cs.glsl), one thread per rendered texel - a constant cost
+    per frame instead of a spike every Nth frame (the old "Far update interval"). Neighbouring texels differ in
+    age by a few frames, well under a texel of cloud motion. That needs ONE texel-to-world mapping for all of
+    them, so `buildUboClouds` FREEZES each centre (snapped to whole texels in light space, double, world
+    space) and re-centres only when the camera is 1/8 of the extent away (125 m near, 1 km far), or the sun,
+    the extent or the enable changed: that frame renders the whole cascade (a rare spike; a CONTINUOUSLY
+    moving sun re-renders every frame). The lookup is unchanged: only the frozen centre's camera-relative
+    offset is rebuilt each frame. **Steps per cascade** ("Near steps", "Far steps", `u_cloudShadow4.y` /
+    `.z`). **So the map is ONE image, not per frame slot.** It is cleared to "no cloud" at creation and
     stays bound while the clouds are off (`u_cloudShadow4.x = 0` makes the lookup return 1).
   * Past the far cascade the transmittance fades to a rough mean from the coverage (not measured).
   * **Consumers** multiply their sun term by `cloudSunTransmittance(worldPos)`: the lit core (lit, masked,
     transparent, terrain; forward set binding 22), the ocean (`sunTint`, so glint, body, foam and SSS),
-    the fog scatter (13 — the shafts through cloud gaps), the GI trace's gather-hit sun (15), LIT particles
+    the fog scatter (13 — the shafts through cloud gaps), LIT particles
     (draw set 11, vertex stage), LIT decals (6), and the cloud march's self-shadow (9; outside the map it
     falls back to the sun march).
+  * **GI under cloud shadows: dimmed at the LOOKUP, not in the trace.** The trace's gather-hit sun has NO
+    cloud shadow (the trace does not bind the map). Cloud-shadowed hits made each probe lag a moving cloud
+    shadow by its update interval, so the GI flashed under shadows that fall AWAY from the camera (long
+    intervals; a cloud straight overhead did not show it). Instead every probe keeps its **sun DC luminance**
+    (probe vec4 `[6].x`, `GI_SUN_V4`: the direct sun at gather hits + the sun share of the multi-bounce +
+    the sunlit-ground term `skyGroundSun` of every DOWNWARD MISS (past `rayMax` or the TLAS range: the sky
+    map below the horizon is a sunlit ground; left out of the sun part, each visit's random downward misses
+    added undimmed sun under a cloud shadow - probe flashes at shadow borders, worst with a low sun) + the
+    UPWARD misses inside a cone around the sun (all sun within 15°, fading out by 30°: the Mie aureole and
+    the sunlit cloud edges, which the shadowing cloud blocks at a shaded point),
+    blended at the SH's alpha), the bake stores the **sun fraction s × W** in the tail image's `.b` (RGBA16F),
+    and `giIrradiance` returns `E × (1 − s (1 − T))` with `T = cloudSunTransmittanceSoft` — the FAR cascade
+    only (~8 m texels, one fetch): the bounce comes from tens of metres around, so the soft value fits.
+    Indoors s ≈ 0, so a roof is not dimmed by the cloud above it. `evalProbeCoverage` stays UNDIMMED (it
+    returns s as well): the trace's multi-bounce needs the undimmed value. The dimming compiles in only
+    when the includer has `cloud_shadow.inc.glsl` BEFORE `gi_probe.inc.glsl` and `CLOUD_SHADOWS` is set.
+    s is the DC fraction (not per direction) and one scalar for RGB: the warm sun bounce and the blue sky
+    part are dimmed alike. **Measured (2026-09-27): no register or local-memory change** in the lit, terrain,
+    ocean, decal, particle, fog scatter, trace or bake pipelines.
 * **THE SKY CLOUDS** (`cloud_sky.cs.glsl`, `CloudPipeline::recordSky`, in the primary after the shadow map
   and before GI): one invocation per sky-map texel, `cloudRaymarch` with 64 steps, written as (in-scatter,
   transmittance) into a lat-long image on the sky map's own texel grid; the sky-map bake composites it

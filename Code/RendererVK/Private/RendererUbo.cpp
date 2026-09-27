@@ -293,16 +293,20 @@ void Renderer::buildUboClouds(const Camera& camera)
         1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f));
 
     // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
-    // texels in light space (in double, world space) so the map does not swim when the camera moves. The near
-    // cascade renders every frame; the far one every "Far update interval" frames, and at once when the sun
-    // or its extent changes - between its updates its world centre is kept, and only the camera-relative
-    // offset the shaders read is rebuilt.
+    // texels in light space (in double, world space) so the map does not swim when the camera moves.
+    // PROGRESSIVE UPDATES in ONE buffer: each frame a cascade renders 1 / split of its texels, interleaved
+    // (a rotating phase of a 2x2 or 4x4 pattern), so its cost is the same every frame; neighbouring texels
+    // then differ in age by a few frames, well under a texel of cloud motion. That needs ONE texel-to-world
+    // mapping for all of them, so the centre is FROZEN and re-centres only when the camera is 1/8 of the
+    // extent away from it (or the sun / the extent changed, or the map was off) - that frame renders the
+    // whole cascade, a rare spike. The shaders' lookup is unchanged: only the camera-relative offset of the
+    // frozen centre is rebuilt each frame.
     const glm::dvec3 sun = glm::normalize(glm::dvec3(m_skyParams.sunDirection));
     const bool shadowOn = enabled && c.shadows && sun.y > 0.01;
     m_cloudShadowMask = 0;
     if (!shadowOn)
     {
-        m_cloudShadowFarValid = false;
+        m_cloudShadowValid = {};
         ubo.cloudShadow4 = glm::vec4(0.0f);
         return;
     }
@@ -310,28 +314,34 @@ void Renderer::buildUboClouds(const Camera& camera)
     const glm::dvec3 e1 = glm::cross(sun, e0);
     const glm::dvec3 camPos(camera.position);
     const double extents[2] = { glm::max((double)c.shadowNearKm, 0.1) * 1000.0, glm::max((double)c.shadowFarKm, 0.2) * 1000.0 };
+    const int splits[2] = { glm::clamp(c.shadowNearSplit, 0, 2), glm::clamp(c.shadowFarSplit, 0, 2) };
     const bool sunChanged = sun != m_cloudShadowSun;
     m_cloudShadowSun = sun;
     for (uint32 cascade = 0; cascade < CloudPipeline::SHADOW_CASCADES; ++cascade)
     {
-        bool update = true;
-        if (cascade == 1)
-            update = !m_cloudShadowFarValid || sunChanged || extents[1] != m_cloudShadowExtent[1]
-                || m_frameCounter - m_cloudShadowFarFrame >= (uint32)glm::max(c.shadowFarInterval, 1);
-        if (update)
+        const double extent = extents[cascade];
+        const double texel = extent / CloudPipeline::SHADOW_RESOLUTION;
+        const glm::dvec2 camLight(glm::dot(camPos, e0), glm::dot(camPos, e1));
+        const glm::dvec2 centreLight(glm::dot(m_cloudShadowCenter[cascade], e0), glm::dot(m_cloudShadowCenter[cascade], e1));
+        const glm::dvec2 offset = glm::abs(camLight - centreLight);
+        const bool recentre = !m_cloudShadowValid[cascade] || sunChanged || extent != m_cloudShadowExtent[cascade]
+            || glm::max(offset.x, offset.y) > extent * 0.125;
+        if (recentre)
         {
-            const double texel = extents[cascade] / CloudPipeline::SHADOW_RESOLUTION;
-            const double su = std::floor(glm::dot(camPos, e0) / texel + 0.5) * texel;
-            const double sv = std::floor(glm::dot(camPos, e1) / texel + 0.5) * texel;
-            m_cloudShadowCenter[cascade] = e0 * su + e1 * sv + sun * glm::dot(camPos, sun);
-            m_cloudShadowExtent[cascade] = extents[cascade];
-            m_cloudShadowMask |= 1u << cascade;
+            const glm::dvec2 snapped = glm::floor(camLight / texel + 0.5) * texel;
+            m_cloudShadowCenter[cascade] = e0 * snapped.x + e1 * snapped.y + sun * glm::dot(camPos, sun);
+            m_cloudShadowExtent[cascade] = extent;
+            m_cloudShadowValid[cascade] = true;
+            m_cloudShadowSplit[cascade] = 0; // this frame: every texel
+            m_cloudShadowPhase[cascade] = 0;
         }
-    }
-    if (m_cloudShadowMask & 2u)
-    {
-        m_cloudShadowFarValid = true;
-        m_cloudShadowFarFrame = m_frameCounter;
+        else
+        {
+            m_cloudShadowSplit[cascade] = (uint32)splits[cascade];
+            const uint32 phases = 1u << (2 * splits[cascade]); // 1, 4 or 16
+            m_cloudShadowPhase[cascade] = (m_cloudShadowPhase[cascade] + 1) % phases;
+        }
+        m_cloudShadowMask |= 1u << cascade;
     }
     const glm::vec3 rel0(m_cloudShadowCenter[0] - camPos);
     const glm::vec3 rel1(m_cloudShadowCenter[1] - camPos);
@@ -340,7 +350,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudShadow2 = glm::vec4(glm::vec3(e0), glm::clamp(c.shadowStrength, 0.0f, 1.0f));
     // Past the cascades: a rough mean transmittance of the layer from its coverage (not measured).
     ubo.cloudShadow3 = glm::vec4(glm::vec3(e1), glm::mix(1.0f, 0.3f, glm::clamp(c.coverage, 0.0f, 1.0f)));
-    ubo.cloudShadow4 = glm::vec4(1.0f, (float)glm::max(c.shadowSteps, 1), 0.0f, 0.0f);
+    ubo.cloudShadow4 = glm::vec4(1.0f, (float)glm::max(c.shadowNearSteps, 1), (float)glm::max(c.shadowFarSteps, 1), 0.0f);
 }
 
 // Sun shadow route: the RT-sun toggle, else the PCSS cascade matrices (also consumed CPU-side via

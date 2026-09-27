@@ -20,14 +20,25 @@
 // GI_SH_STRIDE, GI_NUM_CASCADES, GI_PROBE_DIM_X/Y/Z, GI_FOCUS_Y_OFFSET and GI_CASCADE_BASE_SPACING are
 // injected by the engine from RendererVKLayout (Layout.ixx, the live g_giGrid - the "GI" grid tweaks
 // reload every shader).
-// Per-probe layout, in VEC4s (24 floats = 6 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
+// Per-probe layout, in VEC4s (28 floats = 7 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
 //   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance
 //   [3] = SH-L1 mean depth   [4] = SH-L1 mean depth^2
 //   [5] = (backface-hit fraction, relocation offset xyz)
-#define GI_PROBE_STRIDE_V4 ((uint(GI_SH_STRIDE) + 12u) / 4u)
+//   [6] = (sun DC luminance, sky visibility, fast visit-luma mean, visit-luma second moment):
+//         x - the part of luma(c0) that came from the SUN (the direct sun at gather hits + its multi-bounce),
+//             traced WITHOUT the cloud shadow. The lookup dims that fraction by the cloud transmittance at the
+//             shaded point (giIrradiance), so a moving cloud shadow changes the GI at once instead of after each
+//             probe's update interval.
+//         y - the cosine-weighted share of the upper hemisphere (about u_skyUp) whose rays miss: open sky. Baked
+//             into the volume for giSkyVisibility (sky-reflection occlusion).
+//         z, w - trace-only history of the visits' DC luminance: a fast mean and a slow second moment, for the
+//             trace's variance clamp and change detection (gi_probe_trace.cs.glsl).
+#define GI_PROBE_STRIDE_V4 ((uint(GI_SH_STRIDE) + 16u) / 4u)
 #define GI_DEPTH_V4   3u
 #define GI_DEPTH2_V4  4u
 #define GI_MISC_V4    5u
+#define GI_SUN_V4     6u
+#define GI_LUMA_W     vec3(0.2126, 0.7152, 0.0722)
 
 #ifndef GI_NORMAL_BIAS
 #define GI_NORMAL_BIAS 1.5 // push the sample point along the normal (world units) to limit self-leak
@@ -357,11 +368,13 @@ float giVisibilityWeight(uint cellBase, vec3 dir, float len, int s)
 // Everything before the clamp is linear in the coefficients, so reducing each probe to 3 floats here is
 // exactly the old "blend the 12 coefficients, evaluate once": 3 accumulators live instead of 12, and the
 // first cascade holds 3 floats (not 12) while the second one samples - that span was the register peak.
+// sun = the blended sun fraction (see GI_SUN_V4): the weighted sun DC over the weighted DC luminance.
 void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n, vec4 Yk,
-                     out vec3 eLin, out float totalW)
+                     out vec3 eLin, out float totalW, out float sun)
 {
     eLin = vec3(0.0);
     totalW = 0.0;
+    float sunW = 0.0, lumaW = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -403,7 +416,10 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
         giReadSH(cellBase, c0, c1, c2, c3);
         eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
+        sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
+        lumaW += w * dot(c0, GI_LUMA_W);
     }
+    sun = lumaW > 1e-8 ? clamp(sunW / lumaW, 0.0, 1.0) : 0.0;
     if (totalW <= 1e-4)
         return;
     eLin *= 1.0 / totalW;
@@ -473,13 +489,13 @@ int giStartCascade(vec3 worldPos, vec3 n, out vec3 p, out float fade)
 // point puts the Chebyshev direction exactly in the wall plane, where the blurry L1 depth reconstruction
 // underestimates distance and false-occludes everything lateral to a probe (bright probe-footprint circles
 // on walls).
-float giSampleCascadeAt(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+float giSampleCascadeAt(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
     const int   s    = giCascadeSpacing(c);
     const vec3  pf   = p / float(s);
     const ivec3 base = ivec3(floor(pf));
     float w;
-    giSampleCascade(c, s, base, pf - vec3(base), p, n, Yk, eLin, w);
+    giSampleCascade(c, s, base, pf - vec3(base), p, n, Yk, eLin, w, sun);
     return w;
 }
 
@@ -492,38 +508,72 @@ float giSampleCascadeAt(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
 // caller falls through to a coarser cascade, like giSampleCascade).
 // The ratios filter unweighted while L0 filters weight-correct: where L0 changes fast between voxels the
 // blended direction is slightly off, and a dead voxel's ratio 0 pulls the neighbours' L1 a little toward 0.
-float giVolumeCascade(int c, vec3 p, vec4 Yk, out vec3 eLin)
+// Voxel centres sit at (fine lattice coord + 0.5), which is exactly the texel-centre convention, and the
+// toroidal slot is the coord mod the dims, which is exactly REPEAT: the normalized coord is the fine
+// lattice position over the dims. fract keeps it small for the texture unit's fixed-point conversion.
+vec3 giVolumeUVW(int c, vec3 p)
 {
-    // Voxel centres sit at (fine lattice coord + 0.5), which is exactly the texel-centre convention, and the
-    // toroidal slot is the coord mod the dims, which is exactly REPEAT: the normalized coord is the fine
-    // lattice position over the dims. fract keeps it small for the texture unit's fixed-point conversion.
-    const vec3 uvw = fract(p * (float(GI_VOLUME_RES) / float(giCascadeSpacing(c))) / vec3(GI_PROBE_DIMS * GI_VOLUME_RES));
+    return fract(p * (float(GI_VOLUME_RES) / float(giCascadeSpacing(c))) / vec3(GI_PROBE_DIMS * GI_VOLUME_RES));
+}
+
+float giVolumeCascade(int c, vec3 p, vec4 Yk, out vec3 eLin, out float sun)
+{
+    const vec3 uvw = giVolumeUVW(c, p);
     const int  i   = c * GI_VOLUME_IMAGES_PER_CASCADE;
     // textureLod: the call sits in divergent control flow, where implicit derivatives are undefined.
     const vec3 l0W = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 0)], uvw, 0.0).rgb;
     const vec4 qa  = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 1)], uvw, 0.0); // q1.rgb, q2.r
     const vec4 qb  = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 2)], uvw, 0.0); // q2.gb, q3.rg
-    const vec2 tl  = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 3)], uvw, 0.0).rg; // q3.b, W
+    const vec3 tl  = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(i + 3)], uvw, 0.0).rgb; // q3.b, W, sun x W
     const float W  = tl.y;
     // c_k = q_k * sqrt(3) * c0, so the unclamped irradiance per channel is c0 * (Yk.x + sqrt(3) (q . Yk.yzw)).
-    const vec3 c0 = W > 1e-4 ? l0W / W : vec3(0.0);
+    const float invW = W > 1e-4 ? 1.0 / W : 0.0;
+    const vec3 c0 = l0W * invW;
     const vec3 q1 = qa.xyz, q2 = vec3(qa.w, qb.xy), q3 = vec3(qb.zw, tl.x);
     eLin = c0 * (Yk.x + GI_SQRT3 * (q1 * Yk.y + q2 * Yk.z + q3 * Yk.w));
+    sun  = min(tl.z * invW, 1.0);
     return W;
 }
 
-// One cascade's unclamped irradiance at the biased point p and its summed weight: the irradiance volume when the
-// includer binds it (the normal still biases p per pixel; only the probe-direction half-Lambert weight is gone,
-// see the bake), else the probe loop.
-float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+// One cascade's unclamped irradiance at the biased point p, its sun fraction and its summed weight: the
+// irradiance volume when the includer binds it (the normal still biases p per pixel; only the probe-direction
+// half-Lambert weight is gone, see the bake), else the probe loop.
+float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
-    return giVolumeCascade(c, p, Yk, eLin);
+    return giVolumeCascade(c, p, Yk, eLin, sun);
+}
+
+// SKY VISIBILITY at a surface: the probes' cosine-weighted open share of the upper hemisphere (GI_SUN_V4.y), 1 =
+// open sky, 0 = covered - an occlusion term for sky reflections / sky ambient, which the diffuse GI already
+// carries but a mirror lookup of the sky map does not. ONE tail fetch (W, visibility x W) from the lookup's
+// cascade, the next one where every probe of it is dead; no cross-cascade blend (the term is soft), faded to
+// open sky over the outermost cascade's edge. Volume mode only: without the volume it is 1.
+float giSkyVisibility(vec3 worldPos, vec3 n)
+{
+    vec3 p; float fade;
+    int c = giStartCascade(worldPos, n, p, fade);
+    if (c < 0)
+        return 1.0;
+    vec2 t = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(c * GI_VOLUME_IMAGES_PER_CASCADE + 3)], giVolumeUVW(c, p), 0.0).ga;
+    if (t.x <= 1e-4)
+    {
+        if (++c >= GI_NUM_CASCADES)
+            return 1.0;
+        p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
+        fade = giCascadeFade(giCascadeSpacing(c), p, giFadeBandCells(c));
+        t = textureLod(GI_VOLUME_TEXTURES_NAME[nonuniformEXT(c * GI_VOLUME_IMAGES_PER_CASCADE + 3)], giVolumeUVW(c, p), 0.0).ga;
+        if (t.x <= 1e-4)
+            return 1.0;
+    }
+    const float v = clamp(t.y / t.x, 0.0, 1.0);
+    return c == GI_NUM_CASCADES - 1 ? mix(1.0, v, fade) : v;
 }
 #else
-float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
-    return giSampleCascadeAt(c, p, n, Yk, eLin);
+    return giSampleCascadeAt(c, p, n, Yk, eLin, sun);
 }
+float giSkyVisibility(vec3 worldPos, vec3 n) { return 1.0; }
 #endif
 
 // THE shading lookup: cosine-convolved irradiance E(n) with the cross-cascade fade.
@@ -536,46 +586,60 @@ float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
 // as the fall-through when every probe of c is dead (a coarser, differently-aligned lattice). c dead with
 // c + 1 in ITS band does not blend on into c + 2. Dead in both, or past the outermost box: vec3(-1) with
 // coverage 0, and every caller uses only its sky fallback.
-vec3 evalProbeCoverage(vec3 worldPos, vec3 n, out float coverage)
+// sun = the sun fraction of the result (GI_SUN_V4), blended like the irradiance; 0 with no data. The result is
+// NOT cloud-dimmed: giIrradiance applies that, and the trace's multi-bounce wants it undimmed.
+vec3 evalProbeCoverage(vec3 worldPos, vec3 n, out float coverage, out float sun)
 {
     coverage = 0.0;
+    sun = 0.0;
     vec3 p; float fade;
     const int c = giStartCascade(worldPos, n, p, fade);
     if (c < 0)
         return vec3(-1.0);
 
     const vec4 Yk = giIrradianceBasis(n);
-    vec3 e0;
-    const bool alive0 = giLookupCascade(c, p, n, Yk, e0) > 1e-4;
+    vec3 e0; float s0;
+    const bool alive0 = giLookupCascade(c, p, n, Yk, e0, s0) > 1e-4;
     const bool last   = c == GI_NUM_CASCADES - 1;
     if (alive0 && (last || fade >= 1.0))
     {
         coverage = last ? fade : 1.0;
+        sun = s0;
         return max(e0, vec3(0.0));
     }
     if (last)
         return vec3(-1.0);
 
     const vec3 p1 = giBiasedSample(worldPos, n, giCascadeSpacing(c + 1));
-    vec3 e1;
-    const bool alive1 = giLookupCascade(c + 1, p1, n, Yk, e1) > 1e-4;
+    vec3 e1; float s1;
+    const bool alive1 = giLookupCascade(c + 1, p1, n, Yk, e1, s1) > 1e-4;
     if (alive0)
     {
         coverage = 1.0;
+        sun = alive1 ? mix(s1, s0, fade) : s0;
         return max(alive1 ? mix(e1, e0, fade) : e0, vec3(0.0));
     }
     if (!alive1)
         return vec3(-1.0);
     coverage = c + 1 == GI_NUM_CASCADES - 1 ? giCascadeFade(giCascadeSpacing(c + 1), p1, giFadeBandCells(c + 1)) : 1.0;
+    sun = s1;
     return max(e1, vec3(0.0));
 }
 
 // E(n) with the sky SH faded in over the field's edge: the whole block every shading consumer runs. The sky is
 // read only where it contributes; the vec3(-1) "no data" result always comes with coverage 0, so the mix drops it.
+// CLOUD DIMMING: the probes hold the sun's part WITHOUT the cloud shadow, so here the sun fraction is dimmed by
+// the cloud transmittance at the shaded point - from the FAR cloud-shadow cascade (~8 m texels): the bounce
+// light comes from tens of metres around, so the soft value is the better estimate of its sources' shadow.
+// Only when the includer has cloud_shadow.inc.glsl BEFORE this file (and the shadows are compiled in).
 vec3 giIrradiance(vec3 worldPos, vec3 n)
 {
-    float coverage;
-    vec3 E = evalProbeCoverage(worldPos, n, coverage);
+    float coverage, sun;
+    vec3 E = evalProbeCoverage(worldPos, n, coverage, sun);
+#if defined(CLOUD_SHADOW_INC_GLSL) && defined(CLOUD_SHADOWS)
+    if (sun > 0.0)
+        E *= 1.0 - sun * (1.0 - cloudSunTransmittanceSoft(worldPos));
+#endif
     if (coverage < 1.0)
         E = mix(giEvalSkySH(n), E, coverage);
     return E;
@@ -625,7 +689,7 @@ f16vec3 giIndirectOverPiH(vec3 worldPos, f16vec3 n)
 
 // One cascade of giEvalBounce: giSampleCascade without the Chebyshev test (no depth-moment loads, no
 // reconstruction). Unclamped irradiance and the summed weight, like giSampleCascadeAt.
-float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
+float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
     const int   s    = giCascadeSpacing(c);
     const vec3  pf   = p / float(s);
@@ -633,6 +697,7 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
     const vec3  frac = pf - vec3(base);
     eLin = vec3(0.0);
     float totalW = 0.0;
+    float sunW = 0.0, lumaW = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -656,7 +721,10 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
         giReadSH(cellBase, c0, c1, c2, c3);
         eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
+        sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
+        lumaW += w * dot(c0, GI_LUMA_W);
     }
+    sun = lumaW > 1e-8 ? clamp(sunW / lumaW, 0.0, 1.0) : 0.0;
     if (totalW > 1e-4)
         eLin *= 1.0 / totalW;
     return totalW;
@@ -671,9 +739,11 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin)
 // to two. Backface-dead rejection and the half-Lambert probe-direction fade stay - they are what keeps a
 // wall from leaking into the bounce.
 // coverage behaves like evalProbeCoverage's (1 inside, fading over the outermost window's edge band).
-vec3 giEvalBounce(vec3 worldPos, vec3 n, out float coverage)
+// sun = the result's sun fraction, like evalProbeCoverage's.
+vec3 giEvalBounce(vec3 worldPos, vec3 n, out float coverage, out float sun)
 {
     coverage = 0.0;
+    sun = 0.0;
     vec3 p; float fade;
     int c = giStartCascade(worldPos, n, p, fade);
     if (c < 0)
@@ -681,12 +751,12 @@ vec3 giEvalBounce(vec3 worldPos, vec3 n, out float coverage)
 
     const vec4 Yk = giIrradianceBasis(n);
     vec3 e;
-    if (giBounceCascade(c, p, n, Yk, e) <= 1e-4)
+    if (giBounceCascade(c, p, n, Yk, e, sun) <= 1e-4)
     {
         if (++c >= GI_NUM_CASCADES)
             return vec3(-1.0);
         p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
-        if (giBounceCascade(c, p, n, Yk, e) <= 1e-4)
+        if (giBounceCascade(c, p, n, Yk, e, sun) <= 1e-4)
             return vec3(-1.0);
         fade = giCascadeFade(giCascadeSpacing(c), p, giFadeBandCells(c));
     }
@@ -719,6 +789,13 @@ void giBlendProbeStats(uint cellBase, vec4 dsh, vec4 d2sh, float prevBackfaceFra
     GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4]  = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4],  dsh,  alpha);
     GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4] = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4], d2sh, alpha);
     GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = vec4(mix(prevBackfaceFrac, backfaceFrac, alpha), offset);
+}
+
+// Store the GI_SUN_V4 vec4 (the caller blends: the sun DC at the SH's alpha, so its ratio to luma(c0) stays
+// true; the rest at their own rates).
+void giStoreSunStats(uint cellBase, vec4 stats)
+{
+    GI_GRID_DATA_NAME[cellBase + GI_SUN_V4] = stats;
 }
 
 #endif // GI_PROBE_WRITE

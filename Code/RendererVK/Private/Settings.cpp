@@ -9,6 +9,7 @@ namespace
     constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
     constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size" };
     constexpr oc::string_view s_cloudDebugNames[] = { "Off", "Step count", "Density only", "History rejection" };
+    constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame" };
 }
 
 void SkyParams::registerTweaks()
@@ -78,8 +79,10 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Shadows", "Strength", &shadowStrength, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Shadows", "Near cascade (km)", &shadowNearKm, 1.0f, 50.0f, 0.1f, [&]() { shadowFarKm = oc::max(shadowFarKm, shadowNearKm * 2.0f); });
     Tweak::floatVar("Sky/Clouds/Shadows", "Far cascade (km)", &shadowFarKm, 2.0f, 400.0f, 0.5f, [&]() { shadowNearKm = oc::min(shadowNearKm, shadowFarKm * 0.5f); });
-    Tweak::intVar("Sky/Clouds/Shadows", "Steps", &shadowSteps, 4, 256);
-    Tweak::intVar("Sky/Clouds/Shadows", "Far update interval", &shadowFarInterval, 1, 16);
+    Tweak::intVar("Sky/Clouds/Shadows", "Near steps", &shadowNearSteps, 4, 256);
+    Tweak::intVar("Sky/Clouds/Shadows", "Far steps", &shadowFarSteps, 4, 256);
+    Tweak::enumVar("Sky/Clouds/Shadows", "Near update split", &shadowNearSplit, s_cloudShadowSplitNames);
+    Tweak::enumVar("Sky/Clouds/Shadows", "Far update split", &shadowFarSplit, s_cloudShadowSplitNames);
     Tweak::boolean("Sky/Clouds/Shadows", "Self-shadow from map", &selfShadowFromMap, onDefinesChanged);
 
     Tweak::intVar("Sky/Clouds/Quality", "Max steps", &maxSteps, 16, 1024);

@@ -26,6 +26,8 @@ namespace
     {
         uint32 cascade;
         uint32 resolution;
+        uint32 split; // 0 = every texel, 1 = one of each 2x2, 2 = one of each 4x4
+        uint32 phase; // which texel of the pattern this frame
     };
     // x = the front's along-light coordinate, y = mean extinction, z = whole optical depth (cloud_shadow.inc.glsl).
     constexpr vk::Format SHADOW_FORMAT = vk::Format::eR32G32B32A32Sfloat;
@@ -687,7 +689,8 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &temporalToApply });
 }
 
-void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask)
+void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask,
+    const oc::array<uint32, SHADOW_CASCADES>& split, const oc::array<uint32, SHADOW_CASCADES>& phase)
 {
     if (cascadeMask == 0)
         return;
@@ -716,12 +719,14 @@ void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, 
     commandBuffer.cmdUpdateDescriptorSets(m_shadowPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_shadowPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_shadowPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    const uint32 groups = (SHADOW_RESOLUTION + 7) / 8;
     for (uint32 c = 0; c < SHADOW_CASCADES; ++c)
     {
         if (!(cascadeMask & (1u << c)))
             continue;
-        const ShadowPC pc{ .cascade = c, .resolution = SHADOW_RESOLUTION };
+        // Progressive: one thread per texel of THIS frame's phase, so the dispatch shrinks with the split.
+        const uint32 stride = 1u << split[c]; // 1, 2 or 4 texels per axis
+        const uint32 groups = (SHADOW_RESOLUTION / stride + 7) / 8;
+        const ShadowPC pc{ .cascade = c, .resolution = SHADOW_RESOLUTION, .split = split[c], .phase = phase[c] };
         cmd.pushConstants(m_shadowPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(groups, groups, 1);
     }

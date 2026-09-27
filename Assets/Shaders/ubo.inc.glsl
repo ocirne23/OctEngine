@@ -311,7 +311,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
     vec4 u_cloudShadow2; // xyz = light-space axis e0, w = shadow strength
     vec4 u_cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
-    vec4 u_cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps, zw unused
+    vec4 u_cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

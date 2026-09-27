@@ -15,14 +15,14 @@ layout (binding = 2, std430) readonly buffer AliveList { uint pa_alive[]; };
 layout (binding = 3, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
 layout (binding = 5, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
+#define CLOUD_SHADOW_BINDING 11
+#include "cloud_shadow.inc.glsl" // LIT particles: the sun through the clouds (before gi_probe: its cloud dimming)
 #define GI_GRID_DATA_NAME gi_gridData
 #ifdef GI_VOLUME
 layout (binding = 10) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
 #include "gi_probe.inc.glsl"
-#define CLOUD_SHADOW_BINDING 11
-#include "cloud_shadow.inc.glsl" // LIT particles: the sun through the clouds
 // The terrain-data cascades (height / water level) for the ground fade (PARTICLE_FLAG_GROUND_FADE).
 #define TERRAIN_HEIGHT_BINDING 6
 #include "terrain_height.inc.glsl"

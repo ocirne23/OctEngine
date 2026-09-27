@@ -957,8 +957,6 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
         .tlas = tlas,
         .shadowMapView = frameData.shadowMap.getSampleView(),
         .shadowMapSampler = frameData.shadowMap.getSampler(),
-        .cloudShadowView = m_cloudPipeline.getShadowView(),
-        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
 
@@ -1513,11 +1511,11 @@ void Renderer::recordCommandBuffers()
     if (m_instances.getInstanceCount() > 0)
     {
         recordPrimaryPreScene(frameIdx, vkCommandBuffer);
-        // The cloud shadow map, before every reader (GI trace, fog scatter, the scene, the cloud march).
+        // The cloud shadow map, before every reader (the sky clouds, fog scatter, the scene, the cloud march).
         if (m_cloudShadowMask != 0)
         {
             m_gpuProfiler.beginScope(vkCommandBuffer, "Cloud shadow");
-            m_cloudPipeline.recordShadow(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, m_cloudShadowMask);
+            m_cloudPipeline.recordShadow(commandBuffer, frameIdx, m_perFrameData[frameIdx].ubo, m_cloudShadowMask, m_cloudShadowSplit, m_cloudShadowPhase);
             m_gpuProfiler.endScope(vkCommandBuffer);
         }
         // The clouds of the GI sky map (reflections, GI miss rays, sky SH), before GI bakes the sky map.

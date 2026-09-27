@@ -336,7 +336,7 @@ export namespace RendererVKLayout
     // and the "GI" grid tweaks change it through GIProbePipeline::registerGridTweaks - GPU idle, the SH
     // buffer re-allocated (resizeGrid), every shader reloaded, the clipmap cleared.
     constexpr uint32 GI_SH_STRIDE = 12;                                                  // SH-L1 RGB floats per probe
-    constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 12;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz
+    constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 16;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz + sun DC luminance (+3 spare)
     constexpr uint32 GI_CASCADE_BASE_SPACING = 2;                                        // finest cascade probe spacing, world units (power of two)
     struct GiGridConfig
     {
@@ -363,12 +363,14 @@ export namespace RendererVKLayout
         uint32 volumeDimY() const { return dimY() * (uint32)volumeRes; }
         uint32 volumeDimZ() const { return dimZ() * (uint32)volumeRes; }
     };
-    // Irradiance volume images per cascade, 16 B per voxel (gi_volume_bake.cs.glsl writes, giVolumeCascade reads):
+    // Irradiance volume images per cascade, 20 B per voxel (gi_volume_bake.cs.glsl writes, giVolumeCascade reads):
     //   [0] B10G11R11_UFLOAT  L0 x W: the DC term, PREMULTIPLIED by the summed weight (a weight-correct trilinear
     //                         fetch); a small float, so the HDR range keeps ~1.5% relative steps
     //   [1] R8G8B8A8_SNORM    q1.rgb, q2.r      q = (L1 / L0) / sqrt(3): for a non-negative radiance each L1 / L0
     //   [2] R8G8B8A8_SNORM    q2.gb, q3.rg      ratio lies in [-sqrt(3), sqrt(3)], so it fits SNORM exactly
-    //   [3] R16G16_SFLOAT     q3.b, W           (W in fp16: L0 = fetch[0] / W needs its precision at small W)
+    //   [3] R16G16B16A16_SFLOAT q3.b, W, s x W  (W in fp16: L0 = fetch[0] / W needs its precision at small W;
+    //                         s = the SUN FRACTION of the irradiance, premultiplied like L0 - the lookup dims that
+    //                         part by the cloud shadow at the shaded point, see giIrradiance)
     // The volume is NOT accumulated (every bake writes a finished value from the fp32 probe history), so the
     // quantization never compounds. Then ONE more image at a fixed slot: the sky SH (the out-of-field fallback,
     // GI_VOLUME_SKY_TEXELS texels RGBA16F), copied from the probe buffer by the bake. Every consumer's sampler3D
@@ -377,7 +379,7 @@ export namespace RendererVKLayout
     constexpr uint32 GI_VOLUME_IMAGES_PER_CASCADE = 4;
     constexpr uint32 GI_VOLUME_SKY_TEXELS = 3; // the sky SH's 3 vec4s (the probe buffer's packing)
     inline constexpr vk::Format GI_VOLUME_FORMATS[GI_VOLUME_IMAGES_PER_CASCADE] = {
-        vk::Format::eB10G11R11UfloatPack32, vk::Format::eR8G8B8A8Snorm, vk::Format::eR8G8B8A8Snorm, vk::Format::eR16G16Sfloat };
+        vk::Format::eB10G11R11UfloatPack32, vk::Format::eR8G8B8A8Snorm, vk::Format::eR8G8B8A8Snorm, vk::Format::eR16G16B16A16Sfloat };
     constexpr uint32 GI_VOLUME_SKY_IMAGE = GI_MAX_CASCADES * GI_VOLUME_IMAGES_PER_CASCADE;
     constexpr uint32 GI_VOLUME_MAX_IMAGES = GI_VOLUME_SKY_IMAGE + 1;
     // THE live grid shape: GIProbePipeline owns the tweaks on it; buildLayoutPreamble reads it at every
@@ -830,7 +832,7 @@ export namespace RendererVKLayout
         glm::vec4 cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
         glm::vec4 cloudShadow2; // xyz = light-space axis e0, w = shadow strength
         glm::vec4 cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
-        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps, zw unused
+        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

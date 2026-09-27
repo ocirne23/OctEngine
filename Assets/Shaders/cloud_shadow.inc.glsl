@@ -65,4 +65,20 @@ float cloudSunTransmittance(vec3 worldPos)
 #endif
 }
 
+// cloudSunTransmittance from the FAR cascade only (~8 m texels, bilinear): a soft value over tens of metres,
+// one fetch. The GI lookup dims the probes' sun part by it (giIrradiance).
+float cloudSunTransmittanceSoft(vec3 worldPos)
+{
+#ifdef CLOUD_SHADOWS
+    if (u_cloudShadow4.x < 0.5)
+        return 1.0;
+    float w;
+    const float od = cloudShadowCascadeOD(1, worldPos - u_views[VIEW_CENTER].viewPos.xyz, w);
+    const float T = mix(u_cloudShadow3.w, exp(-od), w);
+    return mix(1.0, T, u_cloudShadow2.w);
+#else
+    return 1.0;
+#endif
+}
+
 #endif
