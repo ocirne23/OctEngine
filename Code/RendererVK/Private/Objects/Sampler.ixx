@@ -11,7 +11,7 @@ public:
 
     // maxAnisotropy <= 1 = no anisotropic filtering. Calling it again replaces the sampler (the caller makes
     // sure the GPU no longer uses the old one).
-    bool initialize(vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat, float maxAnisotropy = 16.0f);
+    bool initialize(vk::SamplerAddressMode addressMode = vk::SamplerAddressMode::eRepeat, float maxAnisotropy = 16.0f, float mipLodBias = 0.0f);
 
     vk::Sampler getSampler() const { return m_sampler; }
 

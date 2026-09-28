@@ -694,7 +694,7 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
             {
                 // The targets change size (and the march target existence) with the mode.
                 m_forceFieldPipeline.setUnionHalfRes(params.unionHalfRes);
-                const vk::Extent2D ext = m_swapChain.getLayout().extent;
+                const vk::Extent2D ext = renderExtent();
                 m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
             }
             m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());

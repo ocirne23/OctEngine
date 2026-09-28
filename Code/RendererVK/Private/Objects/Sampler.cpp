@@ -13,7 +13,7 @@ Sampler::~Sampler()
         Globals::device.getDevice().destroySampler(m_sampler);
 }
 
-bool Sampler::initialize(vk::SamplerAddressMode addressMode, float maxAnisotropy)
+bool Sampler::initialize(vk::SamplerAddressMode addressMode, float maxAnisotropy, float mipLodBias)
 {
     if (m_sampler)
     {
@@ -27,7 +27,7 @@ bool Sampler::initialize(vk::SamplerAddressMode addressMode, float maxAnisotropy
         .addressModeU = addressMode,
         .addressModeV = addressMode,
         .addressModeW = addressMode,
-        .mipLodBias = 0.0f,
+        .mipLodBias = mipLodBias,
         .anisotropyEnable = maxAnisotropy > 1.0f ? vk::True : vk::False,
         .maxAnisotropy = maxAnisotropy > 1.0f ? maxAnisotropy : 1.0f,
         .compareEnable = vk::False,

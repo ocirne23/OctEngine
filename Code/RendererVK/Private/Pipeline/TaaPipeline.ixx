@@ -53,6 +53,15 @@ public:
     uint32 getWidth() const  { return m_width; }
     uint32 getHeight() const { return m_height; }
 
+    // DLSS (desktop) writes the resolved image instead of record(), so everything downstream stays the same.
+    // begin: last frame's reads -> the external write (GENERAL; a compute store or a copy); end: the write ->
+    // the post reads. TRANSFER_DST: DLSS's copy when the viewport does not start at (0, 0).
+    static constexpr vk::Format RESOLVED_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+    static constexpr vk::ImageUsageFlags RESOLVED_USAGE = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
+    vk::Image getResolvedImage(uint32 frameIdx) const { return m_resolved.image[slot(frameIdx, 0)]; }
+    void beginExternalWrite(vk::CommandBuffer cmd, uint32 frameIdx);
+    static void endExternalWrite(vk::CommandBuffer cmd);
+
 private:
     static constexpr uint32 MAX_VIEWS = 2;
     static constexpr uint32 SLOTS = RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS;

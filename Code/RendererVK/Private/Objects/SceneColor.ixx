@@ -19,6 +19,7 @@ import :Allocator;
 // No pass variant transitions the depth itself (initial == final == the reference layout, the first one
 // clears from UNDEFINED); the Renderer emits the one ATTACHMENT -> READ_ONLY barrier per frame.
 export constexpr vk::ImageLayout SCENE_DEPTH_SAMPLED_LAYOUT = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+export constexpr vk::Format SCENE_DEPTH_FORMAT = vk::Format::eD32Sfloat;
 //
 // THE MOTION TARGET (SCENE_MOTION_FORMAT) is a second colour attachment of the depth-WRITING stages only:
 // their passes are a separate family (getOpaqueRenderPass, getOpaqueFramebuffer), so the layered stages and
@@ -35,6 +36,10 @@ public:
     SceneColor();
     ~SceneColor();
     SceneColor(const SceneColor&) = delete;
+
+    // TRANSFER_SRC: the VR path copies each colour layer into its eye swapchain. Also DLSS's resource description.
+    static constexpr vk::ImageUsageFlags COLOR_USAGE = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc;
+    static constexpr vk::ImageUsageFlags DEPTH_USAGE = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst;
 
     // viewCount > 1 allocates the colour/depth as arraySize=viewCount with a single-layer framebuffer
     // per eye (getFramebuffer(eye)). The render pass stays non-multiview (viewMask 0) so the forward

@@ -89,6 +89,10 @@ public:
     // the GPU, call recreateSampler() and re-record (record() rewrites every texture slot with the sampler).
     void registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onSamplerChanged);
     void recreateSampler();
+    // The scene texture sampler's LOD bias (the DLSS render scale, see Renderer::applyRenderResolution). Takes
+    // effect on the next recreateSampler().
+    void setMipLodBias(float bias) { m_mipLodBias = bias; }
+    float getMipLodBias() const { return m_mipLodBias; }
     void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
     // LIT_RT_SUN_SHADOW / LIT_RT_LIGHT_SHADOWS (0/1) on the same shaders: the EFFECTIVE flags (RT master AND
@@ -126,6 +130,7 @@ private:
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler;
     int m_anisotropyLevel = 2; // "Anisotropy" tweak index: 0 = off, else 2^level (2 = 4x)
+    float m_mipLodBias = 0.0f;
     vk::RenderPass m_renderPass;
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant

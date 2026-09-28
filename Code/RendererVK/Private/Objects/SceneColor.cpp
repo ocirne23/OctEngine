@@ -7,8 +7,6 @@ import :CommandBuffer;
 
 namespace
 {
-    constexpr vk::Format SCENE_DEPTH_FORMAT = vk::Format::eD32Sfloat;
-
     bool createImage(vk::Device vkDevice, uint32 w, uint32 h, vk::Format format, vk::ImageUsageFlags usage,
         uint32 arrayLayers, vk::Image& outImage, VmaAllocation& outMemory, const char* name)
     {
@@ -80,13 +78,11 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
 
     // The colour/depth images hold one layer per eye; the forward pass renders into each layer in a
     // separate (non-multiview) pass. TRANSFER_SRC lets the VR path copy each layer into its eye swapchain.
-    if (!createImage(vkDevice, width, height, colorFormat,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc,
+    if (!createImage(vkDevice, width, height, colorFormat, COLOR_USAGE,
         viewCount, m_colorImage, m_colorMemory, "SceneColor.color")) return false;
     // THE scene depth: written by the first scene stages, sampled by everything after them and by the
     // next frame (TRANSFER_DST = the one-time clear below).
-    if (!createImage(vkDevice, width, height, SCENE_DEPTH_FORMAT,
-        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
+    if (!createImage(vkDevice, width, height, SCENE_DEPTH_FORMAT, DEPTH_USAGE, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
     // The motion target: written by the depth-writing stages, sampled by TAA and the AO temporal pass.
     if (!createImage(vkDevice, width, height, SCENE_MOTION_FORMAT,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, viewCount, m_motionImage, m_motionMemory, "SceneColor.motion")) return false;

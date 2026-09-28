@@ -350,6 +350,20 @@ export struct TAAParams
     void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
+// DLSS Super Resolution through Streamline ("Post/DLSS" tweaks; RendererVK:Streamline, DlssPipeline). Any mode
+// but Off REPLACES TAA (desktop only). The mode sets the render resolution: a change re-creates the render-size
+// targets (onResize), so the mode tweak waits for the GPU.
+export struct DlssParams
+{
+    int mode = 2;           // Streamline::DlssMode: Off, DLAA, Quality (default), Balanced, Performance, Ultra Performance
+    int preset = 0;         // 0 = the DLSS default for the mode, else J / K / L / M
+    bool mipBias = true;    // negative texture LOD bias by the render scale (log2(render / output))
+    // Streamline's verbose log (Assets/Local/Streamline/); SL reads it at slInit, so it applies at the next start.
+    bool verboseLog = false;
+
+    void registerTweaks(const oc::function<void()>& onResize, const oc::function<void()>& onReRecord);
+};
+
 // Motion blur ("Post/Motion blur" tweaks; MotionBlurPipeline). The blur is the motion over the EXPOSURE, a
 // shutter fraction of the frame: physically, a higher frame rate blurs less.
 export struct MotionBlurParams

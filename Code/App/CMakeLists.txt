@@ -22,11 +22,19 @@ apply_compile_settings(${PROJECT_NAME})
 # in FileSystem::initialize only covers LoadLibraryEx(LOAD_LIBRARY_SEARCH_USER_DIRS), not load-time imports.
 # The Aftermath DLL is OPTIONAL: RendererVK LoadLibrary()s it at init and runs without GPU crash dumps
 # when it is absent (see RendererVK:Aftermath). It is copied so the dev build keeps crash dumps.
+# Streamline + DLSS are OPTIONAL the same way (RendererVK:Streamline): the interposer is LoadLibrary'd from the
+# exe's folder and loads its plugins (sl.common, sl.dlss) and the DLSS model (nvngx_dlss) from there too.
+# sl.common always loads NvLowLatencyVk (Reflex) and logs an error without it.
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/GFSDK_Aftermath_Lib.x64.dll"
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/onnxruntime.dll"
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/DirectML.dll"
+        "${CMAKE_SOURCE_DIR}/Dependencies/Dll/sl.interposer.dll"
+        "${CMAKE_SOURCE_DIR}/Dependencies/Dll/sl.common.dll"
+        "${CMAKE_SOURCE_DIR}/Dependencies/Dll/sl.dlss.dll"
+        "${CMAKE_SOURCE_DIR}/Dependencies/Dll/nvngx_dlss.dll"
+        "${CMAKE_SOURCE_DIR}/Dependencies/Dll/NvLowLatencyVk.dll"
         "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
 
 # Launch App with networking args from Visual Studio: set run-server / run-client as the Startup

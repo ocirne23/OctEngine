@@ -32,7 +32,7 @@ void StaticMeshGraphicsPipeline::registerTweaks(const oc::function<void()>& onRe
 
 void StaticMeshGraphicsPipeline::recreateSampler()
 {
-    m_sampler.initialize(vk::SamplerAddressMode::eRepeat, m_anisotropyLevel <= 0 ? 1.0f : float(1 << oc::min(m_anisotropyLevel, 4)));
+    m_sampler.initialize(vk::SamplerAddressMode::eRepeat, m_anisotropyLevel <= 0 ? 1.0f : float(1 << oc::min(m_anisotropyLevel, 4)), m_mipLodBias);
 }
 
 void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& graphicsPipelineLayout, uint32 maxTextures)

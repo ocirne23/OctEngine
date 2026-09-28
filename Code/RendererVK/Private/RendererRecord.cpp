@@ -47,12 +47,13 @@ vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuff
     return cb.begin(false, &inheritance);
 }
 
+// The scene passes: the render rect in the render-size targets.
 void Renderer::setFullViewport(vk::CommandBuffer vkCb) const
 {
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
+    const glm::ivec2 vpSize = m_renderRect.getSize();
+    const vk::Viewport viewport{ .x = (float)m_renderRect.min.x, .y = (float)m_renderRect.max.y,
         .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = m_swapChain.getLayout().extent };
+    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = renderExtent() };
     vkCb.setViewport(0, { viewport });
     vkCb.setScissor(0, { scissor });
 }
@@ -372,9 +373,9 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
+    const vk::Extent2D extent = renderExtent();
+    const glm::ivec2 vpMin = m_renderRect.min;
+    const glm::ivec2 vpSize = m_renderRect.getSize();
     vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
     vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
     VolumetricFogPipeline::ApplyParams params{
@@ -419,9 +420,9 @@ void Renderer::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
+    const vk::Extent2D extent = renderExtent();
+    const glm::ivec2 vpMin = m_renderRect.min;
+    const glm::ivec2 vpSize = m_renderRect.getSize();
     vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
     vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
     CloudPipeline::ApplyParams params{
@@ -622,10 +623,10 @@ void Renderer::recordForceMarch(uint32 frameIdx)
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const bool halfRes = m_forceFieldPipeline.getUnionHalfRes();
     const float vpScale = halfRes ? 0.5f : 1.0f;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport marchViewport{ .x = (float)m_viewportRect.min.x * vpScale, .y = (float)m_viewportRect.max.y * vpScale,
+    const glm::ivec2 vpSize = m_renderRect.getSize();
+    const vk::Viewport marchViewport{ .x = (float)m_renderRect.min.x * vpScale, .y = (float)m_renderRect.max.y * vpScale,
         .width = (float)vpSize.x * vpScale, .height = -((float)vpSize.y * vpScale), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Extent2D fullExtent = m_swapChain.getLayout().extent;
+    const vk::Extent2D fullExtent = renderExtent();
     const vk::Rect2D marchScissor{ .offset = vk::Offset2D{ 0, 0 },
         .extent = halfRes ? vk::Extent2D{ glm::max(fullExtent.width / 2u, 1u), glm::max(fullExtent.height / 2u, 1u) } : fullExtent };
     vk::CommandBufferInheritanceInfo intervalInheritance{ .renderPass = m_forceFieldPipeline.getIntervalRenderPass(), .framebuffer = m_forceFieldPipeline.getIntervalFramebuffer() };
@@ -709,9 +710,9 @@ void Renderer::recordFogApply(uint32 frameIdx)
     vk::CommandBuffer vkCb = beginScenePassSecondary(frameIdx, cb);
 
     // Fullscreen triangle in full-render-target UV space (like the composite), scissored to the viewport.
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
+    const vk::Extent2D extent = renderExtent();
+    const glm::ivec2 vpMin = m_renderRect.min;
+    const glm::ivec2 vpSize = m_renderRect.getSize();
     vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
     vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
 
@@ -759,6 +760,96 @@ void Renderer::recordTaa(uint32 frameIdx)
     cb.end();
 }
 
+void Renderer::recordDlss(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& cb = frameData.dlssCommandBuffer;
+    beginComputeSecondary(cb);
+    const DlssPipeline::RecordParams params{
+        .ubo = frameData.ubo,
+        .sceneDepthView = frameData.sceneColor.getDepthView(),
+        .motionView = frameData.sceneColor.getMotionView(0),
+        .renderOrigin = m_renderRect.min,
+        .renderSize = m_renderRect.getSize(),
+    };
+    m_dlssPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
+// The DLSS resolve, in the primary (Streamline records straight into it, every frame: the constants and the
+// frame token are per frame): the motion vectors, then the upscale into TAA's resolved image, which the post
+// chain reads as if TAA had written it.
+void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    const SceneColor& sceneColor = frameData.sceneColor;
+    m_gpuProfiler.beginScope(primary, "DLSS");
+    const vk::CommandBuffer mvecCb = frameData.dlssCommandBuffer.getCommandBuffer();
+    primary.executeCommands(1, &mvecCb);
+    m_taaPipeline.beginExternalWrite(primary, frameIdx);
+
+    const glm::uvec2 renderTarget(sceneColor.getWidth(), sceneColor.getHeight());
+    const glm::uvec2 renderSize(m_renderRect.getSize());
+    // The engine's NDC jitter in render pixels, y down (the viewport's y flip). Verified on screen (2026-09-28):
+    // the opposite sign on either axis (the UE convention) wobbles and softens the image.
+    const glm::vec2 jitterNdc(m_ubo.taaJitter.x, m_ubo.taaJitter.y);
+    const glm::vec2 jitterPx(jitterNdc.x * (float)renderSize.x * 0.5f, -jitterNdc.y * (float)renderSize.y * 0.5f);
+
+    // SL never enables NGX's output subrects: DLSS writes at (0, 0) only. A viewport at the origin (the game,
+    // fullscreen) takes it straight into the resolved image; elsewhere (the editor panel) it lands in DLSS's own
+    // output image and one copy moves it into place.
+    const bool direct = m_viewportRect.min == glm::ivec2(0);
+    const Streamline::Image resolved{ .image = m_taaPipeline.getResolvedImage(frameIdx), .view = m_taaPipeline.getResolvedView(frameIdx, 0),
+        .layout = vk::ImageLayout::eGeneral, .format = TaaPipeline::RESOLVED_FORMAT,
+        .size = glm::uvec2(m_taaPipeline.getWidth(), m_taaPipeline.getHeight()), .usage = TaaPipeline::RESOLVED_USAGE };
+    if (!direct)
+        m_dlssPipeline.beginOutputWrite(primary);
+
+    const Camera& camera = m_frameCamera;
+    const glm::mat4 cameraToWorld = glm::inverse(camera.viewMatrix);
+    const glm::ivec2 outputSize = m_viewportRect.getSize();
+    const Streamline::DlssFrame frame{
+        .mode = m_dlssMode,
+        .preset = m_dlssParams.preset == 0 ? 0 : 9 + m_dlssParams.preset, // J = 10 ... M = 13 (sl::DLSSPreset)
+        .frameIndex = m_frameCounter,
+        .colorIn = { .image = sceneColor.getColorImage(), .view = sceneColor.getColorLayerView(0), .layout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .format = RendererVKLayout::SCENE_COLOR_FORMAT, .size = renderTarget, .usage = SceneColor::COLOR_USAGE },
+        .colorOut = direct ? resolved : m_dlssPipeline.getOutputImage(),
+        .depth = { .image = sceneColor.getDepthImage(), .view = sceneColor.getDepthView(0), .layout = SCENE_DEPTH_SAMPLED_LAYOUT,
+            .format = SCENE_DEPTH_FORMAT, .size = renderTarget, .usage = SceneColor::DEPTH_USAGE, .aspect = vk::ImageAspectFlagBits::eDepth },
+        .motion = m_dlssPipeline.getMotionImage(),
+        .renderOffset = glm::uvec2(m_renderRect.min),
+        .renderSize = renderSize,
+        .outputOffset = glm::uvec2(0),
+        .outputSize = glm::uvec2(outputSize),
+        .jitterPx = jitterPx,
+        .reset = m_dlssReset,
+        .viewToClip = computeCenterProjection(camera),
+        .clipToPrevClip = m_ubo.views[RendererVKLayout::VIEW_CENTER].reprojClip,
+        .cameraPos = camera.position,
+        .cameraUp = glm::vec3(cameraToWorld[1]),
+        .cameraRight = glm::vec3(cameraToWorld[0]),
+        .cameraFwd = -glm::vec3(cameraToWorld[2]),
+        .cameraNear = camera.near,
+        .cameraFar = camera.far,
+        .cameraFovY = glm::radians(camera.fovDeg),
+        .cameraAspect = (float)outputSize.x / (float)oc::max(outputSize.y, 1),
+    };
+    if (Streamline::evaluateDlss(primary, frame))
+    {
+        m_dlssReset = false;
+        if (!direct)
+            m_dlssPipeline.recordOutputCopy(primary, resolved.image, m_viewportRect.min, glm::uvec2(outputSize));
+    }
+    else if (!m_dlssFailed)
+    {
+        m_dlssFailed = true;
+        Log::error("Renderer: DLSS evaluate failed (see Assets/Local/Streamline/sl.log); the output keeps its last image");
+    }
+    TaaPipeline::endExternalWrite(primary);
+    m_gpuProfiler.endScope(primary);
+}
+
 // Motion blur's own small passes: TAA wrote the velocity + sub-tiles (with TAA off, the velocity pass here does);
 // the neighbour max; the composite gathers.
 void Renderer::recordMotionBlur(uint32 frameIdx)
@@ -771,7 +862,7 @@ void Renderer::recordMotionBlur(uint32 frameIdx)
         .ubo = frameData.ubo,
         .sceneDepthView = sceneColor.getDepthView(),
         .motionView = sceneColor.getMotionView(0),
-        .velocityPass = !m_taaParams.taaEnabled,
+        .velocityPass = !taaActive(),
         .shutter = m_motionBlurParams.shutter,
         .maxRadius = m_motionBlurParams.maxRadius,
         .cameraScale = m_motionBlurParams.cameraScale,
@@ -785,9 +876,9 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.eyeAdaptCommandBuffer;
     beginComputeSecondary(cb);
-    // TAA OFF: the pass is not recorded or executed at all (see recordCommandBuffers), so the
-    // post chain reads this frame's scene colour directly instead of TAA's resolved image.
-    const bool taaOn = m_taaParams.taaEnabled;
+    // No resolve (TAA off, no DLSS): the pass is not recorded or executed at all (see recordCommandBuffers), so
+    // the post chain reads this frame's scene colour directly instead of TAA's resolved image.
+    const bool taaOn = resolveActive();
     EyeAdaptationPipeline::RecordParams params{
         .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
         .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -827,7 +918,7 @@ void Renderer::recordComposite(uint32 frameIdx)
     vkCb.setViewport(0, vk::Viewport{.x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
     vkCb.setScissor(0, vk::Rect2D{.offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
 
-    const bool taaOn = m_taaParams.taaEnabled; // TAA bypassed: tonemap the scene colour directly
+    const bool taaOn = resolveActive(); // no resolve: tonemap the scene colour directly
     CompositePipeline::RecordParams params{
         .descriptorSet = frameData.compositeDescriptorSet,
         .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
@@ -1151,8 +1242,10 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
         recordForceMarch(frameIdx);
         recordAO(frameIdx);
         recordClouds(frameIdx);
-        if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
+        if (taaActive()) // bypassed entirely when off - nothing to record or execute
             recordTaa(frameIdx);
+        if (dlssActive()) // replaces TAA: its motion vector pass (the upscale is recorded per frame)
+            recordDlss(frameIdx);
         if (motionBlurEnabled()) // the same
             recordMotionBlur(frameIdx);
         if (bloomEnabled())
@@ -1250,7 +1343,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     SceneColor& sceneColor = frameData.sceneColor;
-    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
+    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_renderRect.min.x, m_renderRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_renderRect.min.x, sceneColor.getHeight() - m_renderRect.min.y } };
 
     m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
     vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
@@ -1373,7 +1466,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
-    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
+    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_renderRect.min.x, m_renderRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_renderRect.min.x, sceneColor.getHeight() - m_renderRect.min.y } };
 
     m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
     vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
@@ -1480,14 +1573,17 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
         .image = sceneColor.getColorImage(),
         .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
     };
-    // TAA OFF: eye adaptation (compute) and the composite (fragment) sample this image
+    // No resolve: eye adaptation (compute) and the composite (fragment) sample this image
     // instead of TAA's resolved one, so the read must be visible to both stages.
-    if (!m_taaParams.taaEnabled)
+    if (!resolveActive())
         colorToTaaImg.dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
     vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &colorToTaaImg });
-    // Disabled TAA is skipped outright (it used to run a full-screen copy with feedback 0).
-    if (m_taaParams.taaEnabled)
+    // Disabled TAA is skipped outright (it used to run a full-screen copy with feedback 0). DLSS replaces it and
+    // writes the same resolved image.
+    if (taaActive())
         executeScoped(vkCommandBuffer, "TAA", frameData.taaCommandBuffer.getCommandBuffer());
+    else if (dlssActive())
+        recordDlssEvaluate(frameIdx, vkCommandBuffer);
     // Motion blur: reads the resolved colour, writes the image the composite tonemaps (its own barriers).
     if (motionBlurEnabled())
         executeScoped(vkCommandBuffer, "Motion blur", frameData.motionBlurCommandBuffer.getCommandBuffer());

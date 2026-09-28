@@ -6,6 +6,7 @@ import :VK;
 import :Instance;
 import :Allocator;
 import :OpenXRSession;
+import :Streamline;
 
 Device::Device() {}
 Device::~Device()
@@ -88,6 +89,12 @@ bool Device::initialize()
     const bool relaxedExtendedInstruction = supportsExtensions({ vk::KHRShaderRelaxedExtendedInstructionExtensionName });
     if (relaxedExtendedInstruction)
         deviceExtensions.push_back(vk::KHRShaderRelaxedExtendedInstructionExtensionName);
+    // What DLSS asks for (none when Streamline is not loaded); an unsupported one only costs DLSS.
+    oc::vector<const char*> slExtensions;
+    Streamline::appendDeviceExtensions(slExtensions);
+    for (const char* ext : slExtensions)
+        if (supportsExtensions({ ext }) && oc::find_if(deviceExtensions.begin(), deviceExtensions.end(), [&](const char* have) { return strcmp(have, ext) == 0; }) == deviceExtensions.end())
+            deviceExtensions.push_back(ext);
 
     m_graphicsQueueIndex = UINT32_MAX;
     oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = oc::fromStd(m_physicalDevice.getQueueFamilyProperties());
@@ -115,9 +122,14 @@ bool Device::initialize()
         return false;
     }
 
-    const float queuePriorities[] = { 1.0f };
+    // Queue 0 is the engine's; Streamline's extra graphics then compute queues follow it in the same family
+    // (it has compute, checked above).
+    const uint32 slGraphicsQueues = Streamline::extraGraphicsQueues();
+    const uint32 slComputeQueues = Streamline::extraComputeQueues();
+    const uint32 queueCount = oc::min(1u + slGraphicsQueues + slComputeQueues, queueFamilyProperties[m_graphicsQueueIndex].queueCount);
+    const float queuePriorities[] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
     oc::array<vk::DeviceQueueCreateInfo, 1> deviceQueueCreateInfos{
-        vk::DeviceQueueCreateInfo {.queueFamilyIndex = m_graphicsQueueIndex, .queueCount = 1, .pQueuePriorities = queuePriorities }
+        vk::DeviceQueueCreateInfo {.queueFamilyIndex = m_graphicsQueueIndex, .queueCount = oc::min(queueCount, 8u), .pQueuePriorities = queuePriorities }
     };
     //const oc::vector<const char*>& enabledLayers = Globals::instance.getEnabledLayers();
 
@@ -163,6 +175,7 @@ bool Device::initialize()
         .shaderDemoteToHelperInvocation = vk::True,
         .synchronization2 = vk::True,
     };
+    Streamline::mergeDeviceFeatures(vk12Features, vk13Features); // what DLSS asks for, ORed in
     vk::PhysicalDeviceMaintenance5Features maintenance5Features{
         .pNext = &vk13Features,
         .maintenance5 = vk::True };
@@ -210,6 +223,8 @@ bool Device::initialize()
         return false;
     }
     m_device = createResult.value;
+    Streamline::onDeviceCreated(instance, m_physicalDevice, m_device, m_graphicsQueueIndex, oc::min(1u, queueCount - 1),
+        m_graphicsQueueIndex, oc::min(1u + slGraphicsQueues, queueCount - 1));
 
     // Instance-extension commands: loaded through the instance (vkGetDeviceProcAddr need not serve them).
     if (Globals::instance.isDebugUtilsEnabled())
@@ -523,6 +538,7 @@ void Device::destroy()
         {
             assert(false && "Failed to wait for device idle");
         }
+        Streamline::shutdown(); // slShutdown BEFORE the device goes (the swapchain is gone already: ~Renderer)
         Globals::gpuAllocator.destroy();
         m_device.destroyCommandPool(m_commandPool);
         m_device.destroyDescriptorPool(m_descriptorPool);

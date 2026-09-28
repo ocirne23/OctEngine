@@ -5,6 +5,7 @@ import :Device;
 import :Allocator;
 import :RenderPass;
 import :SwapChain;
+import :Streamline;
 
 Framebuffers::Framebuffers() {}
 Framebuffers::~Framebuffers()
@@ -38,13 +39,12 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
         m_framebuffers.clear();
     }
 
-    auto swapchainImagesResult = vkDevice.getSwapchainImagesKHR(swapChain.getSwapChain());
-    if (swapchainImagesResult.result != vk::Result::eSuccess)
+    oc::vector<vk::Image> images;
+    if (Streamline::getSwapchainImages(vkDevice, swapChain.getSwapChain(), images) != vk::Result::eSuccess)
     {
         assert(false && "Failed to get swapchain images");
         return false;
     }
-    oc::vector<vk::Image> images = oc::fromStd(swapchainImagesResult.value);
     m_imageViews.reserve(images.size());
     for (const vk::Image& image : images)
     {

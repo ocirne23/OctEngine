@@ -170,7 +170,10 @@ Prebuilt in `Dependencies/` (Include / Lib / Dll):
 
 Vulkan-Hpp (no exceptions, no constructors), SDL3, ImGui docking branch, EASTL, Assimp,
 glslang/shaderc, OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles
-pffft, mysofa and zlib), miniaudio (single header), meshoptimizer, zstd, onnxruntime.
+pffft, mysofa and zlib), miniaudio (single header), meshoptimizer, zstd, onnxruntime, NVIDIA Streamline
+2.14.1 (`Include/sl` headers + the five DLSS runtime DLLs, LoadLibrary'd and optional - see DLSS in
+[`Code/RendererVK/CONTEXT.md`](../Code/RendererVK/CONTEXT.md); update = copy `include/` and
+`bin/x64/{sl.interposer,sl.common,sl.dlss,nvngx_dlss,NvLowLatencyVk}.dll` from the release zip).
 
 **EASTL is 3.27.01 with ONE LOCAL PATCH:** `Include/EASTL/internal/config.h` defaults
 `EASTL_NAME_ENABLED` to 0 (upstream: `EASTL_DEBUG`), marked `OCTENGINE LOCAL PATCH`. No allocator debug

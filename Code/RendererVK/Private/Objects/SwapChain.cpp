@@ -4,6 +4,7 @@ import :VK;
 import :Device;
 import :Surface;
 import :CommandBuffer;
+import :Streamline;
 
 SwapChain::SwapChain() {}
 SwapChain::~SwapChain()
@@ -22,7 +23,7 @@ void SwapChain::destroy()
             vkDevice.destroySemaphore(syncObjects.renderComplete);
             vkDevice.destroyFence(syncObjects.inFlight);
         }
-        vkDevice.destroySwapchainKHR(m_swapChain);
+        Streamline::destroySwapchain(vkDevice, m_swapChain);
         m_swapChain = VK_NULL_HANDLE;
         m_currentFrame = 0;
         m_currentImageIdx = 0;
@@ -128,22 +129,19 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
     m_layout.extent = capabilities.currentExtent;
     m_layout.presentMode = createInfo.presentMode;
 
-    auto createSwapChainResult = vkDevice.createSwapchainKHR(createInfo);
-    if (createSwapChainResult.result != vk::Result::eSuccess)
+    // The swapchain calls go through Streamline's proxies while it is loaded (manual hooking).
+    if (Streamline::createSwapchain(vkDevice, createInfo, m_swapChain) != vk::Result::eSuccess)
     {
         assert(false && "Failed to create swap chain");
         return false;
     }
-    m_swapChain = createSwapChainResult.value;
     Globals::device.setDebugName(m_swapChain, "SwapChain");
 
-    auto imagesResult = vkDevice.getSwapchainImagesKHR(m_swapChain);
-    if (imagesResult.result != vk::Result::eSuccess)
+    if (Streamline::getSwapchainImages(vkDevice, m_swapChain, m_images) != vk::Result::eSuccess)
     {
         assert(false && "Failed to get swapchain images");
         return false;
     }
-    m_images = oc::fromStd(imagesResult.value);
     for (uint32 i = 0; i < (uint32)m_images.size(); i++)
         Globals::device.setDebugName(m_images[i], oc::format("Swapchain[{}]", i).c_str());
 
@@ -163,8 +161,9 @@ bool SwapChain::acquireNextImage()
         assert(false && "Failed to reset fence");
 
     constexpr std::chrono::nanoseconds timeout = std::chrono::seconds(10);
-    auto imageResult = vkDevice.acquireNextImageKHR(m_swapChain, timeout.count(), syncObjects.presentComplete);
-    switch (imageResult.result)
+    uint32 imageIndex = 0;
+    const vk::Result acquireResult = Streamline::acquireNextImage(vkDevice, m_swapChain, timeout.count(), syncObjects.presentComplete, imageIndex);
+    switch (acquireResult)
     {
     case vk::Result::eSuccess:
         break;
@@ -176,7 +175,7 @@ bool SwapChain::acquireNextImage()
         assert(false && "Failed to acquire next image");
         return false;
     }
-    m_currentImageIdx = imageResult.value;
+    m_currentImageIdx = imageIndex;
     return true;
 }
 
@@ -217,7 +216,7 @@ bool SwapChain::present()
     {
         // Queue calls need external synchronization; staging overflow submits can come from workers.
         std::lock_guard<std::mutex> lock(Globals::device.getGraphicsQueueMutex());
-        result = Globals::device.getGraphicsQueue().presentKHR(presentInfo);
+        result = Streamline::queuePresent(Globals::device.getGraphicsQueue(), presentInfo);
     }
     switch (result)
     {

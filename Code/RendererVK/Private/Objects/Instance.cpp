@@ -7,6 +7,7 @@ import Core.Window;
 import :VK;
 import :Device;
 import :OpenXRSession;
+import :Streamline;
 
 Instance::Instance() {}
 Instance::~Instance()
@@ -155,6 +156,13 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
     m_debugUtilsEnabled = supportsExtension(vk::EXTDebugUtilsExtensionName);
     if (m_debugUtilsEnabled)
         extensions.push_back(vk::EXTDebugUtilsExtensionName);
+
+    // What DLSS asks for (none when Streamline is not loaded); a missing one only costs DLSS, not the instance.
+    oc::vector<const char*> slExtensions;
+    Streamline::appendInstanceExtensions(slExtensions);
+    for (const char* ext : slExtensions)
+        if (supportsExtension(ext) && oc::find_if(extensions.begin(), extensions.end(), [&](const char* have) { return strcmp(have, ext) == 0; }) == extensions.end())
+            extensions.push_back(ext);
 
     if (enableValidationLayers)
     {

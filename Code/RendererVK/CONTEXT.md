@@ -7,7 +7,8 @@ Modern Vulkan renderer. Links Animation, File and Threading (+ vulkan, glslang P
 Aftermath is NOT linked: `Util/Aftermath.ixx` (`RendererVK:Aftermath`) `LoadLibrary`s
 `GFSDK_Aftermath_Lib.x64.dll` in `GpuCrashTracker::Initialize` and holds one function pointer per
 entry point. **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
-the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call).
+the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call). **Streamline / DLSS is optional the
+same way** (`Util/Streamline.ixx`, see "DLSS" below).
 **Minimum spec RTX 2000.**
 
 * **Device Generated Commands for everything.**
@@ -158,7 +159,8 @@ GPU Frame
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
-    → Scene forward → TAA (+ motion blur velocity) → Motion blur (desktop, "Post/Motion blur": tile max only;
+    → Scene forward → TAA (+ motion blur velocity) | DLSS (mvec pass + the upscale, see "DLSS")
+    → Motion blur (desktop, "Post/Motion blur": tile max only;
       the composite gathers) → Eye adaptation (+ bloom level 0)
     → Bloom (desktop, "Post/Bloom": the down/up chain; the composite mixes it in)
   Composite + UI
@@ -834,6 +836,70 @@ reads it).
 
 The tweak carries `onReRecord`, so toggling rebuilds the descriptors either way.
 
+## DLSS (NVIDIA Streamline 2.14.1, "Post/DLSS" tweaks)
+
+DLSS Super Resolution + DLAA, **desktop only; any mode but Off REPLACES TAA** (`taaActive()` = TAA on AND no
+DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No frame generation / Reflex.
+
+* **Optional, never linked** (`RendererVK:Streamline`): `sl.interposer.dll` is signature-checked
+  (`sl_security.h`, hence `wintrust` + `crypt32`) and `LoadLibrary`'d from the exe's folder; it loads
+  `sl.common.dll`, `sl.dlss.dll` and the model `nvngx_dlss.dll` from there (the App POST_BUILD copy). No DLL,
+  no NVIDIA GPU, VR, or any SL failure = the plain path, and `Streamline::dlssAvailable()` is false.
+* **MANUAL HOOKING.** `Streamline::load()` runs BEFORE the instance (slInit needs to precede it), the
+  instance / device take DLSS's extensions, 1.2/1.3 features and extra queues (`appendInstanceExtensions`,
+  `appendDeviceExtensions`, `mergeDeviceFeatures`, `extraGraphicsQueues`), `onDeviceCreated` calls
+  `slSetVulkanInfo`. **While SL is loaded the five swapchain calls MUST go through its proxies**
+  (`Streamline::createSwapchain / destroySwapchain / getSwapchainImages / acquireNextImage / queuePresent`,
+  used by SwapChain and Framebuffers) - SL's per-frame `presentCommon` hangs off them. A new swapchain call
+  site uses the wrappers too. `slShutdown` is in `Device::destroy`, before the device. No OTA: the shipped
+  `nvngx_dlss.dll` is the model. `eUseFrameBasedResourceTagging` is REQUIRED: without it SL rejects
+  `slSetTagForFrame`. `sl.common` always loads `NvLowLatencyVk.dll` (Reflex), so it ships too. Its warnings
+  "Hook sl.common:Vulkan:CmdBindPipeline / CmdBindDescriptorSets / BeginCommandBuffer is NOT supported" are
+  expected: they are command-buffer state-tracking hooks, which manual hooking does not use.
+* **The SL log file** (and NGX's, when it writes one) is in `Assets/Local/Streamline/`; the console gets only
+  SL's warnings and errors. "Verbose log (restart)" (saved) sets SL's verbose level, read once at slInit.
+* **The OUTPUT must start at (0, 0)**: SL never sets NGX's `DLSS.Enable.Output.Subrects`, and NGX fails the
+  evaluate (0xbad00005, "the output subrect base must be set to 0 ...") for any other output offset. So a viewport
+  at the origin (the game) is written straight into TAA's resolved image; any other (the editor panel) goes to
+  `DlssPipeline`'s swapchain-size output image at (0, 0), then one `copyImage` to the viewport's place (hence
+  TRANSFER_DST on the resolved images, and the copy stage in `beginExternalWrite` / `endExternalWrite`). The
+  INPUT sub-rects (colour, depth, motion vectors) are fine at any offset.
+* **Two more NGX `InvalidParameter` traps** (both from the sl.dlss source): SL describes a Vulkan
+  image to NGX as a COLOR subresource unless an `sl::SubresourceRange` is chained to it, so the depth tag
+  carries one (`Streamline::Image::aspect`); and SL creates the NGX feature at the optimal render size for the
+  output size, so with DLSS active `m_renderRect`'s SIZE is `getDlssRenderSize(mode, viewport size)` (only its
+  origin scales), never the rounded swapchain ratio, which could come out 1 px larger than the feature.
+* **RENDER RESOLUTION.** The render-size targets - SceneColor (colour, depth, motion), RTAO, the clouds, the
+  force interval target, the DLSS motion vectors - are `m_renderExtent` = the swapchain extent x
+  `m_renderScale` (the DLSS optimal size for the whole swapchain; 1 for Off / DLAA). The scene draws through
+  `m_renderRect` = `m_viewportRect` x the same scale, and **the UBO's `u_screenSize` / `u_viewportRect` are the
+  render target and the render rect**, so every scene / screen-space shader works unchanged. Everything
+  after the resolve - TAA's resolved image (the DLSS output), motion blur, eye adaptation, bloom, composite -
+  stays at the swapchain extent and `m_viewportRect` (the CPU passes it; nothing post reads the UBO rect
+  except the motion blur, which is off while upscaling). The jitter is one RENDER pixel. The projection
+  aspect and `m_mipPixelScale` stay on the output viewport. **A new render-size image joins
+  `recreateRenderTargets()`; a new scene pass sizes from `renderExtent()` / `m_renderRect`, never the
+  swapchain.**
+* **The renderer never reads the "Mode" tweak live**: `m_dlssMode` is the APPLIED mode, set only in
+  `updateRenderExtent` with the sizes it implies. The UI writes the tweak a frame or more before its `onChange`
+  runs; reading it live rendered one frame with the new mode and the old sizes (NGX creates the feature at the new
+  optimal size, the input is bigger: 0xbad00005) or, from Off, executed the never-recorded DLSS secondary
+  (device lost, black screen).
+* **Mode change** ("Mode" tweak): GPU idle + `applyRenderResolution()` - the targets re-created only when the
+  size changes, the DLSS history reset, the scene texture sampler's LOD bias = log2(render / output) ("Mip
+  bias"; the static-mesh sampler only: materials + terrain; decals keep 0).
+* **Per frame** (`recordDlssEvaluate`, in the primary, where TAA would run): the cached `DlssPipeline`
+  secondary (`dlss_mvec.cs.glsl`: full motion vectors - the motion target has object motion only, so a w = 0
+  pixel reprojects through the camera from its depth, RG16F render px, current -> previous, unjittered),
+  `TaaPipeline::beginExternalWrite`, `Streamline::evaluateDlss` (options only on a change, a frame token, the
+  constants, the four tags `eValidUntilEvaluate`, `slEvaluateFeature` into the primary), `endExternalWrite`.
+  Auto exposure is on: the engine's exposure is computed after the upscale. No command buffer state to restore:
+  every pass after it is a secondary.
+* **Jitter sign**: DLSS gets the engine's NDC jitter in render pixels with y down: (+x, -y) x size / 2.
+  Verified on screen with an A/B: the UE convention (-x, +y) wobbles and softens the image.
+* Not while upscaling: **motion blur** (`motionBlurEnabled()`: its velocity and gather assume one resolution);
+  DLAA keeps it. TAA's ocean feedback cap has no DLSS equivalent.
+
 ## Motion blur (`MotionBlurPipeline`, "Post/Motion blur" tweaks)
 
 Desktop only (`motionBlurEnabled()`: off in VR, and bypassed when off - its pass is not recorded, not executed,
@@ -1101,7 +1167,7 @@ Scene opaque, nearly all with 0 instances.
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, Dlss (its motion vectors), MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
 | | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |

@@ -8,7 +8,7 @@ import :CommandBuffer;
 
 namespace
 {
-    constexpr vk::Format TAA_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+    constexpr vk::Format TAA_FORMAT = TaaPipeline::RESOLVED_FORMAT;
 
     struct TaaPC
     {
@@ -77,7 +77,7 @@ void TaaPipeline::createImageSet(ImageSet& set)
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
             .tiling = vk::ImageTiling::eOptimal,
-            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+            .usage = RESOLVED_USAGE,
             .sharingMode = vk::SharingMode::eExclusive,
             .initialLayout = vk::ImageLayout::eUndefined,
         };
@@ -220,11 +220,32 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
         .mbEnabled = params.mbEnabled ? 1u : 0u, .mbShutter = params.mbShutter, .mbMaxRadius = params.mbMaxRadius, .mbCameraScale = params.mbCameraScale };
     cmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
     cmd.dispatch(gx, gy, 1);
+    endExternalWrite(cmd);
+}
 
-    // Resolved storage write -> composite fragment sampled read.
+void TaaPipeline::beginExternalWrite(vk::CommandBuffer cmd, uint32 frameIdx)
+{
+    const uint32 slotIdx = slot(frameIdx, 0);
+    const vk::ImageMemoryBarrier2 bar{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
+        .oldLayout = m_resolved.initialized[slotIdx] ? vk::ImageLayout::eGeneral : vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = m_resolved.image[slotIdx],
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
+    m_resolved.initialized[slotIdx] = true;
+}
+
+void TaaPipeline::endExternalWrite(vk::CommandBuffer cmd)
+{
+    // Resolved storage write (TAA, DLSS) or DLSS's copy -> composite fragment sampled read.
     vk::MemoryBarrier2 bar{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eCopy,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
     };

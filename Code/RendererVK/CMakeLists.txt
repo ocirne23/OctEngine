@@ -32,6 +32,8 @@ target_link_libraries(${PROJECT_NAME} PUBLIC Core Animation File Threading vulka
 	openxr_loader$<$<CONFIG:Debug>:d>
 	meshoptimizer$<$<CONFIG:Debug>:d>
 )
+# Streamline is LoadLibrary'd (RendererVK:Streamline), never linked; these serve its signature check (sl_security.h).
+target_link_libraries(${PROJECT_NAME} PRIVATE wintrust crypt32)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 

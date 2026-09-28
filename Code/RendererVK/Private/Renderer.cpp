@@ -115,6 +115,13 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_taaParams.registerTweaks(rerecordCallback);
+    // The DLSS mode sets the render resolution: GPU idle + the render-size targets re-created. Registered before
+    // the device, so a Saved mode is live when initDeviceAndSwapchain sizes them.
+    m_dlssParams.registerTweaks([this]() {
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        applyRenderResolution();
+    }, rerecordCallback);
     m_motionBlurParams.registerTweaks(rerecordCallback);
     m_bloomParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
@@ -185,6 +192,16 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
         Globals::openXR.initInstanceAndSystem();
     }
 
+    // Streamline (DLSS) BEFORE the instance: slInit, then the instance and device take its requirements. Desktop
+    // only - DLSS does not run in VR, and without SL nothing changes (no DLLs, no NVIDIA GPU).
+    // Its log file (and NGX's) goes to Assets/Local/Streamline/.
+    if (vr != EVr::ENABLED)
+    {
+        const oc::string logDir = "Local/Streamline";
+        const bool haveLogDir = FileSystem::createDirectories(logDir, true);
+        Streamline::load(haveLogDir ? FileSystem::absolutePath(logDir, true) : oc::string(), m_dlssParams.verboseLog);
+    }
+
     Globals::instance.initialize(window, enableValidationLayers);
     Globals::instance.setBreakOnValidationLayerError(enableValidationLayers);
     Globals::device.initialize();
@@ -205,6 +222,9 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
 
     m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, m_vsyncEnabled);
     m_viewportRect.max = glm::ivec2(m_swapChain.getLayout().extent.width, m_swapChain.getLayout().extent.height);
+    updateRenderExtent(); // initPipelines sizes the render-size targets from it
+    updateRenderRect();
+    m_staticMeshGraphicsPipeline.setMipLodBias(dlssMipBias()); // its initialize creates the sampler
 
     m_gpuProfiler.initialize(); // needs the device; Globals::profiler was initialized in main before us
 
@@ -222,7 +242,8 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
 void Renderer::initPipelines()
 {
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
-    const vk::Extent2D ext = m_swapChain.getLayout().extent;
+    const vk::Extent2D ext = m_swapChain.getLayout().extent; // the post chain (after the TAA / DLSS resolve)
+    const vk::Extent2D renderExt = renderExtent();          // the scene's render-size targets
 
     initBindlessTextures(); // the layout cap the pipelines below bake in comes from here
 
@@ -251,13 +272,13 @@ void Renderer::initPipelines()
     m_sceneViewCount = Globals::openXR.isEnabled() ? 2u : 1u;
 
     for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
+        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount);
     const vk::RenderPass sceneRenderPass = m_perFrameData[0].sceneColor.getRenderPass();
     // The depth-writing stages' pipelines: the opaque family, with the motion target (SceneColor).
     const vk::RenderPass opaqueRenderPass = m_perFrameData[0].sceneColor.getOpaqueRenderPass();
 
     m_staticMeshGraphicsPipeline.initialize(opaqueRenderPass,m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
-    m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
+    m_rtaoPipeline.initialize(&m_rtaoParams, renderExt.width, renderExt.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
 
     // "Terrain/Water" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
@@ -269,9 +290,10 @@ void Renderer::initPipelines()
     });
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
-    m_cloudPipeline.initialize(ext.width, ext.height, sceneRenderPass, m_sceneViewCount);
+    m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
     m_terrain.initialize();
     m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
+    m_dlssPipeline.initialize(renderExt.width, renderExt.height, ext.width, ext.height);
     m_motionBlurPipeline.initialize(ext.width, ext.height);
     m_bloomPipeline.initialize(ext.width, ext.height);
     m_eyeAdaptationPipeline.initialize();
@@ -297,7 +319,7 @@ void Renderer::initPipelines()
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_decalPipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
-    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height); // the union march's target
+    m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
 
     m_shadowCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
     for (PerFrameData& perFrame : m_perFrameData)
@@ -356,6 +378,7 @@ void Renderer::initPerFrameResources()
         perFrame.forceMarchCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceUnionMarch");
         perFrame.forceComputeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceCompute");
         perFrame.taaCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.taa");
+        perFrame.dlssCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.dlss");
         perFrame.motionBlurCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.motionBlur");
         perFrame.bloomCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.bloom");
         perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.eyeAdapt");
@@ -415,16 +438,14 @@ void Renderer::recreateWindowSurface(Window& window)
     m_framebuffers.initialize(m_renderPass, m_swapChain);
 
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    m_rtaoPipeline.recreateImages(ext.width, ext.height);
-    m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
     m_motionBlurPipeline.recreateImages(ext.width, ext.height);
     m_bloomPipeline.recreateImages(ext.width, ext.height);
-
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
+    m_dlssPipeline.recreateOutputImage(ext.width, ext.height);
+    updateRenderExtent();
+    recreateRenderTargets();
+    updateRenderRect();
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
-    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their inheritance info, so force them to re-record against the new handle.
     setHaveToRecordCommandBuffers();
@@ -448,15 +469,14 @@ void Renderer::recreateSwapchain()
     m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, m_vsyncEnabled);
     m_framebuffers.initialize(m_renderPass, m_swapChain);
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    m_rtaoPipeline.recreateImages(ext.width, ext.height);
-    m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
     m_motionBlurPipeline.recreateImages(ext.width, ext.height);
     m_bloomPipeline.recreateImages(ext.width, ext.height);
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
+    m_dlssPipeline.recreateOutputImage(ext.width, ext.height);
+    updateRenderExtent();
+    recreateRenderTargets();
+    updateRenderRect();
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
-    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // Cached scene command buffers reference the recreated scene-colour render pass; re-record them.
     setHaveToRecordCommandBuffers();
@@ -493,6 +513,7 @@ void Renderer::reloadShaders()
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_taaPipeline.reloadShaders();
+    m_dlssPipeline.reloadShaders();
     m_motionBlurPipeline.reloadShaders();
     m_bloomPipeline.reloadShaders();
     m_eyeAdaptationPipeline.reloadShaders();
@@ -596,19 +617,90 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
     return true;
 }
 
-// THE one place the centre view-projection is built. Its two callers - setFrameView before the frame
-// and buildUboViews inside it - must agree bit-exactly, or the spatial cull and the GPU cull disagree.
-glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
+glm::mat4 Renderer::computeCenterProjection(const Camera& camera) const
 {
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
     // In VR the "centre view" (used for culling, GI region, shadow cascade fit, and the shared screen-space
     // froxel fog volume) uses a head-centred projection spanning the union of both eyes' FOV, so it covers
     // everything either eye renders. Desktop uses the plain camera perspective.
-    const glm::mat4x4 projection = reverseZProjection(Globals::openXR.isEnabled()
+    return reverseZProjection(Globals::openXR.isEnabled()
         ? Globals::openXR.getCombinedProjection(camera.near, camera.far)
         : glm::perspective(glm::radians(camera.fovDeg), (float)viewportSize.x / (float)viewportSize.y, camera.near, camera.far),
         camera.near, camera.far);
-    return projection * camera.viewMatrix;
+}
+
+// THE one place the centre view-projection is built. Its two callers - setFrameView before the frame
+// and buildUboViews inside it - must agree bit-exactly, or the spatial cull and the GPU cull disagree.
+glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
+{
+    return computeCenterProjection(camera) * camera.viewMatrix;
+}
+
+void Renderer::updateRenderExtent()
+{
+    m_dlssMode = (Streamline::DlssMode)m_dlssParams.mode; // see m_dlssMode: applied here, with the sizes
+    const vk::Extent2D ext = m_swapChain.getLayout().extent;
+    const glm::uvec2 display(oc::max(ext.width, 1u), oc::max(ext.height, 1u));
+    glm::uvec2 render = display;
+    // The DLSS ratio for the whole swapchain; the viewport rect then scales by the same ratio (DLSS takes any
+    // render size in its min..max range, so the editor's viewport panel needs no re-query).
+    if (dlssActive())
+        render = glm::clamp(Streamline::getDlssRenderSize(m_dlssMode, display), glm::uvec2(1u), display);
+    m_renderExtent = render;
+    m_renderScale = glm::vec2(render) / glm::vec2(display);
+}
+
+void Renderer::updateRenderRect()
+{
+    const glm::ivec2 extent(m_renderExtent);
+    Rect rect;
+    rect.min = glm::clamp(glm::ivec2(glm::vec2(m_viewportRect.min) * m_renderScale + 0.5f), glm::ivec2(0), extent - 1);
+    // DLSS: the size is its optimal render size for THIS viewport - SL creates the NGX feature at exactly that
+    // size, and a render subrect larger than the feature (the swapchain ratio, rounded up) fails the evaluate.
+    const glm::ivec2 size = dlssActive()
+        ? glm::ivec2(Streamline::getDlssRenderSize(m_dlssMode, glm::uvec2(m_viewportRect.getSize())))
+        : glm::ivec2(glm::vec2(m_viewportRect.max) * m_renderScale + 0.5f) - rect.min;
+    rect.max = glm::clamp(rect.min + size, rect.min + 1, extent);
+    if (rect != m_renderRect)
+    {
+        m_renderRect = rect;
+        m_dlssReset = true;
+    }
+}
+
+void Renderer::recreateRenderTargets()
+{
+    const vk::Extent2D renderExt = renderExtent();
+    m_rtaoPipeline.recreateImages(renderExt.width, renderExt.height);
+    m_cloudPipeline.recreateImages(renderExt.width, renderExt.height);
+    m_dlssPipeline.recreateImages(renderExt.width, renderExt.height);
+    for (PerFrameData& perFrame : m_perFrameData)
+        perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount);
+    m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height);
+    m_dlssReset = true;
+    // The cached scene command buffers embed the re-created scene-colour render pass and the image views.
+    setHaveToRecordCommandBuffers();
+}
+
+void Renderer::applyRenderResolution()
+{
+    Globals::textureStreamer.onGpuIdle();
+    Globals::meshStreamer.onGpuIdle();
+    const glm::uvec2 oldExtent = m_renderExtent;
+    updateRenderExtent();
+    if (m_renderExtent != oldExtent)
+        recreateRenderTargets();
+    updateRenderRect();
+    if (!dlssActive())
+        Streamline::freeDlss(); // a DLSS mode keeps its feature, Off gives the memory back
+    const float mipBias = dlssMipBias();
+    if (mipBias != m_staticMeshGraphicsPipeline.getMipLodBias())
+    {
+        m_staticMeshGraphicsPipeline.setMipLodBias(mipBias);
+        m_staticMeshGraphicsPipeline.recreateSampler(); // the re-record writes it into every texture slot
+    }
+    m_dlssReset = true;
+    setHaveToRecordCommandBuffers();
 }
 
 void Renderer::beginFrame()

@@ -123,14 +123,18 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
 void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
-    const glm::ivec2 viewportSize = m_viewportRect.getSize();
+    // The jitter is one RENDER pixel (the scene renders through m_renderRect; == m_viewportRect unless upscaling).
+    const glm::ivec2 renderSize = m_renderRect.getSize();
 
     glm::vec2 taaJitterNdc(0.0f);
-    if (m_taaParams.taaEnabled && viewportSize.x > 0 && viewportSize.y > 0)
+    if (resolveActive() && renderSize.x > 0 && renderSize.y > 0)
     {
-        const uint32 sampleIdx = (m_frameCounter % 16u) + 1u;
-        taaJitterNdc.x = (radicalInverse(sampleIdx, 2u) - 0.5f) * 2.0f / (float)viewportSize.x;
-        taaJitterNdc.y = (radicalInverse(sampleIdx, 3u) - 0.5f) * 2.0f / (float)viewportSize.y;
+        // DLSS wants about 8 phases per output pixel: 8 x (output / render)^2 (TAA: 16).
+        const float upscale = 1.0f / oc::max(m_renderScale.y, 0.01f);
+        const uint32 phases = dlssActive() ? oc::clamp((uint32)glm::ceil(8.0f * upscale * upscale), 8u, 128u) : 16u;
+        const uint32 sampleIdx = (m_frameCounter % phases) + 1u;
+        taaJitterNdc.x = (radicalInverse(sampleIdx, 2u) - 0.5f) * 2.0f / (float)renderSize.x;
+        taaJitterNdc.y = (radicalInverse(sampleIdx, 3u) - 0.5f) * 2.0f / (float)renderSize.y;
     }
 
     const uint32 numViews = Globals::openXR.isEnabled() ? RendererVKLayout::NUM_UBO_VIEWS : 1;
@@ -173,14 +177,11 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
         }
     }
 
-    const vk::Extent2D swapExtent = m_swapChain.getLayout().extent;
-    ubo.screenSize = glm::vec4((float)swapExtent.width, (float)swapExtent.height,
-        1.0f / (float)swapExtent.width, 1.0f / (float)swapExtent.height);
-    ubo.viewportRect = glm::vec4(
-        (float)m_viewportRect.min.x / (float)swapExtent.width,
-        (float)m_viewportRect.min.y / (float)swapExtent.height,
-        (float)viewportSize.x / (float)swapExtent.width,
-        (float)viewportSize.y / (float)swapExtent.height);
+    // The render-size targets and the scene's rect in them: every scene / screen-space pass works in these.
+    // Without upscaling they are the swapchain extent and the viewport rect.
+    const glm::vec2 targetSize(m_renderExtent);
+    ubo.screenSize = glm::vec4(targetSize, 1.0f / targetSize);
+    ubo.viewportRect = glm::vec4(glm::vec2(m_renderRect.min) / targetSize, glm::vec2(renderSize) / targetSize);
     // zw = LAST frame's jitter: TAA/AO-temporal compensate both frames' jittered depth images during
     // reprojection (all raster passes jitter, the prepass included - see taaJitterUv in shared.inc.glsl).
     ubo.taaJitter = glm::vec4(taaJitterNdc, m_prevTaaJitter);

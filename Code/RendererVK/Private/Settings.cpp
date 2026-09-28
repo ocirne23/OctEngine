@@ -10,6 +10,8 @@ namespace
     constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size" };
     constexpr oc::string_view s_cloudDebugNames[] = { "Off", "Step count", "Density only", "History rejection" };
     constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame" };
+    constexpr oc::string_view s_dlssModeNames[] = { "Off", "DLAA", "Quality", "Balanced", "Performance", "Ultra Performance" };
+    constexpr oc::string_view s_dlssPresetNames[] = { "Default", "J", "K", "L", "M" };
 }
 
 void SkyParams::registerTweaks()
@@ -207,6 +209,14 @@ void TAAParams::registerTweaks(const oc::function<void()>& onReRecord)
     Tweak::boolean("TAA", "Enabled", &taaEnabled, onReRecord);
     Tweak::floatVar("TAA", "History Feedback", &taaFeedback, 0.0f, 0.98f, 0.01f, onReRecord);
     Tweak::floatVar("TAA", "Ocean feedback", &taaOceanFeedback, 0.0f, 0.98f, 0.01f, onReRecord);
+}
+
+void DlssParams::registerTweaks(const oc::function<void()>& onResize, const oc::function<void()>& onReRecord)
+{
+    Tweak::enumVar("Post/DLSS", "Mode", &mode, s_dlssModeNames, onResize, ETweakFlags::Saved);
+    Tweak::enumVar("Post/DLSS", "Preset", &preset, s_dlssPresetNames, onReRecord, ETweakFlags::Saved);
+    Tweak::boolean("Post/DLSS", "Mip bias", &mipBias, onResize);
+    Tweak::boolean("Post/DLSS", "Verbose log (restart)", &verboseLog, {}, ETweakFlags::Saved);
 }
 
 void MotionBlurParams::registerTweaks(const oc::function<void()>& onReRecord)

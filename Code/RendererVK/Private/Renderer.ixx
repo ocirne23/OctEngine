@@ -44,6 +44,8 @@ import :ParticlePipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
+import :DlssPipeline;
+import :Streamline;
 import :MotionBlurPipeline;
 import :BloomPipeline;
 import :CompositePipeline;
@@ -287,8 +289,15 @@ private:
     void recordCloudApply(uint32 frameIdx);
     void recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     bool cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
+    // DLSS (desktop only) REPLACES TAA: it writes TAA's resolved image, so the post chain reads the same image.
+    bool dlssActive() const { return m_dlssMode != Streamline::DlssMode::Off && m_sceneViewCount == 1 && Streamline::dlssAvailable(); }
+    bool taaActive() const { return m_taaParams.taaEnabled && !dlssActive(); }
+    bool resolveActive() const { return taaActive() || dlssActive(); } // false: the post chain reads the scene colour directly
+    // The scene renders below the output resolution (a DLSS mode other than DLAA).
+    bool upscaling() const { return m_renderScale != glm::vec2(1.0f); }
     // Desktop only (a blur the head did not make is uncomfortable in VR); off = the pass is not recorded at all.
-    bool motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1; }
+    // Not while upscaling: its velocity and gather assume one resolution for the depth and the resolved colour.
+    bool motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1 && !upscaling(); }
     // Desktop only (level 0 comes from the left eye's histogram in VR); off = no chain, no level-0 writes.
     bool bloomEnabled() const { return m_bloomParams.enabled && m_bloomParams.intensity > 0.0f && m_sceneViewCount == 1; }
     // CloudParams toggles -> the baked shader defines (buildLayoutPreamble). Returns whether they changed, so a
@@ -304,15 +313,30 @@ private:
         return true;
     }
     void recordTaa(uint32 frameIdx);
+    void recordDlss(uint32 frameIdx);                                  // cached: the motion vector pass
+    void recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary); // per frame, in the primary: mvec pass + the upscale
     void recordMotionBlur(uint32 frameIdx);
     void recordBloom(uint32 frameIdx);
     void recordEyeAdaptation(uint32 frameIdx);
     void recordComposite(uint32 frameIdx);
 
     void setFullViewport(vk::CommandBuffer vkCb) const;
-    void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect.getSize().x <= 0 || rect.getSize().y <= 0) return; if (rect != m_viewportRect) { m_viewportRect = rect; setHaveToRecordCommandBuffers(); } }
+    void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect.getSize().x <= 0 || rect.getSize().y <= 0) return; if (rect != m_viewportRect) { m_viewportRect = rect; updateRenderRect(); setHaveToRecordCommandBuffers(); } }
     void initBindlessTextures();
 
+    // ---- Render resolution (DLSS) ----
+    // The scene renders into RENDER-SIZE targets (SceneColor, RTAO, clouds, the force interval target, the DLSS
+    // motion vectors) through m_renderRect = m_viewportRect x m_renderScale; everything after the resolve (TAA /
+    // DLSS output, motion blur, eye adaptation, bloom, composite) stays at the swapchain size and m_viewportRect.
+    // Without upscaling the two are identical.
+    void updateRenderExtent();     // m_renderExtent + m_renderScale from the DLSS mode and the swapchain extent
+    void updateRenderRect();       // m_renderRect from m_viewportRect; a change resets the DLSS history
+    void recreateRenderTargets();  // GPU idle: every render-size image at m_renderExtent
+    void applyRenderResolution();  // "Post/DLSS" Mode / Mip bias: GPU idle + the three above + the texture LOD bias
+    float dlssMipBias() const { return dlssActive() && m_dlssParams.mipBias && upscaling() ? glm::log2(m_renderScale.y) : 0.0f; }
+    vk::Extent2D renderExtent() const { return vk::Extent2D{ m_renderExtent.x, m_renderExtent.y }; }
+
+    glm::mat4 computeCenterProjection(const Camera& camera) const; // pure, reversed-Z, unjittered (VR: both eyes)
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: both eyes) * view
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
     void checkFrameCapacities();
@@ -439,6 +463,7 @@ private:
     VolumetricFogPipeline m_volumetricFogPipeline;
     CloudPipeline m_cloudPipeline;
     TaaPipeline m_taaPipeline;
+    DlssPipeline m_dlssPipeline;
     MotionBlurPipeline m_motionBlurPipeline;
     BloomPipeline m_bloomPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
@@ -479,6 +504,7 @@ private:
     RTAOParams m_rtaoParams;
     LightGridParams m_lightGridParams;
     TAAParams m_taaParams;
+    DlssParams m_dlssParams;
     MotionBlurParams m_motionBlurParams;
     BloomParams m_bloomParams;
     MeshLodParams m_lodParams;
@@ -501,6 +527,18 @@ private:
     const void* m_imguiDrawData = nullptr;
     oc::atomic<const void*> m_imguiPendingDrawData = nullptr;
     Rect m_viewportRect = Rect();
+    // Render resolution (see updateRenderExtent): the render-size targets, their scale from the swapchain, and
+    // the scene's rect in them.
+    glm::uvec2 m_renderExtent{ 0 };
+    glm::vec2 m_renderScale{ 1.0f };
+    Rect m_renderRect = Rect();
+    // The APPLIED "Post/DLSS" Mode: set only by updateRenderExtent, together with the sizes it implies. The tweak
+    // itself changes the moment the UI writes it, a frame or more before its onChange re-creates the targets and
+    // re-records - reading it live renders a frame with the new mode and the old sizes (NGX InvalidParameter), or
+    // executes the never-recorded DLSS secondary (device lost).
+    Streamline::DlssMode m_dlssMode = Streamline::DlssMode::Off;
+    bool m_dlssReset = true; // the next DLSS evaluate starts without history
+    bool m_dlssFailed = false; // logged once
     bool m_initialized = false;
     bool m_frameSlotWaited = false;
     bool m_windowMinimized = false;
@@ -577,6 +615,7 @@ private:
         CommandBuffer forceMarchCommandBuffer;
         CommandBuffer forceComputeCommandBuffer;
         CommandBuffer taaCommandBuffer;
+        CommandBuffer dlssCommandBuffer;
         CommandBuffer motionBlurCommandBuffer;
         CommandBuffer bloomCommandBuffer;
         CommandBuffer eyeAdaptCommandBuffer;
