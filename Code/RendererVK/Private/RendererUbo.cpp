@@ -684,6 +684,12 @@ void Renderer::buildUboTerrain()
     const uint16* heightTex = m_terrain.getSplatHeightTex();
     for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
         ubo.terrainSplatHeightTex[i >> 2][i & 3] = heightTex[i];
+    const glm::uvec2* splatTex = m_terrain.getSplatTex();
+    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
+    {
+        ubo.terrainSplatTex[i >> 1][(i & 1) * 2 + 0] = splatTex[i].x;
+        ubo.terrainSplatTex[i >> 1][(i & 1) * 2 + 1] = splatTex[i].y;
+    }
     // Climate boxes: temperature arrives as t01, precipitation as mm/yr - its divisor is a live tweak.
     const float invPrecipFull = 1.0f / glm::max(tex.precipFullMm, 1.0f);
     const glm::vec4* climate = m_terrain.getSplatClimate();

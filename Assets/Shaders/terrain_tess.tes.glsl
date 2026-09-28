@@ -34,6 +34,8 @@ layout (location = 2) out vec4 out_terrainFields;
 // The UNDISPLACED position: the terrain FS lights (sun shadow map, RT shadow rays, lights) from here. The
 // shadow map and the TLAS hold the flat mesh, and the centred relief puts half the surface BELOW it - lit
 // from the displaced point, that half sat inside its own caster (acne bands on the slopes away from the sun).
+// A vec3, not the one-float displacement the film uses: the FS rebuild from that stayed live across the ground
+// FS (64 -> 72 registers, 2026-09-28); the interpolant is re-interpolated at each use instead.
 layout (location = 3) out vec3 out_meshPos;
 
 invariant gl_Position;

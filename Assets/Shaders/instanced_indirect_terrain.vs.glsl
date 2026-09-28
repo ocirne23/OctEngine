@@ -51,9 +51,10 @@ layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = temperature C, z = humidity, w = water level
 
 #ifdef TERRAIN_OVERLAY_PASS
-// The film: out_pos is LIFTED to its water level, this is the mesh point under it - what the film FS lights and
-// measures the relief from (the shadow map and the TLAS hold the flat mesh).
-layout (location = 3) out vec3 out_meshPos;
+// The film: out_pos is LIFTED to its water level, this is the lift along the normal (m). The film FS rebuilds
+// the mesh point under it, out_pos - normalize(out_normal) * this, and lights and measures the relief from it
+// (the shadow map and the TLAS hold the flat mesh). One component, not the vec3 mesh point: 2 fewer in TRAM.
+layout (location = 3) out float out_meshLift;
 
 #define TERRAIN_WET_BINDING 18
 #include "terrain_wetness.inc.glsl"  // the film's water level: terrainWetnessAt + terrainPoolLevel
@@ -129,7 +130,7 @@ void main()
     // depth hides the film there). Elsewhere, and with tessellation off, no lift: it lies on the flat ground,
     // bit-identical (GREATER_OR_EQUAL). Per vertex: it does not follow the ground's relief, only its water
     // level. The ground relief depth only (the rock's is a per-pixel coverage the VS does not have).
-    out_meshPos = out_pos;
+    out_meshLift = 0.0;
     if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
     {
         const vec3 N = normalize(out_normal);
@@ -140,7 +141,10 @@ void main()
             const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
             const float depth = u_terrainTessParams1.z * (1.0 - pow(t, u_terrainTessParams0.w)) * smoothstep(0.35, 0.6, N.y);
             if (depth > 1e-4)
-                out_pos += N * ((terrainFilmLevel(out_meshPos, N.y, waterLevel, depth) - 0.5) * depth);
+            {
+                out_meshLift = (terrainFilmLevel(out_pos, N.y, waterLevel, depth) - 0.5) * depth;
+                out_pos += N * out_meshLift;
+            }
         }
     }
 #endif

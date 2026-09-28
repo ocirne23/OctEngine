@@ -85,7 +85,10 @@ public:
     void setOceanDebugMode(int mode) { m_oceanDebugMode = mode; } // OCEAN_DEBUG_MODE define, same reload rule
     // "Editor/Wireframe": global wireframe, scene variants rasterize as lines. It is baked pipeline state
     // (polygonMode), so onReloadShaders must wait for the GPU, reloadShaders() this pipeline and re-record.
-    void registerTweaks(const oc::function<void()>& onReloadShaders);
+    // "Renderer/Textures/Anisotropy": the scene texture sampler's max anisotropy. onSamplerChanged must wait for
+    // the GPU, call recreateSampler() and re-record (record() rewrites every texture slot with the sampler).
+    void registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onSamplerChanged);
+    void recreateSampler();
     void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
     // LIT_RT_SUN_SHADOW / LIT_RT_LIGHT_SHADOWS (0/1) on the same shaders: the EFFECTIVE flags (RT master AND
@@ -122,6 +125,7 @@ private:
     IndirectExecutionSet m_transparentExecutionSet;
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler;
+    int m_anisotropyLevel = 2; // "Anisotropy" tweak index: 0 = off, else 2^level (2 = 4x)
     vk::RenderPass m_renderPass;
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant

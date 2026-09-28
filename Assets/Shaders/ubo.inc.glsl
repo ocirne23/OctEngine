@@ -271,6 +271,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // Unused for the beach/snow overlays.
     uvec4 u_terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the BC4
                               // height texture index, 0xFFFF = none (flat: no parallax, linear blend)
+    uvec4 u_terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
+                              // x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16
 
     // GPU mesh LOD selection (indirect + shadow cull; keep in sync with RendererVKLayout::Ubo)
     vec4 u_lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,

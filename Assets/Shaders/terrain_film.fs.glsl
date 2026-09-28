@@ -18,10 +18,11 @@
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal; // geometric (interpolated vertex) normal
 layout (location = 2) in vec4 in_terrainFields; // VS-evaluated baked fields: x = macro altitude, y = temperature C, z = humidity, w = water level
-// in_pos is LIFTED to the water level (instanced_indirect_terrain.vs.glsl), this is the mesh under it - what
-// the shadow map and the TLAS hold, and what the relief is measured from.
-layout (location = 3) in vec3 in_meshPos;
-#define TERRAIN_LIT_POS in_meshPos
+// in_pos is LIFTED to the water level (instanced_indirect_terrain.vs.glsl) by this much along the normal. The mesh
+// point under it - what the shadow map and the TLAS hold, and what the relief is measured from - is rebuilt at
+// each use from the interpolants (a macro: nothing holds it live).
+layout (location = 3) in float in_meshLift;
+#define TERRAIN_LIT_POS (in_pos - normalize(in_normal) * in_meshLift)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif

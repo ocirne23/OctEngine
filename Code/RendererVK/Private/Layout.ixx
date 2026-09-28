@@ -801,6 +801,9 @@ export namespace RendererVKLayout
                                      // (snow-line rock is cold at ANY humidity). Unused for beach/snow.
         glm::uvec4 terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the
                                      // BC4 height texture index, 0xFFFF = none (flat: no parallax, linear blend)
+        glm::uvec4 terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
+                                     // x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16.
+                                     // The splat samples without reading the material buffer first.
 
         // GPU mesh LOD selection (indirect + shadow cull; keep in sync with ubo.inc.glsl)
         glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,

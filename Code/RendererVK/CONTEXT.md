@@ -1315,8 +1315,16 @@ Both push params in every frame; the renderer owns none of the tweaks.
   AND rock. Per material: diffuse (sRGB), normal (linear; BC5 sets `MATERIAL_FLAG_BC5_NORMAL`), ARM
   (linear; R = AO, G = roughness, B = metalness, stored in `metalRoughnessTexIdx`), and an optional BC4
   HEIGHT map. **`MaterialInfo` has no free slot, so the height index rides the UBO per slot**
-  (`u_terrainSplatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat), like the climate boxes. The full contract is
-  on the definition in `Renderer.cpp`.
+  (`u_terrainSplatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat), like the climate boxes. **The splat reads its
+  other texture indices from the UBO too** (`u_terrainSplatTex[s >> 1]`, .xy even slot / .zw odd: diffuse |
+  normal << 16, ARM | BC5 bit << 16; `terrainSplatTex()`), not from `in_materialInfos`: each fetch then does
+  not wait on a storage-buffer load first (Nsight 2026-09-28: L1TEX long scoreboard was the top stall of
+  Static meshes, 16.8%). The materials are still registered (`addMaterials`) for everything else. The full
+  contract is on the definition in `Renderer.cpp`.
+* **"Renderer/Textures/Anisotropy"** (Saved; Off / 2x / 4x / 8x / 16x, default 4x - a user decision; was a fixed 16x): the max anisotropy of
+  `StaticMeshGraphicsPipeline::m_sampler`, the sampler of EVERY scene texture slot (materials + the splat). A
+  change waits for the GPU, recreates the sampler (`recreateSampler`) and re-records; `record()` writes all
+  texture slots with it. Added as the A/B for the L1TEX latency: the terrain is seen at grazing angles.
 * **Terrain relief** (`TERRAIN_SPLAT_RELIEF`, defined by the terrain FS only; "Terrain/Textures/Parallax*",
   "Height blend contrast"; `u_terrainTexParams6/7`):
   * **Height blend:** `terrainMixInto` steepens each layer's coverage ramp and shifts it by the height
@@ -1382,8 +1390,9 @@ the sand, so the two can never disagree.
   - above that the ocean draws its own surface and a film lifted to the same height would z-fight it.
   Elsewhere (and with tessellation off) there is no lift. **Depth test GREATER_OR_EQUAL**
   (`PipelineVariant::depthGreaterOrEqual`): with no lift the film is bit-identical to the flat ground
-  (`invariant gl_Position`), and the displaced ground hides it where it stands higher. The VS hands the
-  mesh point on (`out_meshPos`, location 3): the film FS lights and measures the relief from it. The wetness
+  (`invariant gl_Position`), and the displaced ground hides it where it stands higher. The VS hands the lift
+  on (`out_meshLift`, location 3, one float): the film FS rebuilds the mesh point from it
+  (`TERRAIN_LIT_POS`) and lights and measures the relief from there. The wetness
   clipmap (18), the ocean maps (7) and the terrain data (19) are bound to the vertex stage for this.
 * **The COVERAGE** is how much water stands over a pixel: `(level - relief height) x relief depth` METRES
   (or the live ocean over the ground where deeper, see the hand-over below), faded over the last "Edge
@@ -1557,7 +1566,12 @@ the sand, so the two can never disagree.
     (height 0.5 = the mesh), faded by distance and on slopes past ~50°. The domain origin is LOWER_LEFT, so
     `ccw` follows the GL rules.
   * **Lighting uses the UNDISPLACED position** (`in_meshPos`, location 3; `TERRAIN_LIT_POS` in the terrain FS
-    under `TERRAIN_TESS`). The shadow map and the TLAS hold the flat mesh, and the centred relief puts half
+    under `TERRAIN_TESS`). **Tried and reverted 2026-09-28:** one float (the displacement along the normal)
+    instead of the vec3, the FS rebuilding `in_pos - normalize(in_normal) * disp` - 2 components fewer in the
+    ISBE and TRAM (Nsight: launch stalled on registers 44%, TRAM 38%, ISBE 31%), but the compiler kept the
+    rebuilt point live across the shader: tessellated ground FS 64 -> 72 registers. A vec3 interpolant is
+    re-interpolated at each use and holds no register. The FILM keeps the one-float form (`in_meshLift`): there
+    it cost no register (56 either way, 16 -> 14 inputs). The shadow map and the TLAS hold the flat mesh, and the centred relief puts half
     the surface below it: lit from the displaced point, that half self-shadowed in bands. The splat samples
     the displaced `in_pos`.
   * **RTAO** rebuilds its origins from that displaced depth but traces the flat TLAS, so a relief low hit

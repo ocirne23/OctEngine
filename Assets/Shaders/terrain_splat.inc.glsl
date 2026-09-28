@@ -9,9 +9,8 @@
 // Shared by the terrain fragment shader (its own pixels) and the ocean shader (the seabed at a
 // refraction-ray hit, so the sand seen through the water IS the terrain next to it). The includer
 // declares, before including:
-//   in_materialInfos[] (MaterialInfo: flags / diffuseNormalTexIdx / metalRoughnessTexIdxAlphaMode),
 //   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTexParams*, u_terrainSplatClimate,
-//   u_terrainParams).
+//   u_terrainSplatTex, u_terrainParams). The splat's texture indices come from the UBO, not the material buffer.
 // Optional, before including:
 //   TERRAIN_SPLAT_TEX(tex, uv)  - the texture fetch. Defaults to texture() (screen derivatives); a ray
 //                                 hit has none, so the ocean defines it as textureLod at a ray-cone LOD.
@@ -94,12 +93,22 @@ float16_t terrainHeightWeight(float16_t w, float16_t dh)
 #endif
 
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+// A splat material's texture indices, from the UBO (Renderer's buildUboTerrain), not the material buffer: the
+// texture fetches then do not wait on a storage-buffer load first (L1TEX long-scoreboard latency).
+// x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16.
+uvec2 terrainSplatTex(uint matIdx)
+{
+	const uint slot = matIdx - uint(u_terrainTexParams0.x);
+	const uvec4 v = u_terrainSplatTex[slot >> 1];
+	return (slot & 1u) == 0u ? v.xy : v.zw;
+}
+
 // One splat material with world-XZ UVs; tangent basis = world X/Z reoriented onto the geometric
 // normal. matIdx diverges between neighbouring pixels at climate borders -> nonuniformEXT.
 TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 {
-	const MaterialInfo material = in_materialInfos[nonuniformEXT(matIdx)];
-	const uint diffuseTexIdx = material.diffuseNormalTexIdx & 0xFFFFu;
+	const uvec2 tex = terrainSplatTex(matIdx);
+	const uint diffuseTexIdx = tex.x & 0xFFFFu;
 
 	TerrainSample s;
 	s.albedo = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uv).rgb);
@@ -114,8 +123,8 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 	s.metal = float16_t(0.0);
 	s.normal = geoN;
 #else
-	const uint normalTexIdx = material.diffuseNormalTexIdx >> 16;
-	const uint armTexIdx    = material.metalRoughnessTexIdxAlphaMode & 0xFFFFu;
+	const uint normalTexIdx = tex.x >> 16;
+	const uint armTexIdx    = tex.y & 0xFFFFu;
 	const f16vec3 arm = armTexIdx != 0xFFFFu ? f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(armTexIdx)], uv).rgb) : f16vec3(1.0, 0.9, 0.0);
 	s.ao = arm.r;
 	s.rough = max(arm.g, float16_t(0.01));
@@ -123,7 +132,7 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 
 	const f16vec3 normalSample = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uv).xyz);
 	f16vec3 tn;
-	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
+	if ((tex.y >> 16) != 0u) // BC5 normal
 	{
 		const f16vec2 nxy = normalSample.xy * float16_t(2.0) - float16_t(1.0);
 		tn = f16vec3(nxy, sqrt(max(float16_t(1.0) - dot(nxy, nxy), float16_t(0.0))));
@@ -155,12 +164,12 @@ f16vec3 decodeTriplanarNormal(f16vec3 ns, bool bc5)
 #define TRIPLANAR_WMIN 0.05
 TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, float uvScale)
 {
-	const MaterialInfo material = in_materialInfos[nonuniformEXT(matIdx)];
-	const uint diffuseTexIdx = material.diffuseNormalTexIdx & 0xFFFFu;
+	const uvec2 tex = terrainSplatTex(matIdx);
+	const uint diffuseTexIdx = tex.x & 0xFFFFu;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
-	const uint normalTexIdx  = material.diffuseNormalTexIdx >> 16;
-	const uint armTexIdx     = material.metalRoughnessTexIdxAlphaMode & 0xFFFFu;
-	const bool bc5 = (material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u;
+	const uint normalTexIdx  = tex.x >> 16;
+	const uint armTexIdx     = tex.y & 0xFFFFu;
+	const bool bc5 = (tex.y >> 16) != 0u;
 	const bool hasArm = armTexIdx != 0xFFFFu;
 #endif
 

@@ -232,6 +232,8 @@ public:
     oc::span<const uint16> getSplatTextures() const { return m_splatTextures; }
     const glm::vec4* getSplatClimate() const { return m_splatClimate; } // per slot, TerrainSplatMaterial::climate units
     const uint16* getSplatHeightTex() const { return m_splatHeightTex; } // per slot, UINT16_MAX = no height map
+    // Per slot: x = diffuse | normal << 16, y = ARM (UINT16_MAX = none) | BC5-normal bit << 16.
+    const glm::uvec2* getSplatTex() const { return m_splatTex; }
 
     // ---- The CPU-baked height/water map (fog's height base, the ocean's coarse shore fallback) ----
     BakedWorldMap& getHeightMap() { return m_heightMap; }
@@ -268,6 +270,7 @@ private:
     oc::vector<uint16> m_splatTextures; // for the per-frame streaming noteUse + replacement frees
     glm::vec4 m_splatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
     uint16 m_splatHeightTex[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{}; // read only once a set is registered
+    glm::uvec2 m_splatTex[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};    // see getSplatTex
     TerrainTexTweaks m_texTweaks;
     TerrainWetTweaks m_wetTweaks;
 

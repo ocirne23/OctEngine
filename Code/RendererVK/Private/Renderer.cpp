@@ -134,6 +134,11 @@ void Renderer::registerTweaks()
             return;
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
+    }, [this]() { // "Anisotropy": a new scene texture sampler; the re-record writes it into every texture slot
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_staticMeshGraphicsPipeline.recreateSampler();
+        setHaveToRecordCommandBuffers();
     });
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid), so it registers HERE,
     // before any pipeline compiles: an override is then live for every shader and for the probe buffer that
