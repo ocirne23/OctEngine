@@ -750,6 +750,29 @@ void Renderer::recordTaa(uint32 frameIdx)
     cb.end();
 }
 
+// Motion blur over TAA's resolved colour (the scene colour with TAA off); the composite tonemaps its output.
+void Renderer::recordMotionBlur(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    SceneColor& sceneColor = frameData.sceneColor;
+    CommandBuffer& cb = frameData.motionBlurCommandBuffer;
+    beginComputeSecondary(cb);
+    const bool taaOn = m_taaParams.taaEnabled;
+    const MotionBlurPipeline::RecordParams params{
+        .ubo = frameData.ubo,
+        .colorView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : sceneColor.getColorLayerView(0),
+        .colorLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+        .sceneDepthView = sceneColor.getDepthView(),
+        .motionView = sceneColor.getMotionView(0),
+        .shutter = m_motionBlurParams.shutter,
+        .maxRadius = m_motionBlurParams.maxRadius,
+        .cameraScale = m_motionBlurParams.cameraScale,
+        .samples = (uint32)oc::max(m_motionBlurParams.samples, 1),
+    };
+    m_motionBlurPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
 void Renderer::recordEyeAdaptation(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -783,11 +806,13 @@ void Renderer::recordComposite(uint32 frameIdx)
     vkCb.setScissor(0, vk::Rect2D{.offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
 
     const bool taaOn = m_taaParams.taaEnabled; // TAA bypassed: tonemap the scene colour directly
+    const bool motionBlur = motionBlurEnabled(); // the blur's output replaces either
     CompositePipeline::RecordParams params{
         .descriptorSet = frameData.compositeDescriptorSet,
-        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
-        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
-        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
+        .resolvedView = motionBlur ? m_motionBlurPipeline.getOutputView()
+            : taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
+        .resolvedLayout = (motionBlur || taaOn) ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+        .sampler = motionBlur ? m_motionBlurPipeline.getSampler() : taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
         .exposureEV = m_postParams.exposureEV,
         .tonemapper = m_postParams.tonemapper,
@@ -1095,6 +1120,8 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
         recordClouds(frameIdx);
         if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
             recordTaa(frameIdx);
+        if (motionBlurEnabled()) // the same
+            recordMotionBlur(frameIdx);
     }
 }
 
@@ -1419,7 +1446,11 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // Disabled TAA is skipped outright (it used to run a full-screen copy with feedback 0).
     if (m_taaParams.taaEnabled)
         executeScoped(vkCommandBuffer, "TAA", frameData.taaCommandBuffer.getCommandBuffer());
+    // Motion blur: reads the resolved colour, writes the image the composite tonemaps (its own barriers).
+    if (motionBlurEnabled())
+        executeScoped(vkCommandBuffer, "Motion blur", frameData.motionBlurCommandBuffer.getCommandBuffer());
     // Eye adaptation: reads the resolved colour (TAA barrier above), writes the exposure the composite reads.
+    // The unblurred one: the blur moves light around, it does not change the exposure.
     executeScoped(vkCommandBuffer, "Eye adaptation", frameData.eyeAdaptCommandBuffer.getCommandBuffer());
 }
 

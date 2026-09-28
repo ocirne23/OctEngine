@@ -14,6 +14,9 @@ export namespace RendererVKLayout
 
     // HDR scene color target (linear radiance until the composite's exposure + tonemap).
     constexpr vk::Format SCENE_COLOR_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+    // Motion blur tiles (MotionBlurPipeline): px per side, and the max blur RADIUS (a blur must stay inside the
+    // 3x3 tile neighbourhood). One workgroup reduces one tile, so TILE^2 <= 1024 invocations and a power of two.
+    constexpr uint32 MOTION_BLUR_TILE = 32;
     constexpr uint16 FALLBACK_DIFFUSE_TEX_IDX = 0;
 	constexpr uint16 FALLBACK_NORMAL_TEX_IDX = 1;
 

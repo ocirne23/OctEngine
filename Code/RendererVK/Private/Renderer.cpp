@@ -115,6 +115,7 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_taaParams.registerTweaks(rerecordCallback);
+    m_motionBlurParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
     m_lightGridParams.registerTweaks( // the LOD params are read by the CPU build every frame: no reload
@@ -265,6 +266,7 @@ void Renderer::initPipelines()
     m_cloudPipeline.initialize(ext.width, ext.height, sceneRenderPass, m_sceneViewCount);
     m_terrain.initialize();
     m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
+    m_motionBlurPipeline.initialize(ext.width, ext.height);
     m_eyeAdaptationPipeline.initialize();
     m_compositePipeline.initialize(m_renderPass);
     m_indirectCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
@@ -347,6 +349,7 @@ void Renderer::initPerFrameResources()
         perFrame.forceMarchCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceUnionMarch");
         perFrame.forceComputeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceCompute");
         perFrame.taaCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.taa");
+        perFrame.motionBlurCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.motionBlur");
         perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.eyeAdapt");
         perFrame.compositeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.composite");
 
@@ -407,6 +410,7 @@ void Renderer::recreateWindowSurface(Window& window)
     m_rtaoPipeline.recreateImages(ext.width, ext.height);
     m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
+    m_motionBlurPipeline.recreateImages(ext.width, ext.height);
 
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
@@ -438,6 +442,7 @@ void Renderer::recreateSwapchain()
     m_rtaoPipeline.recreateImages(ext.width, ext.height);
     m_cloudPipeline.recreateImages(ext.width, ext.height);
     m_taaPipeline.recreateImages(ext.width, ext.height);
+    m_motionBlurPipeline.recreateImages(ext.width, ext.height);
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
@@ -478,6 +483,7 @@ void Renderer::reloadShaders()
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_taaPipeline.reloadShaders();
+    m_motionBlurPipeline.reloadShaders();
     m_eyeAdaptationPipeline.reloadShaders();
     m_compositePipeline.reloadShaders(m_renderPass);
 

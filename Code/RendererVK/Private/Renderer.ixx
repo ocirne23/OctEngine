@@ -44,6 +44,7 @@ import :ParticlePipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
+import :MotionBlurPipeline;
 import :CompositePipeline;
 import :EyeAdaptationPipeline;
 import :GraphicsPipeline;
@@ -283,6 +284,8 @@ private:
     void recordCloudApply(uint32 frameIdx);
     void recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     bool cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
+    // Desktop only (a blur the head did not make is uncomfortable in VR); off = the pass is not recorded at all.
+    bool motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1; }
     // CloudParams toggles -> the baked shader defines (buildLayoutPreamble). Returns whether they changed, so a
     // strength slider that only crosses 0 at the ends (Powder) reloads the shaders only when its define flips.
     bool syncCloudDefines()
@@ -296,6 +299,7 @@ private:
         return true;
     }
     void recordTaa(uint32 frameIdx);
+    void recordMotionBlur(uint32 frameIdx);
     void recordEyeAdaptation(uint32 frameIdx);
     void recordComposite(uint32 frameIdx);
 
@@ -429,6 +433,7 @@ private:
     VolumetricFogPipeline m_volumetricFogPipeline;
     CloudPipeline m_cloudPipeline;
     TaaPipeline m_taaPipeline;
+    MotionBlurPipeline m_motionBlurPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
     ShadowCullComputePipeline m_rainCullComputePipeline;
@@ -467,6 +472,7 @@ private:
     RTAOParams m_rtaoParams;
     LightGridParams m_lightGridParams;
     TAAParams m_taaParams;
+    MotionBlurParams m_motionBlurParams;
     MeshLodParams m_lodParams;
 
     RendererVKLayout::Ubo m_ubo; // buildUboViews reprojects from last frame's mvps before overwriting them.
@@ -563,6 +569,7 @@ private:
         CommandBuffer forceMarchCommandBuffer;
         CommandBuffer forceComputeCommandBuffer;
         CommandBuffer taaCommandBuffer;
+        CommandBuffer motionBlurCommandBuffer;
         CommandBuffer eyeAdaptCommandBuffer;
         CommandBuffer compositeCommandBuffer;
 

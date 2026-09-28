@@ -344,6 +344,19 @@ export struct TAAParams
     void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
+// Motion blur ("Post/Motion blur" tweaks; MotionBlurPipeline). The blur is the motion over the EXPOSURE, a
+// shutter fraction of the frame: physically, a higher frame rate blurs less.
+export struct MotionBlurParams
+{
+    bool  enabled = true;
+    float shutter = 0.5f;     // exposure / frame time (0.5 = a 180 degree shutter; > 1 exaggerates)
+    float maxRadius = 24.0f;  // px (the blur is at most twice this); capped at RendererVKLayout::MOTION_BLUR_TILE
+    float cameraScale = 1.0f; // the camera's share of the blur (0 = moving objects only)
+    int   samples = 12;       // gather samples per blurred pixel
+
+    void registerTweaks(const oc::function<void()>& onReRecord);
+};
+
 // Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) - the TweakPanel's "LOD" category.
 // Selection runs per instance at renderNode time; generate/generateLevels/minIndices are read at
 // ObjectContainer load, so they only affect containers loaded after a change.

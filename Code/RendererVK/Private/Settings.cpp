@@ -207,6 +207,16 @@ void TAAParams::registerTweaks(const oc::function<void()>& onReRecord)
     Tweak::floatVar("TAA", "Ocean feedback", &taaOceanFeedback, 0.0f, 0.98f, 0.01f, onReRecord);
 }
 
+void MotionBlurParams::registerTweaks(const oc::function<void()>& onReRecord)
+{
+    // All of it rides the cached secondaries (push constants) or gates them: every change re-records.
+    Tweak::boolean("Post/Motion blur", "Enabled", &enabled, onReRecord);
+    Tweak::floatVar("Post/Motion blur", "Shutter", &shutter, 0.0f, 2.0f, 0.01f, onReRecord);
+    Tweak::floatVar("Post/Motion blur", "Max radius (px)", &maxRadius, 1.0f, 32.0f, 0.5f, onReRecord);
+    Tweak::floatVar("Post/Motion blur", "Camera motion", &cameraScale, 0.0f, 1.0f, 0.01f, onReRecord);
+    Tweak::intVar("Post/Motion blur", "Samples", &samples, 4, 32, 1.0f, onReRecord);
+}
+
 void MeshLodParams::registerTweaks()
 {
     Tweak::boolean("LOD", "Enabled", &enabled);

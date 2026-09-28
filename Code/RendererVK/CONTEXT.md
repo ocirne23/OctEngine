@@ -158,7 +158,7 @@ GPU Frame
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
-    → Scene forward → TAA → Eye adaptation
+    → Scene forward → TAA → Motion blur (desktop, "Post/Motion blur") → Eye adaptation
   Composite + UI
 ```
 
@@ -615,8 +615,8 @@ instead of only the camera.
   vertex stage). `SkinningJob::prevValid` = 0 on a job's first frame (fresh or re-acquired bundle: the
   region holds no last frame), set by `SkinnedMeshRegistry::markJobsUploaded` after the upload.
 * **Readers**: TAA (the motion of the NEAREST surface in the 3x3, so a moving silhouette's history follows
-  the object), the AO temporal pass, and the forward pass's AO read (its own `MOTION_WORLD_DELTA`, no
-  target read). Not (yet): the cloud temporal pass, the particle collision.
+  the object), the AO temporal pass, the forward pass's AO read (its own `MOTION_WORLD_DELTA`, no
+  target read), and the motion blur. Not (yet): the cloud temporal pass, the particle collision.
 * Cost: +8 B per pixel per slot and eye (~30 MB per slot at 1440p), +16 B per culled instance, one extra
   varying (vec3) on the lit/unlit vertex path.
 
@@ -813,6 +813,28 @@ reads it).
 > **a "TAA" scope in the profiler for a pass doing nothing.**
 
 The tweak carries `onReRecord`, so toggling rebuilds the descriptors either way.
+
+## Motion blur (`MotionBlurPipeline`, "Post/Motion blur" tweaks)
+
+After TAA, desktop only (`motionBlurEnabled()`: off in VR, and bypassed like TAA when off - not recorded, not
+executed). Three compute passes over TAA's resolved colour (the scene colour with TAA off) into ONE output image
+the composite tonemaps instead; **eye adaptation keeps the unblurred colour.** The images are used within the
+frame only, so there is one set, not one per slot: the record opens with a barrier against last frame's reads.
+
+1. `motion_blur_tiles` - per pixel the velocity = (this - last frame) uv x "Shutter" in px, clamped to 2 x "Max
+   radius", + the view distance; per `MOTION_BLUR_TILE`^2 tile (32, Layout.ixx; one 1024-lane workgroup reduces
+   one tile) the longest velocity. The camera part from the depth (`prevScreenUVClip`), the object part = the
+   motion target - the camera part, so "Camera motion" scales the camera's share alone. A frame motion over
+   ~30 % of the screen diagonal is a cut or a teleport: no blur.
+2. `motion_blur_neighbor` - per tile the longest velocity of its 3x3 tiles. **The radius is capped at the tile
+   size**, so that neighbourhood holds every blur that can reach a pixel: that is what lets a moving object
+   smear past its silhouette.
+3. `motion_blur_gather` - McGuire et al. 2012's reconstruction filter, "Samples" taps along the neighbourhood
+   velocity (interleaved-gradient jitter per frame), each weighted by whether its blur covers this pixel or
+   this pixel's blur covers it, with soft depth tests (2 % of the distance) choosing the front one.
+
+"Shutter" is the exposure as a fraction of the frame, so a higher frame rate blurs less (physical); > 1
+exaggerates. The ocean writes no motion vectors, so its waves blur only with the camera.
 
 ## Colour
 
@@ -1019,7 +1041,7 @@ Scene opaque, nearly all with 0 instances.
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, MotionBlur, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
 | | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |
