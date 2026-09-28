@@ -100,6 +100,7 @@ void RTAOPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
     for (uint32 i = 1; i <= 4; ++i)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // motion target
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TemporalPC) });
 }
 
@@ -367,13 +368,15 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
 
         DescriptorSet& set = m_temporalSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 6> updates{
+        oc::array<DescriptorSetUpdateInfo, 7> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.sceneDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.prevSceneDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_aoSampler, m_raw.view[cur]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_aoSampler, m_accum.view[prevIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_accum.view[cur]) } },
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{
+                .sampler = params.sceneDepthSampler, .imageView = params.motionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         };
         commandBuffer.cmdUpdateDescriptorSets(temporalLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipeline());

@@ -16,7 +16,7 @@ namespace
         uint32 height;
         float  feedback;
         uint32 viewIndex;
-        float  oceanFeedback; // history weight cap on ocean pixels (waves animate without motion vectors)
+        float  oceanFeedback; // history weight cap on ocean pixels (the ocean writes no motion vectors)
     };
 
     auto imgInfoGeneral(vk::ImageView view) { return vk::DescriptorImageInfo{ .imageView = view, .imageLayout = vk::ImageLayout::eGeneral }; }
@@ -33,6 +33,7 @@ void TaaPipeline::buildLayout(ComputePipelineLayout& layout)
     for (uint32 i = 1; i <= 4; ++i)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // motion target
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TaaPC) });
 }
 
@@ -193,13 +194,14 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
     DescriptorSet& set = m_sets[cur];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     const auto sampledDepth = [](vk::Sampler s, vk::ImageView v) { return vk::DescriptorImageInfo{ .sampler = s, .imageView = v, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT }; };
-    oc::array<DescriptorSetUpdateInfo, 6> updates{
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.currentColorSampler, params.currentColorView) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_resolved.view[prevIdx]) } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.sceneDepthView) } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.prevSceneDepthView) } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_resolved.view[cur]) } },
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.sceneDepthSampler, params.motionView) } },
     };
     commandBuffer.cmdUpdateDescriptorSets(pipelineLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());

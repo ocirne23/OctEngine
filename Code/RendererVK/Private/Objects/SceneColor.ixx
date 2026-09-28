@@ -19,6 +19,15 @@ import :Allocator;
 // No pass variant transitions the depth itself (initial == final == the reference layout, the first one
 // clears from UNDEFINED); the Renderer emits the one ATTACHMENT -> READ_ONLY barrier per frame.
 export constexpr vk::ImageLayout SCENE_DEPTH_SAMPLED_LAYOUT = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+//
+// THE MOTION TARGET (SCENE_MOTION_FORMAT) is a second colour attachment of the depth-WRITING stages only:
+// their passes are a separate family (getOpaqueRenderPass, getOpaqueFramebuffer), so the layered stages and
+// their pipelines never see it. Written by the surfaces that can move (motion_vector.inc.glsl): xy = this
+// frame's minus last frame's UNJITTERED full-frame uv, z = last frame's hardware depth, w = 1. Cleared to 0:
+// w = 0 = no object motion - the readers reproject such a pixel through the camera alone (prevScreenUVClip).
+// It stays COLOR_ATTACHMENT_OPTIMAL across the opaque instances; the Renderer's end-of-opaque barrier moves
+// it to SHADER_READ_ONLY with the depth (recordSceneOpaqueToSampled).
+export constexpr vk::Format SCENE_MOTION_FORMAT = vk::Format::eR16G16B16A16Sfloat;
 
 export class SceneColor final
 {
@@ -33,10 +42,15 @@ public:
     bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount);
     void destroy();
 
-    // The BASE pass: what the scene pipelines and the cached secondaries are built against. Never begun.
+    // The BASE passes: what the scene pipelines and the cached secondaries are built against. Never begun.
+    // getRenderPass = the layered stages (colour + depth); getOpaqueRenderPass = the depth-writing stages
+    // (colour + motion + depth). The framebuffers follow the same split.
     vk::RenderPass  getRenderPass() const  { return m_renderPass; }
+    vk::RenderPass  getOpaqueRenderPass() const { return m_opaqueRenderPass; }
     vk::Framebuffer getFramebuffer() const { return m_framebuffers[0]; }
     vk::Framebuffer getFramebuffer(uint32 eye) const { return m_framebuffers[eye]; }
+    vk::Framebuffer getOpaqueFramebuffer(uint32 eye) const { return m_opaqueFramebuffers[eye]; }
+    vk::Framebuffer getStageFramebuffer(uint32 eye, bool depthReadOnly) const { return depthReadOnly ? m_framebuffers[eye] : m_opaqueFramebuffers[eye]; }
     // The scene renders as one render-pass instance PER STAGE: the GPU profiler brackets each stage
     // (timestamps are illegal inside a secondaries subpass), and the depth switches from written to
     // read-only + sampled between two of them. colour: `first` clears, `last` hands the colour to TAA
@@ -45,7 +59,8 @@ public:
     // COMPATIBLE with the base pass (identical dependency arrays; only load/store ops and layouts
     // differ), so the secondaries, the pipelines and the framebuffers serve every one of them.
     // Inter-instance attachment hazards are explicit barriers in the primary (the deps must stay
-    // identical for compatibility, so they cannot carry them).
+    // identical for compatibility, so they cannot carry them). A depth-WRITING variant (!depthReadOnly) is
+    // of the opaque family: it carries the motion target (getStageFramebuffer picks the matching one).
     vk::RenderPass getStageRenderPass(bool first, bool last, bool depthReadOnly) const
     {
         return m_stagePasses[(first ? 1 : 0) | (last ? 2 : 0) | (depthReadOnly ? 4 : 0)];
@@ -56,6 +71,8 @@ public:
     vk::ImageView   getDepthView() const   { return m_depthLayerViews[0]; }
     vk::ImageView   getDepthView(uint32 eye) const { return m_depthLayerViews[eye]; }
     vk::Image       getDepthImage() const  { return m_depthImage; }
+    vk::ImageView   getMotionView(uint32 eye) const { return m_motionLayerViews[eye]; }
+    vk::Image       getMotionImage() const { return m_motionImage; }
     uint32          getViewCount() const   { return m_viewCount; }
     vk::Sampler     getSampler() const     { return m_sampler; } // linear, clamp
     vk::Sampler     getDepthSampler() const { return m_depthSampler; } // nearest, clamp (point sampling for reconstruction)
@@ -76,8 +93,14 @@ private:
     VmaAllocation m_depthMemory = nullptr;
     oc::array<vk::ImageView, 2> m_depthLayerViews{}; // per-eye 2D depth views (layer i)
 
+    vk::Image m_motionImage;
+    VmaAllocation m_motionMemory = nullptr;
+    oc::array<vk::ImageView, 2> m_motionLayerViews{}; // per-eye 2D motion views (layer i)
+
     vk::RenderPass m_renderPass;
+    vk::RenderPass m_opaqueRenderPass;
     oc::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
+    oc::array<vk::Framebuffer, 2> m_opaqueFramebuffers{}; // + the motion target, for the depth-writing stages
     oc::array<vk::RenderPass, 8> m_stagePasses{};   // see getStageRenderPass
     vk::Sampler m_sampler;
     vk::Sampler m_depthSampler;

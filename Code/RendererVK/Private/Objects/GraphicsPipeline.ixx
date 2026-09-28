@@ -44,6 +44,9 @@ export struct PipelineVariant
     // Depth test EQUAL instead of the layout's compare: a variant that re-draws a surface already in the depth
     // buffer (the terrain overlay) - its VS must produce bit-identical depth (`invariant gl_Position`).
     bool depthEqual = false;
+    // With GraphicsPipelineLayout::motionTarget: this variant writes the motion target (fragment location 1).
+    // Off = masked: the pixel keeps what is there (0 = no object motion, or the opaque surface behind a blend).
+    bool writeMotion = false;
     // Wireframe variants set eLine; everything else keeps the solid fill of variant 0.
     vk::PolygonMode polygonMode = vk::PolygonMode::eFill;
     // Per-variant face culling. Defaults to the back-face culling variant 0 uses; set eFront or eNone
@@ -98,6 +101,11 @@ export struct GraphicsPipelineLayout
     // ocean writes 0 - see taa.cs.glsl), so the stages that layer over the opaque scene (decals,
     // debug draws, force, particles, fog apply) must leave it alone.
     bool colorWriteAlpha = true;
+    // Built against SceneColor::getOpaqueRenderPass: the subpass has the MOTION TARGET as colour attachment 1,
+    // so every variant carries a second blend state - written where writeMotion (variant 0: the one below,
+    // the others: PipelineVariant::writeMotion), write-masked otherwise.
+    bool motionTarget = false;
+    bool writeMotion = false;
     bool depthTestEnable = true;
     bool depthWriteEnable = true;
     // The main view renders REVERSED-Z (near = 1, far = 0, cleared to 0) for far-field depth precision,

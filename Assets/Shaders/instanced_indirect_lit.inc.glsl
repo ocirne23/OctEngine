@@ -6,6 +6,11 @@
 #define INSTANCED_INDIRECT_LIT_INC_GLSL
 
 #include "mesh_vertex.inc.glsl"
+#include "motion_vector.inc.glsl"
+
+// MOTION_WORLD_DELTA: this point's world offset from where it was last frame (motion_vector.inc.glsl). The
+// includer that draws moving meshes defines it as its interpolant; without it (the terrain: static) the AO
+// read compiles the camera-only reprojection.
 
 struct MaterialInfo
 {
@@ -232,19 +237,27 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 // Depth-aware 2x2 upsample of LAST FRAME's half-res AO/bent-normal image, reprojected. The AO is traced
 // from the scene depth, which this pass is still writing - so this pass reads the previous frame's AO
 // against the previous frame's depth: no input of this frame, no ordering constraint on the trace.
-// Static geometry is exact under camera motion (the tap test is in world space); a moving object
-// trails by one frame, inside the temporal accumulation's own lag. Plain bilinear bleeds across depth
-// discontinuities (a far wall's AO/bent normal mixing into a near silhouette shows as a bright GI rim),
-// so each tap's bilinear weight is scaled by its world-space distance to the shaded point; the same
-// test rejects disoccluded taps. Returns (0, 0, 0, 1) - no bent normal, no occlusion - without history.
-vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
+// The reprojection follows the point itself - the camera AND the object's own motion (MOTION_WORLD_DELTA,
+// the motion vectors) - so a moving object reads its own AO from where it was, and the taps are tested
+// against where the point WAS. Plain bilinear bleeds across depth discontinuities (a far wall's AO/bent
+// normal mixing into a near silhouette shows as a bright GI rim), so each tap's bilinear weight is scaled
+// by its world-space distance to that point; the same test rejects disoccluded taps. Returns (0, 0, 0, 1)
+// - no bent normal, no occlusion - without history.
+vec4 sampleAOBilateral(vec3 pos, float viewDist)
 {
-	// Clip-space reprojection of this fragment (see prevScreenUVClip). Both images are jittered: the
-	// fragment's surface sits at uv - jitter, and last frame's image holds a surface at uv + ITS jitter.
-	float clipW;
+	// Clip-space reprojection of this fragment (fragPrevClip). Last frame's image holds a surface at its
+	// unjittered uv + ITS jitter.
+#ifdef MOTION_WORLD_DELTA
+	const vec3 prevDelta = MOTION_WORLD_DELTA;
+	const vec4 prevClip = fragPrevClip(prevDelta);
+	const vec3 prevPos = pos + prevDelta;
+#else
+	const vec4 prevClip = fragPrevClipCamera();
+	const vec3 prevPos = pos;
+#endif
 	const vec2 prevJitter = taaJitterUv(u_taaJitter.zw);
-	const vec2 prevUv = prevScreenUVClip(fullUv - taaJitterUv(u_taaJitter.xy), gl_FragCoord.z, clipW) + prevJitter;
-	if (clipW <= 0.0 || any(lessThan(prevUv, vec2(0.0))) || any(greaterThan(prevUv, vec2(1.0))))
+	const vec2 prevUv = prevClipToScreenUV(prevClip) + prevJitter;
+	if (prevClip.w <= 0.0 || any(lessThan(prevUv, vec2(0.0))) || any(greaterThan(prevUv, vec2(1.0))))
 		return vec4(0.0, 0.0, 0.0, 1.0);
 
 	const vec2 aoRes   = ceil(u_screenSize.xy * 0.5);
@@ -266,7 +279,7 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 		if (d <= 0.0) // background (reversed-Z far = 0)
 			continue;
 		const vec3 tapPos = worldPosFromDepthMat(uv - prevJitter, d, u_prevInvMvp);
-		const vec3 dp = tapPos - pos;
+		const vec3 dp = tapPos - prevPos;
 		const float w  = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
 		sum  += texture(u_ao, uv) * w;
 		wsum += w;
@@ -318,7 +331,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z))
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
-		const vec4 aoSample = sampleAOBilateral(gl_FragCoord.xy * u_screenSize.zw, worldPos, aoViewDist);
+		const vec4 aoSample = sampleAOBilateral(worldPos, aoViewDist);
 		ao = float16_t(aoSample.w);
 		// Evaluate the indirect irradiance along the bent normal rather than the surface normal: in concave
 		// areas it points toward the open hemisphere, so the low-frequency probe SH stops leaking light from

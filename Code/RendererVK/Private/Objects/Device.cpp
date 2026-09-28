@@ -82,6 +82,12 @@ bool Device::initialize()
     const bool pipelineExecutableProperties = supportsExtensions({ vk::KHRPipelineExecutablePropertiesExtensionName });
     if (pipelineExecutableProperties)
         deviceExtensions.push_back(vk::KHRPipelineExecutablePropertiesExtensionName);
+    // Optional: the shaders carry full NonSemantic debug info (Shader::GLSLtoSPV), and glslang writes
+    // OpExtInstWithForwardRefsKHR where a debug type refers to one declared later (a struct passed to a
+    // function, e.g.). That instruction needs this feature; without it validation rejects the module.
+    const bool relaxedExtendedInstruction = supportsExtensions({ vk::KHRShaderRelaxedExtendedInstructionExtensionName });
+    if (relaxedExtendedInstruction)
+        deviceExtensions.push_back(vk::KHRShaderRelaxedExtendedInstructionExtensionName);
 
     m_graphicsQueueIndex = UINT32_MAX;
     oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = oc::fromStd(m_physicalDevice.getQueueFamilyProperties());
@@ -181,8 +187,15 @@ bool Device::initialize()
         .pNext = &dgcFeatures,
         .pipelineExecutableInfo = vk::True
     };
+    void* featureChain = pipelineExecutableProperties ? (void*)&pipelineExecutableFeatures : (void*)&dgcFeatures;
+    vk::PhysicalDeviceShaderRelaxedExtendedInstructionFeaturesKHR relaxedExtendedInstructionFeatures{
+        .pNext = featureChain,
+        .shaderRelaxedExtendedInstruction = vk::True
+    };
+    if (relaxedExtendedInstruction)
+        featureChain = &relaxedExtendedInstructionFeatures;
     vk::DeviceCreateInfo deviceCreateInfo{
-        .pNext = pipelineExecutableProperties ? (void*)&pipelineExecutableFeatures : (void*)&dgcFeatures,
+        .pNext = featureChain,
         .queueCreateInfoCount = (uint32)deviceQueueCreateInfos.size(),
         .pQueueCreateInfos = deviceQueueCreateInfos.data(),
         .enabledLayerCount = (uint32)0,

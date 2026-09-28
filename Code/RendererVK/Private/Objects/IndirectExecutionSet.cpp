@@ -10,17 +10,24 @@ IndirectExecutionSet::~IndirectExecutionSet()
     destroy();
 }
 
-bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline, const char* debugName)
+bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline, const char* debugName, uint32 variantMask)
 {
     const uint32 variantCount = pipeline.getPipelineVariantCount();
-    assert(variantCount > 0 && "Cannot build an indirect execution set without pipelines");
+    assert(variantCount > 0 && variantCount <= 32 && "Cannot build an indirect execution set without pipelines");
+    variantMask &= variantCount >= 32 ? ~0u : (1u << variantCount) - 1u;
+    assert(variantMask != 0 && "An indirect execution set needs one variant");
 
     vk::Device vkDevice = Globals::device.getDevice();
 
-    // The initial pipeline establishes the state all other variants must be compatible with;
-    // every slot is created pointing at it, then overwritten per-variant below.
+    // The initial pipeline establishes the state all other variants must be compatible with (the fragment
+    // output interface included): the set's lowest variant. Slots outside the mask stay unwritten - a
+    // sequence must never select them.
+    uint32 initialVariant = 0;
+    while (((variantMask >> initialVariant) & 1u) == 0)
+        ++initialVariant;
+    m_initialVariant = initialVariant;
     vk::IndirectExecutionSetPipelineInfoEXT pipelineInfo{
-        .initialPipeline = pipeline.getPipelineVariant(0),
+        .initialPipeline = pipeline.getPipelineVariant(initialVariant),
         .maxPipelineCount = variantCount,
     };
     vk::IndirectExecutionSetInfoEXT info;
@@ -42,6 +49,8 @@ bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline, const ch
     writes.reserve(variantCount);
     for (uint32 i = 0; i < variantCount; i++)
     {
+        if (((variantMask >> i) & 1u) == 0)
+            continue;
         writes.push_back(vk::WriteIndirectExecutionSetPipelineEXT{
             .index = i,
             .pipeline = pipeline.getPipelineVariant(i),

@@ -94,7 +94,9 @@ void SkinnedMeshRegistry::setInstance(uint32 jobIdx, uint32 baseVertexOffset, ui
         .outVertexOffset = outVertexOffset,
         .vertexCount = vertexCount,
         .paletteOffset = m_paletteRegions[paletteHandle].offset,
+        .prevValid = 0, // no last frame in the region yet (markJobsUploaded)
     };
+    m_hasFreshJobs = true;
     m_blasBuilds[jobIdx] = AccelerationStructure::SkinnedBlasBuild{
         .meshIdx = meshIdx, .vertexOffset = outVertexOffset, .vertexCount = vertexCount, .firstIndex = firstIndex, .indexCount = indexCount };
     // No re-record needed: the jobs are uploaded per frame and dispatched indirectly; the skinned BLAS
@@ -143,11 +145,22 @@ uint32 SkinnedMeshRegistry::acquireBundle(uint32 sourceKey)
     {
         const RendererVKLayout::SkinnedMeshSource& src = m_sources[bundle.sourceKey + k];
         m_jobs[bundle.firstJob + k].vertexCount = src.vertexCount;
+        m_jobs[bundle.firstJob + k].prevValid = 0; // the region holds the dead node's last pose
         // The bundle's recorded count, NOT src.indexCount: the skinned BLAS was created (and its buffer
         // sized) for the chain's RT level, which may be coarser than level 0.
         m_blasBuilds[bundle.firstJob + k].indexCount = bundle.blasIndexCounts[k];
     }
+    m_hasFreshJobs = true;
     return bundleHandle;
+}
+
+void SkinnedMeshRegistry::markJobsUploaded()
+{
+    if (!m_hasFreshJobs)
+        return;
+    m_hasFreshJobs = false;
+    for (RendererVKLayout::SkinningJob& job : m_jobs)
+        job.prevValid = 1;
 }
 
 oc::span<const uint32> SkinnedMeshRegistry::getParkedBundles(uint32 sourceKey) const

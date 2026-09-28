@@ -147,8 +147,8 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
     // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16, 17 the tessellated terrain's
-    // ground + overlay sequences.
-    for (uint32 binding = 11; binding <= 17; ++binding)
+    // ground + overlay sequences; 18, 19 last frame's node transforms + pass masks (the motion vectors).
+    for (uint32 binding = 11; binding <= 19; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -172,7 +172,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 18> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 20> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -352,6 +352,26 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 vk::DescriptorBufferInfo {
                     .buffer = frameData.outTerrainTessOverlayCommandBuffer.getBuffer(),
                     .range = frameData.outTerrainTessOverlayCommandBuffer.getSize(),
+                }
+            }
+        },
+        DescriptorSetUpdateInfo { // InPrevRenderNodeTransformsBuffer
+            .binding = 18,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = {
+                vk::DescriptorBufferInfo {
+                    .buffer = recordParams.inPrevRenderNodeTransformsBuffer.getBuffer(),
+                    .range = recordParams.inPrevRenderNodeTransformsBuffer.getSize(),
+                }
+            }
+        },
+        DescriptorSetUpdateInfo { // InPrevNodePassMasksBuffer
+            .binding = 19,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = {
+                vk::DescriptorBufferInfo {
+                    .buffer = recordParams.inPrevNodePassMasksBuffer.getBuffer(),
+                    .range = recordParams.inPrevNodePassMasksBuffer.getSize(),
                 }
             }
         }

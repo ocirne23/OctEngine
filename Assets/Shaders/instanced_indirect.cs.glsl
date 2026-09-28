@@ -30,16 +30,17 @@ struct InMeshInfo
     uint indexCount;
     uint firstIndex;
     int  vertexOffset;
-    uint _padding;
+    uint prevVertexDelta; // skinned output: last frame's positions sit this many vertices on (0 = not skinned)
 };
+// Matches RendererVKLayout::OutMeshInstance. prev* = the MOTION VECTORS' input (the scene vertex shaders).
 struct OutMeshInstance
 {
     vec4 posScale;
     vec4 quat;
+    vec4 prevPosScale;     // the instance transform last frame; w = 0: the node did not move
     uint meshIdxMaterialIdx;
-    uint _padding1;
-    uint _padding2;
-    uint _padding3;
+    uint prevVertexDelta;  // MeshInfo::prevVertexDelta of the instance's mesh
+    uvec2 prevQuat;        // packSnorm2x16 (x, y), (z, w)
 };
 // Matches RendererVKLayout::IndirectDrawSequence: an EXECUTION_SET pipelineIndex followed by a
 // VkDrawIndexedIndirectCommand. Consumed by vkCmdExecuteGeneratedCommandsEXT.
@@ -136,6 +137,15 @@ layout (binding = 17, std430) buffer OutTerrainTessOverlayCommandBuffer
 {
     OutIndirectCommand out_terrainTessOverlayCommands[];
 };
+// LAST frame's node transforms + stamped pass masks (InstanceStream::recordPrevCopy): the motion vectors.
+layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
+{
+    RenderNodeTransform in_prevRenderNodeTransforms[];
+};
+layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
+{
+    uint in_prevNodePassMasks[]; // PASS_* byte + the push frame above it (InstanceStream::stampedPassMask)
+};
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -162,6 +172,28 @@ bool terrainOverlayCovers(vec3 pos, float radius)
     const vec2 hi = lo + float(TERRAIN_WET_RES) * u_terrainWetParams1.x;
     const vec2 d = pos.xz - clamp(pos.xz, lo, hi);
     return dot(d, d) <= radius * radius;
+}
+
+// The MOTION VECTORS' instance transform LAST frame, only for a node that moved since: its previous
+// transform composed with the same instance offset. prevPosScale.w = 0 = no node motion - also when the
+// node was not pushed last frame (the push stamp above the PASS_* byte), so a slot recycled by a spawn or
+// a node back on screen never reads a stale transform. A still node keeps its exact current transform in
+// the vertex shader: the snorm quaternion is for moving nodes only.
+void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out uvec2 prevQuat)
+{
+    prevPosScale = vec4(0.0);
+    prevQuat = uvec2(0u);
+    if ((in_prevNodePassMasks[instance.renderNodeIdx] >> 8) != ((u_frameIndex - 1u) & 0xFFFFFFu))
+        return;
+    const RenderNodeTransform prev = in_prevRenderNodeTransforms[instance.renderNodeIdx];
+    const RenderNodeTransform cur = in_renderNodeTransforms[instance.renderNodeIdx];
+    if (prev.posScale == cur.posScale && prev.quat == cur.quat)
+        return;
+    const InMeshInstanceOffset offset = in_instanceOffsets[instance.instanceOffsetIdx];
+    const vec4 q = quat_multiply(prev.quat, offset.quat);
+    prevPosScale = vec4(prev.posScale.xyz + quat_transform(offset.posScale.xyz * prev.posScale.w, prev.quat),
+                        prev.posScale.w * offset.posScale.w);
+    prevQuat = uvec2(packSnorm2x16(q.xy), packSnorm2x16(q.zw));
 }
 
 bool frustumCheck(vec3 pos, float radius)
@@ -246,9 +278,13 @@ void main()
         const uint firstInstance      = in_firstInstances[meshIdx];
         const uint16_t pipelineIdx    = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
         const uint16_t alphaMode      = uint16_t((instance.pipelineIdxAlphaMode & 0xFFFF0000) >> 16);
-        // The OCEAN draws in the transparent sequence too: it blends its edge over the ground (ocean.fs.glsl), so
-        // it must come after every terrain draw - the tessellated ground and film run between the two executes.
-        const bool isTransparent      = alphaMode == ALPHA_MODE_BLEND || pipelineIdx == uint16_t(PIPELINE_IDX_OCEAN);
+        // Routed by the pipeline's FAMILY (PIPELINE_TRANSPARENT_MASK, Layout.ixx), not the alpha mode: each
+        // sequence executes with its own DGC set, and a set has ONE fragment output interface (the opaque family
+        // writes the motion target too). The OCEAN is of the transparent family: it blends its edge over the ground
+        // (ocean.fs.glsl), so it must come after every terrain draw - the tessellated ground and film run between
+        // the two executes. (A Blend material always gets a transparent-family pipeline, see ObjectContainer; an
+        // override that puts it on an opaque one draws unblended either way.)
+        const bool isTransparent      = ((PIPELINE_TRANSPARENT_MASK >> uint(pipelineIdx)) & 1u) != 0u;
 
         uint idx;
         if (isTransparent)
@@ -318,9 +354,15 @@ void main()
             }
         }
 
+        vec4 prevPosScale;
+        uvec2 prevQuat;
+        prevInstanceTransform(instance, prevPosScale, prevQuat);
         out_meshInstanceIndexes[firstInstance + idx]      = instanceIdx;
         out_meshInstances[instanceIdx].posScale           = instancePosScale;
         out_meshInstances[instanceIdx].quat               = quat;
+        out_meshInstances[instanceIdx].prevPosScale       = prevPosScale;
         out_meshInstances[instanceIdx].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
+        out_meshInstances[instanceIdx].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: every level shares its region
+        out_meshInstances[instanceIdx].prevQuat           = prevQuat;
     }
 }

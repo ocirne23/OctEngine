@@ -119,13 +119,38 @@ vec2 prevScreenUV(vec3 worldPos, out float clipW) { return prevScreenUVMat(world
 // this instead of worldPosFromDepth + prevScreenUV: that world-space round trip loses precision with the
 // camera's distance from the world origin (pixel-scale history misses by ~500 units = temporal jitter).
 // clipW is the previous clip w scaled by 1/currentW - only its sign is meaningful (> 0 = in front).
+// Last frame's clip position -> its full-frame screen UV (the viewport mapping of prevScreenUVMat).
+vec2 prevClipToScreenUV(vec4 prevClip)
+{
+    vec2 vpPrev = vec2(prevClip.x / prevClip.w * 0.5 + 0.5, 0.5 - prevClip.y / prevClip.w * 0.5);
+    return u_viewportRect.xy + vpPrev * u_viewportRect.zw;
+}
 vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
 {
     vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
     vec4 prevClip = u_reprojClip * vec4(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0, depth, 1.0);
     clipW = prevClip.w;
-    vec2 vpPrev = vec2(prevClip.x / prevClip.w * 0.5 + 0.5, 0.5 - prevClip.y / prevClip.w * 0.5);
-    return u_viewportRect.xy + vpPrev * u_viewportRect.zw;
+    return prevClipToScreenUV(prevClip);
+}
+
+// MOTION VECTORS - the scene's motion target (SceneColor::getMotionView, SHADER_READ_ONLY after the opaque
+// stages; motion_vector.inc.glsl writes it): xy = this frame's minus last frame's UNJITTERED full-frame uv,
+// z = the surface's hardware depth LAST frame (<= 0: it was behind last frame's camera), w = 1 where written.
+// w = 0 = no object motion: the pixel reprojects through the camera alone, exactly as without motion vectors.
+bool motionIsObject(vec4 motion) { return motion.w > 0.5; }
+// Last frame's UNJITTERED uv of the surface at uvUnjit (this frame's depth `depth`). valid = false: no
+// history (behind last frame's camera).
+vec2 prevScreenUVMotion(vec2 uvUnjit, float depth, vec4 motion, out bool valid)
+{
+    if (motionIsObject(motion))
+    {
+        valid = motion.z > 0.0;
+        return uvUnjit - motion.xy;
+    }
+    float clipW;
+    const vec2 prevUv = prevScreenUVClip(uvUnjit, depth, clipW);
+    valid = clipW > 0.0;
+    return prevUv;
 }
 
 // Atmosphere scattering + skyRadiance() for GI miss rays / fog ambient / surface fallback: the same

@@ -115,7 +115,11 @@ private:
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
     // draws in record(), between the opaque and the transparent executes.
     GraphicsPipeline m_terrainTessPipeline;
+    // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
+    // opaque family (colour + the motion target), the transparent sequence the transparent family (colour only;
+    // RendererVKLayout::PIPELINE_TRANSPARENT_MASK).
     IndirectExecutionSet m_indirectExecutionSet;
+    IndirectExecutionSet m_transparentExecutionSet;
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler;
     vk::RenderPass m_renderPass;
@@ -138,5 +142,6 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
 
     void createPreprocessBuffers(uint32 maxUniqueMeshes);
-    void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx);
+    void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, const IndirectExecutionSet& executionSet, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx);
+    void createExecutionSets();
 };

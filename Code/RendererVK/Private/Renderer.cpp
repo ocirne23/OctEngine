@@ -86,7 +86,7 @@ void Renderer::registerTweaks()
         m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     m_fogParams.registerTweaks();
@@ -104,7 +104,7 @@ void Renderer::registerTweaks()
         m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
@@ -122,7 +122,7 @@ void Renderer::registerTweaks()
             m_staticMeshGraphicsPipeline.setLightGridDebugMode(m_lightGridParams.debugMode);
             if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
                 return;
-            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
             setHaveToRecordCommandBuffers();
         });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
@@ -130,7 +130,7 @@ void Renderer::registerTweaks()
     m_staticMeshGraphicsPipeline.registerTweaks([this]() {
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid), so it registers HERE,
@@ -246,8 +246,10 @@ void Renderer::initPipelines()
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
     const vk::RenderPass sceneRenderPass = m_perFrameData[0].sceneColor.getRenderPass();
+    // The depth-writing stages' pipelines: the opaque family, with the motion target (SceneColor).
+    const vk::RenderPass opaqueRenderPass = m_perFrameData[0].sceneColor.getOpaqueRenderPass();
 
-    m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
+    m_staticMeshGraphicsPipeline.initialize(opaqueRenderPass,m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
     m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
 
@@ -280,7 +282,7 @@ void Renderer::initPipelines()
             setHaveToRecordCommandBuffers(); // the cached GI secondary bakes the instance buffers + dispatch size
         });
     m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
-    m_giProbePipeline.initializeDebug(sceneRenderPass);
+    m_giProbePipeline.initializeDebug(opaqueRenderPass);
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
@@ -456,7 +458,7 @@ void Renderer::reloadShaders()
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
 
-    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
     m_rtaoPipeline.reloadShaders();
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
@@ -470,7 +472,7 @@ void Renderer::reloadShaders()
     m_rainCullComputePipeline.reloadShaders();
     m_rainMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
-    m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -497,7 +499,7 @@ void Renderer::setOceanParams(const OceanParams& ocean)
         m_staticMeshGraphicsPipeline.setOceanHitLights(ocean.hitLighting);
         m_staticMeshGraphicsPipeline.setOceanRtReflections(ocean.rtReflections);
         m_staticMeshGraphicsPipeline.setOceanDebugMode(ocean.debugMode);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     }
 }
@@ -514,7 +516,7 @@ void Renderer::setTerrainTextureParams(const TerrainTexTweaks& params)
     if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
         return;
     m_staticMeshGraphicsPipeline.setTerrainRelief(params.parallaxEnabled, params.tessEnabled);
-    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
     m_indirectCullComputePipeline.setTerrainTess(params.tessEnabled);
     m_indirectCullComputePipeline.reloadShaders();
     setHaveToRecordCommandBuffers();
@@ -943,6 +945,7 @@ void Renderer::present()
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
         m_indirectCullComputePipeline.update(frameIdx, m_instances.getInstanceCount());
         m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
+        m_skinned.markJobsUploaded();
     }
     uploadScope.stop();
 

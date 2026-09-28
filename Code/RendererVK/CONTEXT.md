@@ -147,7 +147,7 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 
 ```
 GPU Frame
-  Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull → Light grid → Force compute
+  Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
     → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
@@ -174,8 +174,15 @@ GPU Frame
 >   it, and `SCENE_DEPTH_SAMPLED_LAYOUT` (= `DEPTH_STENCIL_READ_ONLY`, SceneColor.ixx) the rest of the
 >   time — the layout of EVERY sampling descriptor and of the layered stages' read-only depth
 >   attachment, which is why those stages may sample the depth they test against. One barrier per
->   frame and eye (`recordSceneDepthToSampled`); the first stage clears from `UNDEFINED`. A new depth
->   reader uses that layout constant and runs after "Scene opaque".
+>   frame and eye (`recordSceneOpaqueToSampled`, which also moves the motion target to
+>   SHADER_READ_ONLY); the first stage clears from `UNDEFINED`. A new depth reader uses that layout
+>   constant and runs after "Scene opaque".
+> * **The depth-writing stages have a SECOND colour attachment, the motion target** (see "Motion
+>   vectors"). Their passes are a separate render-pass family (`getOpaqueRenderPass`,
+>   `getOpaqueFramebuffer`; a stage variant with `depthReadOnly = false` is of it), so the layered
+>   stages and their pipelines never see it. **A pipeline drawn in the opaque group sets
+>   `GraphicsPipelineLayout::motionTarget`** (two blend states), and its secondary begins with
+>   `beginScenePassSecondary(frameIdx, cb, true)`.
 > * **Nothing reads a normal target.** Normals come from depth (`normalFromDepth`, see RTAO below).
 > * **TAA's ocean flag is the scene colour's ALPHA:** `ocean.fs.glsl` writes 0, every other opaque
 >   surface its material alpha (> 0), and TAA reads `alpha < 0.004` on non-sky pixels. So nothing
@@ -239,7 +246,8 @@ effect immediately.**
 * **Lights** culled through a world-space hash table into distance-scaled grids. `MAX_LIGHTS` is
   `USHRT_MAX - 1`.
 * **GI** through scrolling clipmap radiance cascades (ray-traced probes).
-* **RTAO**, **TAA**, **PCSS cascades**, **volumetric fog**, **volumetric clouds** (sandbox), **GPU compute skinning**.
+* **RTAO**, **TAA**, **PCSS cascades**, **volumetric fog**, **volumetric clouds** (sandbox), **GPU compute skinning**,
+  **motion vectors** (moving + skinned meshes; see "Motion vectors").
 * **"RT/RT Sun" replaces the PCSS cascades entirely** — the shadow cull and draw are skipped.
 
 ## The scene focus
@@ -530,13 +538,15 @@ top-down camera hanging in empty sky shapes none of these:
   stays on the CAMERA distance — it compensates a depth-reconstruction error that lies along the view
   ray, and so do the upsample's depth weights.
 * **THE FORWARD PASS READS LAST FRAME'S AO.** `sampleAOBilateral` (instanced_indirect_lit.inc.glsl)
-  reprojects the fragment in clip space (`prevScreenUVClip` off `gl_FragCoord`), samples the PREVIOUS
-  slot's AO image (binding 13) and weights the 2x2 taps by their world distance to the fragment,
-  reconstructed from the PREVIOUS slot's depth (binding 12, `u_prevDepth`, `u_prevInvMvp`, last frame's
-  jitter). No input comes from this frame, so the trace has NO ordering constraint against the forward
-  pass (this is what let the depth prepass go). Static geometry is exact under camera motion; a moving
-  object trails one frame, inside the temporal pass's own lag. No valid tap (disocclusion, off-screen) =
-  `(0, 0, 0, 1)`: no occlusion, no bent normal.
+  reprojects the fragment in clip space (`fragPrevClip` off `gl_FragCoord`: the camera through
+  `u_reprojClip` plus the point's own motion, `MOTION_WORLD_DELTA` - see "Motion vectors"), samples the
+  PREVIOUS slot's AO image (binding 13) and weights the 2x2 taps by their world distance to where the
+  point WAS, reconstructed from the PREVIOUS slot's depth (binding 12, `u_prevDepth`, `u_prevInvMvp`, last
+  frame's jitter). No input comes from this frame, so the trace has NO ordering constraint against the
+  forward pass (this is what let the depth prepass go). Static geometry is exact under camera motion, and
+  a moving object reads its own AO from where it was (the terrain has no `MOTION_WORLD_DELTA`: it compiles
+  the camera-only path). No valid tap (disocclusion, off-screen) = `(0, 0, 0, 1)`: no occlusion, no bent
+  normal.
 * **THERE IS NO NORMAL CONSUMER LEFT BUT TAA's OCEAN FLAG.** RTAO, its spatial blur, the decals and the
   particle collision derive a GEOMETRIC normal from depth: `normalFromDepth` (shared.inc.glsl) — per
   axis the neighbour with the closer depth, built on `viewRelFromDepth`, the CAMERA-RELATIVE
@@ -552,6 +562,63 @@ top-down camera hanging in empty sky shapes none of these:
 
 `shadowParams()` / `setShadowParams()` expose the same `ShadowParams` block the "Shadows" tweaks
 edit, so a mode can install a preset that stays live in the panel (the game's match ctor/dtor).
+
+## Motion vectors
+
+Per-pixel OBJECT motion, so the temporal passes follow moving meshes (skinned characters, moving nodes)
+instead of only the camera.
+
+* **The motion target** (`SceneColor`, `SCENE_MOTION_FORMAT` = RGBA16F, one per frame slot and eye): colour
+  attachment 1 of the depth-writing stages only (see "Frame order"). Value (`shared.inc.glsl`): xy = this
+  frame's minus last frame's UNJITTERED full-frame uv, z = the surface's hardware depth LAST frame (<= 0:
+  behind last frame's camera), w = 1. **Cleared to 0: w = 0 = no object motion**, and the readers then keep
+  the exact camera-only reprojection (`prevScreenUVClip`). So only a point that really moved stores a uv
+  (fp16 rounding: sub-pixel below ~0.1 of the screen per frame); a still scene is bit-for-bit the old path.
+  Readers: `prevScreenUVMotion(uvUnjit, depth, motion, valid)`; a disocclusion test compares last frame's
+  depth against `worldPosFromDepthMat(prevUv, motion.z, u_prevInvMvp)` - where the point WAS - instead of
+  this frame's position.
+* **Who writes it** (`GraphicsPipelineLayout::motionTarget` + `writeMotion` / `PipelineVariant::writeMotion`;
+  otherwise the second blend state is write-masked): the static-mesh variants that can draw moving meshes -
+  LitOpaque, LitMasked, UnlitOpaque. Masked, and correct because static: terrain (both pipelines), sky,
+  GI probe debug. Masked, keeping the opaque surface behind: the transparent variants, the terrain overlay,
+  the gizmos. **The ocean cannot write it**: dual-source blending allows one fragment output location
+  (`maxFragmentDualSrcAttachments`), so the waves keep TAA's ocean feedback cap, and an ocean pixel over a
+  moving underwater object carries that object's motion (known limitation).
+* **TWO DGC EXECUTION SETS.** A set needs ONE fragment output interface for every pipeline in it
+  (VUID-vkUpdateIndirectExecutionSetPipelineEXT-initialPipeline-11147), and a dual-source blend may not
+  write location 1. So the variants split in two families (`RendererVKLayout::PIPELINE_TRANSPARENT_MASK`,
+  injected as a define): the TRANSPARENT family (LitTransparent, UnlitTransparent - compiled with
+  `NO_MOTION_OUTPUT` - Ocean, TerrainOverlay) writes location 0 only; every other variant writes locations 0
+  and 1 (sky and terrain write a masked 0). The cull routes a draw into the opaque or the transparent
+  sequence by this FAMILY, not by its alpha mode, and `StaticMeshGraphicsPipeline` executes each sequence
+  with its own set (`IndirectExecutionSet::initialize(pipeline, name, variantMask)`; the other slots stay
+  unwritten). Before each execute the set's INITIAL pipeline must be bound (`getInitialVariant`: 0 for the
+  opaque set, LitTransparent for the transparent one). **A new variant: pick its family in the mask, and give its fragment shader that family's
+  outputs.**
+* **The vertex side** (`instanced_indirect.vs.glsl` `prevWorldDelta`): the WORLD offset of the point from
+  where it was last frame, interpolated to `motion_vector.inc.glsl`. A world offset, not a clip position:
+  exactly 0 on a still instance (the fragment then writes 0), small, and computed as a DIFFERENCE of the two
+  transforms' terms (the translations cancel first), so it keeps its precision far from the origin. The
+  fragment adds the camera through `u_reprojClip` and the object through `u_prevMvp`'s linear part only.
+* **Last frame's instance transform** (`instanced_indirect.cs.glsl` `prevInstanceTransform`, into the
+  cull's `OutMeshInstance`, now 64 B): after the main cull the primary copies this slot's node transforms +
+  pass masks into ONE device-local previous set (`InstanceStream::recordPrevCopy`; the other slot cannot
+  serve - the CPU may write it while the GPU reads it), which next frame's cull reads (bindings 18/19). A
+  pass mask carries its push frame above the PASS_* byte (`InstanceStream::stampedPassMask`, from
+  `m_ubo.frameIndex`); a node not pushed LAST frame (off screen, or just spawned into a recycled transform
+  slot) draws with no motion instead of a stale transform. prevScale 0 = the node did not move: the vertex
+  shader then keeps the exact current transform (the previous quaternion is snorm16, moving nodes only).
+* **Skinned meshes**: the output region is 2 x vertexCount (`spawnSkinnedNode`, freed the same way). The
+  skin pass copies each position it is about to overwrite into the second half; `MeshInfo::prevVertexDelta`
+  (the old unused `firstInstance`) = vertexCount, copied into every LOD level's info (they index the same
+  region), 0 = not skinned. The lit vertex shader reads it from the vertex SSBO (binding 14, now also in the
+  vertex stage). `SkinningJob::prevValid` = 0 on a job's first frame (fresh or re-acquired bundle: the
+  region holds no last frame), set by `SkinnedMeshRegistry::markJobsUploaded` after the upload.
+* **Readers**: TAA (the motion of the NEAREST surface in the 3x3, so a moving silhouette's history follows
+  the object), the AO temporal pass, and the forward pass's AO read (its own `MOTION_WORLD_DELTA`, no
+  target read). Not (yet): the cloud temporal pass, the particle collision.
+* Cost: +8 B per pixel per slot and eye (~30 MB per slot at 1440p), +16 B per culled instance, one extra
+  varying (vec3) on the lit/unlit vertex path.
 
 ## Long-range sun shadows
 
@@ -772,7 +839,9 @@ lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `
 `DebugLinePipeline::upload`, which copies each worker list straight into the slot's mapped vertex
 buffer (one memcpy per list, no merged CPU copy) and clears it.
 
-**Pass masks** `PASS_MAIN` / `PASS_SHADOW` / `PASS_GI` (Layout.ixx — the same bits Spatial uses). Main
+**Pass masks** `PASS_MAIN` / `PASS_SHADOW` / `PASS_GI` (Layout.ixx — the same bits Spatial uses). The
+GPU word is the mask byte plus the PUSH FRAME above it (`InstanceStream::stampedPassMask`; the motion
+vectors' "was this node pushed last frame" test), so a reader tests bits, never the whole word. Main
 cull, shadow cull and the GI TLAS writer each early-out on their bit; TLAS also range-bounds by
 `RT/TLAS Range`. **A node carries its own default mask** (`RenderNode::setPassMask`, a byte in the
 padding, `PASS_ALL` unless set): `renderNode(node)` pushes with it, `renderNode(node, mask)` overrides
@@ -952,7 +1021,7 @@ Scene opaque, nearly all with 0 instances.
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
 | `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
-| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
+| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |
 | | **`SkinnedMeshRegistry`** — the skinning jobs + their parallel skinned-BLAS builds, the bone palette store, the per-container sources, and the spawn BUNDLES (parked in place on death, reused wholesale by the next spawn of the same container). |
 | | **`MeshLodRegistry`** — the LOD chains, the per-mesh chain mapping, the three GPU selection buffers and `IndexRangeFreeList`. The Renderer keeps only the RT-alias half of `addMeshLodGroup`, because aliases are AccelerationStructure state. |
@@ -1599,6 +1668,9 @@ calls `reloadShaders()`.
   file name, so every function after an `#include` (`main` too) pointed into that include — Nsight
   reports that as "incorrect function definition locations ... glslangValidator 15.0.0".
   `Local/Shaders/*.spv` is the dump of each compile (`spirv-dis` it to check the debug info).
+  The debug info may contain `OpExtInstWithForwardRefsKHR` (a debug type that refers to one declared later,
+  e.g. a struct passed to a function), so `Device` enables `VK_KHR_shader_relaxed_extended_instruction`
+  (`shaderRelaxedExtendedInstruction`) when the driver offers it.
 * **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
   `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
   atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
@@ -1617,7 +1689,11 @@ calls `reloadShaders()`.
   offset packed in 1 — not 24 scalar ones; the write side packs the same way. The Chebyshev weight
   exponent is the fixed `GI_VIS_CHEB_POWER` define (2, gi_probe.inc.glsl; no tweak), unrolled to
   multiplies.
-* **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
+* **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.** So must the
+  main cull's `OutMeshInstance` (64 B): it is declared in the cull and in the three scene vertex shaders
+  (lit, terrain, ocean) - a shader that declares fewer fields reads with the wrong stride.
+* `motion_vector.inc.glsl`: the fragment side of the motion vectors (`fragPrevClip`, `motionVector`);
+  fragment shaders only (`gl_FragCoord`). The readers' side is in shared.inc.glsl (`prevScreenUVMotion`).
 * **Only `EPipelineIndex::LitMasked` discards** (the lit fragment compiled with `ALPHA_MASK`). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is
   every opaque pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque`

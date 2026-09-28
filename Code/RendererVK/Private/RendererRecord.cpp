@@ -39,9 +39,11 @@ vk::CommandBuffer Renderer::beginComputeSecondary(CommandBuffer& cb)
     return cb.begin(false, &inheritance);
 }
 
-vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb)
+vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb, bool opaque)
 {
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_perFrameData[frameIdx].sceneColor.getRenderPass() };
+    // The depth-writing stages execute in the opaque family (+ the motion target), the layered ones not.
+    const SceneColor& sceneColor = m_perFrameData[frameIdx].sceneColor;
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = opaque ? sceneColor.getOpaqueRenderPass() : sceneColor.getRenderPass() };
     return cb.begin(false, &inheritance);
 }
 
@@ -77,6 +79,8 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .inNodeLodStateBiasBuffer = instances.lodStateBias,
         .outLodStatsBuffer = frameData.lodStatsBuffer,
         .meshCountBuffer = instances.meshCount,
+        .inPrevRenderNodeTransformsBuffer = m_instances.getPrevTransforms(),
+        .inPrevNodePassMasksBuffer = m_instances.getPrevPassMasks(),
     };
     m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
     cb.end();
@@ -257,29 +261,42 @@ void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDepth, uint32 eyeIndex)
+void Renderer::recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex)
 {
     // The depth-writing scene stages are done: flush their writes and park the depth in its sampled /
     // read-only-attachment layout for the rest of the frame (AO, force march, the later scene stages,
-    // TAA) and for next frame's readers.
-    const vk::ImageMemoryBarrier2 barrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests
-            | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eShaderSampledRead,
-        .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        .newLayout = SCENE_DEPTH_SAMPLED_LAYOUT,
-        .image = sceneDepth,
-        .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, eyeIndex, 1 },
+    // TAA) and for next frame's readers; the motion target (their second colour attachment) goes to
+    // SHADER_READ_ONLY for TAA and the AO temporal pass.
+    const vk::ImageMemoryBarrier2 barriers[2]{
+        {
+            .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+            .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests
+                | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eShaderSampledRead,
+            .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+            .newLayout = SCENE_DEPTH_SAMPLED_LAYOUT,
+            .image = sceneColor.getDepthImage(),
+            .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, eyeIndex, 1 },
+        },
+        {
+            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+            .oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .image = sceneColor.getMotionImage(),
+            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, eyeIndex, 1 },
+        },
     };
-    cb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier });
+    cb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 2, .pImageMemoryBarriers = barriers });
 }
 
 void Renderer::recordStaticMesh(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].staticMeshCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
+    beginScenePassSecondary(frameIdx, cb, true);
     recordStaticMeshInto(cb, frameIdx, 0);
     cb.end();
 }
@@ -339,6 +356,7 @@ void Renderer::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .motionView = frameData.sceneColor.getMotionView(eyeIndex),
         .tlas = tlas,
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
@@ -435,6 +453,7 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
         .sceneDepthView = sceneColor.getDepthView(eyeIndex),
         .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
         .sceneDepthSampler = sceneColor.getDepthSampler(),
+        .motionView = sceneColor.getMotionView(eyeIndex),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
     };
@@ -445,7 +464,7 @@ void Renderer::recordGiProbeDebug(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.giProbeDebugCommandBuffer;
-    setFullViewport(beginScenePassSecondary(frameIdx, cb));
+    setFullViewport(beginScenePassSecondary(frameIdx, cb, true)); // depth-writing: the opaque family
     m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo);
     cb.end();
 }
@@ -638,6 +657,7 @@ void Renderer::recordAO(uint32 frameIdx)
             .sceneDepthView = frameData.sceneColor.getDepthView(),
             .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
             .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+            .motionView = frameData.sceneColor.getMotionView(0),
             .tlas = tlas,
             .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
             .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
@@ -722,6 +742,7 @@ void Renderer::recordTaa(uint32 frameIdx)
         .sceneDepthView = sceneColor.getDepthView(),
         .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
         .sceneDepthSampler = sceneColor.getDepthSampler(),
+        .motionView = sceneColor.getMotionView(0),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
     };
@@ -975,8 +996,10 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
 
 namespace
 {
-    // Reversed-Z: the far plane / "no geometry" depth is 0.0 (shadow maps stay standard, cleared 1.0).
-    constexpr oc::array<vk::ClearValue, 2> s_sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+    // Reversed-Z: the far plane / "no geometry" depth is 0.0 (shadow maps stay standard, cleared 1.0). [2] = the
+    // opaque family's motion target: 0 = no object motion. A pass with fewer attachments ignores the extra values.
+    constexpr oc::array<vk::ClearValue, 3> s_sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 },
+        vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } };
 
     // Between two scene render-pass instances: the previous instance's attachment writes -> this
     // instance's loadOp reads + writes. The stage passes cannot carry it - their dependency arrays
@@ -1092,6 +1115,9 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     if (m_oceanSimPipeline.isOceanEnabled())
         executeScoped(primary, "Ocean sim", frameData.oceanSimCommandBuffer.getCommandBuffer());
     executeScoped(primary, "Indirect cull", frameData.indirectCullCommandBuffer.getCommandBuffer());
+    // The cull has read last frame's node transforms: replace them with this frame's for next frame's cull
+    // (the motion vectors; see InstanceStream). A primary command: the live node count changes per frame.
+    m_instances.recordPrevCopy(primary, frameIdx, oc::min(m_instances.getNumTransforms(), m_instances.getMaxRenderNodes()));
     executeScoped(primary, "Light grid", frameData.lightGridCommandBuffer.getCommandBuffer());
     // Forcefield grid build + force/query compute (Force library readbacks land ~2 frames later).
     if (m_force.isEnabled())
@@ -1186,7 +1212,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
         // This eye's forward set (last frame's AO view + TLAS) is written at scene-record time (recordSceneSecondaries).
         vk::RenderPassBeginInfo eyeRpBegin{
             .renderPass = sceneColor.getStageRenderPass(true, !layered, false),
-            .framebuffer = sceneColor.getFramebuffer(eye),
+            .framebuffer = sceneColor.getOpaqueFramebuffer(eye),
             .renderArea = sceneArea,
             .clearValueCount = (uint32)s_sceneClears.size(),
             .pClearValues = s_sceneClears.data(),
@@ -1196,7 +1222,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             if (stage.opaque && stage.enabled && stage.recordInline)
                 (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
         vkCommandBuffer.endRenderPass();
-        recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), eye);
+        recordSceneOpaqueToSampled(vkCommandBuffer, sceneColor, eye);
 
         if (m_rtaoParams.enabled)
             recordAOInto(commandBuffer, frameIdx, eye); // compute AO for this eye (NEXT frame's forward pass reads it)
@@ -1207,6 +1233,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
         { // the stages layered over the opaque scene: read-only depth, which they also sample
             sceneInstanceBarrier(vkCommandBuffer);
             eyeRpBegin.renderPass = sceneColor.getStageRenderPass(false, true, true);
+            eyeRpBegin.framebuffer = sceneColor.getFramebuffer(eye);
             vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
             for (const SceneStage& stage : stages)
                 if (!stage.opaque && stage.enabled && stage.recordInline)
@@ -1310,7 +1337,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
             sceneInstanceBarrier(vkCommandBuffer);
         const vk::RenderPassBeginInfo sceneRpBegin{
             .renderPass = sceneColor.getStageRenderPass(firstInstance, &stage == lastStage, !stage.opaque),
-            .framebuffer = sceneColor.getFramebuffer(),
+            .framebuffer = sceneColor.getStageFramebuffer(0, !stage.opaque),
             .renderArea = sceneArea,
             .clearValueCount = (uint32)s_sceneClears.size(), // ignored by the loadOp LOAD variants
             .pClearValues = s_sceneClears.data(),
@@ -1328,7 +1355,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     for (const SceneStage& stage : stages)
         if (stage.opaque)
             runStage(stage);
-    recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), 0);
+    recordSceneOpaqueToSampled(vkCommandBuffer, sceneColor, 0);
     m_gpuProfiler.endScope(vkCommandBuffer); // Scene opaque
 
     if (m_rtaoParams.enabled)

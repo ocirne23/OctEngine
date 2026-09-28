@@ -244,7 +244,8 @@ private:
     void executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary);
 
     vk::CommandBuffer beginComputeSecondary(CommandBuffer& cb); // Each caller ends its own cb.
-    vk::CommandBuffer beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb);
+    // opaque = a depth-writing stage: inherits SceneColor's opaque family (+ the motion target).
+    vk::CommandBuffer beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb, bool opaque = false);
 
     void recordSkinning(uint32 frameIdx);
     void recordOceanSim(uint32 frameIdx);
@@ -257,7 +258,7 @@ private:
     void recordRainOcclusionDraw(uint32 frameIdx);
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    void recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDepth, uint32 eyeIndex);
+    void recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex);
     void recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);

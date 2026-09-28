@@ -4,7 +4,8 @@
 
 // Temporal anti-aliasing resolve. One full-resolution compute pass per frame:
 //   - reconstruct this pixel's world position from the (jittered) camera depth,
-//   - reproject it into last frame's screen via u_prevMvp to fetch the history color,
+//   - reproject it into last frame's screen to fetch the history color: through the camera (u_reprojClip),
+//     or, on a moving surface, through the MOTION VECTOR (the scene's motion target; shared.inc.glsl),
 //   - clamp the history to the current 3x3 neighborhood colour box (variance clipping) to suppress ghosting,
 //   - reject history on disocclusion (reprojected depth mismatch) or when it lands outside the viewport,
 //   - blend current and (clamped) history with a fixed feedback weight.
@@ -22,6 +23,7 @@ layout (binding = 2) uniform sampler2D u_historyColor;     // last frame's resol
 layout (binding = 3) uniform sampler2D u_sceneDepth;     // this frame's camera depth
 layout (binding = 4) uniform sampler2D u_prevSceneDepth; // last frame's camera depth (disocclusion test)
 layout (binding = 5, rgba16f) uniform restrict writeonly image2D u_resolveOut;
+layout (binding = 6) uniform sampler2D u_motion;         // this frame's motion target (prevScreenUVMotion)
 
 layout (push_constant) uniform PC
 {
@@ -69,18 +71,39 @@ void main()
     // this is exact, and what keeps reprojection wobble-free with a jittered reference.
     const vec2 jitterUv = taaJitterUv(u_taaJitter.xy);
     const vec2 uvUnjit = uv - jitterUv;
-    float clipW;
-    // Clip-space reprojection (u_reprojClip): the world-space round trip drifts pixel-scale away from
-    // the world origin, which made TAA fetch history off-target and turned every stochastic input
-    // (jitter accumulation, shadow dither, RTAO, sky clouds) into visible per-frame noise.
-    const vec2 prevUv = prevScreenUVClip(uvUnjit, depth, clipW);
+    // The motion of the NEAREST surface in the 3x3: at a moving silhouette the jittered edge pixel is partly
+    // the object, and its history must follow the object, not stay behind with the background. A nearest
+    // surface without object motion (w = 0) reprojects this pixel through the camera, with its own depth.
+    vec4 motion = vec4(0.0);
+    {
+        const ivec2 last = ivec2(pc.width, pc.height) - 1;
+        float nearest = depth;
+        ivec2 nearestPx = px;
+        for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const ivec2 q = clamp(px + ivec2(dx, dy), ivec2(0), last);
+            const float d = texelFetch(u_sceneDepth, q, 0).r;
+            if (d > nearest) // reversed-Z: nearer = greater
+            {
+                nearest = d;
+                nearestPx = q;
+            }
+        }
+        motion = texelFetch(u_motion, nearestPx, 0);
+    }
+    // Clip-space reprojection (u_reprojClip) where the surface did not move: the world-space round trip drifts
+    // pixel-scale away from the world origin, which made TAA fetch history off-target and turned every
+    // stochastic input (jitter accumulation, shadow dither, RTAO, sky clouds) into visible per-frame noise.
+    bool prevValid;
+    const vec2 prevUv = prevScreenUVMotion(uvUnjit, depth, motion, prevValid);
     // The HISTORY is the converged, UNJITTERED image (the jitter averages out): its pixel q is the surface
     // at q. This output pixel converges to the surface at uv, which is the sampled surface shifted by
     // +jitter, so fetch history at the reprojection + jitter (= uv under a still camera). Fetching at
     // prevUv shifted the whole history by this frame's jitter every frame: sub-pixel image wobble.
     const vec2 historyUv = prevUv + jitterUv;
 
-    const bool histValid = clipW > 0.0 && insideViewport(historyUv);
+    const bool histValid = prevValid && insideViewport(historyUv);
     if (!histValid)
     {
         imageStore(u_resolveOut, px, vec4(current, 1.0));
@@ -89,8 +112,9 @@ void main()
 
     // Ocean pixels (scene colour ALPHA == 0: only ocean.fs.glsl writes it, every other opaque surface
     // writes its material alpha > 0, and the stages layered over the scene leave alpha alone -
-    // GraphicsPipelineLayout::colorWriteAlpha): the waves ANIMATE but this reprojection is camera-only - no
-    // motion vectors - so ocean history lands on the wrong wave every frame and full-weight accumulation
+    // GraphicsPipelineLayout::colorWriteAlpha): the waves ANIMATE but this reprojection is camera-only - the
+    // ocean writes no motion vectors (its dual-source blend allows one fragment output) - so ocean history
+    // lands on the wrong wave every frame and full-weight accumulation
     // averages the specular sparkle into blur. Cap the feedback there (TAA/Ocean feedback tweak) and
     // tighten the variance clamp so the moving highlights stay crisp; water has no hard edges, so the
     // reduced accumulation costs no visible aliasing.
@@ -136,8 +160,11 @@ void main()
     {
         const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
         const vec3 prevWorld = worldPosFromDepthMat(prevUv, prevDepth, u_prevInvMvp);
+        // Where the surface WAS: here for a still one; a moving one at its motion vector's depth last frame,
+        // on last frame's ray through prevUv - so the test compares depths along one ray.
+        const vec3 refPos = motionIsObject(motion) ? worldPosFromDepthMat(prevUv, motion.z, u_prevInvMvp) : worldPos;
         const float thresh = 0.05 * (1.0 + distance(u_viewPos, worldPos));
-        if (distance(prevWorld, worldPos) > thresh)
+        if (distance(prevWorld, refPos) > thresh)
             fb = 0.0; // real parallax disocclusion: something else was here last frame
     }
 

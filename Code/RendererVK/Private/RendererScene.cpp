@@ -72,7 +72,7 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         memcpy(&instances.mappedTransforms[node.m_transformIdx], &m_instances.getTransform(node.m_transformIdx), sizeof(Transform));
         node.m_transformUploadState &= uint8(~frameBit);
     }
-    instances.mappedPassMasks[node.m_transformIdx] = passMask;
+    instances.mappedPassMasks[node.m_transformIdx] = InstanceStream::stampedPassMask(passMask, m_ubo.frameIndex); // the push frame: see InstanceStream
     memcpy(instances.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
     if (node.m_lodStateBase != UINT32_MAX) // allocated at spawn only when the node has a LOD chain
         noteLodChainUse(node, startIdx, instances); // benign races: same-value stamp + thread-safe noteUse
@@ -208,7 +208,7 @@ RenderMesh Renderer::createMesh(const RenderMeshData& data)
     info.indexCount = mesh.m_numIndices;
     info.firstIndex = mesh.m_firstIndex;
     info.vertexOffset = (int32)mesh.m_firstVertex;
-    info.firstInstance = 0;
+    info.prevVertexDelta = 0;
     mesh.m_meshIdx = (uint16)addMeshInfos({ info }, oc::span<const uint32>(&mesh.m_numVertices, 1));
     return mesh;
 }
@@ -469,10 +469,11 @@ void Renderer::destroySkinnedBundle(uint32 bundleHandle)
     {
         const RendererVKLayout::SkinnedMeshSource& src = m_skinned.getSource(bundle.sourceKey + k);
         numMeshInfos += src.numLodLevels;
-        // The job entry is parked (vertexCount 0) but keeps its output offset for exactly this purpose.
+        // The job entry is parked (vertexCount 0) but keeps its output offset for exactly this purpose. The
+        // region is 2 x vertexCount: the deformed vertices + last frame's positions.
         Globals::meshDataManager.freeVertexData(
             (size_t)m_skinned.getJobOutVertexOffset(bundle.firstJob + k) * sizeof(RendererVKLayout::MeshVertex),
-            (size_t)src.vertexCount * sizeof(RendererVKLayout::MeshVertex));
+            (size_t)src.vertexCount * 2 * sizeof(RendererVKLayout::MeshVertex));
     }
     freeMeshInfoRange(bundle.baseMeshIdx, numMeshInfos);
     m_rt.accel().freeSkinnedJobSlots(bundle.firstJob, bundle.numMeshes);

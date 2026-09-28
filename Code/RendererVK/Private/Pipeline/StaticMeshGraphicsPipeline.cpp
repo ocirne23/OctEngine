@@ -31,12 +31,22 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     graphicsPipelineLayout.fragmentShader.text = FileSystem::readFileStr(graphicsPipelineLayout.fragmentShader.debugFilePath);
 
     // This pass WRITES the scene depth (there is no prepass): the layout's reversed-Z eGreater default.
+    // It is of the opaque family: the MOTION TARGET is colour location 1. Only the variants that draw meshes
+    // which can MOVE write it (lit opaque / masked, unlit opaque - instanced_indirect.vs.glsl passes the
+    // motion); the others mask it, which is exact for static surfaces (0 = camera-only reprojection) and
+    // keeps the opaque surface's motion under a blended one. The ocean cannot write it: dual-source blending
+    // allows ONE fragment output location (maxFragmentDualSrcAttachments).
+    graphicsPipelineLayout.motionTarget = true;
+    graphicsPipelineLayout.writeMotion = true; // variant 0: LitOpaque
 
     // Variant 1 (MeshShaderVariant::LitTransparent): same lit shader, alpha-blended, no depth write.
+    // NO_MOTION_OUTPUT: the transparent family's fragment output interface (location 0 only) - see
+    // RendererVKLayout::PIPELINE_TRANSPARENT_MASK; every opaque-family fragment shader writes location 1 too.
     graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
         .fragmentShader = ShaderSource{
             .text = graphicsPipelineLayout.fragmentShader.text,
             .debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
+            .defines = { { "NO_MOTION_OUTPUT", "1" } },
         },
         .blendEnable = true,
         .depthWrite = false,
@@ -49,12 +59,14 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             .text = unlitVariantText,
             .debugFilePath = unlitVariantPath,
         },
+        .writeMotion = true,
     });
 	// Variant 3 (MeshShaderVariant::UnlitTransparent): same unlit shader, alpha-blended, no depth write.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.fragmentShader = ShaderSource{
 			.text = unlitVariantText,
 			.debugFilePath = unlitVariantPath,
+			.defines = { { "NO_MOTION_OUTPUT", "1" } }, // the transparent family
 		},
 		.blendEnable = true,
 		.depthWrite = false,
@@ -181,6 +193,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
 			.defines = { { "ALPHA_MASK", "1" } },
 		},
+		.writeMotion = true,
 	});
 	// Variant 11 (EPipelineIndex::TerrainOverlay): the terrain chunks inside the wetness clipmap drawn AGAIN
 	// over the ground - the surface-water film today, the place for later terrain surface layers (snow ...).
@@ -426,7 +439,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             .binding = binding,
             .descriptorType = vk::DescriptorType::eStorageBuffer,
             .descriptorCount = 1,
-            .stageFlags = vk::ShaderStageFlagBits::eFragment
+            // The vertices in the vertex stage too: a skinned vertex's position LAST frame (motion vectors).
+            .stageFlags = binding == 14 ? vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlags(vk::ShaderStageFlagBits::eFragment)
         });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_terrainWet (terrain wetness clipmap, GENERAL layout)
         .binding = 18,
@@ -500,6 +514,7 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
     tess.pushConstantRanges = main.pushConstantRanges;
     tess.indirectBindable = false;
     tess.patchControlPoints = 3;
+    tess.motionTarget = true; // the opaque family; the terrain is static, so neither variant writes it
 
     // One VS / TCS / TES for both variants: the overlay's EQUAL depth test needs bit-identical positions. The
     // VS's TERRAIN_TESS path hands control points on instead of projecting.
@@ -617,11 +632,19 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
         m_terrainTessBuilt = m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
     }
 
-    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
+    createExecutionSets();
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
 
     createPreprocessBuffers(maxUniqueMeshes);
+}
+
+void StaticMeshGraphicsPipeline::createExecutionSets()
+{
+    m_indirectExecutionSet.destroy();
+    m_transparentExecutionSet.destroy();
+    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet", ~RendererVKLayout::PIPELINE_TRANSPARENT_MASK);
+    m_transparentExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSetTransparent", RendererVKLayout::PIPELINE_TRANSPARENT_MASK);
 }
 
 void StaticMeshGraphicsPipeline::resizeMeshCapacity(uint32 maxUniqueMeshes)
@@ -631,16 +654,21 @@ void StaticMeshGraphicsPipeline::resizeMeshCapacity(uint32 maxUniqueMeshes)
 
 void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
 {
-    // Size the preprocess scratch buffer for the worst case (one sequence per unique mesh).
-    vk::GeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
-        .indirectExecutionSet = m_indirectExecutionSet.getHandle(),
-        .indirectCommandsLayout = m_indirectCommandsLayout.getHandle(),
-        .maxSequenceCount = maxUniqueMeshes,
-        .maxDrawCount = maxUniqueMeshes,
-    };
-    vk::MemoryRequirements2 memReq;
-    Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
-    m_preprocessSize = memReq.memoryRequirements.size;
+    // Size the preprocess scratch buffer for the worst case (one sequence per unique mesh), the larger of the
+    // two execution sets' needs.
+    m_preprocessSize = 0;
+    for (const IndirectExecutionSet* executionSet : { &m_indirectExecutionSet, &m_transparentExecutionSet })
+    {
+        vk::GeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
+            .indirectExecutionSet = executionSet->getHandle(),
+            .indirectCommandsLayout = m_indirectCommandsLayout.getHandle(),
+            .maxSequenceCount = maxUniqueMeshes,
+            .maxDrawCount = maxUniqueMeshes,
+        };
+        vk::MemoryRequirements2 memReq;
+        Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
+        m_preprocessSize = oc::max(m_preprocessSize, memReq.memoryRequirements.size);
+    }
     if (m_preprocessSize > 0)
     {
         // Separate scratch per pass so the opaque and transparent executes don't alias preprocess memory.
@@ -682,8 +710,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
             printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
     }
 
-    m_indirectExecutionSet.destroy();
-    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
+    createExecutionSets();
 }
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
@@ -860,8 +887,9 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.bindVertexBuffers(2, { params.instanceIdxBuffer.getBuffer() }, { 0 });
         vkCommandBuffer.bindIndexBuffer(params.indexBuffer.getBuffer(), 0, vk::IndexType::eUint32);
     };
-    bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
-    recordExecuteGeneratedCommands(vkCommandBuffer, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
+    // Each execute needs its set's INITIAL pipeline bound (the opaque set's: variant 0).
+    bindForDraws(m_graphicsPipeline.getPipelineVariant(m_indirectExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
+    recordExecuteGeneratedCommands(vkCommandBuffer, m_indirectExecutionSet, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
 
     // The TESSELLATED terrain: ground, then its overlay (EQUAL depth against the ground just drawn), before the
     // transparent execute - where the untessellated overlay runs. Plain indexed indirect draws over the cull's
@@ -878,19 +906,21 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     {
         drawTerrainTess(0, params.terrainTessCommandBuffer, 2);
         drawTerrainTess(1, params.terrainTessOverlayCommandBuffer, 3);
-        bindForDraws(m_graphicsPipeline.getPipeline(), m_graphicsPipeline.getPipelineLayout());
     }
-    recordExecuteGeneratedCommands(vkCommandBuffer, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
+    // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
+    // its own (the transparent family's lowest variant).
+    bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
+    recordExecuteGeneratedCommands(vkCommandBuffer, m_transparentExecutionSet, params.transparentIndirectCommandBuffer, m_transparentPreprocessBuffers[frameIdx], params.drawCountBuffer, 1);
 }
 
-void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx)
+void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, const IndirectExecutionSet& executionSet, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx)
 {
     // The sequence count is the cull's compacted count (DrawCompactPipeline), clamped by maxSequenceCount = the
     // buffer capacity the preprocess scratch was sized for, so registering meshes never re-records.
     const uint32 maxSequences = (uint32)(indirectCommandBuffer.getSize() / sizeof(RendererVKLayout::IndirectDrawSequence));
     vk::GeneratedCommandsInfoEXT generatedCommandsInfo{
         .shaderStages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
-        .indirectExecutionSet = m_indirectExecutionSet.getHandle(),
+        .indirectExecutionSet = executionSet.getHandle(),
         .indirectCommandsLayout = m_indirectCommandsLayout.getHandle(),
         .indirectAddress = indirectCommandBuffer.getDeviceAddress(),
         .indirectAddressSize = indirectCommandBuffer.getSize(),

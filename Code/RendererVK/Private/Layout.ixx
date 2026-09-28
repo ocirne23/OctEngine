@@ -450,6 +450,10 @@ export namespace RendererVKLayout
         uint32 outVertexOffset;  // destination, MeshVertex units
         uint32 vertexCount;
         uint32 paletteOffset;    // bone palette base, mat4 units
+        // The output region is 2 x vertexCount: the deformed vertices, then last frame's positions (the motion
+        // vectors; MeshInfo::prevVertexDelta). 0 on the job's first frame: the region holds no last frame yet,
+        // so the skin writes this frame's positions there too.
+        uint32 prevValid;
     };
     // Per-skinned-mesh source data captured when an ObjectContainer loads (bind-pose geometry + skinning
     // influences + material/pipeline). Owned by the renderer (like MeshInfo) and referenced by a base index
@@ -851,16 +855,21 @@ export namespace RendererVKLayout
     };
 	static_assert(sizeof(InMeshInstance) == 16);
 
+    // Main cull output, read by the scene vertex shaders. The prev* fields feed the MOTION VECTORS: the
+    // instance's transform last frame (prevScale 0 = the node did not move) and, for a skinned mesh, the
+    // offset of its previous positions from the drawn vertex (0 = not skinned). See instanced_indirect.cs.glsl.
     struct OutMeshInstance
     {
         glm::vec3 translation;
         float scale;
         glm::vec4 quat;
+        glm::vec3 prevTranslation;
+        float prevScale;
         uint32 meshIdxMaterialIdx;
-        uint32 _padding1;
-        uint32 _padding2;
-        uint32 _padding3;
+        uint32 prevVertexDelta;
+        uint32 prevQuat[2]; // packSnorm2x16 (x, y), (z, w)
     };
+    static_assert(sizeof(OutMeshInstance) == 64);
 
     // Shadow cull output: like OutMeshInstance but its trailing uint packs the alpha-mask texture index
     // (high 16 bits, 0xFFFF = opaque/no mask) and the cascade overlap bitmask (low 16 bits). Resolving
@@ -896,7 +905,9 @@ export namespace RendererVKLayout
         uint32 indexCount;
         uint32 firstIndex;
         int32  vertexOffset;
-        uint32 firstInstance;
+        // A skinned output mesh: the distance (MeshVertex units) from a deformed vertex to its position LAST
+        // frame (the skin writes both; SkinningJob::prevValid). 0 = not skinned.
+        uint32 prevVertexDelta;
     };
 
     // GPU copy of a MeshLodGroup for the cull shaders' per-instance LOD selection: the chain's global
@@ -936,6 +947,16 @@ export namespace RendererVKLayout
                              // never on a material - the main cull emits it for TerrainLit instances inside the
                              // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
     };
+    // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
+    // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs
+    // ONE fragment output interface, and a dual-source blend (ocean, overlay) may not write location 1, so the
+    // cull routes a draw by this family - not by its alpha mode - into the opaque or the transparent sequence,
+    // and each sequence executes with its own set (StaticMeshGraphicsPipeline). Injected into every shader as
+    // PIPELINE_TRANSPARENT_MASK (one bit per EPipelineIndex).
+    constexpr uint32 PIPELINE_TRANSPARENT_MASK = (1u << (uint32)EPipelineIndex::LitTransparent)
+        | (1u << (uint32)EPipelineIndex::UnlitTransparent)
+        | (1u << (uint32)EPipelineIndex::Ocean) | (1u << (uint32)EPipelineIndex::TerrainOverlay);
+    constexpr bool isTransparentPipeline(uint32 pipelineIdx) { return ((PIPELINE_TRANSPARENT_MASK >> pipelineIdx) & 1u) != 0; }
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays

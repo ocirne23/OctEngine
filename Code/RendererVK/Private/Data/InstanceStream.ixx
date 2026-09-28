@@ -2,6 +2,7 @@
 
 import Core;
 import Core.Transform;
+import :VK;
 import :Buffer;
 import :Layout;
 import :RenderNode; // Globals::renderNodeTransforms
@@ -16,6 +17,12 @@ import :RenderNode; // Globals::renderNodeTransforms
 //    contiguous prefix. The capacity then grows at the next beginFrame.
 //  * a render-node transform slot is recycled the moment its node dies, so the buffers carry a
 //    GENERATION: bumping it marks every node dirty again, which is how a re-created buffer refills.
+//  * the MOTION VECTORS need every node's transform LAST frame. The other slot cannot serve (the CPU may
+//    write it while this frame's GPU work reads it), so after the cull the GPU copies this slot's transforms
+//    and pass masks into ONE device-local previous set (recordPrevCopy), which next frame's cull reads. A
+//    pass mask carries its push frame above the PASS_* byte (renderNode), so the cull knows whether the
+//    previous transform is really last frame's: a node not pushed last frame (off screen, just spawned into
+//    a recycled slot) draws without motion instead of with a stale transform.
 //
 // Growth calls back out: onGpuIdle before the buffers are re-created, then onInvalidate (a re-record),
 // and for the instance buffers the cull pipelines' own resize.
@@ -46,6 +53,15 @@ public:
 
     FrameSlot& slot(uint32 frameIdx) { return m_slots[frameIdx]; }
     const FrameSlot& slot(uint32 frameIdx) const { return m_slots[frameIdx]; }
+
+    // ---- Last frame's node transforms (the motion vectors; see the header) ----
+    Buffer& getPrevTransforms() { return m_prevTransforms; }
+    Buffer& getPrevPassMasks() { return m_prevPassMasks; }
+    // In the primary, after the main cull: this slot's first numNodes transforms + masks -> the previous set.
+    void recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint32 numNodes);
+    // The pass-mask word renderNode writes: the PASS_* byte + the push frame (24 bits; the cull compares
+    // against u_frameIndex - 1).
+    static uint32 stampedPassMask(uint32 passMask, uint32 frameIndex) { return passMask | (frameIndex << 8); }
 
     // ---- The push path (jobs, lock-free) ----
     // Claims `count` contiguous instance slots, or UINT32_MAX when this frame is full (the caller drops
@@ -87,8 +103,11 @@ private:
     void createNodeBuffers(FrameSlot& s);
     void createInstanceBuffer(FrameSlot& s);
     void createFirstInstanceBuffer(FrameSlot& s);
+    void createPrevNodeBuffers();
 
     oc::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
+    Buffer m_prevTransforms; // device-local, one set for every slot: last frame's transforms (recordPrevCopy)
+    Buffer m_prevPassMasks;  // ... and its stamped pass masks
     oc::vector<Transform>& m_transforms = Globals::renderNodeTransforms;
     oc::vector<uint32> m_freeTransformSlots;
     oc::vector<uint32> m_numInstancesPerMesh;

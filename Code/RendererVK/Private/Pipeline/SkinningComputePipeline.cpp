@@ -127,11 +127,12 @@ void SkinningComputePipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 
     vkCommandBuffer.dispatchIndirect(frameData.dispatchArgsBuffer.getBuffer(), 0);
 
-    // Skinned vertices are consumed as vertex input by the forward / shadow passes.
+    // Skinned vertices are consumed as vertex input by the forward / shadow passes; last frame's positions
+    // as a storage read by the scene vertex shader (the motion vectors).
     vk::MemoryBarrier2 memoryBarrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eVertexAttributeInput | vk::PipelineStageFlagBits2::eComputeShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eVertexAttributeInput | vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eVertexShader,
         .dstAccessMask = vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eShaderStorageRead,
     };
     vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &memoryBarrier });

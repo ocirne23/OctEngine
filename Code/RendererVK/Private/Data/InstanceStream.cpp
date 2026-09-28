@@ -35,19 +35,21 @@ void InstanceStream::initialize(uint32 maxUniqueMeshes, oc::function<void()> onG
         s.mappedMeshCount[0] = 0;
         s.meshCount.flushMappedMemory(sizeof(uint32));
     }
+    createPrevNodeBuffers();
 }
 
 // The three per-render-node buffers. No contents to preserve on a re-create: the generation bump makes
 // every node re-upload its transform at the next push, and masks/biases are rewritten by every push.
+// TRANSFER_SRC on the transforms and masks: recordPrevCopy copies them into the device-local previous set.
 void InstanceStream::createNodeBuffers(FrameSlot& s)
 {
     s.transforms.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
-        vk::BufferUsageFlagBits2::eStorageBuffer,
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferSrc,
         vk::MemoryPropertyFlagBits::eHostVisible, false, "RenderNodeTransforms", BufferHostAccess::eSequentialWrite);
     s.mappedTransforms = s.transforms.mapMemory<RendererVKLayout::RenderNodeTransform>();
 
     s.passMasks.initialize(m_maxRenderNodes * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer,
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferSrc,
         vk::MemoryPropertyFlagBits::eHostVisible, false, "NodePassMasks", BufferHostAccess::eSequentialWrite);
     s.mappedPassMasks = s.passMasks.mapMemory<uint32>();
 
@@ -55,6 +57,43 @@ void InstanceStream::createNodeBuffers(FrameSlot& s)
         vk::BufferUsageFlagBits2::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
     s.mappedLodStateBias = s.lodStateBias.mapMemory<int32>();
+}
+
+// Contents are undefined after a re-create: the cull's push-stamp test then fails (or, 1 in 2^24, passes on
+// garbage) for one frame, and every node draws without motion.
+void InstanceStream::createPrevNodeBuffers()
+{
+    m_prevTransforms.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "PrevRenderNodeTransforms");
+    m_prevPassMasks.initialize(m_maxRenderNodes * sizeof(uint32),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "PrevNodePassMasks");
+}
+
+void InstanceStream::recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint32 numNodes)
+{
+    if (numNodes == 0)
+        return;
+    const FrameSlot& s = m_slots[frameIdx];
+    // This frame's cull has read the previous set (compute) before the copy overwrites it.
+    const vk::MemoryBarrier2 before{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+    };
+    cb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
+    cb.copyBuffer(s.transforms.getBuffer(), m_prevTransforms.getBuffer(),
+        vk::BufferCopy{ .size = numNodes * sizeof(RendererVKLayout::RenderNodeTransform) });
+    cb.copyBuffer(s.passMasks.getBuffer(), m_prevPassMasks.getBuffer(), vk::BufferCopy{ .size = numNodes * sizeof(uint32) });
+    // -> next frame's cull.
+    const vk::MemoryBarrier2 after{
+        .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
+    };
+    cb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &after });
 }
 
 void InstanceStream::createInstanceBuffer(FrameSlot& s)
@@ -134,6 +173,7 @@ void InstanceStream::growRenderNodes(uint32 needed)
     m_onGpuIdle();
     for (FrameSlot& s : m_slots)
         createNodeBuffers(s);
+    createPrevNodeBuffers();
     ++m_bufferGeneration; // fresh (empty) GPU buffers: every node uploads again at its next push
     m_onInvalidate();
     printf("Renderer: grew render node capacity to %u\n", m_maxRenderNodes);

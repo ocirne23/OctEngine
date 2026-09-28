@@ -14,12 +14,19 @@ layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x
 layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
+layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
 
 layout (location = 0) out vec4 out_color;
+#ifndef NO_MOTION_OUTPUT // the transparent variant: its DGC set's fragment interface is location 0 only
+layout (location = 1) out vec4 out_motion; // the scene's motion target
+#endif
 
+// The lit core's AO read follows this point to where it was last frame (read where it is used, so the
+// interpolant is not live across the sun's shadow search).
+#define MOTION_WORLD_DELTA in_prevWorldDelta
 #include "instanced_indirect_lit.inc.glsl"
 
 void main()
@@ -78,4 +85,7 @@ void main()
 
 	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
+#ifndef NO_MOTION_OUTPUT
+	out_motion = motionVector(in_prevWorldDelta);
+#endif
 }

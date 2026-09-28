@@ -37,6 +37,9 @@ layout (location = 0, index = 0) out vec4 out_color;  // added colour
 layout (location = 0, index = 1) out vec4 out_factor; // the ground's multiplier
 #else
 layout (location = 0) out vec4 out_color;
+// The motion target: write-masked (the terrain is static), but the opaque family's DGC set needs one fragment
+// output interface (RendererVKLayout::PIPELINE_TRANSPARENT_MASK). Written once at the top of main.
+layout (location = 1) out vec4 out_motion;
 #endif
 
 #include "instanced_indirect_lit.inc.glsl"
@@ -660,6 +663,9 @@ void main()
 {
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex);
+#endif
+#ifndef TERRAIN_OVERLAY_PASS
+	out_motion = vec4(0.0); // write-masked: static
 #endif
 	const vec3 toView = u_viewPos - in_pos;
 	const float viewDist = length(toView);

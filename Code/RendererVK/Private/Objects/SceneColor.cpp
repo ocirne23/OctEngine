@@ -54,15 +54,19 @@ void SceneColor::destroy()
     if (m_sampler)      vkDevice.destroySampler(m_sampler);
     if (m_depthSampler) vkDevice.destroySampler(m_depthSampler);
     for (vk::Framebuffer& fb : m_framebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
+    for (vk::Framebuffer& fb : m_opaqueFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
+    if (m_opaqueRenderPass) vkDevice.destroyRenderPass(m_opaqueRenderPass);
     for (vk::RenderPass& rp : m_stagePasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
     for (vk::ImageView& v : m_colorLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     for (vk::ImageView& v : m_depthLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
+    for (vk::ImageView& v : m_motionLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
     Globals::gpuAllocator.destroyImage(m_depthImage, m_depthMemory);
-    m_sampler = nullptr; m_depthSampler = nullptr; m_renderPass = nullptr;
-    m_colorImage = nullptr; m_depthImage = nullptr;
-    m_colorMemory = nullptr; m_depthMemory = nullptr;
+    Globals::gpuAllocator.destroyImage(m_motionImage, m_motionMemory);
+    m_sampler = nullptr; m_depthSampler = nullptr; m_renderPass = nullptr; m_opaqueRenderPass = nullptr;
+    m_colorImage = nullptr; m_depthImage = nullptr; m_motionImage = nullptr;
+    m_colorMemory = nullptr; m_depthMemory = nullptr; m_motionMemory = nullptr;
 }
 
 bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount)
@@ -83,6 +87,9 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // next frame (TRANSFER_DST = the one-time clear below).
     if (!createImage(vkDevice, width, height, SCENE_DEPTH_FORMAT,
         vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
+    // The motion target: written by the depth-writing stages, sampled by TAA and the AO temporal pass.
+    if (!createImage(vkDevice, width, height, SCENE_MOTION_FORMAT,
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled, viewCount, m_motionImage, m_motionMemory, "SceneColor.motion")) return false;
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
@@ -90,6 +97,8 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
             oc::format("SceneColor.color[{}]", i).c_str())) return false;
         if (!createView(vkDevice, m_depthImage, SCENE_DEPTH_FORMAT, vk::ImageAspectFlagBits::eDepth, vk::ImageViewType::e2D, i, 1, m_depthLayerViews[i],
             oc::format("SceneColor.depth[{}]", i).c_str())) return false;
+        if (!createView(vkDevice, m_motionImage, SCENE_MOTION_FORMAT, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_motionLayerViews[i],
+            oc::format("SceneColor.motion[{}]", i).c_str())) return false;
     }
 
     // ---- BASE render pass (never begun - see getStageRenderPass): colour (ends SHADER_READ_ONLY for
@@ -169,6 +178,47 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     m_renderPass = rpResult.value;
     Globals::device.setDebugName(m_renderPass, "SceneColor.base");
 
+    // ---- OPAQUE base pass (never begun): the depth-writing stages' family - colour, depth, and the motion
+    // target as attachment 2 = colour location 1. The motion target stays COLOR_ATTACHMENT_OPTIMAL across
+    // the opaque instances (the Renderer's end-of-opaque barrier samples it). Same dependency array. ----
+    constexpr vk::ImageLayout colorAttLayout = vk::ImageLayout::eColorAttachmentOptimal;
+    const auto motionDesc = [&](bool first)
+    {
+        return vk::AttachmentDescription2{
+            .format = SCENE_MOTION_FORMAT,
+            .samples = vk::SampleCountFlagBits::e1,
+            .loadOp = first ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .initialLayout = first ? vk::ImageLayout::eUndefined : colorAttLayout,
+            .finalLayout = colorAttLayout,
+        };
+    };
+    const oc::array<vk::AttachmentReference2, 2> opaqueColorRefs{
+        colorRef,
+        vk::AttachmentReference2{ .attachment = 2, .layout = colorAttLayout, .aspectMask = vk::ImageAspectFlagBits::eColor },
+    };
+    const vk::SubpassDescription2 opaqueSubpass{
+        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+        .colorAttachmentCount = (uint32)opaqueColorRefs.size(),
+        .pColorAttachments = opaqueColorRefs.data(),
+        .pDepthStencilAttachment = &depthRef,
+    };
+    {
+        const oc::array<vk::AttachmentDescription2, 3> opaqueAttachments{ attachments[0], attachments[1], motionDesc(true) };
+        const vk::RenderPassCreateInfo2 info{
+            .attachmentCount = (uint32)opaqueAttachments.size(),
+            .pAttachments = opaqueAttachments.data(),
+            .subpassCount = 1,
+            .pSubpasses = &opaqueSubpass,
+            .dependencyCount = (uint32)dependencies.size(),
+            .pDependencies = dependencies.data(),
+        };
+        auto result = vkDevice.createRenderPass2(info);
+        if (result.result != vk::Result::eSuccess) { assert(false && "scenecolor opaque renderpass"); return false; }
+        m_opaqueRenderPass = result.value;
+        Globals::device.setDebugName(m_opaqueRenderPass, "SceneColor.opaque");
+    }
+
     for (uint32 i = 0; i < viewCount; ++i)
     {
         oc::array<vk::ImageView, 2> fbViews{ m_colorLayerViews[i], m_depthLayerViews[i] };
@@ -184,6 +234,15 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         if (fbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor framebuffer"); return false; }
         m_framebuffers[i] = fbResult.value;
         Globals::device.setDebugName(m_framebuffers[i], oc::format("SceneColor[{}]", i).c_str());
+
+        oc::array<vk::ImageView, 3> opaqueViews{ m_colorLayerViews[i], m_depthLayerViews[i], m_motionLayerViews[i] };
+        fbInfo.renderPass = m_opaqueRenderPass;
+        fbInfo.attachmentCount = (uint32)opaqueViews.size();
+        fbInfo.pAttachments = opaqueViews.data();
+        fbResult = vkDevice.createFramebuffer(fbInfo);
+        if (fbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor opaque framebuffer"); return false; }
+        m_opaqueFramebuffers[i] = fbResult.value;
+        Globals::device.setDebugName(m_opaqueFramebuffers[i], oc::format("SceneColor.opaque[{}]", i).c_str());
     }
 
     // ---- STAGE variants (see getStageRenderPass): colour first/last x depth written/read-only.
@@ -195,7 +254,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // attachment in DEPTH_STENCIL_READ_ONLY may be sampled by the pass that tests against it (a
     // writable one would be a feedback loop) - every pipeline of those stages has depthWrite off.
     {
-        const auto makePass = [&](const oc::array<vk::AttachmentDescription2, 2>& atts,
+        const auto makePass = [&](oc::span<const vk::AttachmentDescription2> atts,
             const vk::SubpassDescription2& sp, vk::RenderPass& out)
         {
             const vk::RenderPassCreateInfo2 info{
@@ -255,7 +314,10 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
                 ? depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthRo, depthRo)
                 : first ? depthDesc(vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::ImageLayout::eUndefined, depthAtt)
                         : depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthAtt, depthAtt);
-            if (!makePass({ color, depth }, readOnly ? readOnlySubpass : subpass, m_stagePasses[i])) return false;
+            // A depth-writing variant is of the opaque family: + the motion target (cleared by the first).
+            const oc::array<vk::AttachmentDescription2, 3> atts{ color, depth, motionDesc(first) };
+            if (!makePass(oc::span<const vk::AttachmentDescription2>(atts.data(), readOnly ? 2 : 3),
+                readOnly ? readOnlySubpass : opaqueSubpass, m_stagePasses[i])) return false;
             Globals::device.setDebugName(m_stagePasses[i], oc::format("SceneColor.stage{}{}{}",
                 first ? " first" : "", last ? " last" : "", readOnly ? " depthRO" : "").c_str());
         }
@@ -319,16 +381,20 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
             .subresourceRange = depthRange,
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToSampled });
-        vk::ImageMemoryBarrier2 bar{
-            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-            .oldLayout = vk::ImageLayout::eUndefined,
-            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = m_colorImage,
-            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, viewCount },
+        vk::ImageMemoryBarrier2 bars[2]{
+            {
+                .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+                .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+                .oldLayout = vk::ImageLayout::eUndefined,
+                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .image = m_colorImage,
+                .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, viewCount },
+            },
         };
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
+        bars[1] = bars[0];
+        bars[1].image = m_motionImage;
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 2, .pImageMemoryBarriers = bars });
         init.end();
         init.submitGraphics();
         (void)Globals::device.graphicsQueueWaitIdle();

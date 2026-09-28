@@ -83,6 +83,9 @@ public:
     oc::span<const RendererVKLayout::SkinningJob> getJobs() const { return m_jobs; }
     oc::span<const AccelerationStructure::SkinnedBlasBuild> getBlasBuilds() const { return m_blasBuilds; }
     bool hasJobs() const { return !m_jobs.empty(); }
+    // After the jobs are uploaded: a job's first frame (SkinningJob::prevValid 0) is done, so from the next
+    // frame its region holds last frame's positions.
+    void markJobsUploaded();
     uint32 getMaxPaletteEntries() const { return m_maxPaletteEntries; }
     uint32 getMaxJobs() const { return m_maxJobs; }
 
@@ -105,6 +108,7 @@ private:
     IndexRangeFreeList m_freeJobSlots;       // freed slots stay inert (vertexCount/indexCount 0)
     IndexRangeFreeList m_freeSourceSlots;
 
+    bool m_hasFreshJobs = false; // a job with prevValid 0 is waiting for its first upload
     uint32 m_maxPaletteEntries = RendererVKLayout::INITIAL_SKINNING_PALETTE;
     uint32 m_maxJobs = RendererVKLayout::INITIAL_SKINNING_JOBS;
 };

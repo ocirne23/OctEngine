@@ -26,11 +26,16 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl; the prev* fields are the motion vectors' - the
+// ocean cannot write them (dual-source blend), but the stride must match).
 struct InMeshInstancesData
 {
     vec4 posScale;
     vec4 quat;
+    vec4 prevPosScale;
     uint meshIdxMaterialIdx;
+    uint prevVertexDelta;
+    uvec2 prevQuat;
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {

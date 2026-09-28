@@ -187,7 +187,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
         meshInfo.firstIndex   = (uint32)(indexByteOffset / sizeof(RendererVKLayout::MeshIndex));
         meshInfo.radius       = sphereBounds.radius;
         meshInfo.center       = sphereBounds.pos;
-        meshInfo.firstInstance = 0;
+        meshInfo.prevVertexDelta = 0;
 
         // Stream-set meshes' current ranges are freed by the MeshStreamer at teardown; everything else
         // (procedural/direct imports, skinned bind poses) is recorded here and freed by the container.
@@ -877,8 +877,9 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
         for (uint32 k = 0; k < m_numSkinnedMeshes; ++k)
         {
             const RendererVKLayout::SkinnedMeshSource& src = renderer.getSkinnedMeshSource(m_baseSkinnedMeshIdx + k);
+            // 2 x vertexCount: the deformed vertices, then last frame's positions (the motion vectors).
             const uint32 outVertexOffset = (uint32)(meshDataManager.reserveVertexData(
-                (size_t)src.vertexCount * sizeof(RendererVKLayout::MeshVertex)) / sizeof(RendererVKLayout::MeshVertex));
+                (size_t)src.vertexCount * 2 * sizeof(RendererVKLayout::MeshVertex)) / sizeof(RendererVKLayout::MeshVertex));
             outVertexOffsets.push_back(outVertexOffset);
             meshVertexCounts.push_back(src.vertexCount);
 
@@ -889,7 +890,7 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
             mi.center = src.bounds.pos;
             // Animation deforms the mesh beyond its bind-pose bounds; inflate so it isn't frustum-culled early.
             mi.radius = src.bounds.radius * 2.0f;
-            mi.firstInstance = 0;
+            mi.prevVertexDelta = src.vertexCount; // the LOD levels copy it: they index the same region
 
             lodLevelStart[k] = (uint32)lodLevelInfos.size();
             for (uint32 j = 0; j < src.numLodLevels; ++j)

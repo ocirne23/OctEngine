@@ -11,6 +11,7 @@ layout (binding = 2) uniform sampler2D u_prevDepth;  // previous frame's hardwar
 layout (binding = 3) uniform sampler2D u_rawAO;      // this frame's raw AO (rgb = bent normal, a = AO, half-res)
 layout (binding = 4) uniform sampler2D u_historyAO;  // previous frame's accumulated AO (rgb = bent normal, a = AO)
 layout (binding = 5, rgba16f) uniform restrict writeonly image2D u_accumOut;
+layout (binding = 6) uniform sampler2D u_motion;     // this frame's motion target (full-res, nearest; prevScreenUVMotion)
 
 layout (push_constant) uniform PC
 {
@@ -35,9 +36,11 @@ void main()
     // The depth image is jittered (the scene pass's own depth); compensate geometric uses - see taaJitterUv.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
 
-    float clipW;
-    // Clip-space reprojection: precision independent of the camera's world position (see shared.inc.glsl).
-    const vec2 prevUv = prevScreenUVClip(uvUnjit, depth, clipW);
+    // Through the motion vector where the surface moved (the same texel as the depth), else the camera's
+    // clip-space reprojection: precision independent of the camera's world position (see shared.inc.glsl).
+    const vec4 motion = texture(u_motion, uv);
+    bool prevValid;
+    const vec2 prevUv = prevScreenUVMotion(uvUnjit, depth, motion, prevValid);
 
     // Bilateral 2x2 history fetch: validate each bilinear tap against its own reprojected position
     // instead of fetching with plain bilinear after a single-point disocclusion test. At silhouettes the
@@ -45,12 +48,15 @@ void main()
     // motion) a plain fetch bleeds those into the edge history and leaves a bright trailing rim.
     float histWeight = 0.0;
     vec4 hist = raw;
-    if (clipW > 0.0 && all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0))))
+    if (prevValid && all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0))))
     {
         // Distance-scaled disocclusion threshold: tolerate more at range (depth precision falls off).
         const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
         const float viewDist = length(worldPos - u_viewPos);
         const float thresh = 0.02 + 0.01 * viewDist;
+        // Where the surface WAS: here for a still one; a moving one at its motion vector's depth last frame
+        // on last frame's ray through prevUv. Each tap is tested against it.
+        const vec3 refPos = motionIsObject(motion) ? worldPosFromDepthMat(prevUv, motion.z, u_prevInvMvp) : worldPos;
 
         const vec2 res   = vec2(pc.aoWidth, pc.aoHeight);
         const vec2 st    = prevUv * res - 0.5;
@@ -70,7 +76,7 @@ void main()
             if (prevDepth <= 0.0)
                 continue;
             const vec3 prevWorld = worldPosFromDepthMat(tapUv, prevDepth, u_prevInvMvp);
-            if (length(prevWorld - worldPos) >= thresh)
+            if (length(prevWorld - refPos) >= thresh)
                 continue;
             sum  += texture(u_historyAO, tapUv) * bw[i];
             wsum += bw[i];

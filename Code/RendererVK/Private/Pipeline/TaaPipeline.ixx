@@ -34,8 +34,9 @@ public:
         vk::ImageView sceneDepthView;        // this frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
         vk::ImageView prevSceneDepthView;    // last frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
         vk::Sampler   sceneDepthSampler;
+        vk::ImageView motionView;            // this frame's motion target (SHADER_READ_ONLY), read with the depth sampler
         float feedback;                      // history weight; 0 disables accumulation
-        float oceanFeedback;                 // history weight cap on ocean pixels (waves animate without motion vectors)
+        float oceanFeedback;                 // history weight cap on ocean pixels (the ocean writes no motion vectors)
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params);
 

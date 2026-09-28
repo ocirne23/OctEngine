@@ -34,6 +34,8 @@ public:
         Buffer& inNodeLodStateBiasBuffer;     // 14 - per node: state slot bias
         Buffer& outLodStatsBuffer;            // 15 - per-level pick counts (stats readback)
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
+        Buffer& inPrevRenderNodeTransformsBuffer; // 18 - last frame's node transforms (InstanceStream, motion vectors)
+        Buffer& inPrevNodePassMasksBuffer;        // 19 - ... and its stamped pass masks
     };
 
     void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);

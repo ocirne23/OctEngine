@@ -22,6 +22,9 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-
 #endif
 
 layout (location = 0) out vec4 out_color;
+// The motion target: write-masked here (the sky reprojects through the camera), but the opaque family's DGC set
+// needs one fragment output interface (RendererVKLayout::PIPELINE_TRANSPARENT_MASK).
+layout (location = 1) out vec4 out_motion;
 
 // ---------------------------------------------------------------------------------------------
 // Atmosphere: single-scattering Rayleigh + Mie, shared with the indirect paths (atmosphere.inc.glsl,
@@ -122,6 +125,7 @@ void main()
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex); // per-eye ray reconstruction below
 #endif
+	out_motion = vec4(0.0);
 	// View ray from the screen position, not from the interpolated world position (in_pos - u_viewPos
 	// cancels two large float32 values per pixel and jitters away from the origin). Derived from u_mvp's
 	// x/y/w ROWS only: for a world direction d, ndc.xy = (r0.d, r1.d) / (rw.d), so solving the 3x3 system

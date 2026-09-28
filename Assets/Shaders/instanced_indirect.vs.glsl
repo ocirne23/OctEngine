@@ -6,6 +6,7 @@
 #extension GL_ARB_shading_language_420pack : enable
 
 #include "shared.inc.glsl"
+#include "mesh_vertex.inc.glsl"
 
 #ifdef STEREO
 // VR renders one eye per pass (no multiview here: the forward pass's DGC execution set forbids it), so the
@@ -13,16 +14,22 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl).
 struct InMeshInstancesData
 {
     vec4 posScale;
     vec4 quat;
+    vec4 prevPosScale;    // the instance transform last frame; w = 0: the node did not move
     uint meshIdxMaterialIdx;
+    uint prevVertexDelta; // skinned: last frame's position sits this many vertices on (0 = not skinned)
+    uvec2 prevQuat;       // packSnorm2x16 (x, y), (z, w)
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {
     InMeshInstancesData in_instances[];
 };
+// The vertex mega-buffer: a skinned vertex's position last frame (the skin pass keeps it; motion vectors).
+layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertices[]; };
 
 layout (location = 0) in vec4 in_posU;    // MeshVertex: xyz = position, w = uv.x
 layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
@@ -35,10 +42,28 @@ layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
 layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
 layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
+// The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0
+// for a still, unskinned instance - its fragments then write no motion.
+layout (location = 4) out vec3 out_prevWorldDelta;
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+// Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before
+// they meet the rotated offsets), so the result keeps its precision far from the world origin.
+vec3 prevWorldDelta(InMeshInstancesData inst)
+{
+    const bool skinned = inst.prevVertexDelta != 0u;
+    if (inst.prevPosScale.w <= 0.0 && !skinned)
+        return vec3(0.0);
+    const vec3 prevLocal = skinned ? in_vertices[uint(gl_VertexIndex) + inst.prevVertexDelta].positionU.xyz : in_posU.xyz;
+    if (inst.prevPosScale.w <= 0.0) // the node did not move: only the skin did
+        return quat_transform((prevLocal - in_posU.xyz) * inst.posScale.w, inst.quat);
+    const vec4 prevQuat = normalize(vec4(unpackSnorm2x16(inst.prevQuat.x), unpackSnorm2x16(inst.prevQuat.y)));
+    return (inst.prevPosScale.xyz - inst.posScale.xyz)
+         + (quat_transform(prevLocal * inst.prevPosScale.w, prevQuat) - quat_transform(in_posU.xyz * inst.posScale.w, inst.quat));
 }
 
 void main()
@@ -57,6 +82,7 @@ void main()
     out_posU    = vec4(pos, in_posU.w);
     out_normalV = vec4(quat_transform(in_normalV.xyz, inst_quat), in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
+    out_prevWorldDelta = prevWorldDelta(inst);
 
     // Per-eye projection in VR (g_viewIndex set above) / centre view on desktop, with the same TAA
     // sub-pixel jitter both eyes (per-eye TAA accumulates it just like desktop).

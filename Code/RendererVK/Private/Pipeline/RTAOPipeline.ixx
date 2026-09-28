@@ -41,6 +41,7 @@ public:
         vk::ImageView sceneDepthView;        // this frame (the trace + blur derive the normal from it)
         vk::ImageView prevSceneDepthView;    // previous frame (disocclusion)
         vk::Sampler   sceneDepthSampler;
+        vk::ImageView motionView;            // this frame's motion target (SHADER_READ_ONLY): the temporal pass's reprojection
         vk::AccelerationStructureKHR tlas;
         // Geometry + materials for the alpha-masked candidate test (only consulted when RTAOParams::alphaTest).
         Buffer& vertexBuffer;

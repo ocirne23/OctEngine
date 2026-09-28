@@ -218,13 +218,18 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .alphaBlendOp = layout.colorBlendOp == vk::BlendOp::eAdd ? vk::BlendOp::eAdd : layout.colorBlendOp,
         .colorWriteMask = colorComponentFlags,
     };
+    // [0] the colour, [1] the motion target (layout.motionTarget): never blended, written or fully masked.
+    oc::array<vk::PipelineColorBlendAttachmentState, 2> blendAttachments{ pipelineColorBlendAttachmentState, vk::PipelineColorBlendAttachmentState{
+        .blendEnable = vk::False,
+        .colorWriteMask = layout.writeMotion ? vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags : vk::ColorComponentFlags(),
+    } };
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo
     {
         .flags = {},
         .logicOpEnable = vk::False,
         .logicOp = vk::LogicOp::eCopy,
-        .attachmentCount = layout.depthOnly ? 0u : 1u,
-        .pAttachments = layout.depthOnly ? nullptr : &pipelineColorBlendAttachmentState,
+        .attachmentCount = layout.depthOnly ? 0u : layout.motionTarget ? 2u : 1u,
+        .pAttachments = layout.depthOnly ? nullptr : blendAttachments.data(),
         .blendConstants = { { 1.0f, 1.0f, 1.0f, 1.0f } },
     };
     oc::array<vk::DynamicState, 2> dynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
@@ -342,13 +347,15 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;
         pipelineDepthStencilStateCreateInfo.depthWriteEnable = variant.depthWrite ? vk::True : vk::False;
         pipelineDepthStencilStateCreateInfo.depthCompareOp = variant.depthEqual ? vk::CompareOp::eEqual : layout.depthCompareOp;
-        pipelineColorBlendAttachmentState.blendEnable = variant.blendEnable ? vk::True : vk::False;
+        vk::PipelineColorBlendAttachmentState& colorBlend = blendAttachments[0];
+        colorBlend.blendEnable = variant.blendEnable ? vk::True : vk::False;
         // A blended variant KEEPS the dst alpha (the opaque surface behind it owns the scene colour's
         // alpha = TAA's ocean flag; a near-zero material alpha must not read as ocean), unless it composites
         // the alpha itself (dualSourceAlpha: the ocean's edge).
         const bool blendsAlpha = variant.dualSourceBlend && variant.dualSourceAlpha;
-        pipelineColorBlendAttachmentState.colorWriteMask = variant.blendEnable && !blendsAlpha
+        colorBlend.colorWriteMask = variant.blendEnable && !blendsAlpha
             ? colorComponentFlags & ~vk::ColorComponentFlags(vk::ColorComponentFlagBits::eA) : colorComponentFlags;
+        blendAttachments[1].colorWriteMask = variant.writeMotion ? vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags : vk::ColorComponentFlags();
         pipelineRasterizationStateCreateInfo.polygonMode = variant.polygonMode;
         pipelineRasterizationStateCreateInfo.lineWidth = rasterizesLines(layout.topology, variant.polygonMode) ? LINE_WIDTH : 1.0f;
         pipelineRasterizationStateCreateInfo.cullMode = variant.cullMode;
@@ -356,12 +363,12 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         {
             // Standard "over" alpha blending: src.rgb*src.a + dst.rgb*(1-src.a), keep dst alpha. Dual-source:
             // src0.rgb + dst.rgb*src1.rgb (see PipelineVariant::dualSourceBlend).
-            pipelineColorBlendAttachmentState.srcColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eOne : vk::BlendFactor::eSrcAlpha;
-            pipelineColorBlendAttachmentState.dstColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eSrc1Color : vk::BlendFactor::eOneMinusSrcAlpha;
-            pipelineColorBlendAttachmentState.colorBlendOp = vk::BlendOp::eAdd;
-            pipelineColorBlendAttachmentState.srcAlphaBlendFactor = vk::BlendFactor::eOne;
-            pipelineColorBlendAttachmentState.dstAlphaBlendFactor = blendsAlpha ? vk::BlendFactor::eSrc1Alpha : vk::BlendFactor::eZero;
-            pipelineColorBlendAttachmentState.alphaBlendOp = vk::BlendOp::eAdd;
+            colorBlend.srcColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eOne : vk::BlendFactor::eSrcAlpha;
+            colorBlend.dstColorBlendFactor = variant.dualSourceBlend ? vk::BlendFactor::eSrc1Color : vk::BlendFactor::eOneMinusSrcAlpha;
+            colorBlend.colorBlendOp = vk::BlendOp::eAdd;
+            colorBlend.srcAlphaBlendFactor = vk::BlendFactor::eOne;
+            colorBlend.dstAlphaBlendFactor = blendsAlpha ? vk::BlendFactor::eSrc1Alpha : vk::BlendFactor::eZero;
+            colorBlend.alphaBlendOp = vk::BlendOp::eAdd;
         }
 
         vk::Result   result;
