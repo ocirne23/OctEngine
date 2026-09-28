@@ -137,6 +137,10 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// bases and needs no UV), trimming the interpolated attributes from a full TBN+UV to two vec3s.
 	const oc::string terrainVertexPath = "Shaders/instanced_indirect_terrain.vs.glsl";
 	const oc::string terrainVariantPath = "Shaders/instanced_indirect_terrain.fs.glsl";
+	const oc::string terrainFilmPath = "Shaders/terrain_film.fs.glsl"; // variant 11 (TerrainOverlay)
+	const auto isTerrainFragment = [&](const PipelineVariant& variant) {
+		return variant.fragmentShader.debugFilePath == terrainVariantPath || variant.fragmentShader.debugFilePath == terrainFilmPath;
+	};
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = FileSystem::readFileStr(terrainVertexPath),
@@ -197,13 +201,15 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	});
 	// Variant 11 (EPipelineIndex::TerrainOverlay): the terrain chunks inside the wetness clipmap drawn AGAIN
 	// over the ground - the surface-water film today, the place for later terrain surface layers (snow ...).
-	// The terrain VS and FS compiled with TERRAIN_OVERLAY_PASS: depth test EQUAL against the ground it re-draws
-	// (the terrain VS's `invariant gl_Position` makes the depth bit-identical), so it shows exactly where the
-	// terrain is the visible surface and anything in front - an ocean wave running up the sand - hides it as
-	// it hides the ground (a lift along the normal instead put the film IN FRONT of water shallower than the
-	// lift: a bright band where the waves meet the sand). The FS composites DUAL-SOURCE, out = K + ground *
-	// factor, so it never reads the scene colour. No depth write. Kept out of the ground's shader so the
-	// film's work no longer sets the register allocation of every terrain pixel. The main cull emits it
+	// The terrain VS compiled with TERRAIN_OVERLAY_PASS and the film's own FS (terrain_film.fs.glsl; the part it
+	// shares with the ground FS is terrain_common.inc.glsl). NEVER tessellated, also over the tessellated
+	// ground: inside the tessellation range the VS lifts it to its WATER LEVEL in the relief band (as the
+	// ground's evaluation stage displaces the ground), elsewhere it lies on the mesh. Depth test
+	// GREATER_OR_EQUAL: where it has no lift it is bit-identical to the flat ground (`invariant gl_Position`);
+	// the displaced ground hides it where it stands higher (rock out of a puddle), and anything in front - an
+	// ocean wave running up the sand - hides it as it hides the ground. The FS composites DUAL-SOURCE, out = K +
+	// ground * factor, so it never reads the scene colour. No depth write. Kept out of the ground's shader so
+	// the film's work no longer sets the register allocation of every terrain pixel. The main cull emits it
 	// (never a material): see instanced_indirect.cs.glsl.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
@@ -212,14 +218,13 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.defines = { { "TERRAIN_OVERLAY_PASS", "1" } },
 		},
 		.fragmentShader = ShaderSource{
-			.text = FileSystem::readFileStr(terrainVariantPath),
-			.debugFilePath = terrainVariantPath,
-			.defines = { { "TERRAIN_OVERLAY_PASS", "1" } },
+			.text = FileSystem::readFileStr(terrainFilmPath),
+			.debugFilePath = terrainFilmPath,
 		},
 		.blendEnable = true,
 		.dualSourceBlend = true,
 		.depthWrite = false,
-		.depthEqual = true,
+		.depthGreaterOrEqual = true,
 	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
@@ -273,16 +278,16 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         graphicsPipelineLayout.fragmentShader.defines.push_back({ name, modeText });
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
             if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
-                || variant.fragmentShader.debugFilePath == terrainVariantPath)
+                || isTerrainFragment(variant))
                 variant.fragmentShader.defines.push_back({ name, modeText });
     };
     // The terrain's surface-water film could mirror the scene with the ocean's ray, under the ocean's toggle.
     // DISABLED: that ray query set the terrain's register allocation for every pixel (see terrainFilmMirror in
-    // instanced_indirect_terrain.fs.glsl); the film reflects the sky only.
+    // terrain_film.fs.glsl); the film reflects the sky only.
     constexpr bool TERRAIN_FILM_RT_MIRROR = false;
     if (TERRAIN_FILM_RT_MIRROR && m_oceanRtReflections)
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
-            if (variant.fragmentShader.debugFilePath == terrainVariantPath)
+            if (variant.fragmentShader.debugFilePath == terrainFilmPath)
                 variant.fragmentShader.defines.push_back({ "TERRAIN_FILM_RT_MIRROR", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
@@ -294,7 +299,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         graphicsPipelineLayout.fragmentShader.defines.push_back(define);
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
             if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
-                || variant.fragmentShader.debugFilePath == terrainVariantPath)
+                || isTerrainFragment(variant))
                 variant.fragmentShader.defines.push_back(define);
     };
     defineLit("LIT_RT_SUN_SHADOW", m_rtSunShadow);
@@ -302,7 +307,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // TERRAIN_POM (0/1, "Terrain/Textures/Parallax"): the parallax march + its self-shadow, compiled in or out of
     // the terrain fragment shaders (the tessellated copies inherit it through buildTerrainTessLayout).
     for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
-        if (variant.fragmentShader.debugFilePath == terrainVariantPath)
+        if (isTerrainFragment(variant))
             variant.fragmentShader.defines.push_back({ "TERRAIN_POM", m_terrainPom ? "1" : "0" });
 
     auto& bindingDescriptions = graphicsPipelineLayout.vertexLayoutInfo.bindingDescriptions;
@@ -395,8 +400,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 7,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        // The tessellated film's evaluation stage too: its surface follows the LIVE ocean at the waterline.
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
+        // The vertex stage: the ocean's displacement, and the film's lift follows the LIVE ocean at the waterline.
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_shadowMap (sun CSM, comparison)
         .binding = 8,
@@ -446,16 +451,15 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .binding = 18,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        // The tessellated film's evaluation stage reads it too: its surface stands at the water level the
-        // local wetness fills the relief to.
-        .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
+        // The film's vertex stage reads it too: its surface stands at the water level the local wetness fills
+        // the relief to.
+        .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eVertex
     });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_terrainHeight (terrain-data cascades: ocean depth/water level)
         .binding = 19,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
-        // + the tessellated film's evaluation stage: the baked water level under the live ocean.
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
     });
 
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_skyMap (GI's per-frame sky bake: layer 0 skyRadiance, layer 1 mirror sky; GENERAL layout)
@@ -506,7 +510,6 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& tess)
 {
     const PipelineVariant& ground = main.additionalVariants[(size_t)RendererVKLayout::EPipelineIndex::TerrainLit - 1];
-    const PipelineVariant& overlay = main.additionalVariants[(size_t)RendererVKLayout::EPipelineIndex::TerrainOverlay - 1];
 
     tess.vertexLayoutInfo = main.vertexLayoutInfo;
     tess.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
@@ -516,8 +519,7 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
     tess.patchControlPoints = 3;
     tess.motionTarget = true; // the opaque family; the terrain is static, so neither variant writes it
 
-    // One VS / TCS / TES for both variants: the overlay's EQUAL depth test needs bit-identical positions. The
-    // VS's TERRAIN_TESS path hands control points on instead of projecting.
+    // The VS's TERRAIN_TESS path hands control points on instead of projecting.
     oc::vector<ShaderDefine> tessDefines = { { "TERRAIN_TESS", "1" } };
     if (m_stereo)
         tessDefines.push_back({ "STEREO", "1" });
@@ -528,21 +530,12 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
     tess.tessControlShader = source("Shaders/terrain_tess.tcs.glsl");
     tess.tessEvalShader = source("Shaders/terrain_tess.tes.glsl");
 
-    // Variant 0: the ground (layout defaults: opaque, depth write, back-face culled). TERRAIN_TESS on the
-    // fragment shaders too: they light from the evaluation stage's undisplaced position.
+    // The ground only (layout defaults: opaque, depth write, back-face culled). TERRAIN_TESS on the fragment
+    // shader too: it lights from the evaluation stage's undisplaced position. The film is NEVER tessellated: it
+    // draws untessellated over every chunk (variant 11), lifted to its water level in the terrain VS.
     tess.fragmentShader = ground.fragmentShader;
     tess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
     tess.polygonMode = ground.polygonMode;
-    // Variant 1: the overlay. Its evaluation stage displaces to the film's WATER LEVEL, not to the relief, so
-    // it has its own vertices and CANNOT depth-test EQUAL any more: the ordinary reversed-Z test keeps it where
-    // it stands above the ground and lets the ground hide it where it does not (rock out of a puddle).
-    PipelineVariant overlayTess = overlay;
-    overlayTess.vertexShader = ShaderSource{}; // the layout's (TERRAIN_TESS) VS
-    overlayTess.fragmentShader.defines.push_back({ "TERRAIN_TESS", "1" });
-    overlayTess.tessEvalShader = tess.tessEvalShader;
-    overlayTess.tessEvalShader.defines.push_back({ "TERRAIN_OVERLAY_PASS", "1" });
-    overlayTess.depthEqual = false;
-    tess.additionalVariants.push_back(oc::move(overlayTess));
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
@@ -891,22 +884,22 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_indirectExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());
     recordExecuteGeneratedCommands(vkCommandBuffer, m_indirectExecutionSet, params.indirectCommandBuffer, m_preprocessBuffers[frameIdx], params.drawCountBuffer, 0);
 
-    // The TESSELLATED terrain: ground, then its overlay (EQUAL depth against the ground just drawn), before the
-    // transparent execute - where the untessellated overlay runs. Plain indexed indirect draws over the cull's
-    // compacted sequences (offset 4 skips the pipelineIndex word); with tessellation off the cull routes nothing
-    // there, so the counts are 0.
+    // The TESSELLATED terrain ground, then the terrain FILM over all of the ground, both before the transparent
+    // execute: the ocean then always blends over the film (in the transparent sequence their order was
+    // undefined - a seam where the film drew after the ocean). Plain indexed indirect draws over the cull's
+    // compacted sequences (offset 4 skips the pipelineIndex word); with tessellation off the cull routes no
+    // ground there, so that count is 0. The film variant is indirect-bindable, and binds normally too.
     constexpr vk::DeviceSize sequenceStride = sizeof(RendererVKLayout::IndirectDrawSequence);
-    const auto drawTerrainTess = [&](uint32 variant, Buffer& sequences, uint32 countIdx)
+    const auto drawSequences = [&](vk::Pipeline pipeline, vk::PipelineLayout layout, Buffer& sequences, uint32 countIdx)
     {
-        bindForDraws(m_terrainTessPipeline.getPipelineVariant(variant), m_terrainTessPipeline.getPipelineLayout());
+        bindForDraws(pipeline, layout);
         vkCommandBuffer.drawIndexedIndirectCount(sequences.getBuffer(), offsetof(RendererVKLayout::IndirectDrawSequence, indexCount),
             params.drawCountBuffer.getBuffer(), countIdx * sizeof(uint32), (uint32)(sequences.getSize() / sequenceStride), (uint32)sequenceStride);
     };
     if (m_terrainTess && m_terrainTessBuilt)
-    {
-        drawTerrainTess(0, params.terrainTessCommandBuffer, 2);
-        drawTerrainTess(1, params.terrainTessOverlayCommandBuffer, 3);
-    }
+        drawSequences(m_terrainTessPipeline.getPipelineVariant(0), m_terrainTessPipeline.getPipelineLayout(), params.terrainTessCommandBuffer, 2);
+    drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
+        params.terrainFilmCommandBuffer, 3);
     // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
     // its own (the transparent family's lowest variant).
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());

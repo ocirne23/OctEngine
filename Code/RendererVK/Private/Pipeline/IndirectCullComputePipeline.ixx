@@ -51,8 +51,8 @@ public:
     Buffer& getIndirectCommandBuffer(uint32 idx)   { return m_perFrameData[idx].outIndirectCommandBuffer; }
     Buffer& getTransparentIndirectCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTransparentIndirectCommandBuffer; }
     Buffer& getTerrainTessCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessCommandBuffer; }
-    Buffer& getTerrainTessOverlayCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessOverlayCommandBuffer; }
-    // The compacted lists' draw counts: [0] opaque, [1] transparent, [2] terrain tess ground, [3] its overlay.
+    Buffer& getTerrainFilmCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainFilmCommandBuffer; }
+    // The compacted lists' draw counts: [0] opaque, [1] transparent, [2] terrain tess ground, [3] terrain film.
     Buffer& getDrawCountBuffer(uint32 idx) { return m_perFrameData[idx].drawCountBuffer; }
     Buffer& getInstanceIdxBuffer(uint32 idx)      { return m_perFrameData[idx].outMeshInstanceIndexesBuffer; }
     Buffer& getOutMeshInstancesBuffer(uint32 idx) { return m_perFrameData[idx].outMeshInstancesBuffer; }
@@ -78,7 +78,7 @@ private:
         Buffer outIndirectCommandBuffer;          // 8 - opaque
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
-        Buffer outTerrainTessOverlayCommandBuffer;  // 17 - tessellated terrain overlay
+        Buffer outTerrainFilmCommandBuffer;         // 17 - terrain film (plain indirect draws, never tessellated)
         Buffer drawCountBuffer;                     // the four lists' counts after compaction
 
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;

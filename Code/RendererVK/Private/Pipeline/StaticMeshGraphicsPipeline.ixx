@@ -35,8 +35,8 @@ public:
         Buffer& indirectCommandBuffer;            // opaque draw sequences
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)
-        Buffer& terrainTessOverlayCommandBuffer;  // tessellated terrain overlay sequences
-        Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] tess overlay
+        Buffer& terrainFilmCommandBuffer;         // terrain film sequences (plain indirect draws)
+        Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] film
 
         Buffer& lightInfosBuffer;
 		Buffer& lightGridsBuffer;

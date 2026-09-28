@@ -27,7 +27,20 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 // The lit core's AO read follows this point to where it was last frame (read where it is used, so the
 // interpolant is not live across the sun's shadow search).
 #define MOTION_WORLD_DELTA in_prevWorldDelta
+// The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
+#define SUN_SHADOW_FIRST
 #include "instanced_indirect_lit.inc.glsl"
+
+// THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live. The geometric
+// normal also carries the shadow's normal offset (a normal map must not bend the bias). A surface facing away from
+// the sun gets none; doSunLight's facing test on the shading normal still applies.
+// Measured 2026-09-28: lit FS 72/16 -> 64/48 (regs / spill B); game mode (64 units) Static meshes 0.281/0.284 ->
+// 0.257/0.263 ms, GPU frame 1.553/1.562 -> 1.508/1.515.
+void sunShadowFirst(vec3 pos)
+{
+	const vec3 geoN = normalize(in_normalV.xyz);
+	g_sunShadowFirst = dot(geoN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(pos, geoN) : 0.0;
+}
 
 void main()
 {
@@ -35,6 +48,9 @@ void main()
 	g_viewIndex = int(u_viewIndex); // per-eye reconstruction (AO upsample) + view pos
 #endif
 	const vec3 pos = in_posU.xyz;
+#ifndef ALPHA_MASK
+	sunShadowFirst(pos);
+#endif
 	const vec3 V = normalize(u_viewPos - pos);
 
 	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
@@ -51,6 +67,7 @@ void main()
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
+	sunShadowFirst(pos); // after the discard: a cut-out pixel pays no shadow
 #endif
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,

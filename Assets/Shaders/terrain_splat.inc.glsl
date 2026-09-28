@@ -248,11 +248,12 @@ float terrainValueNoise(vec2 p)
 	           mix(terrainHash12(i + vec2(0.0, 1.0)), terrainHash12(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
-// ~[-1, 1], 3 octaves, amplitude-normalised.
+// ~[-1, 1], 3 octaves, amplitude-normalised. NOT unrolled (the includer enables GL_EXT_control_flow_attributes):
+// unrolled, the compiler overlaps the 12 corner hashes (a vec3 each) and the terrain FS peaked here.
 float terrainFbm(vec2 p)
 {
 	float v = 0.0, a = 0.5, norm = 0.0;
-	for (int i = 0; i < 3; ++i)
+	[[dont_unroll]] for (int i = 0; i < 3; ++i)
 	{
 		v += a * terrainValueNoise(p);
 		norm += a;
@@ -284,35 +285,46 @@ float climateBoxWeight(vec2 climate, vec4 box, float invS2)
 	return exp(-dot(d, d) * invS2);
 }
 
+// PACKED: the three entry indices share one uint (8 bits each - at most MAX_TERRAIN_SPLAT_MATERIALS entries),
+// so a pick costs 2 registers instead of 4; TerrainLayers carries two of them live across the whole splat.
 struct ClimatePick
 {
-	int i0, i1, i2;    // top three entries (0-based like u_terrainSplatClimate; caller adds baseMat)
+	uint idx;          // top three entries i0 | i1 << 8 | i2 << 16 (0-based like u_terrainSplatClimate; caller adds baseMat)
 	float16_t n1, n2;  // normalized coverage of i1 and i2; the top pick i0 gets the rest (n0 = 1 - n1 - n2)
 };
+
+// Entry k (0..2, a constant) of a pick.
+uint climatePickIdx(ClimatePick p, int k)
+{
+	return bitfieldExtract(p.idx, 8 * k, 8);
+}
 
 // Top THREE climate entries in [first, first + count) as a partition of unity, each weighted RELATIVE to
 // the FOURTH (w - w3): when the #3/#4 ranking swaps both sit at zero contribution, so the third texture
 // fades in and out rather than popping (the generalisation of the old top-two's relative-to-third trick).
 // Three real entries - not two - is what lets a pixel where three climate boxes overlap show all three
 // instead of pinching the loser into a hard sliver.
+// HALF weights (the match is exp() in 32-bit, then stored half): the four running weights take 2 registers,
+// not 4. A tail below half's range ranks as 0 - a tie, which only reorders entries of zero contribution.
 ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 {
-	int i0 = first, i1 = first, i2 = first;
-	float w0 = -1.0, w1 = -1.0, w2 = -1.0, w3 = -1.0;
+	uint idx = uint(first) * 0x010101u; // i0 = i1 = i2 = first
+	float16_t w0 = float16_t(-1.0), w1 = float16_t(-1.0), w2 = float16_t(-1.0), w3 = float16_t(-1.0);
 	for (int i = first; i < first + count; ++i)
 	{
-		const float w = climateBoxWeight(climate, u_terrainSplatClimate[i], invS2);
-		if      (w > w0) { i2 = i1; i1 = i0; i0 = i; w3 = w2; w2 = w1; w1 = w0; w0 = w; }
-		else if (w > w1) { i2 = i1; i1 = i;         w3 = w2; w2 = w1; w1 = w; }
-		else if (w > w2) { i2 = i;                  w3 = w2; w2 = w; }
-		else if (w > w3) {                          w3 = w; }
+		const float16_t w = float16_t(climateBoxWeight(climate, u_terrainSplatClimate[i], invS2));
+		const uint ui = uint(i);
+		if      (w > w0) { idx = ((idx << 8) | ui) & 0xFFFFFFu;                       w3 = w2; w2 = w1; w1 = w0; w0 = w; } // i2 = i1, i1 = i0, i0 = i
+		else if (w > w1) { idx = (idx & 0xFFu) | (ui << 8) | ((idx & 0xFF00u) << 8); w3 = w2; w2 = w1; w1 = w; }        // i2 = i1, i1 = i
+		else if (w > w2) { idx = (idx & 0xFFFFu) | (ui << 16);                        w3 = w2; w2 = w; }                 // i2 = i
+		else if (w > w3) {                                                            w3 = w; }
 	}
-	w3 = max(w3, 0.0); // count < 4: nothing to subtract
-	const float a0 = w0 - w3;            // >= 0: w0 is the maximum
-	const float a1 = max(w1 - w3, 0.0);
-	const float a2 = max(w2 - w3, 0.0);
-	const float inv = 1.0 / max(a0 + a1 + a2, 1e-6); // max: all weights can underflow to 0
-	return ClimatePick(i0, i1, i2, float16_t(a1 * inv), float16_t(a2 * inv));
+	w3 = max(w3, float16_t(0.0)); // count < 4: nothing to subtract
+	const float16_t a0 = w0 - w3;            // >= 0: w0 is the maximum
+	const float16_t a1 = max(w1 - w3, float16_t(0.0));
+	const float16_t a2 = max(w2 - w3, float16_t(0.0));
+	const float16_t inv = float16_t(1.0) / max(a0 + a1 + a2, float16_t(1e-4)); // max: all weights can underflow to 0
+	return ClimatePick(idx, a1 * inv, a2 * inv);
 }
 
 // A layer samples the top climate pick, then blends i1/i2 in ONLY when their coverage clears this - so
@@ -343,7 +355,7 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	L.baseMat = int(u_terrainTexParams0.x);
 	L.numGround = int(u_terrainTexParams0.y);
 	L.numRock = int(u_terrainTexParams0.z);
-	L.g = ClimatePick(0, 0, 0, float16_t(0.0), float16_t(0.0));
+	L.g = ClimatePick(0u, float16_t(0.0), float16_t(0.0));
 	L.r = L.g;
 	L.beachW = float16_t(0.0);
 	L.rockW = float16_t(0.0);
@@ -433,11 +445,11 @@ float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
 	float16_t h = float16_t(0.0);
 	if (L.beachW < opaque && L.rockW < opaque)
 	{
-		h = terrainHeightGrad(uint(L.baseMat + L.g.i0), xz * sG, dx * sG, dy * sG);
+		h = terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 0), xz * sG, dx * sG, dy * sG);
 		if (L.g.n1 > blendEps)
-			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat + L.g.i1), xz * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
+			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
 		if (L.g.n2 > blendEps)
-			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat + L.g.i2), xz * sG, dx * sG, dy * sG), L.g.n2);
+			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 2), xz * sG, dx * sG, dy * sG), L.g.n2);
 	}
 	if (L.beachW > blendEps && L.rockW < opaque)
 	{
@@ -446,11 +458,11 @@ float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
 	}
 	if (L.rockW > blendEps)
 	{
-		float16_t hr = terrainHeightGrad(uint(L.baseMat + L.r.i0), xz * sR, dx * sR, dy * sR);
+		float16_t hr = terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 0), xz * sR, dx * sR, dy * sR);
 		if (L.r.n1 > blendEps)
-			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat + L.r.i1), xz * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
+			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
 		if (L.r.n2 > blendEps)
-			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat + L.r.i2), xz * sR, dx * sR, dy * sR), L.r.n2);
+			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 2), xz * sR, dx * sR, dy * sR), L.r.n2);
 		h = L.rockW >= opaque ? hr : terrainMixHeight(h, hr, L.rockW);
 	}
 	if (L.snowW > blendEps)
@@ -489,11 +501,11 @@ f16vec3 terrainReliefAt3(TerrainLayers L, vec2 xz, float e, vec2 dx, vec2 dy)
 	f16vec3 h = f16vec3(0.0);
 	if (L.beachW < opaque && L.rockW < opaque)
 	{
-		h = terrainHeightGrad3(uint(L.baseMat + L.g.i0), xz * sG, e * sG, dx * sG, dy * sG);
+		h = terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 0), xz * sG, e * sG, dx * sG, dy * sG);
 		if (L.g.n1 > blendEps)
-			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat + L.g.i1), xz * sG, e * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
+			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, e * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
 		if (L.g.n2 > blendEps)
-			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat + L.g.i2), xz * sG, e * sG, dx * sG, dy * sG), L.g.n2);
+			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 2), xz * sG, e * sG, dx * sG, dy * sG), L.g.n2);
 	}
 	if (L.beachW > blendEps && L.rockW < opaque)
 	{
@@ -502,11 +514,11 @@ f16vec3 terrainReliefAt3(TerrainLayers L, vec2 xz, float e, vec2 dx, vec2 dy)
 	}
 	if (L.rockW > blendEps)
 	{
-		f16vec3 hr = terrainHeightGrad3(uint(L.baseMat + L.r.i0), xz * sR, e * sR, dx * sR, dy * sR);
+		f16vec3 hr = terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 0), xz * sR, e * sR, dx * sR, dy * sR);
 		if (L.r.n1 > blendEps)
-			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat + L.r.i1), xz * sR, e * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
+			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, e * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
 		if (L.r.n2 > blendEps)
-			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat + L.r.i2), xz * sR, e * sR, dx * sR, dy * sR), L.r.n2);
+			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 2), xz * sR, e * sR, dx * sR, dy * sR), L.r.n2);
 		h = L.rockW >= opaque ? hr : terrainMixHeight3(h, hr, L.rockW);
 	}
 	if (L.snowW > blendEps)
@@ -729,11 +741,11 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	if (beachW < opaque && rockW < opaque)
 	{
 		const ClimatePick g = L.g;
-		surf = sampleTerrainXZ(uint(baseMat + g.i0), uvGround, geoNh);
+		surf = sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 0), uvGround, geoNh);
 		if (g.n1 > blendEps)
-			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat + g.i1), uvGround, geoNh), g.n1 / max(float16_t(1.0) - g.n2, float16_t(1e-4)));
+			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 1), uvGround, geoNh), g.n1 / max(float16_t(1.0) - g.n2, float16_t(1e-4)));
 		if (g.n2 > blendEps)
-			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat + g.i2), uvGround, geoNh), g.n2);
+			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 2), uvGround, geoNh), g.n2);
 	}
 	else
 		surf = TerrainSample(f16vec3(0.0), geoNh, float16_t(0.9), float16_t(0.0), float16_t(1.0), float16_t(0.0));
@@ -752,11 +764,11 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	if (rockW > blendEps)
 	{
 		const ClimatePick r = L.r;
-		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat + r.i0), texPos, geoNh, u_terrainTexParams1.y);
+		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), texPos, geoNh, u_terrainTexParams1.y);
 		if (r.n1 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i1), texPos, geoNh, u_terrainTexParams1.y), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), texPos, geoNh, u_terrainTexParams1.y), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
 		if (r.n2 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat + r.i2), texPos, geoNh, u_terrainTexParams1.y), r.n2);
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), texPos, geoNh, u_terrainTexParams1.y), r.n2);
 		if (rockW >= opaque)
 			surf = rock;
 		else

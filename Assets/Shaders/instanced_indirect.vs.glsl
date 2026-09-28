@@ -38,6 +38,9 @@ layout (location = 4) in uint inst_idx;
 
 // Packed into 4 locations (was 6: a full mat3 TBN + a separate uv): fewer ISBE / TRAM slots per vertex.
 // The fragment shader rebuilds the bitangent from N, T and the sign.
+// The world position stays INTERPOLATED: rebuilding it in the fragment shader from gl_FragCoord + the depth saved
+// 3 inputs (TRAM), but an interpolant costs no register until it is read, while the rebuilt position stayed live
+// across the whole lit core - at its 72-register ceiling the lit FS spill went 16 -> 64 B, and it measured slower.
 layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
 layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
 layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign

@@ -5,6 +5,7 @@
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_ray_query : enable
+#extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
 // FFT ocean surface shading (EPipelineIndex::Ocean). The vertex shader passed the undisplaced world XZ
 // in in_uv; the gradient maps rebuild a per-pixel wave normal + fold Jacobian, then: Fresnel split

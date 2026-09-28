@@ -602,6 +602,12 @@ instead of only the camera.
   exactly 0 on a still instance (the fragment then writes 0), small, and computed as a DIFFERENCE of the two
   transforms' terms (the translations cancel first), so it keeps its precision far from the origin. The
   fragment adds the camera through `u_reprojClip` and the object through `u_prevMvp`'s linear part only.
+* **The delta costs the lit FS 3 inputs (17 -> 20, measured 2026-09-28; registers unchanged at 72 / 16 B).**
+  Tried and REVERTED: rebuilding the world position in the FS from `gl_FragCoord` + the depth to win them back
+  (20 -> 17). An interpolant costs no register until it is read (it is re-interpolated where used), but the
+  rebuilt position stayed live across the whole lit core: spill 16 -> 64 B (LitMasked 32 -> 64 B), Static
+  meshes 1.548 -> 1.563 / 1.576 ms. Nsight (the same day): the pass is occupancy-bound - PS warp launch
+  stalled on registers 34 %, TRAM 17 %, ISBE 16 % of cycles, 9 % of the pixel warp slots active.
 * **Last frame's instance transform** (`instanced_indirect.cs.glsl` `prevInstanceTransform`, into the
   cull's `OutMeshInstance`, now 64 B): after the main cull the primary copies this slot's node transforms +
   pass masks into ONE device-local previous set (`InstanceStream::recordPrevCopy`; the other slot cannot
@@ -1065,7 +1071,7 @@ Scene opaque, nearly all with 0 instances.
 
 * Right after each cull's dispatch, ONE workgroup (1024 threads, subgroup ballots) moves the entries with
   `instanceCount > 0 && indexCount > 0` to the front of the SAME buffer and writes one count per list:
-  main cull `[0]` opaque, `[1]` transparent, `[2]` tess ground, `[3]` tess overlay; shadow / rain cull one
+  main cull `[0]` opaque, `[1]` transparent, `[2]` tess ground, `[3]` terrain film; shadow / rain cull one
   count. The DGC executes take them as `sequenceCountAddress`, the tess draws as the `countBuffer`.
 * **Slot order is kept**, so it is the same every frame: the transparent list is not depth sorted, and a
   per-frame order change would flicker its overlaps. That is why it is one workgroup and not a global
@@ -1367,16 +1373,18 @@ the sand, so the two can never disagree.
   gone, instead of alpha-fading. The slope drain only thins the wetness, and a wet enough slope still
   filled its relief. The live-ocean part of the film is NOT slope-limited. Clamped to 1: the level is
   a height INSIDE the relief, and an unclamped one lifts the film off the ground.
-* **The SURFACE** is the tessellated overlay's own geometry (`terrainFilmLevel`, `terrain_tess.tes.glsl`):
-  it displaces to `max(relief, level, live ocean surface)`, all in the relief band. A pool's surface is flat
-  across a crevice, and at the waterline the film rides the ocean's own live displaced surface (the baked
-  water level + `underwaterLiveWaveY`), so the water continues onto the sand instead of ending at the ocean
-  mesh's hard intersection with it. Capped at the relief top - above that the ocean draws its own surface and
-  a film lifted to the same height would z-fight it. **So the tessellated overlay variant does NOT depth-test
-  EQUAL** (it cannot, having its own geometry): it takes the ordinary reversed-Z test, which also hides it
-  wherever it lands under the ground. The untessellated overlay is unchanged (EQUAL, the ground's vertices).
-  This is what `PipelineVariant::tessEvalShader` (a per-variant evaluation-stage override) exists for, and
-  why the wetness clipmap (18), the ocean maps (7) and the terrain data (19) are bound to that stage too.
+* **The SURFACE: the film is NEVER tessellated** (a user decision: it follows the water level, not the
+  relief). The terrain VS under `TERRAIN_OVERLAY_PASS` lifts each vertex along the normal to
+  `max(level, live ocean surface)` in the relief band (`terrainFilmLevel`), inside the tessellation range
+  only, with the TES's own distance fade and slope gate and the GROUND relief depth (the rock's is a
+  per-pixel coverage). A pool's surface is flat across a crevice, and at the waterline the film rides the
+  ocean's own live displaced surface (the baked water level + `underwaterLiveWaveY`). Capped at the relief top
+  - above that the ocean draws its own surface and a film lifted to the same height would z-fight it.
+  Elsewhere (and with tessellation off) there is no lift. **Depth test GREATER_OR_EQUAL**
+  (`PipelineVariant::depthGreaterOrEqual`): with no lift the film is bit-identical to the flat ground
+  (`invariant gl_Position`), and the displaced ground hides it where it stands higher. The VS hands the
+  mesh point on (`out_meshPos`, location 3): the film FS lights and measures the relief from it. The wetness
+  clipmap (18), the ocean maps (7) and the terrain data (19) are bound to the vertex stage for this.
 * **The COVERAGE** is how much water stands over a pixel: `(level - relief height) x relief depth` METRES
   (or the live ocean over the ground where deeper, see the hand-over below), faded over the last "Edge
   fade (m)". The film therefore always dies exactly where
@@ -1450,9 +1458,10 @@ the sand, so the two can never disagree.
 * **The HAND-OVER to the ocean** (two tweaks, so the seam is neither the film's nor the ocean's hard edge):
   * "Ocean blend (m)" (`u_terrainWetParams5.x`): `aboveLive` fades from 1 to 0 over this much LIVE water
     over the GROUND (`g_liveDepthBelow` at the tested point + that point's height over the relief ground).
-    The tessellated film now draws BEFORE the ocean (below), so the ocean covers it and only its fade band
-    shows the film. The far (untessellated) film still draws after the ocean. There, and in the ocean's
-    fade band, the film must be gone before its surface sinks under the ocean's. The old gate (a 10 cm
+    The film draws from its OWN list BEFORE the transparent execute (below), so the ocean always covers it
+    and only the ocean's fade band shows the film. (In the transparent sequence, the order of film and
+    ocean was undefined: where the film drew after the ocean, the ocean's depth cut it - a seam.) The film
+    must still be gone before its surface sinks under the ocean's. The old gate (a 10 cm
     step at "Ocean margin") let the film run over the whole shallow band in a different tone, then the
     depth test cut it with a hard edge. Keep the blend under the relief depth.
   * The film's coverage depth is `max(pool depth, live water over the ground)`. So the film always covers
@@ -1462,8 +1471,8 @@ the sand, so the two can never disagree.
     over this much water column, so its mesh no longer ends in a hard line where it cuts the ground; the
     film under it carries the water. A real blend: the Ocean variant composites DUAL-SOURCE
     (out = ocean x a + scene x (1 - a)), and **the cull puts ocean instances in the TRANSPARENT sequence** so
-    they draw after the ground: order = opaque execute → tess ground → tess film → transparent execute
-    (ocean, far films, blended meshes). The ALPHA blends too (`PipelineVariant::dualSourceAlpha`):
+    they draw after the ground: order = opaque execute → tess ground → film → transparent execute (ocean,
+    blended meshes). The ALPHA blends too (`PipelineVariant::dualSourceAlpha`):
     out.a = 0 + dst.a x (a > 0.5 ? 0 : 1), the TAA ocean flag where the ocean is most of the pixel.
     Top side only; a fully faded pixel returns before the shading. The band is an ease-out,
     cover = 1 - (1 - t)^2 with t = column / fade: always 0 at the bottom (the mesh edge stays hidden) and
@@ -1502,10 +1511,8 @@ the sand, so the two can never disagree.
     cycle apart and crossfaded by a triangle, so neither phase's reset shows. The finest cascade's
     phase 1 is one slope-only tap after the cascade loop. The moments and the Jacobian (shore foam,
     turbulence) do not flow.
-  * **TESSELLATED film only.** Any second-phase tap cost the untessellated film 16 B (56/48 -> 56/64), in
-    the loop or after it. That variant draws the far terrain past the tessellation range, where flowing
-    ripples do not read, so its flow span is 0 and folds away. The tessellated film stays 64/16. With
-    tessellation off, the film does not flow.
+  * **On the whole film** since the film is one untessellated variant. When only the tessellated film
+    had it, a second-phase tap cost the untessellated film 16 B (56/48 -> 56/64); not measured since.
 * **The LOOK** is the ocean's own (`terrainFilmSurface` / `terrainFilmShade`, below): "Waviness",
   "Normal scale", "Wind ripples". The film's Beer-Lambert TINT runs on the SAME water depth as the
   coverage - a puddle deepens toward its middle - instead of a fixed "virtual depth" tweak.
@@ -1523,23 +1530,23 @@ the sand, so the two can never disagree.
   * **It cannot live in the DGC execution set.** Every pipeline in an indirect execution set must have the
     initial pipeline's shader stages (VUID-vkUpdateIndirectExecutionSetPipelineEXT-11152), plus identical
     static state and fragment outputs. So `StaticMeshGraphicsPipeline` owns a second `GraphicsPipeline`,
-    `m_terrainTessPipeline` (variant 0 ground, 1 overlay), built by `buildTerrainTessLayout` from the main
+    `m_terrainTessPipeline` (the ground only; the film is never tessellated), built by `buildTerrainTessLayout` from the main
     layout: the same bindings (identically defined set layout, so the SAME descriptor set binds), vertex
     input, push ranges and baked fragment defines. `indirectBindable = false`.
   * **Distance routing (the cull):** only a chunk whose bounding sphere reaches inside "Fade end" (+1 m for the
     VR eyes) goes to the tess draws; a chunk wholly past it is the same surface (edge factor 1, no
-    displacement) and takes the plain DGC path and the plain overlay. Nsight showed the geometry stages
+    displacement) and takes the plain DGC path. Nsight showed the geometry stages
     launch-stalled on ISBE 31% of Static meshes while every chunk out to ~33 km ran them. Measured in the
     sandbox view: 1.559 → 1.552 ms, inside the noise. Relies on ONE instance per terrain mesh (one
     `RenderMesh` + node per chunk): the DGC entry is per mesh, the routing per instance.
   * **Routing (the cull):** with tessellation on, a `TerrainLit` instance still allocates its slot in the
     DGC sequence (`atomicAdd`), but that sequence draws `indexCount = 0`. The real draw goes to
-    `out_terrainTessCommands` (binding 16, `atomicMax(idx + 1)` like the overlay), and the overlay goes to
-    binding 17 instead of the transparent sequence. Same 24 B per-mesh-slot layout.
+    `out_terrainTessCommands` (binding 16, `atomicMax(idx + 1)` like the film). Same 24 B per-mesh-slot
+    layout.
   * **Draws:** `record()` draws them with `drawIndexedIndirectCount` (offset 4 skips `pipelineIndex`, stride
     24) between the opaque and the transparent executes, then rebinds everything (a generated-commands
-    execute leaves the bound state undefined). The counts are the compacted ones (draw counts [2] / [3], see
-    Draw-list compaction); with tessellation off the cull routes nothing there, so the recorded draws walk
+    execute leaves the bound state undefined). The count is the compacted one (draw count [2], see
+    Draw-list compaction); with tessellation off the cull routes nothing there, so the recorded draw walks
     nothing.
   * **Shaders:** `instanced_indirect_terrain.vs.glsl` with `TERRAIN_TESS` hands on control points (the baked
     fields still per vertex). `terrain_tess.tcs.glsl` computes an edge factor from the edge's two end points
@@ -1585,8 +1592,7 @@ the sand, so the two can never disagree.
   * **Crack-free vertices:** a vertex on an edge interpolates its two corners in a fixed (lexicographic)
     order, and a corner is the control point itself. The height mip footprint is a function of the position
     only (the pixel size at that distance), not of the patch.
-  * One VS/TCS/TES module serves both variants, with `invariant gl_Position`: the overlay's EQUAL depth test
-    needs the positions bit-identical. **No `precise`**: the engine's glslang crashes (access violation in
+  * **No `precise`**: the engine's glslang crashes (access violation in
     `PropagateNoContraction`) on it, although the SDK's glslc accepts it.
   * **Not tessellated:** the shadow map (a user decision: near relief casts the flat mesh's shadow), the
     TLAS, the collider.
@@ -1604,11 +1610,17 @@ the sand, so the two can never disagree.
   variant (GPU idle + shader reload).
   **The surface-water film is the TERRAIN OVERLAY pass** (`EPipelineIndex::TerrainOverlay`, variant 11):
   the terrain chunks overlapping the wetness clipmap drawn a SECOND time over the ground - the main cull
-  (`instanced_indirect.cs.glsl`) emits it for `TerrainLit` instances into the mesh's otherwise unused
-  TRANSPARENT sequence (after every opaque draw, same instance list, count raised with `atomicMax` so every
-  overlapping instance is inside the drawn range). The terrain VS/FS compiled with `TERRAIN_OVERLAY_PASS`:
-  the VS lifts the rasterized surface 2 cm along its normal (no depth fight; the FS still shades the ground
-  point), depth test on / write off, `early_fragment_tests`, uncovered pixels discard, and the FS composites
+  (`instanced_indirect.cs.glsl`) emits it for `TerrainLit` instances into its OWN list (binding 17, draw count
+  [3]; same instance list, count raised with `atomicMax` so every overlapping instance is inside the drawn
+  range). `record()` draws it with `drawIndexedIndirectCount` and variant 11 bound normally (it stays in the
+  transparent execution set but is never routed there), after the tessellated ground and BEFORE the
+  transparent execute, so the ocean always blends over it. **The film has its own FS, `terrain_film.fs.glsl`**; the
+  part it shares with the ground's `instanced_indirect_terrain.fs.glsl` (the wetness, the mirror sky, the
+  splat include, `terrainFields`, `terrainWetness`) is `terrain_common.inc.glsl`. The film is NEVER
+  tessellated (also over tessellated chunks): the terrain VS compiled with `TERRAIN_OVERLAY_PASS` lifts it
+  to its water level (see "The SURFACE" above). The pipeline's terrain define loops (lit debug, `LIT_RT_*`,
+  `TERRAIN_POM`) match both FS paths (`isTerrainFragment`). Depth test GREATER_OR_EQUAL / write off,
+  `early_fragment_tests`, uncovered pixels discard, and the FS composites
   DUAL-SOURCE (`PipelineVariant::dualSourceBlend`: out = K + ground * factor per channel, the film being
   linear in the ground colour) - it never reads the scene colour. Both passes read the same mask
   (`terrainWetMask`). The overlay resolves its own sun visibility: ONE hard shadow tap (one ray with the RT
@@ -1761,6 +1773,35 @@ calls `reloadShaders()`.
   (lit, terrain, ocean) - a shader that declares fewer fields reads with the wrong stride.
 * `motion_vector.inc.glsl`: the fragment side of the motion vectors (`fragPrevClip`, `motionVector`);
   fragment shaders only (`gl_FragCoord`). The readers' side is in shared.inc.glsl (`prevScreenUVMotion`).
+* **THE SUN SHADOW FIRST** (`SUN_SHADOW_FIRST`: the lit FS, instanced_indirect.fs.glsl, and the terrain GROUND,
+  instanced_indirect_terrain.fs.glsl - not the film, terrain_film.fs.glsl, which has its own hard tap). `sunShadowVisibility`
+  (the shadow + the terrain march + the eclipse + the clouds) is split out of `doSunLight`; these shaders call it
+  at the top of main (LitMasked: right after its discard), before the material, from the GEOMETRIC normal (the
+  lit mesh normal; the terrain's smooth mesh normal `coverN`, also when tessellated: the shadow is evaluated at the
+  flat mesh, which the shadow map and the TLAS hold, and the displaced faces turned away from the sun are gated
+  by `reliefSunGate`), and
+  `doSunLight` reads `g_sunShadowFirst`. So a normal map never bends the shadow's offset; `doSunLight`'s facing
+  test on the shading normal still applies. The shadow search is the lit FS's register peak (Nsight live
+  registers: 70 in `pcssCascade`, with the whole surface live across it). Measured 2026-09-28: lit FS 72/16 ->
+  **64/48**; game mode (64 units) Static meshes 0.281/0.284 -> 0.257/0.263 ms, GPU frame 1.553/1.562 ->
+  1.508/1.515. Terrain: speed-neutral (#8 72/16 either way, tessellated ground 64/48 -> 72/16) - there it is a
+  quality choice. The same day, rebuilding the world position in the lit FS instead of interpolating it was tried
+  and reverted (see "Motion vectors"). Later the same day: the terrain ground's shadow moved BEFORE
+  `terrainLayers` (so the layers and the tessellated pixel normal are not live across it), and `V` moved down to
+  just before `computeLitColor` (Nsight: 69 live at the tessellated ground's `terrainLayers` call). Also
+  `ClimatePick` (terrain_splat.inc.glsl) packs its three indices into one uint (8 bits each), and `pickClimate`
+  keeps its four running weights in HALF (user-checked: no visible artifacts). Together: both ground variants
+  72 -> 64 regs (next item).
+* **The terrain ground FS is 64 regs** since 2026-09-28 (pipeline stats): untessellated #8 72/16 -> **64/32**,
+  tessellated 72/16 -> **64/48**. From three changes measured together: the shadow before `terrainLayers` (from
+  `coverN`), `V` computed just before `computeLitColor`, and `ClimatePick`'s packed indices + half `pickClimate`
+  weights (see "SUN SHADOW FIRST" above). The film (#11, one untessellated variant, flow on everywhere) is 56/48.
+  The frame time is not measured yet. Before that, 64 LIVE at most yet 72 allocated: the step needed a peak a
+  few registers lower, not a different place. Tried earlier the same day, no change to #8: the shadow first (above; kept for its quality), `terrainFbm` not unrolled, and the wet
+  section's two noises (drying fBm, glints) hoisted above the splat (reverted). **Kept: `terrainFbm` is
+  `[[dont_unroll]]`** (terrain_splat.inc.glsl; its includers enable GL_EXT_control_flow_attributes): unrolled,
+  the 12 corner hashes overlapped - the tessellated terrain's TES dropped 70 -> 49 registers with it (the
+  then tessellated film FS 64/16 -> 56/48; everything else unchanged. The film is no longer tessellated).
 * **Only `EPipelineIndex::LitMasked` discards** (the lit fragment compiled with `ALPHA_MASK`). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is
   every opaque pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque`

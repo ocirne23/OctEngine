@@ -56,12 +56,14 @@ void IndirectCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDraws");
         perFrame.outTransparentIndirectCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 9
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTransparent");
-        // The tessellated terrain's ground + overlay: same per-mesh-slot layout, drawn by plain indexed
-        // indirect draws (a tess pipeline cannot join the DGC execution set - its stages differ).
+        // The tessellated terrain's ground: same per-mesh-slot layout, drawn by plain indexed indirect draws (a
+        // tess pipeline cannot join the DGC execution set - its stages differ).
         perFrame.outTerrainTessCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 16
             usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainTess");
-        perFrame.outTerrainTessOverlayCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 17
-            usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainTessOverlay");
+        // The terrain film: its own list, drawn with plain indexed indirect draws BEFORE the transparent execute,
+        // so the ocean always blends over it (in the transparent sequence their order was undefined).
+        perFrame.outTerrainFilmCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 17
+            usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsTerrainFilm");
     }
 }
 
@@ -146,8 +148,8 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
-    // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16, 17 the tessellated terrain's
-    // ground + overlay sequences; 18, 19 last frame's node transforms + pass masks (the motion vectors).
+    // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
+    // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors).
     for (uint32 binding = 11; binding <= 19; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
@@ -345,13 +347,13 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                 }
             }
         },
-        DescriptorSetUpdateInfo { // OutTerrainTessOverlayCommandBuffer
+        DescriptorSetUpdateInfo { // OutTerrainFilmCommandBuffer
             .binding = 17,
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = {
                 vk::DescriptorBufferInfo {
-                    .buffer = frameData.outTerrainTessOverlayCommandBuffer.getBuffer(),
-                    .range = frameData.outTerrainTessOverlayCommandBuffer.getSize(),
+                    .buffer = frameData.outTerrainFilmCommandBuffer.getBuffer(),
+                    .range = frameData.outTerrainFilmCommandBuffer.getSize(),
                 }
             }
         },
@@ -389,7 +391,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.fillBuffer(frameData.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // opaque
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
         vkCommandBuffer.fillBuffer(frameData.outTerrainTessCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
-        vkCommandBuffer.fillBuffer(frameData.outTerrainTessOverlayCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
+        vkCommandBuffer.fillBuffer(frameData.outTerrainFilmCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         {
             vk::MemoryBarrier2 memoryBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -403,7 +405,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.dispatchIndirect(frameData.inIndirectCommandBuffer.getBuffer(), 0);
 
         Buffer* const lists[] = { &frameData.outIndirectCommandBuffer, &frameData.outTransparentIndirectCommandBuffer,
-            &frameData.outTerrainTessCommandBuffer, &frameData.outTerrainTessOverlayCommandBuffer };
+            &frameData.outTerrainTessCommandBuffer, &frameData.outTerrainFilmCommandBuffer };
         m_compact.record(vkCommandBuffer, recordParams.meshCountBuffer, lists, frameData.drawCountBuffer);
 
         {

@@ -185,18 +185,11 @@ void resolveLiveDepth(vec3 worldPos)
 	g_liveWaterLevel = localWaterLevel;
 }
 
-vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
+// The sun's visibility at worldPos: the shadow (PCSS or the RT ray), the long-range terrain march, the eclipse and
+// the clouds. N = the normal the shadow's offset follows.
+float sunShadowVisibility(vec3 worldPos, vec3 N)
 {
-	const vec3 N = vec3(Nh); // the facing test and the shadow's normal offset
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
-	if (dot(N, L) <= 0.0)
-		return vec3(0.0);
-	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's
-	// film gate) resolves it itself before computeLitColor; here it is a no-op then, and other lit
-	// materials keep paying the water-level fetch only on sun-facing pixels.
-	resolveLiveDepth(worldPos);
-	const float depthBelow = g_liveDepthBelow;
-	const float localWaterLevel = g_liveWaterLevel;
 	// BAKED (LIT_RT_SUN_SHADOW, StaticMeshGraphicsPipeline): only the active path is compiled, so the
 	// registers are allocated for one of the PCSS search and the ray-query loop, not for the larger one.
 #if LIT_RT_SUN_SHADOW
@@ -221,10 +214,38 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 			visibility = min(visibility, mix(1.0, terrainVis, fadeIn));
 		}
 	}
-	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
 	visibility *= u_eclipseParams.x;
 	if (visibility > 0.0) // in full shadow the cloud lookup (one or two fetches) changes nothing
 		visibility *= cloudSunTransmittance(worldPos);
+	return visibility;
+}
+
+// SUN_SHADOW_FIRST (the lit FS and the terrain ground define it): the includer evaluates sunShadowVisibility
+// itself at the TOP of main, from the GEOMETRIC normal, before it reads the material, and stores it here. The
+// shadow search is the register peak (Nsight, 2026-09-28: 70 live in pcssCascade), and there nothing of the
+// surface is live yet.
+#ifdef SUN_SHADOW_FIRST
+float g_sunShadowFirst = 0.0;
+#endif
+
+vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
+{
+	const vec3 N = vec3(Nh); // the facing test (and, without SUN_SHADOW_FIRST, the shadow's normal offset)
+	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
+	if (dot(N, L) <= 0.0)
+		return vec3(0.0);
+	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's
+	// film gate) resolves it itself before computeLitColor; here it is a no-op then, and other lit
+	// materials keep paying the water-level fetch only on sun-facing pixels.
+	resolveLiveDepth(worldPos);
+	const float depthBelow = g_liveDepthBelow;
+	const float localWaterLevel = g_liveWaterLevel;
+#ifdef SUN_SHADOW_FIRST
+	const float visibility = g_sunShadowFirst;
+#else
+	const float visibility = sunShadowVisibility(worldPos, N);
+#endif
+	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
 	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption

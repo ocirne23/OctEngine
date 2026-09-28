@@ -346,7 +346,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         // Per-variant blend/depth/raster state (mutated in place; the create info points at these structs).
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;
         pipelineDepthStencilStateCreateInfo.depthWriteEnable = variant.depthWrite ? vk::True : vk::False;
-        pipelineDepthStencilStateCreateInfo.depthCompareOp = variant.depthEqual ? vk::CompareOp::eEqual : layout.depthCompareOp;
+        pipelineDepthStencilStateCreateInfo.depthCompareOp = variant.depthGreaterOrEqual ? vk::CompareOp::eGreaterOrEqual : layout.depthCompareOp;
         vk::PipelineColorBlendAttachmentState& colorBlend = blendAttachments[0];
         colorBlend.blendEnable = variant.blendEnable ? vk::True : vk::False;
         // A blended variant KEEPS the dst alpha (the opaque surface behind it owns the scene colour's

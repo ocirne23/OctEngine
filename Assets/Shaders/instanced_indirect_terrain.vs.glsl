@@ -41,13 +41,47 @@ layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal;
 layout (location = 4) in uint inst_idx;
 
-// INVARIANT: the ground and the terrain overlay (TERRAIN_OVERLAY_PASS, depth test EQUAL) are two pipelines
-// computing the same position from the same inputs - their depth must match bit for bit.
+// INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) are two
+// pipelines computing the same position from the same inputs where the film has no lift - their depth must
+// match bit for bit there.
 invariant gl_Position;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = temperature C, z = humidity, w = water level
+
+#ifdef TERRAIN_OVERLAY_PASS
+// The film: out_pos is LIFTED to its water level, this is the mesh point under it - what the film FS lights and
+// measures the relief from (the shadow map and the TLAS hold the flat mesh).
+layout (location = 3) out vec3 out_meshPos;
+
+#define TERRAIN_WET_BINDING 18
+#include "terrain_wetness.inc.glsl"  // the film's water level: terrainWetnessAt + terrainPoolLevel
+#define UNDERWATER_OCEAN_BINDING 7
+#include "underwater_light.inc.glsl" // underwaterLiveWaveY: the live displaced ocean surface
+
+// The film's surface, as a height in the relief band (0 = its low points, 0.5 = the mesh, 1 = its top): the
+// WATER LEVEL the local wetness fills the relief to (rain puddles), or the LIVE OCEAN surface where that
+// stands higher - the waterline then continues onto the sand instead of ending at the ocean mesh's
+// intersection with it. Capped at the relief top: past that the ocean's own surface is what is drawn, and a
+// film lifted to the same height would z-fight it.
+// normalY = the smooth mesh normal's y (the FS's coverN: the pool level sinks on slopes).
+float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reliefDepth)
+{
+    float level = terrainPoolLevel(terrainWetnessAt(meshPos.xz), normalY);
+    if (terrainHeightMapPresent())
+    {
+        float depthBelow = waterLevel - meshPos.y; // calm column over this point (negative on dry land)
+        // The swash band rides the live displaced surface (the lit core's gate; underwater_light.inc.glsl).
+        // Ground deeper than the reach is under water at any wave phase and skips the wave taps.
+        const float reach = u_oceanParams7.w;
+        if (reach > 0.0 && abs(depthBelow) < reach)
+            depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
+        level = max(level, clamp(0.5 + depthBelow / max(reliefDepth, 1e-3), 0.0, 1.0));
+    }
+    return level;
+}
+#endif
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -88,9 +122,29 @@ void main()
     }
     out_terrainFields = vec4(altitude, temperature, humidity, waterLevel);
 
+#ifdef TERRAIN_OVERLAY_PASS
+    // THE FILM (never tessellated): inside the tessellation range, where the ground is displaced by the relief
+    // (terrain_tess.tes.glsl: the same distance fade and slope gate), lifted along the normal to its water
+    // level in the relief band - a pool's surface over the crevices, the rock standing out of it (the ground's
+    // depth hides the film there). Elsewhere, and with tessellation off, no lift: it lies on the flat ground,
+    // bit-identical (GREATER_OR_EQUAL). Per vertex: it does not follow the ground's relief, only its water
+    // level. The ground relief depth only (the rock's is a per-pixel coverage the VS does not have).
+    out_meshPos = out_pos;
+    if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
+    {
+        const vec3 N = normalize(out_normal);
+        const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
+        const float dist = distance(out_pos, u_viewPos);
+        if (dist < fadeEnd)
+        {
+            const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+            const float depth = u_terrainTessParams1.z * (1.0 - pow(t, u_terrainTessParams0.w)) * smoothstep(0.35, 0.6, N.y);
+            if (depth > 1e-4)
+                out_pos += N * ((terrainFilmLevel(out_meshPos, N.y, waterLevel, depth) - 0.5) * depth);
+        }
+    }
+#endif
 #ifndef TERRAIN_TESS
-    // The terrain overlay (TERRAIN_OVERLAY_PASS) rasterizes the SAME surface again and depth-tests EQUAL
-    // against it: no lift (a lift along the normal put the overlay in front of water shallower than the lift).
     gl_Position = u_mvp * vec4(out_pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #endif

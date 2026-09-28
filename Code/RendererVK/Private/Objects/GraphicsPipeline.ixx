@@ -41,9 +41,10 @@ export struct PipelineVariant
     // Gizmo/overlay variants disable the depth test so they draw on top of everything regardless
     // of scene depth; everything else keeps the layout's depthTestEnable.
     bool depthTest = true;
-    // Depth test EQUAL instead of the layout's compare: a variant that re-draws a surface already in the depth
-    // buffer (the terrain overlay) - its VS must produce bit-identical depth (`invariant gl_Position`).
-    bool depthEqual = false;
+    // Depth test GREATER_OR_EQUAL (reversed-Z) instead of the layout's strict GREATER: a variant that can draw
+    // exactly ON a surface already in the depth buffer (the terrain film where it has no lift) - its VS must
+    // then produce bit-identical depth (`invariant gl_Position`).
+    bool depthGreaterOrEqual = false;
     // With GraphicsPipelineLayout::motionTarget: this variant writes the motion target (fragment location 1).
     // Off = masked: the pixel keeps what is there (0 = no object motion, or the opaque surface behind a blend).
     bool writeMotion = false;

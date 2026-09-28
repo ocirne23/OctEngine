@@ -126,16 +126,18 @@ layout (binding = 15, std430) buffer OutLodStatsBuffer
 #ifndef TERRAIN_TESS_ROUTE
 #define TERRAIN_TESS_ROUTE 0
 #endif
-// The TESSELLATED terrain (TERRAIN_TESS_ROUTE): its ground and overlay draws, same per-mesh-slot layout,
-// consumed by plain vkCmdDrawIndexedIndirectCount (the pipelineIndex word is skipped) - a tess pipeline
-// cannot join the DGC execution set, whose pipelines must all share the vertex + fragment stages.
+// The TESSELLATED terrain ground (TERRAIN_TESS_ROUTE), same per-mesh-slot layout, consumed by plain
+// vkCmdDrawIndexedIndirectCount (the pipelineIndex word is skipped) - a tess pipeline cannot join the DGC
+// execution set, whose pipelines must all share the vertex + fragment stages. (The film is never tessellated.)
 layout (binding = 16, std430) buffer OutTerrainTessCommandBuffer
 {
     OutIndirectCommand out_terrainTessCommands[];
 };
-layout (binding = 17, std430) buffer OutTerrainTessOverlayCommandBuffer
+// The terrain FILM (EPipelineIndex::TerrainOverlay), same layout: its own list, drawn with plain indirect draws
+// BEFORE the transparent execute, so the ocean always blends over it.
+layout (binding = 17, std430) buffer OutTerrainFilmCommandBuffer
 {
-    OutIndirectCommand out_terrainTessOverlayCommands[];
+    OutIndirectCommand out_terrainFilmCommands[];
 };
 // LAST frame's node transforms + stamped pass masks (InstanceStream::recordPrevCopy): the motion vectors.
 layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
@@ -327,30 +329,22 @@ void main()
                 out_terrainTessCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_terrainTessCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_terrainTessCommands[meshIdx].firstInstance = firstInstance;
-                if (terrainOverlayCovers(centerPos, radius))
-                {
-                    atomicMax(out_terrainTessOverlayCommands[meshIdx].instanceCount, idx + 1u);
-                    out_terrainTessOverlayCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
-                    out_terrainTessOverlayCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
-                    out_terrainTessOverlayCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
-                    out_terrainTessOverlayCommands[meshIdx].firstInstance = firstInstance;
-                }
             }
             // The TERRAIN OVERLAY (EPipelineIndex::TerrainOverlay: the surface-water film, later more terrain
-            // surface layers): the same chunk drawn again over the ground, as the mesh's TRANSPARENT sequence
-            // (a terrain mesh has no transparent instances, so it is free, and it executes after every opaque
-            // draw) over the SAME instance list. Only for chunks overlapping the wetness clipmap. The count is
+            // surface layers): the same chunk drawn again over the ground, from its OWN list (binding 17, drawn
+            // after the tessellated ground and before the transparent execute - so the ocean blends over it)
+            // over the SAME instance list. Only for chunks overlapping the wetness clipmap. The count is
             // raised to this instance's slot + 1, so every overlapping instance lies inside the drawn range
             // (a non-overlapping instance drawn along with it discards every pixel); the other fields are the
-            // same values from every writer.
-            if (!terrainTess && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
+            // same values from every writer. NEVER tessellated: also over a tessellated chunk, the film is this
+            // untessellated draw (lifted to its water level in the terrain VS, depth test GREATER_OR_EQUAL).
+            if (pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
             {
-                atomicMax(out_transparentIndirectCommands[meshIdx].instanceCount, idx + 1u);
-                out_transparentIndirectCommands[meshIdx].pipelineIndex = PIPELINE_IDX_TERRAIN_OVERLAY;
-                out_transparentIndirectCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
-                out_transparentIndirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
-                out_transparentIndirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
-                out_transparentIndirectCommands[meshIdx].firstInstance = firstInstance;
+                atomicMax(out_terrainFilmCommands[meshIdx].instanceCount, idx + 1u);
+                out_terrainFilmCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                out_terrainFilmCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                out_terrainFilmCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                out_terrainFilmCommands[meshIdx].firstInstance = firstInstance;
             }
         }
 
