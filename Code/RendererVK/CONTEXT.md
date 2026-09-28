@@ -682,7 +682,10 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     and their own march limit from the scene depth (temporal binding 7). Per dense sample: a sun march (`Light steps` over `Light distance`), three Wrenninge
     multiple-scattering octaves — octave 0 on the HG + Draine phase (Jendersie & d'Eon 2023: a fit to Mie
     scattering on water droplets; the CPU turns `Droplet size (um)` into its four parameters,
-    `u_cloudLight0`), octaves 1 and 2 ISOTROPIC (a flattened droplet phase kept ~half the energy in a g ≈ 0.66
+    `u_cloudLight0`; **the HG part's g is capped by "Forward peak limit" (0.95)**: uncapped it is the droplets'
+    diffraction peak, g ≈ 0.995 at 20 um - ~5400 / sr in a ~0.3 degree lobe, the size of the sun disc - and behind
+    thin cloud that lobe clipped to white after the exposure: the sun looked bigger and brighter behind clouds
+    than in clear sky), octaves 1 and 2 ISOTROPIC (a flattened droplet phase kept ~half the energy in a g ≈ 0.66
     forward lobe, and the side away from the sun went far too dark), a
     powder term, and an ambient from the sky map's CLEAR layer blended to a ground bounce by the height in
     the shell; the energy-conserving step integral.

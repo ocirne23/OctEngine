@@ -98,6 +98,8 @@ export struct CloudParams
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
     // Lighting
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
+    float forwardPeakLimit = 0.95f;    // cap on the fit's HG g (0.995 at 20 um: a ~0.3 degree diffraction lobe that
+                                       // saturates to a sun-sized white blob behind thin cloud); 1 = uncapped
     float multiScatter = 0.9f;        // octave attenuation of the multiple-scattering approximation (0 = single scattering)
     float ambient = 2.0f;              // sky ambient strength
     float groundAlbedo = 0.25f;        // ground bounce onto the cloud bottoms

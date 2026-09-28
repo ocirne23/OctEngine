@@ -279,9 +279,12 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
     // Scattering Function for Fog and Cloud Rendering"), valid for diameters 5 .. 50 um.
+    // The HG part's g is the droplets' DIFFRACTION peak (0.995 at 20 um: ~5400 / sr in a ~0.3 degree lobe, the size
+    // of the sun disc). Behind thin cloud it scattered so much sunlight into that lobe that the lobe clipped to
+    // white after the exposure - a bigger, brighter sun. "Forward peak limit" caps it: a wider, softer silver lining.
     {
         const float d = glm::clamp(c.dropletSize, 5.0f, 50.0f);
-        const float gHG = std::exp(-0.0990567f / (d - 1.67154f));
+        const float gHG = glm::min(std::exp(-0.0990567f / (d - 1.67154f)), glm::clamp(c.forwardPeakLimit, 0.0f, 1.0f));
         const float gD = std::exp(-2.20679f / (d + 3.91029f) - 0.428934f);
         const float alpha = std::exp(3.62489f - 8.29288f / (d + 5.52825f));
         const float wD = std::exp(-0.599085f / (d - 0.641583f) - 0.665888f);

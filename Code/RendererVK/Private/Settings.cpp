@@ -70,6 +70,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &evolveSpeed, 0.0f, 10.0f);
 
     Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &dropletSize, 5.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &forwardPeakLimit, 0.8f, 1.0f, 0.001f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &multiScatter, 0.0f, 0.95f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &ambient, 0.0f, 4.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground albedo", &groundAlbedo, 0.0f, 1.0f);
