@@ -180,18 +180,25 @@ namespace
 	{
 		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
 
-		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diff, 1 = nor, 2 = arm, 3 = disp
+		// THREE textures per material (one texture fetch fewer per splat layer than the sources' four; the fetch
+		// latency is the Static meshes range's top stall): the ARM source is split over the other two.
+		//   diffr = albedo (sRGB) + ROUGHNESS in the alpha (the ARM's G), BC3
+		//   nor   = the normal, BC5
+		//   hao   = HEIGHT (the disp's R; 0.5 = flat without a disp source) + AO (the ARM's R), BC5
+		// Metalness is dropped: terrain is never metallic, the splat uses 0.
+		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diffr, 1 = nor, 2 = hao
 		oc::vector<BakeTask> tasks;
 		for (const TerrainTexSource& src : TERRAIN_TEX_SOURCES)
 		{
-			if (!terrainTexCacheFresh(terrainTexCachePath(src, "diff"), terrainTexSrcPath(src, "diff")))
+			const oc::string arm = terrainTexSrcPath(src, "arm");
+			const oc::string diffr = terrainTexCachePath(src, "diffr");
+			if (!terrainTexCacheFresh(diffr, terrainTexSrcPath(src, "diff")) || !terrainTexCacheFresh(diffr, arm))
 				tasks.push_back({ &src, 0 });
 			if (!terrainTexCacheFresh(terrainTexCachePath(src, "nor"), terrainTexSrcPath(src, "nor_gl")))
 				tasks.push_back({ &src, 1 });
-			if (!terrainTexCacheFresh(terrainTexCachePath(src, "arm"), terrainTexSrcPath(src, "arm")))
+			const oc::string hao = terrainTexCachePath(src, "hao");
+			if (!terrainTexCacheFresh(hao, terrainTexSrcPath(src, "disp")) || !terrainTexCacheFresh(hao, arm))
 				tasks.push_back({ &src, 2 });
-			if (!terrainTexCacheFresh(terrainTexCachePath(src, "disp"), terrainTexSrcPath(src, "disp")))
-				tasks.push_back({ &src, 3 });
 		}
 		if (tasks.empty())
 			return;
@@ -206,13 +213,27 @@ namespace
 				if (stopRequested.load(oc::memory_order_relaxed))
 					return;
 				const TerrainTexSource& src = *tasks[i].src;
+				const oc::string arm = terrainTexSrcPath(src, "arm");
 				bool ok = false;
 				switch (tasks[i].map)
 				{
-				case 0: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "diff").c_str(), TextureConvert::EUsage::Color, terrainTexCachePath(src, "diff").c_str()); break;
+				case 0:
+				{
+					const oc::string diff = terrainTexSrcPath(src, "diff");
+					const TextureConvert::PackChannel channels[4] = { { diff.c_str(), 0 }, { diff.c_str(), 1 }, { diff.c_str(), 2 }, { arm.c_str(), 1 } };
+					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::ColorAlpha, terrainTexCachePath(src, "diffr").c_str());
+					break;
+				}
 				case 1: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "nor_gl").c_str(), TextureConvert::EUsage::NormalMap, terrainTexCachePath(src, "nor").c_str()); break;
-				case 2: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "arm").c_str(), TextureConvert::EUsage::Data, terrainTexCachePath(src, "arm").c_str()); break;
-				case 3: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "disp").c_str(), TextureConvert::EUsage::Height, terrainTexCachePath(src, "disp").c_str()); break;
+				case 2:
+				{
+					// The disp source is optional: without it the height channel is flat (0.5 = the mesh).
+					const oc::string disp = terrainTexSrcPath(src, "disp");
+					const bool hasDisp = FileSystem::exists(disp);
+					const TextureConvert::PackChannel channels[4] = { { hasDisp ? disp.c_str() : nullptr, 0, 128 }, { arm.c_str(), 0 }, {}, {} };
+					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::TwoChannel, terrainTexCachePath(src, "hao").c_str());
+					break;
+				}
 				}
 				if (!ok)
 					Log::warning(oc::format("Terrain: failed to bake splat texture '{}' map {}", src.stem, tasks[i].map));
@@ -411,8 +432,10 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Tessellation", "Target edge (px)", &m_texTessTargetPx, 2.0f, 64.0f, 0.5f);
 		Tweak::floatVar("Terrain/Tessellation", "Fade start (m)", &m_texTessFadeStart, 0.0f, 300.0f, 0.5f);
 		Tweak::floatVar("Terrain/Tessellation", "Fade end (m)", &m_texTessFadeEnd, 1.0f, 500.0f, 0.5f);
-		// strength = 1 - t^p across the fade band: 1 linear, 2 quadratic (holds, drops late), 0.5 square root (drops early)
-		Tweak::floatVar("Terrain/Tessellation", "Falloff exponent", &m_texTessFalloffExponent, 0.05f, 16.0f, 0.05f);
+		// Across the fade band, 1 - t^p: 1 linear, 2 quadratic (holds, drops late), 0.5 square root (drops early).
+		// SEPARATE for the subdivision (the tess factor) and the displacement height.
+		Tweak::floatVar("Terrain/Tessellation", "Factor falloff exponent", &m_texTessFalloffExponent, 0.05f, 16.0f, 0.05f);
+		Tweak::floatVar("Terrain/Tessellation", "Height falloff exponent", &m_texTessHeightFalloffExponent, 0.05f, 16.0f, 0.05f);
 		// Closer than this nothing moves: the subdivision and the height mip hold at this distance's values.
 		Tweak::floatVar("Terrain/Tessellation", "Freeze distance (m)", &m_texTessFreezeDistance, 0.1f, 100.0f, 0.5f);
 		Tweak::floatVar("Terrain/Tessellation", "Depth ground (m)", &m_texTessDepthGround, 0.0f, 2.0f, 0.005f);
@@ -558,6 +581,7 @@ namespace Procedural
 			.tessFadeStart = m_texTessFadeStart,
 			.tessFadeEnd = m_texTessFadeEnd,
 			.tessFalloffExponent = m_texTessFalloffExponent,
+			.tessHeightFalloffExponent = m_texTessHeightFalloffExponent,
 			.tessFreezeDistance = m_texTessFreezeDistance,
 			.tessDepthGround = m_texTessDepthGround,
 			.tessDepthRock = m_texTessDepthRock,
@@ -643,12 +667,12 @@ namespace Procedural
 	//
 	//   TEXTURES PER MATERIAL
 	//
-	//   field        -> MaterialInfo          space    channels                 fallback *
-	//   diffuseDds   -> diffuseTexIdx         sRGB     RGB albedo               white
-	//   normalDds    -> normalTexIdx          linear   tangent normal (BC5 **)  flat normal
-	//   armDds       -> metalRoughnessTexIdx  linear   R AO, G rough, B metal   AO 1, rough 0.9, metal 0
-	//   heightDds    -> terrainSplatHeightTex linear   R height (BC4)           flat (0.5): no parallax,
-	//                   (UBO, per slot)                                         linear layer blend
+	//   field        -> index (UBO, per slot)  space    channels                        fallback *
+	//   diffuseDds   -> terrainSplatTex        sRGB     RGB albedo, A roughness (BC3)  white, rough 0.9
+	//   normalDds    -> terrainSplatTex        linear   tangent normal (BC5 **)        flat normal
+	//   heightDds    -> terrainSplatHeightTex  linear   R height, G AO (BC5)           flat (0.5) + AO 1: no
+	//                                                                                  parallax, linear blend
+	//   Metalness is always 0 (terrain is never metallic).
 	//
 	//   *  on an empty path or a failed upload
 	//   ** a BC5 file sets MATERIAL_FLAG_BC5_NORMAL; the shader rebuilds Z
@@ -675,12 +699,12 @@ namespace Procedural
 		auto tryBuildMat = [](const TerrainTexSource& src) -> oc::optional<Renderer::TerrainSplatMaterial>
 		{
 			Renderer::TerrainSplatMaterial mat;
-			mat.diffuseDds = terrainTexCachePath(src, "diff");
+			mat.diffuseDds = terrainTexCachePath(src, "diffr");
 			mat.normalDds = terrainTexCachePath(src, "nor");
-			mat.armDds = terrainTexCachePath(src, "arm");
+			mat.heightDds = terrainTexCachePath(src, "hao");
 			mat.climate = terrainSplatClimate(src);
 			if (!FileSystem::exists(mat.diffuseDds, /*allowMainThread*/ true) || !FileSystem::exists(mat.normalDds, true)
-				|| !FileSystem::exists(mat.armDds, true))
+				|| !FileSystem::exists(mat.heightDds, true))
 			{
 				// Source images missing / bake failed: drop the entry. A ground or rock entry just leaves
 				// its climate to the neighbouring boxes; a missing beach or snow entry disables that
@@ -689,9 +713,6 @@ namespace Procedural
 				Log::warning(oc::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
 				return oc::nullopt;
 			}
-			// Optional: without it the material is flat for the parallax and the height blend.
-			if (const oc::string heightDds = terrainTexCachePath(src, "disp"); FileSystem::exists(heightDds, true))
-				mat.heightDds = heightDds;
 			return mat;
 		};
 

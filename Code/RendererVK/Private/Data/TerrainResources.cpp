@@ -47,16 +47,14 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
             if (io.isBc5Normal(idx))
                 info.flags |= RendererVKLayout::MATERIAL_FLAG_BC5_NORMAL;
         }
-        if (const uint16 idx = upload(mat.armDds, false); idx != UINT16_MAX)
-            info.metalRoughnessTexIdx = idx;
-        // MaterialInfo has no free slot: the height index rides the UBO per slot, like the climate box.
+        // MaterialInfo has no free slot: the height + AO index rides the UBO per slot, like the climate box.
         const size_t slot = materialInfos.size() - 1;
         m_splatHeightTex[slot] = upload(mat.heightDds, false);
         // The splat's texture indices ride the UBO too (terrain_splat.inc.glsl), so its texture fetches do not
-        // wait on a material-buffer load first. The materials stay registered for everyone else.
+        // wait on a material-buffer load first. The materials stay registered for everyone else (their
+        // roughness sits in the diffuse alpha, which only the splat knows: metalRoughnessTexIdx stays none).
         const uint32 bc5 = (info.flags & RendererVKLayout::MATERIAL_FLAG_BC5_NORMAL) != 0 ? 1u : 0u;
-        m_splatTex[slot] = glm::uvec2(uint32(info.diffuseTexIdx) | (uint32(info.normalTexIdx) << 16),
-            uint32(info.metalRoughnessTexIdx) | (bc5 << 16));
+        m_splatTex[slot] = glm::uvec2(uint32(info.diffuseTexIdx) | (uint32(info.normalTexIdx) << 16), bc5);
     }
 
     m_splatBaseMaterial = (int32)io.addMaterials(materialInfos);

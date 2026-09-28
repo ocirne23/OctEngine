@@ -17,10 +17,11 @@ import :BakedWorldMap;
 // ground/rock climate blend matches it against (ignored for beach/snow).
 export struct TerrainSplatMaterial
 {
-    oc::string diffuseDds;
-    oc::string normalDds;
-    oc::string armDds; // packed AO (R) / roughness (G) / metalness (B); sampled linear
-    oc::string heightDds; // optional BC4 height (R, 0..1, 1 = top): the parallax march + the height blend
+    // THREE textures per material, packed so the splat makes one fetch fewer per layer (no ARM texture):
+    oc::string diffuseDds; // sRGB albedo (RGB) + linear ROUGHNESS (A), BC3
+    oc::string normalDds;  // tangent normal, BC5 (XY)
+    oc::string heightDds;  // HEIGHT (R, 0..1, 1 = top; 0.5 = flat) + AO (G), BC5: the parallax march, the height blend
+    // Metalness is always 0 (terrain is never metallic).
     // xy = temperature range, already t01; zw = precipitation range in mm/yr. Precipitation stays in real
     // units because its divisor is a live tweak (TerrainTexTweaks::precipFullMm): buildUboTerrain
     // normalizes it every frame. The default is full width on both axes (matches any climate).
@@ -98,18 +99,20 @@ export struct TerrainTexTweaks
     // BAKED: flipping it reloads the pipelines - the cull's routing (TERRAIN_TESS_ROUTE) and whether the tess
     // pipeline is built and its draws recorded at all.
     bool  tessEnabled = true;
-    float tessMaxFactor = 16.0f;    // per edge; LOD0 is 2 m, so 16 = ~12 cm triangles
+    float tessMaxFactor = 8.0f;     // per edge; LOD0 is 2 m, so 8 = ~25 cm triangles
     float tessTargetPx = 7.0f;      // screen length of a subdivided edge: smaller costs FS helper lanes
     float tessFadeStart = 15.0f;    // m from the camera: full displacement inside
-    float tessFadeEnd = 100.0f;     // m: no displacement and no subdivision past it
-    // Shape of the fade between start and end, for the displacement AND the tess factor: strength = 1 - t^p
-    // (t = 0..1 across the band). 1 = linear, 2 = quadratic (holds, drops late), 0.5 = square root (drops early).
-    float tessFalloffExponent = 1.0f;
+    float tessFadeEnd = 75.0f;      // m: no displacement and no subdivision past it
+    // Shape of the fade between start and end: 1 - t^p (t = 0..1 across the band). 1 = linear, 2 = quadratic
+    // (holds, drops late), 0.5 = square root (drops early). SEPARATE for the tess factor and the displacement
+    // height: a factor falling off before the height leaves the displaced relief coarser (facets).
+    float tessFalloffExponent = 0.5f;       // the tess factor (TCS): drops early
+    float tessHeightFalloffExponent = 2.0f; // the displacement height (TES, the ground FS normal, the film lift, the ocean's film estimate): holds, drops late
     // Closer than this the factor and the height mip use it instead of the camera distance: the vertices and
     // their heights stop changing as the camera approaches (they swam and breathed without it).
     float tessFreezeDistance = 15.0f;
-    float tessDepthGround = 0.5f;   // m of relief (height 0..1): ground, beach, snow
-    float tessDepthRock = 0.5f;     // m
+    float tessDepthGround = 0.6f;   // m of relief (height 0..1): ground, beach, snow
+    float tessDepthRock = 0.7f;     // m
     // mm/yr that reads as humidity 1.0: the divisor for TerrainSplatMaterial::climate's precipitation.
     // Mirrors the generator's live "Terrain/V3/Precip for full humidity" tweak; if the two drift, the
     // whole climate table slides along the humidity axis.
@@ -232,7 +235,7 @@ public:
     oc::span<const uint16> getSplatTextures() const { return m_splatTextures; }
     const glm::vec4* getSplatClimate() const { return m_splatClimate; } // per slot, TerrainSplatMaterial::climate units
     const uint16* getSplatHeightTex() const { return m_splatHeightTex; } // per slot, UINT16_MAX = no height map
-    // Per slot: x = diffuse | normal << 16, y = ARM (UINT16_MAX = none) | BC5-normal bit << 16.
+    // Per slot: x = diffuse | normal << 16, y = 1 when the normal map is BC5.
     const glm::uvec2* getSplatTex() const { return m_splatTex; }
 
     // ---- The CPU-baked height/water map (fog's height base, the ocean's coarse shore fallback) ----

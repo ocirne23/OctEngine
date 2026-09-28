@@ -135,11 +135,11 @@ void main()
     {
         const vec3 N = normalize(out_normal);
         const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
-        const float dist = distance(out_pos, u_viewPos);
+        const float dist = distance(out_pos, u_views[VIEW_CENTER].viewPos.xyz); // the centre view, as the TES: both VR eyes lift the same
         if (dist < fadeEnd)
         {
             const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
-            const float depth = u_terrainTessParams1.z * (1.0 - pow(t, u_terrainTessParams0.w)) * smoothstep(0.35, 0.6, N.y);
+            const float depth = u_terrainTessParams1.z * (1.0 - pow(t, u_terrainTessParams2.y)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff
             if (depth > 1e-4)
             {
                 out_meshLift = (terrainFilmLevel(out_pos, N.y, waterLevel, depth) - 0.5) * depth;

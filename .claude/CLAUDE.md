@@ -28,6 +28,8 @@ Guidance for Claude Code when working in this repository.
 * Do not commit or push files.
 * Do not notify about App.exe linking failed due to in-use. The user knows to re-link if the linking
   failed due to an in-use executable.
+* Do not tell the user that a changed tweak default might not apply because of a saved value (a local
+  `.cfg` file). The user knows how tweak values persist.
 * Prefer to let the user test out changes, rather than looking at log output or the screen yourself.
 * **ALWAYS make file changes with the Edit/Write tools, NEVER via shell scripts** (python, sed,
   heredocs through Bash). The user reviews every change as the inline diff those tools render, and
@@ -354,7 +356,7 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 | Library | Covers |
 |---|---|
 | [App](../Code/App/CONTEXT.md) | The testbed executable: **the frame loop table**, init order, command line, main menu + lobby + chat flow, escape menu, testbed keys |
-| [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, Tweaks (Saved/Synced/overrides), `Core.GameHud`, plus the **Profiling** and **Memory** sections |
+| [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, Tweaks (Synced/overrides), `Core.GameHud`, plus the **Profiling** and **Memory** sections |
 | [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, shaders |
 | [Entity](../Code/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, the parallel update pass, **SIM LOD**, parallel spawning/destruction, World, the components, script glue, and the **Multiplayer** section |
 | [Script](../Code/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
@@ -472,5 +474,5 @@ Checked-in inputs for repeatable runs:
 
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `TerrainTex/`
-splats, the `Diffusion/<seed>/` tile cache, `tweaks.cfg`, `imgui.ini` (the editor layout),
+splats, the `Diffusion/<seed>/` tile cache, `imgui.ini` (the editor layout),
 `gamesave.txt` and `profile.txt`.

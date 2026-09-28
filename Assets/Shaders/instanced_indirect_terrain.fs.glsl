@@ -115,18 +115,20 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 {
 	strengthOut = 0.0;
-	const float dist = distance(in_meshPos, u_viewPos);
+	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
+	const float dist = distance(in_meshPos, u_views[VIEW_CENTER].viewPos.xyz);
 	const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
 	if (dist >= fadeEnd || u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0)
 		return N;
 	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
-	const float strength = (1.0 - pow(t, u_terrainTessParams0.w)) * smoothstep(0.35, 0.6, N.y);
+	const float strength = (1.0 - pow(t, u_terrainTessParams2.y)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
 	const float depth = mix(mix(u_terrainTessParams1.z, u_terrainTessParams1.w, float(L.rockW)), u_terrainTessParams1.z, float(L.snowW)) * strength;
 	if (depth <= 1e-4)
 		return N;
 	strengthOut = strength;
-	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the mvp's 3x3.
-	const float projY = length(vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]));
+	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the centre mvp's 3x3.
+	const mat4 centreMvp = u_views[VIEW_CENTER].mvp;
+	const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
 	const float e = max(max(dist, u_terrainTessParams2.x) * 2.0 * u_terrainTessParams0.z / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
 	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
 	const float invE = 1.0 / e;

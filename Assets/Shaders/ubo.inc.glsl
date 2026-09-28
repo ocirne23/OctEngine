@@ -186,7 +186,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
                             //     full breaking), z = grid radius around the scene focus (m), w = sim delta (s)
     vec4 u_oceanSpray1;     // x = breaking threshold (instant foam), y = upward kick (m/s), z = forward speed (m/s), w = spawn lead (m)
-    vec4 u_oceanSpray2;     // x = spawn height above the surface (m), yzw unused
+    vec4 u_oceanSpray2;     // x = spawn height above the surface (m), y = "Ocean/World scale" (all spray metres and
+                            //     m/s above already carry it), zw unused
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                             // 0 = no terrain mesh up - fences the ocean land cull),
                             // y = temperature lapse rate, C per WORLD metre above sea level (<= 0; pairs
@@ -225,11 +226,12 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // z = relief self-shadow strength (0 = off), w unused
     vec4 u_terrainTessParams0; // x = tessellation on (0/1: the cull routes terrain to the tess draws),
                               // y = max tess factor, z = target subdivided edge length (px),
-                              // w = fade falloff exponent p (strength = 1 - t^p across the fade band)
+                              // w = the TESS FACTOR's fade falloff exponent p (1 - t^p across the fade band)
     vec4 u_terrainTessParams1; // x = fade start (m), y = fade end (m: factor 1 and no displacement past it),
                               // z = ground/beach/snow relief depth (m), w = rock relief depth (m)
     vec4 u_terrainTessParams2; // x = freeze distance (m: closer in, the factor and the height mip use it instead
-                              // of the camera distance - nothing moves), yzw unused
+                              // of the camera distance - nothing moves), y = the displacement HEIGHT's fade
+                              // falloff exponent p (strength = 1 - t^p), zw unused
     // Terrain wetness clipmap (terrain_wetness.inc.glsl; keep in sync with RendererVKLayout::Ubo): a
     // TERRAIN_WET_RES^2 toroidal window of texels around the scene focus, lattice = integer texel index.
     // TERRAIN SURFACE WATER (keep in sync with RendererVKLayout::Ubo): ONE wetness field - rain, ocean swash,
@@ -269,10 +271,10 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".
                               // Unused for the beach/snow overlays.
-    uvec4 u_terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the BC4
-                              // height texture index, 0xFFFF = none (flat: no parallax, linear blend)
+    uvec4 u_terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the BC5
+                              // HEIGHT (R) + AO (G) texture index, 0xFFFF = none (flat, AO 1: linear blend)
     uvec4 u_terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
-                              // x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16
+                              // x = diffuse (RGB + roughness in A) | normal << 16, y = 1 when the normal is BC5
 
     // GPU mesh LOD selection (indirect + shadow cull; keep in sync with RendererVKLayout::Ubo)
     vec4 u_lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
@@ -302,6 +304,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
     vec4 u_cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
     vec4 u_cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
+    vec4 u_cloudShape4;  // x = base height variation (fraction of the shell height), yzw unused
     vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
     vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
     vec4 u_cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight

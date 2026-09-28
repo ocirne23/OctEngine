@@ -695,7 +695,8 @@ export namespace RendererVKLayout
         glm::vec4 oceanSpray1;     // x = breaking threshold (instant-foam value where spray starts), y = upward
                                    //     kick (m/s), z = forward speed along the wind (m/s), w = spawn lead ahead
                                    //     of the crest (m)
-        glm::vec4 oceanSpray2;     // x = spawn height above the surface (m), yzw unused
+        glm::vec4 oceanSpray2;     // x = spawn height above the surface (m), y = "Ocean/World scale" (all spray
+                                   //     metres and m/s above already carry it), zw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up - fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;
@@ -736,11 +737,12 @@ export namespace RendererVKLayout
                                      // z = relief self-shadow strength (0 = off), w unused
         glm::vec4 terrainTessParams0; // x = tessellation on (0/1: the cull routes terrain to the tess draws),
                                      // y = max tess factor, z = target subdivided edge length (px),
-                                     // w = fade falloff exponent p (strength = 1 - t^p across the fade band)
+                                     // w = the TESS FACTOR's fade falloff exponent p (1 - t^p across the fade band)
         glm::vec4 terrainTessParams1; // x = fade start (m), y = fade end (m: factor 1 and no displacement past
                                      // it), z = ground/beach/snow relief depth (m), w = rock relief depth (m)
         glm::vec4 terrainTessParams2; // x = freeze distance (m: closer in, the factor and the height mip use
-                                     // it instead of the camera distance - nothing moves), yzw unused
+                                     // it instead of the camera distance - nothing moves), y = the displacement
+                                     // HEIGHT's fade falloff exponent p (strength = 1 - t^p), zw unused
         // Terrain wetness clipmap (TerrainWetnessPipeline; terrain_wetness.inc.glsl). A TERRAIN_WET_RES^2
         // toroidal window of texels around the scene focus; lattice coords are integer texel indices.
         // TERRAIN SURFACE WATER (TerrainWetTweaks; the wetness compute pass writes the field, the terrain
@@ -800,9 +802,9 @@ export namespace RendererVKLayout
                                      // full-width range on an axis means "this axis does not matter here"
                                      // (snow-line rock is cold at ANY humidity). Unused for beach/snow.
         glm::uvec4 terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the
-                                     // BC4 height texture index, 0xFFFF = none (flat: no parallax, linear blend)
+                                     // BC5 HEIGHT (R) + AO (G) texture index, 0xFFFF = none (flat, AO 1: linear blend)
         glm::uvec4 terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
-                                     // x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16.
+                                     // x = diffuse (+ roughness alpha) | normal << 16, y = 1 when the normal is BC5.
                                      // The splat samples without reading the material buffer first.
 
         // GPU mesh LOD selection (indirect + shadow cull; keep in sync with ubo.inc.glsl)
@@ -834,6 +836,7 @@ export namespace RendererVKLayout
         glm::vec4 cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
         glm::vec4 cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
         glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
+        glm::vec4 cloudShape4;  // x = base height variation (fraction of the shell height), yzw unused
         glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
         glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
         glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight

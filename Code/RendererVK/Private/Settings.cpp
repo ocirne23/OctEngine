@@ -59,6 +59,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &coverageVariation, 0.0f, 2.0f);
     Tweak::floatVar("Sky/Clouds", "Type", &cloudType, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds", "Type variation", &typeVariation, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Clouds", "Base height variation", &baseVariation, 0.0f, 0.6f);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &densityScale, 0.001f, 0.5f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Erosion", &erosion, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds", "Curl (m)", &curl, 0.0f, 1000.0f, 1.0f);

@@ -74,7 +74,7 @@ measured estimate.
 **Owned by `Core.Time::beginFrame`**, not by Input — see
 [`Code/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md) for the whole frame-pacing story.
 
-The kick fires `Time → Input pump lead (ms)` (Saved, default 2.0) BEFORE the frame starts, so the
+The kick fires `Time → Input pump lead (ms)` (default 2.0) BEFORE the frame starts, so the
 window thread pumps while main still waits and **the events are at most one lead old when sampled**.
 
 * Pumping at wait-start was a whole vsync stale.

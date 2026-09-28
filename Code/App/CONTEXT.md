@@ -28,7 +28,7 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 4 | `ui.flushMainThreadWork()` + `renderer.updateImGuiTextures()` | Deferred tweak callbacks, container imports, and the glyphs the pass baked — **the ImGui context is quiescent from the join until `ui.update()`.** Also promotes the pass's PENDING draw-data snapshot to the one present records (never earlier: the pass can finish before present). |
 | 5 | `forceSystem.joinMerge()` | Last frame's merge job — **before input or drains can touch emitters.** |
 | 6 | Menu / lobby / chat servicing | Only while the main menu is active. See below. |
-| 7 | `TweakRegistry::update(dt)` | Saved/Synced change detection. |
+| 7 | `TweakRegistry::update(dt)` | Synced change detection. |
 | 8 | `input.update` → **`ui.prepare()`** → `controls.update` | The panel prepare jobs overlap everything down to `ui.update`. |
 | 9 | Escape menu | |
 | 10 | **`joinPostUpdateJobs(Sim)`**, then camera: `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
@@ -186,7 +186,7 @@ have to ride the game's GMp event), so the seeded world is single-player only fo
 
 **The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): sponza + the skysphere
 prefab, plus the procedural world — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through
-tweak OVERRIDES (applied at once, never written back to tweaks.cfg) and switched off again in
+tweak OVERRIDES (applied at once) and switched off again in
 `exitToMenu`, so every other mode keeps its own default of off.
 
 ## Events (server-authoritative, reliable)

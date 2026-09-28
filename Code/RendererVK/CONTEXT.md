@@ -27,7 +27,7 @@ the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call).
 loop top does the fence wait, the frame-rate limit, the event-pump kick and the next frame's clock.
 
 The fence goes through a function pointer main passes (`Renderer::waitFrameSlot`), **because Core
-cannot see the renderer.** All the "Time" tweaks are Saved.
+cannot see the renderer.**
 
 ## The limit
 
@@ -78,12 +78,12 @@ while main still waits.
 
 ## VSync is a runtime tweak
 
-`Time/VSync` (Saved) is registered by `Renderer::initialize` on `m_vsyncEnabled`. **Present mode FIFO
+`Time/VSync` is registered by `Renderer::initialize` on `m_vsyncEnabled`. **Present mode FIFO
 vs Immediate is swapchain creation state**, so `onChange` runs `recreateSwapchain()` (device idle +
 re-init), guarded on `m_initialized` **because a saved or override value fires `onChange` at
 registration, before the swapchain exists.**
 
-`--no-vsync` is just `setOverride("Time/VSync=0")` — pinned for the run, never written back.
+`--no-vsync` is just `setOverride("Time/VSync=0")` — pinned for the run.
 
 ---
 
@@ -270,8 +270,8 @@ top-down camera hanging in empty sky shapes none of these:
   keeps the probe count a multiple of 64 (the trace's sky workgroup). A change runs
   `GIProbePipeline::registerGridTweaks`'s callback: GPU idle → `resizeGrid()` (SH buffer re-allocated,
   clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. The grid
-  tweaks register in `Renderer::registerTweaks`, BEFORE any pipeline compiles, so a `--tweak` override or
-  a Saved value is live for every shader and for the buffer `GIProbePipeline::initialize` allocates.
+  tweaks register in `Renderer::registerTweaks`, BEFORE any pipeline compiles, so a `--tweak` override is live
+  for every shader and for the buffer `GIProbePipeline::initialize` allocates.
   **Every reload callback in `Renderer` returns while `!m_initialized`** (state the pipelines read at
   creation is handed over before that test): such a value fires the callback at registration, before the
   device and the pipelines exist, and a reload there crashed. A positive Y offset lifts the grid centre
@@ -548,7 +548,9 @@ top-down camera hanging in empty sky shapes none of these:
   forward pass (this is what let the depth prepass go). Static geometry is exact under camera motion, and
   a moving object reads its own AO from where it was (the terrain has no `MOTION_WORLD_DELTA`: it compiles
   the camera-only path). No valid tap (disocclusion, off-screen) = `(0, 0, 0, 1)`: no occlusion, no bent
-  normal.
+  normal. **All eight fetches (4 depth + 4 AO, `textureLod`, AO held half) are issued first, then the
+  weights** - one texture-latency wait instead of each AO tap sitting behind its own depth test
+  (2026-09-28, for the L1TEX long-scoreboard stall).
 * **THERE IS NO NORMAL CONSUMER LEFT BUT TAA's OCEAN FLAG.** RTAO, its spatial blur, the decals and the
   particle collision derive a GEOMETRIC normal from depth: `normalFromDepth` (shared.inc.glsl) — per
   axis the neighbour with the closer depth, built on `viewRelFromDepth`, the CAMERA-RELATIVE
@@ -654,7 +656,14 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   base, eroded by curl-distorted Worley detail, plus a near-camera octave inside `Near detail radius`.
   **The profile raises the coverage THRESHOLD** (only the strongest noise passes near the top and base, so
   tops round into domes); a profile that only scaled the density against one fixed threshold cut every
-  cloud at the same height. The tower height stretches the profile per column over `[0.45, 1]` of the shell.
+  cloud at the same height. The tower height stretches the profile per column over `[0.45, 1]` of the column.
+  **Per-column LIFT** ("Base height variation" v, `u_cloudShape4.x`, default 0.03 - the user's pick; 2026-09-28): the WHOLE
+  column rises by up to v of the shell - the profile and the base + detail noise with it (`noiseAlt`) - and its
+  height shrinks to (1 - v), so each cloud keeps its own rounded base and only sits higher. The field is a
+  second weather fetch: the tower field ROTATED 90° (uncorrelated with the tops; scale 1 still tiles with the
+  weather period) at MIP 2, so the height drifts over kilometres. **Tried first and replaced:** a per-column
+  BASE cut over the same profile (the field at twice the frequency, mip 0) - the cloud's low part became thin
+  tendrils down to the shell bottom, a "peak" under every cloud. 0 = no lift (and no extra fetch).
 * **The noise is world-anchored and tiles.** Base repeats `Base repeats` times per weather tile and detail
   `Detail repeats` times per base tile — integers, so `buildUboClouds` wraps (camera − wind) by the
   weather period ONCE, in double, and every texture stays continuous. The wind and the detail's vertical
@@ -1152,7 +1161,7 @@ not only with validation — the validation messenger stays validation-only.
 ## Pipeline statistics (register counts)
 
 `VK_KHR_pipeline_executable_properties` (optional, enabled when offered). **"Renderer/Log pipeline
-stats"** (not Saved, off): pipelines created while it is on carry `CAPTURE_STATISTICS`, and
+stats"** (off): pipelines created while it is on carry `CAPTURE_STATISTICS`, and
 `Device::logPipelineStatistics` writes one tab-separated line per stage - `<debug name> <VS|FS|CS>
 Register Count=.. Binary Size=.. Local Memory Size=.. ...` - to the log AND to
 `Assets/Local/pipeline_stats.txt` (appended since startup; F5 re-creates the pipelines and appends a new
@@ -1312,16 +1321,27 @@ Both push params in every frame; the renderer owns none of the tweaks.
   but **that is slot order, not draw order: the shader composites ground → beach → rock → snow**, so
   rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
   beach paints over the waterline whatever the climate, and snow paints over everything else, ground
-  AND rock. Per material: diffuse (sRGB), normal (linear; BC5 sets `MATERIAL_FLAG_BC5_NORMAL`), ARM
-  (linear; R = AO, G = roughness, B = metalness, stored in `metalRoughnessTexIdx`), and an optional BC4
-  HEIGHT map. **`MaterialInfo` has no free slot, so the height index rides the UBO per slot**
-  (`u_terrainSplatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat), like the climate boxes. **The splat reads its
-  other texture indices from the UBO too** (`u_terrainSplatTex[s >> 1]`, .xy even slot / .zw odd: diffuse |
-  normal << 16, ARM | BC5 bit << 16; `terrainSplatTex()`), not from `in_materialInfos`: each fetch then does
-  not wait on a storage-buffer load first (Nsight 2026-09-28: L1TEX long scoreboard was the top stall of
-  Static meshes, 16.8%). The materials are still registered (`addMaterials`) for everything else. The full
-  contract is on the definition in `Renderer.cpp`.
-* **"Renderer/Textures/Anisotropy"** (Saved; Off / 2x / 4x / 8x / 16x, default 4x - a user decision; was a fixed 16x): the max anisotropy of
+  AND rock. **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than
+  the old four - L1TEX long scoreboard was the top stall of Static meshes, 16.8%, Nsight 2026-09-28):
+  diffuse = sRGB albedo + linear ROUGHNESS in the alpha (BC3); normal (BC5 sets
+  `MATERIAL_FLAG_BC5_NORMAL`); height = HEIGHT (R, 0.5 = flat) + AO (G) (BC5). **Metalness is always 0**
+  (the ARM texture is gone; `metalRoughnessTexIdx` stays none). **`MaterialInfo` has no free slot, so the
+  height + AO index rides the UBO per slot** (`u_terrainSplatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat, AO 1),
+  like the climate boxes. **The splat reads its other texture indices from the UBO too**
+  (`u_terrainSplatTex[s >> 1]`, .xy even slot / .zw odd: diffuse | normal << 16, BC5 flag;
+  `terrainSplatTex()`), not from `in_materialInfos`: each fetch then does not wait on a storage-buffer load
+  first. `sampleTerrainXZ` issues its three fetches back to back. The materials are still registered
+  (`addMaterials`) for everything else. The full contract is on the definition in `Renderer.cpp`.
+* **Result of the L1TEX round** (2026-09-28: 4x anisotropy, UBO texture indices, the packed splat, biplanar rock,
+  the batched AO read): Nsight L1TEX long scoreboard 16.8 -> 10.5% of Static meshes, IMC miss 0.25 -> 0.75;
+  the user saw a noticeably higher fps (Static meshes 3.15 ms of a ~6.0 ms GPU frame after it).
+* **Rock is BIPLANAR** (`sampleTerrainTriplanar`, kept its name): only the two world projections the normal
+  leans on most are sampled, each weight being |n| MINUS the smallest |n| (0 for the plane being dropped where
+  the second and third swap: no seam), a second plane under 5% of the pair skipped too. At most 2 x 2 taps +
+  the height/AO tap (triplanar paid up to 3 x 3 + 1). Roughness rides each plane's diffuse alpha; height AND
+  AO come from the top plane (uvY) alone, so on a steep face the AO is the top projection's, stretched (it
+  multiplies only the ambient term).
+* **"Renderer/Textures/Anisotropy"** (Off / 2x / 4x / 8x / 16x, default 4x - a user decision; was a fixed 16x): the max anisotropy of
   `StaticMeshGraphicsPipeline::m_sampler`, the sampler of EVERY scene texture slot (materials + the splat). A
   change waits for the GPU, recreates the sampler (`recreateSampler`) and re-records; `record()` writes all
   texture slots with it. Added as the A/B for the L1TEX latency: the terrain is seen at grazing angles.
@@ -1559,8 +1579,11 @@ the sand, so the two can never disagree.
     nothing.
   * **Shaders:** `instanced_indirect_terrain.vs.glsl` with `TERRAIN_TESS` hands on control points (the baked
     fields still per vertex). `terrain_tess.tcs.glsl` computes an edge factor from the edge's two end points
-    only (projected length / "Target edge (px)", eased to 1 across the fade band with the same
-    `1 - t^p` falloff as the displacement, "Falloff exponent" = `u_terrainTessParams0.w`), which keeps the edges
+    only (projected length / "Target edge (px)", eased to 1 across the fade band by `1 - t^p`, "Factor falloff
+    exponent" = `u_terrainTessParams0.w`; the displacement height fades by its OWN `1 - t^p`, "Height falloff
+    exponent" = `u_terrainTessParams2.y`, read by the TES, the ground FS pixel normal, the film VS lift and the
+    ocean's film estimate - split 2026-09-28; equal = the old shared curve, a factor dropping before the height
+    leaves displaced relief on coarse triangles), which keeps the edges
     crack-free, and culls patches outside the frustum. `terrain_tess.tes.glsl` displaces along the
     interpolated normal by `terrainReliefAt` (splat include with `TERRAIN_SPLAT_HEIGHT_ONLY`), CENTRED
     (height 0.5 = the mesh), faded by distance and on slopes past ~50°. The domain origin is LOWER_LEFT, so
@@ -1606,6 +1629,17 @@ the sand, so the two can never disagree.
   * **Crack-free vertices:** a vertex on an edge interpolates its two corners in a fixed (lexicographic)
     order, and a corner is the control point itself. The height mip footprint is a function of the position
     only (the pixel size at that distance), not of the patch.
+  * **The CENTRE view decides every level of detail** (2026-09-28): the TCS factor, the TES fade + mip
+    footprint, the ground FS `terrainTessPixelNormal` and the film VS lift read `u_views[VIEW_CENTER]`, never
+    the eye's `u_viewPos` / `u_mvp` - per-eye decisions gave the two VR eyes different geometry. Only
+    `gl_Position` projects with the eye.
+  * **The TCS skips work the TES would not use** (2026-09-28, for the ISBE launch stall):
+    * edge factor 1 where both end points are past the slope gate (normal y < 0.35: the TES displaces
+      nothing there), and on VERTICAL edges (the same xz: the skirt walls). Both are per-edge and symmetric,
+      so still crack-free;
+    * a SKIRT patch (a vertical face) gets inner level 1 (its top edge keeps the surface's factor);
+    * a patch whose three smooth corner normals all face away from the camera (dot(N, V) < -0.3, a margin
+      for the relief's tilt) is culled with the frustum cull.
   * **No `precise`**: the engine's glslang crashes (access violation in
     `PropagateNoContraction`) on it, although the SDK's glslc accepts it.
   * **Not tessellated:** the shadow map (a user decision: near relief casts the flat mesh's shadow), the
@@ -1767,9 +1801,11 @@ calls `reloadShaders()`.
 * **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
   `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
   atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
-  normalized on the CPU, so shaders use it raw; PCSS takes 12 blocker + 12 filter taps (16 + 16 before:
-  the same registers, 8 fewer fetches per pixel, ~3.5 KB less code). **Umbra early-out** (`pcssCascade`, not
-  the border path): all 12 search taps occluded AND one hardware-PCF tap at the centre = 0 → return 0, the
+  normalized on the CPU, so shaders use it raw; PCSS takes 6 blocker GATHERS (`textureGather`: 2x2 texels
+  each, 24 texels, since 2026-09-28 for the L1TEX latency; 12 single-texel taps before, 16 before that) + 12
+  filter taps. The gathers stay spread over the Vogel disk; the four texels of one gather are neighbours.
+  **Umbra early-out** (`pcssCascade`, not the border path): all 24 search texels occluded AND one
+  hardware-PCF tap at the centre = 0 → return 0, the
   filter skipped. The centre tap guards a small hole over the pixel that the sparse 15-texel search misses
   (a close grate / canopy gap the filter's small disk would see). Static meshes 1.635 → 1.606 ms (sandbox,
   3-4 runs each, no overlap); lit FS 64/48 → 72/16, terrain unchanged. The PCSS Vogel disk rotates its compile-time tap angles
@@ -1825,8 +1861,8 @@ calls `reloadShaders()`.
   / `effectiveLightShadows()` (master AND toggle — the same expression as the UBO flags). The lit
   core `#error`s without them. Why: register allocation covers every compiled path, so the PCSS
   search and the RT sun loop in one shader cost the occupancy of the larger one. "RT/Enable RT",
-  "RT Sun" and "RT Lights" reload the pipeline; the setter runs BEFORE the idle test, because a Saved
-  value fires at registration and `initialize()` must build with it. The ocean, fog and GI still read
+  "RT Sun" and "RT Lights" reload the pipeline; the setter runs BEFORE the idle test, because an override
+  fires at registration and `initialize()` must build with it. The ocean, fog and GI still read
   the uniforms. `computeLitColor` evaluates the sun FIRST, so no AO/GI value is live across the shadow
   search.
 * **The default static-mesh VS packs its interpolants into 4 locations** (was 6): `posU` (xyz + uv.x),

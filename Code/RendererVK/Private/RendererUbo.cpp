@@ -275,6 +275,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
     ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));
+    ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 0.0f, 0.0f, 0.0f);
     ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, 0.0f, (float)origin.y, (float)m_cloudEvolveOffset);
     ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
@@ -462,12 +463,15 @@ void Renderer::buildUboFog()
     const float waveTrough = m_oceanSimPipeline.getWaveTrough();
     const float swashReachBand = glm::clamp(m_oceanSimPipeline.getOceanParams().swashAmp, 0.0f, 4.0f) * (waveTrough + 0.25f);
     const float waveBand = m_oceanSimPipeline.isOceanEnabled() ? glm::max(waveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f;
+    // The underwater metres are measured against the sea, so they ride "Ocean/World scale" like the
+    // ocean's own tweaks: lengths x s, the per-metre depth fade / s (the same water column in fewer metres).
+    const float oceanScale = getOceanWorldScale();
     ubo.fogParams7 = glm::vec4(
         glm::max(fog.shaftBoost, 0.0f),        // x: underwater sun in-scatter gain (fog light shafts)
         waveBand,
         glm::max(fog.causticStrength, 0.0f),   // z: underwater caustic focus strength (surfaces + fog shafts)
-        glm::max(fog.causticDepthFade, 0.0f)); // w: caustic contrast decay with depth (1/m)
-    ubo.fogParams8 = glm::vec4(fog.underwaterOffset, glm::max(fog.causticShoreFade, 0.0f),
+        glm::max(fog.causticDepthFade, 0.0f) / oceanScale); // w: caustic contrast decay with depth (1/m)
+    ubo.fogParams8 = glm::vec4(fog.underwaterOffset * oceanScale, glm::max(fog.causticShoreFade, 0.0f) * oceanScale,
         fog.farFieldMaxDistanceKm > 0.0f ? fog.farFieldMaxDistanceKm * 1000.0f : 1e30f, 0.0f);
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
@@ -514,12 +518,16 @@ void Renderer::buildUboOcean()
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
     // Off while the particle chain is disabled: nothing would consume (and reset) the request counter.
     const uint32 sprayEmitter = m_particles.isEnabled() ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX;
+    // The "Spray *" tweaks are MODEL units like every ocean tweak: metres and m/s ride the world scale
+    // (the sea keeps its model periods, so speed scales as length), the per-m^2 rate rides 1/s^2 so the
+    // spawns per model area stay the same.
     const OceanSprayParams& spray = m_oceanSimPipeline.getSprayParams();
-    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(spray.rate, 0.0f),
-        glm::max(spray.radius, 1.0f), sprayDt);
-    ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f),
-        glm::max(spray.speed, 0.0f), spray.forward);
-    ubo.oceanSpray2 = glm::vec4(spray.height, 0.0f, 0.0f, 0.0f);
+    const float sprayScale = getOceanWorldScale();
+    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(spray.rate, 0.0f) / (sprayScale * sprayScale),
+        glm::max(spray.radius * sprayScale, 1.0f), sprayDt);
+    ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f) * sprayScale,
+        glm::max(spray.speed, 0.0f) * sprayScale, spray.forward * sprayScale);
+    ubo.oceanSpray2 = glm::vec4(spray.height * sprayScale, sprayScale, 0.0f, 0.0f);
 }
 
 // Forcefield bubbles (the Force library pushes the params every frame; all UBO-driven = live).
@@ -680,7 +688,7 @@ void Renderer::buildUboTerrain()
         glm::max(tex.tessTargetPx, 1.0f), glm::clamp(tex.tessFalloffExponent, 0.05f, 16.0f));
     ubo.terrainTessParams1 = glm::vec4(glm::max(tex.tessFadeStart, 0.0f), glm::max(tex.tessFadeEnd, tex.tessFadeStart + 0.1f),
         glm::max(tex.tessDepthGround, 0.0f), glm::max(tex.tessDepthRock, 0.0f));
-    ubo.terrainTessParams2 = glm::vec4(glm::max(tex.tessFreezeDistance, 0.1f), 0.0f, 0.0f, 0.0f);
+    ubo.terrainTessParams2 = glm::vec4(glm::max(tex.tessFreezeDistance, 0.1f), glm::clamp(tex.tessHeightFalloffExponent, 0.05f, 16.0f), 0.0f, 0.0f);
     const uint16* heightTex = m_terrain.getSplatHeightTex();
     for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
         ubo.terrainSplatHeightTex[i >> 2][i & 3] = heightTex[i];

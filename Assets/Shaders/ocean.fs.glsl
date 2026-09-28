@@ -409,9 +409,10 @@ float oceanEdgeCover()
         float reliefDepth = 0.0;
         if (u_terrainTessParams0.x > 0.5 && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
         {
-            const float tf = clamp((distance(in_pos, u_viewPos) - u_terrainTessParams1.x)
+            // The film's lift (instanced_indirect_terrain.vs.glsl): the centre view and the HEIGHT falloff.
+            const float tf = clamp((distance(in_pos, u_views[VIEW_CENTER].viewPos.xyz) - u_terrainTessParams1.x)
                 / max(u_terrainTessParams1.y - u_terrainTessParams1.x, 1e-3), 0.0, 1.0);
-            reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams0.w));
+            reliefDepth = u_terrainTessParams1.z * (1.0 - pow(tf, u_terrainTessParams2.y));
         }
         // The pool level sinks on slopes ("Film max slope"), as the film's: the ground normal's y from the
         // baked map's forward gradient over 4 m (the film reads its smooth mesh normal; the map is what the

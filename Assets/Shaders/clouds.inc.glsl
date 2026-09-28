@@ -118,14 +118,29 @@ float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBa
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_cloudShape2.x + (weather.g - 0.5) * u_cloudShape2.y, 0.0, 1.0);
-    // Per-column tower height (weather.a): the profile is stretched over [0, columnTop] of the shell, so
+    // Per-column tower height (weather.a): the profile is stretched over [0, columnTop] of the column, so
     // neighbouring clouds end at different heights.
     const float columnTop = mix(0.45, 1.0, weather.a);
-    const float profile = cloudHeightProfile(hf / columnTop, type);
+    // Per-column LIFT ("Base height variation", v): the WHOLE column rises by up to v of the shell - the profile
+    // AND the noise it thresholds - and the column's height shrinks to (1 - v) so it stays inside the shell. A
+    // cloud keeps its own rounded base and only sits higher. (Cutting the bottom off instead - a per-column base
+    // over the same profile - left the low part of each cloud as thin tendrils down to the shell bottom: a
+    // "peak" under every cloud.) The field: the tower field rotated 90 degrees (uncorrelated with the tops; scale
+    // 1 still tiles with the weather period) at a COARSE mip, so the height drifts over kilometres - a cloud's
+    // base barely tilts, neighbours sit at similar heights, distant ones differ.
+    const float variation = u_cloudShape4.x;
+    float lift = 0.0; // fraction of the shell
+    if (variation > 0.0)
+        lift = variation * smoothstep(0.2, 0.8, textureLod(u_cloudWeather, vec2(nxz.y, -nxz.x) * u_cloudShape1.x + 0.37, 2.0).a);
+    const float hfCloud = (hf - lift) / (1.0 - variation); // 0..1 over THIS column (the wisps and the curl follow it)
+    if (hfCloud <= 0.0 || hfCloud >= 1.0)
+        return 0.0;
+    const float profile = cloudHeightProfile(hfCloud / columnTop, type);
     if (profile <= 0.0)
         return 0.0;
+    const float noiseAlt = alt - lift / u_cloudShape3.z; // the noise rides up with the column (shell height = 1 / z)
 
-    const vec4 b = textureLod(u_cloudBaseNoise, vec3(nxz.x, alt, nxz.y) * u_cloudShape1.y, lodBase);
+    const vec4 b = textureLod(u_cloudBaseNoise, vec3(nxz.x, noiseAlt, nxz.y) * u_cloudShape1.y, lodBase);
     const float lowFbm = dot(b.gba, vec3(0.625, 0.25, 0.125));
     // The Perlin-Worley remap lands in [0.5, 1] (r >= its own Worley term), so the coverage threshold
     // sweeps that range: coverage 0 = nothing passes, 1 = everything. The profile RAISES the threshold
@@ -141,8 +156,8 @@ float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBa
     {
         // Curl-distorted detail: stronger toward the base (wispy undersides), rising with the evolve drift.
         const vec2 curl = textureLod(u_cloudCurl, nxz * (u_cloudShape1.y * 4.0), 0.0).xy * 2.0 - 1.0;
-        const vec2 dxz = nxz + curl * (u_cloudShape2.w * (1.0 - hf));
-        const vec3 pd = vec3(dxz.x, alt + u_cloudNoiseOrigin.w, dxz.y) * u_cloudShape1.z;
+        const vec2 dxz = nxz + curl * (u_cloudShape2.w * (1.0 - hfCloud));
+        const vec3 pd = vec3(dxz.x, noiseAlt + u_cloudNoiseOrigin.w, dxz.y) * u_cloudShape1.z;
         float hfFbm = dot(textureLod(u_cloudDetailNoise, pd, lodDetail).rgb, vec3(0.625, 0.25, 0.125));
         if (camDist < u_cloudShape3.y)
         {
@@ -150,7 +165,7 @@ float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBa
             hfFbm = mix(hfFbm, hfFbm * 0.7 + nearFbm * 0.3, 1.0 - camDist * u_cloudShape3.w);
         }
         // Wispy (inverted) at the base, billowy at the top.
-        const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hf * 5.0, 0.0, 1.0));
+        const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hfCloud * 5.0, 0.0, 1.0));
         d = clamp(cloudRemap(d, erodeBy * (u_cloudShape2.z * detail), 1.0, 0.0, 1.0), 0.0, 1.0);
     }
     return d * mix(0.6, 1.4, weather.b);

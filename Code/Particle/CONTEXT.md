@@ -123,6 +123,12 @@ spray`, `Rate 0`) and publishes its FIRST emitter's slot through `Renderer::setO
 frame; the producer spawns mist on breaking crests at `Ocean/Spray *` rates. **One emitter**: the
 producer has no look selection, so further emitters in the asset would never be reached.
 
+**The spray is authored at the MODEL sea's scale** and rides "Ocean/World scale" (s, read through
+`Renderer::getOceanWorldScale`): `update` multiplies the spray instance's size, gravity, turbulence
+accel and scroll by s and divides the turbulence frequency by s; the renderer does the same to the
+`Ocean/Spray *` metres and m/s (rate per m² ÷ s²). Drag, life and velocity stretch are times and stay —
+the sea keeps its model periods.
+
 ## Weather volumes (rain / snow)
 
 An emitter with a non-zero `Volume x, y, z` (box half extents) is a WEATHER VOLUME

@@ -116,7 +116,7 @@ void main()
         const vec3 jitter = vec3(j2.x + wind.x * (particleRand(seed) * cell), 0.0, j2.y + wind.y * (particleRand(seed) * cell));
         // Atomised mist: carried forward with the crest, barely lifting - it hangs at the lip rather
         // than arcing away like a thrown droplet would.
-        const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * 0.6;
+        const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * (0.6 * u_oceanSpray2.y);
         const float fwd = u_oceanSpray1.z * (0.4 + 0.4 * particleRand(seed)) * energy;
         const float up = u_oceanSpray1.y * (0.05 + 0.1 * particleRand(seed)) * energy;
         const vec3 vel = vec3(wind.x * fwd + side.x, up, wind.y * fwd + side.y);

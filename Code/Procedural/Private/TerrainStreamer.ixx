@@ -195,7 +195,7 @@ export namespace Procedural
 		// --- The Terrain Diffusion generator. ONNX-model backed: it needs 2.28 GB of
 		// weights on disk and a DirectML-capable GPU, and it generates 7.68 km tiles rather than evaluating
 		// a point function. See Private/Diffusion/GeneratorV3.ixx.
-		float m_v3MetersPerPixel = 0.3f;  // 30 = the model's true training scale; lower compresses the world
+		float m_v3MetersPerPixel = 2.0f;  // 30 = the model's true training scale; lower compresses the world
 		float m_v3HeightScale = 1.0f;
 		float m_v3DetailSlopeGain = 0.75f; // slope -> detail mask (the model only resolves 30 m/px)
 		// Wavelengths/amplitudes are in MODEL metres and ride metersPerPixel, so the OCTAVE counts are what
@@ -267,9 +267,9 @@ export namespace Procedural
 
 		// --- Terrain/Textures tweaks: splat shaping, pushed to Renderer::setTerrainTextureParams every
 		// frame from updateTerrainTextures (mirrors Renderer::TerrainTexTweaks) ---
-		float m_texUvScaleGround = 0.20f;  // 1/m: ~5 m texture repeat on flat ground
-		float m_texUvScaleRock = 0.08f;    // 1/m: rock features read larger on cliffs
-		float m_texUvScaleSnow = 0.12f;    // 1/m
+		float m_texUvScaleGround = 0.15f;  // 1/m: ~7 m texture repeat on flat ground
+		float m_texUvScaleRock = 0.05f;    // 1/m: rock features read larger on cliffs
+		float m_texUvScaleSnow = 0.10f;    // 1/m
 		float m_texClimateBlend = 0.02f;   // Gaussian sigma OUTSIDE a climate box, in (t01, h01) units
 		// Slope is 1 - N.y: 0.30 = 45 deg (about where soil stops holding), 0.55 = 63 deg.
 		float m_texSlopeRockStart = 0.25f;
@@ -304,8 +304,9 @@ export namespace Procedural
 		int   m_texTessMaxFactor = 8;
 		float m_texTessTargetPx = 7.0f;
 		float m_texTessFadeStart = 15.0f;       // m
-		float m_texTessFadeEnd = 100.0f;        // m
-		float m_texTessFalloffExponent = 1.0f;  // strength = 1 - t^p across the fade band
+		float m_texTessFadeEnd = 75.0f;         // m
+		float m_texTessFalloffExponent = 0.5f;  // tess factor: 1 - t^p across the fade band
+		float m_texTessHeightFalloffExponent = 2.0f; // displacement height: 1 - t^p across the fade band
 		float m_texTessFreezeDistance = 15.0f;  // m: closer in, the factor and the height mip hold
 		float m_texTessDepthGround = 0.6f;      // m
 		float m_texTessDepthRock = 0.7f;       // m
@@ -315,7 +316,7 @@ export namespace Procedural
 		// the level it fills the splat relief to, the live ocean it follows at the waterline, and the
 		// darkening / gloss of the ground under it.
 		bool  m_wetEnabled = true;
-		float m_wetTexelSize = 0.5f;      // m per texel (1024 texels = 512 m around the scene focus)
+		float m_wetTexelSize = 4.0f;      // m per texel (1024 texels = 4096 m around the scene focus)
 		float m_wetUpdateRate = 20.0f;    // Hz: the pass's fixed tick
 		float m_wetDiffusionRate = 20.0f; // 1/s sideways spread (framerate independent)
 		float m_wetRain = 0.0f;           // wetness per second added everywhere

@@ -129,6 +129,8 @@ public:
     void resetParticles() { m_particles.requestReset(); }
     void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
     void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
+    // "Ocean/World scale" (s): the spray emitter's lengths / speeds / accelerations ride it.
+    float getOceanWorldScale() const { return glm::max(m_oceanSimPipeline.getOceanParams().worldScale, 0.001f); }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
     uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
 

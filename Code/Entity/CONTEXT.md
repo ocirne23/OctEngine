@@ -259,8 +259,7 @@ components:
 
 # SIM LOD
 
-`SimLodConfig` in [World.ixx:44](Private/World.ixx#L44). "Game/Sim LOD" tweaks — **NOT Saved**, so the
-code defaults rule every run and a stale tweaks.cfg never overrides a tuning change.
+`SimLodConfig` in [World.ixx:44](Private/World.ixx#L44). "Game/Sim LOD" tweaks — per-process performance tuning, NOT Synced.
 
 **Decided ENTIRELY in World.** The entity only sees its delta.
 

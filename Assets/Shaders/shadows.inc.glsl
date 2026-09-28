@@ -5,7 +5,11 @@
 #define GOLDEN_RATIO_FRACT 0.6180339887
 #define PCSS_MAX_PENUMBRA_TEXELS 15.0  // cap so the kernel never gets too sparse/noisy
 #define PCSS_MIN_PENUMBRA_TEXELS 1.0   // floor so contact shadows stay crisp
-#define PCSS_BLOCKER_SAMPLES 12
+// The blocker search GATHERS: each tap is one textureGather = the 2x2 depth texels around it, so 6 taps read
+// 24 texels in half the fetches of the former 12 single-texel taps (L1TEX latency, the Static meshes range's
+// top stall). The taps stay spread over the Vogel disk; the texels within a tap are neighbours.
+#define PCSS_BLOCKER_GATHERS 6
+#define PCSS_BLOCKER_TEXELS (PCSS_BLOCKER_GATHERS * 4)
 #define PCSS_FILTER_SAMPLES 12
 #define GOLDEN_ANGLE 2.39996323
 
@@ -55,20 +59,18 @@ vec2 vogelDisk(int i, int count, vec2 rotSC)
 }
 
 // PCSS blocker search: average the depths of texels closer to the light than the receiver. Returns the
-// blocker count (0 => no occluders => fully lit).
+// blocker count in TEXELS, of PCSS_BLOCKER_TEXELS (0 => no occluders => fully lit).
 float blockerSearch(vec2 uv, int cascade, float receiverDepth, float radiusUV, vec2 rotSC, out float avgBlocker)
 {
 	float sum = 0.0;
 	float count = 0.0;
-	for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i)
+	for (int i = 0; i < PCSS_BLOCKER_GATHERS; ++i)
 	{
-		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotSC) * radiusUV;
-		float d = textureLod(u_shadowMapDepth, vec3(uv + off, float(cascade)), 0.0).r;
-		if (d < receiverDepth)
-		{
-			sum += d;
-			count += 1.0;
-		}
+		vec2 off = vogelDisk(i, PCSS_BLOCKER_GATHERS, rotSC) * radiusUV;
+		const vec4 d = textureGather(u_shadowMapDepth, vec3(uv + off, float(cascade)), 0);
+		const vec4 isBlocker = vec4(lessThan(d, vec4(receiverDepth)));
+		sum += dot(d, isBlocker);
+		count += isBlocker.x + isBlocker.y + isBlocker.z + isBlocker.w;
 	}
 	avgBlocker = (count > 0.0) ? sum / count : 0.0;
 	return count;
@@ -114,7 +116,7 @@ float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 	// same compare (LEQUAL is the complement of the search's d < ref), so it would find ~0 too. The centre
 	// tap guards the one case the sparse search can miss: a small hole straight over the pixel (a gap in a
 	// grate or canopy with the caster close by, where the filter's small disk would see the light).
-	if (blockers >= float(PCSS_BLOCKER_SAMPLES) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
+	if (blockers >= float(PCSS_BLOCKER_TEXELS) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
 		return 0.0;
 	// Directional penumbra: width grows with the world gap to the blocker (constant across cascades
 	// once expressed in texels). Caster touching the surface => ~MIN texels (sharp); far => up to MAX.
@@ -137,19 +139,19 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 
 	// Blocker search, split between cascades (taps routed to an invalid cascade are skipped).
 	float sumDA = 0.0, nDA = 0.0, sumDB = 0.0, nDB = 0.0;
-	for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i)
+	for (int i = 0; i < PCSS_BLOCKER_GATHERS; ++i)
 	{
 		bool useB = fract(float(i) * GOLDEN_RATIO_FRACT) < t;
 		if ((useB && !validB) || (!useB && !validA))
 			continue;
 		vec4 p = useB ? pb : pa;
-		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotSC) * searchRadiusUV;
-		float d = textureLod(u_shadowMapDepth, vec3(p.xy + off, float(useB ? cb : ca)), 0.0).r;
-		if (d < p.z)
-		{
-			if (useB) { sumDB += d; nDB += 1.0; }
-			else      { sumDA += d; nDA += 1.0; }
-		}
+		vec2 off = vogelDisk(i, PCSS_BLOCKER_GATHERS, rotSC) * searchRadiusUV;
+		const vec4 d = textureGather(u_shadowMapDepth, vec3(p.xy + off, float(useB ? cb : ca)), 0);
+		const vec4 isBlocker = vec4(lessThan(d, vec4(p.z)));
+		const float n = isBlocker.x + isBlocker.y + isBlocker.z + isBlocker.w;
+		const float s = dot(d, isBlocker);
+		if (useB) { sumDB += s; nDB += n; }
+		else      { sumDA += s; nDA += n; }
 	}
 	// The blocker search only SIZES the penumbra; it never decides lit vs shadowed (the PCF does). With
 	// the tap budget split, a cascade can easily find zero blockers even in shadow, so fall back to the

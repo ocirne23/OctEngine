@@ -319,10 +319,12 @@ namespace
     bool compressRgbaToDds(const uint8* pRgba, uint32 width, uint32 height, TextureConvert::EUsage usage, const char* outPath)
     {
         dds::DXGI_FORMAT format = dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM;
-        if (usage == TextureConvert::EUsage::NormalMap)
+        if (usage == TextureConvert::EUsage::NormalMap || usage == TextureConvert::EUsage::TwoChannel)
             format = dds::DXGI_FORMAT::DXGI_FORMAT_BC5_UNORM;
         else if (usage == TextureConvert::EUsage::Height)
             format = dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM;
+        else if (usage == TextureConvert::EUsage::ColorAlpha)
+            format = dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM;
         else if (usage == TextureConvert::EUsage::Color)
         {
             const uint8* pA = pRgba + 3;
@@ -346,6 +348,8 @@ namespace
                 mipPixels.resize((size_t)mipW * mipH * 4);
                 if (usage == TextureConvert::EUsage::Color)
                     stbir_resize_uint8_srgb(pRgba, (int)width, (int)height, 0, mipPixels.data(), (int)mipW, (int)mipH, 0, STBIR_RGBA);
+                else if (usage == TextureConvert::EUsage::ColorAlpha) // sRGB colour, linear alpha, NOT weighted by it
+                    stbir_resize_uint8_srgb(pRgba, (int)width, (int)height, 0, mipPixels.data(), (int)mipW, (int)mipH, 0, STBIR_RGBA_NO_AW);
                 else
                     stbir_resize_uint8_linear(pRgba, (int)width, (int)height, 0, mipPixels.data(), (int)mipW, (int)mipH, 0, STBIR_4CHANNEL);
                 pSrc = mipPixels.data();
@@ -893,4 +897,66 @@ bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPat
     if (rgba.empty())
         return false;
     return compressRgbaToDds(rgba.data(), width, height, EUsage::Data, outPath);
+}
+
+bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath)
+{
+    // Each distinct source decoded once (as RGBA: a grayscale source replicates into RGB).
+    struct Decoded { const char* path; stbi_uc* pixels; };
+    oc::small_vector<Decoded, 4> decoded;
+    uint32 width = 0, height = 0;
+    bool ok = true;
+    const auto source = [&](const char* path) -> const stbi_uc* {
+        for (const Decoded& d : decoded)
+            if (strcmp(d.path, path) == 0)
+                return d.pixels;
+        int w = 0, h = 0, comp = 0;
+        stbi_uc* pPixels = stbi_load(path, &w, &h, &comp, 4);
+        if (!pPixels)
+        {
+            Log::warning(oc::format("TextureConvert: could not decode '{}'", path));
+            return nullptr;
+        }
+        if (decoded.empty())
+        {
+            width = (uint32)w;
+            height = (uint32)h;
+        }
+        else if ((uint32)w != width || (uint32)h != height)
+        {
+            Log::warning(oc::format("TextureConvert: '{}' is {}x{}, expected {}x{} (all packed sources must match)", path, w, h, width, height));
+            stbi_image_free(pPixels);
+            return nullptr;
+        }
+        decoded.push_back({ path, pPixels });
+        return pPixels;
+    };
+    for (const PackChannel& channel : channels)
+        if (channel.path && !source(channel.path))
+            ok = false;
+
+    if (ok && !decoded.empty())
+    {
+        const size_t numPixels = (size_t)width * height;
+        oc::vector<uint8> rgba(numPixels * 4);
+        for (int c = 0; c < 4; ++c)
+        {
+            uint8* pDst = rgba.data() + c;
+            if (!channels[c].path)
+            {
+                for (size_t i = 0; i < numPixels; ++i, pDst += 4)
+                    *pDst = channels[c].fill;
+                continue;
+            }
+            const stbi_uc* pSrc = source(channels[c].path) + (channels[c].srcChannel & 3);
+            for (size_t i = 0; i < numPixels; ++i, pDst += 4, pSrc += 4)
+                *pDst = *pSrc;
+        }
+        ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath);
+    }
+    else
+        ok = false;
+    for (const Decoded& d : decoded)
+        stbi_image_free(d.pixels);
+    return ok;
 }

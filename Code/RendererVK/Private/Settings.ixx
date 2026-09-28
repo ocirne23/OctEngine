@@ -81,16 +81,20 @@ export struct CloudParams
 {
     bool  enabled = true;
     // Shape
-    float bottom = 300.0f;             // shell bottom altitude (m)
-    float top = 2500.0f;               // shell top altitude (m)
+    float bottom = 200.0f;             // shell bottom altitude (m)
+    float top = 1500.0f;               // shell top altitude (m)
     float coverage = 0.25f;            // 0 = clear, 1 = overcast
-    float coverageVariation = 1.0f;    // weather-map spread around the coverage (0 = uniform)
-    float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
+    float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform)
+    float cloudType = 0.75f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
+    // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
+    // bottom - flat, aligned bases); the clouds' own height shrinks to (1 - this). A field drifting over
+    // kilometres, uncorrelated with the tower height.
+    float baseVariation = 0.03f;
     float densityScale = 0.025f;       // extinction (1/m) at density 1
     float erosion = 0.45f;             // detail noise erosion of the base shapes
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
-    float weatherSizeKm = 25.0f;      // weather map period (km): the size of cloud clusters and gaps
+    float weatherSizeKm = 20.0f;      // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeed = 10.0f;           // m/s
@@ -425,15 +429,16 @@ export struct ParticleParams
 
 // The TweakPanel's "Ocean" spray knobs - the ocean spray step (ocean_spray.cs.glsl) is the particle GPU
 // spawn path's first producer, so these ride the UBO (oceanSpray0/1/2) rather than OceanParams, which
-// Procedural::OceanGenerator overwrites wholesale every frame.
+// Procedural::OceanGenerator overwrites wholesale every frame. MODEL units, like the ocean tweaks: the UBO
+// build applies OceanParams::worldScale.
 export struct OceanSprayParams
 {
-    float rate = 20.0f;       // spawns per m^2 per s at full breaking
-    float radius = 30.0f;     // m, the producer grid's half extent around the scene focus
-    float threshold = 0.002f; // instant-foam value where spray starts
+    float rate = 30.0f;       // spawns per m^2 per s at full breaking
+    float radius = 60.0f;     // m, the producer grid's half extent around the scene focus
+    float threshold = 0.003f; // instant-foam value where spray starts
     float kick = 0.0f;        // m/s upward
-    float speed = 2.0f;       // m/s along the wind
-    float forward = 0.0f;     // m, spawn lead ahead of the crest along its travel (negative = behind)
+    float speed = 10.0f;      // m/s along the wind
+    float forward = 3.0f;     // m, spawn lead ahead of the crest along its travel (negative = behind)
     float height = 0.0f;      // m, spawn offset above the surface (negative = below)
 
     void registerTweaks();
@@ -547,6 +552,10 @@ export struct OceanParams
     // e^{iwt} evolution reads it - the breaking-crest acceleration stays in the spectrum's own time, so
     // the foam criterion (a fraction of g) keeps the model sea's look.
     float timeScale = 1.0f;
+    // "Ocean/World scale" itself (s; 1 = the model sea). Nothing above re-applies it - they arrive in world
+    // metres already. The spray and the ocean-bound fog metres read it: the model sea at model periods,
+    // shrunk by s, so their lengths, speeds and accelerations all ride s.
+    float worldScale = 1.0f;
     float shoreFoamDepth = 8.0f;  // water-column height (m) below which the waterline churns white; 0 = off
     float shoreFoamMax   = 0.75f; // surf band opacity cap: shore foam coverage never exceeds this, so the
                                   // refracted bottom stays visible through the lace (whitecaps unaffected)

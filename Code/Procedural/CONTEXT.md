@@ -355,9 +355,13 @@ Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainH
 Consumed by fog terrain-follow, ocean depth/level (GPU through `terrain_height.inc.glsl` plus the CPU
 copy), terrain colouring and the terrain sun march.
 
-It also bakes the splat textures (diff / nor / arm, plus the `disp` height map as BC4 - optional per set,
-the terrain relief's input: the parallax + height blend in "Terrain/Textures", the displacement in
-"Terrain/Tessellation"; see the RendererVK CONTEXT), BC-compressed to `Assets/Local/TerrainTex` — a background job
+It also bakes the splat textures, PACKED into THREE per set (one texture fetch fewer per splat layer than the
+four sources; since 2026-09-28): `diffr` = albedo + ROUGHNESS in the alpha (the ARM's G; BC3), `nor` (BC5),
+`hao` = HEIGHT (the `disp` source's R, 0.5 = flat without one - the terrain relief's input: the parallax +
+height blend in "Terrain/Textures", the displacement in "Terrain/Tessellation"; see the RendererVK CONTEXT) +
+AO (the ARM's R; BC5). The ARM's metalness is dropped (terrain is never metallic). A packed output is stale
+when EITHER of its sources is newer. Compressed to `Assets/Local/TerrainTex` (old `_diff` / `_arm` / `_disp`
+files there are leftovers of the unpacked set) — a background job
 kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextures` when it is
 enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
 shader falls back to flat colours until that bake finishes.** Each entry's climate box registers with
@@ -438,8 +442,8 @@ directions: otherwise the wave travel direction would turn where one map hands o
 ## World scale
 
 **"Ocean/World scale" is the ocean's `metersPerPixel`**: every metre-valued ocean tweak is a MODEL
-metre, and the sea is drawn at model × scale (1 = the model sea; **0.1 is the default**, a 10× sea against
-the default terrain's 100× compression, tuned by eye rather than tied to the terrain's factor). Applied in ONE place, `pushOceanParams`, which fills the scaled `m_params` the renderer gets —
+metre, and the sea is drawn at model × scale (1 = the model sea and **the default**; tuned by eye rather than tied
+to the terrain's "Meters per pixel"). Applied in ONE place, `pushOceanParams`, which fills the scaled `m_params` the renderer gets —
 **and the CPU buoyancy mirror reads `m_params`, never the tweak members**, so the two cannot disagree
 about the scale.
 
@@ -451,6 +455,7 @@ about the scale.
 | absorption, SSS strength (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
 | dimensionless ratios (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
 | sea level | — | The world datum, owned by the terrain. |
+| **outside the ocean tweaks:** the "Ocean/Spray *" metres and m/s, the spray `.pfx` size / gravity / turbulence, "Fog/Underwater offset" and "Fog/Caustic shore fade" | × s (spray rate per m² ÷ s², "Fog/Caustic depth fade" per m ÷ s) | The renderer reads `OceanParams::worldScale` (`Renderer::getOceanWorldScale`): the sea keeps its model PERIODS, so a speed or an acceleration scales like a length. Applied in `buildUboOcean` / `buildUboFog` and, for the emitter, in `ParticleSystem::update`. |
 
 **The periods stay the model sea's.** Froude scaling alone shortens them by √s, and a miniature sea at
 real-sea speed reads as racing. So `OceanParams::timeScale` = √s slows the spectrum's clock

@@ -60,27 +60,29 @@ struct TerrainSample
 	float16_t height; // relief 0..1, 1 = top (the mesh surface); 0.5 without TERRAIN_SPLAT_RELIEF or a height map
 };
 
-#ifdef TERRAIN_SPLAT_RELIEF
+// The per-slot HEIGHT + AO texture (BC5: R = height, G = AO; TerrainStreamer's "hao" bake).
 uint terrainHeightTexIdx(uint matIdx)
 {
 	const uint slot = matIdx - uint(u_terrainTexParams0.x);
 	return u_terrainSplatHeightTex[slot >> 2][slot & 3u];
 }
 
+#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+// Height (x) + AO (y) in ONE fetch; flat (0.5) and unoccluded (1) without the texture.
+f16vec2 terrainHeightAoTap(uint matIdx, vec2 uv)
+{
+	const uint texIdx = terrainHeightTexIdx(matIdx);
+	return texIdx != 0xFFFFu ? f16vec2(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(texIdx)], uv).rg) : f16vec2(0.5, 1.0);
+}
+#endif
+
+#ifdef TERRAIN_SPLAT_RELIEF
 // The parallax march runs in non-uniform flow: explicit gradients (the pixel's own, scaled to the layer's UV).
 float16_t terrainHeightGrad(uint matIdx, vec2 uv, vec2 dx, vec2 dy)
 {
 	const uint texIdx = terrainHeightTexIdx(matIdx);
 	return texIdx != 0xFFFFu ? float16_t(textureGrad(u_textures[nonuniformEXT(texIdx)], uv, dx, dy).r) : float16_t(0.5);
 }
-
-#ifndef TERRAIN_SPLAT_HEIGHT_ONLY
-float16_t terrainHeightTap(uint matIdx, vec2 uv)
-{
-	const uint texIdx = terrainHeightTexIdx(matIdx);
-	return texIdx != 0xFFFFu ? float16_t(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(texIdx)], uv).r) : float16_t(0.5);
-}
-#endif
 
 // Height blend: coverage w of a layer standing dh above the one beneath becomes a steeper ramp shifted by
 // dh, so the higher texels win first (sand fills the gaps between stones before it covers them). Keeps
@@ -95,7 +97,9 @@ float16_t terrainHeightWeight(float16_t w, float16_t dh)
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
 // A splat material's texture indices, from the UBO (Renderer's buildUboTerrain), not the material buffer: the
 // texture fetches then do not wait on a storage-buffer load first (L1TEX long-scoreboard latency).
-// x = diffuse | normal << 16, y = ARM (0xFFFF = none) | BC5-normal bit << 16.
+// x = diffuse (RGB albedo + ROUGHNESS in A) | normal << 16, y = 1 when the normal is BC5.
+// THREE fetches per material (TerrainStreamer's packed bake): diffuse + roughness, normal, height + AO.
+// Metalness is always 0.
 uvec2 terrainSplatTex(uint matIdx)
 {
 	const uint slot = matIdx - uint(u_terrainTexParams0.x);
@@ -111,28 +115,26 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 	const uint diffuseTexIdx = tex.x & 0xFFFFu;
 
 	TerrainSample s;
-	s.albedo = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uv).rgb);
-#ifdef TERRAIN_SPLAT_RELIEF
-	s.height = terrainHeightTap(matIdx, uv);
-#else
-	s.height = float16_t(0.5);
-#endif
+	s.metal = float16_t(0.0);
 #ifdef TERRAIN_SPLAT_ALBEDO_ONLY
+	s.albedo = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uv).rgb);
+	s.height = float16_t(0.5);
 	s.ao = float16_t(1.0);
 	s.rough = float16_t(0.9);
-	s.metal = float16_t(0.0);
 	s.normal = geoN;
 #else
+	// All three fetches first, back to back (one latency wait, not three).
 	const uint normalTexIdx = tex.x >> 16;
-	const uint armTexIdx    = tex.y & 0xFFFFu;
-	const f16vec3 arm = armTexIdx != 0xFFFFu ? f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(armTexIdx)], uv).rgb) : f16vec3(1.0, 0.9, 0.0);
-	s.ao = arm.r;
-	s.rough = max(arm.g, float16_t(0.01));
-	s.metal = arm.b;
-
+	const f16vec4 diffRough = f16vec4(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uv));
 	const f16vec3 normalSample = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uv).xyz);
+	const f16vec2 heightAo = terrainHeightAoTap(matIdx, uv);
+	s.albedo = diffRough.rgb;
+	s.rough = max(diffRough.a, float16_t(0.01));
+	s.height = heightAo.x;
+	s.ao = heightAo.y;
+
 	f16vec3 tn;
-	if ((tex.y >> 16) != 0u) // BC5 normal
+	if (tex.y != 0u) // BC5 normal
 	{
 		const f16vec2 nxy = normalSample.xy * float16_t(2.0) - float16_t(1.0);
 		tn = f16vec3(nxy, sqrt(max(float16_t(1.0) - dot(nxy, nxy), float16_t(0.0))));
@@ -155,83 +157,85 @@ f16vec3 decodeTriplanarNormal(f16vec3 ns, bool bc5)
 	return normalize(ns * float16_t(2.0) - float16_t(1.0));
 }
 
-// Triplanar version for the rock layer (whiteout-style normal blend), so cliff faces don't smear.
-// PLANE SKIPPING: the three projection weights sum to 1, so a plane below TRIPLANAR_WMIN contributes
-// <~4% and is dropped (its texture taps skipped) - on shallow crag one axis dominates and the other two
-// are near-zero, cutting up to 2/3 of the taps. Surviving weights are renormalised so no energy is lost.
-// The branch is coherent across a quad except on the exact plane-crossover diagonal, where one pixel may
-// get a slightly wrong mip; invisible in practice.
-#define TRIPLANAR_WMIN 0.05
+// BIPLANAR version for the rock layer (whiteout-style normal blend), so cliff faces don't smear: of the three
+// world projections only the TWO whose axes the normal leans on most are sampled (at most 2 x 2 taps + the
+// height/AO tap, where triplanar paid up to 3 x 3 + 1). Continuity where the second and third planes swap:
+// each weight is |n| MINUS the smallest |n| (the climate pick's relative-to-the-next trick), so the plane
+// being dropped always has weight 0 at the swap - no seam. A second plane under BIPLANAR_WMIN of the pair is
+// skipped too (on shallow crag the top plane alone). Weights renormalised over the planes kept.
+// The branches are coherent across a quad except at a swap line, where one pixel may take a slightly wrong
+// mip on a plane of ~0 weight; invisible in practice.
+// Roughness rides the diffuse alpha (free per plane). The height AND the AO are the TOP plane's alone (uvY):
+// the parallax march works in world XZ, and one height/AO tap serves every slope. On a steep face the AO is
+// therefore the top projection's, stretched - it multiplies only the ambient term.
+#define BIPLANAR_WMIN 0.05
 TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, float uvScale)
 {
 	const uvec2 tex = terrainSplatTex(matIdx);
 	const uint diffuseTexIdx = tex.x & 0xFFFFu;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
 	const uint normalTexIdx  = tex.x >> 16;
-	const uint armTexIdx     = tex.y & 0xFFFFu;
-	const bool bc5 = (tex.y >> 16) != 0u;
-	const bool hasArm = armTexIdx != 0xFFFFu;
+	const bool bc5 = tex.y != 0u;
 #endif
 
-	f16vec3 w = abs(geoN);
-	w = w / (w.x + w.y + w.z);
-	const bvec3 use = greaterThan(w, f16vec3(TRIPLANAR_WMIN));
-	w /= dot(w, f16vec3(use)); // renormalise over the kept planes
+	const f16vec3 a = abs(geoN);
+	const float16_t minor = min(min(a.x, a.y), a.z);
+	f16vec3 w = a - minor; // the smallest axis -> 0: never sampled
+	const float16_t wSum = w.x + w.y + w.z;
+	w = wSum > float16_t(1e-3) ? w / wSum : f16vec3(0.0, 1.0, 0.0); // all three equal (the exact diagonal): the top plane
+	const bvec3 use = greaterThan(w, f16vec3(BIPLANAR_WMIN));
+	w /= max(dot(w, f16vec3(use)), float16_t(1e-4)); // renormalise over the kept planes
 	const vec2 uvX = worldPos.zy * uvScale; // plane normal = X
 	const vec2 uvY = worldPos.xz * uvScale; // plane normal = Y
 	const vec2 uvZ = worldPos.xy * uvScale; // plane normal = Z
 
 	f16vec3 albedo = f16vec3(0.0);
-	f16vec3 arm = f16vec3(0.0);
+	float16_t rough = float16_t(0.0);
 	f16vec3 nrm = f16vec3(0.0);
 	if (use.x)
 	{
-		albedo += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvX).rgb) * w.x;
+		const f16vec4 dr = f16vec4(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvX));
+		albedo += dr.rgb * w.x;
+		rough += dr.a * w.x;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
 		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvX).xyz), bc5);
 		nrm += f16vec3(tn.z * sign(geoN.x), tn.y, tn.x) * w.x;
-		if (hasArm) arm += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(armTexIdx)], uvX).rgb) * w.x;
 #endif
 	}
 	if (use.y)
 	{
-		albedo += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvY).rgb) * w.y;
+		const f16vec4 dr = f16vec4(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvY));
+		albedo += dr.rgb * w.y;
+		rough += dr.a * w.y;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
 		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvY).xyz), bc5);
 		nrm += f16vec3(tn.x, tn.z * sign(geoN.y), tn.y) * w.y;
-		if (hasArm) arm += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(armTexIdx)], uvY).rgb) * w.y;
 #endif
 	}
 	if (use.z)
 	{
-		albedo += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvZ).rgb) * w.z;
+		const f16vec4 dr = f16vec4(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(diffuseTexIdx)], uvZ));
+		albedo += dr.rgb * w.z;
+		rough += dr.a * w.z;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
 		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvZ).xyz), bc5);
 		nrm += f16vec3(tn.x, tn.y, tn.z * sign(geoN.z)) * w.z;
-		if (hasArm) arm += f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(armTexIdx)], uvZ).rgb) * w.z;
 #endif
 	}
 
 	TerrainSample s;
 	s.albedo = albedo;
-	// The height is the TOP plane's alone (uvY), for every slope: the parallax march works in world XZ, and on
-	// the steep faces where the other planes carry the colour the rock is opaque, so no blend reads it.
-#ifdef TERRAIN_SPLAT_RELIEF
-	s.height = terrainHeightTap(matIdx, uvY);
-#else
-	s.height = float16_t(0.5);
-#endif
+	s.metal = float16_t(0.0);
 #ifdef TERRAIN_SPLAT_ALBEDO_ONLY
+	s.height = float16_t(0.5);
 	s.ao = float16_t(1.0);
 	s.rough = float16_t(0.9);
-	s.metal = float16_t(0.0);
 	s.normal = geoN;
 #else
-	if (!hasArm)
-		arm = f16vec3(1.0, 0.9, 0.0);
-	s.ao = arm.r;
-	s.rough = max(arm.g, float16_t(0.01));
-	s.metal = arm.b;
+	const f16vec2 heightAo = terrainHeightAoTap(matIdx, uvY);
+	s.height = heightAo.x;
+	s.ao = heightAo.y;
+	s.rough = max(rough, float16_t(0.01));
 	s.normal = normalize(nrm + geoN * float16_t(2.0)); // biased toward geoN: detail, not replacement
 #endif
 	return s;

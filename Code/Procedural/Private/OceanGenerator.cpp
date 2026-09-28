@@ -504,6 +504,7 @@ namespace Procedural
 		params.horizonDepth = m_horizonDepth * s;
 		params.horizonDepthRange = m_horizonDepthRange * s;
 		params.timeScale = std::sqrt(s); // Froude periods are x sqrt(s); slow the clock to the model's periods
+		params.worldScale = s;           // the renderer scales the spray + the ocean-bound fog metres by it
 		params.shoreFoamDepth = m_shoreFoamDepth * s;
 		params.shoreFoamMax = m_shoreFoamMax;
 		params.swashAmp = m_swashAmp;

@@ -289,20 +289,30 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 	const float bw[4] = float[]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
 	const vec2 offs[4] = vec2[](vec2(0.0), vec2(aoTexel.x, 0.0), vec2(0.0, aoTexel.y), aoTexel);
 
+	// ALL EIGHT FETCHES FIRST, back to back, then the weights: one texture-latency wait instead of a chain (each
+	// AO tap used to sit behind its own depth test). textureLod: single-level images, no derivatives, so the
+	// fetches need no uniform flow. The AO taps are held half (4 x 2 registers).
+	float d[4];
+	f16vec4 aoTap[4];
+	for (int i = 0; i < 4; ++i)
+	{
+		const vec2 uv = base + offs[i];
+		d[i] = textureLod(u_prevDepth, uv, 0.0).r;
+		aoTap[i] = f16vec4(textureLod(u_ao, uv, 0.0));
+	}
+
 	const float sigmaZ = max(0.05 * viewDist, 0.02);
 	const float gaussK = -1.4426950409 / (2.0 * sigmaZ * sigmaZ); // exp(-x/(2s^2)) == exp2(x * gaussK): one exp2, no divide per tap
 	vec4 sum = vec4(0.0);
 	float wsum = 0.0;
 	for (int i = 0; i < 4; ++i)
 	{
-		const vec2 uv = base + offs[i];
-		const float d = texture(u_prevDepth, uv).r;
-		if (d <= 0.0) // background (reversed-Z far = 0)
+		if (d[i] <= 0.0) // background (reversed-Z far = 0)
 			continue;
-		const vec3 tapPos = worldPosFromDepthMat(uv - prevJitter, d, u_prevInvMvp);
+		const vec3 tapPos = worldPosFromDepthMat(base + offs[i] - prevJitter, d[i], u_prevInvMvp);
 		const vec3 dp = tapPos - prevPos;
 		const float w  = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
-		sum  += texture(u_ao, uv) * w;
+		sum  += vec4(aoTap[i]) * w;
 		wsum += w;
 	}
 	// All taps rejected: disoccluded this frame, or thin geometry the half-res image never saw.

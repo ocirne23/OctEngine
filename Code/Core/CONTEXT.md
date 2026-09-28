@@ -181,7 +181,7 @@ The engine's own contiguous containers, re-exported by `Core.ixx` alongside OcST
 
 ## Global pause
 
-Tweak `Time/Paused` — **Synced**, so the server's pause freezes clients; deliberately NOT Saved. The
+Tweak `Time/Paused` — **Synced**, so the server's pause freezes clients. The
 Pause/Break key toggles it, game mode included.
 
 | Clock | Reads | Consumers |
@@ -215,7 +215,7 @@ limit, the window thread's event-pump kick, and the start of the next frame's cl
 The fence goes through a function pointer main passes (`Renderer::waitFrameSlot`), **because Core
 cannot see the renderer**; both it and `pumpWindow` may be null.
 
-Tweaks (all Saved): `Max FPS` (0 = uncapped), `Inactive max FPS` (30), `Busy-wait window (ms)` (2.5),
+Tweaks: `Max FPS` (0 = uncapped), `Inactive max FPS` (30), `Busy-wait window (ms)` (2.5),
 `Stable frame time` (on), `Input pump lead (ms)` (2.0), `VSync`.
 
 **`setFpsCeiling(fps)`** is a cap ON TOP of those (the target is the lower of the two; 0 = none), not a
@@ -247,7 +247,7 @@ Tweak::intVar / boolean / color3 / float3 / ...
 Once at init, this exposes a variable in the TweakPanel. **Pointers are non-owning and the variable
 must outlive the registration.** This is the standard way to make anything runtime-configurable.
 
-**Identity is `"Category/Name"` — renaming orphans the saved value.**
+**Identity is `"Category/Name"`.**
 
 ## Groups
 
@@ -262,42 +262,32 @@ root category goes into that table**, otherwise it shows under "Other". Panel or
 Optional last parameter after `onChange`, or `Tweak::ScopedFlags` RAII to flag a whole
 `registerTweaks` block. **Explicit per-call flags win over the block default.**
 
-**`Saved`** persists to `Assets/Local/tweaks.cfg`:
-
-* main calls `TweakRegistry::loadSaved()` right after `FileSystem::initialize`.
-* `TweakRegistry::update(dt)` per frame **poll-detects** changes — the panel writes through raw
-  pointers, so polling is the only reliable hook — and debounce-saves 0.5 s after the last change,
-  plus at exit.
-* Unknown file keys are preserved for other run modes.
-
 **`Synced`** broadcasts server → clients:
 
+* `TweakRegistry::update(dt)` per frame **poll-detects** changes — the panel writes through raw
+  pointers, so polling is the only reliable hook.
 * NetworkManager watches `syncGeneration()`, which the poll bumps on any Synced change.
 * `packSynced` splits every Synced var into self-contained records chunked to fit one network message.
 * It rides the engine-reserved `"OcTweakSync"` event, intercepted in `fireEventAttributed`, so it
   never reaches scripts or game hooks. **Only CLIENTS apply**, and `applySyncedBlob` ignores keys the
   receiver did not flag Synced and clamps to the receiver's own bounds.
 
-**Policy:** all `Game/*` tweaks are `Saved|Synced` except `Game/Camera` (Saved only — personal
-preference) and `Game/Sim LOD` (**NEITHER** — per-process performance tuning registered by the Entity
-library's World, where the code defaults must rule every run).
+**Policy:** all `Game/*` tweaks are `Synced` except `Game/Camera` (personal preference) and
+`Game/Sim LOD` (per-process performance tuning registered by the Entity library's World).
 
 ## Command-line overrides
 
-* **`--tweak "Category/Name=v [v v v]"`** (`setOverride`) works on any variable, Saved or not. It
-  applies now or at the variable's registration, **wins over the file, and is NEVER written back** —
-  `saveFile` skips overridden keys, and the snapshot is taken after the apply so it does not read as
-  a change. This is how an unattended profiling run pins settings without touching the user's
-  tweaks.cfg.
-* **`--tweaks <file>`** (`loadOverrides`) applies a whole file in the tweaks.cfg line format with `#`
+* **`--tweak "Category/Name=v [v v v]"`** (`setOverride`) works on any variable. It applies now or at
+  the variable's registration; the snapshot is taken after the apply so it does not read as a change.
+  This is how an unattended profiling run pins settings.
+* **`--tweaks <file>`** (`loadOverrides`) applies a whole file of `Category/Name=v` lines with `#`
   and `//` comments. Later `--tweak` flags win over it.
 * `Assets/Scenarios/cpu-profile.tweaks` = the heavy GPU features off, for CPU-focused runs.
 
 ## The IO hooks
 
-`setFileIo(read, write)` must be installed before `loadSaved()`. Core cannot include `<fstream>`, so
-main injects `FileSystem::readFileStr` / `writeFileStr`. **Without them the `Saved` flag is simply
-inert** and the registry keeps working in memory.
+`setFileIo(read, write)`: Core cannot include `<fstream>`, so main injects `FileSystem::readFileStr` /
+`writeFileStr`. Without them the registry keeps working in memory.
 
 ---
 

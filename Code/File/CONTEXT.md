@@ -155,7 +155,9 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
   | Color (sRGB) | BC1, or **BC3 when the alpha channel is actually used** (any texel below 250) |
   | NormalMap | BC5, XY only — the material flags Z reconstruction |
   | Data (roughness / AO / masks) | BC1 |
-  | Height (displacement; `TextureConvert` only, the terrain splat heights) | BC4, the source's R |
+  | Height (displacement; `TextureConvert` only) | BC4, the source's R |
+  | ColorAlpha (`TextureConvert` only: sRGB RGB + a LINEAR data alpha, e.g. albedo + roughness) | BC3 always; mips `STBIR_RGBA_NO_AW` (no alpha weighting, alpha linear) |
+  | TwoChannel (`TextureConvert` only: two linear data channels, e.g. height + AO) | BC5 |
 
   **Alpha-masked diffuse mips are alpha-coverage-rescaled**: each mip's alpha is binary-searched so
   the fraction of texels passing the material's alpha-test cutoff matches level 0. Only meaningful
@@ -207,5 +209,9 @@ loose textures that no `ISceneData` references — the procedural terrain's biom
 * `convertPackedToDds(r, g, b, out)` — builds an RGB image from up to three GRAYSCALE sources
   (`r` required, missing channels = 0) and compresses it as Data/BC1. For packing separate AO,
   roughness and metalness maps into one ARM-style texture. All present sources must share dimensions.
+* `convertChannelsToDds(PackChannel[4], EUsage, out)` — the general packer: output channel i = channel
+  `srcChannel` of image `path`, or the constant `fill` without a path. Each distinct source is decoded once;
+  all must share dimensions. The terrain splat bake uses it for its packed set (albedo + roughness as
+  ColorAlpha, height + AO as TwoChannel).
 
 Output mip chains stream through the `TextureStreamer` like any cooked `.dds`.

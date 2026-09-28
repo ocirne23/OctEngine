@@ -288,6 +288,19 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             gpu.sizeParams.z = oc::min(gpu.sizeParams.z * sizeVarScale, 1.0f); // > 1 would flip sizes negative
             gpu.colorStart.w *= alphaScale;
             gpu.colorEnd.w *= alphaScale;
+            // The ocean spray is authored at the model sea's scale: the sea is drawn shrunk by "Ocean/World
+            // scale" at the model's periods, so lengths, speeds and accelerations ride s (drag, life and the
+            // velocity stretch are times and stay).
+            if (inst.id == m_oceanSprayEffect.m_id)
+            {
+                const float s = renderer.getOceanWorldScale();
+                gpu.sizeParams.x *= s;
+                gpu.sizeParams.y *= s;
+                gpu.lifeParams.z *= s;  // gravity
+                gpu.noiseParams.x *= s; // turbulence accel
+                gpu.noiseParams.y /= s; // turbulence frequency (1/m)
+                gpu.noiseParams.z *= s; // turbulence scroll
+            }
             // A camera-following weather volume ignores the instance transform: it rides the camera
             // with an identity rotation so the box axes stay world-aligned (the wrap is per axis).
             const bool follow = desc.followCamera && desc.isVolume();

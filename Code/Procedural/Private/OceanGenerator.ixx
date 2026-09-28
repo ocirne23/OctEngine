@@ -125,7 +125,7 @@ export namespace Procedural
 		// x sqrt(s) (a miniature races), so the spectrum clock runs at sqrt(s) (OceanParams::timeScale) and
 		// the periods stay the model sea's. Applied ONCE, in pushOceanParams: the shaders and the CPU
 		// buoyancy mirror both read the scaled set (m_params), so neither can disagree with the other.
-		float m_worldScale = 0.2f;  // 1 = the model sea; a 10x sea against the default terrain (mpp 0.3, 100x), tuned by eye
+		float m_worldScale = 1.0f;  // 1 = the model sea
 		OceanParams m_params;      // the SCALED param set last pushed to the renderer; the CPU mirror reads it
 		// Reach = ringCell * res/2 * 2^(rings-1), and every ring costs the same vertex count whatever its
 		// cell size - so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip
@@ -148,7 +148,7 @@ export namespace Procedural
 		float m_detailBias = 0.3f;
 
 		// --- Spectrum (TMA/JONSWAP + finite-depth dispersion) + shading; all live via setOceanParams ---
-		float m_windSpeed = 20.0f;     // U10 (m/s): the main sea-state knob
+		float m_windSpeed = 10.0f;     // U10 (m/s): the main sea-state knob
 		float m_fetchKm = 300.0f;      // wind fetch (km)
 		float m_depth = 100.0f;        // ocean depth (m): finite-depth dispersion + TMA attenuation
 		float m_windAngle = 5.12f;     // radians, XZ. The swell TRAVELS opposite this - see swellTravelAngle
@@ -219,7 +219,7 @@ export namespace Procedural
 		// that looks exactly like wind 0. Only the seabed moves, never the surface. 0 range = off.
 		float m_horizonDepth = 2.0f;
 		float m_horizonDepthRange = 3000.0f;
-		float m_shoreFoamDepth = 3.0f;  // surf band: water-column height (m) that churns white; 0 = off
+		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
 		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
 		float m_swashAmp = 0.5f;        // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
 		float m_shoreFoamBias = 0.0f;   // surf fold-threshold shift: negative = sparser/more transparent surf
