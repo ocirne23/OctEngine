@@ -42,8 +42,17 @@ public:
         glm::ivec2 renderOrigin;        // the render rect
         glm::ivec2 renderSize;
         float oceanBias;                // the mask value on ocean pixels
+        // The fused motion blur (DLAA only; MotionBlurPipeline): this pass writes its velocity + sub-tiles, as TAA
+        // does. Always bound.
+        vk::ImageView mbVelocityView;
+        vk::ImageView mbSubTileView;
+        bool  mbEnabled = false;
+        float mbShutter = 0.0f;
+        float mbMaxRadius = 0.0f;       // already clamped (MotionBlurPipeline::clampMaxRadius)
+        float mbCameraScale = 0.0f;
     };
-    // The motion vectors + the bias mask; ends with a barrier to the compute reads of the upscale. Cached.
+    // The motion vectors + the bias mask [+ the motion blur velocity]; ends with a barrier to the compute reads
+    // of the upscale and the motion blur's neighbour pass. Cached.
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
 
     Streamline::Image getMotionImage() const;

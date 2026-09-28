@@ -773,6 +773,14 @@ void Renderer::recordDlss(uint32 frameIdx)
         .renderOrigin = m_renderRect.min,
         .renderSize = m_renderRect.getSize(),
         .oceanBias = m_dlssParams.oceanBias,
+        // The fused motion blur (DLAA: motionBlurEnabled() is off while upscaling): this pass writes its velocity +
+        // sub-tiles, as TAA does.
+        .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
+        .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
+        .mbEnabled = motionBlurEnabled(),
+        .mbShutter = m_motionBlurParams.shutter,
+        .mbMaxRadius = MotionBlurPipeline::clampMaxRadius(m_motionBlurParams.maxRadius),
+        .mbCameraScale = m_motionBlurParams.cameraScale,
     };
     m_dlssPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -785,10 +793,23 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const SceneColor& sceneColor = frameData.sceneColor;
+    executeScoped(primary, "DLSS mvec", frameData.dlssCommandBuffer.getCommandBuffer());
     m_gpuProfiler.beginScope(primary, "DLSS");
-    const vk::CommandBuffer mvecCb = frameData.dlssCommandBuffer.getCommandBuffer();
-    primary.executeCommands(1, &mvecCb);
     m_taaPipeline.beginExternalWrite(primary, frameIdx);
+
+    // A viewport that does not fit the swapchain (the editor layout before it adapts to the window) is cropped
+    // everywhere else, but DLSS cannot take it: its output would not fit, the render rect is clamped below the
+    // feature's dynamic range (NGX InvalidParameter), and the output copy would run out of bounds (device lost -
+    // slEvaluateFeature still returns OK when NGX fails inside it). Skip the upscale on such frames.
+    const vk::Extent2D swapExtent = m_swapChain.getLayout().extent;
+    if (glm::any(glm::lessThan(m_viewportRect.min, glm::ivec2(0)))
+        || m_viewportRect.max.x > (int)swapExtent.width || m_viewportRect.max.y > (int)swapExtent.height)
+    {
+        m_dlssReset = true;
+        TaaPipeline::endExternalWrite(primary);
+        m_gpuProfiler.endScope(primary);
+        return;
+    }
 
     const glm::uvec2 renderTarget(sceneColor.getWidth(), sceneColor.getHeight());
     const glm::uvec2 renderSize(m_renderRect.getSize());
@@ -865,7 +886,7 @@ void Renderer::recordMotionBlur(uint32 frameIdx)
         .ubo = frameData.ubo,
         .sceneDepthView = sceneColor.getDepthView(),
         .motionView = sceneColor.getMotionView(0),
-        .velocityPass = !taaActive(),
+        .velocityPass = !resolveActive(), // TAA or DLSS's mvec pass already wrote it
         .shutter = m_motionBlurParams.shutter,
         .maxRadius = m_motionBlurParams.maxRadius,
         .cameraScale = m_motionBlurParams.cameraScale,

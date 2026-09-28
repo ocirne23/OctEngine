@@ -17,11 +17,17 @@ namespace
     constexpr vk::Format DLSS_OUTPUT_FORMAT = TaaPipeline::RESOLVED_FORMAT;
     constexpr vk::ImageUsageFlags DLSS_OUTPUT_USAGE = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc;
 
+    // Must match dlss_mvec.cs.glsl's push constant block.
     struct MvecPC
     {
+        glm::ivec2 base;
         glm::ivec2 origin;
         glm::ivec2 size;
         float oceanBias;
+        uint32 mbEnabled;
+        float mbShutter;
+        float mbMaxRadius;
+        float mbCameraScale;
     };
 
     vk::DescriptorSetLayoutBinding binding(uint32 idx, vk::DescriptorType type)
@@ -50,6 +56,8 @@ void DlssPipeline::buildLayout(ComputePipelineLayout& layout)
         binding(3, vk::DescriptorType::eStorageImage),         // motion vectors
         binding(4, vk::DescriptorType::eCombinedImageSampler), // scene colour (the ocean flag)
         binding(5, vk::DescriptorType::eStorageImage),         // bias mask
+        binding(6, vk::DescriptorType::eStorageImage),         // motion blur velocity
+        binding(7, vk::DescriptorType::eStorageImage),         // motion blur sub-tiles
     };
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(MvecPC) });
 }
@@ -161,30 +169,38 @@ void DlssPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const R
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
 
-    // Last frame's upscale read (compute) -> this write.
+    // Last frame's reads -> this write: the upscale (compute), and the motion blur images' neighbour pass
+    // (compute) and composite gather (fragment).
     const vk::MemoryBarrier2 before{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
 
     vk::DescriptorSet vkSet = m_sets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 6> updates{
+    oc::array<DescriptorSetUpdateInfo, 8> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.motionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_motion.view, .imageLayout = vk::ImageLayout::eGeneral } } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.sceneColorView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_bias.view, .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = params.mbVelocityView, .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = params.mbSubTileView, .imageLayout = vk::ImageLayout::eGeneral } } },
     };
     const vk::PipelineLayout layout = m_pipeline.getPipelineLayout();
     commandBuffer.cmdUpdateDescriptorSets(layout, vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, 1, &vkSet, 0, nullptr);
-    const MvecPC pc{ .origin = params.renderOrigin, .size = params.renderSize, .oceanBias = params.oceanBias };
+    // The motion blur's sub-tile grid starts at pixel 0: with it, the dispatch covers the whole target (as TAA's).
+    const glm::ivec2 base = params.mbEnabled ? glm::ivec2(0) : params.renderOrigin;
+    const glm::ivec2 extent = params.mbEnabled ? glm::ivec2((int)m_motion.width, (int)m_motion.height) : params.renderSize;
+    const MvecPC pc{ .base = base, .origin = params.renderOrigin, .size = params.renderSize, .oceanBias = params.oceanBias,
+        .mbEnabled = params.mbEnabled ? 1u : 0u, .mbShutter = params.mbShutter, .mbMaxRadius = params.mbMaxRadius, .mbCameraScale = params.mbCameraScale };
     cmd.pushConstants(layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-    cmd.dispatch((uint32)(params.renderSize.x + 7) / 8, (uint32)(params.renderSize.y + 7) / 8, 1);
+    constexpr uint32 group = RendererVKLayout::MOTION_BLUR_SUBTILE; // the shader's workgroup
+    cmd.dispatch(((uint32)extent.x + group - 1) / group, ((uint32)extent.y + group - 1) / group, 1);
 
     // The motion vectors -> the upscale's compute read.
     const vk::MemoryBarrier2 after{

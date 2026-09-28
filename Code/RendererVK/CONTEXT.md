@@ -903,10 +903,20 @@ DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No f
   **bias-current-colour mask** (`kBufferTypeBiasCurrentColorHint`: lerp(history, current, bias)): the mvec pass
   also writes an R16F mask (NOT R8_UNORM: SL's Vulkan format table has no entry for it and logs "Cannot have
   undefined format" - a new tagged format must be in `sl.chi` `Vulkan::getFormat`), "Ocean current bias" (0.8 = TAA's 0.2 history weight) on TAA's ocean flag pixels
-  (scene colour alpha < 0.004, depth > 0), 0 elsewhere. It reads the scene colour, so it runs after the
-  colour's barrier to the resolve.
-* Not while upscaling: **motion blur** (`motionBlurEnabled()`: its velocity and gather assume one resolution);
-  DLAA keeps it.
+  (scene colour alpha < 0.004, depth > 0), 0 elsewhere. It reads the scene colour (only where depth > 0: the
+  sky is never ocean), so it runs after the colour's barrier to the resolve.
+* Not while upscaling: **motion blur** (`motionBlurEnabled()`: its velocity and gather assume one resolution).
+  **Under DLAA the mvec pass writes the motion blur velocity + sub-tiles** (the side product TAA writes;
+  `motion_blur_tiles` runs only with no resolve at all: `velocityPass = !resolveActive()`). The sub-tile grid
+  starts at pixel 0, so with the blur on the pass dispatches the WHOLE target (`pc.base` = 0, as TAA), otherwise
+  only the render rect. Its opening barrier's source stages include the fragment stage (the composite's gather).
+* The GPU profiler shows the mvec pass as "DLSS mvec" and the upscale as "DLSS". Measured 2026-09-28
+  (RelWithDebInfo, sandbox, RTX 4090, DLAA 1920x1080 with the fused motion blur): DLSS mvec 0.032 ms, DLSS
+  0.314 ms, the motion blur's neighbour pass 0.012 ms.
+* **A viewport that does not fit the swapchain skips the upscale** (the editor layout before it adapts to the
+  window - seen on a command-line start: 1983x1237 in 1920x1080). Everything else crops it, but DLSS cannot:
+  the render rect clamps below the feature's dynamic range (NGX InvalidParameter), and **`slEvaluateFeature`
+  still returns OK when NGX fails inside it**, so the output copy ran out of bounds: device lost.
 
 ## Motion blur (`MotionBlurPipeline`, "Post/Motion blur" tweaks)
 
@@ -916,7 +926,8 @@ own** (measured 2026-09-28, sandbox, still camera: motion blur 0.065 -> 0.013 ms
 GPU frame -0.04..0.05 ms). The shared code is `motion_blur.inc.glsl`; **eye adaptation and bloom keep the
 unblurred colour.** Its images (RG16F) are used within the frame only - one set for every slot, GENERAL for life.
 
-1. **TAA writes the velocity** (`motionBlurVelocity`; TAA already reads the depth and the motion target) and
+1. **TAA writes the velocity** (`motionBlurVelocity`; TAA already reads the depth and the motion target; under
+   DLAA, DLSS's `dlss_mvec` pass does the same - see "DLSS") and
    the longest velocity per 8 x 8 SUB-tile (`MOTION_BLUR_SUBTILE`, TAA's workgroup; a shared-memory reduction
    at the top of the shader, before any early return). Velocity = (this - last frame) uv x "Shutter" in px,
    clamped to 2 x "Max radius": the camera part from the depth (`prevScreenUVClip`), the object part = the
