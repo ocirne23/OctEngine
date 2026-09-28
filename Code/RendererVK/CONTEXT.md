@@ -158,7 +158,8 @@ GPU Frame
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
-    → Scene forward → TAA → Motion blur (desktop, "Post/Motion blur") → Eye adaptation
+    → Scene forward → TAA → Motion blur (desktop, "Post/Motion blur") → Eye adaptation (+ bloom level 0)
+    → Bloom (desktop, "Post/Bloom": the down/up chain; the composite mixes it in)
   Composite + UI
 ```
 
@@ -843,7 +844,40 @@ auto-exposure) feeds `CompositePipeline` (HDR → display into the swapchain bef
 off / Reinhard / ACES / AgX). The histogram bins EVERY viewport pixel (the reduce divides by the area),
 4×4 pixels per thread: a run of equal bins is one shared atomic and only non-empty bins go global. One
 pixel per thread measured 0.155 ms at 1440p (Nsight: 43% long-scoreboard + 36% misc stalls on the
-atomics). `PIXELS_PER_THREAD` in the shader and the dispatch's group size must match.
+atomics). `PIXELS_PER_THREAD` in the shader and the dispatch's group size must match. A thread's block is
+2 x 2 QUADS of 2 x 2 pixels, because each quad is also one texel of bloom level 0 (below).
+
+## Bloom (`BloomPipeline`, "Post/Bloom" tweaks)
+
+Desktop only (`bloomEnabled()`), in HDR before the exposure, in two modes:
+
+* **"Threshold" > 0 (default 1):** a SOFT threshold (the Unity / Unreal knee, "Knee" half width) on the
+  brightest channel in EXPOSED units (1 = display white before the tonemap), so only light that will show
+  as bright goes into the blur, which the composite ADDS: `scene + blur * intensity`. Dark and mid tones
+  never blur. The threshold uses LAST frame's auto exposure (the histogram pass runs before the reduce;
+  eye adaptation's first barrier makes last frame's write visible) - the adaptation is smoothed over seconds.
+* **"Threshold" 0:** the physical, energy-conserving `scene * (1 - intensity) + blur * intensity`: every pixel
+  spreads a share of its light, so the whole image softens as the intensity rises (keep it small).
+* **"Radius"** weighs the levels, level k by 2^(k (2 radius - 1)) (0.5 = equal; the default 0.75 favours the
+  wide levels), normalized by the weights' sum (`getNormalize`). With equal weights the half- and quarter-res
+  levels, barely blurred, read as a haze over the whole image.
+
+**Built to add no full-res pass:**
+
+* **Level 0 (half res) is written by the eye-adaptation HISTOGRAM pass**, which already reads every pixel of
+  the resolved colour: each 2 x 2 quad of its block becomes one texel, a Karis average (weights 1 / (1 + luma),
+  values clamped finite), so one very bright pixel cannot make a flickering blob; the threshold is applied
+  to that average (once per quad). It reads TAA's output, not
+  the motion blur's (bloom is wide anyway). Off = the pass skips the writes (a push-constant flag).
+* **The chain** (`record`, after eye adaptation): downsamples to the smallest of "Levels" levels
+  (`bloom_downsample`, Jimenez's 13-tap filter - stable under sub-pixel motion), then upsamples back
+  (`bloom_upsample`, 3 x 3 tent + add, IN PLACE into the larger level, each level times its "Radius" weight -
+  the smallest one on the first step). Level 0 then holds the WEIGHTED SUM of every level; the composite
+  divides by the weights' sum.
+* **The composite** mixes level 0 in with one bilinear fetch (`u_bloomUv` maps full-frame uv to level 0).
+* ONE B10G11R11 image with a mip chain for all frame slots, sized to the full render target; each level uses
+  only its VIEWPORT region (from the origin, taps clamped inside it), so a viewport change needs no re-create.
+  Last frame's reads of level 0 are ordered before the histogram's write by eye adaptation's first barrier.
 
 ---
 
@@ -1041,7 +1075,7 @@ Scene opaque, nearly all with 0 instances.
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, MotionBlur, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
 | | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |

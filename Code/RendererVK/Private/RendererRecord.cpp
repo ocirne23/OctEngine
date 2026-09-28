@@ -787,8 +787,23 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
         .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .viewportMin = m_viewportRect.min,
         .viewportSize = m_viewportRect.getSize(),
+        .bloomLevel0View = m_bloomPipeline.getLevel0View(),
+        .bloom = bloomEnabled(), // the histogram pass writes bloom level 0 from its own read
+        .bloomThreshold = m_bloomParams.threshold,
+        .bloomKnee = m_bloomParams.knee,
+        .exposureEV = m_postParams.exposureEV, // the composite's exposure: the threshold is in exposed units
+        .autoExposure = m_postParams.autoExposure,
     };
     m_eyeAdaptationPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
+// The bloom chain (level 0 was written by the eye-adaptation histogram); the composite mixes level 0 in.
+void Renderer::recordBloom(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].bloomCommandBuffer;
+    beginComputeSecondary(cb);
+    m_bloomPipeline.record(cb, frameIdx, m_viewportRect.getSize(), (uint32)m_bloomParams.levels, m_bloomParams.radius);
     cb.end();
 }
 
@@ -817,6 +832,12 @@ void Renderer::recordComposite(uint32 frameIdx)
         .exposureEV = m_postParams.exposureEV,
         .tonemapper = m_postParams.tonemapper,
         .autoExposure = m_postParams.autoExposure ? 1 : 0,
+        .bloomView = m_bloomPipeline.getLevel0View(),
+        .bloomSampler = m_bloomPipeline.getSampler(),
+        .bloomIntensity = bloomEnabled() ? m_bloomParams.intensity : 0.0f,
+        .bloomNormalize = m_bloomPipeline.getNormalize((uint32)m_bloomParams.levels, m_bloomParams.radius),
+        .bloomAdditive = m_bloomParams.threshold > 0.0f,
+        .bloomUv = m_bloomPipeline.getUvTransform(m_viewportRect.min, m_viewportRect.getSize()),
     };
     m_compositePipeline.record(cb, params);
     cb.end();
@@ -1122,6 +1143,8 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
             recordTaa(frameIdx);
         if (motionBlurEnabled()) // the same
             recordMotionBlur(frameIdx);
+        if (bloomEnabled())
+            recordBloom(frameIdx);
     }
 }
 
@@ -1315,6 +1338,8 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             .exposureEV = m_postParams.exposureEV,
             .tonemapper = m_postParams.tonemapper,
             .autoExposure = m_postParams.autoExposure ? 1 : 0,
+            .bloomView = m_bloomPipeline.getLevel0View(), // bound, unused: no bloom in VR (bloomEnabled)
+            .bloomSampler = m_bloomPipeline.getSampler(),
         };
         m_compositePipeline.record(commandBuffer, eyeComposite);
         vkCommandBuffer.endRenderPass();
@@ -1452,6 +1477,9 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // Eye adaptation: reads the resolved colour (TAA barrier above), writes the exposure the composite reads.
     // The unblurred one: the blur moves light around, it does not change the exposure.
     executeScoped(vkCommandBuffer, "Eye adaptation", frameData.eyeAdaptCommandBuffer.getCommandBuffer());
+    // Bloom: its level 0 came out of the histogram pass above; the chain, then the composite mixes it in.
+    if (bloomEnabled())
+        executeScoped(vkCommandBuffer, "Bloom", frameData.bloomCommandBuffer.getCommandBuffer());
 }
 
 void Renderer::recordCommandBuffers()

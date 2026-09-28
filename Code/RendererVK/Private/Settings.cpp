@@ -217,6 +217,17 @@ void MotionBlurParams::registerTweaks(const oc::function<void()>& onReRecord)
     Tweak::intVar("Post/Motion blur", "Samples", &samples, 4, 32, 1.0f, onReRecord);
 }
 
+void BloomParams::registerTweaks(const oc::function<void()>& onReRecord)
+{
+    // Baked into the cached secondaries (the pass gate, the chain length, the composite's push constants).
+    Tweak::boolean("Post/Bloom", "Enabled", &enabled, onReRecord);
+    Tweak::floatVar("Post/Bloom", "Intensity", &intensity, 0.0f, 2.0f, 0.005f, onReRecord);
+    Tweak::floatVar("Post/Bloom", "Threshold", &threshold, 0.0f, 8.0f, 0.01f, onReRecord);
+    Tweak::floatVar("Post/Bloom", "Knee", &knee, 0.0f, 4.0f, 0.01f, onReRecord);
+    Tweak::floatVar("Post/Bloom", "Radius", &radius, 0.0f, 1.0f, 0.01f, onReRecord);
+    Tweak::intVar("Post/Bloom", "Levels", &levels, 2, 7, 1.0f, onReRecord);
+}
+
 void MeshLodParams::registerTweaks()
 {
     Tweak::boolean("LOD", "Enabled", &enabled);

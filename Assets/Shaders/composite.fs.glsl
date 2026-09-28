@@ -8,6 +8,7 @@
 layout (location = 0) in vec2 v_uv;
 layout (binding = 0) uniform sampler2D u_resolved;
 layout (binding = 1, std430) readonly buffer Adapt { float u_avgLum; float u_autoExposure; };
+layout (binding = 2) uniform sampler2D u_bloom; // BloomPipeline level 0: the sum of every level (half res, viewport-relative)
 layout (location = 0) out vec4 out_color;
 
 layout (push_constant) uniform PostPC
@@ -15,6 +16,9 @@ layout (push_constant) uniform PostPC
     float u_exposure;   // linear scale (exp2 of the EV tweak); in auto mode this is exposure compensation
     int   u_tonemapper; // 0 = off (clip), 1 = Reinhard, 2 = ACES, 3 = AgX
     int   u_autoExpEnable; // 1 = multiply by the eye-adaptation exposure, 0 = manual exposure only
+    float u_bloomKeep;  // 1 - the bloom intensity: the scene's share (1 = bloom off)
+    vec4  u_bloomUv;    // bloom uv = v_uv * xy + zw (the viewport -> level 0's region)
+    float u_bloomScale; // intensity / level count: level 0 holds the SUM of every level (0 = bloom off)
 };
 
 // Extended Reinhard on luminance (hue-preserving, soft asymptote at white = 4).
@@ -85,7 +89,12 @@ vec3 linearToSrgb(vec3 c)
 void main()
 {
     float exposure = u_exposure * (u_autoExpEnable != 0 ? u_autoExposure : 1.0);
-    vec3 color = texture(u_resolved, v_uv).rgb * exposure;
+    vec3 color = texture(u_resolved, v_uv).rgb;
+    // Bloom in HDR, before the exposure. With a threshold the blur holds only the light above it and is ADDED
+    // (u_bloomKeep 1); without one it is the energy-conserving mix - every pixel spreads a share of its light.
+    if (u_bloomScale > 0.0)
+        color = color * u_bloomKeep + textureLod(u_bloom, v_uv * u_bloomUv.xy + u_bloomUv.zw, 0.0).rgb * u_bloomScale;
+    color *= exposure;
     // The swapchain is UNORM (no hardware sRGB encode), so display encoding happens here too.
     // "Off" keeps the legacy raw-linear passthrough; AgX's sigmoid already outputs display-encoded.
     if      (u_tonemapper == 1) color = linearToSrgb(tonemapReinhard(color));

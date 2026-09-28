@@ -19,6 +19,8 @@ void EyeAdaptationPipeline::buildHistogramLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // bloom level 0
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // last frame's exposure (bloom threshold)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(HistogramPC) });
 }
 
@@ -93,11 +95,14 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     const uint32 pixelCount = (uint32)oc::max(params.viewportSize.x * params.viewportSize.y, 1);
     auto paramsInfo = vk::DescriptorBufferInfo{ .buffer = m_paramsBuffer[frameIdx].getBuffer(), .range = vk::WholeSize };
 
-    // Clear the histogram, then make the clear visible to the build pass.
+    // Clear the histogram, then make the clear visible to the build pass. The same barrier orders last frame's
+    // reads of bloom level 0 (the upsample chain's compute, the composite's fragment) before this frame's write,
+    // and makes last frame's exposure (the reduce's write) visible to the bloom threshold.
     cmd.fillBuffer(m_histogramBuffer.getBuffer(), 0, vk::WholeSize, 0u);
     {
         vk::MemoryBarrier2 bar{
-            .srcStageMask = vk::PipelineStageFlagBits2::eClear, .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .srcStageMask = vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eShaderStorageWrite,
             .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader, .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
     }
@@ -107,15 +112,19 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         DescriptorSet& set = m_histogramSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto histInfo = vk::DescriptorBufferInfo{ .buffer = m_histogramBuffer.getBuffer(), .range = vk::WholeSize };
-        oc::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 5> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sampler, .imageView = params.resolvedView, .imageLayout = params.resolvedLayout } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { histInfo } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { paramsInfo } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = params.bloomLevel0View, .imageLayout = vk::ImageLayout::eGeneral } } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_adaptBuffer.getBuffer(), .range = vk::WholeSize } } },
         };
         commandBuffer.cmdUpdateDescriptorSets(m_histogramPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_histogramPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_histogramPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-        HistogramPC pc{ .vpMin = params.viewportMin, .vpSize = params.viewportSize };
+        HistogramPC pc{ .vpMin = params.viewportMin, .vpSize = params.viewportSize, .bloom = params.bloom ? 1 : 0,
+            .bloomThreshold = params.bloomThreshold, .bloomKnee = params.bloomKnee,
+            .manualExposure = exp2f(params.exposureEV), .autoExposure = params.autoExposure ? 1 : 0 };
         cmd.pushConstants(m_histogramPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         constexpr uint32 pixelsPerGroup = 16 * 4; // 16x16 threads x PIXELS_PER_THREAD (eyeadapt_histogram.cs.glsl)
         const uint32 gx = ((uint32)params.viewportSize.x + pixelsPerGroup - 1) / pixelsPerGroup;

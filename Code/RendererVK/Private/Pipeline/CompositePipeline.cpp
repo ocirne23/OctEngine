@@ -21,6 +21,8 @@ void CompositePipeline::buildPipelineLayout(GraphicsPipelineLayout& layout)
         .binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
         .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{ // bloom level 0
+        .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(CompositePC) });
 }
@@ -43,7 +45,7 @@ void CompositePipeline::reloadShaders(const RenderPass& renderPass)
 void CompositePipeline::record(CommandBuffer& commandBuffer, const RecordParams& params)
 {
     vk::DescriptorSet descriptorSet = params.descriptorSet.getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 2> updates{
+    oc::array<DescriptorSetUpdateInfo, 3> updates{
         DescriptorSetUpdateInfo{
             .binding = 0,
             .type = vk::DescriptorType::eCombinedImageSampler,
@@ -56,13 +58,18 @@ void CompositePipeline::record(CommandBuffer& commandBuffer, const RecordParams&
         DescriptorSetUpdateInfo{
             .binding = 1,
             .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.exposureBuffer, .range = vk::WholeSize } } } };
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.exposureBuffer, .range = vk::WholeSize } } },
+        DescriptorSetUpdateInfo{
+            .binding = 2,
+            .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.bloomSampler, .imageView = params.bloomView, .imageLayout = vk::ImageLayout::eGeneral } } } };
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet, updates);
     vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-    const CompositePC pc{ .exposure = exp2f(params.exposureEV), .tonemapper = params.tonemapper, .autoExposure = params.autoExposure };
+    const CompositePC pc{ .exposure = exp2f(params.exposureEV), .tonemapper = params.tonemapper, .autoExposure = params.autoExposure,
+        .bloomKeep = params.bloomAdditive ? 1.0f : 1.0f - params.bloomIntensity, .bloomUv = params.bloomUv, .bloomScale = params.bloomIntensity * params.bloomNormalize };
     vkCommandBuffer.pushConstants(m_graphicsPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(pc), &pc);
     vkCommandBuffer.draw(3, 1, 0, 0);
 }

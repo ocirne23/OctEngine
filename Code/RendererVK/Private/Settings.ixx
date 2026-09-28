@@ -357,6 +357,21 @@ export struct MotionBlurParams
     void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
+// Bloom ("Post/Bloom" tweaks; BloomPipeline). With a threshold (> 0) only the light above it, in EXPOSED units,
+// goes into the blur, which is then ADDED: dark and mid tones never blur. Threshold 0 = the physical, energy-
+// conserving mix(scene, blur, intensity), where every pixel spreads a share (keep the intensity small then).
+export struct BloomParams
+{
+    bool  enabled = true;
+    float intensity = 0.3f;  // the blur's weight (additive with a threshold, the mix share without)
+    float threshold = 1.0f;  // exposed brightness where the glow starts (1 = display white); 0 = no threshold
+    float knee = 0.5f;       // the soft ramp's half width around the threshold (exposed units)
+    float radius = 0.75f;    // level weights 2^(k (2 radius - 1)): 0.5 = equal, higher = wider glow, less haze
+    int   levels = 6;        // mip levels of the chain (each doubles the reach); BloomPipeline::MAX_LEVELS at most
+
+    void registerTweaks(const oc::function<void()>& onReRecord);
+};
+
 // Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) - the TweakPanel's "LOD" category.
 // Selection runs per instance at renderNode time; generate/generateLevels/minIndices are read at
 // ObjectContainer load, so they only affect containers loaded after a change.

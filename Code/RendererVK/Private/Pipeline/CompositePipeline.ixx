@@ -1,6 +1,7 @@
 export module RendererVK:CompositePipeline;
 
 import Core;
+import Core.glm;
 
 import :VK;
 import :Buffer;
@@ -29,6 +30,16 @@ public:
         float exposureEV = 0.0f;    // exposure in stops; the shader gets exp2(exposureEV)
         int32 tonemapper = 0;       // 0 = off (raw clip), 1 = Reinhard, 2 = ACES, 3 = AgX
         int32 autoExposure = 0;     // 1 = multiply by the eye-adaptation exposure
+        // Bloom (BloomPipeline): level 0 + its linear sampler (always bound), the mix (0 = off) and the
+        // uv transform full-frame uv -> level 0's viewport region.
+        vk::ImageView bloomView;
+        vk::Sampler   bloomSampler;
+        float bloomIntensity = 0.0f;
+        float bloomNormalize = 1.0f; // 1 / the sum of the level weights (BloomPipeline::getNormalize)
+        // true (a threshold is on): scene + blur x intensity - the blur holds only the light above the threshold.
+        // false: the energy-conserving scene x (1 - intensity) + blur x intensity.
+        bool bloomAdditive = false;
+        glm::vec4 bloomUv = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
     };
     void record(CommandBuffer& commandBuffer, const RecordParams& params);
 
@@ -43,7 +54,11 @@ private:
         float exposure;   // linear scale, exp2 of the EV tweak
         int32 tonemapper;
         int32 autoExposure;
+        float bloomKeep;  // 1 - bloom intensity
+        glm::vec4 bloomUv;
+        float bloomScale; // bloom intensity / level count
     };
+    static_assert(sizeof(CompositePC) == 36);
 
     GraphicsPipeline m_graphicsPipeline;
 };

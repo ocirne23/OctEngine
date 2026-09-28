@@ -10,7 +10,8 @@ import :Layout;
 import :Settings;
 
 // Automatic exposure ("eye adaptation"). Two compute passes per frame over the TAA-resolved scene colour:
-//   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl).
+//   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl);
+//                  from the same read it also writes BLOOM level 0 (BloomPipeline) while bloom is on.
 //   2. reduce    : weighted-average luminance -> target exposure, smoothed over time into a persistent
 //                  exposure buffer (eyeadapt_reduce.cs.glsl).
 // The composite pass reads getExposureBuffer() as its auto-exposure multiplier. The exposure buffer persists
@@ -31,6 +32,14 @@ public:
         vk::Sampler   sampler;
         glm::ivec2 viewportMin;     // viewport rect within the resolved image
         glm::ivec2 viewportSize;
+        // Bloom level 0 (BloomPipeline, GENERAL): the histogram pass writes it from the same read when `bloom`.
+        // Always bound.
+        vk::ImageView bloomLevel0View;
+        bool bloom = false;
+        float bloomThreshold = 0.0f; // exposed units, 0 = off (see eyeadapt_histogram.cs.glsl bloomThreshold)
+        float bloomKnee = 0.5f;
+        float exposureEV = 0.0f;     // the composite's exposure rule, for the threshold
+        bool  autoExposure = true;
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
 
@@ -50,6 +59,11 @@ private:
     {
         glm::ivec2 vpMin;
         glm::ivec2 vpSize;
+        int32 bloom; // 1 = also write bloom level 0
+        float bloomThreshold;
+        float bloomKnee;
+        float manualExposure;
+        int32 autoExposure;
     };
     struct ReducePC
     {
