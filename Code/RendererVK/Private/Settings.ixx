@@ -83,7 +83,7 @@ export struct CloudParams
     // Shape
     float bottom = 200.0f;             // shell bottom altitude (m)
     float top = 1500.0f;               // shell top altitude (m)
-    float coverage = 0.25f;            // 0 = clear, 1 = overcast
+    float coverage = 0.20f;            // 0 = clear, 1 = overcast
     float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform)
     float cloudType = 0.75f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
