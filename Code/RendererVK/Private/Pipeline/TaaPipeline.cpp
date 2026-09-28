@@ -17,6 +17,10 @@ namespace
         float  feedback;
         uint32 viewIndex;
         float  oceanFeedback; // history weight cap on ocean pixels (the ocean writes no motion vectors)
+        uint32 mbEnabled;     // the fused motion blur velocity + sub-tiles (MotionBlurPipeline)
+        float  mbShutter;
+        float  mbMaxRadius;
+        float  mbCameraScale;
     };
 
     auto imgInfoGeneral(vk::ImageView view) { return vk::DescriptorImageInfo{ .imageView = view, .imageLayout = vk::ImageLayout::eGeneral }; }
@@ -34,6 +38,8 @@ void TaaPipeline::buildLayout(ComputePipelineLayout& layout)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // motion target
+    for (uint32 i = 7; i <= 8; ++i) // motion blur velocity + sub-tiles (written)
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TaaPC) });
 }
 
@@ -194,7 +200,7 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
     DescriptorSet& set = m_sets[cur];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     const auto sampledDepth = [](vk::Sampler s, vk::ImageView v) { return vk::DescriptorImageInfo{ .sampler = s, .imageView = v, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT }; };
-    oc::array<DescriptorSetUpdateInfo, 7> updates{
+    oc::array<DescriptorSetUpdateInfo, 9> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.currentColorSampler, params.currentColorView) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_resolved.view[prevIdx]) } },
@@ -202,11 +208,16 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.prevSceneDepthView) } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_resolved.view[cur]) } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.sceneDepthSampler, params.motionView) } },
+        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(params.mbVelocityView) } },
+        DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(params.mbSubTileView) } },
     };
     commandBuffer.cmdUpdateDescriptorSets(pipelineLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout, 0, 1, &vkSet, 0, nullptr);
-    TaaPC pc{ .width = m_width, .height = m_height, .feedback = params.feedback, .viewIndex = viewIndex, .oceanFeedback = params.oceanFeedback };
+    // The storage transition above also orders last frame's reads of the motion blur images (the composite's
+    // fragment, the neighbour pass) before this dispatch writes them: its source stages are compute + fragment.
+    TaaPC pc{ .width = m_width, .height = m_height, .feedback = params.feedback, .viewIndex = viewIndex, .oceanFeedback = params.oceanFeedback,
+        .mbEnabled = params.mbEnabled ? 1u : 0u, .mbShutter = params.mbShutter, .mbMaxRadius = params.mbMaxRadius, .mbCameraScale = params.mbCameraScale };
     cmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
     cmd.dispatch(gx, gy, 1);
 

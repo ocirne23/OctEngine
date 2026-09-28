@@ -24,6 +24,10 @@ layout (binding = 3) uniform sampler2D u_sceneDepth;     // this frame's camera 
 layout (binding = 4) uniform sampler2D u_prevSceneDepth; // last frame's camera depth (disocclusion test)
 layout (binding = 5, rgba16f) uniform restrict writeonly image2D u_resolveOut;
 layout (binding = 6) uniform sampler2D u_motion;         // this frame's motion target (prevScreenUVMotion)
+// MOTION BLUR, fused in (MotionBlurPipeline): this pass already reads the depth and the motion target, so it
+// writes the blur velocity and the 8 x 8 sub-tile maxima - the blur has no full-res pass of its own.
+layout (binding = 7, rg16f) uniform restrict writeonly image2D u_mbVelocityOut;
+layout (binding = 8, rg16f) uniform restrict writeonly image2D u_mbSubTileOut;
 
 layout (push_constant) uniform PC
 {
@@ -32,7 +36,14 @@ layout (push_constant) uniform PC
     float feedback;  // history weight in [0,1]; 0 disables temporal accumulation
     uint  viewIndex; // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
     float oceanFeedback; // history weight cap on ocean pixels - see the ocean block below
+    uint  mbEnabled;     // 1 = write the motion blur velocity + sub-tiles
+    float mbShutter;
+    float mbMaxRadius;
+    float mbCameraScale;
 } pc;
+
+#define MOTION_BLUR_REDUCE u_mbSubTileOut
+#include "motion_blur.inc.glsl"
 
 bool insideViewport(vec2 uv)
 {
@@ -44,7 +55,21 @@ void main()
 {
     g_viewIndex = int(pc.viewIndex);
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    if (px.x >= int(pc.width) || px.y >= int(pc.height))
+    const bool inImage = px.x < int(pc.width) && px.y < int(pc.height);
+    // Before any early return: the sub-tile reduction has barriers every lane must reach. The pixel's OWN
+    // velocity (not the dilated one TAA's history follows).
+    if (pc.mbEnabled != 0u)
+    {
+        vec2 vel = vec2(0.0);
+        if (inImage)
+        {
+            vel = motionBlurVelocity(px, vec2(pc.width, pc.height), texelFetch(u_sceneDepth, px, 0).r,
+                texelFetch(u_motion, px, 0), pc.mbShutter, pc.mbMaxRadius, pc.mbCameraScale);
+            imageStore(u_mbVelocityOut, px, vec4(vel, 0.0, 0.0));
+        }
+        motionBlurReduceTile(vel);
+    }
+    if (!inImage)
         return;
 
     const vec2 texel = 1.0 / vec2(pc.width, pc.height);

@@ -456,6 +456,8 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
         .motionView = sceneColor.getMotionView(eyeIndex),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
+        .mbVelocityView = m_motionBlurPipeline.getVelocityView(), // bound, not written: no motion blur in VR
+        .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
     };
     m_taaPipeline.record(cb, frameIdx, eyeIndex, taaParams);
 }
@@ -745,29 +747,34 @@ void Renderer::recordTaa(uint32 frameIdx)
         .motionView = sceneColor.getMotionView(0),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
+        // The fused motion blur: TAA writes its velocity + sub-tiles.
+        .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
+        .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
+        .mbEnabled = motionBlurEnabled(),
+        .mbShutter = m_motionBlurParams.shutter,
+        .mbMaxRadius = MotionBlurPipeline::clampMaxRadius(m_motionBlurParams.maxRadius),
+        .mbCameraScale = m_motionBlurParams.cameraScale,
     };
     m_taaPipeline.record(cb, frameIdx, 0, taaParams);
     cb.end();
 }
 
-// Motion blur over TAA's resolved colour (the scene colour with TAA off); the composite tonemaps its output.
+// Motion blur's own small passes: TAA wrote the velocity + sub-tiles (with TAA off, the velocity pass here does);
+// the neighbour max; the composite gathers.
 void Renderer::recordMotionBlur(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
     CommandBuffer& cb = frameData.motionBlurCommandBuffer;
     beginComputeSecondary(cb);
-    const bool taaOn = m_taaParams.taaEnabled;
     const MotionBlurPipeline::RecordParams params{
         .ubo = frameData.ubo,
-        .colorView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : sceneColor.getColorLayerView(0),
-        .colorLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
         .sceneDepthView = sceneColor.getDepthView(),
         .motionView = sceneColor.getMotionView(0),
+        .velocityPass = !m_taaParams.taaEnabled,
         .shutter = m_motionBlurParams.shutter,
         .maxRadius = m_motionBlurParams.maxRadius,
         .cameraScale = m_motionBlurParams.cameraScale,
-        .samples = (uint32)oc::max(m_motionBlurParams.samples, 1),
     };
     m_motionBlurPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -821,13 +828,11 @@ void Renderer::recordComposite(uint32 frameIdx)
     vkCb.setScissor(0, vk::Rect2D{.offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
 
     const bool taaOn = m_taaParams.taaEnabled; // TAA bypassed: tonemap the scene colour directly
-    const bool motionBlur = motionBlurEnabled(); // the blur's output replaces either
     CompositePipeline::RecordParams params{
         .descriptorSet = frameData.compositeDescriptorSet,
-        .resolvedView = motionBlur ? m_motionBlurPipeline.getOutputView()
-            : taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
-        .resolvedLayout = (motionBlur || taaOn) ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
-        .sampler = motionBlur ? m_motionBlurPipeline.getSampler() : taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
+        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
+        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
         .exposureEV = m_postParams.exposureEV,
         .tonemapper = m_postParams.tonemapper,
@@ -838,6 +843,13 @@ void Renderer::recordComposite(uint32 frameIdx)
         .bloomNormalize = m_bloomPipeline.getNormalize((uint32)m_bloomParams.levels, m_bloomParams.radius),
         .bloomAdditive = m_bloomParams.threshold > 0.0f,
         .bloomUv = m_bloomPipeline.getUvTransform(m_viewportRect.min, m_viewportRect.getSize()),
+        // The motion blur gather runs in the composite (MotionBlurPipeline).
+        .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
+        .mbNeighborMaxView = m_motionBlurPipeline.getNeighborMaxView(),
+        .mbDepthView = frameData.sceneColor.getDepthView(),
+        .mbSampler = m_motionBlurPipeline.getSampler(),
+        .mbSamples = motionBlurEnabled() ? (uint32)oc::max(m_motionBlurParams.samples, 1) : 0u,
+        .ubo = frameData.ubo.getBuffer(),
     };
     m_compositePipeline.record(cb, params);
     cb.end();
@@ -1340,6 +1352,11 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             .autoExposure = m_postParams.autoExposure ? 1 : 0,
             .bloomView = m_bloomPipeline.getLevel0View(), // bound, unused: no bloom in VR (bloomEnabled)
             .bloomSampler = m_bloomPipeline.getSampler(),
+            .mbVelocityView = m_motionBlurPipeline.getVelocityView(), // bound, unused: no motion blur in VR
+            .mbNeighborMaxView = m_motionBlurPipeline.getNeighborMaxView(),
+            .mbDepthView = frameData.sceneColor.getDepthView(eye),
+            .mbSampler = m_motionBlurPipeline.getSampler(),
+            .ubo = frameData.ubo.getBuffer(),
         };
         m_compositePipeline.record(commandBuffer, eyeComposite);
         vkCommandBuffer.endRenderPass();

@@ -189,6 +189,7 @@ static oc::string buildLayoutPreamble()
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");
     def("PIPELINE_TRANSPARENT_MASK", PIPELINE_TRANSPARENT_MASK, "u"); // the cull's sequence routing (Layout.ixx)
     def("MOTION_BLUR_TILE", MOTION_BLUR_TILE);
+    def("MOTION_BLUR_SUBTILE", MOTION_BLUR_SUBTILE);
     def("MATERIAL_FLAG_TERRAIN", MATERIAL_FLAG_TERRAIN, "u");
     def("OCEAN_FFT_SIZE", OCEAN_FFT_SIZE);
     def("OCEAN_CASCADES", OCEAN_CASCADES);

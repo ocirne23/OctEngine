@@ -158,7 +158,8 @@ GPU Frame
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
-    → Scene forward → TAA → Motion blur (desktop, "Post/Motion blur") → Eye adaptation (+ bloom level 0)
+    → Scene forward → TAA (+ motion blur velocity) → Motion blur (desktop, "Post/Motion blur": tile max only;
+      the composite gathers) → Eye adaptation (+ bloom level 0)
     → Bloom (desktop, "Post/Bloom": the down/up chain; the composite mixes it in)
   Composite + UI
 ```
@@ -817,22 +818,29 @@ The tweak carries `onReRecord`, so toggling rebuilds the descriptors either way.
 
 ## Motion blur (`MotionBlurPipeline`, "Post/Motion blur" tweaks)
 
-After TAA, desktop only (`motionBlurEnabled()`: off in VR, and bypassed like TAA when off - not recorded, not
-executed). Three compute passes over TAA's resolved colour (the scene colour with TAA off) into ONE output image
-the composite tonemaps instead; **eye adaptation keeps the unblurred colour.** The images are used within the
-frame only, so there is one set, not one per slot: the record opens with a barrier against last frame's reads.
+Desktop only (`motionBlurEnabled()`: off in VR, and bypassed when off - its pass is not recorded, not executed,
+and TAA / the composite skip their parts). **FUSED into the passes around it: it has no full-res pass of its
+own** (measured 2026-09-28, sandbox, still camera: motion blur 0.065 -> 0.013 ms, TAA +0.004, composite +0.002,
+GPU frame -0.04..0.05 ms). The shared code is `motion_blur.inc.glsl`; **eye adaptation and bloom keep the
+unblurred colour.** Its images (RG16F) are used within the frame only - one set for every slot, GENERAL for life.
 
-1. `motion_blur_tiles` - per pixel the velocity = (this - last frame) uv x "Shutter" in px, clamped to 2 x "Max
-   radius", + the view distance; per `MOTION_BLUR_TILE`^2 tile (32, Layout.ixx; one 1024-lane workgroup reduces
-   one tile) the longest velocity. The camera part from the depth (`prevScreenUVClip`), the object part = the
-   motion target - the camera part, so "Camera motion" scales the camera's share alone. A frame motion over
-   ~30 % of the screen diagonal is a cut or a teleport: no blur.
-2. `motion_blur_neighbor` - per tile the longest velocity of its 3x3 tiles. **The radius is capped at the tile
-   size**, so that neighbourhood holds every blur that can reach a pixel: that is what lets a moving object
-   smear past its silhouette.
-3. `motion_blur_gather` - McGuire et al. 2012's reconstruction filter, "Samples" taps along the neighbourhood
-   velocity (interleaved-gradient jitter per frame), each weighted by whether its blur covers this pixel or
-   this pixel's blur covers it, with soft depth tests (2 % of the distance) choosing the front one.
+1. **TAA writes the velocity** (`motionBlurVelocity`; TAA already reads the depth and the motion target) and
+   the longest velocity per 8 x 8 SUB-tile (`MOTION_BLUR_SUBTILE`, TAA's workgroup; a shared-memory reduction
+   at the top of the shader, before any early return). Velocity = (this - last frame) uv x "Shutter" in px,
+   clamped to 2 x "Max radius": the camera part from the depth (`prevScreenUVClip`), the object part = the
+   motion target - the camera part, so "Camera motion" scales the camera's share alone; a frame motion over
+   ~30 % of the screen diagonal is a cut or a teleport: no blur. With TAA OFF, `motion_blur_tiles` does it.
+   TAA's opening storage transition (source stages compute + fragment) orders last frame's reads first.
+2. `motion_blur_neighbor` (the "Motion blur" scope) - per `MOTION_BLUR_TILE` (32) tile the longest velocity
+   of its 3 x 3 tiles, read straight from the sub-tiles. **The radius is capped at the tile size**, so that
+   neighbourhood holds every blur that can reach a pixel: that is what lets a moving object smear past its
+   silhouette.
+3. **The COMPOSITE gathers** (`motionBlurGather`): a pixel whose tile neighbourhood moves runs McGuire et
+   al. 2012's reconstruction filter, "Samples" taps along the neighbourhood velocity (interleaved-gradient
+   jitter per frame), each weighted by whether its blur covers this pixel or this pixel's blur covers it, with
+   soft depth tests (2 % of the distance, on 1 / the scene depth) choosing the front one; any other pixel reads
+   the resolved colour once, as without the blur. So no blurred image is written or read. The composite binds
+   the frame UBO for it (binding 6, `UBO_BINDING`).
 
 "Shutter" is the exposure as a fraction of the frame, so a higher frame rate blurs less (physical); > 1
 exaggerates. The ocean writes no motion vectors, so its waves blur only with the camera.

@@ -40,6 +40,14 @@ public:
         // false: the energy-conserving scene x (1 - intensity) + blur x intensity.
         bool bloomAdditive = false;
         glm::vec4 bloomUv = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
+        // The motion blur GATHER runs here (MotionBlurPipeline): its velocity + neighbour max (+ the sampler),
+        // the scene depth (SCENE_DEPTH_SAMPLED_LAYOUT), the frame UBO. Always bound; mbSamples 0 = off.
+        vk::ImageView mbVelocityView;
+        vk::ImageView mbNeighborMaxView;
+        vk::ImageView mbDepthView;
+        vk::Sampler   mbSampler;
+        uint32 mbSamples = 0;
+        vk::Buffer ubo;
     };
     void record(CommandBuffer& commandBuffer, const RecordParams& params);
 
@@ -57,8 +65,9 @@ private:
         float bloomKeep;  // 1 - bloom intensity
         glm::vec4 bloomUv;
         float bloomScale; // bloom intensity / level count
+        uint32 mbSamples; // motion blur gather samples (0 = off)
     };
-    static_assert(sizeof(CompositePC) == 36);
+    static_assert(sizeof(CompositePC) == 40);
 
     GraphicsPipeline m_graphicsPipeline;
 };

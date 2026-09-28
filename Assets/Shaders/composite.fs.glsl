@@ -5,10 +5,20 @@
 // linear radiance). The resolved image is full render-target sized; the area outside the editor
 // viewport panel holds the scene clear colour and is later covered by ImGui.
 
+// The frame UBO at binding 6 (viewport, frame index: the motion blur gather).
+#define UBO_BINDING 6
+#include "shared.inc.glsl"
+#include "motion_blur.inc.glsl"
+
 layout (location = 0) in vec2 v_uv;
 layout (binding = 0) uniform sampler2D u_resolved;
 layout (binding = 1, std430) readonly buffer Adapt { float u_avgLum; float u_autoExposure; };
 layout (binding = 2) uniform sampler2D u_bloom; // BloomPipeline level 0: the sum of every level (half res, viewport-relative)
+// MOTION BLUR, gathered HERE (MotionBlurPipeline): no blurred full-res image is written or read. A pixel whose
+// tile neighbourhood holds no motion reads the resolved colour once, as without the blur.
+layout (binding = 3) uniform sampler2D u_mbVelocity;    // per pixel (px over the exposure; TAA writes it)
+layout (binding = 4) uniform sampler2D u_mbNeighborMax; // per MOTION_BLUR_TILE tile
+layout (binding = 5) uniform sampler2D u_mbDepth;       // this frame's scene depth (the gather's depth tests)
 layout (location = 0) out vec4 out_color;
 
 layout (push_constant) uniform PostPC
@@ -19,6 +29,7 @@ layout (push_constant) uniform PostPC
     float u_bloomKeep;  // 1 - the bloom intensity: the scene's share (1 = bloom off)
     vec4  u_bloomUv;    // bloom uv = v_uv * xy + zw (the viewport -> level 0's region)
     float u_bloomScale; // intensity / level count: level 0 holds the SUM of every level (0 = bloom off)
+    uint  u_mbSamples;  // motion blur gather samples (0 = motion blur off)
 };
 
 // Extended Reinhard on luminance (hue-preserving, soft asymptote at white = 4).
@@ -89,7 +100,17 @@ vec3 linearToSrgb(vec3 c)
 void main()
 {
     float exposure = u_exposure * (u_autoExpEnable != 0 ? u_autoExposure : 1.0);
-    vec3 color = texture(u_resolved, v_uv).rgb;
+    vec3 color;
+    const ivec2 px = ivec2(gl_FragCoord.xy);
+    const vec2 vN = u_mbSamples != 0u ? texelFetch(u_mbNeighborMax, px / MOTION_BLUR_TILE, 0).xy : vec2(0.0);
+    if (dot(vN, vN) >= 1.0) // at least half a pixel of blur radius in the tile neighbourhood
+    {
+        const ivec2 lo = ivec2(u_viewportRect.xy * u_screenSize.xy);
+        const ivec2 hi = ivec2((u_viewportRect.xy + u_viewportRect.zw) * u_screenSize.xy) - 1;
+        color = motionBlurGather(u_resolved, u_mbVelocity, u_mbDepth, px, vN, u_mbSamples, lo, hi);
+    }
+    else
+        color = texture(u_resolved, v_uv).rgb;
     // Bloom in HDR, before the exposure. With a threshold the blur holds only the light above it and is ADDED
     // (u_bloomKeep 1); without one it is the energy-conserving mix - every pixel spreads a share of its light.
     if (u_bloomScale > 0.0)

@@ -37,6 +37,13 @@ public:
         vk::ImageView motionView;            // this frame's motion target (SHADER_READ_ONLY), read with the depth sampler
         float feedback;                      // history weight; 0 disables accumulation
         float oceanFeedback;                 // history weight cap on ocean pixels (the ocean writes no motion vectors)
+        // The fused motion blur (MotionBlurPipeline): this pass writes its velocity + sub-tiles. Always bound.
+        vk::ImageView mbVelocityView;
+        vk::ImageView mbSubTileView;
+        bool  mbEnabled = false;
+        float mbShutter = 0.0f;
+        float mbMaxRadius = 0.0f;            // already clamped (MotionBlurPipeline::clampMaxRadius)
+        float mbCameraScale = 0.0f;
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params);
 
