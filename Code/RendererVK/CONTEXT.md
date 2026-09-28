@@ -628,7 +628,8 @@ instead of only the camera.
   region holds no last frame), set by `SkinnedMeshRegistry::markJobsUploaded` after the upload.
 * **Readers**: TAA (the motion of the NEAREST surface in the 3x3, so a moving silhouette's history follows
   the object), the AO temporal pass, the forward pass's AO read (its own `MOTION_WORLD_DELTA`, no
-  target read), and the motion blur. Not (yet): the cloud temporal pass, the particle collision.
+  target read), the motion blur, and DLSS's motion vector pass (`dlss_mvec`). Not (yet): the cloud temporal
+  pass, the particle collision.
 * Cost: +8 B per pixel per slot and eye (~30 MB per slot at 1440p), +16 B per culled instance, one extra
   varying (vec3) on the lit/unlit vertex path.
 
@@ -890,15 +891,22 @@ DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No f
   bias"; the static-mesh sampler only: materials + terrain; decals keep 0).
 * **Per frame** (`recordDlssEvaluate`, in the primary, where TAA would run): the cached `DlssPipeline`
   secondary (`dlss_mvec.cs.glsl`: full motion vectors - the motion target has object motion only, so a w = 0
-  pixel reprojects through the camera from its depth, RG16F render px, current -> previous, unjittered),
+  pixel reprojects through the camera from its depth, RG16F render px, current -> previous, unjittered; plus
+  the ocean bias mask below),
   `TaaPipeline::beginExternalWrite`, `Streamline::evaluateDlss` (options only on a change, a frame token, the
   constants, the four tags `eValidUntilEvaluate`, `slEvaluateFeature` into the primary), `endExternalWrite`.
   Auto exposure is on: the engine's exposure is computed after the upscale. No command buffer state to restore:
   every pass after it is a secondary.
 * **Jitter sign**: DLSS gets the engine's NDC jitter in render pixels with y down: (+x, -y) x size / 2.
   Verified on screen with an A/B: the UE convention (-x, +y) wobbles and softens the image.
+* **The ocean** (no motion vectors: dual-source blend) gets TAA's ocean feedback cap as DLSS's
+  **bias-current-colour mask** (`kBufferTypeBiasCurrentColorHint`: lerp(history, current, bias)): the mvec pass
+  also writes an R16F mask (NOT R8_UNORM: SL's Vulkan format table has no entry for it and logs "Cannot have
+  undefined format" - a new tagged format must be in `sl.chi` `Vulkan::getFormat`), "Ocean current bias" (0.8 = TAA's 0.2 history weight) on TAA's ocean flag pixels
+  (scene colour alpha < 0.004, depth > 0), 0 elsewhere. It reads the scene colour, so it runs after the
+  colour's barrier to the resolve.
 * Not while upscaling: **motion blur** (`motionBlurEnabled()`: its velocity and gather assume one resolution);
-  DLAA keeps it. TAA's ocean feedback cap has no DLSS equivalent.
+  DLAA keeps it.
 
 ## Motion blur (`MotionBlurPipeline`, "Post/Motion blur" tweaks)
 

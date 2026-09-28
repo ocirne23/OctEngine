@@ -10,6 +10,9 @@ namespace
 {
     constexpr vk::Format DLSS_MVEC_FORMAT = vk::Format::eR16G16Sfloat;
     constexpr vk::ImageUsageFlags DLSS_MVEC_USAGE = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled;
+    // Not R8_UNORM: SL's Vulkan format table (sl.chi Vulkan::getFormat) has no entry for it ("Cannot have undefined
+    // format"). R16_SFLOAT is in it.
+    constexpr vk::Format DLSS_BIAS_FORMAT = vk::Format::eR16Sfloat;
     // TaaPipeline's resolved format: the copy needs the same one.
     constexpr vk::Format DLSS_OUTPUT_FORMAT = TaaPipeline::RESOLVED_FORMAT;
     constexpr vk::ImageUsageFlags DLSS_OUTPUT_USAGE = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc;
@@ -18,6 +21,7 @@ namespace
     {
         glm::ivec2 origin;
         glm::ivec2 size;
+        float oceanBias;
     };
 
     vk::DescriptorSetLayoutBinding binding(uint32 idx, vk::DescriptorType type)
@@ -29,6 +33,7 @@ namespace
 DlssPipeline::~DlssPipeline()
 {
     destroyImage(m_motion);
+    destroyImage(m_bias);
     destroyImage(m_output);
     if (m_sampler)
         Globals::device.getDevice().destroySampler(m_sampler);
@@ -43,6 +48,8 @@ void DlssPipeline::buildLayout(ComputePipelineLayout& layout)
         binding(1, vk::DescriptorType::eCombinedImageSampler), // depth
         binding(2, vk::DescriptorType::eCombinedImageSampler), // motion target
         binding(3, vk::DescriptorType::eStorageImage),         // motion vectors
+        binding(4, vk::DescriptorType::eCombinedImageSampler), // scene colour (the ocean flag)
+        binding(5, vk::DescriptorType::eStorageImage),         // bias mask
     };
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(MvecPC) });
 }
@@ -142,6 +149,7 @@ void DlssPipeline::createImage(Image& image, uint32 width, uint32 height, vk::Fo
 void DlssPipeline::recreateImages(uint32 width, uint32 height)
 {
     createImage(m_motion, width, height, DLSS_MVEC_FORMAT, DLSS_MVEC_USAGE, "Dlss.mvec");
+    createImage(m_bias, width, height, DLSS_BIAS_FORMAT, DLSS_MVEC_USAGE, "Dlss.bias");
 }
 
 void DlssPipeline::recreateOutputImage(uint32 width, uint32 height)
@@ -162,17 +170,19 @@ void DlssPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const R
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
 
     vk::DescriptorSet vkSet = m_sets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 4> updates{
+    oc::array<DescriptorSetUpdateInfo, 6> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.motionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_motion.view, .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.sceneColorView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_bias.view, .imageLayout = vk::ImageLayout::eGeneral } } },
     };
     const vk::PipelineLayout layout = m_pipeline.getPipelineLayout();
     commandBuffer.cmdUpdateDescriptorSets(layout, vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, 1, &vkSet, 0, nullptr);
-    const MvecPC pc{ .origin = params.renderOrigin, .size = params.renderSize };
+    const MvecPC pc{ .origin = params.renderOrigin, .size = params.renderSize, .oceanBias = params.oceanBias };
     cmd.pushConstants(layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
     cmd.dispatch((uint32)(params.renderSize.x + 7) / 8, (uint32)(params.renderSize.y + 7) / 8, 1);
 
@@ -190,6 +200,12 @@ Streamline::Image DlssPipeline::getMotionImage() const
 {
     return Streamline::Image{ .image = m_motion.image, .view = m_motion.view, .layout = vk::ImageLayout::eGeneral, .format = DLSS_MVEC_FORMAT,
         .size = glm::uvec2(m_motion.width, m_motion.height), .usage = DLSS_MVEC_USAGE };
+}
+
+Streamline::Image DlssPipeline::getBiasImage() const
+{
+    return Streamline::Image{ .image = m_bias.image, .view = m_bias.view, .layout = vk::ImageLayout::eGeneral, .format = DLSS_BIAS_FORMAT,
+        .size = glm::uvec2(m_bias.width, m_bias.height), .usage = DLSS_MVEC_USAGE };
 }
 
 Streamline::Image DlssPipeline::getOutputImage() const

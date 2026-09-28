@@ -213,9 +213,10 @@ void TAAParams::registerTweaks(const oc::function<void()>& onReRecord)
 
 void DlssParams::registerTweaks(const oc::function<void()>& onResize, const oc::function<void()>& onReRecord)
 {
-    Tweak::enumVar("Post/DLSS", "Mode", &mode, s_dlssModeNames, onResize, ETweakFlags::Saved);
-    Tweak::enumVar("Post/DLSS", "Preset", &preset, s_dlssPresetNames, onReRecord, ETweakFlags::Saved);
+    Tweak::enumVar("Post/DLSS", "Mode", &mode, s_dlssModeNames, onResize);
+    Tweak::enumVar("Post/DLSS", "Preset", &preset, s_dlssPresetNames, onReRecord);
     Tweak::boolean("Post/DLSS", "Mip bias", &mipBias, onResize);
+    Tweak::floatVar("Post/DLSS", "Ocean current bias", &oceanBias, 0.0f, 1.0f, 0.01f, onReRecord); // a push constant of the cached mvec pass
     Tweak::boolean("Post/DLSS", "Verbose log (restart)", &verboseLog, {}, ETweakFlags::Saved);
 }
 

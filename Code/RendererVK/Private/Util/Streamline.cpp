@@ -474,11 +474,12 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
     if (g_sl.setConstants(constants, *token, viewport) != sl::Result::eOk)
         return false;
 
-    sl::SubresourceRange ranges[4];
+    sl::SubresourceRange ranges[5];
     sl::Resource colorIn = toSl(frame.colorIn, ranges[0]);
     sl::Resource colorOut = toSl(frame.colorOut, ranges[1]);
     sl::Resource depth = toSl(frame.depth, ranges[2]);
     sl::Resource motion = toSl(frame.motion, ranges[3]);
+    sl::Resource bias = toSl(frame.biasCurrentColor, ranges[4]);
     const sl::Extent renderExtent{ .top = frame.renderOffset.y, .left = frame.renderOffset.x, .width = frame.renderSize.x, .height = frame.renderSize.y };
     const sl::Extent outputExtent{ .top = frame.outputOffset.y, .left = frame.outputOffset.x, .width = frame.outputSize.x, .height = frame.outputSize.y };
     // Valid until evaluate: the evaluate below is recorded right after, into the same command buffer.
@@ -487,9 +488,11 @@ bool Streamline::evaluateDlss(vk::CommandBuffer cmd, const DlssFrame& frame)
         sl::ResourceTag(&colorOut, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eValidUntilEvaluate, &outputExtent),
         sl::ResourceTag(&depth, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent),
         sl::ResourceTag(&motion, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent),
+        sl::ResourceTag(&bias, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilEvaluate, &renderExtent),
     };
+    const uint32_t numTags = frame.biasCurrentColor.image ? 5u : 4u; // the optional tag is last
     sl::CommandBuffer* slCmd = reinterpret_cast<sl::CommandBuffer*>(static_cast<VkCommandBuffer>(cmd));
-    if (g_sl.setTagForFrame(*token, viewport, tags, (uint32_t)(sizeof(tags) / sizeof(tags[0])), slCmd) != sl::Result::eOk)
+    if (g_sl.setTagForFrame(*token, viewport, tags, numTags, slCmd) != sl::Result::eOk)
         return false;
 
     const sl::BaseStructure* inputs[] = { &viewport };

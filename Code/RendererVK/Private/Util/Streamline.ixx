@@ -70,6 +70,7 @@ export namespace Streamline
         Image colorOut;          // output resolution, storage
         Image depth;             // hardware depth (reversed-Z)
         Image motion;            // RG16F, px at render resolution, current -> previous
+        Image biasCurrentColor;  // R16F, render resolution: lerp(history, current, bias). Null image = not tagged
         glm::uvec2 renderOffset; // the rendered sub-rect of colorIn / depth / motion
         glm::uvec2 renderSize;
         glm::uvec2 outputOffset; // the written sub-rect of colorOut

@@ -358,6 +358,9 @@ export struct DlssParams
     int mode = 2;           // Streamline::DlssMode: Off, DLAA, Quality (default), Balanced, Performance, Ultra Performance
     int preset = 0;         // 0 = the DLSS default for the mode, else J / K / L / M
     bool mipBias = true;    // negative texture LOD bias by the render scale (log2(render / output))
+    // DLSS's current-colour bias on ocean pixels (no motion vectors on the waves): 1 = no history there. The
+    // default matches TAA's "Ocean feedback" 0.2 history weight.
+    float oceanBias = 0.8f;
     // Streamline's verbose log (Assets/Local/Streamline/); SL reads it at slInit, so it applies at the next start.
     bool verboseLog = false;
 

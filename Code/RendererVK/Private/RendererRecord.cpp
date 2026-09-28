@@ -769,8 +769,10 @@ void Renderer::recordDlss(uint32 frameIdx)
         .ubo = frameData.ubo,
         .sceneDepthView = frameData.sceneColor.getDepthView(),
         .motionView = frameData.sceneColor.getMotionView(0),
+        .sceneColorView = frameData.sceneColor.getColorLayerView(0),
         .renderOrigin = m_renderRect.min,
         .renderSize = m_renderRect.getSize(),
+        .oceanBias = m_dlssParams.oceanBias,
     };
     m_dlssPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -818,6 +820,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
         .depth = { .image = sceneColor.getDepthImage(), .view = sceneColor.getDepthView(0), .layout = SCENE_DEPTH_SAMPLED_LAYOUT,
             .format = SCENE_DEPTH_FORMAT, .size = renderTarget, .usage = SceneColor::DEPTH_USAGE, .aspect = vk::ImageAspectFlagBits::eDepth },
         .motion = m_dlssPipeline.getMotionImage(),
+        .biasCurrentColor = m_dlssPipeline.getBiasImage(),
         .renderOffset = glm::uvec2(m_renderRect.min),
         .renderSize = renderSize,
         .outputOffset = glm::uvec2(0),
