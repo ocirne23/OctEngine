@@ -9,11 +9,16 @@
 // Optical depth toward the sun from a camera-relative point: quadratically growing steps out to the
 // light distance. Only the first (short) step carries the detail noise: the longer ones integrate over
 // the detail scale anyway, and each detail sample costs two or three more fetches (curl, detail, near).
-float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lodBase, float lodDetail, float detailWeight)
+// Each step reads the base noise at the mip of ITS OWN LENGTH (at least the view sample's): a step hundreds of
+// metres long integrates over that much noise, and the view sample's fine mip only thrashed the texture cache
+// (and aliased). EARLY OUT at odCut (normalized, the caller's): past it every multi-scattering octave is gone.
+float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lodBase, float lodDetail, float detailWeight, float odCut)
 {
     const int n = int(u_cloudMarch1.x);
     const float reach = u_cloudMarch1.y;
     const float invN = 1.0 / u_cloudMarch1.x;
+    const float stepLodBias = log2(u_cloudShape1.y * CLOUD_BASE_RES);
+    const float cut = odCut / u_cloudShape1.w;
     float od = 0.0;
     float tPrev = 0.0;
     for (int i = 0; i < n; ++i)
@@ -25,7 +30,11 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lod
         const float alt = cloudAltitude(p, camAlt);
         if (alt > u_cloudShape0.y)
             break;
-        od += cloudDensity(nxz + L.xz * tm, alt, 1e30, i == 0 ? detailWeight : 0.0, lodBase, lodDetail) * (t1 - tPrev);
+        const float len = t1 - tPrev;
+        const float lodStep = max(lodBase, log2(len) + stepLodBias);
+        od += cloudDensity(nxz + L.xz * tm, alt, 1e30, i == 0 ? detailWeight : 0.0, lodStep, lodDetail) * len;
+        if (od > cut)
+            break;
         tPrev = t1;
     }
     return od * u_cloudShape1.w;
@@ -67,6 +76,9 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const float msTailScale = ms * ms / max(1.0 - ms, 0.05);
     const float msTailExt = pow(ms, 1.0 + 1.0 / max(1.0 - ms, 0.05));
     const float msStrength = u_cloudLight2.w;
+    // The sun march's early out: the slowest octave falls as exp(-od * msTailExt), so past od = 7 / msTailExt it
+    // is under 0.1 % - and so is every faster term.
+    const float odCut = 7.0 / max(min(msTailExt, ms), 0.02);
     // Octave 0 (single scattering) keeps the droplet phase: its narrow forward spike is the silver lining.
     // The multiple-scattering octaves are ISOTROPIC: after a few scattering events the direction is nearly
     // random, which is what keeps the side of a cloud away from the sun bright. A flattened copy of the
@@ -207,11 +219,11 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             {
                 const float hf = cloudLayerHeightFraction(alt); // within its own layer (clouds.inc.glsl)
                 float od;
-                const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView) : vec2(0.0);
+                const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView, false) : vec2(0.0);
                 if (map.y >= 1.0)
                     od = map.x;
                 else
-                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, L, lodBase, lodDetail, detailWeight), map.x, map.y);
+                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, L, lodBase, lodDetail, detailWeight, odCut), map.x, map.y);
                 // Multiple scattering: the closed-form octave sum (above the loop), isotropic.
                 const float msSum = ms * exp(-od * ms) + msTailScale * exp(-od * msTailExt);
                 const float sunTerm = phase0 * exp(-od) + isotropic * (msStrength * msSum);
@@ -285,8 +297,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // segment. Unshadowed, its Mie forward peak drew a sun glow on top of any cloud, however dense. (A ramp to the
     // VIEW ray's transmittance within ~10 degrees of the sun left the rest of the halo: a black hole in a ring.)
     const vec3 airWorld = u_viewPos + origin;
-    const float airSunVis = 0.5 * (cloudSunTransmittance(airWorld + dir * (0.25 * tAir))
-                                 + cloudSunTransmittance(airWorld + dir * (0.75 * tAir)));
+    const float airSunVis = 0.5 * (cloudSunTransmittanceBilinear(airWorld + dir * (0.25 * tAir))
+                                 + cloudSunTransmittanceBilinear(airWorld + dir * (0.75 * tAir)));
     r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * airSunVis);
     return r;
 }

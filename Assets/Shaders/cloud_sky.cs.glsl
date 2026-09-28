@@ -29,6 +29,16 @@ const int SKY_CLOUD_STEPS = 64;
 // marches with a new jitter and blends into the texel's history: the average of many jittered marches, which
 // changes smoothly with the camera. The history weight is frame-time based (u_cloudShape4.z = exp(-3 dt / T),
 // "Sky/Clouds/Quality/Sky map history (s)" = T): 95 % of a change after T seconds at any frame rate.
+// PROGRESSIVE: with a seconds-long history a texel need not march every frame. Each frame marches ONE texel of
+// every 2x2 block (the phase rotates with the frame, the shadow map's order), and the CPU's weight counts the 4
+// frames since that texel's last march. And only the UPPER hemisphere is dispatched (rows [0, H/2): v =
+// acos(y) / pi): the lower half stays "no cloud" from the clear at creation.
+
+ivec2 skyCloudTexel()
+{
+    const uint p = u_frameIndex & 3u;
+    return ivec2(gl_GlobalInvocationID.xy) * 2 + ivec2(int((p & 1u) ^ ((p >> 1u) & 1u)), int(p & 1u));
+}
 
 float skyCloudJitter(ivec2 p)
 {
@@ -41,8 +51,8 @@ float skyCloudJitter(ivec2 p)
 void main()
 {
     const ivec2 size = imageSize(u_outSkyClouds);
-    const ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(xy, size)))
+    const ivec2 xy = skyCloudTexel();
+    if (xy.x >= size.x || xy.y >= size.y / 2)
         return;
     const vec3 dir = skyMapDir((vec2(xy) + 0.5) / vec2(size));
     if (dir.y <= 0.0 || u_cloudShape0.w < 0.5)

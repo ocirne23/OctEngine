@@ -767,7 +767,11 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     The sun at the cloud uses the atmosphere transmittance along the LOCAL up of the entry point (the
     sunset on distant clouds). The aerial perspective in front of the cloud is a 4-step single-scatter
     segment from the camera altitude (`cloudAerialScatter`). The sun march runs only where the shadow map
-    does not cover the sample (or "Self-shadow from map" is off). Output: in-scatter + transmittance, and
+    does not cover the sample (or "Self-shadow from map" is off - the default: the user keeps it off for
+    quality; on, it measured march 0.63 -> 0.35 ms). **The sun march** (`cloudLightOpticalDepth`, 3 steps
+    over 2 km) reads each step's base noise at the mip of ITS OWN LENGTH (at least the view sample's) and
+    stops past `odCut = 7 / min(msTailExt, ms)` (every multi-scattering octave under 0.1 %): march 0.63 ->
+    0.56 ms, sky 0.14 -> 0.10 ms (2026-09-29). Output: in-scatter + transmittance, and
     log2 distances (first hit, transmittance-weighted, march limit).
   * **Temporal** (`cloud_temporal.cs.glsl`): reprojects the weighted cloud distance minus this frame's
     wind displacement, rejects a history whose cloud distance lies OUTSIDE the neighbourhood's range of
@@ -823,7 +827,9 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     mountain or fog froxel inside a cloud, and the clouds' own samples. Because x is a coordinate and not a
     distance from a start plane, the map needs no per-cascade start distance.
   * **PROGRESSIVE UPDATES, one buffer, no toroidal addressing.** Each frame a cascade renders 1 / split of
-    its texels ("Near update split" 1/4, "Far update split" 1/16): one texel of each 2x2 / 4x4 block, the
+    its texels ("Near update split" 1/4, "Far update split" 1/64 since 2026-09-29 - it was 1/16; the far
+    cascade did ~2/3 of the samples, and a 64-frame cycle moves the clouds ~11 m at 10 m/s, under a third of
+    its ~39 m texel; Cloud shadow 0.175 -> ~0.09 ms): one texel of each 2x2 / 4x4 / 8x8 block, the
     rotating phase's (`shadowTexel` in cloud_shadow.cs.glsl), one thread per rendered texel - a constant cost
     per frame instead of a spike every Nth frame (the old "Far update interval"). Neighbouring texels differ in
     age by a few frames, well under a texel of cloud motion. That needs ONE texel-to-world mapping for all of
@@ -841,6 +847,10 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     1.5) jitters the lookup per pixel and frame (a world-anchored hash: vertex-stage consumers have no
     gl_FragCoord); TAA and the fog's temporal blend average it into a penumbra. The near cascade keeps its
     one hardware-bilinear fetch, and so does `cloudSunTransmittanceSoft` (GI).
+    **Only SURFACES take the filter** (`cloudSunTransmittance`: lit core, terrain, ocean, film, decals).
+    **`cloudSunTransmittanceBilinear`** (the far cascade's one bilinear fetch) serves what already averages over
+    space and time: the fog froxels + shaft haze, the far field's jittered taps (up to 10 per pixel), the clouds'
+    air term and particles. Measured 2026-09-29: the far field on the filter cost the fog apply ~0.025 ms.
   * Past the far cascade the transmittance fades to a rough mean from the coverage (not measured).
   * **Consumers** multiply their sun term by `cloudSunTransmittance(worldPos)`: the lit core (lit, masked,
     transparent, terrain; forward set binding 22), the ocean (`sunTint`, so glint, body, foam and SSS), the
@@ -880,7 +890,11 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   hash + golden ratio) and blends into the texel's own last value (the image is read-write, cleared to "no
   cloud" at creation). The history weight is FRAME-TIME based: `u_cloudShape4.z = exp(-3 dt / T)` with T =
   "Sky/Clouds/Quality/Sky map history (s)" (default 5; 95 % of a change after T seconds at any frame rate; real
-  time, so it still converges while the sim is paused; 0 = no history). **The observer
+  time, so it still converges while the sim is paused; 0 = no history). **PROGRESSIVE:** each frame marches
+  ONE texel of every 2x2 block (rotating phase, the shadow map's order; `CloudPipeline::SKY_UPDATE_FRAMES` = 4,
+  so the CPU's dt spans 4 frames), and only the UPPER hemisphere is dispatched (rows [0, H/2); the lower half
+  stays "no cloud" from the clear). 4096 threads cannot fill the GPU, so the pass is now bound by its longest
+  ray's serial chain, not its thread count. **The observer
   stands on the GROUND under the camera** (`ATMOS_OBSERVE_HEIGHT`), not at the camera: every reader of the
   sky map sits under the clouds, even while the camera flies above them. The ambient reads the sky map's
   CLEAR layer from LAST frame (no feedback loop through the clouds' own image).
@@ -1440,6 +1454,12 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   * The terrain TES is 70/0 for both the ground and the film: the relief taps are 6 of it (64 without),
     the rest is `terrainLayers` (the climate walk, per tessellated vertex). Its per-layer indices cannot be
     interpolated across a patch, so moving it per control point is not a small change.
+* **Measured 2026-09-29** (regs/local): lit FS **72/32** (#10 variant 72/48; it was 64/32 on 09-22), ocean
+  **80/32** (was 80/16), film 56/48 (same), terrain ground 64/48 and 56/48, cloud_march / cloud_sky 64/0,
+  cloud_shadow 38/0, cloud_temporal 48/0, vol_scatter 72/0, vol_apply FS 56/16. Bisected against that day's
+  changes: the lit core's filtered cloud lookup (bilinear: still 72/32), the ocean's filtered cloud lookup, its
+  SH blur share and its SH ambient (each removed: still 80/32) - NONE is the cause. The lit +8 regs came in
+  between 09-23 and 09-29 (GI cloud-shadow fixes 09-27, motion vectors / terrain opt 09-28): not bisected yet.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a

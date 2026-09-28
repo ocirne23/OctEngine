@@ -385,7 +385,7 @@ void main()
         }
         else
             sunVis = giSunShadow(worldPos, vec3(0.0));
-        sunVis *= cloudSunTransmittance(worldPos);
+        sunVis *= cloudSunTransmittanceBilinear(worldPos);
         fogSunVis = sunVis;
 
         // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
@@ -462,7 +462,7 @@ void main()
     if (u_fogParams10.x > 0.0 && underFrac < 1.0)
     {
         const float hazeSigma = u_fogParams10.x * heightFogMean(yA, yB, u_fogParams0.y, u_fogParams10.y) * (1.0 - underFrac);
-        const float hazeVis = fogSunVis >= 0.0 ? fogSunVis : cloudSunTransmittance(worldPos);
+        const float hazeVis = fogSunVis >= 0.0 ? fogSunVis : cloudSunTransmittanceBilinear(worldPos);
         if (hazeVis > 0.0)
         {
             const vec3 sunDir = normalize(u_sunDirection.xyz);

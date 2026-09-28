@@ -79,7 +79,7 @@ float volFarSunVis(vec3 dir, float a, float b, float jitter)
         return 1.0;
     float v = 0.0;
     for (int j = 0; j < VOL_FAR_VIS_TAPS; ++j)
-        v += cloudSunTransmittance(u_viewPos + dir * mix(a, b, (float(j) + jitter) / float(VOL_FAR_VIS_TAPS)));
+        v += cloudSunTransmittanceBilinear(u_viewPos + dir * mix(a, b, (float(j) + jitter) / float(VOL_FAR_VIS_TAPS)));
     return v / float(VOL_FAR_VIS_TAPS);
 #else
     return 1.0;

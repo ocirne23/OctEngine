@@ -286,9 +286,10 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
     ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));
-    // The sky-map clouds' history weight per frame: exp(-3 dt / T) reaches 95 % of a change in T seconds, at any
-    // frame rate. Real time, not sim time: the camera still moves while the sim is paused.
-    const float realDt = glm::min((float)Globals::time.getDeltaSec(), 0.25f);
+    // The sky-map clouds' history weight per march of a texel: exp(-3 dt / T) reaches 95 % of a change in T seconds,
+    // at any frame rate; a texel marches every SKY_UPDATE_FRAMES frames, so dt spans that many. Real time, not sim
+    // time: the camera still moves while the sim is paused.
+    const float realDt = glm::min((float)Globals::time.getDeltaSec(), 0.25f) * (float)CloudPipeline::SKY_UPDATE_FRAMES;
     const float skyHistory = c.skyMapHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.skyMapHistorySec) : 0.0f;
     ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 1.0f / glm::max(c.groundLightDepth, 1.0f), skyHistory, 0.0f);
     // Top roundness 0..1 -> the superellipse exponent 1..6 (1 = the plain taper, 2 = a circular cap, 6 = nearly flat).
@@ -339,7 +340,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     const glm::dvec3 e1 = glm::cross(sun, e0);
     const glm::dvec3 camPos(camera.position);
     const double extents[2] = { glm::max((double)c.shadowNearKm, 0.1) * 1000.0, glm::max((double)c.shadowFarKm, 0.2) * 1000.0 };
-    const int splits[2] = { glm::clamp(c.shadowNearSplit, 0, 2), glm::clamp(c.shadowFarSplit, 0, 2) };
+    const int splits[2] = { glm::clamp(c.shadowNearSplit, 0, 3), glm::clamp(c.shadowFarSplit, 0, 3) };
     const bool sunChanged = sun != m_cloudShadowSun;
     m_cloudShadowSun = sun;
     for (uint32 cascade = 0; cascade < CloudPipeline::SHADOW_CASCADES; ++cascade)
@@ -363,7 +364,7 @@ void Renderer::buildUboClouds(const Camera& camera)
         else
         {
             m_cloudShadowSplit[cascade] = (uint32)splits[cascade];
-            const uint32 phases = 1u << (2 * splits[cascade]); // 1, 4 or 16
+            const uint32 phases = 1u << (2 * splits[cascade]); // 1, 4, 16 or 64
             m_cloudShadowPhase[cascade] = (m_cloudShadowPhase[cascade] + 1) % phases;
         }
         m_cloudShadowMask |= 1u << cascade;

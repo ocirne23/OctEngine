@@ -28,6 +28,9 @@ export class CloudPipeline final
 public:
     static constexpr uint32 SHADOW_RESOLUTION = 1024;
     static constexpr uint32 SHADOW_CASCADES = 2;
+    // The sky clouds march one texel of every 2x2 block per frame (cloud_sky.cs.glsl): a texel's history
+    // weight covers this many frames.
+    static constexpr uint32 SKY_UPDATE_FRAMES = 4;
 
     CloudPipeline() = default;
     ~CloudPipeline();

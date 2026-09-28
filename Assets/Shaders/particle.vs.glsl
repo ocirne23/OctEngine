@@ -238,7 +238,7 @@ void main()
         const vec3 toEye = n;
         const vec3 sunDir = normalize(u_sunDirection);
         const vec3 sun = atmosTransmittanceToLight(0.0, sunDir, u_skyUp)
-            * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(world)) * particlePhase(dot(-sunDir, toEye));
+            * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
         // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
         // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);

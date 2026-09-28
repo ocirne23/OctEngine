@@ -768,7 +768,8 @@ void CloudPipeline::recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buf
     commandBuffer.cmdUpdateDescriptorSets(m_skyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    cmd.dispatch(GIProbePipeline::SKY_MAP_WIDTH / 8, GIProbePipeline::SKY_MAP_HEIGHT / 8, 1);
+    // One thread per 2x2 block of the UPPER hemisphere (rows [0, H/2)).
+    cmd.dispatch((GIProbePipeline::SKY_MAP_WIDTH / 2 + 7) / 8, (GIProbePipeline::SKY_MAP_HEIGHT / 4 + 7) / 8, 1);
 
     // sky clouds -> the sky-map bake (compute, in the GI secondary)
     vk::MemoryBarrier2 toSkyMap{

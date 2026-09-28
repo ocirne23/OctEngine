@@ -71,14 +71,16 @@ float cloudShadowFarODFiltered(vec3 rel, out float weight)
 
 // Optical depth toward the sun at a camera-relative (CENTRE view) point: x = the optical depth, y = how
 // much of it the maps cover (1 inside, fading to 0 over the far cascade's border). The near cascade blends
-// into the far one over its own border (it lies well inside the far one).
-vec2 cloudShadowSample(vec3 rel)
+// into the far one over its own border (it lies well inside the far one). filtered = the far cascade through
+// cloudShadowFarODFiltered (4 fetches); else its one hardware-bilinear fetch (a compile-time constant at every
+// call site, so the other path compiles out).
+vec2 cloudShadowSample(vec3 rel, bool filtered)
 {
     float wNear, wFar;
     const float odNear = cloudShadowCascadeOD(0, rel, wNear);
     if (wNear >= 1.0)
         return vec2(odNear, 1.0);
-    const float odFar = cloudShadowFarODFiltered(rel, wFar);
+    const float odFar = filtered ? cloudShadowFarODFiltered(rel, wFar) : cloudShadowCascadeOD(1, rel, wFar);
     if (wNear > 0.0)
         return vec2(mix(odFar, odNear, wNear), 1.0);
     return vec2(odFar, wFar);
@@ -89,17 +91,29 @@ vec2 cloudShadowSample(vec3 rel)
 // CLOUD_SHADOWS (baked: "Sky/Clouds" + "Shadows" enabled) compiles it in; u_cloudShadow4.x is the runtime
 // part the define cannot hold - the map was not rendered this frame (the game suppresses the clouds, or
 // the sun is at the horizon).
-float cloudSunTransmittance(vec3 worldPos)
+float cloudSunTransmittanceImpl(vec3 worldPos, bool filtered)
 {
 #ifdef CLOUD_SHADOWS
     if (u_cloudShadow4.x < 0.5)
         return 1.0;
-    const vec2 s = cloudShadowSample(worldPos - u_views[VIEW_CENTER].viewPos.xyz);
+    const vec2 s = cloudShadowSample(worldPos - u_views[VIEW_CENTER].viewPos.xyz, filtered);
     const float T = mix(u_cloudShadow3.w, exp(-s.x), s.y);
     return mix(1.0, T, u_cloudShadow2.w);
 #else
     return 1.0;
 #endif
+}
+// Surfaces: the far cascade filtered (its texels are tens of metres, a lit surface shows them).
+float cloudSunTransmittance(vec3 worldPos)
+{
+    return cloudSunTransmittanceImpl(worldPos, true);
+}
+// Media and averaged taps (the fog froxels, the far field's jittered taps, the clouds' air term, particles): the
+// far cascade's one bilinear fetch - they already average over space and time, and the filter's 4 fetches +
+// 4 exp per call bought nothing visible there.
+float cloudSunTransmittanceBilinear(vec3 worldPos)
+{
+    return cloudSunTransmittanceImpl(worldPos, false);
 }
 
 // cloudSunTransmittance from the FAR cascade only (~8 m texels, bilinear): a soft value over tens of metres,

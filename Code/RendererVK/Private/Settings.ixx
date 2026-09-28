@@ -138,9 +138,11 @@ export struct CloudParams
     int   shadowFarSteps = 32;         // map march steps per texel, far cascade
     float shadowFarSoftness = 1.5f;    // far cascade lookup jitter per pixel and frame, in texels (TAA-resolved penumbra)
     // PROGRESSIVE UPDATES: each frame a cascade renders 1 / split of its texels (interleaved), so the cost is
-    // the same every frame. 0 = every texel every frame, 1 = 1/4 (2x2), 2 = 1/16 (4x4).
+    // the same every frame. 0 = every texel every frame, 1 = 1/4 (2x2), 2 = 1/16 (4x4), 3 = 1/64 (8x8).
+    // The far cascade at 1/64: a full cycle is 64 frames, and the wind moves the clouds ~11 m in that time
+    // at 10 m/s - under a third of a far texel (~39 m at 40 km).
     int   shadowNearSplit = 1;
-    int   shadowFarSplit = 2;
+    int   shadowFarSplit = 3;
     bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
     // Quality
     int   maxSteps = 600;             // view march step budget per pixel

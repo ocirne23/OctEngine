@@ -125,7 +125,8 @@ public:
     {
         if (options.headlessServer())
             return;
-        m_cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
+        const glm::vec3 startPos(-22.3f, 14.6f, 0.7f);
+        m_cameraController.initialize(startPos, startPos + glm::vec3(0.9f, 0.2f, -0.4f));
         if (Globals::rendererVK.isVrEnabled()) // the renderer is up before the session exists
             m_vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
     }
