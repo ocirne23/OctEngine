@@ -57,6 +57,16 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const vec3 L = u_sunDirection;
     const float mu = dot(dir, L);
     const float ms = u_cloudLight1.w;
+    // The multiple-scattering octaves in CLOSED FORM (per ray; per sample then 2 exp, no loop): the sum over ALL
+    // isotropic octaves i >= 1 of a^i e^(-od a^i) (Wrenninge, a = b = "Multi-scatter"), as its first octave exactly
+    // plus the whole geometric tail a^2 / (1 - a) through ONE effective extinction a^(1 + 1/(1 - a)) (the tail's
+    // mean octave), x "Multi-scatter strength" (u_cloudLight2.w, non-physical above 1). With the sun BEHIND the
+    // viewer the lit side is seen near 180 degrees, where the droplet phase is ~0, so its brightness is this term
+    // alone: two octaves (the old fixed count, ~0.14 of the sunlight) left thick sunlit clouds gray; all of them
+    // at a = 0.9 give ~0.7.
+    const float msTailScale = ms * ms / max(1.0 - ms, 0.05);
+    const float msTailExt = pow(ms, 1.0 + 1.0 / max(1.0 - ms, 0.05));
+    const float msStrength = u_cloudLight2.w;
     // Octave 0 (single scattering) keeps the droplet phase: its narrow forward spike is the silver lining.
     // The multiple-scattering octaves are ISOTROPIC: after a few scattering events the direction is nearly
     // random, which is what keeps the side of a cloud away from the sun bright. A flattened copy of the
@@ -65,13 +75,17 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const float phase0 = cloudPhase(mu, 1.0);
 
     // THE LIGHT COLOURS ARE APPLIED AFTER THE LOOP. A sample's in-scatter is linear in four per-ray colours -
-    //   sunBottom * (sun * (1 - hf)) + sunTop * (sun * hf) + ambGround * (1 - hf) + ambSky * hf
+    //   sunBottom * (sun * (1 - hf)) + sunTop * (sun * hf) + ambGround * exp(-h * k) + ambSky * hf
     // (sun = the phase-weighted, shadowed sun term, hf = the height in the shell) - so the loop only sums the
-    // four scalar weights x the absorbed fraction (the last is sum(absorbed) - sum(absorbed * hf) with the
-    // existing wSum): three scalars live across the loop instead of twelve colour floats + the vec3 sum.
-    float sumSunLow = 0.0;  // sum(absorbed * sun * (1 - hf))
-    float sumSunHigh = 0.0; // sum(absorbed * sun * hf)
-    float sumAmbHigh = 0.0; // sum(absorbed * hf)
+    // four scalar weights x the absorbed fraction: four scalars live across the loop instead of twelve colour
+    // floats + the vec3 sum.
+    // THE GROUND BOUNCE COMES FROM BELOW: it falls off EXPONENTIALLY with the metres above the main layer's base
+    // (u_cloudShape4.y = 1 / "Ground light depth"), so it lights the undersides and dies within that depth. (A
+    // linear 1 - hf lit the whole cloud up to the shell top.) hf = the height within the sample's own layer.
+    float sumSunLow = 0.0;    // sum(absorbed * sun * (1 - hf))
+    float sumSunHigh = 0.0;   // sum(absorbed * sun * hf)
+    float sumAmbHigh = 0.0;   // sum(absorbed * hf)
+    float sumAmbGround = 0.0; // sum(absorbed * exp(-h * k)), h = metres above the main layer's base
 
     // The self-shadow comes from the shadow map where it covers the sample (one fetch instead of a sun march);
     // the map is relative to the CENTRE view's camera. CLOUD_SELF_SHADOW_MAP is baked; u_cloudShadow4.x =
@@ -191,16 +205,16 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             const float absorbed = r.transmittance * (1.0 - stepT);
             if (!densityOnly)
             {
-                const float hf = clamp(cloudHeightFraction(alt), 0.0, 1.0);
+                const float hf = cloudLayerHeightFraction(alt); // within its own layer (clouds.inc.glsl)
                 float od;
                 const vec2 map = mapShadow ? cloudShadowSample(rel + toCentreView) : vec2(0.0);
                 if (map.y >= 1.0)
                     od = map.x;
                 else
                     od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, L, lodBase, lodDetail, detailWeight), map.x, map.y);
-                // Multiple scattering (Wrenninge): octave i scatters a^i as much, through b^i of the
-                // optical depth; a = b = the "Multi-scatter" tweak, the octaves' phase isotropic (above).
-                const float sunTerm = phase0 * exp(-od) + isotropic * (ms * exp(-od * ms) + ms * ms * exp(-od * ms * ms));
+                // Multiple scattering: the closed-form octave sum (above the loop), isotropic.
+                const float msSum = ms * exp(-od * ms) + msTailScale * exp(-od * msTailExt);
+                const float sunTerm = phase0 * exp(-od) + isotropic * (msStrength * msSum);
 #ifdef CLOUD_POWDER // baked: "Powder" above 0
                 const float powder = mix(1.0, 1.0 - exp(-dens * 6.0), u_cloudLight1.z);
                 const float sunWeight = absorbed * sunTerm * powder;
@@ -210,6 +224,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 sumSunHigh += sunWeight * hf;
                 sumSunLow += sunWeight * (1.0 - hf);
                 sumAmbHigh += absorbed * hf;
+                sumAmbGround += absorbed * exp(-max(alt - u_cloudLayer0.x, 0.0) * u_cloudShape4.y); // metres above the main layer's base
             }
             if (r.front < 0.0)
                 r.front = ts;
@@ -219,6 +234,10 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             r.transmittance *= stepT;
         }
     }
+    // The early out leaves up to CLOUD_T_END of transmittance, and the composite passes scene x transmittance:
+    // 2 % of the SUN DISC (thousands of times the sky) still shone through any cloud, however dense. Remapped
+    // so the early-out level is fully opaque - continuous (no edge where a cloud just reaches it), and 1 stays 1.
+    r.transmittance = clamp((r.transmittance - CLOUD_T_END) / (1.0 - CLOUD_T_END), 0.0, 1.0);
     if (wSum <= 1e-5)
     {
         r.front = -1.0;
@@ -240,17 +259,17 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const vec3 sunBottom = sunColor * atmosTransmittanceToLight(u_cloudShape0.x, L, localUp);
     const vec3 sunTop = sunColor * atmosTransmittanceToLight(u_cloudShape0.y, L, localUp);
 
-    // Ambient: the CLEAR sky hemisphere from the sky map (up + four at 30 degrees), and the ground bounce
-    // under the shell (albedo x (sun + sky) irradiance / PI). Blended by the height in the shell.
+    // Ambient: the CLEAR sky hemisphere from the sky map (up + four at 30 degrees), weighted by the height in the
+    // shell, and the ground bounce under the shell (albedo x (sun + sky) irradiance / PI), falling off from below.
     vec3 ambSky = textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 1.0, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
     ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.866, 0.5, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
     ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(-0.866, 0.5, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
     ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 0.5, 0.866)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
     ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 0.5, -0.866)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
     ambSky *= 0.2 * u_cloudLight1.x;
-    const vec3 ambGround = u_cloudLight1.y * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky);
+    const vec3 ambGround = u_cloudLight2.rgb * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
 
-    r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * (wSum - sumAmbHigh) + ambSky * sumAmbHigh;
+    r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;
 
     // Aerial perspective between the origin and the cloud: the cloud dims through the air, and the air in
     // front of it keeps the in-scatter the sky behind it had (the sky carries the whole ray's). Taken at the
@@ -261,7 +280,14 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     vec3 airT;
     const vec3 roPlanet = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // re-derived, not held across the loop
     const vec3 air = cloudAerialScatter(roPlanet, dir, tAir, L, airT) * sunColor;
-    r.inScatter = r.inScatter * airT + air * (1.0 - r.transmittance);
+    // The air in front of the cloud lies in the CLOUDS' SHADOW where the sun is behind them (under an overcast,
+    // all of it): its sun term takes the cloud shadow map's sun transmittance, averaged at 1/4 and 3/4 of the air
+    // segment. Unshadowed, its Mie forward peak drew a sun glow on top of any cloud, however dense. (A ramp to the
+    // VIEW ray's transmittance within ~10 degrees of the sun left the rest of the halo: a black hole in a ring.)
+    const vec3 airWorld = u_viewPos + origin;
+    const float airSunVis = 0.5 * (cloudSunTransmittance(airWorld + dir * (0.25 * tAir))
+                                 + cloudSunTransmittance(airWorld + dir * (0.75 * tAir)));
+    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * airSunVis);
     return r;
 }
 

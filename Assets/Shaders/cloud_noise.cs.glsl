@@ -121,7 +121,9 @@ void main()
         const float coverage = smoothstep(0.2, 0.8, perlinFbm(uvw, 6, 5, 71));
         const float type = smoothstep(0.25, 0.75, perlinFbm(uvw, 3, 3, 81));
         const float density = smoothstep(0.15, 0.85, perlinFbm(uvw, 12, 3, 91));
-        const float towerHeight = smoothstep(0.2, 0.8, perlinFbm(uvw, 16, 4, 111)); // per-column top height
+        // Per-column top height, at the COVERAGE's scale (6 cells, 2 octaves): about one smooth top per cloud. At 16
+        // cells / 4 octaves every cloud held several top maxima and its top followed them - a range of peaks.
+        const float towerHeight = smoothstep(0.2, 0.8, perlinFbm(uvw, 6, 2, 111));
         result = vec4(coverage, type, density, towerHeight);
     }
     else

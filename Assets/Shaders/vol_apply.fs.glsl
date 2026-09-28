@@ -37,6 +37,10 @@ layout (binding = 5) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the 
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
 #include "gi_probe.inc.glsl"
+// The cloud shadow map: the far field's sun term is shadowed by the clouds - the light shafts past the froxel
+// volume (whose froxels shadow themselves, vol_scatter.cs.glsl).
+#define CLOUD_SHADOW_BINDING 8
+#include "cloud_shadow.inc.glsl"
 
 layout (location = 0) out vec4 out_color;
 
@@ -65,19 +69,79 @@ vec2 volFarFieldGround(vec2 worldXZ, float follow)
 // an infinite integral, so a zero-fog region erases the horizon along its azimuth and a high macro altitude
 // puts the base above the ray, filling the sky over that spot with a column of fog. Full weight at t0 keeps
 // the seam with the froxel volume exact; by `reach` both have settled to the global medium at sea level.
+// The clouds' mean sun transmittance over [a, b] along the ray: VOL_FAR_VIS_TAPS jittered taps of the cloud shadow
+// map (past its far cascade it returns the layer's mean). The jitter moves every frame; the TAA resolves it.
+#define VOL_FAR_VIS_TAPS 2
+float volFarSunVis(vec3 dir, float a, float b, float jitter)
+{
+#ifdef CLOUD_SHADOWS
+    if (u_cloudShadow4.x < 0.5)
+        return 1.0;
+    float v = 0.0;
+    for (int j = 0; j < VOL_FAR_VIS_TAPS; ++j)
+        v += cloudSunTransmittance(u_viewPos + dir * mix(a, b, (float(j) + jitter) / float(VOL_FAR_VIS_TAPS)));
+    return v / float(VOL_FAR_VIS_TAPS);
+#else
+    return 1.0;
+#endif
+}
+
+// The SHAFT HAZE over [a, b] (vol_scatter.cs.glsl has why): its share of the sunlit in-scatter - behind the fog in
+// front of it (fogTau) and its own haze in front (hazeTau; its OWN extinction bounds a level ray to the horizon, it
+// does not dim the scene) - times the clouds' visibility over the piece. Flat-based, the fog's height base.
+float volFarHazeStep(vec3 dir, float a, float b, float fogTau, inout float hazeTau, float vis)
+{
+    if (u_fogParams10.x <= 0.0)
+        return 0.0;
+    const float seg = volAnalyticOpticalDepth(u_viewPos, dir, a, b, u_fogParams0.y, u_fogParams10.y, u_fogParams10.x);
+    const float w = exp(-fogTau - hazeTau) * (1.0 - exp(-seg)) * vis;
+    hazeTau += seg;
+    return w;
+}
+
 vec4 volFarField(vec3 dir, float t0, float t1)
 {
     const float density = u_fogParams0.x * u_fogParams9.y;
-    if (density <= 1e-7 || t1 <= t0)
+    if ((density <= 1e-7 && u_fogParams10.x <= 0.0) || t1 <= t0)
         return vec4(0.0, 0.0, 0.0, 1.0);
     const float falloff = u_fogParams0.z * u_fogParams9.z;
     const float tauOpaque = 12.0; // transmittance < 1e-5
     const bool followsTerrain = terrainHeightMapPresent() && u_fogParams3.x > 0.0;
+    // THE SUN IS SHADOWED BY THE CLOUDS per sub-segment (the light shafts): each adds its share of the in-scatter,
+    // T before it x (1 - its own T), times the clouds' sun visibility over it. The ambient stays one constant.
+    const float visJitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 63u), vec2(0.06711056, 0.00583715))));
+    const float visTail = 20000.0; // the tail's taps span this much past the march (the shadow map covers far less)
+    float sunW = 0.0;
+    float hazeW = 0.0, hazeTau = 0.0; // the shaft haze's sunlit share, and its own optical depth so far
 
     float tau;
     if (!followsTerrain)
     {
-        tau = volAnalyticOpticalDepth(u_viewPos, dir, t0, t1, u_fogParams0.y, falloff, density);
+        // Split so the visibility can vary along the ray; each piece stays closed-form.
+        const float tEnd = min(t1, t0 + visTail);
+        const int steps = max(int(u_fogParams9.w), 1);
+        float tPrev = t0;
+        tau = 0.0;
+        for (int i = 1; i <= steps; ++i)
+        {
+            const float tNext = mix(t0, tEnd, float(i) / float(steps));
+            const float seg = volAnalyticOpticalDepth(u_viewPos, dir, tPrev, tNext, u_fogParams0.y, falloff, density);
+            const float vis = volFarSunVis(dir, tPrev, tNext, visJitter);
+            sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
+            hazeW += volFarHazeStep(dir, tPrev, tNext, tau, hazeTau, vis);
+            tau += seg;
+            if (tau > tauOpaque)
+                break;
+            tPrev = tNext;
+        }
+        if (t1 > tEnd && tau <= tauOpaque)
+        {
+            const float seg = volAnalyticOpticalDepth(u_viewPos, dir, tEnd, t1, u_fogParams0.y, falloff, density);
+            const float vis = volFarSunVis(dir, tEnd, min(t1, tEnd + visTail), visJitter);
+            sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
+            hazeW += volFarHazeStep(dir, tEnd, t1, tau, hazeTau, vis);
+            tau += seg;
+        }
     }
     else
     {
@@ -112,9 +176,13 @@ vec4 volFarField(vec3 dir, float t0, float t1)
                 k *= mix(1.0, fogFalloffFromTemperature(terrainTemperatureAt(climate, 0.5 * (gPrev.y + gNext.y))), wRegion);
             }
 
-            tau += volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tPrev - gPrev.x,
-                                                 dir.y - (gNext.x - gPrev.x) / max(len, 1e-3),
-                                                 len, k, dens);
+            const float seg = volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tPrev - gPrev.x,
+                                                            dir.y - (gNext.x - gPrev.x) / max(len, 1e-3),
+                                                            len, k, dens);
+            const float vis = volFarSunVis(dir, tPrev, tNext, visJitter);
+            sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
+            hazeW += volFarHazeStep(dir, tPrev, tNext, tau, hazeTau, vis);
+            tau += seg;
             if (tau > tauOpaque)
                 break;
 
@@ -123,24 +191,31 @@ vec4 volFarField(vec3 dir, float t0, float t1)
         }
 
         if (t1 > tEnd && tau <= tauOpaque)
-            tau += volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tEnd - gPrev.x, dir.y, t1 - tEnd, k, dens);
+        {
+            const float seg = volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tEnd - gPrev.x, dir.y, t1 - tEnd, k, dens);
+            const float vis = volFarSunVis(dir, tEnd, min(t1, tEnd + visTail), visJitter);
+            sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
+            hazeW += volFarHazeStep(dir, tEnd, t1, tau, hazeTau, vis);
+            tau += seg;
+        }
     }
 
     const float T = exp(-tau);
-    if (T >= 0.9999)
+    if (T >= 0.9999 && hazeW <= 1e-5)
         return vec4(0.0, 0.0, 0.0, 1.0);
 
-    // Lighting is constant over the segment, so the single-scatter integral collapses: d(tau)/dt is the
-    // extinction, hence integral(rho * exp(-tau)) == 1 - T. Sun unshadowed: the froxel volume's terrain
-    // shadow march is a sparse min() that only holds up filtered and temporally blended.
+    // The ambient is constant over the segment, so its single-scatter integral collapses: d(tau)/dt is the
+    // extinction, hence integral(rho * exp(-tau)) == 1 - T. The sun's is sunW (above): shadowed by the CLOUDS
+    // only - the froxel volume's terrain shadow march is a sparse min() that only holds up filtered and
+    // temporally blended.
     const vec3 sunDir = normalize(u_sunDirection.xyz);
-    vec3 inLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
-        * (volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * u_eclipseParams.x);
+    const vec3 sunLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
+        * (volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * u_eclipseParams.x * u_fogParams8.w); // x "Sun scatter", as the froxels
     // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
     // would report zero coverage out here and hand over to exactly this.
-    inLight += giEvalSkySH(-dir) * u_aoParams.y / PI + u_ambientColor;
+    const vec3 ambient = giEvalSkySH(-dir) * u_aoParams.y / PI + u_ambientColor;
 
-    return vec4(u_fogParams1.rgb * inLight * (1.0 - T), T);
+    return vec4(u_fogParams1.rgb * (sunLight * (sunW + hazeW) + ambient * (1.0 - T)), T);
 }
 
 // The ray for this pixel from u_mvp's x/y/w ROWS, not from a reconstructed position: u_invMvp is a float32 CPU

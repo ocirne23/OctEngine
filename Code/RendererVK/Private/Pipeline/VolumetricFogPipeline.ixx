@@ -66,6 +66,8 @@ public:
         vk::ImageView cloudColorView;
         vk::ImageView cloudDepthView;
         vk::Sampler   cloudSampler;
+        vk::ImageView cloudShadowView;    // the cloud Beer shadow map (GENERAL): the far field's sun term (light shafts)
+        vk::Sampler   cloudShadowSampler;
     };
     // Records the fullscreen apply draw; the caller has begun a command buffer inside the scene-color
     // render pass and set the viewport/scissor. eye selects the per-eye depth/projection (0 = desktop/left).

@@ -89,14 +89,29 @@ void cloudShellIntervals(float originAlt, float b, float tMax, out vec2 seg0, ou
 }
 
 // Vertical density profile for a cloud type (0 = stratus, 0.5 = cumulus, 1 = cumulonimbus) at the
-// normalized shell height hf: xy = the bottom ramp, zw = the top ramp.
-float cloudHeightProfile(float hf, float type)
+// normalized column height hf: xy = the bottom ramp, zw = the top ramp.
+// "Base sharpness" (0..1) shortens the bottom ramp toward a flat base. "Top roundness" (the superellipse exponent p,
+// 1 = the plain taper) shapes the top ramp as (1 - s^p)^(1/p): the profile - which RAISES the coverage threshold -
+// holds near 1 over most of the ramp and falls only near its end, so a cloud stays wide and rounds off into a dome
+// instead of thinning into a cone.
+float cloudHeightProfile(float hf, float type, float roundnessP, float baseSharpness)
 {
     const vec4 stratus      = vec4(0.00, 0.06, 0.12, 0.22);
     const vec4 cumulus      = vec4(0.00, 0.10, 0.35, 0.60);
     const vec4 cumulonimbus = vec4(0.00, 0.08, 0.75, 1.00);
-    const vec4 g = type < 0.5 ? mix(stratus, cumulus, type * 2.0) : mix(cumulus, cumulonimbus, type * 2.0 - 1.0);
-    return smoothstep(g.x, g.y, hf) * (1.0 - smoothstep(g.z, g.w, hf));
+    vec4 g = type < 0.5 ? mix(stratus, cumulus, type * 2.0) : mix(cumulus, cumulonimbus, type * 2.0 - 1.0);
+    g.y = mix(g.y, g.x + 0.005, baseSharpness);
+    const float s = smoothstep(g.z, g.w, hf);
+    return smoothstep(g.x, g.y, hf) * pow(max(1.0 - pow(s, roundnessP), 0.0), 1.0 / roundnessP);
+}
+
+// The tower-height signal (0..1) of a column. The tower field alone (weather.a) is smooth and broad, so most clouds
+// sat on a slope of it and their tops tilted alike - ramps. "Tower core link" ties the top to the cloud's OWN
+// coverage instead: its core rises highest and its edges stay low (central towers, domes), with the tower field
+// scaling that per cloud (x 0.5 .. 1.5) so some clouds tower and others stay flat.
+float cloudTowerSignal(float coverage, float tower, float coreLink)
+{
+    return mix(tower, clamp(coverage * (0.5 + tower), 0.0, 1.0), coreLink);
 }
 
 float cloudHeightFraction(float alt)
@@ -104,42 +119,21 @@ float cloudHeightFraction(float alt)
     return (alt - u_cloudShape0.x) * u_cloudShape3.z; // z = 1 / (top - bottom)
 }
 
-// Normalized density [0, 1+] at a noise-space XZ and an altitude. Multiply by u_cloudShape1.w for the
-// extinction (1/m). detail = the weight of the detail erosion (0 = the cheap shape, weather + base only, no
-// detail fetches; the march fades it out with distance). lodBase / lodDetail are the explicit mip levels (the
-// march derives them from the pixel footprint); camDist fades in the near octave.
-float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
+// The height (0..1) within the LAYER a sample belongs to - the lighting's (sky ambient from above, the sun's
+// bottom / top blend): with two layers the shell is tall, and a main-layer top at a fraction of it lost its sky
+// light. Inside the upper band (when on), that band's; else the main band's, clamped.
+float cloudLayerHeightFraction(float alt)
 {
-    const float hf = cloudHeightFraction(alt);
-    if (hf <= 0.0 || hf >= 1.0)
-        return 0.0;
-    const vec4 weather = textureLod(u_cloudWeather, nxz * u_cloudShape1.x, 0.0);
-    const float coverage = clamp(u_cloudShape0.z + (weather.r - 0.5) * u_cloudShape3.x, 0.0, 1.0);
-    if (coverage <= 0.001)
-        return 0.0;
-    const float type = clamp(u_cloudShape2.x + (weather.g - 0.5) * u_cloudShape2.y, 0.0, 1.0);
-    // Per-column tower height (weather.a): the profile is stretched over [0, columnTop] of the column, so
-    // neighbouring clouds end at different heights.
-    const float columnTop = mix(0.45, 1.0, weather.a);
-    // Per-column LIFT ("Base height variation", v): the WHOLE column rises by up to v of the shell - the profile
-    // AND the noise it thresholds - and the column's height shrinks to (1 - v) so it stays inside the shell. A
-    // cloud keeps its own rounded base and only sits higher. (Cutting the bottom off instead - a per-column base
-    // over the same profile - left the low part of each cloud as thin tendrils down to the shell bottom: a
-    // "peak" under every cloud.) The field: the tower field rotated 90 degrees (uncorrelated with the tops; scale
-    // 1 still tiles with the weather period) at a COARSE mip, so the height drifts over kilometres - a cloud's
-    // base barely tilts, neighbours sit at similar heights, distant ones differ.
-    const float variation = u_cloudShape4.x;
-    float lift = 0.0; // fraction of the shell
-    if (variation > 0.0)
-        lift = variation * smoothstep(0.2, 0.8, textureLod(u_cloudWeather, vec2(nxz.y, -nxz.x) * u_cloudShape1.x + 0.37, 2.0).a);
-    const float hfCloud = (hf - lift) / (1.0 - variation); // 0..1 over THIS column (the wisps and the curl follow it)
-    if (hfCloud <= 0.0 || hfCloud >= 1.0)
-        return 0.0;
-    const float profile = cloudHeightProfile(hfCloud / columnTop, type);
-    if (profile <= 0.0)
-        return 0.0;
-    const float noiseAlt = alt - lift / u_cloudShape3.z; // the noise rides up with the column (shell height = 1 / z)
+    const float hfUpper = (alt - u_cloudLayer1.x) * u_cloudLayer1.y;
+    if (u_cloudLayer0.z > 0.5 && hfUpper >= 0.0 && hfUpper <= 1.0)
+        return hfUpper;
+    return clamp((alt - u_cloudLayer0.x) * u_cloudLayer0.y, 0.0, 1.0);
+}
 
+// The shape both layers share: the base noise thresholded by coverage x profile, then eroded by the detail.
+// noiseAlt = the altitude the noise is read at, hfCloud = the height within the cloud's own column (0..1).
+float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, float profile, float camDist, float detail, float lodBase, float lodDetail)
+{
     const vec4 b = textureLod(u_cloudBaseNoise, vec3(nxz.x, noiseAlt, nxz.y) * u_cloudShape1.y, lodBase);
     const float lowFbm = dot(b.gba, vec3(0.625, 0.25, 0.125));
     // The Perlin-Worley remap lands in [0.5, 1] (r >= its own Worley term), so the coverage threshold
@@ -168,7 +162,95 @@ float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBa
         const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hfCloud * 5.0, 0.0, 1.0));
         d = clamp(cloudRemap(d, erodeBy * (u_cloudShape2.z * detail), 1.0, 0.0, 1.0), 0.0, 1.0);
     }
-    return d * mix(0.6, 1.4, weather.b);
+    return d;
+}
+
+// THE UPPER LAYER ("Sky/Clouds/Upper layer", u_cloudLayer0.zw + u_cloudLayer1): an independent band above (or
+// anywhere around) the main one, with its own coverage and type - a stratiform / altocumulus deck over the
+// cumulus instead of one tall shell that stretched every column into a peak. Its weather is the same map
+// ROTATED -90 degrees and offset (scale 1: still tiles with the weather period), so its gaps do not follow the
+// main layer's. Tops vary per column like the main layer's (its alpha), over [0.6, 1] of the band.
+float cloudUpperDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
+{
+    const float hf = (alt - u_cloudLayer1.x) * u_cloudLayer1.y;
+    if (hf <= 0.0 || hf >= 1.0)
+        return 0.0;
+    const vec4 weather = textureLod(u_cloudWeather, vec2(-nxz.y, nxz.x) * u_cloudShape1.x + vec2(0.61, 0.13), 0.0);
+    const float coverage = clamp(u_cloudLayer1.z + (weather.r - 0.5) * u_cloudShape3.x, 0.0, 1.0);
+    if (coverage <= 0.001)
+        return 0.0;
+    const float type = clamp(u_cloudLayer1.w + (weather.g - 0.5) * (0.5 * u_cloudShape2.y), 0.0, 1.0);
+    // The main layer's profile settings, the tower variation milder.
+    const float columnTop = mix(1.0 - 0.7 * u_cloudShape5.x, 1.0, cloudTowerSignal(coverage, weather.a, u_cloudShape5.w));
+    const float profile = cloudHeightProfile(hf / columnTop, type, u_cloudShape5.y, u_cloudShape5.z);
+    if (profile <= 0.0)
+        return 0.0;
+    return cloudLayerShape(nxz, alt, hf, coverage, profile, camDist, detail, lodBase, lodDetail)
+        * (u_cloudLayer0.w * mix(0.6, 1.4, weather.b));
+}
+
+// THE MAIN LAYER ("Bottom" / "Top", the "Sky/Clouds" settings).
+float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
+{
+    const float invH = u_cloudLayer0.y;
+    const float hf = (alt - u_cloudLayer0.x) * invH;
+    if (hf <= 0.0 || hf >= 1.0)
+        return 0.0;
+    const vec2 wuv = nxz * u_cloudShape1.x;
+    const vec4 weather = textureLod(u_cloudWeather, wuv, 0.0);
+    const float coverage = clamp(u_cloudShape0.z + (weather.r - 0.5) * u_cloudShape3.x, 0.0, 1.0);
+    if (coverage <= 0.001)
+        return 0.0;
+    const float type = clamp(u_cloudShape2.x + (weather.g - 0.5) * u_cloudShape2.y, 0.0, 1.0);
+    // Per-column tower height: the profile is stretched over [0, columnTop] of the column, so neighbouring clouds
+    // end at different heights. "Tower variation" (u_cloudShape5.x) = how far a top may drop below the layer top.
+    const float columnTop = mix(1.0 - u_cloudShape5.x, 1.0, cloudTowerSignal(coverage, weather.a, u_cloudShape5.w));
+    // Per-column LIFT ("Base height variation", v): the WHOLE column rises by up to v of the layer - the profile
+    // AND the noise it thresholds - and the column's height shrinks to (1 - v) so it stays inside the shell. A
+    // cloud keeps its own rounded base and only sits higher. (Cutting the bottom off instead - a per-column base
+    // over the same profile - left the low part of each cloud as thin tendrils down to the shell bottom: a
+    // "peak" under every cloud.) The field: the tower field rotated 90 degrees (uncorrelated with the tops; scale
+    // 1 still tiles with the weather period) at a COARSE mip, so the height drifts over kilometres - a cloud's
+    // base barely tilts, neighbours sit at similar heights, distant ones differ.
+    const float variation = u_cloudShape4.x;
+    float lift = 0.0; // fraction of the layer
+    if (variation > 0.0)
+        lift = variation * smoothstep(0.2, 0.8, textureLod(u_cloudWeather, vec2(wuv.y, -wuv.x) + 0.37, 2.0).a);
+    const float hfCloud = (hf - lift) / (1.0 - variation); // 0..1 over THIS column (the wisps and the curl follow it)
+    if (hfCloud <= 0.0 || hfCloud >= 1.0)
+        return 0.0;
+    float profile = cloudHeightProfile(hfCloud / columnTop, type, u_cloudShape5.y, u_cloudShape5.z);
+    if (profile <= 0.0)
+        return 0.0;
+    // SHELVES ("Shelf count / strength / thickness", u_cloudLayer2): stable layers (inversions) where a rising cloud
+    // spreads out sideways into a flat tier - stratocumulus cumulogenitus; at the top of a storm, the anvil. They sit
+    // at FIXED heights of the layer (count evenly spaced; hf, not the column's own height), so every cloud spreads at
+    // the same altitude, as under a real inversion. Around each the profile is raised past 1, which lowers the coverage
+    // threshold: the cloud widens there. Only where the cloud already exists (profile > 0 above) - a column that stays
+    // below a shelf does not grow one, so the tiers follow the coverage of the clouds under them.
+    const int shelves = int(u_cloudLayer2.x);
+    if (shelves > 0)
+    {
+        float shelf = 0.0;
+        for (int i = 1; i <= shelves; ++i)
+            shelf = max(shelf, 1.0 - smoothstep(0.0, u_cloudLayer2.z, abs(hf - float(i) / float(shelves + 1))));
+        profile += u_cloudLayer2.y * shelf;
+    }
+    const float noiseAlt = alt - lift / invH; // the noise rides up with the column (layer height = 1 / invH)
+    return cloudLayerShape(nxz, noiseAlt, hfCloud, coverage, profile, camDist, detail, lodBase, lodDetail) * mix(0.6, 1.4, weather.b);
+}
+
+// Normalized density [0, 1+] at a noise-space XZ and an altitude: the MAIN layer + the upper layer. Multiply by
+// u_cloudShape1.w for the extinction (1/m). detail = the weight of the detail erosion (0 = the cheap shape,
+// weather + base only, no detail fetches; the march fades it out with distance). lodBase / lodDetail are the
+// explicit mip levels (the march derives them from the pixel footprint); camDist fades in the near octave.
+// The SHELL (u_cloudShape0.xy) is the union of the two bands - what the march and the shadow map cover.
+float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
+{
+    float d = cloudMainDensity(nxz, alt, camDist, detail, lodBase, lodDetail);
+    if (u_cloudLayer0.z > 0.5)
+        d += cloudUpperDensity(nxz, alt, camDist, detail, lodBase, lodDetail);
+    return d;
 }
 
 // Draine's phase function (normalized): HG with an extra alpha * mu^2 term (alpha 1, g 0 = Rayleigh).

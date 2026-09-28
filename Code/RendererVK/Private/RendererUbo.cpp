@@ -270,13 +270,30 @@ void Renderer::buildUboClouds(const Camera& camera)
     // Noise space = world - wind, so the field travels WITH the wind.
     const glm::dvec2 origin = glm::mod(glm::dvec2(camera.position.x, camera.position.z) - m_cloudWindOffset, glm::dvec2(weatherPeriod));
 
-    const float bottom = glm::max(c.bottom, 0.0f);
-    const float top = glm::max(c.top, bottom + 100.0f);
+    // The main layer's band, the upper layer's, and the SHELL = their union (what the march, the shadow map and
+    // the height-in-shell lighting cover).
+    const float mainBottom = glm::max(c.bottom, 0.0f);
+    const float mainTop = glm::max(c.top, mainBottom + 100.0f);
+    const float upperBottom = glm::max(c.upperBottom, 0.0f);
+    const float upperTop = glm::max(c.upperTop, upperBottom + 50.0f);
+    const bool upper = c.upperEnabled && c.upperDensity > 0.0f && c.upperCoverage > 0.0f;
+    float bottom = mainBottom, top = mainTop;
+    if (upper) { bottom = glm::min(bottom, upperBottom); top = glm::max(top, upperTop); }
     ubo.cloudShape0 = glm::vec4(bottom, top, glm::clamp(c.coverage, 0.0f, 1.0f), enabled ? 1.0f : 0.0f);
+    ubo.cloudLayer0 = glm::vec4(mainBottom, 1.0f / (mainTop - mainBottom), upper ? 1.0f : 0.0f, c.upperDensity);
+    ubo.cloudLayer1 = glm::vec4(upperBottom, 1.0f / (upperTop - upperBottom), glm::clamp(c.upperCoverage, 0.0f, 1.0f), glm::clamp(c.upperType, 0.0f, 1.0f));
+    ubo.cloudLayer2 = glm::vec4((float)glm::clamp(c.shelfCount, 0, 3), glm::max(c.shelfStrength, 0.0f), glm::clamp(c.shelfThickness, 0.005f, 0.2f), 0.0f);
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
     ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));
-    ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 0.0f, 0.0f, 0.0f);
+    // The sky-map clouds' history weight per frame: exp(-3 dt / T) reaches 95 % of a change in T seconds, at any
+    // frame rate. Real time, not sim time: the camera still moves while the sim is paused.
+    const float realDt = glm::min((float)Globals::time.getDeltaSec(), 0.25f);
+    const float skyHistory = c.skyMapHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.skyMapHistorySec) : 0.0f;
+    ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 1.0f / glm::max(c.groundLightDepth, 1.0f), skyHistory, 0.0f);
+    // Top roundness 0..1 -> the superellipse exponent 1..6 (1 = the plain taper, 2 = a circular cap, 6 = nearly flat).
+    ubo.cloudShape5 = glm::vec4(glm::clamp(c.towerVariation, 0.0f, 0.9f), 1.0f + 5.0f * glm::clamp(c.topRoundness, 0.0f, 1.0f),
+        glm::clamp(c.baseSharpness, 0.0f, 1.0f), glm::clamp(c.towerCoreLink, 0.0f, 1.0f));
     ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, 0.0f, (float)origin.y, (float)m_cloudEvolveOffset);
     ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
@@ -293,6 +310,9 @@ void Renderer::buildUboClouds(const Camera& camera)
         ubo.cloudLight0 = glm::vec4(gHG, gD, alpha, wD);
     }
     ubo.cloudLight1 = glm::vec4(c.ambient, c.groundAlbedo, c.powder, c.multiScatter);
+    // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity - that one scales the
+    // sky-sphere ground plane and defaults to 0) x the cloud "Ground albedo".
+    ubo.cloudLight2 = glm::vec4(m_skyParams.groundColor * c.groundAlbedo, glm::max(c.multiScatterStrength, 0.0f));
     ubo.cloudMarch0 = glm::vec4((float)glm::max(c.maxSteps, 1), c.maxDistanceKm * 1000.0f, glm::max(c.nearStep, 0.5f), glm::max(c.stepGrowth, 0.0f));
     ubo.cloudMarch1 = glm::vec4((float)glm::max(c.lightSteps, 0), c.lightDistance, glm::clamp(c.temporalBlend, 0.0f, 0.98f),
         1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f));
@@ -355,7 +375,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     ubo.cloudShadow2 = glm::vec4(glm::vec3(e0), glm::clamp(c.shadowStrength, 0.0f, 1.0f));
     // Past the cascades: a rough mean transmittance of the layer from its coverage (not measured).
     ubo.cloudShadow3 = glm::vec4(glm::vec3(e1), glm::mix(1.0f, 0.3f, glm::clamp(c.coverage, 0.0f, 1.0f)));
-    ubo.cloudShadow4 = glm::vec4(1.0f, (float)glm::max(c.shadowNearSteps, 1), (float)glm::max(c.shadowFarSteps, 1), 0.0f);
+    ubo.cloudShadow4 = glm::vec4(1.0f, (float)glm::max(c.shadowNearSteps, 1), (float)glm::max(c.shadowFarSteps, 1), glm::max(c.shadowFarSoftness, 0.0f));
 }
 
 // Sun shadow route: the RT-sun toggle, else the PCSS cascade matrices (also consumed CPU-side via
@@ -473,10 +493,11 @@ void Renderer::buildUboFog()
         glm::max(fog.causticStrength, 0.0f),   // z: underwater caustic focus strength (surfaces + fog shafts)
         glm::max(fog.causticDepthFade, 0.0f) / oceanScale); // w: caustic contrast decay with depth (1/m)
     ubo.fogParams8 = glm::vec4(fog.underwaterOffset * oceanScale, glm::max(fog.causticShoreFade, 0.0f) * oceanScale,
-        fog.farFieldMaxDistanceKm > 0.0f ? fog.farFieldMaxDistanceKm * 1000.0f : 1e30f, 0.0f);
+        fog.farFieldMaxDistanceKm > 0.0f ? fog.farFieldMaxDistanceKm * 1000.0f : 1e30f, glm::max(fog.sunScatter, 0.0f));
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
         1.0f / glm::clamp(fog.farFieldThickness, 0.01f, 100.0f), (float)glm::max(fog.farFieldSteps, 1));
+    ubo.fogParams10 = glm::vec4(glm::max(fog.shaftHazeDensity, 0.0f), 1.0f / glm::max(fog.shaftHazeHeight, 1.0f), 0.0f, 0.0f);
 }
 
 // FFT ocean simulation + shading params.

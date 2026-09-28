@@ -16,12 +16,27 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 #define CLOUD_SHADOW_BINDING 3
 #include "cloud_shadow.inc.glsl"
 
-layout (binding = 1, rgba16f) uniform writeonly image2D u_outSkyClouds;
+// Read-write: the texel's own last value is the history (below). Cleared to "no cloud" at creation.
+layout (binding = 1, rgba16f) uniform image2D u_outSkyClouds;
 layout (binding = 2) uniform sampler2DArray u_skyMap; // LAST frame's bake: its clear layer is the ambient
 
 #include "cloud_raymarch.inc.glsl"
 
 const int SKY_CLOUD_STEPS = 64;
+// TEMPORAL: the march is far too coarse for the cloud detail near the horizon (the steps grow to kilometres
+// there, and the ocean reflects mostly those directions), and its samples sit relative to the camera. So a moving
+// camera slid them through the noise field and the whole reflected sky changed colour every frame. Now each frame
+// marches with a new jitter and blends into the texel's history: the average of many jittered marches, which
+// changes smoothly with the camera. The history weight is frame-time based (u_cloudShape4.z = exp(-3 dt / T),
+// "Sky/Clouds/Quality/Sky map history (s)" = T): 95 % of a change after T seconds at any frame rate.
+
+float skyCloudJitter(ivec2 p)
+{
+    uint h = uint(p.x) * 1597334673u ^ uint(p.y) * 3812015801u;
+    h = (h ^ (h >> 16u)) * 0x7feb352du;
+    h ^= h >> 15u;
+    return fract(float(h) * (1.0 / 4294967296.0) + float(u_frameIndex & 1023u) * 0.61803398875);
+}
 
 void main()
 {
@@ -41,6 +56,7 @@ void main()
     vec2 seg0, seg1;
     cloudShellIntervals(ATMOS_OBSERVE_HEIGHT, cloudRayB(origin, dir, camAlt), u_cloudMarch0.y, seg0, seg1);
     // One texel spans PI / height radians: the mip level from that footprint.
-    const CloudMarchResult r = cloudRaymarch(origin, dir, seg0, seg1, SKY_CLOUD_STEPS, 0.5, PI / float(size.y), false);
-    imageStore(u_outSkyClouds, xy, vec4(r.inScatter, r.transmittance));
+    const CloudMarchResult r = cloudRaymarch(origin, dir, seg0, seg1, SKY_CLOUD_STEPS, skyCloudJitter(xy), PI / float(size.y), false);
+    const vec4 history = imageLoad(u_outSkyClouds, xy);
+    imageStore(u_outSkyClouds, xy, mix(vec4(r.inScatter, r.transmittance), history, u_cloudShape4.z));
 }

@@ -345,8 +345,16 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 
 	const vec3 up = normalize(u_skyUp);
 	const vec3 L = u_sunDirection.xyz;
-	const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x; // = the ocean's sunTint
-	const f16vec3 ambientSky = f16vec3(textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb); // skyRadiance(up): constant per frame, one fetch
+	// = the ocean's sunTint, cloud shadow included: without it the film's in-scatter and reflection fog stayed
+	// sunlit under a cloud, brighter than the ocean it meets.
+	const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(worldPos));
+	// The sky light on the film (body in-scatter, whitewater): the HEMISPHERE average E(up) / pi of the GI sky
+	// SH, constant per frame. Not the sky map's zenith texel: with clouds on that is the one cloud straight over
+	// the camera, and every puddle took its colour (the ocean's rule). GI off (u_aoParams.y 0, stale SH): the
+	// zenith texel.
+	const f16vec3 ambientSky = u_aoParams.y > 0.0
+		? max(giEvalSkySHH(f16vec3(up)) * float16_t(INV_PI), f16vec3(0.0))
+		: f16vec3(textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb);
 
 	// Body: the ground seen through the film - Beer-Lambert absorbed along the refracted path through the
 	// water ACTUALLY standing here (the film's coverage depth: the pool the wetness fills the relief to, or
@@ -393,16 +401,19 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// already carries the ground's diffuse light, caustics included).
 	const f16vec3 glint = f16vec3(min(doLightH(sunSurfaceRadiance(), f16vec3(L), Vh, Nh, f16vec3(0.02), f16vec3(0.0), float16_t(0.0), alphaH), vec3(65504.0)));
 	groundFactor = (one - maskH) + (clearW * (one - F) * (one - milk)) * T;
-	f16vec3 color = (maskH * foamH) * whitewater
-		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur * skyVis) * ambientSky + glint);
-
-	// Reflection: the sky (the ray-traced scene mirror is disabled, TERRAIN_FILM_RT_MIRROR), roughness-
-	// blurred toward the average sky (the blur's sky share is in the fold above). Before the lights: with the
-	// mirror, lights-first kept N / V and the mirror gate live across the lights' own shadow-ray peak, which
-	// cost more (368 vs 352 B/thread).
 	vec3 R = reflect(-vec3(Vh), vec3(Nh));
 	R.y = max(R.y, 0.02);
 	R = normalize(R);
+	// The blur's sky share: the sky SH's cosine lobe (E(n) / pi) centred between R and up, so a rough film sees
+	// the sky on its own side without half the lobe below the horizon (the ocean's rule).
+	const f16vec3 blurSky = u_aoParams.y > 0.0 ? max(giEvalSkySHH(f16vec3(normalize(R + up))) * float16_t(INV_PI), f16vec3(0.0)) : ambientSky;
+	f16vec3 color = (maskH * foamH) * whitewater
+		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur * skyVis) * blurSky + glint);
+
+	// Reflection: the sky (the ray-traced scene mirror is disabled, TERRAIN_FILM_RT_MIRROR), roughness-
+	// blurred toward the sky around R (the blur's sky share is in the fold above). Before the lights: with the
+	// mirror, lights-first kept N / V and the mirror gate live across the lights' own shadow-ray peak, which
+	// cost more (368 vs 352 B/thread).
 	// The sky fallback, fogged too (the baked mirror sky carries none), resolved BEFORE the mirror trace and
 	// folded in whole: a hit swaps its share for the hit below. So neither R's sky lookup nor the ground
 	// normal is live across the trace - only the half sky colour and the hit's slope share. (A hit pixel
@@ -518,7 +529,9 @@ void main()
 		discard;
 	// The film's sun visibility (glint, whitewater): the ground pass's resolve is not available here, so ONE
 	// hard tap (the moving water hides a penumbra), or one ray with the RT sun, as the ocean does. The
-	// ground's gate: no sun on a surface facing away from it.
+	// ground's gate: no sun on a surface facing away from it. x the cloud shadow, as the lit core's
+	// sunShadowVisibility: without it the film's foam and glint stayed sunlit under a cloud, brighter than the
+	// ocean beside it.
 	const vec3 L = u_sunDirection.xyz;
 	float sunVis = 0.0;
 	if (dot(geoN, L) > 0.0)
@@ -528,6 +541,8 @@ void main()
 #else
 		sunVis = sampleSunShadowHard(TERRAIN_LIT_POS, geoN);
 #endif
+		if (sunVis > 0.0)
+			sunVis *= cloudSunTransmittance(TERRAIN_LIT_POS);
 	}
 	g_sunVisSurface = float16_t(sunVis * u_eclipseParams.x);
 	const TerrainFilm film = terrainFilmSurface(in_pos, wetFootprint, filmMask, fields.waterLevel - in_pos.y, fields.waterLevel);

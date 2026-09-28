@@ -603,9 +603,12 @@ export namespace RendererVKLayout
                               // (m; 0 = ocean off; sized from the readback trough estimate),
                               // z = underwater caustic strength (0 = off), w = caustic depth fade (1/m)
         glm::vec4 fogParams8; // x = underwater fog boundary offset off the local water surface (m),
-                              // y = caustic shore fade depth (m; 0 = off), z = far field max distance (m; 1e30 = unbounded), w unused
+                              // y = caustic shore fade depth (m; 0 = off), z = far field max distance (m; 1e30 = unbounded),
+                              // w = sun scatter (non-physical gain on the SUN in-scatter only)
         glm::vec4 fogParams9; // far field (past the froxel volume; vol_apply): x = enabled, y = density
                               // scale, z = multiplier on the near field's height falloff, w = ground samples
+        glm::vec4 fogParams10; // the SHAFT HAZE (sunlit in-scatter only, no extinction / ambient): x = density (1/m),
+                               // y = height falloff (1/m = 1 / its scale height; from the fog's height base), zw unused
 
         glm::vec4 moonParams; // xyz = normalized direction towards the moon, w = cos of the moon disc radius
 
@@ -836,11 +839,20 @@ export namespace RendererVKLayout
         glm::vec4 cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
         glm::vec4 cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
         glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
-        glm::vec4 cloudShape4;  // x = base height variation (fraction of the shell height), yzw unused
+        glm::vec4 cloudShape4;  // x = base height variation (fraction of the main layer's height), y = 1 / ground
+                                // light depth (1/m: the ground bounce's falloff above the main layer's base), z = the
+                                // sky-map clouds' history weight this frame (exp(-3 dt / "Sky map history (s)")), w unused
+        glm::vec4 cloudShape5;  // the profile: x = tower variation (0..1), y = top roundness as the superellipse exponent
+                                // (1 = the plain taper), z = base sharpness (0..1), w = tower core link (0..1)
+        glm::vec4 cloudLayer0;  // the MAIN layer's band: x = bottom (m), y = 1 / height (1/m); z = the upper layer is on (0/1), w = its density scale
+        glm::vec4 cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage, w = type
+        glm::vec4 cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w unused
         glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
         glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
         glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
-        glm::vec4 cloudLight1;  // x = ambient strength, y = ground albedo, z = powder strength, w = multi-scatter attenuation
+        glm::vec4 cloudLight1;  // x = ambient strength, y = ground albedo (folded into cloudLight2), z = powder strength, w = multi-scatter attenuation
+        glm::vec4 cloudLight2;  // rgb = the ground bounce's albedo: the sky's "Ground Albedo" COLOUR x the cloud "Ground albedo",
+                                // w = multi-scatter strength (x the closed-form octave sum; non-physical above 1)
         glm::vec4 cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
         glm::vec4 cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = 1 / detail distance (1/m)
         // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
@@ -848,7 +860,7 @@ export namespace RendererVKLayout
         glm::vec4 cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
         glm::vec4 cloudShadow2; // xyz = light-space axis e0, w = shadow strength
         glm::vec4 cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
-        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w unused
+        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w = far cascade lookup jitter (texels)
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

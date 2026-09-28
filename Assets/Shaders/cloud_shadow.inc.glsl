@@ -32,6 +32,43 @@ float cloudShadowCascadeOD(int cascade, vec3 rel, out float weight)
     return min(t.y * max(t.x - dot(s, u_sunDirection), 0.0), t.z);
 }
 
+// The FAR cascade's optical depth, FILTERED ON THE RESULT: its texels are tens of metres (the cascade spans tens of
+// km), and the OD is non-linear in a texel's stored terms (front, mean extinction, total), so the sampler's bilinear
+// blend of the TERMS stayed blocky - pixelated shadows. Instead each of the 2x2 texels gives its own transmittance
+// exp(-OD) and those are blended (PCF-style). "Far softness" (u_cloudShadow4.w, texels) jitters the lookup by up
+// to that much per pixel and frame, which the TAA / the fog's temporal blend average into a soft penumbra.
+float cloudShadowFarODFiltered(vec3 rel, out float weight)
+{
+    const vec3 s = rel - u_cloudShadow1.xyz;
+    const vec2 uv = vec2(dot(s, u_cloudShadow2.xyz), dot(s, u_cloudShadow3.xyz)) * u_cloudShadow1.w + 0.5;
+    const vec2 edge = min(uv, 1.0 - uv);
+    weight = clamp(min(edge.x, edge.y) * 6.0, 0.0, 1.0);
+    if (weight <= 0.0)
+        return 0.0;
+    const int res = textureSize(u_cloudShadow, 0).x;
+    vec2 st = uv * float(res) - 0.5;
+    if (u_cloudShadow4.w > 0.0)
+    {
+        // World-anchored dither (any stage can call this: no gl_FragCoord), re-rolled every frame.
+        const vec2 p = rel.xz * 3.0 + 5.588238 * float(u_frameIndex & 63u);
+        const vec2 j = vec2(fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))),
+                            fract(52.9829189 * fract(dot(p, vec2(0.00583715, 0.06711056)) + 0.5)));
+        st += (j - 0.5) * u_cloudShadow4.w;
+    }
+    const ivec2 i0 = ivec2(floor(st));
+    const vec2 f = st - vec2(i0);
+    const float a = dot(s, u_sunDirection);
+    float T = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        const ivec2 o = ivec2(k & 1, k >> 1);
+        const vec4 t = texelFetch(u_cloudShadow, ivec3(clamp(i0 + o, ivec2(0), ivec2(res - 1)), 1), 0);
+        const float w = (o.x == 0 ? 1.0 - f.x : f.x) * (o.y == 0 ? 1.0 - f.y : f.y);
+        T += w * exp(-min(t.y * max(t.x - a, 0.0), t.z));
+    }
+    return -log(max(T, 1e-6));
+}
+
 // Optical depth toward the sun at a camera-relative (CENTRE view) point: x = the optical depth, y = how
 // much of it the maps cover (1 inside, fading to 0 over the far cascade's border). The near cascade blends
 // into the far one over its own border (it lies well inside the far one).
@@ -41,7 +78,7 @@ vec2 cloudShadowSample(vec3 rel)
     const float odNear = cloudShadowCascadeOD(0, rel, wNear);
     if (wNear >= 1.0)
         return vec2(odNear, 1.0);
-    const float odFar = cloudShadowCascadeOD(1, rel, wFar);
+    const float odFar = cloudShadowFarODFiltered(rel, wFar);
     if (wNear > 0.0)
         return vec2(mix(odFar, odNear, wNear), 1.0);
     return vec2(odFar, wFar);

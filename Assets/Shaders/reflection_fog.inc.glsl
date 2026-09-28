@@ -65,7 +65,7 @@ vec3 reflectionFogBlend(vec3 radiance, float tau, vec3 dir, vec3 sunRadiance, ve
     // Not skyRadiance(up) - the zenith is the darkest patch of a sunlit sky - except with GI off, where
     // u_aoParams.y is 0 and the SH is stale.
     const f16vec3 skyLight = u_aoParams.y > 0.0 ? giEvalSkySHH(f16vec3(-dir)) * float16_t(u_aoParams.y * INV_PI) : f16vec3(ambientSky);
-    const f16vec3 inLight = f16vec3(sunRadiance * volPhaseHG(dot(dir, L), u_fogParams1.w)) + skyLight + f16vec3(u_ambientColor);
+    const f16vec3 inLight = f16vec3(sunRadiance * (volPhaseHG(dot(dir, L), u_fogParams1.w) * u_fogParams8.w)) + skyLight + f16vec3(u_ambientColor); // x "Sun scatter"
     const float16_t Th = float16_t(T);
     return vec3(f16vec3(radiance) * Th + f16vec3(u_fogParams1.rgb) * inLight * (float16_t(1.0) - Th));
 }

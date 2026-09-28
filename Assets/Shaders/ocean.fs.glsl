@@ -181,9 +181,14 @@ vec3 reflectedSkyRadiance(vec3 dir)
 {
     return textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR), 0.0).rgb;
 }
-// skyRadiance(up): the same constant for every pixel - one fetch of the GI layer.
+// The sky light on the water (body in-scatter, whitewater, the blurred reflection share): the HEMISPHERE average
+// E(n) / pi of the GI sky SH, the same constant for every pixel. Not the sky map's zenith texel: with clouds on
+// that is the one cloud straight over the camera, and the whole ocean took its colour. With GI off (u_aoParams.y
+// 0) the SH is stale, so the zenith texel stays the fallback.
 vec3 skyAmbientUp(vec3 up)
 {
+    if (u_aoParams.y > 0.0)
+        return max(giEvalSkySH(up) * INV_PI, vec3(0.0));
     return textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb;
 }
 
@@ -722,7 +727,18 @@ void main()
     const float16_t glint = min(D * (Vv * NoL), float16_t(MEDIUMP_FLT_MAX)) * (sunVis * F_SchlickH(LoH, float16_t(0.02)));
     // Crest foam + shoreline surf: the final mix over everything (no longer gated at 0.3% foam - the
     // branch saved nothing once the terms fold here).
-    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur * skyVis) * ambientSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
+    // The blur's sky share: the sky SH's cosine lobe (E(n) / pi) toward the reflection's side of the sky - a
+    // rough reflection sees the lit clouds toward the sun, not the average. Centred between R and up: around R
+    // itself a grazing reflection's lobe was half below the horizon (the SH's ground, black at the default
+    // ground intensity) and the blurred share lost half its light - the rough ocean went darker than the film.
+    f16vec3 blurSky = ambientSky;
+    if (u_aoParams.y > 0.0)
+    {
+        vec3 Rb = reflect(-vec3(Vh), vec3(Nh));
+        Rb.y = max(Rb.y, 0.0);
+        blurSky = max(giEvalSkySHH(f16vec3(normalize(normalize(Rb) + up))) * float16_t(INV_PI), f16vec3(0.0));
+    }
+    C = clearW * ((float16_t(1.0) - F) * C + (F * reflBlur * skyVis) * blurSky + min(sunTintH * glint, f16vec3(MEDIUMP_FLT_MAX)))
       + foamH * whitewater;
 
     // Refracted body: the traced water column (Beer-Lambert both ways).

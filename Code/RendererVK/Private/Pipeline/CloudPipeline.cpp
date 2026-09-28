@@ -743,12 +743,13 @@ void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, 
 void CloudPipeline::recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyMapView, vk::Sampler skyMapSampler)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    // In: last frame's sky-map bake read this image (WAR); the shadow map was just written; the UBO copy.
+    // In: last frame's sky-map bake read this image (WAR), and this pass reads its own last write back (the
+    // temporal history, RAW); the shadow map was just written; the UBO copy.
     vk::MemoryBarrier2 inputBarrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eCopy,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eTransferWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eUniformRead,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eUniformRead,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &inputBarrier });
 

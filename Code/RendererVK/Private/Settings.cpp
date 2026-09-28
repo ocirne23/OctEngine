@@ -62,6 +62,19 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds", "Type", &cloudType, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds", "Type variation", &typeVariation, 0.0f, 2.0f);
     Tweak::floatVar("Sky/Clouds", "Base height variation", &baseVariation, 0.0f, 0.6f);
+    Tweak::floatVar("Sky/Clouds", "Tower variation", &towerVariation, 0.0f, 0.9f);
+    Tweak::floatVar("Sky/Clouds", "Top roundness", &topRoundness, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds", "Base sharpness", &baseSharpness, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds", "Tower core link", &towerCoreLink, 0.0f, 1.0f);
+    Tweak::intVar("Sky/Clouds", "Shelf count", &shelfCount, 0, 3);
+    Tweak::floatVar("Sky/Clouds", "Shelf strength", &shelfStrength, 0.0f, 3.0f);
+    Tweak::floatVar("Sky/Clouds", "Shelf thickness", &shelfThickness, 0.005f, 0.2f, 0.005f);
+    Tweak::boolean("Sky/Clouds/Upper layer", "Enabled", &upperEnabled);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Bottom (m)", &upperBottom, 0.0f, 12000.0f, 10.0f, [&]() { upperTop = oc::max(upperTop, upperBottom + 50.0f); });
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Top (m)", &upperTop, 50.0f, 15000.0f, 10.0f, [&]() { upperBottom = oc::min(upperBottom, upperTop - 50.0f); });
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Coverage", &upperCoverage, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Type", &upperType, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Density", &upperDensity, 0.0f, 2.0f);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &densityScale, 0.001f, 0.5f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Erosion", &erosion, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds", "Curl (m)", &curl, 0.0f, 1000.0f, 1.0f);
@@ -75,8 +88,10 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &dropletSize, 5.0f, 50.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &forwardPeakLimit, 0.8f, 1.0f, 0.001f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &multiScatter, 0.0f, 0.95f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter strength", &multiScatterStrength, 0.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &ambient, 0.0f, 4.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground albedo", &groundAlbedo, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Ground light depth (m)", &groundLightDepth, 10.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &powder, 0.0f, 1.0f, 0.01f, onDefinesChanged); // CLOUD_POWDER while > 0
 
     Tweak::boolean("Sky/Clouds/Shadows", "Enabled", &shadows, onDefinesChanged);
@@ -85,6 +100,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Shadows", "Far cascade (km)", &shadowFarKm, 2.0f, 400.0f, 0.5f, [&]() { shadowNearKm = oc::min(shadowNearKm, shadowFarKm * 0.5f); });
     Tweak::intVar("Sky/Clouds/Shadows", "Near steps", &shadowNearSteps, 4, 256);
     Tweak::intVar("Sky/Clouds/Shadows", "Far steps", &shadowFarSteps, 4, 256);
+    Tweak::floatVar("Sky/Clouds/Shadows", "Far softness", &shadowFarSoftness, 0.0f, 4.0f);
     Tweak::enumVar("Sky/Clouds/Shadows", "Near update split", &shadowNearSplit, s_cloudShadowSplitNames);
     Tweak::enumVar("Sky/Clouds/Shadows", "Far update split", &shadowFarSplit, s_cloudShadowSplitNames);
     Tweak::boolean("Sky/Clouds/Shadows", "Self-shadow from map", &selfShadowFromMap, onDefinesChanged);
@@ -96,6 +112,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::intVar("Sky/Clouds/Quality", "Light steps", &lightSteps, 0, 16);
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 10000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &temporalBlend, 0.0f, 0.98f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &skyMapHistorySec, 0.0f, 30.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near detail radius (m)", &nearDetailRadius, 0.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Detail distance (km)", &detailDistanceKm, 0.5f, 400.0f, 0.1f);
     Tweak::boolean("Sky/Clouds/Quality", "Checkerboard", &checkerboard, onDefinesChanged); // CLOUD_CHECKERBOARD
@@ -123,6 +140,9 @@ void FogParams::registerTweaks()
     Tweak::floatVar("Fog", "Height Falloff", &heightFalloff, 0.0f, 1.0f, 0.002f);
     Tweak::floatVar("Fog", "Terrain Follow", &terrainFollow, 0.0f, 1.0f, 0.01f);
     Tweak::color3("Fog", "Albedo", &albedo, &albedoIntensity);
+    Tweak::floatVar("Fog", "Sun scatter", &sunScatter, 0.0f, 50.0f, 0.05f);
+    Tweak::floatVar("Fog/Shaft haze", "Density (1/m)", &shaftHazeDensity, 0.0f, 0.01f, 0.00001f);
+    Tweak::floatVar("Fog/Shaft haze", "Height (m)", &shaftHazeHeight, 10.0f, 10000.0f, 10.0f);
     Tweak::floatVar("Fog", "Anisotropy", &anisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Fog", "Range", &range, 32.0f, 4096.0f, 32.0f);
     Tweak::boolean("Fog/Far Field", "Enabled", &farField);

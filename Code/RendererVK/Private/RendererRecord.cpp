@@ -388,6 +388,8 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
         .cloudColorView = m_cloudPipeline.getAccumColorView(frameIdx, eyeIndex),
         .cloudDepthView = m_cloudPipeline.getAccumDepthView(frameIdx, eyeIndex),
         .cloudSampler = m_cloudPipeline.getLinearSampler(),
+        .cloudShadowView = m_cloudPipeline.getShadowView(),
+        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, eyeIndex, params);
 }
@@ -726,6 +728,8 @@ void Renderer::recordFogApply(uint32 frameIdx)
         .cloudColorView = m_cloudPipeline.getAccumColorView(frameIdx, 0),
         .cloudDepthView = m_cloudPipeline.getAccumDepthView(frameIdx, 0),
         .cloudSampler = m_cloudPipeline.getLinearSampler(),
+        .cloudShadowView = m_cloudPipeline.getShadowView(),
+        .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, 0, params);
     cb.end();

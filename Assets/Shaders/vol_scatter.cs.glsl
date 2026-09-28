@@ -342,6 +342,7 @@ void main()
     }
 
     vec4 result = vec4(0.0);
+    float fogSunVis = -1.0; // the fog's full sun visibility, when it computed one (the shaft haze reuses it)
     if (density > 1e-6)
     {
         const vec3 albedo = albedoWeighted / density;
@@ -385,6 +386,7 @@ void main()
         else
             sunVis = giSunShadow(worldPos, vec3(0.0));
         sunVis *= cloudSunTransmittance(worldPos);
+        fogSunVis = sunVis;
 
         // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
         // + Beer-Lambert absorption (underwater_light.inc.glsl) - weighted by the slice's SUBMERGED
@@ -410,7 +412,9 @@ void main()
                     ), underFrac);
             gSun = mix(g, 0.78, underFrac); // strong forward lobe: ~8x gain toward the sun
         }
-        vec3 inLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_eclipseParams.x) * sunTrans;
+        // "Fog/Sun scatter" (u_fogParams8.w): a gain on the SUN term only - sunlit froxels (the shafts) brighten,
+        // shadowed ones keep their ambient, and the extinction is unchanged.
+        vec3 inLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_eclipseParams.x * u_fogParams8.w) * sunTrans;
 
         // Ambient: GI probe irradiance toward the camera (toggleable; the clipmap lookup is the next
         // biggest cost after the shadow rays), fading to the analytic sky over the probe field's outer
@@ -447,6 +451,24 @@ void main()
 
         // rgb = in-scattered radiance per meter, a = extinction (1/m); integrated analytically per slice.
         result = vec4(albedo * density * inLight + emissive, density);
+    }
+
+    // THE SHAFT HAZE ("Fog/Shaft haze", u_fogParams10): a thin medium for the god rays alone. The fog above is a
+    // HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds down showed only after cranking the
+    // base density - fogging the world. The haze reaches up to the clouds (its own scale height) and adds SUNLIT
+    // in-scatter only: no extinction, no ambient, so shadowed air stays clear and the lit / shadowed contrast is the
+    // shaft. Non-physical on purpose (it scatters without absorbing). Its sun visibility is the fog's where the fog
+    // computed one; above the fog, the clouds' alone (terrain shadows skipped - the shafts are the clouds').
+    if (u_fogParams10.x > 0.0 && underFrac < 1.0)
+    {
+        const float hazeSigma = u_fogParams10.x * heightFogMean(yA, yB, u_fogParams0.y, u_fogParams10.y) * (1.0 - underFrac);
+        const float hazeVis = fogSunVis >= 0.0 ? fogSunVis : cloudSunTransmittance(worldPos);
+        if (hazeVis > 0.0)
+        {
+            const vec3 sunDir = normalize(u_sunDirection.xyz);
+            result.rgb += u_fogParams1.rgb * atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
+                * (hazeSigma * volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * hazeVis * u_eclipseParams.x * u_fogParams8.w);
+        }
     }
 
     // ---- Temporal blend against last frame's reprojected froxel ---------------------------------------

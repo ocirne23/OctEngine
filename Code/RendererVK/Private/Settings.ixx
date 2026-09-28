@@ -13,7 +13,7 @@ export struct SkyParams
     glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f); // sky "up" axis; also the sky radiance light direction
 
     // Sun
-    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.739f, 0.221f, -0.636f));
+    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.625f, 0.6f, -0.5f));
     glm::vec3 sunColor = glm::vec3(0.9568f, 1.0f, 0.9214f);
     float sunIntensity = 3.0f;
     float sunAngularCos = 0.99998f;     // cos of the disc radius (1 = disc off)
@@ -32,7 +32,7 @@ export struct SkyParams
     // ground-bounce fallback in skyRadiance() for downward GI/fog rays. Can stay 0: the GI probe gather
     // fills its range-bounded below-horizon misses from the mirrored sky instead (giMissRadiance), so
     // black ground no longer paints probe-spaced dark dots on sunlit floors.
-    glm::vec3 groundColor = glm::vec3(0.55f, 0.65f, 1.0f);
+    glm::vec3 groundColor = glm::vec3(0.9f, 0.9f, 1.0f);
     float groundIntensity = 0.0f;
     float groundHorizon = 0.25f;  // fraction of every hemisphere treated as sunlit terrain in the
                                   // out-of-GI-range fallback (skyGroundRadiance): up-facing surfaces see
@@ -81,18 +81,36 @@ export struct CloudParams
 {
     bool  enabled = true;
     // Shape
-    float bottom = 200.0f;             // shell bottom altitude (m)
-    float top = 1500.0f;               // shell top altitude (m)
-    float coverage = 0.20f;            // 0 = clear, 1 = overcast
-    float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform)
-    float cloudType = 0.75f;           // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
+    float bottom = 300.0f;             // shell bottom altitude (m)
+    float top = 5000.0f;               // shell top altitude (m)
+    float coverage = 0.66f;            // 0 = clear, 1 = overcast
+    float coverageVariation = 1.0f;    // weather-map spread around the coverage (0 = uniform)
+    float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
     // bottom - flat, aligned bases); the clouds' own height shrinks to (1 - this). A field drifting over
     // kilometres, uncorrelated with the tower height.
-    float baseVariation = 0.03f;
-    float densityScale = 0.025f;       // extinction (1/m) at density 1
-    float erosion = 0.45f;             // detail noise erosion of the base shapes
+    float baseVariation = 0.05f;
+    // The vertical profile's shape (both layers), 0..1 each:
+    float towerVariation = 0.55f;      // how far a cloud's top may drop below the layer top (0 = all reach it)
+    float topRoundness = 0.1f;         // 0 = the plain taper (cones), 1 = flat-shouldered domes
+    float baseSharpness = 0.26f;       // 0 = soft, wispy bases, 1 = flat bases
+    float towerCoreLink = 1.0f;        // 0 = the top follows the tower field only (tilted ramps), 1 = the cloud's own coverage (its core rises)
+    // SHELVES: stable layers (inversions) at fixed heights of the main layer where the clouds that reach them spread
+    // out into flat tiers (stratocumulus cumulogenitus; at the top of a storm, the anvil).
+    int   shelfCount = 1;              // 0..3, evenly spaced through the layer
+    float shelfStrength = 0.55f;       // how far a cloud spreads at a shelf
+    float shelfThickness = 0.1f;       // half thickness (fraction of the layer height)
+    // The UPPER layer: an independent band with its own coverage and type (a stratiform / altocumulus deck over
+    // the main layer's cumulus). The march shell covers both bands.
+    bool  upperEnabled = true;
+    float upperBottom = 6500.0f;       // m
+    float upperTop = 7500.0f;          // m
+    float upperCoverage = 0.25f;
+    float upperType = 0.1f;            // 0 = stratus (thin sheets), 0.5 = cumulus
+    float upperDensity = 0.2f;         // density scale against the main layer
+    float densityScale = 0.015f;       // extinction (1/m) at density 1
+    float erosion = 0.66f;             // detail noise erosion of the base shapes
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
     float weatherSizeKm = 20.0f;      // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
@@ -104,17 +122,21 @@ export struct CloudParams
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
     float forwardPeakLimit = 0.95f;    // cap on the fit's HG g (0.995 at 20 um: a ~0.3 degree diffraction lobe that
                                        // saturates to a sun-sized white blob behind thin cloud); 1 = uncapped
-    float multiScatter = 0.9f;        // octave attenuation of the multiple-scattering approximation (0 = single scattering)
-    float ambient = 2.0f;              // sky ambient strength
-    float groundAlbedo = 0.25f;        // ground bounce onto the cloud bottoms
+    float multiScatter = 0.8f;        // octave attenuation of the multiple-scattering approximation (0 = single scattering)
+    float multiScatterStrength = 1.25f; // x the closed-form sum of ALL multiple-scattering octaves (non-physical above 1):
+                                       // the sunlit side seen with the sun behind the viewer lives on it alone
+    float ambient = 0.0f;              // sky ambient strength
+    float groundAlbedo = 0.2f;      // ground bounce onto the cloud bottoms
+    float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
     float shadowNearKm = 1.0f;         // near cascade extent (km)
-    float shadowFarKm = 8.0f;        // far cascade extent (km)
+    float shadowFarKm = 40.0f;       // far cascade extent (km)
     int   shadowNearSteps = 16;        // map march steps per texel, near cascade
     int   shadowFarSteps = 32;         // map march steps per texel, far cascade
+    float shadowFarSoftness = 1.5f;    // far cascade lookup jitter per pixel and frame, in texels (TAA-resolved penumbra)
     // PROGRESSIVE UPDATES: each frame a cascade renders 1 / split of its texels (interleaved), so the cost is
     // the same every frame. 0 = every texel every frame, 1 = 1/4 (2x2), 2 = 1/16 (4x4).
     int   shadowNearSplit = 1;
@@ -128,6 +150,7 @@ export struct CloudParams
     int   lightSteps = 3;              // sun march steps per dense sample
     float lightDistance = 2000.0f;     // sun march reach (m)
     float temporalBlend = 0.9f;        // history weight of the temporal accumulation
+    float skyMapHistorySec = 5.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
     bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
@@ -186,13 +209,22 @@ export struct FogParams
     bool  enabled = true;
     float density = 0.050f;        // global extinction at the height base (1/m)
     float heightBase = 0.0f;       // world height where the global fog is densest
-    float heightFalloff = 0.33f;   // exponential density falloff above the base (1/m)
+    float heightFalloff = 0.25f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
                                    // terrain height map, see Renderer::setFogTerrainHeightMap): 0 = flat fog,
                                    // 1 = fog hugs the terrain at constant depth; in between it reaches higher
                                    // on mountainsides but still clears the peaks
     glm::vec3 albedo = glm::vec3(1.0f, 1.0f, 1.0f);
     float albedoIntensity = 1.0f;  // > 1 is a non-physical gain (emissive-ish fog)
+    // Non-physical gain on the SUN in-scatter only (froxels + far field): sunlit fog - the light shafts - brightens,
+    // shadowed fog (ambient only) and the extinction do not. Strong god rays through thin fog, without fogging up
+    // the world.
+    float sunScatter = 2.0f;
+    // SHAFT HAZE: a thin medium for the god rays alone - sunlit in-scatter only (x "Sun scatter"), no extinction, no
+    // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
+    // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. 0 = off.
+    float shaftHazeDensity = 0.0005f;  // 1/m
+    float shaftHazeHeight = 1000.0f;   // m: the scale height (density / e per this much height)
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
     float range = 1024.0f;         // froxel grid far distance (m). With the far field on, this is a
                                    // near-field quality knob rather than a view distance: shortening it
@@ -200,8 +232,8 @@ export struct FogParams
                                    // structure (local lights, fog volumes, noise)
     bool  farField = true;         // extend the fog past `range` analytically instead of with more slices
                                    // (vol_apply's volFarField); unbounded, so the horizon fully fogs
-    float farFieldDensity = 0.5f;  // far-field deviations from the near field's own fog. At 1/1 the two are
-    float farFieldThickness = 0.5f; // one continuous medium; near fog is usually authored far thicker than
+    float farFieldDensity = 0.2f;  // far-field deviations from the near field's own fog. At 1/1 the two are
+    float farFieldThickness = 0.1f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
     float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (0 = unbounded).

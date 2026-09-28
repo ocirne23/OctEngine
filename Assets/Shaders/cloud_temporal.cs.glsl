@@ -29,6 +29,11 @@ layout (binding = 5, rgba16f) uniform writeonly image2D u_outColor;
 layout (binding = 6, rgba16f) uniform writeonly image2D u_outDepth;
 layout (binding = 7) uniform sampler2D u_sceneDepth; // the checkerboard's unmarched pixels: their march limit
 
+// The neighbourhood clamp takes only the neighbours whose march LIMIT (log2) is within this of the pixel's own:
+// at a silhouette a texel over the near surface holds "no cloud" (its march stopped under the clouds), and in
+// the range of a sky texel it let the history fade to clear sky - a sky-coloured outline around every object.
+const float LIMIT_MATCH = 0.15;
+
 layout (push_constant) uniform CloudPC
 {
     uint u_viewIndex;
@@ -64,24 +69,34 @@ void main()
         for (int i = 0; i < 4; ++i) // the diagonals: the same parity, marched this frame
         {
             const ivec2 q = clamp(px + ivec2((i & 1) * 2 - 1, (i >> 1) * 2 - 1), ivec2(0), last);
+            const vec4 d = texelFetch(u_curDepth, q, 0);
+            if (abs(d.z - curDepth.z) >= LIMIT_MATCH)
+                continue;
             const vec4 n = texelFetch(u_curColor, q, 0);
-            const float d = texelFetch(u_curDepth, q, 0).y;
             lo = min(lo, n);
             hi = max(hi, n);
-            dLo = min(dLo, d);
-            dHi = max(dHi, d);
+            dLo = min(dLo, d.y);
+            dHi = max(dHi, d.y);
         }
     }
     else
     {
-        // The 4 side neighbours (marched this frame): their average is the current value, their nearest
-        // front and mean weighted distance its depth. The limit is this pixel's own (the march's rule). The
-        // front comes only from neighbours that HOLD cloud: an empty march stores its own limit as the front, so
-        // at a silhouette the near neighbour's limit became the front of cloud from the sky neighbours, and the
-        // upsample let that cloud onto the near surface.
+        // The 4 side neighbours (marched this frame), weighted by how well their march LIMIT matches this
+        // pixel's own (the march's rule, from the scene depth): their average is the current value, their
+        // nearest front and mean weighted distance its depth. A plain average let a neighbour over a near
+        // surface - its march stopped under the clouds: "no cloud" - into a sky texel at every silhouette, a
+        // clear-sky outline around it. The front comes only from neighbours that HOLD cloud: an empty march
+        // stores its own limit as the front, so the near neighbour's limit became the front of cloud from the
+        // sky neighbours, and the upsample let that cloud onto the near surface.
+        const ivec2 full = px * 2;
+        const ivec2 lastFull = textureSize(u_sceneDepth, 0) - 1;
+        const float depth = min(min(texelFetch(u_sceneDepth, min(full, lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), lastFull), 0).r),
+                                min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), lastFull), 0).r));
+        const float maxDist = u_cloudMarch0.y;
+        const float limit = depth > 0.0 ? min(length(viewRelFromDepth(uvJ, depth)), maxDist) : maxDist;
+        const float logLimit = log2(max(limit, 1.0));
         cur = vec4(0.0);
-        lo = vec4(1e30);
-        hi = vec4(-1e30);
+        float wSum = 0.0;
         float front = 1e30;
         float weighted = 0.0;
         for (int i = 0; i < 4; ++i)
@@ -90,24 +105,34 @@ void main()
             const ivec2 q = clamp(px + o, ivec2(0), last);
             const vec4 n = texelFetch(u_curColor, q, 0);
             const vec4 d = texelFetch(u_curDepth, q, 0);
-            cur += n;
+            const float w = 1.0 / (1.0 + 16.0 * abs(d.z - logLimit));
+            cur += n * w;
+            weighted += d.y * w;
+            wSum += w;
+            if (n.a < 0.999 && abs(d.z - logLimit) < LIMIT_MATCH)
+                front = min(front, d.x);
+        }
+        cur /= wSum;
+        curDepth = vec4(min(front, logLimit), min(weighted / wSum, logLimit), logLimit, 0.0);
+        // The clamp range: the matching neighbours only (the same leak through the history clamp), always
+        // holding the current value.
+        lo = cur;
+        hi = cur;
+        dLo = curDepth.y;
+        dHi = curDepth.y;
+        for (int i = 0; i < 4; ++i)
+        {
+            const ivec2 o = i < 2 ? ivec2(i * 2 - 1, 0) : ivec2(0, i * 2 - 5);
+            const ivec2 q = clamp(px + o, ivec2(0), last);
+            const vec4 d = texelFetch(u_curDepth, q, 0);
+            if (abs(d.z - logLimit) >= LIMIT_MATCH)
+                continue;
+            const vec4 n = texelFetch(u_curColor, q, 0);
             lo = min(lo, n);
             hi = max(hi, n);
-            if (n.a < 0.999)
-                front = min(front, d.x);
-            weighted += d.y;
             dLo = min(dLo, d.y);
             dHi = max(dHi, d.y);
         }
-        cur *= 0.25;
-        const ivec2 full = px * 2;
-        const ivec2 lastFull = textureSize(u_sceneDepth, 0) - 1;
-        const float depth = min(min(texelFetch(u_sceneDepth, min(full, lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), lastFull), 0).r),
-                                min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), lastFull), 0).r));
-        const float maxDist = u_cloudMarch0.y;
-        const float limit = depth > 0.0 ? min(length(viewRelFromDepth(uvJ, depth)), maxDist) : maxDist;
-        const float logLimit = log2(max(limit, 1.0));
-        curDepth = vec4(min(front, logLimit), min(weighted * 0.25, logLimit), logLimit, 0.0);
     }
 #else
     cur = texelFetch(u_curColor, px, 0);
@@ -122,12 +147,14 @@ void main()
         if (x == 0 && y == 0)
             continue;
         const ivec2 q = clamp(px + ivec2(x, y), ivec2(0), last);
+        const vec4 d = texelFetch(u_curDepth, q, 0);
+        if (abs(d.z - curDepth.z) >= LIMIT_MATCH)
+            continue;
         const vec4 n = texelFetch(u_curColor, q, 0);
-        const float d = texelFetch(u_curDepth, q, 0).y;
         lo = min(lo, n);
         hi = max(hi, n);
-        dLo = min(dLo, d);
-        dHi = max(dHi, d);
+        dLo = min(dLo, d.y);
+        dHi = max(dHi, d.y);
     }
 #endif
 
@@ -158,7 +185,7 @@ void main()
         // outline on every edge against clouds, thicker the higher the blend. The sky keeps its history (both
         // limits are the max distance there).
         valid = ((histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995))
-             && abs(histDepth.z - curDepth.z) < 0.15;
+             && abs(histDepth.z - curDepth.z) < LIMIT_MATCH;
         if (valid)
         {
             const vec4 pad = (hi - lo) * 0.1 + vec4(0.002);
