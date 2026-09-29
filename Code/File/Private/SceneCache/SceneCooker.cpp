@@ -799,7 +799,10 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
     uint64 sourceMTime = 0;
     if (!ec)
         sourceMTime = fileMTimeTicks(filePath, ec);
-    const bool cacheUsable = options.enableCache && !ec;
+    const bool sourceMissing = (bool)ec;
+    if (sourceMissing)
+        sourceMTime = 0;
+    const bool cacheUsable = options.enableCache && !sourceMissing;
 
     oc::string stem = oc::fromStd(toPath(filePath).stem().string());
     for (char& c : stem)
@@ -816,6 +819,37 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
         {
             Log::info(oc::format("SceneCache: '{}' served from '{}'", filePath, cachePath));
             return cooked;
+        }
+    }
+
+    // Source gone (shipped build, moved asset): serve any cooked scene of this model, whatever its hash
+    // suffix. Size/mtime 0 tells the reader there is nothing to validate against.
+    if (sourceMissing && options.enableCache)
+    {
+        const auto isHash = [](const std::string& s, size_t from)
+        {
+            if (s.size() != from + 8)
+                return false;
+            for (size_t i = from; i < s.size(); ++i)
+                if (!isxdigit((uint8)s[i]))
+                    return false;
+            return true;
+        };
+        const std::string prefix = oc::toStd(stem) + "_";
+        std::filesystem::path bestPath;
+        for (const auto& entry : std::filesystem::directory_iterator("Local/Cooked", ec))
+        {
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".vsc")
+                continue;
+            const std::string name = entry.path().stem().string();
+            if (name.compare(0, prefix.size(), prefix) != 0 || !isHash(name, prefix.size()))
+                continue;
+            auto cooked = oc::make_unique<CookedSceneData>();
+            if (cooked->load(oc::fromStd(entry.path().generic_string()), filePath, 0, 0, 0))
+            {
+                Log::info(oc::format("SceneCache: source '{}' missing, served from '{}'", filePath, entry.path().string()));
+                return cooked;
+            }
         }
     }
 

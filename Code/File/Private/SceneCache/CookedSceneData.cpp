@@ -168,8 +168,10 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
     {
         return offset <= fileSize && count * elemSize <= fileSize - offset;
     };
+    // Size and mtime both 0 = the source is missing: accept the cache as-is (no stamp or options checks).
+    const bool sourceMissing = sourceMTime == 0 && sourceSize == 0;
     if (header.magic != SCENE_CACHE_MAGIC || header.version != SCENE_CACHE_VERSION
-        || header.sourceMTime != sourceMTime || header.sourceSize != sourceSize || header.optionsHash != optionsHash
+        || (!sourceMissing && (header.sourceMTime != sourceMTime || header.sourceSize != sourceSize || header.optionsHash != optionsHash))
         || !sectionValid(header.meshesOffset, header.numMeshes, sizeof(CookedMesh))
         || !sectionValid(header.materialsOffset, header.numMaterials, sizeof(CookedMaterial))
         || !sectionValid(header.texturesOffset, header.numTextures, sizeof(CookedTexture))
@@ -190,9 +192,13 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
     {
         const char* sourceTexPath = reinterpret_cast<const char*>(m_blob.data() + header.stringsOffset + stamps[i].sourcePathOffset);
         const char* cookedTexPath = reinterpret_cast<const char*>(m_blob.data() + header.stringsOffset + stamps[i].cookedPathOffset);
-        const uint64 texSize = std::filesystem::file_size(sourceTexPath, ec);
-        if (ec || texSize != stamps[i].size || fileMTimeTicks(sourceTexPath, ec) != stamps[i].mtime || ec
-            || !std::filesystem::exists(cookedTexPath, ec))
+        bool valid = std::filesystem::exists(cookedTexPath, ec);
+        if (valid && !sourceMissing)
+        {
+            const uint64 texSize = std::filesystem::file_size(sourceTexPath, ec);
+            valid = !ec && texSize == stamps[i].size && fileMTimeTicks(sourceTexPath, ec) == stamps[i].mtime && !ec;
+        }
+        if (!valid)
         {
             m_blob.clear();
             return false;
