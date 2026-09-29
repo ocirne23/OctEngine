@@ -49,7 +49,7 @@ export struct SkyParams
     float rayleighHeight = 8500.0f;     // Rayleigh scale height (m): how fast air density falls off
     float mieHeight = 1200.0f;          // Mie scale height (m): how high the haze layer reaches
     float mieExtinction = 1.11f;        // Mie extinction/scattering ratio (> 1 = absorbing haze)
-    float ozone = 2.0f;                 // ozone absorption strength (1 = Earth-like); absorbs green/yellow,
+    float ozone = 4.0f;                 // ozone absorption strength (1 = Earth-like); absorbs green/yellow,
                                         // suppresses the green horizon band single scattering produces
 
     // Stars
@@ -83,8 +83,8 @@ export struct CloudParams
     // Shape
     float bottom = 300.0f;             // shell bottom altitude (m)
     float top = 5000.0f;               // shell top altitude (m)
-    float coverage = 0.66f;            // 0 = clear, 1 = overcast
-    float coverageVariation = 1.0f;    // weather-map spread around the coverage (0 = uniform)
+    float coverage = 0.75f;            // 0 = clear, 1 = overcast
+    float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
@@ -98,21 +98,24 @@ export struct CloudParams
     float towerCoreLink = 1.0f;        // 0 = the top follows the tower field only (tilted ramps), 1 = the cloud's own coverage (its core rises)
     // SHELVES: stable layers (inversions) at fixed heights of the main layer where the clouds that reach them spread
     // out into flat tiers (stratocumulus cumulogenitus; at the top of a storm, the anvil).
-    int   shelfCount = 1;              // 0..3, evenly spaced through the layer
+    int   shelfCount = 1;              // 0..3
     float shelfStrength = 0.55f;       // how far a cloud spreads at a shelf
     float shelfThickness = 0.1f;       // half thickness (fraction of the layer height)
+    float shelfSpacing = 0.2f;         // from one shelf to the next (fraction of the layer height); the stack is centred in the layer
     // The UPPER layer: an independent band with its own coverage and type (a stratiform / altocumulus deck over
     // the main layer's cumulus). The march shell covers both bands.
     bool  upperEnabled = true;
-    float upperBottom = 6500.0f;       // m
+    float upperBottom = 6000.0f;       // m
     float upperTop = 7500.0f;          // m
-    float upperCoverage = 0.25f;
+    float upperCoverage = 0.2f;        // x the main layer's coverage
     float upperType = 0.1f;            // 0 = stratus (thin sheets), 0.5 = cumulus
-    float upperDensity = 0.2f;         // density scale against the main layer
+    float upperHeightVariation = 0.2f; // per-column lift, fraction of the upper band (the column shrinks to 1 - this)
+    float upperDensity = 0.2f;         // x the main layer's density ("Density (1/m)" scales both)
     float densityScale = 0.015f;       // extinction (1/m) at density 1
     float erosion = 0.66f;             // detail noise erosion of the base shapes
+    float erosionCutoff = 0.15f;       // densities under this after the erosion are removed (the thin haze rest), the rest remapped to 0..1
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
-    float weatherSizeKm = 20.0f;      // weather map period (km): the size of cloud clusters and gaps
+    float weatherSizeKm = 20.0f;       // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeed = 10.0f;           // m/s
@@ -125,10 +128,12 @@ export struct CloudParams
     float multiScatter = 0.8f;        // octave attenuation of the multiple-scattering approximation (0 = single scattering)
     float multiScatterStrength = 1.25f; // x the closed-form sum of ALL multiple-scattering octaves (non-physical above 1):
                                        // the sunlit side seen with the sun behind the viewer lives on it alone
-    float ambient = 0.0f;              // sky ambient strength
-    float groundAlbedo = 0.2f;      // ground bounce onto the cloud bottoms
+    float ambient = 1.0f;              // sky ambient strength
+    float groundAlbedo = 0.15f;      // ground bounce onto the cloud bottoms
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
+    float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays);
+                                       // 0 = no aerial perspective at all (the clouds as lit: no haze, no dimming)
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
@@ -148,11 +153,13 @@ export struct CloudParams
     int   maxSteps = 600;             // view march step budget per pixel
     float maxDistanceKm = 50.0f;       // view march range (km)
     float nearStep = 15.0f;            // step length at the camera (m)
-    float stepGrowth = 0.01f;          // step length growth per metre of distance
-    int   lightSteps = 3;              // sun march steps per dense sample
-    float lightDistance = 2000.0f;     // sun march reach (m)
-    float temporalBlend = 0.9f;        // history weight of the temporal accumulation
-    float skyMapHistorySec = 5.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
+    int   stepsPerRay = 280;           // view march steps over a ray's shell span: each ray solves its step growth to take
+                                       // this many, so the quality through the layer holds whatever its top / bottom
+    int   lightSteps = 4;              // sun march steps per dense sample
+    float lightDistance = 8000.0f;     // MAX sun march reach (m): the reach is the way out of the sample's own layer
+                                       // toward the sun, (layer top - altitude) / sun y, capped by this for a low sun
+    float temporalBlend = 0.8f;        // history weight of the temporal accumulation
+    float skyMapHistorySec = 1.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
     bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
@@ -221,12 +228,12 @@ export struct FogParams
     // Non-physical gain on the SUN in-scatter only (froxels + far field): sunlit fog - the light shafts - brightens,
     // shadowed fog (ambient only) and the extinction do not. Strong god rays through thin fog, without fogging up
     // the world.
-    float sunScatter = 2.0f;
+    float sunScatter = 1.0f;
     // SHAFT HAZE: a thin medium for the god rays alone - sunlit in-scatter only (x "Sun scatter"), no extinction, no
     // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
     // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. 0 = off.
     float shaftHazeDensity = 0.0005f;  // 1/m
-    float shaftHazeHeight = 1000.0f;   // m: the scale height (density / e per this much height)
+    float shaftHazeHeight = 300.0f;    // m: the scale height (density / e per this much height)
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
     float range = 1024.0f;         // froxel grid far distance (m). With the far field on, this is a
                                    // near-field quality knob rather than a view distance: shortening it
@@ -234,8 +241,8 @@ export struct FogParams
                                    // structure (local lights, fog volumes, noise)
     bool  farField = true;         // extend the fog past `range` analytically instead of with more slices
                                    // (vol_apply's volFarField); unbounded, so the horizon fully fogs
-    float farFieldDensity = 0.2f;  // far-field deviations from the near field's own fog. At 1/1 the two are
-    float farFieldThickness = 0.1f; // one continuous medium; near fog is usually authored far thicker than
+    float farFieldDensity = 0.66f; // far-field deviations from the near field's own fog. At 1/1 the two are
+    float farFieldThickness = 0.66f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
     float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (0 = unbounded).

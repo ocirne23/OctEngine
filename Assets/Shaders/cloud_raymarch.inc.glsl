@@ -6,16 +6,22 @@
 #ifndef CLOUD_RAYMARCH_INC_GLSL
 #define CLOUD_RAYMARCH_INC_GLSL
 
-// Optical depth toward the sun from a camera-relative point: quadratically growing steps out to the
-// light distance. Only the first (short) step carries the detail noise: the longer ones integrate over
+// Optical depth toward the sun from a camera-relative point at altitude sampleAlt: quadratically growing steps
+// out to the reach. Only the first (short) step carries the detail noise: the longer ones integrate over
 // the detail scale anyway, and each detail sample costs two or three more fetches (curl, detail, near).
 // Each step reads the base noise at the mip of ITS OWN LENGTH (at least the view sample's): a step hundreds of
 // metres long integrates over that much noise, and the view sample's fine mip only thrashed the texture cache
 // (and aliased). EARLY OUT at odCut (normalized, the caller's): past it every multi-scattering octave is gone.
-float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lodBase, float lodDetail, float detailWeight, float odCut)
+// THE REACH is the way out of the sample's OWN LAYER toward the sun, (layer top - altitude) / L.y, capped by
+// "Light distance (m)" (u_cloudMarch1.y) for a low sun. A fixed reach spent steps in the empty air above a sample
+// near the top, and one near the base stopped short of the tower over it. The own layer's top, not the shell's:
+// the gap between the layers would take steps for nothing.
+float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, vec3 L, float lodBase, float lodDetail, float detailWeight, float odCut)
 {
     const int n = int(u_cloudMarch1.x);
-    const float reach = u_cloudMarch1.y;
+    const bool inUpper = u_cloudLayer0.z > 0.5 && sampleAlt >= u_cloudLayer1.x;
+    const float layerTop = inUpper ? u_cloudLayer1.x + 1.0 / u_cloudLayer1.y : u_cloudLayer0.x + 1.0 / u_cloudLayer0.y;
+    const float reach = clamp((layerTop - sampleAlt) / max(L.y, 0.02), 1.0, u_cloudMarch1.y);
     const float invN = 1.0 / u_cloudMarch1.x;
     const float stepLodBias = log2(u_cloudShape1.y * CLOUD_BASE_RES);
     const float cut = odCut / u_cloudShape1.w;
@@ -38,6 +44,68 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, vec3 L, float lod
         tPrev = t1;
     }
     return od * u_cloudShape1.w;
+}
+
+// The clouds' sun visibility of the AIR at a camera-relative point (this view's camera), for the aerial perspective.
+// Inside the shadow map: the map (one bilinear fetch). PAST it, cloudSunTransmittance fades to one constant mean for
+// the whole sky (mix(1, 0.3, coverage)), so the air toward far cloud bases - 10-40 km of it at a low angle - was
+// half-lit under a dense deck, and its blue Rayleigh light lay over the dark bases as a sheen. Here, past the map,
+// the march estimates it from the WEATHER MAP instead (bound here, not in the other consumers): the coverage of the
+// column where the sun ray from the point crosses the main layer's middle - a gap lights the air, dense weather
+// shades it.
+float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
+{
+#ifdef CLOUD_SHADOWS
+    if (u_cloudShadow4.x < 0.5)
+        return 1.0;
+    const vec2 s = cloudShadowSample(rel + (u_viewPos - u_views[VIEW_CENTER].viewPos.xyz), false);
+    float farT = 1.0;
+    if (s.y < 1.0)
+    {
+        const float mid = u_cloudLayer0.x + 0.5 / u_cloudLayer0.y;
+        const float tSun = max(mid - cloudAltitude(rel, camAlt), 0.0) / max(L.y, 0.05);
+        const vec2 nxz = (rel + L * tSun).xz + cloudNoiseOffset();
+        const float c = cloudColumnCoverage(u_cloudShape0.z, textureLod(u_cloudWeather, nxz * u_cloudShape1.x, 0.0).r);
+        farT = 1.0 - smoothstep(0.35, 0.75, c);
+    }
+    const float T = mix(farT, exp(-s.x), s.y);
+    return mix(1.0, T, u_cloudShadow2.w);
+#else
+    return 1.0;
+#endif
+}
+
+// Single-scattered atmosphere from a camera-relative origin to origin + dir * tEnd, per unit sun radiance (multiply
+// by the sun colour), and its transmittance: the aerial perspective in front of a cloud, from any altitude, to a
+// finite distance, in any direction. Each step's sun is CLOUD-SHADOWED (cloudAirSunVis): one visibility for the
+// whole segment (the old mean of two taps) could not tell the shaded air under a deck from the lit air past it.
+// 8 steps at the ray's own JITTER (per pixel and frame; the temporal pass averages them): with 4 fixed points over
+// tens of km each pixel caught the lit air columns under the openings at one of the same 4 depths as every other
+// pixel - the openings' shapes stamped onto the clouds beside them as blue blobs instead of soft shafts.
+vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 lightDir, float jitter, out vec3 transmittance)
+{
+    const int steps = 8;
+    const vec3 ro = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // planet-centred
+    const float mu = dot(dir, lightDir);
+    const float pR = phaseRayleigh(mu);
+    const float pM = phaseHG(mu, u_skySunParams.y);
+    const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
+    vec3 sumR = vec3(0.0), sumM = vec3(0.0);
+    const float dt = tEnd / float(steps);
+    float t = jitter * dt;
+    for (int i = 0; i < steps; ++i)
+    {
+        const vec3 p = ro + dir * t;
+        const float h = length(p) - ATMOS_R_PLANET;
+        const vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
+        const vec3 atten = exp(-atmosTau(atmosRayOD(ray, t) + atmosLightOpticalDepth(p, lightDir)))
+                         * cloudAirSunVis(origin + dir * t, camAlt, lightDir);
+        sumR += atten * dens.x;
+        sumM += atten * dens.y;
+        t += dt;
+    }
+    transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
+    return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
 }
 
 struct CloudMarchResult
@@ -128,27 +196,31 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // 1 / that distance); past it the samples skip the detail fetches (their mips are nearly flat there).
     const float detailInvDist = u_cloudMarch1.w;
 
-    // THE STEP SCHEDULE: dt = max(near step, g * t). With the "Step growth" g a long ray (flat through the
-    // layer: up to the max distance) needs more steps than the budget, and a uniform floor of (distance left /
-    // steps left) then made EVERY step long - 400 m from the camera on, inside the nearby cloud: one density
-    // sample per step, opaque at once, a grainy band at the camera's altitude. Instead the growth rate rises
-    // per ray until the schedule fits ~75 % of the budget (the rest absorbs the coarse back-ups): short steps
-    // near the camera, faster growth far away. Steps for [tStart, tEnd] at rate g, with n = the near step:
+    // THE STEP SCHEDULE: dt = max(near step, g * t), the growth rate g PER RAY from the shell. Steps for
+    // [tStart, tEnd] at rate g, with n = the near step:
     //   N(g) = max(0, n / g - tStart) / n + ln(tEnd / max(tStart, n / g)) / g
-    // solved by a fixed-point iteration on g = (the same terms) / budget - the log moves slowly, so a few
-    // rounds settle.
+    // A FIXED g ("Step growth", before 2026-09-29) gave a ray crossing the shell from below ln(top / bottom) / g
+    // steps at any angle - so the step count through the clouds followed the RATIO of the layer's top and bottom
+    // (300-5000 m: ~280 steps; 1500-3000 m: ~70), and every top / bottom change needed a new growth. Now g is SOLVED
+    // so every ray takes "Steps per ray" (u_cloudMarch0.w) steps over its shell span: the same quality through the
+    // layer whatever its top and bottom, and the same cost per ray. Capped at ~75 % of the budget (the rest absorbs
+    // the coarse back-ups; the sky map's 64-step rays). A fixed-point iteration on g = (the terms) / target - the log
+    // moves slowly, so a few rounds settle. A span the near step covers in fewer steps keeps the near step.
+    // (Before the per-ray solve a long flat ray overran the budget, and a uniform floor of (distance left / steps
+    // left) made EVERY step long, inside the nearby cloud too: a grainy band at the camera's altitude.)
     const float nearStep = u_cloudMarch0.z;
     const float tStart = max(seg0.y > seg0.x ? seg0.x : seg1.x, 1.0);
     const float tEnd = max(seg1.y > seg1.x ? seg1.y : seg0.y, tStart + 1.0);
-    const float budget = 0.75 * float(maxSteps);
-    float growth = u_cloudMarch0.w;
-    for (int i = 0; i < 4; ++i)
+    const float target = max(min(u_cloudMarch0.w, 0.75 * float(maxSteps)), 1.0);
+    float growth = 0.0; // near steps throughout
+    if ((tEnd - tStart) / nearStep > target)
     {
-        const float tLinear = nearStep / max(growth, 1e-6); // where g * t overtakes the near step
-        const float needed = max(tLinear - tStart, 0.0) / nearStep + log(tEnd / max(tStart, tLinear)) / max(growth, 1e-6);
-        if (needed <= budget)
-            break;
-        growth = max(growth, (max(1.0 - tStart / tLinear, 0.0) + log(tEnd / max(tStart, tLinear))) / budget);
+        growth = log(tEnd / tStart) / target; // the pure geometric schedule: the start point
+        for (int i = 0; i < 4; ++i)
+        {
+            const float tLinear = nearStep / max(growth, 1e-6); // where g * t overtakes the near step
+            growth = max((max(1.0 - tStart / tLinear, 0.0) + log(tEnd / max(tStart, tLinear))) / target, 1e-6);
+        }
     }
 
     // THE AERIAL PERSPECTIVE'S DISTANCE: the air in front of the cloud is applied once per ray (after the loop),
@@ -223,7 +295,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 if (map.y >= 1.0)
                     od = map.x;
                 else
-                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, L, lodBase, lodDetail, detailWeight, odCut), map.x, map.y);
+                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, alt, L, lodBase, lodDetail, detailWeight, odCut), map.x, map.y);
                 // Multiple scattering: the closed-form octave sum (above the loop), isotropic.
                 const float msSum = ms * exp(-od * ms) + msTailScale * exp(-od * msTailExt);
                 const float sunTerm = phase0 * exp(-od) + isotropic * (msStrength * msSum);
@@ -282,6 +354,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const vec3 ambGround = u_cloudLight2.rgb * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
 
     r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;
+    if (u_cloudLayer3.w <= 0.0) // "Lighting/Aerial perspective strength" 0: the cloud as lit, no air in front
+        return r;
 
     // Aerial perspective between the origin and the cloud: the cloud dims through the air, and the air in
     // front of it keeps the in-scatter the sky behind it had (the sky carries the whole ray's). Taken at the
@@ -289,17 +363,15 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // along the ray (up, from altitude) that distance is ill-conditioned and the weighted distance serves.
     const float airMean = airSum / wSum;
     const float tAir = kAir * tEnd > 1e-3 ? clamp(-log(max(airMean, 1e-6)) / kAir, 0.0, tEnd) : r.weighted;
-    vec3 airT;
-    const vec3 roPlanet = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // re-derived, not held across the loop
-    const vec3 air = cloudAerialScatter(roPlanet, dir, tAir, L, airT) * sunColor;
     // The air in front of the cloud lies in the CLOUDS' SHADOW where the sun is behind them (under an overcast,
-    // all of it): its sun term takes the cloud shadow map's sun transmittance, averaged at 1/4 and 3/4 of the air
-    // segment. Unshadowed, its Mie forward peak drew a sun glow on top of any cloud, however dense. (A ramp to the
-    // VIEW ray's transmittance within ~10 degrees of the sun left the rest of the halo: a black hole in a ring.)
-    const vec3 airWorld = u_viewPos + origin;
-    const float airSunVis = 0.5 * (cloudSunTransmittanceBilinear(airWorld + dir * (0.25 * tAir))
-                                 + cloudSunTransmittanceBilinear(airWorld + dir * (0.75 * tAir)));
-    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * airSunVis);
+    // all of it): cloudAerialScatter shadows each of its steps (cloudAirSunVis). Unshadowed, its Mie forward peak
+    // drew a sun glow on top of any cloud, however dense. (A ramp to the VIEW ray's transmittance within ~10 degrees
+    // of the sun left the rest of the halo: a black hole in a ring.)
+    vec3 airT;
+    const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, jitter, airT) * sunColor;
+    // "Lighting/Aerial perspective strength" (u_cloudLayer3.w) scales the added air light only; the cloud's dimming
+    // through the air (airT) stays physical.
+    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * u_cloudLayer3.w);
     return r;
 }
 

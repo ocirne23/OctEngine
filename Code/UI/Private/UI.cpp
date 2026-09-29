@@ -237,12 +237,12 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
 
-            ImGuiID dock_id_right, dock_id_up, dock_id_left, dock_id_down;
+            ImGuiID dock_id_right, dock_id_left;
             ImGuiID dock_id_left_top, dock_id_left_bottom;
             ImGuiID dock_id_scene, dock_id_properties;
 
             ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.3f, &dock_id_left, &dock_id_right);
-            ImGui::DockBuilderSplitNode(dock_id_right, ImGuiDir_Up, 0.8f, &dock_id_up, &dock_id_down);
+            //ImGui::DockBuilderSplitNode(dock_id_right, ImGuiDir_Up, 0.8f, &dock_id_up, &dock_id_down);
             ImGui::DockBuilderSplitNode(dock_id_left,  ImGuiDir_Up, 0.8f, &dock_id_left_top, &dock_id_left_bottom);
             ImGui::DockBuilderSplitNode(dock_id_left_top, ImGuiDir_Right, 0.5f, &dock_id_properties, &dock_id_scene);
 
@@ -253,11 +253,11 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             ImGui::DockBuilderDockWindow("Tweaks",     dock_id_left_bottom);
             ImGui::DockBuilderDockWindow("Profiler",   dock_id_left_bottom);
             ImGui::DockBuilderDockWindow("Memory",     dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Content",       dock_id_down);
+            ImGui::DockBuilderDockWindow("Content",    dock_id_left_bottom);
             ImGui::DockBuilderDockWindow("Entity Editor",  dock_id_properties);
-            ImGui::DockBuilderDockWindow("Text Editor",   dock_id_up);
-            ImGui::DockBuilderDockWindow("Script Editor", dock_id_up);
-            ImGui::DockBuilderDockWindow("Viewport",   dock_id_up);
+            ImGui::DockBuilderDockWindow("Text Editor", dock_id_right);
+            ImGui::DockBuilderDockWindow("Script Editor", dock_id_right);
+            ImGui::DockBuilderDockWindow("Viewport", dock_id_right);
             ImGui::DockBuilderFinish(dockspace_id);
         }
 

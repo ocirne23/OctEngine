@@ -281,8 +281,15 @@ void Renderer::buildUboClouds(const Camera& camera)
     if (upper) { bottom = glm::min(bottom, upperBottom); top = glm::max(top, upperTop); }
     ubo.cloudShape0 = glm::vec4(bottom, top, glm::clamp(c.coverage, 0.0f, 1.0f), enabled ? 1.0f : 0.0f);
     ubo.cloudLayer0 = glm::vec4(mainBottom, 1.0f / (mainTop - mainBottom), upper ? 1.0f : 0.0f, c.upperDensity);
-    ubo.cloudLayer1 = glm::vec4(upperBottom, 1.0f / (upperTop - upperBottom), glm::clamp(c.upperCoverage, 0.0f, 1.0f), glm::clamp(c.upperType, 0.0f, 1.0f));
-    ubo.cloudLayer2 = glm::vec4((float)glm::clamp(c.shelfCount, 0, 3), glm::max(c.shelfStrength, 0.0f), glm::clamp(c.shelfThickness, 0.005f, 0.2f), 0.0f);
+    // The upper layer's coverage is a multiplier on the main layer's (its density already is one: the shader adds
+    // it x upperDensity to the main density before "Density (1/m)").
+    ubo.cloudLayer1 = glm::vec4(upperBottom, 1.0f / (upperTop - upperBottom), glm::clamp(c.upperCoverage * c.coverage, 0.0f, 1.0f), glm::clamp(c.upperType, 0.0f, 1.0f));
+    ubo.cloudLayer2 = glm::vec4((float)glm::clamp(c.shelfCount, 0, 3), glm::max(c.shelfStrength, 0.0f), glm::clamp(c.shelfThickness, 0.005f, 0.2f),
+        glm::clamp(c.upperHeightVariation, 0.0f, 0.8f));
+    // The shelf stack is CENTRED in the layer: the lowest at 0.5 - (count - 1) / 2 x spacing.
+    const float shelfSpacing = glm::max(c.shelfSpacing, 0.0f);
+    const float shelfLowest = 0.5f - 0.5f * (float)glm::max(glm::clamp(c.shelfCount, 0, 3) - 1, 0) * shelfSpacing;
+    ubo.cloudLayer3 = glm::vec4(shelfLowest, shelfSpacing, 0.0f, glm::max(c.aerialStrength, 0.0f));
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
     ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));
@@ -291,7 +298,8 @@ void Renderer::buildUboClouds(const Camera& camera)
     // time: the camera still moves while the sim is paused.
     const float realDt = glm::min((float)Globals::time.getDeltaSec(), 0.25f) * (float)CloudPipeline::SKY_UPDATE_FRAMES;
     const float skyHistory = c.skyMapHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.skyMapHistorySec) : 0.0f;
-    ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 1.0f / glm::max(c.groundLightDepth, 1.0f), skyHistory, 0.0f);
+    ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 1.0f / glm::max(c.groundLightDepth, 1.0f), skyHistory,
+        glm::clamp(c.erosionCutoff, 0.0f, 0.9f));
     // Top roundness 0..1 -> the superellipse exponent 1..6 (1 = the plain taper, 2 = a circular cap, 6 = nearly flat).
     ubo.cloudShape5 = glm::vec4(glm::clamp(c.towerVariation, 0.0f, 0.9f), 1.0f + 5.0f * glm::clamp(c.topRoundness, 0.0f, 1.0f),
         glm::clamp(c.baseSharpness, 0.0f, 1.0f), glm::clamp(c.towerCoreLink, 0.0f, 1.0f));
@@ -314,7 +322,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity - that one scales the
     // sky-sphere ground plane and defaults to 0) x the cloud "Ground albedo".
     ubo.cloudLight2 = glm::vec4(m_skyParams.groundColor * c.groundAlbedo, glm::max(c.multiScatterStrength, 0.0f));
-    ubo.cloudMarch0 = glm::vec4((float)glm::max(c.maxSteps, 1), c.maxDistanceKm * 1000.0f, glm::max(c.nearStep, 0.5f), glm::max(c.stepGrowth, 0.0f));
+    ubo.cloudMarch0 = glm::vec4((float)glm::max(c.maxSteps, 1), c.maxDistanceKm * 1000.0f, glm::max(c.nearStep, 0.5f), (float)glm::max(c.stepsPerRay, 1));
     ubo.cloudMarch1 = glm::vec4((float)glm::max(c.lightSteps, 0), c.lightDistance, glm::clamp(c.temporalBlend, 0.0f, 0.98f),
         1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f));
 

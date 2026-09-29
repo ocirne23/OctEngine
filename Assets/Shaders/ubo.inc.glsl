@@ -309,19 +309,20 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
     vec4 u_cloudShape4;  // x = base height variation (fraction of the main layer's height), y = 1 / ground light
                          // depth (1/m: the ground bounce's falloff above the main layer's base), z = the sky-map
-                         // clouds' history weight this frame (exp(-3 dt / "Sky map history (s)")), w unused
+                         // clouds' history weight this frame (exp(-3 dt / "Sky map history (s)")), w = erosion cutoff
     vec4 u_cloudShape5;  // the profile: x = tower variation (0..1), y = top roundness as the superellipse exponent
                          // (1 = the plain taper), z = base sharpness (0..1), w = tower core link (0..1)
     vec4 u_cloudLayer0;  // the MAIN layer's band: x = bottom (m), y = 1 / height (1/m); z = the upper layer is on (0/1), w = its density scale
-    vec4 u_cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage, w = type
-    vec4 u_cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w unused
+    vec4 u_cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage (the CPU's multiplier x the main coverage), w = type
+    vec4 u_cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w = the UPPER layer's height variation (lift, fraction of its band)
+    vec4 u_cloudLayer3;  // the main layer's SHELF PLACEMENT: x = the lowest shelf's height (the CPU centres the stack), y = the spacing to the next (fractions of the layer), z unused, w = the march's aerial perspective strength (x the added air light; 0 = off)
     vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
     vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
     vec4 u_cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
     vec4 u_cloudLight1;  // x = ambient strength, y = ground albedo (folded into u_cloudLight2), z = powder strength, w = multi-scatter attenuation
     vec4 u_cloudLight2;  // rgb = the ground bounce's albedo: the sky's "Ground Albedo" COLOUR x the cloud "Ground albedo",
                          // w = multi-scatter strength (x the closed-form octave sum; non-physical above 1)
-    vec4 u_cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = step growth per metre
+    vec4 u_cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = steps per ray (the per-ray step growth is solved for it)
     vec4 u_cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = 1 / detail distance (1/m)
     // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
     vec4 u_cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)

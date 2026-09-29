@@ -56,43 +56,48 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
 {
     Tweak::boolean("Sky/Clouds", "Enabled", &enabled, onDefinesChanged);
     Tweak::floatVar("Sky/Clouds", "Bottom (m)", &bottom, 0.0f, 12000.0f, 10.0f, [&]() { top = oc::max(top, bottom + 100.0f); });
-    Tweak::floatVar("Sky/Clouds", "Top (m)", &top, 100.0f, 15000.0f, 10.0f, [&]() { bottom = oc::min(bottom, top - 100.0f); });
+    Tweak::floatVar("Sky/Clouds", "Top (m)", &top, 100.0f, 10000.0f, 10.0f, [&]() { bottom = oc::min(bottom, top - 100.0f); });
     Tweak::floatVar("Sky/Clouds", "Coverage", &coverage, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &coverageVariation, 0.0f, 2.0f);
-    Tweak::floatVar("Sky/Clouds", "Type", &cloudType, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Type variation", &typeVariation, 0.0f, 2.0f);
-    Tweak::floatVar("Sky/Clouds", "Base height variation", &baseVariation, 0.0f, 0.6f);
-    Tweak::floatVar("Sky/Clouds", "Tower variation", &towerVariation, 0.0f, 0.9f);
-    Tweak::floatVar("Sky/Clouds", "Top roundness", &topRoundness, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Base sharpness", &baseSharpness, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Tower core link", &towerCoreLink, 0.0f, 1.0f);
-    Tweak::intVar("Sky/Clouds", "Shelf count", &shelfCount, 0, 3);
-    Tweak::floatVar("Sky/Clouds", "Shelf strength", &shelfStrength, 0.0f, 3.0f);
-    Tweak::floatVar("Sky/Clouds", "Shelf thickness", &shelfThickness, 0.005f, 0.2f, 0.005f);
-    Tweak::boolean("Sky/Clouds/Upper layer", "Enabled", &upperEnabled);
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Bottom (m)", &upperBottom, 0.0f, 12000.0f, 10.0f, [&]() { upperTop = oc::max(upperTop, upperBottom + 50.0f); });
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Top (m)", &upperTop, 50.0f, 15000.0f, 10.0f, [&]() { upperBottom = oc::min(upperBottom, upperTop - 50.0f); });
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Coverage", &upperCoverage, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Type", &upperType, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Density", &upperDensity, 0.0f, 2.0f);
-    Tweak::floatVar("Sky/Clouds", "Density (1/m)", &densityScale, 0.001f, 0.5f, 0.001f);
-    Tweak::floatVar("Sky/Clouds", "Erosion", &erosion, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Curl (m)", &curl, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds", "Density (1/m)", &densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &weatherSizeKm, 5.0f, 500.0f, 0.5f);
-    Tweak::intVar("Sky/Clouds", "Base repeats", &baseRepeats, 1, 64);
-    Tweak::intVar("Sky/Clouds", "Detail repeats", &detailRepeats, 1, 64);
     Tweak::floatVar("Sky/Clouds", "Wind speed (m/s)", &windSpeed, 0.0f, 100.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds", "Wind angle (deg)", &windAngleDeg, 0.0f, 360.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &evolveSpeed, 0.0f, 10.0f);
+    Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &evolveSpeed, 0.0f, 100.0f);
 
-    Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &dropletSize, 5.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &forwardPeakLimit, 0.8f, 1.0f, 0.001f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &aerialStrength, 0.0f, 5.0f); // 0 = off
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &multiScatter, 0.0f, 0.95f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter strength", &multiScatterStrength, 0.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &ambient, 0.0f, 4.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground albedo", &groundAlbedo, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ground light depth (m)", &groundLightDepth, 10.0f, 2000.0f, 5.0f);
-    Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &powder, 0.0f, 1.0f, 0.01f, onDefinesChanged); // CLOUD_POWDER while > 0
+    Tweak::floatVar("Sky/Clouds/Lighting", "Droplet size (um)", &dropletSize, 5.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Forward peak limit", &forwardPeakLimit, 0.8f, 1.0f, 0.001f);
+    //Tweak::floatVar("Sky/Clouds/Lighting", "Powder", &powder, 0.0f, 1.0f, 0.01f, onDefinesChanged); // CLOUD_POWDER while > 0
+
+    Tweak::floatVar("Sky/Clouds/Shape", "Type", &cloudType, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Type variation", &typeVariation, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Base height variation", &baseVariation, 0.0f, 0.6f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Tower variation", &towerVariation, 0.0f, 0.9f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Top roundness", &topRoundness, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Base sharpness", &baseSharpness, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Tower core link", &towerCoreLink, 0.0f, 1.0f);
+    Tweak::intVar("Sky/Clouds/Shape", "Shelf count", &shelfCount, 0, 3);
+    Tweak::floatVar("Sky/Clouds/Shape", "Shelf strength", &shelfStrength, 0.0f, 3.0f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Shelf thickness", &shelfThickness, 0.005f, 0.2f, 0.005f);
+    Tweak::floatVar("Sky/Clouds/Shape", "Shelf spacing", &shelfSpacing, 0.0f, 0.5f);
+    Tweak::boolean("Sky/Clouds/Upper layer", "Enabled", &upperEnabled);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Bottom (m)", &upperBottom, 0.0f, 12000.0f, 10.0f, [&]() { upperTop = oc::max(upperTop, upperBottom + 50.0f); });
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Top (m)", &upperTop, 50.0f, 15000.0f, 10.0f, [&]() { upperBottom = oc::min(upperBottom, upperTop - 50.0f); });
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Coverage", &upperCoverage, 0.0f, 2.0f); // x the main coverage
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Type", &upperType, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Height variation", &upperHeightVariation, 0.0f, 0.8f);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Density", &upperDensity, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Erosion", &erosion, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Erosion cutoff", &erosionCutoff, 0.0f, 0.5f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Curl (m)", &curl, 0.0f, 1000.0f, 1.0f);
+    Tweak::intVar("Sky/Clouds/Quality", "Base repeats", &baseRepeats, 1, 64);
+    Tweak::intVar("Sky/Clouds/Quality", "Detail repeats", &detailRepeats, 1, 64);
 
     Tweak::boolean("Sky/Clouds/Shadows", "Enabled", &shadows, onDefinesChanged);
     Tweak::floatVar("Sky/Clouds/Shadows", "Strength", &shadowStrength, 0.0f, 1.0f);
@@ -108,9 +113,9 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::intVar("Sky/Clouds/Quality", "Max steps", &maxSteps, 16, 1024);
     Tweak::floatVar("Sky/Clouds/Quality", "Max distance (km)", &maxDistanceKm, 1.0f, 400.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near step (m)", &nearStep, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Sky/Clouds/Quality", "Step growth", &stepGrowth, 0.0f, 0.1f, 0.0005f);
+    Tweak::intVar("Sky/Clouds/Quality", "Steps per ray", &stepsPerRay, 16, 1024);
     Tweak::intVar("Sky/Clouds/Quality", "Light steps", &lightSteps, 0, 16);
-    Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 10000.0f, 10.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 20000.0f, 10.0f); // the cap on the per-sample reach
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &skyMapHistorySec, 0.0f, 30.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near detail radius (m)", &nearDetailRadius, 0.0f, 2000.0f, 5.0f);

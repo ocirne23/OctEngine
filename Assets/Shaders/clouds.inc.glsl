@@ -114,6 +114,17 @@ float cloudTowerSignal(float coverage, float tower, float coreLink)
     return mix(tower, clamp(coverage * (0.5 + tower), 0.0, 1.0), coreLink);
 }
 
+// A column's coverage: the layer's base coverage plus the weather map's spread ("Coverage variation",
+// u_cloudShape3.x). The spread fades in over the first CLOUD_VARIATION_RAMP of the base coverage: with a
+// constant spread a coverage of 0 still left the weather map's peaks as clouds (only variation 0 cleared the
+// sky). At 0 now: nothing; from the ramp up: exactly the old sum.
+const float CLOUD_VARIATION_RAMP = 0.25;
+float cloudColumnCoverage(float baseCoverage, float weatherR)
+{
+    const float spread = u_cloudShape3.x * min(baseCoverage * (1.0 / CLOUD_VARIATION_RAMP), 1.0);
+    return clamp(baseCoverage + (weatherR - 0.5) * spread, 0.0, 1.0);
+}
+
 float cloudHeightFraction(float alt)
 {
     return (alt - u_cloudShape0.x) * u_cloudShape3.z; // z = 1 / (top - bottom)
@@ -162,7 +173,12 @@ float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, f
         const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hfCloud * 5.0, 0.0, 1.0));
         d = clamp(cloudRemap(d, erodeBy * (u_cloudShape2.z * detail), 1.0, 0.0, 1.0), 0.0, 1.0);
     }
-    return d;
+    // EROSION CUTOFF ("Erosion cutoff", u_cloudShape4.w): the erosion's remap leaves a thin rest wherever the detail
+    // fBm is low (a small threshold), and at the extinction scale over kilometres of ray that rest read as haze
+    // in the open, eroded areas. Remapped out here: under the cutoff = nothing, the cores stay at 1. Monotonic, so
+    // the cheap shape (detail 0) still bounds the full one - the march's coarse test stays conservative.
+    const float cut = u_cloudShape4.w;
+    return clamp((d - cut) / (1.0 - cut), 0.0, 1.0);
 }
 
 // THE UPPER LAYER ("Sky/Clouds/Upper layer", u_cloudLayer0.zw + u_cloudLayer1): an independent band above (or
@@ -176,16 +192,29 @@ float cloudUpperDensity(vec2 nxz, float alt, float camDist, float detail, float 
     if (hf <= 0.0 || hf >= 1.0)
         return 0.0;
     const vec4 weather = textureLod(u_cloudWeather, vec2(-nxz.y, nxz.x) * u_cloudShape1.x + vec2(0.61, 0.13), 0.0);
-    const float coverage = clamp(u_cloudLayer1.z + (weather.r - 0.5) * u_cloudShape3.x, 0.0, 1.0);
+    const float coverage = cloudColumnCoverage(u_cloudLayer1.z, weather.r);
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_cloudLayer1.w + (weather.g - 0.5) * (0.5 * u_cloudShape2.y), 0.0, 1.0);
+    // Per-column LIFT ("Upper layer/Height variation", u_cloudLayer2.w), as the main layer's: the whole column - the
+    // profile and the noise it thresholds - rises by up to that fraction of the band, and its height shrinks to
+    // (1 - v) so it stays inside. Without it every sheet sat at the band's bottom: one altitude for the whole deck.
+    // Its own field (the tower field NEGATED and offset: scale 1 still tiles; uncorrelated with the main layer's
+    // lift and with this layer's weather) at a coarse mip, so the height drifts over kilometres.
+    const float variation = u_cloudLayer2.w;
+    float lift = 0.0; // fraction of the band
+    if (variation > 0.0)
+        lift = variation * smoothstep(0.2, 0.8, textureLod(u_cloudWeather, -nxz * u_cloudShape1.x + vec2(0.23, 0.71), 2.0).a);
+    const float hfCloud = (hf - lift) / (1.0 - variation);
+    if (hfCloud <= 0.0 || hfCloud >= 1.0)
+        return 0.0;
     // The main layer's profile settings, the tower variation milder.
     const float columnTop = mix(1.0 - 0.7 * u_cloudShape5.x, 1.0, cloudTowerSignal(coverage, weather.a, u_cloudShape5.w));
-    const float profile = cloudHeightProfile(hf / columnTop, type, u_cloudShape5.y, u_cloudShape5.z);
+    const float profile = cloudHeightProfile(hfCloud / columnTop, type, u_cloudShape5.y, u_cloudShape5.z);
     if (profile <= 0.0)
         return 0.0;
-    return cloudLayerShape(nxz, alt, hf, coverage, profile, camDist, detail, lodBase, lodDetail)
+    const float noiseAlt = alt - lift / u_cloudLayer1.y; // the noise rides up with the column (band height = 1 / y)
+    return cloudLayerShape(nxz, noiseAlt, hfCloud, coverage, profile, camDist, detail, lodBase, lodDetail)
         * (u_cloudLayer0.w * mix(0.6, 1.4, weather.b));
 }
 
@@ -198,7 +227,7 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
         return 0.0;
     const vec2 wuv = nxz * u_cloudShape1.x;
     const vec4 weather = textureLod(u_cloudWeather, wuv, 0.0);
-    const float coverage = clamp(u_cloudShape0.z + (weather.r - 0.5) * u_cloudShape3.x, 0.0, 1.0);
+    const float coverage = cloudColumnCoverage(u_cloudShape0.z, weather.r);
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_cloudShape2.x + (weather.g - 0.5) * u_cloudShape2.y, 0.0, 1.0);
@@ -224,16 +253,16 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
         return 0.0;
     // SHELVES ("Shelf count / strength / thickness", u_cloudLayer2): stable layers (inversions) where a rising cloud
     // spreads out sideways into a flat tier - stratocumulus cumulogenitus; at the top of a storm, the anvil. They sit
-    // at FIXED heights of the layer (count evenly spaced; hf, not the column's own height), so every cloud spreads at
-    // the same altitude, as under a real inversion. Around each the profile is raised past 1, which lowers the coverage
+    // at FIXED heights of the layer ("Shelf spacing" between them, the stack centred in the layer: u_cloudLayer3.x =
+    // the lowest, from the CPU, .y = the spacing; hf, not the column's own height), so every cloud spreads at the same altitude, as under a real inversion. Around each the profile is raised past 1, which lowers the coverage
     // threshold: the cloud widens there. Only where the cloud already exists (profile > 0 above) - a column that stays
     // below a shelf does not grow one, so the tiers follow the coverage of the clouds under them.
     const int shelves = int(u_cloudLayer2.x);
     if (shelves > 0)
     {
         float shelf = 0.0;
-        for (int i = 1; i <= shelves; ++i)
-            shelf = max(shelf, 1.0 - smoothstep(0.0, u_cloudLayer2.z, abs(hf - float(i) / float(shelves + 1))));
+        for (int i = 0; i < shelves; ++i)
+            shelf = max(shelf, 1.0 - smoothstep(0.0, u_cloudLayer2.z, abs(hf - (u_cloudLayer3.x + float(i) * u_cloudLayer3.y))));
         profile += u_cloudLayer2.y * shelf;
     }
     const float noiseAlt = alt - lift / invH; // the noise rides up with the column (layer height = 1 / invH)
@@ -267,33 +296,6 @@ float phaseDraine(float mu, float g, float alpha)
 float cloudPhase(float mu, float k)
 {
     return mix(phaseHG(mu, u_cloudLight0.x * k), phaseDraine(mu, u_cloudLight0.y * k, u_cloudLight0.z), u_cloudLight0.w);
-}
-
-// Single-scattered atmosphere between a planet-centred origin ro and ro + dir * tEnd, per unit sun
-// radiance (multiply by the sun colour), and its transmittance: the aerial perspective in front of a
-// cloud, from any altitude, to a finite distance, in any direction.
-vec3 cloudAerialScatter(vec3 ro, vec3 dir, float tEnd, vec3 lightDir, out vec3 transmittance)
-{
-    const int steps = 4;
-    const float mu = dot(dir, lightDir);
-    const float pR = phaseRayleigh(mu);
-    const float pM = phaseHG(mu, u_skySunParams.y);
-    const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
-    vec3 sumR = vec3(0.0), sumM = vec3(0.0);
-    const float dt = tEnd / float(steps);
-    float t = 0.5 * dt;
-    for (int i = 0; i < steps; ++i)
-    {
-        const vec3 p = ro + dir * t;
-        const float h = length(p) - ATMOS_R_PLANET;
-        const vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * dt;
-        const vec3 atten = exp(-atmosTau(atmosRayOD(ray, t) + atmosLightOpticalDepth(p, lightDir)));
-        sumR += atten * dens.x;
-        sumM += atten * dens.y;
-        t += dt;
-    }
-    transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
-    return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
 }
 
 #endif

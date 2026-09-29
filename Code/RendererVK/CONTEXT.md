@@ -665,15 +665,30 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   metres off.
 * **TWO LAYERS** (2026-09-28): `cloudDensity` = the MAIN layer (its own band, "Bottom" / "Top",
   `u_cloudLayer0.xy`) + the optional UPPER layer ("Sky/Clouds/Upper layer": its own band, coverage, type and
-  density scale, `u_cloudLayer0.zw` + `u_cloudLayer1`; default on, 6500-7500 m, type 0.1, density 0.2 = thin high
-  sheets). The upper layer's weather is the same map rotated -90° and offset (scale 1: still tiles), so its
+  density scale, `u_cloudLayer0.zw` + `u_cloudLayer1`; default on, 6000-7500 m, type 0.1, density 0.2 = thin high
+  sheets). Its "Coverage" and "Density" are MULTIPLIERS on the main layer's (2026-09-29; coverage default 0.2):
+  the CPU sends `upperCoverage x coverage` (clamped 0..1) in
+  `u_cloudLayer1.z`, and the density was always `x upperDensity` before "Density (1/m)". **Its own column
+  LIFT** ("Upper layer/Height variation", default 0.2, `u_cloudLayer2.w`; 2026-09-29), the main layer's method:
+  without it every sheet sat at the band's bottom, one altitude for the whole deck. Its field is the tower field
+  NEGATED and offset at mip 2 (uncorrelated with the main lift and this layer's weather; still tiles). The upper layer's weather is the same map rotated -90° and offset (scale 1: still tiles), so its
   gaps do not follow the main layer's. The SHELL (`u_cloudShape0.xy`, what the march and the shadow map cover)
   is the union of the bands; the gap between them is crossed by the coarse empty-space steps. Why: one tall
   shell stretched every column's profile into a peak - a taller "Top" made the towers thinner, not the sky
   layered. Both layers share `cloudLayerShape` (the noise threshold + detail erosion). A taller union shell
   spreads the shadow map's march steps thinner.
+  **COVERAGE 0 = CLEAR** (`cloudColumnCoverage`, both layers; 2026-09-29): a column's coverage is the base
+  coverage + (weather.r - 0.5) x "Coverage variation", the variation faded in over the first 0.25 of the base
+  coverage (`CLOUD_VARIATION_RAMP`). With a constant spread the weather map's peaks stayed clouds at coverage 0;
+  from 0.25 up it is exactly the old sum. The upper layer ramps on its own effective coverage (upper x main).
+  **EROSION CUTOFF** ("Erosion cutoff", default 0.1, `u_cloudShape4.w`; 2026-09-29): the erosion's remap
+  `(d - lo) / (1 - lo)` leaves a thin rest wherever the detail fBm (so `lo`) is low, and over kilometres of ray
+  that rest read as haze in the open, eroded areas. `cloudLayerShape` ends with `(d - cut) / (1 - cut)`: the rest
+  goes, the cores stay at 1. Monotonic, so the cheap shape still bounds the full one (the coarse test).
   **SHELVES** ("Shelf count" 0-3 (default 1), "Shelf strength", "Shelf thickness"; `u_cloudLayer2`; 2026-09-28): the
-  main layer's LAYERED look - stable layers (inversions) at fixed, evenly spaced heights of the layer, where every
+  main layer's LAYERED look - stable layers (inversions) at fixed heights of the layer ("Shelf spacing" between them,
+  default 0.2, the stack CENTRED in the layer: the CPU sends the lowest, `0.5 - (count - 1) / 2 x spacing`, in
+  `u_cloudLayer3.x` and the spacing in `.y`; 2026-09-29 - before, count evenly spaced at i / (count + 1)), where every
   cloud that reaches one spreads out sideways into a flat tier (stratocumulus cumulogenitus; the anvil at a storm's
   top). The profile is raised past 1 around each shelf height (layer-relative hf, so all clouds spread at the same
   altitude), lowering the coverage threshold there - only where the cloud already exists, so the tiers follow the
@@ -715,9 +730,12 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
 * **Three passes per eye:** the march (compute, half res, EVERY pixel EVERY frame — a fly-through has
   parallax at every depth, so a 1-in-16 update would smear), the temporal accumulation, and the apply.
   * **March** (`cloud_march.cs.glsl`, right after RTAO): up to the FARTHEST scene surface of the pixel's
-    2x2 block; steps are `max(Near step, g * t)`, and **g rises PER RAY** until that schedule fits ~75 % of
-    `Max steps` (a fixed-point solve of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`):
-    short steps near the camera, faster growth far away. The uniform floor (distance left / steps left) is
+    2x2 block; steps are `max(Near step, g * t)`, and **g is SOLVED PER RAY** so the schedule takes
+    **"Steps per ray"** (default 280, capped at ~75 % of `Max steps`) over the ray's shell span `[tStart, tEnd]`
+    (a fixed-point solve of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`): short steps near the
+    camera, faster growth far away. (2026-09-29: it replaced the fixed "Step growth" g, with which a ray crossing
+    the shell from below took `ln(top / bottom) / g` steps at any angle - the quality followed the layer's
+    top / bottom RATIO, ~280 steps at 300-5000 m but ~70 at 1500-3000 m.) The uniform floor (distance left / steps left) is
     only a safety net: as the rule it made a long ray's EVERY step long (400 m from the camera on, flat
     through the layer: one density sample per step, opaque at once - a grainy band at the camera's altitude).
     **Known issue, open:** with a small budget (200) a darker band remains on the LIT side of far clouds at
@@ -732,8 +750,15 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     skipped. **The march ends at transmittance 0.02**, and below 0.3 its fine steps double. **The final
     transmittance is remapped `(T - 0.02) / 0.98`**, so the early-out level is fully opaque (2026-09-28): the
     composite passes scene x T, and the leftover 2 % let the SUN DISC (thousands of times the sky) shine through
-    any cloud, however dense. **The aerial in-scatter in front of the cloud is in the clouds' shadow**: its sun
-    term takes `cloudSunTransmittance` (the Beer shadow map) averaged at 1/4 and 3/4 of the air segment. Its
+    any cloud, however dense. **The aerial in-scatter in front of the cloud is in the clouds' shadow**: EACH of
+    `cloudAerialScatter`'s 8 steps, placed at the ray's per-pixel / per-frame jitter (4 fixed points stamped the
+    openings' lit air columns onto the clouds beside them as blue BLOBS; jittered, the temporal pass averages them
+    into soft shafts), takes `cloudAirSunVis` (cloud_raymarch.inc.glsl; the function moved there from
+    clouds.inc.glsl): the shadow map inside it, and PAST it the WEATHER MAP - the coverage of the column where the
+    sun ray from the air point crosses the main layer's middle, `1 - smoothstep(0.35, 0.75, coverage)`. (2026-09-29:
+    it was ONE visibility for the whole segment, the mean of two `cloudSunTransmittance` taps at 1/4 and 3/4 - and
+    past the far cascade that function returns the sky-wide constant mean `mix(1, 0.3, coverage)`, so the 10-40 km of
+    air toward far cloud bases lay half-lit under a dense deck: a BLUE Rayleigh SHEEN on the dark bases.) Its
     Mie forward peak otherwise drew a sun glow on top of dense cloud. Tried first and replaced: a ramp to the
     VIEW ray's transmittance within ~10 degrees of the sun - it cut the halo's centre only, a black hole in a
     ring. With cloud shadows off the air stays unshadowed.
@@ -766,10 +791,14 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     old linear `1 - hf` lit the whole cloud); the energy-conserving step integral.
     The sun at the cloud uses the atmosphere transmittance along the LOCAL up of the entry point (the
     sunset on distant clouds). The aerial perspective in front of the cloud is a 4-step single-scatter
-    segment from the camera altitude (`cloudAerialScatter`). The sun march runs only where the shadow map
+    segment from the camera altitude (`cloudAerialScatter`; "Lighting/Aerial perspective strength",
+    `u_cloudLayer3.w`, 0-5, default 1: x the ADDED air light only - the cloud's dimming through the air stays
+    physical; 0 = off entirely, the cloud as lit with no air in front). The sun march runs only where the shadow map
     does not cover the sample (or "Self-shadow from map" is off - the default: the user keeps it off for
-    quality; on, it measured march 0.63 -> 0.35 ms). **The sun march** (`cloudLightOpticalDepth`, 3 steps
-    over 2 km) reads each step's base noise at the mip of ITS OWN LENGTH (at least the view sample's) and
+    quality; on, it measured march 0.63 -> 0.35 ms). **The sun march** (`cloudLightOpticalDepth`, "Light steps" 4,
+    quadratic spacing) runs over a PER-SAMPLE reach: the way out of the sample's OWN layer toward the sun,
+    `(layer top - altitude) / L.y`, capped by "Light distance (m)" (default 8000; 2026-09-29 - it was a fixed
+    2 km: steps in empty air over a sample near the top, and a base sample stopped short of its tower). It reads each step's base noise at the mip of ITS OWN LENGTH (at least the view sample's) and
     stops past `odCut = 7 / min(msTailExt, ms)` (every multi-scattering octave under 0.1 %): march 0.63 ->
     0.56 ms, sky 0.14 -> 0.10 ms (2026-09-29). Output: in-scatter + transmittance, and
     log2 distances (first hit, transmittance-weighted, march limit).
@@ -808,7 +837,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       default 1): a non-physical gain on the SUN in-scatter only (froxels, far field, reflection fog) - sunlit fog
       and the shafts brighten, shadowed fog (ambient only) and the extinction do not: strong god rays through thin
       fog without fogging up the world.
-    * **"Fog/Shaft haze"** (Density (1/m), default 0 = off; Height (m), default 1000; `u_fogParams10`): the fog is a
+    * **"Fog/Shaft haze"** (Density (1/m), default 0.0025, 0 = off; Height (m), default 300; `u_fogParams10`): the fog is a
       HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds showed only after cranking the base
       density. The haze is a separate thin medium reaching up to the clouds (its own scale height from the fog's
       height base) that adds SUNLIT in-scatter only (x "Sun scatter"): no extinction, no ambient - non-physical on
@@ -889,7 +918,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   noise and the reflected sky changed colour every frame. Each frame now marches with a new jitter (per-texel
   hash + golden ratio) and blends into the texel's own last value (the image is read-write, cleared to "no
   cloud" at creation). The history weight is FRAME-TIME based: `u_cloudShape4.z = exp(-3 dt / T)` with T =
-  "Sky/Clouds/Quality/Sky map history (s)" (default 5; 95 % of a change after T seconds at any frame rate; real
+  "Sky/Clouds/Quality/Sky map history (s)" (default 1; 95 % of a change after T seconds at any frame rate; real
   time, so it still converges while the sim is paused; 0 = no history). **PROGRESSIVE:** each frame marches
   ONE texel of every 2x2 block (rotating phase, the shadow map's order; `CloudPipeline::SKY_UPDATE_FRAMES` = 4,
   so the CPU's dt spans 4 frames), and only the UPPER hemisphere is dispatched (rows [0, H/2); the lower half
