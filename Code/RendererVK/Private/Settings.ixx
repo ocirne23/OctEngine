@@ -153,7 +153,7 @@ export struct CloudParams
     int   maxSteps = 600;             // view march step budget per pixel
     float maxDistanceKm = 50.0f;       // view march range (km)
     float nearStep = 60.0f;           // step length at the camera (m)
-    int   stepsPerRay = 300;          // view march steps over a ray's shell span: each ray solves its step growth to take
+    int   stepsPerRay = 360;          // view march steps over a ray's shell span: each ray solves its step growth to take
                                        // this many, so the quality through the layer holds whatever its top / bottom
     int   lightSteps = 4;              // sun march steps per dense sample
     float lightDistance = 8000.0f;     // MAX sun march reach (m): the reach is the way out of the sample's own layer
