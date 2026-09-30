@@ -731,7 +731,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   parallax at every depth, so a 1-in-16 update would smear), the temporal accumulation, and the apply.
   * **March** (`cloud_march.cs.glsl`, right after RTAO): up to the FARTHEST scene surface of the pixel's
     2x2 block; steps are `max(Near step, g * t)`, and **g is SOLVED PER RAY** so the schedule takes
-    **"Steps per ray"** (default 280, capped at ~75 % of `Max steps`) over the ray's shell span `[tStart, tEnd]`
+    **"Steps per ray"** (default 300, capped at ~75 % of `Max steps`) over the ray's shell span `[tStart, tEnd]`
     (a fixed-point solve of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`): short steps near the
     camera, faster growth far away. (2026-09-29: it replaced the fixed "Step growth" g, with which a ray crossing
     the shell from below took `ln(top / bottom) / g` steps at any angle - the quality followed the layer's
@@ -884,8 +884,12 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   * **Consumers** multiply their sun term by `cloudSunTransmittance(worldPos)`: the lit core (lit, masked,
     transparent, terrain; forward set binding 22), the ocean (`sunTint`, so glint, body, foam and SSS), the
     terrain wet film (its own `sunTint` copy: in-scatter, reflection fog, mirror hits; AND its own sun
-    visibility tap in main, `g_sunVisSurface` -> `sunSurfaceRadiance()`: glint and whitewater - both lacked
-    the cloud term until 2026-09-29, and the film's foam glowed brighter than the ocean under cloud shadow),
+    visibility tap in main, `g_sunVisSurface` -> `sunSurfaceRadiance()`: glint, whitewater and the bubble
+    cloud - both lacked the cloud term until 2026-09-29, and the film's foam glowed brighter than the ocean
+    under cloud shadow. `g_sunVisSurface` already HOLDS the cloud and the eclipse, so never multiply it by
+    `sunTint`: that squares the cloud shadow - the film's bubbles and foam did, darker than the ocean's, 2026-09-30.
+    The tap sits at the WATER SURFACE (`in_pos`, up normal), not the ground under it (`TERRAIN_LIT_POS`,
+    ground-normal gate), since 2026-09-30),
     the fog scatter (13 — the shafts through cloud gaps), LIT particles
     (draw set 11, vertex stage), LIT decals (6), and the cloud march's self-shadow (9; outside the map it
     falls back to the sun march).
@@ -1409,8 +1413,10 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   * A value must not be live in BOTH precisions across a peak (a ray query, PCSS, the light loop): convert
     once, before it, and keep only the half copy (e.g. `computeLitColor` takes the surface half).
   * **Fold before the peak.** The ocean top side and the terrain film are LINEAR in their traced radiances:
-    `final = body * bodyWeight + mirror * mirrorWeight + C`, so the glint, SSS, turbidity, the blur's sky
-    share and the foam fold into one half `C` BEFORE the traces (see both shaders).
+    `final = body * bodyWeight + mirror * mirrorWeight + C`, so the glint, SSS, the bubble cloud, the blur's
+    sky share and the foam fold into one half `C` BEFORE the traces (see both shaders). The bubble cloud is
+    `ocean_bubbles.inc.glsl`, shared by both; the ocean's parallax tap for its coverage runs
+    before the sun shadow ray, so only one float of it is live across that query.
   * **One light loop per shader** (large + cell lights in one loop): every `doLightShadowed` call inlines
     all light types plus the shadow ray query. Merging the ocean's and the film's double loops cut 36-40 KB
     of code each.
@@ -1489,6 +1495,18 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   changes: the lit core's filtered cloud lookup (bilinear: still 72/32), the ocean's filtered cloud lookup, its
   SH blur share and its SH ambient (each removed: still 80/32) - NONE is the cause. The lit +8 regs came in
   between 09-23 and 09-29 (GI cloud-shadow fixes 09-27, motion vectors / terrain opt 09-28): not bisected yet.
+* **Measured 2026-09-30** (the foam / bubble rework; regs/local, Debug exe - the FS stats match RelWithDebInfo):
+  ocean **80/32** (the rework had taken it to 80/48), film **64/16** (was 56/48: the same demand, 68).
+  * The ocean's +16 B was the bubble cloud's THREE half-vec3 `exp`s (sun path down, sky path down, path up)
+    in the middle of the top side. The two DOWN paths and the albedo are per-frame constants: `buildUboOcean`
+    folds them into `u_oceanBubble0/1`, and `oceanBubbleRadianceFrame` keeps the one per-pixel `exp` (up).
+    The film's depth is per pixel (capped at its water), so it keeps the full `oceanBubbleRadiance`.
+  * The ocean's blurred bubble tap (up to 16 B-spline taps) moved to the top of main: NEUTRAL, but kept there
+    (the cheapest point for it). It refracts through the level plane since.
+  * `foamSlope` -> `foamNoL` (one half across the sun ray query, not two; the film's struct likewise): neutral.
+  * Film, each stubbed, NO change: the bubble radiance (the frame form), the blurred milk tap, the sharp
+    foam-field tap with the stuck foam. Its 64/16 is not this session's foam; its known peak is the light
+    loop's shadow rays (below).
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
@@ -1765,8 +1783,8 @@ the sand, so the two can never disagree.
     carries the ocean's own waves.
   * A two-phase flow map on the finest cascade's slope tap and the detail tap. Each is sampled again half a
     cycle apart and crossfaded by a triangle, so neither phase's reset shows. The finest cascade's
-    phase 1 is one slope-only tap after the cascade loop. The moments and the Jacobian (shore foam,
-    turbulence) do not flow.
+    phase 1 is one slope-only tap after the cascade loop. The moments and the Jacobian (shore foam) do not
+    flow.
   * **On the whole film** since the film is one untessellated variant. When only the tessellated film
     had it, a second-phase tap cost the untessellated film 16 B (56/48 -> 56/64); not measured since.
 * **The LOOK** is the ocean's own (`terrainFilmSurface` / `terrainFilmShade`, below): "Waviness",
@@ -1931,7 +1949,7 @@ the sand, so the two can never disagree.
   `applyRayFogSky`):
   the mirror rule below needs a directly visible source, which an underwater viewer does not have.
   **The underside wears the surface FOAM too**: the foam terms are resolved before the side split (the
-  turbulence fetch takes screen derivatives), a foam patch is laid over the window + mirror as a backlit
+  stuck foam's edge takes screen derivatives), a foam patch is laid over the window + mirror as a backlit
   diffuse sheet (half the top side's whitewater light), and it scales both underside rays' weights.
   **Mirror rays are fogged, hits AND the reflected sky** (`reflection_fog.inc.glsl`, ocean + film).
   **THE RULE: a reflection carries the fog its SOURCE carries when seen directly** -

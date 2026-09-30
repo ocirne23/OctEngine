@@ -256,7 +256,7 @@ void main()
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(worldPos.xz); // .x = terrain height, .y = water level, .w = macro altitude
-        waterY = td.y + u_fogParams8.x; // "Fog/Underwater offset (m)" raises/lowers the fog boundary
+        waterY = td.y + u_fogParams8.x; // the fog boundary, lowered by "Fog/Underwater wave offset" x the live wave trough
         waterDepth = td.y - td.x;       // wave shoal fade keys on the REAL depth, not the offset boundary
         // Terrain follow rides the MACRO ALTITUDE channel (A, m above sea level), not the raw height:
         // the fog base tracks the smooth macro landscape, so ridge bumps don't drag the layer up with

@@ -162,7 +162,7 @@ void FogParams::registerTweaks()
     Tweak::floatVar("Fog", "Temporal Blend", &temporalBlend, 0.0f, 0.97f, 0.01f);
     Tweak::floatVar("Fog", "Region strength", &regionStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Underwater density", &underwaterDensity, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Fog", "Underwater offset (m)", &underwaterOffset, -5.0f, 5.0f, 0.1f);
+    Tweak::floatVar("Fog", "Underwater wave offset", &underwaterWaveOffset, 0.0f, 2.0f, 0.01f); // x the live wave trough, lowers the boundary
     Tweak::floatVar("Fog", "Shaft boost", &shaftBoost, 0.0f, 100.0f, 0.1f);
     Tweak::floatVar("Fog", "Caustic strength", &causticStrength, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Fog", "Caustic depth fade", &causticDepthFade, 0.0f, 0.5f, 0.005f);

@@ -414,6 +414,7 @@ export namespace RendererVKLayout
     // FFT ocean simulation (OceanSimulationPipeline / ocean_*.cs.glsl). Injected into every shader compile.
     constexpr uint32 OCEAN_FFT_SIZE = 512; // FFT grid resolution per cascade (power of two)
     constexpr uint32 OCEAN_CASCADES = 3;   // spectral band-split cascades (different patch sizes)
+    constexpr uint32 OCEAN_FOAM_LEVELS = 3; // world-space foam field clipmap levels (texel x 4 per level)
     constexpr uint32 MAX_TERRAIN_SPLAT_MATERIALS = 24; // UBO capacity for terrain splat materials (ground + rock + beach + snow)
     static_assert(MAX_TERRAIN_SPLAT_MATERIALS % 4 == 0, "terrainSplatHeightTex packs four slots per uvec4");
 
@@ -648,17 +649,17 @@ export namespace RendererVKLayout
                                    //     would otherwise draw over distant near-sea-level terrain),
                                    // y = horizon depth (m): the minimum water depth the waves assume
                                    //     past oceanParams4.x (only the seabed moves, not the surface),
-                                   // z = turbulence decay/frame,
+                                   // z unused (was the turbulence decay),
                                    // w = vertex displacement mip bias (Detail bias; the clipmap rings carry
                                    // their cell size per vertex, so the mip itself is baked into the mesh)
         glm::vec4 oceanParams4;    // x = horizon depth RANGE (m): camera distance past which the waves
                                    //     assume at least oceanParams3.y of water whatever the map says
                                    //     (distant depth readings all err shallow; 0 = take it literally),
-                                   // y = turbulence spread (diffusion/frame), z = shoal depth scale (per-
+                                   // y unused (was the turbulence spread), z = shoal depth scale (per-
                                    // cascade shoaling: waves fade below depth = scale * patch size),
                                    // w = instant-foam edge width (both thresholds' smoothstep)
-        glm::vec4 oceanParams5;    // x = foam boost (turbulence -> fold-threshold relaxation),
-                                   // y = turbidity (entrained-bubble milkiness + roughness),
+        glm::vec4 oceanParams5;    // x unused,
+                                   // y unused (was the turbidity: the bubble cloud is the foam amount itself now),
                                    // z = shore foam depth (m; surf band width at the waterline, 0 = off),
                                    // w = breaking-crest foam threshold (downward crest accel in g units)
         glm::vec4 oceanParams6;    // x = far-cascade land-cull error allowance (m; flat burial slack the
@@ -691,6 +692,23 @@ export namespace RendererVKLayout
         // displacement, so geometry and the CPU buoyancy mirror are untouched.
         glm::vec4 oceanParams11;   // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
                                    // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
+        // Entrained-bubble cloud (ocean_bubbles.inc.glsl; its coverage is the foam field's amount):
+        glm::vec4 oceanParams12;   // x = bubble depth (m under the surface), y = bubble brightness (x foam albedo),
+                                   // z = foam flatten (0..1: the foam's Lambert normal eased toward up),
+                                   // w = camera under water (1/0, CPU mirror): gates the underside path
+        // The world-space foam field (OceanSimulationPipeline::advanceFoamField, ocean_foam_field.inc.glsl):
+        glm::vec4 oceanFoamField;  // xy = accumulated drift (m; field coordinates = rest XZ - drift),
+                                   // z = level 0 texel (m; level l = z x 4^l), w = surface foam decay per frame
+        glm::vec4 oceanFoamField1; // x = surface foam strength, y = foam threshold (on amount / Jacobian), z = foam edge (threshold
+                                   // half-width), w = foam detail (scale on the detail slope in the foam's
+                                   // lighting normal)
+        glm::vec4 oceanFoamField2; // x = foam fine waves (the finest cascade's share in the foam's Jacobian),
+                                   // y = bubble blur (m: the bubble cloud reads the foam field this blurred), zw unused
+        // The ocean's bubble cloud, its per-FRAME factors (oceanBubbleRadianceFrame; buildUboOcean):
+        glm::vec4 oceanBubble0;    // rgb = foam albedo x brightness x exp(-sigma d / muL) x max(L.y, 0) / pi, w unused
+        glm::vec4 oceanBubble1;    // rgb = foam albedo x brightness x exp(-sigma d), w unused
+        glm::vec4 oceanFoamLevels[OCEAN_FOAM_LEVELS]; // xy = level origin (drifted coords of texel (0,0)'s
+                                   // corner, m), zw = whole texels the origin moved since last frame
         // Ocean spray (ocean_spray.cs.glsl -> the particle GPU spawn path; "Ocean/Spray *" tweaks):
         glm::vec4 oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns per
                                    //     m^2 per s at full breaking), z = grid radius around the scene focus (m),

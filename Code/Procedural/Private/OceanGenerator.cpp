@@ -123,15 +123,32 @@ namespace Procedural
 		Tweak::floatVar("Ocean/Shading", "Underside transmission", &m_undersideTransmission, 0.0f, 1.0f, 0.01f); // sky through Snell's window from below; less = more internal reflection
 		Tweak::boolean("Ocean/Shading", "Hit lighting", &m_hitLighting); // lights on geometry seen through/mirrored in the water
 		Tweak::color3("Ocean/Shading", "Foam color", &m_foamColor);
-		// One instant-foam response (thresholds + softness) draws the crest foam AND injects the
-		// turbulence field; decay/spread shape the wake's life, foam boost/turbidity its look.
+		// One instant-foam response (thresholds + softness) draws the crest foam AND injects the foam field.
 		Tweak::floatVar("Ocean/Foam", "Fold bias", &m_foamBias, 0.0f, 1.2f, 0.01f);
 		Tweak::floatVar("Ocean/Foam", "Break accel (g)", &m_foamBreakAccel, 0.05f, 1.5f, 0.01f);
 		Tweak::floatVar("Ocean/Foam", "Softness", &m_foamSoftness, 0.02f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Turb decay", &m_foamDecay, 0.5f, 0.999f, 0.001f);
-		Tweak::floatVar("Ocean/Foam", "Turb spread", &m_foamSpread, 0.0f, 4.0f, 0.05f);
-		Tweak::floatVar("Ocean/Foam", "Foam boost", &m_foamBoost, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Turbidity", &m_turbidity, 0.0f, 1.0f, 0.01f);
+		// The model wind ("Ocean/Waves/Wind speed") from which the surf band has its full "Shore foam depth" (it
+		// narrows to off in a calm).
+		Tweak::floatVar("Ocean/Foam", "Foam wind full (m/s)", &m_foamWindFull, 0.0f, 60.0f, 0.1f);
+		// The world-space foam field: ONE foam amount sticks to the water it formed on (it stays behind as the
+		// crest moves on) and drifts downwind - white foam above "Foam threshold", the bubble cloud below it.
+		Tweak::floatVar("Ocean/Foam", "Foam decay", &m_foamSurfaceDecay, 0.5f, 0.9995f, 0.0005f);
+		Tweak::floatVar("Ocean/Foam", "Surface foam", &m_foamSurfaceStrength, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Ocean/Foam", "Foam texel (m)", &m_foamTexel, 0.1f, 4.0f, 0.05f);
+		Tweak::floatVar("Ocean/Foam", "Foam drift (% wind)", &m_foamDrift, 0.0f, 10.0f, 0.1f);
+		// The stuck foam's coverage: a threshold on its density over the live Jacobian (packs where the water
+		// converges, tears where it stretches).
+		Tweak::floatVar("Ocean/Foam", "Foam threshold", &m_foamThreshold, 0.0f, 2.0f, 0.01f);
+		Tweak::floatVar("Ocean/Foam", "Foam edge", &m_foamEdge, 0.0f, 0.5f, 0.005f);
+		// The finest cascade's share in the Jacobian the foam reads: its short, fast waves reshape foam every frame.
+		Tweak::floatVar("Ocean/Foam", "Foam fine waves", &m_foamFineWaves, 0.0f, 1.0f, 0.01f);
+		// The foam's lighting normal: the sub-band detail slope at this scale ("Foam flatten" eases the large waves).
+		Tweak::floatVar("Ocean/Foam", "Foam detail", &m_foamDetail, 0.0f, 4.0f, 0.01f);
+		// The bubble cloud (ocean_bubbles.inc.glsl): the foam amount itself - how deep it floats and how bright it scatters.
+		Tweak::floatVar("Ocean/Foam", "Bubble depth (m)", &m_bubbleDepth, 0.0f, 10.0f, 0.05f);
+		Tweak::floatVar("Ocean/Foam", "Bubble brightness", &m_bubbleBrightness, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Ocean/Foam", "Bubble blur (m)", &m_bubbleBlur, 0.0f, 32.0f, 0.1f);		// The foam's sun term on the wave normal eased toward up: bent crests stop going dark at grazing angles.
+		Tweak::floatVar("Ocean/Foam", "Foam flatten", &m_foamFlatten, 0.0f, 1.0f, 0.01f);
 
 		// Shore interaction: driven by the terrain streamer's baked terrain-data map (nothing baked here;
 		// no data while terrain rendering is disabled - the ocean then behaves as open sea).
@@ -145,8 +162,7 @@ namespace Procedural
 		Tweak::floatVar("Ocean/Shore", "Horizon depth (m)", &m_horizonDepth, 0.0f, 200.0f, 1.0f);
 		Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &m_horizonDepthRange, 0.0f, 8000.0f, 50.0f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &m_shoreFoamDepth, 0.0f, 8.0f, 0.05f);
-		Tweak::floatVar("Ocean/Shore", "Shore foam max", &m_shoreFoamMax, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shore", "Swash amplitude", &m_swashAmp, 0.0f, 2.0f, 0.01f);
+		Tweak::floatVar("Ocean/Shore", "Shore foam max", &m_shoreFoamMax, 0.0f, 1.0f, 0.01f);		Tweak::floatVar("Ocean/Shore", "Swash amplitude", &m_swashAmp, 0.0f, 2.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam bias", &m_shoreFoamBias, -1.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash backflow", &m_swashFlow, 0.0f, 3.0f, 0.01f);
 		// Land cull: clipmap triangles buried deeper than this under the local water level (over their
@@ -496,17 +512,32 @@ namespace Procedural
 		params.foamBias = m_foamBias;
 		params.foamBreakAccel = m_foamBreakAccel;
 		params.foamSoftness = m_foamSoftness;
-		params.foamDecay = m_foamDecay;
-		params.foamSpread = m_foamSpread;
-		params.foamBoost = m_foamBoost;
-		params.turbidity = m_turbidity;
+		params.bubbleDepth = m_bubbleDepth * s;
+		params.bubbleBrightness = m_bubbleBrightness;
+		params.bubbleBlur = m_bubbleBlur * s;
+		params.foamFlatten = m_foamFlatten; // a blend weight: never scaled
+		params.foamSurfaceDecay = m_foamSurfaceDecay;
+		params.foamSurfaceStrength = m_foamSurfaceStrength;
+		params.foamTexel = m_foamTexel * s;
+		params.foamThreshold = m_foamThreshold; // a density ratio: dimensionless
+		params.foamEdge = m_foamEdge;
+		params.foamFineWaves = m_foamFineWaves;
+		params.foamDetail = m_foamDetail; // a slope scale: dimensionless
+		params.foamDriftSpeed = m_foamDrift * 0.01f * m_windSpeed * s; // model m/s: a speed scales like a length
+		// The ocean shader's underside path only while the camera is really under the water: a back face
+		// seen from above is a fold (high choppiness) and shades as the top side.
+		params.cameraUnderwater = hasWater() && camera.position.y < sampleWaterHeight(camera.position.x, camera.position.z);
 		params.shoalScale = m_shoalScale;
 		params.horizonDepth = m_horizonDepth * s;
 		params.horizonDepthRange = m_horizonDepthRange * s;
 		params.timeScale = std::sqrt(s); // Froude periods are x sqrt(s); slow the clock to the model's periods
 		params.worldScale = s;           // the renderer scales the spray + the ocean-bound fog metres by it
-		params.shoreFoamDepth = m_shoreFoamDepth * s;
-		params.shoreFoamMax = m_shoreFoamMax;
+		// The surf band narrows with the wind: full width from "Foam wind full" up, off in a calm (the MODEL wind,
+		// so it holds at any world scale).
+		const float windT = glm::smoothstep(0.0f, glm::max(m_foamWindFull, 0.01f), m_windSpeed);
+		params.shoreFoamDepth = m_shoreFoamDepth * s * windT;
+		// Only a near-calm thins the surf's cap: none below 0.5 m/s of MODEL wind, easing in to full at 2 m/s.
+		params.shoreFoamMax = m_shoreFoamMax * glm::smoothstep(0.5f, 2.0f, m_windSpeed);
 		params.swashAmp = m_swashAmp;
 		params.shoreFoamBias = m_shoreFoamBias;
 		params.swashFlow = m_swashFlow;

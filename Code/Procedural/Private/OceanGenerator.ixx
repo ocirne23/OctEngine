@@ -195,17 +195,26 @@ export namespace Procedural
 		float m_sssPower = 1.0f;        // crest SSS toward-the-sun view lobe exponent
 		float m_undersideTransmission = 1.0f; // sky through Snell's window from below (1 = Fresnel; less = more internal reflection)
 		bool  m_hitLighting = false; // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
-		// Foam & turbulence: one instant-foam response draws the crest foam AND injects the accumulated
-		// turbulence field, which in turn relaxes the fold threshold (aged foam along live geometry) and
-		// makes the wake milky/rough.
+		// Foam: one instant-foam response draws the crest foam AND injects the world-space foam field, whose
+		// one amount draws white foam above "Foam threshold" and the bubble cloud below it.
 		glm::vec3 m_foamColor = glm::vec3(0.88f, 0.92f, 0.94f);
-		float m_foamBias = 0.61f;     // fold threshold (Jacobian below this foams)
-		float m_foamBreakAccel = 0.2f; // breaking threshold (downward crest accel, g units)
-		float m_foamSoftness = 0.50f; // edge width of both thresholds
-		float m_foamDecay = 0.999f;  // turbulence retention per frame (wake persistence)
-		float m_foamSpread = 0.25f;   // turbulence diffusion per frame (wake spreads as it lives)
-		float m_foamBoost = 0.67f;    // turbulence -> fold-threshold relaxation (aged-foam amount)
-		float m_turbidity = 0.0f;    // entrained bubbles: milky brightening + roughness of the wake
+		float m_foamBias = 0.9f;      // fold threshold (Jacobian below this foams)
+		float m_foamBreakAccel = 0.4f; // breaking threshold (downward crest accel, g units)
+		float m_foamSoftness = 1.0f;  // edge width of both thresholds
+		float m_foamWindFull = 15.0f; // model U10 (m/s) from which the surf band has its full width (off in a calm)
+		float m_bubbleDepth = 0.5f;  // m under the surface (model metre): deeper = darker, more turquoise
+		float m_bubbleBrightness = 1.25f; // the bubble cloud's albedo, x foam color
+		float m_bubbleBlur = 2.0f;   // model m: the bubble cloud reads the foam field this blurred
+		float m_foamFlatten = 0.5f;  // 0..1: the foam's Lambert normal eased toward up
+		// The world-space foam field: the foam amount sticks to the water it formed on and drifts downwind.
+		float m_foamSurfaceDecay = 0.999f; // foam amount retention per frame
+		float m_foamSurfaceStrength = 1.0f; // display scale on the stuck foam (0 = crest foam only)
+		float m_foamTexel = 0.4f;    // level 0 texel (model m); x 4 per level, 512^2 texels each
+		float m_foamThreshold = 0.5f; // stuck foam density (amount / Jacobian) where it turns on
+		float m_foamEdge = 0.33f;    // that threshold's half-width (smaller = crisper foam)
+		float m_foamFineWaves = 0.5f; // 0..1: the finest cascade's share in the Jacobian the foam reads
+		float m_foamDetail = 1.25f;  // scale on the sub-band detail slope in the foam's lighting normal
+		float m_foamDrift = 2.0f;    // % of the wind speed: the surface drift along the swell's travel
 
 		// --- Shore interaction (driven by the streamer's baked terrain-data map) ---
 		// The shore's APPROACH BAND: open water eases to the swash amplitude over depth = scale x the mid
@@ -220,9 +229,9 @@ export namespace Procedural
 		float m_horizonDepth = 2.0f;
 		float m_horizonDepthRange = 3000.0f;
 		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
-		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
+		float m_shoreFoamMax = 1.0f; // surf band opacity cap: keeps the refracted bottom visible through the foam
 		float m_swashAmp = 0.5f;        // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
-		float m_shoreFoamBias = 0.0f;   // surf fold-threshold shift: negative = sparser/more transparent surf
+		float m_shoreFoamBias = 0.1f;  // surf fold-threshold shift: negative = sparser/more transparent surf
 		float m_swashFlow = 0.5f;       // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
 		float m_cullMargin = 1.0f;      // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)
 		float m_farCullError = 4.0f;    // land cull from the FAR terrain cascade: flat error allowance (m); 0 = near-only

@@ -33,6 +33,8 @@ layout (location = 0, index = 1) out vec4 out_factor; // the ground's multiplier
 
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
+#include "ocean_bubbles.inc.glsl"
+#include "ocean_foam_field.inc.glsl"
 
 // TERRAIN_FILM_RT_MIRROR - DISABLED (StaticMeshGraphicsPipeline's TERRAIN_FILM_RT_MIRROR switch is false):
 // the film reflects only the sky. Its scene mirror ray set the terrain's register allocation for EVERY
@@ -121,7 +123,8 @@ struct TerrainFilm
 	f16vec3 N;        // the film normal (level plane, rippled)
 	float16_t alpha;  // the water's GGX alpha
 	float16_t foam;   // crest foam + shoreline lace coverage
-	float16_t milk;   // entrained-bubble turbidity
+	float16_t milk;   // entrained-bubble cloud coverage
+	float16_t foamNoL; // the foam's Lambert N.L on its own slope, the ocean's rule (one scalar, not the slope)
 };
 
 // mask = how much of the pixel is film. depth = calm water level above the ground here (negative on dry
@@ -148,7 +151,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// The SHORE, as the ocean defines it (oceanSwashBase): water connected to the sea (its baked level at
 	// sea level - not a lake, a river, or ground the water-reach bake sank the level under) within ONE
 	// swash reach above that level, as far as the tongue ever runs. Gates everything breaking makes (foam,
-	// turbulence); its complement is where the wind ripples live.
+	// bubbles); its complement is where the wind ripples live.
 	const float16_t shore = float16_t((1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w)))
 		* (1.0 - smoothstep(0.6 * reach, reach, -depth)));
 	// Wind ripples ("Wind ripple strength"): off the shore w is 0 and the film would lie dead flat, so
@@ -189,8 +192,8 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// Wave slopes, LEAN variance, vertical acceleration and the RAW fold Jacobian sums of the cascades.
 	f16vec2 slopeSum = f16vec2(0.0), varSum = f16vec2(0.0);
 	float16_t rxx = float16_t(0.0), rzz = float16_t(0.0), rxz = float16_t(0.0);
-	float16_t turbulence = float16_t(0.0);
 	float16_t accel = float16_t(0.0);
+	f16vec3 fineJ = f16vec3(0.0);
 	f16vec2 lastSlope = f16vec2(0.0); // the finest cascade's phase-0 slope, for the phase-1 blend after the loop
 	for (int c = 0; c < OCEAN_CASCADES; ++c)
 	{
@@ -199,13 +202,13 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		const float16_t lod = max(lodBase - float16_t(log2(L)), float16_t(0.0));
 		const vec2 uvc = worldPos.xz / L;
 		// The finest cascade's slopes FLOW (above; the offsets are 0 without it): the ripple normal travels,
-		// the moments / Jacobian (shore-gated foam, turbulence) stay put. Its phase 1 blends in AFTER the loop:
+		// the moments / Jacobian (shore-gated foam) stay put. Its phase 1 blends in AFTER the loop:
 		// inside it, the second tap cost 16 B/thread.
 		const bool flows = c == OCEAN_CASCADES - 1;
 		const vec4 g32 = textureLod(u_uwOceanMaps, vec3(flows ? (worldPos.xz - flowOff0) / L : uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
 		if (flows)
 			lastSlope = f16vec2(g32.xy);
-		const vec4 m32 = textureLod(u_uwOceanMaps, vec3(uvc, float(2 * OCEAN_CASCADES + c)), lod); // LEAN moments, accel, turbulence (c0)
+		const vec4 m32 = textureLod(u_uwOceanMaps, vec3(uvc, float(2 * OCEAN_CASCADES + c)), lod); // LEAN moments, accel
 		const float16_t dxz = float16_t(textureLod(u_uwOceanMaps, vec3(uvc, float(c)), lod).w); // displacement layer w = dDx/dz
 		// Slope variance lost to mip filtering (Bruneton 2010): the cancelling difference in 32-bit.
 		varSum += f16vec2(max(m32.xy - g32.xy * g32.xy, vec2(0.0))) * (wc * wc);
@@ -213,9 +216,14 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		slopeSum += g.xy * wc;
 		rxx += g.z; rzz += g.w; rxz += dxz;
 		accel += float16_t(m32.z);
-		if (c == 0)
-			turbulence = float16_t(m32.w); // the accumulated breaking memory rides cascade 0's moments
+		if (c == OCEAN_CASCADES - 1)
+			fineJ = f16vec3(g.z, g.w, dxz); // for the stuck foam's Jacobian ("Foam fine waves")
 	}
+	// The ocean's world-space foam field (ocean_foam_field.inc.glsl): the foam amount breaking left stuck to
+	// the water - white foam above "Foam threshold", the bubble cloud below. At the film's own
+	// position: near the shore the rest lattice the ocean samples it at lies within a displacement of it.
+	float16_t foamAmount = float16_t(oceanSampleFoamField(u_uwOceanMaps, worldPos.xz, float(footprintH), 0.0)); // shore-gated below
+	const float stuckAmount = float(foamAmount) * u_oceanFoamField1.x; // coverage below, on the weighted Jacobian
 	// The finest cascade's flow phase 1, crossfaded in: slope only.
 	if (flowMix > float16_t(0.0))
 	{
@@ -226,7 +234,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		slopeSum += (s1 - lastSlope) * (flowMix * max(w, ripple));
 	}
 	accel *= w;
-	turbulence *= shore; // the map tiles over the whole world; off the shore it would milk and roughen a puddle
+	foamAmount *= shore; // the field is open-ocean math over land too; off the shore it would milk and roughen a puddle
 	const float16_t sxx = rxx * w, szz = rzz * w, sxz = rxz * w; // the normal's Jacobian follows the weighted chop
 	const float16_t chop = float16_t(u_oceanParams0.w);
 	const float16_t jxx = one + chop * sxx, jzz = one + chop * szz;
@@ -237,6 +245,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// The ocean's sub-band detail: oceanDetailSlope (ocean_wave.inc.glsl) inlined - that include binds the
 	// ocean's own sampler - with an explicit LOD (no derivatives in this branch). Weighted like the finest
 	// cascade, so an inland puddle gets it too.
+	f16vec2 detailSlope = f16vec2(0.0); // kept apart for the foam's lighting slope
 	{
 		float16_t detailFade = max(w, ripple);
 		if (u_oceanParams11.z > 0.0)
@@ -259,7 +268,8 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 			}
 			const f16vec2 s = f16vec2(s32) * (float16_t(u_oceanParams11.x) * detailFade);
 			const f16vec2 rotH = f16vec2(rot);
-			slope += f16vec2(rotH.x * s.x - rotH.y * s.y, rotH.y * s.x + rotH.x * s.y); // back into world space
+			detailSlope = f16vec2(rotH.x * s.x - rotH.y * s.y, rotH.y * s.x + rotH.x * s.y); // back into world space
+			slope += detailSlope;
 		}
 	}
 
@@ -282,35 +292,47 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// Shoreline lace coverage: the ocean's surf-band foam at its waterline target (column ~ 0 -> target
 	// 1), realized through the raw fold Jacobian with the same bias/threshold, eased toward "Shore foam
 	// max" - so the lace the water carries onto the sand is the same lace it wears at the edge. Shore only.
+	// ALL the film's foam reads the Jacobian sums with the finest cascade scaled by "Foam fine waves"
+	// (u_oceanFoamField2.x, as the ocean's foamJacobian): the short, fast waves would reshape it every frame.
+	const f16vec3 rFoam = f16vec3(rxx, rzz, rxz) + fineJ * float16_t(u_oceanFoamField2.x - 1.0);
 	float16_t foam = float16_t(0.0);
 	if (u_oceanParams5.z > 0.0)
 	{
-		const float16_t Jraw = (one + chop * rxx) * (one + chop * rzz) - chop * rxz * chop * rxz;
+		const float16_t Jraw = (one + chop * rFoam.x) * (one + chop * rFoam.y) - chop * rFoam.z * chop * rFoam.z;
 		// The ocean's tongue has column ~ 0, i.e. lace target 1, over its whole run-up - so does its film.
 		const float16_t target = maskH * shore;
-		const float16_t b = mix(float16_t(0.75), float16_t(1.45), target) + float16_t(u_oceanParams8.y);
+		// The target fades the lace in through its THRESHOLD, as the ocean's (ocean.fs.glsl) - not as a coverage
+		// multiplier. `shore` alone still multiplies, as the LAND gate: the raw Jacobian is the full open-sea
+		// fold field inland too, so a threshold alone would foam the puddles.
+		const float16_t b = mix(float16_t(u_oceanFoam.w - 0.8), float16_t(1.45), target) + float16_t(u_oceanParams8.y);
 		const float16_t foamMax = float16_t(max(u_oceanParams7.y, 1e-3));
-		foam = foamMax * (one - exp(-target * (one - smoothstep(b - float16_t(0.4), b + float16_t(0.4), Jraw)) / foamMax));
+		// The ocean's knee, normalised so full lace reaches the cap (ocean.fs.glsl: the bare knee stopped at 0.63).
+		const float16_t kneeNorm = float16_t(1.0 / (1.0 - exp(-1.0 / max(u_oceanParams7.y, 1e-3))));
+		foam = shore * foamMax * (one - exp(-(one - smoothstep(b - float16_t(0.4), b + float16_t(0.4), Jraw)) / foamMax)) * kneeNorm;
 	}
 	// The ocean's crest foam: oceanInstantFoam (ocean_wave.inc.glsl) inlined - fold of the WEIGHTED Jacobian
-	// or a breaking downward acceleration, the threshold relaxed by the turbulence ("Foam boost"). The
-	// water beside the film wears max(crest, lace), and the lace alone is capped at "Shore foam max".
+	// or a breaking downward acceleration. The water beside the film wears max(crest, lace), and the lace
+	// alone is capped at "Shore foam max".
 	{
-		const float16_t jxz = chop * sxz;
-		const float16_t jacobian = jxx * jzz - jxz * jxz;
+		const f16vec3 wFoam = rFoam * (w * chop); // weighted, as the normal's Jacobian
+		const float16_t jacobian = (one + wFoam.x) * (one + wFoam.y) - wFoam.z * wFoam.z;
 		const float16_t softness = float16_t(max(u_oceanParams4.w, 0.02));
-		const float16_t bias = float16_t(u_oceanFoam.w) + turbulence * float16_t(u_oceanParams5.x);
+		const float16_t bias = float16_t(u_oceanFoam.w);
 		const float16_t fold = one - smoothstep(bias - softness, bias, jacobian);
 		const float16_t breakStart = float16_t(u_oceanParams5.w);
 		const float16_t breaking = smoothstep(breakStart, breakStart + softness, -accel * float16_t(1.0 / 9.81));
-		foam = clamp(max(foam, maskH * shore * max(fold, breaking)), float16_t(0.0), one);
+		// The ocean's stuck foam: its density over this Jacobian, thresholded (no screen derivatives in this
+		// branch: no AA widening - the Jacobian taps are already mip-filtered to the footprint).
+		const float16_t stuckFoam = float16_t(oceanStuckFoamCoverage(oceanStuckFoamDensity(stuckAmount, float(jacobian)), 0.0));
+		foam = clamp(max(foam, maskH * shore * max(max(fold, breaking), stuckFoam)), float16_t(0.0), one);
 	}
-	// Entrained bubbles: the ocean's accumulated turbulence (the decaying memory of breaking, strongest
-	// exactly at the shore) turns the water milky ("Turbidity") and rougher. The surf beside the film
-	// carries it, so the film carries it too.
-	const float16_t milk = clamp(turbulence * float16_t(u_oceanParams5.y), float16_t(0.0), one);
+	// Entrained bubbles: the ocean's foam amount (the decaying memory of breaking, strongest exactly at the
+	// shore) is the bubble cloud and roughens the water. The surf beside the film carries it,
+	// so the film carries it too - read blurred by "Bubble blur (m)", as the ocean's cloud.
+	const float16_t milk = clamp(float16_t(oceanSampleFoamField(u_uwOceanMaps, worldPos.xz, float(footprintH), u_oceanFoamField2.y))
+		* shore, float16_t(0.0), one);
 	// The ocean's microfacet alpha on the film's own base ("Water roughness"): perceptual roughness^2, plus the LEAN slope variance (scaled by
-	// "Glint filtering") that stretches the glitter toward the horizon, plus the turbulence
+	// "Glint filtering") that stretches the glitter toward the horizon, plus the churn's
 	// micro-roughness. No spec-AA term: that is a screen derivative, undefined in this branch.
 	// NOTE: the lit core's `roughness` parameter IS the GGX alpha, so it goes in directly - passing a
 	// perceptual value there gave the film a wider glint than the water beside it.
@@ -318,9 +340,17 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	const float baseRough = clamp(u_terrainWetParams2.z, 0.02, 1.0); // "Water roughness" (perceptual, as the ocean's)
 	const float slopeVariance = float(float16_t(0.5) * (slopeVar.x + slopeVar.y) * (ns * ns));
 	const float alphaSq = baseRough * baseRough * baseRough * baseRough
-		+ 2.0 * slopeVariance * u_oceanParams6.y + float(turbulence) * u_oceanParams5.y * 0.35;
+		+ 2.0 * slopeVariance * u_oceanParams6.y + float(foamAmount) * 0.35;
 
-	return TerrainFilm(N, float16_t(clamp(sqrt(alphaSq), 0.02, 1.0)), foam, milk);
+	// The foam's lighting slope, the ocean's rule (ocean.fs.glsl foamSlope): the large waves eased flat by
+	// "Foam flatten", the sub-band detail x "Foam detail", at the OCEAN's normal strength - not the film's
+	// normal scale or waviness, so the film's foam lights exactly like the ocean's beside it.
+	// Resolved to its N.L here, so one half crosses into the shading stage, not the slope.
+	const f16vec2 foamSlope = ((slope - detailSlope) * float16_t(1.0 - u_oceanParams12.z) + detailSlope * float16_t(u_oceanFoamField1.w))
+		* float16_t(u_oceanParams1.w);
+	const float16_t foamNoL = max(dot(normalize(f16vec3(-foamSlope.x, float16_t(1.0), -foamSlope.y)), f16vec3(u_sunDirection.xyz)), float16_t(0.0));
+
+	return TerrainFilm(N, float16_t(clamp(sqrt(alphaSq), 0.02, 1.0)), foam, milk, foamNoL);
 }
 
 // The film over the lit ground (the "body"), as the overlay composites it: final = body * groundFactor +
@@ -363,25 +393,31 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// middle and the two are the same colour where the film meets the ocean.
 	f16vec3 T = f16vec3(1.0);
 	f16vec3 tintAdd = f16vec3(0.0);
+	const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + f16vec3(sunTint * (max(L.y, 0.0) * INV_PI)));
 	if (waterDepth > float16_t(0.0))
 	{
 		const vec3 refrDir = refract(-vec3(Vh), vec3(Nh), 1.0 / 1.33);
 		const float path = float(waterDepth) / max(-refrDir.y, 0.2);
 		T = f16vec3(exp(-u_oceanAbsorption.rgb * path));
-		const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + f16vec3(sunTint * (max(L.y, 0.0) * INV_PI)));
 		tintAdd = inscatter * (f16vec3(1.0) - T);
 	}
 
-	// Whitewater: lambertian foam lit by the pixel's ALREADY-RESOLVED sun radiance AT THE SURFACE
-	// (sunSurfaceRadiance() - the lit core's shadow visibility, no second shadow evaluation, and NOT the
-	// underwater caustic/absorption factor: the foam floats on the film, it is not the seabed under it)
-	// plus sky and ambient. The ocean's whitewater; skipped where neither the milk nor the lace would
-	// show it.
+	// The sun on the foam and the bubbles: sunSurfaceRadiance() - the pixel's ALREADY-RESOLVED visibility
+	// (main: shadow x cloud shadow x eclipse, no second shadow evaluation). NOT sunTint x that: sunTint carries
+	// the cloud and the eclipse too, and the product squared the cloud shadow (a darker foam than the ocean's).
+	const f16vec3 sunLight = f16vec3(sunSurfaceRadiance());
+	// Whitewater: EXACTLY the ocean's (ocean.fs.glsl) - Lambert on the foam's own slope (film.foamNoL, the
+	// ocean's rule), plus sky and ambient - so the two foams meet in one tone. Skipped where the lace would
+	// not show it.
 	f16vec3 whitewater = f16vec3(0.0);
-	if (milk > float16_t(0.003) || foamH > float16_t(0.003))
-		whitewater = f16vec3(doLightH(sunSurfaceRadiance(), f16vec3(L), Vh, Nh, f16vec3(0.0), f16vec3(u_oceanFoam.rgb * INV_PI), float16_t(0.0), float16_t(0.85)))
-			+ f16vec3(u_oceanFoam.rgb) * (ambientSky + f16vec3(u_ambientColor));
-	// Turbidity: tinted = mix(body * T + tintAdd, whitewater * 0.55, milk).
+	if (foamH > float16_t(0.003))
+		whitewater = f16vec3(u_oceanFoam.rgb) * (sunLight * (film.foamNoL * float16_t(INV_PI)) + ambientSky + f16vec3(u_ambientColor));
+	// Bubbles: tinted = mix(body * T + tintAdd, bubbles, milk) - the ocean's bubble cloud, no deeper than
+	// the water standing here.
+	f16vec3 bubbles = f16vec3(0.0);
+	if (milk > float16_t(0.003))
+		bubbles = oceanBubbleRadiance(min(float16_t(u_oceanParams12.x), max(waterDepth, float16_t(0.0))), NoV, float16_t(max(L.y, 0.0)),
+			sunLight, ambientSky + f16vec3(u_ambientColor), inscatter);
 
 	// The film is LINEAR in the body and in its remaining unknowns, the mirror (the sky; the traced scene
 	// mirror when TERRAIN_FILM_RT_MIRROR is on) and the scene lights:
@@ -408,7 +444,7 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// the sky on its own side without half the lobe below the horizon (the ocean's rule).
 	const f16vec3 blurSky = u_aoParams.y > 0.0 ? max(giEvalSkySHH(f16vec3(normalize(R + up))) * float16_t(INV_PI), f16vec3(0.0)) : ambientSky;
 	f16vec3 color = (maskH * foamH) * whitewater
-		+ clearW * ((one - F) * (tintAdd * (one - milk) + whitewater * (float16_t(0.55) * milk)) + (F * reflBlur * skyVis) * blurSky + glint);
+		+ clearW * ((one - F) * (tintAdd * (one - milk) + bubbles * milk) + (F * reflBlur * skyVis) * blurSky + glint);
 
 	// Reflection: the sky (the ray-traced scene mirror is disabled, TERRAIN_FILM_RT_MIRROR), roughness-
 	// blurred toward the sky around R (the blur's sky share is in the fold above). Before the lights: with the
@@ -527,22 +563,25 @@ void main()
 	const float16_t filmMask = smoothstep(float16_t(0.0), float16_t(max(u_terrainWetParams4.w, 1e-4)), waterDepth) * aboveLive;
 	if (filmMask <= float16_t(0.0))
 		discard;
-	// The film's sun visibility (glint, whitewater): the ground pass's resolve is not available here, so ONE
-	// hard tap (the moving water hides a penumbra), or one ray with the RT sun, as the ocean does. The
-	// ground's gate: no sun on a surface facing away from it. x the cloud shadow, as the lit core's
-	// sunShadowVisibility: without it the film's foam and glint stayed sunlit under a cloud, brighter than the
-	// ocean beside it.
+	// The film's sun visibility (glint, whitewater, bubbles): the ground pass's resolve is not available here,
+	// so ONE hard tap (the moving water hides a penumbra), or one ray with the RT sun, as the ocean does. x the
+	// cloud shadow, as the lit core's sunShadowVisibility: without it the film's foam and glint stayed sunlit
+	// under a cloud, brighter than the ocean beside it.
+	// AT THE WATER SURFACE (in_pos, the level water's up normal), where the foam and the glint are - the
+	// ocean's rule. It was the GROUND point under the water (TERRAIN_LIT_POS, gated on the ground normal):
+	// metres under the live ocean's edge, sunk into the relief, facing away on the far side of a ripple - a
+	// sun the surface never loses.
 	const vec3 L = u_sunDirection.xyz;
 	float sunVis = 0.0;
-	if (dot(geoN, L) > 0.0)
+	if (L.y > 0.0)
 	{
 #if LIT_RT_SUN_SHADOW
-		sunVis = rtShadowVisibility(TERRAIN_LIT_POS + geoN * 0.1, L, 0.05, 10000.0);
+		sunVis = rtShadowVisibility(in_pos + vec3(0.0, 0.1, 0.0), L, 0.05, 10000.0);
 #else
-		sunVis = sampleSunShadowHard(TERRAIN_LIT_POS, geoN);
+		sunVis = sampleSunShadowHard(in_pos, vec3(0.0, 1.0, 0.0));
 #endif
 		if (sunVis > 0.0)
-			sunVis *= cloudSunTransmittance(TERRAIN_LIT_POS);
+			sunVis *= cloudSunTransmittance(in_pos);
 	}
 	g_sunVisSurface = float16_t(sunVis * u_eclipseParams.x);
 	const TerrainFilm film = terrainFilmSurface(in_pos, wetFootprint, filmMask, fields.waterLevel - in_pos.y, fields.waterLevel);

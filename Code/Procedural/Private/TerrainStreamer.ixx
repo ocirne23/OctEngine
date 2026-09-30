@@ -316,9 +316,9 @@ export namespace Procedural
 		// the level it fills the splat relief to, the live ocean it follows at the waterline, and the
 		// darkening / gloss of the ground under it.
 		bool  m_wetEnabled = true;
-		float m_wetTexelSize = 4.0f;      // m per texel (1024 texels = 4096 m around the scene focus)
+		float m_wetTexelSize = 2.0f;      // m per texel (1024 texels = 2048 m around the scene focus)
 		float m_wetUpdateRate = 20.0f;    // Hz: the pass's fixed tick
-		float m_wetDiffusionRate = 20.0f; // 1/s sideways spread (framerate independent)
+		float m_wetDiffusionRate = 5.0f; // 1/s sideways spread (framerate independent)
 		float m_wetRain = 0.0f;           // wetness per second added everywhere
 		float m_wetDryTime = 10.0f;       // s to decay to 1/e on cool ground
 		float m_wetDryTempSens = 0.04f;   // extra decay rate per C above 15 C
@@ -327,9 +327,9 @@ export namespace Procedural
 		float m_wetFillStart = 0.5f;     // wetness at which water begins to stand in the relief's low points
 		float m_wetFillFull = 1.0f;       // wetness that submerges the relief (level 1)
 		float m_wetFillCurve = 1.0f;      // exponent between them: 1 = linear, > 1 = fills late, < 1 = early
-		float m_wetEdgeFade = 0.2f;       // m of water depth the film fades out over at the terrain intersection
-		float m_wetOceanBlend = 1.0f;     // m of live ocean water over the ground the film fades into the ocean over
-		float m_wetOceanEdgeFade = 0.33f;  // m of column the ocean blends out over at its edge (0 = hard edge)
+		float m_wetEdgeFade = 0.5f;       // m of water depth the film fades out over at the terrain intersection
+		float m_wetOceanBlend = 5.0f;     // m of live ocean water over the ground the film fades into the ocean over
+		float m_wetOceanEdgeFade = 0.5f;  // m of column the ocean blends out over at its edge (0 = hard edge)
 		float m_wetFilmMaxSlope = 25.0f;  // degrees: no standing water on steeper ground (90 = off)
 		float m_wetFilmSlopeFade = 5.0f; // degrees below the max over which the pool level sinks to nothing
 		float m_wetFilmFlowSpeed = 1.0f;  // m/s the film's ripples run downhill at 45 degrees (x sqrt(tan slope))

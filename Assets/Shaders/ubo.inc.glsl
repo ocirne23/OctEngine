@@ -138,15 +138,15 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // horizon band so it stays under distant near-sea-level terrain),
                             // y = horizon depth (m): minimum water depth the waves assume past
                             // u_oceanParams4.x (only the seabed moves, not the surface),
-                            // z = turbulence decay per frame,
+                            // z unused (was the turbulence decay: the foam field has one amount now),
                             // w = vertex displacement mip bias (Detail bias; ring cell size rides per vertex)
     vec4 u_oceanParams4;    // x = horizon depth RANGE (m): camera distance past which the waves assume
                             // at least u_oceanParams3.y of water, whatever the map says (0 = literal),
-                            // y = turbulence spread (diffusion/frame),
+                            // y unused (was the turbulence spread),
                             // z = shoal depth scale (waves fade below depth = scale * cascade patch size),
                             // w = instant-foam edge width (both thresholds' smoothstep)
-    vec4 u_oceanParams5;    // x = foam boost (turbulence -> fold-threshold relaxation),
-                            // y = turbidity (entrained-bubble milkiness + roughness),
+    vec4 u_oceanParams5;    // x unused,
+                            // y unused (was the turbidity: the bubble cloud is the foam amount itself now),
                             // z = shore foam depth (m; surf band width at the waterline, 0 = off),
                             // w = breaking-crest foam threshold (downward crest accel in g units)
     vec4 u_oceanParams6;    // x = far-cascade land-cull error allowance (m; flat burial slack the cull
@@ -186,7 +186,26 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // the geometry and the CPU buoyancy mirror stay as they are):
                             // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
                             // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
-    vec4 u_oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
+    vec4 u_oceanParams12;   // Entrained-bubble cloud (ocean_bubbles.inc.glsl): x = bubble depth (m under the
+                            // surface), y = bubble brightness (x foam albedo),
+                            // z = foam flatten (0..1: the foam's Lambert normal eased toward up),
+                            // w = camera under water (1/0, CPU mirror): gates ocean.fs's underside path
+    // The world-space foam field (ocean_foam_field.inc.glsl, ocean_foam.cs.glsl):
+    vec4 u_oceanFoamField;  // xy = accumulated drift (m; the field's coordinates are rest XZ - drift),
+                            // z = level 0 texel (m; level l = z x 4^l), w = surface foam decay per frame
+    vec4 u_oceanFoamField1; // x = surface foam strength (display scale on the stuck foam), y = foam threshold
+                            // (on the density amount / Jacobian),
+                            // z = foam edge (threshold half-width), w = foam detail (scale on the detail
+                            // slope in the foam's lighting normal)
+    vec4 u_oceanFoamField2; // x = foam fine waves (the finest cascade's share in the foam's Jacobian),
+                            // y = bubble blur (m: the bubble cloud reads the foam field this blurred), zw unused
+    // The ocean's bubble cloud, its per-FRAME factors (ocean_bubbles.inc.glsl oceanBubbleRadianceFrame): the
+    // light's path down to "Bubble depth" and the cloud's albedo, folded on the CPU.
+    vec4 u_oceanBubble0;    // rgb = foam albedo x brightness x exp(-sigma d / muL) x max(L.y, 0) / pi (x the sun), w unused
+    vec4 u_oceanBubble1;    // rgb = foam albedo x brightness x exp(-sigma d) (x the sky + ambient), w unused
+    vec4 u_oceanFoamLevels[OCEAN_FOAM_LEVELS]; // xy = level origin (drifted coords of texel (0,0)'s corner, m),
+                            // zw = whole texels the origin moved since last frame (the compute's read offset)
+    vec4 u_oceanSpray0;    // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
                             //     full breaking), z = grid radius around the scene focus (m), w = sim delta (s)
     vec4 u_oceanSpray1;     // x = breaking threshold (instant foam), y = upward kick (m/s), z = forward speed (m/s), w = spawn lead (m)
     vec4 u_oceanSpray2;     // x = spawn height above the surface (m), y = "Ocean/World scale" (all spray metres and

@@ -152,13 +152,13 @@ export struct CloudParams
     // Quality
     int   maxSteps = 600;             // view march step budget per pixel
     float maxDistanceKm = 50.0f;       // view march range (km)
-    float nearStep = 15.0f;            // step length at the camera (m)
-    int   stepsPerRay = 280;           // view march steps over a ray's shell span: each ray solves its step growth to take
+    float nearStep = 60.0f;           // step length at the camera (m)
+    int   stepsPerRay = 300;          // view march steps over a ray's shell span: each ray solves its step growth to take
                                        // this many, so the quality through the layer holds whatever its top / bottom
     int   lightSteps = 4;              // sun march steps per dense sample
     float lightDistance = 8000.0f;     // MAX sun march reach (m): the reach is the way out of the sample's own layer
                                        // toward the sun, (layer top - altitude) / sun y, capped by this for a low sun
-    float temporalBlend = 0.8f;        // history weight of the temporal accumulation
+    float temporalBlend = 0.9f;        // history weight of the temporal accumulation
     float skyMapHistorySec = 1.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
@@ -273,8 +273,10 @@ export struct FogParams
     float underwaterDensity = 1.0f; // multiplier on the global density at/below the LOCAL water surface
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
-    float underwaterOffset = -1.0f;  // raises/lowers the underwater fog boundary relative to the local
-                                    // water surface (m); the live wave displacement rides on top
+    float underwaterWaveOffset = 0.25f; // lowers the underwater fog boundary (the local water surface, the live
+                                    // wave displacement on top) by this x the deepest live wave trough (m per
+                                    // m): the fog's coarse froxels miss steep waves' troughs, and the murk
+                                    // peeked through them - more so the higher the sea
     float noiseScale = 0.08f;      // density noise frequency (1/m)
     float noiseStrength = 0.5f;    // 0 = uniform fog, 1 = fully modulated (dusty wisps)
     float windSpeed = 1.5f;        // noise drift (m/s)
@@ -491,7 +493,7 @@ export struct ParticleParams
 // build applies OceanParams::worldScale.
 export struct OceanSprayParams
 {
-    float rate = 30.0f;       // spawns per m^2 per s at full breaking
+    float rate = 20.0f;       // spawns per m^2 per s at full breaking
     float radius = 60.0f;     // m, the producer grid's half extent around the scene focus
     float threshold = 0.003f; // instant-foam value where spray starts
     float kick = 0.0f;        // m/s upward
@@ -572,22 +574,34 @@ export struct OceanParams
     bool  rtReflections    = true;  // ray-traced mirror of the scene on the top side (OCEAN_RT_REFLECTIONS
                                     // shader variant; off = sky only, no mirror ray compiled in)
     int   debugMode        = 0;     // OCEAN_DEBUG_MODE shader variant (mode list: ocean.fs.glsl); 0 = off
-    // Foam & turbulence. ONE instant-foam response (oceanInstantFoam) both draws the per-pixel crest
-    // foam and injects the accumulated TURBULENCE field (the churn energy breaking leaves behind).
-    // Turbulence then drives the wake look: it relaxes the fold threshold (aged foam paints itself along
-    // the LIVE geometry's convergence lines) and makes the water milky + rough (entrained bubbles).
+    // Foam. ONE instant-foam response (oceanInstantFoam) both draws the per-pixel crest foam and injects
+    // the world-space FOAM FIELD (the foam amount breaking leaves stuck to the water): white foam above
+    // foamThreshold, the bubble cloud (and its roughness) from the same amount below it.
     glm::vec3 foamColor    = glm::vec3(0.88f, 0.92f, 0.94f);
     float foamBias         = 0.6f;  // fold threshold: Jacobian below this is folding (foaming)
     float foamBreakAccel   = 0.25f; // breaking threshold (Longuet-Higgins): downward crest acceleration
                                     // above this fraction of g is breaking - what makes LARGE waves foam
     float foamSoftness     = 0.5f;  // edge width of both thresholds (small = crisp crest lines)
-    float foamDecay        = 0.985f; // turbulence retention per frame (wake persistence)
-    float foamSpread       = 1.2f;  // turbulence diffusion per frame: the wake spreads as it lives (also
-                                    // keeps the stored field free of texel structure)
-    float foamBoost        = 0.6f;  // how much turbulence relaxes the fold threshold: the aged-foam
-                                    // amount in the wake (0 = only actively breaking crests foam)
-    float turbidity        = 0.4f;  // entrained-bubble strength: milky brightening + extra roughness of
-                                    // turbulent water (the wake stays visible after the foam thins)
+    float bubbleDepth      = 3.0f;  // m under the surface: the bubble cloud's water absorbs the red both
+                                    // ways, so deeper = darker and more turquoise (a world metre: scaled)
+    float bubbleBrightness = 1.0f;  // the cloud's albedo, x foam color
+    float bubbleBlur       = 4.0f;  // m (world): the cloud reads the foam field this blurred (a diffuse volume)    // The world-space foam field (ocean_foam.cs.glsl): SURFACE FOAM sticks to the water it formed on (the
+    // rest lattice, so it rides the orbits and stays behind as the crest moves on) and drifts downwind.
+    float foamSurfaceDecay    = 0.995f; // foam amount retention per frame
+    float foamSurfaceStrength = 1.0f;   // display scale on the stuck foam (0 = only crest foam, as before)
+    float foamTexel        = 0.5f;  // level 0 texel (m, world); level l = x 4^l, 512^2 texels per level
+    // The stuck foam's coverage (oceanStuckFoamCoverage): a threshold on its density amount / Jacobian.
+    float foamThreshold    = 0.5f;  // density where the foam turns on
+    float foamEdge         = 0.06f; // threshold half-width: smaller = crisper foam edges
+    float foamFineWaves    = 0.25f; // 0..1: the finest cascade's share in the Jacobian the foam reads (lower =
+                                    // steadier foam shapes; the film's crest + shore foam too)
+    float foamDetail       = 1.5f;  // scale on the sub-band detail slope in the foam's lighting normal (the
+                                    // large waves' slope is eased by foamFlatten instead)
+    float foamDriftSpeed   = 0.3f;  // m/s (world) along the swell's travel: the wind drift of the surface
+    float foamFlatten      = 0.6f;  // 0..1: the foam's Lambert normal eased toward up (bent crests stop
+                                    // going dark at grazing sun angles)
+    bool  cameraUnderwater = false; // per frame, from the CPU mirror: the camera is below the live surface.
+                                    // Gates the shader's underside path - a back face seen from above is a fold
 
     // Shore interaction: the baked terrain-data cascades (Renderer::setFogTerrainHeightMap, baked by the
     // terrain streamer) give the water its depth - open water eases to the swash amplitude across an

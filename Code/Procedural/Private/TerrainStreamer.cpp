@@ -354,7 +354,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Water", "Fill full", &m_wetFillFull, 0.01f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Fill curve", &m_wetFillCurve, 0.05f, 16.0f, 0.05f);
 		Tweak::floatVar("Terrain/Water", "Edge fade (m)", &m_wetEdgeFade, 0.0f, 0.5f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Ocean blend (m)", &m_wetOceanBlend, 0.01f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Water", "Ocean blend (m)", &m_wetOceanBlend, 0.01f, 20.0f, 0.05f);
 		Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &m_wetOceanEdgeFade, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Water", "Film max slope (deg)", &m_wetFilmMaxSlope, 0.0f, 90.0f, 0.5f);
 		Tweak::floatVar("Terrain/Water", "Film slope fade (deg)", &m_wetFilmSlopeFade, 0.0f, 45.0f, 0.5f);

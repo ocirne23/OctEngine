@@ -29,10 +29,10 @@ import :Settings;
 //                                        mip-averaged squares recover the filtered-out slope variance,
 //                                        which the water shader adds as microfacet roughness)
 //                 Choppiness lambda is NOT baked in - the samplers apply it, so it stays live.
-//   4. foam     : temporal whitecap COVERAGE accumulation (persistent mask over cascade 0's patch):
-//                 inject on total-Jacobian folding (mip-filtered to the mask's texel), decay per frame;
-//                 stashed into moments[cascade 0].w for mipped sampling. The mask stores WHERE whitecaps
-//                 are; the water shader erodes it with world-anchored noise for crisp edge detail.
+//   4. foam     : the WORLD-SPACE foam field (ocean_foam_field.inc.glsl): OCEAN_FOAM_LEVELS camera-centred
+//                 clipmap levels in drifted rest coordinates, one foam amount per texel -
+//                 inject on breaking, decay per frame, scroll with the camera. Written into the maps' last
+//                 layers (layer 3 * CASCADES + level) so every maps sampler reads it, mipped.
 //   5. mip chain: blit-downsample the maps so distant water samples prefiltered slopes (no shimmer).
 // OCEAN_CASCADES band-split patches (each keeps a disjoint wavenumber range) break up tiling; the raster
 // passes sum all cascades (ocean_wave.inc.glsl).
@@ -87,6 +87,11 @@ public:
         vk::ImageView terrainView;
         vk::Sampler terrainSampler;
     };
+    // The foam field's per-frame CPU state into the UBO (oceanFoamField / 1 / Levels): the drift integrated
+    // over dt along the swell's travel, each level's origin snapped around the camera and the whole texels it
+    // moved since the last call (the compute's read offset). Once per built frame, in frame order - the
+    // shift is relative to the previous call, which the other ping/pong slot was simulated with.
+    void advanceFoamField(RendererVKLayout::Ubo& ubo, const glm::vec3& cameraPos, float dt);
     // Records the whole per-frame simulation. ubo = that frame slot's main UBO (time + ocean params).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray);
     // Points the spray step's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image;
@@ -120,7 +125,9 @@ private:
     // vertical acceleration d2h/dt2 = -w^2 h~ (+ dh/dt in its imaginary half) for the Longuet-Higgins
     // breaking-crest foam criterion (downward crest acceleration > fraction of g).
     static constexpr uint32 SPECTRUM_LAYERS = CASCADES * 3;
-    static constexpr uint32 MAPS_LAYERS = CASCADES * 3;     // displacement + gradients + moments per cascade
+    static constexpr uint32 FOAM_LEVELS = RendererVKLayout::OCEAN_FOAM_LEVELS;
+    // displacement + gradients + moments per cascade, then the foam field's levels
+    static constexpr uint32 MAPS_LAYERS = CASCADES * 3 + FOAM_LEVELS;
 
     void buildSpectrumLayout(ComputePipelineLayout& layout);
     void buildFftLayout(ComputePipelineLayout& layout);
@@ -164,10 +171,16 @@ private:
     vk::ImageView m_mapsMip0View{}; // mip 0 (assemble/foam storage access)
     uint32 m_mapsMipLevels = 0;
 
-    // Persistent foam coverage mask (R16F, cascade 0's patch; GENERAL, cleared once at init).
+    // The foam field's ping/pong state (R16F, layer = level * 2 + slot; GENERAL, cleared once at init).
     vk::Image m_foamImage{};
     VmaAllocation m_foamMemory{};
     vk::ImageView m_foamView{};
+    // advanceFoamField's state: the accumulated drift (m), each level's origin in whole texels, and the
+    // texel the origins were addressed with (a change re-addresses everything: the field starts over).
+    glm::vec2 m_foamDrift = glm::vec2(0.0f);
+    oc::array<glm::vec2, FOAM_LEVELS> m_foamOriginCells{};
+    float m_foamTexel = 0.0f;
+    bool m_foamValid = false; // false after a frame with the ocean off (no simulation ran: stale state)
 
     // Displacement readback (see getDisplacementReadback). Host-visible + coherent, persistently mapped.
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackBuffers;

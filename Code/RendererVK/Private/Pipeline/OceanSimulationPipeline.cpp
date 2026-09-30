@@ -172,16 +172,16 @@ void OceanSimulationPipeline::createImages()
     m_mapsMip0View = mip0Result.value;
     Globals::device.setDebugName(m_mapsMip0View, "OceanMaps.mip0");
 
-    // Persistent foam coverage mask over cascade 0's patch. Two layers = ping/pong: the foam pass reads
-    // last frame's layer through a small diffusion tent and writes the other (frame slots alternate
-    // strictly, so the layer roles just follow frameIdx & 1). The diffusion is what actually removes
-    // texel structure from the mask - a sampling-side blur gets undone by the dissolve threshold.
+    // The foam field's state: the foam amount per texel, two layers per level = ping/pong: the foam pass
+    // reads last frame's slot and writes the other (frame slots alternate strictly, so the roles just follow
+    // frameIdx & 1).
+    constexpr uint32 FOAM_STATE_LAYERS = FOAM_LEVELS * 2;
     vk::ImageCreateInfo foamInfo{
         .imageType = vk::ImageType::e2D,
         .format = vk::Format::eR16Sfloat,
         .extent = { N, N, 1 },
         .mipLevels = 1,
-        .arrayLayers = 2,
+        .arrayLayers = FOAM_STATE_LAYERS,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst,
@@ -193,7 +193,7 @@ void OceanSimulationPipeline::createImages()
         .image = m_foamImage,
         .viewType = vk::ImageViewType::e2DArray,
         .format = vk::Format::eR16Sfloat,
-        .subresourceRange = allSubresources(1, 2),
+        .subresourceRange = allSubresources(1, FOAM_STATE_LAYERS),
     };
     auto foamViewResult = vkDevice.createImageView(foamViewInfo);
     assert(foamViewResult.result == vk::Result::eSuccess);
@@ -236,12 +236,12 @@ void OceanSimulationPipeline::createImages()
             .oldLayout = vk::ImageLayout::eUndefined,
             .newLayout = vk::ImageLayout::eTransferDstOptimal,
             .image = m_foamImage,
-            .subresourceRange = allSubresources(1, 2),
+            .subresourceRange = allSubresources(1, FOAM_STATE_LAYERS),
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)barriers.size(), .pImageMemoryBarriers = barriers.data() });
 
         const vk::ClearColorValue zero{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }; // vk::ClearColorValue is spelled in std::array
-        const vk::ImageSubresourceRange foamRange = allSubresources(1, 2);
+        const vk::ImageSubresourceRange foamRange = allSubresources(1, FOAM_STATE_LAYERS);
         cmd.clearColorImage(m_foamImage, vk::ImageLayout::eTransferDstOptimal, &zero, 1, &foamRange);
 
         vk::ImageMemoryBarrier2 foamToGeneral{
@@ -252,7 +252,7 @@ void OceanSimulationPipeline::createImages()
             .oldLayout = vk::ImageLayout::eTransferDstOptimal,
             .newLayout = vk::ImageLayout::eGeneral,
             .image = m_foamImage,
-            .subresourceRange = allSubresources(1, 2),
+            .subresourceRange = allSubresources(1, FOAM_STATE_LAYERS),
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &foamToGeneral });
         init.end();
@@ -344,6 +344,35 @@ void OceanSimulationPipeline::reloadShaders()
         printf("OceanSimulationPipeline: spray shader reload failed, keeping previous pipeline\n");
 }
 
+void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::Ubo& ubo, const glm::vec3& cameraPos, float dt)
+{
+    const OceanParams& ocean = m_oceanParams;
+    const float texel0 = glm::max(ocean.foamTexel, 0.01f);
+    // A disabled ocean records no simulation, so the ping/pong state goes stale; a new texel re-addresses
+    // every level. Either way the field starts over: a shift past the grid makes every read come back empty.
+    const bool reset = !m_foamValid || texel0 != m_foamTexel;
+    m_foamTexel = texel0;
+    m_foamValid = ocean.enabled; // the first frame back after a disabled stretch resets
+
+    // The swell travels AGAINST the wind-direction vector (the spectrum's convention), and so does the drift.
+    const glm::vec2 wind = glm::length(ocean.windDirection) > 1e-4f ? glm::normalize(ocean.windDirection) : glm::vec2(1.0f, 0.0f);
+    m_foamDrift -= wind * (glm::max(ocean.foamDriftSpeed, 0.0f) * dt);
+
+    const glm::vec2 cameraQ = glm::vec2(cameraPos.x, cameraPos.z) - m_foamDrift;
+    for (uint32 level = 0; level < FOAM_LEVELS; ++level)
+    {
+        const float texel = texel0 * (float)(1u << (2 * level));
+        const glm::vec2 originCells = glm::floor(cameraQ / texel) - (float)(N / 2);
+        const glm::vec2 shift = reset ? glm::vec2((float)(2 * N)) : originCells - m_foamOriginCells[level];
+        m_foamOriginCells[level] = originCells;
+        ubo.oceanFoamLevels[level] = glm::vec4(originCells * texel, shift);
+    }
+    ubo.oceanFoamField = glm::vec4(m_foamDrift, texel0, glm::clamp(ocean.foamSurfaceDecay, 0.0f, 0.9999f));
+    ubo.oceanFoamField1 = glm::vec4(glm::max(ocean.foamSurfaceStrength, 0.0f), glm::max(ocean.foamThreshold, 0.0f),
+        glm::max(ocean.foamEdge, 0.0f), glm::max(ocean.foamDetail, 0.0f));
+    ubo.oceanFoamField2 = glm::vec4(glm::clamp(ocean.foamFineWaves, 0.0f, 1.0f), glm::max(ocean.bubbleBlur, 0.0f), 0.0f, 0.0f);
+}
+
 void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
@@ -432,10 +461,10 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
     }
     computeBarrier();
 
-    // ---- 4. Foam: temporal whitecap COVERAGE accumulation (inject on Jacobian folding, decay, stash in
-    // moments[c0].w). The injection Jacobian samples the maps mip-filtered (binding 3; image is GENERAL
-    // here) so a 1.5m mask texel reads each cascade's AVERAGE local folding, not one aliased full-res
-    // sample. The crisp foam edges come from noise erosion in the water shader, not from this mask. ----
+    // ---- 4. Foam: the world-space foam field's one amount, one dispatch layer per level (inject on
+    // breaking, decay, scroll; write the maps' foam layers). The injection samples the cascades mip-filtered to each level's
+    // texel (binding 3; image is GENERAL here), so a texel reads the AVERAGE local folding under it, not one
+    // aliased full-res sample. ----
     {
         oc::array<DescriptorSetUpdateInfo, 4> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
@@ -450,10 +479,10 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_foamPipeline.getPipeline());
         commandBuffer.cmdUpdateDescriptorSets(m_foamPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set, updates);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_foamPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        // Ping/pong: write layer frameIdx & 1, read (diffuse) the other - frame slots alternate strictly.
+        // Ping/pong: write slot frameIdx & 1, read (diffuse) the other - frame slots alternate strictly.
         FoamPC foamPc{ .writeLayer = frameIdx & 1u };
         cmd.pushConstants(m_foamPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(FoamPC), &foamPc);
-        cmd.dispatch(N / 8, N / 8, 1);
+        cmd.dispatch(N / 8, N / 8, FOAM_LEVELS);
     }
 
     // ---- 5. Mip chain: blit-downsample so distant water reads prefiltered displacement/slopes ----

@@ -13,12 +13,14 @@
 // closed-form single-scatter; the water itself has TLAS mask 0 so rays pass through) and the RAY-TRACED
 // mirror reflection (sky fallback). GGX/Smith sun glint widened by spec AA + LEAN-filtered slope
 // variance (Bruneton 2010 - the elongated glitter path at distance), Jacobian whitecap foam with
-// temporal turbulence (ocean_foam.cs.glsl), one RT sun shadow ray. Ray budgets: "Ocean/RT" tweaks.
+// the world-space stuck-foam field + its bubble cloud (ocean_foam.cs.glsl), one RT sun shadow ray. Ray budgets: "Ocean/RT" tweaks.
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
 #include "ocean_wave.inc.glsl"
+#include "ocean_bubbles.inc.glsl"
+#include "ocean_foam_field.inc.glsl"
 #define TERRAIN_WET_BINDING 18
 #include "terrain_wetness.inc.glsl" // the edge fade's film surface: the pool level the wetness fills to
 
@@ -443,6 +445,17 @@ void main()
     const vec3 toCam = u_viewPos - in_pos;
     const float viewDist = length(toCam);
     const vec3 V = toCam / max(viewDist, 1e-4);
+    // Entrained bubbles (the foam amount): the cloud's coverage, read where the refracted view ray reaches
+    // "Bubble depth" - so the cloud slides under the surface with the view instead of sitting on it. Read
+    // blurred by "Bubble blur (m)" (u_oceanFoamField2.y): the cloud is a diffuse volume, so the separate
+    // breaking events merge into clouds instead of texel-sized spots. The parallax is capped at 5x the depth
+    // at grazing. FIRST in main, where almost nothing is live: its B-spline taps (up to 16) in the middle of
+    // the top side's shading set the shader's peak (80/32 -> 80/48); here only the one result stays live. So
+    // it refracts through the LEVEL plane, not the rippled normal (the cloud is metres of blur anyway), and
+    // the underside pixels pay the tap for nothing.
+    const float milkF = clamp(oceanSampleFoamField(u_oceanMaps,
+        in_uv + refract(-V, vec3(0.0, 1.0, 0.0), 1.0 / 1.33).xz * (u_oceanParams12.x / max(sqrt(1.0 - (1.0 - V.y * V.y) / (1.33 * 1.33)), 0.2)),
+        length(fwidth(in_uv)), u_oceanFoamField2.y), 0.0, 1.0);
     // per-frame atmosTransmittanceToLight, and the cloud shadow at the surface (the glint, the body, the foam)
     const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittance(in_pos));
     // "Ray cutoff dist": beyond it no scene rays at all - the body uses the analytic bottom (the path
@@ -451,22 +464,40 @@ void main()
 
     // Wave normal, fold Jacobian (shoaled + raw), LEAN slope variance, vertical acceleration; shoreHW =
     // (terrain height, water level) here, reused by the surf band and SSS below.
-    vec2 slope, slopeVar, shoreHW;
-    float jacobian, jacobianRaw, accel;
-    oceanSampleSurface(in_uv, slope, jacobian, jacobianRaw, slopeVar, accel, shoreHW);
+    vec2 slope, slopeVar, shoreHW, detailSlope;
+    float jacobian, jacobianRaw, accel, foamJacobian;
+    oceanSampleSurface(in_uv, slope, jacobian, jacobianRaw, slopeVar, accel, shoreHW, detailSlope, foamJacobian);
     const float ns = u_oceanParams1.w;
     vec3 N = normalize(vec3(-slope.x * ns, 1.0, -slope.y * ns));
+    // The FOAM's lighting slope (whitewater, below): foam is a rough, thick sheet, so "Foam flatten" eases
+    // the large waves' slope toward flat - their bent crest facets otherwise fall to NoL 0 in dark blotches
+    // - while the sub-band detail stays at full strength x "Foam detail" (u_oceanFoamField1.w): the foam's
+    // relief below the geometry, as the terrain film's foam wears its detailed normal. From the slope, so it
+    // always faces up (no grazing-flip handling). Resolved to the ONE scalar the foam needs, its N.L, here:
+    // the slope would otherwise stay live (two values) across the sun shadow ray query to the whitewater.
+    float16_t foamNoL;
+    {
+        const f16vec2 foamSlope = f16vec2(((slope - detailSlope) * (1.0 - u_oceanParams12.z) + detailSlope * u_oceanFoamField1.w) * ns);
+        const f16vec3 foamN = normalize(f16vec3(-foamSlope.x, float16_t(1.0), -foamSlope.y));
+        foamNoL = max(dot(foamN, f16vec3(L)), float16_t(0.0));
+    }
     // Screen derivatives up front: the underside path returns early, and derivatives are undefined in
     // non-uniform control flow.
     const vec3 faceN = cross(dFdx(in_pos), dFdy(in_pos));
     const float uvFootprint = length(fwidth(in_uv));
 
-    // Foam, BEFORE the side split: both sides wear it (the underside sees it from below), and the
-    // turbulence fetch takes screen derivatives, which the underside branch cannot.
-    // Accumulated turbulence (churn energy of past breaking). Drives aged foam, milkiness and extra
-    // roughness.
-    const float turbulence = oceanSampleTurbulence(in_uv, uvFootprint);
-    const float foam = oceanInstantFoam(jacobian, accel, turbulence * u_oceanParams5.x);
+    // Foam, BEFORE the side split: both sides wear it (the underside sees it from below), and the stuck
+    // foam's edge takes screen derivatives, which the underside branch cannot.
+    // The world-space foam field at this pixel's REST position (ocean_foam_field.inc.glsl): the foam amount
+    // breaking left stuck to the water (it rides the orbits and stays as the crest moves on). Above "Foam
+    // threshold" it draws white; the same amount is the bubble cloud (milk, roughness) below.
+    // The crest foam is the live Jacobian's.
+    const float foamAmount = oceanSampleFoamField(u_oceanMaps, in_uv, uvFootprint, 0.0);
+    // The stuck foam's coverage: its density over the live Jacobian, thresholded (ocean_foam_field.inc.glsl).
+    // The density's screen derivative widens the edge (AA) - uniform control flow here, before the side split.
+    const float stuckDensity = oceanStuckFoamDensity(foamAmount * u_oceanFoamField1.x, foamJacobian);
+    const float stuckFoam = oceanStuckFoamCoverage(stuckDensity, 0.5 * fwidth(stuckDensity));
+    const float foam = max(oceanInstantFoam(jacobian, accel), stuckFoam);
 
     // Shoreline surf band: coverage target from the breaking bore front + the waterline, realized
     // through the RAW (un-shoaled) fold Jacobian so it reads as filaments along the swell, not a
@@ -487,13 +518,19 @@ void main()
 
         if (target > 0.001)
         {
-            const float b = mix(0.75, 1.45, target) + u_oceanParams8.y; // "Shore foam bias"
-            shoreFoam = target * (1.0 - smoothstep(b - 0.4, b + 0.4, jacobianRaw));
+            // The target fades the lace in through its THRESHOLD only - never as a coverage multiplier, which
+            // made the band's fade a half-transparent grey veil. At the band's outer edge (target -> 0) only
+            // folds 0.8 past "Fold bias" foam (a subset of the crest foam: no seam at the hand-over); toward
+            // the waterline it rises to 1.45 and the lace fills in, its strands solid white throughout.
+            const float b = mix(u_oceanFoam.w - 0.8, 1.45, target) + u_oceanParams8.y; // "Shore foam bias"
+            shoreFoam = 1.0 - smoothstep(b - 0.4, b + 0.4, jacobianRaw);
             // "Shore foam max": keep the bottom visible through the lace. A soft knee, not a min(): a hard
             // clamp flattened the whole waterline band into a plateau with an edge wherever the target
-            // exceeded the cap; this eases toward the cap and never quite reaches it.
+            // exceeded the cap. NORMALISED so full lace (1) reaches the cap exactly: the bare knee
+            // fm (1 - e^(-x / fm)) gave 1 - 1/e = 0.63 at full lace and cap 1 - a grey veil next to the
+            // fully covering foam offshore, whatever the cap.
             const float foamMax = max(u_oceanParams7.y, 1e-3);
-            shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax));
+            shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax)) / (1.0 - exp(-1.0 / foamMax));
         }
     }
     const float foamW = clamp(max(foam, shoreFoam), 0.0, 1.0);
@@ -525,8 +562,10 @@ void main()
     // Underside (camera on the water side of this triangle): through Snell's window the scene above the
     // water or the sky, outside it (TIR) the mirrored water body, surface foam over both. The side comes from the rasterized triangle's plane, not
     // gl_FrontFacing: the clipmap carries both windings under back-face culling, so the surviving copy
-    // is always front-facing.
-    if (dot(faceN, V) * dot(faceN, N) < 0.0)
+    // is always front-facing. Only while the camera is under the water (u_oceanParams12.w, the CPU mirror):
+    // a back face seen from above is a FOLD (high choppiness overturns the sheet) and shades as the top side,
+    // whose grazing flip turns N to the camera and whose foam lights on the un-flipped, flattened normal.
+    if (u_oceanParams12.w > 0.5 && dot(faceN, V) * dot(faceN, N) < 0.0)
     {
         // Keep the detail normal inside the camera's hemisphere at grazing (a flip would open the window
         // at TIR angles).
@@ -644,7 +683,7 @@ void main()
         N = -N;
 
     // Microfacet roughness = base + spec AA + LEAN slope variance (both scaled by "Glint filtering")
-    // + the sub-grid capillary band + turbulence micro-roughness. The variance terms stretch the sun
+    // + the sub-grid capillary band + the churn's micro-roughness (the foam amount). The variance terms stretch the sun
     // glitter toward the horizon.
     //
     // "Micro roughness" (u_oceanParams9.x): the slope variance of everything BELOW the finest cascade's
@@ -657,7 +696,8 @@ void main()
     const float microVariance = u_oceanParams9.x * (ns * ns);
     const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
         + (normalVariance(N) + 2.0 * slopeVariance) * u_oceanParams6.y + 2.0 * microVariance
-        + turbulence * u_oceanParams5.y * 0.35;
+        + foamAmount * 0.35;
+
 
     // From here the top side shades in HALF math: the vectors, the dots, the roughness, the ray weights
     // and the colours (the scene colour is RGBA16F and the sun intensity is single digits, so the radiance
@@ -680,7 +720,7 @@ void main()
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest
     // SSS is on - the subsurface glow must stay shadow-gated.
-    const bool sunUp = L.y > 0.0 && (NoL > float16_t(0.0) || u_oceanParams6.z > 0.0);
+    const bool sunUp = L.y > 0.0 && (NoL > float16_t(0.0) || u_oceanParams6.z > 0.0 || foamW > 0.003);
     const float16_t sunVis = float16_t(!sunUp ? 0.0
         : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + vec3(Nh) * 0.1, L, 0.05, 10000.0)
                                : sampleSunShadowHard(in_pos, vec3(Nh)))); // one tap: the moving water hides a penumbra
@@ -688,28 +728,31 @@ void main()
     // The GI's sky visibility on the SKY reflections (the blurred share in C, the mirror's sky fallback): water
     // under a roof or an overhang mirrors no sky. A traced mirror hit is geometry and keeps its full weight.
     const float16_t skyVis = float16_t(giSkyVisibility(in_pos, up));
-    const f16vec3 whitewater = f16vec3(u_oceanFoam.rgb) * (sunTintH * (NoL * sunVis * float16_t(INV_PI)) + ambientSky + f16vec3(u_ambientColor));
+    // The foam's Lambert term on its own normal (foamNoL, at the top of main).
+    const f16vec3 whitewater = f16vec3(u_oceanFoam.rgb) * (sunTintH * (foamNoL * sunVis * float16_t(INV_PI)) + ambientSky + f16vec3(u_ambientColor));
 
     const f16vec3 inscatter = f16vec3(u_oceanScatter.rgb * u_oceanScatter.w) * (ambientSky + sunTintH * float16_t(max(L.y, 0.0) * INV_PI));
 
     const float16_t F = F_SchlickH(NoV, float16_t(0.02));
 
     // Each scene ray's weight in the final pixel, resolved before it is traced: foam covers both,
-    // turbidity replaces the body, Fresnel splits the rest, the roughness blur hands part of the mirror
+    // the bubble cloud replaces the body, Fresnel splits the rest, the roughness blur hands part of the mirror
     // to the average sky. Under 2% the ray is skipped.
-    const float16_t milk = float16_t(clamp(turbulence * u_oceanParams5.y, 0.0, 1.0)); // entrained bubbles ("Turbidity")
+    const float16_t milk = float16_t(milkF); // entrained bubbles (the foam amount)
     const float16_t reflBlur = clamp(alphaF * float16_t(2.0) - float16_t(0.05), float16_t(0.0), float16_t(0.6));
     const float16_t clearW = float16_t(1.0) - foamH;
     const float16_t bodyWeight = (float16_t(1.0) - F) * (float16_t(1.0) - milk) * clearW;
     const float16_t mirrorWeight = F * (float16_t(1.0) - reflBlur) * clearW;
 
     // The pixel is LINEAR in the two traced radiances: body * bodyWeight + mirror * mirrorWeight + C.
-    //   color = mix(mix(body, whitewater * 0.55, milk) + sss, mix(mirror, ambientSky, reflBlur), F) + glint
+    //   color = mix(mix(body, bubbles, milk) + sss, mix(mirror, ambientSky, reflBlur), F) + glint
     //   final = mix(color, whitewater, foam)
-    // Everything that is not traced - the glint, the crest SSS, the turbidity, the blur's sky share and the
-    // foam - folds into C BEFORE the traces, so only C, the weights and the light inputs stay live across
-    // them (the ray-query loops are the register peak).
-    f16vec3 C = whitewater * (float16_t(0.55) * milk);
+    // Everything that is not traced - the glint, the crest SSS, the bubble cloud, the blur's sky share and
+    // the foam - folds into C BEFORE the traces, so only C, the weights and the light inputs stay live
+    // across them (the ray-query loops are the register peak).
+    f16vec3 C = f16vec3(0.0);
+    if (milk > float16_t(0.003))
+        C = oceanBubbleRadianceFrame(NoV, sunTintH * sunVis, ambientSky + f16vec3(u_ambientColor), inscatter) * milk;
     // Crest SSS: sun through back-lit crests glows the scatter color, scaled by height above the calm
     // line. In the transmitted body so Fresnel fades it at grazing like all subsurface light.
     const float sssStrength = u_oceanParams6.z;

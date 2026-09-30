@@ -4,7 +4,8 @@
 // Sampling helpers for the FFT ocean maps (OceanSimulationPipeline / ocean_*.cs.glsl), per cascade c:
 //   layer c                      : displacement (Dx, h, Dz, dDx/dz)
 //   layer   OCEAN_CASCADES + c   : gradients    (dh/dx, dh/dz, dDx/dx, dDz/dz)
-//   layer 2*OCEAN_CASCADES + c   : slope second moments (dhx^2, dhz^2, accel, turbulence [c=0 only])
+//   layer 2*OCEAN_CASCADES + c   : slope second moments (dhx^2, dhz^2, accel, -)
+//   layer 3*OCEAN_CASCADES + l   : the world-space foam field's level l (ocean_foam_field.inc.glsl)
 // Shared by the displacement pass (instanced_indirect_ocean.vs.glsl) and the water shading
 // (ocean.fs.glsl) so the drawn geometry and the shaded normals read the same field.
 // Requires ubo.inc.glsl; includer may set OCEAN_MAPS_BINDING / TERRAIN_HEIGHT_BINDING first.
@@ -277,8 +278,14 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
 //              microfacet roughness (the elongated sun glitter at distance)
 //   accel    : vertical acceleration (breaking-crest foam driver)
 //   shoreHW  : the (terrain height, water level) fetch, returned for the caller to reuse
-void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out float jacobianRaw, out vec2 slopeVar, out float accel, out vec2 shoreHW)
+//   detail   : the sub-band detail slope's share of `slope` (world domain) - the foam lights on it
+//   foamJacobian : `jacobian` with the finest cascade scaled by "Foam fine waves" (u_oceanFoamField2.x) -
+//              the stuck foam's density reads it, so the short, fast waves do not reshape it every frame
+void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out float jacobianRaw, out vec2 slopeVar, out float accel, out vec2 shoreHW, out vec2 detail, out float foamJacobian)
 {
+    detail = vec2(0.0);
+    foamJacobian = 1.0;
+    vec3 fine = vec3(0.0); // the finest cascade's (dDx/dx, dDz/dz, dDx/dz)
     const float chop = u_oceanParams0.w;
     shoreHW = oceanSampleShoreData(worldXZ);
     const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
@@ -298,6 +305,8 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
         varSum += max(m.xy - g.xy * g.xy, vec2(0.0));
         sxx += g.z; szz += g.w; sxz += d.w;
         accel += m.z;
+        if (c == OCEAN_CASCADES - 1)
+            fine = vec3(g.z, g.w, d.w);
     }
     jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
     // Buried under land: flat calm surface (with swash on, the run-up band still shades, and its surf
@@ -321,56 +330,32 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     const float jzz = 1.0 + chop * szz;
     const float jxz = chop * sxz;
     jacobian = jxx * jzz - jxz * jxz;
+    {
+        const vec3 f = fine * ((u_oceanFoamField2.x - 1.0) * w * chop); // the finest cascade's change
+        const float fxx = jxx + f.x, fzz = jzz + f.y, fxz = jxz + f.z;
+        foamJacobian = fxx * fzz - fxz * fxz;
+    }
     // Floor + rational soft limit: near folds the raw division explodes the slope into dark creases.
     // "Crest slope limit" (u_oceanParams10.x) is the limit's strength - it also compresses the steep
     // crest faces, so lowering it sharpens crests at the risk of creases; 0 = off.
     slope = slopeSum / max(vec2(jxx, jzz), vec2(0.6));
     slope /= 1.0 + u_oceanParams10.x * length(slope);
-    slope += oceanDetailSlope(sampleXZ, worldXZ, w);
-    slope = oceanFlowToWorld(slope, fr);
+    const vec2 detailSample = oceanDetailSlope(sampleXZ, worldXZ, w);
+    slope = oceanFlowToWorld(slope + detailSample, fr);
+    detail = oceanFlowToWorld(detailSample, fr);
     slopeVar = varSum;
 }
 
 // Instant crest foam from the fold Jacobian + downward acceleration (Longuet-Higgins). ONE function
-// shared by the water shader (display, biasBoost = turbulence * "Foam boost") and ocean_foam.cs.glsl
-// (injection, biasBoost = 0 - only genuine breaking adds energy, no feedback loop).
-float oceanInstantFoam(float jacobian, float accel, float biasBoost)
+// shared by the water shader (the crest foam it draws), ocean_foam.cs.glsl (what it injects into the foam
+// field) and the spray.
+float oceanInstantFoam(float jacobian, float accel)
 {
     const float softness = max(u_oceanParams4.w, 0.02);
-    const float bias = u_oceanFoam.w + biasBoost;
+    const float bias = u_oceanFoam.w;
     const float fold = 1.0 - smoothstep(bias - softness, bias, jacobian);
     const float breaking = smoothstep(u_oceanParams5.w, u_oceanParams5.w + softness, -accel / 9.81);
     return max(fold, breaking);
-}
-
-// Accumulated turbulence (moments[c0].w): the decaying memory of breaking. Magnified hard near the
-// camera, so mip 0 gets a 3x3 tent of bilinear taps (reconstruction AA); crossfades to plain
-// trilinear once the pixel footprint reaches mip 1. footprint = world size of one pixel.
-float oceanSampleTurbulence(vec2 worldXZ, float footprint)
-{
-    const float L0 = u_oceanParams2.x;
-    const float layer = float(2 * OCEAN_CASCADES);
-    const float size = float(OCEAN_FFT_SIZE);
-
-    const float lod = log2(max(footprint * size / L0, 1e-3));
-    const float trilinear = texture(u_oceanMaps, vec3(worldXZ / L0, layer)).w;
-    if (lod >= 1.0)
-        return trilinear;
-
-    const vec2 uv = worldXZ / L0;
-    const vec2 spacing = vec2(1.0 / size);
-    float filtered = 0.0;
-    for (int j = -1; j <= 1; ++j)
-    {
-        for (int i = -1; i <= 1; ++i)
-        {
-            const float w = float((2 - abs(i)) * (2 - abs(j)));
-            filtered += textureLod(u_oceanMaps, vec3(uv + vec2(float(i), float(j)) * spacing, layer), 0.0).w * w;
-        }
-    }
-    filtered *= 1.0 / 16.0;
-
-    return mix(filtered, trilinear, clamp(lod, 0.0, 1.0));
 }
 
 #endif

@@ -451,11 +451,11 @@ about the scale.
 |---|---|---|
 | fetch, depth, cascade patch sizes | × s | Froude similarity: with gravity untouched this is the ONE scaling of the JONSWAP/TMA inputs under which wavelengths AND heights both come out × s — the scaled sea is a shrunk copy, not the full-size spectrum aliased into small patches. |
 | wind speed | × √s | The velocity half of the same similarity (`U²/(F g)` and the wave-age ratio stay invariant). |
-| every other metre (shore depths, cull slack, RT ranges, horizon offset, steer range, **ring cell**) | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
+| every other metre (shore depths, cull slack, RT ranges, horizon offset, steer range, bubble depth, foam texel, **ring cell**) and the foam drift speed | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
 | absorption, SSS strength (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
 | dimensionless ratios (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
 | sea level | — | The world datum, owned by the terrain. |
-| **outside the ocean tweaks:** the "Ocean/Spray *" metres and m/s, the spray `.pfx` size / gravity / turbulence, "Fog/Underwater offset" and "Fog/Caustic shore fade" | × s (spray rate per m² ÷ s², "Fog/Caustic depth fade" per m ÷ s) | The renderer reads `OceanParams::worldScale` (`Renderer::getOceanWorldScale`): the sea keeps its model PERIODS, so a speed or an acceleration scales like a length. Applied in `buildUboOcean` / `buildUboFog` and, for the emitter, in `ParticleSystem::update`. |
+| **outside the ocean tweaks:** the "Ocean/Spray *" metres and m/s, the spray `.pfx` size / gravity / turbulence and "Fog/Caustic shore fade" | × s (spray rate per m² ÷ s², "Fog/Caustic depth fade" per m ÷ s) | The renderer reads `OceanParams::worldScale` (`Renderer::getOceanWorldScale`): the sea keeps its model PERIODS, so a speed or an acceleration scales like a length. Applied in `buildUboOcean` / `buildUboFog` and, for the emitter, in `ParticleSystem::update`. The underwater fog boundary's offset is NOT a scaled tweak: "Fog/Underwater wave offset" (a ratio) lowers it by × the deepest LIVE wave trough (`getWaveTrough`, world metres already): a higher sea needs a lower boundary, or the murk peeks through the troughs the fog's coarse froxels miss. (A fixed "Underwater offset (m)" was removed, 2026-09-30.) |
 
 **The periods stay the model sea's.** Froude scaling alone shortens them by √s, and a miniature sea at
 real-sea speed reads as racing. So `OceanParams::timeScale` = √s slows the spectrum's clock
@@ -620,6 +620,82 @@ above that, so what is left near the camera is a normal map on a smooth surface 
 
 The first two are dimensionless (a variance and a slope ratio) and so is the detail strength, scale and
 rotation — `pushOceanParams` world-scales only "Detail fade (m)".
+
+* **"Ocean/Foam/Bubble depth (m) / Bubble brightness / Bubble blur (m)"** — the entrained-bubble cloud
+  (`ocean_bubbles.inc.glsl`, 2026-09-30). Its coverage IS the foam field's amount (clamped; it also adds
+  roughness, amount × 0.35). A "Turbidity" scale on it was removed as redundant with the brightness. The
+  cloud is a high-albedo layer "Bubble depth" UNDER the surface, so the water over it absorbs the red both
+  ways and it reads **turquoise, not grey** (it replaced a mix toward `whitewater × 0.55`). The ocean reads
+  its coverage where the refracted view ray reaches that depth (one parallax tap); the terrain film uses the
+  same function with the depth capped at its own water, so the hand-over keeps one colour. "Bubble depth"
+  is a metre (× s); the brightness is a scale.
+* **The surf band scales with the WIND** ("Ocean/Foam/Foam wind full (m/s)", `pushOceanParams`): its width
+  "Shore foam depth" × smoothstep(0, full, MODEL U10) - off in a calm, full from "full" up. Its cap ("Shore
+  foam max") scales only in a near-calm: × smoothstep(0.5, 2 m/s, model U10): none below 0.5 m/s, full from 2 m/s. The fold /
+  breaking thresholds do not scale. (A wind shift of both thresholds - "Foam wind
+  onset" / "Calm foam cut", also moving the surf band's waterline threshold - was tried and removed,
+  2026-09-30.)
+* **The WORLD-SPACE FOAM FIELD** (2026-09-30; `ocean_foam.cs.glsl`, `ocean_foam_field.inc.glsl`,
+  `OceanSimulationPipeline::advanceFoamField`). It replaced the turbulence stashed in cascade 0's moments `.w`.
+  That field was 3 m texels over the 1.5 km patch, and it showed only by relaxing the live fold threshold,
+  so aged foam stayed on the crests.
+  * `OCEAN_FOAM_LEVELS` (3) camera-centred clipmap levels of 512², texel "Foam texel (m)" × 4^level (0.5 /
+    2 / 8 m: 256 m / 1 km / 4 km). They are the ocean MAPS' last layers (`3 × CASCADES + level`, mipped
+    by the blit), so any maps sampler reads them - no new binding. Ping/pong state: an R16F image, layer
+    = level × 2 + slot.
+  * ONE channel: the FOAM AMOUNT (`max(prev × "Foam decay", instant)`, no spread), injected by
+    `oceanInstantFoam`. Above "Foam threshold" (its density, below) it draws white foam; the same amount is
+    the bubble cloud and the roughness. So decaying foam fades into the turquoise glow.
+    (A second turbulence channel with its own decay / spread, and "Foam boost" - turbulence relaxing the
+    live fold threshold, the old aged foam - were removed as redundant, 2026-09-30.)
+  * The bubble cloud reads the amount BLURRED ("Bubble blur (m)", default 4, × s): a diffuse volume, so
+    the separate breaking events merge into clouds instead of texel-sized spots. That read picks a coarse
+    mip and reconstructs it with two mips' B-splines (8 taps); a magnified coarse mip read bilinearly
+    shows its texels as diamonds.
+  * Indexed in DRIFTED REST coordinates, q = rest XZ − drift. The rest (undisplaced) lattice is where a
+    parcel sits between orbits, so foam on it rides the waves and STAYS as a crest passes on. The drift
+    ("Foam drift (% wind)", along the swell's travel, over the SIM delta) moves the whole frame, never
+    resamples, so it never blurs.
+  * The CPU state scrolls each level by whole texels (the UBO's `zw` = the compute's read offset). A texel
+    change or a frame with the ocean off resets the field. A texel that SCROLLS IN starts from the next
+    coarser level's last-frame state (bilinear), not empty: at a long "Foam decay" an empty strip took
+    seconds to fill and showed each level's edge as a line trailing the moving camera. The outermost level
+    starts empty (it fades out anyway).
+  * The ocean draws `max(crest foam, surface foam × "Surface foam")`; the film does the same inside its
+    shore gate. The film samples at its own position (near the shore it is within a displacement of the
+    rest lattice).
+  * **Coverage is DATA-DRIVEN** (`oceanStuckFoamDensity` / `oceanStuckFoamCoverage`): a threshold
+    ("Foam threshold", "Foam edge") on the stuck foam's surface density, `amount / J`. The live fold
+    Jacobian J is the displaced area per rest area, so the foam packs where the water converges and
+    tears where it stretches. Every cascade is in J, so the edges get detail down to centimetres with no
+    pattern. The ocean widens the edge by `fwidth(density)` (AA); the film has no derivatives there and
+    relies on its mip-filtered Jacobian taps. The J it reads is `foamJacobian` (`oceanSampleSurface`): the
+    finest cascade scaled by "Foam fine waves" (0.25). Its sub-second waves reshaped the foam every frame
+    ("too active"). The film's crest fold and shoreline lace read the same damped sums. A procedural lace (ridged noise) was tried first and
+    REJECTED by the user: they want data-driven foam, not a pattern.
+    The field is read through a cubic B-spline where magnified (`oceanFoamBicubic`).
+  * **The foam's lighting normal** (ocean): its own slope, `macro × (1 − "Foam flatten") + detail ×
+    "Foam detail"`. `oceanSampleSurface` returns the sub-band detail slope separately for this. The flatten
+    eases only the large waves, whose bent crest facets otherwise go dark, and the detail keeps the foam's
+    relief below the geometry. A bump from the lace's gradient was REJECTED (it looked bad).
+    **The film's whitewater is the ocean's exact formula** on the same slope rule (`TerrainFilm::foamSlope`,
+    at the OCEAN's normal strength, not the film's normal scale or waviness) with `sunSurfaceRadiance()`
+    as the sun, so the two foams meet in one tone.
+  * **The surf band's cap** ("Ocean/Shore/Shore foam max") is a soft knee NORMALISED so full lace reaches
+    the cap (ocean + film). The bare knee `fm (1 − e^(−x/fm))` stopped at 1 − 1/e ≈ 0.63 even at cap 1, so
+    the whole "Shore foam depth" band was a grey 60 % veil beside the fully covering stuck foam — read at
+    first as a shading difference (2026-09-30). The band's TARGET (nearShore × bore, the waterline term)
+    fades the lace in through its fold THRESHOLD only, `b = mix(Fold bias − 0.8, 1.45, target) + Shore
+    foam bias`, never as a coverage multiplier: multiplied, the band's fade was a half-transparent veil. At
+    target → 0 only folds 0.8 past "Fold bias" foam, a subset of the crest foam, so the hand-over has no
+    seam. The film keeps `shore` (the land gate) as a multiplier: inland its raw Jacobian is still the full
+    open-sea fold field.
+  * Not shore-weighted: injection is open-ocean math, so the stuck foam and the milk can show in the calm
+    shallows where the waves were damped.
+* **`OceanParams::cameraUnderwater`** (`u_oceanParams12.w`) — set each frame in `pushOceanParams` from
+  `sampleWaterHeight` at the camera. `ocean.fs.glsl` takes its UNDERSIDE path only while it is set: a back
+  face seen from above is a FOLD (high "Choppiness" overturns the sheet), and before this gate it shaded as
+  the underside, with half-bright "foam from below" (dark grey sheets on the curls). It now shades as the top side.
 
 "Ocean/RT" tweaks budget per-pixel scene rays.
 

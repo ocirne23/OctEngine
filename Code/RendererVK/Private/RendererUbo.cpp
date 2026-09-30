@@ -501,7 +501,11 @@ void Renderer::buildUboFog()
         waveBand,
         glm::max(fog.causticStrength, 0.0f),   // z: underwater caustic focus strength (surfaces + fog shafts)
         glm::max(fog.causticDepthFade, 0.0f) / oceanScale); // w: caustic contrast decay with depth (1/m)
-    ubo.fogParams8 = glm::vec4(fog.underwaterOffset * oceanScale, glm::max(fog.causticShoreFade, 0.0f) * oceanScale,
+    // x: the boundary offset - "Underwater wave offset" x the deepest live wave trough, down (world metres
+    // already; 0 with the ocean off): a higher sea needs a lower boundary, or the murk peeks through the
+    // troughs the fog's coarse froxels miss.
+    ubo.fogParams8 = glm::vec4(-glm::max(fog.underwaterWaveOffset, 0.0f) * m_oceanSimPipeline.getWaveTrough(),
+        glm::max(fog.causticShoreFade, 0.0f) * oceanScale,
         fog.farFieldMaxDistanceKm > 0.0f ? fog.farFieldMaxDistanceKm * 1000.0f : 1e30f, glm::max(fog.sunScatter, 0.0f));
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
@@ -524,10 +528,10 @@ void Renderer::buildUboOcean()
     ubo.oceanScatter = glm::vec4(ocean.scatterColor, ocean.scatterStrength);
     ubo.oceanFoam = glm::vec4(ocean.foamColor, ocean.foamBias);
     ubo.oceanParams3 = glm::vec4(ocean.horizonLevelOffset, glm::max(ocean.horizonDepth, 0.0f),
-        glm::clamp(ocean.foamDecay, 0.0f, 0.999f), glm::clamp(ocean.detailBias, -4.0f, 4.0f));
+        0.0f, glm::clamp(ocean.detailBias, -4.0f, 4.0f));
     ubo.oceanParams4 = glm::vec4(glm::max(ocean.horizonDepthRange, 0.0f),
-        glm::clamp(ocean.foamSpread * 0.25f, 0.0f, 0.95f), glm::max(ocean.shoalScale, 0.0f), glm::max(ocean.foamSoftness, 0.02f));
-    ubo.oceanParams5 = glm::vec4(glm::max(ocean.foamBoost, 0.0f), glm::clamp(ocean.turbidity, 0.0f, 1.0f), glm::max(ocean.shoreFoamDepth, 0.0f), glm::max(ocean.foamBreakAccel, 0.01f));
+        0.0f, glm::max(ocean.shoalScale, 0.0f), glm::max(ocean.foamSoftness, 0.02f));
+    ubo.oceanParams5 = glm::vec4(0.0f, 0.0f, glm::max(ocean.shoreFoamDepth, 0.0f), glm::max(ocean.foamBreakAccel, 0.01f));
     ubo.oceanParams6 = glm::vec4(glm::max(ocean.farCullError, 0.0f), glm::max(ocean.glintFilter, 0.0f),
         glm::max(ocean.sssStrength, 0.0f), glm::max(ocean.sssPower, 1.0f));
     // Swash reach: conservative max run-up height from the wave-amplitude readback (trough estimate ~
@@ -544,6 +548,20 @@ void Renderer::buildUboOcean()
         ocean.enabled ? m_oceanSimPipeline.getDisplacementExtent() : 0.0f); // w: per-instance cull padding
     ubo.oceanParams11 = glm::vec4(glm::max(ocean.detailStrength, 0.0f), glm::max(ocean.detailScale, 0.001f),
         glm::max(ocean.detailFadeDist, 0.0f), ocean.detailRotation);
+    // The bubble cloud's per-frame factors (ocean_bubbles.inc.glsl oceanBubbleRadianceFrame): the sun's and the
+    // sky's path down to "Bubble depth" and the cloud's albedo depend on nothing per pixel, so the ocean pays one
+    // exp (the path back up to the eye) per pixel, not three. The film's depth is per pixel: it keeps the full form.
+    {
+        const glm::vec3 L = glm::normalize(ubo.sunDirection); // buildUboSky ran first
+        const float sunCos = glm::max(L.y, 0.0f);
+        const float muL = glm::sqrt(1.0f - (1.0f - sunCos * sunCos) / (1.33f * 1.33f)); // refracted sun cosine
+        const float depth = glm::max(ocean.bubbleDepth, 0.0f);
+        const glm::vec3 albedo = ocean.foamColor * glm::max(ocean.bubbleBrightness, 0.0f);
+        ubo.oceanBubble0 = glm::vec4(albedo * glm::exp(-ocean.absorption * (depth / muL)) * (sunCos / glm::pi<float>()), 0.0f);
+        ubo.oceanBubble1 = glm::vec4(albedo * glm::exp(-ocean.absorption * depth), 0.0f);
+    }
+    ubo.oceanParams12 = glm::vec4(glm::max(ocean.bubbleDepth, 0.0f), glm::max(ocean.bubbleBrightness, 0.0f),
+        glm::clamp(ocean.foamFlatten, 0.0f, 1.0f), ocean.cameraUnderwater ? 1.0f : 0.0f);
     // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off), the sim
     // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
@@ -559,6 +577,9 @@ void Renderer::buildUboOcean()
     ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f) * sprayScale,
         glm::max(spray.speed, 0.0f) * sprayScale, spray.forward * sprayScale);
     ubo.oceanSpray2 = glm::vec4(spray.height * sprayScale, sprayScale, 0.0f, 0.0f);
+    // The world-space foam field: drift over the SIM delta (frozen with the pause, like the waves), levels
+    // around the camera (the water nearest the eye is where the detail shows).
+    m_oceanSimPipeline.advanceFoamField(ubo, m_cameraPos, sprayDt);
 }
 
 // Forcefield bubbles (the Force library pushes the params every frame; all UBO-driven = live).

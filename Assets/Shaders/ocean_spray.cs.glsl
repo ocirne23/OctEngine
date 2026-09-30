@@ -26,7 +26,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 // oceanSampleSurface's Jacobian + acceleration with EXPLICIT LOD at the cell footprint (the shared
 // helper samples with implicit derivatives, which compute has none of). Same depth weighting.
-void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out float accel, out float turbulence)
+void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out float accel)
 {
     const float chop = u_oceanParams0.w;
     const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
@@ -44,8 +44,6 @@ void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out 
         const vec4 m = textureLod(u_oceanMaps, uv + vec3(0.0, 0.0, float(2 * OCEAN_CASCADES + c)), lod);
         sxx += g.z; szz += g.w; sxz += d.w;
         accel += m.z;
-        if (c == 0)
-            turbulence = m.w;
     }
     const float w = oceanSurfaceWeight(depth, shoreHW.y);
     sxx *= w; szz *= w; sxz *= w;
@@ -82,10 +80,10 @@ void main()
     if (shoreHW.y - shoreHW.x <= 0.0)
         return; // land
 
-    float jacobian, accel, turbulence;
-    sprayCrest(worldXZ, cell, shoreHW, jacobian, accel, turbulence);
-    // The water shader's displayed foam (turbulence-relaxed threshold): spray where the whitecaps are.
-    const float foam = oceanInstantFoam(jacobian, accel, turbulence * u_oceanParams5.x);
+    float jacobian, accel;
+    sprayCrest(worldXZ, cell, shoreHW, jacobian, accel);
+    // The water shader's crest foam: spray where the whitecaps break.
+    const float foam = oceanInstantFoam(jacobian, accel);
     const float breaking = smoothstep(u_oceanSpray1.x, 1.0, foam);
     if (breaking <= 0.0)
         return;
