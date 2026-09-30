@@ -55,12 +55,15 @@ void main()
     const vec3 origin = cascade.xyz + u_cloudShadow2.xyz * local.x + u_cloudShadow3.xyz * local.y; // on the plane through the centre
     const float camAlt = u_viewPos.y; // centre view (g_viewIndex 0)
 
-    // Start where the line leaves the shell top toward the sun (at the plane when the plane is above it).
-    const vec2 tTop = cloudRaySphere(cloudAltitude(origin, camAlt), cloudRayB(origin, L, camAlt), u_cloudShape0.y);
+    // THE MAIN LAYER ONLY: the upper layer casts no map shadow (thin, low-density sheets - a weak shadow). Over the
+    // union shell the fixed step count was spread across the gap and the upper band, and the main layer's shadows
+    // got coarser whenever the upper layer was on.
+    // Start where the line leaves the main band's top toward the sun (at the plane when the plane is above it).
+    const vec2 tTop = cloudRaySphere(cloudAltitude(origin, camAlt), cloudRayB(origin, L, camAlt), cloudMainTop());
     const float aStart = tTop.y > tTop.x ? max(tTop.y, 0.0) : 0.0;
     const vec3 start = origin + L * aStart;
     vec2 seg0, seg1;
-    cloudShellIntervals(cloudAltitude(start, camAlt), cloudRayB(start, -L, camAlt), 1e7, seg0, seg1);
+    cloudMainIntervals(cloudAltitude(start, camAlt), cloudRayB(start, -L, camAlt), 1e7, seg0, seg1);
     const float len0 = max(seg0.y - seg0.x, 0.0);
     const float len1 = max(seg1.y - seg1.x, 0.0);
     const float total = len0 + len1;
@@ -86,7 +89,7 @@ void main()
         // The detail erosion in BOTH cascades: it removes much of the base density, so a base-only far
         // cascade shadows far darker and its border shows as a box. At the far texel size the detail's mip
         // is close to its mean, which is what the far cascade needs.
-        const float dens = cloudDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
+        const float dens = cloudMainDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
         if (dens <= 0.0)
             continue;
         od += dens * u_cloudShape1.w * dt;

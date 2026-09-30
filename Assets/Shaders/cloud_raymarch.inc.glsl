@@ -205,21 +205,43 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // so every ray takes "Steps per ray" (u_cloudMarch0.w) steps over its shell span: the same quality through the
     // layer whatever its top and bottom, and the same cost per ray. Capped at ~75 % of the budget (the rest absorbs
     // the coarse back-ups; the sky map's 64-step rays). A fixed-point iteration on g = (the terms) / target - the log
-    // moves slowly, so a few rounds settle. A span the near step covers in fewer steps keeps the near step.
+    // moves slowly, so a few rounds settle.
+    // THE NEAR STEP SCALES WITH THE SPAN: clamp(span / target, "Min step", "Near step"). A fixed near step gave a SHORT
+    // span (up through a thin layer: 1000 m at 15 m = 67 steps) fewer steps than the target - lower quality exactly
+    // where the path is short. Now such a span is marched in `target` uniform steps; a long span keeps "Near step" at
+    // the camera. "Min step" (u_cloudLayer3.z) is the floor: steps finer than the noise detail only re-read the same
+    // texels, so a very short span takes fewer steps instead of paying the full target for nothing.
     // (Before the per-ray solve a long flat ray overran the budget, and a uniform floor of (distance left / steps
     // left) made EVERY step long, inside the nearby cloud too: a grainy band at the camera's altitude.)
-    const float nearStep = u_cloudMarch0.z;
+    // THE SOLVE SPAN IS THE MAIN LAYER'S (sStart, sEnd) while the upper layer is on: over the union shell the target
+    // was spread across the gap and the upper band too, and the main layer got fewer steps whenever the upper layer
+    // was on. With the growth fitted to the main band the upper layer - farther out - takes its steps ON TOP (at the
+    // same growth: ~ln(upper top / upper bottom) / g more), and the gap is crossed with the coarse empty-space steps.
+    // A ray that misses the main band (only the upper one) solves over the shell. tStart / tEnd stay the SHELL's
+    // (the air term below).
     const float tStart = max(seg0.y > seg0.x ? seg0.x : seg1.x, 1.0);
     const float tEnd = max(seg1.y > seg1.x ? seg1.y : seg0.y, tStart + 1.0);
-    const float target = max(min(u_cloudMarch0.w, 0.75 * float(maxSteps)), 1.0);
-    float growth = 0.0; // near steps throughout
-    if ((tEnd - tStart) / nearStep > target)
+    float sStart = tStart, sEnd = tEnd;
+    if (u_cloudLayer0.z > 0.5)
     {
-        growth = log(tEnd / tStart) / target; // the pure geometric schedule: the start point
+        vec2 m0, m1;
+        cloudMainIntervals(cloudAltitude(origin, camAlt), cloudRayB(origin, dir, camAlt), tEnd, m0, m1);
+        if (m0.y > m0.x || m1.y > m1.x)
+        {
+            sStart = max(m0.y > m0.x ? m0.x : m1.x, 1.0);
+            sEnd = max(m1.y > m1.x ? m1.y : m0.y, sStart + 1.0);
+        }
+    }
+    const float target = max(min(u_cloudMarch0.w, 0.75 * float(maxSteps)), 1.0);
+    const float nearStep = max(min(u_cloudMarch0.z, (sEnd - sStart) / target), u_cloudLayer3.z);
+    float growth = 0.0; // near steps throughout
+    if ((sEnd - sStart) / nearStep > target)
+    {
+        growth = log(sEnd / sStart) / target; // the pure geometric schedule: the start point
         for (int i = 0; i < 4; ++i)
         {
             const float tLinear = nearStep / max(growth, 1e-6); // where g * t overtakes the near step
-            growth = max((max(1.0 - tStart / tLinear, 0.0) + log(tEnd / max(tStart, tLinear))) / target, 1e-6);
+            growth = max((max(1.0 - sStart / tLinear, 0.0) + log(sEnd / max(sStart, tLinear))) / target, 1e-6);
         }
     }
 

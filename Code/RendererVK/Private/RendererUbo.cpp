@@ -289,7 +289,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     // The shelf stack is CENTRED in the layer: the lowest at 0.5 - (count - 1) / 2 x spacing.
     const float shelfSpacing = glm::max(c.shelfSpacing, 0.0f);
     const float shelfLowest = 0.5f - 0.5f * (float)glm::max(glm::clamp(c.shelfCount, 0, 3) - 1, 0) * shelfSpacing;
-    ubo.cloudLayer3 = glm::vec4(shelfLowest, shelfSpacing, 0.0f, glm::max(c.aerialStrength, 0.0f));
+    ubo.cloudLayer3 = glm::vec4(shelfLowest, shelfSpacing, glm::max(c.minStep, 0.25f), glm::max(c.aerialStrength, 0.0f));
     ubo.cloudShape1 = glm::vec4((float)(1.0 / weatherPeriod), (float)(1.0 / basePeriod), (float)(1.0 / detailPeriod), c.densityScale);
     ubo.cloudShape2 = glm::vec4(glm::clamp(c.cloudType, 0.0f, 1.0f), c.typeVariation, c.erosion, c.curl);
     ubo.cloudShape3 = glm::vec4(c.coverageVariation, c.nearDetailRadius, 1.0f / (top - bottom), 1.0f / glm::max(c.nearDetailRadius, 1e-3f));

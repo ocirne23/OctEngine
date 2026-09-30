@@ -107,10 +107,10 @@ export struct CloudParams
     bool  upperEnabled = true;
     float upperBottom = 6000.0f;       // m
     float upperTop = 7500.0f;          // m
-    float upperCoverage = 0.2f;        // x the main layer's coverage
+    float upperCoverage = 0.6f;       // x the main layer's coverage
     float upperType = 0.1f;            // 0 = stratus (thin sheets), 0.5 = cumulus
     float upperHeightVariation = 0.2f; // per-column lift, fraction of the upper band (the column shrinks to 1 - this)
-    float upperDensity = 0.2f;         // x the main layer's density ("Density (1/m)" scales both)
+    float upperDensity = 0.1f;        // x the main layer's density ("Density (1/m)" scales both)
     float densityScale = 0.015f;       // extinction (1/m) at density 1
     float erosion = 0.66f;             // detail noise erosion of the base shapes
     float erosionCutoff = 0.15f;       // densities under this after the erosion are removed (the thin haze rest), the rest remapped to 0..1
@@ -150,10 +150,12 @@ export struct CloudParams
     int   shadowFarSplit = 3;
     bool  selfShadowFromMap = false;   // the clouds' own sun shadow from the map (else the light march)
     // Quality
-    int   maxSteps = 600;             // view march step budget per pixel
-    float maxDistanceKm = 50.0f;       // view march range (km)
-    float nearStep = 60.0f;           // step length at the camera (m)
-    int   stepsPerRay = 360;          // view march steps over a ray's shell span: each ray solves its step growth to take
+    int   maxSteps = 360;             // view march step budget per pixel
+    float maxDistanceKm = 45.0f;       // view march range (km)
+    float nearStep = 90.0f;           // step length at the camera (m); a MAXIMUM: a ray with a shorter path through
+                                       // the shell uses span / "Steps per ray", so it still takes its full step count
+    float minStep = 3.0f;              // the floor of that per-ray near step (m): finer steps only re-read the same noise
+    int   stepsPerRay = 180;          // view march steps over a ray's shell span: each ray solves its step growth to take
                                        // this many, so the quality through the layer holds whatever its top / bottom
     int   lightSteps = 4;              // sun march steps per dense sample
     float lightDistance = 8000.0f;     // MAX sun march reach (m): the reach is the way out of the sample's own layer

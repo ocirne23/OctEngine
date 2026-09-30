@@ -113,6 +113,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::intVar("Sky/Clouds/Quality", "Max steps", &maxSteps, 16, 1024);
     Tweak::floatVar("Sky/Clouds/Quality", "Max distance (km)", &maxDistanceKm, 1.0f, 400.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near step (m)", &nearStep, 1.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Min step (m)", &minStep, 0.25f, 50.0f, 0.25f);
     Tweak::intVar("Sky/Clouds/Quality", "Steps per ray", &stepsPerRay, 16, 1024);
     Tweak::intVar("Sky/Clouds/Quality", "Light steps", &lightSteps, 0, 16);
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 20000.0f, 10.0f); // the cap on the per-sample reach

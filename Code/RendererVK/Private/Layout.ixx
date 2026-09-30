@@ -865,7 +865,7 @@ export namespace RendererVKLayout
         glm::vec4 cloudLayer0;  // the MAIN layer's band: x = bottom (m), y = 1 / height (1/m); z = the upper layer is on (0/1), w = its density scale
         glm::vec4 cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage, w = type
         glm::vec4 cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w = the UPPER layer's height variation (lift, fraction of its band)
-        glm::vec4 cloudLayer3;  // the main layer's SHELF PLACEMENT: x = the lowest shelf's height (the CPU centres the stack), y = the spacing to the next (fractions of the layer), z unused, w = the march's aerial perspective strength (x the added air light; 0 = off)
+        glm::vec4 cloudLayer3;  // the main layer's SHELF PLACEMENT: x = the lowest shelf's height (the CPU centres the stack), y = the spacing to the next (fractions of the layer), z = the march's min step (m), w = the march's aerial perspective strength (x the added air light; 0 = off)
         glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
         glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
         glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight

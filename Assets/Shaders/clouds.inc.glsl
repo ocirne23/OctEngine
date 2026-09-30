@@ -69,12 +69,12 @@ float cloudRayB(vec3 rel, vec3 dir, float camAlt)
     return dot(rel.xz, dir.xz) + (rel.y + camAlt + ATMOS_R_PLANET) * dir.y;
 }
 
-// The ray's (at most two) intervals inside the shell, clamped to [0, tMax], for a ray from a point at
-// altitude originAlt with b = cloudRayB. The ground (altitude 0) ends the ray. An empty interval has y <= x.
-void cloudShellIntervals(float originAlt, float b, float tMax, out vec2 seg0, out vec2 seg1)
+// The ray's (at most two) intervals inside the band [bottom, top], clamped to [0, tMax], for a ray from a point
+// at altitude originAlt with b = cloudRayB. The ground (altitude 0) ends the ray. An empty interval has y <= x.
+void cloudBandIntervals(float originAlt, float b, float tMax, float bottom, float top, out vec2 seg0, out vec2 seg1)
 {
-    const vec2 tTop = cloudRaySphere(originAlt, b, u_cloudShape0.y);
-    const vec2 tBottom = cloudRaySphere(originAlt, b, u_cloudShape0.x);
+    const vec2 tTop = cloudRaySphere(originAlt, b, top);
+    const vec2 tBottom = cloudRaySphere(originAlt, b, bottom);
     const vec2 tGround = cloudRaySphere(originAlt, b, 0.0);
     float tEnd = tMax;
     if (tGround.x > 0.0 && tGround.x < tGround.y)
@@ -86,6 +86,17 @@ void cloudShellIntervals(float originAlt, float b, float tMax, out vec2 seg0, ou
         seg1 = vec2(max(tBottom.y, seg0.x), seg0.y);
         seg0.y = min(seg0.y, tBottom.x);
     }
+}
+// The SHELL: the union of both layers' bands (u_cloudShape0.xy) - what the view march covers.
+void cloudShellIntervals(float originAlt, float b, float tMax, out vec2 seg0, out vec2 seg1)
+{
+    cloudBandIntervals(originAlt, b, tMax, u_cloudShape0.x, u_cloudShape0.y, seg0, seg1);
+}
+// The MAIN layer's band alone (u_cloudLayer0.xy: bottom, 1 / height).
+float cloudMainTop() { return u_cloudLayer0.x + 1.0 / u_cloudLayer0.y; }
+void cloudMainIntervals(float originAlt, float b, float tMax, out vec2 seg0, out vec2 seg1)
+{
+    cloudBandIntervals(originAlt, b, tMax, u_cloudLayer0.x, cloudMainTop(), seg0, seg1);
 }
 
 // Vertical density profile for a cloud type (0 = stratus, 0.5 = cumulus, 1 = cumulonimbus) at the

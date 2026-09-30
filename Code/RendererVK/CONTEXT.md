@@ -665,8 +665,8 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   metres off.
 * **TWO LAYERS** (2026-09-28): `cloudDensity` = the MAIN layer (its own band, "Bottom" / "Top",
   `u_cloudLayer0.xy`) + the optional UPPER layer ("Sky/Clouds/Upper layer": its own band, coverage, type and
-  density scale, `u_cloudLayer0.zw` + `u_cloudLayer1`; default on, 6000-7500 m, type 0.1, density 0.2 = thin high
-  sheets). Its "Coverage" and "Density" are MULTIPLIERS on the main layer's (2026-09-29; coverage default 0.2):
+  density scale, `u_cloudLayer0.zw` + `u_cloudLayer1`; default on, 6000-7500 m, type 0.1, density 0.1 = thin high
+  sheets). Its "Coverage" and "Density" are MULTIPLIERS on the main layer's (2026-09-29; coverage default 0.6):
   the CPU sends `upperCoverage x coverage` (clamped 0..1) in
   `u_cloudLayer1.z`, and the density was always `x upperDensity` before "Density (1/m)". **Its own column
   LIFT** ("Upper layer/Height variation", default 0.2, `u_cloudLayer2.w`; 2026-09-29), the main layer's method:
@@ -675,8 +675,10 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   gaps do not follow the main layer's. The SHELL (`u_cloudShape0.xy`, what the march and the shadow map cover)
   is the union of the bands; the gap between them is crossed by the coarse empty-space steps. Why: one tall
   shell stretched every column's profile into a peak - a taller "Top" made the towers thinner, not the sky
-  layered. Both layers share `cloudLayerShape` (the noise threshold + detail erosion). A taller union shell
-  spreads the shadow map's march steps thinner.
+  layered. Both layers share `cloudLayerShape` (the noise threshold + detail erosion). **The upper layer does
+  not cost the main layer quality** (2026-09-30): the SHADOW MAP marches the MAIN band only (`cloudMainIntervals`,
+  `cloudMainDensity`) - the upper layer casts no map shadow (thin, low-density sheets; its own lighting comes from
+  the sun march) - and the view march SOLVES its step growth over the main band's span (see the March).
   **COVERAGE 0 = CLEAR** (`cloudColumnCoverage`, both layers; 2026-09-29): a column's coverage is the base
   coverage + (weather.r - 0.5) x "Coverage variation", the variation faded in over the first 0.25 of the base
   coverage (`CLOUD_VARIATION_RAMP`). With a constant spread the weather map's peaks stayed clouds at coverage 0;
@@ -735,7 +737,14 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     (a fixed-point solve of `N(g) = max(0, n/g - tStart)/n + ln(tEnd / max(tStart, n/g))/g`): short steps near the
     camera, faster growth far away. (2026-09-29: it replaced the fixed "Step growth" g, with which a ray crossing
     the shell from below took `ln(top / bottom) / g` steps at any angle - the quality followed the layer's
-    top / bottom RATIO, ~280 steps at 300-5000 m but ~70 at 1500-3000 m.) The uniform floor (distance left / steps left) is
+    top / bottom RATIO, ~280 steps at 300-5000 m but ~70 at 1500-3000 m.) **The near step scales with the
+    span:** `clamp(span / target, "Min step", "Near step")` (2026-09-30) - a fixed near step gave a SHORT span (up
+    through a thin layer) fewer steps than the target; now it takes `target` uniform steps, and a long span keeps
+    "Near step". "Min step (m)" (default 3, `u_cloudLayer3.z`) is the floor: finer steps only re-read the same noise.
+    **With the upper layer on, the solve span is the MAIN band's** (`sStart` / `sEnd`, two more sphere tests): over
+    the union shell the target was spread over the gap and the upper band, and the main layer lost steps. The
+    upper layer takes its steps on top at the same growth; the gap uses the coarse empty-space steps; a ray that
+    misses the main band solves over the shell. `tStart` / `tEnd` stay the shell's for the air term. The uniform floor (distance left / steps left) is
     only a safety net: as the rule it made a long ray's EVERY step long (400 m from the camera on, flat
     through the layer: one density sample per step, opaque at once - a grainy band at the camera's altitude).
     **Known issue, open:** with a small budget (200) a darker band remains on the LIT side of far clouds at
@@ -850,7 +859,8 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
 * **THE CLOUD SHADOW MAP** (a Beer shadow map: `cloud_shadow.cs.glsl` writes, `cloud_shadow.inc.glsl`
   reads). Two sun-aligned ortho cascades in ONE 2-layer RGBA32F array (`SHADOW_RESOLUTION` 1024), recorded
   straight into the primary after the pre-scene stages (before GI, fog and the scene).
-  * A texel = one line along the sun through the shell: x = the along-light coordinate `dot(p - centre, L)`
+  * A texel = one line along the sun through the MAIN layer's band (not the union shell: the upper layer casts
+    no map shadow, 2026-09-30): x = the along-light coordinate `dot(p - centre, L)`
     of the first cloud coming from the sun, y = the mean extinction to the last cloud, z = the whole optical
     depth. A receiver's optical depth is `min(y * max(x - a, 0), z)`, so ONE fetch serves the ground, a
     mountain or fog froxel inside a cloud, and the clouds' own samples. Because x is a coordinate and not a
