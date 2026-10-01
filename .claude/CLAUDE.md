@@ -450,6 +450,15 @@ Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 `Code/Particle/Private/Effect.ixx`**; demos `Assets/Effects/fire.pfx`, and the camera-following
 weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, see Particle).
 
+## `.tree` — tree species
+
+`TreeSpecies <name>` with `Trunk` / `Crown` / `Module` (+ `Level` children) / `Leaves` / `Color` blocks, in
+`Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree.
+**The grammar is in "Trees" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; placeholders
+`Oak.tree`, `Pine.tree`, `Acacia.tree`. Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
+Entity, above Procedural). Their generated textures are saved once to `Assets/Trees/Textures/*.png` and
+reused (regenerate with `Trees/Regenerate textures`).
+
 ## `.dsl` — scripts
 
 A dual-purpose file: **generated C++ on top, the `//@`-commented DSL block below**, between

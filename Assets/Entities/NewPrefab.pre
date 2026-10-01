@@ -1,0 +1,13 @@
+Prefab NewPrefab
+	Name Boat
+	Position 11.981136 6.9994698 13.266215
+	Rotation 0 9.04615e-07 -1.7635541e-14
+	Scale 1
+	Component Render
+		ObjectContainer boat
+		Node Boat
+		Type StaticMesh
+	Component Physics
+		Body Dynamic
+		Shape Hull
+		Density 143

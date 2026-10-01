@@ -78,6 +78,14 @@ the File category, through a local `IoScope` and **NOT a plain `ProfileScope`**:
 the profiler deliberately leaves unregistered — the transient startup texture-bake pool — where
 `ProfileScope` would dereference a null track. `IoScope` no-ops when `threadTrack()` is null.
 
+## `ImageIO` (`File:ImageIO`)
+
+PNG out / any stb-decodable image in, RGBA8, for GENERATED content written once and read back on later runs
+(the procedural tree textures in `Assets/Trees/Textures`). stb encodes / decodes in memory and the bytes go
+through `FileSystem::writeFileBytes` / `readFileBytes`, so the disk seam and its main-thread rule hold
+(`allowMainThread`). Its stb implementations are STATIC (internal linkage), like SceneCooker.cpp's —
+RendererVK owns the external-linkage `stb_image`.
+
 ## `AssetParser` (`File:AssetParser`)
 
 The text format behind every engine text asset (`.oc`, `.pre`, `.anm`, `.apl`, `.pfx`, game saves,

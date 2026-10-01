@@ -1,0 +1,4 @@
+ObjectContainer boat
+	Path "Models/boat.glb"
+	MergeNodes false
+	PreTransformVertices false

@@ -212,6 +212,13 @@ public:
     // TerrainLit add their material flag, like an ObjectContainer override). Permanent: create one per
     // system and share it between its meshes.
     uint16 createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
+    // A material with its own generated sRGB RGBA8 diffuse, from a caller-built mip chain (level 0 first,
+    // each level half the previous). alphaCutoff > 0 makes it alpha-tested (EAlphaMode::Mask, the cutoff
+    // rides `opacity`): draw it on LitMasked. `normalMips` (optional, same size): a LINEAR RGB tangent-space
+    // normal map (x along U, y along V, z out). Free with destroyTextureMaterial (textures + material slot).
+    uint16 createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
+        const oc::vector<oc::span<uint8>>* normalMips = nullptr);
+    void destroyTextureMaterial(uint16 materialIdx);
     RenderMesh createMesh(const RenderMeshData& data); // uploads + one MeshInfo (and its BLAS); invalid when empty
     // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity
     // instance offset: the mesh is its own root).

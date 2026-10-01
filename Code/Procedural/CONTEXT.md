@@ -7,7 +7,7 @@ The procedural world layer: diffusion terrain, FFT ocean, scattering, terrain ph
 camera-centered bakes they share. Links RendererVK, File, Spatial and Physics (+ onnxruntime, zstd
 PRIVATE).
 
-## The four globals
+## The five globals
 
 | Global | Type | Per-frame call |
 |---|---|---|
@@ -15,11 +15,12 @@ PRIVATE).
 | `Globals::terrainCollider` | `TerrainCollider` | `update(camera.position, terrain.activeClimateMaps())` |
 | `Globals::ocean` | `OceanGenerator` | `update(renderer, camera, terrain.activeTerrainData(), terrain.seaLevel())` |
 | `Globals::scatter` | `ScatterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` |
+| `Globals::trees` | `TreeSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Trees" |
 
 main.cpp updates them **in that order**, after entity updates and before present
 ([main.cpp:803](../App/main.cpp#L803)).
 
-All four sit in init_seg `OC_SEG_PROCEDURAL`, **the first globals to destruct** — their dtors free
+All five sit in init_seg `OC_SEG_PROCEDURAL`, **the first globals to destruct** — their dtors free
 renderer residency and collider bodies and may wait on in-flight jobs. **Order among them is undefined
 and deliberately independent.**
 
@@ -776,6 +777,114 @@ and everything regenerates on a sampler identity change.
 
 > Like terrain chunks, scatter uses its **own layer so gameplay queries never see it** — its
 > `userData` is 0, not an `Entity*`.
+
+---
+
+# Trees
+
+"Trees" tweaks. **In development — the plan is `Docs/TreeRenderingPlan.md`** (tiers T0..T3, phases G1..G8).
+Status: G1 (species asset + piece generator) and a CPU composite PREVIEW.
+
+## The model: a piece library, composited per tree
+
+A tree is NEVER generated as a whole. A species generates once into a `TreeLibrary`
+(`generateTreeLibrary`, TreeGenerator.cpp): **trunks** with attach **slots**, and **branch modules** (a main
+branch with its sub-branch levels and leaves). `compositeTree(species, library, seed)` then picks a trunk and
+fills its slots with modules: module +Y onto the slot direction, module +Z (its "up side") toward world up,
+a roll jitter, a scale to the slot length. **The composite's only randomness is `treeHash` (PCG)** — the GPU
+version (phase G4) must reproduce it bit for bit; keep the two in step.
+
+* Pieces carry a per-vertex **bone** index (piece-local; bone 0 = the piece root, each level-1 sub-branch of a
+  module gets its own) and `TreeBone` pivots/axes — the data the wind and the GPU bone palette will use.
+* Modules are generated in a frame where world-up is `(0, cos φ, sin φ)` for the species' mean slot angle φ,
+  so up-attraction and leaf facing are world-relative after the composite.
+* Slot lengths follow the crown envelope (`Crown Shape`) — the envelope sets the silhouette, modules fill it.
+
+## `.tree` — species asset (`Assets/Trees/*.tree`, `loadTreeSpecies`)
+
+```
+TreeSpecies <name>
+	Seed n · Scale min max
+	Trunk   Count · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5) · <shape>
+	        Lobes n (ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius fractions)
+	        LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over the height)
+	Crown   Shape Ellipsoid|Cone|Umbrella|Column · Start (fraction of height) · Radius (m reach)
+	        Slots · Fill (probability) · Angle bottom top (deg from up) · AngleVar · Leader true|false
+	        BranchRadius (max module base radius / trunk radius at the slot; caps the module scale)
+	Module  Count · Length (m, 0 = crown radius) · Radius (base / length) · <shape>
+	        Level { Count · Start · Length · LengthTaper · Angle value var · Radius · <shape> }  (up to 3)
+	Leaves  Size (m) · Aspect (width/length) · PerBranch (per average last-level branch; other branches
+	        scale it by their length) · Levels (deepest tiers that carry leaves; 1 = last level only)
+	        Type Single|Cluster · Cross true|false · ClusterLeaves · ClusterLeafSize · NormalBend (0..1, default
+	        0.7: card normals bent away from the module root, both faces)   (Cluster only, below)
+	Bark    Plates lines rows (fissure lines per family around / horizontal-break rows along, per tile)
+	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
+	Color   Bark r g b · Leaf r g b
+
+<shape> (TreeBranchShape, any of): Curve value var (deg, smooth bend) · UpAttract (negative droops)
+        Wobble (deg random walk per segment) · Elbows (average count) · ElbowAngle value var (deg)
+        ElbowUpBias (probability a downward elbow turn is mirrored upward; default 0.5)
+        ElbowMinElevation (deg vs horizontal an elbow may turn down to; default -15; a branch that already
+        points lower before the elbow is not lifted) · ElbowRange start end (length fractions; default 0 1)
+        Stubs (probability an elbow carries a snapped-off stub) · Rings · Sides
+```
+
+**Elbows** are sharp turns on interior ring nodes, each rounded by replacing the corner with three points of
+a quadratic Bezier (+2 rings per elbow); everything along a branch is addressed by its arc-length fraction
+`u`, not by ring index. A **stub** continues the direction the branch had BEFORE the elbow (the branch that
+snapped off), short and thick, with a flat broken end cap.
+
+Placeholders: `Oak` (ellipsoid, cluster cards), `Pine` (cone + leader, drooping tiers), `Acacia` (umbrella).
+
+## Texture files (`Assets/Trees/Textures`)
+
+The species textures are generated ONCE and saved as PNG (`File:ImageIO`): `<species>_bark.png`,
+`<species>_bark_normal.png`, `<species>_leaves.png` (cluster species only). Later loads read them back and
+only rebuild the mip chains (bark box-filtered, leaves coverage-preserving). **A file that exists wins —
+changing `Bark` / `Color` / cluster parameters does NOT regenerate it**: press `Trees/Regenerate textures`
+(overwrites all) or delete the file. The files are also where authored replacements go: square power of
+two, RGBA8; the leaf atlas keeps the 2×2 cell layout (stem at the TOP edge of each cell, v = 0); the normal
+map is tangent space with x along u (around) and y along v (along the branch, DOWN the image).
+
+## Bark texture
+
+PROCEDURAL per species until authored textures exist (`TreeBarkTexture.cpp`, 1024²): tiles in both directions,
+matching the bark UVs (u once around a branch, v along it per base circumference — so the pattern scales
+with each branch). **Furrows, not cells** (a Worley plate pattern read as scales): two families of fissure
+lines along the branch, each meandering by its own tileable fbm, cross and merge into braided ridges. All
+noise is tileable GRADIENT noise — smoothstep value noise has zero slope on every lattice line, which the
+normal map showed as evenly spaced horizontal bands. Every
+line fades out where its own per-column noise is high (`Breakup` → segments with gaps) and varies in width
+along its length; a third, 3× denser family of FINE cracks (mostly gaps, shallow) splits the ridges; a
+fourth, 8× denser family of STRIATIONS (thin, very shallow, short-to-medium segments) runs along the ridges; rare
+thin horizontal breaks (20 % per ridge column and row). **Low contrast in the cracks** (albedo 75 % of
+the bark colour, fine cracks 85 %; fissure floor at 35 % of the ridge height): dark or deep outlines read as
+cartoon ink; rounded ridge crowns with V fissures, per-segment
+height/tint, fine grain, along-the-branch fibres and lichen on the ridges. sRGB albedo plus a
+LINEAR RGB tangent-space normal map from the same height field (x along u, y along v — the tube's tangent /
+bitangent), each with a CPU box-filtered mip chain (normals renormalized). Uploaded through
+`Renderer::createTextureMaterial(..., &normalMips)`, freed with the species.
+
+## Leaf types
+
+* **`Single`** — one double-sided diamond per leaf, the species' solid leaf colour, `LitOpaque`.
+* **`Cluster`** — alpha-tested CARDS (`LitMasked`), each showing a twig with `ClusterLeaves` leaves. `Size` /
+  `Aspect` are then the card's, `PerBranch` counts cards, and a card's stem starts at the branch centre (the
+  texture's twig grows out of the wood). `Cross true` adds a second card at 90° about the stem axis.
+  The texture is PROCEDURAL until authored textures exist (`TreeLeafTexture.cpp`): per species a 1024² 2×2
+  atlas of cluster variants (stem at v = 0, each card picks a cell), sRGB colours from `Color Leaf` / `Bark`,
+  and its OWN mip chain — every level's alpha is rescaled (binary search) so the fraction of texels passing
+  `TREE_LEAF_ALPHA_CUTOFF` matches level 0, otherwise the crown thins with distance. Uploaded through
+  `Renderer::createTextureMaterial`, freed with the species (`TreeSystem::clearAll`).
+
+## The preview (temporary)
+
+`Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload yet),
+uploads each piece as two `RenderMesh`es (bark + double-sided diamond leaf cards, solid-colour `LitOpaque`
+materials), and spawns a `Grove size`² grove in front of the camera plus the piece library in rows behind it
+(`Show piece library`). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
+by the dedicated GPU tree pipeline (G4: own shaders, per-tree bone palettes, own shadow draw); trees in that
+path are not in the RT scene at first, but the design keeps RT addable.**
 
 ---
 

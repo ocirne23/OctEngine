@@ -23,7 +23,8 @@
 // Per-probe layout, in VEC4s (28 floats = 7 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
 //   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance
 //   [3] = SH-L1 mean depth   [4] = SH-L1 mean depth^2
-//   [5] = (backface-hit fraction, relocation offset xyz)
+//   [5] = (embedded fraction: the backface-hit fraction weighted by the enclosure - see GI_ENCLOSED_SHARE_MIN in
+//         the trace, relocation offset xyz)
 //   [6] = (sun DC luminance, sky visibility, fast visit-luma mean, visit-luma second moment):
 //         x - the part of luma(c0) that came from the SUN (the direct sun at gather hits + its multi-bounce),
 //             traced WITHOUT the cloud shadow. The lookup dims that fraction by the cloud transmittance at the

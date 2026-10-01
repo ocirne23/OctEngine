@@ -56,6 +56,12 @@ uint16 TextureManager::upload(const char* filePath, bool generateMips, bool sRGB
 	return uploadImpl([&](Texture& texture) { return texture.initialize(filePath, generateMips, sRGB); });
 }
 
+uint16 TextureManager::uploadRgba8Mips(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, bool sRGB, const char* debugName)
+{
+	const vk::Format format = sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+	return uploadImpl([&](Texture& texture) { return texture.initialize(width, height, format, mips, false, debugName); });
+}
+
 uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize)
 {
 	// The image build (file load, staging upload) is the expensive part and touches no manager

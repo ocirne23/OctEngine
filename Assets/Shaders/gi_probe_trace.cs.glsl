@@ -79,6 +79,12 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_DEAD_INTERVAL 8 // a backface-dead probe traces every N-th regular visit
 #define GI_VISIT_ALPHA_MAX 0.15    // cap on the per-visit blend alpha the update interval can scale up to
 #define GI_FRESH_RAY_MULT 4        // ray count multiplier for a fresh (just scrolled-in) probe's replace visit
+// ENCLOSURE: the backface fraction counts as "embedded" only as far as the backfaces dominate the HITS. From
+// inside a closed solid (terrain, a wall, a trunk) a ray reaches only the inside of the shell - every hit is a
+// backface. Among double-sided geometry (a tree canopy: double-sided leaf diamonds, cards traced opaque) about
+// half the hits are backfaces; there the raw fraction relocated the probe on every visit and marked it dead.
+#define GI_ENCLOSED_SHARE_MIN 0.6  // backface share of the hits at which a probe starts to count as embedded ...
+#define GI_ENCLOSED_SHARE_MAX 0.85 // ... and fully does
 // The visit clamp and change detection (main, after the trace): see the comment there.
 #define GI_CLAMP_SIGMA 2.5         // a visit's DC luminance is clamped to the stored luminance +- this many sigma
 #define GI_SIGMA_MIN_REL 0.1       // sigma floor, relative to the stored luminance (a converged, quiet probe still moves)
@@ -400,6 +406,7 @@ void main()
     const float escapeMargin = 0.125  * float(spacing); // how far past the backface the probe lands
     const float maxLen       = 0.45 * float(spacing);
     float backfaceSum = 0.0;
+    float frontSum = 0.0; // front-face hits within the depth cap (the enclosure test; depthCap is live in the loop anyway)
     float sunSum = 0.0; // sun luminance over the rays: the sun part of luma(c0) after the Y.x * wsh below
     // The cosine-weighted open share of the upper hemisphere: the misses' cosines to up over the whole
     // hemisphere's, which is N / 4 in expectation for sphere-uniform rays - ONE accumulator through the loop.
@@ -412,6 +419,7 @@ void main()
         float hitDist, backface, sunLuma, skyOpen;
         const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface, sunLuma, skyOpen);
         backfaceSum += backface;
+        frontSum += hitDist < depthCap && backface < 0.5 ? 1.0 : 0.0;
         sunSum += sunLuma;
         skyOpenSum += skyOpen;
         if (backface > 0.5 && hitDist < closestBack)
@@ -453,7 +461,10 @@ void main()
         c3 += cd * Ysky.w;
     }
 
-    const float backFrac = backfaceSum / float(N);
+    // The embedded fraction: the backface fraction, weighted by the enclosure (see GI_ENCLOSED_SHARE_MIN). It
+    // drives the escape, the stored "dead" fraction and the just-escaped flush alike.
+    const float backShare = backfaceSum / max(backfaceSum + frontSum, 1.0);
+    const float backFrac  = backfaceSum / float(N) * smoothstep(GI_ENCLOSED_SHARE_MIN, GI_ENCLOSED_SHARE_MAX, backShare);
 
     // Relocation update: an embedded probe punches through the closest backface along the ray that found it
     // - one discrete step, no continuous steering. Front-face back-off and a drift home were tried and

@@ -392,6 +392,12 @@ top-down camera hanging in empty sky shapes none of these:
   `GI_BACKFACE_DEAD_MAX` (under the terrain, inside a wall — the lookup rejects it anyway) traces only
   every `GI_DEAD_INTERVAL` (8) regular visits, enough for the escape relocation and the wake-up; an
   escape visit pins the stored fraction to exactly DEAD_MAX so the next visit is not skipped.
+  **The stored fraction is the EMBEDDED fraction:** the backface-hit fraction × the enclosure, a smoothstep
+  of the backface share of the hits (front hits counted within the depth cap) over `GI_ENCLOSED_SHARE_MIN`
+  0.6 .. `_MAX` 0.85. Inside a closed solid every hit is a backface (share ≈ 1); among double-sided geometry
+  — a tree canopy's leaf diamonds and opaque-traced cards — about half are. The raw fraction relocated canopy
+  probes on every visit and marked them dead. The escape, the dead skip/rejection and the just-escaped flush
+  all read the weighted value.
   **Covered waves (hollow cascades):** the priority distance is in CELLS, so the centre of every
   coarse cascade — the 1/8 that lies under the next finer window, which no lookup reads — had that
   cascade's highest rate. `giWaveCovered` (gi_probe.inc.glsl) is true when the block plus one spacing
@@ -1218,7 +1224,14 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   (through `addMeshInfos`, so the BLAS registers like any mesh). No LOD chain, no stream set. Offsets
   and counts are stored as 32-bit element units.
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
-  shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn).
+  shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
+  instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
+* `createTextureMaterial(w, h, mips, alphaCutoff, name)` — a material with its OWN generated sRGB RGBA8
+  diffuse from a caller-built mip chain (`TextureManager::uploadRgba8Mips`; no blit-generated mips, so the
+  caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
+  `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
+  a LINEAR RGB tangent-space normal map (x along U, y along V). `destroyTextureMaterial` queues the
+  textures' free and releases the material slot. Used by the procedural tree leaf cards and bark.
 * `~RenderMesh` frees the ranges and neutralizes the `MeshInfo` slot (`freeMeshInfoRange`), like
   `removeObjectContainer` for an unstreamed mesh. **Destroy its nodes first** (owners declare the
   mesh before the node).

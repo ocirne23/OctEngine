@@ -1,0 +1,63 @@
+# Conifer placeholder species: cone crown, a leader at the top, drooping tiers.
+TreeSpecies Pine
+	Seed 23
+	Scale 0.8 1.25
+	Trunk
+		Count 4
+		Height 11 15
+		Radius 0.3
+		Taper 0.1
+		Curve 4
+		UpAttract 0.3
+		Wobble 1.5
+		Flare 0.3
+		Lobes 6
+		LobeDepth 0.35 0.04
+		LobeHeight 0.12
+		Twist 10
+		Rings 18
+		Sides 14
+	Crown
+		Shape Cone
+		Start 0.22
+		Radius 3.2
+		Slots 30
+		Fill 0.95
+		Angle 100 70
+		AngleVar 8
+		Leader true
+	Module
+		Count 12
+		Radius 0.03
+		Curve 15 8
+		UpAttract -0.1
+		Wobble 4
+		Elbows 0.6
+		ElbowAngle 15 6
+		Stubs 0.5
+		Rings 6
+		Sides 5
+		Level
+			Count 10
+			Start 0.1
+			Length 0.35
+			LengthTaper 0.6
+			Angle 60 10
+			Curve 10 8
+			UpAttract -0.05
+			Wobble 6
+			Radius 0.5
+			Rings 3
+			Sides 3
+	Leaves
+		Size 0.18
+		Aspect 0.3
+		PerBranch 28
+	Bark
+		Plates 16 4
+		Crack 0.045
+		Relief 1.2
+		Lichen 0.1
+	Color
+		Bark 0.28 0.20 0.15
+		Leaf 0.10 0.24 0.12

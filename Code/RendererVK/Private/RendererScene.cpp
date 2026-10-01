@@ -188,6 +188,44 @@ uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, b
     return (uint16)addMaterialInfos({ material });
 }
 
+uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
+    const oc::vector<oc::span<uint8>>* normalMips)
+{
+    const uint16 texIdx = Globals::textureManager.uploadRgba8Mips(width, height, mips, true, debugName);
+    RendererVKLayout::MaterialInfo material{};
+    material.flags = 0;
+    material.diffuseTexIdx = texIdx;
+    material.normalTexIdx = normalMips
+        ? Globals::textureManager.uploadRgba8Mips(width, height, *normalMips, false, debugName)
+        : RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
+    material.metalRoughnessTexIdx = UINT16_MAX;
+    if (alphaCutoff > 0.0f)
+    {
+        material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Mask;
+        material.opacity = alphaCutoff; // the Mask discard compares against opacity
+    }
+    else
+    {
+        material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Opaque;
+        material.opacity = 1.0f;
+    }
+    const vk::Format normalFormat = Globals::textureManager.getTexture(material.normalTexIdx).getFormat();
+    if (normalFormat == vk::Format::eBc5UnormBlock || normalFormat == vk::Format::eBc5SnormBlock)
+        material.flags |= RendererVKLayout::MATERIAL_FLAG_BC5_NORMAL;
+    // No re-record, like getOrCreateSolidColorMaterial: the upload queued its bindless write.
+    return (uint16)addMaterialInfos({ material });
+}
+
+void Renderer::destroyTextureMaterial(uint16 materialIdx)
+{
+    // Like removeObjectContainer: the image retires once the GPU has drained, the slot recycles.
+    const RendererVKLayout::MaterialInfo& material = m_materials.items()[materialIdx];
+    m_textures.queueFree(oc::span<const uint16>(&material.diffuseTexIdx, 1));
+    if (material.normalTexIdx != RendererVKLayout::FALLBACK_NORMAL_TEX_IDX)
+        m_textures.queueFree(oc::span<const uint16>(&material.normalTexIdx, 1));
+    m_materials.release(materialIdx, 1);
+}
+
 RenderMesh Renderer::createMesh(const RenderMeshData& data)
 {
     RenderMesh mesh;
@@ -228,7 +266,7 @@ RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, R
     instance.meshIdx = mesh.m_meshIdx;
     instance.materialIdx = materialIdx;
     instance.pipelineIndex = (uint16)pipeline;
-    instance.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Opaque;
+    instance.alphaMode = m_materials.items()[materialIdx].alphaMode; // the TLAS writer's opacity flag reads it
     return node;
 }
 

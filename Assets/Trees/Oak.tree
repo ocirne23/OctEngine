@@ -1,0 +1,87 @@
+# Broadleaf placeholder species. Format: Code/Procedural/CONTEXT.md, "Trees".
+TreeSpecies Oak
+	Seed 11
+	Scale 0.85 1.2
+	Trunk
+		Count 4
+		Height 6 9
+		Radius 0.35
+		Taper 0.45
+		Curve 6
+		UpAttract 0.25
+		Wobble 2
+		Elbows 1
+		ElbowAngle 12 6
+		ElbowUpBias 0.8
+		ElbowRange 0.45 0.9
+		Stubs 0.6
+		Flare 0.4
+		Lobes 5
+		LobeDepth 0.6 0.08
+		LobeHeight 0.3
+		Twist 25
+		Rings 24
+		Sides 32
+	Crown
+		Shape Ellipsoid
+		Start 0.35
+		Radius 5
+		Slots 18
+		Fill 0.9
+		Angle 72 38
+		AngleVar 10
+		BranchRadius 0.7
+	Module
+		Count 12
+		Radius 0.03
+		Curve 25 10
+		UpAttract 0.25
+		Wobble 6
+		Elbows 2
+		ElbowAngle 28 10
+		Stubs 0.6
+		Rings 8
+		Sides 6
+		Level
+			Count 7
+			Start 0.2
+			Length 0.9
+			LengthTaper 0.5
+			Angle 50 12
+			Curve 25 10
+			UpAttract 0.2
+			Wobble 8
+			Elbows 1
+			ElbowAngle 25 10
+			Stubs 0.3
+			Radius 0.55
+			Rings 4
+			Sides 4
+		Level
+			Count 5
+			Start 0.2
+			Length 0.9
+			LengthTaper 0.4
+			Angle 45 15
+			Curve 15 10
+			Wobble 10
+			Radius 0.6
+			Rings 3
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.8
+		Aspect 0.8
+		PerBranch 6
+		Levels 2
+		ClusterLeaves 10
+		ClusterLeafSize 0.3
+		NormalBend 0.33
+	Bark
+		Plates 22 5
+		Crack 0.06
+		Relief 1
+		Lichen 0.3
+	Color
+		Bark 0.30 0.23 0.17
+		Leaf 0.20 0.36 0.10

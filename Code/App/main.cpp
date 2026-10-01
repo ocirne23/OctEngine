@@ -88,6 +88,7 @@ int main(int argc, char* argv[])
         terrainEntity = Globals::world.createEmptyEntity("Terrain");
         Globals::terrainCollider.initialize((void*)terrainEntity);
         Globals::scatter.initialize();
+        Globals::trees.initialize();
         Globals::ocean.initialize();
         Globals::terrain.setFlowWindAngle(Globals::ocean.swellTravelAngle());
         Globals::physics.setWaterSurface([](float x, float z) { return Globals::ocean.sampleWaterHeight(x, z); },
@@ -287,6 +288,7 @@ int main(int argc, char* argv[])
             Globals::ocean.update(Globals::rendererVK, camera, Globals::terrain.activeTerrainData(), Globals::terrain.seaLevel());
             Globals::terrain.render(Globals::rendererVK, Globals::ocean); // one walk of the visible hand-over for chunks + sectors; kicks both pushes
             Globals::scatter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
+            Globals::trees.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::rendererVK.kickGridBuilds(); // the force update is the frame's last light source and the emitters' last writer

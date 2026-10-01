@@ -13,3 +13,8 @@ export import :TerrainPreview;
 export import :TerrainCollider;
 export import :Scattering;
 export import :OceanGenerator;
+export import :TreeSpecies;
+export import :TreeGenerator;
+export import :TreeLeafTexture;
+export import :TreeBarkTexture;
+export import :TreeSystem;

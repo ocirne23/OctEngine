@@ -1,0 +1,81 @@
+# Umbrella placeholder species: short leaning trunk, a wide flat crown on top.
+TreeSpecies Acacia
+	Seed 37
+	Scale 0.85 1.15
+	Trunk
+		Count 4
+		Height 3 4.5
+		Radius 0.3
+		Taper 0.5
+		Curve 14
+		UpAttract 0.15
+		Wobble 3
+		Elbows 1.5
+		ElbowAngle 20 8
+		ElbowUpBias 0.7
+		ElbowRange 0.4 0.9
+		Stubs 0.6
+		Flare 0.3
+		Lobes 4
+		LobeDepth 0.5 0.1
+		LobeHeight 0.4
+		Twist 30
+		Rings 14
+		Sides 16
+	Crown
+		Shape Umbrella
+		Start 0.6
+		Radius 6
+		Slots 8
+		Fill 1
+		Angle 55 35
+		AngleVar 10
+	Module
+		Count 10
+		Radius 0.025
+		Curve 30 10
+		UpAttract 0.2
+		Wobble 7
+		Elbows 2.5
+		ElbowAngle 32 10
+		Stubs 0.5
+		Rings 8
+		Sides 6
+		Level
+			Count 8
+			Start 0.3
+			Length 0.4
+			LengthTaper 0.3
+			Angle 60 12
+			Curve 20 10
+			UpAttract 0.5
+			Wobble 8
+			Elbows 1.5
+			ElbowAngle 30 10
+			Stubs 0.3
+			Radius 0.55
+			Rings 4
+			Sides 4
+		Level
+			Count 4
+			Start 0.2
+			Length 0.45
+			LengthTaper 0.3
+			Angle 50 15
+			Curve 10 8
+			UpAttract 0.3
+			Radius 0.6
+			Rings 3
+			Sides 3
+	Leaves
+		Size 0.1
+		Aspect 0.7
+		PerBranch 28
+	Bark
+		Plates 28 7
+		Crack 0.09
+		Relief 1.3
+		Lichen 0.15
+	Color
+		Bark 0.33 0.27 0.21
+		Leaf 0.30 0.40 0.14
