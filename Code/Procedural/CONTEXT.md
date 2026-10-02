@@ -898,7 +898,8 @@ modules keep the unprefixed ones), swapped in per placed piece beyond its distan
   `MATERIAL_FLAG_LEAF`: the sun shines through them (RendererVK leaf transmission, `Trees/Foliage
   transmission*` tweaks). The lit FS also blends their normals toward a view-ray CROWN normal
   (`Trees/Foliage crown normal`), so the two cards stop shading differently at their crossing axis. This
-  needs the card's +u axis to run from the instance origin (`billboardViews`: right = piece +Y). Real geometry on `LitMasked`: **they cast
+  needs the card's +u axis to run from the instance origin (`billboardViews`: right = piece +Y). Real geometry on
+  `LitFoliage` (RendererVK: LitMasked + the card paths; a billboard material must use it): **they cast
   their own alpha-tested shadows**, so the mesh nodes stop drawing entirely.
 * **Crossfade** (billboards only): a band `FadeWidth` wide, centred on the billboard distance × `Far distance
   scale`. Inside it (centre distance ± the module radius) the module draws its mesh as `barkFade` / `leavesFade`

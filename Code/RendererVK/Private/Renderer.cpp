@@ -1065,7 +1065,7 @@ void Renderer::present()
 
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
-        m_indirectCullComputePipeline.update(frameIdx, m_instances.getInstanceCount());
+        m_indirectCullComputePipeline.update(frameIdx, m_ubo.treeCull.z); // the cull threads (uploadTreeCullUbo)
         m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
         m_skinned.markJobsUploaded();
     }

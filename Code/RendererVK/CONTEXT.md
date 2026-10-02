@@ -1055,7 +1055,10 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   < ~0.1 texel off), a purely vertical tap keeps the sample's column outright (`densityAbove`: no lookup, no floor
   read); the height map only above the layer (the skip) or deeper than half a layer under the floor (the break);
   the phase, the sun / sky factors and the slice height per ray; the pixel-skip block loops unrolled with arithmetic
-  schedule / neighbour offsets (arrays indexed at run time sat in local memory).
+  schedule / neighbour offsets (arrays indexed at run time sat in local memory). **A column WITHOUT a floor** inside
+  the layer takes no sample and steps at least a whole cell: the splat floors every footprint plus one ring, so
+  such a column lies 2+ columns from any density and all 4 `densityAtColumns` taps would read 0 (exact, not an
+  approximation - keep the ring if the floor pass changes).
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
@@ -1418,10 +1421,16 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   claim, and a 0 / 0 range made the culls read the never-written entries as instances: garbage mesh indices,
   out-of-bounds bucket writes, glitching terrain) and
   `u_treeCullParams` (x = far distance scale, y = forceFar, z = the far-tree volume's start + overlap, 0 = no
-  volume). **The culls build the records**: a thread whose instance index lies in the range skips the stream
-  and calls `treeCullMain` (main cull: the mesh / crossfade / billboard / none decision from the distance to
-  the centre view — the same rules as the CPU preview) or `treeCullShadow` (shadow + rain-shelter culls: the
-  BILLBOARD is the caster at every distance; a type without one casts its mesh). **Far trees out of the near
+  volume). **The culls build the records, ONE THREAD PER TREE**: the dispatch covers the stream below the
+  range, one thread per piece (`u_treeCull.w` = the piece count), then the stream above it (`u_treeCull.z` = the
+  thread count; `treeCullThreadInstance` maps a thread to its instance). A tree thread decides once —
+  `treeCullMainPiece` (main cull: the mesh / crossfade / billboard / none decision from the distance to the
+  centre view — the same rules as the CPU preview) or `treeCullShadowPiece` (shadow + rain-shelter culls: the
+  BILLBOARD is the caster at every distance; a type without one casts its mesh) — and runs the per-instance cull
+  for each record in `[kBegin, kEnd)` (record k at its first record + k). ONE call site of that body
+  (`cullInstance` / `cullCaster`, the loop serves the plain instance with k = 0): each call site is a full
+  inlined copy. **Both culls are `local_size_x = 64`** (`IndirectCullComputePipeline::update` dispatches
+  ceil(threads / 64) groups; they ran ONE thread per workgroup before — a warp per instance, 31 of 32 lanes idle). **Far trees out of the near
   cascades:** the shadow cull keeps a tree record in cascade c only while `distance(centre, u_sceneFocus) − radius
   ≤ split(c) + Foliage shadow cascade margin` (`Trees/...`, default 64 m, `u_treeCullParams.w`): a cascade's box runs
   far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
@@ -1448,27 +1457,20 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
   a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
-  **`MATERIAL_FLAG_BILLBOARD`** (bit 26, LitMasked only): the FS's early sun shadow is NOT rejected by the
+  **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, variant 13 = the LitMasked shaders + `FOLIAGE`,
+  whose card paths assume it - LitMasked no longer compiles them, so the card code stopped setting the register
+  count of every alpha-tested mesh): the FS's early sun shadow is NOT rejected by the
   geometric normal's facing (`sunShadowFirstFoliage`: sampled from the sun side, the normal-mapped normal's
   facing test in `doSunLight` decides) — for flat cards standing for a foliage clump. Its shadow lookup uses
   the CONSTANT depth bias only (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage` in shadows.inc.glsl: no slope scaling,
   no normal offset): a crossed billboard's back half sits in the crossing card's shadow by a small depth step,
-  which the slope-scaled bias and normal push erased — that strip lit up through the tree. Even at ZERO bias a
-  line stayed (the cards touch at the crossing line, so no bias separates them), so the lookup also moves OFF
-  the card to the texel's BAKED DEPTH: the normal map's alpha, signed along the card's FRONT normal, in units
-  of the card's u length. Both are rebuilt from the screen derivatives of position and uv (before the discard):
-  d(pos)/du and d(pos)/dv, front normal = cross(dv, du) on both faces — so the instance scale needs no data,
-  and a back face agrees with the front. Both passes scale the offset by `Trees/Foliage depth offset`
-  (`u_foliageParams.x`, 0 = on the card plane). **The CASTER writes the same points** (pixel depth offset, as Unreal's
-  / Amplify's impostors do): the shadow cull fills `OutShadowMeshInstance::foliageNormalTexIdx` /
-  `foliageShift` (world bounding radius) for FOLIAGE materials (not for rain occlusion); `shadow_depth.vs`
-  pulls those casters toward the light by the radius, and `shadow_depth.fs` adds back the radius plus the
-  leaf's offset — always ≥ 0, so the FS declares `layout (depth_greater)` and the early / hierarchical reject
-  stays valid for the whole pass. Every other caster writes `gl_FragCoord.z` (its depth without the write,
-  the rasterizer's bias included). With the receiver only offset, card B stayed a flat plane in the map and the
-  line stayed. (An up-sun SKIP was also tried and rejected: it only widened the lit strip.) **Transmission**:
-  the leaves at their depths still left a HARD edge on the axis (half the crown sits behind the crossing card,
-  and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` /
+  which the slope-scaled bias and normal push erased — that strip lit up through the tree. The lookup stays ON
+  the card plane. **REMOVED 2026-10-02: the per-leaf PIXEL DEPTH OFFSET** (the lookup and the caster both moved
+  to the texel's baked depth; `shadow_depth.fs` wrote `gl_FragDepth` under `layout (depth_greater)` after a VS
+  pull toward the light). Not writing `gl_FragDepth` saved 0.165 ms of a 1.07 ms shadow draw (350² grove), and
+  the shadow length below hides the crossing line well enough. Do not bring it back without that trade.
+  `OutShadowMeshInstance` keeps its 48-byte stride with pads. **Transmission**: flat cards leave a HARD edge on
+  the crossing axis (half the crown sits behind the crossing card, and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` /
   `pcssBorder`) keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the
   PCSS average blocker (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)`
   (`u_foliageParams.z`, 0 = hard). ~0 on the axis, deepening into the crown; far blockers shadow fully. All
@@ -1478,8 +1480,8 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   = seen through the gaps deep inside — darkens the sun visibility AND the ambient (`computeLitColor`'s
   `texAO`) down to `1 - Trees/Foliage interior shadow` (`u_foliageParams.w`), so a fully lit crown is not
   flat: full inside `Foliage interior inner radius`, gone outside `outer radius` (leaf distance / crown radius,
-  default 0 / 1.1, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
-  raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 1; an exponent: > 1 darker -
+  default 0.2 / 1.0, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
+  raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 1.5; an exponent: > 1 darker -
   a strength multiplier saturated at strength 1), then × `|V.y|` (the view's steepness; plain `V.y` went negative
   from below and turned the card black). **Crown normal**:
   each crossed card's baked normals shade the crown side ITS bake view saw, so the shading split hard where
@@ -1491,8 +1493,8 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   it, so the outer crown keeps its baked detail. On a whole tree's HORIZONTAL card
   (`MATERIAL_FLAG_BILLBOARD_TOP_CARD`, bit 23, on the card whose normal points up - `foliageTopCard`; whole trees
   stand upright) `foliageCrownFrame` takes the card normal as the
-  axis and the card's own point on it as the centre; the radius is half the u length on every card. The LitMasked variant's VS (defined
-  `ALPHA_MASK`) and `tree_impostor.vs` add the instance origin as flat location 5. **Leaf transmission**
+  axis and the card's own point on it as the centre; the radius is half the u length on every card. The LitFoliage variant's VS (defined
+  `FOLIAGE`) adds the instance origin as flat location 5. **Leaf transmission**
   (`MATERIAL_FLAG_LEAF`, bit 30, LitMasked: the tree leaf cluster material and the billboards — not FOLIAGE,
   which carries the billboard-only terms): after `computeLitColor` the FS adds the sun THROUGH the leaf, tinted
   by its colour — `saturate(-N·L)` (lit from behind) + `saturate(V·-L)^focus × glow` (the backlit rim looking
@@ -2409,7 +2411,7 @@ calls `reloadShaders()`.
   `[[dont_unroll]]`** (terrain_splat.inc.glsl; its includers enable GL_EXT_control_flow_attributes): unrolled,
   the 12 corner hashes overlapped - the tessellated terrain's TES dropped 70 -> 49 registers with it (the
   then tessellated film FS 64/16 -> 56/48; everything else unchanged. The film is no longer tessellated).
-* **Only `EPipelineIndex::LitMasked` discards** (the lit fragment compiled with `ALPHA_MASK`). A
+* **Only `EPipelineIndex::LitMasked` / `LitFoliage` discard** (the lit fragment compiled with `ALPHA_MASK`). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is
   every opaque pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque`
   (after the `.oc` overrides) to `LitMasked`. Keep `discard` out of `LitOpaque`.

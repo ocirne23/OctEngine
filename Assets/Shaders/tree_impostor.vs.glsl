@@ -49,7 +49,6 @@ layout (location = 1) out vec4 out_normalV;
 layout (location = 2) out vec4 out_tangent;
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 layout (location = 4) out vec3 out_prevWorldDelta;
-layout (location = 5) out flat vec3 out_instanceOrigin; // the LitMasked FS's input (unused: no FOLIAGE flag here)
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -123,7 +122,6 @@ void main()
     out_normalV = vec4(dirWorld, uv.y);
     out_tangent = vec4(rightWorld, 1.0); // FS bitangent = cross(N, T) = the frame's up
     out_prevWorldDelta = vec3(0.0);      // static trees; a frame switch is a pop either way
-    out_instanceOrigin = inst.posScale.xyz;
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w;

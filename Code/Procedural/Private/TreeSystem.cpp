@@ -612,7 +612,7 @@ namespace Procedural
 			piece.leaves = renderer.spawnMeshNode(meshes.leaves[0], species.leafMaterial, species.leafPipeline, transform);
 		if (meshes.billboard.isValid())
 		{
-			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitMasked, transform);
+			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage, transform);
 			piece.farDistance = species.desc.billboardDistance;
 			piece.farIsBillboard = true;
 			piece.fadeWidth = species.desc.billboardFadeWidth;
@@ -686,7 +686,7 @@ namespace Procedural
 						}
 						if (meshes.billboard.isValid())
 						{
-							type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
 							type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
 							type.farDistance = species.desc.billboardDistance;

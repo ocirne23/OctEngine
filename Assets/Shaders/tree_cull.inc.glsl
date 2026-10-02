@@ -48,20 +48,47 @@ bool treeCullIsTree(uint instanceIdx) { return instanceIdx - u_treeCull.x < u_tr
 
 TreeCullRecord treeCullNone() { return TreeCullRecord(TREE_CULL_ABSENT, 0u); }
 
-// LOADS PER FIELD, the transform LAST: a piece is two 32-byte sectors - posScale + quat, then centre / radius / type /
-// lodStateBase - and the decision needs only the second. Most records draw nothing (the shadow cull's mesh records
-// of every billboard type; in the main cull every record past the far-tree volume's start), and those never fetch
-// the transform's sector. (Copying the whole piece first fetched both for every record.)
-
-// The MAIN pass's record: the mesh before the crossfade band, the billboard after it, inside it the mesh on its
-// fade-OUT materials AND the billboard (the lit FS's dither splits the pixels); past the far-tree volume's start
-// (u_treeCullParams.z > 0) nothing - the volume draws it. posScale / quat / stateSlot only when it draws.
-bool treeCullMain(uint instanceIdx, out TreeCullRecord rec, out vec4 posScale, out vec4 quat, out uint stateSlot)
+// THE CULLS RUN ONE THREAD PER TREE (instanced_indirect[_shadow].cs.glsl): the range's 3 records per piece collapse
+// into one thread that decides once and emits 0-3 of them - most emit none (in the main cull every tree past the
+// far-tree volume's start; in the shadow cull the mesh records of every billboard type). Threads: the stream below
+// the range, then one per piece (u_treeCull.w), then the stream above it; u_treeCull.z = the thread count.
+// Returns the stream instance index - for a tree thread, its piece's FIRST record (pieceIdx = the thread's offset).
+uint treeCullThreadInstance(uint gid, out bool isTree, out uint pieceIdx)
 {
-    const uint v = instanceIdx - u_treeCull.x;
-    const uint k = v % 3u;
-    const uint pieceIdx = v / 3u;
+    pieceIdx = gid - u_treeCull.x; // unsigned: below base wraps
+    isTree = pieceIdx < u_treeCull.w;
+    return isTree ? u_treeCull.x + pieceIdx * 3u : (gid < u_treeCull.x ? gid : gid + 2u * u_treeCull.w);
+}
+
+// A piece's decision: records [kBegin, kEnd) may draw (0 = bark, 1 = leaves, 2 = billboard; an ABSENT one is skipped).
+struct TreeCullPiecePick
+{
+    uint typeIdx;
+    uint kBegin;
+    uint kEnd;
+    bool fade;          // main pass: the mesh on its fade-OUT materials
+    vec4 posScale;
+    vec4 quat;
+    uint lodStateBase;  // record k -> lodStateBase + k
+};
+
+// LOADS PER FIELD, the transform LAST: a piece is two 32-byte sectors - posScale + quat, then centre / radius / type /
+// lodStateBase - and the decision needs only the second. A piece that draws nothing never fetches the transform's
+// sector. (Copying the whole piece first fetched both for every record.)
+void treeCullLoadTransform(uint pieceIdx, inout TreeCullPiecePick pick)
+{
+    pick.posScale = in_treePieces[pieceIdx].posScale;
+    pick.quat = in_treePieces[pieceIdx].quat;
+    pick.lodStateBase = in_treePieces[pieceIdx].lodStateBase;
+}
+
+// The MAIN pass: the mesh before the crossfade band, the billboard after it, inside it the mesh on its fade-OUT
+// materials AND the billboard (the lit FS's dither splits the pixels); past the far-tree volume's start
+// (u_treeCullParams.z > 0) nothing - the volume draws it. False = nothing draws.
+bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
+{
     const uint typeIdx = in_treePieces[pieceIdx].type;
+    pick.typeIdx = typeIdx;
     const bool hasBillboard = in_treeTypes[typeIdx].billboard.meshMaterial != TREE_CULL_ABSENT;
     bool mesh = true, fade = false, billboard = false;
     if (hasBillboard)
@@ -97,22 +124,45 @@ bool treeCullMain(uint instanceIdx, out TreeCullRecord rec, out vec4 posScale, o
             billboard = false;
         }
     }
-    rec = k == 0u ? (mesh ? (fade ? in_treeTypes[typeIdx].barkFade : in_treeTypes[typeIdx].bark) : treeCullNone())
-        : k == 1u ? (mesh ? (fade ? in_treeTypes[typeIdx].leavesFade : in_treeTypes[typeIdx].leaves) : treeCullNone())
-        : (billboard ? in_treeTypes[typeIdx].billboard : treeCullNone());
-    posScale = vec4(0.0);
-    quat = vec4(0.0, 0.0, 0.0, 1.0);
-    stateSlot = 0u;
-    if (rec.meshMaterial == TREE_CULL_ABSENT)
+    pick.kBegin = mesh ? 0u : 2u;
+    pick.kEnd = billboard ? 3u : 2u;
+    pick.fade = fade;
+    pick.posScale = vec4(0.0);
+    pick.quat = vec4(0.0, 0.0, 0.0, 1.0);
+    pick.lodStateBase = 0u;
+    if (!mesh && !billboard)
         return false;
-    posScale = in_treePieces[pieceIdx].posScale;
-    quat = in_treePieces[pieceIdx].quat;
-    stateSlot = in_treePieces[pieceIdx].lodStateBase + k;
+    treeCullLoadTransform(pieceIdx, pick);
     return true;
 }
 
-// The SHADOW (and rain-shelter) passes' record: the BILLBOARD stands in for the tree at every distance; the mesh
-// casts only for a type without one. posScale / quat only when it draws.
+TreeCullRecord treeCullMainRecord(TreeCullPiecePick pick, uint k)
+{
+    return k == 0u ? (pick.fade ? in_treeTypes[pick.typeIdx].barkFade : in_treeTypes[pick.typeIdx].bark)
+         : k == 1u ? (pick.fade ? in_treeTypes[pick.typeIdx].leavesFade : in_treeTypes[pick.typeIdx].leaves)
+         : in_treeTypes[pick.typeIdx].billboard;
+}
+
+// The SHADOW (and rain-shelter) passes: the BILLBOARD stands in for the tree at every distance; the mesh casts only
+// for a type without one. Always draws something (an absent record is skipped by the caller).
+void treeCullShadowPiece(uint pieceIdx, out TreeCullPiecePick pick)
+{
+    const uint typeIdx = in_treePieces[pieceIdx].type;
+    pick.typeIdx = typeIdx;
+    const bool hasBillboard = in_treeTypes[typeIdx].billboard.meshMaterial != TREE_CULL_ABSENT;
+    pick.kBegin = hasBillboard ? 2u : 0u;
+    pick.kEnd = hasBillboard ? 3u : 2u;
+    pick.fade = false;
+    treeCullLoadTransform(pieceIdx, pick);
+}
+
+TreeCullRecord treeCullShadowRecord(TreeCullPiecePick pick, uint k)
+{
+    return k == 0u ? in_treeTypes[pick.typeIdx].bark : k == 1u ? in_treeTypes[pick.typeIdx].leaves : in_treeTypes[pick.typeIdx].billboard;
+}
+
+// PER RECORD, for the TLAS writer (gi_tlas_instances.cs.glsl), whose slots are the stream's instance indices: the
+// shadow pick of one record. posScale / quat only when it draws.
 bool treeCullShadow(uint instanceIdx, out TreeCullRecord rec, out vec4 posScale, out vec4 quat)
 {
     const uint v = instanceIdx - u_treeCull.x;

@@ -62,10 +62,13 @@ namespace
 // Patched in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet claims the range - left at
 // that upload's 0 / 0, the culls read the range's never-written stream entries as instances (garbage mesh
 // indices, out-of-bounds bucket writes).
+// z = the culls' THREAD count (their dispatch, IndirectCullComputePipeline::update): one per stream instance, but
+// one per PIECE in the tree range (w = the piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
 void Renderer::uploadTreeCullUbo(PerFrameData& frameData)
 {
     const bool treeVolume = m_treeCullCount > 0 && farTreesActive() && m_treeSets[m_treeCullSet].hasVolume;
-    m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, 0u, 0u);
+    const uint32 treePieces = m_treeCullCount / TREE_RECORDS_PER_PIECE;
+    m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, m_instances.getInstanceCount() - 2 * treePieces, treePieces);
     m_ubo.treeCullParams = glm::vec4(m_treeCullDistanceScale, m_treeCullForceFar ? 1.0f : 0.0f,
         treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f,
         oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl

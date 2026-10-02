@@ -329,6 +329,13 @@ void marchAt(ivec2 px)
             if (h < -0.5 * pc.vol.height && p.y - (hasFloor ? min(floorY, terrainHeightAt(p.xz)) : floorY) < -0.5 * pc.vol.height)
                 break; // under the ground (the scene depth ends the ray there)
         }
+        else if (!hasFloor)
+        {
+            // In the layer over a column WITHOUT a tree floor: the splat floors every tree's footprint PLUS one ring, so
+            // such a column lies 2+ columns from any density and all 4 of densityAtColumns' taps read 0 - no sample
+            // (its 4 floor loads), and a whole cell of step (the ring column still lies between it and the density).
+            dt = max(dt, cell);
+        }
         else
         {
             const float tt = t;

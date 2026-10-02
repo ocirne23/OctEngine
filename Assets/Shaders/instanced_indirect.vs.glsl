@@ -48,8 +48,8 @@ layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 // The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0
 // for a still, unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
-#ifdef ALPHA_MASK
-// The LitMasked variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS).
+#ifdef FOLIAGE
+// The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS).
 layout (location = 5) out flat vec3 out_instanceOrigin;
 #endif
 
@@ -90,7 +90,7 @@ void main()
     out_normalV = vec4(quat_transform(in_normalV.xyz, inst_quat), in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
     out_prevWorldDelta = prevWorldDelta(inst);
-#ifdef ALPHA_MASK
+#ifdef FOLIAGE
     out_instanceOrigin = inst_pos;
 #endif
 

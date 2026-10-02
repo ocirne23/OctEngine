@@ -217,34 +217,9 @@ bool frustumCheck(vec3 pos, float radius)
     return true;
 }
 
-void main()
+// One instance (or one tree record) through the frustum test, the LOD pick and the draw-list emit.
+void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree)
 {
-    //debugPrintfEXT("instanceIdx %d\n", gl_GlobalInvocationID.x);
-    const uint instanceIdx        = gl_GlobalInvocationID.x;
-    // A BAKED TREE RECORD (tree_cull.inc.glsl): built from the static tree data, its stream entry never written.
-    const bool isTree = treeCullIsTree(instanceIdx);
-    InMeshInstance instance;
-    vec4 quat, instancePosScale;
-    uint stateSlot;
-    if (isTree)
-    {
-        TreeCullRecord rec;
-        if (!treeCullMain(instanceIdx, rec, instancePosScale, quat, stateSlot))
-            return; // this record does not draw this frame
-        instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
-    }
-    else
-    {
-        instance = in_instances[instanceIdx];
-        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
-            return; // pushed for shadows/GI only
-        quat                              = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
-        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
-        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
-        instancePosScale                  = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
-                                                renderNodePosScale.w * instanceOffsetPosScale.w);
-        stateSlot                         = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
-    }
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
@@ -379,5 +354,53 @@ void main()
         out_meshInstances[instanceIdx].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
         out_meshInstances[instanceIdx].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: every level shares its region
         out_meshInstances[instanceIdx].prevQuat           = prevQuat;
+    }
+}
+
+layout (local_size_x = 64) in; // one thread per stream instance, and one per TREE in the tree range (tree_cull.inc.glsl)
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= u_treeCull.z)
+        return;
+    bool isTree;
+    uint pieceIdx;
+    const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx);
+    // A BAKED TREE (tree_cull.inc.glsl): its records built from the static tree data, their stream entries never
+    // written. Decided once for the piece; each record it draws then culls on its own mesh bounds. The loop serves
+    // the plain instance too (one pass, k = 0), so cullInstance has ONE call site - each is a full inlined copy.
+    TreeCullPiecePick pick;
+    InMeshInstance instance;
+    if (isTree)
+    {
+        if (!treeCullMainPiece(pieceIdx, pick))
+            return; // nothing of this tree draws this frame
+    }
+    else
+    {
+        instance = in_instances[instanceIdx];
+        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
+            return; // pushed for shadows/GI only
+        pick.kBegin = 0u;
+        pick.kEnd = 1u;
+        pick.quat                         = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
+        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
+        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
+        pick.posScale                     = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
+                                                renderNodePosScale.w * instanceOffsetPosScale.w);
+        pick.lodStateBase                 = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
+    }
+    for (uint k = pick.kBegin; k < pick.kEnd; ++k)
+    {
+        if (isTree)
+        {
+            const TreeCullRecord rec = treeCullMainRecord(pick, k);
+            if (rec.meshMaterial == TREE_CULL_ABSENT)
+                continue;
+            instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
+        }
+        // A tree's record k sits at its first record + k; a plain instance runs k = 0 only.
+        cullInstance(instanceIdx + k, instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree);
     }
 }

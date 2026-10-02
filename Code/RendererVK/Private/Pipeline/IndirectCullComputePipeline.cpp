@@ -162,11 +162,13 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
     }
 }
 
-void IndirectCullComputePipeline::update(uint32 frameIdx, uint32 numMeshInstances)
+void IndirectCullComputePipeline::update(uint32 frameIdx, uint32 numThreads)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-   
-    frameData.mappedIndirectCommands[0] = vk::DispatchIndirectCommand{ .x = numMeshInstances, .y = 1, .z = 1 };
+
+    // 64-thread groups (local_size_x in the culls; was 1, one wave per instance). Shared by the shadow and rain culls.
+    constexpr uint32 CULL_GROUP_SIZE = 64;
+    frameData.mappedIndirectCommands[0] = vk::DispatchIndirectCommand{ .x = (numThreads + CULL_GROUP_SIZE - 1) / CULL_GROUP_SIZE, .y = 1, .z = 1 };
 
     frameData.inIndirectCommandBuffer.flushMappedMemory(vk::WholeSize);
 }

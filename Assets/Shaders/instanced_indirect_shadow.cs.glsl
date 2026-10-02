@@ -18,7 +18,7 @@ struct InMeshInfo           { vec3 center; float radius; uint indexCount; uint f
 struct MaterialInfo         { uint flags; float opacity; uint diffuseNormalTexIdx; uint metalRoughnessTexIdxAlphaMode; };
 // alphaTexIdxCascadeMask: high 16 = alpha-mask texture index (0xFFFF when the material has no mask),
 // low 16 = cascade overlap bitmask. Matches RendererVKLayout::OutShadowMeshInstance.
-struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; uint foliageNormalTexIdx; float foliageShift; };
+struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; };
 struct OutIndirectCommand   { uint pipelineIndex; uint indexCount; uint instanceCount; uint firstIndex; int vertexOffset; uint firstInstance; };
 
 layout (binding = 1, std430) readonly buffer InRenderNodeTransformsBuffer  { RenderNodeTransform  in_renderNodeTransforms[]; };
@@ -94,31 +94,9 @@ uint cascadeOverlapMask(vec3 center, float radius)
     return mask;
 }
 
-void main()
+// One caster (or one tree record) through the cascade tests, the LOD pick and the draw-list emit.
+void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, bool isTree)
 {
-    const uint instanceIdx        = gl_GlobalInvocationID.x;
-    // A BAKED TREE RECORD (tree_cull.inc.glsl): built from the static tree data (its billboard is the caster).
-    const bool isTree = treeCullIsTree(instanceIdx);
-    InMeshInstance instance;
-    vec4 quat, instancePosScale;
-    if (isTree)
-    {
-        TreeCullRecord rec;
-        if (!treeCullShadow(instanceIdx, rec, instancePosScale, quat))
-            return;
-        instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
-    }
-    else
-    {
-        instance = in_instances[instanceIdx];
-        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
-            return; // not shadow-relevant this frame
-        quat                              = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
-        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
-        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
-        instancePosScale                  = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
-                                                renderNodePosScale.w * instanceOffsetPosScale.w);
-    }
     // Resolve the alpha-mask texture once here (0xFFFF = opaque) so the depth pass can discard cutout
     // fragments without touching the material buffer. Tested first: it needs only the instance word,
     // and a gizmo instance then skips the transform + cascade test below.
@@ -154,13 +132,6 @@ void main()
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
     const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x0000FFFFu);
-    // FOLIAGE cards (tree billboards) write their leaves at the baked depth (shadow_depth.fs.glsl); the rain's
-    // top-down shelter map keeps the plain cards.
-#ifdef RAIN_OCCLUSION
-    const bool foliage = false;
-#else
-    const bool foliage = alphaTexIdx != 0xFFFFu && (material.flags & MATERIAL_FLAG_BILLBOARD) != 0u;
-#endif
 
     // GPU LOD selection, stateless and two levels coarser than the main view (matches the old CPU
     // pass bias: 4x the error budget / +2 fallback levels). Off-screen casters never pop on screen,
@@ -206,6 +177,47 @@ void main()
     out_meshInstances[instanceIdx].posScale                = instancePosScale;
     out_meshInstances[instanceIdx].quat                    = quat;
     out_meshInstances[instanceIdx].alphaTexIdxCascadeMask  = packed;
-    out_meshInstances[instanceIdx].foliageNormalTexIdx     = foliage ? (material.diffuseNormalTexIdx >> 16) : 0xFFFFu;
-    out_meshInstances[instanceIdx].foliageShift            = foliage ? radius : 0.0;
+}
+
+layout (local_size_x = 64) in; // one thread per stream instance, and one per TREE in the tree range (tree_cull.inc.glsl)
+
+void main()
+{
+    const uint gid = gl_GlobalInvocationID.x;
+    if (gid >= u_treeCull.z)
+        return;
+    bool isTree;
+    uint pieceIdx;
+    const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx);
+    // A BAKED TREE (tree_cull.inc.glsl): its billboard is the caster (the mesh only for a type without one). The loop
+    // serves the plain instance too (k = 0 only), so cullCaster has ONE call site - each is a full inlined copy.
+    TreeCullPiecePick pick;
+    InMeshInstance instance;
+    if (isTree)
+        treeCullShadowPiece(pieceIdx, pick);
+    else
+    {
+        instance = in_instances[instanceIdx];
+        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
+            return; // not shadow-relevant this frame
+        pick.kBegin = 0u;
+        pick.kEnd = 1u;
+        pick.quat                         = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
+        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
+        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
+        pick.posScale                     = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
+                                                renderNodePosScale.w * instanceOffsetPosScale.w);
+    }
+    for (uint k = pick.kBegin; k < pick.kEnd; ++k)
+    {
+        if (isTree)
+        {
+            const TreeCullRecord rec = treeCullShadowRecord(pick, k);
+            if (rec.meshMaterial == TREE_CULL_ABSENT)
+                continue;
+            instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
+        }
+        // A tree's record k sits at its first record + k; a plain instance runs k = 0 only.
+        cullCaster(instanceIdx + k, instance, pick.posScale, pick.quat, isTree);
+    }
 }

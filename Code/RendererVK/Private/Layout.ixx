@@ -832,7 +832,7 @@ export namespace RendererVKLayout
         glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
                               // z = fallback full-res pixels (authored chains), w = mipPixelScale (px per unit/dist)
         glm::vec4 lodParams1; // x = force LOD level (< 0 = off), y = fallback-metric level bias, z = enabled (0/1), w unused
-        // FOLIAGE cards (the tree billboards; FoliageParams): x = depth offset scale, y = crown normal blend,
+        // FOLIAGE cards (the tree billboards; FoliageParams): x unused, y = crown normal blend,
         // z = self-shadow transmission length (m), w = interior darkening
         glm::vec4 foliageParams;
         glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
@@ -842,7 +842,8 @@ export namespace RendererVKLayout
         glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
                                   // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
         // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
-        // of this frame's tree range, y = its length (3 per tree; 0 = none). params: x = the far distance scale,
+        // of this frame's tree range, y = its length (3 per tree; 0 = none), z = the culls' thread count (one per tree
+        // in the range; their dispatch), w = the tree count. params: x = the far distance scale,
         // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade
         // margin" (m; the shadow cull drops a tree from the cascades whose split + this it lies beyond).
         glm::uvec4 treeCull;
@@ -938,9 +939,9 @@ export namespace RendererVKLayout
         float scale;
         glm::vec4 quat;
         uint32 alphaTexIdxCascadeMask;
-        uint32 foliageNormalTexIdx; // MATERIAL_FLAG_BILLBOARD casters: the normal map (alpha = baked depth); 0xFFFF = none
-        float foliageShift;         // their world bounding radius: the depth pass pulls them toward the light by it
         uint32 _pad0;
+        uint32 _pad1;
+        uint32 _pad2;
     };
     static_assert(sizeof(OutShadowMeshInstance) == 48);
 
@@ -1006,6 +1007,8 @@ export namespace RendererVKLayout
         TreeImpostor   = 12, // procedural tree piece impostor: a camera-facing quad per instance picking one frame of an
                              // octahedral atlas (tree_impostor.vs.glsl) + the LitMasked fragment shader. MAIN pass only
                              // (the shadow pass's own VS cannot build the quad): push its nodes with PASS_MAIN.
+        LitFoliage     = 13, // LitMasked + the FOLIAGE card paths (FOLIAGE): the tree billboards' materials
+                             // (MATERIAL_FLAG_BILLBOARD) only - kept out of LitMasked's register allocation
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs
@@ -1042,7 +1045,7 @@ export namespace RendererVKLayout
         const uint32 width = (uint32)(widthMetres < 1.0f ? 1.0f : widthMetres > 1023.0f ? 1023.0f : widthMetres);
         return MATERIAL_FLAG_DISTANCE_FADE | (fadeIn ? MATERIAL_FLAG_FADE_IN : 0u) | start | (width << 12);
     }
-    constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // LitMasked: the sun shadow is NOT rejected by the geometric
+    constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // drawn on LitFoliage (its paths assume it): the sun shadow is NOT rejected by the geometric
                                                        // normal's facing (a flat card standing for a foliage clump,
                                                        // the tree billboards) - the normal-mapped normal decides
     constexpr uint32 MATERIAL_FLAG_BILLBOARD_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a

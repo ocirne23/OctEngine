@@ -202,9 +202,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.dualSourceAlpha = true,
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
-	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant
-	// carries a discard, so the LitOpaque variant keeps early depth writes. Its VS adds the instance origin
-	// (the FOLIAGE cards' crown normal).
+	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant (and
+	// LitFoliage, 13) carries a discard, so the LitOpaque variant keeps early depth writes.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = graphicsPipelineLayout.vertexShader.text,
@@ -262,6 +261,23 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.writeMotion = true,
 		.cullMode = vk::CullModeFlagBits::eNone,
+	});
+	// Variant 13 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (FOLIAGE: card
+	// frame, edge fade, foliage shadow, crown normal + interior). Its VS adds the instance origin (the crown normal).
+	// Split out of LitMasked: a shader's register count is the maximum over all its paths, so every alpha-tested
+	// mesh paid for the cards'.
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = graphicsPipelineLayout.vertexShader.text,
+			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" }, { "FOLIAGE", "1" } },
+		},
+		.fragmentShader = ShaderSource{
+			.text = graphicsPipelineLayout.fragmentShader.text,
+			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" }, { "FOLIAGE", "1" } },
+		},
+		.writeMotion = true,
 	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and

@@ -15,7 +15,7 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
-#ifdef ALPHA_MASK
+#ifdef FOLIAGE
 layout (location = 5) in flat vec3 in_instanceOrigin; // a point on a FOLIAGE card's axis (foliageCrownNormal)
 #endif
 #ifdef STEREO
@@ -32,7 +32,10 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
-#ifdef ALPHA_MASK
+// VARIANTS: ALPHA_MASK = LitMasked (the alpha + distance-fade discards, the leaf transmission); with FOLIAGE too =
+// LitFoliage, the tree billboard cards (MATERIAL_FLAG_BILLBOARD) only: their card frame, edge fade, shadow, crown
+// normal and interior. Split so the card code no longer sets the register count of every alpha-tested mesh.
+#ifdef FOLIAGE
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage cards' own bias (sunShadowFirstFoliage)
 #define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
 #endif
@@ -60,17 +63,18 @@ void sunShadowFirstLeaf(vec3 pos)
 	const vec3 geoN = normalize(in_normalV.xyz);
 	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
 }
+#endif
 
+#ifdef FOLIAGE
 // FOLIAGE (MATERIAL_FLAG_BILLBOARD - the tree billboard cards): one flat geometric normal stands for a whole
 // clump, and rejecting by it darkened the entire card whenever the sun was behind it. Shadow it from the card's
 // sun side instead (the bias still follows the geometric normal, just flipped toward the sun) and let
-// doSunLight's facing test on the normal-mapped normal decide.
-// The lookup moves OFF the card to the texel's baked depth (the normal map's alpha, signed along the card's FRONT
-// normal, in units of the card's u length): the crossed cards touch at their crossing line, where no depth bias
-// separates them and a lit strip leaked through every tree. The shadow pass writes its casters at the same depths
-// (shadow_depth.fs.glsl), so caster and receiver agree leaf by leaf. `cardDu` / `cardDv` = d(pos)/du, d(pos)/dv
-// (pos and uv are affine over the card); front normal = cross(dv, du) on both faces (billboardViews).
-// Returns the leaf's offset off the card (world, unscaled): the interior term reads the leaf's real 3D point.
+// doSunLight's facing test on the normal-mapped normal decide. The lookup stays on the card plane, as the flat
+// caster (shadow_depth.fs.glsl writes no depth).
+// Returns the leaf's offset off the card to the texel's baked depth (the normal map's alpha, signed along the card's
+// FRONT normal, in units of the card's u length; world, unscaled): the interior term reads the leaf's real 3D point.
+// `cardDu` / `cardDv` = d(pos)/du, d(pos)/dv (pos and uv are affine over the card); front normal = cross(dv, du) on
+// both faces (billboardViews).
 vec3 sunShadowFirstFoliage(vec3 pos, float depth01, vec3 cardDu, vec3 cardDv)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
@@ -78,8 +82,7 @@ vec3 sunShadowFirstFoliage(vec3 pos, float depth01, vec3 cardDu, vec3 cardDv)
 	const float frontLen = length(frontN);
 	const vec3 leafOffset = frontLen > 0.0 ? frontN * ((depth01 * 2.0 - 1.0) * length(cardDu) / frontLen) : vec3(0.0);
 	g_shadowFoliage = true; // the constant depth bias only (shadows.inc.glsl)
-	g_sunShadowFirst = sunShadowVisibility(pos + leafOffset * u_foliageParams.x, // x "Trees/Foliage depth offset"
-		dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
 	g_shadowFoliage = false;
 	return leafOffset;
 }
@@ -181,9 +184,8 @@ void main()
 	const vec2 uv = vec2(in_posU.w, in_normalV.w);
 
 	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], uv);
-#ifdef ALPHA_MASK
-	// The foliage depth offset's card frame from the screen derivatives (taken before any discard): d(pos)/du and
-	// d(pos)/dv. The same in shadow_depth.fs.glsl - the caster and the receiver must agree on every leaf point.
+#ifdef FOLIAGE
+	// The card frame from the screen derivatives (taken before any discard): d(pos)/du and d(pos)/dv.
 	const vec2 uvDx = dFdx(uv), uvDy = dFdy(uv);
 	const float uvDet = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
 	vec3 cardDu = vec3(0.0), cardDv = vec3(0.0);
@@ -193,7 +195,9 @@ void main()
 		cardDu = (pdx * uvDy.y - pdy * uvDx.y) / uvDet;
 		cardDv = (pdy * uvDx.x - pdx * uvDy.x) / uvDet;
 	}
-	// Only the LitMasked variant discards: a discard anywhere in the shader costs the pipeline its early
+#endif
+#ifdef ALPHA_MASK
+	// Only the LitMasked / LitFoliage variants discard: a discard anywhere in the shader costs the pipeline its early
 	// depth write. The alpha-mode test stays, because a material override can put an opaque material here.
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
@@ -218,7 +222,7 @@ void main()
 	// fade start" to "end" (u_foliageParams2.xy), both x "Foliage edge fade centre scale" (z) at the crossing axis, back to x1
 	// at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card scale"
 	// (u_foliageParams3.y).
-	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
+#ifdef FOLIAGE
 	{
 		const float facing = abs(dot(normalize(in_normalV.xyz), V));
 		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
@@ -238,13 +242,14 @@ void main()
 		}
 	}
 	// After the discard: a cut-out pixel pays no shadow.
-	vec3 leafOffset = vec3(0.0);
-	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
-		leafOffset = sunShadowFirstFoliage(pos, texture(u_textures[normalTexIdx], uv).a, cardDu, cardDv);
-	else if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+	const vec3 leafOffset = sunShadowFirstFoliage(pos, texture(u_textures[normalTexIdx], uv).a, cardDu, cardDv);
+#else
+	// After the discard: a cut-out pixel pays no shadow.
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 		sunShadowFirstLeaf(pos);
 	else
 		sunShadowFirst(pos);
+#endif
 #endif
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
@@ -279,10 +284,11 @@ void main()
 	float16_t surfaceAO = float16_t(1.0);
 #ifdef ALPHA_MASK
 	const float sunVisibility = g_sunShadowFirst; // before the interior term (the leaf transmission's shadow)
+#endif
+#ifdef FOLIAGE
 	// FOLIAGE: toward the crown normal - fully at the crossing axis, by "Trees/Foliage crown normal"
 	// (u_foliageParams.y) from half the radius out - and the crown INTERIOR darkening on both the sun and the
 	// ambient (in place of the RTAO a card does not read).
-	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
 	{
 		float interior;
 		const vec4 crown = foliageCrownNormal(pos, V, cardDu, cardDv, uv, material.flags, leafOffset, interior);

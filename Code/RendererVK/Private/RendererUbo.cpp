@@ -52,7 +52,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         m_lodParams.hysteresis, m_lodParams.fullResPixels, m_mipPixelScale);
     ubo.lodParams1 = glm::vec4((float)m_lodParams.forceLod, (float)m_lodParams.bias,
         m_lodParams.enabled ? 1.0f : 0.0f, 0.0f);
-    ubo.foliageParams = glm::vec4(m_foliageParams.depthOffset, m_foliageParams.crownNormal,
+    ubo.foliageParams = glm::vec4(0.0f, m_foliageParams.crownNormal,
         m_foliageParams.shadowLength, m_foliageParams.interiorShadow);
     ubo.foliageParams2 = glm::vec4(m_foliageParams.edgeFadeStart, m_foliageParams.edgeFadeEnd,
         m_foliageParams.edgeFadeCentreScale, m_foliageParams.interiorInner);

@@ -141,7 +141,6 @@ void ShadowParams::registerTweaks(const oc::function<void()>& onReloadShaders)
 void FoliageParams::registerTweaks()
 {
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
-    Tweak::floatVar("Trees", "Foliage depth offset", &depthOffset, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage crown normal", &crownNormal, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &shadowLength, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Foliage interior shadow", &interiorShadow, 0.0f, 1.0f, 0.01f);

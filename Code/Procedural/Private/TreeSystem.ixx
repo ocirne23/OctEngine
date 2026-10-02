@@ -39,7 +39,7 @@ export namespace Procedural
 			RenderMesh leaves[TREE_PIECE_LODS];
 			uint32 barkChain = UINT32_MAX;
 			uint32 leafChain = UINT32_MAX;
-			// Modules only, per Trees/Far mode: the billboard cards (LitMasked) or the impostor quad (TreeImpostor
+			// Modules only, per Trees/Far mode: the billboard cards (LitFoliage) or the impostor quad (TreeImpostor
 			// pipeline), each with its own baked material (owned).
 			RenderMesh billboard;
 			uint16 billboardMaterial = UINT16_MAX;
