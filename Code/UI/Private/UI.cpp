@@ -243,7 +243,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
 
             ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.3f, &dock_id_left, &dock_id_right);
             //ImGui::DockBuilderSplitNode(dock_id_right, ImGuiDir_Up, 0.8f, &dock_id_up, &dock_id_down);
-            ImGui::DockBuilderSplitNode(dock_id_left,  ImGuiDir_Up, 0.8f, &dock_id_left_top, &dock_id_left_bottom);
+            ImGui::DockBuilderSplitNode(dock_id_left,  ImGuiDir_Up, 0.2f, &dock_id_left_top, &dock_id_left_bottom);
             ImGui::DockBuilderSplitNode(dock_id_left_top, ImGuiDir_Right, 0.5f, &dock_id_properties, &dock_id_scene);
 
             ImGui::DockBuilderDockWindow("Scene",      dock_id_scene);

@@ -36,6 +36,10 @@ layout (binding = 10, std430) readonly buffer InNodePassMasksBuffer        { uin
 
 layout (binding = 11, std430) readonly buffer InMeshLodGroupIdxBuffer      { uint                 in_meshLodGroupIdx[]; };
 layout (binding = 12, std430) readonly buffer InMeshLodGroupsBuffer        { MeshLodGroup         in_meshLodGroups[]; };
+// 13 + 14: the baked tree records' static data (tree_cull.inc.glsl).
+#define TREE_CULL_PIECES_BINDING 13
+#define TREE_CULL_TYPES_BINDING 14
+#include "tree_cull.inc.glsl"
 
 vec3 quat_transform(vec3 v, vec4 q) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 vec4 quat_multiply(vec4 q, vec4 p)
@@ -93,9 +97,31 @@ uint cascadeOverlapMask(vec3 center, float radius)
 void main()
 {
     const uint instanceIdx        = gl_GlobalInvocationID.x;
-    const InMeshInstance instance = in_instances[instanceIdx];
-    if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
-        return; // not shadow-relevant this frame
+    // A BAKED TREE RECORD (tree_cull.inc.glsl): built from the static tree data (its billboard is the caster).
+    const bool isTree = treeCullIsTree(instanceIdx);
+    InMeshInstance instance;
+    vec4 quat, instancePosScale;
+    if (isTree)
+    {
+        TreeCullRecord rec;
+        TreeCullPiece piece;
+        if (!treeCullShadow(instanceIdx, rec, piece))
+            return;
+        instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
+        quat = piece.quat;
+        instancePosScale = piece.posScale;
+    }
+    else
+    {
+        instance = in_instances[instanceIdx];
+        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
+            return; // not shadow-relevant this frame
+        quat                              = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
+        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
+        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
+        instancePosScale                  = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
+                                                renderNodePosScale.w * instanceOffsetPosScale.w);
+    }
     // Resolve the alpha-mask texture once here (0xFFFF = opaque) so the depth pass can discard cutout
     // fragments without touching the material buffer. Tested first: it needs only the instance word,
     // and a gizmo instance then skips the transform + cascade test below.
@@ -106,11 +132,6 @@ void main()
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
 
-    const vec4 quat                   = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
-    const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
-    const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
-    const vec4 instancePosScale       = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
-                                            renderNodePosScale.w * instanceOffsetPosScale.w);
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
     const float radius                = meshInfo.radius * instancePosScale.w;
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
@@ -127,7 +148,7 @@ void main()
 #ifdef RAIN_OCCLUSION
     const bool foliage = false;
 #else
-    const bool foliage = alphaTexIdx != 0xFFFFu && (material.flags & MATERIAL_FLAG_FOLIAGE) != 0u;
+    const bool foliage = alphaTexIdx != 0xFFFFu && (material.flags & MATERIAL_FLAG_BILLBOARD) != 0u;
 #endif
 
     // GPU LOD selection, stateless and two levels coarser than the main view (matches the old CPU

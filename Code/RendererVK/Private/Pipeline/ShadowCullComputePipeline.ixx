@@ -32,6 +32,8 @@ public:
         Buffer& inMeshLodGroupIdxBuffer;      // 11 - per mesh: LOD group index (GPU LOD selection)
         Buffer& inMeshLodGroupsBuffer;        // 12
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
+        Buffer& treePiecesBuffer;             // 13 - the baked tree records' pieces (static; tree_cull.inc.glsl)
+        Buffer& treeTypesBuffer;              // 14 - ... and their types
     };
 
     // rainOcclusion: the RAIN_OCCLUSION shader variant - one view (u_rainOcclusionViewProj) instead of

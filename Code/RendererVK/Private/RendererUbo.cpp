@@ -57,8 +57,11 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     ubo.foliageParams2 = glm::vec4(m_foliageParams.edgeFadeStart, m_foliageParams.edgeFadeEnd,
         m_foliageParams.edgeFadeCentreScale, m_foliageParams.interiorInner);
     ubo.foliageParams3 = glm::vec4(m_foliageParams.interiorOuter, m_foliageParams.edgeFadeTopCardScale,
-        m_foliageParams.interiorTopCardScale, 0.0f);
-
+        m_foliageParams.interiorTopCardScale, m_foliageParams.transmission);
+    ubo.foliageParams4 = glm::vec4(m_foliageParams.transmissionFocus, m_foliageParams.transmissionGlow,
+        m_foliageParams.transmissionShadow, farTreesActive() ? 1.0f : 0.0f);
+    ubo.treeCull = glm::uvec4(0u); // no tree range until present() patches it (uploadTreeCullUbo)
+    ubo.treeCullParams = glm::vec4(0.0f);
     buildUboViews(cameraIn, camera, vrBaseOrientation);
 
     // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the

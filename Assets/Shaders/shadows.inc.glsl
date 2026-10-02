@@ -24,7 +24,7 @@ float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 
 #ifdef SHADOW_FOLIAGE_BIAS
-// FOLIAGE cards (MATERIAL_FLAG_FOLIAGE; set by the lit FS around its lookup): no slope scaling and no normal
+// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD; set by the lit FS around its lookup): no slope scaling and no normal
 // offset, the constant depth bias only. A crossed billboard's back half sits in the crossing card's shadow by a
 // small depth step - the slope-scaled bias (up to 4x at a grazing sun) and the push along the card normal erased
 // it, and that strip lit up through the tree. Alpha-tested foliage hides the bit of acne this allows.

@@ -50,7 +50,18 @@ void sunShadowFirst(vec3 pos)
 }
 
 #ifdef ALPHA_MASK
-// FOLIAGE (MATERIAL_FLAG_FOLIAGE - the tree billboard cards): one flat geometric normal stands for a whole
+// LEAVES (MATERIAL_FLAG_LEAF, the meshes): thin and two-sided, so a leaf facing AWAY from the sun is still lit
+// through - its transmission needs its real shadow. sunShadowFirst's facing reject gave every such leaf 0, the
+// very leaves the transmission's back term lights, so "Foliage transmission shadow" scaled them all as one. The
+// lookup is taken from the leaf's sun side (the bias along the geometric normal flipped toward the sun);
+// doSunLight's facing test on the shading normal still keeps the front light off a back-facing leaf.
+void sunShadowFirstLeaf(vec3 pos)
+{
+	const vec3 geoN = normalize(in_normalV.xyz);
+	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+}
+
+// FOLIAGE (MATERIAL_FLAG_BILLBOARD - the tree billboard cards): one flat geometric normal stands for a whole
 // clump, and rejecting by it darkened the entire card whenever the sun was behind it. Shadow it from the card's
 // sun side instead (the bias still follows the geometric normal, just flipped toward the sun) and let
 // doSunLight's facing test on the normal-mapped normal decide.
@@ -89,12 +100,12 @@ vec3 sunShadowFirstFoliage(vec3 pos, float depth01, vec3 cardDu, vec3 cardDv)
 // (TreeImpostor billboardHorizontalView): it lies across the axis at mid height, so the axis is its normal and the
 // centre its own point on it. Its u spans the tree's height too, so the radius - half the u length - is the vertical
 // cards'. False on a degenerate card frame.
-// The horizontal card: a MATERIAL_FLAG_FOLIAGE_TOP_CARD material's card whose normal points up (whole trees stand
+// The horizontal card: a MATERIAL_FLAG_BILLBOARD_TOP_CARD material's card whose normal points up (whole trees stand
 // upright - yaw only - so their vertical cards' normals are horizontal). Found by geometry, not by its strip.
 bool foliageTopCard(vec3 cardDu, vec3 cardDv, uint flags)
 {
 	const vec3 n = cross(cardDv, cardDu);
-	return (flags & MATERIAL_FLAG_FOLIAGE_TOP_CARD) != 0u && n.y * n.y > 0.5 * dot(n, n);
+	return (flags & MATERIAL_FLAG_BILLBOARD_TOP_CARD) != 0u && n.y * n.y > 0.5 * dot(n, n);
 }
 
 bool foliageCrownFrame(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, out vec3 axis, out vec3 centre, out float radius)
@@ -132,8 +143,10 @@ vec4 foliageCrownNormal(vec3 pos, vec3 V, vec3 cardDu, vec3 cardDv, vec2 uv, uin
 	interior = mix(1.0 - u_foliageParams.w, 1.0, smoothstep(u_foliageParams2.w, max(u_foliageParams3.x, u_foliageParams2.w + 1e-3), leafR));
 	// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliageParams3.z): an EXPONENT, so > 1
 	// darkens it at any strength (a multiplier on the strength saturated at 1).
+	// x |V.y|, the view's steepness: from BELOW V.y is negative - a negative factor on the AO and the sun turned the
+	// card black (from level: 0).
 	if (foliageTopCard(cardDu, cardDv, flags))
-		interior = pow(max(interior, 0.0), max(u_foliageParams3.z, 0.01)) * V.y; // pow(0, 0) is undefined
+		interior = pow(max(interior, 0.0), max(u_foliageParams3.z, 0.01)) * abs(V.y); // pow(0, 0) is undefined
 	return vec4(normalize(offset / radius - D * sqrt(max(1.0 - r2, 0.0))), length(fromAxis) / radius);
 }
 
@@ -205,14 +218,17 @@ void main()
 	// fade start" to "end" (u_foliageParams2.xy), both x "Foliage edge fade centre scale" (z) at the crossing axis, back to x1
 	// at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card scale"
 	// (u_foliageParams3.y).
-	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
 	{
 		const float facing = abs(dot(normalize(in_normalV.xyz), V));
 		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
 		const float centreScale = mix(u_foliageParams2.z, 1.0, smoothstep(0.0, 0.5, foliageAxisDistance(pos, cardDu, cardDv, uv, material.flags)))
 			* (topCard ? u_foliageParams3.y : 1.0);
 		const float fadeStart = u_foliageParams2.x * centreScale;
-		const float visibility = smoothstep(fadeStart, max(u_foliageParams2.y * centreScale, fadeStart + 1e-3), facing);
+		// Not from BELOW: looking up into a crown, the edge-on cards are what fills it - fading them left it see-through.
+		// The fade blends out as the view turns upward, over the first ~11 degrees below the pixel (V.y = 0 .. -0.2).
+		const float fromBelow = smoothstep(0.0, 0.2, -V.y);
+		const float visibility = mix(smoothstep(fadeStart, max(u_foliageParams2.y * centreScale, fadeStart + 1e-3), facing), 1.0, fromBelow);
 		if (visibility < 1.0)
 		{
 			const vec2 pixel = gl_FragCoord.xy + vec2(17.0, 31.0) + 5.588238 * float((u_frameIndex + 3u) & 7u);
@@ -223,8 +239,10 @@ void main()
 	}
 	// After the discard: a cut-out pixel pays no shadow.
 	vec3 leafOffset = vec3(0.0);
-	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
 		leafOffset = sunShadowFirstFoliage(pos, texture(u_textures[normalTexIdx], uv).a, cardDu, cardDv);
+	else if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+		sunShadowFirstLeaf(pos);
 	else
 		sunShadowFirst(pos);
 #endif
@@ -260,10 +278,11 @@ void main()
 	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
 	float16_t surfaceAO = float16_t(1.0);
 #ifdef ALPHA_MASK
+	const float sunVisibility = g_sunShadowFirst; // before the interior term (the leaf transmission's shadow)
 	// FOLIAGE: toward the crown normal - fully at the crossing axis, by "Trees/Foliage crown normal"
 	// (u_foliageParams.y) from half the radius out - and the crown INTERIOR darkening on both the sun and the
 	// ambient (in place of the RTAO a card does not read).
-	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+	if ((material.flags & MATERIAL_FLAG_BILLBOARD) != 0u)
 	{
 		float interior;
 		const vec4 crown = foliageCrownNormal(pos, V, cardDu, cardDv, uv, material.flags, leafOffset, interior);
@@ -275,7 +294,24 @@ void main()
 	}
 #endif
 
-	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
+	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
+#ifdef ALPHA_MASK
+	// LEAF TRANSMISSION (MATERIAL_FLAG_LEAF): thin leaves let the sun through, tinted by their own colour - a
+	// diffuse back term saturate(-N.L) (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking
+	// toward the sun: the backlit rim). x "Trees/Foliage transmission" (u_foliageParams3.w). Its visibility leans
+	// on the sun shadow by "Foliage transmission shadow" (u_foliageParams4.z) only - a leaf seen from the shaded
+	// side sits in its own crown's shadow, which would leave the backlit view no glow - then x the interior term,
+	// so the crown's depths stay dark.
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliageParams3.w > 0.0)
+	{
+		const vec3 L = u_sunDirection.xyz;
+		const float back = max(-dot(vec3(N), L), 0.0);
+		const float glow = pow(max(-dot(V, L), 0.0), u_foliageParams4.x) * u_foliageParams4.y;
+		const float visibility = mix(1.0, sunVisibility, u_foliageParams4.z) * float(surfaceAO);
+		color += vec3(materialColor) * u_sunTransmittance * u_sunColor.rgb
+			* ((back + glow) * visibility * u_foliageParams3.w * INV_PI);
+	}
+#endif
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT
 	out_motion = motionVector(in_prevWorldDelta);

@@ -68,6 +68,11 @@ public:
         vk::Sampler   cloudSampler;
         vk::ImageView cloudShadowView;    // the cloud Beer shadow map (GENERAL): the far field's sun term (light shafts)
         vk::Sampler   cloudShadowSampler;
+        // The far-tree volume's march of this slot (GENERAL; TreeVolumePipeline): composited inside the fog like the
+        // clouds. Read only while u_foliageParams4.w says it ran; always bound (the images exist from init).
+        vk::ImageView farTreesColorView;
+        vk::ImageView farTreesDepthView;
+        vk::Sampler   farTreesSampler;
     };
     // Records the fullscreen apply draw; the caller has begun a command buffer inside the scene-color
     // render pass and set the viewport/scissor. eye selects the per-eye depth/projection (0 = desktop/left).

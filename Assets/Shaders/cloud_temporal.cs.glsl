@@ -13,8 +13,19 @@
 //  - the other pixels: the current value = the average of the 4 side neighbours (marched this frame), the
 //    history = last frame's march AT this pixel (the parity flipped); the march limit from the scene depth.
 
+//
+// TREE_TEMPORAL (TreeVolumePipeline's instance): the same pass over the FAR-TREE march (tree_volume_march.cs) - no
+// wind; the history weight ("Trees/Far temporal blend") and the march's max distance from the push constant, the
+// scale (TREE_TEMPORAL_SCALE: 1 = full res, 2 = "Far half res") and the checkerboard (TREE_TEMPORAL_CHECKER, "Far
+// pixel skip") baked, instead of the clouds' baked / UBO values; u_outMeanDistance only at full res (at half res the
+// upsample writes the full-res pair).
+
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
+#ifdef TREE_TEMPORAL
+#undef CLOUD_CHECKERBOARD // the preamble's cloud toggles do not apply
+#undef CLOUD_DEBUG_MODE
+#endif
 #ifndef CLOUD_DEBUG_MODE
 #define CLOUD_DEBUG_MODE 0 // baked by the preamble while the clouds are on ("Sky/Clouds/Quality/Debug mode")
 #endif
@@ -28,6 +39,10 @@ layout (binding = 4) uniform sampler2D u_histDepth;
 layout (binding = 5, rgba16f) uniform writeonly image2D u_outColor;
 layout (binding = 6, rgba16f) uniform writeonly image2D u_outDepth;
 layout (binding = 7) uniform sampler2D u_sceneDepth; // the checkerboard's unmarched pixels: their march limit
+#ifdef TREE_TEMPORAL
+// The fog apply's tree layer depth (m), as the march alone writes it (u_outDepth is the next frame's history).
+layout (binding = 8, r16f) uniform writeonly image2D u_outMeanDistance;
+#endif
 
 // The neighbourhood clamp takes only the neighbours whose march LIMIT (log2) is within this of the pixel's own:
 // at a silhouette a texel over the near surface holds "no cloud" (its march stopped under the clouds), and in
@@ -39,8 +54,35 @@ layout (push_constant) uniform CloudPC
     uint u_viewIndex;
     uint u_width;
     uint u_height;
+#ifdef TREE_TEMPORAL
+    float u_historyWeight;
+    float u_maxDist;  // the march's max distance (the far volume's end)
+#else
     uint u_pad;
+#endif
 };
+
+// The trees' variant BAKES its scale (1, or 2 at "Far half res") and checkerboard (TreeVolumePipeline compiles one per
+// setting); at full res it also writes u_outMeanDistance.
+#ifndef TREE_TEMPORAL_SCALE
+#define TREE_TEMPORAL_SCALE 1
+#endif
+#ifndef TREE_TEMPORAL_CHECKER
+#define TREE_TEMPORAL_CHECKER 0
+#endif
+#if defined(TREE_TEMPORAL)
+#define TT_CHECKER (TREE_TEMPORAL_CHECKER != 0)
+#define TT_SCALE TREE_TEMPORAL_SCALE
+#define TT_MAX_DIST u_maxDist
+#elif defined(CLOUD_CHECKERBOARD)
+#define TT_CHECKER true
+#define TT_SCALE 2
+#define TT_MAX_DIST u_cloudMarch0.y
+#else
+#define TT_CHECKER false
+#define TT_SCALE 2
+#define TT_MAX_DIST u_cloudMarch0.y
+#endif
 
 void main()
 {
@@ -50,15 +92,14 @@ void main()
     g_viewIndex = int(u_viewIndex);
 
     const ivec2 last = ivec2(u_width, u_height) - 1;
-    const vec2 uv = (vec2(px * 2) + 1.0) * u_screenSize.zw;
+    const vec2 uv = (vec2(px * TT_SCALE) + 0.5 * float(TT_SCALE)) * u_screenSize.zw; // the block's centre
     const vec2 uvJ = uv - taaJitterUv(u_taaJitter.xy);
     vec4 cur;
     vec4 curDepth;
     vec4 lo, hi;
     // The neighbourhood's range of weighted cloud distance (log2): the history test (below).
     float dLo = 1e30, dHi = -1e30;
-#ifdef CLOUD_CHECKERBOARD
-    if (((px.x + px.y + int(u_frameIndex)) & 1) == 0)
+    if (TT_CHECKER && ((px.x + px.y + int(u_frameIndex)) & 1) == 0)
     {
         cur = texelFetch(u_curColor, px, 0);
         curDepth = texelFetch(u_curDepth, px, 0);
@@ -79,7 +120,7 @@ void main()
             dHi = max(dHi, d.y);
         }
     }
-    else
+    else if (TT_CHECKER)
     {
         // The 4 side neighbours (marched this frame), weighted by how well their march LIMIT matches this
         // pixel's own (the march's rule, from the scene depth): their average is the current value, their
@@ -88,11 +129,12 @@ void main()
         // clear-sky outline around it. The front comes only from neighbours that HOLD cloud: an empty march
         // stores its own limit as the front, so the near neighbour's limit became the front of cloud from the
         // sky neighbours, and the upsample let that cloud onto the near surface.
-        const ivec2 full = px * 2;
+        const ivec2 full = px * TT_SCALE;
         const ivec2 lastFull = textureSize(u_sceneDepth, 0) - 1;
-        const float depth = min(min(texelFetch(u_sceneDepth, min(full, lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), lastFull), 0).r),
-                                min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), lastFull), 0).r));
-        const float maxDist = u_cloudMarch0.y;
+        const ivec2 corner = ivec2(TT_SCALE - 1); // the block's far corner (the same texel at full res)
+        const float depth = min(min(texelFetch(u_sceneDepth, min(full, lastFull), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(corner.x, 0), lastFull), 0).r),
+                                min(texelFetch(u_sceneDepth, min(full + ivec2(0, corner.y), lastFull), 0).r, texelFetch(u_sceneDepth, min(full + corner, lastFull), 0).r));
+        const float maxDist = TT_MAX_DIST;
         const float limit = depth > 0.0 ? min(length(viewRelFromDepth(uvJ, depth)), maxDist) : maxDist;
         const float logLimit = log2(max(limit, 1.0));
         cur = vec4(0.0);
@@ -134,33 +176,38 @@ void main()
             dHi = max(dHi, d.y);
         }
     }
-#else
-    cur = texelFetch(u_curColor, px, 0);
-    curDepth = texelFetch(u_curDepth, px, 0);
-    lo = cur;
-    hi = cur;
-    dLo = curDepth.y;
-    dHi = curDepth.y;
-    for (int y = -1; y <= 1; ++y)
-    for (int x = -1; x <= 1; ++x)
+    else
     {
-        if (x == 0 && y == 0)
-            continue;
-        const ivec2 q = clamp(px + ivec2(x, y), ivec2(0), last);
-        const vec4 d = texelFetch(u_curDepth, q, 0);
-        if (abs(d.z - curDepth.z) >= LIMIT_MATCH)
-            continue;
-        const vec4 n = texelFetch(u_curColor, q, 0);
-        lo = min(lo, n);
-        hi = max(hi, n);
-        dLo = min(dLo, d.y);
-        dHi = max(dHi, d.y);
+        cur = texelFetch(u_curColor, px, 0);
+        curDepth = texelFetch(u_curDepth, px, 0);
+        lo = cur;
+        hi = cur;
+        dLo = curDepth.y;
+        dHi = curDepth.y;
+        for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            if (x == 0 && y == 0)
+                continue;
+            const ivec2 q = clamp(px + ivec2(x, y), ivec2(0), last);
+            const vec4 d = texelFetch(u_curDepth, q, 0);
+            if (abs(d.z - curDepth.z) >= LIMIT_MATCH)
+                continue;
+            const vec4 n = texelFetch(u_curColor, q, 0);
+            lo = min(lo, n);
+            hi = max(hi, n);
+            dLo = min(dLo, d.y);
+            dHi = max(dHi, d.y);
+        }
     }
-#endif
 
     const vec3 dir = normalize(viewRelFromDepth(uvJ, 1.0));
     const float tCloud = exp2(curDepth.y);
+#ifdef TREE_TEMPORAL
+    const vec3 prevWorld = u_viewPos + dir * tCloud; // trees do not move
+#else
     const vec3 prevWorld = u_viewPos + dir * tCloud - u_cloudWind.xyz;
+#endif
     float clipW;
     // Last frame marched the direction of (texel uv - ITS jitter), so the texel holding this point sits at
     // the unjittered projection + last frame's jitter.
@@ -190,7 +237,11 @@ void main()
         {
             const vec4 pad = (hi - lo) * 0.1 + vec4(0.002);
             hist = clamp(hist, lo - pad, hi + pad);
+#ifdef TREE_TEMPORAL
+            result = mix(cur, hist, u_historyWeight);
+#else
             result = mix(cur, hist, u_cloudMarch1.z);
+#endif
         }
     }
 #if CLOUD_DEBUG_MODE == 3
@@ -199,4 +250,7 @@ void main()
 
     imageStore(u_outColor, px, result);
     imageStore(u_outDepth, px, curDepth);
+#if defined(TREE_TEMPORAL) && TREE_TEMPORAL_SCALE == 1
+    imageStore(u_outMeanDistance, px, vec4(exp2(curDepth.y))); // at half res the upsample writes the full-res pair
+#endif
 }

@@ -149,6 +149,12 @@ layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
     uint in_prevNodePassMasks[]; // PASS_* byte + the push frame above it (InstanceStream::stampedPassMask)
 };
 
+// 20 + 21: the baked tree records' static data (tree_cull.inc.glsl): this frame's tree range of the stream is
+// built from them instead of read.
+#define TREE_CULL_PIECES_BINDING 20
+#define TREE_CULL_TYPES_BINDING 21
+#include "tree_cull.inc.glsl"
+
 vec3 quat_transform(vec3 v, vec4 q)
 {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -215,17 +221,35 @@ void main()
 {
     //debugPrintfEXT("instanceIdx %d\n", gl_GlobalInvocationID.x);
     const uint instanceIdx        = gl_GlobalInvocationID.x;
-    const InMeshInstance instance = in_instances[instanceIdx];
-    if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
-        return; // pushed for shadows/GI only
+    // A BAKED TREE RECORD (tree_cull.inc.glsl): built from the static tree data, its stream entry never written.
+    const bool isTree = treeCullIsTree(instanceIdx);
+    InMeshInstance instance;
+    vec4 quat, instancePosScale;
+    uint stateSlot;
+    if (isTree)
+    {
+        TreeCullRecord rec;
+        TreeCullPiece piece;
+        if (!treeCullMain(instanceIdx, rec, piece, stateSlot))
+            return; // this record does not draw this frame
+        instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
+        quat = piece.quat;
+        instancePosScale = piece.posScale;
+    }
+    else
+    {
+        instance = in_instances[instanceIdx];
+        if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
+            return; // pushed for shadows/GI only
+        quat                              = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
+        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
+        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
+        instancePosScale                  = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
+                                                renderNodePosScale.w * instanceOffsetPosScale.w);
+        stateSlot                         = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
+    }
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
-
-    const vec4 quat                   = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
-    const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
-    const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
-    const vec4 instancePosScale       = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
-                                            renderNodePosScale.w * instanceOffsetPosScale.w);
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
     const float radius                = meshInfo.radius * instancePosScale.w;
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
@@ -252,7 +276,6 @@ void main()
         {
             const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
             const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
-            const uint stateSlot = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
             int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
                 u_lodParams0.x, 0.0, int(lodLevelState[stateSlot]));
             lodLevelState[stateSlot] = uint(level);
@@ -348,9 +371,10 @@ void main()
             }
         }
 
-        vec4 prevPosScale;
-        uvec2 prevQuat;
-        prevInstanceTransform(instance, prevPosScale, prevQuat);
+        vec4 prevPosScale = vec4(0.0); // trees never move
+        uvec2 prevQuat = uvec2(0u);
+        if (!isTree)
+            prevInstanceTransform(instance, prevPosScale, prevQuat);
         out_meshInstanceIndexes[firstInstance + idx]      = instanceIdx;
         out_meshInstances[instanceIdx].posScale           = instancePosScale;
         out_meshInstances[instanceIdx].quat               = quat;

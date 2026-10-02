@@ -880,7 +880,7 @@ modules keep the unprefixed ones), swapped in per placed piece beyond its distan
   both cards above stand vertical) get a THIRD, horizontal card for the top-down view
   (`billboardHorizontalView`): across the axis at mid height, seen from above, u (+Z) spanning at least the
   tree's height so the lit FS's crown radius matches the vertical cards'. The material carries
-  `MATERIAL_FLAG_FOLIAGE_TOP_CARD`; the lit FS finds the card by its up-facing normal (RendererVK). The
+  `MATERIAL_FLAG_BILLBOARD_TOP_CARD`; the lit FS finds the card by its up-facing normal (RendererVK). The
   edge-on fade hands over between the vertical cards and it. **Strip layout** (`billboardLayout`): 3 cards
   share the texture (3 strips with 2 views, 6 with 4), each strip's height rounded DOWN to a multiple of the
   largest power of two p that leaves ≥ 4 px per strip at mip log2(p) — so every strip boundary lands on a texel
@@ -888,13 +888,15 @@ modules keep the unprefixed ones), swapped in per placed piece beyond its distan
   (+25% over a 4-strip layout), 32 spare rows at the bottom. 2 cards: 256 rows, mips to 4 px as before. **VOLUME normals**: each texel's normal is bent by
   `Billboard NormalBend` toward "out of the clump's centre" (its 3D position from the baked depth) and keeps
   its sign, in each card face's tangent space. The material carries
-  `MATERIAL_FLAG_FOLIAGE`, so the lit FS does not reject the sun shadow by the flat card normal — without
+  `MATERIAL_FLAG_BILLBOARD`, so the lit FS does not reject the sun shadow by the flat card normal — without
   both, a whole card went dark whenever the sun was behind it. The normal map's ALPHA is the texel's depth off
   the card (signed along the card's FRONT normal on every strip — the 4-view back strips are negated — in
   units of the card's u length, 128 = on the plane, uncovered texels too; the normal mips average it): the
   lit FS moves the foliage shadow lookup there and the shadow pass writes its casters there (RendererVK
-  `MATERIAL_FLAG_FOLIAGE`), so the crossed cards self-shadow by the leaves' depths instead of leaking a lit
-  strip at their crossing line. The lit FS also blends their normals toward a view-ray CROWN normal
+  `MATERIAL_FLAG_BILLBOARD`), so the crossed cards self-shadow by the leaves' depths instead of leaking a lit
+  strip at their crossing line. The billboard materials and the leaf cluster material also carry
+  `MATERIAL_FLAG_LEAF`: the sun shines through them (RendererVK leaf transmission, `Trees/Foliage
+  transmission*` tweaks). The lit FS also blends their normals toward a view-ray CROWN normal
   (`Trees/Foliage crown normal`), so the two cards stop shading differently at their crossing axis. This
   needs the card's +u axis to run from the instance origin (`billboardViews`: right = piece +Y). Real geometry on `LitMasked`: **they cast
   their own alpha-tested shadows**, so the mesh nodes stop drawing entirely.
@@ -995,8 +997,14 @@ The pieces still exist (the bake input, the piece library rows).
 With `Trees/GPU expansion` (default on) and any far mode but the octahedral impostors, `spawnPreview` builds
 ONE RendererVK tree instance set: a piece TYPE per library piece (its bark, leaves, the derived fade-out
 materials and the billboard, plus the band), then every placed piece (transform, far centre + radius, type).
-Per frame `update` makes one `renderTreeInstanceSet` call; a compute pass makes the per-piece decision and
-writes the instance records (see RendererVK "GPU tree expansion"). With billboards, the BILLBOARD is the
+The set is uploaded once to device-local memory; per frame `update` makes one `renderTreeInstanceSet` call, and
+the culls make the per-piece decision and build the records themselves, and the TLAS writer their RT instances
+(see RendererVK "BAKED TREE RECORDS"). Every baked variant also carries its
+FAR-TREE VOLUME grid (`bakeTreeDensity`, `TREE_DENSITY_RES` = 32³ extinction over its billboard box, from the
+LOD-0 triangles; cluster leaves count half opaque) and the species leaf colour — the leaf texture's
+alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures upload as sRGB, so the raw
+`leafColor` taken as linear read light yellow-green) — handed to the set as
+`TreeInstanceType::density` / `albedo` (RendererVK "Far-tree volume"). With billboards, the BILLBOARD is the
 piece's only shadow / GI / RT representation at every distance: the mesh draws in the MAIN pass only (both
 paths). Off — or in the impostor mode, whose
 main-pass-only quad + shadow-only meshes need per-node pass masks — it keeps the CPU path below (one
@@ -1010,8 +1018,10 @@ materials), and spawns a `Grove size`² grove in front of the camera plus the pi
 (`Show piece library`). `Grove type`: Mixed (species alternate) or one species by its `TreeSpecies` name — the
 names are a fixed list in TreeSystem.cpp (`GROVE_TYPES`; a tweak enum registers before the species load), so a
 new species needs its name added there; a missing one falls back to mixed with a warning. Trees sit on a
-`Spacing` grid, each offset by a seeded random `Position jitter` × spacing (default 1 = anywhere in its cell;
-the old fixed 0.3 left the rows visible). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
+`Spacing` grid (default 11 m; `Grove size` up to 512², default 350² of `Grove type` Oak, for the far-tree volume),
+each offset by a seeded random `Position jitter` × spacing (default 0.8; 1 = anywhere in its cell;
+the old fixed 0.3 left the rows visible), and scaled by the species' `Scale` range × `Size variation` (2^±v,
+log-uniform, default 0.5 = ×0.71..1.41). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
 by the dedicated GPU tree pipeline (G4: own shaders, per-tree bone palettes, own shadow draw); trees in that
 path are not in the RT scene at first, but the design keeps RT addable.**
 

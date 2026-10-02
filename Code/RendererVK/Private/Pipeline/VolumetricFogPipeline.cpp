@@ -89,6 +89,9 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 7, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     // 8 = the cloud shadow map: the far field's sun term is shadowed by the clouds (light shafts).
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 8, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    // 9 + 10 = the far-tree volume's march (colour, distance): composited inside the fog like the clouds.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 9, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
     // Eye index (per-eye depth reconstruction + projection; 0 on desktop / left eye).
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
@@ -329,7 +332,7 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
     DescriptorSet& set = m_applySets[applySlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
-    oc::array<DescriptorSetUpdateInfo, 9> updates{
+    oc::array<DescriptorSetUpdateInfo, 11> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
@@ -339,13 +342,15 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudColorView) } },
         DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudDepthView) } },
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
-        DescriptorSetUpdateInfo{}, // [7] + [8] the GI volume (its sky SH): written only while it exists
+        DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesColorView) } },
+        DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesDepthView) } },
+        DescriptorSetUpdateInfo{}, // [9] + [10] the GI volume (its sky SH): written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(5, updates[7], updates[8]);
+        params.giVolume.fillUpdates(5, updates[9], updates[10]);
     commandBuffer.cmdUpdateDescriptorSets(m_applyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
-        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 7 : 9));
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 9 : 11));
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_applyPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);

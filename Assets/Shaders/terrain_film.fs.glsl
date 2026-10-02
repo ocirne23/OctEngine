@@ -65,8 +65,10 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 	vec3 albedo = vec3(0.3);
 	// Interpolated normal/uv + material albedo, bounds-checked like rt_shadow.inc.glsl.
 	const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
+	// Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
+	const bool tree = (instanceIdx & 0x800000) != 0;
 	const uint meshIdx = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
-	if (uint(instanceIdx) < in_instances.length() && meshIdx < in_meshInfos.length())
+	if ((tree || uint(instanceIdx) < in_instances.length()) && meshIdx < in_meshInfos.length())
 	{
 		const InMeshInfo mi = in_meshInfos[meshIdx];
 		const uint triBase = mi.firstIndex + uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, true)) * 3u;
@@ -84,7 +86,7 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 				hitN = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true)) * objN);
 				if (dot(hitN, dir) > 0.0)
 					hitN = -hitN;
-				const uint materialIdx = in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
+				const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
 				if (materialIdx < in_materialInfos.length())
 				{
 					hitTerrain = (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u;

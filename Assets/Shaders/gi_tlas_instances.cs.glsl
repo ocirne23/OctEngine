@@ -48,6 +48,14 @@ layout (binding = 6, std430) readonly buffer InNodePassMasksBuffer        { uint
 // single BLAS at its RT level, so instances of every level reference that BLAS and carry its meshIdx
 // (packed into sbtOffset below) for the hit shaders' attribute fetches.
 layout (binding = 7, std430) readonly buffer InRtMeshAliasBuffer          { uint in_rtMeshAlias[]; };
+// The BAKED TREE RECORDS (bindings 9 / 10): their stream entries are never written, so a tree's instance is built
+// from the static tree data instead - its SHADOW representation (the billboard; the meshes for a type without one),
+// as the shadow cull does. Its custom index carries the MATERIAL itself (RT_CUSTOM_TREE | materialIdx): every ray-query
+// consumer reads only the material from in_instances[custom], and has no stream entry to read for a tree.
+#define TREE_CULL_PIECES_BINDING 9
+#define TREE_CULL_TYPES_BINDING 10
+#include "tree_cull.inc.glsl"
+const uint RT_CUSTOM_TREE = 0x800000u; // custom index bit 23: a tree, the low 16 bits its material
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -70,9 +78,13 @@ void main()
     const uint id = gl_GlobalInvocationID.x;
     if (id >= uint(out_instances.length()))
         return;
-    if (id >= u_giTlasNumInstances)
+    // Past the live count, or a tree record without a shadow representation: an inactive record (reference 0 - not
+    // built, not traversed).
+    const bool isTree = treeCullIsTree(id);
+    TreeCullRecord treeRec;
+    TreeCullPiece treePiece;
+    if (id >= u_giTlasNumInstances || (isTree && !treeCullShadow(id, treeRec, treePiece)))
     {
-        // Past the live count: an inactive record (reference 0 - not built, not traversed).
         TlasInstance dead;
         dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
         dead.instanceCustomIndexAndMask = 0u;
@@ -83,14 +95,32 @@ void main()
         return;
     }
 
-    const InMeshInstance inst = in_instances[id];
+    InMeshInstance inst;
+    vec4 quat;
+    vec3 pos;
+    float scale;
+    bool inRtSet;
+    if (isTree)
+    {
+        inst = InMeshInstance(0u, 0u, treeRec.meshMaterial, treeRec.pipelineAlpha);
+        quat = treePiece.quat;
+        pos = treePiece.posScale.xyz;
+        scale = treePiece.posScale.w;
+        inRtSet = true; // the shadow / GI stand-in, always
+    }
+    else
+    {
+        inst = in_instances[id];
+        quat              = quat_multiply(in_renderNodeTransforms[inst.renderNodeIdx].quat, in_instanceOffsets[inst.instanceOffsetIdx].quat);
+        const vec4 rnPS   = in_renderNodeTransforms[inst.renderNodeIdx].posScale;
+        const vec4 ioPS   = in_instanceOffsets[inst.instanceOffsetIdx].posScale;
+        pos               = rnPS.xyz + quat_transform(ioPS.xyz * rnPS.w, in_renderNodeTransforms[inst.renderNodeIdx].quat);
+        scale             = rnPS.w * ioPS.w;
+        // GI or shadow relevance keeps the instance hittable: probes/RTAO trace the GI set, and the
+        // rt-sun-shadow mode needs shadow-relevant casters present too.
+        inRtSet = (in_nodePassMasks[inst.renderNodeIdx] & (PASS_GI | PASS_SHADOW)) != 0u;
+    }
     const uint meshIdx = inst.meshIdxMaterialIdx & 0x0000FFFFu;
-
-    const vec4 quat   = quat_multiply(in_renderNodeTransforms[inst.renderNodeIdx].quat, in_instanceOffsets[inst.instanceOffsetIdx].quat);
-    const vec4 rnPS   = in_renderNodeTransforms[inst.renderNodeIdx].posScale;
-    const vec4 ioPS   = in_instanceOffsets[inst.instanceOffsetIdx].posScale;
-    const vec3 pos    = rnPS.xyz + quat_transform(ioPS.xyz * rnPS.w, in_renderNodeTransforms[inst.renderNodeIdx].quat);
-    const float scale = rnPS.w * ioPS.w;
 
     // Rotation matrix columns (object basis vectors rotated into world), scaled uniformly.
     const vec3 col0 = quat_transform(vec3(1.0, 0.0, 0.0), quat);
@@ -137,9 +167,6 @@ void main()
     const uint materialIdx = inst.meshIdxMaterialIdx >> 16;
     const bool noRT = materialIdx < uint(in_materialInfos.length())
                    && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_NO_RAYTRACING) != 0u;
-    // GI or shadow relevance keeps the instance hittable: probes/RTAO trace the GI set, and the
-    // rt-sun-shadow mode needs shadow-relevant casters present too.
-    const bool inRtSet = (in_nodePassMasks[inst.renderNodeIdx] & (PASS_GI | PASS_SHADOW)) != 0u;
     // Range bound: rays never reach past the GI clipmap + max ray distance, so distant geometry
     // only bloats the TLAS build (origin-distance test: cheap, conservative via the RT/GI tweak).
     // Centered on the scene focus (the player in game mode; the camera otherwise).
@@ -153,8 +180,10 @@ void main()
     // Mask: FOLIAGE cards (tree billboards) only 0x02, so RTAO's rays (cull mask 0x01) skip them - its opaque rays
     // would hit the whole card rectangles; every other ray (0xFF) still hits them.
     const bool foliage = materialIdx < uint(in_materialInfos.length())
-                      && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_FOLIAGE) != 0u;
-    o.instanceCustomIndexAndMask = (id & 0x00FFFFFFu) | ((foliage ? 0x02u : 0xFFu) << 24); // custom = instance idx
+                      && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_BILLBOARD) != 0u;
+    // Custom = the stream index (below RT_CUSTOM_TREE: the TLAS holds far fewer), or a tree's RT_CUSTOM_TREE | material.
+    const uint custom = isTree ? RT_CUSTOM_TREE | materialIdx : id & (RT_CUSTOM_TREE - 1u);
+    o.instanceCustomIndexAndMask = custom | ((foliage ? 0x02u : 0xFFu) << 24);
 
     out_instances[id] = o;
 }

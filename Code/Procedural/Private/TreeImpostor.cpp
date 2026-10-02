@@ -303,6 +303,42 @@ namespace Procedural
 		}
 	}
 
+	void bakeTreeDensity(const TreePiece& piece, uint32 res, float leafCoverage, oc::vector<float>& out, TreeBillboardBox& outBox)
+	{
+		outBox = billboardBox(piece);
+		out.assign((size_t)res * res * res, 0.0f);
+		const glm::vec3 size = glm::max(outBox.max - outBox.min, glm::vec3(1e-3f));
+		const glm::vec3 voxel = size / (float)res;
+		const float invVoxelVolume = 1.0f / (voxel.x * voxel.y * voxel.z);
+		const float minVoxel = glm::min(glm::min(voxel.x, voxel.y), voxel.z);
+		auto splat = [&](const TreeMesh& mesh, float blockPerArea)
+		{
+			for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+			{
+				const glm::vec3 a = mesh.positions[mesh.indices[t]];
+				const glm::vec3 b = mesh.positions[mesh.indices[t + 1]];
+				const glm::vec3 c = mesh.positions[mesh.indices[t + 2]];
+				const float area = 0.5f * glm::length(glm::cross(b - a, c - a));
+				if (area <= 0.0f)
+					continue;
+				// A barycentric grid of n(n+1)/2 points, fine enough that every voxel the triangle crosses gets some.
+				const float longest = glm::max(glm::max(glm::length(b - a), glm::length(c - b)), glm::length(a - c));
+				const uint32 n = glm::clamp((uint32)std::ceil(longest / (0.5f * minVoxel)), 1u, 32u);
+				const float share = area * blockPerArea * invVoxelVolume / (float)(n * (n + 1) / 2);
+				for (uint32 i = 0; i < n; ++i)
+					for (uint32 j = 0; i + j < n; ++j)
+					{
+						const float u = ((float)i + 1.0f / 3.0f) / (float)n, v = ((float)j + 1.0f / 3.0f) / (float)n;
+						const glm::vec3 p = a + (b - a) * u + (c - a) * v;
+						const glm::ivec3 cell = glm::clamp(glm::ivec3(glm::floor((p - outBox.min) / voxel)), glm::ivec3(0), glm::ivec3((int)res - 1));
+						out[(size_t)cell.x + res * ((size_t)cell.y + res * (size_t)cell.z)] += share;
+					}
+			}
+		};
+		splat(piece.leaves[0], 0.5f * leafCoverage);
+		splat(piece.bark[0], 0.25f);
+	}
+
 	TreeBillboardBox billboardBox(const TreePiece& piece)
 	{
 		glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);

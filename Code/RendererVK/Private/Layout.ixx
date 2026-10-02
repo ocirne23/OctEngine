@@ -838,8 +838,14 @@ export namespace RendererVKLayout
         glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
                                   // w = interior shadow: leaf radius (/ crown radius) where it is full
         glm::vec4 foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
-                                  // z = interior shadow top card scale, w unused
-
+                                  // z = interior shadow top card scale, w = leaf transmission strength
+        glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
+                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
+        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
+        // of this frame's tree range, y = its length (3 per tree; 0 = none). params: x = the far distance scale,
+        // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume).
+        glm::uvec4 treeCull;
+        glm::vec4 treeCullParams;
         // Forcefield bubbles (Force library / ForceFieldPipeline; keep in sync with ubo.inc.glsl)
         glm::vec4 forceTeamColors[MAX_FORCE_TEAMS]; // rgb = linear team color, w unused
         glm::vec4 forceParams0; // x = iso threshold, y = rim power, z = rim intensity, w = shell base alpha
@@ -931,7 +937,7 @@ export namespace RendererVKLayout
         float scale;
         glm::vec4 quat;
         uint32 alphaTexIdxCascadeMask;
-        uint32 foliageNormalTexIdx; // MATERIAL_FLAG_FOLIAGE casters: the normal map (alpha = baked depth); 0xFFFF = none
+        uint32 foliageNormalTexIdx; // MATERIAL_FLAG_BILLBOARD casters: the normal map (alpha = baked depth); 0xFFFF = none
         float foliageShift;         // their world bounding radius: the depth pass pulls them toward the light by it
         uint32 _pad0;
     };
@@ -1013,8 +1019,9 @@ export namespace RendererVKLayout
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays
-    // bit 30 is free (was MATERIAL_FLAG_SKY, read only by the removed depth prepass; the Sky variant
-    // now simply does not write depth)
+    constexpr uint32 MATERIAL_FLAG_LEAF = 1u << 30; // LitMasked: thin, light-transmitting leaves (the tree leaf
+                                                    // clusters + billboards): the sun shines THROUGH them - a
+                                                    // diffuse back term + a forward glow ("Trees/Foliage transmission")
     constexpr uint32 MATERIAL_FLAG_BC5_NORMAL = 1u << 29; // normal map is a two-channel BC5 texture (X/Y only):
                                                           // the shader reconstructs Z instead of reading .z
     constexpr uint32 MATERIAL_FLAG_OCEAN = 1u << 28; // ocean water (the Ocean variant's materials)
@@ -1034,10 +1041,10 @@ export namespace RendererVKLayout
         const uint32 width = (uint32)(widthMetres < 1.0f ? 1.0f : widthMetres > 1023.0f ? 1023.0f : widthMetres);
         return MATERIAL_FLAG_DISTANCE_FADE | (fadeIn ? MATERIAL_FLAG_FADE_IN : 0u) | start | (width << 12);
     }
-    constexpr uint32 MATERIAL_FLAG_FOLIAGE = 1u << 26; // LitMasked: the sun shadow is NOT rejected by the geometric
+    constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // LitMasked: the sun shadow is NOT rejected by the geometric
                                                        // normal's facing (a flat card standing for a foliage clump,
                                                        // the tree billboards) - the normal-mapped normal decides
-    constexpr uint32 MATERIAL_FLAG_FOLIAGE_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
+    constexpr uint32 MATERIAL_FLAG_BILLBOARD_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
                                                        // HORIZONTAL card (its top-down view; the card whose normal
                                                        // points up) - the lit FS's crown frame runs along its normal
 

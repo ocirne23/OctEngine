@@ -57,6 +57,11 @@ public:
         Buffer& ubo;
         vk::ImageView sceneDepthView;
         vk::Sampler   sceneDepthSampler;
+        // The far-tree volume's result (GENERAL; read only while it marched - u_foliageParams4.w): composited with the
+        // clouds by distance, as the fog apply does.
+        vk::ImageView farTreesColorView;
+        vk::ImageView farTreesDepthView;
+        vk::Sampler   farTreesSampler;
     };
     // The fullscreen apply draw; the caller is inside the scene-colour render pass with the viewport set.
     void recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const ApplyParams& params);

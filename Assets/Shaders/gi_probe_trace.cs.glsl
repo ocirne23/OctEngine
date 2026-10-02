@@ -191,13 +191,15 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     // Bound every post-hit buffer access. A bad meshIdx/triBase/vertex index would otherwise read wildly
     // out of bounds and MMU-fault; treat any out-of-range hit as a miss.
     const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    if (uint(instanceIdx) >= in_instances.length())
+    // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
+    const bool tree = (instanceIdx & 0x800000) != 0;
+    if (!tree && uint(instanceIdx) >= in_instances.length())
         return traceMiss(dir, sunLuma, skyOpen);
     // Geometry comes from the RT meshIdx the TLAS writer packed into the instance's sbtOffset (a LOD
     // chain traces one shared BLAS, which may differ from the raster-selected level the instance
     // references); the material still comes from the instance.
     const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
-    const uint materialIdx = in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
+    const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
     if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
         return traceMiss(dir, sunLuma, skyOpen);
     const InMeshInfo mi    = in_meshInfos[meshIdx];

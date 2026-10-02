@@ -47,6 +47,10 @@ export namespace Procedural
 			uint16 impostorMaterial = UINT16_MAX;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
 			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
+			// Baked variants only: the far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
+			oc::vector<float> density;
+			glm::vec3 densityMin{ 0.0f };
+			glm::vec3 densityMax{ 0.0f };
 		};
 		// One placed piece of the preview. Beyond its far distance the far node (billboard or impostor) replaces
 		// the mesh LOD nodes. A BILLBOARD is real geometry and casts its own shadow: the mesh nodes then stop
@@ -90,6 +94,7 @@ export namespace Procedural
 			// released with the species). UINT16_MAX without billboards.
 			uint16 barkFadeMaterial = UINT16_MAX;
 			uint16 leafFadeMaterial = UINT16_MAX;
+			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
 		void reload(Renderer& renderer);
@@ -113,11 +118,12 @@ export namespace Procedural
 		bool m_respawn = false;     // button: respawn the preview in front of the camera
 		bool m_regenerateTextures = false; // button: regenerate the species textures over the files on disk
 		bool m_showLibrary = true;
-		int m_gridSize = 5;
-		float m_spacing = 14.0f;
-		float m_positionJitter = 1.0f;        // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)
+		int m_gridSize = 350;
+		float m_spacing = 11.0f;
+		float m_positionJitter = 0.8f;        // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)
+		float m_sizeVariation = 0.5f;         // extra per-tree scale on top of the species range: x 2^(+-this), log-uniform
 		int m_seed = 1;
-		int m_groveType = 0;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name
+		int m_groveType = 1;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name (1 = Oak)
 		int m_farMode = 0;                    // 0 = billboards, 1 = octahedral impostors (fallback), 2 = none (reloads)
 		int m_billboardViews = 0;             // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
 		float m_impostorDistanceScale = 1.0f; // x every species' far distance (billboard or impostor); 0 = off

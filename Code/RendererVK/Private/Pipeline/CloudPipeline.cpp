@@ -261,7 +261,7 @@ void CloudPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     layout.depthWriteEnable = false;
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer, vk::ShaderStageFlagBits::eFragment));
-    for (uint32 i = 1; i <= 3; ++i) // scene depth, cloud color, cloud depth
+    for (uint32 i = 1; i <= 5; ++i) // scene depth, cloud color, cloud depth, far-tree colour, far-tree distance
         b.push_back(binding(i, vk::DescriptorType::eCombinedImageSampler, vk::ShaderStageFlagBits::eFragment));
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
@@ -788,11 +788,13 @@ void CloudPipeline::recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, u
     const uint32 cur = slot(frameIdx, eye);
     const vk::DescriptorSet vkSet = m_applySets[cur].getDescriptorSet();
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
-    oc::array<DescriptorSetUpdateInfo, 4> updates{
+    oc::array<DescriptorSetUpdateInfo, 6> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.sceneDepthView) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumColor.view[cur]) } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumDepth.view[cur]) } },
+        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesColorView) } },
+        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesDepthView) } },
     };
     commandBuffer.cmdUpdateDescriptorSets(m_applyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipeline());

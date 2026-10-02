@@ -308,8 +308,14 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
                            // w = interior shadow: leaf radius (/ crown radius) where it is full
     vec4 u_foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
-                           // z = interior shadow top card scale, w unused
-
+                           // z = interior shadow top card scale, w = leaf transmission strength
+    vec4 u_foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
+                           // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)
+    // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
+    // length (3 per tree; 0 = no trees), zw unused; params x = the far distance scale, y = force far (0/1),
+    // z = the far-tree volume's start (3D, m; 0 = no volume), w unused.
+    uvec4 u_treeCull;
+    vec4 u_treeCullParams;
     // Forcefield bubbles (keep in sync with RendererVKLayout::Ubo; force_field.inc.glsl consumes these)
     vec4 u_forceTeamColors[MAX_FORCE_TEAMS]; // rgb = linear team color, w unused
     vec4 u_forceParams0; // x = iso threshold, y = rim power, z = rim intensity, w = shell base alpha

@@ -65,7 +65,7 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
         computePipelineLayout.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
-    for (uint32 i = 0; i <= 12; i++) // 11/12 = LOD group idx per mesh / LOD group data
+    for (uint32 i = 0; i <= 14; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14 the baked tree pieces / types
     {
         b.push_back(vk::DescriptorSetLayoutBinding{
             .binding = i,
@@ -80,7 +80,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 13> updates{
+    oc::array<DescriptorSetUpdateInfo, 15> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
@@ -107,6 +107,10 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inMeshLodGroupIdxBuffer.getBuffer(), .range = params.inMeshLodGroupIdxBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inMeshLodGroupsBuffer.getBuffer(), .range = params.inMeshLodGroupsBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treePiecesBuffer.getBuffer(), .range = params.treePiecesBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treeTypesBuffer.getBuffer(), .range = params.treeTypesBuffer.getSize() } } },
     };
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();

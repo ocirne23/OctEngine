@@ -72,6 +72,7 @@ namespace
 	// Far-representation cache name infix per piece set (modules keep the original, unprefixed names).
 	constexpr const char* PIECE_KINDS[3] = { "", "trunk", "tree" };
 	constexpr uint32 TREE_TEXTURE_SIZE = 1024;
+	constexpr uint32 TREE_DENSITY_RES = 32; // the far-tree volume's per-variant extinction grid (bakeTreeDensity)
 
 	// A square power-of-two RGBA8 image (the mip chain halves down to 1x1). False when missing or unusable.
 	bool loadSquareImage(const oc::string& path, uint32& outSize, oc::vector<uint8>& outRgba)
@@ -86,6 +87,26 @@ namespace
 		}
 		outSize = w;
 		return true;
+	}
+
+	// The LINEAR mean albedo of an RGBA8 leaf image, alpha-weighted: albedo textures upload as sRGB, so each texel
+	// is decoded before the sum (the far-tree volume's leaf colour must match what the meshes show).
+	glm::vec3 meanLeafAlbedo(const oc::vector<uint8>& rgba, const glm::vec3& fallback)
+	{
+		auto decode = [](uint8 v)
+		{
+			const float c = (float)v / 255.0f;
+			return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+		};
+		glm::vec3 sum(0.0f);
+		float weight = 0.0f;
+		for (size_t i = 0; i + 3 < rgba.size(); i += 4)
+		{
+			const float a = (float)rgba[i + 3] / 255.0f;
+			sum += glm::vec3(decode(rgba[i]), decode(rgba[i + 1]), decode(rgba[i + 2])) * a;
+			weight += a;
+		}
+		return weight > 0.0f ? sum / weight : fallback;
 	}
 
 	void saveImage(const oc::string& path, uint32 size, const oc::vector<uint8>& rgba)
@@ -173,9 +194,10 @@ namespace Procedural
 		Tweak::boolean("Trees", "Respawn preview", &m_respawn);
 		Tweak::boolean("Trees", "Regenerate textures", &m_regenerateTextures, [this]() { if (m_regenerateTextures) m_reload = true; });
 		Tweak::boolean("Trees", "Show piece library", &m_showLibrary, respawn);
-		Tweak::intVar("Trees", "Grove size", &m_gridSize, 1, 32, 1.0f, respawn);
+		Tweak::intVar("Trees", "Grove size", &m_gridSize, 1, 512, 1.0f, respawn);
 		Tweak::floatVar("Trees", "Spacing (m)", &m_spacing, 2.0f, 50.0f, 0.1f, respawn);
 		Tweak::floatVar("Trees", "Position jitter", &m_positionJitter, 0.0f, 2.0f, 0.01f, respawn);
+		Tweak::floatVar("Trees", "Size variation", &m_sizeVariation, 0.0f, 2.0f, 0.01f, respawn);
 		Tweak::intVar("Trees", "Seed", &m_seed, 0, 1000000, 1.0f, respawn);
 		Tweak::enumVar("Trees", "Grove type", &m_groveType, GROVE_TYPES, respawn);
 		static constexpr oc::string_view FAR_MODES[] = { "Billboards", "Octahedral impostors", "None" };
@@ -228,6 +250,9 @@ namespace Procedural
 		// The GPU path: one call, the expansion decides per piece (the same rules as the CPU loop below).
 		if (m_treeSet != UINT32_MAX)
 			renderer.renderTreeInstanceSet(m_treeSet, camera.position, m_impostorDistanceScale, m_forceImpostors);
+		// The far-tree volume lays its cells out by the camera's height above the ground under it.
+		if (maps)
+			renderer.setFarTreeCameraGround(maps->sampleHeight(camera.position.x, camera.position.z));
 
 		// The CPU path (GPU expansion off, or the impostor mode): per module, the far representation beyond its
 		// distance (5% hysteresis), else the mesh LOD chain. Billboards crossfade instead (see PlacedPiece).
@@ -239,7 +264,7 @@ namespace Procedural
 				// The same band the materials carry (applyFadeBands). A pixel's distance varies by up to the
 				// module's radius from the centre's, so both sides draw while any of it can be in the band.
 				// The billboard stands in for the piece in every pass but MAIN (shadow, GI, RT): the mesh draws in
-				// MAIN only, the cards always draw, in MAIN too only while they show (as tree_expand.cs.glsl).
+				// MAIN only, the cards always draw, in MAIN too only while they show (as tree_cull.inc.glsl).
 				const float switchDistance = piece.farDistance * m_impostorDistanceScale;
 				const float bandStart = glm::max(switchDistance - piece.fadeWidth * 0.5f, 0.0f);
 				const float bandEnd = bandStart + piece.fadeWidth;
@@ -337,6 +362,17 @@ namespace Procedural
 			for (int v = 0; v < species.desc.variantCount; ++v)
 				bakeTreeVariant(species.desc, species.library, treeHash(species.desc.seed, 5000u + (uint32)v), species.variants[(size_t)v]);
 			uploadPieces(species.variants, species.variantMeshes);
+			// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline). Cluster cards are about
+			// half opaque; a single leaf diamond fully.
+			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f;
+			for (size_t v = 0; v < species.variants.size(); ++v)
+			{
+				PieceMeshes& meshes = species.variantMeshes[v];
+				TreeBillboardBox box;
+				bakeTreeDensity(species.variants[v], TREE_DENSITY_RES, leafCoverage, meshes.density, box);
+				meshes.densityMin = box.min;
+				meshes.densityMax = box.max;
+			}
 			const oc::string& name = species.desc.name.empty() ? entry.name : species.desc.name;
 			// Level-0 images, kept for the impostor bake.
 			oc::vector<uint8> barkAlbedo, leafImage;
@@ -383,7 +419,9 @@ namespace Procedural
 				oc::vector<oc::span<uint8>> mips;
 				for (oc::vector<uint8>& level : texture.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				species.leafMaterial = renderer.createTextureMaterial(texture.size, texture.size, mips, TREE_LEAF_ALPHA_CUTOFF, "TreeLeafCluster");
+				// LEAF: the sun shines through the cluster cards (the lit FS's transmission).
+				species.leafMaterial = renderer.createTextureMaterial(texture.size, texture.size, mips, TREE_LEAF_ALPHA_CUTOFF, "TreeLeafCluster",
+					nullptr, RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitMasked;
 			}
@@ -396,6 +434,7 @@ namespace Procedural
 					(uint8)(glm::clamp(species.desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
 					(uint8)(glm::clamp(species.desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
 			}
+			species.volumeAlbedo = meanLeafAlbedo(leafImage, species.desc.leafColor);
 			if (m_farMode == 0 && species.desc.billboardDistance > 0.0f)
 			{
 				buildBillboards(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
@@ -552,7 +591,8 @@ namespace Procedural
 			}
 			// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect.fs.glsl).
 			meshes.billboardMaterial = renderer.createTextureMaterial(size, size, albedoMips, TREE_LEAF_ALPHA_CUTOFF, "TreeBillboard",
-				&normalMips, RendererVKLayout::MATERIAL_FLAG_FOLIAGE | (horizontal ? RendererVKLayout::MATERIAL_FLAG_FOLIAGE_TOP_CARD : 0u));
+				&normalMips, RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
+				| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
 
 			TreeMesh cards;
 			billboardMesh(box, size, numViews, horizontal, cards);
@@ -618,7 +658,7 @@ namespace Procedural
 					GROVE_TYPES[m_groveType]));
 		}
 
-		// G4: on the GPU path every placed piece goes into ONE expansion set (RendererVK TreeExpandPipeline): a
+		// G4: on the GPU path every placed piece goes into ONE baked set (RendererVK tree_cull.inc.glsl): a
 		// piece TYPE per library piece, then per frame one call instead of a renderNode per piece node. The
 		// octahedral impostor mode keeps the CPU path (its main-pass-only quad + shadow-only meshes).
 		const bool gpu = m_gpuExpansion && m_farMode != 1;
@@ -636,6 +676,14 @@ namespace Procedural
 						const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
 						type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
 						type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
+						if (!meshes.density.empty())
+						{
+							type.density = meshes.density.data();
+							type.densityRes = TREE_DENSITY_RES;
+							type.densityMin = meshes.densityMin;
+							type.densityMax = meshes.densityMax;
+							type.albedo = species.volumeAlbedo;
+						}
 						if (meshes.billboard.isValid())
 						{
 							type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
@@ -676,7 +724,9 @@ namespace Procedural
 				if (species.variantMeshes.empty())
 					continue;
 				const uint32 variant = treeHash(seed, 102u) % (uint32)species.variantMeshes.size();
-				const float treeScale = glm::mix(species.desc.scale.x, species.desc.scale.y, treeHash01(treeHash(seed, 103u)));
+				// The species' own range, then "Size variation": x 2^(+-v), log-uniform, so halving and doubling are as likely.
+				const float treeScale = glm::mix(species.desc.scale.x, species.desc.scale.y, treeHash01(treeHash(seed, 103u)))
+					* std::exp2(m_sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0f - 1.0f));
 				const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
 				place(species, species.variantMeshes[variant], Transform(glm::vec3(p.x, groundAt(p) - 0.05f, p.y), treeScale, yaw));
 			}

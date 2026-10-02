@@ -41,7 +41,7 @@ import :BakedWorldMap;
 import :SceneColor;
 import :DebugLinePipeline;
 import :ParticlePipeline;
-import :TreeExpandPipeline;
+import :TreeVolumePipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
@@ -217,7 +217,7 @@ public:
     // each level half the previous). alphaCutoff > 0 makes it alpha-tested (EAlphaMode::Mask, the cutoff
     // rides `opacity`): draw it on LitMasked. `normalMips` (optional, same size): a LINEAR RGB tangent-space
     // normal map (x along U, y along V, z out). Free with destroyTextureMaterial (textures + material slot).
-    // `extraFlags`: RendererVKLayout::MATERIAL_FLAG_* to add (e.g. MATERIAL_FLAG_FOLIAGE).
+    // `extraFlags`: RendererVKLayout::MATERIAL_FLAG_* to add (e.g. MATERIAL_FLAG_BILLBOARD).
     uint16 createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
         const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0);
     void destroyTextureMaterial(uint16 materialIdx);
@@ -238,9 +238,10 @@ public:
     // instance offset: the mesh is its own root).
     RenderNode spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform);
 
-    // -- Procedural tree pieces, expanded on the GPU (TreeExpandPipeline; RendererTrees.cpp) -- MAIN THREAD.
-    // A SET is a grove of placed pieces sharing a table of piece types. Per frame, renderTreeInstanceSet costs
-    // one instance claim, one count per distinct mesh and one dispatch - nothing per piece on the CPU.
+    // -- Procedural tree pieces, BAKED on the GPU (tree_cull.inc.glsl; RendererTrees.cpp) -- MAIN THREAD.
+    // A SET is a grove of placed pieces sharing a table of piece types, uploaded once to device-local memory. Per
+    // frame, renderTreeInstanceSet costs one instance claim and one count per distinct mesh - nothing per piece on
+    // the CPU, and no pass of its own on the GPU: the culls build the records. ONE set draws per frame.
     struct TreeInstanceRep // one representation; mesh nullptr = none. Spawned-on mesh = a chain's LEVEL 0.
     {
         const RenderMesh* mesh = nullptr;
@@ -253,6 +254,13 @@ public:
         TreeInstanceRep bark, barkFade, leaves, leavesFade, billboard;
         float farDistance = 0.0f; // billboard switch distance (m); 0 = always the mesh
         float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
+        // The FAR-TREE VOLUME's view of the type (TreeVolumePipeline): its extinction (1/m) over [densityMin,
+        // densityMax] in type space, densityRes^3 floats (x fastest); nullptr = the type is not in the volume.
+        const float* density = nullptr;
+        uint32 densityRes = 0;
+        glm::vec3 densityMin{ 0.0f };
+        glm::vec3 densityMax{ 0.0f };
+        glm::vec3 albedo{ 0.1f, 0.16f, 0.07f }; // the leaf colour of its volume
     };
     struct TreeInstancePiece
     {
@@ -266,6 +274,9 @@ public:
     void destroyTreeInstanceSet(uint32 setId);
     // Every frame the set should draw, before present(); distanceScale x every type's farDistance.
     void renderTreeInstanceSet(uint32 setId, const glm::vec3& cameraPos, float distanceScale, bool forceFar);
+    // The terrain height right under the camera (world Y), per frame: the far-tree volume's cell layout follows the
+    // camera's height above it. Unset (NaN): the baked sea level.
+    void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
 
     // -- Debug rendering --
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
@@ -414,7 +425,7 @@ private:
         void (Renderer::*recordCached)(uint32);                         // fills cb
         void (Renderer::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
     };
-    static constexpr uint32 NUM_SCENE_STAGES = 9;
+    static constexpr uint32 NUM_SCENE_STAGES = 10;
     oc::array<SceneStage, NUM_SCENE_STAGES> buildSceneStages(uint32 frameIdx);
 
     void recreateVrEyeTargets();
@@ -526,25 +537,40 @@ private:
     GIProbePipeline m_giProbePipeline;
     DebugLinePipeline m_debugLinePipeline;
     ParticlePipeline m_particlePipeline;
-    // GPU tree expansion (RendererTrees.cpp): the live sets (dead ones recycled by id) and this frame's dispatches
-    // (cleared in beginFrame, recorded at the top of the primary).
+    // BAKED TREE RECORDS (RendererTrees.cpp, tree_cull.inc.glsl): the live sets (dead ones recycled by id). The culls
+    // bind ONE set's static buffers (m_treeCullSet, the set rendered last; a change re-records them) and build its
+    // records from the camera distance in the range renderTreeInstanceSet claims (m_treeCullBase / Count, reset
+    // per frame in beginFrame, into the UBO's u_treeCull).
     struct TreeInstanceSet
     {
-        Buffer pieces;
-        Buffer types;
+        Buffer pieces; // TreeCullPieceGpu per piece (device-local)
+        Buffer types;  // TreeCullTypeGpu per type (device-local)
         uint32 numPieces = 0;
-        oc::vector<uint32> transformSlots; // per piece: the mesh records' node
-        oc::vector<uint32> billboardSlots; // per piece: the billboard record's node (same transform, own pass mask)
-        oc::vector<uint32> lodStateBases;  // TREE_EXPAND_RECORDS_PER_PIECE slots per piece
-        uint32 dummyNode = UINT32_MAX;     // pass mask 0: the unused records' node
-        uint32 maxNode = 0;
+        oc::vector<uint32> lodStateBases;  // TREE_RECORDS_PER_PIECE slots per piece
         oc::vector<oc::pair<uint16, uint32>> meshCounts; // the cull's bucket sizes (level-0 mesh, instances)
-        int32 uploadedGeneration[RendererVKLayout::NUM_FRAMES_IN_FLIGHT] = {}; // per slot: transforms written at
+        Buffer volumePieces; // TreeVolumePieceGpu per piece (the far-tree volume's bake)
+        Buffer volumeTypes;  // TreeVolumeTypeGpu per type
+        Buffer volumeData;   // the types' extinction mip chains (floats)
+        bool hasVolume = false;
         bool alive = false;
     };
-    TreeExpandPipeline m_treeExpandPipeline;
     oc::vector<TreeInstanceSet> m_treeSets;
-    oc::vector<TreeExpandPipeline::Dispatch> m_treeDispatches;
+    Buffer m_treeCullDummy;              // bound to both tree bindings while no set is
+    uint32 m_treeCullSet = UINT32_MAX;   // the set whose buffers the recorded culls bind
+    uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none)
+    uint32 m_treeCullCount = 0;
+    float m_treeCullDistanceScale = 1.0f;
+    bool m_treeCullForceFar = false;
+    Buffer& treeCullPieces();
+    Buffer& treeCullTypes();
+    void uploadTreeCullUbo(PerFrameData& frameData);
+    TreeVolumePipeline m_treeVolume;
+    FarTreeParams m_farTreeParams;
+    float m_farTreeCameraGround = std::numeric_limits<float>::quiet_NaN(); // setFarTreeCameraGround
+    bool farTreesActive() const; // enabled, desktop, and a tree set with volume data
+    float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)
+    void recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary); // bake when due + march (straight into the primary)
+    void recordFarTreesApply(uint32 frameIdx);                        // the scene stage's cached secondary
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
     ParticleState m_particles;
@@ -674,6 +700,7 @@ private:
         CommandBuffer fogApplyCommandBuffer;
         CommandBuffer cloudCommandBuffer;
         CommandBuffer cloudApplyCommandBuffer;
+        CommandBuffer farTreesApplyCommandBuffer;
         CommandBuffer giProbeDebugCommandBuffer;
         CommandBuffer debugLineCommandBuffer;
         CommandBuffer particleSimCommandBuffer;

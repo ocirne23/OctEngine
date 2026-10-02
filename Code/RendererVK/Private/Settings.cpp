@@ -148,10 +148,44 @@ void FoliageParams::registerTweaks()
     Tweak::floatVar("Trees", "Foliage interior inner radius", &interiorInner, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior outer radius", &interiorOuter, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow top card scale", &interiorTopCardScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission", &transmission, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission focus", &transmissionFocus, 1.0f, 64.0f, 0.1f);
+    Tweak::floatVar("Trees", "Foliage transmission glow", &transmissionGlow, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission shadow", &transmissionShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade start", &edgeFadeStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade end", &edgeFadeEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade centre scale", &edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
+}
+
+void FarTreeParams::registerTweaks()
+{
+    Tweak::boolean("Trees", "Far volume", &enabled);
+    Tweak::floatVar("Trees", "Far start (m)", &startDistance, 50.0f, 40000.0f, 5.0f);
+    Tweak::floatVar("Trees", "Far end (m)", &endDistance, 100.0f, 100000.0f, 10.0f);
+    Tweak::floatVar("Trees", "Far overlap (m)", &overlap, 1.0f, 5000.0f, 1.0f);
+    Tweak::intVar("Trees", "Far angular resolution", (int*)&angularRes, 64, 8192, 1.0f);
+    Tweak::intVar("Trees", "Far radial resolution", (int*)&radialRes, 16, 4096, 1.0f);
+    Tweak::intVar("Trees", "Far slices", (int*)&slices, 2, 64, 1.0f);
+    Tweak::floatVar("Trees", "Far height (m)", &height, 5.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Trees", "Far density", &densityScale, 0.0f, 10.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far blob shrink", &blobShrink, 0.0f, 2.0f, 0.001f);
+    Tweak::floatVar("Trees", "Far step scale", &stepScale, 0.05f, 4.0f, 0.01f);
+    Tweak::intVar("Trees", "Far max steps", (int*)&maxSteps, 8, 2048, 1.0f);
+    Tweak::floatVar("Trees", "Far ambient", &ambient, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far sun scale", &sunScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far self shadow", &selfShadow, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far normal strength", &normalStrength, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far ground darkening", &groundDarkening, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far interior shadow", &interiorShadow, 0.0f, 20.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far interior radius", &interiorRadius, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Trees", "Far forward scatter", &forwardScatter, -0.9f, 0.9f, 0.01f);
+    Tweak::floatVar("Trees", "Far albedo scale", &albedoScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far temporal blend", &temporalBlend, 0.0f, 0.98f, 0.01f);
+    Tweak::boolean("Trees", "Far half res", &halfRes);
+    static constexpr oc::string_view PIXEL_SKIP[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };
+    Tweak::enumVar("Trees", "Far pixel skip", &pixelSkip, PIXEL_SKIP);
+    Tweak::floatVar("Trees", "Far rebake distance (m)", &rebakeDistance, 1.0f, 2000.0f, 1.0f);
 }
 
 void FogParams::registerTweaks()

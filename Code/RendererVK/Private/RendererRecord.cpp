@@ -82,6 +82,8 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .meshCountBuffer = instances.meshCount,
         .inPrevRenderNodeTransformsBuffer = m_instances.getPrevTransforms(),
         .inPrevNodePassMasksBuffer = m_instances.getPrevPassMasks(),
+        .treePiecesBuffer = treeCullPieces(),
+        .treeTypesBuffer = treeCullTypes(),
     };
     m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
     cb.end();
@@ -170,6 +172,8 @@ void Renderer::recordShadowCull(uint32 frameIdx)
         .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
         .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
         .meshCountBuffer = instances.meshCount,
+        .treePiecesBuffer = treeCullPieces(),
+        .treeTypesBuffer = treeCullTypes(),
     };
     m_shadowCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -229,6 +233,8 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
         .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
         .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
         .meshCountBuffer = instances.meshCount,
+        .treePiecesBuffer = treeCullPieces(),
+        .treeTypesBuffer = treeCullTypes(),
     };
     m_rainCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -390,6 +396,9 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
         .cloudSampler = m_cloudPipeline.getLinearSampler(),
         .cloudShadowView = m_cloudPipeline.getShadowView(),
         .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
+        .farTreesColorView = m_treeVolume.getOutView(frameIdx), // desktop only: VR never sets the UBO flag
+        .farTreesDepthView = m_treeVolume.getOutDepthView(frameIdx),
+        .farTreesSampler = m_treeVolume.getSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, eyeIndex, params);
 }
@@ -431,6 +440,9 @@ void Renderer::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .ubo = frameData.ubo,
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .farTreesColorView = m_treeVolume.getOutView(frameIdx), // desktop only: VR never sets the UBO flag
+        .farTreesDepthView = m_treeVolume.getOutDepthView(frameIdx),
+        .farTreesSampler = m_treeVolume.getSampler(),
     };
     m_cloudPipeline.recordApply(cb, frameIdx, eyeIndex, params);
 }
@@ -730,6 +742,9 @@ void Renderer::recordFogApply(uint32 frameIdx)
         .cloudSampler = m_cloudPipeline.getLinearSampler(),
         .cloudShadowView = m_cloudPipeline.getShadowView(),
         .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
+        .farTreesColorView = m_treeVolume.getOutView(frameIdx),
+        .farTreesDepthView = m_treeVolume.getOutDepthView(frameIdx),
+        .farTreesSampler = m_treeVolume.getSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, 0, params);
     cb.end();
@@ -1059,6 +1074,8 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
             .materialInfos = m_materials.getBuffer(),
             .nodePassMasks = instances.passMasks,
             .ubo = frameData.ubo,
+            .treePieces = treeCullPieces(),
+            .treeTypes = treeCullTypes(),
             .count = liveCount,
         };
         m_giProbePipeline.recordTlasInstances(prepCommandBuffer, frameIdx, tlasParams);
@@ -1220,6 +1237,10 @@ oc::array<Renderer::SceneStage, Renderer::NUM_SCENE_STAGES> Renderer::buildScene
         SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &Renderer::recordForceShells,  &Renderer::recordForceFieldBothInto },
         SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &Renderer::recordForceUnion,   nullptr },
         SceneStage{ "Particles",         false, m_particles.isEnabled(),         false, &f.particleCommandBuffer,     &Renderer::recordParticles,    &Renderer::recordParticlesInto },
+        // The far-tree volume (TreeVolumePipeline; desktop only). With the fog on, the fog apply composites it
+        // itself at its own distance (like the clouds); this stage is the fog-off path.
+        // Fog off: with the clouds on, the cloud apply composites the trees itself (ordered by distance).
+        SceneStage{ "Far trees apply",   false, farTreesActive() && !m_fogParams.enabled && !cloudsEnabled(), false, &f.farTreesApplyCommandBuffer, &Renderer::recordFarTreesApply, nullptr },
         // With the fog on, the fog apply composites the clouds itself (inside the fog); this stage is the fog-off path.
         SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &Renderer::recordCloudApply,   &Renderer::recordCloudApplyInto },
         SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &Renderer::recordFogApply,     &Renderer::recordFogApplyInto },
@@ -1288,16 +1309,6 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
 void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    // The GPU tree expansion first: it writes instance records, pass masks and LOD biases into this slot's
-    // instance stream, which every cull, the TLAS writer and recordPrevCopy read (its own barrier ends it).
-    if (!m_treeDispatches.empty())
-    {
-        InstanceStream::FrameSlot& slot = m_instances.slot(frameIdx);
-        m_gpuProfiler.beginScope(primary, "Tree expand");
-        m_treeExpandPipeline.record(primary, slot.meshInstances.getDeviceAddress(), slot.passMasks.getDeviceAddress(),
-            slot.lodStateBias.getDeviceAddress(), m_treeDispatches);
-        m_gpuProfiler.endScope(primary);
-    }
     // Skin first: deforms skinned meshes into their output vertex regions, which the cull / forward /
     // shadow passes then consume as ordinary static geometry.
     if (m_skinned.hasJobs())
@@ -1563,6 +1574,9 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // Cloud march + temporal: reads this frame's (now read-only) depth; the "Cloud apply" scene stage composites it.
     if (cloudsEnabled())
         executeScoped(vkCommandBuffer, "Cloud march", frameData.cloudCommandBuffer.getCommandBuffer());
+    // The far-tree volume: bake when due + march (straight into the primary); the "Far trees apply" stage composites it.
+    if (farTreesActive())
+        recordFarTrees(frameIdx, vkCommandBuffer);
 
     // The union march's interval pass + the half-res march: their render passes begin/end HERE (a
     // secondary cannot begin one), the draws are cached secondaries (recordForceMarch). Gated like the

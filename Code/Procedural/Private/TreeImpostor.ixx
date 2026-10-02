@@ -59,7 +59,7 @@ export namespace Procedural
 	TreeBillboardBox billboardBox(const TreePiece& piece); // LOD-0 bark + leaves
 	void billboardViews(const TreeBillboardBox& box, TreeBillboardView& outSide, TreeBillboardView& outTop);
 	// `horizontal` (whole trees, whose +Y is up - both cards above stand vertical): a THIRD card, horizontal
-	// through the axis at mid height, seen from above - the top-down view (MATERIAL_FLAG_FOLIAGE_TOP_CARD tells
+	// through the axis at mid height, seen from above - the top-down view (MATERIAL_FLAG_BILLBOARD_TOP_CARD tells
 	// the lit FS, which finds the card by its up-facing normal).
 	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box);
 	// The strips stacked top to bottom (card by card, each card's faces in turn), each stripHeight rows - rounded
@@ -78,6 +78,12 @@ export namespace Procedural
 		uint32 numViews, bool horizontal, oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal);
 	// The cards (both faces), UVs into the strips of a `numViews` / `horizontal` bake.
 	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out);
+
+	// The FAR-TREE VOLUME's view of a piece (RendererVK TreeVolumePipeline): its EXTINCTION (1/m) over its billboard
+	// box, res^3 voxels (x fastest, then y, then z), from the LOD-0 triangles - a leaf card blocks half its area on
+	// average (x `leafCoverage`, the texture's opaque fraction), the bark a quarter of its surface (a convex body's
+	// mean projected area), each spread over its voxels per unit volume.
+	void bakeTreeDensity(const TreePiece& piece, uint32 res, float leafCoverage, oc::vector<float>& out, TreeBillboardBox& outBox);
 
 	// Mirrors of tree_impostor.vs.glsl.
 	glm::vec2 impostorOctEncode(glm::vec3 d);

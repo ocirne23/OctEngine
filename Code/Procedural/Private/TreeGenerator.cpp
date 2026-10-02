@@ -471,7 +471,7 @@ namespace
 			{
 				m.positions.push_back(corners[i]);
 				m.normals.push_back(n);
-				m.tangents.push_back(face == 0 ? side : -side);
+				m.tangents.push_back(side); // dPos/dU on BOTH faces (same UVs): the back face's handedness flips instead
 				m.bitangents.push_back(along);
 				m.texCoords.push_back(uvs[i]);
 				m.bones.push_back(bone);
@@ -511,11 +511,13 @@ namespace
 					if (glm::dot(bent, bent) > 1e-6f)
 						n = glm::normalize(bent);
 				}
-				const glm::vec3 faceSide = face == 0 ? side : -side;
-				const glm::vec3 t = faceSide - n * glm::dot(faceSide, n);
+				// The tangent is dPos/dU on BOTH faces (they share the UVs) - the back face's handedness flips instead
+				// (RenderMesh's sign from n, t, b). A back face with -side mirrored the normal map's X: its bumps faced
+				// away from the light, and half the leaves shaded too dark.
+				const glm::vec3 t = side - n * glm::dot(side, n);
 				m.positions.push_back(corners[i]);
 				m.normals.push_back(n);
-				m.tangents.push_back(glm::dot(t, t) > 1e-8f ? glm::normalize(t) : faceSide);
+				m.tangents.push_back(glm::dot(t, t) > 1e-8f ? glm::normalize(t) : side);
 				m.bitangents.push_back(along);
 				m.texCoords.push_back(glm::vec3(uv, 0.0f));
 				m.bones.push_back(bone);

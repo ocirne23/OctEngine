@@ -23,12 +23,14 @@ vec2 rtsVertexUV(uint vi) { return meshVertexUV(in_vertices[vi]); }
 bool rtsCandidateBlocks(rayQueryEXT rq)
 {
 	const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
-	if (uint(instanceIdx) >= in_instances.length())
+	// Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
+	const bool tree = (instanceIdx & 0x800000) != 0;
+	if (!tree && uint(instanceIdx) >= in_instances.length())
 		return true;
 	// Geometry from the RT meshIdx in the instance's sbtOffset (LOD chains trace one shared BLAS, which
 	// may differ from the raster-selected level the instance references); material from the instance.
 	const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
-	const uint materialIdx = in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
+	const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
 	if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
 		return true;
 	const InMeshInfo mi = in_meshInfos[meshIdx];

@@ -180,7 +180,9 @@ void main()
             if (pass > 0 || t >= terrainSkip)
                 break;
             const uint instanceIdx = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true));
-            const uint materialIdx = instanceIdx < uint(in_instances.length()) ? in_instances[instanceIdx].meshIdxMaterialIdx >> 16 : 0xFFFFu;
+            // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material.
+            const uint materialIdx = (instanceIdx & 0x800000u) != 0u ? instanceIdx & 0xFFFFu
+                : instanceIdx < uint(in_instances.length()) ? in_instances[instanceIdx].meshIdxMaterialIdx >> 16 : 0xFFFFu;
             if (materialIdx >= uint(in_materialInfos.length()) || (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) == 0u)
                 break;
             tStart = t + 0.01; // the terrain's underside: continue past it

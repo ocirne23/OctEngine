@@ -158,6 +158,7 @@ GPU Frame
     → Scene opaque                         (WRITES the scene depth, then parks it read-only)
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
+    → Far trees                            (the far-tree volume: bake when due + march, full res; see "Far-tree volume")
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
     → Scene forward → TAA (+ motion blur velocity) | DLSS (mvec pass + the upscale, see "DLSS")
     → Motion blur (desktop, "Post/Motion blur": tile max only;
@@ -205,7 +206,7 @@ attachment barriers between instances — `sceneInstanceBarrier`, RendererRecord
 
 ```
 Scene opaque   (depth WRITTEN):            Static meshes → GI probe debug
-Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Cloud apply → Fog apply
+Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Far trees apply → Cloud apply → Fog apply
 ```
 
 `SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance clears, the last
@@ -981,6 +982,169 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   it), `u_cloudShadow4.x` = the map was rendered this frame (suppressed, or the sun at the horizon).
 * **Debug mode** ("Sky/Clouds/Quality"): step count heat, density only, history rejection.
 
+## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
+
+**PROTOTYPE (Docs/TreeRenderingPlan.md T2 / P1), desktop only** (on by default; the user's 2026-10-02 pick:
+start 500 m, end 20 km, overlap 32 m, 2048 × 1024 × 10 slices over 22 m (angular: keep a power of two - at 3072 a
+band showed along u = 1/3, cause not found), checkerboard on, blob shrink 0.433, step scale 0.85, 500 steps, ambient
+1, sun 1, self shadow 4, normal strength 1, ground darkening 1, interior shadow 2 / radius 0.077, forward scatter
+−0.1, albedo 1, rebake 64 m). The FAR trees —
+beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
+
+* **The volume:** camera-centred (snapped: re-baked once the camera leaves `Far rebake distance` of the bake
+  centre, or a tree set / a geometry setting changes), **POLAR** (`tree_volume.inc.glsl`): image x = the angle
+  around the centre (`Far angular resolution`; it WRAPS — the sampler repeats u), image y = `log(r / rMin) /
+  log(end / rMin)` (`Far radial resolution`), so nothing is stored inside the ring and the cells grow linearly
+  with the distance (a constant angular size). Image z =
+  the height above the column's TREE FLOOR, `[0, Far height]`: an R32UI 2D image, the base of the column's
+  **DOMINANT** tree - the one whose tent covers it most (floor pass 1, `m_floorCover`: the largest coverage per
+  column, atomic max; floor pass 2: the trees within 4 quantization steps of that coverage write their base, the
+  lowest among them - NOT an exact match: the passes are separately compiled variants whose float math can round
+  a tree's coverage a few bits apart, and with an exact match some columns got no floor at all and the splat
+  skipped them: radial gaps in the volume, a moire changing with every rebake). The
+  LOWEST base of any tree reaching the column put a cliff-top tree above the layer in its edge columns, where the
+  splat moved it down - blobs out of line with their billboards at every cliff (2026-10-02; a larger `Far height`
+  hid it, messily). A column only the rectangle's **ring** reaches (coverage 0) keeps the lowest base there
+  (atomic max of inverted order-preserving bits;
+  0 = no tree; the ring: the march filters the density bilinearly but reads the NEAREST column's floor, so a
+  filter-reached column without a tree floor fell back to the height map and put the leaked density tens of
+  metres off - thin hatched spikes above the crowns, 2026-10-02; and the march's PRIMARY sample,
+  `densityAtColumns`, filters per column: the 4 columns around the point, each read at its own height above its own
+  floor, blended bilinearly - the hardware filter put a neighbour's crown in at this column's height, a spike over
+  every steep floor step at peaks and slopes; the lighting taps keep the cheap `densityAt`), written
+  by the splat shader's `TREE_FLOOR_PASS` variant before the splat. Splat and march both measure from it (the
+  march: the nearest column; a column without a tree falls back to `terrainHeightAt`). **Not the height map**:
+  its far cascade's ~132 m texels put the ground tens of metres off on mountains, and trees fell out of the
+  15 m layer — missing far trees on mountainous terrain that popped in as billboards (2026-10-02; the user's A/B:
+  a larger `Far height` brought them back). A tree that would reach past the layer's top (a lower tree set the
+  column's floor) is moved down into it, as far as its base allows. The march's under-ground break uses the
+  LOWER of floor and map, its above-layer skip the HIGHER, capped at 4 cells. R16F extinction (1/m) + an RGBA8
+  colour map. 2048 × 512 × 16: ~100 MB (R32UI accum + R16F + colour). (A SEPARABLE per-axis warp was built first
+  and dropped the same day: it must keep fine cells over the whole inner square, thousands of wasted texels per
+  axis at a 5 km start.)
+* **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
+  (`createTreeInstanceSet` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types'
+  float extinction mip chains — `TreeInstanceType::density`, box-filtered to 1³ on upload). Every texel the
+  tree's box touches (+ one texel each way) samples the type volume at the mip matching the texel footprint, at
+  the texel centre clamped into the box, × the tree's TENT weight horizontally (per polar axis, one cell wide
+  each way, `tentWeight`) and the slice's box overlap vertically, and ADDS it. **The tent is load-bearing:** with
+  the trilinear reconstruction it keeps a small tree's blob centred ON the tree whatever the grid's offset; the
+  first (box-overlap) splat put it at the cell centre, up to half a cell (8-60 m) off, so every re-bake (a new
+  grid centre) shifted every blob — "shaking" while flying. The splat ADDS with fixed-point `imageAtomicAdd` (crowns overlap → extinction sums). Past 65535 trees the
+  dispatch wraps into y. The colour column takes the tree type's albedo (last writer wins).
+* **The ring's inner radius is a FIXED `Far start` − `Far rebake distance` − 30 m** (horizontal), around the BAKE
+  centre: the camera may move a rebake distance before the next bake, and the ring must still hold every tree
+  past the hand-over.
+* **The hand-over follows the camera's HEIGHT** (`Renderer::farTreesStart`): `sqrt(start² + h²)`, h = the camera's
+  height above the ground under it (`setFarTreeCameraGround`, fed by TreeSystem from the terrain sampler; the
+  baked sea level until set) — the 3D distance of a ground tree at horizontal `start`. The tree cull's
+  volume start (`u_treeCullParams.z`, + overlap) and the march's start both use it, so from the air the hand-over stays at horizontal
+  `Far start`, where the ring begins. (With the 3D `start` alone, the billboards vanished under a high camera
+  with no volume there. Tried and dropped the same day: shrinking the RING with the height instead —
+  `sqrt(start² − h²)` — which spread the log mapping's radial texels from ~10 m to the far end and smeared the
+  crowns into stripes, also with an asinh mapping.)
+* **The ray** is `vol_apply`'s `fogRay`: from `u_mvp`'s x / y / w rows (not `u_invMvp`, whose float32 error re-rolls
+  every frame — kilometres out it moved the blobs) through this frame's TAA-JITTERED sub-pixel position, as every
+  raster pass samples (an unjittered ray had TAA un-jitter content that never was jittered); the scene distance
+  from `viewRelFromDepth` at the jittered uv. The `u_invMvp` ray was the visible "position jitter" (independent
+  of resolution, step and TAA - the user's A/B, 2026-10-02); the jitter alignment is kept for correctness.
+* **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
+  least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
+  **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
+  `Far normal strength` (the sun term toward `max(N·L, 0)` with N = −∇density by forward differences — the
+  volume's "normal map"; 3 more taps per lit step, only when > 0; a crown-scale gradient blended into it was
+  tried and removed 2026-10-02 - not worth its 3 taps), `Far forward scatter` (Henyey-Greenstein g),
+  `Far ground darkening` (the sky light's drop toward the ground), `Far albedo scale`, `Far ambient`, and
+  `Far interior shadow` / `radius` (the volume's "Foliage interior shadow": `exp(−strength × the mean extinction of
+  6 taps at radius × the cell size around the sample × that distance)` on the sun and the sky — a blob's core is
+  dense on every side; 6 taps per lit step, only when > 0).
+  The volume FADES IN over `Far overlap` ON THE RESULT - of the BAND only: the ray accumulates two segments split
+  at the fade end (`Far start` + `Far overlap`), the band fades as a whole by its own weighted mean distance, and
+  the segment behind it composites under it unfaded (an opaque band skips to the fade end unless it is already
+  fully in). (Fading each sample's DENSITY thinned a blob's front, the ray reached its dark core, and a half-faded
+  tree read too dark. ONE fade for the whole ray let a ray grazing a band tree's blob beside its billboard pull its
+  mean distance into the band and fade out the far trees behind it too: a sky-coloured outline along the
+  billboard silhouettes - 2026-10-02.) and `Far blob shrink` (1/m)
+  comes off the baked extinction first, so a blob shrinks toward its dense core. Steps of one cell × `Far step
+  scale` (default 0.85; so they grow like the cells), the WHOLE ray shifted by a per-pixel, per-frame fraction of
+  its first step (TAA averages it — the steps are measured from the camera and slide through the volume as it
+  moves; jittering only the first sample left the rest on that sliding grid and the blobs shimmered), the height
+  gap above the volume's top. Per sample: `albedo / π ×` (the sun × 0.6 (a leaf's mean cosine) × its
+  transmittance through the crown (3 taps out to 14 m) × the terrain's sun visibility (`terrainSunVisibility`,
+  once per ray) + a COOL sky term, `Far ambient` × a blue tint × the sun's luminance, darker near the ground) +
+  `u_ambientColor`. (First version: `2 × L.y` full sun + a warm ambient from the sun colour - the crowns read flat
+  and yellow.) Ends at transmittance 0.01. Out: in-scatter + transmittance (RGBA16F) and the transmittance-weighted
+  mean distance (R16F, m); the temporal variant instead writes log2 distances in `cloud_temporal`'s format
+  (RGBA16F: x = the first tree, y = the mean, z = the march limit).
+* **Temporal** (`Far temporal blend`, the history's weight; **default 0 — and 0 costs NOTHING**: the plain march
+  variant writes the slot's result (R16F linear distance) directly with the original barriers, the temporal
+  images are freed and the two temporal pipelines are compiled only at the first use; the user tested: the
+  full-res march is stable without it, also at larger steps - it is for half res / checkerboard later). On: the
+  `TREE_TEMPORAL_OUT` march variant writes a raw pair (log2 distances), then `cloud_temporal.cs.glsl`'s
+  **`TREE_TEMPORAL` instance** (history distances per slot; it also writes the R16F distance the fog apply reads) —
+  the CLOUDS' pass, shared rather than copied (2026-10-02, the user's choice): full res, no checkerboard, no wind,
+  the weight from the push constant. It reprojects the previous slot's result at the mean distance, rejects it
+  when that distance leaves the neighbourhood's range or the march limit changed (a silhouette), clamps it to
+  the neighbourhood and blends. The history counts only when the previous frame marched (`frameNumber`).
+  **`Far pixel skip`** (Off / **1 of 2 (checkerboard), the default** / 1 of 4) **needs no pass on its own**: one
+  thread per BLOCK - a horizontal pair, the marched pixel alternating per frame and row, or a 2x2 block, the marched
+  pixel cycling through it over 4 frames - marches ONE pixel: the first of its schedule whose surface lies FARTHER
+  than `Far start` (a nearer pixel's result is exactly "no trees" - the march would stop before the volume - so it
+  is written directly; a block with no far pixel marches nothing). At a near crown's alpha-tested fringe (leaf and
+  gap alternating per pixel and per frame) the background side is then marched this frame and donates to the
+  block's other far pixels; marching the scheduled pixel blindly left the gaps only leaf-side copies - a bare-sky
+  speckle. The march writes into the persistent **latest-march images**
+  (`m_latest` / `m_latestDepth`, bindings 8 / 9: render size, not per slot - a skipped pixel was last marched up to 3
+  frames ago; only while the plain path skips), and COPIES the block's other pixels from them - 1 to 3 frames late
+  under camera motion (no reprojection). A RESTART (the first frame, a resize, a mode change, a frame without the
+  plain skip: `m_lastPlainMarchFrame` / `m_lastSkipMode`) clears them to "no trees, distance 0", which fails every
+  copy test. The copy must fit THIS frame's surface: the TAA jitter moves silhouettes by up to a pixel per
+  frame, and a copy marched against the other side of an edge brought the bright outline back. With trees (T <
+  0.999) the surface must lie behind their mean distance (×0.7); without, not farther than last frame's march
+  reached (×1.5) - so the plain variant stores, for a tree-less pixel, its march LIMIT as the distance (the scene
+  distance, sky = 65000 m; the composites read the distance only where trees are). **A failed test never
+  marches** (a second march stalled the whole warp - with it the checkerboard cost MORE than off): trees in front of
+  a nearer surface → "no trees" (exact); a surface farther than that march reached → MORE DONORS through the same
+  test (`copyFits`): the block's marched pixel (this frame), then the 4 direct neighbours' latest marches, and
+  only if none fits the marched pixel anyway. (Taking the marched pixel blindly gave a bare-sky halo along every
+  near silhouette whenever it sat on the near side - worst at 1 of 4.) The wide tolerances keep the TAA jitter on grazing terrain (more than a
+  few % per sub-pixel) from counting as a border. ONE `marchAt` call site (two inlined copies raise every warp's
+  register count). The barrier before the march also orders last frame's latest-image writes (and a restart's
+  clear) before this frame's reads. (Tried first: copying this frame's NEIGHBOUR - a bright outline at every
+  silhouette against the volume; then marching the pair at depth edges - correct, but a warp with one edge pixel
+  paid the double march, and the checkerboard saved little; then the previous SLOT as the copy source - fine for 1
+  of 2, but it holds one frame only.) Under the temporal path the pass reconstructs instead, and 1 of 4 runs as 1
+  of 2 (the pass knows the checkerboard only). **The scale and the pixel skip are BAKED** (`TREE_MARCH_SCALE` /
+  `TREE_MARCH_SKIP` in the march, `TREE_TEMPORAL_SCALE` / `TREE_TEMPORAL_CHECKER` in the temporal pass), so the
+  dead paths and their registers go: `prepare()` rebuilds a variant when its define set changes (one GPU drain per
+  toggle; a failed rebuild keeps the old one), and `record()` dispatches by the BAKED values
+  (`m_plainBakedSkip`, `m_temporalBakedScale` / `Checker`), never by the live settings. The march's push block is
+  full (128 B; two pad words where the runtime flags were).
+  **`Far half res`** (off) - or the blend - runs this path (`FarTreeParams::temporalPath`): the march at the temporal images' SCALE (2 = one ray per 2x2 block, its centre,
+  to the block's FARTHEST surface) and/or this frame's checker parity only (the dispatch covers half the columns,
+  as `cloud_march`). The temporal pass takes the scale, the checkerboard, the far end (the unmarched pixels' limit)
+  and whether to write the R16F distance as push constants - the clouds keep their baked / UBO values through the
+  same `TT_*` macros. The march's stored LIMIT is `min(scene distance, Far end)`, the rule the pass applies to an
+  unmarched pixel. At half res the history colour is a half-res image per slot, and **`tree_volume_upsample.cs`**
+  (`cloud_upsample`'s depth-aware 2x2 rules, copied) writes the slot's full-res pair, so the three composites
+  read the same images in every mode. A far crown is ~1.5 px at 10 km: half res softens it.
+* **Apply — FOG OFF:** without clouds, the "Far trees apply" scene stage: `colour + scene × T`. **With clouds,
+  the cloud apply composites the trees itself** (`cloud_apply.fs`, bindings 4 / 5) - the two layers front to back
+  by distance, `vol_apply`'s layering without the fog - and the tree stage is skipped. (Composited separately, the
+  clouds came AFTER the trees: the volume writes no depth, so the clouds' march limit was the terrain behind the
+  trees, and clouds between the two drew over them - 2026-10-02.)
+  **FOG ON: the fog apply composites the trees itself** (`vol_apply.fs`, bindings 9 / 10; `u_foliageParams4.w` =
+  it marched this frame — the fog apply is a cached secondary, so the flag rides the UBO), at the march's
+  transmittance-weighted MEAN DISTANCE (`exp2` of the distances' y): over the finished trees, the fog fogged them at
+  the scene depth — the terrain BEHIND them, km farther — and they read twice as hazy as the billboards beside
+  them. Trees and clouds are two layers composed front to back by distance (the cloud formula per layer).
+* **Hand-over:** the tree cull gets `u_treeCullParams.z` = `Far start` + `Far overlap`: a tree whose CENTRE lies
+  past it drops its mesh AND its billboard from MAIN (the billboard stays the shadow caster). Over the overlap band
+  both draw while the volume fades in — an overlap, not a seam; the billboards switch off at its end. (A dithered
+  billboard fade-out over the band was tried and removed 2026-10-02 at the user's request.)
+* Not yet: per-tree species colour beyond "last writer", half res, the analytic tail (P7), placement
+  beyond the grove, a dithered billboard fade-out at the overlap's end.
+
 ## TAA off bypasses the pass completely
 
 The secondary CB is not recorded, the dispatch and its GPU scope are skipped, and eye adaptation and
@@ -1061,6 +1225,10 @@ DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No f
   undefined format" - a new tagged format must be in `sl.chi` `Vulkan::getFormat`), "Ocean current bias" (0.8 = TAA's 0.2 history weight) on TAA's ocean flag pixels
   (scene colour alpha < 0.004, depth > 0), 0 elsewhere. It reads the scene colour (only where depth > 0: the
   sky is never ocean), so it runs after the colour's barrier to the resolve.
+* **Preset default M** (`Post/DLSS/Preset`; sl_dlss.h: L / M are the newer models with less ghosting, M near K's
+  cost). DLAA's own default, K, SMEARED the trees' alpha-tested foliage under camera rotation while TAA did not
+  (the user's A/B, 2026-10-02: not the edge-fade dither, not the far volume; L and M clean). A far-tree bias in
+  this mask was tried first and removed: it did not help.
 * Not while upscaling: **motion blur** (`motionBlurEnabled()`: its velocity and gather assume one resolution).
   **Under DLAA the mvec pass writes the motion blur velocity + sub-tiles** (the side product TAA writes;
   `motion_blur_tiles` runs only with no resolve at all: `velocityPass = !resolveActive()`). The sub-tile grid
@@ -1229,24 +1397,36 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * The `TreeImpostor` pipeline variant (12, opaque family): `tree_impostor.vs.glsl` + the `LitMasked` FS. Its
   quad mesh carries per-piece constants instead of geometry (Procedural "Branch-module impostors"); push its
   nodes with `PASS_MAIN` only — the shadow pass would draw the degenerate quad with its own VS.
-* **GPU tree expansion** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
-  RendererTrees.cpp + `TreeExpandPipeline`, `tree_expand.cs.glsl`): a SET of placed procedural tree pieces
-  sharing a table of piece TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the
-  crossfade band). Per frame the CPU claims ONE instance range (3 records per piece), notes the bucket sizes
-  once per distinct level-0 mesh, uploads the static piece transforms once per frame slot and node-buffer
-  generation, and queues a dispatch — nothing per piece. The dispatch is recorded at the TOP of
-  `recordPrimaryPreScene` (before skinning, every cull, the TLAS writer and `recordPrevCopy`; its own barrier
-  ends it) and writes, per piece, its 3 `InMeshInstance` records (the mesh / crossfade / billboard decision —
-  the same rules as the CPU preview), its nodes' stamped pass masks and LOD state biases (record k → state
-  slot base + k). A record the piece does not draw points at the set's DUMMY node (pass mask 0), which every
-  cull skips at its first read. **TWO nodes per piece** (same transform): the mesh records on `transformIdx`,
-  the billboard record on `billboardNode` — so the BILLBOARD stands in for the piece in every pass but MAIN:
-  the mesh node is MAIN only, the billboard record is always written, its node PASS_ALL while it shows and
-  SHADOW | GI otherwise. The shadow map, the shadow cull and the TLAS (GI, RT shadows) only ever see the cards.
-  A type without a billboard keeps its mesh in every pass. Everything is addressed by BUFFER DEVICE ADDRESS (push constants), re-read
-  per frame — so the slot's `meshInstances` / `passMasks` / `lodStateBias` carry `eShaderDeviceAddress`, and
-  their re-creation on growth needs no descriptor update. Destroying a set drains the GPU (rare: respawn /
-  reload). Texture / mesh streaming notes are skipped: tree textures are pinned and `RenderMesh`es never stream.
+* **BAKED TREE RECORDS** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
+  RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
+  TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
+  ONCE to DEVICE-LOCAL buffers (`TreeCullPieceGpu` 64 B: transform + band centre/radius + type + LOD state
+  base; `TreeCullTypeGpu` 48 B). Trees do not move, so nothing about them is written per frame: no render
+  nodes, no stream entries, no pass of their own (the earlier `tree_expand` pass, which rewrote every piece's
+  records into the HOST-VISIBLE stream each frame, cost ~7.5 ms of GPU). Per frame the CPU claims ONE instance
+  range (3 records per piece: bark, leaves, billboard) and notes the bucket sizes once per distinct level-0
+  mesh — nothing per piece. The UBO carries the range (`u_treeCull` x = base, y = count; **patched in
+  `present()`** by `uploadTreeCullUbo`, like `giTlasNumInstances` — the UBO uploads in beginFrame, before the
+  claim, and a 0 / 0 range made the culls read the never-written entries as instances: garbage mesh indices,
+  out-of-bounds bucket writes, glitching terrain) and
+  `u_treeCullParams` (x = far distance scale, y = forceFar, z = the far-tree volume's start + overlap, 0 = no
+  volume). **The culls build the records**: a thread whose instance index lies in the range skips the stream
+  and calls `treeCullMain` (main cull: the mesh / crossfade / billboard / none decision from the distance to
+  the centre view — the same rules as the CPU preview) or `treeCullShadow` (shadow + rain-shelter culls: the
+  BILLBOARD is the caster at every distance; a type without one casts its mesh). Record k's LOD hysteresis
+  slot = the piece's `lodStateBase + k`; prev transform = none (w 0 — trees never move). The buffers are
+  bound at bindings 20/21 (main cull) and 13/14 (shadow culls) — descriptors written at RECORD time, so the
+  culls bind ONE set (`m_treeCullSet`, the set rendered; changing it or destroying it re-records; a second set
+  in one frame asserts). With no set, `m_treeCullDummy` is bound. **In the TLAS** (GI, RTAO, RT shadows, the ocean / film
+  reflections): `gi_tlas_instances` (bindings 9 / 10) builds a tree record's instance from the same static data
+  with `treeCullShadow` - the billboard, or the meshes for a type without one - and, since the range's stream
+  entries are never written, puts the MATERIAL in the custom index: **bit 23 set = a tree, bits 0..15 = its
+  material** (a stream instance's custom index stays its index, below 2^23). Every ray-query consumer reads only
+  the material from `in_instances[custom]`, so each takes it from the custom index when bit 23 is set
+  (`rt_shadow.inc`, `gi_probe_trace`, `rtao`, `ocean.fs`, `terrain_film.fs`) - no extra binding anywhere. The
+  geometry comes from the sbt-offset RT mesh index as for any instance; the billboards keep RTAO's mask 0x02. Destroying a set drains
+  the GPU (rare: respawn / reload). Texture / mesh streaming notes are skipped: tree textures are pinned and
+  `RenderMesh`es never stream.
 * `createMeshLodChain(levels, errors)` — a GPU LOD chain (`addMeshLodGroup`) over `createMesh`'d meshes,
   level 0 first, errors in mesh-local units (0 for level 0; nonzero → the screen-space-error selector).
   `spawnMeshNode` on a chain's level 0 allocates the node's hysteresis slot itself, and the cull redirects
@@ -1256,7 +1436,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
   a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
-  **`MATERIAL_FLAG_FOLIAGE`** (bit 26, LitMasked only): the FS's early sun shadow is NOT rejected by the
+  **`MATERIAL_FLAG_BILLBOARD`** (bit 26, LitMasked only): the FS's early sun shadow is NOT rejected by the
   geometric normal's facing (`sunShadowFirstFoliage`: sampled from the sun side, the normal-mapped normal's
   facing test in `doSunLight` decides) — for flat cards standing for a foliage clump. Its shadow lookup uses
   the CONSTANT depth bias only (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage` in shadows.inc.glsl: no slope scaling,
@@ -1288,7 +1468,8 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   flat: full inside `Foliage interior inner radius`, gone outside `outer radius` (leaf distance / crown radius,
   default 0 / 1.1, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
   raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 1; an exponent: > 1 darker -
-  a strength multiplier saturated at strength 1). **Crown normal**:
+  a strength multiplier saturated at strength 1), then × `|V.y|` (the view's steepness; plain `V.y` went negative
+  from below and turned the card black). **Crown normal**:
   each crossed card's baked normals shade the crown side ITS bake view saw, so the shading split hard where
   card A gives way to card B on screen (it stayed with shadows off). `foliageCrownNormal` blends the shading
   normal toward the view ray's hit on a sphere on
@@ -1296,10 +1477,18 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   the u length — which depends on the ray only, so both cards agree. The blend is 1 at the axis (where the
   cards disagree most) and falls to `Trees/Foliage crown normal` (`u_foliageParams.y`) at half the radius from
   it, so the outer crown keeps its baked detail. On a whole tree's HORIZONTAL card
-  (`MATERIAL_FLAG_FOLIAGE_TOP_CARD`, bit 23, on the card whose normal points up - `foliageTopCard`; whole trees
+  (`MATERIAL_FLAG_BILLBOARD_TOP_CARD`, bit 23, on the card whose normal points up - `foliageTopCard`; whole trees
   stand upright) `foliageCrownFrame` takes the card normal as the
   axis and the card's own point on it as the centre; the radius is half the u length on every card. The LitMasked variant's VS (defined
-  `ALPHA_MASK`) and `tree_impostor.vs` add the instance origin as flat location 5. **No RTAO either way**: a
+  `ALPHA_MASK`) and `tree_impostor.vs` add the instance origin as flat location 5. **Leaf transmission**
+  (`MATERIAL_FLAG_LEAF`, bit 30, LitMasked: the tree leaf cluster material and the billboards — not FOLIAGE,
+  which carries the billboard-only terms): after `computeLitColor` the FS adds the sun THROUGH the leaf, tinted
+  by its colour — `saturate(-N·L)` (lit from behind) + `saturate(V·-L)^focus × glow` (the backlit rim looking
+  toward the sun), × `Trees/Foliage transmission`. Its visibility = `mix(1, sun shadow, Foliage transmission
+  shadow)` × the interior term: a leaf seen from the shaded side is in its own crown's shadow, which would
+  leave no glow. A LEAF mesh pixel's shadow is looked up from its SUN side (`sunShadowFirstLeaf`: the bias normal
+  flipped toward the sun) - `sunShadowFirst`'s facing reject gave every leaf facing away from the sun 0, exactly
+  the ones the back term lights, so the shadow weight moved the whole tree as one (fixed 2026-10-02). `u_foliageParams3.w` / `u_foliageParams4` (focus, glow, shadow weight). **No RTAO either way**: a
   FOLIAGE instance gets TLAS mask 0x02 (`gi_tlas_instances.cs`) and RTAO traces with cull mask 0x01, so its
   opaque rays no longer hit whole card rectangles (every other ray uses 0xFF and still hits them); and the lit
   FS skips the AO read on a card (`FOLIAGE_NO_RTAO` / `g_noRtao`) — traced from depth, it was the flat card's
@@ -1309,7 +1498,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   the crossed card faces the view right then. `Trees/Foliage edge fade start` / `end` (default 0.1 / 0.6, centre scale 1.33;
   `u_foliageParams2.xy`); near the crossing axis both are × `Foliage edge fade centre scale` (`.z`, back to ×1
   at half the crown radius, `foliageAxisDistance`), and on a whole tree's horizontal card also × `Foliage edge
-  fade top card scale` (`u_foliageParams3.y`, default 1).
+  fade top card scale` (`u_foliageParams3.y`, default 1). **Not from below:** the fade blends out as the view
+  turns upward (`smoothstep(0, 0.2, -V.y)`, the first ~11° below the pixel) - looking up into a crown, the
+  edge-on cards are what fills it, and fading them left it see-through.
   **`MATERIAL_FLAG_DISTANCE_FADE`** (bit 25, LitMasked only; + `MATERIAL_FLAG_FADE_IN`, bit 24): a dithered fade
   over a camera-distance band packed into the LOW flag bits (start m in bits 0..11, width m in 12..21;
   `makeDistanceFadeFlags`). Fade-out keeps `dither < 1 − f`, fade-in `dither ≥ 1 − f`, so an out/in pair over

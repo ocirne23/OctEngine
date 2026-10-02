@@ -36,6 +36,8 @@ public:
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
         Buffer& inPrevRenderNodeTransformsBuffer; // 18 - last frame's node transforms (InstanceStream, motion vectors)
         Buffer& inPrevNodePassMasksBuffer;        // 19 - ... and its stamped pass masks
+        Buffer& treePiecesBuffer;                 // 20 - the baked tree records' pieces (static; tree_cull.inc.glsl)
+        Buffer& treeTypesBuffer;                  // 21 - ... and their types
     };
 
     void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);

@@ -90,6 +90,7 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_foliageParams.registerTweaks();
+    m_farTreeParams.registerTweaks();
     m_fogParams.registerTweaks();
     // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
     // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
@@ -292,6 +293,7 @@ void Renderer::initPipelines()
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
     m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
+    m_treeVolume.initialize(renderExt.width, renderExt.height, sceneRenderPass);
     m_terrain.initialize();
     m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
     m_dlssPipeline.initialize(renderExt.width, renderExt.height, ext.width, ext.height);
@@ -318,7 +320,8 @@ void Renderer::initPipelines()
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
-    m_treeExpandPipeline.initialize();
+    m_treeCullDummy.initialize(sizeof(glm::vec4) * 16, vk::BufferUsageFlagBits2::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal,
+        false, "TreeCullDummy");
     m_decalPipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
@@ -369,6 +372,7 @@ void Renderer::initPerFrameResources()
         perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.fogApply");
         perFrame.cloudCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.clouds");
         perFrame.cloudApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudApply");
+        perFrame.farTreesApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.farTreesApply");
         perFrame.giProbeDebugCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giProbeDebug");
         perFrame.debugLineCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.debugLines");
         perFrame.particleSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.particleSim");
@@ -501,6 +505,7 @@ void Renderer::reloadShaders()
     m_terrainWetnessPipeline.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_cloudPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_treeVolume.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_indirectCullComputePipeline.reloadShaders();
     m_skinningComputePipeline.reloadShaders();
     m_lightGridComputePipeline.reloadShaders();
@@ -512,7 +517,6 @@ void Renderer::reloadShaders()
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
-    m_treeExpandPipeline.reloadShaders();
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_taaPipeline.reloadShaders();
@@ -676,6 +680,7 @@ void Renderer::recreateRenderTargets()
     const vk::Extent2D renderExt = renderExtent();
     m_rtaoPipeline.recreateImages(renderExt.width, renderExt.height);
     m_cloudPipeline.recreateImages(renderExt.width, renderExt.height);
+    m_treeVolume.recreateImages(renderExt.width, renderExt.height);
     m_dlssPipeline.recreateImages(renderExt.width, renderExt.height);
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, renderExt.width, renderExt.height, m_sceneViewCount);
@@ -730,12 +735,15 @@ void Renderer::beginFrame()
     applyVrHeadPose(m_frameCamera, camera, vrBaseOrientation);
 
     checkFrameCapacities();
+    if (m_farTreeParams.enabled)
+        m_treeVolume.prepare(m_farTreeParams); // a volume resolution change drains the GPU, so before any recording
 
     PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
     {
         ProfileScope resetScope("Counters + LOD stats", EProfileCategory::Renderer);
         m_instances.beginFrame();
-        m_treeDispatches.clear(); // this frame's tree expansions are queued by renderTreeInstanceSet
+        m_treeCullBase = 0; // this frame's baked tree range is claimed by renderTreeInstanceSet
+        m_treeCullCount = 0;
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
@@ -966,6 +974,7 @@ void Renderer::present()
     m_ubo.giTlasNumInstances = oc::min(m_instances.getInstanceCount(), m_rt.getMaxTlasInstances());
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
         offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
+    uploadTreeCullUbo(frameData); // the same: renderTreeInstanceSet claims its range after beginFrame
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the

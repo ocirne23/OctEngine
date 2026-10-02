@@ -41,8 +41,6 @@ void InstanceStream::initialize(uint32 maxUniqueMeshes, oc::function<void()> onG
 // The three per-render-node buffers. No contents to preserve on a re-create: the generation bump makes
 // every node re-upload its transform at the next push, and masks/biases are rewritten by every push.
 // TRANSFER_SRC on the transforms and masks: recordPrevCopy copies them into the device-local previous set.
-// DEVICE_ADDRESS on the masks / biases (and the instances): the tree expansion writes them from the GPU
-// (TreeExpandPipeline), addressed per frame, so a re-created buffer needs no descriptor update.
 void InstanceStream::createNodeBuffers(FrameSlot& s)
 {
     s.transforms.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
@@ -51,12 +49,12 @@ void InstanceStream::createNodeBuffers(FrameSlot& s)
     s.mappedTransforms = s.transforms.mapMemory<RendererVKLayout::RenderNodeTransform>();
 
     s.passMasks.initialize(m_maxRenderNodes * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferSrc | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferSrc,
         vk::MemoryPropertyFlagBits::eHostVisible, false, "NodePassMasks", BufferHostAccess::eSequentialWrite);
     s.mappedPassMasks = s.passMasks.mapMemory<uint32>();
 
     s.lodStateBias.initialize(m_maxRenderNodes * sizeof(int32),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+        vk::BufferUsageFlagBits2::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
     s.mappedLodStateBias = s.lodStateBias.mapMemory<int32>();
 }
@@ -103,7 +101,7 @@ void InstanceStream::createInstanceBuffer(FrameSlot& s)
     // Kept cached/random: growInstances reads the existing mapping to preserve in-flight instances
     // across a resize, so this buffer must stay CPU-readable.
     s.meshInstances.initialize(m_maxInstances * sizeof(RendererVKLayout::InMeshInstance),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+        vk::BufferUsageFlagBits2::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "MeshInstances");
     s.mappedMeshInstances = s.meshInstances.mapMemory<RendererVKLayout::InMeshInstance>();
 }

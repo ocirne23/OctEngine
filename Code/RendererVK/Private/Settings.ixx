@@ -82,8 +82,8 @@ export struct CloudParams
     bool  enabled = true;
     // Shape
     float bottom = 300.0f;             // shell bottom altitude (m)
-    float top = 5000.0f;               // shell top altitude (m)
-    float coverage = 0.75f;            // 0 = clear, 1 = overcast
+    float top = 2000.0f;               // shell top altitude (m)
+    float coverage = 0.15f;            // 0 = clear, 1 = overcast
     float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
@@ -213,7 +213,7 @@ export struct ShadowParams
     void registerTweaks(const oc::function<void()>& onReloadShaders); // debugMode is a baked define
 };
 
-// FOLIAGE cards (MATERIAL_FLAG_FOLIAGE - the tree billboards) - "Foliage ..." in the TweakPanel's "Trees" category.
+// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD - the tree billboards) - "Foliage ..." in the TweakPanel's "Trees" category.
 // UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
 export struct FoliageParams
 {
@@ -241,9 +241,59 @@ export struct FoliageParams
     float edgeFadeStart = 0.1f;
     float edgeFadeEnd = 0.6f;
     float edgeFadeCentreScale = 1.33f;
+    // TRANSMISSION (MATERIAL_FLAG_LEAF: leaf clusters + billboards): the sun through the leaves - a diffuse back
+    // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
+    // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
+    // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
+    float transmission = 1.0f;
+    float transmissionFocus = 64.0f;
+    float transmissionGlow = 1.5f;
+    float transmissionShadow = 0.95f;
     float edgeFadeTopCardScale = 1.0f; // x both thresholds on a whole tree's HORIZONTAL card (on top of the centre
                                 // scale): > 1 hands the top-down view to the vertical cards sooner
 
+    void registerTweaks();
+};
+
+// FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
+// a camera-centred POLAR volume (angle x log radius, startDistance .. endDistance: cells grow with the distance) and
+// marched there - beyond the billboards, kilometres out. The volume geometry re-bakes on change; the resolutions
+// recreate the images.
+export struct FarTreeParams
+{
+    bool enabled = true;
+    float startDistance = 500.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
+    float endDistance = 20000.0f;  // and ends here (m)
+    float overlap = 64.0f;         // the billboards draw to startDistance + this; the volume fades in over it (m)
+    uint32 angularRes = 2048;      // texels around (cell = r x 2 pi / this). Keep a POWER OF TWO: at 3072 a band showed along
+                                   // the direction u = 1/3 (cause not found; gone at 2048 / 4096)
+    uint32 radialRes = 1024;       // texels from start to end (cell = r x ln(end / start) / this)
+    uint32 slices = 10;            // height slices
+    float height = 22.0f;         // m above the column's tree floor the volume covers
+    float densityScale = 1.0f;    // x the baked extinction
+    float blobShrink = 0.433f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float stepScale = 0.85f;      // march step, x the cell size
+    uint32 maxSteps = 500;
+    float ambient = 1.0f;        // sky light on the canopy, x the sun radiance
+    float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
+    float selfShadow = 4.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float normalStrength = 1.0f;  // 0..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
+    float groundDarkening = 1.0f; // how much darker the sky light is at the ground than at the volume's top
+    float interiorShadow = 2.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+                                  // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
+    float interiorRadius = 0.077f;// the taps' distance, x the cell size
+    float forwardScatter = -0.1f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float albedoScale = 1.0f;    // x the leaf colour
+    float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
+    // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
+    // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per
+    // frame only 1 of 2 pixels (the checkerboard) or 1 of 4 (one per 2x2 block) is marched, the rest copied from a
+    // persistent image of each pixel's latest march (tree_volume_march.cs.glsl). Under the temporal pass the pass
+    // reconstructs instead, and 1 of 4 runs as 1 of 2 (its checkerboard).
+    bool halfRes = false;
+    int pixelSkip = 1;            // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
+    bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
+    float rebakeDistance = 64.0f; // the camera moves this far from the bake centre -> re-bake
     void registerTweaks();
 };
 
@@ -435,7 +485,9 @@ export struct TAAParams
 export struct DlssParams
 {
     int mode = 2;           // Streamline::DlssMode: Off, DLAA, Quality (default), Balanced, Performance, Ultra Performance
-    int preset = 0;         // 0 = the DLSS default for the mode, else J / K / L / M
+    // 0 = the DLSS default for the mode, else J / K / L / M. Default M: DLAA's own default (K) smeared the trees'
+    // alpha-tested foliage under camera rotation, L / M do not, and M is closer to K's cost (sl_dlss.h).
+    int preset = 4;
     bool mipBias = true;    // negative texture LOD bias by the render scale (log2(render / output))
     // DLSS's current-colour bias on ocean pixels (no motion vectors on the waves): 1 = no history there. The
     // default matches TAA's "Ocean feedback" 0.2 history weight.

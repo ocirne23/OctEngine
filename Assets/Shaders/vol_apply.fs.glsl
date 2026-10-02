@@ -17,6 +17,10 @@
 //   out = T * F.rgb + C.a * S + (1 - T) * C.rgb  +  scene * (T * F.a)
 // exact for a cloud at one distance (fog in front of it over it, the rest behind it), and linear in the
 // scene, so the blend state stays the same.
+// THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliageParams4.w = it marched this frame), at
+// its weighted mean distance - not in the scene depth, so fogged at the terrain BEHIND it the trees read twice as
+// hazy as the billboards next to them. Two layers compose front to back by distance: with each layer's part
+// P = (1 - T) F_layer.rgb + F_layer.a S and transmittance T, the nearer one's P + T x the farther one's.
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
@@ -28,6 +32,8 @@ layout (binding = 2) uniform sampler3D u_integrated;
 layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 6) uniform sampler2D u_cloudColor; // the accumulated clouds (half res), this eye / slot
 layout (binding = 7) uniform sampler2D u_cloudDepth;
+layout (binding = 9) uniform sampler2D u_farTreesColor;  // the far-tree volume's march (full res): in-scatter, T
+layout (binding = 10) uniform sampler2D u_farTreesDepth; // its weighted mean distance (m)
 
 #define TERRAIN_HEIGHT_BINDING 3
 #include "terrain_height.inc.glsl"
@@ -298,6 +304,7 @@ void main()
     // march ran this frame (the game suppresses it at runtime).
     vec4 cloudPart = vec4(0.0, 0.0, 0.0, 1.0); // rgb = C.a * S + (1 - T) * C.rgb, a = T
     bool sameFog = false; // the cloud sees the scene's own fog: cloudPart.rgb still holds S, folded below
+    float tCloud = 1e30;  // the cloud layer's distance (orders it against the far trees)
 #ifdef CLOUDS
     if (u_cloudShape0.w > 0.5)
     {
@@ -312,7 +319,7 @@ void main()
             // The fog in front of the cloud: the same two parts, to the cloud's weighted distance - unless the
             // cloud AND the scene lie past both the froxel volume and the far field's max distance: then both
             // see the same (whole) fog, and the scene's evaluation below serves the cloud too.
-            const float tCloud = exp2(logCloudDist);
+            tCloud = exp2(logCloudDist);
             const float fogEnd = max(u_fogParams8.z, u_fogParams0.w * invCos);
             sameFog = min(logCloudDist, logScene) >= log2(fogEnd);
             if (!sameFog)
@@ -326,5 +333,19 @@ void main()
     const vec4 fog = fogTo(worldPosFromDepth(v_uv, depth), depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
     if (sameFog)
         cloudPart.rgb = fog.a * cloudPart.rgb + (1.0 - cloudPart.a) * fog.rgb;
-    out_color = vec4(cloudPart.a * fog.rgb + cloudPart.rgb, cloudPart.a * fog.a);
+    vec4 layers = cloudPart;
+    if (u_foliageParams4.w > 0.5)
+    {
+        const vec4 trees = texelFetch(u_farTreesColor, ivec2(gl_FragCoord.xy), 0);
+        if (trees.a < 0.999)
+        {
+            const float tTrees = texelFetch(u_farTreesDepth, ivec2(gl_FragCoord.xy), 0).r;
+            const vec4 fogTrees = fogTo(u_viewPos + dir * tTrees, tTrees, dir, invCos);
+            const vec3 treePart = fogTrees.a * trees.rgb + (1.0 - trees.a) * fogTrees.rgb;
+            layers = tTrees <= tCloud
+                ? vec4(treePart + trees.a * cloudPart.rgb, trees.a * cloudPart.a)
+                : vec4(cloudPart.rgb + cloudPart.a * treePart, cloudPart.a * trees.a);
+        }
+    }
+    out_color = vec4(layers.a * fog.rgb + layers.rgb, layers.a * fog.a);
 }

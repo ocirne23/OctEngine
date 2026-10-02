@@ -149,8 +149,9 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
         .stageFlags = vk::ShaderStageFlagBits::eCompute
     });
     // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
-    // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors).
-    for (uint32 binding = 11; binding <= 19; ++binding)
+    // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors);
+    // 20, 21 the baked tree records' static pieces + types (tree_cull.inc.glsl).
+    for (uint32 binding = 11; binding <= 21; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -174,7 +175,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 20> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 22> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -376,7 +377,17 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
                     .range = recordParams.inPrevNodePassMasksBuffer.getSize(),
                 }
             }
-        }
+        },
+        DescriptorSetUpdateInfo { // TreeCullPieces
+            .binding = 20,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treePiecesBuffer.getBuffer(), .range = recordParams.treePiecesBuffer.getSize() } }
+        },
+        DescriptorSetUpdateInfo { // TreeCullTypes
+            .binding = 21,
+            .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeTypesBuffer.getBuffer(), .range = recordParams.treeTypesBuffer.getSize() } }
+        },
     };
 
     // Compute shader frustum cull and indirect command buffer generation
