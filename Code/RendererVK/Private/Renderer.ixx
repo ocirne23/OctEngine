@@ -248,12 +248,27 @@ public:
         uint16 material = 0;
         RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
     };
+    // A BRANCH CARD of the mid tier: a module's billboard at its placement in the tree (tree-local, at scale 1).
+    struct TreeInstanceModule
+    {
+        const RenderMesh* mesh = nullptr; // the module's billboard cards (no LOD chain)
+        uint16 materialIn = 0;            // its fade-IN material (the mid band)
+        uint16 materialOut = 0;           // its fade-OUT material (the far band)
+        RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitFoliage;
+        Transform local;
+    };
     struct TreeInstanceType
     {
-        // barkFade / leavesFade: the same meshes on LitMasked with fade-OUT materials (the crossfade band).
+        // barkFade / leavesFade: the same meshes on LitMasked with fade-OUT materials (the crossfade band). With a
+        // mid tier, leavesFade fades out over the MID band instead (the cards take over from the leaves there).
         TreeInstanceRep bark, barkFade, leaves, leavesFade, billboard;
         float farDistance = 0.0f; // billboard switch distance (m); 0 = always the mesh
         float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
+        // The MID tier (main pass only; shadows keep the billboard): from midDistance (0 = none) the leaves mesh gives
+        // way to `modules` over a band of midFadeWidth; the bark mesh stays. Needs a billboard.
+        float midDistance = 0.0f;
+        float midFadeWidth = 1.0f;
+        oc::vector<TreeInstanceModule> modules;
         // The FAR-TREE VOLUME's view of the type (TreeVolumePipeline): its extinction (1/m) over [densityMin,
         // densityMax] in type space, densityRes^3 floats (x fastest); nullptr = the type is not in the volume.
         const float* density = nullptr;
@@ -543,9 +558,11 @@ private:
     // per frame in beginFrame, into the UBO's u_treeCull).
     struct TreeInstanceSet
     {
-        Buffer pieces; // TreeCullPieceGpu per piece (device-local)
-        Buffer types;  // TreeCullTypeGpu per type (device-local)
+        Buffer pieces;  // TreeCullPieceGpu per piece (device-local)
+        Buffer types;   // TreeCullTypeGpu per type (device-local)
+        Buffer modules; // TreeCullModuleGpu: the types' branch cards (device-local)
         uint32 numPieces = 0;
+        uint32 cardCapacity = 0; // the branch-card slots claimed behind the records each frame
         oc::vector<uint32> lodStateBases;  // TREE_RECORDS_PER_PIECE slots per piece
         oc::vector<oc::pair<uint16, uint32>> meshCounts; // the cull's bucket sizes (level-0 mesh, instances)
         Buffer volumePieces; // TreeVolumePieceGpu per piece (the far-tree volume's bake)
@@ -557,12 +574,14 @@ private:
     oc::vector<TreeInstanceSet> m_treeSets;
     Buffer m_treeCullDummy;              // bound to both tree bindings while no set is
     uint32 m_treeCullSet = UINT32_MAX;   // the set whose buffers the recorded culls bind
-    uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none)
+    uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none): the records + the card region
     uint32 m_treeCullCount = 0;
+    uint32 m_treeCullPieces = 0;         // the trees in it (3 records each)
     float m_treeCullDistanceScale = 1.0f;
     bool m_treeCullForceFar = false;
     Buffer& treeCullPieces();
     Buffer& treeCullTypes();
+    Buffer& treeCullModules();
     void uploadTreeCullUbo(PerFrameData& frameData);
     TreeVolumePipeline m_treeVolume;
     FarTreeParams m_farTreeParams;

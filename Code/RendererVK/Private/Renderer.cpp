@@ -744,6 +744,7 @@ void Renderer::beginFrame()
         m_instances.beginFrame();
         m_treeCullBase = 0; // this frame's baked tree range is claimed by renderTreeInstanceSet
         m_treeCullCount = 0;
+        m_treeCullPieces = 0;
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));

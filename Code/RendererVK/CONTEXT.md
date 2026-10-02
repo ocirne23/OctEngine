@@ -1413,7 +1413,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
   ONCE to DEVICE-LOCAL buffers (`TreeCullPieceGpu` 64 B: transform + band centre/radius + type + LOD state
-  base; `TreeCullTypeGpu` 48 B). Trees do not move, so nothing about them is written per frame: no render
+  base; `TreeCullTypeGpu` 64 B, with the mid tier's distance / band / card list). Trees do not move, so nothing about them is written per frame: no render
   nodes, no stream entries, no pass of their own (the earlier `tree_expand` pass, which rewrote every piece's
   records into the HOST-VISIBLE stream each frame, cost ~7.5 ms of GPU). Per frame the CPU claims ONE instance
   range (3 records per piece: bark, leaves, billboard) and notes the bucket sizes once per distinct level-0
@@ -1431,7 +1431,20 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   for each record in `[kBegin, kEnd)` (record k at its first record + k). ONE call site of that body
   (`cullInstance` / `cullCaster`, the loop serves the plain instance with k = 0): each call site is a full
   inlined copy. **Both culls are `local_size_x = 64`** (`IndirectCullComputePipeline::update` dispatches
-  ceil(threads / 64) groups; they ran ONE thread per workgroup before — a warp per instance, 31 of 32 lanes idle). **Far trees out of the near
+  ceil(threads / 64) groups; they ran ONE thread per workgroup before — a warp per instance, 31 of 32 lanes idle).
+  **BRANCH CARDS (the MID tier, main pass only):** a type may carry `modules` (`TreeInstanceModule`: a module's
+  billboard at its placement in the tree, on a fade-IN and a fade-OUT material; `TreeCullModuleGpu` 48 B, binding
+  22) plus `midDistance` / `midFadeWidth`. The cards draw on LitFoliage like the whole-tree billboards (the same
+  shading and tweaks; their crown sphere and interior are the MODULE's, from its own instance origin), minus the
+  edge-on fade: `MATERIAL_FLAG_NO_EDGE_FADE` (bit 22). From the mid band on the leaves mesh gives way to the cards (leaves on
+  `leavesFade`, which then carries the MID band; cards on their fade-in materials), the bark mesh stays; in the far
+  band the cards fade OUT with the bark while the whole billboard fades in. Shadows / GI / RT keep the billboard.
+  The cards take COMPACT slots: the claim is `3 × pieces + cardCapacity` (`TREE_CARD_SLOTS_MAX` = 64 K, at most every
+  tree's cards), `u_treeCull.y` = that whole range, and the main cull hands the card region out per frame with ONE
+  atomic per subgroup (`treeCardCounter`, binding 23, cleared before the dispatch). A tree that does not fit draws its
+  leaves mesh. The card meshes' buckets are sized min(placements, capacity). The TLAS writer leaves card slots
+  inactive; the shadow culls skip the region in their thread mapping. Fixed slots per card would have been ~2.3 M
+  slots for the 350² grove (16 modules per Oak). **Far trees out of the near
   cascades:** the shadow cull keeps a tree record in cascade c only while `distance(centre, u_sceneFocus) − radius
   ≤ split(c) + Foliage shadow cascade margin` (`Trees/...`, default 64 m, `u_treeCullParams.w`): a cascade's box runs
   far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
@@ -1483,8 +1496,8 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   = seen through the gaps deep inside — darkens the sun visibility AND the ambient (`computeLitColor`'s
   `texAO`) down to `1 - Trees/Foliage interior shadow` (`u_foliageParams.w`), so a fully lit crown is not
   flat: full inside `Foliage interior inner radius`, gone outside `outer radius` (leaf distance / crown radius,
-  default 0.2 / 1.0, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
-  raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 1.5; an exponent: > 1 darker -
+  default 0.2 / 1.2, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
+  raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 0.5; an exponent: > 1 darker -
   a strength multiplier saturated at strength 1), then × `|V.y|` (the view's steepness; plain `V.y` went negative
   from below and turned the card black). **Crown normal**:
   each crossed card's baked normals shade the crown side ITS bake view saw, so the shading split hard where

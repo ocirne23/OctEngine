@@ -911,6 +911,17 @@ modules keep the unprefixed ones), swapped in per placed piece beyond its distan
   changes — no reload). Not dithered in the shadow pass: inside the band both cast. `Force far` and the
   impostor mode keep the hard switch. (Turning the cards about the
   branch axis toward the camera was tried and removed — the user did not like the look.) Cache `<species>_billboard<i>_<hash>.png` (+ `_normal`), mips down to 8 px.
+* **Branch cards — the MID tier** (GPU path, baked variants; `Trees/Branch card distance`, default 0.4 × each
+  species' billboard distance, 0 = off; respawns): between the full mesh and the whole-tree billboard the tree
+  draws its bark mesh plus ONE MODULE BILLBOARD per module placement of its composite (`TreePiece::placements`,
+  kept by `bakeTreeVariant`) — the leaves mesh is what gives way. Over the mid band (`FadeWidth` wide) the leaves
+  fade out on `leafMidFadeMaterial` and the cards fade in on their module's `cardInMaterial`; over the far band
+  the cards fade out on `cardOutMaterial` with the bark while the whole billboard fades in (all derived
+  materials, bands in `applyFadeBands`). The cards draw on LitFoliage with the whole-tree billboards' shading and
+  "Foliage ..." tweaks, but with `MATERIAL_FLAG_NO_EDGE_FADE`: no edge-on fade (the user's call). MAIN pass only:
+  shadows, GI and RT keep the whole billboard. The module
+  billboards were otherwise only the piece library row's. The renderer side (compact card slots) is RendererVK
+  "BAKED TREE RECORDS". The CPU path (GPU expansion off, impostor mode) has no mid tier.
 * **Octahedral impostors** (the fallback, below).
 * **None**: mesh LODs only.
 
@@ -1002,7 +1013,8 @@ The set is uploaded once to device-local memory; per frame `update` makes one `r
 the culls make the per-piece decision and build the records themselves, and the TLAS writer their RT instances
 (see RendererVK "BAKED TREE RECORDS"). Every baked variant also carries its
 FAR-TREE VOLUME grid (`bakeTreeDensity`, `TREE_DENSITY_RES` = 32³ extinction over its billboard box, from the
-LOD-0 triangles; cluster leaves count half opaque) and the species leaf colour — the leaf texture's
+LOD-0 LEAF triangles only; cluster leaves count half opaque. The bark was dropped 2026-10-02: a trunk's whole area
+in one thin voxel column drew dashed vertical streaks through the far blobs) and the species leaf colour — the leaf texture's
 alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures upload as sRGB, so the raw
 `leafColor` taken as linear read light yellow-green) — handed to the set as
 `TreeInstanceType::density` / `albedo` (RendererVK "Far-tree volume"). With billboards, the BILLBOARD is the

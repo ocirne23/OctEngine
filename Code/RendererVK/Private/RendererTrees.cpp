@@ -39,8 +39,28 @@ namespace
         TreeCullRecordGpu billboard;
         float farDistance = 0.0f; // billboard switch distance (m); x the frame's distance scale
         float fadeWidth = 1.0f;   // crossfade band (m), centred on it
+        float midDistance = 0.0f; // the mid tier (branch cards) from here (m; x the scale); 0 = none
+        float midFadeWidth = 1.0f;
+        uint32 moduleFirst = 0;   // its branch cards in the modules buffer
+        uint32 moduleCount = 0;
     };
-    static_assert(sizeof(TreeCullTypeGpu) == 48);
+    static_assert(sizeof(TreeCullTypeGpu) == 64);
+
+    // A branch card: a module's billboard at its placement (tree-local, scale 1), on its fade-in / fade-out material.
+    struct TreeCullModuleGpu
+    {
+        glm::vec4 posScale{ 0.0f };
+        glm::vec4 quat{ 0.0f, 0.0f, 0.0f, 1.0f };
+        uint32 meshMaterialIn = TREE_RECORD_ABSENT;
+        uint32 meshMaterialOut = TREE_RECORD_ABSENT;
+        uint32 pipelineAlpha = 0;
+        uint32 pad0 = 0;
+    };
+    static_assert(sizeof(TreeCullModuleGpu) == 48);
+
+    // The branch-card slots a set claims per frame (the cull hands them out; a tree that finds them taken draws its
+    // leaves mesh). At most the cards of every placed tree.
+    constexpr uint32 TREE_CARD_SLOTS_MAX = 64 * 1024;
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -62,13 +82,14 @@ namespace
 // Patched in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet claims the range - left at
 // that upload's 0 / 0, the culls read the range's never-written stream entries as instances (garbage mesh
 // indices, out-of-bounds bucket writes).
-// z = the culls' THREAD count (their dispatch, IndirectCullComputePipeline::update): one per stream instance, but
-// one per PIECE in the tree range (w = the piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
+// y = the whole range: 3 records per piece, then the branch-card region. z = the culls' THREAD count (their dispatch,
+// IndirectCullComputePipeline::update): one per stream instance outside the range, one per PIECE inside it (w = the
+// piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
 void Renderer::uploadTreeCullUbo(PerFrameData& frameData)
 {
     const bool treeVolume = m_treeCullCount > 0 && farTreesActive() && m_treeSets[m_treeCullSet].hasVolume;
-    const uint32 treePieces = m_treeCullCount / TREE_RECORDS_PER_PIECE;
-    m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, m_instances.getInstanceCount() - 2 * treePieces, treePieces);
+    m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces),
+        m_treeCullPieces);
     m_ubo.treeCullParams = glm::vec4(m_treeCullDistanceScale, m_treeCullForceFar ? 1.0f : 0.0f,
         treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f,
         oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl
@@ -85,6 +106,11 @@ Buffer& Renderer::treeCullPieces()
 Buffer& Renderer::treeCullTypes()
 {
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].types : m_treeCullDummy;
+}
+
+Buffer& Renderer::treeCullModules()
+{
+    return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].modules : m_treeCullDummy;
 }
 
 uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces)
@@ -109,11 +135,32 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
         return gpu;
     };
     oc::vector<TreeCullTypeGpu> gpuTypes(types.size());
+    oc::vector<TreeCullModuleGpu> gpuModules;
     for (size_t t = 0; t < types.size(); ++t)
     {
         const TreeInstanceType& type = types[t];
-        gpuTypes[t] = TreeCullTypeGpu{ record(type.bark), record(type.barkFade), record(type.leaves), record(type.leavesFade),
+        TreeCullTypeGpu& gpu = gpuTypes[t];
+        gpu = TreeCullTypeGpu{ record(type.bark), record(type.barkFade), record(type.leaves), record(type.leavesFade),
             record(type.billboard), type.farDistance, type.fadeWidth };
+        gpu.moduleFirst = (uint32)gpuModules.size();
+        for (const TreeInstanceModule& module : type.modules)
+        {
+            if (!module.mesh || !module.mesh->isValid())
+                continue;
+            const TreeCullRecordGpu in = record({ module.mesh, module.materialIn, module.pipeline });
+            gpuModules.push_back(TreeCullModuleGpu{
+                .posScale = glm::vec4(module.local.pos, module.local.scale),
+                .quat = glm::vec4(module.local.quat.x, module.local.quat.y, module.local.quat.z, module.local.quat.w),
+                .meshMaterialIn = in.meshMaterial,
+                .meshMaterialOut = record({ module.mesh, module.materialOut, module.pipeline }).meshMaterial,
+                .pipelineAlpha = in.pipelineAlpha,
+            });
+        }
+        gpu.moduleCount = (uint32)gpuModules.size() - gpu.moduleFirst;
+        // The mid tier only with cards and a billboard to hand over to (tree_cull.inc.glsl).
+        const bool mid = type.midDistance > 0.0f && gpu.moduleCount > 0 && gpu.billboard.meshMaterial != TREE_RECORD_ABSENT;
+        gpu.midDistance = mid ? type.midDistance : 0.0f;
+        gpu.midFadeWidth = type.midFadeWidth;
     }
 
     // Bucket sizes: a piece draws its bark mesh at most once (normal OR fade material - the same mesh), its
@@ -126,6 +173,8 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
             ++meshCounts[mesh->m_meshIdx];
     };
 
+    oc::unordered_map<uint16, uint32> cardCounts; // per card mesh: its placements over every tree with a mid tier
+    uint32 totalCards = 0;
     oc::vector<TreeCullPieceGpu> gpuPieces(pieces.size());
     set.lodStateBases.resize(pieces.size());
     for (size_t i = 0; i < pieces.size(); ++i)
@@ -145,7 +194,18 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
         count(type.bark, type.barkFade);
         count(type.leaves, type.leavesFade);
         count(type.billboard, type.billboard);
+        if (gpuTypes[piece.type].midDistance > 0.0f)
+        {
+            totalCards += gpuTypes[piece.type].moduleCount;
+            for (const TreeInstanceModule& module : type.modules)
+                if (module.mesh && module.mesh->isValid())
+                    ++cardCounts[module.mesh->m_meshIdx];
+        }
     }
+    // The card region: the slots of every placed tree's cards, capped - its buckets never hold more than the region.
+    set.cardCapacity = oc::min(totalCards, TREE_CARD_SLOTS_MAX);
+    for (const auto& [meshIdx, cards] : cardCounts)
+        meshCounts[meshIdx] += oc::min(cards, set.cardCapacity);
     set.meshCounts.assign(meshCounts.begin(), meshCounts.end());
 
     // The culls' data: written once, device-local (staged in chunks).
@@ -159,6 +219,7 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
     };
     uploadDeviceLocal(set.pieces, gpuPieces.data(), gpuPieces.size() * sizeof(TreeCullPieceGpu), "TreeCullPieces");
     uploadDeviceLocal(set.types, gpuTypes.data(), gpuTypes.size() * sizeof(TreeCullTypeGpu), "TreeCullTypes");
+    uploadDeviceLocal(set.modules, gpuModules.data(), gpuModules.size() * sizeof(TreeCullModuleGpu), "TreeCullModules");
 
     // The far-tree volume's data: host-visible, read through device addresses at its (rare) rebakes.
     auto upload = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
@@ -300,10 +361,13 @@ void Renderer::destroyTreeInstanceSet(uint32 setId)
         m_treeCullSet = UINT32_MAX;
         m_treeCullBase = 0;
         m_treeCullCount = 0;
+        m_treeCullPieces = 0;
         setHaveToRecordCommandBuffers();
     }
     set.pieces.destroy();
     set.types.destroy();
+    set.modules.destroy();
+    set.cardCapacity = 0;
     set.volumePieces.destroy();
     set.volumeTypes.destroy();
     set.volumeData.destroy();
@@ -338,13 +402,16 @@ void Renderer::renderTreeInstanceSet(uint32 setId, const glm::vec3& cameraPos, f
         setHaveToRecordCommandBuffers();
     }
 
-    const uint32 base = m_instances.claimInstances(set.numPieces * TREE_RECORDS_PER_PIECE);
+    // The records, then the branch-card region, in ONE claim (the culls address the cards behind the records).
+    const uint32 count = set.numPieces * TREE_RECORDS_PER_PIECE + set.cardCapacity;
+    const uint32 base = m_instances.claimInstances(count);
     if (base == UINT32_MAX)
         return; // full this frame: the capacity grows at the next beginFrame
     for (const auto& [meshIdx, numInstances] : set.meshCounts)
         m_instances.noteMeshInstances(meshIdx, numInstances);
     m_treeCullBase = base;
-    m_treeCullCount = set.numPieces * TREE_RECORDS_PER_PIECE;
+    m_treeCullCount = count;
+    m_treeCullPieces = set.numPieces;
     m_treeCullDistanceScale = distanceScale;
     m_treeCullForceFar = forceFar;
 }

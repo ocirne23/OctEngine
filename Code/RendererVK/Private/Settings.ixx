@@ -217,7 +217,7 @@ export struct ShadowParams
 // UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
 export struct FoliageParams
 {
-    float crownNormal = 0.5f;   // blend of the shading normal toward a CROWN normal - the view ray's hit on a
+    float crownNormal = 0.25f;  // blend of the shading normal toward a CROWN normal - the view ray's hit on a
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
@@ -225,11 +225,11 @@ export struct FoliageParams
                                 // blockers (0 = hard, as any surface): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float interiorShadow = 0.66f; // darkening of the leaves deep INSIDE the crown (their baked 3D point near the
+    float interiorShadow = 0.67f; // darkening of the leaves deep INSIDE the crown (their baked 3D point near the
                                 // crown sphere's centre), on the sun and the ambient alike (0 = off) - a fully
                                 // lit crown otherwise looked flat.
     float interiorInner = 0.2f; // the leaf's distance from the crown centre (/ the crown radius) inside which
-    float interiorOuter = 1.0f; // the interior shadow is full, and outside which it is gone (smoothstep between)
+    float interiorOuter = 1.2f; // the interior shadow is full, and outside which it is gone (smoothstep between)
     float interiorTopCardScale = 0.5f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
     // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
@@ -242,7 +242,7 @@ export struct FoliageParams
     // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
-    float transmission = 1.0f;
+    float transmission = 0.8f;
     float transmissionFocus = 64.0f;
     float transmissionGlow = 1.5f;
     float transmissionShadow = 0.95f;
@@ -263,28 +263,27 @@ export struct FoliageParams
 export struct FarTreeParams
 {
     bool enabled = true;
-    float startDistance = 500.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
+    float startDistance = 600.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
     float endDistance = 20000.0f;  // and ends here (m)
     float overlap = 64.0f;         // the billboards draw to startDistance + this; the volume fades in over it (m)
-    uint32 angularRes = 2048;      // texels around (cell = r x 2 pi / this). Keep a POWER OF TWO: at 3072 a band showed along
-                                   // the direction u = 1/3 (cause not found; gone at 2048 / 4096)
-    uint32 radialRes = 1024;       // texels from start to end (cell = r x ln(end / start) / this)
-    uint32 slices = 10;            // height slices
+    uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
+    uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
+    uint32 slices = 15;            // height slices
     float height = 22.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 1.0f;    // x the baked extinction
+    float densityScale = 1.5f;    // x the baked extinction
     float blobShrink = 0.433f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
-    float stepScale = 0.85f;      // march step, x the cell size
+    float stepScale = 0.5f;       // march step, x the cell size
     uint32 maxSteps = 500;
     float ambient = 1.0f;        // sky light on the canopy, x the sun radiance
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 4.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float selfShadow = 2.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
     float normalStrength = 1.0f;  // 0..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 1.0f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 2.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+    float interiorShadow = 6.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
-    float interiorRadius = 0.077f;// the taps' distance, x the cell size
-    float forwardScatter = -0.1f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
-    float albedoScale = 1.0f;    // x the leaf colour
+    float interiorRadius = 0.1f;  // the taps' distance, x the cell size
+    float forwardScatter = -0.3f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float albedoScale = 1.5f;    // x the leaf colour
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
     // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per

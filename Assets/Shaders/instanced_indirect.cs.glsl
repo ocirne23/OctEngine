@@ -2,6 +2,9 @@
 
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_EXT_shader_16bit_storage : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
 //#extension GL_EXT_debug_printf : enable
 
 #include "shared.inc.glsl"
@@ -149,11 +152,17 @@ layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
     uint in_prevNodePassMasks[]; // PASS_* byte + the push frame above it (InstanceStream::stampedPassMask)
 };
 
-// 20 + 21: the baked tree records' static data (tree_cull.inc.glsl): this frame's tree range of the stream is
-// built from them instead of read.
+// 20 + 21 + 22: the baked tree records' static data (tree_cull.inc.glsl): this frame's tree range of the stream is
+// built from them instead of read; 22 = the types' branch cards.
 #define TREE_CULL_PIECES_BINDING 20
 #define TREE_CULL_TYPES_BINDING 21
+#define TREE_CULL_MODULES_BINDING 22
 #include "tree_cull.inc.glsl"
+// The branch-card region's allocator (cleared before the dispatch): the slots handed out this frame.
+layout (binding = 23, std430) buffer TreeCardCounterBuffer
+{
+    uint treeCardCounter;
+};
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -391,16 +400,51 @@ void main()
                                                 renderNodePosScale.w * instanceOffsetPosScale.w);
         pick.lodStateBase                 = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
     }
-    for (uint k = pick.kBegin; k < pick.kEnd; ++k)
+    // BRANCH CARDS (the mid tier): a tree's cards take consecutive slots of the range's card region - ONE atomic per
+    // subgroup (the lanes' counts prefix-summed). A tree that does not fit draws its leaves mesh instead (in the far
+    // band: nothing - its leaves have faded out by then).
+    uint numCards = isTree && pick.cards != 0u ? in_treeTypes[pick.typeIdx].moduleCount : 0u;
+    const uint cardTotal = subgroupAdd(numCards);
+    const uint cardOffset = subgroupExclusiveAdd(numCards);
+    uint cardFirst = 0u;
+    if (cardTotal > 0u && subgroupElect())
+        cardFirst = atomicAdd(treeCardCounter, cardTotal);
+    cardFirst = subgroupBroadcastFirst(cardFirst) + cardOffset;
+    if (numCards > 0u && cardFirst + numCards > treeCullCardCapacity())
     {
-        if (isTree)
+        numCards = 0u;
+        if (pick.leaves == 0u && !pick.fade)
+            pick.leaves = 1u;
+    }
+    // Records [kBegin, kEnd) (k < 3), then the cards (k >= 3); a plain instance runs k = 0 only.
+    const uint kLast = isTree ? 3u + numCards : 1u;
+    for (uint k = pick.kBegin; k < kLast; ++k)
+    {
+        uint slot = instanceIdx + k;
+        uint stateSlot = pick.lodStateBase + k;
+        vec4 posScale = pick.posScale, quat = pick.quat;
+        if (isTree && k < 3u)
         {
+            if (k >= pick.kEnd)
+                continue;
             const TreeCullRecord rec = treeCullMainRecord(pick, k);
             if (rec.meshMaterial == TREE_CULL_ABSENT)
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        // A tree's record k sits at its first record + k; a plain instance runs k = 0 only.
-        cullInstance(instanceIdx + k, instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree);
+        else if (isTree)
+        {
+            // A card: its module's placement (tree-local, scale 1) under the tree's transform. No LOD chain.
+            const uint c = k - 3u;
+            const uint m = in_treeTypes[pick.typeIdx].moduleFirst + c;
+            const vec4 local = in_treeModules[m].posScale;
+            posScale = vec4(pick.posScale.xyz + quat_transform(local.xyz * pick.posScale.w, pick.quat), pick.posScale.w * local.w);
+            quat = quat_multiply(pick.quat, in_treeModules[m].quat);
+            instance = InMeshInstance(0u, 0u, pick.cards == 2u ? in_treeModules[m].meshMaterialOut : in_treeModules[m].meshMaterialIn,
+                in_treeModules[m].pipelineAlpha);
+            slot = treeCullCardBase() + cardFirst + c;
+            stateSlot = 0u;
+        }
+        cullInstance(slot, instance, posScale, quat, stateSlot, isTree);
     }
 }

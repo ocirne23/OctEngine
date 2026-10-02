@@ -186,7 +186,7 @@ static oc::string buildLayoutPreamble()
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");
     def("MATERIAL_FLAG_BILLBOARD", MATERIAL_FLAG_BILLBOARD, "u");
     def("MATERIAL_FLAG_BILLBOARD_TOP_CARD", MATERIAL_FLAG_BILLBOARD_TOP_CARD, "u");
-    def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
+    def("MATERIAL_FLAG_NO_EDGE_FADE", MATERIAL_FLAG_NO_EDGE_FADE, "u");    def("MATERIAL_FLAG_LEAF", MATERIAL_FLAG_LEAF, "u");
     def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
     def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement

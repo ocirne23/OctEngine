@@ -84,6 +84,7 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .inPrevNodePassMasksBuffer = m_instances.getPrevPassMasks(),
         .treePiecesBuffer = treeCullPieces(),
         .treeTypesBuffer = treeCullTypes(),
+        .treeModulesBuffer = treeCullModules(),
     };
     m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
     cb.end();

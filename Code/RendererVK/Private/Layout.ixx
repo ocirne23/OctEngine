@@ -840,8 +840,7 @@ export namespace RendererVKLayout
         glm::vec4 foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
                                   // z = interior shadow top card scale, w = leaf transmission strength
         glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
-                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
-        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
+                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
         // of this frame's tree range, y = its length (3 per tree; 0 = none), z = the culls' thread count (one per tree
         // in the range; their dispatch), w = the tree count. params: x = the far distance scale,
         // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade
@@ -1048,6 +1047,8 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_BILLBOARD = 1u << 26; // drawn on LitFoliage (its paths assume it): the sun shadow is NOT rejected by the geometric
                                                        // normal's facing (a flat card standing for a foliage clump,
                                                        // the tree billboards) - the normal-mapped normal decides
+    constexpr uint32 MATERIAL_FLAG_NO_EDGE_FADE = 1u << 22; // with BILLBOARD: no edge-on fade (the mid tier's branch
+                                                       // cards; outside the fade bits TreeSystem rewrites)
     constexpr uint32 MATERIAL_FLAG_BILLBOARD_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
                                                        // HORIZONTAL card (its top-down view; the card whose normal
                                                        // points up) - the lit FS's crown frame runs along its normal

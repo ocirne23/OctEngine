@@ -224,8 +224,9 @@ void main()
 	// pattern), so it composes with the distance fade instead of cancelling it. Over |N.V| from "Trees/Foliage edge
 	// fade start" to "end" (u_foliageParams2.xy), both x "Foliage edge fade centre scale" (z) at the crossing axis, back to x1
 	// at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card scale"
-	// (u_foliageParams3.y).
+	// (u_foliageParams3.y). Not on MATERIAL_FLAG_NO_EDGE_FADE (the mid tier's branch cards).
 #ifdef FOLIAGE
+	if ((material.flags & MATERIAL_FLAG_NO_EDGE_FADE) == 0u)
 	{
 		const float facing = abs(dot(normalize(in_normalV.xyz), V));
 		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);

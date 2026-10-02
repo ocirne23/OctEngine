@@ -54,6 +54,14 @@ export namespace Procedural
 	// no stubs at the coarse levels. Level 0 is the full piece.
 	constexpr uint32 TREE_PIECE_LODS = 4;
 
+	// One placed piece of a composited tree, tree-local.
+	struct TreePiecePlacement
+	{
+		uint16 pieceIdx = 0;
+		bool trunk = false;
+		Transform local;
+	};
+
 	struct TreePiece
 	{
 		TreeMesh bark[TREE_PIECE_LODS];
@@ -63,6 +71,7 @@ export namespace Procedural
 		oc::vector<TreeSlot> slots; // trunks only
 		float length = 1.0f;        // trunk height / nominal module length (m)
 		float baseRadius = 0.1f;    // root radius at the base (m, unscaled)
+		oc::vector<TreePiecePlacement> placements; // baked variants only: the composite it was merged from
 	};
 
 	struct TreeLibrary
@@ -74,18 +83,11 @@ export namespace Procedural
 	// Pure; any thread. Deterministic from the species (its seed included).
 	void generateTreeLibrary(const TreeSpeciesDesc& species, TreeLibrary& out);
 
-	// One placed piece of a composited tree, tree-local.
-	struct TreePiecePlacement
-	{
-		uint16 pieceIdx = 0;
-		bool trunk = false;
-		Transform local;
-	};
-
 	// A BAKED tree variant: the composite of `seed` merged into ONE piece - per LOD level all its pieces' bark
 	// into one mesh and all their leaves into another, at tree scale 1 (the instance scales). Each level's
 	// error is the largest of its pieces' (x their placement scale). Bones are dropped (0). The runtime draws
-	// these instead of compositing, so a tree costs one set of records, not one per piece.
+	// these instead of compositing, so a tree costs one set of records, not one per piece. `out.placements` keeps
+	// the composite (the mid tier's branch cards stand at its module placements).
 	void bakeTreeVariant(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed, TreePiece& out);
 
 	// The composite function: a unique tree from `seed`, tree-local (the caller adds the tree transform).

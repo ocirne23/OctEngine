@@ -310,8 +310,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
                            // z = interior shadow top card scale, w = leaf transmission strength
     vec4 u_foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
-                           // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)
-    // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
+                           // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)    // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
     // length (3 per tree; 0 = no trees), z = the culls' thread count (one per tree in the range), w = the tree count;
     // params x = the far distance scale, y = force far (0/1),
     // z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade margin" (m; the shadow cull:

@@ -141,6 +141,10 @@ namespace Procedural
 						Globals::rendererVK.freeMeshLodChain(meshes.leafChain);
 					if (meshes.impostorMaterial != UINT16_MAX)
 						Globals::rendererVK.destroyTextureMaterial(meshes.impostorMaterial);
+					// The derived card materials first: they share the billboard's textures.
+					for (uint16 card : { meshes.cardInMaterial, meshes.cardOutMaterial })
+						if (card != UINT16_MAX)
+							Globals::rendererVK.releaseMaterial(card);
 					if (meshes.billboardMaterial != UINT16_MAX)
 						Globals::rendererVK.destroyTextureMaterial(meshes.billboardMaterial);
 				}
@@ -148,6 +152,8 @@ namespace Procedural
 				Globals::rendererVK.releaseMaterial(species.barkFadeMaterial); // derived: textures stay with the source
 			if (species.leafFadeMaterial != UINT16_MAX)
 				Globals::rendererVK.releaseMaterial(species.leafFadeMaterial);
+			if (species.leafMidFadeMaterial != UINT16_MAX)
+				Globals::rendererVK.releaseMaterial(species.leafMidFadeMaterial);
 			if (species.ownsLeafMaterial)
 				Globals::rendererVK.destroyTextureMaterial(species.leafMaterial);
 			if (species.ownsBarkMaterial)
@@ -183,7 +189,28 @@ namespace Procedural
 				for (const PieceMeshes& meshes : *pieces)
 					if (meshes.billboardMaterial != UINT16_MAX)
 						renderer.setMaterialFlags(meshes.billboardMaterial, (renderer.getMaterialFlags(meshes.billboardMaterial) & ~FADE_BITS) | billboardFade);
+			// The MID tier (branch cards): the leaves fade OUT and the cards IN over the mid band; the cards fade OUT
+			// over the far band with the bark (tree_cull.inc.glsl picks the side per tree).
+			if (species.leafMidFadeMaterial == UINT16_MAX)
+				continue;
+			const float midStart = glm::max(midDistance(species) * m_impostorDistanceScale - width * 0.5f, 0.0f);
+			auto setFade = [&](uint16 material, uint32 fade)
+			{
+				if (material != UINT16_MAX)
+					renderer.setMaterialFlags(material, (renderer.getMaterialFlags(material) & ~FADE_BITS) | fade);
+			};
+			setFade(species.leafMidFadeMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, false));
+			for (const PieceMeshes& meshes : species.moduleMeshes)
+			{
+				setFade(meshes.cardInMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, true));
+				setFade(meshes.cardOutMaterial, fadeOut);
+			}
 		}
+	}
+
+	float TreeSystem::midDistance(const Species& species) const
+	{
+		return species.desc.billboardDistance * m_branchCardDistance;
 	}
 
 	void TreeSystem::initialize()
@@ -205,6 +232,10 @@ namespace Procedural
 		static constexpr oc::string_view BILLBOARD_VIEWS[] = { "2 (side + top)", "4 (+ other side + bottom)" };
 		Tweak::enumVar("Trees", "Billboard views", &m_billboardViews, BILLBOARD_VIEWS, [this]() { m_reload = true; });
 		Tweak::floatVar("Trees", "Far distance scale", &m_impostorDistanceScale, 0.0f, 10.0f, 0.01f, [this]() { m_fadeBandsDirty = true; });
+		// The MID tier: from this fraction of each species' billboard distance the leaves mesh gives way to one billboard
+		// card per branch module (the bark mesh stays). 0 = off.
+		Tweak::floatVar("Trees", "Branch card distance", &m_branchCardDistance, 0.0f, 1.0f, 0.01f,
+			[this]() { m_fadeBandsDirty = true; m_respawn = true; });
 		Tweak::boolean("Trees", "Force far", &m_forceImpostors, [this]() { m_fadeBandsDirty = true; });
 		Tweak::boolean("Trees", "GPU expansion", &m_gpuExpansion, respawn);
 	}
@@ -442,6 +473,17 @@ namespace Procedural
 				// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
 				species.barkFadeMaterial = renderer.deriveMaterial(species.barkMaterial, 0);
 				species.leafFadeMaterial = renderer.deriveMaterial(species.leafMaterial, 0);
+				// The MID tier's: the leaves fading out over the mid band, and per module its billboard fading in over it
+				// and out over the far band (the branch cards; bands set by applyFadeBands).
+				species.leafMidFadeMaterial = renderer.deriveMaterial(species.leafMaterial, 0);
+				for (PieceMeshes& meshes : species.moduleMeshes)
+					if (meshes.billboardMaterial != UINT16_MAX)
+					{
+						// Foliage cards like the whole-tree billboards (LitFoliage: the same shading, the same tweaks), but
+						// no edge-on fade (MATERIAL_FLAG_NO_EDGE_FADE).
+						meshes.cardInMaterial = renderer.deriveMaterial(meshes.billboardMaterial, RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+						meshes.cardOutMaterial = renderer.deriveMaterial(meshes.billboardMaterial, RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
+					}
 			}
 			else if (m_farMode == 1 && species.desc.impostorDistance > 0.0f)
 				buildImpostors(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
@@ -694,6 +736,28 @@ namespace Procedural
 							type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
 							type.farDistance = species.desc.billboardDistance;
 							type.fadeWidth = species.desc.billboardFadeWidth;
+							// The MID tier of a baked variant: a branch card (its module's billboard) per module placement;
+							// the leaves fade out over the mid band on their own derived material.
+							if (set == &species.variantMeshes && midDistance(species) > 0.0f && species.leafMidFadeMaterial != UINT16_MAX)
+							{
+								const TreePiece& variant = species.variants[(size_t)(&meshes - set->data())];
+								for (const TreePiecePlacement& placement : variant.placements)
+								{
+									if (placement.trunk || placement.pieceIdx >= species.moduleMeshes.size())
+										continue;
+									const PieceMeshes& module = species.moduleMeshes[placement.pieceIdx];
+									if (!module.billboard.isValid() || module.cardInMaterial == UINT16_MAX)
+										continue;
+									type.modules.push_back({ &module.billboard, module.cardInMaterial, module.cardOutMaterial,
+										RendererVKLayout::EPipelineIndex::LitFoliage, placement.local });
+								}
+								if (!type.modules.empty())
+								{
+									type.midDistance = midDistance(species);
+									type.midFadeWidth = species.desc.billboardFadeWidth;
+									type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+								}
+							}
 						}
 						typeOf.emplace(&meshes, (uint32)gpuTypes.size());
 						gpuTypes.push_back(type);

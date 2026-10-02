@@ -797,6 +797,7 @@ namespace Procedural
 			}
 		}
 		out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, out.length });
+		out.placements = oc::move(placements);
 	}
 
 	void compositeTree(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed,

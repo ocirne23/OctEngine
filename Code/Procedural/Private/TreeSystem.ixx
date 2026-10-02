@@ -43,6 +43,10 @@ export namespace Procedural
 			// pipeline), each with its own baked material (owned).
 			RenderMesh billboard;
 			uint16 billboardMaterial = UINT16_MAX;
+			// Modules with billboards: the mid tier's BRANCH CARD materials, derived from billboardMaterial (fade in
+			// over the mid band, out over the far band; applyFadeBands).
+			uint16 cardInMaterial = UINT16_MAX;
+			uint16 cardOutMaterial = UINT16_MAX;
 			RenderMesh impostor;
 			uint16 impostorMaterial = UINT16_MAX;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
@@ -94,6 +98,7 @@ export namespace Procedural
 			// released with the species). UINT16_MAX without billboards.
 			uint16 barkFadeMaterial = UINT16_MAX;
 			uint16 leafFadeMaterial = UINT16_MAX;
+			uint16 leafMidFadeMaterial = UINT16_MAX; // the mid tier: the leaves' fade-OUT over the mid band
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
@@ -109,6 +114,7 @@ export namespace Procedural
 		// Writes every species' crossfade band (billboard distance x Far distance scale, FadeWidth) into its
 		// fade-out materials and its billboards' fade-in materials.
 		void applyFadeBands(Renderer& renderer);
+		float midDistance(const Species& species) const; // the mid tier's switch distance (m, unscaled); 0 = off
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
 		void spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform);
 
@@ -126,7 +132,8 @@ export namespace Procedural
 		int m_groveType = 1;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name (1 = Oak)
 		int m_farMode = 0;                    // 0 = billboards, 1 = octahedral impostors (fallback), 2 = none (reloads)
 		int m_billboardViews = 0;             // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-		float m_impostorDistanceScale = 1.0f; // x every species' far distance (billboard or impostor); 0 = off
+		float m_impostorDistanceScale = 4.0f; // x every species' far distance (billboard or impostor); 0 = off
+		float m_branchCardDistance = 0.4f;    // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
 		bool m_forceImpostors = false;        // debug: every module as its far representation
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
 		bool m_gpuExpansion = true;           // G4: pieces expanded on the GPU (one set) instead of a CPU push per node

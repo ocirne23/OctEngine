@@ -335,8 +335,10 @@ namespace Procedural
 					}
 			}
 		};
+		// Leaves only: the bark (0.25 per area before) put a trunk's whole surface into one thin column of voxels - a dense
+		// vertical line per tree, darkened by the volume's self-shadow and interior taps: dashed vertical streaks through
+		// the far blobs. A trunk is far below a pixel at the volume's distances.
 		splat(piece.leaves[0], 0.5f * leafCoverage);
-		splat(piece.bark[0], 0.25f);
 	}
 
 	TreeBillboardBox billboardBox(const TreePiece& piece)
