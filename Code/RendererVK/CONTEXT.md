@@ -1058,7 +1058,8 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   schedule / neighbour offsets (arrays indexed at run time sat in local memory). **A column WITHOUT a floor** inside
   the layer takes no sample and steps at least a whole cell: the splat floors every footprint plus one ring, so
   such a column lies 2+ columns from any density and all 4 `densityAtColumns` taps would read 0 (exact, not an
-  approximation - keep the ring if the floor pass changes).
+  approximation - keep the ring if the floor pass changes). It sits in the step formula and the sample's
+  `hasFloor ?` - as a branch of its own it cost the march 8 registers (56 → 64, measured 2026-10-02).
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
@@ -1500,7 +1501,11 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   by its colour — `saturate(-N·L)` (lit from behind) + `saturate(V·-L)^focus × glow` (the backlit rim looking
   toward the sun), × `Trees/Foliage transmission`. Its visibility = `mix(1, sun shadow, Foliage transmission
   shadow)` × the interior term: a leaf seen from the shaded side is in its own crown's shadow, which would
-  leave no glow. A LEAF mesh pixel's shadow is looked up from its SUN side (`sunShadowFirstLeaf`: the bias normal
+  leave no glow. **Formed BEFORE `computeLitColor`** as one half colour: the light loop is the lit FS's register
+  peak (all lit variants sit at LitOpaque's 72 / 32 B because of it), and afterwards the shadow, the interior
+  term and the surface colour were live across it - LitFoliage 72 / 48 → 72 / 32 (2026-10-02). LitMasked's leaf
+  and plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstMasked`): two call sites inlined the
+  shadow search twice (+20 KB of code). A LEAF mesh pixel's shadow is looked up from its SUN side (`sunShadowFirstLeaf`: the bias normal
   flipped toward the sun) - `sunShadowFirst`'s facing reject gave every leaf facing away from the sun 0, exactly
   the ones the back term lights, so the shadow weight moved the whole tree as one (fixed 2026-10-02). `u_foliageParams3.w` / `u_foliageParams4` (focus, glow, shadow weight). **No RTAO either way**: a
   FOLIAGE instance gets TLAS mask 0x02 (`gi_tlas_instances.cs`) and RTAO traces with cull mask 0x01, so its

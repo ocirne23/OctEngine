@@ -58,10 +58,13 @@ void sunShadowFirst(vec3 pos)
 // very leaves the transmission's back term lights, so "Foliage transmission shadow" scaled them all as one. The
 // lookup is taken from the leaf's sun side (the bias along the geometric normal flipped toward the sun);
 // doSunLight's facing test on the shading normal still keeps the front light off a back-facing leaf.
-void sunShadowFirstLeaf(vec3 pos)
+// Any other masked surface keeps sunShadowFirst's facing reject. ONE call of sunShadowVisibility for both: each
+// call site inlines the whole shadow search (two cost LitMasked ~20 KB of code).
+void sunShadowFirstMasked(vec3 pos, bool leaf)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
-	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+	const bool facing = dot(geoN, u_sunDirection.xyz) > 0.0;
+	g_sunShadowFirst = leaf || facing ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0;
 }
 #endif
 
@@ -245,10 +248,7 @@ void main()
 	const vec3 leafOffset = sunShadowFirstFoliage(pos, texture(u_textures[normalTexIdx], uv).a, cardDu, cardDv);
 #else
 	// After the discard: a cut-out pixel pays no shadow.
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
-		sunShadowFirstLeaf(pos);
-	else
-		sunShadowFirst(pos);
+	sunShadowFirstMasked(pos, (material.flags & MATERIAL_FLAG_LEAF) != 0u);
 #endif
 #endif
 
@@ -299,8 +299,6 @@ void main()
 		surfaceAO = float16_t(interior);
 	}
 #endif
-
-	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
 #ifdef ALPHA_MASK
 	// LEAF TRANSMISSION (MATERIAL_FLAG_LEAF): thin leaves let the sun through, tinted by their own colour - a
 	// diffuse back term saturate(-N.L) (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking
@@ -308,15 +306,22 @@ void main()
 	// on the sun shadow by "Foliage transmission shadow" (u_foliageParams4.z) only - a leaf seen from the shaded
 	// side sits in its own crown's shadow, which would leave the backlit view no glow - then x the interior term,
 	// so the crown's depths stay dark.
+	// Formed BEFORE computeLitColor: its light loop is the shader's register peak, and only this half colour is live
+	// across it - not the shadow, the interior term and the surface colour it is made of (LitFoliage 72 registers).
+	f16vec3 transmit = f16vec3(0.0);
 	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliageParams3.w > 0.0)
 	{
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliageParams4.x) * u_foliageParams4.y;
 		const float visibility = mix(1.0, sunVisibility, u_foliageParams4.z) * float(surfaceAO);
-		color += vec3(materialColor) * u_sunTransmittance * u_sunColor.rgb
-			* ((back + glow) * visibility * u_foliageParams3.w * INV_PI);
+		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliageParams3.w * INV_PI, MEDIUMP_FLT_MAX));
 	}
+#endif
+
+	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
+#ifdef ALPHA_MASK
+	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
 #endif
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT
