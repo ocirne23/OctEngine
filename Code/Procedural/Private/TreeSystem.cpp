@@ -400,7 +400,8 @@ namespace Procedural
 					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : bark.normalMips)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				species.barkMaterial = renderer.createTextureMaterial(bark.size, bark.size, albedoMips, 0.0f, "TreeBark", &normalMips);
+				species.barkMaterial = renderer.createTextureMaterial(bark.size, bark.size, albedoMips, 0.0f,
+					oc::format("TreeBark/{}", name).c_str(), &normalMips);
 				species.ownsBarkMaterial = true;
 			}
 			if (species.desc.leafType == ETreeLeafType::Cluster)
@@ -420,8 +421,8 @@ namespace Procedural
 				for (oc::vector<uint8>& level : texture.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
 				// LEAF: the sun shines through the cluster cards (the lit FS's transmission).
-				species.leafMaterial = renderer.createTextureMaterial(texture.size, texture.size, mips, TREE_LEAF_ALPHA_CUTOFF, "TreeLeafCluster",
-					nullptr, RendererVKLayout::MATERIAL_FLAG_LEAF);
+				species.leafMaterial = renderer.createTextureMaterial(texture.size, texture.size, mips, TREE_LEAF_ALPHA_CUTOFF,
+					oc::format("TreeLeafCluster/{}", name).c_str(), nullptr, RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitMasked;
 			}
@@ -507,7 +508,8 @@ namespace Procedural
 				albedoMips.push_back(oc::span<uint8>(albedoChain.mips[k].data(), albedoChain.mips[k].size()));
 				normalMips.push_back(oc::span<uint8>(normalChain[k].data(), normalChain[k].size()));
 			}
-			meshes.impostorMaterial = renderer.createTextureMaterial(atlas, atlas, albedoMips, TREE_LEAF_ALPHA_CUTOFF, "TreeImpostor", &normalMips);
+			meshes.impostorMaterial = renderer.createTextureMaterial(atlas, atlas, albedoMips, TREE_LEAF_ALPHA_CUTOFF,
+				oc::format("TreeImpostor/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), &normalMips);
 
 			// The quad: no geometry, only per-piece constants (see tree_impostor.vs.glsl). Its bounds are the
 			// piece's sphere, which is what the cull tests.
@@ -590,8 +592,9 @@ namespace Procedural
 				normalMips.push_back(oc::span<uint8>(normalChain[k].data(), normalChain[k].size()));
 			}
 			// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect.fs.glsl).
-			meshes.billboardMaterial = renderer.createTextureMaterial(size, size, albedoMips, TREE_LEAF_ALPHA_CUTOFF, "TreeBillboard",
-				&normalMips, RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
+			// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
+			meshes.billboardMaterial = renderer.createTextureMaterial(size, size, albedoMips, TREE_LEAF_ALPHA_CUTOFF,
+				oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), &normalMips, RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
 				| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
 
 			TreeMesh cards;

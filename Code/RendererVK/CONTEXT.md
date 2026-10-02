@@ -1453,7 +1453,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   level 0 first, errors in mesh-local units (0 for level 0; nonzero → the screen-space-error selector).
   `spawnMeshNode` on a chain's level 0 allocates the node's hysteresis slot itself, and the cull redirects
   each instance like a container chain. `freeMeshLodChain` BEFORE destroying the meshes.
-* `createTextureMaterial(w, h, mips, alphaCutoff, name)` — a material with its OWN generated sRGB RGBA8
+* `createTextureMaterial(w, h, mips, alphaCutoff, name)` — (its textures are named `<name>/albedo` and
+  `<name>/normal`: the VRAM view splits names on '/', so name a material `<group>/<item>` for one box per item)
+  a material with its OWN generated sRGB RGBA8
   diffuse from a caller-built mip chain (`TextureManager::uploadRgba8Mips`; no blit-generated mips, so the
   caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads

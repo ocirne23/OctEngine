@@ -230,7 +230,7 @@ export struct FoliageParams
                                 // lit crown otherwise looked flat.
     float interiorInner = 0.2f; // the leaf's distance from the crown centre (/ the crown radius) inside which
     float interiorOuter = 1.0f; // the interior shadow is full, and outside which it is gone (smoothstep between)
-    float interiorTopCardScale = 1.5f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
+    float interiorTopCardScale = 0.5f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
     // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
     // card smears its texture into streaks. Near the crossing axis both thresholds are x edgeFadeCentreScale

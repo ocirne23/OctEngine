@@ -191,12 +191,14 @@ uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, b
 uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
     const oc::vector<oc::span<uint8>>* normalMips, uint32 extraFlags)
 {
-    const uint16 texIdx = Globals::textureManager.uploadRgba8Mips(width, height, mips, true, debugName);
+    // "<debugName>/albedo" and "/normal": the VRAM view (MemoryPanel) splits a name on '/', so each material is a
+    // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
+    const uint16 texIdx = Globals::textureManager.uploadRgba8Mips(width, height, mips, true, oc::format("{}/albedo", debugName).c_str());
     RendererVKLayout::MaterialInfo material{};
     material.flags = extraFlags;
     material.diffuseTexIdx = texIdx;
     material.normalTexIdx = normalMips
-        ? Globals::textureManager.uploadRgba8Mips(width, height, *normalMips, false, debugName)
+        ? Globals::textureManager.uploadRgba8Mips(width, height, *normalMips, false, oc::format("{}/normal", debugName).c_str())
         : RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
     material.metalRoughnessTexIdx = UINT16_MAX;
     if (alphaCutoff > 0.0f)
