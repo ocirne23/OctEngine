@@ -81,7 +81,7 @@ the profiler deliberately leaves unregistered — the transient startup texture-
 ## `ImageIO` (`File:ImageIO`)
 
 PNG out / any stb-decodable image in, RGBA8, for GENERATED content written once and read back on later runs
-(the procedural tree textures in `Assets/Trees/Textures`). stb encodes / decodes in memory and the bytes go
+(the procedural tree textures in `Assets/Local/Trees/Textures`). stb encodes / decodes in memory and the bytes go
 through `FileSystem::writeFileBytes` / `readFileBytes`, so the disk seam and its main-thread rule hold
 (`allowMainThread`). Its stb implementations are STATIC (internal linkage), like SceneCooker.cpp's —
 RendererVK owns the external-linkage `stb_image`.

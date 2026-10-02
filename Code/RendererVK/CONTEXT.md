@@ -1226,11 +1226,97 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
+* The `TreeImpostor` pipeline variant (12, opaque family): `tree_impostor.vs.glsl` + the `LitMasked` FS. Its
+  quad mesh carries per-piece constants instead of geometry (Procedural "Branch-module impostors"); push its
+  nodes with `PASS_MAIN` only — the shadow pass would draw the degenerate quad with its own VS.
+* **GPU tree expansion** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
+  RendererTrees.cpp + `TreeExpandPipeline`, `tree_expand.cs.glsl`): a SET of placed procedural tree pieces
+  sharing a table of piece TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the
+  crossfade band). Per frame the CPU claims ONE instance range (3 records per piece), notes the bucket sizes
+  once per distinct level-0 mesh, uploads the static piece transforms once per frame slot and node-buffer
+  generation, and queues a dispatch — nothing per piece. The dispatch is recorded at the TOP of
+  `recordPrimaryPreScene` (before skinning, every cull, the TLAS writer and `recordPrevCopy`; its own barrier
+  ends it) and writes, per piece, its 3 `InMeshInstance` records (the mesh / crossfade / billboard decision —
+  the same rules as the CPU preview), its nodes' stamped pass masks and LOD state biases (record k → state
+  slot base + k). A record the piece does not draw points at the set's DUMMY node (pass mask 0), which every
+  cull skips at its first read. **TWO nodes per piece** (same transform): the mesh records on `transformIdx`,
+  the billboard record on `billboardNode` — so the BILLBOARD stands in for the piece in every pass but MAIN:
+  the mesh node is MAIN only, the billboard record is always written, its node PASS_ALL while it shows and
+  SHADOW | GI otherwise. The shadow map, the shadow cull and the TLAS (GI, RT shadows) only ever see the cards.
+  A type without a billboard keeps its mesh in every pass. Everything is addressed by BUFFER DEVICE ADDRESS (push constants), re-read
+  per frame — so the slot's `meshInstances` / `passMasks` / `lodStateBias` carry `eShaderDeviceAddress`, and
+  their re-creation on growth needs no descriptor update. Destroying a set drains the GPU (rare: respawn /
+  reload). Texture / mesh streaming notes are skipped: tree textures are pinned and `RenderMesh`es never stream.
+* `createMeshLodChain(levels, errors)` — a GPU LOD chain (`addMeshLodGroup`) over `createMesh`'d meshes,
+  level 0 first, errors in mesh-local units (0 for level 0; nonzero → the screen-space-error selector).
+  `spawnMeshNode` on a chain's level 0 allocates the node's hysteresis slot itself, and the cull redirects
+  each instance like a container chain. `freeMeshLodChain` BEFORE destroying the meshes.
 * `createTextureMaterial(w, h, mips, alphaCutoff, name)` — a material with its OWN generated sRGB RGBA8
   diffuse from a caller-built mip chain (`TextureManager::uploadRgba8Mips`; no blit-generated mips, so the
   caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
-  a LINEAR RGB tangent-space normal map (x along U, y along V). `destroyTextureMaterial` queues the
+  a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
+  **`MATERIAL_FLAG_FOLIAGE`** (bit 26, LitMasked only): the FS's early sun shadow is NOT rejected by the
+  geometric normal's facing (`sunShadowFirstFoliage`: sampled from the sun side, the normal-mapped normal's
+  facing test in `doSunLight` decides) — for flat cards standing for a foliage clump. Its shadow lookup uses
+  the CONSTANT depth bias only (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage` in shadows.inc.glsl: no slope scaling,
+  no normal offset): a crossed billboard's back half sits in the crossing card's shadow by a small depth step,
+  which the slope-scaled bias and normal push erased — that strip lit up through the tree. Even at ZERO bias a
+  line stayed (the cards touch at the crossing line, so no bias separates them), so the lookup also moves OFF
+  the card to the texel's BAKED DEPTH: the normal map's alpha, signed along the card's FRONT normal, in units
+  of the card's u length. Both are rebuilt from the screen derivatives of position and uv (before the discard):
+  d(pos)/du and d(pos)/dv, front normal = cross(dv, du) on both faces — so the instance scale needs no data,
+  and a back face agrees with the front. Both passes scale the offset by `Trees/Foliage depth offset`
+  (`u_foliageParams.x`, 0 = on the card plane). **The CASTER writes the same points** (pixel depth offset, as Unreal's
+  / Amplify's impostors do): the shadow cull fills `OutShadowMeshInstance::foliageNormalTexIdx` /
+  `foliageShift` (world bounding radius) for FOLIAGE materials (not for rain occlusion); `shadow_depth.vs`
+  pulls those casters toward the light by the radius, and `shadow_depth.fs` adds back the radius plus the
+  leaf's offset — always ≥ 0, so the FS declares `layout (depth_greater)` and the early / hierarchical reject
+  stays valid for the whole pass. Every other caster writes `gl_FragCoord.z` (its depth without the write,
+  the rasterizer's bias included). With the receiver only offset, card B stayed a flat plane in the map and the
+  line stayed. (An up-sun SKIP was also tried and rejected: it only widened the lit strip.) **Transmission**:
+  the leaves at their depths still left a HARD edge on the axis (half the crown sits behind the crossing card,
+  and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` /
+  `pcssBorder`) keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the
+  PCSS average blocker (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)`
+  (`u_foliageParams.z`, 0 = hard). ~0 on the axis, deepening into the crown; far blockers shadow fully. All
+  foliage values live in `FoliageParams` (Settings.ixx; registered as "Foliage ..." in the TreeSystem's
+  "Trees" tweak category) and ride `u_foliageParams` / `u_foliageParams2` (Ubo, after `lodParams1`). **Interior**: the leaf's real 3D point (card
+  point + baked depth, returned by `sunShadowFirstFoliage`) against the crown sphere below — near its centre
+  = seen through the gaps deep inside — darkens the sun visibility AND the ambient (`computeLitColor`'s
+  `texAO`) down to `1 - Trees/Foliage interior shadow` (`u_foliageParams.w`), so a fully lit crown is not
+  flat: full inside `Foliage interior inner radius`, gone outside `outer radius` (leaf distance / crown radius,
+  default 0 / 1.1, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
+  raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 1; an exponent: > 1 darker -
+  a strength multiplier saturated at strength 1). **Crown normal**:
+  each crossed card's baked normals shade the crown side ITS bake view saw, so the shading split hard where
+  card A gives way to card B on screen (it stayed with shadows off). `foliageCrownNormal` blends the shading
+  normal toward the view ray's hit on a sphere on
+  the card's axis — the line from the instance origin along +u, centred at the card's u centre, radius half
+  the u length — which depends on the ray only, so both cards agree. The blend is 1 at the axis (where the
+  cards disagree most) and falls to `Trees/Foliage crown normal` (`u_foliageParams.y`) at half the radius from
+  it, so the outer crown keeps its baked detail. On a whole tree's HORIZONTAL card
+  (`MATERIAL_FLAG_FOLIAGE_TOP_CARD`, bit 23, on the card whose normal points up - `foliageTopCard`; whole trees
+  stand upright) `foliageCrownFrame` takes the card normal as the
+  axis and the card's own point on it as the centre; the radius is half the u length on every card. The LitMasked variant's VS (defined
+  `ALPHA_MASK`) and `tree_impostor.vs` add the instance origin as flat location 5. **No RTAO either way**: a
+  FOLIAGE instance gets TLAS mask 0x02 (`gi_tlas_instances.cs`) and RTAO traces with cull mask 0x01, so its
+  opaque rays no longer hit whole card rectangles (every other ray uses 0xFF and still hits them); and the lit
+  FS skips the AO read on a card (`FOLIAGE_NO_RTAO` / `g_noRtao`) — traced from depth, it was the flat card's
+  occlusion by the crossing card and the ground. A foliage card also
+  FADES OUT EDGE-ON (dithered, `smoothstep(start, end, |N·V|)` on the geometric normal, its own decorrelated
+  pattern so it composes with the distance fade): a grazing card smeared its texture into bright streaks, and
+  the crossed card faces the view right then. `Trees/Foliage edge fade start` / `end` (default 0.1 / 0.6, centre scale 1.33;
+  `u_foliageParams2.xy`); near the crossing axis both are × `Foliage edge fade centre scale` (`.z`, back to ×1
+  at half the crown radius, `foliageAxisDistance`), and on a whole tree's horizontal card also × `Foliage edge
+  fade top card scale` (`u_foliageParams3.y`, default 1).
+  **`MATERIAL_FLAG_DISTANCE_FADE`** (bit 25, LitMasked only; + `MATERIAL_FLAG_FADE_IN`, bit 24): a dithered fade
+  over a camera-distance band packed into the LOW flag bits (start m in bits 0..11, width m in 12..21;
+  `makeDistanceFadeFlags`). Fade-out keeps `dither < 1 − f`, fade-in `dither ≥ 1 − f`, so an out/in pair over
+  the same band shares no pixel; interleaved gradient noise shifted per frame for TAA. `MaterialInfo` stays 16 B
+  (it is redeclared in ~10 shaders). `deriveMaterial(src, flags)` copies a material sharing its textures
+  (free with `releaseMaterial`, the slot only); `get/setMaterialFlags` rewrite flags in place (no re-record).
+  `destroyTextureMaterial` queues the
   textures' free and releases the material slot. Used by the procedural tree leaf cards and bark.
 * `~RenderMesh` frees the ranges and neutralizes the `MeshInfo` slot (`freeMeshInfoRange`), like
   `removeObjectContainer` for an unstreamed mesh. **Destroy its nodes first** (owners declare the

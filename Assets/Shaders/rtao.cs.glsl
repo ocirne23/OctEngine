@@ -161,7 +161,8 @@ void main()
 #ifdef RTAO_ALPHA_TEST
             // Masked geometry is non-opaque in the TLAS; run the alpha test on candidates, hardware still
             // auto-commits opaque hits. Terminate-on-first-hit gives the nearest confirmed hit for falloff.
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, rayOrigin, tStart, dir, pc.radius);
+            // Cull mask 0x01: not the FOLIAGE cards (gi_tlas_instances.cs.glsl).
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, tStart, dir, pc.radius);
             while (rayQueryProceedEXT(rq))
             {
                 if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
@@ -169,7 +170,7 @@ void main()
                     rayQueryConfirmIntersectionEXT(rq);
             }
 #else
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0xFFu, rayOrigin, tStart, dir, pc.radius);
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, tStart, dir, pc.radius);
             while (rayQueryProceedEXT(rq)) {}
 #endif
             hit = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;

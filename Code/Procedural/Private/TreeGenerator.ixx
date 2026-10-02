@@ -49,10 +49,16 @@ export namespace Procedural
 		float radius = 0.1f;  // trunk radius at the slot
 	};
 
+	// Mesh LODs per piece, all meshed from ONE skeleton (same branches, stubs and leaf placements):
+	// fewer rings and sides, the deepest branch levels dropped, fewer but larger leaves (same total area),
+	// no stubs at the coarse levels. Level 0 is the full piece.
+	constexpr uint32 TREE_PIECE_LODS = 4;
+
 	struct TreePiece
 	{
-		TreeMesh bark;
-		TreeMesh leaves;
+		TreeMesh bark[TREE_PIECE_LODS];
+		TreeMesh leaves[TREE_PIECE_LODS];
+		float lodError[TREE_PIECE_LODS] = {}; // piece-local deviation per level (0 for level 0), for the GPU selector
 		oc::vector<TreeBone> bones;
 		oc::vector<TreeSlot> slots; // trunks only
 		float length = 1.0f;        // trunk height / nominal module length (m)
@@ -75,6 +81,12 @@ export namespace Procedural
 		bool trunk = false;
 		Transform local;
 	};
+
+	// A BAKED tree variant: the composite of `seed` merged into ONE piece - per LOD level all its pieces' bark
+	// into one mesh and all their leaves into another, at tree scale 1 (the instance scales). Each level's
+	// error is the largest of its pieces' (x their placement scale). Bones are dropped (0). The runtime draws
+	// these instead of compositing, so a tree costs one set of records, not one per piece.
+	void bakeTreeVariant(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed, TreePiece& out);
 
 	// The composite function: a unique tree from `seed`, tree-local (the caller adds the tree transform).
 	// `outTreeScale` is the species-random uniform scale the caller multiplies into that transform.

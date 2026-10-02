@@ -194,6 +194,25 @@ namespace Procedural
 			readFloat(*bark, "Lichen", out.barkLichen);
 		}
 
+		if (const AssetNode* lod = species->find("Lod"))
+			readFloat(*lod, "ErrorScale", out.lodErrorScale);
+		if (const AssetNode* bake = species->find("Bake"))
+			readInt(*bake, "Variants", out.variantCount);
+
+		if (const AssetNode* impostor = species->find("Impostor"))
+		{
+			readFloat(*impostor, "Distance", out.impostorDistance);
+			readInt(*impostor, "Frames", out.impostorFrames);
+			readInt(*impostor, "Resolution", out.impostorFrameSize);
+		}
+
+		if (const AssetNode* billboard = species->find("Billboard"))
+		{
+			readFloat(*billboard, "Distance", out.billboardDistance);
+			readInt(*billboard, "Resolution", out.billboardSize);
+			readFloat(*billboard, "NormalBend", out.billboardNormalBend);
+			readFloat(*billboard, "FadeWidth", out.billboardFadeWidth);		}
+
 		if (const AssetNode* color = species->find("Color"))
 		{
 			readColor(*color, "Bark", out.barkColor);
@@ -222,6 +241,22 @@ namespace Procedural
 		out.barkPlates = glm::clamp(glm::round(out.barkPlates), glm::vec2(1.0f), glm::vec2(64.0f));
 		out.barkCrack = glm::clamp(out.barkCrack, 0.01f, 0.5f);
 		out.barkBreakup = glm::clamp(out.barkBreakup, 0.0f, 1.0f);
+		out.lodErrorScale = glm::max(out.lodErrorScale, 0.0f);
+		out.variantCount = glm::clamp(out.variantCount, 1, 64);
+		out.impostorDistance = glm::max(out.impostorDistance, 0.0f);
+		out.impostorFrames = glm::clamp(out.impostorFrames, 2, 32);
+		// A power of two: the atlas (frames x frameSize) gets a mip chain down to 4 px per frame.
+		int frameSize = 8;
+		while (frameSize < out.impostorFrameSize && frameSize < 512)
+			frameSize *= 2;
+		out.impostorFrameSize = frameSize;
+		out.billboardDistance = glm::max(out.billboardDistance, 0.0f);
+		out.billboardNormalBend = glm::clamp(out.billboardNormalBend, 0.0f, 1.0f);
+		out.billboardFadeWidth = glm::clamp(out.billboardFadeWidth, 1.0f, 1023.0f); // the material packs 10 bits
+		int billboardSize = 16;
+		while (billboardSize < out.billboardSize && billboardSize < 2048)
+			billboardSize *= 2;
+		out.billboardSize = billboardSize;
 		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.05f, 0.6f);
 		return true;
 	}

@@ -355,28 +355,100 @@ namespace
 		}
 	}
 
+	// --- The piece skeleton: everything random is decided once, into plans; each LOD meshes the plans. ---
+
+	struct TubePlan
+	{
+		BranchPath path;
+		int sides = 3;
+		uint8 bone = 0;
+		int level = 0;          // 0 = trunk / module root, i = sub-branch level i
+		float flare = 0.0f;
+		bool lobed = false;     // use the plan's TubeProfile
+		float sink = 0.0f;
+		bool stub = false;      // a snapped-off stub (capped; dropped at the coarse levels)
+	};
+
+	struct LeafPlan
+	{
+		glm::vec3 stem;
+		glm::vec3 along;
+		glm::vec3 normal;
+		float length;
+		float width;
+		uint32 cell;
+		uint8 bone;
+	};
+
+	struct PiecePlan
+	{
+		oc::vector<TubePlan> tubes;
+		oc::vector<LeafPlan> leaves;
+		TubeProfile profile;
+		int maxLevel = 0;
+	};
+
 	// A snapped-off branch at an elbow: a short, thick, straight stub continuing the direction the branch
 	// had before it turned, ending in a flat broken face.
-	void appendStub(TreeMesh& m, const BranchPath& parent, const Elbow& elbow, int sides, uint8 bone, Rng& rng)
+	void planStub(PiecePlan& plan, const BranchPath& parent, const Elbow& elbow, int sides, uint8 bone, int level, Rng& rng)
 	{
 		const float r = parent.radiusAt(elbow.u);
 		const float r0 = r * rng.range(0.55f, 0.85f);
 		const float length = r * rng.range(1.5f, 4.0f);
 		const glm::vec3 dir = glm::normalize(elbow.incomingDir + randomPerpendicular(elbow.incomingDir, rng) * 0.25f);
-		BranchPath stub;
-		stub.length = length;
-		stub.r0 = r0;
-		stub.r1 = r0 * 0.85f;
-		stub.points = { elbow.pos, elbow.pos + dir * (length * 0.5f), elbow.pos + dir * length };
-		stub.finish();
-		appendTube(m, stub, sides, bone, 0.0f, true);
+		TubePlan& stub = plan.tubes.emplace_back();
+		stub.path.length = length;
+		stub.path.r0 = r0;
+		stub.path.r1 = r0 * 0.85f;
+		stub.path.points = { elbow.pos, elbow.pos + dir * (length * 0.5f), elbow.pos + dir * length };
+		stub.path.finish();
+		stub.sides = sides;
+		stub.bone = bone;
+		stub.level = level;
+		stub.stub = true;
 	}
 
-	void appendStubs(TreeMesh& m, const BranchPath& parent, oc::span<const Elbow> elbows, const TreeBranchShape& shape, uint8 bone, Rng& rng)
+	void planStubs(PiecePlan& plan, const BranchPath& parent, oc::span<const Elbow> elbows, const TreeBranchShape& shape, uint8 bone, int level, Rng& rng)
 	{
 		for (const Elbow& elbow : elbows)
 			if (rng.next01() < shape.stubs)
-				appendStub(m, parent, elbow, shape.sides, bone, rng);
+				planStub(plan, parent, elbow, shape.sides, bone, level, rng);
+	}
+
+	// What each LOD keeps: ring / side fractions, how many of the deepest branch levels it drops (never
+	// below level 1), the leaf stride (every Nth leaf, scaled by sqrt(N) so the total area holds), stubs.
+	struct LodSpec
+	{
+		float rings;
+		float sides;
+		int levelDrop;
+		uint32 leafStride;
+		bool stubs;
+		float error; // x piece length x the species' Lod ErrorScale
+	};
+	constexpr LodSpec PIECE_LODS[TREE_PIECE_LODS] =
+	{
+		{ 1.0f,  1.0f,  0, 1, true,  0.0f },
+		{ 0.6f,  0.6f,  0, 2, true,  0.001f },
+		{ 0.4f,  0.45f, 1, 4, false, 0.0025f },
+		{ 0.25f, 0.34f, 2, 8, false, 0.005f },
+	};
+
+	// Every ~(1/frac)th point, both ends kept (u re-derived from the kept chord lengths).
+	BranchPath subsamplePath(const BranchPath& b, float frac)
+	{
+		const int n = (int)b.points.size();
+		const int m = glm::clamp((int)std::round((float)n * frac), 2, n);
+		if (m == n)
+			return b;
+		BranchPath out;
+		out.length = b.length;
+		out.r0 = b.r0;
+		out.r1 = b.r1;
+		for (int i = 0; i < m; ++i)
+			out.points.push_back(b.points[(size_t)std::round((float)i * (float)(n - 1) / (float)(m - 1))]);
+		out.finish();
+		return out;
 	}
 
 	// A diamond leaf card from its stem point, both faces (no alpha test needed for the placeholder shape).
@@ -455,6 +527,44 @@ namespace
 		}
 	}
 
+	// Meshes every LOD of a piece from its plan.
+	void meshPiece(const TreeSpeciesDesc& sp, const PiecePlan& plan, TreePiece& out)
+	{
+		// The module root is the attach point on the trunk axis - inside the crown, the best centre a shared
+		// module knows (the composited tree's own centre differs per tree).
+		const glm::vec3 crownCentre(0.0f);
+		for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
+		{
+			const LodSpec& spec = PIECE_LODS[lod];
+			const int keepLevel = glm::max(plan.maxLevel - spec.levelDrop, 1);
+			for (const TubePlan& tube : plan.tubes)
+			{
+				if (tube.level > keepLevel || (tube.stub && !spec.stubs))
+					continue;
+				const int sides = glm::max(3, (int)std::round((float)tube.sides * spec.sides));
+				appendTube(out.bark[lod], subsamplePath(tube.path, spec.rings), sides, tube.bone, tube.flare, tube.stub,
+					tube.lobed ? &plan.profile : nullptr, tube.sink);
+			}
+
+			const float grow = std::sqrt((float)spec.leafStride);
+			for (size_t i = 0; i < plan.leaves.size(); i += spec.leafStride)
+			{
+				const LeafPlan& leaf = plan.leaves[i];
+				const float length = leaf.length * grow, width = leaf.width * grow;
+				if (sp.leafType == ETreeLeafType::Single)
+				{
+					appendLeaf(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.bone);
+					continue;
+				}
+				appendCard(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.cell, leaf.bone, crownCentre, sp.leafNormalBend);
+				if (sp.leafCross)
+					appendCard(out.leaves[lod], leaf.stem, leaf.along, glm::normalize(glm::cross(leaf.along, leaf.normal)), length, width,
+						leaf.cell ^ 1u, leaf.bone, crownCentre, sp.leafNormalBend);
+			}
+			out.lodError[lod] = spec.error * out.length * sp.lodErrorScale;
+		}
+	}
+
 	float crownEnvelope(ETreeCrownShape shape, float h)
 	{
 		switch (shape)
@@ -478,16 +588,19 @@ namespace
 		out.length = height;
 		out.baseRadius = sp.trunkRadius;
 
-		BranchPath path;
+		PiecePlan plan;
+		TubePlan& trunk = plan.tubes.emplace_back();
 		oc::vector<Elbow> elbows;
-		growBranch(path, glm::vec3(0.0f), WORLD_UP, height, sp.trunkRadius, sp.trunkRadius * sp.trunkTaper,
+		growBranch(trunk.path, glm::vec3(0.0f), WORLD_UP, height, sp.trunkRadius, sp.trunkRadius * sp.trunkTaper,
 			sp.trunkShape, WORLD_UP, rng, &elbows, 1.6f); // rings packed toward the ground
-		TubeProfile profile;
-		if (sp.trunkLobes > 0)
-			profile.build(sp.trunkLobes, sp.trunkLobeDepth, sp.trunkLobeHeight, sp.trunkTwist, rng);
-		appendTube(out.bark, path, sp.trunkShape.sides, 0, sp.trunkFlare, false, sp.trunkLobes > 0 ? &profile : nullptr,
-			glm::max(sp.trunkSink, 0.0f));
-		appendStubs(out.bark, path, elbows, sp.trunkShape, 0, rng);
+		trunk.sides = sp.trunkShape.sides;
+		trunk.flare = sp.trunkFlare;
+		trunk.lobed = sp.trunkLobes > 0;
+		trunk.sink = glm::max(sp.trunkSink, 0.0f);
+		if (trunk.lobed)
+			plan.profile.build(sp.trunkLobes, sp.trunkLobeDepth, sp.trunkLobeHeight, sp.trunkTwist, rng);
+		const BranchPath path = trunk.path; // planStubs grows plan.tubes: no reference into it past here
+		planStubs(plan, path, elbows, sp.trunkShape, 0, 0, rng);
 		out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, height });
 
 		const float crownStart = glm::clamp(sp.crownStart, 0.0f, 0.98f);
@@ -516,6 +629,7 @@ namespace
 			slot.radius = path.r1;
 			out.slots.push_back(slot);
 		}
+		meshPiece(sp, plan, out);
 	}
 
 	// Module-local frame: +Y = the root branch direction, +Z = the side that faces world-up after the
@@ -538,11 +652,13 @@ namespace
 		root.bone = 0;
 		const float r0 = sp.moduleRadius * nominalLength;
 		out.baseRadius = r0;
+		PiecePlan plan;
+		plan.maxLevel = (int)sp.levels.size();
 		oc::vector<Elbow> elbows;
 		growBranch(root.path, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength, r0, r0 * 0.15f,
 			sp.moduleShape, up, rng, &elbows);
-		appendTube(out.bark, root.path, sp.moduleShape.sides, 0);
-		appendStubs(out.bark, root.path, elbows, sp.moduleShape, 0, rng);
+		plan.tubes.push_back({ .path = root.path, .sides = sp.moduleShape.sides, .bone = 0, .level = 0 });
+		planStubs(plan, root.path, elbows, sp.moduleShape, 0, 0, rng);
 		out.bones.push_back({ -1, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength });
 		current.push_back(oc::move(root));
 
@@ -576,8 +692,9 @@ namespace
 						child.bone = parent.bone;
 					elbows.clear();
 					growBranch(child.path, s.pos, dir, length, cr0, cr0 * 0.15f, level.shape, up, rng, &elbows);
-					appendTube(out.bark, child.path, level.shape.sides, child.bone);
-					appendStubs(out.bark, child.path, elbows, level.shape, child.bone, rng);
+					const int levelNumber = (int)levelIdx + 1;
+					plan.tubes.push_back({ .path = child.path, .sides = level.shape.sides, .bone = child.bone, .level = levelNumber });
+					planStubs(plan, child.path, elbows, level.shape, child.bone, levelNumber, rng);
 					next.push_back(oc::move(child));
 				}
 			}
@@ -613,20 +730,15 @@ namespace
 				const float size = rng.range(0.8f, 1.2f);
 				if (sp.leafType == ETreeLeafType::Single)
 				{
-					appendLeaf(out.leaves, s.pos + perp * s.radius, along, normal, leafLength * size, leafWidth * size, branch.bone);
+					plan.leaves.push_back({ s.pos + perp * s.radius, along, normal, leafLength * size, leafWidth * size, 0u, branch.bone });
 					continue;
 				}
 				// Cards start at the branch centre: the twig in the texture grows out of the wood.
 				const uint32 cell = rng.next() & 3u;
-				// The module root is the attach point on the trunk axis - inside the crown, the best centre a
-				// shared module knows (the composited tree's own centre differs per tree).
-				const glm::vec3 crownCentre(0.0f);
-				appendCard(out.leaves, s.pos, along, normal, leafLength * size, leafWidth * size, cell, branch.bone, crownCentre, sp.leafNormalBend);
-				if (sp.leafCross)
-					appendCard(out.leaves, s.pos, along, glm::normalize(glm::cross(along, normal)), leafLength * size, leafWidth * size,
-						cell ^ 1u, branch.bone, crownCentre, sp.leafNormalBend);
+				plan.leaves.push_back({ s.pos, along, normal, leafLength * size, leafWidth * size, cell, branch.bone });
 			}
 		}
+		meshPiece(sp, plan, out);
 	}
 }
 
@@ -643,6 +755,46 @@ namespace Procedural
 		out.modules.resize((size_t)species.moduleCount);
 		for (int i = 0; i < species.moduleCount; ++i)
 			generateModule(species, treeHash(species.seed, 2000u + (uint32)i), nominalLength, out.modules[i]);
+	}
+
+	void bakeTreeVariant(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed, TreePiece& out)
+	{
+		out = TreePiece{};
+		oc::vector<TreePiecePlacement> placements;
+		float treeScale = 1.0f;
+		compositeTree(species, library, seed, placements, treeScale);
+
+		auto append = [](TreeMesh& dst, const TreeMesh& src, const Transform& t)
+		{
+			const uint32 base = dst.numVertices();
+			for (uint32 v = 0; v < src.numVertices(); ++v)
+			{
+				dst.positions.push_back(t.transformPoint(src.positions[v]));
+				dst.normals.push_back(t.quat * src.normals[v]); // uniform scale: directions only rotate
+				dst.tangents.push_back(t.quat * src.tangents[v]);
+				dst.bitangents.push_back(t.quat * src.bitangents[v]);
+				dst.texCoords.push_back(src.texCoords[v]);
+				dst.bones.push_back(0);
+			}
+			for (uint32 index : src.indices)
+				dst.indices.push_back(base + index);
+		};
+		for (const TreePiecePlacement& placement : placements)
+		{
+			const TreePiece& piece = placement.trunk ? library.trunks[placement.pieceIdx] : library.modules[placement.pieceIdx];
+			for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
+			{
+				append(out.bark[lod], piece.bark[lod], placement.local);
+				append(out.leaves[lod], piece.leaves[lod], placement.local);
+				out.lodError[lod] = glm::max(out.lodError[lod], piece.lodError[lod] * placement.local.scale);
+			}
+			if (placement.trunk)
+			{
+				out.length = piece.length;
+				out.baseRadius = piece.baseRadius;
+			}
+		}
+		out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, out.length });
 	}
 
 	void compositeTree(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed,

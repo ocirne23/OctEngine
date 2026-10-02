@@ -22,6 +22,31 @@ float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 // PCSS softness matches the ray-traced sun (tan(sunRadius) * depthRange / texelWorldSize - the
 // derivation sits at Renderer::buildUboSunShadow, which computes it per cascade once per frame).
 float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
+
+#ifdef SHADOW_FOLIAGE_BIAS
+// FOLIAGE cards (MATERIAL_FLAG_FOLIAGE; set by the lit FS around its lookup): no slope scaling and no normal
+// offset, the constant depth bias only. A crossed billboard's back half sits in the crossing card's shadow by a
+// small depth step - the slope-scaled bias (up to 4x at a grazing sun) and the push along the card normal erased
+// it, and that strip lit up through the tree. Alpha-tested foliage hides the bit of acne this allows.
+bool g_shadowFoliage = false;
+#endif
+
+// FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers -
+// 1 - exp(-gap / "Trees/Foliage shadow length") of it (u_foliageParams.z, metres). The crossed cards' own
+// shadow then starts at nothing on their crossing axis (where the gap is ~0) instead of as a hard edge there,
+// and deepens into the crown; a blocker far up-sun (another tree, terrain) still shadows fully.
+// `gap` = the normalized depth gap to the average blocker.
+float foliageTransmit(float visibility, float gap, int cascade)
+{
+#ifdef SHADOW_FOLIAGE_BIAS
+	if (g_shadowFoliage && u_foliageParams.z > 0.0)
+	{
+		const float metres = max(gap, 0.0) * cascadeDepthRange(cascade);
+		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliageParams.z));
+	}
+#endif
+	return visibility;
+}
 mat4 cascadeMatrix(int c)
 {
 	mat4 m = u_cascadeViewProj[c];
@@ -117,11 +142,11 @@ float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 	// tap guards the one case the sparse search can miss: a small hole straight over the pixel (a gap in a
 	// grate or canopy with the caster close by, where the filter's small disk would see the light).
 	if (blockers >= float(PCSS_BLOCKER_TEXELS) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
-		return 0.0;
+		return foliageTransmit(0.0, p.z - avgBlocker, cascade);
 	// Directional penumbra: width grows with the world gap to the blocker (constant across cascades
 	// once expressed in texels). Caster touching the surface => ~MIN texels (sharp); far => up to MAX.
 	float penumbraTexels = clamp((p.z - avgBlocker) * pcssSunSizeTexels(cascade), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS);
-	return pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC);
+	return foliageTransmit(pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC), p.z - avgBlocker, cascade);
 }
 
 // Border PCSS: the fixed tap budget (blocker + filter) is split between the two cascades by t, so a
@@ -173,10 +198,15 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 		if (useB) { sumB += vis; nB += 1.0; }
 		else      { sumA += vis; nA += 1.0; }
 	}
+	// FOLIAGE: each cascade's shadow fades in with its own blocker gap; no blocker found keeps the PCF result.
+	float visA = (nA > 0.0) ? sumA / nA : 1.0;
+	float visB = (nB > 0.0) ? sumB / nB : 1.0;
+	if (nDA > 0.0) visA = foliageTransmit(visA, pa.z - sumDA / nDA, ca);
+	if (nDB > 0.0) visB = foliageTransmit(visB, pb.z - sumDB / nDB, cb);
 	// If one cascade is invalid (or got no taps), use the other's visibility instead of injecting light.
-	if (!validA || nA == 0.0) return sumB / nB;
-	if (!validB || nB == 0.0) return sumA / nA;
-	return mix(sumA / nA, sumB / nB, t);
+	if (!validA || nA == 0.0) return visB;
+	if (!validB || nB == 0.0) return visA;
+	return mix(visA, visB, t);
 }
 
 // The cascade, the next one, and the cross-fade factor t into it: t ramps 0->1 across the last
@@ -206,6 +236,14 @@ void sunShadowBias(vec3 N, float dist, out float depthBias, out float normalScal
 	float slope = clamp(sqrt(1.0 - NdotL * NdotL) / max(NdotL, 1e-3), 1.0, 4.0);
 	const float SHADOW_BIAS_DIST_MAX = 6.0;
 	float distScale = mix(0.0, SHADOW_BIAS_DIST_MAX, clamp(dist / cascadeSplit(NUM_SHADOW_CASCADES - 1), 0.0, 1.0));
+#ifdef SHADOW_FOLIAGE_BIAS
+	if (g_shadowFoliage)
+	{
+		depthBias = u_shadowParams.x * distScale;
+		normalScale = 0.0;
+		return;
+	}
+#endif
 	depthBias = u_shadowParams.x * slope * distScale;
 	normalScale = u_shadowParams.y * slope * distScale;
 }

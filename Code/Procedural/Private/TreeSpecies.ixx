@@ -110,6 +110,26 @@ export namespace Procedural
 		float barkRelief = 1.0f;    // normal-map strength
 		float barkLichen = 0.3f;    // amount of grey-green lichen patches
 
+		// Baked tree variants (bakeTreeVariant): the runtime draws whole merged trees, not composited pieces.
+		int variantCount = 4;
+
+		// Piece mesh LODs: the per-level error (a fraction of the piece length, TreeGenerator's PIECE_LODS)
+		// is multiplied by this. > 1 switches to coarser levels nearer the camera.
+		float lodErrorScale = 1.0f;
+
+		// Branch-module impostors (TreeImpostor): beyond `impostorDistance` (m, 0 = never) a module draws as one
+		// camera-facing quad from an octahedral atlas of frames x frames views, frameSize px each.
+		float impostorDistance = 60.0f;
+		int impostorFrames = 8;
+		int impostorFrameSize = 64;
+
+		// Branch-module billboards (the default far representation, Trees/Far mode): beyond
+		// `billboardDistance` (m, 0 = never) a module draws as two crossed cards baked into one
+		// billboardSize-square texture: one strip per view (Trees/Billboard views: 2 or 4).
+		float billboardDistance = 50.0f;
+		int billboardSize = 512;
+		float billboardNormalBend = 0.6f; // baked normals bent toward "out of the clump" (0..1): shades like a volume
+		float billboardFadeWidth = 10.0f; // m: the mesh <-> billboard crossfade band, centred on billboardDistance
 		glm::vec3 barkColor{ 0.32f, 0.24f, 0.17f };
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
 	};

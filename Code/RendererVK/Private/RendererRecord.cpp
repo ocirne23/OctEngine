@@ -1288,6 +1288,16 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
 void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
+    // The GPU tree expansion first: it writes instance records, pass masks and LOD biases into this slot's
+    // instance stream, which every cull, the TLAS writer and recordPrevCopy read (its own barrier ends it).
+    if (!m_treeDispatches.empty())
+    {
+        InstanceStream::FrameSlot& slot = m_instances.slot(frameIdx);
+        m_gpuProfiler.beginScope(primary, "Tree expand");
+        m_treeExpandPipeline.record(primary, slot.meshInstances.getDeviceAddress(), slot.passMasks.getDeviceAddress(),
+            slot.lodStateBias.getDeviceAddress(), m_treeDispatches);
+        m_gpuProfiler.endScope(primary);
+    }
     // Skin first: deforms skinned meshes into their output vertex regions, which the cull / forward /
     // shadow passes then consume as ordinary static geometry.
     if (m_skinned.hasJobs())

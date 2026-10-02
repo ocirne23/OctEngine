@@ -138,6 +138,22 @@ void ShadowParams::registerTweaks(const oc::function<void()>& onReloadShaders)
     Tweak::floatVar("Shadows", "Terrain march spread", &terrainMarchSpread, 0.002f, 0.1f, 0.001f);
 }
 
+void FoliageParams::registerTweaks()
+{
+    // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
+    Tweak::floatVar("Trees", "Foliage depth offset", &depthOffset, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage crown normal", &crownNormal, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage shadow length (m)", &shadowLength, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Trees", "Foliage interior shadow", &interiorShadow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage interior inner radius", &interiorInner, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage interior outer radius", &interiorOuter, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage interior shadow top card scale", &interiorTopCardScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage edge fade start", &edgeFadeStart, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage edge fade end", &edgeFadeEnd, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage edge fade centre scale", &edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
+}
+
 void FogParams::registerTweaks()
 {
     Tweak::boolean("Fog", "Enabled", &enabled);

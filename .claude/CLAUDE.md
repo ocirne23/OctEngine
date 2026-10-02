@@ -456,8 +456,8 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 `Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree.
 **The grammar is in "Trees" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`. Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
-Entity, above Procedural). Their generated textures are saved once to `Assets/Trees/Textures/*.png` and
-reused (regenerate with `Trees/Regenerate textures`).
+Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
+(not in git) and reused (regenerate with `Trees/Regenerate textures`).
 
 ## `.dsl` — scripts
 
@@ -485,6 +485,7 @@ Checked-in inputs for repeatable runs:
 ## `Assets/Local/`
 
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
-(`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `TerrainTex/`
+(`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
+generated tree textures and far bakes), `TerrainTex/`
 splats, the `Diffusion/<seed>/` tile cache, `imgui.ini` (the editor layout),
 `gamesave.txt` and `profile.txt`.

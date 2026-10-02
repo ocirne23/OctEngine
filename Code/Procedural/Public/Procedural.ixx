@@ -17,4 +17,5 @@ export import :TreeSpecies;
 export import :TreeGenerator;
 export import :TreeLeafTexture;
 export import :TreeBarkTexture;
+export import :TreeImpostor;
 export import :TreeSystem;

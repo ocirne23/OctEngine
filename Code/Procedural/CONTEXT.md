@@ -817,6 +817,11 @@ TreeSpecies <name>
 	        scale it by their length) · Levels (deepest tiers that carry leaves; 1 = last level only)
 	        Type Single|Cluster · Cross true|false · ClusterLeaves · ClusterLeafSize · NormalBend (0..1, default
 	        0.7: card normals bent away from the module root, both faces)   (Cluster only, below)
+	Lod     ErrorScale (x the per-level error; > 1 = coarser levels nearer the camera)
+	Bake    Variants (baked whole trees per species, default 4)
+	Billboard Distance (m, 0 = none; default 50) · Resolution (px, power of two, 512) · NormalBend (0..1, 0.6)
+	          FadeWidth (m, the mesh <-> billboard crossfade band centred on Distance; 10)
+	Impostor Distance (m, 0 = none) · Frames (per atlas side, 8) · Resolution (px per frame, power of two, 64)
 	Bark    Plates lines rows (fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
 	Color   Bark r g b · Leaf r g b
@@ -836,8 +841,103 @@ snapped off), short and thick, with a flat broken end cap.
 
 Placeholders: `Oak` (ellipsoid, cluster cards), `Pine` (cone + leader, drooping tiers), `Acacia` (umbrella).
 
-## Texture files (`Assets/Trees/Textures`)
+## Piece mesh LODs
 
+Every piece has `TREE_PIECE_LODS` (4) mesh levels, all from ONE skeleton: generation first records a
+`PiecePlan` (branch paths, stubs, leaf placements — every random decision, in the old RNG order), then
+`meshPiece` meshes each level from it (`PIECE_LODS` table in TreeGenerator.cpp):
+
+| Level | Rings / sides | Branch levels | Leaves (every Nth, scaled √N: same area) | Stubs | Error (× length × ErrorScale) |
+|---|---|---|---|---|---|
+| 0 | 100 % / 100 % | all | 1 | yes | 0 |
+| 1 | 60 % / 60 % | all | 2 | yes | 0.001 |
+| 2 | 40 % / 45 % | deepest dropped (never below level 1) | 4 | no | 0.0025 |
+| 3 | 25 % / 34 % | two deepest dropped (never below level 1) | 8 | no | 0.005 |
+
+Each piece's bark and leaves become GPU LOD chains (`Renderer::createMeshLodChain`); nodes spawn on level 0
+and the cull picks the level per instance against `LOD/Max error (px)` (shadows coarser, as for any chain).
+The errors are not geometric deviations but tuned so a ~5 m module steps at roughly 25 / 60 / 120 m with
+the default 0.33 px budget. `LOD/Force LOD` shows a level everywhere.
+
+## Far representations (`Trees/Far mode`)
+
+Trees are composited per seed, so a whole-tree impostor cannot match them; the SHARED pieces — modules AND
+trunks — get a far representation each instead (a trunk's +Y is world up, so its billboard's "top" card stands
+vertical: two crossed vertical trunk cards; cache names `<species>_trunkbillboard…` / `_trunkimpostor…`,
+modules keep the unprefixed ones), swapped in per placed piece beyond its distance × `Trees/Far distance scale`
+(5 % hysteresis; `Trees/Force far` shows them all). Changing the mode reloads (only the active one is built).
+
+* **Billboards** (default): two crossed cards along the module axis from its LOD-0 box — a vertical card
+  (normal +X) and a horizontal card (normal +Z = world-up after the composite), their views stacked as strips
+  of one square texture (`bakeBillboards`, `billboardMesh` in TreeImpostor.cpp). `Trees/Billboard views`
+  (reloads): **2** (default) — a strip per card (side, top), the back face showing the front view through the
+  card; **4** — each FACE its own strip, top to bottom: side from +X, side from −X, top, bottom. A back view
+  keeps the card's right / up and negates only the view direction: stored as seen THROUGH the card, it reads
+  the right way round on the back face, and its tangent-space normals match the back face's TBN (same tangent /
+  bitangent, the handedness flips) — no shader change. Mips stop at 4 px per strip. Cache names carry the view
+  count (`<species>_billboard<i>v<views>_<hash>`), so both settings keep their files. Both card PLANES pass through the branch axis (module x = 0 / z = 0),
+  not the box centre, so the root lands at the trunk. **Whole trees** (the baked variants, whose +Y is up, so
+  both cards above stand vertical) get a THIRD, horizontal card for the top-down view
+  (`billboardHorizontalView`): across the axis at mid height, seen from above, u (+Z) spanning at least the
+  tree's height so the lit FS's crown radius matches the vertical cards'. The material carries
+  `MATERIAL_FLAG_FOLIAGE_TOP_CARD`; the lit FS finds the card by its up-facing normal (RendererVK). The
+  edge-on fade hands over between the vertical cards and it. **Strip layout** (`billboardLayout`): 3 cards
+  share the texture (3 strips with 2 views, 6 with 4), each strip's height rounded DOWN to a multiple of the
+  largest power of two p that leaves ≥ 4 px per strip at mip log2(p) — so every strip boundary lands on a texel
+  boundary at every mip the material gets and no mip mixes two cards. 512 / 3: p = 32, 160 rows a strip
+  (+25% over a 4-strip layout), 32 spare rows at the bottom. 2 cards: 256 rows, mips to 4 px as before. **VOLUME normals**: each texel's normal is bent by
+  `Billboard NormalBend` toward "out of the clump's centre" (its 3D position from the baked depth) and keeps
+  its sign, in each card face's tangent space. The material carries
+  `MATERIAL_FLAG_FOLIAGE`, so the lit FS does not reject the sun shadow by the flat card normal — without
+  both, a whole card went dark whenever the sun was behind it. The normal map's ALPHA is the texel's depth off
+  the card (signed along the card's FRONT normal on every strip — the 4-view back strips are negated — in
+  units of the card's u length, 128 = on the plane, uncovered texels too; the normal mips average it): the
+  lit FS moves the foliage shadow lookup there and the shadow pass writes its casters there (RendererVK
+  `MATERIAL_FLAG_FOLIAGE`), so the crossed cards self-shadow by the leaves' depths instead of leaking a lit
+  strip at their crossing line. The lit FS also blends their normals toward a view-ray CROWN normal
+  (`Trees/Foliage crown normal`), so the two cards stop shading differently at their crossing axis. This
+  needs the card's +u axis to run from the instance origin (`billboardViews`: right = piece +Y). Real geometry on `LitMasked`: **they cast
+  their own alpha-tested shadows**, so the mesh nodes stop drawing entirely.
+* **Crossfade** (billboards only): a band `FadeWidth` wide, centred on the billboard distance × `Far distance
+  scale`. Inside it (centre distance ± the module radius) the module draws its mesh as `barkFade` / `leavesFade`
+  — the same LOD-chain meshes on `LitMasked` with species materials DERIVED with a distance fade-OUT
+  (`Renderer::deriveMaterial`, shared textures) — plus the billboard, whose material fades IN over the same
+  band. The lit FS's dither (RendererVK `MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to exactly one of them;
+  TAA blends the per-frame dither. Outside the band only one side draws, the mesh on its normal (early-depth)
+  materials. `applyFadeBands` writes the bands into the material flags (at reload and when the distance scale
+  changes — no reload). Not dithered in the shadow pass: inside the band both cast. `Force far` and the
+  impostor mode keep the hard switch. (Turning the cards about the
+  branch axis toward the camera was tried and removed — the user did not like the look.) Cache `<species>_billboard<i>_<hash>.png` (+ `_normal`), mips down to 8 px.
+* **Octahedral impostors** (the fallback, below).
+* **None**: mesh LODs only.
+
+## Branch-module impostors (fallback far mode)
+
+Kept as the `Octahedral impostors` far mode. `TreeImpostor.cpp` bakes a module (LOD 0) on the CPU with a small software rasterizer (2×2
+supersampled, back faces culled, leaves alpha-tested against the leaf image) into an octahedral atlas of
+`Frames`² frames — full sphere, +Y pole (`impostorOctEncode/Decode`), each frame an orthographic view of the
+module's bounding sphere from its direction (`impostorFrameBasis`). Per texel: albedo + coverage alpha, and the
+normal in the FRAME's tangent space (x right, y up, z toward the viewer; alpha = depth, unused yet).
+**The frame mapping, the basis and the atlas layout are mirrored in `Assets/Shaders/tree_impostor.vs.glsl`
+— keep them in step.**
+
+* Cached as `<species>_impostor<i>_<hash>.png` + `_normal.png` in `Assets/Local/Trees/Textures`; the hash covers
+  the module geometry and the bake settings (`BAKE_VERSION` too), so a changed module re-bakes on its own and
+  the slot's stale files are deleted. `Trees/Regenerate textures` re-bakes all.
+* Mips: albedo coverage-preserving (`buildLeafClusterMips`), normals renormalized (`buildNormalMips`), only
+  down to 4 px per frame (below that a level blends neighbouring frames).
+* Drawn through the `TreeImpostor` pipeline variant (RendererVK): a quad `RenderMesh` whose 4 vertices carry
+  only the sphere centre, corner + radius and the frame count; the VS picks the frame per instance and builds
+  the quad in that frame's basis, the `LitMasked` FS shades it unchanged (the frame basis is its TBN).
+* **Switch per placed module** (`TreeSystem::update`): beyond `Impostor Distance` × `Trees/Far distance
+  scale` the impostor draws in the MAIN pass and the mesh LOD nodes stay in SHADOW + GI only — the impostor
+  cannot cast through the shadow pass's own vertex shader.
+* Not yet: frame blending (a frame change is a pop), depth output from the baked depth (the quad is flat
+  through the sphere centre), a crossfade between mesh and impostor.
+
+## Texture files (`Assets/Local/Trees/Textures`)
+
+Generated output under `Assets/Local`, so NOT in git: a fresh checkout generates them on the first load.
 The species textures are generated ONCE and saved as PNG (`File:ImageIO`): `<species>_bark.png`,
 `<species>_bark_normal.png`, `<species>_leaves.png` (cluster species only). Later loads read them back and
 only rebuild the mip chains (bark box-filtered, leaves coverage-preserving). **A file that exists wins —
@@ -859,8 +959,8 @@ along its length; a third, 3× denser family of FINE cracks (mostly gaps, shallo
 fourth, 8× denser family of STRIATIONS (thin, very shallow, short-to-medium segments) runs along the ridges; rare
 thin horizontal breaks (20 % per ridge column and row). **Low contrast in the cracks** (albedo 75 % of
 the bark colour, fine cracks 85 %; fissure floor at 35 % of the ridge height): dark or deep outlines read as
-cartoon ink; rounded ridge crowns with V fissures, per-segment
-height/tint, fine grain, along-the-branch fibres and lichen on the ridges. sRGB albedo plus a
+cartoon ink; rounded ridge crowns with V fissures, ridge-scale
+height/tint from SMOOTH noise (a per-segment hash keyed by row/column made a brightness grid), fine grain, along-the-branch fibres and lichen on the ridges. sRGB albedo plus a
 LINEAR RGB tangent-space normal map from the same height field (x along u, y along v — the tube's tangent /
 bitangent), each with a CPU box-filtered mip chain (normals renormalized). Uploaded through
 `Renderer::createTextureMaterial(..., &normalMips)`, freed with the species.
@@ -877,12 +977,41 @@ bitangent), each with a CPU box-filtered mip chain (normals renormalized). Uploa
   `TREE_LEAF_ALPHA_CUTOFF` matches level 0, otherwise the crown thins with distance. Uploaded through
   `Renderer::createTextureMaterial`, freed with the species (`TreeSystem::clearAll`).
 
+## Baked tree variants (what the grove places)
+
+The runtime no longer composites pieces per tree: at load every species bakes `Bake Variants` (4) whole trees
+(`bakeTreeVariant`: the composite of a seed, all its pieces' bark merged into one mesh and all their leaves
+into another, PER LOD LEVEL, at scale 1; each level's error = the largest piece error × its placement scale).
+A variant is just one more "piece" (`Species::variants` / `variantMeshes`): LOD chains, a billboard and an
+impostor (cache infix `tree`), the crossfade — all the piece machinery applies unchanged. The grove places one
+variant per tree with a seeded variant, scale (`Scale`) and yaw: **one GPU expansion piece = 3 records per
+TREE** (was ~16 pieces × 3). A whole-tree billboard is two crossed VERTICAL cards through the trunk axis (a
+tree's +Z card stands vertical too) — thin from straight above. Near-range uniqueness is planned as a per-tree
+vertex-shader warp (bend / twist / lopsided crown / noise, seeded by position) that also carries the wind.
+The pieces still exist (the bake input, the piece library rows).
+
+## GPU expansion (G4)
+
+With `Trees/GPU expansion` (default on) and any far mode but the octahedral impostors, `spawnPreview` builds
+ONE RendererVK tree instance set: a piece TYPE per library piece (its bark, leaves, the derived fade-out
+materials and the billboard, plus the band), then every placed piece (transform, far centre + radius, type).
+Per frame `update` makes one `renderTreeInstanceSet` call; a compute pass makes the per-piece decision and
+writes the instance records (see RendererVK "GPU tree expansion"). With billboards, the BILLBOARD is the
+piece's only shadow / GI / RT representation at every distance: the mesh draws in the MAIN pass only (both
+paths). Off — or in the impostor mode, whose
+main-pass-only quad + shadow-only meshes need per-node pass masks — it keeps the CPU path below (one
+`RenderNode` per piece representation, pushed per frame). The set is destroyed on respawn / reload / disable.
+
 ## The preview (temporary)
 
 `Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload yet),
 uploads each piece as two `RenderMesh`es (bark + double-sided diamond leaf cards, solid-colour `LitOpaque`
 materials), and spawns a `Grove size`² grove in front of the camera plus the piece library in rows behind it
-(`Show piece library`). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
+(`Show piece library`). `Grove type`: Mixed (species alternate) or one species by its `TreeSpecies` name — the
+names are a fixed list in TreeSystem.cpp (`GROVE_TYPES`; a tweak enum registers before the species load), so a
+new species needs its name added there; a missing one falls back to mixed with a warning. Trees sit on a
+`Spacing` grid, each offset by a seeded random `Position jitter` × spacing (default 1 = anywhere in its cell;
+the old fixed 0.3 left the rows visible). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
 by the dedicated GPU tree pipeline (G4: own shaders, per-tree bone palettes, own shadow draw); trees in that
 path are not in the RT scene at first, but the design keeps RT addable.**
 

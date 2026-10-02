@@ -61,7 +61,8 @@ namespace
 		float width = 1.0f;    // local fissure width multiplier (varies along a line)
 		float fineDist = 0.5f; // to the nearest fine crack (short, shallow, between the fissures)
 		float striaDist = 0.5f; // to the nearest striation (many long thin lines along the branch)
-		uint32 ridgeId = 0;    // which ridge segment (tint / height variation)
+		float tone = 0.5f;        // smooth ridge-scale brightness variation (0..1)
+		float ridgeHeight = 0.5f; // smooth ridge-scale height variation (0..1)
 	};
 
 	// Lines fade out where their own noise is high: per line column (one noise cell per ridge width across)
@@ -99,7 +100,7 @@ namespace
 		const float xs = u * (float)(nu * 8) + warpS;
 		const float fs = xs - std::floor(xs);
 		s.striaDist = glm::min(fs, 1.0f - fs) + lineGap(u, v, nu * 8, nv * 8, glm::min(breakup * 0.5f + 0.25f, 1.0f), seed + 12u);
-		const int colA = wrap((int)std::floor(xa), nu), colB = wrap((int)std::floor(xb), nu);
+		const int colA = wrap((int)std::floor(xa), nu);
 
 		// Horizontal breaks: per (column, row) a break at a jittered height, present with 20% probability.
 		// Vertical distance converted to ridge widths (x nu / nv), then x2.5 so a break is thinner than a fissure.
@@ -113,7 +114,11 @@ namespace
 			const float breakY = (float)(row + dr) + treeHash01(treeHash(h));
 			s.dist = glm::min(s.dist, glm::abs(y - breakY) / (float)nv * (float)nu * 2.5f);
 		}
-		s.ridgeId = latticeHash(colA, colB, seed + 4u) ^ latticeHash(row, 0, seed + 5u);
+		// Ridge-scale tone and height: smooth noise (one cell per ridge width across, two per break row
+		// along), NOT a per-segment hash - a hash keyed by row / column jumped in brightness on every row
+		// line and behind every gap in a fissure, a visible grid.
+		s.tone = gradientNoise(u * (float)nu, v * (float)(nv * 2), nu, nv * 2, seed + 4u);
+		s.ridgeHeight = gradientNoise(u * (float)nu, v * (float)(nv * 2), nu, nv * 2, seed + 5u);
 		return s;
 	}
 
@@ -147,18 +152,20 @@ namespace
 			for (uint32 x = 0; x < size; ++x)
 			{
 				glm::vec3 n(0.0f);
+				uint32 a = 0; // the billboards' / impostors' baked depth (255 on bark)
 				for (uint32 k = 0; k < 4; ++k)
 				{
 					const uint32 sx = glm::min(x * 2 + (k & 1), srcSize - 1), sy = glm::min(y * 2 + (k >> 1), srcSize - 1);
 					const uint8* p = &src[((size_t)sy * srcSize + sx) * 4];
 					n += glm::vec3(p[0], p[1], p[2]) / 127.5f - 1.0f;
+					a += p[3];
 				}
 				n = glm::dot(n, n) > 1e-8f ? glm::normalize(n) : glm::vec3(0.0f, 0.0f, 1.0f);
 				uint8* d = &dst[((size_t)y * size + x) * 4];
 				d[0] = toByte(n.x * 0.5f + 0.5f);
 				d[1] = toByte(n.y * 0.5f + 0.5f);
 				d[2] = toByte(n.z * 0.5f + 0.5f);
-				d[3] = 255;
+				d[3] = (uint8)((a + 2) / 4);
 			}
 		}
 		return dst;
@@ -190,7 +197,7 @@ namespace Procedural
 				const float stria = 1.0f - glm::smoothstep(0.0f, 0.16f, f.striaDist);
 				// Rounded ridge crown (V-shaped fissures, not flat plates), per-segment height jitter.
 				const float crown = std::sqrt(glm::clamp(f.dist * 2.0f, 0.0f, 1.0f));
-				const float ridgeHeight = treeHash01(treeHash(f.ridgeId, 7u));
+				const float ridgeHeight = f.ridgeHeight;
 				const float grain = fbm(u, v, 8, 8, 4, seed + 11u);
 				// Fibres: noise stretched along the branch (v), the grain of the wood under the bark.
 				const float fibre = gradientNoise(u * (float)(nu * 6), v * (float)nv, nu * 6, nv, seed + 23u);
@@ -200,7 +207,7 @@ namespace Procedural
 				height[i] = glm::mix(0.35f, 1.0f, plate) * (0.55f + 0.45f * crown) * (0.85f + 0.15f * ridgeHeight)
 					- 0.3f * fine - 0.12f * stria * plate + 0.1f * (grain - 0.5f) + 0.08f * (fibre - 0.5f);
 
-				glm::vec3 c = species.barkColor * (0.9f + 0.2f * treeHash01(treeHash(f.ridgeId, 13u)));
+				glm::vec3 c = species.barkColor * (0.9f + 0.2f * f.tone);
 				c *= 0.85f + 0.3f * crown; // ridge tops weathered lighter
 				c *= 0.8f + 0.4f * grain;
 				c *= 0.9f + 0.2f * fibre; // streaks along the branch: tone variation that is not a line
@@ -241,6 +248,14 @@ namespace Procedural
 
 		outAlbedo = oc::move(albedo0);
 		outNormal = oc::move(normal0);
+	}
+
+	void buildNormalMips(oc::span<const uint8> normal0, uint32 size, oc::vector<oc::vector<uint8>>& outMips)
+	{
+		outMips.clear();
+		outMips.push_back(oc::vector<uint8>(normal0.begin(), normal0.end()));
+		for (uint32 levelSize = size; levelSize > 1; levelSize /= 2)
+			outMips.push_back(downsampleNormals(outMips.back(), levelSize));
 	}
 
 	void buildBarkMips(oc::span<const uint8> albedo0, oc::span<const uint8> normal0, uint32 size, TreeBarkTexture& out)

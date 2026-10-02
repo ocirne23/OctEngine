@@ -189,11 +189,11 @@ uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, b
 }
 
 uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-    const oc::vector<oc::span<uint8>>* normalMips)
+    const oc::vector<oc::span<uint8>>* normalMips, uint32 extraFlags)
 {
     const uint16 texIdx = Globals::textureManager.uploadRgba8Mips(width, height, mips, true, debugName);
     RendererVKLayout::MaterialInfo material{};
-    material.flags = 0;
+    material.flags = extraFlags;
     material.diffuseTexIdx = texIdx;
     material.normalTexIdx = normalMips
         ? Globals::textureManager.uploadRgba8Mips(width, height, *normalMips, false, debugName)
@@ -226,6 +226,29 @@ void Renderer::destroyTextureMaterial(uint16 materialIdx)
     m_materials.release(materialIdx, 1);
 }
 
+uint16 Renderer::deriveMaterial(uint16 source, uint32 extraFlags)
+{
+    RendererVKLayout::MaterialInfo material = m_materials.items()[source];
+    material.flags |= extraFlags;
+    return (uint16)addMaterialInfos({ material });
+}
+
+void Renderer::releaseMaterial(uint16 materialIdx)
+{
+    m_materials.release(materialIdx, 1);
+}
+
+uint32 Renderer::getMaterialFlags(uint16 materialIdx)
+{
+    return m_materials.items()[materialIdx].flags;
+}
+
+void Renderer::setMaterialFlags(uint16 materialIdx, uint32 flags)
+{
+    m_materials.items()[materialIdx].flags = flags;
+    m_materials.upload(materialIdx, 1);
+}
+
 RenderMesh Renderer::createMesh(const RenderMeshData& data)
 {
     RenderMesh mesh;
@@ -251,6 +274,21 @@ RenderMesh Renderer::createMesh(const RenderMeshData& data)
     return mesh;
 }
 
+uint32 Renderer::createMeshLodChain(oc::span<const RenderMesh* const> levels, oc::span<const float> errors)
+{
+    assert(levels.size() >= 2 && levels.size() <= RendererVKLayout::MAX_MESH_LODS && errors.size() == levels.size());
+    MeshLodGroup group;
+    group.numLods = (uint8)levels.size();
+    for (uint8 k = 0; k < group.numLods; ++k)
+    {
+        group.meshIdx[k] = levels[k]->m_meshIdx;
+        group.errors[k] = k == 0 ? 0.0f : oc::max(errors[k], 1e-7f); // nonzero: selects by error, not projected size
+    }
+    group.center = levels[0]->m_bounds.pos;
+    group.radius = levels[0]->m_bounds.radius;
+    return addMeshLodGroup(group);
+}
+
 RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform)
 {
     RenderNode node;
@@ -267,6 +305,8 @@ RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, R
     instance.materialIdx = materialIdx;
     instance.pipelineIndex = (uint16)pipeline;
     instance.alphaMode = m_materials.items()[materialIdx].alphaMode; // the TLAS writer's opacity flag reads it
+    if (m_meshLods.getGroupIdxForMesh(mesh.m_meshIdx) != UINT32_MAX)
+        node.m_lodStateBase = allocateLodStateRange(1); // GPU hysteresis slot (createMeshLodChain level 0)
     return node;
 }
 

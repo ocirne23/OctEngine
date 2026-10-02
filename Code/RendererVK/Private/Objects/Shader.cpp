@@ -184,6 +184,10 @@ static oc::string buildLayoutPreamble()
     def("MATERIAL_FLAG_NO_RAYTRACING", MATERIAL_FLAG_NO_RAYTRACING, "u");
     def("MATERIAL_FLAG_BC5_NORMAL", MATERIAL_FLAG_BC5_NORMAL, "u");
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");
+    def("MATERIAL_FLAG_FOLIAGE", MATERIAL_FLAG_FOLIAGE, "u");
+    def("MATERIAL_FLAG_FOLIAGE_TOP_CARD", MATERIAL_FLAG_FOLIAGE_TOP_CARD, "u");
+    def("MATERIAL_FLAG_DISTANCE_FADE", MATERIAL_FLAG_DISTANCE_FADE, "u");
+    def("MATERIAL_FLAG_FADE_IN", MATERIAL_FLAG_FADE_IN, "u");
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement
     def("PIPELINE_IDX_TERRAIN_LIT", (uint32)EPipelineIndex::TerrainLit, "u"); // the cull emits the terrain overlay for these
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");

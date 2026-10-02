@@ -336,6 +336,12 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 // (A second, specular-only lobe riding this light loop - the terrain's water film, one shadow ray per light
 // for both - was tried and dropped: the film's surface then had to be resolved before the loop and its
 // values stayed live across the shadow ray query, 80/64 regs/local against 80/32 with the film's own loop.)
+#ifdef FOLIAGE_NO_RTAO
+// FOLIAGE cards (set by the lit FS around computeLitColor): no RTAO. The AO is traced from the depth image, so on
+// a card it is the occlusion of the flat card by the crossing card and the ground, not of the crown it stands for.
+bool g_noRtao = false;
+#endif
+
 vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
 	const f16vec3 V = f16vec3(Vf);
@@ -359,7 +365,11 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
 	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
+#ifdef FOLIAGE_NO_RTAO
+	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z) && !g_noRtao)
+#else
 	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z))
+#endif
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(worldPos, aoViewDist);

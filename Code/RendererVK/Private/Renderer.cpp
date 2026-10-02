@@ -89,6 +89,7 @@ void Renderer::registerTweaks()
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
+    m_foliageParams.registerTweaks();
     m_fogParams.registerTweaks();
     // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
     // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
@@ -317,6 +318,7 @@ void Renderer::initPipelines()
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
+    m_treeExpandPipeline.initialize();
     m_decalPipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
@@ -510,6 +512,7 @@ void Renderer::reloadShaders()
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    m_treeExpandPipeline.reloadShaders();
     m_decalPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_taaPipeline.reloadShaders();
@@ -732,6 +735,7 @@ void Renderer::beginFrame()
     {
         ProfileScope resetScope("Counters + LOD stats", EProfileCategory::Renderer);
         m_instances.beginFrame();
+        m_treeDispatches.clear(); // this frame's tree expansions are queued by renderTreeInstanceSet
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));

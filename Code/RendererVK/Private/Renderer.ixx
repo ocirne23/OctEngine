@@ -41,6 +41,7 @@ import :BakedWorldMap;
 import :SceneColor;
 import :DebugLinePipeline;
 import :ParticlePipeline;
+import :TreeExpandPipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
@@ -216,13 +217,55 @@ public:
     // each level half the previous). alphaCutoff > 0 makes it alpha-tested (EAlphaMode::Mask, the cutoff
     // rides `opacity`): draw it on LitMasked. `normalMips` (optional, same size): a LINEAR RGB tangent-space
     // normal map (x along U, y along V, z out). Free with destroyTextureMaterial (textures + material slot).
+    // `extraFlags`: RendererVKLayout::MATERIAL_FLAG_* to add (e.g. MATERIAL_FLAG_FOLIAGE).
     uint16 createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-        const oc::vector<oc::span<uint8>>* normalMips = nullptr);
+        const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0);
     void destroyTextureMaterial(uint16 materialIdx);
+    // A copy of `source` with `extraFlags` added, SHARING its textures: free it with releaseMaterial (the slot
+    // only), never destroyTextureMaterial.
+    uint16 deriveMaterial(uint16 source, uint32 extraFlags);
+    void releaseMaterial(uint16 materialIdx);
+    // Rewrites a material's flags in place (e.g. a distance-fade band). No re-record: a contents upload.
+    uint32 getMaterialFlags(uint16 materialIdx);
+    void setMaterialFlags(uint16 materialIdx, uint32 flags);
     RenderMesh createMesh(const RenderMeshData& data); // uploads + one MeshInfo (and its BLAS); invalid when empty
+    // A GPU LOD chain over createMesh'd meshes (level 0 first, at most MAX_MESH_LODS), `errors` = each level's
+    // geometric deviation in mesh-local units (0 for level 0; the screen-space-error selector). Spawn nodes on
+    // LEVEL 0: the cull picks the level per instance. freeMeshLodChain BEFORE destroying the meshes.
+    uint32 createMeshLodChain(oc::span<const RenderMesh* const> levels, oc::span<const float> errors);
+    void freeMeshLodChain(uint32 groupIdx) { freeMeshLodGroup(groupIdx); }
     // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity
     // instance offset: the mesh is its own root).
     RenderNode spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform);
+
+    // -- Procedural tree pieces, expanded on the GPU (TreeExpandPipeline; RendererTrees.cpp) -- MAIN THREAD.
+    // A SET is a grove of placed pieces sharing a table of piece types. Per frame, renderTreeInstanceSet costs
+    // one instance claim, one count per distinct mesh and one dispatch - nothing per piece on the CPU.
+    struct TreeInstanceRep // one representation; mesh nullptr = none. Spawned-on mesh = a chain's LEVEL 0.
+    {
+        const RenderMesh* mesh = nullptr;
+        uint16 material = 0;
+        RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
+    };
+    struct TreeInstanceType
+    {
+        // barkFade / leavesFade: the same meshes on LitMasked with fade-OUT materials (the crossfade band).
+        TreeInstanceRep bark, barkFade, leaves, leavesFade, billboard;
+        float farDistance = 0.0f; // billboard switch distance (m); 0 = always the mesh
+        float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
+    };
+    struct TreeInstancePiece
+    {
+        Transform transform;      // the piece's node transform (static)
+        glm::vec3 centre{ 0.0f }; // world centre + radius of the far representation (the band test)
+        float radius = 0.0f;
+        uint32 type = 0;
+    };
+    uint32 createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces);
+    // Drains the GPU first (rare: a respawn / reload).
+    void destroyTreeInstanceSet(uint32 setId);
+    // Every frame the set should draw, before present(); distanceScale x every type's farDistance.
+    void renderTreeInstanceSet(uint32 setId, const glm::vec3& cameraPos, float distanceScale, bool forceFar);
 
     // -- Debug rendering --
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
@@ -483,6 +526,25 @@ private:
     GIProbePipeline m_giProbePipeline;
     DebugLinePipeline m_debugLinePipeline;
     ParticlePipeline m_particlePipeline;
+    // GPU tree expansion (RendererTrees.cpp): the live sets (dead ones recycled by id) and this frame's dispatches
+    // (cleared in beginFrame, recorded at the top of the primary).
+    struct TreeInstanceSet
+    {
+        Buffer pieces;
+        Buffer types;
+        uint32 numPieces = 0;
+        oc::vector<uint32> transformSlots; // per piece: the mesh records' node
+        oc::vector<uint32> billboardSlots; // per piece: the billboard record's node (same transform, own pass mask)
+        oc::vector<uint32> lodStateBases;  // TREE_EXPAND_RECORDS_PER_PIECE slots per piece
+        uint32 dummyNode = UINT32_MAX;     // pass mask 0: the unused records' node
+        uint32 maxNode = 0;
+        oc::vector<oc::pair<uint16, uint32>> meshCounts; // the cull's bucket sizes (level-0 mesh, instances)
+        int32 uploadedGeneration[RendererVKLayout::NUM_FRAMES_IN_FLIGHT] = {}; // per slot: transforms written at
+        bool alive = false;
+    };
+    TreeExpandPipeline m_treeExpandPipeline;
+    oc::vector<TreeInstanceSet> m_treeSets;
+    oc::vector<TreeExpandPipeline::Dispatch> m_treeDispatches;
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
     ParticleState m_particles;
@@ -492,6 +554,7 @@ private:
 
     SkyParams m_skyParams;
     ShadowParams m_shadowParams;
+    FoliageParams m_foliageParams;
     FogParams m_fogParams;
     CloudParams m_cloudParams;
     bool m_cloudsSuppressed = false;

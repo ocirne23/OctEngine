@@ -18,7 +18,7 @@ struct InMeshInfo           { vec3 center; float radius; uint indexCount; uint f
 struct MaterialInfo         { uint flags; float opacity; uint diffuseNormalTexIdx; uint metalRoughnessTexIdxAlphaMode; };
 // alphaTexIdxCascadeMask: high 16 = alpha-mask texture index (0xFFFF when the material has no mask),
 // low 16 = cascade overlap bitmask. Matches RendererVKLayout::OutShadowMeshInstance.
-struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; };
+struct OutMeshInstance      { vec4 posScale; vec4 quat; uint alphaTexIdxCascadeMask; uint foliageNormalTexIdx; float foliageShift; };
 struct OutIndirectCommand   { uint pipelineIndex; uint indexCount; uint instanceCount; uint firstIndex; int vertexOffset; uint firstInstance; };
 
 layout (binding = 1, std430) readonly buffer InRenderNodeTransformsBuffer  { RenderNodeTransform  in_renderNodeTransforms[]; };
@@ -122,6 +122,13 @@ void main()
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
     const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x0000FFFFu);
+    // FOLIAGE cards (tree billboards) write their leaves at the baked depth (shadow_depth.fs.glsl); the rain's
+    // top-down shelter map keeps the plain cards.
+#ifdef RAIN_OCCLUSION
+    const bool foliage = false;
+#else
+    const bool foliage = alphaTexIdx != 0xFFFFu && (material.flags & MATERIAL_FLAG_FOLIAGE) != 0u;
+#endif
 
     // GPU LOD selection, stateless and two levels coarser than the main view (matches the old CPU
     // pass bias: 4x the error budget / +2 fallback levels). Off-screen casters never pop on screen,
@@ -167,4 +174,6 @@ void main()
     out_meshInstances[instanceIdx].posScale                = instancePosScale;
     out_meshInstances[instanceIdx].quat                    = quat;
     out_meshInstances[instanceIdx].alphaTexIdxCascadeMask  = packed;
+    out_meshInstances[instanceIdx].foliageNormalTexIdx     = foliage ? (material.diffuseNormalTexIdx >> 16) : 0xFFFFu;
+    out_meshInstances[instanceIdx].foliageShift            = foliage ? radius : 0.0;
 }

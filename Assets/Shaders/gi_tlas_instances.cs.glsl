@@ -150,7 +150,11 @@ void main()
         o.blasLo = 0u; // reference 0 = inactive: not built, not traversed
         o.blasHi = 0u;
     }
-    o.instanceCustomIndexAndMask = (id & 0x00FFFFFFu) | (0xFFu << 24);      // custom = instance idx
+    // Mask: FOLIAGE cards (tree billboards) only 0x02, so RTAO's rays (cull mask 0x01) skip them - its opaque rays
+    // would hit the whole card rectangles; every other ray (0xFF) still hits them.
+    const bool foliage = materialIdx < uint(in_materialInfos.length())
+                      && (in_materialInfos[materialIdx].flags & MATERIAL_FLAG_FOLIAGE) != 0u;
+    o.instanceCustomIndexAndMask = (id & 0x00FFFFFFu) | ((foliage ? 0x02u : 0xFFu) << 24); // custom = instance idx
 
     out_instances[id] = o;
 }

@@ -76,12 +76,14 @@ TreeSpecies Oak
 		Levels 2
 		ClusterLeaves 10
 		ClusterLeafSize 0.3
-		NormalBend 0.33
+		NormalBend 0.2
 	Bark
 		Plates 22 5
 		Crack 0.06
 		Relief 1
 		Lichen 0.3
+	Billboard
+		NormalBend 0.0
 	Color
 		Bark 0.30 0.23 0.17
 		Leaf 0.20 0.36 0.10

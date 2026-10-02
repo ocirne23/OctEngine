@@ -203,8 +203,14 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
 	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant
-	// carries a discard, so the LitOpaque variant keeps early depth writes.
+	// carries a discard, so the LitOpaque variant keeps early depth writes. Its VS adds the instance origin
+	// (the FOLIAGE cards' crown normal).
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = graphicsPipelineLayout.vertexShader.text,
+			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" } },
+		},
 		.fragmentShader = ShaderSource{
 			.text = graphicsPipelineLayout.fragmentShader.text,
 			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
@@ -238,6 +244,24 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.dualSourceBlend = true,
 		.depthWrite = false,
 		.depthGreaterOrEqual = true,
+	});
+	// Variant 12 (EPipelineIndex::TreeImpostor): procedural tree piece impostors. Its VS builds a camera-facing
+	// quad per instance from one frame of an octahedral atlas and hands the frame basis to the FS as the TBN, so
+	// the LitMasked FS (alpha discard + normal map) shades it unchanged. Both faces (the quad is built facing
+	// the frame direction, not the exact camera).
+	const oc::string impostorVertexPath = "Shaders/tree_impostor.vs.glsl";
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = FileSystem::readFileStr(impostorVertexPath),
+			.debugFilePath = impostorVertexPath,
+		},
+		.fragmentShader = ShaderSource{
+			.text = graphicsPipelineLayout.fragmentShader.text,
+			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" } },
+		},
+		.writeMotion = true,
+		.cullMode = vk::CullModeFlagBits::eNone,
 	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and

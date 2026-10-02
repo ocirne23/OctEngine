@@ -832,6 +832,13 @@ export namespace RendererVKLayout
         glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
                               // z = fallback full-res pixels (authored chains), w = mipPixelScale (px per unit/dist)
         glm::vec4 lodParams1; // x = force LOD level (< 0 = off), y = fallback-metric level bias, z = enabled (0/1), w unused
+        // FOLIAGE cards (the tree billboards; FoliageParams): x = depth offset scale, y = crown normal blend,
+        // z = self-shadow transmission length (m), w = interior darkening
+        glm::vec4 foliageParams;
+        glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
+                                  // w = interior shadow: leaf radius (/ crown radius) where it is full
+        glm::vec4 foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
+                                  // z = interior shadow top card scale, w unused
 
         // Forcefield bubbles (Force library / ForceFieldPipeline; keep in sync with ubo.inc.glsl)
         glm::vec4 forceTeamColors[MAX_FORCE_TEAMS]; // rgb = linear team color, w unused
@@ -924,9 +931,9 @@ export namespace RendererVKLayout
         float scale;
         glm::vec4 quat;
         uint32 alphaTexIdxCascadeMask;
+        uint32 foliageNormalTexIdx; // MATERIAL_FLAG_FOLIAGE casters: the normal map (alpha = baked depth); 0xFFFF = none
+        float foliageShift;         // their world bounding radius: the depth pass pulls them toward the light by it
         uint32 _pad0;
-        uint32 _pad1;
-        uint32 _pad2;
     };
     static_assert(sizeof(OutShadowMeshInstance) == 48);
 
@@ -989,6 +996,9 @@ export namespace RendererVKLayout
         TerrainOverlay = 11, // the terrain chunks drawn AGAIN over the ground (surface-water film, later snow ...):
                              // never on a material - the main cull emits it for TerrainLit instances inside the
                              // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
+        TreeImpostor   = 12, // procedural tree piece impostor: a camera-facing quad per instance picking one frame of an
+                             // octahedral atlas (tree_impostor.vs.glsl) + the LitMasked fragment shader. MAIN pass only
+                             // (the shadow pass's own VS cannot build the quad): push its nodes with PASS_MAIN.
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs
@@ -1011,7 +1021,25 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
                                                        // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
-    // bit 26 is free (was MATERIAL_FLAG_GIZMO_UI: the removed prepass's copy of the GizmoUI near-depth stamp)
+    // DISTANCE FADE (LitMasked only): a dithered fade over a camera-distance band, packed into the low flag bits -
+    // start in metres (bits 0..11), width in metres (bits 12..21). Without FADE_IN the surface fades OUT across
+    // the band, with it IN; an out and an in material over the same band keep complementary pixels (the tree
+    // mesh -> billboard crossfade). makeDistanceFadeFlags packs it.
+    constexpr uint32 MATERIAL_FLAG_FADE_IN = 1u << 24;
+    constexpr uint32 MATERIAL_FLAG_DISTANCE_FADE = 1u << 25;
+    constexpr uint32 MATERIAL_FADE_BAND_MASK = 0x3FFFFFu; // bits 0..21
+    constexpr uint32 makeDistanceFadeFlags(float startMetres, float widthMetres, bool fadeIn)
+    {
+        const uint32 start = (uint32)(startMetres < 0.0f ? 0.0f : startMetres > 4095.0f ? 4095.0f : startMetres);
+        const uint32 width = (uint32)(widthMetres < 1.0f ? 1.0f : widthMetres > 1023.0f ? 1023.0f : widthMetres);
+        return MATERIAL_FLAG_DISTANCE_FADE | (fadeIn ? MATERIAL_FLAG_FADE_IN : 0u) | start | (width << 12);
+    }
+    constexpr uint32 MATERIAL_FLAG_FOLIAGE = 1u << 26; // LitMasked: the sun shadow is NOT rejected by the geometric
+                                                       // normal's facing (a flat card standing for a foliage clump,
+                                                       // the tree billboards) - the normal-mapped normal decides
+    constexpr uint32 MATERIAL_FLAG_FOLIAGE_TOP_CARD = 1u << 23; // with FOLIAGE: an upright whole-tree billboard with a
+                                                       // HORIZONTAL card (its top-down view; the card whose normal
+                                                       // points up) - the lit FS's crown frame runs along its normal
 
     struct alignas(16) MaterialInfo
     {

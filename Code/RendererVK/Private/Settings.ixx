@@ -213,6 +213,40 @@ export struct ShadowParams
     void registerTweaks(const oc::function<void()>& onReloadShaders); // debugMode is a baked define
 };
 
+// FOLIAGE cards (MATERIAL_FLAG_FOLIAGE - the tree billboards) - "Foliage ..." in the TweakPanel's "Trees" category.
+// UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
+export struct FoliageParams
+{
+    float depthOffset = 1.0f;   // x the baked per-texel depth the shadow lookup (and the caster) moves off the
+                                // card by (0 = on the card plane). On the plane, the crossed cards' crossing
+                                // line leaks light at any depth bias.
+    float crownNormal = 0.5f;   // blend of the shading normal toward a CROWN normal - the view ray's hit on a
+                                // sphere around the card's centre (0 = the baked normals only; 1 at the axis
+                                // regardless). The same for both crossed cards, so the shading no longer splits
+                                // at their crossing axis (each card's bake shades its own view's side).
+    float shadowLength = 0.0f;  // the sun shadow fades in over this many metres between the receiver and its
+                                // blockers (0 = hard, as any surface): light reaches into a crown, so its own
+                                // crossed cards darken it gradually instead of with a hard edge at the crossing
+                                // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
+    float interiorShadow = 1.0f; // darkening of the leaves deep INSIDE the crown (their baked 3D point near the
+                                // crown sphere's centre), on the sun and the ambient alike (0 = off) - a fully
+                                // lit crown otherwise looked flat.
+    float interiorInner = 0.0f; // the leaf's distance from the crown centre (/ the crown radius) inside which
+    float interiorOuter = 1.1f;// the interior shadow is full, and outside which it is gone (smoothstep between)
+    float interiorTopCardScale = 1.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
+                                // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
+    // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
+    // card smears its texture into streaks. Near the crossing axis both thresholds are x edgeFadeCentreScale
+    // (back to x1 at half the crown radius): < 1 keeps the centre, > 1 fades it sooner.
+    float edgeFadeStart = 0.1f;
+    float edgeFadeEnd = 0.6f;
+    float edgeFadeCentreScale = 1.33f;
+    float edgeFadeTopCardScale = 1.0f; // x both thresholds on a whole tree's HORIZONTAL card (on top of the centre
+                                // scale): > 1 hands the top-down view to the vertical cards sooner
+
+    void registerTweaks();
+};
+
 // Volumetric fog (froxel grid; see VolumetricFogPipeline) - the TweakPanel's "Fog" categories.
 // All UBO-driven, so changes apply live.
 export struct FogParams

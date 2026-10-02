@@ -315,8 +315,9 @@ Each phase ends with something the user can look at in SANDBOX and measure with 
 | G1 ✅ | **Piece generator:** `.tree` asset, Weber–Penn style skeleton, swept-tube bark, `(u, θ)` UVs, placeholder leaf cards; trunks with attach slots, branch modules, per-vertex bones; piece-library view in SANDBOX | Pieces read as the species' parts — **user to judge** |
 | G2 ✅ | **CPU composite (prototype):** the composite function in C++, trees spawned as plain `RenderNode`s per piece, a small grove | Composited trees look like whole, varied trees at 5–100 m; joints acceptable — **user to judge** |
 | G3 | **Live editing:** species params as tweaks / a panel, regenerate pieces + re-composite on change | Species can be tuned without restarting |
-| G4 | **Tree pipeline (4.4):** own shaders, per-tree bone palettes (composite in GLSL, matching the C++ one), cull + expansion compute, main + shadow draw | Same trees as G2, now GPU-driven; thousands of trees |
-| G5 | **LODs:** piece LOD chains with per-level error + tree LOD (fewer pieces) | No visible pops 0–500 m; instance / triangle counts measured |
+| G4 ✅ (step 1) | **GPU expansion into the EXISTING instance stream** (decided 2026-10-02 instead of a separate pipeline): per-piece records written by `tree_expand.cs.glsl` before the culls, so the regular cull / LOD chains / shadows / TLAS / billboard crossfade all keep working; the CPU does one claim + per-mesh counts + one dispatch per frame. Still placed by the CPU composite (pieces uploaded once); not yet: composite in GLSL, per-tree records, bone palettes / wind, a coarse per-tree cull | Same trees as the CPU path; the "Trees" CPU scope near zero — **user to judge** |
+| G4b ✅ | **Baked whole-tree variants** (2026-10-02, user: per-piece instancing far too expensive — a 64² grove was ~200k instances): `Bake Variants` (4) merged trees per species per LOD level, placed with seeded variant/scale/yaw → 3 records per TREE; whole-tree billboards / impostors from the same machinery. Next: a per-tree VS **warp** (bend, twist, lopsided crown, noise; seeded by position) for near-range uniqueness + wind on the same terms, with a shadow VS variant; device-local expansion records; scaling past ~100k trees (per-tree GPU cull + compaction, or cell nodes) | ~16x fewer records; grove looks right — **user to judge** |
+| G5 ✅ (preview) | **LODs:** 4 piece mesh LODs from one skeleton as GPU LOD chains; **branch-module billboards** (two crossed cards: side + top view, CPU bake, PNG cache, cast shadows; default) with **octahedral impostors** kept as the fallback far mode (`TreeImpostor` pipeline variant), per-module distance switch — replaces whole-tree T1 (composited trees cannot share a whole-tree impostor) | No visible pops 0–500 m; instance / triangle counts measured — **user to judge** |
 | G6 | **Scatter integration:** `ScatterAsset` → species, placements as GPU records; measure 40–100k trees | Forest to ~500 m within budget (`Tools/profile.ps1`) |
 | G7 | Wind: rigid module sway in the expansion pass | |
 | G8 | Side outputs: per-piece cluster ellipsoids, per-species stats, trunk capsules | Data ready for the far tiers / physics |
@@ -327,7 +328,7 @@ Each phase ends with something the user can look at in SANDBOX and measure with 
 | P7 | T3 analytic canopy layer + T2↔T3 hand-over | Forest edges stable from 100 m to 40 km |
 | P8 | Shadows across tiers, baked volume lighting, canopy shadow map | |
 | P9 | T3s silhouettes, per-tree species in T2, seasons, ray tracing | |
-| (P10) | T1 impostors — only if P6 says so | |
+| (P10) | Whole-tree T1 impostors — superseded by the per-module impostors of G5 | |
 
 (P4/P5 from the first draft are now G1–G7.)
 

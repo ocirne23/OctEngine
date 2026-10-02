@@ -15,6 +15,9 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
+#ifdef ALPHA_MASK
+layout (location = 5) in flat vec3 in_instanceOrigin; // a point on a FOLIAGE card's axis (foliageCrownNormal)
+#endif
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -29,6 +32,10 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
+#ifdef ALPHA_MASK
+#define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage cards' own bias (sunShadowFirstFoliage)
+#define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
+#endif
 #include "instanced_indirect_lit.inc.glsl"
 
 // THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live. The geometric
@@ -41,6 +48,106 @@ void sunShadowFirst(vec3 pos)
 	const vec3 geoN = normalize(in_normalV.xyz);
 	g_sunShadowFirst = dot(geoN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(pos, geoN) : 0.0;
 }
+
+#ifdef ALPHA_MASK
+// FOLIAGE (MATERIAL_FLAG_FOLIAGE - the tree billboard cards): one flat geometric normal stands for a whole
+// clump, and rejecting by it darkened the entire card whenever the sun was behind it. Shadow it from the card's
+// sun side instead (the bias still follows the geometric normal, just flipped toward the sun) and let
+// doSunLight's facing test on the normal-mapped normal decide.
+// The lookup moves OFF the card to the texel's baked depth (the normal map's alpha, signed along the card's FRONT
+// normal, in units of the card's u length): the crossed cards touch at their crossing line, where no depth bias
+// separates them and a lit strip leaked through every tree. The shadow pass writes its casters at the same depths
+// (shadow_depth.fs.glsl), so caster and receiver agree leaf by leaf. `cardDu` / `cardDv` = d(pos)/du, d(pos)/dv
+// (pos and uv are affine over the card); front normal = cross(dv, du) on both faces (billboardViews).
+// Returns the leaf's offset off the card (world, unscaled): the interior term reads the leaf's real 3D point.
+vec3 sunShadowFirstFoliage(vec3 pos, float depth01, vec3 cardDu, vec3 cardDv)
+{
+	const vec3 geoN = normalize(in_normalV.xyz);
+	const vec3 frontN = cross(cardDv, cardDu);
+	const float frontLen = length(frontN);
+	const vec3 leafOffset = frontLen > 0.0 ? frontN * ((depth01 * 2.0 - 1.0) * length(cardDu) / frontLen) : vec3(0.0);
+	g_shadowFoliage = true; // the constant depth bias only (shadows.inc.glsl)
+	g_sunShadowFirst = sunShadowVisibility(pos + leafOffset * u_foliageParams.x, // x "Trees/Foliage depth offset"
+		dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+	g_shadowFoliage = false;
+	return leafOffset;
+}
+
+// The CROWN normal of a foliage card: where the VIEW RAY hits a sphere around the card's centre. Each crossed card's
+// baked normals shade the crown side its own bake view saw, so where card A gives way to card B on screen (their
+// crossing axis) the shading split hard; this normal depends on the ray only, so both cards agree. The sphere is
+// foliageCrownFrame's (below). Outside the sphere (leaf tips) the normal turns to
+// the rim. w = the pixel's distance from the axis / the radius (the blend reaches 1 at the axis, where the cards
+// cross and their baked normals disagree most).
+// INTERIOR: the leaf's real 3D point (the card point + its baked depth, `leafOffset`) against the same sphere - a
+// leaf seen through the gaps deep inside the crown sits near the centre, an outer one near the surface. `interior`
+// = the darkening, 1 = none: down to 1 - "Trees/Foliage interior shadow" (u_foliageParams.w) at the centre. An
+// AO-like term (no sun direction - the transmitted sun shadow is the directional part), so a fully lit crown is
+// not flat.
+// The crown frame both use: the axis, the sphere centre on it and the radius. A vertical card (or a module's): the
+// axis from the instance origin along +u, the centre at the card's u centre. The whole tree's HORIZONTAL card
+// (TreeImpostor billboardHorizontalView): it lies across the axis at mid height, so the axis is its normal and the
+// centre its own point on it. Its u spans the tree's height too, so the radius - half the u length - is the vertical
+// cards'. False on a degenerate card frame.
+// The horizontal card: a MATERIAL_FLAG_FOLIAGE_TOP_CARD material's card whose normal points up (whole trees stand
+// upright - yaw only - so their vertical cards' normals are horizontal). Found by geometry, not by its strip.
+bool foliageTopCard(vec3 cardDu, vec3 cardDv, uint flags)
+{
+	const vec3 n = cross(cardDv, cardDu);
+	return (flags & MATERIAL_FLAG_FOLIAGE_TOP_CARD) != 0u && n.y * n.y > 0.5 * dot(n, n);
+}
+
+bool foliageCrownFrame(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, out vec3 axis, out vec3 centre, out float radius)
+{
+	const float uLen = length(cardDu);
+	radius = 0.5 * uLen;
+	axis = vec3(0.0, 1.0, 0.0);
+	centre = pos;
+	if (uLen <= 0.0)
+		return false;
+	if (foliageTopCard(cardDu, cardDv, flags))
+	{
+		axis = normalize(cross(cardDv, cardDu));
+		centre = in_instanceOrigin + axis * dot(pos - in_instanceOrigin, axis);
+		return true;
+	}
+	axis = cardDu / uLen;
+	centre = in_instanceOrigin + axis * dot(pos + cardDu * (0.5 - uv.x) - in_instanceOrigin, axis);
+	return true;
+}
+
+vec4 foliageCrownNormal(vec3 pos, vec3 V, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, vec3 leafOffset, out float interior)
+{
+	interior = 1.0;
+	vec3 axis, centre;
+	float radius;
+	if (!foliageCrownFrame(pos, cardDu, cardDv, uv, flags, axis, centre, radius))
+		return vec4(V, 1.0);
+	const vec3 D = -V;
+	const vec3 w = (centre - pos) + D * distance(u_viewPos, pos); // centre - camera, kept small-valued
+	const vec3 offset = D * dot(w, D) - w;                       // the ray's closest approach, from the centre
+	const float r2 = dot(offset, offset) / (radius * radius);
+	const vec3 fromAxis = (pos - centre) - axis * dot(pos - centre, axis);
+	const float leafR = length(pos + leafOffset - centre) / radius;
+	interior = mix(1.0 - u_foliageParams.w, 1.0, smoothstep(u_foliageParams2.w, max(u_foliageParams3.x, u_foliageParams2.w + 1e-3), leafR));
+	// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliageParams3.z): an EXPONENT, so > 1
+	// darkens it at any strength (a multiplier on the strength saturated at 1).
+	if (foliageTopCard(cardDu, cardDv, flags))
+		interior = pow(max(interior, 0.0), max(u_foliageParams3.z, 0.01)) * V.y; // pow(0, 0) is undefined
+	return vec4(normalize(offset / radius - D * sqrt(max(1.0 - r2, 0.0))), length(fromAxis) / radius);
+}
+
+// The pixel's distance from a foliage card's axis / the crown radius (the sphere of foliageCrownNormal).
+float foliageAxisDistance(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags)
+{
+	vec3 axis, centre;
+	float radius;
+	if (!foliageCrownFrame(pos, cardDu, cardDv, uv, flags, axis, centre, radius))
+		return 1.0;
+	const vec3 toPos = pos - centre;
+	return length(toPos - axis * dot(toPos, axis)) / radius;
+}
+#endif
 
 void main()
 {
@@ -62,12 +169,64 @@ void main()
 
 	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], uv);
 #ifdef ALPHA_MASK
+	// The foliage depth offset's card frame from the screen derivatives (taken before any discard): d(pos)/du and
+	// d(pos)/dv. The same in shadow_depth.fs.glsl - the caster and the receiver must agree on every leaf point.
+	const vec2 uvDx = dFdx(uv), uvDy = dFdy(uv);
+	const float uvDet = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+	vec3 cardDu = vec3(0.0), cardDv = vec3(0.0);
+	if (abs(uvDet) > 1e-20)
+	{
+		const vec3 pdx = dFdx(pos), pdy = dFdy(pos);
+		cardDu = (pdx * uvDy.y - pdy * uvDx.y) / uvDet;
+		cardDv = (pdy * uvDx.x - pdx * uvDy.x) / uvDet;
+	}
 	// Only the LitMasked variant discards: a discard anywhere in the shader costs the pipeline its early
 	// depth write. The alpha-mode test stays, because a material override can put an opaque material here.
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
-	sunShadowFirst(pos); // after the discard: a cut-out pixel pays no shadow
+	// DISTANCE FADE (Layout.ixx makeDistanceFadeFlags): a dithered fade over a camera-distance band. A fade-out
+	// surface keeps the pixels with dither < 1 - f, a fade-in one those with dither >= 1 - f, so an out/in pair
+	// over the same band shares no pixel (the tree mesh -> billboard crossfade). Interleaved gradient noise,
+	// shifted per frame so TAA resolves the dither into a smooth blend.
+	if ((material.flags & MATERIAL_FLAG_DISTANCE_FADE) != 0u)
+	{
+		const float fadeStart = float(material.flags & 0xFFFu);
+		const float fadeWidth = max(float((material.flags >> 12) & 0x3FFu), 1.0);
+		const float f = clamp((distance(u_viewPos, pos) - fadeStart) / fadeWidth, 0.0, 1.0);
+		const vec2 pixel = gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 7u);
+		const float dither = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+		if (((material.flags & MATERIAL_FLAG_FADE_IN) != 0u) ? dither < 1.0 - f : dither >= 1.0 - f)
+			discard;
+	}
+	// FOLIAGE cards (the tree billboards) fade out as they turn EDGE-ON: a near-grazing card smears its texture
+	// into bright streaks, and the crossed card faces the view right then. A dither of its own (a decorrelated
+	// pattern), so it composes with the distance fade instead of cancelling it. Over |N.V| from "Trees/Foliage edge
+	// fade start" to "end" (u_foliageParams2.xy), both x "Foliage edge fade centre scale" (z) at the crossing axis, back to x1
+	// at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card scale"
+	// (u_foliageParams3.y).
+	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+	{
+		const float facing = abs(dot(normalize(in_normalV.xyz), V));
+		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
+		const float centreScale = mix(u_foliageParams2.z, 1.0, smoothstep(0.0, 0.5, foliageAxisDistance(pos, cardDu, cardDv, uv, material.flags)))
+			* (topCard ? u_foliageParams3.y : 1.0);
+		const float fadeStart = u_foliageParams2.x * centreScale;
+		const float visibility = smoothstep(fadeStart, max(u_foliageParams2.y * centreScale, fadeStart + 1e-3), facing);
+		if (visibility < 1.0)
+		{
+			const vec2 pixel = gl_FragCoord.xy + vec2(17.0, 31.0) + 5.588238 * float((u_frameIndex + 3u) & 7u);
+			const float dither = fract(52.9829189 * fract(dot(pixel, vec2(0.00583715, 0.06711056))));
+			if (dither >= visibility)
+				discard;
+		}
+	}
+	// After the discard: a cut-out pixel pays no shadow.
+	vec3 leafOffset = vec3(0.0);
+	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+		leafOffset = sunShadowFirstFoliage(pos, texture(u_textures[normalTexIdx], uv).a, cardDu, cardDv);
+	else
+		sunShadowFirst(pos);
 #endif
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
@@ -98,9 +257,25 @@ void main()
 	const f16vec3 geoN = f16vec3(in_normalV.xyz);
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
-	const f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+	float16_t surfaceAO = float16_t(1.0);
+#ifdef ALPHA_MASK
+	// FOLIAGE: toward the crown normal - fully at the crossing axis, by "Trees/Foliage crown normal"
+	// (u_foliageParams.y) from half the radius out - and the crown INTERIOR darkening on both the sun and the
+	// ambient (in place of the RTAO a card does not read).
+	if ((material.flags & MATERIAL_FLAG_FOLIAGE) != 0u)
+	{
+		float interior;
+		const vec4 crown = foliageCrownNormal(pos, V, cardDu, cardDv, uv, material.flags, leafOffset, interior);
+		const vec3 blended = mix(vec3(N), crown.xyz, mix(1.0, u_foliageParams.y, smoothstep(0.0, 0.5, crown.w)));
+		N = f16vec3(blended * inversesqrt(max(dot(blended, blended), 1e-8))); // opposite normals can cancel
+		g_noRtao = true;
+		g_sunShadowFirst *= interior;
+		surfaceAO = float16_t(interior);
+	}
+#endif
 
-	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT
 	out_motion = motionVector(in_prevWorldDelta);
