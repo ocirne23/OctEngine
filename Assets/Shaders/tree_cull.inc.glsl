@@ -48,34 +48,40 @@ bool treeCullIsTree(uint instanceIdx) { return instanceIdx - u_treeCull.x < u_tr
 
 TreeCullRecord treeCullNone() { return TreeCullRecord(TREE_CULL_ABSENT, 0u); }
 
+// LOADS PER FIELD, the transform LAST: a piece is two 32-byte sectors - posScale + quat, then centre / radius / type /
+// lodStateBase - and the decision needs only the second. Most records draw nothing (the shadow cull's mesh records
+// of every billboard type; in the main cull every record past the far-tree volume's start), and those never fetch
+// the transform's sector. (Copying the whole piece first fetched both for every record.)
+
 // The MAIN pass's record: the mesh before the crossfade band, the billboard after it, inside it the mesh on its
 // fade-OUT materials AND the billboard (the lit FS's dither splits the pixels); past the far-tree volume's start
-// (u_treeCullParams.z > 0) nothing - the volume draws it.
-bool treeCullMain(uint instanceIdx, out TreeCullRecord rec, out TreeCullPiece piece, out uint stateSlot)
+// (u_treeCullParams.z > 0) nothing - the volume draws it. posScale / quat / stateSlot only when it draws.
+bool treeCullMain(uint instanceIdx, out TreeCullRecord rec, out vec4 posScale, out vec4 quat, out uint stateSlot)
 {
     const uint v = instanceIdx - u_treeCull.x;
     const uint k = v % 3u;
-    piece = in_treePieces[v / 3u];
-    stateSlot = piece.lodStateBase + k;
-    const TreeCullType type = in_treeTypes[piece.type];
-    const bool hasBillboard = type.billboard.meshMaterial != TREE_CULL_ABSENT;
+    const uint pieceIdx = v / 3u;
+    const uint typeIdx = in_treePieces[pieceIdx].type;
+    const bool hasBillboard = in_treeTypes[typeIdx].billboard.meshMaterial != TREE_CULL_ABSENT;
     bool mesh = true, fade = false, billboard = false;
     if (hasBillboard)
     {
-        const float switchDistance = type.farDistance * u_treeCullParams.x;
-        const float bandStart = max(switchDistance - type.fadeWidth * 0.5, 0.0);
-        const float bandEnd = bandStart + type.fadeWidth;
+        const float switchDistance = in_treeTypes[typeIdx].farDistance * u_treeCullParams.x;
+        const float fadeWidth = in_treeTypes[typeIdx].fadeWidth;
+        const float bandStart = max(switchDistance - fadeWidth * 0.5, 0.0);
+        const float bandEnd = bandStart + fadeWidth;
         // A pixel's distance varies by up to the piece radius from the centre's (the material's band is per pixel).
-        const float dist = distance(u_views[VIEW_CENTER].viewPos.xyz, piece.centre);
+        const float dist = distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre);
+        const float radius = in_treePieces[pieceIdx].radius;
         if (u_treeCullParams.y > 0.5)
         {
             mesh = false;
             billboard = true;
         }
-        else if (switchDistance <= 0.0 || dist + piece.radius < bandStart)
+        else if (switchDistance <= 0.0 || dist + radius < bandStart)
         {
         }
-        else if (dist - piece.radius > bandEnd)
+        else if (dist - radius > bandEnd)
         {
             mesh = false;
             billboard = true;
@@ -91,23 +97,38 @@ bool treeCullMain(uint instanceIdx, out TreeCullRecord rec, out TreeCullPiece pi
             billboard = false;
         }
     }
-    rec = k == 0u ? (mesh ? (fade ? type.barkFade : type.bark) : treeCullNone())
-        : k == 1u ? (mesh ? (fade ? type.leavesFade : type.leaves) : treeCullNone())
-        : (billboard ? type.billboard : treeCullNone());
-    return rec.meshMaterial != TREE_CULL_ABSENT;
+    rec = k == 0u ? (mesh ? (fade ? in_treeTypes[typeIdx].barkFade : in_treeTypes[typeIdx].bark) : treeCullNone())
+        : k == 1u ? (mesh ? (fade ? in_treeTypes[typeIdx].leavesFade : in_treeTypes[typeIdx].leaves) : treeCullNone())
+        : (billboard ? in_treeTypes[typeIdx].billboard : treeCullNone());
+    posScale = vec4(0.0);
+    quat = vec4(0.0, 0.0, 0.0, 1.0);
+    stateSlot = 0u;
+    if (rec.meshMaterial == TREE_CULL_ABSENT)
+        return false;
+    posScale = in_treePieces[pieceIdx].posScale;
+    quat = in_treePieces[pieceIdx].quat;
+    stateSlot = in_treePieces[pieceIdx].lodStateBase + k;
+    return true;
 }
 
 // The SHADOW (and rain-shelter) passes' record: the BILLBOARD stands in for the tree at every distance; the mesh
-// casts only for a type without one.
-bool treeCullShadow(uint instanceIdx, out TreeCullRecord rec, out TreeCullPiece piece)
+// casts only for a type without one. posScale / quat only when it draws.
+bool treeCullShadow(uint instanceIdx, out TreeCullRecord rec, out vec4 posScale, out vec4 quat)
 {
     const uint v = instanceIdx - u_treeCull.x;
     const uint k = v % 3u;
-    piece = in_treePieces[v / 3u];
-    const TreeCullType type = in_treeTypes[piece.type];
-    const bool hasBillboard = type.billboard.meshMaterial != TREE_CULL_ABSENT;
-    rec = k == 2u ? type.billboard : (hasBillboard ? treeCullNone() : (k == 0u ? type.bark : type.leaves));
-    return rec.meshMaterial != TREE_CULL_ABSENT;
+    const uint pieceIdx = v / 3u;
+    const uint typeIdx = in_treePieces[pieceIdx].type;
+    const TreeCullRecord billboard = in_treeTypes[typeIdx].billboard;
+    const bool hasBillboard = billboard.meshMaterial != TREE_CULL_ABSENT;
+    rec = k == 2u ? billboard : (hasBillboard ? treeCullNone() : (k == 0u ? in_treeTypes[typeIdx].bark : in_treeTypes[typeIdx].leaves));
+    posScale = vec4(0.0);
+    quat = vec4(0.0, 0.0, 0.0, 1.0);
+    if (rec.meshMaterial == TREE_CULL_ABSENT)
+        return false;
+    posScale = in_treePieces[pieceIdx].posScale;
+    quat = in_treePieces[pieceIdx].quat;
+    return true;
 }
 
 #endif

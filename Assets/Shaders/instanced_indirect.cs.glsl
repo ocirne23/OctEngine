@@ -229,12 +229,9 @@ void main()
     if (isTree)
     {
         TreeCullRecord rec;
-        TreeCullPiece piece;
-        if (!treeCullMain(instanceIdx, rec, piece, stateSlot))
+        if (!treeCullMain(instanceIdx, rec, instancePosScale, quat, stateSlot))
             return; // this record does not draw this frame
         instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
-        quat = piece.quat;
-        instancePosScale = piece.posScale;
     }
     else
     {

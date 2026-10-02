@@ -82,8 +82,8 @@ void main()
     // built, not traversed).
     const bool isTree = treeCullIsTree(id);
     TreeCullRecord treeRec;
-    TreeCullPiece treePiece;
-    if (id >= u_giTlasNumInstances || (isTree && !treeCullShadow(id, treeRec, treePiece)))
+    vec4 treePosScale, treeQuat;
+    if (id >= u_giTlasNumInstances || (isTree && !treeCullShadow(id, treeRec, treePosScale, treeQuat)))
     {
         TlasInstance dead;
         dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
@@ -103,9 +103,9 @@ void main()
     if (isTree)
     {
         inst = InMeshInstance(0u, 0u, treeRec.meshMaterial, treeRec.pipelineAlpha);
-        quat = treePiece.quat;
-        pos = treePiece.posScale.xyz;
-        scale = treePiece.posScale.w;
+        quat = treeQuat;
+        pos = treePosScale.xyz;
+        scale = treePosScale.w;
         inRtSet = true; // the shadow / GI stand-in, always
     }
     else

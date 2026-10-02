@@ -104,12 +104,9 @@ void main()
     if (isTree)
     {
         TreeCullRecord rec;
-        TreeCullPiece piece;
-        if (!treeCullShadow(instanceIdx, rec, piece))
+        if (!treeCullShadow(instanceIdx, rec, instancePosScale, quat))
             return;
         instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
-        quat = piece.quat;
-        instancePosScale = piece.posScale;
     }
     else
     {
@@ -136,7 +133,21 @@ void main()
     const float radius                = meshInfo.radius * instancePosScale.w;
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
-    const uint cascadeMask = cascadeOverlapMask(centerPos, radius);
+    uint cascadeMask = cascadeOverlapMask(centerPos, radius);
+#ifndef RAIN_OCCLUSION
+    // FAR TREES OUT OF THE NEAR CASCADES: a cascade's box runs a long way up-sun (it must hold every caster between the
+    // light and its receivers), so it takes in thousands of distant grove trees. A tree stays in cascade c only while
+    // its distance from the cascades' centre (the scene focus, getSunCascade's) minus its radius lies within that
+    // cascade's split + "Foliage shadow cascade margin" (u_treeCullParams.w) - the margin keeps the long shadows of the
+    // trees just up-sun of the cascade's range. (cascadeSplit: the packed scalar of shadows.inc.glsl.)
+    if (isTree)
+    {
+        const float reach = distance(centerPos, u_sceneFocus.xyz) - radius - u_treeCullParams.w;
+        for (uint c = 0u; c < NUM_SHADOW_CASCADES; ++c)
+            if (reach > u_cascadeViewProj[c][0][3])
+                cascadeMask &= ~(1u << c);
+    }
+#endif
     if (cascadeMask == 0u)
         return; // casts no shadow in any cascade
 

@@ -251,6 +251,10 @@ export struct FoliageParams
     float transmissionShadow = 0.95f;
     float edgeFadeTopCardScale = 1.0f; // x both thresholds on a whole tree's HORIZONTAL card (on top of the centre
                                 // scale): > 1 hands the top-down view to the vertical cards sooner
+    // A tree casts into sun cascade c only while its distance from the cascades' centre (the scene focus) minus its
+    // radius stays within that cascade's split + this (m): far trees out of the near cascades. The margin keeps the
+    // long shadows of trees up-sun, which fall into a nearer cascade's range (a 20 m tree at a 17 degree sun: ~65 m).
+    float shadowCascadeMargin = 64.0f;
 
     void registerTweaks();
 };

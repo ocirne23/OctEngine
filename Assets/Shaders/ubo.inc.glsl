@@ -313,7 +313,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                            // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)
     // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
     // length (3 per tree; 0 = no trees), zw unused; params x = the far distance scale, y = force far (0/1),
-    // z = the far-tree volume's start (3D, m; 0 = no volume), w unused.
+    // z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade margin" (m; the shadow cull:
+    // a tree leaves the cascades whose split + this it lies beyond).
     uvec4 u_treeCull;
     vec4 u_treeCullParams;
     // Forcefield bubbles (keep in sync with RendererVKLayout::Ubo; force_field.inc.glsl consumes these)

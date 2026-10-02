@@ -1011,7 +1011,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   metres off - thin hatched spikes above the crowns, 2026-10-02; and the march's PRIMARY sample,
   `densityAtColumns`, filters per column: the 4 columns around the point, each read at its own height above its own
   floor, blended bilinearly - the hardware filter put a neighbour's crown in at this column's height, a spike over
-  every steep floor step at peaks and slopes; the lighting taps keep the cheap `densityAt`), written
+  every steep floor step at peaks and slopes; the lighting taps keep the cheap `densityAtUv`), written
   by the splat shader's `TREE_FLOOR_PASS` variant before the splat. Splat and march both measure from it (the
   march: the nearest column; a column without a tree falls back to `terrainHeightAt`). **Not the height map**:
   its far cascade's ~132 m texels put the ground tens of metres off on mountains, and trees fell out of the
@@ -1048,6 +1048,14 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   raster pass samples (an unjittered ray had TAA un-jitter content that never was jittered); the scene distance
   from `viewRelFromDepth` at the jittered uv. The `u_invMvp` ray was the visible "position jitter" (independent
   of resolution, step and TAA - the user's A/B, 2026-10-02); the jitter alignment is kept for correctness.
+* **March cost rules** (2026-10-02, measured in the sandbox with the 350² grove, RelWithDebInfo: "Far trees" 0.98 →
+  0.62 ms, the march 72 registers + 48 B spill → 56 registers, no spill): ONE polar lookup (`polarUv`: atan + log)
+  per step, shared by the cell size, the floor and the primary sample; the 12 lighting taps per lit step take their
+  uv to FIRST ORDER around the sample's (`polarJ`, d uv / d xz - the taps lie within ~10 m of a sample >= ~400 m out,
+  < ~0.1 texel off), a purely vertical tap keeps the sample's column outright (`densityAbove`: no lookup, no floor
+  read); the height map only above the layer (the skip) or deeper than half a layer under the floor (the break);
+  the phase, the sun / sky factors and the slice height per ray; the pixel-skip block loops unrolled with arithmetic
+  schedule / neighbour offsets (arrays indexed at run time sat in local memory).
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
@@ -1413,7 +1421,11 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   volume). **The culls build the records**: a thread whose instance index lies in the range skips the stream
   and calls `treeCullMain` (main cull: the mesh / crossfade / billboard / none decision from the distance to
   the centre view — the same rules as the CPU preview) or `treeCullShadow` (shadow + rain-shelter culls: the
-  BILLBOARD is the caster at every distance; a type without one casts its mesh). Record k's LOD hysteresis
+  BILLBOARD is the caster at every distance; a type without one casts its mesh). **Far trees out of the near
+  cascades:** the shadow cull keeps a tree record in cascade c only while `distance(centre, u_sceneFocus) − radius
+  ≤ split(c) + Foliage shadow cascade margin` (`Trees/...`, default 64 m, `u_treeCullParams.w`): a cascade's box runs
+  far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
+  its range. Sandbox, 350² grove: Shadow draw 1.48 → 1.06 ms. Record k's LOD hysteresis
   slot = the piece's `lodStateBase + k`; prev transform = none (w 0 — trees never move). The buffers are
   bound at bindings 20/21 (main cull) and 13/14 (shadow culls) — descriptors written at RECORD time, so the
   culls bind ONE set (`m_treeCullSet`, the set rendered; changing it or destroying it re-records; a second set

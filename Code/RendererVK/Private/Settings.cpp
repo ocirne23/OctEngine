@@ -156,6 +156,7 @@ void FoliageParams::registerTweaks()
     Tweak::floatVar("Trees", "Foliage edge fade end", &edgeFadeEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade centre scale", &edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage shadow cascade margin (m)", &shadowCascadeMargin, 0.0f, 10000.0f, 1.0f);
 }
 
 void FarTreeParams::registerTweaks()

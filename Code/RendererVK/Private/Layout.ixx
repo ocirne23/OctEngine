@@ -843,7 +843,8 @@ export namespace RendererVKLayout
                                   // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
         // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
         // of this frame's tree range, y = its length (3 per tree; 0 = none). params: x = the far distance scale,
-        // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume).
+        // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade
+        // margin" (m; the shadow cull drops a tree from the cascades whose split + this it lies beyond).
         glm::uvec4 treeCull;
         glm::vec4 treeCullParams;
         // Forcefield bubbles (Force library / ForceFieldPipeline; keep in sync with ubo.inc.glsl)

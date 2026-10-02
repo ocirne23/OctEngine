@@ -12,6 +12,7 @@
 // colour + scene x T, like the clouds).
 
 #extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_control_flow_attributes : require
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 2
@@ -77,31 +78,36 @@ layout (push_constant, scalar) uniform Push
 layout (binding = 8, rgba16f) uniform image2D u_latest;
 layout (binding = 9, r16f) uniform image2D u_latestDepth;
 
-// The volume's ground at p: the nearest column's tree floor (the splat measured that column's slices from it), the
-// height map where the column has no tree.
-float floorAt(vec2 xz)
+// A point's polar image coordinates (tvUvXZ) from its offset to the bake centre and that offset's length: callers that
+// also need the length (the cell size) compute it once. Every density read takes ONE of these - the atan + log were
+// computed twice per read before (once for the density, once more for the floor), 25 times per lit step.
+vec2 polarUv(vec2 rel, float r)
 {
-    const vec2 uv = tvUvXZ(xz, pc.vol);
-    if (uv.y >= 0.0 && uv.y < 1.0)
-    {
-        const int angularRes = int(pc.vol.angularRes);
-        const ivec2 texel = ivec2((int(floor(uv.x * float(angularRes))) % angularRes + angularRes) % angularRes,
-            int(uv.y * float(pc.vol.radialRes)));
-        const uint bits = imageLoad(u_floor, texel).r;
-        if (bits != 0u)
-            return tvFloorDecode(bits);
-    }
-    return terrainHeightAt(xz);
+    return vec2(atan(rel.y, rel.x) / TV_TWO_PI + 0.5, tvRadialUv(r, pc.vol));
+}
+
+// The volume's ground at the point of `uv`: the nearest column's tree floor (the splat measured that column's slices
+// from it). False where the column has no tree (the caller falls back to the height map - only where it needs to).
+bool floorAtUv(vec2 uv, out float floorY)
+{
+    floorY = 0.0;
+    if (uv.y < 0.0 || uv.y >= 1.0)
+        return false;
+    const int angularRes = int(pc.vol.angularRes);
+    const ivec2 texel = ivec2((int(floor(uv.x * float(angularRes))) % angularRes + angularRes) % angularRes,
+        int(uv.y * float(pc.vol.radialRes)));
+    const uint bits = imageLoad(u_floor, texel).r;
+    floorY = tvFloorDecode(bits);
+    return bits != 0u;
 }
 
 // The PRIMARY sample: the 4 columns around p bilinearly, EACH at its own height above its own floor - what the splat
-// stored. The hardware filter (densityAt) mixes a neighbour's density in at THIS column's height, so on a steep floor
+// stored. The hardware filter (densityAtUv) mixes a neighbour's density in at THIS column's height, so on a steep floor
 // step (peaks, slopes) a neighbour's crown leaked up by the floor difference: thin spikes over the trees. Per column
 // the texture is read at the column's centre, so only the vertical axis filters in hardware. The lighting taps keep
-// densityAt: an error there shades, it does not draw.
-float densityAtColumns(vec3 p)
+// densityAtUv: an error there shades, it does not draw.
+float densityAtColumns(vec3 p, vec2 uv)
 {
-    const vec2 uv = tvUvXZ(p.xz, pc.vol);
     if (uv.y < 0.0 || uv.y > 1.0)
         return 0.0;
     const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
@@ -126,15 +132,39 @@ float densityAtColumns(vec3 p)
     return max(sum - pc.shrink, 0.0) * pc.vol.densityScale;
 }
 
-float densityAt(vec3 p)
+float densityAtUv(vec3 p, vec2 uv)
 {
-    const vec2 uv = tvUvXZ(p.xz, pc.vol);
     if (uv.y < 0.0 || uv.y > 1.0)
         return 0.0;
-    const float h = p.y - floorAt(p.xz);
+    // A column without a floor holds no density (the splat writes only where it set one): no height-map read.
+    float floorY;
+    if (!floorAtUv(uv, floorY))
+        return 0.0;
+    const float h = p.y - floorY;
     if (h < 0.0 || h > pc.vol.height)
         return 0.0;
     // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
+    return max(textureLod(u_density, vec3(uv, h / pc.vol.height), 0.0).r - pc.shrink, 0.0) * pc.vol.densityScale;
+}
+
+// The LIGHTING TAPS (sun, normal, interior - 12 per lit step) lie within ~10 m of their sample, which lies >= ~400 m
+// from the bake centre: their polar uv to FIRST ORDER around the sample's (polarJ: d uv / d xz), under ~0.1 texel off
+// even for the farthest tap - instead of an atan + log + length per tap. A purely VERTICAL tap keeps the sample's
+// column outright: its uv, its floor, only another height (densityAbove).
+mat2 polarJ(vec2 rel, float r)
+{
+    const float ir2 = 1.0 / (r * r);
+    const float a = ir2 / TV_TWO_PI, b = ir2 / tvLogSpan(pc.vol);
+    return mat2(vec2(-rel.y * a, rel.x * b), vec2(rel.x * a, rel.y * b)); // columns: d/dx, d/dz
+}
+float densityTap(vec3 p, vec2 uv, mat2 J, vec3 d)
+{
+    return densityAtUv(p + d, uv + J * d.xz);
+}
+float densityAbove(vec2 uv, float h)
+{
+    if (h < 0.0 || h > pc.vol.height)
+        return 0.0;
     return max(textureLod(u_density, vec3(uv, h / pc.vol.height), 0.0).r - pc.shrink, 0.0) * pc.vol.densityScale;
 }
 
@@ -243,6 +273,14 @@ void marchAt(ivec2 px)
 
     const vec3 L = u_sunDirection.xyz;
     const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb;
+    // PER RAY, not per lit step: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic, "Far
+    // forward scatter" - 1 at g = 0 - times "Far sun scale") and the sky light (a COOL blue tint x the sun's luminance,
+    // x "Far ambient"; its height factor stays per step).
+    const float g = pc.forwardScatter;
+    const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
+    const vec3 sunPart = sunRadiance * (pc.sunScale * phase);
+    const vec3 skyBase = vec3(0.45, 0.6, 1.0) * dot(sunRadiance, vec3(0.2126, 0.7152, 0.0722)) * pc.ambient;
+    const float sliceH = pc.vol.height / float(pc.vol.slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
     // TWO SEGMENTS, split at the fade-in's end: the BAND (from "Far start" over "Far overlap", where the billboards still
     // draw) and BEHIND it. Each accumulates its own in-scatter, transmittance and weighted distance; only the band
@@ -263,72 +301,78 @@ void marchAt(ivec2 px)
     t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - pc.vol.centre), pc.vol) * pc.stepScale, 0.25);
     for (uint i = 0u; i < pc.maxSteps && t < tEnd; ++i)
     {
-        const vec3 rp = dir * t; // camera-relative
-        const vec3 p = u_viewPos + rp;
-        const float cell = tvCellSize(length(p.xz - pc.vol.centre), pc.vol);
+        const vec3 p = u_viewPos + dir * t;
+        // ONE polar lookup per step: the cell size, the floor and the primary sample all take it.
+        const vec2 rel = p.xz - pc.vol.centre;
+        const float r = length(rel);
+        const vec2 uv = polarUv(rel, r);
+        const float cell = max(r * tvLogSpan(pc.vol) / float(pc.vol.radialRes), r * TV_TWO_PI / float(pc.vol.angularRes)); // tvCellSize
         float dt = max(cell * pc.stepScale, 0.25);
+        float floorY;
+        const bool hasFloor = floorAtUv(uv, floorY);
+        if (!hasFloor)
+            floorY = terrainHeightAt(p.xz); // no tree reaches the column: the height map
+        const float h = p.y - floorY;
         // The tree floor and the height map disagree by up to tens of metres (the map's far texels): the break below
         // the ground takes the LOWER of the two, the skip above the layer the HIGHER - and a few cells at most, since
-        // a column's floor can sit above the map's slope.
-        const float floorY = floorAt(p.xz);
-        const float mapY = terrainHeightAt(p.xz);
-        const float h = p.y - floorY;
-        if (p.y - min(floorY, mapY) < -0.5 * pc.vol.height)
-            break; // under the ground (the scene depth ends the ray there)
+        // a column's floor can sit above the map's slope. The height map is read only for those two: inside the layer
+        // neither applies (the lower of the two lies at or under the floor; the skip needs h above the layer), and the
+        // break needs h below -0.5 x the layer.
         if (h > pc.vol.height)
         {
             // Above the volume: no tree before the ground comes within its height again.
-            const float hHigh = p.y - max(floorY, mapY);
+            const float hHigh = p.y - (hasFloor ? max(floorY, terrainHeightAt(p.xz)) : floorY);
             dt = max(dt, min((hHigh - pc.vol.height) * 0.7, 4.0 * cell));
         }
-        else if (h >= 0.0)
+        else if (h < 0.0)
+        {
+            if (h < -0.5 * pc.vol.height && p.y - (hasFloor ? min(floorY, terrainHeightAt(p.xz)) : floorY) < -0.5 * pc.vol.height)
+                break; // under the ground (the scene depth ends the ray there)
+        }
+        else
         {
             const float tt = t;
-            const vec3 sp = u_viewPos + dir * tt;
-            const float sigma = densityAtColumns(sp);
+            const float sigma = densityAtColumns(p, uv);
             if (sigma > 1e-4)
             {
                 if (terrainVis < 0.0)
-                    terrainVis = terrainSunVisibility(sp, L, 20.0, 8, 0.02, 1.0);
+                    terrainVis = terrainSunVisibility(p, L, 20.0, 8, 0.02, 1.0);
+                const mat2 J = polarJ(rel, r);
                 // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
-                const float sunT = exp(-(densityAt(sp + L * 1.0) * 2.0 + densityAt(sp + L * 4.0) * 4.0 + densityAt(sp + L * 10.0) * 8.0) * pc.selfShadow);
-                const vec3 albedo = textureLod(u_colour, tvUvXZ(sp.xz, pc.vol), 0.0).rgb * pc.albedoScale;
+                const float sunT = exp(-(densityTap(p, uv, J, L * 1.0) * 2.0 + densityTap(p, uv, J, L * 4.0) * 4.0
+                    + densityTap(p, uv, J, L * 10.0) * 8.0) * pc.selfShadow);
+                const vec3 albedo = textureLod(u_colour, uv, 0.0).rgb * pc.albedoScale;
                 const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
                 // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
                 float sunCos = 1.0;
                 if (pc.normalStrength > 0.0)
                 {
-                    const float hx = 0.5 * tvCellSize(length(sp.xz - pc.vol.centre), pc.vol);
-                    const float hy = pc.vol.height / float(pc.vol.slices);
-                    const vec3 grad = vec3(densityAt(sp + vec3(hx, 0.0, 0.0)) - sigma, (densityAt(sp + vec3(0.0, hy, 0.0)) - sigma) * hx / hy,
-                        densityAt(sp + vec3(0.0, 0.0, hx)) - sigma);
+                    const float hx = 0.5 * cell;
+                    const float up = hasFloor ? densityAbove(uv, h + sliceH) : 0.0;
+                    const vec3 grad = vec3(densityTap(p, uv, J, vec3(hx, 0.0, 0.0)) - sigma, (up - sigma) * hx / sliceH,
+                        densityTap(p, uv, J, vec3(0.0, 0.0, hx)) - sigma);
                     const float len2 = dot(grad, grad);
                     if (len2 > 1e-12)
                         sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), pc.normalStrength);
                 }
-                // Henyey-Greenstein relative to isotropic ("Far forward scatter"; 1 at g = 0).
-                const float g = pc.forwardScatter;
-                const float cosVL = dot(dir, L);
-                const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * cosVL, 1e-4), 1.5);
-                // Leaves as Lambert surfaces of a mean cosine ("Far sun scale") toward the sun; the sky light COOL (a
-                // blue tint x the sun's luminance), darker toward the ground ("Far ground darkening").
-                const float sunLum = dot(sunRadiance, vec3(0.2126, 0.7152, 0.0722));
-                const vec3 sky = vec3(0.45, 0.6, 1.0) * sunLum * pc.ambient * mix(1.0 - pc.groundDark, 1.0, hNorm);
+                // Leaves as Lambert surfaces of a mean cosine toward the sun (sunPart: the phase and "Far sun scale"); the
+                // sky light darker toward the ground ("Far ground darkening").
+                const vec3 sky = skyBase * mix(1.0 - pc.groundDark, 1.0, hNorm);
                 // INTERIOR (the volume's "Foliage interior shadow"): the mean extinction of 6 taps around the sample
                 // (+-x / +-z / +-y at "Far interior radius" cells) - deep in a blob dense on every side, at its surface
                 // empty on one - as an AO term on the sun and the sky alike.
                 float interior = 1.0;
                 if (pc.interiorShadow > 0.0)
                 {
-                    const float rr = pc.interiorRadius * tvCellSize(length(sp.xz - pc.vol.centre), pc.vol);
+                    const float rr = pc.interiorRadius * cell;
                     const float ry = min(rr, 0.5 * pc.vol.height);
-                    const float m = (densityAt(sp + vec3(rr, 0.0, 0.0)) + densityAt(sp - vec3(rr, 0.0, 0.0))
-                        + densityAt(sp + vec3(0.0, 0.0, rr)) + densityAt(sp - vec3(0.0, 0.0, rr))
-                        + densityAt(sp + vec3(0.0, ry, 0.0)) + densityAt(sp - vec3(0.0, ry, 0.0))) / 6.0;
+                    const float m = (densityTap(p, uv, J, vec3(rr, 0.0, 0.0)) + densityTap(p, uv, J, vec3(-rr, 0.0, 0.0))
+                        + densityTap(p, uv, J, vec3(0.0, 0.0, rr)) + densityTap(p, uv, J, vec3(0.0, 0.0, -rr))
+                        + (hasFloor ? densityAbove(uv, h + ry) + densityAbove(uv, h - ry) : 0.0)) / 6.0;
                     interior = exp(-pc.interiorShadow * m * rr);
                 }
-                const vec3 lit = (albedo * INV_PI * (sunRadiance * (sunT * terrainVis * pc.sunScale * sunCos * phase) + sky) + albedo * u_ambientColor) * interior;
+                const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * sunCos) + sky) + albedo * u_ambientColor) * interior;
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);
@@ -435,7 +479,6 @@ void main()
     // The block and its SCHEDULE: the pixel due this frame first, then the rest in the order they come due. Without
     // pixel skipping the block is the thread's one pixel.
     const bool skip = MARCH_QUAD || MARCH_CHECKER;
-    const ivec2 ORDER4[4] = ivec2[4](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
     const ivec2 base = MARCH_QUAD ? ivec2(gid) * 2 : MARCH_CHECKER ? ivec2(gid.x * 2u, gid.y) : ivec2(gid);
     const int count = MARCH_QUAD ? 4 : MARCH_CHECKER ? 2 : 1;
     if (any(greaterThanEqual(uvec2(base), pc.size)))
@@ -446,33 +489,40 @@ void main()
     // background side is marched THIS frame and donates to its other far pixels; marching the scheduled pixel blindly
     // left the gaps with only leaf-side copies to choose from: a bare-sky speckle along every near crown. A block
     // without a far pixel marches nothing.
+    // REGISTERS, not local memory: the block loops unroll (their bound is baked) so the arrays are indexed by
+    // constants, the marched pixel is its own variable, and the schedule / neighbour offsets are arithmetic - arrays
+    // indexed at run time (pixels[pick], a const table by the frame index) lived in local memory: 48 bytes of spill.
     ivec2 pixels[4];
     float surfaces[4];
     int pick = skip ? -1 : 0; // without skipping: always march the one pixel (no surface test)
+    ivec2 marchPx = base;
     if (skip)
     {
-        for (int i = 0; i < count; ++i)
+        [[unroll]] for (int i = 0; i < count; ++i)
         {
-            pixels[i] = base + (MARCH_QUAD ? ORDER4[(u_frameIndex + uint(i)) & 3u] : ivec2(int((gid.y + u_frameIndex + uint(i)) & 1u), 0));
+            // The schedule: 1 of 4 cycles (0,0) (1,1) (1,0) (0,1) over the frames; 1 of 2 alternates per frame and row.
+            const uint j = (u_frameIndex + uint(i)) & 3u;
+            pixels[i] = base + (MARCH_QUAD ? ivec2(int(((j + 1u) >> 1) & 1u), int(j & 1u)) : ivec2(int((gid.y + u_frameIndex + uint(i)) & 1u), 0));
             const bool inside = all(lessThan(uvec2(pixels[i]), pc.size));
             surfaces[i] = inside ? sceneDistanceAt(pixels[i]) : -1.0; // -1: outside the image
             if (pick < 0 && surfaces[i] > pc.startDistance)
+            {
                 pick = i;
+                marchPx = pixels[i];
+            }
         }
     }
-    else
-        pixels[0] = base;
     // ONE call site of the march (two inlined copies raise every warp's register count).
     if (pick >= 0)
-        marchAt(pixels[pick]);
+        marchAt(marchPx);
     if (!skip)
         return;
     if (pick >= 0)
     {
-        imageStore(u_latest, pixels[pick], g_colour);
-        imageStore(u_latestDepth, pixels[pick], vec4(g_distance));
+        imageStore(u_latest, marchPx, g_colour);
+        imageStore(u_latestDepth, marchPx, vec4(g_distance));
     }
-    for (int k = 0; k < count; ++k)
+    [[unroll]] for (int k = 0; k < count; ++k)
     {
         const ivec2 q = pixels[k];
         const float surface = surfaces[k];
@@ -505,10 +555,12 @@ void main()
                 distance = g_distance;
                 found = true;
             }
-            const ivec2 NEIGHBOURS[4] = ivec2[4](ivec2(-1, 0), ivec2(1, 0), ivec2(0, -1), ivec2(0, 1));
-            for (int n = 0; n < 4 && !hidden && !found; ++n)
+            [[unroll]] for (int n = 0; n < 4; ++n)
             {
-                const ivec2 d = clamp(q + NEIGHBOURS[n], ivec2(0), ivec2(pc.size) - 1);
+                if (hidden || found)
+                    break;
+                // Left, right, up, down.
+                const ivec2 d = clamp(q + (n < 2 ? ivec2(n * 2 - 1, 0) : ivec2(0, n * 2 - 5)), ivec2(0), ivec2(pc.size) - 1);
                 const vec4 c = imageLoad(u_latest, d);
                 const float dist = imageLoad(u_latestDepth, d).r;
                 if (copyFits(c, dist, surface))

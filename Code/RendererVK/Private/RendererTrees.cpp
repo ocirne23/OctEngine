@@ -67,7 +67,8 @@ void Renderer::uploadTreeCullUbo(PerFrameData& frameData)
     const bool treeVolume = m_treeCullCount > 0 && farTreesActive() && m_treeSets[m_treeCullSet].hasVolume;
     m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, 0u, 0u);
     m_ubo.treeCullParams = glm::vec4(m_treeCullDistanceScale, m_treeCullForceFar ? 1.0f : 0.0f,
-        treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f, 0.0f);
+        treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f,
+        oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl
     static_assert(offsetof(RendererVKLayout::Ubo, treeCullParams) == offsetof(RendererVKLayout::Ubo, treeCull) + sizeof(glm::uvec4));
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(glm::uvec4) + sizeof(glm::vec4), &m_ubo.treeCull,
         offsetof(RendererVKLayout::Ubo, treeCull));

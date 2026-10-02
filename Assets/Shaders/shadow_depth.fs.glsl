@@ -27,33 +27,37 @@ layout (location = 4) in flat vec4 in_foliageDepth; // xyz = d(depth)/d(world), 
 
 void main()
 {
+	// The screen derivatives FIRST (no derivatives after a discard): the foliage card frame and the depth read's
+	// gradients. Then the alpha test, and only THEN the foliage depth read - a cut-out leaf pixel (most of a card)
+	// skips it. textureGrad with the derivatives from before the discard: the implicit-gradient read's result,
+	// well-defined after it.
+	const vec2 uvDx = dFdx(in_uv), uvDy = dFdy(in_uv);
+	const vec3 pdx = dFdx(in_worldPos), pdy = dFdy(in_worldPos);
+	if (in_alphaTexIdx != 0xFFFFu)
+	{
+		if (texture(u_textures[nonuniformEXT(in_alphaTexIdx)], in_uv).a < SHADOW_ALPHA_CUTOFF)
+			discard;
+	}
 	float depth = gl_FragCoord.z;
 	if (in_foliageNormalTexIdx != 0xFFFFu)
 	{
-		// The card frame from the screen derivatives (before the discard), as in the lit FS.
-		const vec2 uvDx = dFdx(in_uv), uvDy = dFdy(in_uv);
+		// The card frame from the screen derivatives, as in the lit FS.
 		const float uvDet = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
 		float push = in_foliageDepth.w;
 		if (abs(uvDet) > 1e-20)
 		{
-			const vec3 pdx = dFdx(in_worldPos), pdy = dFdy(in_worldPos);
 			const vec3 cardDu = (pdx * uvDy.y - pdy * uvDx.y) / uvDet;
 			const vec3 cardDv = (pdy * uvDx.x - pdx * uvDy.x) / uvDet;
 			const vec3 frontN = cross(cardDv, cardDu);
 			const float frontLen = length(frontN);
 			if (frontLen > 0.0)
 			{
-				const float depth01 = texture(u_textures[nonuniformEXT(in_foliageNormalTexIdx)], in_uv).a;
+				const float depth01 = textureGrad(u_textures[nonuniformEXT(in_foliageNormalTexIdx)], in_uv, uvDx, uvDy).a;
 				const float offset = (depth01 * 2.0 - 1.0) * length(cardDu) / frontLen; // world, along frontN / frontLen
 				push += offset * dot(frontN, in_foliageDepth.xyz);
 			}
 		}
 		depth += max(push, 0.0);
-	}
-	if (in_alphaTexIdx != 0xFFFFu)
-	{
-		if (texture(u_textures[nonuniformEXT(in_alphaTexIdx)], in_uv).a < SHADOW_ALPHA_CUTOFF)
-			discard;
 	}
 	gl_FragDepth = depth;
 }
