@@ -129,7 +129,14 @@ bool foliageCrownFrame(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, 
 		return true;
 	}
 	axis = cardDu / uLen;
-	centre = in_instanceOrigin + axis * dot(pos + cardDu * (0.5 - uv.x) - in_instanceOrigin, axis);
+	// The MERGED branch cards (one mesh of many modules' cards per tree): the instance origin is the tree's, not the
+	// card's module, so the card carries its axis instead - |tangent.w| = 3 + the texture v of its module's axis line
+	// (Procedural billboardMesh, RenderMeshData). The crown centre is the card's u centre moved along v onto that line.
+	const float axisCode = abs(in_tangent.w);
+	if (axisCode >= 1.5)
+		centre = pos + cardDu * (0.5 - uv.x) + cardDv * (axisCode - 3.0 - uv.y);
+	else
+		centre = in_instanceOrigin + axis * dot(pos + cardDu * (0.5 - uv.x) - in_instanceOrigin, axis);
 	return true;
 }
 
@@ -323,6 +330,23 @@ void main()
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
 #ifdef ALPHA_MASK
 	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+#endif
+#if defined(TREE_DEBUG) && TREE_DEBUG != 0
+	// "Trees/Debug view" (baked; StaticMeshGraphicsPipeline): a flat colour per MATERIAL (1) or per MESH (2: the LOD
+	// level the cull picked), or the distance FADE side (3: red = fade-out, green = fade-in, white = none) - over the
+	// lit brightness, so the shapes still read. A snap is a colour change: which kind tells the cause.
+	{
+#if TREE_DEBUG == 3
+		const vec3 debugColor = (material.flags & MATERIAL_FLAG_DISTANCE_FADE) == 0u ? vec3(1.0)
+			: (material.flags & MATERIAL_FLAG_FADE_IN) != 0u ? vec3(0.1, 1.0, 0.1) : vec3(1.0, 0.1, 0.1);
+#else
+		uint h = TREE_DEBUG == 1 ? uint(materialIdx) * 2654435761u + 7u : (in_meshIdxMaterialIdx & 0xFFFFu) * 2246822519u + 3u;
+		h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12;
+		const vec3 debugColor = vec3(float(h & 255u), float((h >> 8) & 255u), float((h >> 16) & 255u)) / 255.0 * 0.8 + 0.2;
+#endif
+		const float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+		color = debugColor * (0.35 + 0.65 * clamp(lum * 4.0, 0.0, 1.0));
+	}
 #endif
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT

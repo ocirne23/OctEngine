@@ -1,0 +1,81 @@
+# Broadleaf bush placeholder: denser than Shrub and wide - low stems, flat-angled modules spreading sideways
+# (~0.7-1 m tall, ~2.5-3 m across).
+TreeSpecies Thicket
+	Kind Bush
+	Seed 77
+	Scale 0.6 1.0
+	Trunk
+		Count 3
+		Height 0.3 0.5
+		Radius 0.06
+		Taper 0.6
+		Curve 10
+		Wobble 4
+		Flare 0.2
+		Sink 0.2
+		Rings 6
+		Sides 6
+	Crown
+		Shape Ellipsoid
+		Start 0
+		Radius 1.5
+		Slots 12
+		Fill 0.9
+		Angle 85 55
+		AngleVar 12
+		BranchRadius 3
+	Module
+		Count 8
+		Radius 0.03
+		Curve 30 10
+		UpAttract 0.35
+		Wobble 8
+		Elbows 1
+		ElbowAngle 20 8
+		Rings 6
+		Sides 4
+		Level
+			Count 5
+			Start 0.15
+			Length 0.6
+			LengthTaper 0.4
+			Angle 45 15
+			Curve 20 10
+			UpAttract 0.3
+			Wobble 10
+			Radius 0.6
+			Rings 3
+			Sides 3
+		Level
+			Count 4
+			Start 0.2
+			Length 0.6
+			LengthTaper 0.3
+			Angle 45 15
+			Curve 10 8
+			Wobble 10
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.45
+		Aspect 0.8
+		PerBranch 3
+		Levels 2
+		ClusterLeaves 10
+		ClusterLeafSize 0.3
+		NormalBend 0.4
+	Billboard
+		Distance 25
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 6
+	Bark
+		Plates 12 4
+		Crack 0.08
+		Relief 0.8
+		Lichen 0.2
+	Color
+		Bark 0.29 0.23 0.17
+		Leaf 0.16 0.31 0.10

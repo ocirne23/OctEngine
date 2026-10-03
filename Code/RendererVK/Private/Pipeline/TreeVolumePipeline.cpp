@@ -72,6 +72,14 @@ namespace
         float historyWeight;
         float maxDist;
     };
+    // tree_volume_floor_smooth.cs.glsl's.
+    struct FloorSmoothPC
+    {
+        uint32 angularRes;
+        uint32 radialRes;
+        int32 radius;
+        uint32 radialAxis;
+    };
     // tree_volume_upsample.cs.glsl's.
     struct UpsamplePC
     {
@@ -116,7 +124,7 @@ namespace
     bool sameBake(const FarTreeParams& a, const FarTreeParams& b)
     {
         return a.startDistance == b.startDistance && a.rebakeDistance == b.rebakeDistance && a.endDistance == b.endDistance && a.angularRes == b.angularRes
-            && a.radialRes == b.radialRes && a.slices == b.slices && a.height == b.height;
+            && a.radialRes == b.radialRes && a.slices == b.slices && a.height == b.height && a.floorSmoothing == b.floorSmoothing;
     }
 
     void createImage(vk::ImageType type, vk::Format format, vk::Extent3D extent, vk::ImageUsageFlags usage,
@@ -204,6 +212,16 @@ void TreeVolumePipeline::buildResolveLayout(ComputePipelineLayout& layout)
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum
     b.push_back(binding(1, vk::DescriptorType::eStorageImage)); // density
+}
+
+void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/tree_volume_floor_smooth.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(binding(0, vk::DescriptorType::eStorageImage)); // source floor
+    b.push_back(binding(1, vk::DescriptorType::eStorageImage)); // destination
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(FloorSmoothPC) });
 }
 
 // The march, BAKED per setting: the temporal variant (TREE_TEMPORAL_OUT) at its scale, and the pixel skip (0 / 1 of 2 /
@@ -496,6 +514,9 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
     ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2);  m_floorPipeline.initialize(floorLayout);
     ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0);  m_splatPipeline.initialize(splatLayout);
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout); m_resolvePipeline.initialize(resolveLayout);
+    ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout); m_floorSmoothPipeline.initialize(smoothLayout);
+    for (DescriptorSet& set : m_floorSmoothSets)
+        set.initialize(m_floorSmoothPipeline.getDescriptorSetLayout(), "TreeVolume.floorSmooth");
     // The pixel skip baked at the default setting; prepare() rebuilds it if the setting differs.
     ComputePipelineLayout marchLayout;   buildMarchLayout(marchLayout, false, 1, m_plainBakedSkip); m_marchPipeline.initialize(marchLayout);
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);     m_applyPipeline.initialize(sceneRenderPass, applyLayout);
@@ -535,9 +556,11 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2);
     ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0);
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout);
+    ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout);
     ComputePipelineLayout marchLayout;   buildMarchLayout(marchLayout, false, 1, m_plainBakedSkip);
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);
     bool ok = m_floorCoverPipeline.reloadShaders(coverLayout);
+    ok = m_floorSmoothPipeline.reloadShaders(smoothLayout) && ok;
     ok = m_floorPipeline.reloadShaders(floorLayout) && ok;
     if (m_temporalPipeline.getPipeline()) // compiled at its first use (prepare)
     {
@@ -622,7 +645,27 @@ void TreeVolumePipeline::bake(vk::CommandBuffer cmd, uint32 frameIdx, const Reco
     splat(m_floorCoverPipeline, m_floorCoverSets[frameIdx]);
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // coverage -> floor
     splat(m_floorPipeline, m_floorSets[frameIdx]);
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // floor -> splat
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // floor -> smooth / splat
+    if (s.floorSmoothing > 0)
+    {
+        // The floor's separable tent blur (tree_volume_floor_smooth.cs): along the angle into floorCover (free after
+        // the floor pass), then along the radius back into the floor.
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_floorSmoothPipeline.getPipeline());
+        for (uint32 axis = 0; axis < 2; ++axis)
+        {
+            const vk::DescriptorSet set = m_floorSmoothSets[frameIdx * 2 + axis].getDescriptorSet();
+            oc::array<DescriptorSetUpdateInfo, 2> updates{
+                DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(axis == 0 ? m_floor.view : m_floorCover.view) } },
+                DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(axis == 0 ? m_floorCover.view : m_floor.view) } },
+            };
+            writeSet(set, updates);
+            const FloorSmoothPC pc{ .angularRes = m_angularRes, .radialRes = m_radialRes, .radius = s.floorSmoothing, .radialAxis = axis };
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_floorSmoothPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+            cmd.pushConstants(m_floorSmoothPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+            cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, 1);
+            cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat });
+        }
+    }
     splat(m_splatPipeline, m_splatSets[frameIdx]);
     const vk::MemoryBarrier2 splatToResolve{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
@@ -694,8 +737,9 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     // The plain pixel skip READS and WRITES the latest images, last written by last frame's march (or the clear).
     const bool computeSrc = temporal || m_temporalLastFrame || plainSkip;
     const vk::MemoryBarrier2 inputBarrier{
+        // The clear's stage whenever its TRANSFER_WRITE access is listed (VUID-VkMemoryBarrier2-srcAccessMask-03915).
         .srcStageMask = computeSrc ? vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader
-                                       | (restart ? vk::PipelineStageFlagBits2::eClear : vk::PipelineStageFlags2{})
+                                       | (plainSkip ? vk::PipelineStageFlagBits2::eClear : vk::PipelineStageFlags2{})
                                    : vk::PipelineStageFlagBits2::eFragmentShader,
         .srcAccessMask = plainSkip ? vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eShaderStorageWrite
                                        | vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eTransferWrite

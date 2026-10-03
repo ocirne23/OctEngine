@@ -186,7 +186,7 @@ void main()
         const uint col = i / slices;
 #endif
         ivec2 texel = base + ivec2(int(col % uint(ext.x)), int(col / uint(ext.x)));
-        texel.x = ((texel.x % angularRes) + angularRes) % angularRes; // the angle wraps
+        texel.x = tvWrapAngle(texel.x, angularRes); // the angle wraps
         const vec2 xz = tvTexelWorldXZ(texel, pc.vol);
         // Horizontally a TENT per polar axis (one cell wide each way, in the texel's radial / tangential frame),
         // vertically the box overlap of the slice (slices are thin against a crown).

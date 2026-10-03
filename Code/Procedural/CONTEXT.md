@@ -250,9 +250,11 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
 "Terrain*" tweaks. Render-only chunk streaming.
 
-* A bounded LOD ring around the camera: `ringRadius` 32 chunks, `chunkSize` 1024, `lod0Res` 512,
-  `maxLod` 4, `lodStep` 0.3 chunks for the LOD0 band (each next band twice as wide, geometric),
-  `fullResDist` 0.3, `skirtDepth` 5, `maxUploadsPerFrame` 16.
+* A bounded LOD ring around the camera: `ringRadius` 96 chunks (24 km), `chunkSize` 256, `lod0Res` 128, `maxLod`
+  4, `lodStep` 1.2 chunks for the LOD0 band (each next band twice as wide, geometric), `fullResDist` 1.2,
+  `skirtDepth` 5, `maxUploadsPerFrame` 16. (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32, `lodStep` /
+  `fullResDist` 0.3 - the same 2 m LOD0 texel and LOD band metres; the ring stays below the old 32 km because 128
+  chunks would be ~51 k chunk meshes against the 16-bit mesh index.)
 * Generated on up to "Gen jobs" **self-continuing Low-priority pump jobs** (`kickPump` CAS-claim +
   exit-recheck protocol, nearest-first). **The upload layout is built IN the pump**
   (`RenderMeshData::build`, pure) and `Renderer::createMesh` runs on the upload job (below),
@@ -269,18 +271,19 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   ranges and MeshInfo slot, **so residency stays bounded across a session.**
 * Each resident registers a `SpatialEntry` on `SpatialLayer_Terrain` with **`spawnVisible = false`** —
   chunks stream in off-screen constantly, and the guard would pin each one in the main pass until it
-  first entered the frustum. **Its userData is `&resident->node`**, so the hand-over push needs no
-  lookup. That address must outlive every list that holds it: residents are heap-held
+  first entered the frustum. **Its userData is the `Resident*`**, so the hand-over push needs no
+  lookup and reaches the chunk's node AND its vegetation. Its sphere is the node's bounds grown for the
+  vegetation (a plant up to 64 m tall, its crown up to 16 m past the chunk's edge). That address must
+  outlive every list that holds it: residents are heap-held
   (`m_residents` maps to a `unique_ptr`), and an evicted / cleared one is **retired**
   (`retireResident`: culling entry, node and mesh released at once; the memory kept in `m_retired`
   until `visibleCollectGeneration` moves past its value, freed at the top of `update`). The walk
   meets its destroyed node and `renderNode` skips it.
 * **The push is `render(renderer, ocean)`, not `update`.** main.cpp calls it right after
   `ocean.update` (which may rebuild the sector grid). It kicks `ocean.render(gate)` first, then its
-  own job, whose ONE walk of the hand-over is literally
-  `renderNode(*(RenderNode*)(userData & ~SpatialTerrainTag_Ocean))` for every value: chunks and ocean
-  sectors alike, each with its node's own pass mask (chunks `PASS_ALL`, sectors `PASS_MAIN` or 0
-  when dry). Nothing is resolved on main. It runs with the terrain disabled too (the walk still
+  own job, whose ONE walk of the hand-over pushes every value: a tagged ocean sector's `RenderNode*`
+  or a chunk's `Resident*` (its node, and its vegetation - below), each with its node's own pass mask
+  (chunks `PASS_ALL`, sectors `PASS_MAIN` or 0 when dry). Nothing is resolved on main. It runs with the terrain disabled too (the walk still
   pushes the ocean's sectors; `m_renderReady` = "update ran enabled" gates the chunk-only parts).
 * **The render push never walks the ring** (thousands of residents, a handful on screen). Two sets:
   1. **Main-visible chunks** come from the cull job's Main stamp through the Spatial visible-set
@@ -298,6 +301,13 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
   **The walk and the pushes run on a worker** (`"terrainRenderPush"`, High, `m_renderCounter`); main.cpp calls `joinRender()` right before `present`, and `update`
   / `clearResidents` join it before they touch `m_residents`.
+* **THE VEGETATION IS STORED IN THE CHUNKS** (`setVegetation(lookup, sink, numChunks)`, TreeSystem's GPU
+  tree set): every resident holds the index of its coordinate's vegetation chunk (`lookup`, -1 = none;
+  re-stamped on every resident by `setVegetation`, which joins the walk first). The walk notes it with the
+  chunk's pass mask (main-stamped `PASS_ALL`, the shadow/GI sphere `PASS_SHADOW | PASS_GI`), merges a
+  coordinate drawn twice (a LOD hand-over's old + new resident: the masks OR'ed), and hands the frame's
+  list to `sink` at its end, on the walk's worker. `vegetationRouted()` = this frame's walk carries it
+  (the chunks draw and a sink is set); otherwise the owner submits its vegetation itself.
 * **Eviction does not walk the ring either.** The unwanted residents (column outside the ring, or
   wanting another LOD) are a function of the ring and the resident set only, so `m_evictCandidates`
   is rebuilt by one walk when `ringMoved` or a chunk uploaded; every frame checks only the candidates
@@ -804,7 +814,7 @@ version (phase G4) must reproduce it bit for bit; keep the two in step.
 
 ```
 TreeSpecies <name>
-	Seed n · Scale min max
+	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush is scattered around the grove's trees, never one)
 	Trunk   Count · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5) · <shape>
 	        Lobes n (ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius fractions)
 	        LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over the height)
@@ -840,6 +850,10 @@ a quadratic Bezier (+2 rings per elbow); everything along a branch is addressed 
 snapped off), short and thick, with a flat broken end cap.
 
 Placeholders: `Oak` (ellipsoid, cluster cards), `Pine` (cone + leader, drooping tiers), `Acacia` (umbrella).
+Bushes (`Kind Bush`): `Shrub` (broadleaf, round, sparse cluster cards) and `Thicket` (denser and wide: crown
+radius 1.5 m, flat slot angles); a conifer bush was tried and removed. A bush is a
+tree species with a short trunk (`Height` ~1 m), slots from the ground (`Crown Start 0`), a large `BranchRadius`
+(the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
 
 ## Piece mesh LODs
 
@@ -854,10 +868,12 @@ Every piece has `TREE_PIECE_LODS` (4) mesh levels, all from ONE skeleton: genera
 | 2 | 40 % / 45 % | deepest dropped (never below level 1) | 4 | no | 0.0025 |
 | 3 | 25 % / 34 % | two deepest dropped (never below level 1) | 8 | no | 0.005 |
 
-Each piece's bark and leaves become GPU LOD chains (`Renderer::createMeshLodChain`); nodes spawn on level 0
-and the cull picks the level per instance against `LOD/Max error (px)` (shadows coarser, as for any chain).
-The errors are not geometric deviations but tuned so a ~5 m module steps at roughly 25 / 60 / 120 m with
-the default 0.33 px budget. `LOD/Force LOD` shows a level everywhere.
+**The GPU uses LEVEL 0 ONLY (2026-10-03): no `createMeshLodChain` for tree pieces** (`uploadLodChain` uploads level
+0 and leaves the chain empty). The trees switch through their own tiers (mid tier, billboard, far volume); the mesh
+LOD steps underneath popped visibly (fewer, larger leaf cards per level, no crossfade). The generator meshes level 0
+only (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table below stays for a return of mesh LODs); `lodError` / `Lod
+ErrorScale` are unused, and RendererVK allocates no hysteresis slots for tree records.
+Debug: `Trees/Debug view` (RendererVK) colours the lit meshes per material / mesh / fade side.
 
 ## Far representations (`Trees/Far mode`)
 
@@ -911,17 +927,27 @@ modules keep the unprefixed ones), swapped in per placed piece beyond its distan
   changes — no reload). Not dithered in the shadow pass: inside the band both cast. `Force far` and the
   impostor mode keep the hard switch. (Turning the cards about the
   branch axis toward the camera was tried and removed — the user did not like the look.) Cache `<species>_billboard<i>_<hash>.png` (+ `_normal`), mips down to 8 px.
+* **RT (GI, RT shadows, RTAO, reflections) sees only the WHOLE-TREE billboards** of TREE species: every other tree
+  mesh is created without a BLAS (`createMesh(..., raytraced = false)`) - bark / leaves / trunk / branches, the card
+  meshes, the module / trunk billboards (the library rows), the impostor quads - and BUSHES never get one. Without
+  billboards (Far mode impostors / none) the tree species' bark + leaves are raytraced instead (they stand in for the
+  tree in shadow + GI there).
 * **Branch cards — the MID tier** (GPU path, baked variants; `Trees/Branch card distance`, default 0.4 × each
-  species' billboard distance, 0 = off; respawns): between the full mesh and the whole-tree billboard the tree
-  draws its bark mesh plus ONE MODULE BILLBOARD per module placement of its composite (`TreePiece::placements`,
-  kept by `bakeTreeVariant`) — the leaves mesh is what gives way. Over the mid band (`FadeWidth` wide) the leaves
-  fade out on `leafMidFadeMaterial` and the cards fade in on their module's `cardInMaterial`; over the far band
-  the cards fade out on `cardOutMaterial` with the bark while the whole billboard fades in (all derived
+  species' billboard distance, 0 = off; respawns): every baked variant keeps its composite (`TreePiece::placements`)
+  and its bark SPLIT in two (`trunkBark` - the trunk alone - and `branchBark` - the modules'; `bark` stays whole for
+  the bakes and the CPU path). `buildBillboards` stacks the module billboards into ONE CARD ATLAS per species (module
+  m in rows [m, m + 1) x size; each mip the stack of the modules' own coverage-preserved levels) and merges per
+  variant ONE CARD MESH: every module placement's cards in the variant's space, v into the module's block. Between
+  the full mesh and the whole-tree billboard the tree draws the TRUNK (shared by both - it never fades at the mid
+  band) plus the CARD mesh: over the mid band (`FadeWidth` wide) the branch bark (`branchMidFadeMaterial`) and the
+  leaves (`leafMidFadeMaterial`) fade out while the cards fade in (`cardInMaterial`); over the far band the trunk
+  (`barkFadeMaterial`) and the cards (`cardOutMaterial`) fade out while the whole billboard fades in (derived
   materials, bands in `applyFadeBands`). The cards draw on LitFoliage with the whole-tree billboards' shading and
-  "Foliage ..." tweaks, but with `MATERIAL_FLAG_NO_EDGE_FADE`: no edge-on fade (the user's call). MAIN pass only:
-  shadows, GI and RT keep the whole billboard. The module
-  billboards were otherwise only the piece library row's. The renderer side (compact card slots) is RendererVK
-  "BAKED TREE RECORDS". The CPU path (GPU expansion off, impostor mode) has no mid tier.
+  "Foliage ..." tweaks, but with `MATERIAL_FLAG_NO_EDGE_FADE`: no edge-on fade (the user's call). Their crown frame
+  is still per MODULE: `billboardMesh(..., axisInZ)` puts each card's axis (its module's +Y line, as a texture v) into
+  texCoords.z = 3 + v, which rides the tangent's w magnitude to the lit FS. MAIN pass only: shadows, GI and RT keep
+  the whole billboard. 4 fixed record slots per tree, no pool (RendererVK "BAKED TREE RECORDS"). The CPU path (GPU
+  expansion off, impostor mode) has no mid tier.
 * **Octahedral impostors** (the fallback, below).
 * **None**: mesh LODs only.
 
@@ -998,7 +1024,7 @@ The runtime no longer composites pieces per tree: at load every species bakes `B
 into another, PER LOD LEVEL, at scale 1; each level's error = the largest piece error × its placement scale).
 A variant is just one more "piece" (`Species::variants` / `variantMeshes`): LOD chains, a billboard and an
 impostor (cache infix `tree`), the crossfade — all the piece machinery applies unchanged. The grove places one
-variant per tree with a seeded variant, scale (`Scale`) and yaw: **one GPU expansion piece = 3 records per
+variant per tree with a seeded variant, scale (`Scale`) and yaw: **one GPU expansion piece = 4 records per
 TREE** (was ~16 pieces × 3). A whole-tree billboard is two crossed VERTICAL cards through the trunk axis (a
 tree's +Z card stands vertical too) — thin from straight above. Near-range uniqueness is planned as a per-tree
 vertex-shader warp (bend / twist / lopsided crown / noise, seeded by position) that also carries the wind.
@@ -1009,9 +1035,16 @@ The pieces still exist (the bake input, the piece library rows).
 With `Trees/GPU expansion` (default on) and any far mode but the octahedral impostors, `spawnPreview` builds
 ONE RendererVK tree instance set: a piece TYPE per library piece (its bark, leaves, the derived fade-out
 materials and the billboard, plus the band), then every placed piece (transform, far centre + radius, type).
-The set is uploaded once to device-local memory; per frame `update` makes one `renderTreeInstanceSet` call, and
-the culls make the per-piece decision and build the records themselves, and the TLAS writer their RT instances
-(see RendererVK "BAKED TREE RECORDS"). Every baked variant also carries its
+The set is uploaded once to device-local memory, and the culls make the per-piece decision and build the records
+themselves, and the TLAS writer their RT instances (see RendererVK "BAKED TREE RECORDS"). **The pieces live in
+the TERRAIN CHUNKS:** `spawnPreview` sorts them by the terrain chunk under their base (`Globals::terrain.chunkSize()`;
+a chunk-size change respawns), one set chunk per terrain chunk, and hooks the set into the terrain
+(`TerrainStreamer::setVegetation`, above): the terrain's render walk lists the chunks it draws with their passes,
+and its sink calls `renderTreeInstanceSet` with that list - so the culls only see the plants of the visible
+chunks (all passes) and of the shadow / GI sphere's chunks (shadow + GI). The sink runs on the walk's worker: it
+reads the band settings through atomics. `update` binds the set (`bindTreeInstanceSet`, main) and submits
+EVERY chunk itself when the walk does not carry it (terrain off, or the respawn frame - the new hooks start
+with the next walk). Unhooking (`destroyTreeSet`) joins the walk. Every baked variant also carries its
 FAR-TREE VOLUME grid (`bakeTreeDensity`, `TREE_DENSITY_RES` = 32³ extinction over its billboard box, from the
 LOD-0 LEAF triangles only; cluster leaves count half opaque. The bark was dropped 2026-10-02: a trunk's whole area
 in one thin voxel column drew dashed vertical streaks through the far blobs) and the species leaf colour — the leaf texture's
@@ -1028,13 +1061,16 @@ main-pass-only quad + shadow-only meshes need per-node pass masks — it keeps t
 `Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload yet),
 uploads each piece as two `RenderMesh`es (bark + double-sided diamond leaf cards, solid-colour `LitOpaque`
 materials), and spawns a `Grove size`² grove in front of the camera plus the piece library in rows behind it
-(`Show piece library`). `Grove type`: Mixed (species alternate) or one species by its `TreeSpecies` name — the
+(`Show piece library`). `Bushes per tree` (default 4; the fraction by chance) scatters the `Kind Bush` species
+around each grove tree (1.5 m .. 0.75 × spacing out, area-uniform, a random bush species, the same variant / scale /
+yaw rules). `Bush shadow distance (m)` (default 100, GPU path): bushes farther than this from the shadow
+cascades' centre cast no sun shadow (`TreeInstanceType::shadowDistance`). `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name — the
 names are a fixed list in TreeSystem.cpp (`GROVE_TYPES`; a tweak enum registers before the species load), so a
 new species needs its name added there; a missing one falls back to mixed with a warning. Trees sit on a
 `Spacing` grid (default 11 m; `Grove size` up to 512², default 350² of `Grove type` Oak, for the far-tree volume),
 each offset by a seeded random `Position jitter` × spacing (default 0.8; 1 = anywhere in its cell;
 the old fixed 0.3 left the rows visible), and scaled by the species' `Scale` range × `Size variation` (2^±v,
-log-uniform, default 0.5 = ×0.71..1.41). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
+log-uniform, default 0.6 = ×0.66..1.52). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
 by the dedicated GPU tree pipeline (G4: own shaders, per-tree bone palettes, own shadow draw); trees in that
 path are not in the RT scene at first, but the design keeps RT addable.**
 

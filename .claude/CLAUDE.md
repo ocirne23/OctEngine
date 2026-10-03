@@ -169,7 +169,9 @@ That is why these hold namespace-scope objects:
 Prebuilt in `Dependencies/` (Include / Lib / Dll):
 
 Vulkan-Hpp (no exceptions, no constructors), SDL3, ImGui docking branch, EASTL, Assimp,
-glslang/shaderc, OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles
+glslang/shaderc + SPIRV-Tools (glslang 16.3, copied from Vulkan SDK 1.4.350: `Lib/` + `Include/glslang`,
+`spirv-tools`, `shaderc` - 15.4 wrote NonSemantic debug info that spirv-val rejects, `DebugTypeMember` lines /
+columns from the wrong source), OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles
 pffft, mysofa and zlib), miniaudio (single header), meshoptimizer, zstd, onnxruntime, NVIDIA Streamline
 2.14.1 (`Include/sl` headers + the five DLSS runtime DLLs, LoadLibrary'd and optional - see DLSS in
 [`Code/RendererVK/CONTEXT.md`](../Code/RendererVK/CONTEXT.md); update = copy `include/` and

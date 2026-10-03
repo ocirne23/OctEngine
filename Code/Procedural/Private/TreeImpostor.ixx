@@ -76,8 +76,12 @@ export namespace Procedural
 	// face away from the card's front) - so the cards shade like a round clump from any sun side.
 	void bakeBillboards(const TreePiece& piece, const TreeBakeImage& bark, const TreeBakeImage& leaves, uint32 size, float normalBend,
 		uint32 numViews, bool horizontal, oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal);
-	// The cards (both faces), UVs into the strips of a `numViews` / `horizontal` bake.
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out);
+	// The cards (both faces), UVs into the strips of a `numViews` / `horizontal` bake. `axisInZ` (the merged branch
+	// cards): texCoords.z = TREE_CARD_AXIS_CODE + the texture v of the piece's axis (its +Y line through the origin) on
+	// that card - RenderMeshData puts it into the tangent's w magnitude, and the lit FS rebuilds the crown frame from
+	// it where the instance origin is not the card's piece.
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false);
+	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect.fs.glsl's foliageCrownFrame
 
 	// The FAR-TREE VOLUME's view of a piece (RendererVK TreeVolumePipeline): its EXTINCTION (1/m) over its billboard
 	// box, res^3 voxels (x fastest, then y, then z), from the LOD-0 triangles - a leaf card blocks half its area on

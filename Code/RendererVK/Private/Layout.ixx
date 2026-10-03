@@ -832,7 +832,7 @@ export namespace RendererVKLayout
         glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
                               // z = fallback full-res pixels (authored chains), w = mipPixelScale (px per unit/dist)
         glm::vec4 lodParams1; // x = force LOD level (< 0 = off), y = fallback-metric level bias, z = enabled (0/1), w unused
-        // FOLIAGE cards (the tree billboards; FoliageParams): x unused, y = crown normal blend,
+        // FOLIAGE cards (the tree billboards; FoliageParams): x = the trees' RT range (m), y = crown normal blend,
         // z = self-shadow transmission length (m), w = interior darkening
         glm::vec4 foliageParams;
         glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,

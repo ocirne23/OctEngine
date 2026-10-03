@@ -89,7 +89,14 @@ void Renderer::registerTweaks()
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
-    m_foliageParams.registerTweaks();
+    // "Trees/Debug view" is the TREE_DEBUG define on the lit mesh fragments (the shadow debug pattern above).
+    m_foliageParams.registerTweaks([this]() {
+        m_staticMeshGraphicsPipeline.setTreeDebugMode(m_foliageParams.debugView);
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
+        setHaveToRecordCommandBuffers();
+    });
     m_farTreeParams.registerTweaks();
     m_fogParams.registerTweaks();
     // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
@@ -745,6 +752,8 @@ void Renderer::beginFrame()
         m_treeCullBase = 0; // this frame's baked tree range is claimed by renderTreeInstanceSet
         m_treeCullCount = 0;
         m_treeCullPieces = 0;
+        m_treeCullRtPieces = 0;
+        m_treeCullTaken.store(false, oc::memory_order_relaxed);
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
@@ -885,8 +894,8 @@ void Renderer::checkFrameCapacities()
     ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
     m_instances.growToPendingDemand(m_swapChain.getCurrentFrameIndex());
-    // Last frame's instance count (still live here) outgrew the GI TLAS instance buffers.
-    m_rt.growTlasInstancesFor(m_instances.getInstanceCount());
+    // Last frame's TLAS slot count (present(): the stream + the RT trees) outgrew the GI TLAS instance buffers.
+    m_rt.growTlasInstancesFor(m_giTlasDemand);
     // A mesh mega-buffer was reallocated (vertex/index data growth)
     if (Globals::meshDataManager.getGeneration() != m_meshDataGeneration)
     {
@@ -972,7 +981,11 @@ void Renderer::present()
     // The UBO was uploaded in beginFrame, where the instance counter had just been reset: the TLAS-instance
     // writer's live count is only known here, so patch that one word. (Left at the beginFrame value it
     // read 0 every frame - every TLAS slot inactive, an EMPTY TLAS, no ray hit anywhere.)
-    m_ubo.giTlasNumInstances = oc::min(m_instances.getInstanceCount(), m_rt.getMaxTlasInstances());
+    // The TLAS slots (tree_cull.inc.glsl treeCullTlasInstance): the stream outside the tree range, and ONE per tree of
+    // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
+    // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
+    m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
+    m_ubo.giTlasNumInstances = oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
         offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
     uploadTreeCullUbo(frameData); // the same: renderTreeInstanceSet claims its range after beginFrame

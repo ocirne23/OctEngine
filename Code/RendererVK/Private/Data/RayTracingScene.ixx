@@ -15,7 +15,8 @@ import :AccelerationStructure;
 //  * a REUSED slot a destroyed container freed, if it sits under the watermark.
 // SKINNED OUTPUT regions never build a static BLAS at all: their vertices are uninitialized until the
 // skinning compute runs, and their address entries are owned per frame slot by the skinned rebuild, so
-// a static build entering compaction would clobber them with a garbage BLAS.
+// a static build entering compaction would clobber them with a garbage BLAS. Neither does a mesh created
+// NOT RAYTRACED (Renderer::createMesh): no BLAS, so the TLAS writer makes any instance of it inactive.
 export class RayTracingScene final
 {
 public:
@@ -34,18 +35,19 @@ public:
     // ---- MeshInfo lifetime ----
     // Called with the slots addMeshInfos just claimed. `reused` distinguishes a recycled range (below
     // the watermark, so its builds are queued) from a fresh append (the watermark scan catches it).
-    void onMeshInfosAdded(uint32 base, uint32 count, oc::span<const uint32> vertexCounts, bool skinnedOutputs, bool reused)
+    // `noStaticBlas`: skinned output regions, and meshes created not raytraced.
+    void onMeshInfosAdded(uint32 base, uint32 count, oc::span<const uint32> vertexCounts, bool noStaticBlas, bool reused)
     {
         if (!reused)
         {
             m_vertexCounts.resize(base + count);
-            m_isSkinnedOutput.resize(base + count);
+            m_noStaticBlas.resize(base + count);
         }
         for (uint32 i = 0; i < count; ++i)
         {
             m_vertexCounts[base + i] = vertexCounts[i];
-            m_isSkinnedOutput[base + i] = skinnedOutputs ? 1 : 0;
-            if (reused && !skinnedOutputs && base + i < m_blasBuiltCount)
+            m_noStaticBlas[base + i] = noStaticBlas ? 1 : 0;
+            if (reused && !noStaticBlas && base + i < m_blasBuiltCount)
                 m_pendingRebuilds.push_back(base + i);
         }
     }
@@ -55,7 +57,7 @@ public:
         for (uint32 i = base; i < base + count; ++i)
         {
             m_vertexCounts[i] = 0;
-            m_isSkinnedOutput[i] = 0;
+            m_noStaticBlas[i] = 0;
         }
         m_accel.onMeshRangeFreed(base, count);
         oc::erase_if(m_pendingRebuilds, [&](uint32 meshIdx) { return meshIdx >= base && meshIdx < base + count; });
@@ -77,12 +79,14 @@ public:
         oc::vector<uint32> buildList = oc::move(m_pendingRebuilds);
         m_pendingRebuilds.clear();
         for (uint32 meshIdx = m_blasBuiltCount; meshIdx < meshInfoCount; ++meshIdx)
-            if (!m_isSkinnedOutput[meshIdx])
+            if (!m_noStaticBlas[meshIdx])
                 buildList.push_back(meshIdx);
         m_blasBuiltCount = meshInfoCount;
         return buildList;
     }
     const uint32* getVertexCounts() const { return m_vertexCounts.data(); } // BLAS maxVertex, one per MeshInfo
+    // A static BLAS is (or will be) built for the mesh - false for one created not raytraced (and skinned outputs).
+    bool hasStaticBlas(uint32 meshIdx) const { return meshIdx < m_noStaticBlas.size() && !m_noStaticBlas[meshIdx]; }
 
     // ---- The GI TLAS instance buffers ----
     uint32 getMaxTlasInstances() const { return m_maxTlasInstances; }
@@ -105,7 +109,7 @@ private:
     oc::function<void(uint32)> m_onTlasGrown;
 
     oc::vector<uint32> m_vertexCounts;    // exact per-MeshInfo vertex count (BLAS maxVertex)
-    oc::vector<uint8> m_isSkinnedOutput;  // per MeshInfo: skinned output region (no static BLAS build)
+    oc::vector<uint8> m_noStaticBlas;     // per MeshInfo: skinned output region or not raytraced (no static BLAS build)
     oc::vector<uint32> m_pendingRebuilds; // re-streamed / recycled meshes awaiting a build
     uint32 m_blasBuiltCount = 0;          // the one-time build watermark
     uint32 m_maxTlasInstances = RendererVKLayout::GI_INITIAL_TLAS_INSTANCES;

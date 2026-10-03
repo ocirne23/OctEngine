@@ -103,7 +103,9 @@ public:
         Buffer& ubo;             // u_giTlasNumInstances (live count), u_giTrace1.w (range bound), u_sceneFocus (its center)
         Buffer& treePieces;      // the baked tree records (tree_cull.inc.glsl): a tree's instance is built from these
         Buffer& treeTypes;
+        Buffer& treeList;        // this frame's visible trees (piece | pass bits << 28): one TLAS slot each
         uint32 count;            // this frame's live instance count (= u_giTlasNumInstances): the dispatch and the build cover it
+        uint32 treeRtPieces;     // the tree list's RT section (push constant; tree_cull.inc.glsl treeCullTlasInstance)
     };
     // Per frame (the GI prep secondary): one thread per live instance; the range bound rides the UBO.
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
@@ -309,7 +311,7 @@ private:
     // one every frame. The texture list keeps its capacity across frames (clear + push_back).
     void buildUpdateScratch();
     bool m_updateScratchBuilt = false;
-    oc::array<DescriptorSetUpdateInfo, 11> m_tlasUpdates;  // bindings 0..7 of the TLAS-instance set + the UBO (8) + the tree pieces / types (9, 10)
+    oc::array<DescriptorSetUpdateInfo, 12> m_tlasUpdates;  // bindings 0..7 of the TLAS-instance set + the UBO (8) + the tree pieces / types / list (9, 10, 11)
     oc::array<DescriptorSetUpdateInfo, 3> m_skyUpdates;    // the sky-map set: UBO + storage image + the sky clouds
     oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
     // Writes every live texture view into the trace sets' array (binding 15) - at (re)allocation only.

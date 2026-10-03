@@ -38,7 +38,7 @@ public:
         Buffer& inPrevNodePassMasksBuffer;        // 19 - ... and its stamped pass masks
         Buffer& treePiecesBuffer;                 // 20 - the baked tree records' pieces (static; tree_cull.inc.glsl)
         Buffer& treeTypesBuffer;                  // 21 - ... and their types
-        Buffer& treeModulesBuffer;                // 22 - ... and the types' branch cards
+        Buffer& treeListBuffer;                   // 22 - ... and this frame's visible trees (piece | pass bits << 28)
     };
 
     void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);
@@ -83,7 +83,6 @@ private:
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
         Buffer outTerrainFilmCommandBuffer;         // 17 - terrain film (plain indirect draws, never tessellated)
         Buffer drawCountBuffer;                     // the four lists' counts after compaction
-        Buffer treeCardCounterBuffer;               // 23 - the branch-card slots handed out (cleared per dispatch)
 
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };

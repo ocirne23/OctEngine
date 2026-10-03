@@ -993,7 +993,10 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
 
 * **The volume:** camera-centred (snapped: re-baked once the camera leaves `Far rebake distance` of the bake
   centre, or a tree set / a geometry setting changes), **POLAR** (`tree_volume.inc.glsl`): image x = the angle
-  around the centre (`Far angular resolution`; it WRAPS — the sampler repeats u), image y = `log(r / rMin) /
+  around the centre (`Far angular resolution`; it WRAPS — the sampler repeats u, and every integer wrap goes through
+  `tvWrapAngle`: GLSL's `%` is UNDEFINED for a negative operand, and the `((x % n) + n) % n` wraps in the splat and
+  the march broke the columns just below 0 - a line of strange streaks out from the bake centre along world −X, jumping
+  with every rebake, 2026-10-03), image y = `log(r / rMin) /
   log(end / rMin)` (`Far radial resolution`), so nothing is stored inside the ring and the cells grow linearly
   with the distance (a constant angular size). Image z =
   the height above the column's TREE FLOOR, `[0, Far height]`: an R32UI 2D image, the base of the column's
@@ -1011,8 +1014,18 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   metres off - thin hatched spikes above the crowns, 2026-10-02; and the march's PRIMARY sample,
   `densityAtColumns`, filters per column: the 4 columns around the point, each read at its own height above its own
   floor, blended bilinearly - the hardware filter put a neighbour's crown in at this column's height, a spike over
-  every steep floor step at peaks and slopes; the lighting taps keep the cheap `densityAtUv`), written
-  by the splat shader's `TREE_FLOOR_PASS` variant before the splat. Splat and march both measure from it (the
+  every steep floor step at peaks and slopes; the lighting taps read the hardware filter at a height above the
+  sample's SMOOTH floor - `densityAtColumns`' 4 column floors blended bilinearly. Measured from each tap's NEAREST
+  column's floor, as first built, the shading jumped at every column edge between two different floors: bright /
+  dark vertical lines through the blobs, finer but as many at a higher angular resolution - the user's A/B,
+  2026-10-03: they went with self shadow + normal + interior off), written
+  by the splat shader's `TREE_FLOOR_PASS` variant before the splat, then **SMOOTHED** (`tree_volume_floor_smooth.cs`,
+  `Far floor smoothing` = the tent radius in columns, default 2, 0 = off; a rebake setting): a separable masked tent
+  blur, along the angle into `floorCover` (free after the floor pass), then along the radius back. A column without a
+  floor keeps none and adds nothing to its neighbours. The dominant tree's base jumps whole floor steps between
+  neighbouring columns on a slope, and with everything stored and read relative to it those steps showed as faint
+  vertical lines and a moire on slopes (2026-10-03); a tree the smoothed floor no longer fits moves down into the
+  layer through the splat's `shift`, as for any floor below it. Splat and march both measure from it (the
   march: the nearest column; a column without a tree falls back to `terrainHeightAt`). **Not the height map**:
   its far cascade's ~132 m texels put the ground tens of metres off on mountains, and trees fell out of the
   15 m layer — missing far trees on mountainous terrain that popped in as billboards (2026-10-02; the user's A/B:
@@ -1180,7 +1193,9 @@ DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No f
   no NVIDIA GPU, VR, or any SL failure = the plain path, and `Streamline::dlssAvailable()` is false.
 * **MANUAL HOOKING.** `Streamline::load()` runs BEFORE the instance (slInit needs to precede it), the
   instance / device take DLSS's extensions, 1.2/1.3 features and extra queues (`appendInstanceExtensions`,
-  `appendDeviceExtensions`, `mergeDeviceFeatures`, `extraGraphicsQueues`), `onDeviceCreated` calls
+  `appendDeviceExtensions`, `mergeDeviceFeatures`, `extraGraphicsQueues`; Device drops its
+  `VK_EXT_buffer_device_address` - SL lists it next to the KHR one, and both at once is a validation error; the feature
+  is core), `onDeviceCreated` calls
   `slSetVulkanInfo`. **While SL is loaded the five swapchain calls MUST go through its proxies**
   (`Streamline::createSwapchain / destroySwapchain / getSwapchainImages / acquireNextImage / queuePresent`,
   used by SwapChain and Framebuffers) - SL's per-frame `presentCommon` hangs off them. A new swapchain call
@@ -1403,6 +1418,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * `createMesh(data)` → a move-only RAII `RenderMesh`: the vertex/index uploads and ONE `MeshInfo`
   (through `addMeshInfos`, so the BLAS registers like any mesh). No LOD chain, no stream set. Offsets
   and counts are stored as 32-bit element units.
+* `createMesh(data, raytraced = true)`: `raytraced` false builds NO BLAS (`RayTracingScene`'s `m_noStaticBlas`, the
+  skip the skinned output regions use too) - any TLAS instance of it is inactive (no BLAS address). For meshes RT
+  never has to see: the trees' meshes / cards / impostors, the bushes (Procedural TreeSystem).
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
@@ -1413,18 +1431,30 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
   ONCE to DEVICE-LOCAL buffers (`TreeCullPieceGpu` 64 B: transform + band centre/radius + type + LOD state
-  base; `TreeCullTypeGpu` 64 B, with the mid tier's distance / band / card list). Trees do not move, so nothing about them is written per frame: no render
+  base; `TreeCullTypeGpu` 96 B, with the mid tier's records + distance / band and a `shadowDistance`: beyond it from
+  the cascades' centre the shadow cull drops the piece from every cascade, before the transform loads - the
+  bushes, a texel or less in the far cascades). Trees do not move, so nothing about them is written per frame: no render
   nodes, no stream entries, no pass of their own (the earlier `tree_expand` pass, which rewrote every piece's
-  records into the HOST-VISIBLE stream each frame, cost ~7.5 ms of GPU). Per frame the CPU claims ONE instance
-  range (3 records per piece: bark, leaves, billboard) and notes the bucket sizes once per distinct level-0
-  mesh — nothing per piece. The UBO carries the range (`u_treeCull` x = base, y = count; **patched in
+  records into the HOST-VISIBLE stream each frame, cost ~7.5 ms of GPU). **A set is split into CHUNKS**
+  (`TreeInstanceChunk`: contiguous piece ranges - Procedural: one per terrain chunk). `bindTreeInstanceSet` (main,
+  every frame) picks the set the recorded culls bind (a change re-records); `renderTreeInstanceSet(set, chunks,
+  scale, forceFar)` - **ANY THREAD**, once per frame between beginFrame and present (Procedural calls it from the
+  terrain's render walk) - takes the frame's drawn chunks with their PASS bits, writes the frame slot's
+  host-visible LIST (`piece | passMask << 28` per listed piece, binding 22 / 15 / 11 in the main cull / shadow
+  culls / TLAS writer), claims ONE instance range (4 FIXED records per LISTED piece - tree_cull.inc.glsl's slot
+  layouts) and notes each listed chunk's precomputed bucket sizes (per distinct level-0 mesh) — nothing per piece
+  on the CPU but the list entry. The culls skip a listed tree without their pass bit (a chunk only in the
+  shadow / GI sphere draws no main records; the TLAS writer wants `PASS_GI | PASS_SHADOW`). A second call in a
+  frame asserts and is dropped (`m_treeCullTaken`). Destroying the bound set after this frame's claim keeps the
+  range claimed with NO trees (`u_treeCull.w` = 0): the threads skip the range whole. The UBO carries the range (`u_treeCull` x = base, y = count; **patched in
   `present()`** by `uploadTreeCullUbo`, like `giTlasNumInstances` — the UBO uploads in beginFrame, before the
   claim, and a 0 / 0 range made the culls read the never-written entries as instances: garbage mesh indices,
   out-of-bounds bucket writes, glitching terrain) and
   `u_treeCullParams` (x = far distance scale, y = forceFar, z = the far-tree volume's start + overlap, 0 = no
   volume). **The culls build the records, ONE THREAD PER TREE**: the dispatch covers the stream below the
-  range, one thread per piece (`u_treeCull.w` = the piece count), then the stream above it (`u_treeCull.z` = the
-  thread count; `treeCullThreadInstance` maps a thread to its instance). A tree thread decides once —
+  range, one thread per LISTED piece (`u_treeCull.w` = the list length), then the stream above it (`u_treeCull.z` =
+  the thread count; `treeCullThreadInstance` maps a thread to its instance, and a tree thread through the list to
+  its piece and pass bits). A tree thread decides once —
   `treeCullMainPiece` (main cull: the mesh / crossfade / billboard / none decision from the distance to the
   centre view — the same rules as the CPU preview) or `treeCullShadowPiece` (shadow + rain-shelter culls: the
   BILLBOARD is the caster at every distance; a type without one casts its mesh) — and runs the per-instance cull
@@ -1432,30 +1462,42 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   (`cullInstance` / `cullCaster`, the loop serves the plain instance with k = 0): each call site is a full
   inlined copy. **Both culls are `local_size_x = 64`** (`IndirectCullComputePipeline::update` dispatches
   ceil(threads / 64) groups; they ran ONE thread per workgroup before — a warp per instance, 31 of 32 lanes idle).
-  **BRANCH CARDS (the MID tier, main pass only):** a type may carry `modules` (`TreeInstanceModule`: a module's
-  billboard at its placement in the tree, on a fade-IN and a fade-OUT material; `TreeCullModuleGpu` 48 B, binding
-  22) plus `midDistance` / `midFadeWidth`. The cards draw on LitFoliage like the whole-tree billboards (the same
-  shading and tweaks; their crown sphere and interior are the MODULE's, from its own instance origin), minus the
-  edge-on fade: `MATERIAL_FLAG_NO_EDGE_FADE` (bit 22). From the mid band on the leaves mesh gives way to the cards (leaves on
-  `leavesFade`, which then carries the MID band; cards on their fade-in materials), the bark mesh stays; in the far
-  band the cards fade OUT with the bark while the whole billboard fades in. Shadows / GI / RT keep the billboard.
-  The cards take COMPACT slots: the claim is `3 × pieces + cardCapacity` (`TREE_CARD_SLOTS_MAX` = 64 K, at most every
-  tree's cards), `u_treeCull.y` = that whole range, and the main cull hands the card region out per frame with ONE
-  atomic per subgroup (`treeCardCounter`, binding 23, cleared before the dispatch). A tree that does not fit draws its
-  leaves mesh. The card meshes' buckets are sized min(placements, capacity). The TLAS writer leaves card slots
-  inactive; the shadow culls skip the region in their thread mapping. Fixed slots per card would have been ~2.3 M
-  slots for the 350² grove (16 modules per Oak). **Far trees out of the near
+  **THE MID TIER (main pass only; shadows / GI / RT keep the billboard):** a type with `midDistance` > 0 is a baked
+  variant with its bark SPLIT - `trunk` / `trunkFade` (the trunk alone) and `bark` / `barkFade` (the module
+  branches) - and a CARD mesh (`cardsIn` / `cardsOut`: every module placement's billboard cards merged into ONE mesh
+  per variant over the species' card ATLAS, LitFoliage + `MATERIAL_FLAG_NO_EDGE_FADE`, bit 22). Over the mid band
+  the branch bark and the leaves fade out while the card mesh fades in; the trunk stands; over the far band the
+  trunk and the cards fade out while the billboard fades in. At most 4 draw at once, so a tree has 4 FIXED slots
+  (mid: trunk, branches, leaves-then-billboard, cards; otherwise bark, leaves, -, billboard) - no per-frame pool.
+  HISTORY: per-module card instances in a per-frame atomic pool (64 K slots) ran out with a large grove + bushes,
+  and an overflowing tree drew its meshes undithered (a "popping" mid tier); fixed slots per card would have been
+  millions. A merged card's crown frame cannot come from the instance origin (the tree's): its axis rides the
+  tangent's w (RenderMeshData, foliageCrownFrame in the lit FS). A tree whose whole sphere is off screen returns
+  before its records. **`Trees/Debug view`** (`FoliageParams::debugView`, baked as `TREE_DEBUG` on the lit mesh
+  fragment; a change reloads it): a colour per MATERIAL (a representation / fade switch), per MESH (an LOD step),
+  or the distance-fade side (red out, green in, white none). **Far trees out of the near
   cascades:** the shadow cull keeps a tree record in cascade c only while `distance(centre, u_sceneFocus) − radius
   ≤ split(c) + Foliage shadow cascade margin` (`Trees/...`, default 64 m, `u_treeCullParams.w`): a cascade's box runs
   far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
-  its range. Sandbox, 350² grove: Shadow draw 1.48 → 1.06 ms. Record k's LOD hysteresis
-  slot = the piece's `lodStateBase + k`; prev transform = none (w 0 — trees never move). The buffers are
+  its range. Sandbox, 350² grove: Shadow draw 1.48 → 1.06 ms. Tree meshes have NO LOD chains (Procedural uploads
+  level 0 only): both culls skip the LOD group lookup for tree records, and no hysteresis slots are allocated (the
+  piece's old `lodStateBase` word is padding); prev transform = none (w 0 — trees never move). The buffers are
   bound at bindings 20/21 (main cull) and 13/14 (shadow culls) — descriptors written at RECORD time, so the
   culls bind ONE set (`m_treeCullSet`, the set rendered; changing it or destroying it re-records; a second set
   in one frame asserts). With no set, `m_treeCullDummy` is bound. **In the TLAS** (GI, RTAO, RT shadows, the ocean / film
-  reflections): `gi_tlas_instances` (bindings 9 / 10) builds a tree record's instance from the same static data
-  with `treeCullShadow` - the billboard, or the meshes for a type without one - and, since the range's stream
-  entries are never written, puts the MATERIAL in the custom index: **bit 23 set = a tree, bits 0..15 = its
+  reflections): the TLAS slots are the stream outside the tree range + ONE per tree of the list's **RT SECTION**
+  (`treeCullTlasInstance`, the section length a push constant; `giTlasNumInstances` = stream + section, and the TLAS
+  capacity grows by that demand, `m_giTlasDemand`). `createTreeInstanceSet` puts each chunk's RT-CAPABLE pieces first
+  (a type whose RT representation has a BLAS - `RayTracingScene::hasStaticBlas`; bushes have none) with a sphere
+  around them; `renderTreeInstanceSet` lists those of the GI / shadow chunks whose sphere reaches into `Trees/RT
+  range` FIRST, then everything else, which takes no TLAS slot (before: every listed piece, 4 bushes per tree
+  included, took one, written inactive and still walked by the writer and the build; earlier still 4 record slots
+  per tree - the consumers read the custom index, never the TLAS position). `gi_tlas_instances` (bindings 9 / 10 / 11) builds a tree's
+  instance from the same static data with `treeCullRtPiece` - the billboard (a type without one: its leaves only),
+  off beyond **`Trees/RT range (m)`** (default 500 m, `u_foliageParams.x`, 0 = only "RT/TLAS Range") from the scene
+  focus: every tree in the TLAS is an overlapping box every GI / shadow ray traverses (with the whole 4 km grove in
+  the TLAS, "TLAS + probe trace" took ~20 ms on some frames - the likely cause, not yet confirmed by a measurement). A mesh created without a BLAS (bushes) is inactive anyway. Since the range's
+  stream entries are never written, it puts the MATERIAL in the custom index: **bit 23 set = a tree, bits 0..15 = its
   material** (a stream instance's custom index stays its index, below 2^23). Every ray-query consumer reads only
   the material from `in_instances[custom]`, so each takes it from the custom index when bit 23 is set
   (`rt_shadow.inc`, `gi_probe_trace`, `rtao`, `ocean.fs`, `terrain_film.fs`) - no extra binding anywhere. The

@@ -69,9 +69,11 @@ namespace
 
     void logMessage(sl::LogType type, const char* msg)
     {
+#ifdef _DEBUG
         if (type == sl::LogType::eInfo)
             return; // the SL log file already has them; the console only gets warnings and errors
         printf("Streamline: %s", msg);
+#endif
     }
 
     sl::DLSSMode toSlMode(Streamline::DlssMode mode)

@@ -319,11 +319,13 @@ void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     for (uint32 b = 0; b <= 7; ++b)
         layout.descriptorSetLayoutBindings.push_back(storageBinding(b));
-    // The UBO (binding 8): the live instance count, the range bound and its center (u_sceneFocus) - no push
-    // constants, so the GI command buffer records once.
+    // The UBO (binding 8): the live instance count, the range bound and its center (u_sceneFocus).
     layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{ .binding = 8, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     layout.descriptorSetLayoutBindings.push_back(storageBinding(9));  // the baked tree records' pieces
     layout.descriptorSetLayoutBindings.push_back(storageBinding(10)); // ... and their types
+    layout.descriptorSetLayoutBindings.push_back(storageBinding(11)); // ... and this frame's visible-tree list
+    // The list's RT section length (recorded per frame - the GI prep secondary).
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(uint32) });
 }
 
 void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
@@ -507,6 +509,7 @@ void GIProbePipeline::buildUpdateScratch()
     m_tlasUpdates[8] = buf(8, vk::DescriptorType::eUniformBuffer);
     m_tlasUpdates[9] = buf(9);
     m_tlasUpdates[10] = buf(10);
+    m_tlasUpdates[11] = buf(11);
 
     m_traceUpdates.clear();
     m_traceUpdates.push_back(buf(0, vk::DescriptorType::eUniformBuffer)); // [0] UBO
@@ -551,10 +554,12 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     m_tlasUpdates[8].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
     m_tlasUpdates[9].bufferInfos[0] = bufInfo(params.treePieces);
     m_tlasUpdates[10].bufferInfos[0] = bufInfo(params.treeTypes);
+    m_tlasUpdates[11].bufferInfos[0] = bufInfo(params.treeList);
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_tlasUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+    cmd.pushConstants(m_tlasInstancePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(uint32), &params.treeRtPieces);
     cmd.dispatch((params.count + 63) / 64, 1, 1);
 }
 

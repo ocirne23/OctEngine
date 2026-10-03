@@ -36,9 +36,10 @@ layout (binding = 10, std430) readonly buffer InNodePassMasksBuffer        { uin
 
 layout (binding = 11, std430) readonly buffer InMeshLodGroupIdxBuffer      { uint                 in_meshLodGroupIdx[]; };
 layout (binding = 12, std430) readonly buffer InMeshLodGroupsBuffer        { MeshLodGroup         in_meshLodGroups[]; };
-// 13 + 14: the baked tree records' static data (tree_cull.inc.glsl).
+// 13 + 14: the baked tree records' static data (tree_cull.inc.glsl); 15: this frame's list of the trees to cull.
 #define TREE_CULL_PIECES_BINDING 13
 #define TREE_CULL_TYPES_BINDING 14
+#define TREE_CULL_LIST_BINDING 15
 #include "tree_cull.inc.glsl"
 
 vec3 quat_transform(vec3 v, vec4 q) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
@@ -137,7 +138,8 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     // pass bias: 4x the error budget / +2 fallback levels). Off-screen casters never pop on screen,
     // so hysteresis state isn't worth carrying here.
     InMeshInfo drawMeshInfo = meshInfo;
-    const uint lodGroupIdx = in_meshLodGroupIdx[meshIdx];
+    // Trees have no mesh LOD chains (their own tiers instead; Procedural TreeSystem): no lookup for their records.
+    const uint lodGroupIdx = isTree ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
     if (lodGroupIdx != 0xFFFFFFFFu && u_lodParams1.z > 0.5)
     {
         const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
@@ -187,14 +189,26 @@ void main()
     if (gid >= u_treeCull.z)
         return;
     bool isTree;
-    uint pieceIdx;
-    const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx);
+    uint pieceIdx, passBits;
+    const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx, passBits);
     // A BAKED TREE (tree_cull.inc.glsl): its billboard is the caster (the mesh only for a type without one). The loop
     // serves the plain instance too (k = 0 only), so cullCaster has ONE call site - each is a full inlined copy.
     TreeCullPiecePick pick;
     InMeshInstance instance;
     if (isTree)
+    {
+        if ((passBits & PASS_SHADOW) == 0u)
+            return;
+#ifndef RAIN_OCCLUSION
+        // A type's SHADOW DISTANCE (bushes): beyond it from the cascades' centre the piece casts into no cascade - it
+        // would cover a texel or less there. Tested before the transform loads.
+        const float shadowDistance = in_treeTypes[in_treePieces[pieceIdx].type].shadowDistance;
+        if (shadowDistance > 0.0
+            && distance(in_treePieces[pieceIdx].centre, u_sceneFocus.xyz) - in_treePieces[pieceIdx].radius > shadowDistance)
+            return;
+#endif
         treeCullShadowPiece(pieceIdx, pick);
+    }
     else
     {
         instance = in_instances[instanceIdx];

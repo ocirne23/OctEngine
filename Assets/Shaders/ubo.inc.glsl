@@ -302,7 +302,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
                        // z = fallback full-res pixels (authored chains), w = mipPixelScale (px per unit/dist)
     vec4 u_lodParams1; // x = force LOD level (< 0 = off), y = fallback-metric level bias, z = enabled (0/1), w unused
-    // FOLIAGE cards (the tree billboards): x unused, y = crown normal blend (instanced_indirect.fs.glsl),
+    // FOLIAGE cards (the tree billboards): x = the trees' RT range (m; gi_tlas_instances), y = crown normal blend (instanced_indirect.fs.glsl),
     // z = self-shadow transmission length (m; shadows.inc.glsl), w = interior darkening (instanced_indirect.fs.glsl)
     vec4 u_foliageParams;
     vec4 u_foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,

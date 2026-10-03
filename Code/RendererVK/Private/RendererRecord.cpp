@@ -84,7 +84,7 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .inPrevNodePassMasksBuffer = m_instances.getPrevPassMasks(),
         .treePiecesBuffer = treeCullPieces(),
         .treeTypesBuffer = treeCullTypes(),
-        .treeModulesBuffer = treeCullModules(),
+        .treeListBuffer = treeCullList(frameIdx),
     };
     m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
     cb.end();
@@ -175,6 +175,7 @@ void Renderer::recordShadowCull(uint32 frameIdx)
         .meshCountBuffer = instances.meshCount,
         .treePiecesBuffer = treeCullPieces(),
         .treeTypesBuffer = treeCullTypes(),
+        .treeListBuffer = treeCullList(frameIdx),
     };
     m_shadowCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -236,6 +237,7 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
         .meshCountBuffer = instances.meshCount,
         .treePiecesBuffer = treeCullPieces(),
         .treeTypesBuffer = treeCullTypes(),
+        .treeListBuffer = treeCullList(frameIdx),
     };
     m_rainCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -1077,7 +1079,9 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
             .ubo = frameData.ubo,
             .treePieces = treeCullPieces(),
             .treeTypes = treeCullTypes(),
+            .treeList = treeCullList(frameIdx),
             .count = liveCount,
+            .treeRtPieces = m_treeCullRtPieces,
         };
         m_giProbePipeline.recordTlasInstances(prepCommandBuffer, frameIdx, tlasParams);
 

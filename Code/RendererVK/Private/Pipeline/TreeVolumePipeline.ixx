@@ -108,6 +108,7 @@ private:
     };
     void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass);
     void buildResolveLayout(ComputePipelineLayout& layout);
+    void buildFloorSmoothLayout(ComputePipelineLayout& layout);
     void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip);
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);
@@ -122,6 +123,7 @@ private:
     ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)
     ComputePipeline m_splatPipeline;
     ComputePipeline m_resolvePipeline;
+    ComputePipeline m_floorSmoothPipeline; // the floor's separable blur (floor -> floorCover -> floor)
     ComputePipeline m_marchPipeline;
     ComputePipeline m_marchTemporalPipeline; // TREE_TEMPORAL_OUT: the log2 distances for the temporal pass
     // What the baked variants were compiled with (record() dispatches by these, never by the live settings):
@@ -135,6 +137,7 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_floorSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_splatSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_resolveSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * 2> m_floorSmoothSets; // per slot: the two axes
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_marchSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_temporalSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;

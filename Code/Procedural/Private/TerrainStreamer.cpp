@@ -279,9 +279,9 @@ namespace Procedural
 		Tweak::floatVar("Terrain", "Origin Z (m)", &m_originZ, -1.0e7f, 1.0e7f, 10.0f, dirty);
 		Tweak::intVar("Terrain", "Chunk size (m)", &m_chunkSize, 128, 1024, 1.0f, dirty);
 		Tweak::intVar("Terrain", "LOD0 resolution", &m_lod0Res, 128, 1024, 1.0f, dirty);
-		Tweak::intVar("Terrain", "Range (chunks)", &m_ringRadius, 1, 64, 1.0f); // max generation radius from the camera chunk
-		Tweak::floatVar("Terrain", "LOD step (chunks)", &m_lodStep, 0.1f, 4.0f, 0.1f); // LOD0 band width; each next band doubles
-		Tweak::floatVar("Terrain", "Full-res distance (chunks)", &m_fullResDist, 0.0f, 8.0f, 0.05f); // edge distance forced to LOD0 before bands begin
+		Tweak::intVar("Terrain", "Range (chunks)", &m_ringRadius, 1, 128, 1.0f); // max generation radius from the camera chunk
+		Tweak::floatVar("Terrain", "LOD step (chunks)", &m_lodStep, 0.1f, 16.0f, 0.1f); // LOD0 band width; each next band doubles
+		Tweak::floatVar("Terrain", "Full-res distance (chunks)", &m_fullResDist, 0.0f, 32.0f, 0.05f); // edge distance forced to LOD0 before bands begin
 		Tweak::intVar("Terrain", "Max LOD", &m_maxLod, 0, 6, 1.0f);
 		Tweak::intVar("Terrain", "Uploads/frame", &m_maxUploadsPerFrame, 1, 32, 1.0f);
 		Tweak::floatVar("Terrain", "Upload MB/frame", &m_maxUploadMBPerFrame, 4.0f, 96.0f, 1.0f);
@@ -1187,6 +1187,8 @@ namespace Procedural
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
 		const bool chunks = m_renderReady;
 		m_renderReady = false;
+		// The chunks' vegetation rides this walk whenever the chunks do (the owner submits it otherwise).
+		m_vegRouted = chunks && m_vegSink;
 		ocean.render(gate); // its own job: the readbacks, and every sector itself while the hand-over cannot name them
 		if (!gate)
 		{
@@ -1194,7 +1196,11 @@ namespace Procedural
 				Globals::jobSystem.submit([this, &renderer]
 				{
 					for (const auto& entry : m_residents)
+					{
 						renderer.renderNode(entry.second->node);
+						noteVegetation(*entry.second, RendererVKLayout::PASS_ALL);
+					}
+					flushVegetation();
 				}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
 			return;
 		}
@@ -1203,19 +1209,76 @@ namespace Procedural
 		const ShadowParams& shadow = renderer.shadowParams();
 		const float reach = glm::max(shadow.maxDistance + shadow.casterPad, renderer.giTlasRange());
 		const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
-		Globals::jobSystem.submit([&renderer, sphere, reach, focus]
+		Globals::jobSystem.submit([this, &renderer, sphere, reach, focus]
 		{
-			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect).
+			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect): an ocean sector's
+			// tagged RenderNode*, or a chunk's Resident* (its node and its vegetation).
 			for (const uint64 userData : Globals::spatialIndex.visibleUserData(1))
-				renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
-			if (!sphere)
-				return;
-			Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
 			{
-				if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
-					renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData), RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI);
-			}, SpatialPassBit_Main); // main-stamped: pushed above
+				if (userData & SpatialTerrainTag_Ocean)
+					renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
+				else
+				{
+					const Resident& resident = *reinterpret_cast<const Resident*>(userData);
+					renderer.renderNode(resident.node);
+					noteVegetation(resident, RendererVKLayout::PASS_ALL);
+				}
+			}
+			if (sphere)
+			{
+				Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
+				{
+					if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
+					{
+						constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
+						const Resident& resident = *reinterpret_cast<const Resident*>(userData);
+						renderer.renderNode(resident.node, SHADOW_AND_GI);
+						noteVegetation(resident, SHADOW_AND_GI);
+					}
+				}, SpatialPassBit_Main); // main-stamped: pushed above
+			}
+			flushVegetation();
 		}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
+	}
+
+	// The walk job's: a chunk's vegetation, merged per vegetation chunk (a LOD handover pushes the old and the new
+	// resident of one coordinate - the trees must not draw twice).
+	void TerrainStreamer::noteVegetation(const Resident& resident, uint32 passMask)
+	{
+		if (!m_vegRouted || resident.vegetation < 0 || (size_t)resident.vegetation >= m_vegMasks.size())
+			return;
+		uint8& mask = m_vegMasks[(size_t)resident.vegetation];
+		if (mask == 0)
+			m_vegTouched.push_back((uint32)resident.vegetation);
+		mask |= (uint8)passMask;
+	}
+
+	void TerrainStreamer::flushVegetation()
+	{
+		if (!m_vegRouted) // the owner submits its vegetation itself this frame
+			return;
+		m_vegDraws.clear();
+		for (const uint32 chunk : m_vegTouched)
+		{
+			m_vegDraws.push_back({ chunk, m_vegMasks[chunk] });
+			m_vegMasks[chunk] = 0;
+		}
+		m_vegTouched.clear();
+		m_vegSink(oc::span<const VegetationDraw>(m_vegDraws.data(), m_vegDraws.size()));
+	}
+
+	void TerrainStreamer::setVegetation(oc::function<int32(glm::ivec2)> lookup, oc::function<void(oc::span<const VegetationDraw>)> sink,
+		uint32 numChunks)
+	{
+		joinRender(); // the walk reads the hooks and every resident's index
+		m_vegLookup = oc::move(lookup);
+		m_vegSink = oc::move(sink);
+		m_vegMasks.assign(m_vegSink ? numChunks : 0u, 0);
+		m_vegTouched.clear();
+		for (auto& entry : m_residents)
+			entry.second->vegetation = m_vegLookup ? m_vegLookup(entry.second->coord) : -1;
+		for (RetiredResident& retired : m_retired) // a hand-over list may still name them: no stale index
+			retired.resident->vegetation = -1;
 	}
 
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
@@ -1428,16 +1491,21 @@ namespace Procedural
                 resident->node = renderer.spawnMeshNode(resident->mesh, m_material, RendererVKLayout::EPipelineIndex::TerrainLit, transform);
                 resident->coord = res.coord;
                 resident->lod = res.lod;
+                resident->vegetation = m_vegLookup ? m_vegLookup(res.coord) : -1;
                 // Culling registration: chunks live in the SpatialIndex like entity render components, but on
-                // their own layer (the userData is the chunk's RenderNode*, NOT an Entity* - gameplay queries
-                // must not see them - so the hand-over push needs no lookup; the Resident is heap-held and
-                // retired, never freed, while a list may still name it), registered ONCE (chunks never move,
-                // so they promote straight into the static tier), and WITHOUT the spawn-visibility guard
-                // (chunks stream in off-screen constantly; the guard would pin each one in the main pass
-                // until it first enters the frustum).
+                // their own layer (the userData is the chunk's Resident*, NOT an Entity* - gameplay queries
+                // must not see them - so the hand-over push needs no lookup and reaches the chunk's node AND its
+                // vegetation; the Resident is heap-held and retired, never freed, while a list may still name it),
+                // registered ONCE (chunks never move, so they promote straight into the static tier), and WITHOUT
+                // the spawn-visibility guard (chunks stream in off-screen constantly; the guard would pin each one
+                // in the main pass until it first enters the frustum).
+                // The sphere also holds the chunk's vegetation: a plant stands up to VEG_HEIGHT above the ground and
+                // its crown reaches up to VEG_OVERHANG past the chunk's edge (its piece sorts by its centre).
+                constexpr float VEG_HEIGHT = 64.0f, VEG_OVERHANG = 16.0f;
                 const Sphere bounds = resident->node.getWorldBounds();
+                const float radius = std::sqrt(bounds.radius * bounds.radius + VEG_HEIGHT * VEG_HEIGHT) + VEG_OVERHANG;
                 resident->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
-                    glm::dvec3(bounds.pos), bounds.radius, (uint64)&resident->node, SpatialLayer_Terrain, false));
+                    glm::dvec3(bounds.pos), radius, (uint64)resident.get(), SpatialLayer_Terrain, false));
                 m_residents.emplace(res.key, oc::move(resident));
                 ++uploads;
             }

@@ -89,11 +89,13 @@ bool Device::initialize()
     const bool relaxedExtendedInstruction = supportsExtensions({ vk::KHRShaderRelaxedExtendedInstructionExtensionName });
     if (relaxedExtendedInstruction)
         deviceExtensions.push_back(vk::KHRShaderRelaxedExtendedInstructionExtensionName);
-    // What DLSS asks for (none when Streamline is not loaded); an unsupported one only costs DLSS.
+    // What DLSS asks for (none when Streamline is not loaded); an unsupported one only costs DLSS. Streamline lists
+    // VK_EXT_buffer_device_address next to the KHR one, and a device must not enable both (VUID-VkDeviceCreateInfo-
+    // ppEnabledExtensionNames-03328): the EXT one is dropped - the feature is core (vk12Features.bufferDeviceAddress).
     oc::vector<const char*> slExtensions;
     Streamline::appendDeviceExtensions(slExtensions);
     for (const char* ext : slExtensions)
-        if (supportsExtensions({ ext }) && oc::find_if(deviceExtensions.begin(), deviceExtensions.end(), [&](const char* have) { return strcmp(have, ext) == 0; }) == deviceExtensions.end())
+        if (strcmp(ext, "VK_EXT_buffer_device_address") != 0 && supportsExtensions({ ext }) && oc::find_if(deviceExtensions.begin(), deviceExtensions.end(), [&](const char* have) { return strcmp(have, ext) == 0; }) == deviceExtensions.end())
             deviceExtensions.push_back(ext);
 
     m_graphicsQueueIndex = UINT32_MAX;
@@ -172,6 +174,7 @@ bool Device::initialize()
     };
     vk::PhysicalDeviceVulkan13Features vk13Features{
         .pNext = &vk12Features,
+        .privateData = vk::True, // Streamline's slSetVulkanInfo creates private data slots (mandatory in 1.3)
         .shaderDemoteToHelperInvocation = vk::True,
         .synchronization2 = vk::True,
     };

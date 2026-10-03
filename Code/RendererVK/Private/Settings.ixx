@@ -252,8 +252,16 @@ export struct FoliageParams
     // radius stays within that cascade's split + this (m): far trees out of the near cascades. The margin keeps the
     // long shadows of trees up-sun, which fall into a nearer cascade's range (a 20 m tree at a 17 degree sun: ~65 m).
     float shadowCascadeMargin = 64.0f;
+    // A tree farther than this (m) from the scene focus is not in the TLAS (no GI / RT shadow / RTAO / reflection hits;
+    // 0 = only the general "RT/TLAS Range"): every tree there is an overlapping box every ray has to traverse.
+    float rtRange = 500.0f;
+    // "Trees/Debug view" - baked as TREE_DEBUG on the lit mesh fragments (a change reloads them; 0 = no define):
+    // 1 = a colour per MATERIAL (each representation and fade copy has its own: a switch shows as a colour change),
+    // 2 = a colour per MESH (the LOD level the cull picked: an LOD step shows), 3 = the distance FADE side (red = a
+    // fade-out material, green = fade-in, white = none).
+    int debugView = 0;
 
-    void registerTweaks();
+    void registerTweaks(const oc::function<void()>& onDebugViewChanged);
 };
 
 // FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
@@ -294,6 +302,7 @@ export struct FarTreeParams
     int pixelSkip = 1;            // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
     bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
     float rebakeDistance = 64.0f; // the camera moves this far from the bake centre -> re-bake
+    int floorSmoothing = 2;       // the tree floor's tent blur radius, in columns (tree_volume_floor_smooth.cs); 0 = off
     void registerTweaks();
 };
 

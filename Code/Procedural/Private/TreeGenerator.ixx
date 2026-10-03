@@ -71,7 +71,11 @@ export namespace Procedural
 		oc::vector<TreeSlot> slots; // trunks only
 		float length = 1.0f;        // trunk height / nominal module length (m)
 		float baseRadius = 0.1f;    // root radius at the base (m, unscaled)
-		oc::vector<TreePiecePlacement> placements; // baked variants only: the composite it was merged from
+		// Baked variants only: the composite it was merged from, and `bark` split in two - the trunk's, and the module
+		// branches' (the GPU mid tier keeps the trunk while the branches give way to the branch cards).
+		oc::vector<TreePiecePlacement> placements;
+		TreeMesh trunkBark[TREE_PIECE_LODS];
+		TreeMesh branchBark[TREE_PIECE_LODS];
 	};
 
 	struct TreeLibrary

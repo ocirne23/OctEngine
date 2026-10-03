@@ -94,7 +94,7 @@ bool floorAtUv(vec2 uv, out float floorY)
     if (uv.y < 0.0 || uv.y >= 1.0)
         return false;
     const int angularRes = int(pc.vol.angularRes);
-    const ivec2 texel = ivec2((int(floor(uv.x * float(angularRes))) % angularRes + angularRes) % angularRes,
+    const ivec2 texel = ivec2(tvWrapAngle(int(floor(uv.x * float(angularRes))), angularRes),
         int(uv.y * float(pc.vol.radialRes)));
     const uint bits = imageLoad(u_floor, texel).r;
     floorY = tvFloorDecode(bits);
@@ -102,70 +102,68 @@ bool floorAtUv(vec2 uv, out float floorY)
 }
 
 // The PRIMARY sample: the 4 columns around p bilinearly, EACH at its own height above its own floor - what the splat
-// stored. The hardware filter (densityAtUv) mixes a neighbour's density in at THIS column's height, so on a steep floor
+// stored. The hardware filter across columns mixes a neighbour's density in at THIS column's height, so on a steep floor
 // step (peaks, slopes) a neighbour's crown leaked up by the floor difference: thin spikes over the trees. Per column
-// the texture is read at the column's centre, so only the vertical axis filters in hardware. The lighting taps keep
-// densityAtUv: an error there shades, it does not draw.
-float densityAtColumns(vec3 p, vec2 uv)
+// the texture is read at the column's centre, so only the vertical axis filters in hardware.
+// `smoothFloor`: the same 4 columns' floors blended bilinearly (the columns with a floor; `fallback` without any) - the
+// CONTINUOUS ground the lighting taps measure their heights from (densityTap / densityAbove).
+float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
 {
+    smoothFloor = fallback;
     if (uv.y < 0.0 || uv.y > 1.0)
         return 0.0;
     const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
     const vec2 tc = uv * vec2(angularRes, radialRes) - 0.5;
     const ivec2 base = ivec2(floor(tc));
     const vec2 f = tc - vec2(base);
-    float sum = 0.0;
+    float sum = 0.0, floorSum = 0.0, floorWeight = 0.0;
     for (int k = 0; k < 4; ++k)
     {
         const ivec2 o = ivec2(k & 1, k >> 1);
-        const ivec2 col = ivec2(((base.x + o.x) % angularRes + angularRes) % angularRes, clamp(base.y + o.y, 0, radialRes - 1));
+        const ivec2 col = ivec2(tvWrapAngle(base.x + o.x, angularRes), clamp(base.y + o.y, 0, radialRes - 1));
         const uint bits = imageLoad(u_floor, col).r;
         if (bits == 0u)
             continue; // no tree reaches the column: no density there
-        const float h = p.y - tvFloorDecode(bits);
+        const vec2 w2 = mix(1.0 - f, f, vec2(o));
+        const float w = w2.x * w2.y;
+        const float colFloor = tvFloorDecode(bits);
+        floorSum += w * colFloor;
+        floorWeight += w;
+        const float h = p.y - colFloor;
         if (h < 0.0 || h > pc.vol.height)
             continue;
-        const vec2 w2 = mix(1.0 - f, f, vec2(o));
         const vec3 at = vec3((vec2(col) + 0.5) / vec2(angularRes, radialRes), h / pc.vol.height);
-        sum += w2.x * w2.y * textureLod(u_density, at, 0.0).r;
+        sum += w * textureLod(u_density, at, 0.0).r;
     }
+    if (floorWeight > 1e-6)
+        smoothFloor = floorSum / floorWeight;
     return max(sum - pc.shrink, 0.0) * pc.vol.densityScale;
-}
-
-float densityAtUv(vec3 p, vec2 uv)
-{
-    if (uv.y < 0.0 || uv.y > 1.0)
-        return 0.0;
-    // A column without a floor holds no density (the splat writes only where it set one): no height-map read.
-    float floorY;
-    if (!floorAtUv(uv, floorY))
-        return 0.0;
-    const float h = p.y - floorY;
-    if (h < 0.0 || h > pc.vol.height)
-        return 0.0;
-    // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
-    return max(textureLod(u_density, vec3(uv, h / pc.vol.height), 0.0).r - pc.shrink, 0.0) * pc.vol.densityScale;
 }
 
 // The LIGHTING TAPS (sun, normal, interior - 12 per lit step) lie within ~10 m of their sample, which lies >= ~400 m
 // from the bake centre: their polar uv to FIRST ORDER around the sample's (polarJ: d uv / d xz), under ~0.1 texel off
 // even for the farthest tap - instead of an atan + log + length per tap. A purely VERTICAL tap keeps the sample's
-// column outright: its uv, its floor, only another height (densityAbove).
+// column outright: its uv, only another height (densityAbove).
+// THE TAPS' HEIGHT is measured from the sample's SMOOTH floor (densityAtColumns), not from each tap's nearest column's
+// floor: that one jumps at every column boundary where two dominant trees stand at different bases, and the shading
+// stepped with it - a bright / dark vertical line along every angular column edge (finer columns: thinner lines, as
+// many). No floor load per tap either; a column without trees holds no density, so its tap reads ~0 anyway.
 mat2 polarJ(vec2 rel, float r)
 {
     const float ir2 = 1.0 / (r * r);
     const float a = ir2 / TV_TWO_PI, b = ir2 / tvLogSpan(pc.vol);
     return mat2(vec2(-rel.y * a, rel.x * b), vec2(rel.x * a, rel.y * b)); // columns: d/dx, d/dz
 }
-float densityTap(vec3 p, vec2 uv, mat2 J, vec3 d)
-{
-    return densityAtUv(p + d, uv + J * d.xz);
-}
 float densityAbove(vec2 uv, float h)
 {
-    if (h < 0.0 || h > pc.vol.height)
+    if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc.vol.height)
         return 0.0;
+    // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
     return max(textureLod(u_density, vec3(uv, h / pc.vol.height), 0.0).r - pc.shrink, 0.0) * pc.vol.densityScale;
+}
+float densityTap(vec2 uv, mat2 J, float h, vec3 d)
+{
+    return densityAbove(uv + J * d.xz, h + d.y);
 }
 
 // The plain variant's distance image: the trees' weighted mean where the result holds trees (transmittance below
@@ -336,15 +334,17 @@ void marchAt(ivec2 px)
         else
         {
             const float tt = t;
-            const float sigma = hasFloor ? densityAtColumns(p, uv) : 0.0;
+            float smoothFloor = floorY;
+            const float sigma = hasFloor ? densityAtColumns(p, uv, floorY, smoothFloor) : 0.0;
             if (sigma > 1e-4)
             {
                 if (terrainVis < 0.0)
                     terrainVis = terrainSunVisibility(p, L, 20.0, 8, 0.02, 1.0);
                 const mat2 J = polarJ(rel, r);
+                const float hs = p.y - smoothFloor; // the taps' height (densityTap)
                 // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
-                const float sunT = exp(-(densityTap(p, uv, J, L * 1.0) * 2.0 + densityTap(p, uv, J, L * 4.0) * 4.0
-                    + densityTap(p, uv, J, L * 10.0) * 8.0) * pc.selfShadow);
+                const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
+                    + densityTap(uv, J, hs, L * 10.0) * 8.0) * pc.selfShadow);
                 const vec3 albedo = textureLod(u_colour, uv, 0.0).rgb * pc.albedoScale;
                 const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
@@ -353,9 +353,11 @@ void marchAt(ivec2 px)
                 if (pc.normalStrength > 0.0)
                 {
                     const float hx = 0.5 * cell;
-                    const float up = hasFloor ? densityAbove(uv, h + sliceH) : 0.0;
-                    const vec3 grad = vec3(densityTap(p, uv, J, vec3(hx, 0.0, 0.0)) - sigma, (up - sigma) * hx / sliceH,
-                        densityTap(p, uv, J, vec3(0.0, 0.0, hx)) - sigma);
+                    // The base of the differences on the same floor as the taps (sigma's own is the per-column blend).
+                    const float here = densityAbove(uv, hs);
+                    const float up = densityAbove(uv, hs + sliceH);
+                    const vec3 grad = vec3(densityTap(uv, J, hs, vec3(hx, 0.0, 0.0)) - here, (up - here) * hx / sliceH,
+                        densityTap(uv, J, hs, vec3(0.0, 0.0, hx)) - here);
                     const float len2 = dot(grad, grad);
                     if (len2 > 1e-12)
                         sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), pc.normalStrength);
@@ -371,9 +373,9 @@ void marchAt(ivec2 px)
                 {
                     const float rr = pc.interiorRadius * cell;
                     const float ry = min(rr, 0.5 * pc.vol.height);
-                    const float m = (densityTap(p, uv, J, vec3(rr, 0.0, 0.0)) + densityTap(p, uv, J, vec3(-rr, 0.0, 0.0))
-                        + densityTap(p, uv, J, vec3(0.0, 0.0, rr)) + densityTap(p, uv, J, vec3(0.0, 0.0, -rr))
-                        + (hasFloor ? densityAbove(uv, h + ry) + densityAbove(uv, h - ry) : 0.0)) / 6.0;
+                    const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
+                        + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
+                        + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
                     interior = exp(-pc.interiorShadow * m * rr);
                 }
                 const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * sunCos) + sky) + albedo * u_ambientColor) * interior;

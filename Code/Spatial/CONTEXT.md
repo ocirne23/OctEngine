@@ -140,11 +140,11 @@ sectors and scatter groups all pass false.
 | `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
 
 > **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is its
-> `RenderNode*`, an ocean sector's is its `RenderNode*` **with `SpatialTerrainTag_Ocean` (bit 63, above
-> the 47-bit user address range) set**, and scatter groups carry 0. The streamer and the ocean share
-> ONE hand-over list (collect slot 1), walked ONCE by `TerrainStreamer::render`'s job, which masks the
-> tag off and pushes every node blindly with its own pass mask; the tag only keeps the sectors out of
-> the terrain's shadow ball. The owners keep a dead node's memory until `visibleCollectGeneration`
+> streamer `Resident*` (its node AND its vegetation), an ocean sector's is its `RenderNode*` **with
+> `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set**, and scatter groups carry
+> 0. The streamer and the ocean share ONE hand-over list (collect slot 1), walked ONCE by
+> `TerrainStreamer::render`'s job, which tells the two apart by the tag and pushes every node with its own
+> pass mask; the tag also keeps the sectors out of the terrain's shadow ball. The owners keep a dead node's memory until `visibleCollectGeneration`
 > moves on (see the hand-over below). **Gameplay queries must never include that layer**
 > ([Types.ixx:58](Private/Types.ixx#L58)).
 

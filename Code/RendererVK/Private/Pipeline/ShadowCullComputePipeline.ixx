@@ -34,6 +34,7 @@ public:
         Buffer& meshCountBuffer;              // [0] = the registered mesh count: the slots the compaction walks
         Buffer& treePiecesBuffer;             // 13 - the baked tree records' pieces (static; tree_cull.inc.glsl)
         Buffer& treeTypesBuffer;              // 14 - ... and their types
+        Buffer& treeListBuffer;               // 15 - ... and this frame's visible trees (piece | pass bits << 28)
     };
 
     // rainOcclusion: the RAIN_OCCLUSION shader variant - one view (u_rainOcclusionViewProj) instead of

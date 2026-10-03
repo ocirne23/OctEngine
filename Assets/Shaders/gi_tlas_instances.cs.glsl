@@ -48,14 +48,19 @@ layout (binding = 6, std430) readonly buffer InNodePassMasksBuffer        { uint
 // single BLAS at its RT level, so instances of every level reference that BLAS and carry its meshIdx
 // (packed into sbtOffset below) for the hit shaders' attribute fetches.
 layout (binding = 7, std430) readonly buffer InRtMeshAliasBuffer          { uint in_rtMeshAlias[]; };
-// The BAKED TREE RECORDS (bindings 9 / 10): their stream entries are never written, so a tree's instance is built
-// from the static tree data instead - its SHADOW representation (the billboard; the meshes for a type without one),
-// as the shadow cull does. Its custom index carries the MATERIAL itself (RT_CUSTOM_TREE | materialIdx): every ray-query
-// consumer reads only the material from in_instances[custom], and has no stream entry to read for a tree.
+// The BAKED TREE RECORDS (bindings 9 / 10 / 11): their stream entries are never written, so a tree's instance is
+// built from the static tree data instead - ONE per tree of the list's RT section (treeCullTlasInstance: the stream
+// outside the tree range, a tree per slot inside the section; the rest of the list takes no slot), its RT
+// representation (treeCullRtPiece: the billboard). Its custom index carries the MATERIAL itself (RT_CUSTOM_TREE | materialIdx): every ray-query consumer
+// reads only the material from in_instances[custom], and has no stream entry to read for a tree. Every consumer reads
+// the CUSTOM index, never the TLAS position, so the layout is free.
 #define TREE_CULL_PIECES_BINDING 9
 #define TREE_CULL_TYPES_BINDING 10
+#define TREE_CULL_LIST_BINDING 11 // this frame's list of the trees
 #include "tree_cull.inc.glsl"
 const uint RT_CUSTOM_TREE = 0x800000u; // custom index bit 23: a tree, the low 16 bits its material
+
+layout (push_constant) uniform Push { uint treeRtPieces; } pc; // the tree list's RT section (Renderer m_treeCullRtPieces)
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -75,15 +80,19 @@ layout(local_size_x = 64) in;
 
 void main()
 {
-    const uint id = gl_GlobalInvocationID.x;
-    if (id >= uint(out_instances.length()))
+    const uint slot = gl_GlobalInvocationID.x;
+    if (slot >= uint(out_instances.length()))
         return;
-    // Past the live count, or a tree record without a shadow representation: an inactive record (reference 0 - not
-    // built, not traversed).
-    const bool isTree = treeCullIsTree(id);
+    // The slot's stream instance (`id`), or its tree. Past the live count, or a tree without an RT representation in
+    // range: an inactive record (reference 0 - not built, not traversed).
+    bool isTree = false;
+    uint pieceIdx = 0u, passBits = 0u;
+    const uint id = slot < u_giTlasNumInstances ? treeCullTlasInstance(slot, pc.treeRtPieces, isTree, pieceIdx, passBits) : slot;
     TreeCullRecord treeRec;
     vec4 treePosScale, treeQuat;
-    if (id >= u_giTlasNumInstances || (isTree && !treeCullShadow(id, treeRec, treePosScale, treeQuat)))
+    // A tree whose terrain chunk is listed for the main view only: out of the RT set, as a stream instance would be.
+    if (slot >= u_giTlasNumInstances || (isTree && ((passBits & (PASS_GI | PASS_SHADOW)) == 0u
+        || !treeCullRtPiece(pieceIdx, u_foliageParams.x, treeRec, treePosScale, treeQuat))))
     {
         TlasInstance dead;
         dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
@@ -91,7 +100,7 @@ void main()
         dead.sbtOffsetAndFlags = 0u;
         dead.blasLo = 0u;
         dead.blasHi = 0u;
-        out_instances[id] = dead;
+        out_instances[slot] = dead;
         return;
     }
 
@@ -185,5 +194,5 @@ void main()
     const uint custom = isTree ? RT_CUSTOM_TREE | materialIdx : id & (RT_CUSTOM_TREE - 1u);
     o.instanceCustomIndexAndMask = custom | ((foliage ? 0x02u : 0xFFu) << 24);
 
-    out_instances[id] = o;
+    out_instances[slot] = o;
 }

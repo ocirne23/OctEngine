@@ -228,7 +228,9 @@ public:
     // Rewrites a material's flags in place (e.g. a distance-fade band). No re-record: a contents upload.
     uint32 getMaterialFlags(uint16 materialIdx);
     void setMaterialFlags(uint16 materialIdx, uint32 flags);
-    RenderMesh createMesh(const RenderMeshData& data); // uploads + one MeshInfo (and its BLAS); invalid when empty
+    // Uploads + one MeshInfo (and its BLAS); invalid when empty. `raytraced` false: NO BLAS - any instance of it is
+    // inactive in the TLAS (no RT shadows / GI / RTAO / reflections hit it); for meshes RT never needs to see.
+    RenderMesh createMesh(const RenderMeshData& data, bool raytraced = true);
     // A GPU LOD chain over createMesh'd meshes (level 0 first, at most MAX_MESH_LODS), `errors` = each level's
     // geometric deviation in mesh-local units (0 for level 0; the screen-space-error selector). Spawn nodes on
     // LEVEL 0: the cull picks the level per instance. freeMeshLodChain BEFORE destroying the meshes.
@@ -248,27 +250,23 @@ public:
         uint16 material = 0;
         RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
     };
-    // A BRANCH CARD of the mid tier: a module's billboard at its placement in the tree (tree-local, at scale 1).
-    struct TreeInstanceModule
-    {
-        const RenderMesh* mesh = nullptr; // the module's billboard cards (no LOD chain)
-        uint16 materialIn = 0;            // its fade-IN material (the mid band)
-        uint16 materialOut = 0;           // its fade-OUT material (the far band)
-        RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitFoliage;
-        Transform local;
-    };
     struct TreeInstanceType
     {
         // barkFade / leavesFade: the same meshes on LitMasked with fade-OUT materials (the crossfade band). With a
-        // mid tier, leavesFade fades out over the MID band instead (the cards take over from the leaves there).
+        // mid tier, both fade out over the MID band instead (the card mesh takes over from them there).
         TreeInstanceRep bark, barkFade, leaves, leavesFade, billboard;
         float farDistance = 0.0f; // billboard switch distance (m); 0 = always the mesh
         float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
-        // The MID tier (main pass only; shadows keep the billboard): from midDistance (0 = none) the leaves mesh gives
-        // way to `modules` over a band of midFadeWidth; the bark mesh stays. Needs a billboard.
+        // The MID tier (main pass only; shadows keep the billboard), from midDistance (0 = none) over a band of
+        // midFadeWidth: `bark` is then the BRANCH bark only and gives way with the leaves to the CARD mesh (cardsIn:
+        // fades in over the mid band; cardsOut: out over the far band); `trunk` stands through both, fading out only
+        // in the far band (trunkFade). Needs a billboard, the card mesh and the trunk.
+        TreeInstanceRep trunk, trunkFade, cardsIn, cardsOut;
         float midDistance = 0.0f;
         float midFadeWidth = 1.0f;
-        oc::vector<TreeInstanceModule> modules;
+        // Beyond this distance (m) from the shadow cascades' centre it casts no sun shadow (small plants: a texel or
+        // less in the far cascades). 0 = no limit.
+        float shadowDistance = 0.0f;
         // The FAR-TREE VOLUME's view of the type (TreeVolumePipeline): its extinction (1/m) over [densityMin,
         // densityMax] in type space, densityRes^3 floats (x fastest); nullptr = the type is not in the volume.
         const float* density = nullptr;
@@ -284,11 +282,20 @@ public:
         float radius = 0.0f;
         uint32 type = 0;
     };
-    uint32 createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces);
+    // A CHUNK of the set: a contiguous range of its pieces (the caller sorts them - Procedural: per terrain chunk).
+    struct TreeInstanceChunk { uint32 first = 0; uint32 count = 0; };
+    uint32 createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
+        oc::span<const TreeInstanceChunk> chunks);
     // Drains the GPU first (rare: a respawn / reload).
     void destroyTreeInstanceSet(uint32 setId);
-    // Every frame the set should draw, before present(); distanceScale x every type's farDistance.
-    void renderTreeInstanceSet(uint32 setId, const glm::vec3& cameraPos, float distanceScale, bool forceFar);
+    // MAIN THREAD, every frame the set draws (before its renderTreeInstanceSet): the culls bind its buffers (a change
+    // re-records).
+    void bindTreeInstanceSet(uint32 setId);
+    // This frame's DRAWN chunks, each with the passes it draws in (PASS_*: the main cull, the shadow culls, the TLAS):
+    // the claim covers only their pieces. ANY THREAD, once per frame between beginFrame and present (Procedural: from
+    // the terrain's render walk). distanceScale x every type's farDistance.
+    struct TreeChunkDraw { uint32 chunk; uint32 passMask; };
+    void renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar);
     // The terrain height right under the camera (world Y), per frame: the far-tree volume's cell layout follows the
     // camera's height above it. Unset (NaN): the baked sea level.
     void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
@@ -469,7 +476,8 @@ private:
     inline Transform& getRenderNodeTransform(uint32 idx) { return m_instances.getTransform(idx); }
     void freeRenderNode(RenderNode& node);
 
-    uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false);
+    uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false,
+        bool raytraced = true);
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_rt.accel().getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
@@ -553,18 +561,27 @@ private:
     DebugLinePipeline m_debugLinePipeline;
     ParticlePipeline m_particlePipeline;
     // BAKED TREE RECORDS (RendererTrees.cpp, tree_cull.inc.glsl): the live sets (dead ones recycled by id). The culls
-    // bind ONE set's static buffers (m_treeCullSet, the set rendered last; a change re-records them) and build its
-    // records from the camera distance in the range renderTreeInstanceSet claims (m_treeCullBase / Count, reset
-    // per frame in beginFrame, into the UBO's u_treeCull).
+    // bind ONE set's static buffers (m_treeCullSet, bindTreeInstanceSet; a change re-records them) and build the
+    // records of this frame's LISTED pieces (the drawn chunks' pieces, each with its pass bits) from the camera
+    // distance in the range renderTreeInstanceSet claims (m_treeCullBase / Count, reset per frame in beginFrame,
+    // into the UBO's u_treeCull).
     struct TreeInstanceSet
     {
         Buffer pieces;  // TreeCullPieceGpu per piece (device-local)
         Buffer types;   // TreeCullTypeGpu per type (device-local)
-        Buffer modules; // TreeCullModuleGpu: the types' branch cards (device-local)
         uint32 numPieces = 0;
-        uint32 cardCapacity = 0; // the branch-card slots claimed behind the records each frame
-        oc::vector<uint32> lodStateBases;  // TREE_RECORDS_PER_PIECE slots per piece
-        oc::vector<oc::pair<uint16, uint32>> meshCounts; // the cull's bucket sizes (level-0 mesh, instances)
+        oc::vector<TreeInstanceChunk> chunks;
+        // Per chunk: its RT-capable pieces (an RT representation with a BLAS - tree_cull.inc.glsl treeCullRtPiece) come
+        // FIRST in its range (createTreeInstanceSet reorders), rtCount of them, inside the sphere rtCentre / rtRadius.
+        struct ChunkRt { uint32 rtCount = 0; glm::vec3 rtCentre{ 0.0f }; float rtRadius = 0.0f; };
+        oc::vector<ChunkRt> chunkRt;
+        // Per chunk its bucket sizes (level-0 mesh, instances): chunks[c]'s are meshCounts[meshCountsBegin[c] ..
+        // meshCountsBegin[c + 1]).
+        oc::vector<oc::pair<uint16, uint32>> meshCounts;
+        oc::vector<uint32> meshCountsBegin;
+        // This frame's list (piece | passMask << 28 per listed piece): host-visible, one per frame slot.
+        oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> lists;
+        oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> mappedLists;
         Buffer volumePieces; // TreeVolumePieceGpu per piece (the far-tree volume's bake)
         Buffer volumeTypes;  // TreeVolumeTypeGpu per type
         Buffer volumeData;   // the types' extinction mip chains (floats)
@@ -574,14 +591,17 @@ private:
     oc::vector<TreeInstanceSet> m_treeSets;
     Buffer m_treeCullDummy;              // bound to both tree bindings while no set is
     uint32 m_treeCullSet = UINT32_MAX;   // the set whose buffers the recorded culls bind
-    uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none): the records + the card region
+    uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none)
     uint32 m_treeCullCount = 0;
-    uint32 m_treeCullPieces = 0;         // the trees in it (3 records each)
+    uint32 m_treeCullPieces = 0;         // the trees in it (TREE_RECORDS_PER_PIECE records each)
+    uint32 m_treeCullRtPieces = 0;       // the list's first ones: the RT-capable trees of the GI / shadow chunks in RT range (TLAS slots)
+    uint32 m_giTlasDemand = 0;           // last present()'s TLAS slot count before the capacity clamp (the growth check)
+    oc::atomic<bool> m_treeCullTaken{ false }; // renderTreeInstanceSet ran this frame (any thread; reset in beginFrame)
     float m_treeCullDistanceScale = 1.0f;
     bool m_treeCullForceFar = false;
     Buffer& treeCullPieces();
     Buffer& treeCullTypes();
-    Buffer& treeCullModules();
+    Buffer& treeCullList(uint32 frameIdx);
     void uploadTreeCullUbo(PerFrameData& frameData);
     TreeVolumePipeline m_treeVolume;
     FarTreeParams m_farTreeParams;

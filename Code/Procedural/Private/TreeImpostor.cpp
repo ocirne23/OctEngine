@@ -411,7 +411,7 @@ namespace Procedural
 		return 3;
 	}
 
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out)
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ)
 	{
 		const bool backViews = numViews >= 4;
 		TreeBillboardView views[3];
@@ -431,6 +431,10 @@ namespace Procedural
 				// 4 views: a strip per face. 2 views: a strip per card, the back face reading the front's strip
 				// through the card (the same u along `right`).
 				const float strip = backViews ? (float)(v * 2 + (uint32)face) : (float)v;
+				// The piece's axis (along `right` = +Y, through the origin) on this card: image v = 0.5 - its offset along
+				// `up` from the centre / the card height (v runs down from the top), into this face's strip.
+				const float axisV = (0.5f + glm::dot(view.centre, view.up) / (2.0f * view.halfExtent.y) + strip) * stripV;
+				const float axisZ = axisInZ && v < 2 ? TREE_CARD_AXIS_CODE + axisV : 0.0f;
 				for (int k = 0; k < 4; ++k)
 				{
 					out.positions.push_back(corners[k]);
@@ -439,7 +443,7 @@ namespace Procedural
 					// Same tangent and bitangent on the back face: its handedness flips, which is exactly the TBN
 					// its own view was baked in (right / up kept, direction negated - see bakeBillboards).
 					out.bitangents.push_back(view.up);
-					out.texCoords.push_back(glm::vec3(uvs[k].x, (uvs[k].y + strip) * stripV, 0.0f));
+					out.texCoords.push_back(glm::vec3(uvs[k].x, (uvs[k].y + strip) * stripV, axisZ));
 					out.bones.push_back(0);
 				}
 				if (face == 0)

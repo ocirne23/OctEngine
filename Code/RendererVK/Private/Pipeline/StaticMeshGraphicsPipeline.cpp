@@ -344,6 +344,15 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
                 variant.fragmentShader.defines.push_back({ "TERRAIN_FILM_RT_MIRROR", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
+    // TREE_DEBUG ("Trees/Debug view"): the lit mesh fragment only (instanced_indirect.fs.glsl; the terrain has no trees).
+    if (m_treeDebugMode != 0)
+    {
+        const ShaderDefine define{ "TREE_DEBUG", oc::to_string(m_treeDebugMode) };
+        graphicsPipelineLayout.fragmentShader.defines.push_back(define);
+        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
+            if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath)
+                variant.fragmentShader.defines.push_back(define);
+    }
     // The RT shadow toggles, always defined (0/1) on the lit-core fragments: only the active sun-shadow
     // path and (when off) no light ray query is compiled, so the register allocation covers less code.
     const auto defineLit = [&](const char* name, bool on)

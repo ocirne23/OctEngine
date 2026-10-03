@@ -41,6 +41,17 @@ export namespace Procedural
 		// tagged SpatialTerrainTag_Ocean) pushes every node with its own pass mask - chunks and sectors
 		// alike. Runs with the terrain disabled too (the walk still pushes the ocean's sectors).
 		void render(Renderer& renderer, OceanGenerator& ocean);
+
+		// THE VEGETATION STORED IN THE CHUNKS (Procedural TreeSystem's trees and bushes): a chunk holds the index of
+		// its coordinate's vegetation (`lookup`; -1 = none), and render()'s walk draws it WITH the chunk - the same
+		// visibility, the same pass mask (Main-stamped: every pass; the shadow/GI sphere: PASS_SHADOW | PASS_GI). The
+		// walk merges a chunk drawn twice (a LOD handover's old + new resident: the masks OR'ed) and hands the frame's
+		// list to `sink` at its end - ON THE WALK'S WORKER, before present (main.cpp joins it). Main thread; joins
+		// the walk and re-stamps every resident. Empty functions = no vegetation.
+		struct VegetationDraw { uint32 chunk; uint32 passMask; };
+		void setVegetation(oc::function<int32(glm::ivec2)> lookup, oc::function<void(oc::span<const VegetationDraw>)> sink, uint32 numChunks);
+		// This frame's render() routes the vegetation (the terrain draws its chunks): its owner submits nothing else.
+		bool vegetationRouted() const { return m_vegRouted; }
 		// Joins the render-push job render() kicked (the renderNode pushes run on a worker). main.cpp
 		// calls it right before Renderer::present; update() and clearResidents() join it too before
 		// they touch m_residents, so a caller never sees the map change under the job.
@@ -137,15 +148,16 @@ export namespace Procedural
 			RenderMeshData mesh;
 		};
 
-		// Heap-held (m_residents maps to a unique_ptr): the SpatialIndex hands &node over as userData,
+		// Heap-held (m_residents maps to a unique_ptr): the SpatialIndex hands the Resident* over as userData,
 		// so the address must outlive the frame's hand-over - see retireResident.
 		struct Resident
 		{
 			RenderMesh mesh;           // declared first -> destroyed AFTER the node that draws it
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
-			RenderNode node;           // the culling entry's userData is &node
-			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static)
+			int32 vegetation = -1;     // the VEGETATION stored in this chunk: its index in the owner's table (-1 = none)
+			RenderNode node;
+			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static; userData = this)
 		};
 
 		void pumpJob();                 // self-continuing Low-priority generation job
@@ -179,11 +191,13 @@ export namespace Procedural
 		bool m_bounded = false;
 		glm::vec2 m_boundsMin = glm::vec2(0.0f);
 		glm::vec2 m_boundsMax = glm::vec2(0.0f);
-		int   m_chunkSize = 1024;
-		int   m_lod0Res = 512;
-		int   m_ringRadius = 32;   // max generation range from the camera chunk, in chunks
-		float m_lodStep = 0.3f;   // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
-		float m_fullResDist = 0.3f; // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
+		int   m_chunkSize = 256;
+		int   m_lod0Res = 128;
+		// IN CHUNKS (256 m since 2026-10-03; the LOD bands keep their old metre widths: x4). The ring is 24 km, not the
+		// old 32: 128 chunks would be ~51 k chunk meshes against the 16-bit mesh index (Renderer addMeshInfos).
+		int   m_ringRadius = 96;   // max generation range from the camera chunk, in chunks
+		float m_lodStep = 1.2f;   // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
+		float m_fullResDist = 1.2f; // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
 		int   m_maxLod = 4;
 		float m_seaLevel = 0.0f;
 		float m_skirtDepth = 5.0f;
@@ -415,6 +429,16 @@ export namespace Procedural
 		// sphere query both run in the job.
 		JobCounter                          m_renderCounter;
 		bool                                m_renderReady = false; // update() ran enabled: render() pushes chunks
+		// The vegetation (setVegetation): the owner's hooks, and the walk's per-frame merge (a mask per vegetation chunk,
+		// the chunks touched, the list handed to the sink) - only the walk job touches them between kick and join.
+		oc::function<int32(glm::ivec2)>                         m_vegLookup;
+		oc::function<void(oc::span<const VegetationDraw>)>      m_vegSink;
+		oc::vector<uint8>                   m_vegMasks;
+		oc::vector<uint32>                  m_vegTouched;
+		oc::vector<VegetationDraw>          m_vegDraws;
+		bool                                m_vegRouted = false;
+		void noteVegetation(const Resident& resident, uint32 passMask); // the walk job
+		void flushVegetation();                                          // the walk job's end
 		// The ring scan runs on a worker too: kicked at the END of update (after the drain and the
 		// eviction, the frame's last writers of m_residents / m_pending, which it only reads) and
 		// applied at the START of the next one (m_pending inserts, the publish, kickPump). One frame

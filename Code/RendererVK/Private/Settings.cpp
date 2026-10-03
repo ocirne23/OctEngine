@@ -138,8 +138,10 @@ void ShadowParams::registerTweaks(const oc::function<void()>& onReloadShaders)
     Tweak::floatVar("Shadows", "Terrain march spread", &terrainMarchSpread, 0.002f, 0.1f, 0.001f);
 }
 
-void FoliageParams::registerTweaks()
+void FoliageParams::registerTweaks(const oc::function<void()>& onDebugViewChanged)
 {
+    static constexpr oc::string_view DEBUG_VIEWS[] = { "Off", "Material", "Mesh (LOD)", "Fade side" };
+    Tweak::enumVar("Trees", "Debug view", &debugView, DEBUG_VIEWS, onDebugViewChanged);
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
     Tweak::floatVar("Trees", "Foliage crown normal", &crownNormal, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &shadowLength, 0.0f, 20.0f, 0.05f);
@@ -156,6 +158,7 @@ void FoliageParams::registerTweaks()
     Tweak::floatVar("Trees", "Foliage edge fade centre scale", &edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow cascade margin (m)", &shadowCascadeMargin, 0.0f, 10000.0f, 1.0f);
+    Tweak::floatVar("Trees", "RT range (m)", &rtRange, 0.0f, 10000.0f, 5.0f);
 }
 
 void FarTreeParams::registerTweaks()
@@ -186,6 +189,7 @@ void FarTreeParams::registerTweaks()
     static constexpr oc::string_view PIXEL_SKIP[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };
     Tweak::enumVar("Trees", "Far pixel skip", &pixelSkip, PIXEL_SKIP);
     Tweak::floatVar("Trees", "Far rebake distance (m)", &rebakeDistance, 1.0f, 2000.0f, 1.0f);
+    Tweak::intVar("Trees", "Far floor smoothing", &floorSmoothing, 0, 8, 1.0f);
 }
 
 void FogParams::registerTweaks()

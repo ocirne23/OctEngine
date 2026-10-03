@@ -251,7 +251,7 @@ void Renderer::setMaterialFlags(uint16 materialIdx, uint32 flags)
     m_materials.upload(materialIdx, 1);
 }
 
-RenderMesh Renderer::createMesh(const RenderMeshData& data)
+RenderMesh Renderer::createMesh(const RenderMeshData& data, bool raytraced)
 {
     RenderMesh mesh;
     if (data.vertices.empty() || data.indices.empty())
@@ -272,7 +272,7 @@ RenderMesh Renderer::createMesh(const RenderMeshData& data)
     info.firstIndex = mesh.m_firstIndex;
     info.vertexOffset = (int32)mesh.m_firstVertex;
     info.prevVertexDelta = 0;
-    mesh.m_meshIdx = (uint16)addMeshInfos({ info }, oc::span<const uint32>(&mesh.m_numVertices, 1));
+    mesh.m_meshIdx = (uint16)addMeshInfos({ info }, oc::span<const uint32>(&mesh.m_numVertices, 1), false, raytraced);
     return mesh;
 }
 
@@ -585,7 +585,8 @@ void Renderer::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 
 // SharedTable does the slot claim, the mirror write, the upload and any capacity growth (holes are
 // never compacted, so a range a destroyed container freed is reused first). The callback is the
 // Renderer's own per-slot bookkeeping: the parallel CPU side tables and the BLAS build queue.
-uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs)
+uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs,
+    bool raytraced)
 {
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
     if (meshInfos.empty())
@@ -603,7 +604,7 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
         }
         // The BLAS side tables and the build queue: a recycled slot below the one-time build
         // watermark needs its build queued explicitly, since the watermark scan will not reach it.
-        m_rt.onMeshInfosAdded(base, count, vertexCounts, skinnedOutputs, reused);
+        m_rt.onMeshInfosAdded(base, count, vertexCounts, skinnedOutputs || !raytraced, reused);
         // Fresh mesh slots must read as "no LOD chain" on the GPU (device memory starts undefined;
         // addMeshLodGroup overwrites the chained ones right after). A growth re-uploads the whole
         // mapping itself, so this only has to cover the within-capacity append.

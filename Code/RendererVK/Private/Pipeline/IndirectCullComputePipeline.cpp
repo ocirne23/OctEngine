@@ -22,8 +22,6 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
         perFrame.drawCountBuffer.initialize(4 * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullDrawCounts");
-        perFrame.treeCardCounterBuffer.initialize(16, vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullTreeCardCounter");
     }
     resizeInstanceBuffers(maxMeshInstances);
     resizeCommandBuffers(maxUniqueMeshes);
@@ -152,9 +150,8 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
     });
     // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
     // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors);
-    // 20, 21, 22 the baked tree records' static pieces + types + branch cards (tree_cull.inc.glsl); 23 the card
-    // region's allocator.
-    for (uint32 binding = 11; binding <= 23; ++binding)
+    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl).
+    for (uint32 binding = 11; binding <= 22; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -180,7 +177,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 24> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 23> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -393,15 +390,10 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeTypesBuffer.getBuffer(), .range = recordParams.treeTypesBuffer.getSize() } }
         },
-        DescriptorSetUpdateInfo { // TreeCullModules
+        DescriptorSetUpdateInfo { // TreeCullList
             .binding = 22,
             .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeModulesBuffer.getBuffer(), .range = recordParams.treeModulesBuffer.getSize() } }
-        },
-        DescriptorSetUpdateInfo { // TreeCardCounterBuffer
-            .binding = 23,
-            .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = frameData.treeCardCounterBuffer.getBuffer(), .range = frameData.treeCardCounterBuffer.getSize() } }
+            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeListBuffer.getBuffer(), .range = recordParams.treeListBuffer.getSize() } }
         },
     };
 
@@ -418,13 +410,12 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
         vkCommandBuffer.fillBuffer(frameData.outTerrainTessCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         vkCommandBuffer.fillBuffer(frameData.outTerrainFilmCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
-        vkCommandBuffer.fillBuffer(frameData.treeCardCounterBuffer.getBuffer(), 0, vk::WholeSize, 0);
         {
             vk::MemoryBarrier2 memoryBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eClear,
                 .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
                 .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead, // + the card counter's atomics
+                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
             };
             vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &memoryBarrier });
         }

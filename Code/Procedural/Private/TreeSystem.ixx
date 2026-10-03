@@ -43,10 +43,14 @@ export namespace Procedural
 			// pipeline), each with its own baked material (owned).
 			RenderMesh billboard;
 			uint16 billboardMaterial = UINT16_MAX;
-			// Modules with billboards: the mid tier's BRANCH CARD materials, derived from billboardMaterial (fade in
-			// over the mid band, out over the far band; applyFadeBands).
-			uint16 cardInMaterial = UINT16_MAX;
-			uint16 cardOutMaterial = UINT16_MAX;
+			// Baked variants with billboards (the GPU MID tier): the bark split into the trunk's and the branches'
+			// (LOD chains), and the BRANCH CARD mesh - every module placement's billboard cards merged into one mesh,
+			// UVs into the species' card atlas (Species::cardAtlasMaterial), each card's axis in its tangent w.
+			RenderMesh trunkBark[TREE_PIECE_LODS];
+			RenderMesh branchBark[TREE_PIECE_LODS];
+			uint32 trunkChain = UINT32_MAX;
+			uint32 branchChain = UINT32_MAX;
+			RenderMesh cards;
 			RenderMesh impostor;
 			uint16 impostorMaterial = UINT16_MAX;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
@@ -98,7 +102,14 @@ export namespace Procedural
 			// released with the species). UINT16_MAX without billboards.
 			uint16 barkFadeMaterial = UINT16_MAX;
 			uint16 leafFadeMaterial = UINT16_MAX;
-			uint16 leafMidFadeMaterial = UINT16_MAX; // the mid tier: the leaves' fade-OUT over the mid band
+			// The MID tier (GPU path): the module billboards stacked into ONE atlas (owned; LitFoliage, no edge fade) and
+			// its derived fade-IN (the mid band) / fade-OUT (the far band) copies for the variants' card meshes; the
+			// leaves' and the branch bark's fade-OUT over the mid band. The trunk keeps barkMaterial / barkFadeMaterial.
+			uint16 cardAtlasMaterial = UINT16_MAX;
+			uint16 cardInMaterial = UINT16_MAX;
+			uint16 cardOutMaterial = UINT16_MAX;
+			uint16 leafMidFadeMaterial = UINT16_MAX;
+			uint16 branchMidFadeMaterial = UINT16_MAX;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
@@ -127,7 +138,9 @@ export namespace Procedural
 		int m_gridSize = 350;
 		float m_spacing = 11.0f;
 		float m_positionJitter = 0.8f;        // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)
-		float m_sizeVariation = 0.5f;         // extra per-tree scale on top of the species range: x 2^(+-this), log-uniform
+		float m_sizeVariation = 0.6f;        // extra per-tree scale on top of the species range: x 2^(+-this), log-uniform
+		float m_bushesPerTree = 4.0f;        // `Kind Bush` species scattered around each grove tree (the fraction by chance)
+		float m_bushShadowDistance = 100.0f;  // bushes cast no sun shadow beyond this from the cascades' centre (m); 0 = no limit
 		int m_seed = 1;
 		int m_groveType = 1;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name (1 = Oak)
 		int m_farMode = 0;                    // 0 = billboards, 1 = octahedral impostors (fallback), 2 = none (reloads)
@@ -138,6 +151,16 @@ export namespace Procedural
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
 		bool m_gpuExpansion = true;           // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 		uint32 m_treeSet = UINT32_MAX;        // the grove's GPU expansion set (Renderer::createTreeInstanceSet)
+		// The set's chunks are the TERRAIN's (spawnPreview: Globals::terrain.setVegetation): terrain chunk coordinate ->
+		// set chunk, at the chunk size they were sorted with. The sink reads the band settings through the atomics (it
+		// runs on the terrain's walk job). m_vegFallback: every chunk, when no walk lists them.
+		oc::unordered_map<uint64, int32> m_vegChunkOf;
+		int m_vegChunkSize = 0;
+		uint32 m_vegNumChunks = 0;
+		bool m_vegHooked = false;
+		oc::vector<Renderer::TreeChunkDraw> m_vegFallback;
+		oc::atomic<float> m_sinkDistanceScale{ 4.0f };
+		oc::atomic<bool> m_sinkForceFar{ false };
 
 		bool m_loaded = false;
 		bool m_spawned = false;

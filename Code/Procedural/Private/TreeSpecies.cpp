@@ -119,6 +119,8 @@ namespace Procedural
 		if (const AssetNode* n = species->find("Seed"))
 			out.seed = (uint32)n->asInt(0, (int)out.seed);
 		readRange(*species, "Scale", out.scale);
+		if (const AssetNode* n = species->find("Kind"))
+			out.bush = iequals(n->asString(), "Bush");
 
 		if (const AssetNode* trunk = species->find("Trunk"))
 		{

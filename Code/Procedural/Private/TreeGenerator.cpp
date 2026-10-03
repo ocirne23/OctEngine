@@ -529,13 +529,18 @@ namespace
 		}
 	}
 
-	// Meshes every LOD of a piece from its plan.
+	// The LOD levels meshPiece builds: LEVEL 0 ONLY - the trees switch through their own tiers (mid tier, billboard, far
+	// volume) and upload no mesh LOD chains (TreeSystem uploadLodChain). Levels 1.. stay empty; PIECE_LODS keeps their
+	// specs should mesh LODs come back.
+	constexpr uint32 MESHED_LODS = 1;
+
+	// Meshes the LODs of a piece from its plan (MESHED_LODS of them).
 	void meshPiece(const TreeSpeciesDesc& sp, const PiecePlan& plan, TreePiece& out)
 	{
 		// The module root is the attach point on the trunk axis - inside the crown, the best centre a shared
 		// module knows (the composited tree's own centre differs per tree).
 		const glm::vec3 crownCentre(0.0f);
-		for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
+		for (uint32 lod = 0; lod < MESHED_LODS; ++lod)
 		{
 			const LodSpec& spec = PIECE_LODS[lod];
 			const int keepLevel = glm::max(plan.maxLevel - spec.levelDrop, 1);
@@ -787,6 +792,7 @@ namespace Procedural
 			for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
 			{
 				append(out.bark[lod], piece.bark[lod], placement.local);
+				append(placement.trunk ? out.trunkBark[lod] : out.branchBark[lod], piece.bark[lod], placement.local);
 				append(out.leaves[lod], piece.leaves[lod], placement.local);
 				out.lodError[lod] = glm::max(out.lodError[lod], piece.lodError[lod] * placement.local.scale);
 			}

@@ -59,6 +59,7 @@ export namespace Procedural
 		oc::string path;
 		uint32 seed = 1;
 		glm::vec2 scale{ 0.85f, 1.15f }; // uniform tree scale range
+		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
 
 		// Trunks
 		int trunkCount = 4;

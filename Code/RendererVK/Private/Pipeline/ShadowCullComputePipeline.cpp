@@ -65,7 +65,7 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
         computePipelineLayout.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
-    for (uint32 i = 0; i <= 14; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14 the baked tree pieces / types
+    for (uint32 i = 0; i <= 15; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14/15 the baked tree pieces / types / list
     {
         b.push_back(vk::DescriptorSetLayoutBinding{
             .binding = i,
@@ -80,7 +80,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 15> updates{
+    oc::array<DescriptorSetUpdateInfo, 16> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
@@ -111,6 +111,8 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treePiecesBuffer.getBuffer(), .range = params.treePiecesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treeTypesBuffer.getBuffer(), .range = params.treeTypesBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 15, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.treeListBuffer.getBuffer(), .range = params.treeListBuffer.getSize() } } },
     };
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();

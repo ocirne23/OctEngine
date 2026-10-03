@@ -11,16 +11,17 @@ import :Layout;
 import :InstanceStream;
 
 // The BAKED TREE RECORDS' CPU side (tree_cull.inc.glsl): sets of placed pieces uploaded ONCE to device-local
-// memory. The culls build each piece's three records (bark, leaves, billboard) from the camera distance inside a
-// range of the frame's instance stream; per frame the CPU only claims that range and notes the per-mesh bucket
-// sizes. Nothing writes the range's stream entries.
+// memory. The culls build each piece's four records from the camera distance inside a range of the frame's instance
+// stream (tree_cull.inc.glsl: what each slot holds per type and band); per frame the CPU only lists the drawn
+// chunks' pieces, claims that range and notes the chunks' per-mesh bucket sizes. Nothing writes the range's stream
+// entries.
 //
 // The GPU layouts below are MIRRORED in tree_cull.inc.glsl - keep them in step.
 
 namespace
 {
     constexpr uint32 TREE_RECORD_ABSENT = 0xFFFFFFFFu;
-    constexpr uint32 TREE_RECORDS_PER_PIECE = 3; // bark, leaves, billboard
+    constexpr uint32 TREE_RECORDS_PER_PIECE = 4; // at most 4 representations draw at once (tree_cull.inc.glsl)
 
     // One representation: an InMeshInstance minus its node (meshIdx | materialIdx << 16, pipelineIdx | alphaMode << 16).
     struct TreeCullRecordGpu
@@ -29,7 +30,7 @@ namespace
         uint32 pipelineAlpha = 0;
     };
 
-    // A piece TYPE (one library piece of one species): its representations and its crossfade band.
+    // A piece TYPE (one library piece of one species): its representations and its crossfade bands.
     struct TreeCullTypeGpu
     {
         TreeCullRecordGpu bark;
@@ -37,30 +38,18 @@ namespace
         TreeCullRecordGpu leaves;
         TreeCullRecordGpu leavesFade;
         TreeCullRecordGpu billboard;
+        TreeCullRecordGpu trunk;      // the mid tier (tree_cull.inc.glsl): the trunk on its own ...
+        TreeCullRecordGpu trunkFade;
+        TreeCullRecordGpu cardsIn;    // ... and the merged branch-card mesh
+        TreeCullRecordGpu cardsOut;
         float farDistance = 0.0f; // billboard switch distance (m); x the frame's distance scale
         float fadeWidth = 1.0f;   // crossfade band (m), centred on it
-        float midDistance = 0.0f; // the mid tier (branch cards) from here (m; x the scale); 0 = none
+        float midDistance = 0.0f; // the mid tier from here (m; x the scale); 0 = none
         float midFadeWidth = 1.0f;
-        uint32 moduleFirst = 0;   // its branch cards in the modules buffer
-        uint32 moduleCount = 0;
-    };
-    static_assert(sizeof(TreeCullTypeGpu) == 64);
-
-    // A branch card: a module's billboard at its placement (tree-local, scale 1), on its fade-in / fade-out material.
-    struct TreeCullModuleGpu
-    {
-        glm::vec4 posScale{ 0.0f };
-        glm::vec4 quat{ 0.0f, 0.0f, 0.0f, 1.0f };
-        uint32 meshMaterialIn = TREE_RECORD_ABSENT;
-        uint32 meshMaterialOut = TREE_RECORD_ABSENT;
-        uint32 pipelineAlpha = 0;
+        float shadowDistance = 0.0f; // no sun shadow beyond this from the cascades' centre (m); 0 = no limit
         uint32 pad0 = 0;
     };
-    static_assert(sizeof(TreeCullModuleGpu) == 48);
-
-    // The branch-card slots a set claims per frame (the cull hands them out; a tree that finds them taken draws its
-    // leaves mesh). At most the cards of every placed tree.
-    constexpr uint32 TREE_CARD_SLOTS_MAX = 64 * 1024;
+    static_assert(sizeof(TreeCullTypeGpu) == 96);
 
     // A placed piece: its static transform and its band test.
     struct TreeCullPieceGpu
@@ -70,7 +59,7 @@ namespace
         glm::vec3 centre{ 0.0f };
         float radius = 0.0f;
         uint32 type = 0;
-        uint32 lodStateBase = 0; // TREE_RECORDS_PER_PIECE LOD hysteresis slots
+        uint32 pad2 = 0;         // (was the LOD hysteresis base: tree meshes have no LOD chains)
         uint32 pad0 = 0;
         uint32 pad1 = 0;
     };
@@ -82,12 +71,13 @@ namespace
 // Patched in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet claims the range - left at
 // that upload's 0 / 0, the culls read the range's never-written stream entries as instances (garbage mesh
 // indices, out-of-bounds bucket writes).
-// y = the whole range: 3 records per piece, then the branch-card region. z = the culls' THREAD count (their dispatch,
+// y = the range (TREE_RECORDS_PER_PIECE per piece). z = the culls' THREAD count (their dispatch,
 // IndirectCullComputePipeline::update): one per stream instance outside the range, one per PIECE inside it (w = the
 // piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
 void Renderer::uploadTreeCullUbo(PerFrameData& frameData)
 {
-    const bool treeVolume = m_treeCullCount > 0 && farTreesActive() && m_treeSets[m_treeCullSet].hasVolume;
+    const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
+        && m_treeSets[m_treeCullSet].hasVolume;
     m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces),
         m_treeCullPieces);
     m_ubo.treeCullParams = glm::vec4(m_treeCullDistanceScale, m_treeCullForceFar ? 1.0f : 0.0f,
@@ -108,12 +98,13 @@ Buffer& Renderer::treeCullTypes()
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].types : m_treeCullDummy;
 }
 
-Buffer& Renderer::treeCullModules()
+Buffer& Renderer::treeCullList(uint32 frameIdx)
 {
-    return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].modules : m_treeCullDummy;
+    return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].lists[frameIdx] : m_treeCullDummy;
 }
 
-uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces)
+uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
+    oc::span<const TreeInstanceChunk> chunks)
 {
     uint32 setId = 0;
     while (setId < (uint32)m_treeSets.size() && m_treeSets[setId].alive)
@@ -135,36 +126,83 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
         return gpu;
     };
     oc::vector<TreeCullTypeGpu> gpuTypes(types.size());
-    oc::vector<TreeCullModuleGpu> gpuModules;
     for (size_t t = 0; t < types.size(); ++t)
     {
         const TreeInstanceType& type = types[t];
         TreeCullTypeGpu& gpu = gpuTypes[t];
         gpu = TreeCullTypeGpu{ record(type.bark), record(type.barkFade), record(type.leaves), record(type.leavesFade),
-            record(type.billboard), type.farDistance, type.fadeWidth };
-        gpu.moduleFirst = (uint32)gpuModules.size();
-        for (const TreeInstanceModule& module : type.modules)
-        {
-            if (!module.mesh || !module.mesh->isValid())
-                continue;
-            const TreeCullRecordGpu in = record({ module.mesh, module.materialIn, module.pipeline });
-            gpuModules.push_back(TreeCullModuleGpu{
-                .posScale = glm::vec4(module.local.pos, module.local.scale),
-                .quat = glm::vec4(module.local.quat.x, module.local.quat.y, module.local.quat.z, module.local.quat.w),
-                .meshMaterialIn = in.meshMaterial,
-                .meshMaterialOut = record({ module.mesh, module.materialOut, module.pipeline }).meshMaterial,
-                .pipelineAlpha = in.pipelineAlpha,
-            });
-        }
-        gpu.moduleCount = (uint32)gpuModules.size() - gpu.moduleFirst;
-        // The mid tier only with cards and a billboard to hand over to (tree_cull.inc.glsl).
-        const bool mid = type.midDistance > 0.0f && gpu.moduleCount > 0 && gpu.billboard.meshMaterial != TREE_RECORD_ABSENT;
+            record(type.billboard), record(type.trunk), record(type.trunkFade), record(type.cardsIn), record(type.cardsOut),
+            type.farDistance, type.fadeWidth };
+        // The mid tier only with its card mesh, its trunk and a billboard to hand over to (tree_cull.inc.glsl).
+        const bool mid = type.midDistance > 0.0f && gpu.cardsIn.meshMaterial != TREE_RECORD_ABSENT
+            && gpu.trunk.meshMaterial != TREE_RECORD_ABSENT && gpu.billboard.meshMaterial != TREE_RECORD_ABSENT;
         gpu.midDistance = mid ? type.midDistance : 0.0f;
         gpu.midFadeWidth = type.midFadeWidth;
+        gpu.shadowDistance = type.shadowDistance;
     }
 
-    // Bucket sizes: a piece draws its bark mesh at most once (normal OR fade material - the same mesh), its
-    // leaves once, its billboard once. Level-0 meshes: present() sizes a chain's buckets from its level 0.
+    // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves)
+    // has a BLAS. The others (bushes: created without one) would only ever take inactive TLAS slots.
+    oc::vector<uint8> rtCapable(types.size(), 0);
+    for (size_t t = 0; t < types.size(); ++t)
+    {
+        const TreeCullRecordGpu& rec = gpuTypes[t].billboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].billboard : gpuTypes[t].leaves;
+        rtCapable[t] = rec.meshMaterial != TREE_RECORD_ABSENT && m_rt.hasStaticBlas(rec.meshMaterial & 0xFFFFu) ? 1 : 0;
+    }
+
+    // The chunks (no table = one chunk over every piece). Within each, the RT-capable pieces FIRST (a stable
+    // partition - the caller does not address single pieces): renderTreeInstanceSet lists them ahead of every other
+    // piece, and the TLAS takes slots for those only. Per chunk the sphere around them, for the CPU's RT range test.
+    if (chunks.empty())
+        set.chunks.assign(1, TreeInstanceChunk{ 0, (uint32)pieces.size() });
+    else
+        set.chunks.assign(chunks.begin(), chunks.end());
+    set.chunkRt.clear();
+    set.chunkRt.resize(set.chunks.size());
+    oc::vector<uint32> order(pieces.size());
+    for (uint32 i = 0; i < (uint32)order.size(); ++i)
+        order[i] = i;
+    for (size_t c = 0; c < set.chunks.size(); ++c)
+    {
+        const TreeInstanceChunk& chunk = set.chunks[c];
+        assert(chunk.first + chunk.count <= pieces.size());
+        uint32* begin = order.data() + chunk.first;
+        uint32* mid = oc::stable_partition(begin, begin + chunk.count, [&](uint32 i) { return rtCapable[pieces[i].type] != 0; });
+        TreeInstanceSet::ChunkRt& rt = set.chunkRt[c];
+        rt.rtCount = (uint32)(mid - begin);
+        glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+        for (const uint32* it = begin; it != mid; ++it)
+        {
+            lo = glm::min(lo, pieces[*it].centre - pieces[*it].radius);
+            hi = glm::max(hi, pieces[*it].centre + pieces[*it].radius);
+        }
+        if (rt.rtCount > 0)
+        {
+            rt.rtCentre = (lo + hi) * 0.5f;
+            rt.rtRadius = glm::length(hi - lo) * 0.5f;
+        }
+    }
+
+    // No LOD hysteresis slots: tree meshes have no LOD chains (Procedural TreeSystem; the culls skip the lookup).
+    oc::vector<TreeCullPieceGpu> gpuPieces(pieces.size());
+    for (size_t i = 0; i < pieces.size(); ++i)
+    {
+        const TreeInstancePiece& piece = pieces[order[i]];
+        const Transform& transform = piece.transform;
+        gpuPieces[i] = TreeCullPieceGpu{
+            .posScale = glm::vec4(transform.pos, transform.scale),
+            .quat = glm::vec4(transform.quat.x, transform.quat.y, transform.quat.z, transform.quat.w),
+            .centre = piece.centre,
+            .radius = piece.radius,
+            .type = piece.type,
+        };
+    }
+
+    // Per chunk its bucket sizes: a piece draws each of its meshes at most once (normal OR fade material - the same
+    // mesh). Level-0 meshes: present() sizes a chain's buckets from its level 0. (The order within a chunk does not
+    // matter here.)
+    set.meshCounts.clear();
+    set.meshCountsBegin.clear();
     oc::unordered_map<uint16, uint32> meshCounts;
     auto count = [&](const TreeInstanceRep& a, const TreeInstanceRep& b)
     {
@@ -172,41 +210,33 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
         if (mesh)
             ++meshCounts[mesh->m_meshIdx];
     };
-
-    oc::unordered_map<uint16, uint32> cardCounts; // per card mesh: its placements over every tree with a mid tier
-    uint32 totalCards = 0;
-    oc::vector<TreeCullPieceGpu> gpuPieces(pieces.size());
-    set.lodStateBases.resize(pieces.size());
-    for (size_t i = 0; i < pieces.size(); ++i)
+    for (const TreeInstanceChunk& chunk : set.chunks)
     {
-        const TreeInstancePiece& piece = pieces[i];
-        const TreeInstanceType& type = types[piece.type];
-        const Transform& transform = piece.transform;
-        set.lodStateBases[i] = allocateLodStateRange(TREE_RECORDS_PER_PIECE);
-        gpuPieces[i] = TreeCullPieceGpu{
-            .posScale = glm::vec4(transform.pos, transform.scale),
-            .quat = glm::vec4(transform.quat.x, transform.quat.y, transform.quat.z, transform.quat.w),
-            .centre = piece.centre,
-            .radius = piece.radius,
-            .type = piece.type,
-            .lodStateBase = set.lodStateBases[i],
-        };
-        count(type.bark, type.barkFade);
-        count(type.leaves, type.leavesFade);
-        count(type.billboard, type.billboard);
-        if (gpuTypes[piece.type].midDistance > 0.0f)
+        meshCounts.clear();
+        for (uint32 i = chunk.first; i < chunk.first + chunk.count; ++i)
         {
-            totalCards += gpuTypes[piece.type].moduleCount;
-            for (const TreeInstanceModule& module : type.modules)
-                if (module.mesh && module.mesh->isValid())
-                    ++cardCounts[module.mesh->m_meshIdx];
+            const TreeInstanceType& type = types[pieces[i].type];
+            count(type.bark, type.barkFade);
+            count(type.leaves, type.leavesFade);
+            count(type.billboard, type.billboard);
+            if (gpuTypes[pieces[i].type].midDistance > 0.0f)
+            {
+                count(type.trunk, type.trunkFade);
+                count(type.cardsIn, type.cardsOut);
+            }
         }
+        set.meshCountsBegin.push_back((uint32)set.meshCounts.size());
+        set.meshCounts.insert(set.meshCounts.end(), meshCounts.begin(), meshCounts.end());
     }
-    // The card region: the slots of every placed tree's cards, capped - its buckets never hold more than the region.
-    set.cardCapacity = oc::min(totalCards, TREE_CARD_SLOTS_MAX);
-    for (const auto& [meshIdx, cards] : cardCounts)
-        meshCounts[meshIdx] += oc::min(cards, set.cardCapacity);
-    set.meshCounts.assign(meshCounts.begin(), meshCounts.end());
+    set.meshCountsBegin.push_back((uint32)set.meshCounts.size());
+
+    // This frame's list (renderTreeInstanceSet): host-visible per frame slot, at most every piece.
+    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
+    {
+        set.lists[f].initialize(oc::max<size_t>(pieces.size() * sizeof(uint32), 16), vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeCullList", BufferHostAccess::eSequentialWrite);
+        set.mappedLists[f] = oc::span<uint32>((uint32*)set.lists[f].mapMemory().data(), pieces.size());
+    }
 
     // The culls' data: written once, device-local (staged in chunks).
     auto uploadDeviceLocal = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
@@ -219,8 +249,6 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
     };
     uploadDeviceLocal(set.pieces, gpuPieces.data(), gpuPieces.size() * sizeof(TreeCullPieceGpu), "TreeCullPieces");
     uploadDeviceLocal(set.types, gpuTypes.data(), gpuTypes.size() * sizeof(TreeCullTypeGpu), "TreeCullTypes");
-    uploadDeviceLocal(set.modules, gpuModules.data(), gpuModules.size() * sizeof(TreeCullModuleGpu), "TreeCullModules");
-
     // The far-tree volume's data: host-visible, read through device addresses at its (rare) rebakes.
     auto upload = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
     {
@@ -357,61 +385,116 @@ void Renderer::destroyTreeInstanceSet(uint32 setId)
     (void)waitResult;
     if (m_treeCullSet == setId)
     {
-        // The recorded culls bind its buffers: back to the dummies, and no range this frame.
+        // The recorded culls bind its buffers: back to the dummies, and no tree this frame. A range claimed already
+        // stays claimed (a claim cannot be returned) with NO trees in it: the culls' threads then skip it whole
+        // (tree_cull.inc.glsl treeCullThreadInstance), instead of reading its never-written entries as instances.
         m_treeCullSet = UINT32_MAX;
-        m_treeCullBase = 0;
-        m_treeCullCount = 0;
         m_treeCullPieces = 0;
+        m_treeCullRtPieces = 0;
         setHaveToRecordCommandBuffers();
     }
     set.pieces.destroy();
     set.types.destroy();
-    set.modules.destroy();
-    set.cardCapacity = 0;
     set.volumePieces.destroy();
     set.volumeTypes.destroy();
     set.volumeData.destroy();
     set.hasVolume = false;
     m_treeVolume.markDirty();
+    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
-        const std::lock_guard lock(m_spawnMutex);
-        for (uint32 base : set.lodStateBases)
-            m_meshLods.releaseStateRange(base, TREE_RECORDS_PER_PIECE);
+        set.lists[f].destroy();
+        set.mappedLists[f] = {};
     }
-    set.lodStateBases.clear();
+    set.chunks.clear();
+    set.chunkRt.clear();
     set.meshCounts.clear();
+    set.meshCountsBegin.clear();
     set.numPieces = 0;
     set.alive = false;
 }
 
-void Renderer::renderTreeInstanceSet(uint32 setId, const glm::vec3& cameraPos, float distanceScale, bool forceFar)
+void Renderer::bindTreeInstanceSet(uint32 setId)
 {
-    if (setId >= (uint32)m_treeSets.size())
+    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || m_treeCullSet == setId)
+        return;
+    m_treeCullSet = setId; // the recorded culls bind its buffers
+    setHaveToRecordCommandBuffers();
+}
+
+void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar)
+{
+    // The culls carry the BOUND set's records (bindTreeInstanceSet, main), one set per frame. The distance test runs
+    // from the main view: the culls' camera.
+    if (setId != m_treeCullSet || setId >= (uint32)m_treeSets.size())
         return;
     TreeInstanceSet& set = m_treeSets[setId];
     if (!set.alive || set.numPieces == 0)
         return;
-    // The culls carry one set's records per frame (the distance test runs from the main view: the culls' camera).
-    (void)cameraPos;
-    assert(m_treeCullCount == 0 && "renderTreeInstanceSet: one tree set per frame");
-    if (m_treeCullCount != 0)
-        return;
-    if (m_treeCullSet != setId)
+    if (m_treeCullTaken.exchange(true, oc::memory_order_relaxed))
     {
-        m_treeCullSet = setId; // the recorded culls bind its buffers
-        setHaveToRecordCommandBuffers();
+        assert(false && "renderTreeInstanceSet: one call per frame");
+        return;
     }
 
-    // The records, then the branch-card region, in ONE claim (the culls address the cards behind the records).
-    const uint32 count = set.numPieces * TREE_RECORDS_PER_PIECE + set.cardCapacity;
+    // The LIST in two sections. First the RT section: the RT-capable pieces (first in their chunk) of the chunks drawn
+    // for GI / shadows whose RT sphere reaches into "Trees/RT range" of the scene focus - the TLAS takes ONE slot per
+    // entry of this section only (m_treeCullRtPieces; tree_cull.inc.glsl treeCullTlasInstance). Then every other
+    // listed piece. The culls read the whole list, in any order.
+    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
+    oc::span<uint32> list = set.mappedLists[frameIdx];
+    const float rtRange = m_foliageParams.rtRange;
+    const glm::vec3 focus = sceneFocusOrCamera();
+    auto inRtSection = [&](const TreeChunkDraw& draw)
+    {
+        const TreeInstanceSet::ChunkRt& rt = set.chunkRt[draw.chunk];
+        return rt.rtCount > 0 && (draw.passMask & (RendererVKLayout::PASS_GI | RendererVKLayout::PASS_SHADOW)) != 0
+            && (rtRange <= 0.0f || glm::distance(rt.rtCentre, focus) - rt.rtRadius <= rtRange);
+    };
+    uint32 numListed = 0;
+    for (const TreeChunkDraw& draw : chunks)
+    {
+        if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0 || !inRtSection(draw))
+            continue;
+        const TreeInstanceChunk& chunk = set.chunks[draw.chunk];
+        const uint32 rtCount = set.chunkRt[draw.chunk].rtCount;
+        assert(numListed + rtCount <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
+        const uint32 bits = draw.passMask << 28;
+        for (uint32 i = 0; i < rtCount; ++i)
+            list[numListed + i] = (chunk.first + i) | bits;
+        numListed += rtCount;
+    }
+    const uint32 numRt = numListed;
+    for (const TreeChunkDraw& draw : chunks)
+    {
+        if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0)
+            continue;
+        const TreeInstanceChunk& chunk = set.chunks[draw.chunk];
+        const uint32 skip = inRtSection(draw) ? set.chunkRt[draw.chunk].rtCount : 0u; // listed above
+        assert(numListed + chunk.count - skip <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
+        const uint32 bits = draw.passMask << 28;
+        for (uint32 i = skip; i < chunk.count; ++i)
+            list[numListed + i - skip] = (chunk.first + i) | bits;
+        numListed += chunk.count - skip;
+    }
+    if (numListed == 0)
+        return;
+
+    const uint32 count = numListed * TREE_RECORDS_PER_PIECE;
     const uint32 base = m_instances.claimInstances(count);
     if (base == UINT32_MAX)
         return; // full this frame: the capacity grows at the next beginFrame
-    for (const auto& [meshIdx, numInstances] : set.meshCounts)
-        m_instances.noteMeshInstances(meshIdx, numInstances);
+    for (const TreeChunkDraw& draw : chunks)
+    {
+        if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0)
+            continue;
+        for (uint32 m = set.meshCountsBegin[draw.chunk]; m < set.meshCountsBegin[draw.chunk + 1]; ++m)
+            m_instances.noteMeshInstances(set.meshCounts[m].first, set.meshCounts[m].second);
+    }
+    set.lists[frameIdx].flushMappedMemory(numListed * sizeof(uint32));
     m_treeCullBase = base;
     m_treeCullCount = count;
-    m_treeCullPieces = set.numPieces;
+    m_treeCullPieces = numListed;
+    m_treeCullRtPieces = numRt;
     m_treeCullDistanceScale = distanceScale;
     m_treeCullForceFar = forceFar;
 }

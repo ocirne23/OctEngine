@@ -39,6 +39,11 @@ float tvRadialUv(float r, TreeVolumeParams v) { return log(max(r, 1e-3) / v.rMin
 // Radial texel coordinate (texels from rMin, continuous) -> radius.
 float tvRadius(float texel, TreeVolumeParams v) { return v.rMin * exp(texel / float(v.radialRes) * tvLogSpan(v)); }
 
+// An angular texel index wrapped into [0, res), for any x >= -2 res. NOT `((x % res) + res) % res`: GLSL leaves `%`
+// UNDEFINED for a negative operand, and the indices just below 0 (the tent's and the floor ring's left neighbours, the
+// march's bilinear base) are exactly the ones at the seam - a line of broken columns along the bake centre's -X.
+int tvWrapAngle(int x, int res) { return int(uint(x + 2 * res) % uint(res)); }
+
 // A cell's radial / tangential size (m) at radius r.
 float tvRadialCell(float r, TreeVolumeParams v) { return r * tvLogSpan(v) / float(v.radialRes); }
 float tvTangentialCell(float r, TreeVolumeParams v) { return r * TV_TWO_PI / float(v.angularRes); }
