@@ -985,7 +985,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
 
 ## Procedural grass (`GrassPipeline`, "Grass" tweaks, `GrassParams`)
 
-**Built 2026-10-03; defaults tuned by the user the same day** (1024 blades per 2 m patch, 1 m blades 0.1 m wide).
+**Built 2026-10-03; defaults tuned by the user the same day** (1024 blades per 2 m patch, 1 m blades 0.15 m wide).
 Desktop only (no VR). Blades near the camera (default range 145 m);
 the far tiers (the terrain shading taking over the grass look) are not built yet.
 

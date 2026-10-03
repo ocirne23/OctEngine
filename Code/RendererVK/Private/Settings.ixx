@@ -281,7 +281,7 @@ export struct GrassParams
     float rangeFade = 45.0f;       // m: the blades thin out to none over the last metres of the range
     float bladeHeight = 1.0f;      // m
     float heightVariation = 0.6f;  // 0..1: the shortest blade is (1 - this) x the height
-    float bladeWidth = 0.1f;       // m at the root
+    float bladeWidth = 0.15f;      // m at the root
     float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
     float thinStart = 20.0f;       // m: all blades inside it; past it (start / d)^exponent of them
     float thinExponent = 1.0f;
