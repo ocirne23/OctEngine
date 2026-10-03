@@ -195,6 +195,16 @@ vec3 doAreaLightSpecularH(vec3 lightRadiance, f16vec3 Lspec, f16vec3 V, f16vec3 
 		* (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL), float16_t(MEDIUMP_FLT_MAX));
 	return vec3(F * spec) * lightRadiance;
 }
+// The ANTI-LIGHT cone: V within a few degrees of -L (looking straight at the light THROUGH the surface). There N.V ~
+// -N.L, so only a back-facing shading normal (the grass's ground-blended far blades, a bent leaf card) is lit at all,
+// and L + V is almost zero - normalized in half, H is noise, Fresnel(H.V ~ 0) goes to 1 and GGX can sit at its peak: a
+// bright DOT around the sun (2026-10-04). The specular fades out over |L + V| 0.25 -> 0.05 (~14 -> ~3 degrees off -L);
+// outside the cone back-facing normals keep their grazing sheen (a full N.V <= 0 gate took it away).
+float16_t antiLightFade(f16vec3 L, f16vec3 V)
+{
+	const vec3 s = vec3(L) + vec3(V);
+	return float16_t(smoothstep(0.0025, 0.0625, dot(s, s)));
+}
 vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float16_t metalness, float16_t alpha)
 {
 	const f16vec3 H     = normalize(L + V);
@@ -203,7 +213,7 @@ vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specu
 	const float16_t NoH = max(dot(N, H), float16_t(0.0));
 	const f16vec3 F     = FresnelSchlickH(max(dot(H, V), float16_t(0.0)), specularCol);
 	const float16_t spec = min(D_GGX_H(alpha, NoH, cross(N, H)) * (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL),
-		float16_t(MEDIUMP_FLT_MAX));
+		float16_t(MEDIUMP_FLT_MAX)) * antiLightFade(L, V);
 	return vec3(F * spec + (f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
 }
 // The light types evaluate through the fp16 BRDF: V and N arrive half, and roughness is the half GGX alpha.

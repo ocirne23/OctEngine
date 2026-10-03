@@ -98,7 +98,14 @@ vec3 grassBladeNormal(float t, float sideSign)
     const vec3 linearN = mix(rootN, tipN, t) + side * (sideSign * r * (1.0 - t));
     const vec3 tangent = 2.0 * (1.0 - t) * (g_blade.ctrl - g_blade.root) + 2.0 * t * (g_blade.tip - g_blade.ctrl);
     const vec3 across = cross(tangent, side);
-    const vec3 curveN = normalize(across * inversesqrt(max(dot(across, across), 1e-12)) + side * ((t < 1.0 ? sideSign : 0.0) * r));
+    // DEGENERATE at the tip: the tangent there is the horizontal lean + wind offset (2 (tip - ctrl)), so an upright blade
+    // (offset ~0) or one bending along its own width (offset || side) has across ~0 - the tip vertex's normal was noise,
+    // or NaN at exactly 0 (spread over the top triangle; NaN shading can blow up through the bloom). Where across is
+    // small against the tangent (the sine of their angle), blend to the root's normal, always defined.
+    const float acrossLen = length(across);
+    const float acrossWeight = smoothstep(0.05, 0.25, acrossLen / max(length(tangent), 1e-6));
+    const vec3 acrossN = mix(rootN, across / max(acrossLen, 1e-12), acrossWeight);
+    const vec3 curveN = normalize(acrossN + side * ((t < 1.0 ? sideSign : 0.0) * r));
     return mix(curveN, linearN, g_blade.linearBlend);
 }
 

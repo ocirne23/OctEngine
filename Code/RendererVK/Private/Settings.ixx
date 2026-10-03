@@ -322,7 +322,7 @@ export struct GrassParams
     float coldTemperature = 0.0f;
     float warmTemperature = 20.0f;
     float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches)
-    float roughness = 0.7f;
+    float roughness = 0.5f;
     float rootOcclusion = 0.8f;
     float shadowBias = 0.5f;       // m: the blade's sun shadow lookup moves this far toward the sun at the root (none at
                                    // the tip) - the sunk root sits under the ground's shadow-map surface otherwise
@@ -344,7 +344,7 @@ export struct GrassParams
     float nearShadowBias = 0.15f;
     float nearShadowStrength = 0.7f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
-    float roundness = 0.4f;        // the normal's tilt toward the blade's edges
+    float roundness = 0.1f;        // the normal's tilt toward the blade's edges
 
     void registerTweaks(const oc::function<void()>& onBladesChanged);
 };

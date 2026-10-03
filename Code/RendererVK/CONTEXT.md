@@ -1044,8 +1044,11 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   sun shadow LOOKUP moves toward the sun by `Shadow bias` (0.5 m at the root, none at the tip): the sunk root sits
   under the ground's own shadow-map surface (a dark band at every blade's foot);
   `Transmission` lights a blade from behind; the normal blends toward the ground's with distance (`Ground normal
-  blend`). (A minimum N·V clamp like the trees' `Foliage min N.V` was tried and removed the same day: no visible
-  effect on the grass.) `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
+  blend`), with NO minimum N·V (the bright grazing light is wanted; clamps were tried and removed 2026-10-03/04). The CURVE
+  normal (`grassBladeNormal`, near blades) is `cross(tangent, side)`, and the tangent at the TIP is the horizontal
+  lean + wind offset: an upright blade (offset ~0) or one bending along its width (offset ∥ side) made it ~0 - noise
+  or NaN on the tip vertex, spread over the top triangle. Where `|across| / |tangent|` is small (0.05-0.25) it blends
+  to the root's normal `cross(up, side)` (2026-10-04). `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
   (`u_grass*`).
 
 * **THE CANOPY: grass self-shadowing without a shadow map** (`Grass/Shadows/Canopy shadow`, 0.10; 0 = off) - a blade
@@ -1925,7 +1928,12 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   L, H, the dots, GGX D + visibility, Fresnel and the colour factors; each light's factor widens once, at
   the multiply with its fp32 radiance. GGX D is Filament's fp16 form: `1 - NoH^2` as `|N x H|^2` (no
   cancellation near the peak) and the square after the divide (alpha^4 never forms), clamped to 65504.
-  **Alpha must be >= 0.01** (the lit FS, the splat and the film clamp it).
+  **Alpha must be >= 0.01** (the lit FS, the splat and the film clamp it). Back-facing shading normals (N·V < 0, N·V
+  clamped to 0) KEEP their specular on purpose: the grazing sheen on the grass comes from it (a gate on N·V <= 0 was
+  tried 2026-10-04 and removed - it took that sheen away). Only the ANTI-LIGHT cone loses it (`antiLightFade`,
+  `doLightH`: V within ~3-14° of −L, faded over |L + V| 0.25 → 0.05): there only back-facing normals are lit, and the
+  almost zero `L + V` normalized in half made H noise, Fresnel → 1 and GGX at its peak - a bright DOT around the sun
+  seen through the grass (the user's A/B: it stayed with the grass transmission at 0).
 * **The lit core:** `computeLitColor(worldPos, V, f16vec3 N, f16vec3 albedo, float16_t alpha, metalness,
   AO)`, a half accumulator, half AO / bent normal; the light loop puts each light's result into half BEFORE
   its shadow ray (`lightShadowVisibility`), so no 32-bit light result is live across the query. `g_sunVisSurface` (one half scalar; the film rebuilds the
