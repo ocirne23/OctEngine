@@ -226,6 +226,22 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
     cb.end();
 }
 
+// The NEAR GRASS CASCADE: the blades within its box into the sun shadow map's extra layer (its own single-view pass,
+// begun in the primary right after the cascades' pass). Desktop only.
+void Renderer::recordGrassNearShadow(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    ShadowMap& shadowMap = frameData.shadowMap;
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getExtraRenderPass() };
+    CommandBuffer& cb = frameData.grassNearShadowCommandBuffer;
+    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
+    const float res = (float)shadowMap.getResolution();
+    vkCb.setViewport(0, { vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f } });
+    vkCb.setScissor(0, { vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } } });
+    m_grassPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer());
+    cb.end();
+}
+
 // The weather volume's rain occlusion map: the shadow cull + depth pass pair in their RAIN_OCCLUSION
 // variant (one view, u_rainOcclusionViewProj). Executed right after the indirect cull, BEFORE the
 // particle sim, so the sim reads this frame's map.
@@ -1284,7 +1300,10 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
     recordTerrainWetness(frameIdx); // executed only while enabled (TerrainWetTweaks::enabled)
     if (m_sceneViewCount == 1)
-        recordGrassCull(frameIdx); // executed only while grass is on (grassActive)
+    {
+        recordGrassCull(frameIdx);       // executed only while grass is on (grassActive)
+        recordGrassNearShadow(frameIdx); // executed only while its cascade is on (grassNearShadowActive)
+    }
     recordShadowCull(frameIdx);
     recordShadowDraw(frameIdx);
     recordVolumetricFog(frameIdx); // shared scatter/integrate (center view in VR)
@@ -1412,6 +1431,24 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         primary.executeCommands(1, &vkShadowDrawCommandBuffer);
         primary.endRenderPass();
         m_gpuProfiler.endScope(primary);
+        // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition
+        // covers this layer too). Off, the receivers do not read it (u_grassParams13.y = 0).
+        if (m_sceneViewCount == 1 && grassNearShadowActive())
+        {
+            m_gpuProfiler.beginScope(primary, "Grass near shadow");
+            const vk::RenderPassBeginInfo nearRpBegin{
+                .renderPass = shadowMap.getExtraRenderPass(),
+                .framebuffer = shadowMap.getExtraFramebuffer(),
+                .renderArea = shadowRpBegin.renderArea,
+                .clearValueCount = 1,
+                .pClearValues = &shadowClear,
+            };
+            vk::CommandBuffer vkGrassNearShadow = frameData.grassNearShadowCommandBuffer.getCommandBuffer();
+            primary.beginRenderPass(nearRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
+            primary.executeCommands(1, &vkGrassNearShadow);
+            primary.endRenderPass();
+            m_gpuProfiler.endScope(primary);
+        }
     }
 }
 

@@ -155,6 +155,7 @@ void FoliageParams::registerTweaks(const oc::function<void()>& onDebugViewChange
     Tweak::floatVar("Trees", "Foliage transmission focus", &transmissionFocus, 1.0f, 64.0f, 0.1f);
     Tweak::floatVar("Trees", "Foliage transmission glow", &transmissionGlow, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission shadow", &transmissionShadow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage min N.V", &minNoV, 0.0f, 0.9f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade start", &edgeFadeStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade end", &edgeFadeEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade centre scale", &edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);
@@ -205,7 +206,18 @@ void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
     Tweak::floatVar("Grass/Look", "Warm temperature (C)", &warmTemperature, -30.0f, 40.0f, 0.1f);
     Tweak::floatVar("Grass/Look", "Dry amount", &dryAmount, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roughness", &roughness, 0.05f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Min N.V", &minNoV, 0.0f, 0.9f, 0.01f);
     Tweak::floatVar("Grass/Look", "Root occlusion", &rootOcclusion, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Shadow bias (m)", &shadowBias, 0.0f, 5.0f, 0.01f);
+    Tweak::floatVar("Grass/Shadows", "Canopy shadow", &canopyShadow, 0.0f, 4.0f, 0.005f);
+    Tweak::floatVar("Grass/Shadows", "Fleck size (m)", &fleckSize, 0.01f, 2.0f, 0.005f);
+    Tweak::floatVar("Grass/Shadows", "Fleck contrast", &fleckContrast, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Shadows", "Fleck fade distance (m)", &fleckFadeDistance, 1.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Grass/Shadows", "Fleck stretch", &fleckStretch, 0.0f, 8.0f, 0.01f);
+    Tweak::boolean("Grass/Shadows", "Near shadows", &nearShadows);
+    Tweak::floatVar("Grass/Shadows", "Near shadow range (m)", &nearShadowRange, 1.0f, 100.0f, 0.1f);
+    Tweak::floatVar("Grass/Shadows", "Near shadow bias (m)", &nearShadowBias, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Shadows", "Near shadow strength", &nearShadowStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Transmission", &transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roundness", &roundness, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Ground normal blend", &groundBlend, 0.0f, 1.0f, 0.01f);

@@ -20,6 +20,7 @@ layout (location = 1) in vec3 in_normal;
 layout (location = 2) in vec3 in_groundNormal;
 layout (location = 3) in vec4 in_blade; // x = along the blade, y = albedo factor (variation x cold), z = dryness, w = ground normal blend
 layout (location = 4) in vec3 in_prevWorldDelta;
+layout (location = 5) in vec2 in_canopy; // x = depth below the canopy top (m), y = the canopy's extinction (1/m)
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target (the opaque family)
@@ -27,6 +28,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST
 #include "instanced_indirect_lit.inc.glsl"
+#include "grass.inc.glsl" // grassCanopySun (in_vertices: the lit core's binding 14)
 
 void main()
 {
@@ -38,7 +40,19 @@ void main()
         bladeN = -bladeN;
     // THE SHADOW FIRST (the register peak, nothing of the surface live yet), from the blade's SUN side: it is thin,
     // and the side facing away from the sun still needs its real shadow for the transmission.
-    g_sunShadowFirst = sunShadowVisibility(pos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN);
+    // The lookup moves TOWARD THE SUN by "Shadow bias (m)", full at the root and none at the tip: the root sinks below
+    // the terrain mesh (root sink + half the tessellated relief), into the ground's own shadow-map surface - a dark
+    // band at the bottom of every blade.
+    const vec3 shadowPos = pos + L * (u_grassParams11.x * (1.0 - in_blade.x));
+    g_sunShadowFirst = sunShadowVisibility(shadowPos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN);
+    // THE CANOPY's shadow (grass.inc.glsl grassCanopySun): the blades above this point along the sun, as a volume with
+    // its clumps and sun flecks - the self-shadowing a shadow map cannot resolve. On the direct sun and the
+    // transmission alike.
+    // Near the camera the REAL blade shadows (the near grass cascade) take over from it.
+    float nearWeight;
+    const float nearSun = grassNearShadow(pos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN, nearWeight);
+    const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, in_canopy.x, in_canopy.y, distance(pos, u_viewPos)) : 1.0;
+    g_sunShadowFirst *= mix(canopySun, nearSun, nearWeight);
 
     const float t = in_blade.x;
     vec3 albedo = mix(u_grassColor0.rgb, u_grassColor1.rgb, t);
@@ -46,7 +60,13 @@ void main()
     albedo *= in_blade.y; // the per-blade variation and the cold darkening (grass.vs.glsl)
     const float ao = mix(1.0 - u_grassShade.x, 1.0, smoothstep(0.0, 1.0, t));
 
-    const vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
+    vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
+    // Bent toward the viewer until N.V reaches "Grass/Look/Min N.V" (u_grassParams14.w; as the tree leaves): an edge-on
+    // blade, and the far ones on the ground normal looking toward the sun, otherwise shade at grazing - the GGX glint
+    // (Fresnel -> 1, the Smith term growing) many times the diffuse.
+    const float noV = dot(N, V);
+    if (noV < u_grassParams14.w)
+        N = normalize(N + V * (u_grassParams14.w - noV));
     // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
     // register peak): only this half colour is live across it.
     const float back = max(-dot(N, L), 0.0);

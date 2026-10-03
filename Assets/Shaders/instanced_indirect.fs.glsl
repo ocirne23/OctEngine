@@ -307,6 +307,16 @@ void main()
 		surfaceAO = float16_t(interior);
 	}
 #endif
+	// LEAVES seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliageParams5.x).
+	// The cards' normals are bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing (Fresnel -> 1,
+	// the Smith term growing) lit one leaf near the sun hundreds of times brighter than its diffuse: a blinding
+	// spot with bloom. Adding V x (min - N.V) gives N.V = min / |N'| (just under min) - and N.L barely moves.
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+	{
+		const float noV = dot(vec3(N), V);
+		if (noV < u_foliageParams5.x)
+			N = f16vec3(normalize(vec3(N) + V * (u_foliageParams5.x - noV)));
+	}
 #ifdef ALPHA_MASK
 	// LEAF TRANSMISSION (MATERIAL_FLAG_LEAF): thin leaves let the sun through, tinted by their own colour - a
 	// diffuse back term saturate(-N.L) (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking

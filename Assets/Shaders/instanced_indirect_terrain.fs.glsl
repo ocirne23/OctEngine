@@ -40,6 +40,7 @@ layout (location = 1) out vec4 out_motion;
 
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
+#include "grass.inc.glsl" // the canopy shading of the ground under the grass (grassGroundCanopy)
 
 // --- Terrain field debug view: set a mode, F5. Draws the baked data map instead of shading it. ---
 //   1 = temperature  heat ramp -25..+50 C, 5 C contours; MAGENTA = freezing line, CYAN + darkened
@@ -165,8 +166,13 @@ void main()
 	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
 	float reliefStrength;
 	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
+	// THE GRASS CANOPY over this ground (grass.inc.glsl): its sun and ambient, from the same layer coverages as the
+	// grass placement. Formed here so only these two halves stay live across the splat, not the layers' picks.
+	const f16vec2 grassCanopy = f16vec2(grassGroundCanopy(tessLayers, in_meshPos, coverN));
 #else
 	const vec3 geoN = coverN;
+	const TerrainLayers layers = terrainLayers(in_pos, coverN, fields);
+	const f16vec2 grassCanopy = f16vec2(grassGroundCanopy(layers, in_pos, coverN)); // see the tessellated path
 #endif
 	const float16_t one = float16_t(1.0);
 
@@ -178,7 +184,7 @@ void main()
 #ifdef TERRAIN_TESS
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, tessLayers);
 #else
-	TerrainSample surf = terrainSplat(in_pos, geoN, coverN, fields);
+	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
 #endif
 	// THE GROUND'S WET LOOK: one darkening and one roughness drop, both on the wetness field alone (the
 	// clipmap's memory of where water stood, slope-drained per pixel). No instantaneous "under the live
@@ -292,6 +298,9 @@ void main()
 	// before, its half result across 72/32 / 72/32.
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
 	// V HERE, not at the top: its 3 registers are then not live across the shadow, the layers and the splat.
+	// The grass canopy: the ground's sun only (the water film on top keeps its own) and its ambient.
+	g_sunVisMaterial *= grassCanopy.x;
+	surf.ao *= grassCanopy.y;
 	const vec3 V = normalize(u_viewPos - in_pos);
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
 	if (skyReflW > float16_t(0.0))

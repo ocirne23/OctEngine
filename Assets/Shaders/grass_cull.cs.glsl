@@ -58,7 +58,10 @@ struct DrawIndexedIndirect // VkDrawIndexedIndirectCommand
     uint firstInstance;
 };
 layout (binding = 5, std430) writeonly buffer OutCommands { DrawIndexedIndirect out_commands[]; };
-layout (binding = 6, std430) buffer OutCount { uint out_count; };
+// [0] = the main draws, [1] = the near grass cascade's caster draws (the draw counts), [2] = the patch records (every
+// list's firstInstance).
+layout (binding = 6, std430) buffer OutCounts { uint out_counts[3]; };
+layout (binding = 7, std430) writeonly buffer OutNearShadowCommands { DrawIndexedIndirect out_nearShadowCommands[]; };
 
 bool grassGroundAt(vec2 xz, out GrassGround g)
 {
@@ -76,11 +79,6 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
     return true;
 }
 
-float grassTextureAmount(uint slot)
-{
-    return u_terrainSplatGrass[slot >> 2u][slot & 3u];
-}
-
 // How much grass grows at a ground point [0, 1]: where the terrain draws its ground textures, by their grass amount.
 // Fed like the terrain VS feeds the splat (instanced_indirect_terrain.vs.glsl): the baked fields at the point, the
 // temperature at its height, the smooth mesh normal. No texture set registered yet (the startup bake): no grass.
@@ -94,15 +92,7 @@ float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
     const vec4 climate = terrainClimateAt(xz);
     temperature = terrainTemperatureAt(climate, h);
     const TerrainFields fields = TerrainFields(td.w, temperature, climate.w, td.y);
-    const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields);
-    // The composite lays beach, rock, then snow OVER the ground: what is left of the ground.
-    const float ground = (1.0 - float(L.beachW)) * (1.0 - float(L.rockW)) * (1.0 - float(L.snowW));
-    if (ground <= 0.0)
-        return 0.0;
-    const float n1 = float(L.g.n1), n2 = float(L.g.n2);
-    const float grass = (1.0 - n1 - n2) * grassTextureAmount(climatePickIdx(L.g, 0))
-        + n1 * grassTextureAmount(climatePickIdx(L.g, 1)) + n2 * grassTextureAmount(climatePickIdx(L.g, 2));
-    return ground * grass;
+    return grassTerrainCover(terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields)); // grass.inc.glsl
 }
 
 void main()
@@ -151,14 +141,22 @@ void main()
     const vec3 boxMax = vec3(origin.x + P + bladeH, hMax + slack, origin.y + P + bladeH);
     const vec3 sphereCentre = 0.5 * (boxMin + boxMax);
     const float sphereRadius = 0.5 * length(boxMax - boxMin);
+    bool visible = true;
     for (int i = 0; i < 6; ++i)
         if (dot(vec4(sphereCentre, 1.0), u_frustumPlanes[i]) + sphereRadius < 0.0)
-            return;
+            visible = false;
 
     // The nearest point of the patch's box, with the box's slack below the corners: the ground between them can dip,
     // and no blade may be nearer than this (the LOD is picked from it, and the blades geomorph by their own distance).
     const vec3 nearest = clamp(u_viewPos, vec3(origin.x, boxMin.y, origin.y), vec3(origin.x + P, hMax + bladeH, origin.y + P));
     const float dist = distance(nearest, u_viewPos);
+    // THE NEAR GRASS CASCADE's casters, in view or not (a blade just off screen still casts): within half size x 1.5 +
+    // 2 m of its box's centre (u_grassParams14.yz - ahead of the camera; as grass.vs.glsl's near caster).
+    const vec2 nearCentre = u_grassParams14.yz;
+    const bool nearCaster = u_grassParams13.y > 0.0
+        && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grassParams13.y * 1.5 + 2.0;
+    if (!visible && !nearCaster)
+        return;
     const float keep = grassKeep(dist);
     const uint N = uint(u_grassParams0.x);
     const uint blades = min(N, uint(ceil(maxDensity * keep * float(N))));
@@ -166,10 +164,15 @@ void main()
         return;
     const uint lod = dist < u_grassParams3.x ? 0u : dist < u_grassParams3.y ? 1u : dist < u_grassParams10.x ? 2u : 3u;
 
-    const uint slot = atomicAdd(out_count, 1u);
+    const uint slot = atomicAdd(out_counts[2], 1u);
     if (slot >= GRASS_MAX_PATCHES)
         return;
     out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16), packUnorm4x8(density),
         packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
-    out_commands[slot] = DrawIndexedIndirect(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0, slot);
+    // The same draw in both lists (the same LOD: the caster is the blade the main pass shades).
+    const DrawIndexedIndirect draw = DrawIndexedIndirect(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0, slot);
+    if (visible)
+        out_commands[atomicAdd(out_counts[0], 1u)] = draw; // <= slot < GRASS_MAX_PATCHES
+    if (nearCaster)
+        out_nearShadowCommands[atomicAdd(out_counts[1], 1u)] = draw;
 }

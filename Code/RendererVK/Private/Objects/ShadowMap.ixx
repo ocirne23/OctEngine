@@ -16,10 +16,16 @@ public:
     ~ShadowMap();
     ShadowMap(const ShadowMap&) = delete;
 
-    bool initialize(const char* debugName, uint32 resolution = RendererVKLayout::SHADOW_MAP_RESOLUTION, uint32 numCascades = RendererVKLayout::NUM_SHADOW_CASCADES);
+    // extraLayer: one more array layer AFTER the cascades (layer numCascades), outside the multiview pass, with its
+    // own single-layer render pass + framebuffer - the sun's NEAR GRASS cascade (GrassPipeline). The cascades' pass
+    // discards it (its layout transition covers the whole view), so it must be drawn after them, every frame it is read.
+    bool initialize(const char* debugName, uint32 resolution = RendererVKLayout::SHADOW_MAP_RESOLUTION, uint32 numCascades = RendererVKLayout::NUM_SHADOW_CASCADES,
+        bool extraLayer = false);
 
     vk::RenderPass getRenderPass() const { return m_renderPass; }
     vk::Framebuffer getFramebuffer() const { return m_framebuffer; } // single layered framebuffer (multiview)
+    vk::RenderPass getExtraRenderPass() const { return m_extraRenderPass; }   // null without the extra layer
+    vk::Framebuffer getExtraFramebuffer() const { return m_extraFramebuffer; }
     vk::ImageView getSampleView() const  { return m_sampleView; }
     vk::Sampler getSampler() const       { return m_sampler; }      // comparison sampler (hardware PCF)
     vk::Sampler getDepthSampler() const  { return m_depthSampler; } // non-comparison (raw depth for PCSS blocker search)
@@ -35,9 +41,12 @@ private:
     uint32 m_numCascades = 0;
     vk::Image m_image;
     VmaAllocation m_imageMemory = nullptr;
-    vk::ImageView m_sampleView; // e2DArray over all cascades; used both as the render target and for sampling
+    vk::ImageView m_sampleView; // e2DArray over all cascades (+ the extra layer); the render target and the sampled view
     vk::Framebuffer m_framebuffer;
     vk::RenderPass m_renderPass;
+    vk::ImageView m_extraView;  // the extra layer alone (its render target)
+    vk::RenderPass m_extraRenderPass;
+    vk::Framebuffer m_extraFramebuffer;
     vk::Sampler m_sampler;      // comparison sampler for hardware PCF
     vk::Sampler m_depthSampler; // non-comparison sampler for raw-depth blocker search
 };

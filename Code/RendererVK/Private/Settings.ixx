@@ -246,6 +246,11 @@ export struct FoliageParams
     float transmissionFocus = 64.0f;
     float transmissionGlow = 1.5f;
     float transmissionShadow = 0.95f;
+    // LEAVES (MATERIAL_FLAG_LEAF) seen nearly edge-on: their shading normal is bent toward the viewer until N.V reaches
+    // this (0 = off). The cards' normals are bent (NormalBend), so N.V can approach 0 while N.L > 0: the sun's GGX at
+    // grazing (Fresnel -> 1, the Smith term growing) lit a single leaf near the sun hundreds of times brighter than
+    // its diffuse - a blinding spot with bloom.
+    float minNoV = 0.25f;
     float edgeFadeTopCardScale = 1.0f; // x both thresholds on a whole tree's HORIZONTAL card (on top of the centre
                                 // scale): > 1 hands the top-down view to the vertical cards sooner
     // A tree casts into sun cascade c only while its distance from the cascades' centre (the scene focus) minus its
@@ -318,7 +323,29 @@ export struct GrassParams
     float warmTemperature = 20.0f;
     float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches)
     float roughness = 0.7f;
-    float rootOcclusion = 0.8f;  // darkening at the root (the blades shade each other; they cast no shadow map)
+    // A blade's normal is bent toward the viewer until N.V reaches this (0 = off; as Trees/Foliage min N.V): edge-on
+    // blades, and the far ones blended to the ground normal, otherwise shade at grazing - a sun glint looking toward it.
+    float minNoV = 0.25f;
+    float rootOcclusion = 0.8f;
+    float shadowBias = 0.5f;       // m: the blade's sun shadow lookup moves this far toward the sun at the root (none at
+                                   // the tip) - the sunk root sits under the ground's shadow-map surface otherwise
+    // THE CANOPY's self-shadowing (grass.inc.glsl): the grass layer as a volume of blades - the sun reaching a point
+    // below its top is exp(-extinction x the path along the sun), extinction = this x blades per m^2 x the mean blade
+    // width x the local density. On the blades and on the ground under them. 0 = off.
+    float canopyShadow = 0.10f;
+    // SUN FLECKS: the light through the canopy in bright and dark spots of about this size (m), at this contrast (0 =
+    // an even gray), faded out from half the fade distance to it (m).
+    float fleckSize = 0.08f;
+    float fleckContrast = 0.7f;
+    float fleckFadeDistance = 40.0f;
+    float fleckStretch = 1.0f;     // the flecks stretch along the sun into streaks: x 1 / tan(sun elevation) (0 = round)
+    // THE NEAR GRASS CASCADE: real blade shadows around the camera - an extra sun shadow-map layer (2048^2) over a box
+    // of +-nearShadowRange metres (texel = 2 x range / 2048), the blades only, on the blades and the ground under them.
+    // It blends into the canopy over the box's outer part. nearShadowBias: the receiver's shift toward the sun (m).
+    bool nearShadows = true;
+    float nearShadowRange = 8.0f;
+    float nearShadowBias = 0.15f;
+    float nearShadowStrength = 0.7f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.4f;        // the normal's tilt toward the blade's edges
 

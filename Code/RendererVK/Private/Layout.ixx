@@ -841,7 +841,9 @@ export namespace RendererVKLayout
         glm::vec4 foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
                                   // z = interior shadow top card scale, w = leaf transmission strength
         glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
-                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
+                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
+        glm::vec4 foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), yzw unused
+        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
         // of this frame's tree range, y = its length (3 per tree; 0 = none), z = the culls' thread count (one per tree
         // in the range; their dispatch), w = the tree count. params: x = the far distance scale,
         // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade
@@ -912,6 +914,18 @@ export namespace RendererVKLayout
                                 // w = LOD morph band (fraction of the next LOD's distance)
         glm::vec4 grassParams10; // x = LOD 3 distance (m; one segment past it), y = cold temperature (C; full darkening),
                                  // z = warm temperature (C; none), w = cold darkening (0..1)
+        glm::vec4 grassParams11; // x = shadow bias (m toward the sun at the root, none at the tip), yz unused,
+                                 // w = the canopy's base extinction (1/m; 0 = none)
+        glm::vec4 grassParams12; // the canopy's sun flecks: x = 1 / fleck size (1/m), y = contrast, z = fade distance (m),
+                                 // w = stretch along the sun (x 1 / tan(sun elevation))
+        // THE NEAR GRASS CASCADE: an extra layer of the sun shadow array (layer NUM_SHADOW_CASCADES), the blades only,
+        // an ortho box around the camera (standard Z, texel-snapped).
+        glm::mat4 grassShadowViewProj;
+        glm::vec4 grassParams13; // x unused (was the removed scene-cascade casting), y = the near
+                                 // cascade's range (m: its half size; 0 = off), z = receiver bias (m toward the sun),
+                                 // w = the near cascade's texel (m)
+        glm::vec4 grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
+                                 // w = the blades' minimum N.V (0 = off)
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

@@ -1039,10 +1039,59 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   sun side; albedo root -> tip + per-blade variation + dry patches (sRGB tweaks, linearised in `buildUboGrass`);
   `Cold darkening` scales the albedo down as the patch's mean temperature (the cull's 4 corners, at their height; it
   rides the record's `cellTemperature` half with the cell size) falls from `Warm temperature` to `Cold temperature`; `Root
-  occlusion` stands in for the blades shadowing each other (they cast NO shadow map and are not in the TLAS);
+  occlusion` stands in for the blades shadowing each other (they are not in the TLAS and never cast into the scene
+  cascades - the canopy and the near grass cascade, below, do that work); the
+  sun shadow LOOKUP moves toward the sun by `Shadow bias` (0.5 m at the root, none at the tip): the sunk root sits
+  under the ground's own shadow-map surface (a dark band at every blade's foot);
   `Transmission` lights a blade from behind; the normal blends toward the ground's with distance (`Ground normal
-  blend`). `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
+  blend`), then is bent toward the viewer until N·V reaches `Min N.V` (0.25, `u_grassParams14.w`; as the trees'
+  `Foliage min N.V`): edge-on blades, and the far ones on the ground normal looking toward the sun, otherwise shade at
+  grazing - a GGX sun glint many times the diffuse. `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
   (`u_grass*`).
+
+* **THE CANOPY: grass self-shadowing without a shadow map** (`Grass/Shadows/Canopy shadow`, 0.10; 0 = off) - a blade
+  is far below a shadow-map texel. The grass layer is a thin VOLUME of blades (`grass.inc.glsl`): its top at the mean
+  blade height (`grassCanopyHeight`), its extinction = `u_grassParams11.w` (the CPU fold: Canopy shadow x blades per
+  m^2 x half the blade width) x the COVER x the size by cover, faded with the range. Sun at a point `depth` below the
+  top (`grassCanopySun`): `exp(-extinction x mean clumps x depth / max(sun.y, 0.1))`, the CLUMPS sampled at 4 points
+  along the sun path (a clump shadows the bare ground beside it, stretched away from the sun), then SUN FLECKS: a
+  2-octave noise at the path's ENTRY into the canopy turns T into lit / dark spots (`Fleck size` 0.08 m, `Fleck
+  contrast` 0.7; the mean stays about T), STRETCHED along the sun's horizontal direction into streaks like blade
+  shadows (x 1 + `Fleck stretch` (1) / tan(sun elevation), capped at 16), shared by every point of that path (a fleck lights a blade and the soil
+  under it), faded out from half `Fleck fade distance` (40 m) to it. The BLADES: the VS passes depth + extinction (location
+  5; the depth is linear along the blade), the FS multiplies the sun visibility (direct + transmission). THE GROUND
+  under them (`instanced_indirect_terrain.fs.glsl`, both paths): `grassGroundCanopy` from the SAME `terrainLayers`
+  the splat uses (the untessellated path now calls `terrainLayers` + `terrainSplatLayers` itself) - the sun at the full
+  canopy depth into `g_sunVisMaterial` (the ground's sun only; the film keeps its own), and the blades' `Root
+  occlusion` x the canopy's opacity on the ambient. Formed right after the layers, so only two halves stay live across
+  the splat (the terrain FS's register count is not measured yet). The shadow map keeps the big casters (trees,
+  terrain); the canopy multiplies them.
+* **THE NEAR GRASS CASCADE** (`Grass/Shadows/Near shadows`, default ON; never under RT sun shadows): real blade
+  shadows around the camera, the canopy beyond. It is an EXTRA LAYER of the sun shadow array (`ShadowMap::initialize(...,
+  extraLayer)`: layer `NUM_SHADOW_CASCADES`, 2048^2, its own single-view render pass + framebuffer), so the lit shaders
+  read it through the binding they already have (`u_shadowMap`). The cascades' multiview pass transitions the WHOLE
+  array view (UNDEFINED -> read-only), so this layer is drawn right AFTER it in the primary ("Grass near shadow"; its
+  pass's source dependency waits for that pass's depth writes). Its matrix (`u_grassShadowViewProj`, `buildUboGrass`):
+  an ortho box of +-`Near shadow range` (8 m: 0.8 cm texels) down the sun, the cascades' construction, texel-snapped,
+  a 50 m up-sun slab, centred AHEAD of the camera (a centred box spent half its texels behind the view): where the
+  view's bottom-centre ray meets the ground + range - 1 m along the horizontal view direction - so the receivers'
+  full-weight disc starts 1 m behind the bottom of the frustum (the centre XZ: `u_grassParams14.yz`). That ground
+  point is capped at HALF the range ahead (was 4 x the range: a low camera looking near the horizon meets the ground
+  far ahead, and the box slid up to ~5 x the range forward - the near grass fell out; 2026-10-03). The ground is the
+  terrain height under the camera (`Renderer::setCameraGround`, from Procedural's TerrainStreamer every frame; unknown:
+  the camera's height - 2 m. The far trees' `setFarTreeCameraGround` exists only while trees are on, and its sea-level
+  fallback put the box at its then 4 x range cap far ahead). Casters: the cull's SECOND list (count [1], binding 7; the patches within range x 1.5 + 2 m of that
+  centre, in view or not), `grass.vs.glsl` with `GRASS_SHADOW` + `GRASS_NEAR_SHADOW`. Receivers (`grassNearShadow`,
+  grass.inc.glsl, only where the lit core is included): the blades and the ground under them - also bare ground in the
+  box - 4 bilinear PCF taps, the receiver moved toward the sun by `Near shadow bias` (0.15 m) and off its normal by a
+  texel, x `Near shadow strength` (0.7); its weight fades over the box's edge (85-98 %) AND over 1.0-1.3 x the range from
+  the box's centre (the box is square in light space: on the ground it reaches range / sin(sun elevation) along the
+  sun, past the casters - an empty, lit band there showed as a gap) into the canopy term (which it REPLACES inside: real blades instead of
+  the statistical volume). Other objects do not read it. `GrassPipeline::recordNearShadow` draws the list (the same
+  records and LOD as the main draw: counts [0] main, [1] near casters, [2] records), depth only, the shadow pass's depth
+  bias, both faces, its own set (UBO + vertex mega-buffer). **REMOVED 2026-10-03:** the blades' casting into the SCENE
+  cascades (`Cast shadows` / `Shadow distance` / `Shadow cascades`, default off) - its cull list, multiview VS variant,
+  pipeline and record call; the canopy and this cascade replace it.
 
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 
@@ -1620,7 +1669,10 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   by its colour — `saturate(-N·L)` (lit from behind) + `saturate(V·-L)^focus × glow` (the backlit rim looking
   toward the sun), × `Trees/Foliage transmission`. Its visibility = `mix(1, sun shadow, Foliage transmission
   shadow)` × the interior term: a leaf seen from the shaded side is in its own crown's shadow, which would
-  leave no glow. **Formed BEFORE `computeLitColor`** as one half colour: the light loop is the lit FS's register
+  leave no glow. **Leaves seen edge-on:** their N is bent toward the viewer until N·V reaches `Trees/Foliage min
+  N.V` (default 0.25, `u_foliageParams5.x`, 0 = off) - the cards' bent normals let N·V approach 0 with N·L > 0,
+  and the sun's GGX at grazing (Fresnel → 1, the Smith term growing) lit one leaf near the sun hundreds of times
+  brighter than its diffuse: a blinding spot with bloom (2026-10-03). **Formed BEFORE `computeLitColor`** as one half colour: the light loop is the lit FS's register
   peak (all lit variants sit at LitOpaque's 72 / 32 B because of it), and afterwards the shadow, the interior
   term and the surface colour were live across it - LitFoliage 72 / 48 → 72 / 32 (2026-10-02). LitMasked's leaf
   and plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstMasked`): two call sites inlined the

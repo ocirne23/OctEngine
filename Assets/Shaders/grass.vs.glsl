@@ -32,6 +32,9 @@ layout (location = 3) out vec4 out_blade;        // x = along the blade (0 root 
                                                  // (with the cold darkening: an albedo factor), z = dryness,
                                                  // w = blend toward the ground normal
 layout (location = 4) out vec3 out_prevWorldDelta;
+// THE CANOPY (grass.inc.glsl): x = the point's depth below the canopy top (m), y = the canopy's extinction (1/m). The
+// FS turns them into the sun reaching the point; the depth is linear along the blade, so it interpolates exactly.
+layout (location = 5) out vec2 out_canopy;
 
 const float GRASS_TWO_PI = 6.28318530718;
 
@@ -128,9 +131,9 @@ void main()
     // AND smaller ("Size by cover"): fewer blades of full size read as sparse long stalks.
     const vec4 corners = unpackUnorm4x8(in_patchData.z);
     const float cover = mix(mix(corners.x, corners.y, uv.x), mix(corners.z, corners.w, uv.x), uv.y);
-    const float clump = mix(1.0, smoothstep(0.25, 0.65, grassValueNoise(xz * u_grassParams6.y)), u_grassParams6.z);
+    const float clump = grassClump(xz);
     const float density = cover * clump;
-    const float coverSize = mix(1.0, cover, u_grassParams9.z);
+    const float coverSize = grassCoverSize(cover);
     const float thinning = grassKeep(dist);
     const float keep = density * thinning;
     const float rank = (float(blade) + 0.5) / N;
@@ -191,22 +194,29 @@ void main()
         ? smoothstep(nextLodDist * (1.0 - u_grassParams9.w), nextLodDist, dist) : 0.0;
     const float h = 1.0 / float(segments);
     vec3 pos = grassBladePoint(t, sideSign);
-    vec3 normal = grassBladeNormal(t, sideSign);
-    vec3 prevPos;
     if (morph > 0.0)
-    {
         pos = mix(pos, 0.5 * (grassBladePoint(t - h, sideSign) + grassBladePoint(t + h, sideSign)), morph);
-        normal = mix(normal, 0.5 * (grassBladeNormal(t - h, sideSign) + grassBladeNormal(t + h, sideSign)), morph);
-        g_blade.ctrl = ctrlPrev;
-        g_blade.tip = tipPrev;
-        prevPos = mix(grassBladePoint(t, sideSign), 0.5 * (grassBladePoint(t - h, sideSign) + grassBladePoint(t + h, sideSign)), morph);
-    }
-    else
+
+#ifdef GRASS_NEAR_SHADOW
+    // THE NEAR GRASS CASCADE's caster (GrassPipeline::recordNearShadow): the same blade into the extra shadow layer's
+    // box (ahead of the camera); past its half size x 1.5 + 2 m from the box's centre (the receivers' disc, and casters
+    // up-sun of it) nothing. (The blades never cast into the scene cascades: the "Cast shadows" path was removed
+    // 2026-10-03 - the canopy and this cascade replace it.)
+    if (distance(xz, u_grassParams14.yz) > u_grassParams13.y * 1.5 + 2.0)
     {
-        g_blade.ctrl = ctrlPrev;
-        g_blade.tip = tipPrev;
-        prevPos = grassBladePoint(t, sideSign);
+        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
     }
+    gl_Position = u_grassShadowViewProj * vec4(pos, 1.0);
+#else
+    vec3 normal = grassBladeNormal(t, sideSign);
+    if (morph > 0.0)
+        normal = mix(normal, 0.5 * (grassBladeNormal(t - h, sideSign) + grassBladeNormal(t + h, sideSign)), morph);
+    g_blade.ctrl = ctrlPrev;
+    g_blade.tip = tipPrev;
+    vec3 prevPos = grassBladePoint(t, sideSign);
+    if (morph > 0.0)
+        prevPos = mix(prevPos, 0.5 * (grassBladePoint(t - h, sideSign) + grassBladePoint(t + h, sideSign)), morph);
     out_normal = normal;
     out_groundNormal = groundN;
 
@@ -220,7 +230,12 @@ void main()
     out_blade = vec4(t, variation * mix(1.0 - u_grassParams10.w, 1.0, warm), dryness, groundBlend);
     out_pos = pos;
     out_prevWorldDelta = prevPos - pos;
+    // The canopy at this blade: its mean height and extinction (the ground under it takes the same); the depth is
+    // capped at the canopy height (the sunk root is below the ground).
+    const float canopyHeight = grassCanopyHeight(clump, coverSize);
+    out_canopy = vec2(clamp(canopyHeight - (pos.y - groundY), 0.0, canopyHeight), grassCanopyExtinction(cover, coverSize, dist));
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+#endif
 }

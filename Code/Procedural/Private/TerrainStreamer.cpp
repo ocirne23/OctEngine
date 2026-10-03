@@ -1149,6 +1149,7 @@ namespace Procedural
 		// Polls/drops the in-flight terrain-data bake and clears the renderer-side map once (active=false).
 		updateFogHeightMap(renderer, camera, nullptr, m_terrainMapFarRange); // no terrain -> no terrain-following fog
 		renderer.setTerrainParams(0.0f, m_seaLevel);   // no mesh up: disables the ocean land cull
+		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
 
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
 	}
@@ -1382,6 +1383,8 @@ namespace Procedural
 			lapsePerWorldM = maps->lapseRatePerMetre() / glm::max(vertScale, 1e-4f);
 		}
 		renderer.setTerrainParams((float)R * chunkSize, m_seaLevel, lapsePerWorldM);
+		// The ground under the camera (the near grass shadow cascade's placement).
+		renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
 
 		// The far cascade must cover the whole resident mesh, else terrain past its edge reads clamp-to-edge
 		// (frozen altitude/temperature -> distant inland looks uniformly cold/snowy, ignoring the inland

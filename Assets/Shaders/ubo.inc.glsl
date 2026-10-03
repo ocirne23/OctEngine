@@ -311,7 +311,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
                            // z = interior shadow top card scale, w = leaf transmission strength
     vec4 u_foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
-                           // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)    // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
+                           // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)
+    vec4 u_foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), yzw unused
+    // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
     // length (3 per tree; 0 = no trees), z = the culls' thread count (one per tree in the range), w = the tree count;
     // params x = the far distance scale, y = force far (0/1),
     // z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade margin" (m; the shadow cull:
@@ -381,6 +383,18 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                          // w = LOD morph band (fraction of the next LOD's distance)
     vec4 u_grassParams10; // x = LOD 3 distance (m; one segment past it), y = cold temperature (C; full darkening),
                           // z = warm temperature (C; none), w = cold darkening (0..1)
+    vec4 u_grassParams11; // x = shadow bias (m toward the sun at the root, none at the tip), yz unused,
+                          // w = the canopy's base extinction (1/m; 0 = none)
+    vec4 u_grassParams12; // the canopy's sun flecks: x = 1 / fleck size (1/m), y = contrast, z = fade distance (m),
+                          // w = stretch along the sun (x 1 / tan(sun elevation))
+    // THE NEAR GRASS CASCADE: an extra layer of the sun shadow array (layer NUM_SHADOW_CASCADES), the blades only, an
+    // ortho box around the camera (standard Z, texel-snapped).
+    mat4 u_grassShadowViewProj;
+    vec4 u_grassParams13; // x unused (was the removed scene-cascade casting), y = the near
+                          // cascade's range (m: its half size; 0 = off), z = receiver bias (m toward the sun),
+                          // w = the near cascade's texel (m)
+    vec4 u_grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
+                          // w = the blades' minimum N.V (0 = off)
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

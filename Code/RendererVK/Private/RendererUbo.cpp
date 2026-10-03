@@ -59,7 +59,9 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     ubo.foliageParams3 = glm::vec4(m_foliageParams.interiorOuter, m_foliageParams.edgeFadeTopCardScale,
         m_foliageParams.interiorTopCardScale, m_foliageParams.transmission);
     ubo.foliageParams4 = glm::vec4(m_foliageParams.transmissionFocus, m_foliageParams.transmissionGlow,
-        m_foliageParams.transmissionShadow, farTreesActive() ? 1.0f : 0.0f);    ubo.treeCull = glm::uvec4(0u); // no tree range until present() patches it (uploadTreeCullUbo)
+        m_foliageParams.transmissionShadow, farTreesActive() ? 1.0f : 0.0f);
+    ubo.foliageParams5 = glm::vec4(glm::clamp(m_foliageParams.minNoV, 0.0f, 0.9f), 0.0f, 0.0f, 0.0f);
+    ubo.treeCull = glm::uvec4(0u); // no tree range until present() patches it (uploadTreeCullUbo)
     ubo.treeCullParams = glm::vec4(0.0f);
     buildUboViews(cameraIn, camera, vrBaseOrientation);
 
@@ -122,14 +124,14 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     buildUboOcean();
     buildUboForce();
     buildUboTerrain();
-    buildUboGrass();
+    buildUboGrass(camera);
 
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
 }
 
 // The grass (GrassParams). The patch size and the range set the patch grid uploadGrassFrame writes for the cull, which
 // reads them from here: the range is capped so the grid fits GRASS_MAX_PATCHES.
-void Renderer::buildUboGrass()
+void Renderer::buildUboGrass(const Camera& camera)
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
     const GrassParams& g = m_grassParams;
@@ -146,6 +148,70 @@ void Renderer::buildUboGrass()
     ubo.grassParams3 = glm::vec4(g.lod1Distance, lod2Distance, minWidthPerMetre, g.groundBlendDistance);
     ubo.grassParams10 = glm::vec4(glm::max(g.lod3Distance, lod2Distance), g.coldTemperature, g.warmTemperature,
         glm::clamp(g.coldDarkening, 0.0f, 1.0f));
+    // w = the canopy's base extinction (1/m; grass.inc.glsl): "Canopy shadow" x blades per m^2 x the mean blade width
+    // (it tapers to the tip: half the root width). 0 without grass: the terrain FS then skips the canopy.
+    const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
+    const float canopyExtinction = grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+    ubo.grassParams11 = glm::vec4(glm::max(g.shadowBias, 0.0f), 0.0f, 0.0f, canopyExtinction);
+
+    // THE NEAR GRASS CASCADE (the shadow array's extra layer): an ortho box of +-range looking down the sun - the
+    // cascades' construction (LightingUtils computeSunCascades: standard Z, the eye up-sun, texel-snapped so the blade
+    // shadows hold still while the camera moves). Its slab reaches 50 m up-sun past the box: blades on a slope up-sun
+    // are never clipped.
+    // AHEAD of the camera, not around it (half of a centred box lay behind the view): the bottom-centre ray of the view
+    // meets the ground (the terrain height under the camera) at d0 along the horizontal view direction, and the centre
+    // goes range - 1 m past that - the receivers' full-weight disc (range around the centre; grass.inc.glsl) then
+    // starts 1 m behind the bottom of the frustum. Looking steeply down, d0 goes negative (capped at -range).
+    const float nearRange = grassNearShadowActive() ? glm::max(g.nearShadowRange, 1.0f) : 0.0f;
+    const float res = (float)RendererVKLayout::SHADOW_MAP_RESOLUTION;
+    glm::vec3 nearCentre = m_cameraPos;
+    if (nearRange > 0.0f)
+    {
+        const glm::mat4 invView = glm::inverse(camera.viewMatrix);
+        const glm::vec3 forward = -glm::normalize(glm::vec3(invView[2]));
+        const glm::vec3 up = glm::normalize(glm::vec3(invView[1]));
+        const glm::vec3 bottomRay = forward - up * std::tan(glm::radians(camera.fovDeg) * 0.5f);
+        glm::vec2 horizontal(forward.x, forward.z);
+        if (glm::dot(horizontal, horizontal) < 0.01f) // looking straight down: the top of the screen is "ahead"
+            horizontal = glm::vec2(up.x, up.z);
+        horizontal = glm::dot(horizontal, horizontal) > 1e-8f ? glm::normalize(horizontal) : glm::vec2(0.0f, -1.0f);
+        // The terrain under the camera (setCameraGround); unknown: assume the camera stands on the ground (sea level, the
+        // old fallback, put the box at its cap far ahead wherever the land is high).
+        const float ground = std::isnan(m_cameraGround) ? m_cameraPos.y - 2.0f : m_cameraGround;
+        float d0 = 0.0f;
+        if (bottomRay.y < -1e-4f && m_cameraPos.y > ground)
+        {
+            const glm::vec3 hit = m_cameraPos + bottomRay * ((ground - m_cameraPos.y) / bottomRay.y);
+            d0 = glm::dot(glm::vec2(hit.x - m_cameraPos.x, hit.z - m_cameraPos.z), horizontal);
+        }
+        // At most HALF the range ahead: a low camera looking near the horizon meets the ground far ahead, and with the old
+        // cap (4 x range) the box slid up to ~5 x range forward - the near grass, the shadows that matter most, fell out.
+        d0 = glm::clamp(d0, -nearRange, 0.5f * nearRange);
+        // The full-weight disc (range around the centre) starts 1 m behind where the bottom of the view meets the ground.
+        constexpr float NEAR_BACK_MARGIN = 1.0f;
+        const glm::vec2 centreXZ = glm::vec2(m_cameraPos.x, m_cameraPos.z) + horizontal * (d0 - NEAR_BACK_MARGIN + nearRange);
+        nearCentre = glm::vec3(centreXZ.x, glm::min(m_cameraPos.y, ground), centreXZ.y);
+
+        const glm::vec3 L = glm::normalize(glm::vec3(ubo.sunDirection));
+        const glm::vec3 upRef = (fabsf(L.y) > 0.99f) ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+        const float zPad = 50.0f;
+        const glm::vec3 eye = nearCentre + L * (nearRange + zPad);
+        const glm::mat4 lightView = glm::lookAtRH(eye, nearCentre, upRef);
+        glm::mat4 lightProj = glm::orthoRH_ZO(-nearRange, nearRange, -nearRange, nearRange, 0.0f, 2.0f * nearRange + zPad);
+        glm::vec4 origin = lightProj * lightView * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        origin *= res * 0.5f;
+        const glm::vec2 off = (glm::round(glm::vec2(origin)) - glm::vec2(origin)) * (2.0f / res);
+        lightProj[3][0] += off.x;
+        lightProj[3][1] += off.y;
+        ubo.grassShadowViewProj = lightProj * lightView;
+    }
+    // w = one texel (m): the receivers' normal offset.
+    ubo.grassParams13 = glm::vec4(0.0f, nearRange, glm::max(g.nearShadowBias, 0.0f), 2.0f * nearRange / res);
+    // yz = the box's centre (XZ): the receivers' fade disc and the casters' selection measure from it.
+    // w = the blades' minimum N.V (grass.fs.glsl; 0 = off).
+    ubo.grassParams14 = glm::vec4(glm::clamp(g.nearShadowStrength, 0.0f, 1.0f), nearCentre.x, nearCentre.z, glm::clamp(g.minNoV, 0.0f, 0.9f));
+    ubo.grassParams12 = glm::vec4(1.0f / glm::max(g.fleckSize, 0.01f), glm::clamp(g.fleckContrast, 0.0f, 1.0f),
+        glm::max(g.fleckFadeDistance, 1.0f), glm::max(g.fleckStretch, 0.0f));
     const float windAngle = glm::radians(g.windAngleDeg);
     ubo.grassParams4 = glm::vec4(std::cos(windAngle), std::sin(windAngle), g.windBend, g.gustBend);
     ubo.grassParams5 = glm::vec4(1.0f / glm::max(g.gustSize, 0.01f), g.gustSpeed, g.swayFrequency, m_grassPrevTime);

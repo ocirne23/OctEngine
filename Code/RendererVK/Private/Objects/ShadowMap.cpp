@@ -21,15 +21,20 @@ void ShadowMap::destroy()
     if (m_framebuffer)  vkDevice.destroyFramebuffer(m_framebuffer);
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
     if (m_sampleView)   vkDevice.destroyImageView(m_sampleView);
+    if (m_extraFramebuffer) vkDevice.destroyFramebuffer(m_extraFramebuffer);
+    if (m_extraRenderPass)  vkDevice.destroyRenderPass(m_extraRenderPass);
+    if (m_extraView)        vkDevice.destroyImageView(m_extraView);
+    m_extraFramebuffer = nullptr; m_extraRenderPass = nullptr; m_extraView = nullptr;
     Globals::gpuAllocator.destroyImage(m_image, m_imageMemory);
     m_sampler = nullptr; m_depthSampler = nullptr; m_framebuffer = nullptr; m_renderPass = nullptr; m_sampleView = nullptr; m_image = nullptr; m_imageMemory = nullptr;
 }
 
-bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numCascades)
+bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numCascades, bool extraLayer)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     m_resolution = resolution;
     m_numCascades = numCascades;
+    const uint32 numLayers = numCascades + (extraLayer ? 1u : 0u);
 
     // ---- Depth array image -------------------------------------------------
     vk::ImageCreateInfo imageInfo{
@@ -37,7 +42,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
         .format = SHADOW_DEPTH_FORMAT,
         .extent = { resolution, resolution, 1 },
         .mipLevels = 1,
-        .arrayLayers = numCascades,
+        .arrayLayers = numLayers,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled,
@@ -51,7 +56,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
         .image = m_image,
         .viewType = vk::ImageViewType::e2DArray,
         .format = SHADOW_DEPTH_FORMAT,
-        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eDepth, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = numCascades },
+        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eDepth, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = numLayers },
     };
     auto sampleViewResult = vkDevice.createImageView(sampleViewInfo);
     if (sampleViewResult.result != vk::Result::eSuccess) { assert(false && "shadow sample view"); return false; }
@@ -124,6 +129,55 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     if (fbResult.result != vk::Result::eSuccess) { assert(false && "shadow framebuffer"); return false; }
     m_framebuffer = fbResult.value;
     Globals::device.setDebugName(m_framebuffer, debugName);
+
+    // ---- The extra layer: its own view, single-view render pass and framebuffer ----
+    // Drawn AFTER the cascades' pass (whose UNDEFINED -> read-only transition covers this layer too): its source
+    // dependency waits for that pass's depth writes and transition as well as for last frame's shader reads.
+    if (extraLayer)
+    {
+        vk::ImageViewCreateInfo extraViewInfo = sampleViewInfo;
+        extraViewInfo.viewType = vk::ImageViewType::e2D;
+        extraViewInfo.subresourceRange.baseArrayLayer = numCascades;
+        extraViewInfo.subresourceRange.layerCount = 1;
+        auto extraViewResult = vkDevice.createImageView(extraViewInfo);
+        if (extraViewResult.result != vk::Result::eSuccess) { assert(false && "shadow extra view"); return false; }
+        m_extraView = extraViewResult.value;
+        Globals::device.setDebugName(m_extraView, debugName);
+
+        vk::SubpassDescription2 extraSubpass{
+            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+            .colorAttachmentCount = 0,
+            .pDepthStencilAttachment = &depthRef,
+        };
+        oc::array<vk::SubpassDependency2, 2> extraDependencies = dependencies;
+        extraDependencies[0].srcStageMask |= vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
+        extraDependencies[0].srcAccessMask |= vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+        vk::RenderPassCreateInfo2 extraPassInfo{
+            .attachmentCount = 1,
+            .pAttachments = &depthAttachment,
+            .subpassCount = 1,
+            .pSubpasses = &extraSubpass,
+            .dependencyCount = (uint32)extraDependencies.size(),
+            .pDependencies = extraDependencies.data(),
+        };
+        auto extraPassResult = vkDevice.createRenderPass2(extraPassInfo);
+        if (extraPassResult.result != vk::Result::eSuccess) { assert(false && "shadow extra renderpass"); return false; }
+        m_extraRenderPass = extraPassResult.value;
+        Globals::device.setDebugName(m_extraRenderPass, debugName);
+
+        vk::FramebufferCreateInfo extraFbInfo{
+            .renderPass = m_extraRenderPass,
+            .attachmentCount = 1,
+            .pAttachments = &m_extraView,
+            .width = resolution,
+            .height = resolution,
+            .layers = 1,
+        };
+        auto extraFbResult = vkDevice.createFramebuffer(extraFbInfo);
+        if (extraFbResult.result != vk::Result::eSuccess) { assert(false && "shadow extra framebuffer"); return false; }
+        m_extraFramebuffer = extraFbResult.value;
+        Globals::device.setDebugName(m_extraFramebuffer, debugName);
+    }
 
     // ---- Comparison sampler (hardware PCF) --------------------------------
     vk::SamplerCreateInfo samplerInfo{

@@ -342,9 +342,11 @@ void Renderer::initPipelines()
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
 
     m_shadowCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
+    // + the extra layer: the NEAR GRASS CASCADE (GrassPipeline; sampled through the same array binding).
     for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.shadowMap.initialize("ShadowMap");
+        perFrame.shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES, true);
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
+    m_grassPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
     // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION variant over a single-layer map per frame slot.
     m_rainCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity(), true);
     for (PerFrameData& perFrame : m_perFrameData)
@@ -376,6 +378,7 @@ void Renderer::initPerFrameResources()
         perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.oceanSim");
         perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.terrainWetness");
         perFrame.grassCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.grassCull");
+        perFrame.grassNearShadowCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.grassNearShadow");
         perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.lightGrid");
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.imgui");
         perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowCull");

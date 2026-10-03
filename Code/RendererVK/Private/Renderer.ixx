@@ -308,6 +308,9 @@ public:
     // MAIN THREAD, every frame before present (Procedural TerrainStreamer::update). Valid for ONE frame: a frame
     // without a call draws no grass (a disabled terrain, or freed chunks, can never be read).
     void setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> chunks);
+    // The terrain height right under the camera (world Y; NaN = unknown), per frame (Procedural TerrainStreamer::update):
+    // the near grass cascade's placement (where the bottom of the view meets the ground).
+    void setCameraGround(float groundY) { m_cameraGround = groundY; }
     float grassRange() const { return grassActive() ? m_grassParams.range : 0.0f; } // m; 0 = no grass
 
     // -- Debug rendering --
@@ -350,6 +353,7 @@ private:
     void recordOceanSim(uint32 frameIdx);
     void recordTerrainWetness(uint32 frameIdx);
     void recordGrassCull(uint32 frameIdx);
+    void recordGrassNearShadow(uint32 frameIdx); // the near grass cascade's casters (the shadow map's extra-layer pass)
     void recordIndirectCull(uint32 frameIdx);
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
@@ -445,7 +449,7 @@ private:
     void buildUboOcean();
     void buildUboForce();
     void buildUboTerrain();
-    void buildUboGrass();
+    void buildUboGrass(const Camera& camera);
 
     // ---- THE scene stage table ----
     // recordSceneSecondaries, recordPrimaryDesktop and recordPrimaryVR all read it, so a stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
@@ -629,7 +633,11 @@ private:
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
     float m_grassPrevTime = 0.0f; // last frame's timeSeconds (the blades' motion vectors)
+    float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
     bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
+    // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
+    // map - the cascades' pass that this layer must follow).
+    bool grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }
     void uploadGrassFrame(uint32 frameIdx);
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
@@ -749,6 +757,7 @@ private:
         CommandBuffer oceanSimCommandBuffer;
         CommandBuffer terrainWetnessCommandBuffer;
         CommandBuffer grassCullCommandBuffer;
+        CommandBuffer grassNearShadowCommandBuffer;
         CommandBuffer lightGridCommandBuffer;
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;

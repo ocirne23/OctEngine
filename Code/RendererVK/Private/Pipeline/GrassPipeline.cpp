@@ -20,7 +20,7 @@ void GrassPipeline::buildLayout(ComputePipelineLayout& layout)
     constexpr vk::ShaderStageFlags CS = vk::ShaderStageFlagBits::eCompute;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = CS });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = CS });
-    for (uint32 binding = 2; binding <= 6; ++binding) // ground table, vertices, patches, commands, count
+    for (uint32 binding = 2; binding <= 7; ++binding) // ground table, vertices, patches, commands, counts, the near casters
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = CS });
     // Binding 1 (the terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
     layout.descriptorBindingFlags.resize(b.size());
@@ -47,6 +47,9 @@ void GrassPipeline::initialize(uint32 bladesPerPatch)
         m_commands[i].initialize(GRASS_MAX_PATCHES * GRASS_COMMAND_SIZE,
             vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eIndirectBuffer,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GrassCommands");
+        m_nearShadowCommands[i].initialize(GRASS_MAX_PATCHES * GRASS_COMMAND_SIZE,
+            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eIndirectBuffer,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GrassNearShadowCommands");
         m_counts[i].initialize(16, vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eIndirectBuffer
             | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GrassCount");
         const uint32 zero[4] = {};
@@ -55,12 +58,82 @@ void GrassPipeline::initialize(uint32 bladesPerPatch)
     setBladesPerPatch(bladesPerPatch);
 }
 
+// The near grass cascade's casters: the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant (its own matrix, a
+// single-view pass), depth only (no fragment shader), the shadow pass's depth state (standard Z, its slope-scaled bias),
+// both faces. Its set: the UBO (the matrix, the grass params) and the vertex mega-buffer (the roots) at the main set's
+// binding numbers, so the VS source is the same.
+void GrassPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout)
+{
+    layout.vertexShader.debugFilePath = "Shaders/grass.vs.glsl";
+    layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
+    layout.vertexShader.defines.push_back(ShaderDefine{ "GRASS_SHADOW", "1" });
+    layout.vertexShader.defines.push_back(ShaderDefine{ "GRASS_NEAR_SHADOW", "1" });
+    layout.depthOnly = true;
+    layout.depthCompareOp = vk::CompareOp::eLess;
+    layout.depthBiasEnable = true;
+    layout.depthBiasConstantFactor = 1.25f; // as ShadowMapGraphicsPipeline
+    layout.depthBiasSlopeFactor = 2.5f;
+    layout.cullMode = vk::CullModeFlagBits::eNone;
+    layout.indirectBindable = false;
+    layout.vertexLayoutInfo.bindingDescriptions.push_back(vk::VertexInputBindingDescription{
+        .binding = 0, .stride = sizeof(RendererVKLayout::GrassPatchGpu), .inputRate = vk::VertexInputRate::eInstance });
+    layout.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
+        .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::GrassPatchGpu, origin) });
+    layout.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
+        .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(RendererVKLayout::GrassPatchGpu, firstVertex) });
+    layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
+        .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
+        .binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+}
+
+void GrassPipeline::initializeNearShadow(vk::RenderPass nearShadowRenderPass)
+{
+    m_nearShadowRenderPass = nearShadowRenderPass;
+    GraphicsPipelineLayout nearLayout;
+    buildNearShadowLayout(nearLayout);
+    m_nearShadowBuilt = m_nearShadowPipeline.initialize(m_nearShadowRenderPass, nearLayout);
+    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+        m_nearShadowSets[i].initialize(m_nearShadowPipeline.getDescriptorSetLayout(), "GrassNearShadow");
+}
+
 void GrassPipeline::reloadShaders()
 {
     ComputePipelineLayout layout;
     buildLayout(layout);
     if (!m_pipeline.reloadShaders(layout))
         printf("GrassPipeline: shader reload failed, keeping previous pipeline\n");
+    if (!m_nearShadowRenderPass)
+        return;
+    GraphicsPipelineLayout nearLayout;
+    buildNearShadowLayout(nearLayout);
+    if (!m_nearShadowBuilt)
+        m_nearShadowBuilt = m_nearShadowPipeline.initialize(m_nearShadowRenderPass, nearLayout);
+    else if (!m_nearShadowPipeline.reloadShaders(m_nearShadowRenderPass, nearLayout))
+        printf("GrassPipeline: near shadow shader reload failed, keeping previous pipeline\n");
+}
+
+void GrassPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer)
+{
+    GraphicsPipeline& pipeline = m_nearShadowPipeline;
+    if (!m_nearShadowBuilt)
+        return;
+    oc::array<DescriptorSetUpdateInfo, 2> updates{
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = vertexBuffer.getBuffer(), .range = vertexBuffer.getSize() } } },
+    };
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    vk::DescriptorSet set = m_nearShadowSets[frameIdx].getDescriptorSet();
+    commandBuffer.cmdUpdateDescriptorSets(pipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, set, updates);
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.getPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+    cmd.bindVertexBuffers(0, { m_patches[frameIdx].getBuffer() }, { 0 });
+    cmd.bindIndexBuffer(m_indices.getBuffer(), 0, vk::IndexType::eUint32);
+    // The cull's count [1]: the near cascade's casters.
+    cmd.drawIndexedIndirectCount(m_nearShadowCommands[frameIdx].getBuffer(), 0,
+        m_counts[frameIdx].getBuffer(), sizeof(uint32), RendererVKLayout::GRASS_MAX_PATCHES, GRASS_COMMAND_SIZE);
 }
 
 void GrassPipeline::setBladesPerPatch(uint32 bladesPerPatch)
@@ -122,8 +195,8 @@ GrassPipeline::Draw GrassPipeline::getDraw(uint32 frameIdx)
 
 void GrassPipeline::recordClear(vk::CommandBuffer primary, uint32 frameIdx)
 {
-    // The slot's last draw read the count (its fence was waited); the scene pass reads the zero.
-    primary.fillBuffer(m_counts[frameIdx].getBuffer(), 0, sizeof(uint32), 0u);
+    // The slot's last draws read the counts (its fence was waited); the scene + shadow passes read the zeros.
+    primary.fillBuffer(m_counts[frameIdx].getBuffer(), 0, 4 * sizeof(uint32), 0u);
     const vk::MemoryBarrier2 toDraw{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -138,8 +211,8 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     Buffer& count = m_counts[frameIdx];
 
-    // The count restarts at 0; the slot's last draw (which read these buffers) retired with its fence.
-    cmd.fillBuffer(count.getBuffer(), 0, sizeof(uint32), 0u);
+    // The counts restart at 0; the slot's last draws (which read these buffers) retired with its fence.
+    cmd.fillBuffer(count.getBuffer(), 0, 4 * sizeof(uint32), 0u);
     const vk::MemoryBarrier2 before{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -152,7 +225,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         return DescriptorSetUpdateInfo{ .binding = binding, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() } } };
     };
-    oc::array<DescriptorSetUpdateInfo, 7> updates{
+    oc::array<DescriptorSetUpdateInfo, 8> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -162,6 +235,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         storage(4, m_patches[frameIdx]),
         storage(5, m_commands[frameIdx]),
         storage(6, count),
+        storage(7, m_nearShadowCommands[frameIdx]),
     };
     vk::DescriptorSet set = m_sets[frameIdx].getDescriptorSet();
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());
