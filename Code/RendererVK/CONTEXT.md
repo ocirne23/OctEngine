@@ -1044,9 +1044,8 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   sun shadow LOOKUP moves toward the sun by `Shadow bias` (0.5 m at the root, none at the tip): the sunk root sits
   under the ground's own shadow-map surface (a dark band at every blade's foot);
   `Transmission` lights a blade from behind; the normal blends toward the ground's with distance (`Ground normal
-  blend`), then is bent toward the viewer until N·V reaches `Min N.V` (0.01, `u_grassParams14.w`; as the trees'
-  `Foliage min N.V`): edge-on blades, and the far ones on the ground normal looking toward the sun, otherwise shade at
-  grazing - a GGX sun glint many times the diffuse. `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
+  blend`). (A minimum N·V clamp like the trees' `Foliage min N.V` was tried and removed the same day: no visible
+  effect on the grass.) `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
   (`u_grass*`).
 
 * **THE CANOPY: grass self-shadowing without a shadow map** (`Grass/Shadows/Canopy shadow`, 0.10; 0 = off) - a blade

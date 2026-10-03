@@ -60,13 +60,7 @@ void main()
     albedo *= in_blade.y; // the per-blade variation and the cold darkening (grass.vs.glsl)
     const float ao = mix(1.0 - u_grassShade.x, 1.0, smoothstep(0.0, 1.0, t));
 
-    vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
-    // Bent toward the viewer until N.V reaches "Grass/Look/Min N.V" (u_grassParams14.w; as the tree leaves): an edge-on
-    // blade, and the far ones on the ground normal looking toward the sun, otherwise shade at grazing - the GGX glint
-    // (Fresnel -> 1, the Smith term growing) many times the diffuse.
-    const float noV = dot(N, V);
-    if (noV < u_grassParams14.w)
-        N = normalize(N + V * (u_grassParams14.w - noV));
+    const vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
     // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
     // register peak): only this half colour is live across it.
     const float back = max(-dot(N, L), 0.0);

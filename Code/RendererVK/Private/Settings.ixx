@@ -323,9 +323,6 @@ export struct GrassParams
     float warmTemperature = 20.0f;
     float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches)
     float roughness = 0.7f;
-    // A blade's normal is bent toward the viewer until N.V reaches this (0 = off; as Trees/Foliage min N.V): edge-on
-    // blades, and the far ones blended to the ground normal, otherwise shade at grazing - a sun glint looking toward it.
-    float minNoV = 0.01f;
     float rootOcclusion = 0.8f;
     float shadowBias = 0.5f;       // m: the blade's sun shadow lookup moves this far toward the sun at the root (none at
                                    // the tip) - the sunk root sits under the ground's shadow-map surface otherwise

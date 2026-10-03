@@ -924,8 +924,7 @@ export namespace RendererVKLayout
         glm::vec4 grassParams13; // x unused (was the removed scene-cascade casting), y = the near
                                  // cascade's range (m: its half size; 0 = off), z = receiver bias (m toward the sun),
                                  // w = the near cascade's texel (m)
-        glm::vec4 grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
-                                 // w = the blades' minimum N.V (0 = off)
+        glm::vec4 grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera), w unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

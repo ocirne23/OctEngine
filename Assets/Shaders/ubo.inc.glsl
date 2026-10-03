@@ -393,8 +393,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_grassParams13; // x unused (was the removed scene-cascade casting), y = the near
                           // cascade's range (m: its half size; 0 = off), z = receiver bias (m toward the sun),
                           // w = the near cascade's texel (m)
-    vec4 u_grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
-                          // w = the blades' minimum N.V (0 = off)
+    vec4 u_grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera), w unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

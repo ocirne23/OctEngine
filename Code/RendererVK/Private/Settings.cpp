@@ -205,9 +205,7 @@ void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
     Tweak::floatVar("Grass/Look", "Cold temperature (C)", &coldTemperature, -30.0f, 40.0f, 0.1f);
     Tweak::floatVar("Grass/Look", "Warm temperature (C)", &warmTemperature, -30.0f, 40.0f, 0.1f);
     Tweak::floatVar("Grass/Look", "Dry amount", &dryAmount, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Look", "Roughness", &roughness, 0.05f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Look", "Min N.V", &minNoV, 0.0f, 0.9f, 0.01f);
-    Tweak::floatVar("Grass/Look", "Root occlusion", &rootOcclusion, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Roughness", &roughness, 0.05f, 1.0f, 0.01f);    Tweak::floatVar("Grass/Look", "Root occlusion", &rootOcclusion, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Shadow bias (m)", &shadowBias, 0.0f, 5.0f, 0.01f);
     Tweak::floatVar("Grass/Shadows", "Canopy shadow", &canopyShadow, 0.0f, 4.0f, 0.005f);
     Tweak::floatVar("Grass/Shadows", "Fleck size (m)", &fleckSize, 0.01f, 2.0f, 0.005f);
