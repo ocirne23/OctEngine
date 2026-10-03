@@ -122,8 +122,41 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     buildUboOcean();
     buildUboForce();
     buildUboTerrain();
+    buildUboGrass();
 
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
+}
+
+// The grass (GrassParams). The patch size and the range set the patch grid uploadGrassFrame writes for the cull, which
+// reads them from here: the range is capped so the grid fits GRASS_MAX_PATCHES.
+void Renderer::buildUboGrass()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
+    const GrassParams& g = m_grassParams;
+    const auto linear = [](const glm::vec3& srgb) { return glm::pow(glm::clamp(srgb, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(2.2f)); };
+    const float patchSize = glm::clamp(g.patchSize, 1.0f, 16.0f);
+    const uint32 maxHalf = (uint32)std::sqrt((float)RendererVKLayout::GRASS_MAX_PATCHES) / 2u - 1u; // (2 half + 1)^2 patches
+    const float range = glm::min(g.range, patchSize * (float)maxHalf);
+    ubo.grassParams0 = glm::vec4((float)m_grassPipeline.getBladesPerPatch(), patchSize, range, glm::clamp(g.rangeFade, 0.0f, range));
+    ubo.grassParams1 = glm::vec4(g.bladeHeight, glm::clamp(g.heightVariation, 0.0f, 1.0f), g.bladeWidth, g.rootSink);
+    ubo.grassParams2 = glm::vec4(glm::max(g.thinStart, 0.1f), g.thinExponent, g.widthCompensation, glm::max(g.maxWidthScale, 1.0f));
+    // The pixel floor as world width per metre of distance: one pixel spans 2 d / m_mipPixelScale.
+    const float minWidthPerMetre = m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f;
+    const float lod2Distance = glm::max(g.lod2Distance, g.lod1Distance);
+    ubo.grassParams3 = glm::vec4(g.lod1Distance, lod2Distance, minWidthPerMetre, g.groundBlendDistance);
+    ubo.grassParams10 = glm::vec4(glm::max(g.lod3Distance, lod2Distance), g.coldTemperature, g.warmTemperature,
+        glm::clamp(g.coldDarkening, 0.0f, 1.0f));
+    const float windAngle = glm::radians(g.windAngleDeg);
+    ubo.grassParams4 = glm::vec4(std::cos(windAngle), std::sin(windAngle), g.windBend, g.gustBend);
+    ubo.grassParams5 = glm::vec4(1.0f / glm::max(g.gustSize, 0.01f), g.gustSpeed, g.swayFrequency, m_grassPrevTime);
+    m_grassPrevTime = ubo.timeSeconds;
+    ubo.grassParams6 = glm::vec4(g.curvature, 1.0f / glm::max(g.clumpSize, 0.01f), glm::clamp(g.patchiness, 0.0f, 1.0f), glm::max(g.growBand, 0.01f));
+    ubo.grassColor0 = glm::vec4(linear(g.rootColor), g.roughness);
+    ubo.grassColor1 = glm::vec4(linear(g.tipColor), g.colorVariation);
+    ubo.grassColor2 = glm::vec4(linear(g.dryColor), glm::clamp(g.dryAmount, 0.0f, 1.0f));
+    ubo.grassShade = glm::vec4(g.rootOcclusion, g.transmission, g.roundness, g.groundBlend);
+    ubo.grassParams9 = glm::vec4(g.windFadeStart, glm::max(g.windFadeEnd, g.windFadeStart + 0.01f), glm::clamp(g.sizeByCover, 0.0f, 1.0f),
+        glm::clamp(g.lodMorphBand, 0.0f, 1.0f));
 }
 
 // View matrices, frustum, and TAA jitter: the center (culling) view, the VR eye views, and the
@@ -758,6 +791,9 @@ void Renderer::buildUboTerrain()
         ubo.terrainSplatTex[i >> 1][(i & 1) * 2 + 0] = splatTex[i].x;
         ubo.terrainSplatTex[i >> 1][(i & 1) * 2 + 1] = splatTex[i].y;
     }
+    const float* splatGrass = m_terrain.getSplatGrass();
+    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
+        ubo.terrainSplatGrass[i >> 2][i & 3] = glm::clamp(splatGrass[i], 0.0f, 1.0f);
     // Climate boxes: temperature arrives as t01, precipitation as mm/yr - its divisor is a live tweak.
     const float invPrecipFull = 1.0f / glm::max(tex.precipFullMm, 1.0f);
     const glm::vec4* climate = m_terrain.getSplatClimate();

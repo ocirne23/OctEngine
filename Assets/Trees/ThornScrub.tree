@@ -1,0 +1,87 @@
+# Savanna bush (with Acacia): a low, wide, flat-topped thorn bush - zig-zag grey stems, an umbrella of feathery
+# pinnate pads, sparser than a tree crown (~0.8-1.2 m tall, ~3 m across).
+TreeSpecies ThornScrub
+	Kind Bush
+	Climate Savanna
+	Seed 71
+	Scale 0.6 1.0
+	Trunk
+		Count 3
+		Height 0.3 0.5
+		Radius 0.06
+		Taper 0.6
+		Curve 14
+		Wobble 6
+		Flare 0.2
+		Sink 0.2
+		Rings 6
+		Sides 6
+	Crown
+		Shape Umbrella
+		Start 0
+		Radius 1.6
+		Slots 10
+		Fill 0.9
+		Angle 70 50
+		AngleVar 12
+		BranchRadius 3
+	Module
+		Count 8
+		Radius 0.025
+		Curve 25 10
+		UpAttract 0.3
+		Wobble 8
+		Elbows 2
+		ElbowAngle 30 10
+		Stubs 0.3
+		Rings 8
+		Sides 4
+		Level
+			Count 5
+			Start 0.2
+			Length 0.45
+			LengthTaper 0.3
+			Angle 55 12
+			Curve 15 8
+			UpAttract 0.4
+			Wobble 10
+			Elbows 1.5
+			ElbowAngle 30 10
+			Radius 0.55
+			Rings 3
+			Sides 3
+		Level
+			Count 3
+			Start 0.2
+			Length 0.45
+			LengthTaper 0.3
+			Angle 50 15
+			Curve 10 8
+			UpAttract 0.3
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Style Pinnate
+		Size 0.5
+		Aspect 0.85
+		PerBranch 2
+		Levels 2
+		Shoots 1
+		ClusterLeaves 3
+		ClusterLeafSize 0.08
+		NormalBend 0.5
+	Billboard
+		Distance 25
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 6
+	Bark
+		Plates 18 6
+		Crack 0.08
+		Relief 1.0
+		Lichen 0.1
+	Color
+		Bark 0.36 0.31 0.27
+		Leaf 0.27 0.35 0.15

@@ -264,6 +264,67 @@ export struct FoliageParams
     void registerTweaks(const oc::function<void()>& onDebugViewChanged);
 };
 
+// PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but
+// "Blades per patch", which rebuilds the blade index buffer. Desktop only. Colours are picked as sRGB (the UBO build
+// converts them).
+export struct GrassParams
+{
+    bool enabled = true;
+    int bladesPerPatch = 1024;     // blades in a full patch (<= GRASS_MAX_BLADES): the near density is this / patch size^2
+    float patchSize = 2.0f;        // m; ideally a divisor of the terrain chunk size
+    float range = 145.0f;          // m: no blade past it
+    float rangeFade = 45.0f;       // m: the blades thin out to none over the last metres of the range
+    float bladeHeight = 1.0f;      // m
+    float heightVariation = 0.6f;  // 0..1: the shortest blade is (1 - this) x the height
+    float bladeWidth = 0.1f;       // m at the root
+    float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
+    float thinStart = 20.0f;       // m: all blades inside it; past it (start / d)^exponent of them
+    float thinExponent = 1.0f;
+    float widthCompensation = 0.5f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
+    float maxWidthScale = 4.0f;
+    float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
+    float lod2Distance = 30.0f;
+    float lod3Distance = 60.0f;
+    float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (0 = pop)
+    float minPixelWidth = 1.0f;    // px: a blade is never narrower (fights the far shimmer)
+    float groundBlendDistance = 80.0f; // m at which the normal has blended "Ground normal blend" of the way to the ground's
+    float groundBlend = 0.7f;
+    float windAngleDeg = 30.0f;
+    float windBend = 0.15f;        // the steady push on the tip, in blade heights
+    float gustBend = 0.35f;
+    float gustSize = 12.0f;        // m
+    float gustSpeed = 5.0f;        // m/s
+    float swayFrequency = 0.6f;    // Hz
+    // All wind movement eases out between these camera distances (m): small far blades moving read as grain.
+    float windFadeStart = 15.0f;
+    float windFadeEnd = 25.0f;
+    float curvature = 0.4f;        // the blades' own lean, in blade heights (random direction)
+    float clumpSize = 3.25f;       // m: the size of the clumps and bare spots
+    float patchiness = 0.62f;      // 0 = even cover, 1 = clumps with bare ground between
+    float growBand = 0.62f;        // a blade shrinks into the ground over this fraction of the kept range (no pops)
+    float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter and
+                                   // narrower by the cover - not only fewer (sparse long stalks otherwise)
+    // WHERE it grows is the terrain textures' logic (grass_cull.cs.glsl): the ground layer's coverage (no rock, beach,
+    // snow) x the grass amount of its climate-picked textures (Procedural's TERRAIN_TEX_SOURCES .grass).
+    // The look (sRGB).
+    glm::vec3 rootColor = glm::vec3(0.20f, 0.27f, 0.08f);
+    glm::vec3 tipColor = glm::vec3(0.45f, 0.53f, 0.20f);
+    glm::vec3 dryColor = glm::vec3(0.58f, 0.52f, 0.30f);
+    float colorVariation = 0.2f;
+    // COLD: the albedo darkens by up to coldDarkening as the ground's temperature falls from warmTemperature to
+    // coldTemperature (C, at the ground's height).
+    float coldDarkening = 0.7f;
+    float coldTemperature = 0.0f;
+    float warmTemperature = 20.0f;
+    float dryAmount = 0.2f;       // share of the ground with dry, straw-coloured blades (in patches)
+    float roughness = 0.7f;
+    float rootOcclusion = 0.8f;  // darkening at the root (the blades shade each other; they cast no shadow map)
+    float transmission = 0.9f; // the sun through a blade from behind
+    float roundness = 0.4f;        // the normal's tilt toward the blade's edges
+
+    void registerTweaks(const oc::function<void()>& onBladesChanged);
+};
+
 // FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
 // a camera-centred POLAR volume (angle x log radius, startDistance .. endDistance: cells grow with the distance) and
 // marched there - beyond the billboards, kilometres out. The volume geometry re-bakes on change; the resolutions

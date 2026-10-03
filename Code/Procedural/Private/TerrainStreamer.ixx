@@ -437,6 +437,7 @@ export namespace Procedural
 		oc::vector<uint32>                  m_vegTouched;
 		oc::vector<VegetationDraw>          m_vegDraws;
 		bool                                m_vegRouted = false;
+		oc::vector<Renderer::GrassGroundChunk> m_grassGround; // update's per-frame list for Renderer::setGrassGround (kept memory)
 		void noteVegetation(const Resident& resident, uint32 passMask); // the walk job
 		void flushVegetation();                                          // the walk job's end
 		// The ring scan runs on a worker too: kicked at the END of update (after the drain and the

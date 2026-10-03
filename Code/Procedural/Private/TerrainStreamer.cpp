@@ -92,6 +92,8 @@ namespace
 		const char* norSrc = nullptr;
 		const char* armSrc = nullptr;
 		const char* dispSrc = nullptr;
+		// How much GRASS grows where this texture shows (0..1, RendererVK "Procedural grass"): ground entries only.
+		float grass = 0.0f;
 	};
 	const TerrainTexSource TERRAIN_TEX_SOURCES[] =
 	{
@@ -102,20 +104,20 @@ namespace
 		// blend comes from the Gaussian tails just outside the edges, so entries should MEET, not straddle.
 		//                temperature C           precipitation mm/yr
 		{ .tempMinC = ANY_COLD, .tempMaxC = -4.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = ANY_WET, .stem = "gravel_ground_01" },        // polar/alpine scree: frost-shattered rubble. The substrate beside (and under) the snow, at ANY humidity - above the snow line there is no vegetation left for humidity to decide
-		{ .tempMinC = -5.0f,    .tempMaxC = 0.0f,    .precipMinMm = 250.0f,   .precipMaxMm = ANY_WET, .stem = "rocky_trail" },             // tundra: moss and lichen over stony ground
-		{ .tempMinC = -1.0f,    .tempMaxC = 5.0f,    .precipMinMm = 300.0f,   .precipMaxMm = 1500.0f, .stem = "forest_ground_04" },        // taiga / boreal forest floor: needle litter
-		{ .tempMinC = 4.0f,     .tempMaxC = 19.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = 400.0f,  .stem = "dry_ground_01" },           // cold desert / dry steppe
+		{ .tempMinC = -5.0f,    .tempMaxC = 0.0f,    .precipMinMm = 250.0f,   .precipMaxMm = ANY_WET, .stem = "rocky_trail", },             // tundra: moss and lichen over stony ground
+		{ .tempMinC = -1.0f,    .tempMaxC = 5.0f,    .precipMinMm = 300.0f,   .precipMaxMm = 1500.0f, .stem = "forest_ground_04", .grass = 0.3f },         // taiga / boreal forest floor: needle litter
+		{ .tempMinC = 4.0f,     .tempMaxC = 19.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = 400.0f,  .stem = "dry_ground_01" },                          // cold desert / dry steppe: cracked earth, no grass
 		{ .tempMinC = 4.0f,     .tempMaxC = 20.0f,   .precipMinMm = 400.0f,   .precipMaxMm = 1000.0f, .stem = "Grass001",                  // temperate grassland / prairie
 		  .diffSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Grass001/Grass001_arm_2k.jpg",
-		  .dispSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Displacement.jpg" },
-		{ .tempMinC = 5.0f,     .tempMaxC = 18.0f,   .precipMinMm = 1000.0f,  .precipMaxMm = 1900.0f, .stem = "forest_floor" },            // temperate seasonal forest: broadleaf litter
+		  .dispSrc = "Textures/Terrain/Grass001/Grass001_2K-JPG_Displacement.jpg", .grass = 1.0f },
+		{ .tempMinC = 5.0f,     .tempMaxC = 18.0f,   .precipMinMm = 1000.0f,  .precipMaxMm = 1900.0f, .stem = "forest_floor", .grass = 0.5f },            // temperate seasonal forest: broadleaf litter
 		{ .tempMinC = 3.0f,     .tempMaxC = 15.0f,   .precipMinMm = 1800.0f,  .precipMaxMm = ANY_WET, .stem = "Moss002",                   // temperate rainforest: deep moss
 		  .diffSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Color.jpg", .norSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_NormalGL.jpg", .armSrc = "Textures/Terrain/Moss002/Moss002_arm_2k.jpg",
-		  .dispSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Displacement.jpg" },
+		  .dispSrc = "Textures/Terrain/Moss002/Moss002_2K-JPG_Displacement.jpg", .grass = 0.4f },
 		{ .tempMinC = 20.0f,    .tempMaxC = ANY_HOT, .precipMinMm = ANY_DRY,  .precipMaxMm = 300.0f,  .stem = "sand_01" },                 // subtropical desert: dune sand
-		{ .tempMinC = 19.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 450.0f,   .precipMaxMm = 1300.0f, .stem = "red_laterite_soil_stones" },// savanna / dry tropics: iron-red laterite. 450 floor: at 250 this box bridged the steppe|sand seam and drew a red isotherm sliver across every desert
-		{ .tempMinC = 18.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 1300.0f,  .precipMaxMm = 2100.0f, .stem = "leaves_forest_ground" },    // tropical forest floor: leaf litter
-		{ .tempMinC = 16.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 2000.0f,  .precipMaxMm = ANY_WET, .stem = "mud_forest" },              // wetland / swamp: saturated mud
+		{ .tempMinC = 19.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 450.0f,   .precipMaxMm = 1300.0f, .stem = "red_laterite_soil_stones", .grass = 0.25f },// savanna / dry tropics: iron-red laterite. 450 floor: at 250 this box bridged the steppe|sand seam and drew a red isotherm sliver across every desert
+		{ .tempMinC = 18.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 1300.0f,  .precipMaxMm = 2100.0f, .stem = "leaves_forest_ground", .grass = 0.5f },    // tropical forest floor: leaf litter
+		{ .tempMinC = 16.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 2000.0f,  .precipMaxMm = ANY_WET, .stem = "mud_forest", .grass = 0.4f },              // wetland / swamp: saturated mud
 
 		// --- Rock: the bedrock the slope/crag layer exposes. Climate still selects the TYPE - weathering
 		// is a climate process - but the cold entry spans all humidity for the same reason the scree does.
@@ -703,6 +705,7 @@ namespace Procedural
 			mat.normalDds = terrainTexCachePath(src, "nor");
 			mat.heightDds = terrainTexCachePath(src, "hao");
 			mat.climate = terrainSplatClimate(src);
+			mat.grass = src.kind == ESourceKind::Ground ? src.grass : 0.0f;
 			if (!FileSystem::exists(mat.diffuseDds, /*allowMainThread*/ true) || !FileSystem::exists(mat.normalDds, true)
 				|| !FileSystem::exists(mat.heightDds, true))
 			{
@@ -1615,6 +1618,29 @@ namespace Procedural
         }
 
 		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
+
+		// The GRASS stands on these chunks (Renderer::setGrassGround): its blades read the mesh vertices. Only the
+		// columns within its range - a handful of lookups per LOD, not a walk of the ring. The finest resident per
+		// column wins in the renderer (a LOD hand-over keeps two).
+		{
+			const float grassRange = renderer.grassRange();
+			m_grassGround.clear();
+			if (grassRange > 0.0f)
+			{
+				const glm::ivec2 c0(std::floor((camera.position.x - grassRange) / chunkSize), std::floor((camera.position.z - grassRange) / chunkSize));
+				const glm::ivec2 c1(std::floor((camera.position.x + grassRange) / chunkSize), std::floor((camera.position.z + grassRange) / chunkSize));
+				const uint32 lod0Res = (uint32)glm::max(1, m_lod0Res);
+				for (int z = c0.y; z <= c1.y; ++z)
+					for (int x = c0.x; x <= c1.x; ++x)
+						for (uint32 lod = 0; lod <= maxLod; ++lod)
+						{
+							const auto it = m_residents.find(chunkKey(glm::ivec2(x, z), lod));
+							if (it != m_residents.end() && it->second->mesh.isValid())
+								m_grassGround.push_back({ glm::ivec2(x, z), it->second->mesh.getFirstVertex(), glm::max(1u, lod0Res >> lod) });
+						}
+			}
+			renderer.setGrassGround(chunkSize, oc::span<const Renderer::GrassGroundChunk>(m_grassGround.data(), m_grassGround.size()));
+		}
 
 		// --- Kick THIS frame's ring scan for the next update to apply. Last in update on purpose: the
 		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and

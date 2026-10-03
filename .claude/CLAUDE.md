@@ -362,7 +362,7 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 |---|---|
 | [App](../Code/App/CONTEXT.md) | The testbed executable: **the frame loop table**, init order, command line, main menu + lobby + chat flow, escape menu, testbed keys |
 | [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, Tweaks (Synced/overrides), `Core.GameHud`, plus the **Profiling** and **Memory** sections |
-| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, shaders |
+| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, procedural grass, shaders |
 | [Entity](../Code/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, the parallel update pass, **SIM LOD**, parallel spawning/destruction, World, the components, script glue, and the **Multiplayer** section |
 | [Script](../Code/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
 | [Physics](../Code/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
@@ -457,7 +457,7 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 `TreeSpecies <name>` with `Trunk` / `Crown` / `Module` (+ `Level` children) / `Leaves` / `Color` blocks, in
 `Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree.
 **The grammar is in "Trees" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; placeholders
-`Oak.tree`, `Pine.tree`, `Acacia.tree`. Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
+`Oak.tree`, `Pine.tree`, `Acacia.tree`, plus two bushes per tree `Climate`. Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
 Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
 (not in git) and reused (regenerate with `Trees/Regenerate textures`).
 

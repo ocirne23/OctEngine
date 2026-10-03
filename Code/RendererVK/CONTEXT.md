@@ -151,6 +151,7 @@ GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
     → Particle sim → Terrain wetness
+    → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
@@ -981,6 +982,67 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   cannot hold stays a runtime UBO flag: `u_cloudShape0.w` = the march ran this frame (the game suppresses
   it), `u_cloudShadow4.x` = the map was rendered this frame (suppressed, or the sun at the horizon).
 * **Debug mode** ("Sky/Clouds/Quality"): step count heat, density only, history rejection.
+
+## Procedural grass (`GrassPipeline`, "Grass" tweaks, `GrassParams`)
+
+**Built 2026-10-03; defaults tuned by the user the same day** (1024 blades per 2 m patch, 1 m blades 0.1 m wide).
+Desktop only (no VR). Blades near the camera (default range 145 m);
+the far tiers (the terrain shading taking over the grass look) are not built yet.
+
+* **Patches of RANKED blades** (`grass.inc.glsl`): a world grid of patches (`Patch size`, 2 m) around the camera. ONE
+  static index buffer (`GrassPipeline::buildIndices`) holds, per LOD (8 / 4 / 2 / 1 segments - they NEST, for the geomorph; switches at `LOD 1/2/3 distance`, 10 / 30 / 60 m), `Blades per patch` blades in
+  RANK order; blade k stands at the k-th point of an R2 low-discrepancy sequence over the patch (offset per patch), so
+  EVERY PREFIX of the ranks is evenly spread. A patch draws the first K blades. The vertex shader keeps blade k where
+  `(k + 0.5) / N < density x thinning` and shrinks it into the ground over the `Grow band` below that: ONE rule thins by
+  density (climate, slope, clumps) AND by distance (`(Thinning start / d)^exponent`, faded to none over `Range fade`),
+  so a blade fades by shrinking, never pops. Where the COVER fades (the corner densities: climate, slope, water, snow -
+  not the clumps) the blades are also shorter and narrower by it (`Size by cover`, default 1), not only fewer: fewer
+  full-size blades read as sparse long stalks. The kept blades widen by `(1 / kept)^Width compensation` (capped) and are
+  never narrower than `Min pixel width`.
+* **No vertex buffer:** the index buffer holds vertex IDS (`blade << GRASS_BLADE_VERTEX_SHIFT | vertex`), and
+  `grass.vs.glsl` builds the blade: a quadratic Bezier from the root (control point above the root at the tip's height,
+  tip pushed by a random lean + the wind - a steady bend with a sway and value-noise gusts blowing downwind), its width
+  narrowing to a one-vertex tip. **GEOMORPH:** over the last `LOD morph band` (fraction, 0.3) before the next LOD's
+  distance, the rows the coarser LOD drops (the odd rows) move - positions, last frame's positions and normals - onto
+  the midpoint of their neighbours, by the blade's OWN distance; at the switch the blade is the coarser one exactly. The
+  patch's LOD comes from the nearest point of its box (with slack below the corners), so no blade of a coarser patch is
+  nearer than the switch. **Two shading normals:** NEAR, the curve's own normal + the full edge tilt (the
+  user's preferred look); it eases (per blade) between `LOD 2 distance` and `LOD 3 distance` into a normal LINEAR in t
+  (root normal -> the upper-half chord's normal, edge tilt x (1 - t)), which every LOD interpolates the same. The
+  curve normal (horizontal tangent at the tip) spread over the single-triangle LOD made a brightness step at its
+  switch. Motion vectors: the same blade at LAST frame's time (`u_grassParams5.w`). The wind
+  (not the lean) eases out between `Wind/Fade start` and `Fade end` (15 / 25 m): far blades moving read as grain.
+* **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
+  interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
+  height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the chunks within
+  `grassRange()` to `Renderer::setGrassGround` EVERY frame (coord, `RenderMesh::getFirstVertex`, grid cells); the list
+  lives ONE frame (a frame without it draws no grass: a disabled terrain or freed chunks are never read). `present` writes
+  it into the slot's host-visible GROUND TABLE (`GrassFrameGpu`: the patch grid + a `GRASS_TABLE_DIM`^2 chunk table,
+  the finest resident per cell; `uploadGrassFrame`). The tessellated relief (`terrain_tess.tes.glsl`) is not sampled:
+  the root sinks by `Root sink` + half the relief depth (the same fade and slope gate) and the blade grows by as much,
+  so no blade floats over a displaced hollow.
+* **The cull** (`grass_cull.cs.glsl`, a cached compute secondary "Grass cull" before the shadow cull): one thread per
+  patch slot (`GRASS_MAX_PATCHES` = 65536; the range is capped so the grid fits), range and frustum tests, the 4 corner
+  heights and DENSITIES - **the terrain textures' own logic**: `terrainLayers` (terrain_splat.inc.glsl, included with
+  `TERRAIN_SPLAT_HEIGHT_ONLY`), fed as the terrain VS feeds it (the baked fields, the temperature at the height, the
+  SMOOTH mesh normal from the chunk's vertex normals: `grassGroundSmoothNormal`). Density = what the beach, rock and
+  snow layers leave of the GROUND x the grass amount of its climate pick's textures (`u_terrainSplatGrass` per slot,
+  `TerrainSplatMaterial::grass`, set in Procedural's `TERRAIN_TEX_SOURCES`: grassland 1, savanna 0.6, cracked steppe / sand / scree 0).
+  No grass until the terrain texture set is registered (the startup bake). The splat's relief height blend is not
+  applied (linear coverages). Corners are shared, so the bilinear density is continuous across patches. Output per visible
+  patch: a `GrassPatchGpu` record (32 B) and a `VkDrawIndexedIndirectCommand` (`firstInstance` = the slot - needs
+  `drawIndirectFirstInstance`, enabled in Device.cpp), counted atomically.
+* **The draw:** `m_grassPipeline` in `StaticMeshGraphicsPipeline` (built from the main layout like the tess terrain, so
+  the SAME descriptor set binds: the lit core), `drawIndexedIndirectCount` after the tessellated ground and before the
+  film; the record is an INSTANCE-RATE vertex attribute (binding 0). Two-sided, no discard (early depth), opaque
+  family, writes motion. `grass.fs.glsl`: the lit core's `computeLitColor`; the sun shadow looked up from the blade's
+  sun side; albedo root -> tip + per-blade variation + dry patches (sRGB tweaks, linearised in `buildUboGrass`);
+  `Cold darkening` scales the albedo down as the patch's mean temperature (the cull's 4 corners, at their height; it
+  rides the record's `cellTemperature` half with the cell size) falls from `Warm temperature` to `Cold temperature`; `Root
+  occlusion` stands in for the blades shadowing each other (they cast NO shadow map and are not in the TLAS);
+  `Transmission` lights a blade from behind; the normal blends toward the ground's with distance (`Ground normal
+  blend`). `Blades per patch` rebuilds the index buffer (GPU idle + re-record); everything else is UBO-live
+  (`u_grass*`).
 
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 

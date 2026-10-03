@@ -890,6 +890,28 @@ namespace Procedural
 		for (const Species& species : m_species)
 			(species.desc.bush ? bushSpecies : treeSpecies).push_back(&species);
 
+		// Per tree species the bushes of its CLIMATE (`Climate`, case-insensitive); a tree whose climate no bush shares
+		// takes every bush.
+		auto sameClimate = [](const oc::string& a, const oc::string& b)
+		{
+			if (a.size() != b.size())
+				return false;
+			for (size_t i = 0; i < a.size(); ++i)
+				if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i]))
+					return false;
+			return true;
+		};
+		oc::unordered_map<const Species*, oc::vector<const Species*>> bushesFor;
+		for (const Species* tree : treeSpecies)
+		{
+			oc::vector<const Species*>& list = bushesFor[tree];
+			for (const Species* bush : bushSpecies)
+				if (sameClimate(bush->desc.climate, tree->desc.climate))
+					list.push_back(bush);
+			if (list.empty())
+				list = bushSpecies;
+		}
+
 		uint32 treeIdx = 0;
 		for (int j = 0; j < grid; ++j)
 		{
@@ -899,13 +921,13 @@ namespace Procedural
 				const glm::vec2 jitter(treeHash01(treeHash(seed, 100u)) - 0.5f, treeHash01(treeHash(seed, 101u)) - 0.5f);
 				const glm::vec2 p = center + right * ((float)i * m_spacing - half) + fwd * ((float)j * m_spacing - half)
 					+ jitter * (m_spacing * m_positionJitter);
-				if (only)
-					placeVariant(*only, seed, p);
-				else if (!treeSpecies.empty())
-					placeVariant(*treeSpecies[(size_t)(i + j * grid) % treeSpecies.size()], seed, p);
+				const Species* tree = only ? only : !treeSpecies.empty() ? treeSpecies[(size_t)(i + j * grid) % treeSpecies.size()] : nullptr;
+				if (tree)
+					placeVariant(*tree, seed, p);
 				// "Bushes per tree": the whole part always, the fraction by chance. Each around its tree - out of the
-				// trunk's way (1.5 m), out to 0.75 x the spacing (area-uniform) - a random bush species.
-				if (bushSpecies.empty() || m_bushesPerTree <= 0.0f)
+				// trunk's way (1.5 m), out to 0.75 x the spacing (area-uniform) - a random bush species of its climate.
+				const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : bushSpecies;
+				if (bushes.empty() || m_bushesPerTree <= 0.0f)
 					continue;
 				const float whole = std::floor(m_bushesPerTree);
 				const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < m_bushesPerTree - whole ? 1u : 0u);
@@ -914,7 +936,7 @@ namespace Procedural
 					const uint32 bushSeed = treeHash(seed, 200u + b);
 					const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
 					const float radius = glm::mix(1.5f, glm::max(0.75f * m_spacing, 1.5f), std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
-					const Species& bush = *bushSpecies[treeHash(bushSeed, 113u) % (uint32)bushSpecies.size()];
+					const Species& bush = *bushes[treeHash(bushSeed, 113u) % (uint32)bushes.size()];
 					placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
 				}
 			}

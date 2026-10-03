@@ -22,6 +22,13 @@ export namespace Procedural
 		Cluster, // alpha-tested cards showing a twig with many leaves (procedural texture, TreeLeafTexture)
 	};
 
+	enum class ETreeClusterStyle : uint8
+	{
+		Leaves,  // a twig with broad leaves (ClusterLeaves of them)
+		Needles, // a conifer shoot: a main shoot + ClusterLeaves side shoots, all densely set with needles
+		Pinnate, // bipinnate compound leaves (acacia): a rachis with ClusterLeaves pairs of pinnae lined with leaflets
+	};
+
 	// How one branch grows - shared by the trunk, the module root and every sub-branch level.
 	struct TreeBranchShape
 	{
@@ -60,6 +67,7 @@ export namespace Procedural
 		uint32 seed = 1;
 		glm::vec2 scale{ 0.85f, 1.15f }; // uniform tree scale range
 		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
+		oc::string climate;              // `Climate <name>`: a bush grows around the trees of its climate only
 
 		// Trunks
 		int trunkCount = 4;
@@ -96,8 +104,11 @@ export namespace Procedural
 		ETreeLeafType leafType = ETreeLeafType::Single;
 		bool leafCross = false;     // Cluster: a second card at 90 degrees about the card's stem axis
 		float leafNormalBend = 0.7f; // Cluster: 0 = flat card normals, 1 = normals point straight out of the crown
-		int clusterLeaves = 12;     // Cluster: leaves drawn per texture variant
-		float clusterLeafSize = 0.3f; // Cluster: leaf length in the texture, as a fraction of the card length
+		ETreeClusterStyle clusterStyle = ETreeClusterStyle::Leaves; // Cluster: what the texture draws
+		int clusterLeaves = 12;     // Cluster: leaves drawn per texture variant (Needles: side shoots per branch;
+		                            // Pinnate: pinna pairs per compound leaf)
+		int clusterShoots = 1;      // Needles / Pinnate: branches / compound leaves fanned out from the card's base
+		float clusterLeafSize = 0.3f; // Cluster: leaf (Needles: needle) length in the texture, a fraction of the card length
 		float leafSize = 0.25f;     // length (m)
 		float leafAspect = 0.6f;    // width / length
 		int leavesPerBranch = 8;    // per average last-level branch; longer branches get proportionally more

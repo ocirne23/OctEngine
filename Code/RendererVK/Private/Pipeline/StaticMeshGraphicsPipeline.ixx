@@ -12,6 +12,7 @@ import :DescriptorSet;
 import :Texture;
 import :Sampler;
 import :GIProbePipeline;
+import :GrassPipeline;
 
 class CommandBuffer;
 class ObjectContainer;
@@ -59,6 +60,9 @@ public:
 		vk::Sampler oceanMapsSampler;
 
 		uint32 viewIndex = 0; // selects u_views[viewIndex] via push constant (0 = centre/desktop, 1/2 = eyes)
+
+		// The grass blades (GrassPipeline's cull outputs + the blade index buffer); null = none (VR).
+		const GrassPipeline::Draw* grass = nullptr;
     };
 
     void initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
@@ -118,11 +122,17 @@ private:
     // layouts are identically defined), vertex input and push ranges, and the terrain ground / overlay
     // variants' fragment shaders with every baked define. Variant 0 = ground, 1 = overlay.
     void buildTerrainTessLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& tess);
+    // The grass blades from the main layout: its bindings (the SAME descriptor set binds: the lit core), their own
+    // vertex input (the patch record, instance rate) and shaders. Desktop only.
+    void buildGrassLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& grass);
 
     GraphicsPipeline m_graphicsPipeline;
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
     // draws in record(), between the opaque and the transparent executes.
     GraphicsPipeline m_terrainTessPipeline;
+    // The grass blades: also outside the execution set, one indexed indirect draw per visible patch (GrassPipeline).
+    GraphicsPipeline m_grassPipeline;
+    bool m_grassBuilt = false;
     // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
     // opaque family (colour + the motion target), the transparent sequence the transparent family (colour only;
     // RendererVKLayout::PIPELINE_TRANSPARENT_MASK).

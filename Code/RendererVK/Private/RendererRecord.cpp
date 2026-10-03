@@ -136,6 +136,21 @@ void Renderer::recordTerrainWetness(uint32 frameIdx)
     cb.end();
 }
 
+void Renderer::recordGrassCull(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& cb = frameData.grassCullCommandBuffer;
+    beginComputeSecondary(cb);
+    const GrassPipeline::RecordParams params{
+        .ubo = &frameData.ubo,
+        .terrainView = m_terrain.getHeightMap().getView(),
+        .terrainSampler = m_terrain.getHeightMap().getSampler(),
+        .vertexBuffer = &Globals::meshDataManager.getVertexBuffer(),
+    };
+    m_grassPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
 void Renderer::recordLightGrid(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -317,6 +332,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
     setFullViewport(cb.getCommandBuffer());
+    const GrassPipeline::Draw grassDraw = m_grassPipeline.getDraw(frameIdx);
     StaticMeshGraphicsPipeline::RecordParams drawParams
     {
         .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
@@ -346,6 +362,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
         .viewIndex = RendererVKLayout::eyeToViewIndex(eyeIndex, m_sceneViewCount),
+        .grass = m_sceneViewCount == 1 ? &grassDraw : nullptr, // desktop only (the count is 0 while grass is off)
     };
     // Each eye has its own descriptor set (per-eye AO + last frame's depth), so both eyes write their own.
     m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, true);
@@ -1266,6 +1283,8 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     recordRainOcclusionDraw(frameIdx);
     recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
     recordTerrainWetness(frameIdx); // executed only while enabled (TerrainWetTweaks::enabled)
+    if (m_sceneViewCount == 1)
+        recordGrassCull(frameIdx); // executed only while grass is on (grassActive)
     recordShadowCull(frameIdx);
     recordShadowDraw(frameIdx);
     recordVolumetricFog(frameIdx); // shared scatter/integrate (center view in VR)
@@ -1363,6 +1382,15 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
     if (m_terrain.getWetTweaks().enabled && m_terrain.isWetnessTicking())
         executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
+    // Grass patch cull (desktop): the draws "Static meshes" executes. Off, the count is cleared instead, so the
+    // recorded draw draws nothing.
+    if (m_sceneViewCount == 1)
+    {
+        if (grassActive())
+            executeScoped(primary, "Grass cull", frameData.grassCullCommandBuffer.getCommandBuffer());
+        else
+            m_grassPipeline.recordClear(primary, frameIdx);
+    }
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
     // so skip the shadow cull + cascade render.
     if (!m_rtParams.effectiveSunShadow())
@@ -1684,6 +1712,7 @@ void Renderer::recordCommandBuffers()
                 m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
+        m_grassPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_oceanSimPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_particlePipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         // The wetness clipmap, the GI sky map and the cloud shadow map never change handle; rewritten

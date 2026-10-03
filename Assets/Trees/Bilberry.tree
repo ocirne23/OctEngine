@@ -1,0 +1,69 @@
+# Boreal bush (with Pine): knee-high, many thin upright stems densely set with small leaves - the forest-floor
+# dwarf shrub under conifers (~0.3-0.5 m tall).
+TreeSpecies Bilberry
+	Kind Bush
+	Climate Boreal
+	Seed 67
+	Scale 0.4 0.7
+	Trunk
+		Count 3
+		Height 0.15 0.25
+		Radius 0.03
+		Taper 0.6
+		Curve 8
+		Wobble 4
+		Flare 0.1
+		Sink 0.1
+		Rings 4
+		Sides 5
+	Crown
+		Shape Ellipsoid
+		Start 0
+		Radius 0.7
+		Slots 12
+		Fill 0.9
+		Angle 45 20
+		AngleVar 15
+		BranchRadius 3
+	Module
+		Count 8
+		Radius 0.025
+		Curve 20 10
+		UpAttract 0.5
+		Wobble 8
+		Rings 5
+		Sides 4
+		Level
+			Count 5
+			Start 0.2
+			Length 0.45
+			LengthTaper 0.4
+			Angle 40 12
+			Curve 15 8
+			UpAttract 0.4
+			Wobble 10
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.3
+		Aspect 0.8
+		PerBranch 4
+		Levels 2
+		ClusterLeaves 14
+		ClusterLeafSize 0.18
+		NormalBend 0.4
+	Billboard
+		Distance 20
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 5
+	Bark
+		Plates 8 4
+		Crack 0.06
+		Relief 0.5
+		Lichen 0.05
+	Color
+		Bark 0.24 0.27 0.14
+		Leaf 0.15 0.30 0.10

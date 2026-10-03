@@ -26,6 +26,9 @@ export struct TerrainSplatMaterial
     // units because its divisor is a live tweak (TerrainTexTweaks::precipFullMm): buildUboTerrain
     // normalizes it every frame. The default is full width on both axes (matches any climate).
     glm::vec4 climate{ 0.0f, 1.0f, 0.0f, 1.0e6f };
+    // How much GRASS grows where this texture shows (0..1; the grass cull weighs it by the same layer coverages and
+    // climate picks the splat draws). Rock, beach and snow are 0.
+    float grass = 0.0f;
 };
 
 // Layout of a registered set, in slot order [ground][rock][beach?][snow?] (the shader composites
@@ -234,6 +237,7 @@ public:
     const TerrainSplatCounts& getSplatCounts() const { return m_splatCounts; }
     oc::span<const uint16> getSplatTextures() const { return m_splatTextures; }
     const glm::vec4* getSplatClimate() const { return m_splatClimate; } // per slot, TerrainSplatMaterial::climate units
+    const float* getSplatGrass() const { return m_splatGrass; }         // per slot, TerrainSplatMaterial::grass
     const uint16* getSplatHeightTex() const { return m_splatHeightTex; } // per slot, UINT16_MAX = no height map
     // Per slot: x = diffuse | normal << 16, y = 1 when the normal map is BC5.
     const glm::uvec2* getSplatTex() const { return m_splatTex; }
@@ -272,6 +276,7 @@ private:
     TerrainSplatCounts m_splatCounts;
     oc::vector<uint16> m_splatTextures; // for the per-frame streaming noteUse + replacement frees
     glm::vec4 m_splatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
+    float m_splatGrass[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
     uint16 m_splatHeightTex[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{}; // read only once a set is registered
     glm::uvec2 m_splatTex[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};    // see getSplatTex
     TerrainTexTweaks m_texTweaks;

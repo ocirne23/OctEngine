@@ -60,7 +60,10 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
     m_splatBaseMaterial = (int32)io.addMaterials(materialInfos);
     m_splatCounts = counts;
     for (size_t i = 0; i < mats.size(); ++i)
+    {
         m_splatClimate[i] = mats[i].climate;
+        m_splatGrass[i] = mats[i].grass;
+    }
     return retired;
 }
 

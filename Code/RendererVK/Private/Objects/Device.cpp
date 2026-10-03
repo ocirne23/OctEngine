@@ -142,6 +142,7 @@ bool Device::initialize()
     deviceFeatures.features.dualSrcBlend = vk::True; // the terrain overlay composites src0 + dst * src1
     deviceFeatures.features.tessellationShader = vk::True; // the tessellated terrain (StaticMeshGraphicsPipeline)
     deviceFeatures.features.multiDrawIndirect = vk::True;  // its per-mesh-slot indirect draws
+    deviceFeatures.features.drawIndirectFirstInstance = vk::True; // the grass: firstInstance = the patch record (instance-rate attributes)
     vk::PhysicalDeviceVulkan11Features vk11Features
     {
         .pNext = &deviceFeatures,

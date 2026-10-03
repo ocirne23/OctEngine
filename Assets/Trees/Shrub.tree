@@ -1,6 +1,7 @@
 # Broadleaf bush placeholder: a few short stems, modules from the ground up, a round dense crown (~0.7-1 m).
 TreeSpecies Shrub
 	Kind Bush
+	Climate Temperate
 	Seed 51
 	Scale 0.6 1.0
 	Trunk

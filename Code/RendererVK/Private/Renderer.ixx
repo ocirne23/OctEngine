@@ -42,6 +42,7 @@ import :SceneColor;
 import :DebugLinePipeline;
 import :ParticlePipeline;
 import :TreeVolumePipeline;
+import :GrassPipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
@@ -300,6 +301,15 @@ public:
     // camera's height above it. Unset (NaN): the baked sea level.
     void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
 
+    // -- Procedural grass (GrassPipeline, grass.inc.glsl; "Grass" tweaks) --
+    // The blades stand on the terrain MESH: their roots are read from the chunks' own vertices. One resident chunk per
+    // coordinate (the finest), all within grassRange() of the camera.
+    struct GrassGroundChunk { glm::ivec2 coord; uint32 firstVertex = 0; uint32 res = 0; };
+    // MAIN THREAD, every frame before present (Procedural TerrainStreamer::update). Valid for ONE frame: a frame
+    // without a call draws no grass (a disabled terrain, or freed chunks, can never be read).
+    void setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> chunks);
+    float grassRange() const { return grassActive() ? m_grassParams.range : 0.0f; } // m; 0 = no grass
+
     // -- Debug rendering --
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color) // [Concurrency:LOCK - FREE - per - worker staging, merged in present]
@@ -339,6 +349,7 @@ private:
     void recordSkinning(uint32 frameIdx);
     void recordOceanSim(uint32 frameIdx);
     void recordTerrainWetness(uint32 frameIdx);
+    void recordGrassCull(uint32 frameIdx);
     void recordIndirectCull(uint32 frameIdx);
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
@@ -434,6 +445,7 @@ private:
     void buildUboOcean();
     void buildUboForce();
     void buildUboTerrain();
+    void buildUboGrass();
 
     // ---- THE scene stage table ----
     // recordSceneSecondaries, recordPrimaryDesktop and recordPrimaryVR all read it, so a stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
@@ -610,6 +622,15 @@ private:
     float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)
     void recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary); // bake when due + march (straight into the primary)
     void recordFarTreesApply(uint32 frameIdx);                        // the scene stage's cached secondary
+    // PROCEDURAL GRASS: the patch cull + buffers (the blades draw in m_staticMeshGraphicsPipeline). The ground chunks
+    // arrive per frame (setGrassGround) and go into the slot's ground table in present (uploadGrassFrame).
+    GrassPipeline m_grassPipeline;
+    GrassParams m_grassParams;
+    oc::vector<GrassGroundChunk> m_grassGround;
+    float m_grassChunkSize = 0.0f;
+    float m_grassPrevTime = 0.0f; // last frame's timeSeconds (the blades' motion vectors)
+    bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
+    void uploadGrassFrame(uint32 frameIdx);
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
     ParticleState m_particles;
@@ -727,6 +748,7 @@ private:
         CommandBuffer skinningCommandBuffer;
         CommandBuffer oceanSimCommandBuffer;
         CommandBuffer terrainWetnessCommandBuffer;
+        CommandBuffer grassCullCommandBuffer;
         CommandBuffer lightGridCommandBuffer;
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;

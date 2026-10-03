@@ -1,5 +1,7 @@
-# Conifer placeholder species: cone crown, a leader at the top, drooping tiers.
+# Conifer species: cone crown down to low on the trunk, a leader at the top, dense horizontal tiers of drooping
+# branches with needle-shoot cards (Leaves Style Needles: TreeLeafTexture draws conifer shoots, not leaves).
 TreeSpecies Pine
+	Climate Boreal
 	Seed 23
 	Scale 0.8 1.25
 	Trunk
@@ -19,40 +21,60 @@ TreeSpecies Pine
 		Sides 14
 	Crown
 		Shape Cone
-		Start 0.22
-		Radius 3.2
-		Slots 30
-		Fill 0.95
-		Angle 100 70
+		Start 0.12
+		Radius 3.4
+		Slots 60
+		Fill 0.85
+		Angle 100 62
 		AngleVar 8
 		Leader true
+		BranchRadius 0.5
 	Module
 		Count 12
 		Radius 0.03
-		Curve 15 8
-		UpAttract -0.1
-		Wobble 4
-		Elbows 0.6
-		ElbowAngle 15 6
-		Stubs 0.5
+		Curve 12 6
+		UpAttract -0.05
+		Wobble 3
+		Elbows 0.3
+		ElbowAngle 12 5
+		Stubs 0.3
 		Rings 6
 		Sides 5
 		Level
-			Count 10
-			Start 0.1
-			Length 0.35
+			Count 7
+			Start 0.08
+			Length 0.4
 			LengthTaper 0.6
-			Angle 60 10
-			Curve 10 8
-			UpAttract -0.05
-			Wobble 6
+			Angle 55 10
+			Curve 10 6
+			UpAttract -0.1
+			Wobble 5
 			Radius 0.5
 			Rings 3
 			Sides 3
+		Level
+			Count 4
+			Start 0.15
+			Length 0.45
+			LengthTaper 0.5
+			Angle 50 12
+			Curve 8 6
+			Wobble 6
+			Radius 0.55
+			Rings 3
+			Sides 3
 	Leaves
-		Size 0.18
-		Aspect 0.3
-		PerBranch 28
+		Type Cluster
+		Style Needles
+		Size 1.1
+		Aspect 0.75
+		PerBranch 2
+		Levels 3
+		Cross false
+		Shoots 3
+		ClusterLeaves 3
+		ClusterLeafSize 0.11
+		NormalBend 0.5
 	Bark
 		Plates 16 4
 		Crack 0.045
@@ -60,4 +82,4 @@ TreeSpecies Pine
 		Lichen 0.1
 	Color
 		Bark 0.28 0.20 0.15
-		Leaf 0.10 0.24 0.12
+		Leaf 0.12 0.26 0.13

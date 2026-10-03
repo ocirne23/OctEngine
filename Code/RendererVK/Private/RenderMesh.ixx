@@ -72,6 +72,7 @@ public:
     bool isValid() const { return m_meshIdx != UINT16_MAX; }
     void destroy(); // main thread (Renderer::destroyMesh)
     const Sphere& getBounds() const { return m_bounds; }
+    uint32 getFirstVertex() const { return m_firstVertex; } // in the vertex mega-buffer, MeshVertex units (the grass reads the terrain's)
 
 private:
 

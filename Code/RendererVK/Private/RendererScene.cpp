@@ -784,3 +784,52 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     }
     m_force.setParams(params);
 }
+
+// ---- Procedural grass: the ground the blades stand on ----
+
+void Renderer::setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> chunks)
+{
+    m_grassChunkSize = chunkSize;
+    m_grassGround.assign(chunks.begin(), chunks.end());
+}
+
+// This slot's ground table (its fence was waited): the patch grid around the camera, from the UBO's patch size and
+// capped range (buildUboGrass), and the terrain chunks under it - the finest per cell. Then the frame's chunk list is
+// spent: the next frame draws grass only if the terrain hands it over again.
+void Renderer::uploadGrassFrame(uint32 frameIdx)
+{
+    using RendererVKLayout::GRASS_TABLE_DIM;
+    RendererVKLayout::GrassFrameGpu& frame = m_grassPipeline.frame(frameIdx);
+    frame.gridDim = 0;
+    frame.tableDim = 0;
+    if (grassActive() && !m_grassGround.empty() && m_grassChunkSize > 0.0f)
+    {
+        const float patchSize = m_ubo.grassParams0.y;
+        const int half = (int)std::ceil(m_ubo.grassParams0.z / patchSize);
+        const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
+        frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
+        frame.gridDim = (uint32)(2 * half + 1);
+        frame.patchSize = patchSize;
+
+        const glm::ivec2 tableMin(glm::floor(frame.gridOrigin / m_grassChunkSize));
+        const glm::ivec2 tableMax(glm::floor((frame.gridOrigin + (float)frame.gridDim * patchSize) / m_grassChunkSize));
+        const uint32 tableDim = (uint32)oc::min(oc::max(tableMax.x - tableMin.x, tableMax.y - tableMin.y) + 1, (int)GRASS_TABLE_DIM);
+        frame.tableMin = tableMin;
+        frame.tableDim = tableDim;
+        frame.chunkSize = m_grassChunkSize;
+        // Built here, then copied: the mapped table is write-combined memory (never read it back).
+        oc::array<glm::uvec2, GRASS_TABLE_DIM * GRASS_TABLE_DIM> table{};
+        for (const GrassGroundChunk& chunk : m_grassGround)
+        {
+            const glm::ivec2 cell = chunk.coord - tableMin;
+            if (cell.x < 0 || cell.y < 0 || cell.x >= (int)tableDim || cell.y >= (int)tableDim || chunk.res == 0)
+                continue;
+            glm::uvec2& entry = table[(uint32)cell.y * tableDim + (uint32)cell.x];
+            if (chunk.res > entry.y) // a LOD hand-over keeps two residents: the finer one
+                entry = glm::uvec2(chunk.firstVertex, chunk.res);
+        }
+        memcpy(frame.chunks, table.data(), tableDim * tableDim * sizeof(glm::uvec2));
+    }
+    m_grassPipeline.flushFrame(frameIdx);
+    m_grassGround.clear();
+}

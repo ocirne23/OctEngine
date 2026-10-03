@@ -121,6 +121,8 @@ namespace Procedural
 		readRange(*species, "Scale", out.scale);
 		if (const AssetNode* n = species->find("Kind"))
 			out.bush = iequals(n->asString(), "Bush");
+		if (const AssetNode* n = species->find("Climate"))
+			out.climate = n->asString();
 
 		if (const AssetNode* trunk = species->find("Trunk"))
 		{
@@ -182,7 +184,11 @@ namespace Procedural
 				out.leafType = iequals(n->asString(), "Cluster") ? ETreeLeafType::Cluster : ETreeLeafType::Single;
 			if (const AssetNode* n = leaves->find("Cross"))
 				out.leafCross = n->asBool(0, out.leafCross);
+			if (const AssetNode* n = leaves->find("Style"))
+				out.clusterStyle = iequals(n->asString(), "Needles") ? ETreeClusterStyle::Needles
+					: iequals(n->asString(), "Pinnate") ? ETreeClusterStyle::Pinnate : ETreeClusterStyle::Leaves;
 			readInt(*leaves, "ClusterLeaves", out.clusterLeaves);
+			readInt(*leaves, "Shoots", out.clusterShoots);
 			readFloat(*leaves, "NormalBend", out.leafNormalBend);
 			readFloat(*leaves, "ClusterLeafSize", out.clusterLeafSize);
 		}
@@ -238,7 +244,8 @@ namespace Procedural
 		}
 		out.leavesPerBranch = glm::clamp(out.leavesPerBranch, 0, 128);
 		out.leafLevels = glm::clamp(out.leafLevels, 1, 4);
-		out.clusterLeaves = glm::clamp(out.clusterLeaves, 1, 64);
+		out.clusterLeaves = glm::clamp(out.clusterLeaves, out.clusterStyle == ETreeClusterStyle::Needles ? 0 : 1, 64);
+		out.clusterShoots = glm::clamp(out.clusterShoots, 1, 5);
 		out.leafNormalBend = glm::clamp(out.leafNormalBend, 0.0f, 1.0f);
 		out.barkPlates = glm::clamp(glm::round(out.barkPlates), glm::vec2(1.0f), glm::vec2(64.0f));
 		out.barkCrack = glm::clamp(out.barkCrack, 0.01f, 0.5f);
@@ -259,7 +266,7 @@ namespace Procedural
 		while (billboardSize < out.billboardSize && billboardSize < 2048)
 			billboardSize *= 2;
 		out.billboardSize = billboardSize;
-		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.05f, 0.6f);
+		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.02f, 0.6f); // Pinnate leaflets are tiny
 		return true;
 	}
 }

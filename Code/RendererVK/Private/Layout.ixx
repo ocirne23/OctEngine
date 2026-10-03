@@ -827,6 +827,7 @@ export namespace RendererVKLayout
         glm::uvec4 terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
                                      // x = diffuse (+ roughness alpha) | normal << 16, y = 1 when the normal is BC5.
                                      // The splat samples without reading the material buffer first.
+        glm::vec4 terrainSplatGrass[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = its grass amount (0..1; grass_cull.cs.glsl)
 
         // GPU mesh LOD selection (indirect + shadow cull; keep in sync with ubo.inc.glsl)
         glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
@@ -894,6 +895,23 @@ export namespace RendererVKLayout
         glm::vec4 cloudShadow2; // xyz = light-space axis e0, w = shadow strength
         glm::vec4 cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
         glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w = far cascade lookup jitter (texels)
+
+        // Procedural grass (GrassParams; grass.inc.glsl, grass_cull.cs.glsl, grass.vs/fs.glsl; keep in sync with ubo.inc.glsl)
+        glm::vec4 grassParams0; // x = blades per patch, y = patch size (m), z = range (m), w = range fade (m)
+        glm::vec4 grassParams1; // x = blade height (m), y = height variation, z = blade width (m), w = root sink (m)
+        glm::vec4 grassParams2; // x = thinning start (m), y = thinning exponent, z = width compensation exponent, w = max width scale
+        glm::vec4 grassParams3; // x = LOD 1 distance (m), y = LOD 2 distance (m), z = min blade width per metre of distance, w = ground normal blend distance (m)
+        glm::vec4 grassParams4; // xy = wind direction (unit XZ), z = wind bend, w = gust bend
+        glm::vec4 grassParams5; // x = 1 / gust size (1/m), y = gust speed (m/s), z = sway frequency (Hz), w = LAST frame's timeSeconds
+        glm::vec4 grassParams6; // x = curvature, y = 1 / clump size (1/m), z = patchiness, w = grow band
+        glm::vec4 grassColor0;  // rgb = root albedo (linear), w = roughness
+        glm::vec4 grassColor1;  // rgb = tip albedo (linear), w = colour variation
+        glm::vec4 grassColor2;  // rgb = dry albedo (linear), w = dry amount
+        glm::vec4 grassShade;   // x = root occlusion, y = transmission, z = normal roundness, w = ground normal blend at the blend distance
+        glm::vec4 grassParams9; // x = wind fade start (m), y = wind fade end (m; no wind past it), z = size by cover (0..1),
+                                // w = LOD morph band (fraction of the next LOD's distance)
+        glm::vec4 grassParams10; // x = LOD 3 distance (m; one segment past it), y = cold temperature (C; full darkening),
+                                 // z = warm temperature (C; none), w = cold darkening (0..1)
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
@@ -1073,6 +1091,41 @@ export namespace RendererVKLayout
     constexpr uint32 FOG_TERRAIN_CASCADES = 2;  // layer 0 = near/fine, layer 1 = far/coarse (same res, larger range)
     constexpr uint32 TERRAIN_WET_RES = 1024;    // terrain wetness clipmap texels per axis (power of two: toroidal
                                                 // slot = lattice & (RES-1)); 512 m of coverage at the 0.5 m texel
+
+    // PROCEDURAL GRASS (GrassPipeline; grass.inc.glsl). Patches of ranked blades: the cull writes one indexed draw per
+    // visible patch, and the draw takes the FIRST K blades of the patch mesh (any prefix is evenly spread).
+    constexpr uint32 GRASS_MAX_PATCHES = 65536;     // patch slots per frame (the grid around the camera is capped to it)
+    constexpr uint32 GRASS_TABLE_DIM = 16;          // the ground-chunk table around the camera, chunks per axis
+    constexpr uint32 GRASS_MAX_BLADES = 1024;       // blades per patch, max
+    constexpr uint32 GRASS_BLADE_VERTEX_SHIFT = 5;  // a vertex id is blade << 5 | vertex in the blade (2 x 8 + 1 vertices)
+    constexpr uint32 GRASS_LODS = 4;
+    // grass.inc.glsl grassLodSegments. Each LOD HALVES the one before (they nest): grass.vs.glsl geomorphs the dropped rows.
+    constexpr uint32 GRASS_LOD_SEGMENTS[GRASS_LODS] = { 8, 4, 2, 1 };
+    constexpr uint32 GRASS_CULL_GROUP = 64;
+
+    // One visible patch: the cull's output, read by the grass VS as INSTANCE-RATE attributes (firstInstance = slot).
+    struct GrassPatchGpu
+    {
+        glm::vec2 origin;      // the patch's min corner, world XZ
+        glm::vec2 chunkOrigin; // its terrain chunk's origin, world XZ
+        uint32 firstVertex;    // the chunk mesh's first vertex in the vertex mega-buffer
+        uint32 resLod;         // the chunk's grid cells per side (bits 0-15) | the blade LOD << 16
+        uint32 density;        // the 4 corner densities, unorm8 (x0z0, x1z0, x0z1, x1z1)
+        uint32 cellTemperature; // packHalf2x16(the chunk grid's cell (m), the patch's mean temperature (C): the cold tint)
+    };
+    static_assert(sizeof(GrassPatchGpu) == 32);
+
+    // The per-frame GROUND TABLE (host-visible; grass_cull.cs.glsl): the patch grid and the terrain chunks under it.
+    struct GrassFrameGpu
+    {
+        glm::vec2 gridOrigin;  // min corner of the patch grid, world XZ
+        uint32 gridDim;        // patches per axis
+        float patchSize;       // m
+        glm::ivec2 tableMin;   // the chunk coordinate of table cell (0, 0)
+        uint32 tableDim;       // cells per axis (<= GRASS_TABLE_DIM)
+        float chunkSize;       // m
+        glm::uvec2 chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM]; // x = the mesh's first vertex, y = grid cells per side (0 = none)
+    };
 
     // Local participating-media box, submitted per frame like lights (Renderer::addFogVolume). Density adds
     // to the global fog inside the box, fading out over the outer edgeSoftness fraction of each half extent.

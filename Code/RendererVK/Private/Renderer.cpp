@@ -98,6 +98,13 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_farTreeParams.registerTweaks();
+    // "Blades per patch" is the blade index buffer's size: GPU idle, rebuild, re-record (the draw binds it).
+    m_grassParams.registerTweaks([this]() {
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_grassPipeline.setBladesPerPatch((uint32)m_grassParams.bladesPerPatch);
+        setHaveToRecordCommandBuffers();
+    });
     m_fogParams.registerTweaks();
     // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
     // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
@@ -297,6 +304,7 @@ void Renderer::initPipelines()
         m_terrainWetnessPipeline.reloadShaders();
         setHaveToRecordCommandBuffers();
     });
+    m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch);
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
     m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
@@ -367,6 +375,7 @@ void Renderer::initPerFrameResources()
         perFrame.skinningCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.skinning");
         perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.oceanSim");
         perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.terrainWetness");
+        perFrame.grassCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.grassCull");
         perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.lightGrid");
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.imgui");
         perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowCull");
@@ -510,6 +519,7 @@ void Renderer::reloadShaders()
     m_rtaoPipeline.reloadShaders();
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
+    m_grassPipeline.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_cloudPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_treeVolume.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -958,6 +968,7 @@ void Renderer::present()
     if(m_windowMinimized)
     {
         m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
+        m_grassGround.clear(); // one frame only (setGrassGround)
         Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
         return;
     }
@@ -989,6 +1000,7 @@ void Renderer::present()
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
         offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
     uploadTreeCullUbo(frameData); // the same: renderTreeInstanceSet claims its range after beginFrame
+    uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the

@@ -600,6 +600,33 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
     tess.polygonMode = ground.polygonMode;
 }
 
+void StaticMeshGraphicsPipeline::buildGrassLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& grass)
+{
+    grass.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    grass.descriptorBindingFlags = main.descriptorBindingFlags;
+    grass.pushConstantRanges = main.pushConstantRanges;
+    grass.indirectBindable = false;
+    grass.motionTarget = true; // the opaque family; the wind moves the blades
+    grass.writeMotion = true;
+    grass.cullMode = vk::CullModeFlagBits::eNone; // two-sided blades
+    grass.polygonMode = main.polygonMode;
+
+    // The patch record (RendererVKLayout::GrassPatchGpu), one per draw: firstInstance = its slot.
+    grass.vertexLayoutInfo.bindingDescriptions.push_back(vk::VertexInputBindingDescription{
+        .binding = 0, .stride = sizeof(RendererVKLayout::GrassPatchGpu), .inputRate = vk::VertexInputRate::eInstance });
+    grass.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
+        .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(RendererVKLayout::GrassPatchGpu, origin) });
+    grass.vertexLayoutInfo.attributeDescriptions.push_back(vk::VertexInputAttributeDescription{
+        .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(RendererVKLayout::GrassPatchGpu, firstVertex) });
+
+    const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
+        return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
+    };
+    grass.vertexShader = source("Shaders/grass.vs.glsl", {});
+    // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
+    grass.fragmentShader = source("Shaders/grass.fs.glsl", main.fragmentShader.defines);
+}
+
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
@@ -686,6 +713,12 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
         buildTerrainTessLayout(graphicsPipelineLayout, terrainTessLayout);
         m_terrainTessBuilt = m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
     }
+    if (!m_stereo)
+    {
+        GraphicsPipelineLayout grassLayout;
+        buildGrassLayout(graphicsPipelineLayout, grassLayout);
+        m_grassBuilt = m_grassPipeline.initialize(renderPass, grassLayout);
+    }
 
     createExecutionSets();
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
@@ -763,6 +796,15 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
             m_terrainTessBuilt = m_terrainTessPipeline.initialize(m_renderPass, terrainTessLayout);
         else if (!m_terrainTessPipeline.reloadShaders(m_renderPass, terrainTessLayout))
             printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
+    }
+    if (!m_stereo)
+    {
+        GraphicsPipelineLayout grassLayout;
+        buildGrassLayout(graphicsPipelineLayout, grassLayout);
+        if (!m_grassBuilt)
+            m_grassBuilt = m_grassPipeline.initialize(m_renderPass, grassLayout);
+        else if (!m_grassPipeline.reloadShaders(m_renderPass, grassLayout))
+            printf("StaticMeshGraphicsPipeline: grass shader reload failed, keeping previous pipeline\n");
     }
 
     createExecutionSets();
@@ -960,6 +1002,19 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     };
     if (m_terrainTess && m_terrainTessBuilt)
         drawSequences(m_terrainTessPipeline.getPipelineVariant(0), m_terrainTessPipeline.getPipelineLayout(), params.terrainTessCommandBuffer, 2);
+    // The GRASS after the ground (its depth rejects the buried blade parts early), before the film (which then stays
+    // under the blades): one indexed draw per visible patch, the patch record an instance-rate attribute, the blade
+    // index buffer of vertex ids (grass.vs.glsl). No vertex buffer of geometry.
+    if (params.grass && m_grassBuilt)
+    {
+        const GrassPipeline::Draw& grass = *params.grass;
+        vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipeline());
+        vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_grassPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        vkCommandBuffer.bindVertexBuffers(0, { grass.patches->getBuffer() }, { 0 });
+        vkCommandBuffer.bindIndexBuffer(grass.indices->getBuffer(), 0, vk::IndexType::eUint32);
+        vkCommandBuffer.drawIndexedIndirectCount(grass.commands->getBuffer(), 0, grass.count->getBuffer(), 0, grass.maxDraws,
+            5 * sizeof(uint32)); // VkDrawIndexedIndirectCommand
+    }
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);
     // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is

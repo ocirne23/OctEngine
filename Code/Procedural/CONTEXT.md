@@ -308,6 +308,10 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   coordinate drawn twice (a LOD hand-over's old + new resident: the masks OR'ed), and hands the frame's
   list to `sink` at its end, on the walk's worker. `vegetationRouted()` = this frame's walk carries it
   (the chunks draw and a sink is set); otherwise the owner submits its vegetation itself.
+* **THE GRASS STANDS ON THE CHUNK MESHES** (RendererVK "Procedural grass"): at the end of every enabled `update`, the
+  residents of the columns within `renderer.grassRange()` (a few `m_residents` lookups per LOD, no walk) go to
+  `Renderer::setGrassGround` (coord, first vertex in the mega-buffer, grid cells per side); the GPU reads their vertices.
+  The renderer keeps the list ONE frame, so a disabled terrain simply sends none.
 * **Eviction does not walk the ring either.** The unwanted residents (column outside the ring, or
   wanting another LOD) are a function of the ring and the resident set only, so `m_evictCandidates`
   is rebuilt by one walk when `ringMoved` or a chunk uploaded; every frame checks only the candidates
@@ -377,7 +381,9 @@ kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextu
 enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
 shader falls back to flat colours until that bake finishes.** Each entry's climate box registers with
 its textures (`TerrainSplatMaterial::climate`: temperature as t01, precipitation in mm/yr); only the
-mm-per-full-humidity divisor stays live, pushed every frame as `TerrainTexTweaks::precipFullMm`.
+mm-per-full-humidity divisor stays live, pushed every frame as `TerrainTexTweaks::precipFullMm`. Each GROUND entry
+also carries a `.grass` amount (0..1, `TerrainSplatMaterial::grass`): the grass grows where the splat draws that
+texture, by that amount (RendererVK "Procedural grass").
 
 The streamer also owns the **"Terrain/Water" tweaks** - ONE wetness field (rain, the ocean's swash,
 submersion) driving ONE water surface: the field (texel size, update rate, diffusion, rain, dry time +
@@ -815,6 +821,8 @@ version (phase G4) must reproduce it bit for bit; keep the two in step.
 ```
 TreeSpecies <name>
 	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush is scattered around the grove's trees, never one)
+	Climate <name> (a Bush grows around the trees of the same climate only, case-insensitive; a tree whose
+	        climate no bush shares takes every bush)
 	Trunk   Count · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5) · <shape>
 	        Lobes n (ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius fractions)
 	        LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over the height)
@@ -825,7 +833,10 @@ TreeSpecies <name>
 	        Level { Count · Start · Length · LengthTaper · Angle value var · Radius · <shape> }  (up to 3)
 	Leaves  Size (m) · Aspect (width/length) · PerBranch (per average last-level branch; other branches
 	        scale it by their length) · Levels (deepest tiers that carry leaves; 1 = last level only)
-	        Type Single|Cluster · Cross true|false · ClusterLeaves · ClusterLeafSize · NormalBend (0..1, default
+	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate · ClusterLeaves (Needles: side
+	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
+	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafSize (Needles: the needle
+	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default
 	        0.7: card normals bent away from the module root, both faces)   (Cluster only, below)
 	Lod     ErrorScale (x the per-level error; > 1 = coarser levels nearer the camera)
 	Bake    Variants (baked whole trees per species, default 4)
@@ -849,9 +860,23 @@ a quadratic Bezier (+2 rings per elbow); everything along a branch is addressed 
 `u`, not by ring index. A **stub** continues the direction the branch had BEFORE the elbow (the branch that
 snapped off), short and thick, with a flat broken end cap.
 
-Placeholders: `Oak` (ellipsoid, cluster cards), `Pine` (cone + leader, drooping tiers), `Acacia` (umbrella).
-Bushes (`Kind Bush`): `Shrub` (broadleaf, round, sparse cluster cards) and `Thicket` (denser and wide: crown
-radius 1.5 m, flat slot angles); a conifer bush was tried and removed. A bush is a
+Placeholders: `Oak` (ellipsoid, cluster cards), `Pine` (cone + leader from 12 % of the height, 60 slots at 85 %, two
+sub-branch levels (7 + 4) drooping, 1.1 × 0.83 m NEEDLE-spray cards of 3 fanned branches, 2 per branch, on all
+three tiers (the module roots too: near the top of the cone the short modules are mostly root) -
+reworked 2026-10-03 from single diamond leaves on one level, which read as bare poles), `Acacia` (umbrella:
+14 slots, sub-branch levels 10 + 5 up-attracted, flat 0.9 m PINNATE cards, 4 per branch - 1 compound leaf of 4
+pinna pairs, leaflets 0.07 of the card (~6 cm; true-to-life ~2 cm leaflets were invisible) - on the last two tiers; reworked
+2026-10-03 from 0.1 m single diamonds).
+Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna. Bushes (`Kind Bush`), two per climate:
+* Temperate: `Shrub` (broadleaf, round, sparse cluster cards) and `Thicket` (denser and wide: crown radius 1.5 m,
+  flat slot angles).
+* Boreal: `Juniper` (a low SPREADING conifer, blue-green needle-spray cards, uncrossed - crossed read too dense; the first conifer bush, on
+  single diamond leaves, was removed - the needle texture made it work) and `Bilberry` (knee-high, many thin upright
+  stems with small dense leaf clusters).
+* Savanna: `ThornScrub` (low, wide, umbrella crown, zig-zag grey stems, pinnate pads) and `Bushwillow` (an upright
+  vase of stems, dry olive-yellow broadleaf clusters, up to ~2.5 m).
+
+A bush is a
 tree species with a short trunk (`Height` ~1 m), slots from the ground (`Crown Start 0`), a large `BranchRadius`
 (the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
 
@@ -1016,6 +1041,24 @@ bitangent), each with a CPU box-filtered mip chain (normals renormalized). Uploa
   and its OWN mip chain — every level's alpha is rescaled (binary search) so the fraction of texels passing
   `TREE_LEAF_ALPHA_CUTOFF` matches level 0, otherwise the crown thins with distance. Uploaded through
   `Renderer::createTextureMaterial`, freed with the species (`TreeSystem::clearAll`).
+  **`Style Needles`** (conifers, `drawNeedleCluster`): each cell is a conifer SPRAY instead of a leafy twig - `Shoots`
+  needle branches fanned from the stem (the middle one along v, the others over up to ±18° and a little shorter;
+  one card then reads as a whole spray, so the tree needs fewer branches and cards), each a main shoot plus
+  `ClusterLeaves` side shoots (alternating, short, 24-38° off it - wider read as a flat fan), all densely set with
+  thin tapered needles on both sides (two-segment, curving toward the shoot tip; shorter and steeper toward it; the
+  far side darker) and a forward tuft at the tip. `ClusterLeafSize` is the needle length. Every leaf / needle /
+  shoot is shortened until it fits inside its cell. **`Style Pinnate`** (acacia, `drawPinnateCluster`): `Shoots`
+  BIPINNATE compound leaves fanned from a short woody twig (±28°), each a thin greenish rachis with `ClusterLeaves`
+  pairs of LONG pinnae (0.55 × the rachis, forward, shorter toward the tip; the first pair close to the
+  twig - a long bare stem read as a stalk). **Each of the 4 cells has its own CHARACTER** (`PinnateVariant`, the
+  four read as copies with jitter only): a lean (±12°), a rachis curve (±0.16 × its length) and length (0.78-1),
+  ±1 pinna pair, a pinna angle (30-50° + 0-18°) and length (× 0.8-1.12), the leaflet size (× 0.85-1.15), half of
+  them ALTERNATE pinnae (the right-hand ones staggered outward) and a tint (× 0.88-1.12), every pinna a dense COMB of
+  narrow oblong leaflets (`ClusterLeafSize` long, 0.4 as wide, 72-84° off the pinna, side by side with no gap,
+  shorter in the pinna's last quarter; one half a little darker) - fern-like fronds, after a photo of a real
+  acacia branch. (The first version - short pinnae nearly at right angles with sparse wide leaflets - read as
+  scattered specks.) Every pinna fits its cell too. (The cell clips the drawing - the Oak's tip leaf lost its
+  tip, 2026-10-03; the leafy twig also ends low enough for its tip leaf.)
 
 ## Baked tree variants (what the grove places)
 

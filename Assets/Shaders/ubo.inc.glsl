@@ -297,6 +297,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // HEIGHT (R) + AO (G) texture index, 0xFFFF = none (flat, AO 1: linear blend)
     uvec4 u_terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
                               // x = diffuse (RGB + roughness in A) | normal << 16, y = 1 when the normal is BC5
+    vec4 u_terrainSplatGrass[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = its grass amount (0..1; grass_cull.cs.glsl)
 
     // GPU mesh LOD selection (indirect + shadow cull; keep in sync with RendererVKLayout::Ubo)
     vec4 u_lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
@@ -363,6 +364,23 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudShadow2; // xyz = light-space axis e0, w = shadow strength
     vec4 u_cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
     vec4 u_cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w = far cascade lookup jitter (texels)
+
+    // Procedural grass (keep in sync with RendererVKLayout::Ubo; grass.inc.glsl)
+    vec4 u_grassParams0; // x = blades per patch, y = patch size (m), z = range (m), w = range fade (m)
+    vec4 u_grassParams1; // x = blade height (m), y = height variation, z = blade width (m), w = root sink (m)
+    vec4 u_grassParams2; // x = thinning start (m), y = thinning exponent, z = width compensation exponent, w = max width scale
+    vec4 u_grassParams3; // x = LOD 1 distance (m), y = LOD 2 distance (m), z = min blade width per metre of distance, w = ground normal blend distance (m)
+    vec4 u_grassParams4; // xy = wind direction (unit XZ), z = wind bend, w = gust bend
+    vec4 u_grassParams5; // x = 1 / gust size (1/m), y = gust speed (m/s), z = sway frequency (Hz), w = LAST frame's u_timeSeconds
+    vec4 u_grassParams6; // x = curvature, y = 1 / clump size (1/m), z = patchiness, w = grow band
+    vec4 u_grassColor0;  // rgb = root albedo (linear), w = roughness
+    vec4 u_grassColor1;  // rgb = tip albedo (linear), w = colour variation
+    vec4 u_grassColor2;  // rgb = dry albedo (linear), w = dry amount
+    vec4 u_grassShade;   // x = root occlusion, y = transmission, z = normal roundness, w = ground normal blend at the blend distance
+    vec4 u_grassParams9; // x = wind fade start (m), y = wind fade end (m; no wind past it), z = size by cover (0..1),
+                         // w = LOD morph band (fraction of the next LOD's distance)
+    vec4 u_grassParams10; // x = LOD 3 distance (m; one segment past it), y = cold temperature (C; full darkening),
+                          // z = warm temperature (C; none), w = cold darkening (0..1)
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

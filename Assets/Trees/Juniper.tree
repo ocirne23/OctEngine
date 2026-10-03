@@ -1,0 +1,85 @@
+# Boreal bush (with Pine): a low SPREADING conifer - short stems, flat-angled modules creeping outward, crossed
+# blue-green needle-spray cards (~0.6-0.9 m tall, ~2.5-3 m across).
+TreeSpecies Juniper
+	Kind Bush
+	Climate Boreal
+	Seed 61
+	Scale 0.6 1.0
+	Trunk
+		Count 3
+		Height 0.25 0.4
+		Radius 0.06
+		Taper 0.6
+		Curve 12
+		Wobble 5
+		Flare 0.2
+		Sink 0.2
+		Rings 6
+		Sides 6
+	Crown
+		Shape Ellipsoid
+		Start 0
+		Radius 1.4
+		Slots 12
+		Fill 0.9
+		Angle 86 62
+		AngleVar 10
+		BranchRadius 3
+	Module
+		Count 8
+		Radius 0.03
+		Curve 20 8
+		UpAttract 0.2
+		Wobble 6
+		Elbows 0.8
+		ElbowAngle 18 6
+		Rings 6
+		Sides 4
+		Level
+			Count 6
+			Start 0.1
+			Length 0.45
+			LengthTaper 0.5
+			Angle 50 12
+			Curve 12 8
+			UpAttract 0.15
+			Wobble 8
+			Radius 0.55
+			Rings 3
+			Sides 3
+		Level
+			Count 3
+			Start 0.2
+			Length 0.5
+			LengthTaper 0.4
+			Angle 45 12
+			Curve 8 6
+			Wobble 8
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Style Needles
+		Size 0.45
+		Aspect 0.75
+		PerBranch 2
+		Levels 2
+		Cross false
+		Shoots 3
+		ClusterLeaves 3
+		ClusterLeafSize 0.13
+		NormalBend 0.4
+	Billboard
+		Distance 25
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 6
+	Bark
+		Plates 14 5
+		Crack 0.07
+		Relief 0.9
+		Lichen 0.15
+	Color
+		Bark 0.33 0.22 0.16
+		Leaf 0.11 0.22 0.17

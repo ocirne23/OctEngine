@@ -4,6 +4,8 @@ import Core;
 import Core.glm;
 import Core.Tweaks;
 
+import :Layout;
+
 namespace
 {
     constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
@@ -159,6 +161,55 @@ void FoliageParams::registerTweaks(const oc::function<void()>& onDebugViewChange
     Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow cascade margin (m)", &shadowCascadeMargin, 0.0f, 10000.0f, 1.0f);
     Tweak::floatVar("Trees", "RT range (m)", &rtRange, 0.0f, 10000.0f, 5.0f);
+}
+
+void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
+{
+    Tweak::boolean("Grass", "Enabled", &enabled);
+    Tweak::intVar("Grass", "Blades per patch", &bladesPerPatch, 16, (int)RendererVKLayout::GRASS_MAX_BLADES, 1.0f, onBladesChanged);
+    Tweak::floatVar("Grass", "Patch size (m)", &patchSize, 1.0f, 16.0f, 0.1f);
+    Tweak::floatVar("Grass", "Range (m)", &range, 5.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Grass", "Range fade (m)", &rangeFade, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Grass/Blade", "Height (m)", &bladeHeight, 0.01f, 3.0f, 0.005f);
+    Tweak::floatVar("Grass/Blade", "Height variation", &heightVariation, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Blade", "Width (m)", &bladeWidth, 0.002f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Blade", "Root sink (m)", &rootSink, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Grass/Blade", "Curvature", &curvature, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/LOD", "Thinning start (m)", &thinStart, 1.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Grass/LOD", "Thinning exponent", &thinExponent, 0.0f, 3.0f, 0.01f);
+    Tweak::floatVar("Grass/LOD", "Width compensation", &widthCompensation, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/LOD", "Max width scale", &maxWidthScale, 1.0f, 16.0f, 0.05f);
+    Tweak::floatVar("Grass/LOD", "LOD 1 distance (m)", &lod1Distance, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Grass/LOD", "LOD 2 distance (m)", &lod2Distance, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/LOD", "LOD 3 distance (m)", &lod3Distance, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/LOD", "Min pixel width", &minPixelWidth, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/LOD", "LOD morph band", &lodMorphBand, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Wind", "Angle (deg)", &windAngleDeg, 0.0f, 360.0f, 1.0f);
+    Tweak::floatVar("Grass/Wind", "Bend", &windBend, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Grass/Wind", "Gust bend", &gustBend, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Grass/Wind", "Gust size (m)", &gustSize, 0.5f, 200.0f, 0.1f);
+    Tweak::floatVar("Grass/Wind", "Gust speed (m/s)", &gustSpeed, 0.0f, 50.0f, 0.05f);
+    Tweak::floatVar("Grass/Wind", "Sway frequency (Hz)", &swayFrequency, 0.0f, 5.0f, 0.01f);
+    Tweak::floatVar("Grass/Wind", "Fade start (m)", &windFadeStart, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/Wind", "Fade end (m)", &windFadeEnd, 0.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/Cover", "Clump size (m)", &clumpSize, 0.2f, 50.0f, 0.05f);
+    Tweak::floatVar("Grass/Cover", "Patchiness", &patchiness, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Cover", "Grow band", &growBand, 0.01f, 1.0f, 0.005f);
+    Tweak::floatVar("Grass/Cover", "Size by cover", &sizeByCover, 0.0f, 1.0f, 0.01f);
+    Tweak::color3("Grass/Look", "Root colour", &rootColor);
+    Tweak::color3("Grass/Look", "Tip colour", &tipColor);
+    Tweak::color3("Grass/Look", "Dry colour", &dryColor);
+    Tweak::floatVar("Grass/Look", "Colour variation", &colorVariation, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Cold darkening", &coldDarkening, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Cold temperature (C)", &coldTemperature, -30.0f, 40.0f, 0.1f);
+    Tweak::floatVar("Grass/Look", "Warm temperature (C)", &warmTemperature, -30.0f, 40.0f, 0.1f);
+    Tweak::floatVar("Grass/Look", "Dry amount", &dryAmount, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Roughness", &roughness, 0.05f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Root occlusion", &rootOcclusion, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Transmission", &transmission, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Roundness", &roundness, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Ground normal blend", &groundBlend, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Ground normal blend distance (m)", &groundBlendDistance, 1.0f, 500.0f, 0.5f);
 }
 
 void FarTreeParams::registerTweaks()

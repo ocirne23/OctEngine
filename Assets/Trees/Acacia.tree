@@ -1,5 +1,7 @@
-# Umbrella placeholder species: short leaning trunk, a wide flat crown on top.
+# Umbrella species: short leaning trunk, a wide flat crown of feathery pads on top (Leaves Style Pinnate:
+# TreeLeafTexture draws bipinnate compound leaves - pinnae lined with tiny leaflets).
 TreeSpecies Acacia
+	Climate Savanna
 	Seed 37
 	Scale 0.85 1.15
 	Trunk
@@ -25,10 +27,10 @@ TreeSpecies Acacia
 	Crown
 		Shape Umbrella
 		Start 0.6
-		Radius 6
-		Slots 8
+		Radius 6.5
+		Slots 14
 		Fill 1
-		Angle 55 35
+		Angle 60 38
 		AngleVar 10
 	Module
 		Count 10
@@ -42,7 +44,7 @@ TreeSpecies Acacia
 		Rings 8
 		Sides 6
 		Level
-			Count 8
+			Count 10
 			Start 0.3
 			Length 0.4
 			LengthTaper 0.3
@@ -57,7 +59,7 @@ TreeSpecies Acacia
 			Rings 4
 			Sides 4
 		Level
-			Count 4
+			Count 5
 			Start 0.2
 			Length 0.45
 			LengthTaper 0.3
@@ -68,9 +70,16 @@ TreeSpecies Acacia
 			Rings 3
 			Sides 3
 	Leaves
-		Size 0.1
-		Aspect 0.7
-		PerBranch 28
+		Type Cluster
+		Style Pinnate
+		Size 0.9
+		Aspect 0.85
+		PerBranch 4
+		Levels 2
+		Shoots 1
+		ClusterLeaves 4
+		ClusterLeafSize 0.07
+		NormalBend 0.6
 	Bark
 		Plates 28 7
 		Crack 0.09
@@ -78,4 +87,4 @@ TreeSpecies Acacia
 		Lichen 0.15
 	Color
 		Bark 0.33 0.27 0.21
-		Leaf 0.30 0.40 0.14
+		Leaf 0.27 0.37 0.14

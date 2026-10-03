@@ -1,5 +1,6 @@
 # Broadleaf placeholder species. Format: Code/Procedural/CONTEXT.md, "Trees".
 TreeSpecies Oak
+	Climate Temperate
 	Seed 11
 	Scale 0.85 1.2
 	Trunk
