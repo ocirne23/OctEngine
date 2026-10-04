@@ -103,18 +103,138 @@ Buffer& Renderer::treeCullList(uint32 frameIdx)
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].lists[frameIdx] : m_treeCullDummy;
 }
 
-uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
-    oc::span<const TreeInstanceChunk> chunks)
+uint32 Renderer::allocTreeSet()
 {
     uint32 setId = 0;
     while (setId < (uint32)m_treeSets.size() && m_treeSets[setId].alive)
         ++setId;
     if (setId == (uint32)m_treeSets.size())
         m_treeSets.emplace_back();
-    TreeInstanceSet& set = m_treeSets[setId];
-    set.alive = true;
-    set.numPieces = (uint32)pieces.size();
+    m_treeSets[setId].alive = true;
+    return setId;
+}
 
+uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
+    oc::span<const TreeInstanceChunk> chunks)
+{
+    const uint32 setId = allocTreeSet();
+    TreeInstanceSet& set = m_treeSets[setId];
+    initTreeSetTypes(set, types);
+    initTreeSetPieces(set, (uint32)pieces.size());
+    // The chunks (no table = one chunk over every piece): each written into its own range.
+    const TreeInstanceChunk whole{ 0, (uint32)pieces.size() };
+    const oc::span<const TreeInstanceChunk> ranges = chunks.empty() ? oc::span<const TreeInstanceChunk>(&whole, 1) : chunks;
+    set.chunks.resize(ranges.size());
+    for (size_t c = 0; c < ranges.size(); ++c)
+    {
+        assert(ranges[c].first + ranges[c].count <= pieces.size());
+        writeTreeChunk(set, set.chunks[c], pieces.subspan(ranges[c].first, ranges[c].count), ranges[c].first);
+    }
+    set.numPieces = (uint32)pieces.size();
+    m_treeVolume.markDirty();
+    return setId;
+}
+
+uint32 Renderer::createDynamicTreeInstanceSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
+{
+    const uint32 setId = allocTreeSet();
+    TreeInstanceSet& set = m_treeSets[setId];
+    set.dynamic = true;
+    set.numBlocks = (oc::max(pieceCapacity, 1u) + TREE_SET_BLOCK - 1) / TREE_SET_BLOCK;
+    initTreeSetTypes(set, types);
+    initTreeSetPieces(set, set.numBlocks * TREE_SET_BLOCK);
+    set.numPieces = 0;
+    m_treeVolume.markDirty();
+    return setId;
+}
+
+uint32 Renderer::addTreeInstanceChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces)
+{
+    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
+        return UINT32_MAX;
+    TreeInstanceSet& set = m_treeSets[setId];
+    std::lock_guard<std::mutex> lock(m_treeSetMutex);
+    // The removals that are due: their slots (every frame that could list them is done) and their indices (this
+    // frame's walk was stamped without them).
+    for (size_t i = 0; i < set.pendingFrees.size(); )
+    {
+        if (set.pendingFrees[i].readyFrame <= m_frameCounter)
+        {
+            set.freeBlocks.release(set.pendingFrees[i].firstBlock, set.pendingFrees[i].blocks);
+            set.pendingFrees[i] = set.pendingFrees.back();
+            set.pendingFrees.pop_back();
+        }
+        else
+            ++i;
+    }
+    for (size_t i = 0; i < set.pendingChunks.size(); )
+    {
+        if (set.pendingChunks[i].second < m_frameCounter)
+        {
+            set.freeChunks.push_back(set.pendingChunks[i].first);
+            set.pendingChunks[i] = set.pendingChunks.back();
+            set.pendingChunks.pop_back();
+        }
+        else
+            ++i;
+    }
+
+    const uint32 blocks = ((uint32)pieces.size() + TREE_SET_BLOCK - 1) / TREE_SET_BLOCK;
+    uint32 firstBlock = UINT32_MAX;
+    if (blocks > 0)
+    {
+        firstBlock = set.freeBlocks.allocate(blocks);
+        if (firstBlock == UINT32_MAX)
+        {
+            if (set.topBlock + blocks > set.numBlocks)
+                return UINT32_MAX;
+            firstBlock = set.topBlock;
+            set.topBlock += blocks;
+        }
+    }
+    uint32 index;
+    if (!set.freeChunks.empty())
+    {
+        index = set.freeChunks.back();
+        set.freeChunks.pop_back();
+    }
+    else
+    {
+        index = (uint32)set.chunks.size();
+        set.chunks.emplace_back();
+    }
+    TreeInstanceSet::Chunk& chunk = set.chunks[index];
+    chunk = {};
+    if (blocks > 0)
+        writeTreeChunk(set, chunk, pieces, firstBlock * TREE_SET_BLOCK);
+    set.numPieces = oc::max(set.numPieces, set.topBlock * TREE_SET_BLOCK);
+    return index; // (no re-bake: the far volume never splats a dynamic set - recordFarTrees)
+}
+
+void Renderer::removeTreeInstanceChunk(uint32 setId, uint32 index)
+{
+    if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
+        return;
+    TreeInstanceSet& set = m_treeSets[setId];
+    std::lock_guard<std::mutex> lock(m_treeSetMutex);
+    if (index >= (uint32)set.chunks.size())
+        return;
+    TreeInstanceSet::Chunk& chunk = set.chunks[index];
+    if (chunk.count > 0)
+    {
+        const uint32 blocks = (chunk.count + TREE_SET_BLOCK - 1) / TREE_SET_BLOCK;
+        set.pendingFrees.push_back({ chunk.first / TREE_SET_BLOCK, blocks, m_frameCounter + RendererVKLayout::NUM_FRAMES_IN_FLIGHT });
+        // The far volume skips its slots from the next bake on (a bake in flight reads either - both harmless).
+        for (uint32 i = 0; i < chunk.count; ++i)
+            set.mappedVolumePieces[chunk.first + i].type = set.emptyVolumeType;
+        set.volumePieces.flushMappedMemory(chunk.count * sizeof(TreeVolumePieceGpu), chunk.first * sizeof(TreeVolumePieceGpu));
+    }
+    chunk = {};
+    set.pendingChunks.push_back({ index, m_frameCounter });
+}
+
+void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanceType> types)
+{
     auto record = [&](const TreeInstanceRep& rep)
     {
         TreeCullRecordGpu gpu;
@@ -143,127 +263,40 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
 
     // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves)
     // has a BLAS. The others (bushes: created without one) would only ever take inactive TLAS slots.
-    oc::vector<uint8> rtCapable(types.size(), 0);
+    set.typeRtCapable.assign(types.size(), 0);
+    set.typeMeshes.assign(types.size(), {});
     for (size_t t = 0; t < types.size(); ++t)
     {
         const TreeCullRecordGpu& rec = gpuTypes[t].billboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].billboard : gpuTypes[t].leaves;
-        rtCapable[t] = rec.meshMaterial != TREE_RECORD_ABSENT && m_rt.hasStaticBlas(rec.meshMaterial & 0xFFFFu) ? 1 : 0;
-    }
-
-    // The chunks (no table = one chunk over every piece). Within each, the RT-capable pieces FIRST (a stable
-    // partition - the caller does not address single pieces): renderTreeInstanceSet lists them ahead of every other
-    // piece, and the TLAS takes slots for those only. Per chunk the sphere around them, for the CPU's RT range test.
-    if (chunks.empty())
-        set.chunks.assign(1, TreeInstanceChunk{ 0, (uint32)pieces.size() });
-    else
-        set.chunks.assign(chunks.begin(), chunks.end());
-    set.chunkRt.clear();
-    set.chunkRt.resize(set.chunks.size());
-    oc::vector<uint32> order(pieces.size());
-    for (uint32 i = 0; i < (uint32)order.size(); ++i)
-        order[i] = i;
-    for (size_t c = 0; c < set.chunks.size(); ++c)
-    {
-        const TreeInstanceChunk& chunk = set.chunks[c];
-        assert(chunk.first + chunk.count <= pieces.size());
-        uint32* begin = order.data() + chunk.first;
-        uint32* mid = oc::stable_partition(begin, begin + chunk.count, [&](uint32 i) { return rtCapable[pieces[i].type] != 0; });
-        TreeInstanceSet::ChunkRt& rt = set.chunkRt[c];
-        rt.rtCount = (uint32)(mid - begin);
-        glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
-        for (const uint32* it = begin; it != mid; ++it)
+        set.typeRtCapable[t] = rec.meshMaterial != TREE_RECORD_ABSENT && m_rt.hasStaticBlas(rec.meshMaterial & 0xFFFFu) ? 1 : 0;
+        // The bucket sizes: a piece draws each of its meshes at most once (normal OR fade material - the same mesh).
+        // Level-0 meshes: present() sizes a chain's buckets from its level 0.
+        const TreeInstanceType& type = types[t];
+        auto mesh = [&](const TreeInstanceRep& a, const TreeInstanceRep& b)
         {
-            lo = glm::min(lo, pieces[*it].centre - pieces[*it].radius);
-            hi = glm::max(hi, pieces[*it].centre + pieces[*it].radius);
-        }
-        if (rt.rtCount > 0)
-        {
-            rt.rtCentre = (lo + hi) * 0.5f;
-            rt.rtRadius = glm::length(hi - lo) * 0.5f;
-        }
-    }
-
-    // No LOD hysteresis slots: tree meshes have no LOD chains (Procedural TreeSystem; the culls skip the lookup).
-    oc::vector<TreeCullPieceGpu> gpuPieces(pieces.size());
-    for (size_t i = 0; i < pieces.size(); ++i)
-    {
-        const TreeInstancePiece& piece = pieces[order[i]];
-        const Transform& transform = piece.transform;
-        gpuPieces[i] = TreeCullPieceGpu{
-            .posScale = glm::vec4(transform.pos, transform.scale),
-            .quat = glm::vec4(transform.quat.x, transform.quat.y, transform.quat.z, transform.quat.w),
-            .centre = piece.centre,
-            .radius = piece.radius,
-            .type = piece.type,
+            const RenderMesh* m = a.mesh && a.mesh->isValid() ? a.mesh : (b.mesh && b.mesh->isValid() ? b.mesh : nullptr);
+            if (m)
+                set.typeMeshes[t].push_back(m->m_meshIdx);
         };
-    }
-
-    // Per chunk its bucket sizes: a piece draws each of its meshes at most once (normal OR fade material - the same
-    // mesh). Level-0 meshes: present() sizes a chain's buckets from its level 0. (The order within a chunk does not
-    // matter here.)
-    set.meshCounts.clear();
-    set.meshCountsBegin.clear();
-    oc::unordered_map<uint16, uint32> meshCounts;
-    auto count = [&](const TreeInstanceRep& a, const TreeInstanceRep& b)
-    {
-        const RenderMesh* mesh = a.mesh && a.mesh->isValid() ? a.mesh : (b.mesh && b.mesh->isValid() ? b.mesh : nullptr);
-        if (mesh)
-            ++meshCounts[mesh->m_meshIdx];
-    };
-    for (const TreeInstanceChunk& chunk : set.chunks)
-    {
-        meshCounts.clear();
-        for (uint32 i = chunk.first; i < chunk.first + chunk.count; ++i)
+        mesh(type.bark, type.barkFade);
+        mesh(type.leaves, type.leavesFade);
+        mesh(type.billboard, type.billboard);
+        if (gpuTypes[t].midDistance > 0.0f)
         {
-            const TreeInstanceType& type = types[pieces[i].type];
-            count(type.bark, type.barkFade);
-            count(type.leaves, type.leavesFade);
-            count(type.billboard, type.billboard);
-            if (gpuTypes[pieces[i].type].midDistance > 0.0f)
-            {
-                count(type.trunk, type.trunkFade);
-                count(type.cardsIn, type.cardsOut);
-            }
+            mesh(type.trunk, type.trunkFade);
+            mesh(type.cardsIn, type.cardsOut);
         }
-        set.meshCountsBegin.push_back((uint32)set.meshCounts.size());
-        set.meshCounts.insert(set.meshCounts.end(), meshCounts.begin(), meshCounts.end());
-    }
-    set.meshCountsBegin.push_back((uint32)set.meshCounts.size());
-
-    // This frame's list (renderTreeInstanceSet): host-visible per frame slot, at most every piece.
-    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
-    {
-        set.lists[f].initialize(oc::max<size_t>(pieces.size() * sizeof(uint32), 16), vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeCullList", BufferHostAccess::eSequentialWrite);
-        set.mappedLists[f] = oc::span<uint32>((uint32*)set.lists[f].mapMemory().data(), pieces.size());
     }
 
-    // The culls' data: written once, device-local (staged in chunks).
-    auto uploadDeviceLocal = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
-    {
-        buffer.initialize(oc::max<size_t>(bytes, 16), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, name);
-        constexpr size_t CHUNK = 16 * 1024 * 1024;
-        for (size_t offset = 0; offset < bytes; offset += CHUNK)
-            buffer.upload(oc::min(CHUNK, bytes - offset), (const uint8*)data + offset, offset);
-    };
-    uploadDeviceLocal(set.pieces, gpuPieces.data(), gpuPieces.size() * sizeof(TreeCullPieceGpu), "TreeCullPieces");
-    uploadDeviceLocal(set.types, gpuTypes.data(), gpuTypes.size() * sizeof(TreeCullTypeGpu), "TreeCullTypes");
-    // The far-tree volume's data: host-visible, read through device addresses at its (rare) rebakes.
-    auto upload = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
-    {
-        buffer.initialize(oc::max<size_t>(bytes, 16), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, name, BufferHostAccess::eSequentialWrite);
-        if (bytes > 0)
-        {
-            memcpy(buffer.mapMemory().data(), data, bytes);
-            buffer.flushMappedMemory(bytes);
-        }
-    };
+    set.types.initialize(oc::max<size_t>(gpuTypes.size() * sizeof(TreeCullTypeGpu), 16),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "TreeCullTypes");
+    set.types.upload(gpuTypes.size() * sizeof(TreeCullTypeGpu), gpuTypes.data());
 
     // The far-tree volume's view (TreeVolumePipeline): per type its extinction mip chain (box filtered down to
-    // 1^3), per piece its transform. Types without density add nothing to the volume.
-    oc::vector<TreeVolumeTypeGpu> volumeTypes(types.size());
+    // 1^3). Types without density add nothing to the volume. One more type at the end: the SENTINEL (res 0) a free
+    // piece slot of a dynamic set points at. Host-visible, read through device addresses at its (rare) rebakes.
+    oc::vector<TreeVolumeTypeGpu> volumeTypes(types.size() + 1);
+    set.emptyVolumeType = (uint32)types.size();
     oc::vector<float> volumeData;
     for (size_t t = 0; t < types.size(); ++t)
     {
@@ -299,19 +332,96 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
         }
         set.hasVolume = true;
     }
-    oc::vector<TreeVolumePieceGpu> volumePieces(pieces.size());
-    for (size_t i = 0; i < pieces.size(); ++i)
+    auto upload = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
     {
-        const Transform& transform = pieces[i].transform;
-        volumePieces[i].posScale = glm::vec4(transform.pos, transform.scale);
-        volumePieces[i].quat = glm::vec4(transform.quat.x, transform.quat.y, transform.quat.z, transform.quat.w);
-        volumePieces[i].type = pieces[i].type;
-    }
+        buffer.initialize(oc::max<size_t>(bytes, 16), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, name, BufferHostAccess::eSequentialWrite);
+        if (bytes > 0)
+        {
+            memcpy(buffer.mapMemory().data(), data, bytes);
+            buffer.flushMappedMemory(bytes);
+        }
+    };
     upload(set.volumeTypes, volumeTypes.data(), volumeTypes.size() * sizeof(TreeVolumeTypeGpu), "TreeVolumeTypes");
     upload(set.volumeData, volumeData.data(), volumeData.size() * sizeof(float), "TreeVolumeData");
-    upload(set.volumePieces, volumePieces.data(), volumePieces.size() * sizeof(TreeVolumePieceGpu), "TreeVolumePieces");
-    m_treeVolume.markDirty();
-    return setId;
+}
+
+// The piece slots: the culls' pieces (device-local, written per chunk through the staging ring), the volume's pieces
+// (host-visible, every slot on the sentinel type until a chunk writes it) and the per-frame lists (at most every slot).
+void Renderer::initTreeSetPieces(TreeInstanceSet& set, uint32 capacity)
+{
+    set.pieces.initialize(oc::max<size_t>((size_t)capacity * sizeof(TreeCullPieceGpu), 16),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "TreeCullPieces");
+    set.volumePieces.initialize(oc::max<size_t>((size_t)capacity * sizeof(TreeVolumePieceGpu), 16),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+        vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeVolumePieces", BufferHostAccess::eSequentialWrite);
+    set.mappedVolumePieces = oc::span<TreeVolumePieceGpu>((TreeVolumePieceGpu*)set.volumePieces.mapMemory().data(), capacity);
+    TreeVolumePieceGpu empty;
+    empty.type = set.emptyVolumeType;
+    for (TreeVolumePieceGpu& piece : set.mappedVolumePieces)
+        piece = empty;
+    if (capacity > 0)
+        set.volumePieces.flushMappedMemory((size_t)capacity * sizeof(TreeVolumePieceGpu));
+    for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
+    {
+        set.lists[f].initialize(oc::max<size_t>((size_t)capacity * sizeof(uint32), 16), vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeCullList", BufferHostAccess::eSequentialWrite);
+        set.mappedLists[f] = oc::span<uint32>((uint32*)set.lists[f].mapMemory().data(), capacity);
+    }
+}
+
+// Within the chunk the RT-capable pieces FIRST (a stable partition - the caller does not address single pieces):
+// renderTreeInstanceSet lists them ahead of every other piece, and the TLAS takes slots for those only. The sphere
+// around them is the CPU's RT range test.
+void Renderer::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first)
+{
+    oc::vector<uint32> order(pieces.size());
+    for (uint32 i = 0; i < (uint32)order.size(); ++i)
+        order[i] = i;
+    const auto mid = oc::stable_partition(order.begin(), order.end(), [&](uint32 i) { return set.typeRtCapable[pieces[i].type] != 0; });
+    chunk.first = first;
+    chunk.count = (uint32)pieces.size();
+    chunk.rtCount = (uint32)(mid - order.begin());
+    glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+    for (auto it = order.begin(); it != mid; ++it)
+    {
+        lo = glm::min(lo, pieces[*it].centre - pieces[*it].radius);
+        hi = glm::max(hi, pieces[*it].centre + pieces[*it].radius);
+    }
+    if (chunk.rtCount > 0)
+    {
+        chunk.rtCentre = (lo + hi) * 0.5f;
+        chunk.rtRadius = glm::length(hi - lo) * 0.5f;
+    }
+
+    // No LOD hysteresis slots: tree meshes have no LOD chains (Procedural TreeSystem; the culls skip the lookup).
+    oc::vector<TreeCullPieceGpu> gpuPieces(pieces.size());
+    oc::unordered_map<uint16, uint32> meshCounts;
+    for (size_t i = 0; i < pieces.size(); ++i)
+    {
+        const TreeInstancePiece& piece = pieces[order[i]];
+        const Transform& transform = piece.transform;
+        gpuPieces[i] = TreeCullPieceGpu{
+            .posScale = glm::vec4(transform.pos, transform.scale),
+            .quat = glm::vec4(transform.quat.x, transform.quat.y, transform.quat.z, transform.quat.w),
+            .centre = piece.centre,
+            .radius = piece.radius,
+            .type = piece.type,
+        };
+        TreeVolumePieceGpu& volume = set.mappedVolumePieces[first + i];
+        volume.posScale = gpuPieces[i].posScale;
+        volume.quat = gpuPieces[i].quat;
+        volume.type = piece.type;
+        for (uint16 mesh : set.typeMeshes[piece.type])
+            ++meshCounts[mesh];
+    }
+    chunk.meshCounts.assign(meshCounts.begin(), meshCounts.end());
+    constexpr size_t CHUNK = 16 * 1024 * 1024;
+    const size_t bytes = gpuPieces.size() * sizeof(TreeCullPieceGpu);
+    for (size_t offset = 0; offset < bytes; offset += CHUNK)
+        set.pieces.upload(oc::min(CHUNK, bytes - offset), (const uint8*)gpuPieces.data() + offset, (size_t)first * sizeof(TreeCullPieceGpu) + offset);
+    if (!pieces.empty())
+        set.volumePieces.flushMappedMemory(pieces.size() * sizeof(TreeVolumePieceGpu), (size_t)first * sizeof(TreeVolumePieceGpu));
 }
 
 // "Far start" scaled with the camera's height h above the ground under it: sqrt(start^2 + h^2) is the 3D distance
@@ -329,6 +439,8 @@ bool Renderer::farTreesActive() const
 {
     if (!m_farTreeParams.enabled || m_sceneViewCount != 1)
         return false;
+    if (m_treeRecords.numTypes() > 0)
+        return true; // the world tree records (W4)
     for (const TreeInstanceSet& set : m_treeSets)
         if (set.alive && set.hasVolume)
             return true;
@@ -338,11 +450,31 @@ bool Renderer::farTreesActive() const
 void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
+    // The record chunks changed (they stream in and out while the camera moves): re-bake at most every 30 frames.
+    if (m_treeSetsChanged && m_frameCounter - m_treeVolumeMarkFrame >= 30)
+    {
+        m_treeSetsChanged = false;
+        m_treeVolumeMarkFrame = m_frameCounter;
+        m_treeVolume.markDirty();
+    }
+    // The static sets (the preview grove). A DYNAMIC set (the world) never: its trees come from their records, which
+    // expand to the same trees (W4) - one source, so a chunk entering / leaving the set never changes the volume.
     oc::small_vector<TreeVolumePipeline::Source, 4> sources;
     for (const TreeInstanceSet& set : m_treeSets)
-        if (set.alive && set.hasVolume)
+        if (set.alive && set.hasVolume && !set.dynamic)
             sources.push_back(TreeVolumePipeline::Source{ set.volumePieces.getDeviceAddress(), set.volumeTypes.getDeviceAddress(),
                 set.volumeData.getDeviceAddress(), set.numPieces });
+    // The world tree records (W4): this frame slot's chunk table, expanded into the world set's volume types.
+    TreeVolumePipeline::RecordSource records;
+    if (m_treeRecords.numTypes() > 0 && m_treeRecords.tableCount(frameIdx) > 0 && m_treeRecordSet < (uint32)m_treeSets.size()
+        && m_treeSets[m_treeRecordSet].alive)
+    {
+        const TreeInstanceSet& set = m_treeSets[m_treeRecordSet];
+        records = TreeVolumePipeline::RecordSource{ m_treeRecords.records().getDeviceAddress(), m_treeRecords.map(frameIdx).getDeviceAddress(),
+            m_treeRecords.mapSize(), m_treeRecords.table(frameIdx).getDeviceAddress(),
+            m_treeRecords.types().getDeviceAddress(), set.volumeTypes.getDeviceAddress(), set.volumeData.getDeviceAddress(),
+            m_treeRecords.tableCount(frameIdx), m_treeRecords.numTypes(), m_treeRecordChunkSize, m_treeRecordSeed };
+    }
     const TreeVolumePipeline::RecordParams params{
         .ubo = frameData.ubo,
         .sceneDepthView = frameData.sceneColor.getDepthView(0),
@@ -356,6 +488,7 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
         .cameraPos = m_cameraPos,
         .startDistance = farTreesStart(),
         .sources = oc::span<const TreeVolumePipeline::Source>(sources.data(), sources.size()),
+        .records = records,
         .settings = m_farTreeParams,
         .frameNumber = m_frameCounter,
     };
@@ -409,10 +542,17 @@ void Renderer::destroyTreeInstanceSet(uint32 setId)
         set.lists[f].destroy();
         set.mappedLists[f] = {};
     }
+    set.mappedVolumePieces = {};
     set.chunks.clear();
-    set.chunkRt.clear();
-    set.meshCounts.clear();
-    set.meshCountsBegin.clear();
+    set.typeRtCapable.clear();
+    set.typeMeshes.clear();
+    set.dynamic = false;
+    set.numBlocks = 0;
+    set.topBlock = 0;
+    set.freeBlocks = {};
+    set.pendingFrees.clear();
+    set.freeChunks.clear();
+    set.pendingChunks.clear();
     set.numPieces = 0;
     set.alive = false;
 }
@@ -439,6 +579,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
         assert(false && "renderTreeInstanceSet: one call per frame");
         return;
     }
+    std::lock_guard<std::mutex> lock(m_treeSetMutex); // a dynamic set's chunks change on main meanwhile
 
     // The LIST in two sections. First the RT section: the RT-capable pieces (first in their chunk) of the chunks drawn
     // for GI / shadows whose RT sphere reaches into "Trees/RT range" of the scene focus - the TLAS takes ONE slot per
@@ -450,7 +591,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
     const glm::vec3 focus = sceneFocusOrCamera();
     auto inRtSection = [&](const TreeChunkDraw& draw)
     {
-        const TreeInstanceSet::ChunkRt& rt = set.chunkRt[draw.chunk];
+        const TreeInstanceSet::Chunk& rt = set.chunks[draw.chunk];
         return rt.rtCount > 0 && (draw.passMask & (RendererVKLayout::PASS_GI | RendererVKLayout::PASS_SHADOW)) != 0
             && (rtRange <= 0.0f || glm::distance(rt.rtCentre, focus) - rt.rtRadius <= rtRange);
     };
@@ -459,8 +600,8 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
     {
         if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0 || !inRtSection(draw))
             continue;
-        const TreeInstanceChunk& chunk = set.chunks[draw.chunk];
-        const uint32 rtCount = set.chunkRt[draw.chunk].rtCount;
+        const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
+        const uint32 rtCount = chunk.rtCount;
         assert(numListed + rtCount <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
         const uint32 bits = draw.passMask << 28;
         for (uint32 i = 0; i < rtCount; ++i)
@@ -472,8 +613,8 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
     {
         if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0)
             continue;
-        const TreeInstanceChunk& chunk = set.chunks[draw.chunk];
-        const uint32 skip = inRtSection(draw) ? set.chunkRt[draw.chunk].rtCount : 0u; // listed above
+        const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
+        const uint32 skip = inRtSection(draw) ? chunk.rtCount : 0u; // listed above
         assert(numListed + chunk.count - skip <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
         const uint32 bits = draw.passMask << 28;
         for (uint32 i = skip; i < chunk.count; ++i)
@@ -491,8 +632,8 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
     {
         if (draw.chunk >= (uint32)set.chunks.size() || draw.passMask == 0)
             continue;
-        for (uint32 m = set.meshCountsBegin[draw.chunk]; m < set.meshCountsBegin[draw.chunk + 1]; ++m)
-            m_instances.noteMeshInstances(set.meshCounts[m].first, set.meshCounts[m].second);
+        for (const auto& [mesh, instances] : set.chunks[draw.chunk].meshCounts)
+            m_instances.noteMeshInstances(mesh, instances);
     }
     set.lists[frameIdx].flushMappedMemory(numListed * sizeof(uint32));
     m_treeCullBase = base;

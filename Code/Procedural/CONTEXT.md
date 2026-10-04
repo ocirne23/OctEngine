@@ -15,7 +15,7 @@ PRIVATE).
 | `Globals::terrainCollider` | `TerrainCollider` | `update(camera.position, terrain.activeClimateMaps())` |
 | `Globals::ocean` | `OceanGenerator` | `update(renderer, camera, terrain.activeTerrainData(), terrain.seaLevel())` |
 | `Globals::scatter` | `ScatterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` |
-| `Globals::trees` | `TreeSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Trees" |
+| `Globals::trees` | `TreeSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Trees" (it also runs the world records, "World records") |
 
 main.cpp updates them **in that order**, after entity updates and before present
 ([main.cpp:803](../App/main.cpp#L803)).
@@ -308,6 +308,9 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   coordinate drawn twice (a LOD hand-over's old + new resident: the masks OR'ed), and hands the frame's
   list to `sink` at its end, on the walk's worker. `vegetationRouted()` = this frame's walk carries it
   (the chunks draw and a sink is set); otherwise the owner submits its vegetation itself.
+  **`restampVegetation(coord)`** (TreeSystem's world mode adds / removes one coordinate): re-stamps that coordinate's
+  residents (every LOD; retired ones to -1) from `lookup` WITHOUT joining the walk - the stamp is an atomic, the walk
+  sees the old or the new index, and the owner keeps a removed index unused until the next frame.
 * **THE GRASS STANDS ON THE CHUNK MESHES** (RendererVK "Procedural grass"): at the end of every enabled `update`, the
   residents of the columns within `renderer.grassRange()` (a few `m_residents` lookups per LOD, no walk) go to
   `Renderer::setGrassGround` (coord, first vertex in the mega-buffer, grid cells per side); the GPU reads their vertices.
@@ -847,6 +850,12 @@ TreeSpecies <name>
 	Bark    Plates lines rows (fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
 	Color   Bark r g b · Leaf r g b
+	Placement (WORLD placement, TreeWorld; trees only - absent or Density 0 = never placed in the world)
+	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)
+	        Precipitation min max (mm/yr; the ideal range - 2200 and up is the encoding's top, so a max there is no max)
+	        ClimateWidth (sigma of the falloff OUTSIDE the ideal box, in the normalized climate space, 0.06)
+	        Cluster size coverage (m, 0..1; size 0 = no patches) · MaxSlope (rise/run, 0.6)
+	        Altitude min max (m above the local water level, 1.5 ..)
 
 <shape> (TreeBranchShape, any of): Curve value var (deg, smooth bend) · UpAttract (negative droops)
         Wobble (deg random walk per segment) · Elbows (average count) · ElbowAngle value var (deg)
@@ -1082,6 +1091,76 @@ alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures up
 piece's only shadow / GI / RT representation at every distance: the mesh draws in the MAIN pass only (both
 paths). Off, it keeps the CPU path below (one
 `RenderNode` per piece representation, pushed per frame). The set is destroyed on respawn / reload / disable.
+
+## World records (`TreeWorld`, "Trees/World" tweaks; W1 of Docs/TreeRenderingPlan.md 3.5)
+
+Every tree of the terrain ring as a **4-byte record per terrain chunk** (`TreeRecord`: x, z 12 bits each, chunk-local
+on a 4096 lattice; the species type 8 bits = its index in the NAME-SORTED `.tree` list). No height (the terrain's), no
+variant / scale / yaw: `treeRecordSeed(seed, chunk, record)` hashes the chunk and the QUANTIZED position, mirrored
+in `Assets/Shaders/tree_record.inc.glsl` (not read by a shader yet). A member of TreeSystem, updated before its
+`Enabled` check: it runs with the preview off.
+
+* **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.
+  On a camera chunk change the main thread requests the missing chunks and re-sorts the queue nearest first; Low pump
+  jobs (`Gen jobs`, 2) take the front, with lazy staleness as the terrain / scatter pumps.
+* **Pure function** (`placeChunk`): one `sampleGrid` at Full detail, ~8 m step + halo, then one candidate per cell of
+  a `Candidate cell (m)` (5) lattice, jittered over the cell. Per species (`Placement`) its CLIMATE FIT: 1 inside its
+  IDEAL box (`Temperature` / `Precipitation` min max, normalized as `ScatterRule`), outside a Gaussian of the distance
+  to the box (per axis, sigma `ClimateWidth`), faded to 0 between `Climate fade start` and `end` (0.10 / 0.25 of the
+  peak), 0 outside its slope / altitude band. (Until 2026-10-04 an attractor POINT: the density peaked at one climate
+  and every climate around it thinned - a precipitation band where a minimum was meant.)
+  The SPECIES is picked by fit ^ `Climate sharpness` (4) alone; the candidate then exists with probability (the chosen
+  species' Density x its fit x its cluster fbm) x the cell's hectares x `Density scale` (so at most one tree per cell:
+  400 / ha at 5 m). (Until 2026-10-04 the pick and the existence were by Density x fit summed over the species, with
+  the Gaussian cut at 2 %: a dense species' tail outnumbered a sparse one's core - pines among the acacias - and the
+  tail scattered lone trees far from any forest.) Bushes are not stored.
+* **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density tweaks,
+  `Reload species`, a new sampler, a chunk size or bounds change. The generation counter is monotonic, so a late pump
+  result of an old config never merges.
+* **GPU (W2):** each merged chunk joins an upload queue; `Upload KB per frame` (1024) of records per frame go to the
+  renderer's pool (`Renderer::addTreeRecordChunk`, RendererVK "WORLD TREE RECORDS"; `GPU pool (MB)`, 128, fixed - a
+  full pool refuses chunks and warns once), each with its GROUND: `placeChunk` also writes the chunk's 17² heights
+  (16 m at 256 m chunks, bilinear in its Full 8 m grid, 16-bit above the minimum - TreeRecordPool's encoding), the
+  ground the far volume stands the records' trees on (the camera-centred height map's far cascade, ~100 m texels,
+  buried them on every peak). Every chunk uploads, trees or not. An evicted chunk's GPU range is freed (deferred
+  reuse). Disabling frees the pool; a ring radius change restarts (the pool's chunk map is sized by it).
+* **CPU keep radius (chunks)** (8): the CPU keeps a chunk's records only inside it (world mode's expansion reads
+  them; at least its near radius + 1). Beyond it they are dropped once uploaded; a chunk coming back inside is generated again (same
+  records - nothing re-uploads).
+* `Log stats`: chunks (in flight, queued, to upload), trees, per chunk average / max; CPU and GPU MB; per species of the
+  CPU-held records.
+* Placeholder ideal climates: Oak 9..18 C / 900..2200 mm, 90 / ha; Pine -5..5 C / 600..2200 mm, 90 / ha; Acacia
+  20..30 C / 300..900 mm, 12 / ha; all `ClimateWidth` 0.06.
+
+## World mode (TreeSystem, W3)
+
+`Trees/Enabled` + `Trees/World/Enabled` + `GPU expansion` (+ terrain): the trees are TreeWorld's records, not the
+preview grove. Switching it, or a TreeWorld restart (its `generation()`), respawns.
+
+* **One DYNAMIC set** (RendererVK `createDynamicTreeInstanceSet`: every piece type, a fixed `Set capacity (pieces)`
+  of slots, 600 k; no growth, a full set refuses chunks and warns once), hooked into the terrain like the preview
+  (`hookTerrain`; chunk index capacity (2 x near + 3)^2 x 2).
+* **Near radius (chunks)** (6, Chebyshev): every chunk inside it that TreeWorld holds CPU records for (TreeWorld's
+  keep radius is raised to near + 1: `requireKeepRadius`) is EXPANDED on a Low job, nearest ring first, at most 4 in
+  flight: per record its tree (`treeRecordSeed`: the preview's variant / scale / yaw rules, `Size variation`) on the
+  ground of ONE Full `sampleGrid` at 2 m (the terrain's LOD 0 spacing) over the chunk plus the bushes' reach, plus its
+  BUSHES (`Bushes per tree`, out to 0.75 x `Spacing`, the bush species of its climate - the preview's rule). The job
+  reads only an immutable `ExpandContext` (types, scales, far centre / radius per variant, the record-type -> species
+  map by name, the sampler) and a copy of the records.
+* `Expand per frame` (2) finished chunks join the set per frame (`addTreeInstanceChunk`), the coordinate is mapped
+  (`m_vegChunkOf`) and re-stamped in the terrain (`restampVegetation`). A chunk past near + 1 is removed
+  (`removeTreeInstanceChunk`, deferred reuse) and re-stamped; a pending one's result is dropped.
+* A respawn joins the jobs (`stopExpansion`: the generation bumps, the results are cleared).
+* **The far-tree volume (W4)** takes EVERY tree from the RECORDS (RendererVK "WORLD TREE RECORDS"), never from the
+  set: within `Trees/Far record detail (m)` the GPU expands each record exactly as `expandChunk` (variant, scale, yaw,
+  its bushes - the same hashes; the terrain map's ground) and splats it in detail; beyond, its exact mass per column.
+  So a chunk entering or leaving the near radius changes nothing in the volume. The spawn hands the renderer the
+  record types (`setTreeRecordTypes`: per TreeWorld type its variants as the set's types, Scale range, size
+  variation, a tree's bush types in `ExpandSpecies::bushes` order, bushes per tree / radius, per-variant mass, the
+  height profile); a respawn clears them. **Keep `expandChunk` and `tree_volume_splat.cs`'s `splatRecordPlant` /
+  `main` (and `tree_volume_records.cs`'s variant / scale) in step.** At most 8 variants per species and 8 bush species
+  per tree (a warning past that). Without `Trees/Enabled` (no species meshes, so no density) the records are not in
+  the volume. It re-bakes at most every 30 frames while record chunks change.
 
 ## The preview (temporary)
 

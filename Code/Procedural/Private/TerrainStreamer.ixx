@@ -50,6 +50,10 @@ export namespace Procedural
 		// the walk and re-stamps every resident. Empty functions = no vegetation.
 		struct VegetationDraw { uint32 chunk; uint32 passMask; };
 		void setVegetation(oc::function<int32(glm::ivec2)> lookup, oc::function<void(oc::span<const VegetationDraw>)> sink, uint32 numChunks);
+		// One coordinate's vegetation changed (its owner added or removed it): re-stamps that coordinate's residents
+		// (every LOD, the retired ones too) from `lookup`. Main thread, WITHOUT joining the walk: the walk sees the old
+		// or the new index - the owner keeps a removed index unused until the next frame.
+		void restampVegetation(glm::ivec2 coord);
 		// This frame's render() routes the vegetation (the terrain draws its chunks): its owner submits nothing else.
 		bool vegetationRouted() const { return m_vegRouted; }
 		// Joins the render-push job render() kicked (the renderNode pushes run on a worker). main.cpp
@@ -126,6 +130,13 @@ export namespace Procedural
 			m_boundsMax = boundsMax;
 			m_configDirty = true;
 		}
+		// False when unbounded (outMin / outMax untouched).
+		bool generatedBounds(glm::vec2& outMin, glm::vec2& outMax) const
+		{
+			outMin = m_boundsMin;
+			outMax = m_boundsMax;
+			return m_bounded;
+		}
 
 	private:
 		struct Request
@@ -155,7 +166,9 @@ export namespace Procedural
 			RenderMesh mesh;           // declared first -> destroyed AFTER the node that draws it
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
-			int32 vegetation = -1;     // the VEGETATION stored in this chunk: its index in the owner's table (-1 = none)
+			// The VEGETATION stored in this chunk: its index in the owner's table (-1 = none). Atomic: restampVegetation
+			// writes it on main while the walk reads it.
+			oc::atomic<int32> vegetation{ -1 };
 			RenderNode node;
 			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static; userData = this)
 		};

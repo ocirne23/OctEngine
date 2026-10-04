@@ -15,12 +15,25 @@
 // base of any tree reaching the column put an upper tree at a cliff edge above the layer in its edge columns, where
 // the splat moved it DOWN: blobs out of line with their billboards along every cliff. A ring column no tree covers
 // (coverage 0) keeps the lowest base of the trees whose rectangle reaches it.
+//
+// TREE_SPLAT_RECORDS (all three passes): the trees come from the WORLD TREE RECORDS (Procedural TreeWorld, W4) instead
+// of a tree set: one workgroup per record chunk within the record detail distance of the bake centre (the chunks
+// beyond add mass per column - tree_volume_records.cs, the same test), each record EXPANDED exactly as Procedural
+// TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on the terrain map's ground, into
+// the world set's volume types. The tree set's own copies of those trees are never splatted: one source, so a chunk
+// entering or leaving the set does not change the volume.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
 
 #include "shared.inc.glsl"
 #include "tree_volume.inc.glsl"
+#ifdef TREE_SPLAT_RECORDS
+#define TERRAIN_HEIGHT_BINDING 1
+#include "terrain_height.inc.glsl"
+#define TREE_RECORD_GROUND
+#include "tree_record.inc.glsl"
+#endif
 
 layout (local_size_x = 64) in;
 
@@ -52,14 +65,57 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Pi
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { VolumeType t[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer FloatList { float v[]; };
 
+// Mirrors TreeRecordChunkGpu / TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
+struct RecordChunk
+{
+    ivec2 coord;
+    uint first;
+    uint count;
+};
+struct RecordType
+{
+    vec4 albedo;
+    float mass;
+    float height;
+    float radius;
+    float sizeVariation;
+    vec2 scale;
+    uint numVariants;
+    uint numBushes;
+    float bushesPerTree;
+    float bushRadius;
+    float pad0, pad1;
+    uint variantType[8];
+    float variantMass[8];
+    uint bushTypes[8];
+    float shape[32];
+};
+layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ChunkList { RecordChunk c[]; };
+layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RecordTypeList { RecordType t[]; };
+#ifndef TREE_SPLAT_RECORDS
+layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TreeRecordWords { uint w[]; };
+#endif
+
 layout (push_constant, scalar) uniform Push
 {
+#ifdef TREE_SPLAT_RECORDS
+    TreeRecordMap map;   // the chunk map (the records' ground)
+#else
     PieceList pieces;
-    TypeList types;
+#endif
+    TypeList types;      // TREE_SPLAT_RECORDS: the world set's
     FloatList data;
-    uint numPieces;
-    uint pad;
+    uint numPieces;      // TREE_SPLAT_RECORDS: the record chunks
+    uint mapSize;        // TREE_SPLAT_RECORDS: the chunk map's size
     TreeVolumeParams vol;
+    // TREE_SPLAT_RECORDS only:
+    TreeRecordWords records; // each chunk's ground, then its records
+    ChunkList chunks;
+    RecordTypeList recordTypes;
+    float chunkSize;
+    uint worldSeed;
+    float recordDetail;  // m: the chunks whose centre lies within this of the bake centre
+    uint numRecordTypes;
 } pc;
 
 // Fixed point of the accumulation: extinction (1/m) x this.
@@ -112,12 +168,9 @@ float tentPrimitive(float x, float h)
 }
 float tentWeight(float lo, float hi, float h) { return (tentPrimitive(hi, h) - tentPrimitive(lo, h)) / h; }
 
-void main()
+// One tree, by the whole workgroup (its texels spread over the threads).
+void splatPiece(VolumePiece piece)
 {
-    const uint pieceIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
-    if (pieceIdx >= pc.numPieces)
-        return;
-    const VolumePiece piece = pc.pieces.p[pieceIdx];
     const VolumeType type = pc.types.t[piece.type];
     if (type.res == 0u)
         return;
@@ -243,3 +296,78 @@ void main()
     }
 }
 #endif
+
+#ifdef TREE_SPLAT_RECORDS
+// One plant of a record (its tree, or one of its bushes): Procedural TreeSystem::expandChunk's placeVariant - keep in
+// step. The ground is its chunk's height grid (16 m, from the generator's own field - the tree set's copy stands on
+// the sampler's 2 m grid); the terrain map only where that chunk holds none.
+void splatRecordPlant(uint recordType, uint seed, vec2 p)
+{
+    const uint numVariants = pc.recordTypes.t[recordType].numVariants;
+    if (numVariants == 0u)
+        return;
+    const uint variant = treeHash(seed, 102u) % numVariants;
+    const vec2 range = pc.recordTypes.t[recordType].scale;
+    const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
+        * exp2(pc.recordTypes.t[recordType].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
+    const float yaw = treeHash01(treeHash(seed, 104u)) * 6.28318531;
+    float ground;
+    if (!treeRecordGround(pc.records, pc.map, pc.mapSize, pc.chunkSize, p, ground))
+        ground = terrainHeightAt(p);
+    VolumePiece piece;
+    piece.posScale = vec4(p.x, ground - 0.05, p.y, scale);
+    piece.quat = vec4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)); // about up
+    piece.type = pc.recordTypes.t[recordType].variantType[variant];
+    splatPiece(piece);
+}
+#endif
+
+void main()
+{
+#ifdef TREE_SPLAT_RECORDS
+    const uint chunkIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 chunks the dispatch wraps into y
+    if (chunkIdx >= pc.numPieces)
+        return;
+    const RecordChunk chunk = pc.chunks.c[chunkIdx];
+    const vec2 origin = vec2(chunk.coord) * pc.chunkSize;
+    const float d = length(origin + 0.5 * pc.chunkSize - pc.vol.centre);
+    if (d >= pc.recordDetail)
+        return; // tree_volume_records.cs adds it as mass per column
+    const float reach = 0.7072 * pc.chunkSize + 30.0; // the chunk's half diagonal + a crown or a bush's reach
+    if (d + reach < pc.vol.rMin || d - reach > pc.vol.rMax)
+        return;
+    // Record by record, the whole workgroup on each (uniform control flow: every thread runs the same plant).
+    for (uint i = 0u; i < chunk.count; ++i)
+    {
+        const uint record = pc.records.w[chunk.first + i];
+        const uint type = treeRecordType(record);
+        if (type >= pc.numRecordTypes)
+            continue;
+        const uint seed = treeRecordSeed(pc.worldSeed, chunk.coord, record);
+        const vec2 p = origin + treeRecordLocal(record, pc.chunkSize);
+        splatRecordPlant(type, seed, p);
+        // "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to the bush
+        // radius (area-uniform), a random bush type of its climate.
+        const uint numBushes = pc.recordTypes.t[type].numBushes;
+        const float perTree = pc.recordTypes.t[type].bushesPerTree;
+        if (numBushes == 0u || perTree <= 0.0)
+            continue;
+        const float whole = floor(perTree);
+        const uint count = uint(whole) + (treeHash01(treeHash(seed, 110u)) < perTree - whole ? 1u : 0u);
+        const float bushRadius = pc.recordTypes.t[type].bushRadius;
+        for (uint b = 0u; b < count; ++b)
+        {
+            const uint bushSeed = treeHash(seed, 200u + b);
+            const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531;
+            const float radius = mix(1.5, bushRadius, sqrt(treeHash01(treeHash(bushSeed, 112u))));
+            const uint bushType = pc.recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
+            splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
+        }
+    }
+#else
+    const uint pieceIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
+    if (pieceIdx >= pc.numPieces)
+        return;
+    splatPiece(pc.pieces.p[pieceIdx]);
+#endif
+}

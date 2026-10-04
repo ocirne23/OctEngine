@@ -222,6 +222,18 @@ namespace Procedural
 			readColor(*color, "Leaf", out.leafColor);
 		}
 
+		if (const AssetNode* placement = species->find("Placement"))
+		{
+			TreePlacementDesc& p = out.placement;
+			readFloat(*placement, "Density", p.density);
+			readRange(*placement, "Temperature", p.temperature);     // min max (one value: exactly that)
+			readRange(*placement, "Precipitation", p.precipitation); // min max
+			readFloat(*placement, "ClimateWidth", p.climateWidth);
+			readValueVar(*placement, "Cluster", p.clusterSize, p.clusterCoverage);
+			readFloat(*placement, "MaxSlope", p.maxSlope);
+			readRange(*placement, "Altitude", p.altitude);
+		}
+
 		// Clamp what would break the generator; everything else is the author's call.
 		out.trunkCount = glm::clamp(out.trunkCount, 1, 64);
 		out.moduleCount = glm::clamp(out.moduleCount, 1, 256);
@@ -256,6 +268,12 @@ namespace Procedural
 			billboardSize *= 2;
 		out.billboardSize = billboardSize;
 		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.02f, 0.6f); // Pinnate leaflets are tiny
+		out.placement.density = glm::max(out.placement.density, 0.0f);
+		out.placement.climateWidth = glm::max(out.placement.climateWidth, 0.01f);
+		out.placement.temperature.y = glm::max(out.placement.temperature.y, out.placement.temperature.x);
+		out.placement.precipitation.y = glm::max(out.placement.precipitation.y, out.placement.precipitation.x);
+		out.placement.clusterCoverage = glm::clamp(out.placement.clusterCoverage, 0.0f, 1.0f);
+		out.placement.maxSlope = glm::max(out.placement.maxSlope, 0.0f);
 		return true;
 	}
 }

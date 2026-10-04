@@ -91,3 +91,10 @@ TreeSpecies Acacia
 	Color
 		Bark 0.33 0.27 0.21
 		Leaf 0.27 0.37 0.14
+	Placement
+		Density 12
+		Temperature 20 30
+		Precipitation 300 900
+		ClimateWidth 0.06
+		Cluster 120 0.4
+		MaxSlope 0.5

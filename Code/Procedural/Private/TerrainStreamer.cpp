@@ -1249,11 +1249,12 @@ namespace Procedural
 	// resident of one coordinate - the trees must not draw twice).
 	void TerrainStreamer::noteVegetation(const Resident& resident, uint32 passMask)
 	{
-		if (!m_vegRouted || resident.vegetation < 0 || (size_t)resident.vegetation >= m_vegMasks.size())
+		const int32 vegetation = resident.vegetation.load(oc::memory_order_relaxed);
+		if (!m_vegRouted || vegetation < 0 || (size_t)vegetation >= m_vegMasks.size())
 			return;
-		uint8& mask = m_vegMasks[(size_t)resident.vegetation];
+		uint8& mask = m_vegMasks[(size_t)vegetation];
 		if (mask == 0)
-			m_vegTouched.push_back((uint32)resident.vegetation);
+			m_vegTouched.push_back((uint32)vegetation);
 		mask |= (uint8)passMask;
 	}
 
@@ -1280,9 +1281,20 @@ namespace Procedural
 		m_vegMasks.assign(m_vegSink ? numChunks : 0u, 0);
 		m_vegTouched.clear();
 		for (auto& entry : m_residents)
-			entry.second->vegetation = m_vegLookup ? m_vegLookup(entry.second->coord) : -1;
+			entry.second->vegetation.store(m_vegLookup ? m_vegLookup(entry.second->coord) : -1, oc::memory_order_relaxed);
 		for (RetiredResident& retired : m_retired) // a hand-over list may still name them: no stale index
-			retired.resident->vegetation = -1;
+			retired.resident->vegetation.store(-1, oc::memory_order_relaxed);
+	}
+
+	void TerrainStreamer::restampVegetation(glm::ivec2 coord)
+	{
+		const int32 vegetation = m_vegLookup ? m_vegLookup(coord) : -1;
+		for (uint32 lod = 0; lod < 16; ++lod) // every LOD a resident can have (the ring's max is the scan job's)
+			if (const auto it = m_residents.find(chunkKey(coord, lod)); it != m_residents.end())
+				it->second->vegetation.store(vegetation, oc::memory_order_relaxed);
+		for (RetiredResident& retired : m_retired)
+			if (retired.resident->coord == coord)
+				retired.resident->vegetation.store(-1, oc::memory_order_relaxed);
 	}
 
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
@@ -1497,7 +1509,7 @@ namespace Procedural
                 resident->node = renderer.spawnMeshNode(resident->mesh, m_material, RendererVKLayout::EPipelineIndex::TerrainLit, transform);
                 resident->coord = res.coord;
                 resident->lod = res.lod;
-                resident->vegetation = m_vegLookup ? m_vegLookup(res.coord) : -1;
+                resident->vegetation.store(m_vegLookup ? m_vegLookup(res.coord) : -1, oc::memory_order_relaxed);
                 // Culling registration: chunks live in the SpatialIndex like entity render components, but on
                 // their own layer (the userData is the chunk's Resident*, NOT an Entity* - gameplay queries
                 // must not see them - so the hand-over push needs no lookup and reaches the chunk's node AND its

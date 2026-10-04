@@ -20,6 +20,10 @@ import :Settings;
 //           TREE_FLOOR_PASS variant (each column's lowest tree base, R32UI 2D), then the splat (fixed-point atomics,
 //           R32UI 3D); then tree_volume_resolve.cs (-> R16F, filterable). Re-baked only when the camera leaves the snap radius
 //           around the bake centre, a set changes, or a volume setting changes.
+//           W4: the WORLD TREE RECORDS: within "Far record detail" each record expands to its exact trees (the splat's
+//           TREE_SPLAT_RECORDS variants, in every pass); beyond, their mass per column (tree_volume_records.cs, a tent
+//           over the crown's columns), then per column the terrain floor where no tree floor is and the slices from
+//           the type's height profile (tree_volume_far.cs). A dynamic set (the world) is never splatted.
 //   march : tree_volume_march.cs, full res, the view ray from the start distance to the scene surface.
 //   temporal: cloud_temporal.cs's TREE_TEMPORAL instance ("Far temporal blend" > 0): last frame's result reprojected
 //           at the trees' mean distance, rejected / neighbourhood-clamped as for the clouds, blended in. OFF COSTS
@@ -75,6 +79,25 @@ public:
         vk::DeviceAddress data = 0;   // float[]
         uint32 numPieces = 0;
     };
+    // The WORLD TREE RECORDS (TreeRecordPool; W4): every record's tree. A chunk inside "Far record detail" of the bake
+    // centre EXPANDS each record exactly as Procedural's world expansion (variant, scale, yaw, its bushes; the ground
+    // from the terrain map) into the world set's volume types and splats it in detail (tree_volume_splat.cs, its
+    // TREE_SPLAT_RECORDS variants); beyond it each record adds its exact mass to its columns (tree_volume_records.cs),
+    // spread over the slices by its type's height profile (tree_volume_far.cs). numTypes 0 = none.
+    struct RecordSource
+    {
+        vk::DeviceAddress records = 0;     // uint32 per record; each chunk's ground right before its records
+        vk::DeviceAddress map = 0;         // TreeRecordMapGpu, mapSize^2 (the chunk map: a position's ground)
+        uint32 mapSize = 0;
+        vk::DeviceAddress chunks = 0;      // TreeRecordChunkGpu per chunk
+        vk::DeviceAddress types = 0;       // TreeRecordTypeGpu per record type
+        vk::DeviceAddress volumeTypes = 0; // the world set's TreeVolumeTypeGpu (the variants' grids)
+        vk::DeviceAddress volumeData = 0;
+        uint32 numChunks = 0;
+        uint32 numTypes = 0;
+        float chunkSize = 256.0f;
+        uint32 worldSeed = 1;
+    };
     struct RecordParams
     {
         Buffer& ubo;
@@ -90,6 +113,7 @@ public:
         float startDistance = 0.0f;   // the march's start (3D, m): "Far start" scaled with the camera's height
                                       // (Renderer::farTreesStart), the billboards' hand-over
         oc::span<const Source> sources;
+        RecordSource records;
         const FarTreeParams& settings;
         uint32 frameNumber = 0;       // monotonic: the history is last frame's only when this follows the last march
     };
@@ -110,9 +134,11 @@ private:
         VmaAllocation memory{};
         vk::ImageView view;
     };
-    void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass);
+    void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records);
     void buildResolveLayout(ComputePipelineLayout& layout);
     void buildFloorSmoothLayout(ComputePipelineLayout& layout);
+    void buildRecordsLayout(ComputePipelineLayout& layout);
+    void buildFarLayout(ComputePipelineLayout& layout);
     void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip);
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);
@@ -128,6 +154,11 @@ private:
     ComputePipeline m_splatPipeline;
     ComputePipeline m_resolvePipeline;
     ComputePipeline m_floorSmoothPipeline; // the floor's separable blur (floor -> floorCover -> floor)
+    ComputePipeline m_recordsPipeline;     // tree_volume_records.cs: the records' mass per column
+    // The splat's TREE_SPLAT_RECORDS variants, per pass: [0] the splat, [1] the floor coverage, [2] the floor.
+    oc::array<ComputePipeline, 3> m_recordSplatPipelines;
+    oc::array<DescriptorSet, 3 * RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_recordSplatSets;
+    ComputePipeline m_farPipeline;         // tree_volume_far.cs: the columns' floor from the terrain + their slices
     ComputePipeline m_marchPipeline;
     ComputePipeline m_marchTemporalPipeline; // TREE_TEMPORAL_OUT: the log2 distances for the temporal pass
     // What the baked variants were compiled with (record() dispatches by these, never by the live settings):
@@ -141,6 +172,8 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_floorSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_splatSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_resolveSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_recordsSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_farSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * 2> m_floorSmoothSets; // per slot: the two axes
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_marchSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_temporalSets;
@@ -152,6 +185,8 @@ private:
     Image m_colour;  // RGBA8 2D: the leaf albedo per column
     Image m_floor;   // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
     Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass)
+    Image m_farAmount;  // R32UI 2D: the records' mass per column (fixed point; TV_AMOUNT_SCALE)
+    Image m_farType;    // R32UI 2D: the record type whose profile a column takes (last writer wins)
     oc::array<Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_out;      // RGBA16F, render size: in-scatter + T
     oc::array<Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_outDepth; // R16F: the weighted mean distance (m)
     // The TEMPORAL images (only while the temporal path is on - FarTreeParams::temporalPath; RGBA16F at the march size,

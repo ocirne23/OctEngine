@@ -254,6 +254,7 @@ void FarTreeParams::registerTweaks()
     static constexpr oc::string_view PIXEL_SKIP[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };
     Tweak::enumVar("Trees", "Far pixel skip", &pixelSkip, PIXEL_SKIP);
     Tweak::floatVar("Trees", "Far rebake distance (m)", &rebakeDistance, 1.0f, 2000.0f, 1.0f);
+    Tweak::floatVar("Trees", "Far record detail (m)", &recordDetail, 0.0f, 40000.0f, 10.0f);
     Tweak::intVar("Trees", "Far floor smoothing", &floorSmoothing, 0, 8, 1.0f);
 }
 

@@ -9,3 +9,4 @@ export import :RenderNode;
 export import :RenderMesh;
 export import :Light;
 export import :Settings;
+export import :TreeRecordPool; // TreeRecordTypeGpu: Procedural's world trees hand the far volume their record types

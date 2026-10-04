@@ -42,6 +42,7 @@ import :SceneColor;
 import :DebugLinePipeline;
 import :ParticlePipeline;
 import :TreeVolumePipeline;
+import :TreeRecordPool;
 import :GrassPipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
@@ -287,6 +288,14 @@ public:
     struct TreeInstanceChunk { uint32 first = 0; uint32 count = 0; };
     uint32 createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
         oc::span<const TreeInstanceChunk> chunks);
+    // A DYNAMIC set (Procedural's world trees): the types fixed, CHUNKS added and removed at run time into a fixed capacity
+    // of piece slots (no growth; no GPU drain). MAIN THREAD, after beginFrame.
+    uint32 createDynamicTreeInstanceSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity);
+    // The new chunk's index (TreeChunkDraw::chunk), or UINT32_MAX when the set has no room.
+    uint32 addTreeInstanceChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces);
+    // Its piece slots are reused NUM_FRAMES_IN_FLIGHT frames later, its index from the next frame on (this frame's
+    // terrain walk may still name it).
+    void removeTreeInstanceChunk(uint32 setId, uint32 chunk);
     // Drains the GPU first (rare: a respawn / reload).
     void destroyTreeInstanceSet(uint32 setId);
     // MAIN THREAD, every frame the set draws (before its renderTreeInstanceSet): the culls bind its buffers (a change
@@ -300,6 +309,36 @@ public:
     // The terrain height right under the camera (world Y), per frame: the far-tree volume's cell layout follows the
     // camera's height above it. Unset (NaN): the baked sea level.
     void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
+
+    // -- WORLD TREE RECORDS (TreeRecordPool; Procedural TreeWorld). MAIN THREAD, after beginFrame. --
+    // (Re)sizes the pool and drops every chunk (a size change drains the GPU). ringRadius (chunks) sizes the chunk map.
+    void resetTreeRecords(uint64 poolBytes, uint32 ringRadius) { m_treeRecords.reset(poolBytes, m_frameCounter, ringRadius); }
+    // A chunk's ground (TREE_RECORD_HEIGHT_WORDS) and 4-byte records; the handle, or UINT32_MAX (no room). The far
+    // volume re-bakes (throttled).
+    uint32 addTreeRecordChunk(glm::ivec2 coord, oc::span<const uint32> ground, oc::span<const uint32> records)
+    {
+        m_treeSetsChanged = true;
+        return m_treeRecords.add(coord, ground, records);
+    }
+    void removeTreeRecordChunk(uint32 handle)
+    {
+        m_treeSetsChanged = true;
+        m_treeRecords.remove(handle, m_frameCounter);
+    }
+    // The record types (indexed by the record's type; empty: the volume ignores the records) and what expanding a record
+    // needs: the chunk size, the world seed, and the tree set whose volume types the variants name (Procedural's world
+    // set). The far volume then takes EVERY tree from the records and none from that set. Drains the GPU.
+    void setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types, float chunkSize, uint32 worldSeed, uint32 volumeSet)
+    {
+        m_treeRecords.setTypes(types);
+        m_treeRecordChunkSize = chunkSize;
+        m_treeRecordSeed = worldSeed;
+        m_treeRecordSet = volumeSet;
+        m_treeVolume.markDirty();
+    }
+    // Once per frame: the deferred frees, and the current frame slot's chunk table.
+    void updateTreeRecords() { m_treeRecords.update(m_swapChain.getCurrentFrameIndex(), m_frameCounter); }
+    TreeRecordStats treeRecordStats() const { return m_treeRecords.stats(); }
 
     // -- Procedural grass (GrassPipeline, grass.inc.glsl; "Grass" tweaks) --
     // The blades stand on the terrain MESH: their roots are read from the chunks' own vertices. One resident chunk per
@@ -583,28 +622,59 @@ private:
     // into the UBO's u_treeCull).
     struct TreeInstanceSet
     {
-        Buffer pieces;  // TreeCullPieceGpu per piece (device-local)
+        Buffer pieces;  // TreeCullPieceGpu per piece slot (device-local)
         Buffer types;   // TreeCullTypeGpu per type (device-local)
-        uint32 numPieces = 0;
-        oc::vector<TreeInstanceChunk> chunks;
-        // Per chunk: its RT-capable pieces (an RT representation with a BLAS - tree_cull.inc.glsl treeCullRtPiece) come
-        // FIRST in its range (createTreeInstanceSet reorders), rtCount of them, inside the sphere rtCentre / rtRadius.
-        struct ChunkRt { uint32 rtCount = 0; glm::vec3 rtCentre{ 0.0f }; float rtRadius = 0.0f; };
-        oc::vector<ChunkRt> chunkRt;
-        // Per chunk its bucket sizes (level-0 mesh, instances): chunks[c]'s are meshCounts[meshCountsBegin[c] ..
-        // meshCountsBegin[c + 1]).
-        oc::vector<oc::pair<uint16, uint32>> meshCounts;
-        oc::vector<uint32> meshCountsBegin;
+        uint32 numPieces = 0; // the piece slots up to the highest one in use (the volume's splat range)
+        // One CHUNK: its piece range (count 0 = a dead or empty chunk), with its RT-capable pieces (an RT representation
+        // with a BLAS - tree_cull.inc.glsl treeCullRtPiece) FIRST, rtCount of them inside the sphere rtCentre / rtRadius,
+        // and its bucket sizes (level-0 mesh, instances).
+        struct Chunk
+        {
+            uint32 first = 0;
+            uint32 count = 0;
+            uint32 rtCount = 0;
+            glm::vec3 rtCentre{ 0.0f };
+            float rtRadius = 0.0f;
+            oc::vector<oc::pair<uint16, uint32>> meshCounts;
+        };
+        oc::vector<Chunk> chunks;
+        // Per type: whether its RT representation has a BLAS, and the meshes a piece of it draws (one per representation
+        // pair - a piece draws the normal OR the fade material of a mesh) for the bucket sizes.
+        oc::vector<uint8> typeRtCapable;
+        oc::vector<oc::small_vector<uint16, 5>> typeMeshes;
+        // A DYNAMIC set (createDynamicTreeInstanceSet): a fixed capacity of piece slots in blocks of TREE_SET_BLOCK, a
+        // removed chunk's blocks reused NUM_FRAMES_IN_FLIGHT frames later, its index the frame after.
+        bool dynamic = false;
+        uint32 numBlocks = 0;
+        uint32 topBlock = 0;
+        IndexRangeFreeList freeBlocks;
+        struct PendingFree { uint32 firstBlock = 0; uint32 blocks = 0; uint32 readyFrame = 0; };
+        oc::vector<PendingFree> pendingFrees;
+        oc::vector<uint32> freeChunks;
+        oc::vector<oc::pair<uint32, uint32>> pendingChunks; // (index, the frame it was removed in)
+        uint32 emptyVolumeType = 0;                         // the volume's sentinel type (res 0) for free slots
+        oc::span<TreeVolumePieceGpu> mappedVolumePieces;
         // This frame's list (piece | passMask << 28 per listed piece): host-visible, one per frame slot.
         oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> lists;
         oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> mappedLists;
-        Buffer volumePieces; // TreeVolumePieceGpu per piece (the far-tree volume's bake)
-        Buffer volumeTypes;  // TreeVolumeTypeGpu per type
+        Buffer volumePieces; // TreeVolumePieceGpu per piece slot (the far-tree volume's bake; host-visible)
+        Buffer volumeTypes;  // TreeVolumeTypeGpu per type, + the sentinel
         Buffer volumeData;   // the types' extinction mip chains (floats)
         bool hasVolume = false;
         bool alive = false;
     };
+    static constexpr uint32 TREE_SET_BLOCK = 64; // a dynamic set's piece-slot allocation unit
     oc::vector<TreeInstanceSet> m_treeSets;
+    // A dynamic set's chunks change on MAIN (add / remove) while the terrain walk lists them on a worker
+    // (renderTreeInstanceSet).
+    std::mutex m_treeSetMutex;
+    bool m_treeSetsChanged = false;    // a dynamic set changed: the far volume re-bakes (throttled, recordFarTrees)
+    uint32 m_treeVolumeMarkFrame = 0;
+    uint32 allocTreeSet();
+    void initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanceType> types);
+    void initTreeSetPieces(TreeInstanceSet& set, uint32 capacity);
+    // Writes a chunk's pieces (RT-capable first) into the set's slots [first, first + pieces.size()).
+    void writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first);
     Buffer m_treeCullDummy;              // bound to both tree bindings while no set is
     uint32 m_treeCullSet = UINT32_MAX;   // the set whose buffers the recorded culls bind
     uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none)
@@ -620,6 +690,10 @@ private:
     Buffer& treeCullList(uint32 frameIdx);
     void uploadTreeCullUbo(PerFrameData& frameData);
     TreeVolumePipeline m_treeVolume;
+    TreeRecordPool m_treeRecords;
+    float m_treeRecordChunkSize = 256.0f;
+    uint32 m_treeRecordSeed = 1;
+    uint32 m_treeRecordSet = UINT32_MAX; // the set whose volume types the record types' variants name
     FarTreeParams m_farTreeParams;
     float m_farTreeCameraGround = std::numeric_limits<float>::quiet_NaN(); // setFarTreeCameraGround
     bool farTreesActive() const; // enabled, desktop, and a tree set with volume data

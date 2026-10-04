@@ -123,6 +123,7 @@ namespace Procedural
 		// Globals::terrain may be gone already (the procedural globals' order is undefined): its walk ended with the
 		// frame loop and never calls the sink again.
 		m_vegHooked = false;
+		stopExpansion();
 		clearAll();
 	}
 
@@ -161,6 +162,13 @@ namespace Procedural
 
 	void TreeSystem::destroyTreeSet()
 	{
+		stopExpansion();
+		m_near.clear();
+		m_expandContext = nullptr;
+		// Without world mode the far volume has no record types (it ignores the records).
+		if (m_recordTypesSet)
+			Globals::rendererVK.setTreeRecordTypes({}, 256.0f, 1, UINT32_MAX);
+		m_recordTypesSet = false;
 		// Unhook from the terrain first: setVegetation joins its walk, the last caller of the sink.
 		if (m_vegHooked)
 			Globals::terrain.setVegetation({}, {}, 0);
@@ -232,6 +240,10 @@ namespace Procedural
 		Tweak::floatVar("Trees", "Bush shadow distance (m)", &m_bushShadowDistance, 0.0f, 5000.0f, 1.0f, respawn);
 		Tweak::intVar("Trees", "Seed", &m_seed, 0, 1000000, 1.0f, respawn);
 		Tweak::enumVar("Trees", "Grove type", &m_groveType, GROVE_TYPES, respawn);
+		// World mode ("Trees/World/Enabled" with the GPU expansion): the near chunks' records as trees + bushes.
+		Tweak::intVar("Trees/World", "Near radius (chunks)", &m_nearRadius, 1, 32, 1.0f, respawn);
+		Tweak::intVar("Trees/World", "Set capacity (pieces)", &m_worldCapacity, 10000, 8000000, 1000.0f, respawn);
+		Tweak::intVar("Trees/World", "Expand per frame", &m_expandPerFrame, 1, 32, 1.0f);
 		static constexpr oc::string_view FAR_MODES[] = { "Billboards", "None" };
 		Tweak::enumVar("Trees", "Far mode", &m_farMode, FAR_MODES, [this]() { m_reload = true; });
 		static constexpr oc::string_view BILLBOARD_VIEWS[] = { "2 (side + top)", "4 (+ other side + bottom)" };
@@ -243,10 +255,12 @@ namespace Procedural
 			[this]() { m_fadeBandsDirty = true; m_respawn = true; });
 		Tweak::boolean("Trees", "Force far", &m_forceFar, [this]() { m_fadeBandsDirty = true; });
 		Tweak::boolean("Trees", "GPU expansion", &m_gpuExpansion, respawn);
+		m_world.initialize();
 	}
 
 	void TreeSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
+		m_world.update(renderer, camera, maps);
 		if (!m_enabled)
 		{
 			// Disabled frees everything, so enabling again re-reads the .tree files.
@@ -272,6 +286,12 @@ namespace Procedural
 		// The terrain's chunk size changed: the pieces sort into the old chunks.
 		if (m_vegHooked && m_vegChunkSize != Globals::terrain.chunkSize())
 			m_respawn = true;
+		// WORLD MODE: TreeWorld's records instead of the preview grove (the GPU path only). Switching, or new records
+		// (a TreeWorld restart), respawns.
+		const bool worldMode = m_world.enabled() && m_gpuExpansion && maps != nullptr;
+		m_world.requireKeepRadius(worldMode ? m_nearRadius + 1 : 0);
+		if (worldMode != m_worldMode || (worldMode && m_world.generation() != m_worldGeneration))
+			m_respawn = true;
 		// A respawn hooks the new set into the terrain AFTER this frame's walk (setVegetation joins it): this frame
 		// draws every chunk itself.
 		const bool respawned = !m_spawned || m_respawn;
@@ -280,9 +300,15 @@ namespace Procedural
 			m_respawn = false;
 			destroyTreeSet();
 			m_pieces.clear();
-			spawnPreview(renderer, camera, maps.get());
+			m_worldMode = worldMode;
+			if (worldMode)
+				spawnWorld(renderer, maps);
+			else
+				spawnPreview(renderer, camera, maps.get());
 			m_spawned = true;
 		}
+		if (m_worldMode)
+			updateWorld(renderer, camera);
 		if (m_fadeBandsDirty)
 		{
 			m_fadeBandsDirty = false;
@@ -298,9 +324,14 @@ namespace Procedural
 			renderer.bindTreeInstanceSet(m_treeSet);
 			if (!m_vegHooked || !Globals::terrain.vegetationRouted() || respawned)
 			{
-				m_vegFallback.resize(m_vegNumChunks ? m_vegNumChunks : 1u);
-				for (uint32 c = 0; c < (uint32)m_vegFallback.size(); ++c)
-					m_vegFallback[c] = { c, RendererVKLayout::PASS_ALL };
+				// Every chunk of the set (a dynamic set: the live ones).
+				m_vegFallback.clear();
+				if (m_worldMode)
+					for (const auto& [key, chunk] : m_vegChunkOf)
+						m_vegFallback.push_back({ (uint32)chunk, RendererVKLayout::PASS_ALL });
+				else
+					for (uint32 c = 0; c < glm::max(m_vegNumChunks, 1u); ++c)
+						m_vegFallback.push_back({ c, RendererVKLayout::PASS_ALL });
 				renderer.renderTreeInstanceSet(m_treeSet, m_vegFallback, m_farDistanceScale, m_forceFar);
 			}
 		}
@@ -691,6 +722,77 @@ namespace Procedural
 		piece.centre = transform.transformPoint(meshes.farCentre);
 	}
 
+	void TreeSystem::buildGpuTypes(oc::vector<Renderer::TreeInstanceType>& gpuTypes, oc::unordered_map<const PieceMeshes*, uint32>& typeOf) const
+	{
+		for (const Species& species : m_species)
+			for (const oc::vector<PieceMeshes>* set : { &species.trunkMeshes, &species.moduleMeshes, &species.variantMeshes })
+				for (const PieceMeshes& meshes : *set)
+				{
+					Renderer::TreeInstanceType type;
+					const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
+					const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
+					type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
+					type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
+					if (!meshes.density.empty())
+					{
+						type.density = meshes.density.data();
+						type.densityRes = TREE_DENSITY_RES;
+						type.densityMin = meshes.densityMin;
+						type.densityMax = meshes.densityMax;
+						type.albedo = species.volumeAlbedo;
+					}
+					if (meshes.billboard.isValid())
+					{
+						type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
+						type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+						type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+						type.farDistance = species.desc.billboardDistance;
+						type.fadeWidth = species.desc.billboardFadeWidth;
+						// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
+						// the BRANCH bark and the leaves fading out over the mid band while the CARD mesh (every module
+						// placement's billboard, merged; the species' atlas) fades in - and out over the far band.
+						if (set == &species.variantMeshes && midDistance(species) > 0.0f && meshes.cards.isValid()
+							&& meshes.trunkBark[0].isValid() && species.cardInMaterial != UINT16_MAX)
+						{
+							const RenderMesh* branches = meshes.branchBark[0].isValid() ? &meshes.branchBark[0] : nullptr;
+							type.trunk = { &meshes.trunkBark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
+							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.bark = { branches, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
+							type.barkFade = { branches, species.branchMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.cardsIn = { &meshes.cards, species.cardInMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
+							type.cardsOut = { &meshes.cards, species.cardOutMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
+							type.midDistance = midDistance(species);
+							type.midFadeWidth = species.desc.billboardFadeWidth;
+						}
+					}
+					if (species.desc.bush)
+						type.shadowDistance = m_bushShadowDistance;
+					typeOf.emplace(&meshes, (uint32)gpuTypes.size());
+					gpuTypes.push_back(type);
+				}
+	}
+
+	void TreeSystem::hookTerrain(uint32 numChunks)
+	{
+		auto lookup = [this](glm::ivec2 coord)
+		{
+			const auto it = m_vegChunkOf.find((uint64)(uint32)coord.x | ((uint64)(uint32)coord.y << 32));
+			return it != m_vegChunkOf.end() ? it->second : -1;
+		};
+		// On the terrain's walk job (between beginFrame and present): the band settings through atomics.
+		auto sink = [this](oc::span<const TerrainStreamer::VegetationDraw> draws)
+		{
+			static_assert(sizeof(TerrainStreamer::VegetationDraw) == sizeof(Renderer::TreeChunkDraw));
+			Globals::rendererVK.renderTreeInstanceSet(m_treeSet,
+				oc::span<const Renderer::TreeChunkDraw>((const Renderer::TreeChunkDraw*)draws.data(), draws.size()),
+				m_sinkDistanceScale.load(oc::memory_order_relaxed), m_sinkForceFar.load(oc::memory_order_relaxed));
+		};
+		Globals::terrain.setVegetation(lookup, sink, numChunks);
+		m_vegHooked = true;
+		m_vegNumChunks = numChunks;
+	}
+
 	void TreeSystem::spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps)
 	{
 		if (m_species.empty())
@@ -724,56 +826,8 @@ namespace Procedural
 		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
 		oc::vector<Renderer::TreeInstancePiece> gpuPieces;
 		if (gpu)
-		{
-			for (const Species& species : m_species)
-				for (const oc::vector<PieceMeshes>* set : { &species.trunkMeshes, &species.moduleMeshes, &species.variantMeshes })
-					for (const PieceMeshes& meshes : *set)
-					{
-						Renderer::TreeInstanceType type;
-						const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
-						const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
-						type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-						type.leaves = { leaves, species.leafMaterial, species.leafPipeline };
-						if (!meshes.density.empty())
-						{
-							type.density = meshes.density.data();
-							type.densityRes = TREE_DENSITY_RES;
-							type.densityMin = meshes.densityMin;
-							type.densityMax = meshes.densityMax;
-							type.albedo = species.volumeAlbedo;
-						}
-						if (meshes.billboard.isValid())
-						{
-							type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-							type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-							type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-							type.farDistance = species.desc.billboardDistance;
-							type.fadeWidth = species.desc.billboardFadeWidth;
-							// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
-							// the BRANCH bark and the leaves fading out over the mid band while the CARD mesh (every module
-							// placement's billboard, merged; the species' atlas) fades in - and out over the far band.
-							if (set == &species.variantMeshes && midDistance(species) > 0.0f && meshes.cards.isValid()
-								&& meshes.trunkBark[0].isValid() && species.cardInMaterial != UINT16_MAX)
-							{
-								const RenderMesh* branches = meshes.branchBark[0].isValid() ? &meshes.branchBark[0] : nullptr;
-								type.trunk = { &meshes.trunkBark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-								type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-								type.bark = { branches, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-								type.barkFade = { branches, species.branchMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-								type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-								type.cardsIn = { &meshes.cards, species.cardInMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-								type.cardsOut = { &meshes.cards, species.cardOutMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-								type.midDistance = midDistance(species);
-								type.midFadeWidth = species.desc.billboardFadeWidth;
-							}
-						}
-						if (species.desc.bush)
-							type.shadowDistance = m_bushShadowDistance;
-						typeOf.emplace(&meshes, (uint32)gpuTypes.size());
-						gpuTypes.push_back(type);
-					}
-		}
-		auto place = [&](const Species& species, const PieceMeshes& meshes, const Transform& transform)
+			buildGpuTypes(gpuTypes, typeOf);
+		auto place =[&](const Species& species, const PieceMeshes& meshes, const Transform& transform)
 		{
 			if (!gpu)
 			{
@@ -826,6 +880,27 @@ namespace Procedural
 				list = bushSpecies;
 		}
 
+		auto placeTree = [&](const Species* tree, uint32 seed, glm::vec2 p)
+		{
+			if (tree)
+				placeVariant(*tree, seed, p);
+			// "Bushes per tree": the whole part always, the fraction by chance. Each around its tree - out of the
+			// trunk's way (1.5 m), out to 0.75 x the spacing (area-uniform) - a random bush species of its climate.
+			const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : bushSpecies;
+			if (bushes.empty() || m_bushesPerTree <= 0.0f)
+				return;
+			const float whole = std::floor(m_bushesPerTree);
+			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < m_bushesPerTree - whole ? 1u : 0u);
+			for (uint32 b = 0; b < count; ++b)
+			{
+				const uint32 bushSeed = treeHash(seed, 200u + b);
+				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
+				const float radius = glm::mix(1.5f, glm::max(0.75f * m_spacing, 1.5f), std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
+				const Species& bush = *bushes[treeHash(bushSeed, 113u) % (uint32)bushes.size()];
+				placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
+			}
+		};
+
 		uint32 treeIdx = 0;
 		for (int j = 0; j < grid; ++j)
 		{
@@ -835,24 +910,7 @@ namespace Procedural
 				const glm::vec2 jitter(treeHash01(treeHash(seed, 100u)) - 0.5f, treeHash01(treeHash(seed, 101u)) - 0.5f);
 				const glm::vec2 p = center + right * ((float)i * m_spacing - half) + fwd * ((float)j * m_spacing - half)
 					+ jitter * (m_spacing * m_positionJitter);
-				const Species* tree = only ? only : !treeSpecies.empty() ? treeSpecies[(size_t)(i + j * grid) % treeSpecies.size()] : nullptr;
-				if (tree)
-					placeVariant(*tree, seed, p);
-				// "Bushes per tree": the whole part always, the fraction by chance. Each around its tree - out of the
-				// trunk's way (1.5 m), out to 0.75 x the spacing (area-uniform) - a random bush species of its climate.
-				const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : bushSpecies;
-				if (bushes.empty() || m_bushesPerTree <= 0.0f)
-					continue;
-				const float whole = std::floor(m_bushesPerTree);
-				const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < m_bushesPerTree - whole ? 1u : 0u);
-				for (uint32 b = 0; b < count; ++b)
-				{
-					const uint32 bushSeed = treeHash(seed, 200u + b);
-					const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
-					const float radius = glm::mix(1.5f, glm::max(0.75f * m_spacing, 1.5f), std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
-					const Species& bush = *bushes[treeHash(bushSeed, 113u) % (uint32)bushes.size()];
-					placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
-				}
+				placeTree(only ? only : !treeSpecies.empty() ? treeSpecies[(size_t)(i + j * grid) % treeSpecies.size()] : nullptr, seed, p);
 			}
 		}
 
@@ -912,22 +970,342 @@ namespace Procedural
 		}
 		m_treeSet = renderer.createTreeInstanceSet(gpuTypes, sorted, chunks);
 		renderer.bindTreeInstanceSet(m_treeSet);
+		hookTerrain((uint32)chunks.size());
+	}
 
-		auto lookup = [this](glm::ivec2 coord)
+	// WORLD MODE's spawn: the dynamic set (every type, no pieces yet), the expansion context, the terrain hook.
+	void TreeSystem::spawnWorld(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps)
+	{
+		m_worldGeneration = m_world.generation();
+		m_worldFullLogged = false;
+		if (m_species.empty())
+			return;
+		oc::vector<Renderer::TreeInstanceType> gpuTypes;
+		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
+		buildGpuTypes(gpuTypes, typeOf);
+
+		auto context = oc::make_shared<ExpandContext>();
+		context->maps = maps;
+		context->worldSeed = m_world.seed();
+		context->chunkSize = (float)Globals::terrain.chunkSize();
+		context->sizeVariation = m_sizeVariation;
+		context->bushesPerTree = m_bushesPerTree;
+		context->bushRadius = glm::max(0.75f * m_spacing, 1.5f);
+		// Every loaded species (its baked variants), then per TREE species the bushes of its climate (as the preview:
+		// case-insensitive; a tree whose climate no bush shares takes every bush).
+		oc::vector<uint32> bushes;
+		for (const Species& species : m_species)
 		{
-			const auto it = m_vegChunkOf.find((uint64)(uint32)coord.x | ((uint64)(uint32)coord.y << 32));
-			return it != m_vegChunkOf.end() ? it->second : -1;
-		};
-		// On the terrain's walk job (between beginFrame and present): the band settings through atomics.
-		auto sink = [this](oc::span<const TerrainStreamer::VegetationDraw> draws)
+			ExpandSpecies& out = context->species.emplace_back();
+			out.scale = species.desc.scale;
+			for (const PieceMeshes& meshes : species.variantMeshes)
+				out.variants.push_back({ typeOf[&meshes], meshes.farCentre, meshes.farRadius });
+			if (species.desc.bush && !species.variantMeshes.empty())
+				bushes.push_back((uint32)(context->species.size() - 1));
+		}
+		auto sameClimate = [](const oc::string& a, const oc::string& b)
 		{
-			static_assert(sizeof(TerrainStreamer::VegetationDraw) == sizeof(Renderer::TreeChunkDraw));
-			Globals::rendererVK.renderTreeInstanceSet(m_treeSet,
-				oc::span<const Renderer::TreeChunkDraw>((const Renderer::TreeChunkDraw*)draws.data(), draws.size()),
-				m_sinkDistanceScale.load(oc::memory_order_relaxed), m_sinkForceFar.load(oc::memory_order_relaxed));
+			if (a.size() != b.size())
+				return false;
+			for (size_t i = 0; i < a.size(); ++i)
+				if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i]))
+					return false;
+			return true;
 		};
-		Globals::terrain.setVegetation(lookup, sink, (uint32)chunks.size());
-		m_vegHooked = true;
-		m_vegNumChunks = (uint32)chunks.size();
+		for (size_t s = 0; s < m_species.size(); ++s)
+		{
+			if (m_species[s].desc.bush)
+				continue;
+			for (uint32 b : bushes)
+				if (sameClimate(m_species[b].desc.climate, m_species[s].desc.climate))
+					context->species[s].bushes.push_back(b);
+			if (context->species[s].bushes.empty())
+				context->species[s].bushes = bushes;
+		}
+		// The record types are TreeWorld's (its name-sorted .tree list): matched by name.
+		for (uint32 type = 0; type < 256; ++type)
+		{
+			const oc::string_view name = m_world.typeName(type);
+			if (name.empty())
+				break;
+			int32 index = -1;
+			for (size_t s = 0; s < m_species.size(); ++s)
+				if (!m_species[s].desc.bush && oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
+					index = (int32)s;
+			context->speciesOfRecordType.push_back(index);
+		}
+		m_expandContext = context;
+
+		m_treeSet = renderer.createDynamicTreeInstanceSet(gpuTypes, (uint32)glm::max(m_worldCapacity, 1));
+
+		// The far volume's view of the RECORDS (W4; RendererVK TreeRecordTypeGpu), per record type (TreeWorld's name-sorted
+		// species, bushes too): how a record EXPANDS - the same rules as expandChunk (its variants as this set's types,
+		// the scale range, the size variation, a tree's bushes in expandChunk's order) - and, for the mass far out, per
+		// variant its extinction's integral at scale 1, plus the species' profile over height (the variants' mean at
+		// the mean of its Scale range), crown radius (scale 1) and leaf colour.
+		oc::vector<int32> recordTypeOfSpecies(m_species.size(), -1);
+		oc::vector<int32> speciesOfType;
+		for (uint32 type = 0; type < 256; ++type)
+		{
+			const oc::string_view name = m_world.typeName(type);
+			if (name.empty())
+				break;
+			int32 index = -1;
+			for (size_t s = 0; s < m_species.size(); ++s)
+				if (oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
+					index = (int32)s;
+			speciesOfType.push_back(index);
+			if (index >= 0)
+				recordTypeOfSpecies[(size_t)index] = (int32)type;
+		}
+		oc::vector<TreeRecordTypeGpu> recordTypes(speciesOfType.size());
+		bool clipped = false;
+		for (size_t t = 0; t < recordTypes.size(); ++t)
+		{
+			if (speciesOfType[t] < 0)
+				continue;
+			const size_t s = (size_t)speciesOfType[t];
+			const Species& species = m_species[s];
+			TreeRecordTypeGpu& out = recordTypes[t];
+			out.scale = species.desc.scale;
+			out.sizeVariation = m_sizeVariation;
+			out.albedo = glm::vec4(species.volumeAlbedo, 1.0f);
+			clipped |= species.variantMeshes.size() > TREE_RECORD_MAX_VARIANTS;
+			out.numVariants = (uint32)glm::min(species.variantMeshes.size(), (size_t)TREE_RECORD_MAX_VARIANTS);
+			if (!species.desc.bush)
+			{
+				const oc::vector<uint32>& climateBushes = context->species[s].bushes;
+				clipped |= climateBushes.size() > TREE_RECORD_MAX_BUSHES;
+				for (uint32 bush : climateBushes)
+					if (out.numBushes < TREE_RECORD_MAX_BUSHES && recordTypeOfSpecies[bush] >= 0)
+						out.bushTypes[out.numBushes++] = (uint32)recordTypeOfSpecies[bush];
+				out.bushesPerTree = context->bushesPerTree;
+				out.bushRadius = context->bushRadius;
+			}
+			const float meanScale = 0.5f * (species.desc.scale.x + species.desc.scale.y);
+			for (uint32 v = 0; v < out.numVariants; ++v)
+			{
+				const PieceMeshes& meshes = species.variantMeshes[v];
+				out.variantType[v] = typeOf[&meshes];
+				if (meshes.density.empty())
+					continue;
+				out.height = glm::max(out.height, meshes.densityMax.y * meanScale);
+				out.radius = glm::max(out.radius, 0.5f * glm::max(meshes.densityMax.x - meshes.densityMin.x, meshes.densityMax.z - meshes.densityMin.z));
+			}
+			if (out.height <= 0.0f)
+				continue;
+			double profile[TREE_RECORD_PROFILE_BINS] = {};
+			uint32 variants = 0;
+			for (uint32 v = 0; v < out.numVariants; ++v)
+			{
+				const PieceMeshes& meshes = species.variantMeshes[v];
+				if (meshes.density.empty())
+					continue;
+				++variants;
+				const uint32 res = TREE_DENSITY_RES;
+				const glm::vec3 voxel = (meshes.densityMax - meshes.densityMin) / (float)res;
+				// Extinction (1/m) in tree space -> world: / scale; the voxel's volume x scale^3: the mass grows with scale^2.
+				const double voxelVolume = (double)voxel.x * voxel.y * voxel.z;
+				double variantMass = 0.0;
+				for (uint32 z = 0; z < res; ++z)
+					for (uint32 y = 0; y < res; ++y)
+					{
+						const float height = (meshes.densityMin.y + ((float)y + 0.5f) * voxel.y) * meanScale;
+						const uint32 bin = (uint32)glm::clamp(height / out.height * (float)TREE_RECORD_PROFILE_BINS, 0.0f, (float)TREE_RECORD_PROFILE_BINS - 1.0f);
+						for (uint32 x = 0; x < res; ++x)
+						{
+							const double m = meshes.density[x + res * (y + res * z)] * voxelVolume;
+							variantMass += m;
+							profile[bin] += m * meanScale * meanScale;
+						}
+					}
+				out.variantMass[v] = (float)variantMass;
+			}
+			double mass = 0.0;
+			for (double p : profile)
+				mass += p;
+			mass /= (double)glm::max(variants, 1u);
+			if (mass <= 0.0)
+				continue;
+			out.mass = (float)mass;
+			const double binH = out.height / (double)TREE_RECORD_PROFILE_BINS;
+			for (uint32 b = 0; b < TREE_RECORD_PROFILE_BINS; ++b)
+				out.shape[b] = (float)(profile[b] / (double)variants / (mass * binH));
+		}
+		if (clipped)
+			Log::warning(oc::format("Trees: a species has more than {} variants or a tree more than {} bush species - the far volume's "
+				"records then pick differently from the meshes", TREE_RECORD_MAX_VARIANTS, TREE_RECORD_MAX_BUSHES));
+		renderer.setTreeRecordTypes(recordTypes, context->chunkSize, context->worldSeed, m_treeSet);
+		m_recordTypesSet = true;
+		renderer.bindTreeInstanceSet(m_treeSet);
+		m_vegChunkSize = Globals::terrain.chunkSize();
+		// The set's chunk indices are recycled: at most the near square (+1 of hysteresis) plus one frame of removals.
+		const uint32 side = 2u * (uint32)m_nearRadius + 3u;
+		hookTerrain(side * side * 2u);
+	}
+
+	// WORLD MODE, every frame: drop the chunks that left the near radius (+1 of hysteresis), start the expansion of the
+	// ones inside it that TreeWorld holds records for, and add up to "Expand per frame" finished ones to the set.
+	void TreeSystem::updateWorld(Renderer& renderer, const Camera& camera)
+	{
+		if (!m_expandContext || m_treeSet == UINT32_MAX)
+			return;
+		const float chunkSize = m_expandContext->chunkSize;
+		const glm::ivec2 cam((int32)std::floor(camera.position.x / chunkSize), (int32)std::floor(camera.position.z / chunkSize));
+		auto key = [](glm::ivec2 c) { return (uint64)(uint32)c.x | ((uint64)(uint32)c.y << 32); };
+		auto chebyshev = [&](glm::ivec2 c) { return glm::max(glm::abs(c.x - cam.x), glm::abs(c.y - cam.y)); };
+
+		for (auto it = m_near.begin(); it != m_near.end(); )
+		{
+			const glm::ivec2 coord((int32)(uint32)it->first, (int32)(uint32)(it->first >> 32));
+			if (chebyshev(coord) <= m_nearRadius + 1)
+			{
+				++it;
+				continue;
+			}
+			if (it->second.setChunk != UINT32_MAX)
+			{
+				renderer.removeTreeInstanceChunk(m_treeSet, it->second.setChunk);
+				m_vegChunkOf.erase(it->first);
+				Globals::terrain.restampVegetation(coord);
+			}
+			it = m_near.erase(it); // a pending one: its result finds no entry
+		}
+
+		// The finished expansions (this generation's, still wanted), nearest first is the jobs' order already.
+		oc::vector<ExpandResult> results;
+		{
+			std::lock_guard<std::mutex> lk(m_expandMutex);
+			const size_t take = glm::min(m_expandResults.size(), (size_t)glm::max(m_expandPerFrame, 1));
+			for (size_t i = 0; i < take; ++i)
+				results.push_back(oc::move(m_expandResults[i]));
+			m_expandResults.erase(m_expandResults.begin(), m_expandResults.begin() + take);
+		}
+		for (ExpandResult& result : results)
+		{
+			const auto it = m_near.find(key(result.coord));
+			if (result.generation != m_expandGeneration || it == m_near.end() || !it->second.pending)
+				continue;
+			it->second.pending = false;
+			const uint32 setChunk = renderer.addTreeInstanceChunk(m_treeSet, result.pieces);
+			if (setChunk == UINT32_MAX)
+			{
+				if (!m_worldFullLogged)
+					Log::warning(oc::format("Trees: the world set is full ({} pieces) - raise 'Trees/World/Set capacity (pieces)'", m_worldCapacity));
+				m_worldFullLogged = true;
+				continue;
+			}
+			it->second.setChunk = setChunk;
+			m_vegChunkOf[it->first] = (int32)setChunk;
+			Globals::terrain.restampVegetation(result.coord);
+		}
+
+		// New expansions, nearest first, a few in flight at a time.
+		constexpr int32 MAX_IN_FLIGHT = 4;
+		for (int r = 0; r <= m_nearRadius && m_expandInFlight.load(oc::memory_order_relaxed) < MAX_IN_FLIGHT; ++r)
+			for (int z = -r; z <= r && m_expandInFlight.load(oc::memory_order_relaxed) < MAX_IN_FLIGHT; ++z)
+				for (int x = -r; x <= r; ++x)
+				{
+					if (glm::max(glm::abs(x), glm::abs(z)) != r)
+						continue; // the ring at Chebyshev distance r only
+					const glm::ivec2 coord = cam + glm::ivec2(x, z);
+					if (m_near.find(key(coord)) != m_near.end())
+						continue;
+					const oc::vector<TreeRecord>* records = m_world.cpuRecords(coord);
+					if (!records)
+						continue; // not generated yet: next frame
+					m_near[key(coord)] = NearChunk{};
+					m_expandInFlight.fetch_add(1, oc::memory_order_relaxed);
+					Globals::jobSystem.submit([this, context = m_expandContext, coord, chunkRecords = *records, generation = m_expandGeneration]
+					{
+						ExpandResult result;
+						result.coord = coord;
+						result.generation = generation;
+						expandChunk(*context, coord, chunkRecords, result.pieces);
+						std::lock_guard<std::mutex> lk(m_expandMutex);
+						m_expandResults.push_back(oc::move(result));
+						m_expandInFlight.fetch_sub(1, oc::memory_order_relaxed);
+					}, { "treeExpandChunk", EProfileCategory::Procedural }, EJobPriority::Low, &m_expandCounter);
+					if (m_expandInFlight.load(oc::memory_order_relaxed) >= MAX_IN_FLIGHT)
+						break;
+				}
+	}
+
+	void TreeSystem::stopExpansion()
+	{
+		Globals::jobSystem.wait(m_expandCounter);
+		++m_expandGeneration;
+		std::lock_guard<std::mutex> lk(m_expandMutex);
+		m_expandResults.clear();
+	}
+
+	// One chunk's trees + bushes from its records: the preview's placeVariant rules (variant, scale, yaw from the seed),
+	// the record's seed for the tree, the ground from one Full grid at 2 m (the terrain's LOD 0 spacing) over the chunk
+	// plus the bushes' reach. MIRRORED on the GPU by the far volume (tree_volume_splat.cs's TREE_SPLAT_RECORDS,
+	// tree_volume_records.cs) - keep the hashes and the order of the choices in step.
+	void TreeSystem::expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
+		oc::vector<Renderer::TreeInstancePiece>& out)
+	{
+		out.clear();
+		if (records.empty() || !context.maps)
+			return;
+		const float cs = context.chunkSize;
+		constexpr float STEP = 2.0f;
+		const float margin = std::ceil((context.bushRadius + 2.0f) / STEP) * STEP;
+		const glm::vec2 origin = glm::vec2(coord) * cs - margin;
+		const uint32 res = (uint32)std::ceil((cs + 2.0f * margin) / STEP) + 1;
+		oc::vector<TerrainPoint> field((size_t)res * res);
+		context.maps->sampleGrid(origin.x, origin.y, STEP, res, res, field, ESampleDetail::Full);
+		Globals::jobSystem.preemptionPoint();
+		auto groundAt = [&](glm::vec2 p)
+		{
+			const glm::vec2 g = glm::clamp((p - origin) / STEP, glm::vec2(0.0f), glm::vec2((float)(res - 1) - 1e-3f));
+			const glm::uvec2 i0 = glm::uvec2(g);
+			const glm::vec2 f = g - glm::vec2(i0);
+			const float h00 = field[(size_t)i0.y * res + i0.x].height, h10 = field[(size_t)i0.y * res + i0.x + 1].height;
+			const float h01 = field[(size_t)(i0.y + 1) * res + i0.x].height, h11 = field[(size_t)(i0.y + 1) * res + i0.x + 1].height;
+			return glm::mix(glm::mix(h00, h10, f.x), glm::mix(h01, h11, f.x), f.y);
+		};
+		auto placeVariant = [&](const ExpandSpecies& species, uint32 seed, glm::vec2 p)
+		{
+			if (species.variants.empty())
+				return;
+			const ExpandVariant& variant = species.variants[treeHash(seed, 102u) % (uint32)species.variants.size()];
+			const float scale = glm::mix(species.scale.x, species.scale.y, treeHash01(treeHash(seed, 103u)))
+				* std::exp2(context.sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0f - 1.0f));
+			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
+			Renderer::TreeInstancePiece& piece = out.emplace_back();
+			piece.transform = Transform(glm::vec3(p.x, groundAt(p) - 0.05f, p.y), scale, yaw);
+			piece.centre = piece.transform.transformPoint(variant.farCentre);
+			piece.radius = variant.farRadius * scale;
+			piece.type = variant.type;
+		};
+
+		const glm::vec2 chunkOrigin = glm::vec2(coord) * cs;
+		for (TreeRecord record : records)
+		{
+			const uint32 type = treeRecordType(record);
+			const int32 s = type < context.speciesOfRecordType.size() ? context.speciesOfRecordType[type] : -1;
+			if (s < 0)
+				continue;
+			const ExpandSpecies& tree = context.species[(size_t)s];
+			const uint32 seed = treeRecordSeed(context.worldSeed, coord, record);
+			const glm::vec2 p = chunkOrigin + treeRecordLocal(record, cs);
+			placeVariant(tree, seed, p);
+			// "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to
+			// bushRadius (area-uniform), a random bush species of its climate.
+			if (tree.bushes.empty() || context.bushesPerTree <= 0.0f)
+				continue;
+			const float whole = std::floor(context.bushesPerTree);
+			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < context.bushesPerTree - whole ? 1u : 0u);
+			for (uint32 b = 0; b < count; ++b)
+			{
+				const uint32 bushSeed = treeHash(seed, 200u + b);
+				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
+				const float radius = glm::mix(1.5f, context.bushRadius, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
+				const ExpandSpecies& bush = context.species[tree.bushes[treeHash(bushSeed, 113u) % (uint32)tree.bushes.size()]];
+				placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
+			}
+		}
 	}
 }

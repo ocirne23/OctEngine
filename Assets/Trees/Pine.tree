@@ -86,3 +86,10 @@ TreeSpecies Pine
 	Color
 		Bark 0.28 0.20 0.15
 		Leaf 0.12 0.26 0.13
+	Placement
+		Density 90
+		Temperature -5 5
+		Precipitation 600 2200
+		ClimateWidth 0.06
+		Cluster 80 0.55
+		MaxSlope 0.7

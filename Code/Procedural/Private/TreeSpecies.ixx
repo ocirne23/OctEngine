@@ -60,6 +60,22 @@ export namespace Procedural
 		TreeBranchShape shape;
 	};
 
+	// WORLD placement (`Placement` block; TreeWorld): the expected trees per hectare in the species' IDEAL climate - a
+	// box of mean annual temperature x annual precipitation - falling off as a Gaussian of the distance OUTSIDE the box,
+	// in the normalized (temperature, precipitation) space the scatter rules and the terrain textures use, then gated by
+	// cluster noise, slope and the height above the water. density 0 = never placed.
+	struct TreePlacementDesc
+	{
+		float density = 0.0f;                    // per hectare inside the ideal climate
+		glm::vec2 temperature{ 10.0f, 20.0f };   // the ideal range (C)
+		glm::vec2 precipitation{ 800.0f, 2200.0f }; // the ideal range (mm/yr)
+		float climateWidth = 0.06f;              // sigma of the falloff outside the box, in the normalized climate space
+		float clusterSize = 0.0f;      // m: the size of the forest patches; 0 = no patches
+		float clusterCoverage = 0.5f;  // ~the fraction of the land the patches cover
+		float maxSlope = 0.6f;         // rise / run
+		glm::vec2 altitude{ 1.5f, 1e9f }; // m above the local water level
+	};
+
 	struct TreeSpeciesDesc
 	{
 		oc::string name;
@@ -68,6 +84,7 @@ export namespace Procedural
 		glm::vec2 scale{ 0.85f, 1.15f }; // uniform tree scale range
 		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
 		oc::string climate;              // `Climate <name>`: a bush grows around the trees of its climate only
+		TreePlacementDesc placement;
 
 		// Trunks
 		int trunkCount = 4;

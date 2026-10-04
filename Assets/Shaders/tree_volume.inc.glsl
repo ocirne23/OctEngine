@@ -8,7 +8,10 @@
 // THE FLOOR is the lowest base of the trees whose footprint reaches the column (R32UI, tree_volume_splat.cs's
 // TREE_FLOOR_PASS, before the splat) - NOT the terrain height map: its far cascade's ~132 m texels put the ground
 // tens of metres off on mountains, the trees fell outside the thin layer and went missing. A column without a tree
-// has no floor (0): the march falls back to the height map there (no density to place anyway). rMin is a FIXED horizontal radius: a high camera
+// has no floor (0): the march falls back to the height map there (no density to place anyway). The WORLD TREE RECORDS'
+// trees and columns take their chunk's GROUND grid instead (tree_record.inc.glsl treeRecordGround: 16 m heights from
+// the generator's own field) - a record has no height, its tree stands on that ground.
+// rMin is a FIXED horizontal radius: a high camera
 // moves the hand-over out instead (TreeVolumePipeline, the scaled start) - a ring shrinking toward the camera spread
 // the radial texels thin and smeared the crowns into stripes.
 // Mirrors TreeVolumePipeline.cpp - keep them in step.
@@ -30,6 +33,8 @@ struct TreeVolumeParams
 };
 
 const float TV_TWO_PI = 6.28318531;
+// The world tree records' mass per column (tree_volume_records.cs -> tree_volume_far.cs): fixed point x this.
+const float TV_AMOUNT_SCALE = 4096.0;
 
 float tvLogSpan(TreeVolumeParams v) { return log(v.rMax / v.rMin); }
 

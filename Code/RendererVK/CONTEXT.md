@@ -1158,6 +1158,35 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   first (box-overlap) splat put it at the cell centre, up to half a cell (8-60 m) off, so every re-bake (a new
   grid centre) shifted every blob — "shaking" while flying. The splat ADDS with fixed-point `imageAtomicAdd` (crowns overlap → extinction sums). Past 65535 trees the
   dispatch wraps into y. The colour column takes the tree type's albedo (last writer wins).
+* **WORLD TREE RECORDS** (W4, 2026-10-04; `RecordSource`, TreeRecordPool "WORLD TREE RECORDS"): while record types
+  are set (`setTreeRecordTypes(types, chunkSize, worldSeed, volumeSet)`, from TreeSystem's world spawn), EVERY tree of
+  the volume comes from the records, near and far, and the world's DYNAMIC set is never splatted (`recordFarTrees`
+  skips dynamic sets; their adds / removes do not re-bake). One source: a chunk entering or leaving the set changes
+  nothing in the volume. (First version, the same day: the set splatted its own chunks and the records the rest, with
+  a per-chunk "expanded" flag - the swap moved the blobs (two different representations), and the set and the flag
+  reached the bake on different frames: a chunk doubled for a frame on the way in, empty for a few on the way out.)
+  `TreeRecordTypeGpu` per record type (TreeWorld's name-sorted species, bushes too) mirrors TreeSystem::expandChunk:
+  the variants as the world set's volume types (max 8), the Scale range, `sizeVariation`, a tree's bush types in
+  expandChunk's order (max 8), `bushesPerTree`, `bushRadius`; per variant its extinction integral at scale 1; the
+  species' 32-bin height profile at the mean scale, crown radius (scale 1), leaf colour. Two regions by the chunk
+  centre's distance from the bake centre against `Far record detail (m)` (4000; a rebake setting):
+  * **Within it** the splat's `TREE_SPLAT_RECORDS` variants (all three passes; one workgroup per chunk, record by
+    record): each record EXPANDS exactly as the CPU does - variant, scale, yaw from `treeRecordSeed`, its bushes - on
+    its chunk's GROUND grid (`treeRecordGround`: the 17² heights TreeWorld took from the generator's own field;
+    `terrainHeightAt` only where the chunk holds none) and runs the per-tree body (`splatPiece`) into the world set's
+    volume types. Detailed floors as any tree. (The terrain map alone, ~100 m texels in its far cascade, put every
+    peak's trees under the summit - hidden until the camera came within its near cascade, ~2 km.)
+  * **Beyond it** two passes, because 15 slices x ~9M records of atomics per bake would cost tens of ms:
+  * `tree_volume_records.cs`, one workgroup per chunk: each record adds its exact variant's mass x its exact scale² x
+    weight / the column's area into a 2D R32UI image (`m_farAmount`, fixed point `TV_AMOUNT_SCALE`) over a TENT as
+    wide as its crown (at least a cell each way, at most 8 texels; per-axis weights normalized, so the tree adds its
+    whole mass - far out a tree is smaller than a column, near the detail distance a column can be smaller than a crown
+    and a point splat made pillars); its nearest column takes its type (`m_farType`) and colour. No bushes.
+  * `tree_volume_far.cs`, one thread per column: a column with mass, or next to one (the march's floor ring), that
+    no tree floored gets the GROUND under its centre (its chunk's grid, `terrainHeightAt` where none); then mass x the
+    type's profile (its mean over each slice) into the accumulation. A column without a type takes a neighbour's,
+    else the first type with mass.
+  Record table changes re-bake (at most every 30 frames). `farTreesActive` is true with record types alone.
 * **The ring's inner radius is a FIXED `Far start` − `Far rebake distance` − 30 m** (horizontal), around the BAKE
   centre: the camera may move a rebake distance before the next bake, and the ring must still hold every tree
   past the hand-over.
@@ -1543,6 +1572,21 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
+* **WORLD TREE RECORDS** (`TreeRecordPool`, Data/; `resetTreeRecords` / `addTreeRecordChunk` / `removeTreeRecordChunk` /
+  `updateTreeRecords`, main thread after beginFrame; Procedural TreeWorld, Docs/TreeRenderingPlan.md 3.5 W2): every
+  terrain chunk's 4-byte tree records - right after its GROUND (`TREE_RECORD_HEIGHT_RES`² = 17² heights over the chunk,
+  16-bit above its minimum, `TREE_RECORD_HEIGHT_WORDS`; every chunk has one, trees or not) - in ONE fixed-size
+  device-local pool (`Trees/World/GPU pool (MB)`, 128; 64-record
+  blocks, best-fit `IndexRangeFreeList` + a bump top) and a TABLE of the resident chunks (`TreeRecordChunkGpu`: coord,
+  first, count; host-visible per frame slot, rewritten for the current slot when changed). **The pool never grows**: a
+  chunk that does not fit is refused (`stats().refused`); only a size change drains the GPU. A chunk's range is
+  written once through the staging ring into blocks no frame reads - a removed chunk's blocks are reused
+  NUM_FRAMES_IN_FLIGHT frames later, when every frame whose table listed it is done. The far-tree volume's bake reads
+  them (W4, "Far-tree volume" / WORLD TREE RECORDS), and the pool holds the record types (`setTreeRecordTypes`,
+  drains the GPU - a world spawn). The CHUNK MAP (`TreeRecordMapGpu`, per frame slot with the table): a toroidal
+  mapSize² grid (a power of two over the ring's diameter + hysteresis; `resetTreeRecords(bytes, ringRadius)`), indexed
+  by the chunk coordinate & (mapSize - 1), holding the coordinate (checked) and its ground's pool word: any position ->
+  its ground (`treeRecordGround`, tree_record.inc.glsl).
 * **BAKED TREE RECORDS** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
   RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
@@ -1552,7 +1596,15 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   bushes, a texel or less in the far cascades). Trees do not move, so nothing about them is written per frame: no render
   nodes, no stream entries, no pass of their own (the earlier `tree_expand` pass, which rewrote every piece's
   records into the HOST-VISIBLE stream each frame, cost ~7.5 ms of GPU). **A set is split into CHUNKS**
-  (`TreeInstanceChunk`: contiguous piece ranges - Procedural: one per terrain chunk). `bindTreeInstanceSet` (main,
+  (`TreeInstanceChunk`: contiguous piece ranges - Procedural: one per terrain chunk). **DYNAMIC sets**
+  (`createDynamicTreeInstanceSet(types, capacity)` / `addTreeInstanceChunk` / `removeTreeInstanceChunk`, main after
+  beginFrame; Procedural's world mode): the types fixed, a FIXED capacity of piece slots in blocks of 64 (no growth,
+  no drain; a full set refuses the chunk), each chunk written once through the staging ring
+  (`writeTreeChunk`: RT-capable first, bucket sizes, the volume's pieces); a removed chunk's slots are reused
+  NUM_FRAMES_IN_FLIGHT frames later (its volume pieces go to the SENTINEL type at once - the volume types end with a
+  res-0 one), its index from the next frame on. `m_treeSetMutex` covers the chunk table: main adds / removes while the
+  terrain walk lists (`renderTreeInstanceSet`). The far volume never splats a dynamic set: the world's trees reach it
+  through their records ("Far-tree volume", WORLD TREE RECORDS). `bindTreeInstanceSet` (main,
   every frame) picks the set the recorded culls bind (a change re-records); `renderTreeInstanceSet(set, chunks,
   scale, forceFar)` - **ANY THREAD**, once per frame between beginFrame and present (Procedural calls it from the
   terrain's render walk) - takes the frame's drawn chunks with their PASS bits, writes the frame slot's

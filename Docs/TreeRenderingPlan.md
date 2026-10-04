@@ -99,6 +99,79 @@ Used as: the source the T2 volume bake splats, the shadow proxy, possibly the T0
   (Open question Q5.)
 * Season: global season parameter × per-species color response, all tiers.
 
+### 3.5 World placement: compact tree records per terrain chunk (planned 2026-10-04)
+
+Replaces the camera-placed preview grove. Agreed with the user: **every tree in the terrain ring is stored, as a
+compact record per terrain chunk. Render data (mesh / card / billboard pieces) exists only for chunks near the
+camera.** Scope: SANDBOX and the lobby "Seed world" (the co-op game uses a flat ground plane, not this terrain).
+
+**What the current code cannot do** `[Certain]`:
+
+* One immutable GPU tree set. A respawn rebuilds it with `graphicsQueueWaitIdle`.
+* About 120 B static per tree (64 B cull piece + 48 B volume piece + list) and 64 B of instance stream per drawn tree.
+  For the 24 km ring (about 1800 km², about 9M trees at 50/ha) that is about 1 GB. `[Likely]`
+* The far volume splats every tree with its 32³ grid at every 64 m rebake.
+
+**The record — 4 B** (6 B if a flags byte for edits is wanted):
+
+| Field | Bits | Note |
+|---|---|---|
+| x, z | 2 × 12 | Chunk-local, 256 m / 4096 ≈ 6 cm |
+| type | 8 | Species (trees and bushes) |
+
+* **No height.** The tree stands on the terrain: near trees take the full-detail sampler height when expanded; the
+  far volume takes `terrainHeightAt` from the terrain height cascades. The far cascade covers the whole ring
+  (`farRange = max(8192, 2 × meshHalfExtent)`, about 50 km, `TerrainStreamer.cpp`). `[Certain]`
+* **No variant / scale / yaw.** They come from `hash(seed, chunk, x, z)` of the QUANTIZED position, identical in
+  C++ and GLSL. `[Certain]`
+* The far volume uses a fixed density profile per type (the mean of its variants), not per tree.
+* **Memory:** about 9M trees × 4 B ≈ **36 MB** (54 MB at 6 B). `[Likely, at 50/ha]`
+* **Far chunks store trees only.** Bushes (they fade at 80–120 m) are generated from the placement function when a
+  chunk is expanded. Storing them everywhere would add ~4 records per tree. `[Likely]`
+* The records are the never-disappear rule of 3.1 for free: near and far read the same trees.
+
+**Generation:** the placement function (3.1: climate attractors per species, cluster noise, slope, altitude band
+above water) runs on the terrain chunk's pump job when the chunk enters the terrain ring. One `sampleGrid` per chunk
+at `Coarse` detail (~8 m), bilinear reads, slope by finite differences. `.tree` gets numeric climate attractors
+(temperature, humidity, spread, density per ha) instead of the bare `Climate` name; the bushes are picked the same
+way. A terrain LOD change does not regenerate the records. `[Likely]`
+
+**GPU records:** one large device buffer in pages + a chunk table (page offset, count, chunk origin). Upload
+through staging with a per-frame budget; a chunk that leaves the ring frees its pages after `NUM_FRAMES_IN_FLIGHT`
+frames. No `waitIdle`. The CPU keeps no copy for far chunks (a chunk can be generated again: pure function).
+`[Likely]`
+
+**Near expansion (R_near ≈ 1–1.5 km):**
+
+* **Option A (first):** a job per chunk derives variant / scale / yaw from the hash, takes the exact sampler height,
+  adds the bushes, and writes the 64 B cull pieces into a PAGED cull set (add / free per chunk, same per-chunk lists
+  from the terrain walk). About 35k trees + bushes ≈ 20 MB. `[Guessing on density]`
+* **Option B (later):** no expansion — `tree_cull.inc.glsl` reads the 4 B records and derives the transform in the
+  shader. The exact height and the bushes still need a per-chunk step. Measure A first.
+
+**Far volume:**
+
+* **Floor = terrain:** each column's floor is `terrainHeightAt(column centre)`, not the dominant tree's base. This
+  removes the two `TREE_FLOOR_PASS` passes and probably the floor smoothing. The march's no-tree fallback already
+  uses the terrain height. `[Likely]`
+* **Near band (600 m … R_near):** the existing per-tree 32³ splat of the expanded trees, so the blobs match the
+  billboards at the hand-over.
+* **Far (R_near … 20 km):** a POINT splat — one thread per record adds its type's vertical profile into its one
+  column (a tree is smaller than a far column, 40 m+). The dispatch walks the chunk table.
+* **Risk — rebake time:** about 9M threads × ~15 atomics per 64 m of camera movement. `[Guessing]` If too slow:
+  double-buffer the volume and splat 1/N of the chunks per frame into the back one.
+* **Risk — far height resolution:** the far cascade has ~97 m texels (`FOG_TERRAIN_RES` 512 over ~50 km) while the
+  volume's columns are 4–42 m past ~2 km: on steep relief a blob base can sit metres to tens of metres off the
+  rendered terrain. Too low is mostly hidden (the march stops at the scene depth); floating on a ridge can show.
+  `[Likely]` Fixes if it shows: `FOG_TERRAIN_RES` 1024 (~49 m; 4× CPU bake samples, 16 MB per cascade), a middle
+  cascade, or sinking the far blobs a little. Test 512 first.
+
+**Benefits of storing every tree:** edits persist (a felled tree is a flag, and the far volume sees it); trunk
+colliders in the TerrainCollider ring (96 m) and gameplay / Nav queries read the same records. `[Likely]`
+
+**Out of scope for now:** colliders (Q8), the co-op game map, RT (unchanged: whole-tree billboards within 500 m),
+removing the scatter's `tree_small_02` rules (do it when this ships; rocks stay).
+
 ## 4. T0 — procedural geometry
 
 ### 4.1 Decision: a SEPARATE tree render path, with per-tree bone palettes
@@ -318,7 +391,7 @@ Each phase ends with something the user can look at in SANDBOX and measure with 
 | G4 ✅ (step 1) | **GPU expansion into the EXISTING instance stream** (decided 2026-10-02 instead of a separate pipeline). First as a `tree_expand.cs.glsl` pass writing every piece's records into the host-visible stream each frame (~7.5 ms GPU); the same day replaced by **BAKED TREE RECORDS**: static device-local pieces/types, the culls build the records in a claimed stream range (`tree_cull.inc.glsl`) — no per-frame pass. The CPU does one claim + per-mesh counts per frame. The TLAS writer builds the trees' RT instances (the billboard) from the same static data, the material carried in the custom index (bit 23) - GI / RT see the trees again without any per-frame tree data. Still placed by the CPU composite (pieces uploaded once); not yet: composite in GLSL, per-tree records, bone palettes / wind, a coarse per-tree cull | Same trees as the CPU path; the "Trees" CPU scope near zero — **user to judge** |
 | G4b ✅ | **Baked whole-tree variants** (2026-10-02, user: per-piece instancing far too expensive — a 64² grove was ~200k instances): `Bake Variants` (4) merged trees per species per LOD level, placed with seeded variant/scale/yaw → 3 records per TREE; whole-tree billboards / impostors from the same machinery. Next: a per-tree VS **warp** (bend, twist, lopsided crown, noise; seeded by position) for near-range uniqueness + wind on the same terms, with a shadow VS variant; device-local expansion records; scaling past ~100k trees (per-tree GPU cull + compaction, or cell nodes) | ~16x fewer records; grove looks right — **user to judge** |
 | G5 ✅ (preview) | **LODs:** 4 piece mesh LODs from one skeleton as GPU LOD chains; **branch-module billboards** (two crossed cards: side + top view, CPU bake, PNG cache, cast shadows; default) with **octahedral impostors** kept as the fallback far mode (`TreeImpostor` pipeline variant), per-module distance switch — replaces whole-tree T1 (composited trees cannot share a whole-tree impostor) | No visible pops 0–500 m; instance / triangle counts measured — **user to judge** |
-| G6 | **Scatter integration:** `ScatterAsset` → species, placements as GPU records; measure 40–100k trees | Forest to ~500 m within budget (`Tools/profile.ps1`) |
+| G6 | **Scatter integration:** `ScatterAsset` → species, placements as GPU records; measure 40–100k trees — **superseded by W1–W5 (3.5)** | Forest to ~500 m within budget (`Tools/profile.ps1`) |
 | G7 | Wind: rigid module sway in the expansion pass | |
 | G8 | Side outputs: per-piece cluster ellipsoids, per-species stats, trunk capsules | Data ready for the far tiers / physics |
 | P1 🚧 | (2026-10-02, built, user-untested — see RendererVK "Far-tree volume") **Changed with the user:** no G8 clusters and no hash-grid placement — the GPU tree SET's trees are splatted (per-variant 32³ extinction grids) into ONE camera-centred POLAR volume (angle × log radius from "Far start" 5 km to "Far end" 40 km — beyond the billboards; cells grow with the distance), z = height above terrain; re-baked on a camera snap. Original: **T2 march prototype** with the G8 cluster data (bake = the GLSL composite function): fullscreen compute, hash-grid placement in GLSL, ONE fixed-size volume (no clipmap), depth composite vs terrain | Cost at grazing angles acceptable; cluster trees read as trees at 1–5 km. **Go/no-go for T2.** |
@@ -329,6 +402,11 @@ Each phase ends with something the user can look at in SANDBOX and measure with 
 | P8 | Shadows across tiers, baked volume lighting, canopy shadow map | |
 | P9 | T3s silhouettes, per-tree species in T2, seasons, ray tracing | |
 | (P10) | Whole-tree T1 impostors — superseded by the per-module impostors of G5 | |
+| W1 🚧 | (2026-10-04, built, user-untested — Procedural CONTEXT "World records") **World records (3.5):** record format, hash-derived attributes (C++ + GLSL), numeric climate attractors in `.tree`, placement on the terrain pump job | Debug: tree count per chunk; species follow the climate — **user to judge** |
+| W2 🚧 | (2026-10-04, built, user-untested — RendererVK "WORLD TREE RECORDS"; a fixed pool of 64-record blocks, no growth) GPU record pages + chunk table (staged upload, deferred free, no `waitIdle`) | Flying in SANDBOX: no stalls; memory as estimated |
+| W3 🚧 | (2026-10-04, built, user-untested — Procedural CONTEXT "World mode"; RendererVK dynamic tree sets) Near expansion, Option A: paged cull set, R_near hysteresis, bushes from the placement function; the preview grove becomes a debug option | Forest around the camera in the whole world — **user to judge** |
+| W4 🚧 | (2026-10-04, built, user-untested — RendererVK "WORLD TREE RECORDS"; every tree from the records: within "Far record detail" expanded exactly on the GPU and splatted in detail, beyond as a 2D mass per column + the type's height profile; the world set never splatted; the rebake not yet measured or amortized) Far volume from the records: terrain floor, near-band detailed splat + far point splat; measure the rebake, amortize if needed | Far forest matches the climate; rebake within budget (`Tools/profile.ps1`) |
+| W5 | Profile + tune R_near, density, `FOG_TERRAIN_RES`; later Option B, colliders, edits | |
 
 (P4/P5 from the first draft are now G1–G7.)
 

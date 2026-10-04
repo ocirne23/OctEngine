@@ -6,13 +6,16 @@ import Core.Camera;
 import Core.Transform;
 
 import RendererVK;
+import Threading;
 
 import :TerrainSampler;
 import :TreeSpecies;
 import :TreeGenerator;
+import :TreeWorld;
 
-// Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library,
-// and - for now - shows a PREVIEW: a grove of composited trees in front of the camera plus the piece
+// Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library, and draws
+// either the WORLD (TreeWorld's records expanded around the camera into a dynamic GPU set - "World mode" in
+// Procedural CONTEXT) or a PREVIEW: a grove of composited trees in front of the camera plus the piece
 // library itself, drawn through the plain RenderMesh path (one node per placed piece mesh, GPU mesh LOD
 // chains, billboards beyond a distance). The dedicated GPU tree path (bone palettes, own
 // shaders) replaces the preview draw in G4; see Docs/TreeRenderingPlan.md.
@@ -118,6 +121,54 @@ export namespace Procedural
 		float midDistance(const Species& species) const; // the mid tier's switch distance (m, unscaled); 0 = off
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
 		void spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform);
+		// The GPU set's piece TYPES: one per library piece (trunks, modules, baked variants) of every species.
+		void buildGpuTypes(oc::vector<Renderer::TreeInstanceType>& outTypes, oc::unordered_map<const PieceMeshes*, uint32>& outTypeOf) const;
+		// Hooks a set into the terrain chunks: the walk lists the drawn chunks (m_vegChunkOf: coordinate -> set chunk).
+		void hookTerrain(uint32 numChunks);
+
+		// --- WORLD MODE (Trees/World/Enabled + GPU expansion; Docs/TreeRenderingPlan.md 3.5, W3) ---
+		// The near chunks of TreeWorld's records, EXPANDED into one DYNAMIC set: per record the tree (variant, scale, yaw from
+		// its hash, the exact ground) plus its bushes, chunk by chunk on Low jobs; a chunk that leaves the near radius frees
+		// its set chunk. Everything an expansion reads is in an immutable ExpandContext.
+		struct ExpandVariant
+		{
+			uint32 type = 0;            // the GPU type
+			glm::vec3 farCentre{ 0.0f };
+			float farRadius = 0.0f;
+		};
+		struct ExpandSpecies
+		{
+			glm::vec2 scale{ 1.0f };
+			oc::vector<ExpandVariant> variants;
+			oc::vector<uint32> bushes;  // trees: the bush species of their climate (indices into species)
+		};
+		struct ExpandContext
+		{
+			oc::shared_ptr<const ITerrainSampler> maps;
+			oc::vector<int32> speciesOfRecordType; // TreeWorld record type -> species index (-1: not loaded / not a tree)
+			oc::vector<ExpandSpecies> species;
+			uint32 worldSeed = 1;
+			float chunkSize = 256.0f;
+			float sizeVariation = 0.0f;
+			float bushesPerTree = 0.0f;
+			float bushRadius = 1.5f;    // bushes out to this from their tree (m)
+		};
+		struct ExpandResult
+		{
+			glm::ivec2 coord{ 0 };
+			uint32 generation = 0;
+			oc::vector<Renderer::TreeInstancePiece> pieces;
+		};
+		struct NearChunk
+		{
+			uint32 setChunk = UINT32_MAX; // the set chunk once added
+			bool pending = true;          // an expansion job runs (or its result waits)
+		};
+		void spawnWorld(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps);
+		void updateWorld(Renderer& renderer, const Camera& camera);
+		void stopExpansion(); // joins the jobs, drops their results
+		static void expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
+			oc::vector<Renderer::TreeInstancePiece>& out);
 
 		// --- Tweaks ---
 		bool m_enabled = false;
@@ -154,6 +205,23 @@ export namespace Procedural
 
 		bool m_loaded = false;
 		bool m_spawned = false;
+
+		TreeWorld m_world; // every tree of the terrain ring as records (Docs/TreeRenderingPlan.md 3.5)
+		// World mode.
+		int m_nearRadius = 3;          // chunks (Chebyshev) around the camera chunk whose trees are expanded
+		int m_worldCapacity = 600000;  // the dynamic set's piece slots (trees + bushes)
+		int m_expandPerFrame = 2;      // expanded chunks added to the set per frame
+		bool m_worldMode = false;      // this spawn is the world (else the preview grove)
+		bool m_worldFullLogged = false;
+		bool m_recordTypesSet = false; // the renderer holds this spawn's record types (the far volume's records)
+		uint32 m_worldGeneration = 0;  // TreeWorld's, at the spawn
+		oc::shared_ptr<const ExpandContext> m_expandContext;
+		oc::unordered_map<uint64, NearChunk> m_near;
+		uint32 m_expandGeneration = 0;
+		std::mutex m_expandMutex;
+		oc::vector<ExpandResult> m_expandResults;
+		oc::atomic<int32> m_expandInFlight{ 0 };
+		JobCounter m_expandCounter;
 
 		// Nodes after the meshes: members destruct in reverse order, and a node must die before its mesh.
 		oc::vector<Species> m_species;
