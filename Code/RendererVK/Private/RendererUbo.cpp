@@ -209,7 +209,8 @@ void Renderer::buildUboGrass(const Camera& camera)
     // w = one texel (m): the receivers' normal offset.
     ubo.grassParams13 = glm::vec4(0.0f, nearRange, glm::max(g.nearShadowBias, 0.0f), 2.0f * nearRange / res);
     // yz = the box's centre (XZ): the receivers' fade disc and the casters' selection measure from it.
-    ubo.grassParams14 = glm::vec4(glm::clamp(g.nearShadowStrength, 0.0f, 1.0f), nearCentre.x, nearCentre.z, 0.0f);
+    ubo.grassParams14 = glm::vec4(glm::clamp(g.nearShadowStrength, 0.0f, 1.0f), nearCentre.x, nearCentre.z,
+        glm::clamp(g.bareFraction, 0.0f, 1.0f));
     ubo.grassParams12 = glm::vec4(1.0f / glm::max(g.fleckSize, 0.01f), glm::clamp(g.fleckContrast, 0.0f, 1.0f),
         glm::max(g.fleckFadeDistance, 1.0f), glm::max(g.fleckStretch, 0.0f));
     const float windAngle = glm::radians(g.windAngleDeg);

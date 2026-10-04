@@ -70,7 +70,9 @@ float grassValueNoise(vec2 p)
 // cover"): shared by the blades (grass.vs.glsl) and the canopy shading of the ground under them.
 float grassClump(vec2 xz)
 {
-    return mix(1.0, smoothstep(0.25, 0.65, grassValueNoise(xz * u_grassParams6.y)), u_grassParams6.z);
+    // "Bare fraction" (u_grassParams14.w) is the noise threshold: about that share of the ground is bare / thin.
+    const float bare = u_grassParams14.w;
+    return mix(1.0, smoothstep(bare - 0.2, bare + 0.2, grassValueNoise(xz * u_grassParams6.y)), u_grassParams6.z);
 }
 float grassCoverSize(float cover)
 {

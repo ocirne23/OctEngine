@@ -1042,7 +1042,9 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   `(k + 0.5) / N < density x thinning` and shrinks it into the ground over the `Grow band` below that: ONE rule thins by
   density (climate, slope, clumps) AND by distance (`(Thinning start / d)^exponent`, faded to none over `Range fade`),
   so a blade fades by shrinking, never pops. Where the COVER fades (the corner densities: climate, slope, water, snow -
-  not the clumps) the blades are also shorter and narrower by it (`Size by cover`, default 1), not only fewer: fewer
+  not the clumps) the blades are also shorter and narrower by it (`Size by cover`, default 1), not only fewer. The
+  CLUMPS (`grassClump`): value noise of `Clump size`, thresholded at `Bare fraction` (0.45: about that share of the
+  ground is the bare / thin part) over +-0.2, mixed in by `Patchiness`. Fewer
   full-size blades read as sparse long stalks. The kept blades widen by `(1 / kept)^Width compensation` (capped) and are
   never narrower than `Min pixel width`.
 * **No vertex buffer:** the index buffer holds vertex IDS (`blade << GRASS_BLADE_VERTEX_SHIFT | vertex`), and

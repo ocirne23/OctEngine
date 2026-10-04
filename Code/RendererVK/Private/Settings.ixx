@@ -219,7 +219,7 @@ export struct ShadowParams
 // UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
 export struct FoliageParams
 {
-    float crownNormal = 0.0f;  // blend of the shading normal toward a CROWN normal - the view ray's hit on a
+    float crownNormal = 0.25f; // blend of the shading normal toward a CROWN normal - the view ray's hit on a
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
@@ -239,7 +239,7 @@ export struct FoliageParams
     // THE CROWN SELF-SHADOW (billboards): the sun x exp(-this x the chord from the view ray's entry on the crown
     // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
     // side-lit one darker. 0 = off.
-    float selfShadow = 2.5f;
+    float selfShadow = 3.0f;
     float transmissionSelfShadow = 0.3f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
                                          // through the leaves: at 1 a crown seen toward the sun hid the transmission)
     float interiorTopCardScale = 0.5f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
@@ -316,9 +316,10 @@ export struct GrassParams
     float windFadeStart = 15.0f;
     float windFadeEnd = 25.0f;
     float curvature = 0.4f;        // the blades' own lean, in blade heights (random direction)
-    float clumpSize = 3.25f;       // m: the size of the clumps and bare spots
-    float patchiness = 0.62f;      // 0 = even cover, 1 = clumps with bare ground between
-    float growBand = 0.62f;        // a blade shrinks into the ground over this fraction of the kept range (no pops)
+    float clumpSize = 5.0f;        // m: the size of the clumps and bare spots
+    float patchiness = 0.6f;       // 0 = even cover, 1 = clumps with bare ground between
+    float bareFraction = 0.25f;    // about this share of the ground is the bare / thin part of the clump pattern
+    float growBand = 0.7f;         // a blade shrinks into the ground over this fraction of the kept range (no pops)
     float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter and
                                    // narrower by the cover - not only fewer (sparse long stalks otherwise)
     // WHERE it grows is the terrain textures' logic (grass_cull.cs.glsl): the ground layer's coverage (no rock, beach,

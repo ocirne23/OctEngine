@@ -200,6 +200,7 @@ void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
     Tweak::floatVar("Grass/Wind", "Fade end (m)", &windFadeEnd, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/Cover", "Clump size (m)", &clumpSize, 0.2f, 50.0f, 0.05f);
     Tweak::floatVar("Grass/Cover", "Patchiness", &patchiness, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Cover", "Bare fraction", &bareFraction, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Grow band", &growBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Cover", "Size by cover", &sizeByCover, 0.0f, 1.0f, 0.01f);
     Tweak::color3("Grass/Look", "Root colour", &rootColor);
