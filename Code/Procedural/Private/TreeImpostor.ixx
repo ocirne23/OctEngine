@@ -43,9 +43,9 @@ export namespace Procedural
 	TreeBillboardBox billboardBox(const TreePiece& piece); // LOD-0 bark + leaves
 	void billboardViews(const TreeBillboardBox& box, TreeBillboardView& outSide, TreeBillboardView& outTop);
 	// `horizontal` (whole trees, whose +Y is up - both cards above stand vertical): a THIRD card, horizontal
-	// through the axis at mid height, seen from above - the top-down view (MATERIAL_FLAG_BILLBOARD_TOP_CARD tells
-	// the lit FS, which finds the card by its up-facing normal).
-	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box);
+	// through the axis at `height` of the box (0.5 = mid height; `Billboard TopCardHeight`), seen from above - the
+	// top-down view (MATERIAL_FLAG_BILLBOARD_TOP_CARD tells the lit FS, which finds the card by its up-facing normal).
+	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box, float height);
 	// The strips stacked top to bottom (card by card, each card's faces in turn), each stripHeight rows - rounded
 	// so every strip boundary stays on a texel boundary down to the last of numMips mips (spare rows at the bottom).
 	struct TreeBillboardLayout
@@ -66,8 +66,9 @@ export namespace Procedural
 	// The cards (both faces), UVs into the strips of a `numViews` / `horizontal` bake. `axisInZ` (the merged branch
 	// cards): texCoords.z = TREE_CARD_AXIS_CODE + the texture v of the piece's axis (its +Y line through the origin) on
 	// that card - RenderMeshData puts it into the tangent's w magnitude, and the lit FS rebuilds the crown frame from
-	// it where the instance origin is not the card's piece.
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false);
+	// it where the instance origin is not the card's piece. `topCardHeight`: the horizontal card's height (billboardHorizontalView).
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false,
+		float topCardHeight = 0.5f);
 	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect.fs.glsl's foliageCrownFrame
 	// Every other card: this + its strip height in texture v (< 1): the FS's crown ellipsoid needs the card's width.
 	constexpr float TREE_CARD_STRIP_CODE = 2.0f;

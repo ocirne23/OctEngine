@@ -85,6 +85,7 @@ TreeSpecies Oak
 		Lichen 0.3
 	Billboard
 		NormalBend 0.0
+		TopCardHeight 0.45
 	Color
 		Bark 0.30 0.23 0.17
 		Leaf 0.20 0.36 0.10

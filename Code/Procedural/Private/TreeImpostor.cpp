@@ -451,14 +451,14 @@ namespace Procedural
 			glm::vec3(0.0f, 0.0f, 1.0f), glm::vec2(half.y, half.x) };
 	}
 
-	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box)
+	TreeBillboardView billboardHorizontalView(const TreeBillboardBox& box, float height)
 	{
 		const float halfY = (box.max.y - box.min.y) * 0.5f;
 		const float maxX = glm::max(-box.min.x, box.max.x), maxZ = glm::max(-box.min.z, box.max.z);
-		// Centred ON the axis (x = z = 0) at mid height, seen from +Y (above). u (right) along +Z, v (up) along +X:
-		// cross(normal, right) = up and cross(right, up) = normal, the frames the lit FS rebuilds. u spans at least
-		// the tree's height, so half its length - the lit FS's crown radius - matches the vertical cards'.
-		return { glm::vec3(0.0f, (box.min.y + box.max.y) * 0.5f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f),
+		// Centred ON the axis (x = z = 0) at `height` of the box (0.5 = mid height), seen from +Y (above). u (right) along
+		// +Z, v (up) along +X: cross(normal, right) = up and cross(right, up) = normal, the frames the lit FS rebuilds. u
+		// spans at least the tree's height, so half its length - the lit FS's crown radius - matches the vertical cards'.
+		return { glm::vec3(0.0f, glm::mix(box.min.y, box.max.y, height), 0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(1.0f, 0.0f, 0.0f),
 			glm::vec3(0.0f, 1.0f, 0.0f), glm::vec2(glm::max(halfY, maxZ), maxX) };
 	}
 
@@ -481,20 +481,21 @@ namespace Procedural
 	}
 
 	// The cards in strip order: side, top, then (horizontal) the horizontal card.
-	static uint32 billboardCards(const TreeBillboardBox& box, bool horizontal, TreeBillboardView (&views)[3])
+	static uint32 billboardCards(const TreeBillboardBox& box, bool horizontal, float topCardHeight, TreeBillboardView (&views)[3])
 	{
 		billboardViews(box, views[0], views[1]);
 		if (!horizontal)
 			return 2;
-		views[2] = billboardHorizontalView(box);
+		views[2] = billboardHorizontalView(box, topCardHeight);
 		return 3;
 	}
 
-	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ)
+	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ,
+		float topCardHeight)
 	{
 		const bool backViews = numViews >= 4;
 		TreeBillboardView views[3];
-		const uint32 numCards = billboardCards(box, horizontal, views);
+		const uint32 numCards = billboardCards(box, horizontal, topCardHeight, views);
 		const float stripV = (float)billboardLayout(size, numViews, horizontal).stripHeight / (float)size; // one strip in v
 		for (uint32 v = 0; v < numCards; ++v)
 		{
@@ -553,8 +554,10 @@ namespace Procedural
 		const TreeBillboardBox box = billboardBox(piece);
 		const glm::vec3 volumeCentre = (box.min + box.max) * 0.5f; // the fallback where the crown field is flat
 		const CrownField crown = buildCrownField(piece, box.min, box.max);
+		// The horizontal card at mid height: its view is orthographic from above, so the image is the same at any card
+		// height (billboardMesh places it - Billboard TopCardHeight - with no re-bake).
 		TreeBillboardView views[3];
-		const uint32 numCards = billboardCards(box, horizontal, views);
+		const uint32 numCards = billboardCards(box, horizontal, 0.5f, views);
 		const uint32 stripHeight = billboardLayout(size, numViews, horizontal).stripHeight;
 		FrameTarget target;
 		for (uint32 v = 0; v < numCards; ++v)

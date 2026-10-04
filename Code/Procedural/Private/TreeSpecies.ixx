@@ -154,6 +154,7 @@ export namespace Procedural
 		float billboardNormalBend = 0.0f; // baked normals bent toward "out of the clump" (0..1): shades like a volume
 		float billboardFadeWidth = 10.0f; // m: the mesh <-> billboard crossfade band, centred on billboardDistance
 		float billboardAlbedoScale = 1.0f; // x the WHOLE-TREE billboards' colour (linear; applied at load, not baked)
+		float billboardTopCardHeight = 0.5f; // the whole tree's horizontal card, as a fraction of its height (0 = bottom, 1 = top)
 		glm::vec3 barkColor{ 0.32f, 0.24f, 0.17f };
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
 	};

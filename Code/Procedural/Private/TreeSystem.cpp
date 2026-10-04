@@ -630,7 +630,7 @@ namespace Procedural
 				| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
 
 			TreeMesh cards;
-			billboardMesh(box, size, numViews, horizontal, cards);
+			billboardMesh(box, size, numViews, horizontal, cards, false, species.desc.billboardTopCardHeight);
 			// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
 			// views), and never a bush's.
 			meshes.billboard = uploadTreeMesh(renderer, cards, horizontal && !species.desc.bush);

@@ -847,6 +847,8 @@ TreeSpecies <name>
 	          FadeWidth (m, the mesh <-> billboard crossfade band centred on Distance; 10)
           AlbedoScale (x the WHOLE-TREE billboards' colour, linear, 0..8; default 1 - applied after the cache, at
           load: a change needs no re-bake; the module billboards / branch cards and the far volume keep theirs)
+          TopCardHeight (the WHOLE-TREE billboard's horizontal card, a fraction of the tree's height: 0 = bottom,
+          1 = top; default 0.5 - its bake is orthographic from above, so only the card mesh moves: no re-bake)
 	Bark    Plates lines rows (fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
 	Color   Bark r g b · Leaf r g b
