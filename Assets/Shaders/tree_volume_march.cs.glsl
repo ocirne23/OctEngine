@@ -274,7 +274,9 @@ void marchAt(ivec2 px)
     }
 
     const vec3 L = u_sunDirection.xyz;
-    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb;
+    // x the eclipse's visible sun fraction (u_eclipseParams.x), as every other sun consumer: without it the far trees
+    // stayed sunlit while the moon covered the sun.
+    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x;
     // PER RAY, not per lit step: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic, "Far
     // forward scatter" - 1 at g = 0 - times "Far sun scale") and the SKY LIGHT: the real sky's irradiance on an
     // up-facing leaf - pi x the mean radiance of GI's sky map over the upper hemisphere, cosine-weighted from 5 taps (the

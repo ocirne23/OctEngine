@@ -1802,9 +1802,14 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   merged branch cards, axis code >= 3 - keep a sphere of half the u length) (the card's own proportions: about a sphere for a round
   crown, tall and narrow for a pine; the sphere of half the height it replaced, 2026-10-04, pointed a pine's
   normals up at its top and down at its bottom - a top-to-bottom gradient under a high sun) — which depends on the
-  ray only, so both cards agree. The blend is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage
+  ray only, so both cards agree. The weight is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage
   crown normal` (`u_foliageParams.y`, default 0 - the user's pick) at half the LATERAL radius from it, so the outer
-  crown keeps its baked detail.
+  crown keeps its baked detail. **The baked normal is ROTATED, not replaced** (2026-10-04): it turns by the rotation
+  from the card's facing normal to the crown normal, x the weight as an angle - both cards agree on the mean direction,
+  the leaf normals keep their scatter. Replacing it with the one smooth crown normal lit the axis strip (about a crown
+  radius wide) brighter than the rest of the card under almost any light - a smooth normal facing the light side
+  outshines the mean of scattered ones: a bright vertical band through every whole-tree billboard (the user's A/B:
+  `Foliage crown normal` 1 lit the whole card as bright as the band).
   On a whole tree's HORIZONTAL card (`MATERIAL_FLAG_BILLBOARD_TOP_CARD`, bit 23, on the card whose normal points up -
   `foliageTopCard`; whole trees stand upright) `foliageCrownFrame` takes the card normal as the axis and the card's
   own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS (defined

@@ -315,7 +315,7 @@ void main()
 	float crownTransmit = 1.0; // ... and of the transmitted sun (the self-shadow at its own share)
 #endif
 #ifdef FOLIAGE
-	// FOLIAGE: toward the crown normal - fully at the crossing axis, by "Trees/Foliage crown normal"
+	// FOLIAGE: rotated into the crown normal's frame - fully at the crossing axis, by "Trees/Foliage crown normal"
 	// (u_foliageParams.y) from half the lateral radius out - and the crown INTERIOR darkening on both the sun and the
 	// ambient (in place of the RTAO a card does not read): the BAKED interior (the normal map's A, from the piece's own
 	// crown field - any crown shape: 0 = the crown's surface, 1 = about its core depth), remapped by "Trees/Foliage
@@ -335,8 +335,23 @@ void main()
 		const float leafDepth = float(normalTap.w) * (1.0 - max(dot(V, u_sunDirection.xyz), 0.0));
 		float sunChord;
 		const vec4 crown = foliageCrownNormal(pos, V, cardDu, cardDv, uv, material.flags, leafDepth, sunChord);
-		const vec3 blended = mix(vec3(N), crown.xyz, mix(1.0, u_foliageParams.y, smoothstep(0.0, 0.5, crown.w)));
-		N = f16vec3(blended * inversesqrt(max(dot(blended, blended), 1e-8))); // opposite normals can cancel
+		// ROTATED, not replaced: the baked normal turns by the rotation that takes the card's facing normal to the crown
+		// normal (x the weight, as an angle), so both crossed cards agree on the MEAN direction - the seam at their crossing
+		// axis - while the leaf normals keep their scatter. Replacing them with the one smooth crown normal lit the axis
+		// strip brighter than the rest of the card under almost any light (a smooth normal facing the light side outshines
+		// the mean of scattered ones): a bright vertical band through every whole-tree billboard (2026-10-04).
+		const float crownWeight = mix(1.0, u_foliageParams.y, smoothstep(0.0, 0.5, crown.w));
+		const vec3 faceN = dot(vec3(geoN), V) >= 0.0 ? vec3(geoN) : -vec3(geoN);
+		const vec3 turn = cross(faceN, crown.xyz);
+		const float sinTurn = length(turn);
+		if (sinTurn > 1e-4 && crownWeight > 0.0)
+		{
+			const vec3 k = turn / sinTurn;
+			const float angle = atan(sinTurn, dot(faceN, crown.xyz)) * crownWeight;
+			const float c = cos(angle), s = sin(angle);
+			const vec3 n = vec3(N);
+			N = f16vec3(normalize(n * c + cross(k, n) * s + k * (dot(k, n) * (1.0 - c))));
+		}
 		g_noRtao = true;
 		// THE SUN through the crown: the interior fades out of it as the view lines up with the sun (x "Foliage interior
 		// view fade" (u_foliageParams5.z) x |V.L|) - from the front the leaves seen through the gaps are lit through those
