@@ -966,7 +966,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   ray's serial chain, not its thread count. **The observer
   stands on the GROUND under the camera** (`ATMOS_OBSERVE_HEIGHT`), not at the camera: every reader of the
   sky map sits under the clouds, even while the camera flies above them. The ambient reads the sky map's
-  CLEAR layer from LAST frame (no feedback loop through the clouds' own image). **The clear layer holds per-frame
+  CLEAR layer from LAST frame (no feedback loop through the clouds' own image). **The clear layer (2) holds per-frame
   CONSTANTS, one texel each** (2026-10-04; `SKY_MAP_*_TEXEL` in atmosphere.inc.glsl), written by invocation (0, 0, 0)
   of the bake, whose dispatch covers only layers 0 and 1: the clouds' ambient (the clear sky over the zenith + four
   directions at 30°, averaged) and the far trees' sky light (the GI layer, see Far trees). The clear layer was a full
@@ -979,7 +979,22 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   layer 1 = each march from a new observer in a disc around the camera (R2 over the disc per texel, uniform by
   area: "Sky/Clouds/Quality/GI sky observer radius (m)", default 4 km, `u_cloudWind.w`), its history the average
   over them, composited into the GI layer. A binary cloud / gap per march needs a longer history: "GI sky history
-  (s)" (default 4, `u_cloudNoiseOrigin.y`). The cost: a second sky march per frame.
+  (s)" (default 4, `u_cloudNoiseOrigin.y`).
+  **THE GI LAYER IS LOW-RES** (2026-10-04): since the probe misses read the sky SH and the far trees a constant
+  texel, its only readers were the sky-SH projection (64 directions + −up) and the GI-off zenith ambient (terrain,
+  ocean, film) - yet the clouds' layer 1 marched and the sky map composited the full 256x128 grid. Now both live in
+  the `SKY_MAP_GI_WIDTH` x `SKY_MAP_GI_HEIGHT` (64x32) CORNER of their images, on their own lat-long grid (1/16 of
+  the marches / `skyRadiance` texels; the rest of the dispatch's threads exit), read with `skyMapGISample`
+  (atmosphere.inc.glsl: 4 `texelFetch`es, U wrapped inside the corner) - never `textureLod` + `skyMapUV`. The zenith
+  readers take `SKY_MAP_GI_ZENITH_TEXEL` (a constant texel, like the trees'). No new images or bindings. The corner's
+  lower half is rewritten as "no cloud" every pass, so a shader reload leaves no full-res texels in it. Measured
+  after (RelWithDebInfo sandbox): "Cloud sky" 0.126 ms GPU.
+  **THE MIRROR LAYER'S CLEAR SKY IS CACHED** (2026-10-04; layer 3, `SKY_MAP_LAYER_MIRROR_CACHE`, `SKY_MAP_LAYERS` 4):
+  the 12-step `mirrorSkyRadiance` changes only with the sun and the sky tweaks, so each frame re-marches ONE texel
+  of every 2x2 block (rotating phase, the sky clouds' order) into the cache and composites this frame's clouds over
+  the cached value for the rest - 1/4 of the march. A moving sun lags by up to 3 frames. The image is cleared to 0
+  at creation; alpha 0 = not baked yet, marched at once. The bake's entry barrier carries the RAW from last frame's
+  cache writes; the dispatch stays 2 layers (`SKY_MAP_DISPATCH_LAYERS`).
 * **The visible sky is seen from the camera altitude** (`sky.fs.glsl`, `atmosphereScatter`'s observer
   height): the air above thins, and the horizon dips (`cosHorizon`). Below the dipped horizon the march ends
   at the ground, so the pixel is the haze in front of it plus the lit ground through the march's

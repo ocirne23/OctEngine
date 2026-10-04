@@ -316,7 +316,7 @@ void main()
 			vec3 R = reflect(-V, vec3(surf.normal));
 			R.y = max(R.y, 0.02);
 			R = normalize(R);
-			const vec3 ambientSky = textureLod(u_skyMap, vec3(skyMapUV(normalize(u_skyUp)), SKY_MAP_LAYER_GI), 0.0).rgb;
+			const vec3 ambientSky = texelFetch(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, 0).rgb;
 			const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x;
 			color += applyReflectionFogSky(terrainReflectedSkyRadiance(R), TERRAIN_LIT_POS, R, sunTint, u_sunDirection.xyz, ambientSky) * float(w);
 		}

@@ -386,7 +386,7 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// zenith texel.
 	const f16vec3 ambientSky = u_aoParams.y > 0.0
 		? max(giEvalSkySHH(f16vec3(up)) * float16_t(INV_PI), f16vec3(0.0))
-		: f16vec3(textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb);
+		: f16vec3(texelFetch(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, 0).rgb);
 
 	// Body: the ground seen through the film - Beer-Lambert absorbed along the refracted path through the
 	// water ACTUALLY standing here (the film's coverage depth: the pool the wetness fills the relief to, or

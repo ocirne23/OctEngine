@@ -191,7 +191,7 @@ vec3 skyAmbientUp(vec3 up)
 {
     if (u_aoParams.y > 0.0)
         return max(giEvalSkySH(up) * INV_PI, vec3(0.0));
-    return textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb;
+    return texelFetch(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, 0).rgb;
 }
 
 struct SceneHit

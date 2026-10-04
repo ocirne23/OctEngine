@@ -230,10 +230,11 @@ private:
     // every frame. Single-buffered under recordSkyMap's barriers. 256x128: reflections look along the horizon
     // band, where the sunset gradient needs ~1.4 deg rows.
 public:
-    // Layers: skyRadiance + clouds, mirror sky + clouds, the clouds' clear-sky ambient in texel (0, 0) only
-    // (atmosphere.inc.glsl SKY_MAP_LAYER_*).
+    // Layers: skyRadiance + clouds in a 64x32 corner only (SKY_MAP_GI_*), mirror sky + clouds (full size), per-frame
+    // constants in single texels, the CLEAR mirror sky cache (re-marched 1/4 per frame; atmosphere.inc.glsl
+    // SKY_MAP_LAYER_* / SKY_MAP_*_TEXEL). The bake's dispatch covers layers 0 and 1 (SKY_MAP_DISPATCH_LAYERS).
     // CloudPipeline's sky clouds image uses the same width / height (one texel per sky-map texel).
-    static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 3;
+    static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 4, SKY_MAP_DISPATCH_LAYERS = 2;
 private:
     vk::Image m_skyMapImage;
     VmaAllocation m_skyMapMemory{};

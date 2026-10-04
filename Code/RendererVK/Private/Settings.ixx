@@ -179,11 +179,11 @@ export struct CloudParams
 // "Shadows" category. Consumed per frame by computeSunCascades, so changes apply live.
 export struct ShadowParams
 {
-    float maxDistance = 2000.0f; // farthest distance receiving sun shadows (m), measured from the shadow
+    float maxDistance = 2500.0f; // farthest distance receiving sun shadows (m), measured from the shadow
                                 // focus (Renderer::setSceneFocus - the player in game mode; the camera when
                                 // unset). Lower = every cascade covers less ground = sharper shadows
                                 // everywhere, at range cost.
-    float splitLambda = 0.95f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
+    float splitLambda = 0.80f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
                                 // bunches up near the camera)
     float casterPad = 4000.0f;   // how far up-sun a caster may sit above a cascade and still be captured
                                 // (m). Must exceed the tallest shadow-casting feature (mountains!); too

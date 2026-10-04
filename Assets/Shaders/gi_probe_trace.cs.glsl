@@ -136,7 +136,7 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
 
 // Miss radiance: the per-frame sky bake (skyRadiance layer) instead of the analytic march per ray. The
 // virtual sky probe (projectSkySH) samples the same bake, so the two agree by construction.
-vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
+vec3 skyMiss(vec3 d) { return skyMapGISample(u_skyMap, d, int(SKY_MAP_LAYER_GI)).rgb; } // the low-res GI corner
 
 // A gather MISS: THE SKY SH's radiance (the virtual sky probe, giSkySHRadiance), not the sky map. A probe in open
 // space then gathers exactly the integral the out-of-field fallback evaluates (giIrradiance -> giEvalSkySHCloud),

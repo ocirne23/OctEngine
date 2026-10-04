@@ -12,7 +12,8 @@
 // observer radius", u_cloudWind.w), its history ("GI sky history", u_cloudNoiseOrigin.y) the AVERAGE over them.
 // From one observer, the cloud overhead and the cloud in front of the sun ARE that observer's cloud shadow, and
 // every GI-layer reader (sky SH -> fog / ocean / fallback ambient, far trees, GI misses) lit the whole world with
-// it: fog under a cloud brightened when the camera moved into the sun.
+// it: fog under a cloud brightened when the camera moved into the sun. Layer 1 is LOW-RES: a 64x32 grid in the
+// image's corner (atmosphere.inc.glsl SKY_MAP_GI_*, read with skyMapGISample).
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -70,13 +71,18 @@ vec2 skyCloudObserver(ivec2 p)
 
 void main()
 {
-    const ivec3 size = imageSize(u_outSkyClouds);
-    const ivec2 xy = skyCloudTexel();
-    if (xy.x >= size.x || xy.y >= size.y / 2)
-        return;
     const int layer = int(gl_GlobalInvocationID.z);
+    // The GI layer has its own low-res grid in the image's corner (atmosphere.inc.glsl SKY_MAP_GI_WIDTH): its
+    // readers reduce it to L1, so 1/16 of the texels march; the rest of the dispatch's layer-1 threads exit here.
+    const ivec2 size = layer == 1 ? ivec2(SKY_MAP_GI_WIDTH, SKY_MAP_GI_HEIGHT) : imageSize(u_outSkyClouds).xy;
+    const ivec2 xy = skyCloudTexel();
+    // The full layer marches the upper hemisphere only (its lower half stays "no cloud" from the creation clear);
+    // the GI corner also rewrites its lower half below as "no cloud" (cheap), so a shader reload cannot leave the
+    // old full-res layer's texels there.
+    if (xy.x >= size.x || xy.y >= (layer == 1 ? size.y : size.y / 2))
+        return;
     const ivec3 texel = ivec3(xy, layer);
-    const vec3 dir = skyMapDir((vec2(xy) + 0.5) / vec2(size.xy));
+    const vec3 dir = skyMapDir((vec2(xy) + 0.5) / vec2(size));
     if (dir.y <= 0.0 || u_cloudShape0.w < 0.5)
     {
         imageStore(u_outSkyClouds, texel, vec4(0.0, 0.0, 0.0, 1.0));

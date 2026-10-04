@@ -350,7 +350,7 @@ void GIProbePipeline::createSkyMap()
         .arrayLayers = SKY_MAP_LAYERS,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
         .sharingMode = vk::SharingMode::eExclusive,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
@@ -366,20 +366,30 @@ void GIProbePipeline::createSkyMap()
     m_skyMapView = viewResult.value;
     Globals::device.setDebugName(m_skyMapView, "GI.skyMap");
 
-    // One-time UNDEFINED -> GENERAL; the image stays GENERAL for life (storage write + sampled read).
+    // One-time UNDEFINED -> GENERAL; the image stays GENERAL for life (storage write + sampled read). Cleared to 0:
+    // alpha 0 in the clear-sky cache layer = "not baked yet", which the bake marches at once.
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary, "GI.skyMap.init");
     vk::CommandBuffer cmd = init.begin(true);
+    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, SKY_MAP_LAYERS };
     vk::ImageMemoryBarrier2 bar{
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eClear,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
         .oldLayout = vk::ImageLayout::eUndefined,
         .newLayout = vk::ImageLayout::eGeneral,
         .image = m_skyMapImage,
-        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, SKY_MAP_LAYERS },
+        .subresourceRange = range,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
+    cmd.clearColorImage(m_skyMapImage, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+    vk::MemoryBarrier2 clearToBake{
+        .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &clearToBake });
     init.end();
     init.submitGraphics();
     (void)Globals::device.graphicsQueueWaitIdle();
@@ -418,19 +428,21 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
     commandBuffer.cmdUpdateDescriptorSets(m_skyMapPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_skyUpdates);
 
     // Last frame's readers of the single image (the trace, the forward pass) -> this write: an execution
-    // dependency is all a write-after-read needs.
+    // dependency is all a write-after-read needs. Plus last frame's bake -> this one's read of its clear-sky cache
+    // (read-after-write: a memory dependency).
     vk::MemoryBarrier2 readToWrite{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &readToWrite });
 
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    // The two DIRECTIONAL layers only: the clear layer holds ONE texel, the clouds' ambient, which invocation
-    // (0, 0, 0) writes (gi_sky_map.cs.glsl).
-    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, SKY_MAP_LAYERS - 1);
+    // The two composited layers only: invocation (0, 0, 0) writes the constants layer, and the mirror threads their
+    // own texels of the clear-sky cache (gi_sky_map.cs.glsl).
+    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, SKY_MAP_DISPATCH_LAYERS);
 
     // sky-map write -> the trace's and the forward pass's sampled reads.
     vk::MemoryBarrier2 writeToRead{

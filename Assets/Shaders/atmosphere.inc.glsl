@@ -276,11 +276,23 @@ vec3 mirrorSkyRadiance(vec3 dir)
 //                                 ambient, so they never light themselves through their image
 //   SKY_MAP_TREE_SKY_TEXEL      - the GI layer (WITH clouds), cosine-weighted over the zenith (0.4) + 4 at 45 degrees
 //                                 (0.15 each): the far trees' sky light
+//   SKY_MAP_GI_ZENITH_TEXEL     - the GI layer along u_skyUp: the GI-off sky ambient (terrain, ocean, wet film)
+// THE GI LAYER IS LOW-RES: only the SKY_MAP_GI_WIDTH x SKY_MAP_GI_HEIGHT corner of layer 0 holds it (its own
+// lat-long grid), and likewise of the sky clouds' GI layer (cloud_sky.cs.glsl layer 1). Its readers reduce it to
+// L1 (the sky SH: 64 directions) or to the constants above, so the full grid was a waste. Read it with
+// skyMapGISample, never with textureLod / skyMapUV (the corner wraps in U by hand).
 #define SKY_MAP_LAYER_GI     0.0
 #define SKY_MAP_LAYER_MIRROR 1.0
 #define SKY_MAP_LAYER_CLEAR  2.0
+// Layer 3: the CLEAR mirror sky (mirrorSkyRadiance, no clouds) - the bake's own cache, nobody else reads it. The
+// atmosphere changes only with the sun and the sky tweaks, so each frame re-marches ONE texel of every 2x2 block
+// and composites the clouds over the cached rest (alpha 0 = not baked yet: marched at once).
+#define SKY_MAP_LAYER_MIRROR_CACHE 3
 #define SKY_MAP_CLOUD_AMBIENT_TEXEL ivec3(0, 0, 2)
 #define SKY_MAP_TREE_SKY_TEXEL      ivec3(1, 0, 2)
+#define SKY_MAP_GI_ZENITH_TEXEL     ivec3(2, 0, 2)
+#define SKY_MAP_GI_WIDTH  64
+#define SKY_MAP_GI_HEIGHT 32
 vec2 skyMapUV(vec3 d)
 {
 	return vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));
@@ -291,6 +303,20 @@ vec3 skyMapDir(vec2 uv) // texel centre uv -> direction (the bake's inverse of s
 	const float theta = uv.y * PI;
 	const float st = sin(theta);
 	return vec3(st * sin(phi), cos(theta), st * cos(phi));
+}
+// Bilinear read of a low-res GI corner (SKY_MAP_GI_WIDTH x SKY_MAP_GI_HEIGHT at texel (0, 0) of `layer`): four
+// texelFetches, U wrapped inside the corner (the sampler's REPEAT wraps the whole image), V clamped.
+vec4 skyMapGISample(sampler2DArray tex, vec3 dir, int layer)
+{
+	const vec2 st = skyMapUV(dir) * vec2(SKY_MAP_GI_WIDTH, SKY_MAP_GI_HEIGHT) - 0.5;
+	const ivec2 i0 = ivec2(floor(st));
+	const vec2 f = st - vec2(i0);
+	const int x0 = (i0.x % SKY_MAP_GI_WIDTH + SKY_MAP_GI_WIDTH) % SKY_MAP_GI_WIDTH;
+	const int x1 = (x0 + 1) % SKY_MAP_GI_WIDTH;
+	const int y0 = clamp(i0.y, 0, SKY_MAP_GI_HEIGHT - 1);
+	const int y1 = clamp(i0.y + 1, 0, SKY_MAP_GI_HEIGHT - 1);
+	return mix(mix(texelFetch(tex, ivec3(x0, y0, layer), 0), texelFetch(tex, ivec3(x1, y0, layer), 0), f.x),
+	           mix(texelFetch(tex, ivec3(x0, y1, layer), 0), texelFetch(tex, ivec3(x1, y1, layer), 0), f.x), f.y);
 }
 
 //vec3 skyRadiance(vec3 dir)
