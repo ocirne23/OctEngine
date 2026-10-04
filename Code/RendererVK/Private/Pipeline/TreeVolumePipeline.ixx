@@ -82,6 +82,10 @@ public:
         vk::Sampler sceneDepthSampler;
         vk::ImageView terrainView;    // the baked terrain-data cascades (SHADER_READ_ONLY)
         vk::Sampler terrainSampler;
+        vk::ImageView skyMapView;     // GI's sky bake (GENERAL; baked earlier this frame): the canopy's sky light
+        vk::Sampler skyMapSampler;
+        vk::ImageView cloudShadowView; // the cloud Beer shadow map (GENERAL): the sun on the canopy under clouds
+        vk::Sampler cloudShadowSampler;
         glm::vec3 cameraPos{ 0.0f };
         float startDistance = 0.0f;   // the march's start (3D, m): "Far start" scaled with the camera's height
                                       // (Renderer::farTreesStart), the billboards' hand-over

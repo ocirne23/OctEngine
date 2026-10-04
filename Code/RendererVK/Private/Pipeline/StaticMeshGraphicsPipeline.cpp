@@ -203,7 +203,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
 	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant (and
-	// LitFoliage, 13) carries a discard, so the LitOpaque variant keeps early depth writes.
+	// LitFoliage, 12) carries a discard, so the LitOpaque variant keeps early depth writes.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = graphicsPipelineLayout.vertexShader.text,
@@ -244,25 +244,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.depthWrite = false,
 		.depthGreaterOrEqual = true,
 	});
-	// Variant 12 (EPipelineIndex::TreeImpostor): procedural tree piece impostors. Its VS builds a camera-facing
-	// quad per instance from one frame of an octahedral atlas and hands the frame basis to the FS as the TBN, so
-	// the LitMasked FS (alpha discard + normal map) shades it unchanged. Both faces (the quad is built facing
-	// the frame direction, not the exact camera).
-	const oc::string impostorVertexPath = "Shaders/tree_impostor.vs.glsl";
-	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
-		.vertexShader = ShaderSource{
-			.text = FileSystem::readFileStr(impostorVertexPath),
-			.debugFilePath = impostorVertexPath,
-		},
-		.fragmentShader = ShaderSource{
-			.text = graphicsPipelineLayout.fragmentShader.text,
-			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
-			.defines = { { "ALPHA_MASK", "1" } },
-		},
-		.writeMotion = true,
-		.cullMode = vk::CullModeFlagBits::eNone,
-	});
-	// Variant 13 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (FOLIAGE: card
+	// Variant 12 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (FOLIAGE: card
 	// frame, edge fade, foliage shadow, crown normal + interior). Its VS adds the instance origin (the crown normal).
 	// Split out of LitMasked: a shader's register count is the maximum over all its paths, so every alpha-tested
 	// mesh paid for the cards'.

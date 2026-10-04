@@ -58,7 +58,7 @@ namespace
         float albedoScale;
         float interiorShadow;
         float interiorRadius;
-        uint32 pad0;        // (the scale and the pixel skip are baked: TREE_MARCH_SCALE / TREE_MARCH_SKIP)
+        float saturation;   // "Far saturation scale" (the scale and the pixel skip are baked: TREE_MARCH_SCALE / TREE_MARCH_SKIP)
         uint32 pad1;
         glm::uvec2 fullSize;
     };
@@ -245,6 +245,8 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(7, vk::DescriptorType::eStorageImage));         // floor
     b.push_back(binding(8, vk::DescriptorType::eStorageImage));         // the previous slot's result (the checkerboard's copy)
     b.push_back(binding(9, vk::DescriptorType::eStorageImage));         // ... and its distance
+    b.push_back(binding(10, vk::DescriptorType::eCombinedImageSampler)); // GI's sky map (the canopy's sky light)
+    b.push_back(binding(11, vk::DescriptorType::eCombinedImageSampler)); // the cloud shadow map
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(MarchPC) });
 }
 
@@ -781,12 +783,12 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         .albedoScale = s.albedoScale,
         .interiorShadow = oc::max(s.interiorShadow, 0.0f),
         .interiorRadius = oc::max(s.interiorRadius, 0.0f), // 0: the taps sit on the sample - no darkening
-        .pad0 = 0,
+        .saturation = oc::max(s.saturationScale, 0.0f),
         .pad1 = 0,
         .fullSize = glm::uvec2(m_width, m_height),
     };
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 10> updates{
+    oc::array<DescriptorSetUpdateInfo, 12> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -801,6 +803,8 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         // The latest-march images (the plain pixel skip; without them, any matching images - never read then).
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_hasLatest ? m_latest.view : m_out[prevIdx].view) } },
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_hasLatest ? m_latestDepth.view : m_outDepth[prevIdx].view) } },
+        DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.skyMapSampler, params.skyMapView) } },
+        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
     };
     writeSet(set, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, march.getPipeline());

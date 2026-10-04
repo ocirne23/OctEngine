@@ -837,12 +837,13 @@ export namespace RendererVKLayout
         // z = self-shadow transmission length (m), w = interior darkening
         glm::vec4 foliageParams;
         glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
-                                  // w = interior shadow: leaf radius (/ crown radius) where it is full
-        glm::vec4 foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
+                                  // w = interior depth start (the baked interior where the darkening starts)
+        glm::vec4 foliageParams3; // x = interior depth end (where it is full), y = edge fade top card scale,
                                   // z = interior shadow top card scale, w = leaf transmission strength
         glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
                                   // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
-        glm::vec4 foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), yzw unused
+        glm::vec4 foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), y = crown self-shadow,
+                                  // z = the interior's view fade on the sun, w = the transmission's share of the self-shadow
         // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
         // of this frame's tree range, y = its length (3 per tree; 0 = none), z = the culls' thread count (one per tree
         // in the range; their dispatch), w = the tree count. params: x = the far distance scale,
@@ -1034,10 +1035,7 @@ export namespace RendererVKLayout
         TerrainOverlay = 11, // the terrain chunks drawn AGAIN over the ground (surface-water film, later snow ...):
                              // never on a material - the main cull emits it for TerrainLit instances inside the
                              // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
-        TreeImpostor   = 12, // procedural tree piece impostor: a camera-facing quad per instance picking one frame of an
-                             // octahedral atlas (tree_impostor.vs.glsl) + the LitMasked fragment shader. MAIN pass only
-                             // (the shadow pass's own VS cannot build the quad): push its nodes with PASS_MAIN.
-        LitFoliage     = 13, // LitMasked + the FOLIAGE card paths (FOLIAGE): the tree billboards' materials
+        LitFoliage     = 12, // LitMasked + the FOLIAGE card paths (FOLIAGE): the tree billboards' materials
                              // (MATERIAL_FLAG_BILLBOARD) only - kept out of LitMasked's register allocation
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write

@@ -307,12 +307,13 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     // z = self-shadow transmission length (m; shadows.inc.glsl), w = interior darkening (instanced_indirect.fs.glsl)
     vec4 u_foliageParams;
     vec4 u_foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
-                           // w = interior shadow: leaf radius (/ crown radius) where it is full
-    vec4 u_foliageParams3; // x = interior shadow: leaf radius where it is gone, y = edge fade top card scale,
+                           // w = interior depth start (the baked interior where the darkening starts)
+    vec4 u_foliageParams3; // x = interior depth end (where it is full), y = edge fade top card scale,
                            // z = interior shadow top card scale, w = leaf transmission strength
     vec4 u_foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
                            // w = 1 while the far-tree volume marched this frame (vol_apply.fs.glsl composites it)
-    vec4 u_foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), yzw unused
+    vec4 u_foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), y = crown self-shadow,
+                           // z = the interior's view fade on the sun, w = the transmission's share of the self-shadow
     // The BAKED TREE RECORDS (tree_cull.inc.glsl): x = the first instance index of this frame's tree range, y = its
     // length (3 per tree; 0 = no trees), z = the culls' thread count (one per tree in the range), w = the tree count;
     // params x = the far distance scale, y = force far (0/1),

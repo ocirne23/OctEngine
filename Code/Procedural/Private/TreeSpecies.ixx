@@ -129,19 +129,14 @@ export namespace Procedural
 		// is multiplied by this. > 1 switches to coarser levels nearer the camera.
 		float lodErrorScale = 1.0f;
 
-		// Branch-module impostors (TreeImpostor): beyond `impostorDistance` (m, 0 = never) a module draws as one
-		// camera-facing quad from an octahedral atlas of frames x frames views, frameSize px each.
-		float impostorDistance = 60.0f;
-		int impostorFrames = 8;
-		int impostorFrameSize = 64;
-
-		// Branch-module billboards (the default far representation, Trees/Far mode): beyond
+		// Branch-module billboards (the far representation, Trees/Far mode): beyond
 		// `billboardDistance` (m, 0 = never) a module draws as two crossed cards baked into one
 		// billboardSize-square texture: one strip per view (Trees/Billboard views: 2 or 4).
 		float billboardDistance = 50.0f;
 		int billboardSize = 512;
-		float billboardNormalBend = 0.6f; // baked normals bent toward "out of the clump" (0..1): shades like a volume
+		float billboardNormalBend = 0.0f; // baked normals bent toward "out of the clump" (0..1): shades like a volume
 		float billboardFadeWidth = 10.0f; // m: the mesh <-> billboard crossfade band, centred on billboardDistance
+		float billboardAlbedoScale = 1.0f; // x the WHOLE-TREE billboards' colour (linear; applied at load, not baked)
 		glm::vec3 barkColor{ 0.32f, 0.24f, 0.17f };
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
 	};

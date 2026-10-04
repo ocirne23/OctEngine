@@ -152,7 +152,7 @@ namespace
 			for (uint32 x = 0; x < size; ++x)
 			{
 				glm::vec3 n(0.0f);
-				uint32 a = 0; // the billboards' / impostors' baked depth (255 on bark)
+				uint32 a = 0; // the billboards' baked interior (255 on bark)
 				for (uint32 k = 0; k < 4; ++k)
 				{
 					const uint32 sx = glm::min(x * 2 + (k & 1), srcSize - 1), sy = glm::min(y * 2 + (k >> 1), srcSize - 1);

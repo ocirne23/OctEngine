@@ -77,7 +77,7 @@ TreeSpecies Oak
 		Levels 2
 		ClusterLeaves 10
 		ClusterLeafSize 0.3
-		NormalBend 0.2
+		NormalBend 0.0
 	Bark
 		Plates 22 5
 		Crack 0.06

@@ -147,9 +147,12 @@ void FoliageParams::registerTweaks(const oc::function<void()>& onDebugViewChange
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
     Tweak::floatVar("Trees", "Foliage crown normal", &crownNormal, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &shadowLength, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Trees", "Foliage interior depth start", &interiorStart, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage interior depth end", &interiorEnd, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage interior view fade", &interiorViewFade, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage self shadow", &selfShadow, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission self shadow", &transmissionSelfShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow", &interiorShadow, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior inner radius", &interiorInner, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage interior outer radius", &interiorOuter, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow top card scale", &interiorTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission", &transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission focus", &transmissionFocus, 1.0f, 64.0f, 0.1f);
@@ -245,6 +248,7 @@ void FarTreeParams::registerTweaks()
     Tweak::floatVar("Trees", "Far interior radius", &interiorRadius, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Trees", "Far forward scatter", &forwardScatter, -0.9f, 0.9f, 0.01f);
     Tweak::floatVar("Trees", "Far albedo scale", &albedoScale, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far saturation scale", &saturationScale, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Far temporal blend", &temporalBlend, 0.0f, 0.98f, 0.01f);
     Tweak::boolean("Trees", "Far half res", &halfRes);
     static constexpr oc::string_view PIXEL_SKIP[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };

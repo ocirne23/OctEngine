@@ -59,7 +59,7 @@ namespace
 	}
 
 	// Species textures are generated ONCE into Assets/Local/Trees/Textures (<species>_bark.png, _bark_normal.png,
-	// _leaves.png, the impostor / billboard bakes) and read back on later loads. Generated output: not in git.
+	// _leaves.png, the billboard bakes) and read back on later loads. Generated output: not in git.
 	constexpr const char* TREE_TEXTURE_DIR = "Local/Trees/Textures";
 
 	// Trees/Grove type: "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name.
@@ -138,8 +138,6 @@ namespace Procedural
 					for (uint32 chain : { meshes.barkChain, meshes.leafChain, meshes.trunkChain, meshes.branchChain })
 						if (chain != UINT32_MAX)
 							Globals::rendererVK.freeMeshLodChain(chain);
-					if (meshes.impostorMaterial != UINT16_MAX)
-						Globals::rendererVK.destroyTextureMaterial(meshes.impostorMaterial);
 					if (meshes.billboardMaterial != UINT16_MAX)
 						Globals::rendererVK.destroyTextureMaterial(meshes.billboardMaterial);
 				}
@@ -183,13 +181,13 @@ namespace Procedural
 			if (species.barkFadeMaterial == UINT16_MAX)
 				continue;
 			const float width = species.desc.billboardFadeWidth;
-			const float start = glm::max(species.desc.billboardDistance * m_impostorDistanceScale - width * 0.5f, 0.0f);
+			const float start = glm::max(species.desc.billboardDistance * m_farDistanceScale - width * 0.5f, 0.0f);
 			const uint32 fadeOut = RendererVKLayout::makeDistanceFadeFlags(start, width, false);
 			const uint32 fadeIn = RendererVKLayout::makeDistanceFadeFlags(start, width, true);
 			for (uint16 material : { species.barkFadeMaterial, species.leafFadeMaterial })
 				renderer.setMaterialFlags(material, (renderer.getMaterialFlags(material) & ~FADE_BITS) | fadeOut);
 			// Force far draws the billboards at every distance: no fade-in then, or they would vanish nearby.
-			const uint32 billboardFade = m_forceImpostors ? 0u : fadeIn;
+			const uint32 billboardFade = m_forceFar ? 0u : fadeIn;
 			for (const oc::vector<PieceMeshes>* pieces : { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes })
 				for (const PieceMeshes& meshes : *pieces)
 					if (meshes.billboardMaterial != UINT16_MAX)
@@ -199,7 +197,7 @@ namespace Procedural
 			// (tree_cull.inc.glsl picks the side per tree).
 			if (species.leafMidFadeMaterial == UINT16_MAX)
 				continue;
-			const float midStart = glm::max(midDistance(species) * m_impostorDistanceScale - width * 0.5f, 0.0f);
+			const float midStart = glm::max(midDistance(species) * m_farDistanceScale - width * 0.5f, 0.0f);
 			auto setFade = [&](uint16 material, uint32 fade)
 			{
 				if (material != UINT16_MAX)
@@ -234,16 +232,16 @@ namespace Procedural
 		Tweak::floatVar("Trees", "Bush shadow distance (m)", &m_bushShadowDistance, 0.0f, 5000.0f, 1.0f, respawn);
 		Tweak::intVar("Trees", "Seed", &m_seed, 0, 1000000, 1.0f, respawn);
 		Tweak::enumVar("Trees", "Grove type", &m_groveType, GROVE_TYPES, respawn);
-		static constexpr oc::string_view FAR_MODES[] = { "Billboards", "Octahedral impostors", "None" };
+		static constexpr oc::string_view FAR_MODES[] = { "Billboards", "None" };
 		Tweak::enumVar("Trees", "Far mode", &m_farMode, FAR_MODES, [this]() { m_reload = true; });
 		static constexpr oc::string_view BILLBOARD_VIEWS[] = { "2 (side + top)", "4 (+ other side + bottom)" };
 		Tweak::enumVar("Trees", "Billboard views", &m_billboardViews, BILLBOARD_VIEWS, [this]() { m_reload = true; });
-		Tweak::floatVar("Trees", "Far distance scale", &m_impostorDistanceScale, 0.0f, 10.0f, 0.01f, [this]() { m_fadeBandsDirty = true; });
+		Tweak::floatVar("Trees", "Far distance scale", &m_farDistanceScale, 0.0f, 10.0f, 0.01f, [this]() { m_fadeBandsDirty = true; });
 		// The MID tier: from this fraction of each species' billboard distance the leaves mesh gives way to one billboard
 		// card per branch module (the bark mesh stays). 0 = off.
 		Tweak::floatVar("Trees", "Branch card distance", &m_branchCardDistance, 0.0f, 1.0f, 0.01f,
 			[this]() { m_fadeBandsDirty = true; m_respawn = true; });
-		Tweak::boolean("Trees", "Force far", &m_forceImpostors, [this]() { m_fadeBandsDirty = true; });
+		Tweak::boolean("Trees", "Force far", &m_forceFar, [this]() { m_fadeBandsDirty = true; });
 		Tweak::boolean("Trees", "GPU expansion", &m_gpuExpansion, respawn);
 	}
 
@@ -293,8 +291,8 @@ namespace Procedural
 
 		// The GPU path: the expansion decides per piece (the same rules as the CPU loop below). The terrain's walk lists
 		// the chunks (the sink, spawnPreview); without it - terrain off, or no walk this frame - every chunk draws.
-		m_sinkDistanceScale.store(m_impostorDistanceScale, oc::memory_order_relaxed);
-		m_sinkForceFar.store(m_forceImpostors, oc::memory_order_relaxed);
+		m_sinkDistanceScale.store(m_farDistanceScale, oc::memory_order_relaxed);
+		m_sinkForceFar.store(m_forceFar, oc::memory_order_relaxed);
 		if (m_treeSet != UINT32_MAX)
 		{
 			renderer.bindTreeInstanceSet(m_treeSet);
@@ -303,29 +301,29 @@ namespace Procedural
 				m_vegFallback.resize(m_vegNumChunks ? m_vegNumChunks : 1u);
 				for (uint32 c = 0; c < (uint32)m_vegFallback.size(); ++c)
 					m_vegFallback[c] = { c, RendererVKLayout::PASS_ALL };
-				renderer.renderTreeInstanceSet(m_treeSet, m_vegFallback, m_impostorDistanceScale, m_forceImpostors);
+				renderer.renderTreeInstanceSet(m_treeSet, m_vegFallback, m_farDistanceScale, m_forceFar);
 			}
 		}
 		// The far-tree volume lays its cells out by the camera's height above the ground under it.
 		if (maps)
 			renderer.setFarTreeCameraGround(maps->sampleHeight(camera.position.x, camera.position.z));
 
-		// The CPU path (GPU expansion off, or the impostor mode): per module, the far representation beyond its
-		// distance (5% hysteresis), else the mesh LOD chain. Billboards crossfade instead (see PlacedPiece).
+		// The CPU path (GPU expansion off): per piece, its billboard crossfade (see PlacedPiece); without a far
+		// representation (Far mode None) the meshes alone.
 		constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
 		for (PlacedPiece& piece : m_pieces)
 		{
-			if (piece.farIsBillboard)
+			if (piece.far.isValid())
 			{
 				// The same band the materials carry (applyFadeBands). A pixel's distance varies by up to the
 				// module's radius from the centre's, so both sides draw while any of it can be in the band.
 				// The billboard stands in for the piece in every pass but MAIN (shadow, GI, RT): the mesh draws in
 				// MAIN only, the cards always draw, in MAIN too only while they show (as tree_cull.inc.glsl).
-				const float switchDistance = piece.farDistance * m_impostorDistanceScale;
+				const float switchDistance = piece.farDistance * m_farDistanceScale;
 				const float bandStart = glm::max(switchDistance - piece.fadeWidth * 0.5f, 0.0f);
 				const float bandEnd = bandStart + piece.fadeWidth;
 				const float distance = glm::distance(camera.position, piece.centre);
-				if (m_forceImpostors)
+				if (m_forceFar)
 					renderer.renderNode(piece.far);
 				else if (switchDistance <= 0.0f || distance + piece.radius < bandStart)
 				{
@@ -343,24 +341,8 @@ namespace Procedural
 				}
 				continue;
 			}
-			if (piece.far.isValid())
-			{
-				const float switchDistance = piece.farDistance * m_impostorDistanceScale;
-				const float distance = glm::distance(camera.position, piece.centre);
-				piece.farActive = m_forceImpostors
-					|| (switchDistance > 0.0f && distance > switchDistance * (piece.farActive ? 0.95f : 1.05f));
-			}
-			if (piece.farActive)
-			{
-				renderer.renderNode(piece.far, RendererVKLayout::PASS_MAIN);
-				renderer.renderNode(piece.bark, SHADOW_AND_GI);
-				renderer.renderNode(piece.leaves, SHADOW_AND_GI);
-			}
-			else
-			{
-				renderer.renderNode(piece.bark);
-				renderer.renderNode(piece.leaves);
-			}
+			renderer.renderNode(piece.bark);
+			renderer.renderNode(piece.leaves);
 		}
 	}
 
@@ -397,7 +379,7 @@ namespace Procedural
 			generateTreeLibrary(species.desc, species.library);
 
 			size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
-			// RT sees the MESHES only without billboards (Far mode impostors / none: the meshes stand in for the tree in
+			// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
 			// shadow + GI); with billboards the whole billboard is the tree's only RT representation (buildBillboards).
 			// Bushes never: too small to matter to GI / RT shadows, and too many for the TLAS.
 			const bool meshesRaytraced = m_farMode != 0 && !species.desc.bush;
@@ -438,7 +420,7 @@ namespace Procedural
 				meshes.densityMax = box.max;
 			}
 			const oc::string& name = species.desc.name.empty() ? entry.name : species.desc.name;
-			// Level-0 images, kept for the impostor bake.
+			// Level-0 images, kept for the billboard bake.
 			oc::vector<uint8> barkAlbedo, leafImage;
 			uint32 barkSize = 0, leafSize = 0;
 			{
@@ -516,90 +498,11 @@ namespace Procedural
 					species.cardOutMaterial = renderer.deriveMaterial(species.cardAtlasMaterial, 0);
 				}
 			}
-			else if (m_farMode == 1 && species.desc.impostorDistance > 0.0f)
-				buildImpostors(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
 			Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
 				species.desc.name, species.library.trunks.size(), species.library.modules.size(),
 				barkTris[0], leafTris[0], barkTris[1], leafTris[1], barkTris[2], leafTris[2], barkTris[3], leafTris[3]));
 		}
 		applyFadeBands(renderer);
-	}
-
-	void TreeSystem::buildImpostors(Renderer& renderer, Species& species, const oc::string& name,
-		oc::span<const uint8> barkAlbedo, uint32 barkSize, oc::span<const uint8> leafImage, uint32 leafSize)
-	{
-		const uint32 frames = (uint32)species.desc.impostorFrames;
-		const uint32 frameSize = (uint32)species.desc.impostorFrameSize;
-		const uint32 atlas = frames * frameSize;
-		// Mips down to 4 px per frame: below that a level blends neighbouring frames.
-		uint32 numMips = 1;
-		for (uint32 s = frameSize; s > 4; s /= 2)
-			++numMips;
-
-		oc::vector<FileSystem::DirEntry> existing;
-		FileSystem::listDirectory(TREE_TEXTURE_DIR, existing, true);
-
-		// Modules, trunks and the baked whole trees alike (the octahedral views cover any piece).
-		const oc::vector<TreePiece>* pieceSets[3] = { &species.library.modules, &species.library.trunks, &species.variants };
-		oc::vector<PieceMeshes>* meshSets[3] = { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes };
-		for (uint32 set = 0; set < 3; ++set)
-		for (size_t i = 0; i < pieceSets[set]->size(); ++i)
-		{
-			const TreePiece& piece = (*pieceSets[set])[i];
-			PieceMeshes& meshes = (*meshSets[set])[i];
-			const TreeImpostorBounds bounds = impostorBounds(piece);
-
-			// The file name carries a hash of the geometry and bake settings: a changed piece re-bakes on its
-			// own, and the stale files of this slot are removed.
-			const oc::string prefix = oc::format("{}_{}impostor{}_", name, PIECE_KINDS[set], i);
-			const oc::string stem = oc::format("{}{:08x}", prefix, impostorHash(piece, frames, frameSize));
-			const oc::string albedoPath = oc::format("{}/{}.png", TREE_TEXTURE_DIR, stem);
-			const oc::string normalPath = oc::format("{}/{}_normal.png", TREE_TEXTURE_DIR, stem);
-
-			oc::vector<uint8> albedo, normal;
-			uint32 albedoSize = 0, normalSize = 0;
-			const bool loaded = !m_regenerateTextures && loadSquareImage(albedoPath, albedoSize, albedo)
-				&& loadSquareImage(normalPath, normalSize, normal) && albedoSize == atlas && normalSize == atlas;
-			if (!loaded)
-			{
-				for (const FileSystem::DirEntry& entry : existing)
-					if (entry.name.rfind(prefix.c_str(), 0) == 0)
-						FileSystem::remove(entry.path, true);
-				bakeImpostor(piece, bounds, TreeBakeImage{ barkAlbedo, barkSize }, TreeBakeImage{ leafImage, leafSize },
-					frames, frameSize, albedo, normal);
-				saveImage(albedoPath, atlas, albedo);
-				saveImage(normalPath, atlas, normal);
-			}
-
-			TreeLeafTexture albedoChain;
-			buildLeafClusterMips(albedo, atlas, albedoChain); // coverage-preserving, like the leaf cards
-			oc::vector<oc::vector<uint8>> normalChain;
-			buildNormalMips(normal, atlas, normalChain);
-			oc::vector<oc::span<uint8>> albedoMips, normalMips;
-			for (uint32 k = 0; k < numMips; ++k)
-			{
-				albedoMips.push_back(oc::span<uint8>(albedoChain.mips[k].data(), albedoChain.mips[k].size()));
-				normalMips.push_back(oc::span<uint8>(normalChain[k].data(), normalChain[k].size()));
-			}
-			meshes.impostorMaterial = renderer.createTextureMaterial(atlas, atlas, albedoMips, TREE_LEAF_ALPHA_CUTOFF,
-				oc::format("TreeImpostor/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), &normalMips);
-
-			// The quad: no geometry, only per-piece constants (see tree_impostor.vs.glsl). Its bounds are the
-			// piece's sphere, which is what the cull tests.
-			RenderMeshData quad;
-			constexpr float CORNERS[4][2] = { { -1.0f, -1.0f }, { 1.0f, -1.0f }, { 1.0f, 1.0f }, { -1.0f, 1.0f } };
-			quad.vertices.resize(4);
-			for (uint32 k = 0; k < 4; ++k)
-			{
-				quad.vertices[k].positionU = glm::vec4(bounds.centre, 0.0f);
-				quad.vertices[k].normalV = glm::vec4(CORNERS[k][0], CORNERS[k][1], bounds.radius, 0.0f);
-				quad.vertices[k].tangent = glm::vec4((float)frames, 0.0f, 0.0f, 1.0f);
-			}
-			quad.indices = { 0, 1, 2, 0, 2, 3 };
-			quad.bounds = Sphere(bounds.centre, bounds.radius);
-			meshes.impostor = renderer.createMesh(quad, false); // its VS builds the quad: no geometry to trace
-			meshes.farCentre = bounds.centre;
-		}
 	}
 
 	void TreeSystem::buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
@@ -631,14 +534,14 @@ namespace Procedural
 			// Mips down to ~4 px per strip, while the strip boundaries stay on texel boundaries (billboardLayout).
 			const uint32 numMips = billboardLayout(size, numViews, horizontal).numMips;
 
-			// Same cache scheme as the impostors: geometry + settings in the name, stale slot files removed.
+			// The cache: geometry + settings in the name, stale slot files removed.
 			// The view count is in the name, so both Billboard views settings keep their own cache.
 			const oc::string prefix = oc::format("{}_{}billboard{}v{}_", name, PIECE_KINDS[set], i, numViews);
 			// Before the view count was named.
 			const oc::string legacyPrefix = oc::format("{}_{}billboard{}_", name, PIECE_KINDS[set], i);
 			const float bend = species.desc.billboardNormalBend;
 			const uint32 settingsHash = treeHash(0xB1B0A2D5u ^ numViews, (uint32)std::round(bend * 1000.0f));
-			const oc::string stem = oc::format("{}{:08x}", prefix, impostorHash(piece, 2u, size) ^ settingsHash);
+			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(piece, 2u, size) ^ settingsHash);
 			const oc::string albedoPath = oc::format("{}/{}.png", TREE_TEXTURE_DIR, stem);
 			const oc::string normalPath = oc::format("{}/{}_normal.png", TREE_TEXTURE_DIR, stem);
 
@@ -657,11 +560,29 @@ namespace Procedural
 				saveImage(normalPath, size, normal);
 			}
 
+			// `Billboard AlbedoScale` (whole trees only): x the colour in LINEAR space (the texture is sRGB), applied here -
+			// after the cache - so a change needs no re-bake.
+			const float albedoScale = species.desc.billboardAlbedoScale;
+			if (horizontal && albedoScale != 1.0f)
+			{
+				uint8 lut[256];
+				for (uint32 v = 0; v < 256; ++v)
+				{
+					const float c = (float)v / 255.0f;
+					const float lin = (c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f)) * albedoScale;
+					const float enc = lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(glm::min(lin, 1.0f), 1.0f / 2.4f) - 0.055f;
+					lut[v] = (uint8)(glm::clamp(enc, 0.0f, 1.0f) * 255.0f + 0.5f);
+				}
+				for (size_t t = 0; t + 3 < albedo.size(); t += 4)
+					for (size_t c = 0; c < 3; ++c)
+						albedo[t + c] = lut[albedo[t + c]];
+			}
+
 			// Coverage-preserving albedo mips (alpha scaled up per level to keep the level-0 coverage).
 			TreeLeafTexture albedoChain;
 			buildLeafClusterMips(albedo, size, albedoChain);
 			oc::vector<oc::vector<uint8>> normalChain;
-			buildNormalMips(normal, size, normalChain);
+			buildNormalMips(normal, size, normalChain); // RGB renormalized, A (the interior) averaged
 			oc::vector<oc::span<uint8>> albedoMips, normalMips;
 			for (uint32 k = 0; k < numMips; ++k)
 			{
@@ -758,7 +679,6 @@ namespace Procedural
 		{
 			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage, transform);
 			piece.farDistance = species.desc.billboardDistance;
-			piece.farIsBillboard = true;
 			piece.fadeWidth = species.desc.billboardFadeWidth;
 			piece.radius = meshes.farRadius * transform.scale;
 			// The crossfade copies: the same LOD-chain meshes on LitMasked (the dither discards) with the fade-out
@@ -767,11 +687,6 @@ namespace Procedural
 				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked, transform);
 			if (meshes.leaves[0].isValid())
 				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked, transform);
-		}
-		else if (meshes.impostor.isValid())
-		{
-			piece.far = renderer.spawnMeshNode(meshes.impostor, meshes.impostorMaterial, RendererVKLayout::EPipelineIndex::TreeImpostor, transform);
-			piece.farDistance = species.desc.impostorDistance;
 		}
 		piece.centre = transform.transformPoint(meshes.farCentre);
 	}
@@ -803,9 +718,8 @@ namespace Procedural
 		}
 
 		// G4: on the GPU path every placed piece goes into ONE baked set (RendererVK tree_cull.inc.glsl): a
-		// piece TYPE per library piece, then per frame one call instead of a renderNode per piece node. The
-		// octahedral impostor mode keeps the CPU path (its main-pass-only quad + shadow-only meshes).
-		const bool gpu = m_gpuExpansion && m_farMode != 1;
+		// piece TYPE per library piece, then per frame one call instead of a renderNode per piece node.
+		const bool gpu = m_gpuExpansion;
 		oc::vector<Renderer::TreeInstanceType> gpuTypes;
 		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
 		oc::vector<Renderer::TreeInstancePiece> gpuPieces;

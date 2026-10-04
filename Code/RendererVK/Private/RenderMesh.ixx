@@ -21,8 +21,9 @@ export struct RenderMeshData
 
     // Null tangents / bitangents / texCoords default like ISceneData::createMeshScene's (the tangent
     // handedness is ObjectContainer's formula), so the shading matches the container path exactly.
-    // texCoords.z >= 2 rides the tangent's w as its MAGNITUDE (the sign stays the handedness): the merged tree branch
-    // cards' axis code (Procedural billboardMesh, read by the lit FS's foliageCrownFrame). Every other mesh: |w| = 1.
+    // texCoords.z >= 2 rides the tangent's w as its MAGNITUDE (the sign stays the handedness): the tree billboard cards'
+    // strip code (2 + the strip height, < 3) or the merged branch cards' axis code (>= 3) (Procedural billboardMesh, read
+    // by the lit FS's foliageCrownFrame). Every other mesh: |w| = 1.
     void build(const MeshGeometryDesc& geometry)
     {
         const uint32 numVertices = geometry.numVertices;

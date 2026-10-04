@@ -23,6 +23,6 @@ export namespace Procedural
 	void generateBarkImages(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outAlbedo, oc::vector<uint8>& outNormal);
 	// Both full chains from a level 0 (generated or loaded from disk); normals renormalized per level.
 	void buildBarkMips(oc::span<const uint8> albedo0, oc::span<const uint8> normal0, uint32 size, TreeBarkTexture& out);
-	// A normal map's chain alone (box filter, renormalized, alpha 255), level 0 included: the impostor atlas too.
+	// A normal map's chain alone (box filter, renormalized, alpha 255), level 0 included: the billboards too.
 	void buildNormalMips(oc::span<const uint8> normal0, uint32 size, oc::vector<oc::vector<uint8>>& outMips);
 }

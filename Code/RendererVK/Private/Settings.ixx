@@ -217,19 +217,29 @@ export struct ShadowParams
 // UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
 export struct FoliageParams
 {
-    float crownNormal = 0.25f;  // blend of the shading normal toward a CROWN normal - the view ray's hit on a
+    float crownNormal = 0.0f;  // blend of the shading normal toward a CROWN normal - the view ray's hit on a
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
-    float shadowLength = 3.0f;  // the sun shadow fades in over this many metres between the receiver and its
+    float shadowLength = 3.5f;  // the sun shadow fades in over this many metres between the receiver and its
                                 // blockers (0 = hard, as any surface): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float interiorShadow = 0.67f; // darkening of the leaves deep INSIDE the crown (their baked 3D point near the
-                                // crown sphere's centre), on the sun and the ambient alike (0 = off) - a fully
-                                // lit crown otherwise looked flat.
-    float interiorInner = 0.2f; // the leaf's distance from the crown centre (/ the crown radius) inside which
-    float interiorOuter = 1.2f; // the interior shadow is full, and outside which it is gone (smoothstep between)
+    float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
+                                // (from the piece's own crown field: any crown shape), on the sun and the ambient
+                                // alike (0 = off) - a fully lit crown otherwise looked flat.
+    float interiorStart = 0.25f; // the baked interior (0 = the crown's surface, 1 = about its core depth) where the
+    float interiorEnd = 0.56f;  // darkening starts / reaches full strength (smoothstep between)
+    // On the SUN (direct + transmitted) the interior fades out by this x |V.L|: from the front the leaves seen through
+    // the gaps are lit through those gaps, from the back the self-shadow below darkens the whole crown. The ambient keeps
+    // it (AO). 0 = the interior on the sun from every side.
+    float interiorViewFade = 1.0f;
+    // THE CROWN SELF-SHADOW (billboards): the sun x exp(-this x the chord from the view ray's entry on the crown
+    // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
+    // side-lit one darker. 0 = off.
+    float selfShadow = 2.5f;
+    float transmissionSelfShadow = 0.3f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
+                                         // through the leaves: at 1 a crown seen toward the sun hid the transmission)
     float interiorTopCardScale = 0.5f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
     // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
@@ -242,7 +252,7 @@ export struct FoliageParams
     // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
-    float transmission = 0.8f;
+    float transmission = 0.6f;
     float transmissionFocus = 64.0f;
     float transmissionGlow = 1.5f;
     float transmissionShadow = 0.95f;
@@ -363,20 +373,21 @@ export struct FarTreeParams
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 15;            // height slices
     float height = 22.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 1.5f;    // x the baked extinction
-    float blobShrink = 0.433f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float densityScale = 0.25f;   // x the baked extinction
+    float blobShrink = 0.4f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
     float stepScale = 0.5f;       // march step, x the cell size
-    uint32 maxSteps = 500;
-    float ambient = 1.0f;        // sky light on the canopy, x the sun radiance
+    uint32 maxSteps = 600;
+    float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 2.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
-    float normalStrength = 1.0f;  // 0..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
+    float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float normalStrength = 0.5f;  // 0..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 1.0f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 6.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+    float interiorShadow = 1.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
-    float interiorRadius = 0.1f;  // the taps' distance, x the cell size
-    float forwardScatter = -0.3f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
-    float albedoScale = 1.5f;    // x the leaf colour
+    float interiorRadius = 0.0f;  // the taps' distance, x the cell size
+    float forwardScatter = -0.25f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float albedoScale = 1.0f;    // x the leaf colour
+    float saturationScale = 0.85f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
     // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per

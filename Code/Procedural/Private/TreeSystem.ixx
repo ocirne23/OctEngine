@@ -14,7 +14,7 @@ import :TreeGenerator;
 // Procedural trees ("Trees" tweaks). Loads every Assets/Trees/*.tree species, generates its piece library,
 // and - for now - shows a PREVIEW: a grove of composited trees in front of the camera plus the piece
 // library itself, drawn through the plain RenderMesh path (one node per placed piece mesh, GPU mesh LOD
-// chains, branch-module impostors beyond a distance). The dedicated GPU tree path (bone palettes, own
+// chains, billboards beyond a distance). The dedicated GPU tree path (bone palettes, own
 // shaders) replaces the preview draw in G4; see Docs/TreeRenderingPlan.md.
 export namespace Procedural
 {
@@ -39,8 +39,7 @@ export namespace Procedural
 			RenderMesh leaves[TREE_PIECE_LODS];
 			uint32 barkChain = UINT32_MAX;
 			uint32 leafChain = UINT32_MAX;
-			// Modules only, per Trees/Far mode: the billboard cards (LitFoliage) or the impostor quad (TreeImpostor
-			// pipeline), each with its own baked material (owned).
+			// Modules only, Far mode Billboards: the billboard cards (LitFoliage) with their own baked material (owned).
 			RenderMesh billboard;
 			uint16 billboardMaterial = UINT16_MAX;
 			// Baked variants with billboards (the GPU MID tier): the bark split into the trunk's and the branches'
@@ -51,8 +50,6 @@ export namespace Procedural
 			uint32 trunkChain = UINT32_MAX;
 			uint32 branchChain = UINT32_MAX;
 			RenderMesh cards;
-			RenderMesh impostor;
-			uint16 impostorMaterial = UINT16_MAX;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
 			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
 			// Baked variants only: the far-tree volume's extinction grid (bakeTreeDensity) over [densityMin, densityMax].
@@ -60,10 +57,8 @@ export namespace Procedural
 			glm::vec3 densityMin{ 0.0f };
 			glm::vec3 densityMax{ 0.0f };
 		};
-		// One placed piece of the preview. Beyond its far distance the far node (billboard or impostor) replaces
-		// the mesh LOD nodes. A BILLBOARD is real geometry and casts its own shadow: the mesh nodes then stop
-		// drawing. An IMPOSTOR cannot cast through the shadow pass's own vertex shader: it draws in the MAIN pass
-		// only and the mesh nodes keep drawing in shadow + GI.
+		// One placed piece of the preview. Beyond its far distance the billboard replaces the mesh LOD nodes; it is
+		// real geometry and casts its own shadow, so the mesh nodes then stop drawing.
 		//
 		// Billboards CROSSFADE instead of switching: over a band of `Billboard FadeWidth` around the switch
 		// distance the module draws as barkFade / leavesFade (the same meshes on LitMasked with the species'
@@ -81,8 +76,6 @@ export namespace Procedural
 			float radius = 0.0f;               // world, around `centre`
 			float farDistance = 0.0f;
 			float fadeWidth = 0.0f;
-			bool farIsBillboard = false;
-			bool farActive = false;
 		};
 		struct Species
 		{
@@ -114,10 +107,7 @@ export namespace Procedural
 		};
 
 		void reload(Renderer& renderer);
-		// Bakes (or loads) every module's impostor atlas and quad. Needs the species' level-0 bark and leaf images.
-		void buildImpostors(Renderer& renderer, Species& species, const oc::string& name,
-			oc::span<const uint8> barkAlbedo, uint32 barkSize, oc::span<const uint8> leafImage, uint32 leafSize);
-		// The same for the billboards (the default far representation).
+		// Bakes (or loads) every module's billboard cards. Needs the species' level-0 bark and leaf images.
 		void buildBillboards(Renderer& renderer, Species& species, const oc::string& name,
 			oc::span<const uint8> barkAlbedo, uint32 barkSize, oc::span<const uint8> leafImage, uint32 leafSize);
 		void clearAll(); // nodes first, then the species' meshes and owned materials
@@ -143,11 +133,11 @@ export namespace Procedural
 		float m_bushShadowDistance = 100.0f;  // bushes cast no sun shadow beyond this from the cascades' centre (m); 0 = no limit
 		int m_seed = 1;
 		int m_groveType = 1;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name (1 = Oak)
-		int m_farMode = 0;                    // 0 = billboards, 1 = octahedral impostors (fallback), 2 = none (reloads)
+		int m_farMode = 0;                    // 0 = billboards, 1 = none (reloads)
 		int m_billboardViews = 0;             // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-		float m_impostorDistanceScale = 4.0f; // x every species' far distance (billboard or impostor); 0 = off
+		float m_farDistanceScale = 4.0f;      // x every species' billboard distance; 0 = off
 		float m_branchCardDistance = 0.4f;    // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
-		bool m_forceImpostors = false;        // debug: every module as its far representation
+		bool m_forceFar = false;              // debug: every module as its far representation
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
 		bool m_gpuExpansion = true;           // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 		uint32 m_treeSet = UINT32_MAX;        // the grove's GPU expansion set (Renderer::createTreeInstanceSet)

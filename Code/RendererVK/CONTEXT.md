@@ -1174,6 +1174,12 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   raster pass samples (an unjittered ray had TAA un-jitter content that never was jittered); the scene distance
   from `viewRelFromDepth` at the jittered uv. The `u_invMvp` ray was the visible "position jitter" (independent
   of resolution, step and TAA - the user's A/B, 2026-10-02); the jitter alignment is kept for correctness.
+* **The canopy's colour and sky light** (2026-10-04): the leaf colour (linear, as `meanLeafAlbedo` decoded it; LINEAR
+  in an RGBA8 UNORM image) is mixed toward its Rec. 709 luminance by `Far saturation scale` (0 grey .. 1 as baked .. 2;
+  a push-constant word, was `pad0`), then x `Far albedo scale`. The SKY term is the real sky: pi x the cosine-weighted
+  mean radiance of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45°
+  down 4 x 0.15: one cloud overhead does not set it alone), once per ray, x `Far ambient` (1 = physical); it was a
+  fixed cool blue tint x the sun's luminance. The sky map is baked in the GI stage, before "Far trees".
 * **March cost rules** (2026-10-02, measured in the sandbox with the 350² grove, RelWithDebInfo: "Far trees" 0.98 →
   0.62 ms, the march 72 registers + 48 B spill → 56 registers, no spill): ONE polar lookup (`polarUv`: atan + log)
   per step, shared by the cell size, the floor and the primary sample; the 12 lighting taps per lit step take their
@@ -1209,7 +1215,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   moves; jittering only the first sample left the rest on that sliding grid and the blobs shimmered), the height
   gap above the volume's top. Per sample: `albedo / π ×` (the sun × 0.6 (a leaf's mean cosine) × its
   transmittance through the crown (3 taps out to 14 m) × the terrain's sun visibility (`terrainSunVisibility`,
-  once per ray) + a COOL sky term, `Far ambient` × a blue tint × the sun's luminance, darker near the ground) +
+  once per ray) × the cloud shadow (`cloudSunTransmittanceBilinear`, per lit step; binding 11) + a COOL sky term, `Far ambient` × a blue tint × the sun's luminance, darker near the ground) +
   `u_ambientColor`. (First version: `2 × L.y` full sun + a warm ambient from the sun colour - the crowns read flat
   and yellow.) Ends at transmittance 0.01. Out: in-scatter + transmittance (RGBA16F) and the transmittance-weighted
   mean distance (R16F, m); the temporal variant instead writes log2 distances in `cloud_temporal`'s format
@@ -1533,13 +1539,10 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   and counts are stored as 32-bit element units.
 * `createMesh(data, raytraced = true)`: `raytraced` false builds NO BLAS (`RayTracingScene`'s `m_noStaticBlas`, the
   skip the skinned output regions use too) - any TLAS instance of it is inactive (no BLAS address). For meshes RT
-  never has to see: the trees' meshes / cards / impostors, the bushes (Procedural TreeSystem).
+  never has to see: the trees' meshes / cards, the bushes (Procedural TreeSystem).
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
-* The `TreeImpostor` pipeline variant (12, opaque family): `tree_impostor.vs.glsl` + the `LitMasked` FS. Its
-  quad mesh carries per-piece constants instead of geometry (Procedural "Branch-module impostors"); push its
-  nodes with `PASS_MAIN` only — the shadow pass would draw the degenerate quad with its own VS.
 * **BAKED TREE RECORDS** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
   RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
@@ -1628,7 +1631,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
   a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
-  **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, variant 13 = the LitMasked shaders + `FOLIAGE`,
+  **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, variant 12 = the LitMasked shaders + `FOLIAGE`,
   whose card paths assume it - LitMasked no longer compiles them, so the card code stopped setting the register
   count of every alpha-tested mesh): the FS's early sun shadow is NOT rejected by the
   geometric normal's facing (`sunShadowFirstFoliage`: sampled from the sun side, the normal-mapped normal's
@@ -1644,27 +1647,52 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   the crossing axis (half the crown sits behind the crossing card, and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` /
   `pcssBorder`) keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the
   PCSS average blocker (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)`
-  (`u_foliageParams.z`, 0 = hard). ~0 on the axis, deepening into the crown; far blockers shadow fully. All
+  (`u_foliageParams.z`, default 3.5, 0 = hard). ~0 on the axis, deepening into the crown; far blockers shadow fully. All
   foliage values live in `FoliageParams` (Settings.ixx; registered as "Foliage ..." in the TreeSystem's
-  "Trees" tweak category) and ride `u_foliageParams` / `u_foliageParams2` (Ubo, after `lodParams1`). **Interior**: the leaf's real 3D point (card
-  point + baked depth, returned by `sunShadowFirstFoliage`) against the crown sphere below — near its centre
-  = seen through the gaps deep inside — darkens the sun visibility AND the ambient (`computeLitColor`'s
-  `texAO`) down to `1 - Trees/Foliage interior shadow` (`u_foliageParams.w`), so a fully lit crown is not
-  flat: full inside `Foliage interior inner radius`, gone outside `outer radius` (leaf distance / crown radius,
-  default 0.2 / 1.2, `u_foliageParams2.w` / `u_foliageParams3.x`); on a whole tree's horizontal card the term is
+  "Trees" tweak category) and ride `u_foliageParams` / `u_foliageParams2` (Ubo, after `lodParams1`). **The
+  billboard normal map is the CROWN layout** (Procedural TreeImpostor `bakeBillboards`, 2026-10-04): RGB = the full
+  tangent-space normal, SIGN KEPT (a normal may face away, toward a sun behind the tree), **A = the BAKED INTERIOR**
+  (linear: 0 on the crown's surface .. 1 at about the crown's core depth, from the piece's own blurred leaf field -
+  any crown shape). (A first version rebuilt z from RG to put the interior in B: every normal then faced the viewer
+  and a back-lit tree went flat - the user's call; the alpha depth was read by no shader any more.) **Interior**:
+  darkens the sun visibility AND the ambient (`computeLitColor`'s `texAO`) by `1 - Trees/Foliage interior shadow
+  (u_foliageParams.w) x smoothstep(Foliage interior depth start, end, A)` (`u_foliageParams2.w` / `u_foliageParams3.x`,
+  default 0.25 / 0.56), so a fully lit crown is not flat. **On the SUN** (direct and transmitted) that interior FADES OUT as the
+  view lines up with the sun (x `Foliage interior view fade` (1) x |V·L|; the ambient keeps it): from the front the
+  leaves seen through the gaps are lit through those same gaps - the interior showed as a dark hole. **CROWN
+  SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (2.5) x chord)`, the chord from the visible
+  LEAF along L to where the crown ellipsoid (below) ends, in lateral radii (0 for a leaf outside it). The leaf lies
+  between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
+  interior x (1 - max(V·L, 0)) (from the front: at the entry - lit through the gaps); from the entry alone a sun
+  straight above left the whole upper half unshadowed and the core turned bright. The flat
+  cards cannot shade themselves in the shadow map - a crown seen toward the sun was lit everywhere but at its axis
+  (bright edges), now dark as a whole; a side-lit one darker on its far side (`u_foliageParams5.yz`, 2026-10-04). The
+  TRANSMITTED sun takes only `Foliage transmission self shadow` (0.3, `u_foliageParams5.w`) of that self-shadow's
+  exponent (light scattered forward through the leaves loses less): at the full share a crown seen toward the sun hid
+  `Foliage transmission` on the billboards entirely.
+  (It was the leaf's 3D point against a SPHERE of half the tree
+  height, with inner / outer radius tweaks - on a tall narrow pine that measured the height from mid-crown, not the
+  depth into it.) On a whole tree's horizontal card the term is
   raised to `Foliage interior shadow top card scale` (`u_foliageParams3.z`, default 0.5; an exponent: > 1 darker -
   a strength multiplier saturated at strength 1), then × `|V.y|` (the view's steepness; plain `V.y` went negative
   from below and turned the card black). **Crown normal**:
   each crossed card's baked normals shade the crown side ITS bake view saw, so the shading split hard where
   card A gives way to card B on screen (it stayed with shadows off). `foliageCrownNormal` blends the shading
-  normal toward the view ray's hit on a sphere on
-  the card's axis — the line from the instance origin along +u, centred at the card's u centre, radius half
-  the u length — which depends on the ray only, so both cards agree. The blend is 1 at the axis (where the
-  cards disagree most) and falls to `Trees/Foliage crown normal` (`u_foliageParams.y`) at half the radius from
-  it, so the outer crown keeps its baked detail. On a whole tree's HORIZONTAL card
-  (`MATERIAL_FLAG_BILLBOARD_TOP_CARD`, bit 23, on the card whose normal points up - `foliageTopCard`; whole trees
-  stand upright) `foliageCrownFrame` takes the card normal as the
-  axis and the card's own point on it as the centre; the radius is half the u length on every card. The LitFoliage variant's VS (defined
+  normal toward the view ray's hit on an ELLIPSOID on
+  the card's axis — the line from the instance origin along +u, centred at the card's u centre, radii half the u
+  length ALONG the axis and half the card's WIDTH ACROSS it (`|d(pos)/dv|` x the card's strip height in texture v,
+  which rides the tangent's w magnitude as `2 + strip` - Procedural `TREE_CARD_STRIP_CODE`; d(pos)/dv alone spans a
+  whole texture unit, ~3x the card: the first version took it raw, every pixel sat "at the axis" and the crown normal
+  replaced the baked one - uniformly lit circles, Billboard NormalBend without effect; cards without the code - the
+  merged branch cards, axis code >= 3 - keep a sphere of half the u length) (the card's own proportions: about a sphere for a round
+  crown, tall and narrow for a pine; the sphere of half the height it replaced, 2026-10-04, pointed a pine's
+  normals up at its top and down at its bottom - a top-to-bottom gradient under a high sun) — which depends on the
+  ray only, so both cards agree. The blend is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage
+  crown normal` (`u_foliageParams.y`, default 0 - the user's pick) at half the LATERAL radius from it, so the outer
+  crown keeps its baked detail.
+  On a whole tree's HORIZONTAL card (`MATERIAL_FLAG_BILLBOARD_TOP_CARD`, bit 23, on the card whose normal points up -
+  `foliageTopCard`; whole trees stand upright) `foliageCrownFrame` takes the card normal as the axis and the card's
+  own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS (defined
   `FOLIAGE`) adds the instance origin as flat location 5. **Leaf transmission**
   (`MATERIAL_FLAG_LEAF`, bit 30, LitMasked: the tree leaf cluster material and the billboards — not FOLIAGE,
   which carries the billboard-only terms): after `computeLitColor` the FS adds the sun THROUGH the leaf, tinted

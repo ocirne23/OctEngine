@@ -207,19 +207,14 @@ namespace Procedural
 		if (const AssetNode* bake = species->find("Bake"))
 			readInt(*bake, "Variants", out.variantCount);
 
-		if (const AssetNode* impostor = species->find("Impostor"))
-		{
-			readFloat(*impostor, "Distance", out.impostorDistance);
-			readInt(*impostor, "Frames", out.impostorFrames);
-			readInt(*impostor, "Resolution", out.impostorFrameSize);
-		}
-
 		if (const AssetNode* billboard = species->find("Billboard"))
 		{
 			readFloat(*billboard, "Distance", out.billboardDistance);
 			readInt(*billboard, "Resolution", out.billboardSize);
 			readFloat(*billboard, "NormalBend", out.billboardNormalBend);
-			readFloat(*billboard, "FadeWidth", out.billboardFadeWidth);		}
+			readFloat(*billboard, "FadeWidth", out.billboardFadeWidth);
+			readFloat(*billboard, "AlbedoScale", out.billboardAlbedoScale);
+		}
 
 		if (const AssetNode* color = species->find("Color"))
 		{
@@ -252,16 +247,10 @@ namespace Procedural
 		out.barkBreakup = glm::clamp(out.barkBreakup, 0.0f, 1.0f);
 		out.lodErrorScale = glm::max(out.lodErrorScale, 0.0f);
 		out.variantCount = glm::clamp(out.variantCount, 1, 64);
-		out.impostorDistance = glm::max(out.impostorDistance, 0.0f);
-		out.impostorFrames = glm::clamp(out.impostorFrames, 2, 32);
-		// A power of two: the atlas (frames x frameSize) gets a mip chain down to 4 px per frame.
-		int frameSize = 8;
-		while (frameSize < out.impostorFrameSize && frameSize < 512)
-			frameSize *= 2;
-		out.impostorFrameSize = frameSize;
 		out.billboardDistance = glm::max(out.billboardDistance, 0.0f);
 		out.billboardNormalBend = glm::clamp(out.billboardNormalBend, 0.0f, 1.0f);
 		out.billboardFadeWidth = glm::clamp(out.billboardFadeWidth, 1.0f, 1023.0f); // the material packs 10 bits
+		out.billboardAlbedoScale = glm::clamp(out.billboardAlbedoScale, 0.0f, 8.0f);
 		int billboardSize = 16;
 		while (billboardSize < out.billboardSize && billboardSize < 2048)
 			billboardSize *= 2;

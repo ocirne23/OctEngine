@@ -66,7 +66,7 @@ TreeSpecies Pine
 	Leaves
 		Type Cluster
 		Style Needles
-		Size 1.1
+		Size 1.0
 		Aspect 0.75
 		PerBranch 2
 		Levels 3
@@ -74,12 +74,15 @@ TreeSpecies Pine
 		Shoots 3
 		ClusterLeaves 3
 		ClusterLeafSize 0.11
-		NormalBend 0.5
+		NormalBend 0.1
 	Bark
 		Plates 16 4
 		Crack 0.045
 		Relief 1.2
 		Lichen 0.1
+	Billboard
+		NormalBend 0.0
+		AlbedoScale 1.2
 	Color
 		Bark 0.28 0.20 0.15
 		Leaf 0.12 0.26 0.13

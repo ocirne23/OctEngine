@@ -7,7 +7,8 @@
 // volume's ring (tree_volume.inc.glsl), from "Far start" to the scene surface or "Far end": steps of about one
 // volume cell (x "Step scale"), so they grow with the distance like the cells do; above the volume's
 // top the step is the height gap. Per step with extinction: the leaves' colour lit by the sun (its transmittance
-// through the volume toward the sun - two taps - x the terrain's sun visibility, one per ray at the first hit)
+// through the volume toward the sun - two taps - x the terrain's sun visibility, one per ray at the first hit, x the
+// cloud shadow per step)
 // plus an ambient that darkens toward the ground. Out: rgb = in-scatter, a = transmittance (the apply composites
 // colour + scene x T, like the clouds).
 
@@ -18,6 +19,8 @@
 #define TERRAIN_HEIGHT_BINDING 2
 #include "terrain_height.inc.glsl"
 #include "tree_volume.inc.glsl"
+#define CLOUD_SHADOW_BINDING 11
+#include "cloud_shadow.inc.glsl"
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
@@ -34,6 +37,7 @@ layout (binding = 6, rgba16f) uniform writeonly image2D u_outDepth;
 layout (binding = 6, r16f) uniform writeonly image2D u_outDepth; // the weighted mean distance (m): the fog apply's layer depth
 #endif
 layout (binding = 7, r32ui) uniform readonly uimage2D u_floor;   // the columns' tree floors (tree_volume.inc.glsl)
+layout (binding = 10) uniform sampler2DArray u_skyMap;           // GI's sky bake (atmosphere.inc.glsl): the canopy's sky light
 
 layout (push_constant, scalar) uniform Push
 {
@@ -42,7 +46,7 @@ layout (push_constant, scalar) uniform Push
     float stepScale;     // x the cell size
     float startDistance; // m from the CAMERA: the volume fades in from here...
     uint maxSteps;
-    float ambient;       // x the sun radiance, the sky light on the canopy
+    float ambient;       // x the sky's irradiance on the canopy (from the sky map; "Far ambient")
     float shrink;        // 1/m off the baked extinction: a blob shrinks toward its dense core ("Far blob shrink")
     float overlap;       // ...over this band (m), where the billboards still draw ("Far overlap")
     // The lighting ("Trees/Far ..."):
@@ -54,7 +58,7 @@ layout (push_constant, scalar) uniform Push
     float albedoScale;    // x the leaf colour
     float interiorShadow; // darkening of a blob's core ("Far interior shadow"; 0 = off)
     float interiorRadius; // its taps' distance, x the cell size ("Far interior radius")
-    uint pad0;
+    float saturation;     // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked ("Far saturation scale")
     uint pad1;
     uvec2 fullSize;       // the render size (the scene depth)
 } pc;
@@ -272,12 +276,21 @@ void marchAt(ivec2 px)
     const vec3 L = u_sunDirection.xyz;
     const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb;
     // PER RAY, not per lit step: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic, "Far
-    // forward scatter" - 1 at g = 0 - times "Far sun scale") and the sky light (a COOL blue tint x the sun's luminance,
-    // x "Far ambient"; its height factor stays per step).
+    // forward scatter" - 1 at g = 0 - times "Far sun scale") and the SKY LIGHT: the real sky's irradiance on an
+    // up-facing leaf - pi x the mean radiance of GI's sky map over the upper hemisphere, cosine-weighted from 5 taps (the
+    // zenith and a ring 45 degrees down: one cloud straight overhead does not set it alone) - x "Far ambient"; its
+    // height factor stays per step. (It was a fixed cool blue tint x the sun's luminance.)
     const float g = pc.forwardScatter;
     const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
     const vec3 sunPart = sunRadiance * (pc.sunScale * phase);
-    const vec3 skyBase = vec3(0.45, 0.6, 1.0) * dot(sunRadiance, vec3(0.2126, 0.7152, 0.0722)) * pc.ambient;
+    vec3 skyMean = 0.4 * textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 1.0, 0.0)), SKY_MAP_LAYER_GI), 0.0).rgb;
+    const float ringS = 0.70710678;
+    for (int k = 0; k < 4; ++k)
+    {
+        const vec2 h = k == 0 ? vec2(1.0, 0.0) : k == 1 ? vec2(-1.0, 0.0) : k == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+        skyMean += 0.15 * textureLod(u_skyMap, vec3(skyMapUV(vec3(h.x * ringS, ringS, h.y * ringS)), SKY_MAP_LAYER_GI), 0.0).rgb;
+    }
+    const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * pc.ambient);
     const float sliceH = pc.vol.height / float(pc.vol.slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
     // TWO SEGMENTS, split at the fade-in's end: the BAND (from "Far start" over "Far overlap", where the billboards still
@@ -340,12 +353,17 @@ void marchAt(ivec2 px)
             {
                 if (terrainVis < 0.0)
                     terrainVis = terrainSunVisibility(p, L, 20.0, 8, 0.02, 1.0);
+                // The clouds' sun transmittance per lit step (a ray crosses kilometres of canopy): the bilinear lookup,
+                // as the fog's media - the steps and TAA average it.
+                const float cloudT = cloudSunTransmittanceBilinear(p);
                 const mat2 J = polarJ(rel, r);
                 const float hs = p.y - smoothFloor; // the taps' height (densityTap)
                 // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
                 const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
                     + densityTap(uv, J, hs, L * 10.0) * 8.0) * pc.selfShadow);
-                const vec3 albedo = textureLod(u_colour, uv, 0.0).rgb * pc.albedoScale;
+                const vec3 baked = textureLod(u_colour, uv, 0.0).rgb;
+                // "Far saturation scale": toward the colour's linear luminance (Rec. 709) - distant canopies read greyer.
+                const vec3 albedo = max(mix(vec3(dot(baked, vec3(0.2126, 0.7152, 0.0722))), baked, pc.saturation), 0.0) * pc.albedoScale;
                 const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
                 // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
@@ -378,7 +396,7 @@ void marchAt(ivec2 px)
                         + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
                     interior = exp(-pc.interiorShadow * m * rr);
                 }
-                const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * sunCos) + sky) + albedo * u_ambientColor) * interior;
+                const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + albedo * u_ambientColor) * interior;
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);
