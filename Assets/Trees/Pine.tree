@@ -82,7 +82,7 @@ TreeSpecies Pine
 		Lichen 0.1
 	Billboard
 		NormalBend 0.0
-		AlbedoScale 1.2
+		AlbedoScale 1.3
 	Color
 		Bark 0.28 0.20 0.15
 		Leaf 0.12 0.26 0.13
