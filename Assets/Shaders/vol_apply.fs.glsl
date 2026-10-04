@@ -218,10 +218,13 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     const vec3 sunLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * u_eclipseParams.x * u_fogParams8.w); // x "Sun scatter", as the froxels
     // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
-    // would report zero coverage out here and hand over to exactly this.
-    const vec3 ambient = giEvalSkySH(-dir) * u_aoParams.y / PI + u_ambientColor;
+    // would report zero coverage out here and hand over to exactly this. Its sunlit-ground part
+    // (giSkySunIrradiance) is cloud-shadowed like the sun: weighted by sunW, which equals 1 - T unshadowed.
+    const vec3 skyE = giEvalSkySH(-dir);
+    const vec3 groundSunE = min(giSkySunIrradiance(-dir), skyE);
+    const vec3 ambient = ((skyE - groundSunE) * (1.0 - T) + groundSunE * sunW) * (u_aoParams.y / PI) + u_ambientColor * (1.0 - T);
 
-    return vec4(u_fogParams1.rgb * (sunLight * (sunW + hazeW) + ambient * (1.0 - T)), T);
+    return vec4(u_fogParams1.rgb * (sunLight * (sunW + hazeW) + ambient), T);
 }
 
 // The ray for this pixel from u_mvp's x/y/w ROWS, not from a reconstructed position: u_invMvp is a float32 CPU

@@ -854,6 +854,13 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       default 1): a non-physical gain on the SUN in-scatter only (froxels, far field, reflection fog) - sunlit fog
       and the shafts brighten, shadowed fog (ambient only) and the extinction do not: strong god rays through thin
       fog without fogging up the world.
+    * **The fog's sky-SH ambient is cloud-shadowed too** (2026-10-04): the sky SH is ONE probe seen from the
+      camera, and holds the sunlit ground below the horizon (`skyGroundSun`, plus the "Ground Horizon" share
+      above it). Undimmed, fog under a cloud shadow kept the camera's sunlit-ground ambient: bright over the
+      whole volume. `giSkySunIrradiance` (gi_probe.inc.glsl) is that part in closed form, `giEvalSkySHCloud`
+      subtracts its shadowed share: the froxels' GI-off ambient (the froxel's cloud tap), `giIrradiance`'s
+      out-of-field fallback (its `cloudSunTransmittanceSoft`, so surfaces too), and the far field (weighted by
+      `sunW`, no extra taps). The sun cone in the sky (aureole) is not part of it.
     * **"Fog/Shaft haze"** (Density (1/m), default 0.0025, 0 = off; Height (m), default 300; `u_fogParams10`): the fog is a
       HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds showed only after cranking the base
       density. The haze is a separate thin medium reaching up to the clouds (its own scale height from the fog's

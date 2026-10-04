@@ -315,6 +315,23 @@ vec3 giEvalSkySH(vec3 n)
 vec3 giEvalSkySH(vec3 n) { return giEvalCell(GI_SKY_SH_BASE, n); }
 #endif
 
+// The sky SH's SUN part, in closed form: the sunlit ground below the horizon (skyGroundSun, constant G) plus the
+// "Sky/Ground Horizon" share w of it above (projectSkySH). The L1 irradiance of G over the lower hemisphere is
+// G (pi/2)(1 - n.up); the constant w G above adds pi w G. The sky SH is ONE probe (the sky seen from the camera),
+// so without this every point out of the probe field got the camera's sunlit ground under a cloud shadow too.
+vec3 giSkySunIrradiance(vec3 n)
+{
+    const vec3 up = normalize(u_skyUp);
+    const float w = u_groundParams.w;
+    return skyGroundSun(up) * (PI * w + (1.0 - w) * (0.5 * PI) * (1.0 - dot(n, up)));
+}
+
+// The sky SH with its sun part dimmed by the cloud sun transmittance cloudT at the shaded point.
+vec3 giEvalSkySHCloud(vec3 n, float cloudT)
+{
+    return max(giEvalSkySH(n) - giSkySunIrradiance(n) * (1.0 - cloudT), vec3(0.0));
+}
+
 // The Chebyshev test's two inputs for direction dir FROM the probe: the mean distance to geometry and its
 // variance, both after the mean scale. Shared with the debug view's visibility mode.
 // * Mean scale k (u_giVisParams.w, > 1) widens each probe's visible footprint: the blurry L1 reconstruction
@@ -638,11 +655,14 @@ vec3 giIrradiance(vec3 worldPos, vec3 n)
     float coverage, sun;
     vec3 E = evalProbeCoverage(worldPos, n, coverage, sun);
 #if defined(CLOUD_SHADOW_INC_GLSL) && defined(CLOUD_SHADOWS)
-    if (sun > 0.0)
-        E *= 1.0 - sun * (1.0 - cloudSunTransmittanceSoft(worldPos));
-#endif
+    const float cloudT = (sun > 0.0 || coverage < 1.0) ? cloudSunTransmittanceSoft(worldPos) : 1.0;
+    E *= 1.0 - sun * (1.0 - cloudT);
+    if (coverage < 1.0)
+        E = mix(giEvalSkySHCloud(n, cloudT), E, coverage);
+#else
     if (coverage < 1.0)
         E = mix(giEvalSkySH(n), E, coverage);
+#endif
     return E;
 }
 

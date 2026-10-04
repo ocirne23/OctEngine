@@ -385,7 +385,8 @@ void main()
         }
         else
             sunVis = giSunShadow(worldPos, vec3(0.0));
-        sunVis *= cloudSunTransmittanceBilinear(worldPos);
+        const float cloudVis = cloudSunTransmittanceBilinear(worldPos);
+        sunVis *= cloudVis;
         fogSunVis = sunVis;
 
         // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
@@ -421,7 +422,8 @@ void main()
         // band (coverage) instead of stepping at its boundary. For an SH-L1 field the isotropically
         // in-scattered radiance is E_mean / PI; E(-dir) is the single-sample stand-in for E_mean.
         // u_ambientColor is an isotropic radiance, so its phase integral is just itself.
-        const vec3 amb = u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySH(-dir);
+        // The sky SH's sunlit-ground part is cloud-shadowed at this froxel (giEvalSkySHCloud).
+        const vec3 amb = u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis);
         inLight += amb * u_aoParams.y / PI + u_ambientColor;
 
         // Local lights from the world-space hash grid cell containing this froxel.
