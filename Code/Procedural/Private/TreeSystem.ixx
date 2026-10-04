@@ -171,7 +171,7 @@ export namespace Procedural
 			oc::vector<Renderer::TreeInstancePiece>& out);
 
 		// --- Tweaks ---
-		bool m_enabled = false;
+		bool m_enabled = true;
 		bool m_reload = false;      // button: re-read the .tree files, regenerate, respawn
 		bool m_respawn = false;     // button: respawn the preview in front of the camera
 		bool m_regenerateTextures = false; // button: regenerate the species textures over the files on disk

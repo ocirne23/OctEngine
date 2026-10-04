@@ -142,7 +142,7 @@ export namespace Procedural
 		void logStats(const Renderer& renderer) const;
 
 		// --- Tweaks ---
-		bool m_enabled = false;
+		bool m_enabled = true;
 		int m_seed = 1;
 		float m_cellSize = 5.0f;
 		float m_densityScale = 1.0f;
