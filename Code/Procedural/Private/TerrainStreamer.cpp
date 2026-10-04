@@ -1395,8 +1395,12 @@ namespace Procedural
 			lapsePerWorldM = maps->lapseRatePerMetre() / glm::max(vertScale, 1e-4f);
 		}
 		renderer.setTerrainParams((float)R * chunkSize, m_seaLevel, lapsePerWorldM);
-		// The ground under the camera (the near grass shadow cascade's placement).
-		renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
+		// The ground under the camera (the near grass shadow cascade's placement). The sample may read the tile under the
+		// camera from the disk cache once (a cold start or a jump): one tile, which the chunks there need anyway.
+		{
+			const FileSystem::AllowMainThreadIO cameraGroundIo;
+			renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
+		}
 
 		// The far cascade must cover the whole resident mesh, else terrain past its edge reads clamp-to-edge
 		// (frozen altitude/temperature -> distant inland looks uniformly cold/snowy, ignoring the inland

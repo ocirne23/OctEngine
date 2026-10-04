@@ -337,7 +337,10 @@ namespace Procedural
 		}
 		// The far-tree volume lays its cells out by the camera's height above the ground under it.
 		if (maps)
+		{
+			const FileSystem::AllowMainThreadIO cameraGroundIo; // the tile under the camera (TerrainStreamer read it already)
 			renderer.setFarTreeCameraGround(maps->sampleHeight(camera.position.x, camera.position.z));
+		}
 
 		// The CPU path (GPU expansion off): per piece, its billboard crossfade (see PlacedPiece); without a far
 		// representation (Far mode None) the meshes alone.

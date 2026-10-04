@@ -470,10 +470,21 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
         && m_treeSets[m_treeRecordSet].alive)
     {
         const TreeInstanceSet& set = m_treeSets[m_treeRecordSet];
-        records = TreeVolumePipeline::RecordSource{ m_treeRecords.records().getDeviceAddress(), m_treeRecords.map(frameIdx).getDeviceAddress(),
-            m_treeRecords.mapSize(), m_treeRecords.table(frameIdx).getDeviceAddress(),
-            m_treeRecords.types().getDeviceAddress(), set.volumeTypes.getDeviceAddress(), set.volumeData.getDeviceAddress(),
-            m_treeRecords.tableCount(frameIdx), m_treeRecords.numTypes(), m_treeRecordChunkSize, m_treeRecordSeed };
+        records = TreeVolumePipeline::RecordSource{
+            .records = m_treeRecords.records().getDeviceAddress(),
+            .map = m_treeRecords.map(frameIdx).getDeviceAddress(),
+            .mapSize = m_treeRecords.mapSize(),
+            .chunks = m_treeRecords.table(frameIdx).getDeviceAddress(),
+            .chunksCpu = m_treeRecords.tableCpu(frameIdx),
+            .mapCpu = m_treeRecords.mapCpu(),
+            .types = m_treeRecords.types().getDeviceAddress(),
+            .volumeTypes = set.volumeTypes.getDeviceAddress(),
+            .volumeData = set.volumeData.getDeviceAddress(),
+            .numChunks = m_treeRecords.tableCount(frameIdx),
+            .numTypes = m_treeRecords.numTypes(),
+            .chunkSize = m_treeRecordChunkSize,
+            .worldSeed = m_treeRecordSeed,
+        };
     }
     const TreeVolumePipeline::RecordParams params{
         .ubo = frameData.ubo,
@@ -536,7 +547,7 @@ void Renderer::destroyTreeInstanceSet(uint32 setId)
     set.volumeTypes.destroy();
     set.volumeData.destroy();
     set.hasVolume = false;
-    m_treeVolume.markDirty();
+    m_treeVolume.invalidate(); // a running bake reads its buffers
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
         set.lists[f].destroy();

@@ -38,7 +38,7 @@ void TreeRecordPool::reset(uint64 bytes, uint64 frame, uint32 ringRadius)
     {
         // Same pool: the live chunks' blocks go through the deferred free like any removal.
         for (uint32 handle : m_dense)
-            m_pending.push_back({ m_chunks[handle].firstBlock, m_chunks[handle].blocks, frame + RendererVKLayout::NUM_FRAMES_IN_FLIGHT });
+            m_pending.push_back({ m_chunks[handle].firstBlock, m_chunks[handle].blocks, frame + RendererVKLayout::NUM_FRAMES_IN_FLIGHT, frame });
     }
     m_chunks.clear();
     m_freeHandles.clear();
@@ -101,7 +101,7 @@ void TreeRecordPool::remove(uint32 handle, uint64 frame)
     if (handle >= (uint32)m_chunks.size() || m_chunks[handle].dense == UINT32_MAX)
         return;
     Chunk& chunk = m_chunks[handle];
-    m_pending.push_back({ chunk.firstBlock, chunk.blocks, frame + RendererVKLayout::NUM_FRAMES_IN_FLIGHT });
+    m_pending.push_back({ chunk.firstBlock, chunk.blocks, frame + RendererVKLayout::NUM_FRAMES_IN_FLIGHT, frame });
     if (TreeRecordMapGpu& entry = m_mapMirror[mapIndex(chunk.gpu.coord)]; entry.coord == chunk.gpu.coord)
         entry = TreeRecordMapGpu{};
     // Swap-remove from the packed list.
@@ -133,11 +133,17 @@ void TreeRecordPool::setTypes(oc::span<const TreeRecordTypeGpu> types)
     m_types.upload(types.size_bytes(), types.data());
 }
 
-void TreeRecordPool::update(uint32 frameSlot, uint64 frame)
+void TreeRecordPool::update(uint32 frameSlot, uint64 frame, uint64 holdSince)
 {
+    // A bake ended: what it held is reusable once its last frame is done.
+    if (m_holdSince != UINT64_MAX && holdSince != m_holdSince)
+        for (PendingFree& p : m_pending)
+            if (p.removedFrame >= m_holdSince)
+                p.readyFrame = oc::max(p.readyFrame, frame + RendererVKLayout::NUM_FRAMES_IN_FLIGHT);
+    m_holdSince = holdSince;
     for (size_t i = 0; i < m_pending.size(); )
     {
-        if (m_pending[i].readyFrame <= frame)
+        if (m_pending[i].readyFrame <= frame && (m_holdSince == UINT64_MAX || m_pending[i].removedFrame < m_holdSince))
         {
             m_freeBlocks.release(m_pending[i].firstBlock, m_pending[i].blocks);
             m_pending[i] = m_pending.back();
@@ -150,11 +156,12 @@ void TreeRecordPool::update(uint32 frameSlot, uint64 frame)
     if (!m_tableDirty[frameSlot])
         return;
     m_tableDirty[frameSlot] = false;
-    m_scratch.resize(m_dense.size());
+    oc::vector<TreeRecordChunkGpu>& tableCpu = m_tableCpu[frameSlot];
+    tableCpu.resize(m_dense.size());
     for (size_t i = 0; i < m_dense.size(); ++i)
-        m_scratch[i] = m_chunks[m_dense[i]].gpu;
+        tableCpu[i] = m_chunks[m_dense[i]].gpu;
     Buffer& table = m_tables[frameSlot];
-    const size_t bytes = m_scratch.size() * sizeof(TreeRecordChunkGpu);
+    const size_t bytes = tableCpu.size() * sizeof(TreeRecordChunkGpu);
     if (!table.getBuffer() || table.getSize() < bytes)
     {
         // This slot's last frame is done (beginFrame waited its fence): its buffer can be replaced.
@@ -165,8 +172,8 @@ void TreeRecordPool::update(uint32 frameSlot, uint64 frame)
             vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeRecordTable", BufferHostAccess::eSequentialWrite);
     }
     if (bytes > 0)
-        table.upload(bytes, m_scratch.data());
-    m_tableCounts[frameSlot] = (uint32)m_scratch.size();
+        table.upload(bytes, tableCpu.data());
+    m_tableCounts[frameSlot] = (uint32)tableCpu.size();
 
     // The chunk map, whole (its size only changes at a reset).
     Buffer& map = m_maps[frameSlot];

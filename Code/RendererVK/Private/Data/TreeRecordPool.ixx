@@ -101,13 +101,19 @@ public:
     Buffer& types() { return m_types; }
     uint32 numTypes() const { return m_numTypes; }
     // Once per frame after beginFrame: the deferred frees whose frames are done, and the current slot's table.
-    void update(uint32 frameSlot, uint64 frame);
+    // holdSince: a far-volume bake that started on that frame is still running over several frames (UINT64_MAX: none) -
+    // it works from a snapshot of the table, so a chunk removed since then keeps its blocks until NUM_FRAMES_IN_FLIGHT
+    // frames after the bake ended.
+    void update(uint32 frameSlot, uint64 frame, uint64 holdSince);
     TreeRecordStats stats() const;
 
     Buffer& records() { return m_records; }
     Buffer& table(uint32 frameSlot) { return m_tables[frameSlot]; }
     uint32 tableCount(uint32 frameSlot) const { return m_tableCounts[frameSlot]; }
+    // The CPU copy of what the slot's table holds (the far volume picks its detail chunks from it).
+    oc::span<const TreeRecordChunkGpu> tableCpu(uint32 frameSlot) const { return m_tableCpu[frameSlot]; }
     Buffer& map(uint32 frameSlot) { return m_maps[frameSlot]; }
+    oc::span<const TreeRecordMapGpu> mapCpu() const { return m_mapMirror; } // the chunk map as of now
     uint32 mapSize() const { return m_mapSize; }
 
 private:
@@ -123,7 +129,9 @@ private:
         uint32 firstBlock = 0;
         uint32 blocks = 0;
         uint64 readyFrame = 0;
+        uint64 removedFrame = 0;
     };
+    uint64 m_holdSince = UINT64_MAX; // the running bake's start (update's holdSince)
 
     Buffer m_records;
     uint32 m_numBlocks = 0;
@@ -142,7 +150,7 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tables;
     oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tableCounts{};
     oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tableDirty{};
-    oc::vector<TreeRecordChunkGpu> m_scratch;
+    oc::array<oc::vector<TreeRecordChunkGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tableCpu;
     // The chunk map: its CPU mirror, written whole into the current slot's buffer with the table.
     uint32 m_mapSize = 0;
     oc::vector<TreeRecordMapGpu> m_mapMirror;

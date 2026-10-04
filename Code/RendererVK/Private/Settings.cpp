@@ -255,6 +255,7 @@ void FarTreeParams::registerTweaks()
     Tweak::enumVar("Trees", "Far pixel skip", &pixelSkip, PIXEL_SKIP);
     Tweak::floatVar("Trees", "Far rebake distance (m)", &rebakeDistance, 1.0f, 2000.0f, 1.0f);
     Tweak::floatVar("Trees", "Far record detail (m)", &recordDetail, 0.0f, 40000.0f, 10.0f);
+    Tweak::intVar("Trees", "Far bake frames", &bakeFrames, 1, 120, 1.0f);
     Tweak::intVar("Trees", "Far floor smoothing", &floorSmoothing, 0, 8, 1.0f);
 }
 

@@ -312,7 +312,11 @@ public:
 
     // -- WORLD TREE RECORDS (TreeRecordPool; Procedural TreeWorld). MAIN THREAD, after beginFrame. --
     // (Re)sizes the pool and drops every chunk (a size change drains the GPU). ringRadius (chunks) sizes the chunk map.
-    void resetTreeRecords(uint64 poolBytes, uint32 ringRadius) { m_treeRecords.reset(poolBytes, m_frameCounter, ringRadius); }
+    void resetTreeRecords(uint64 poolBytes, uint32 ringRadius)
+    {
+        m_treeVolume.invalidate(); // a running bake reads the old chunks
+        m_treeRecords.reset(poolBytes, m_frameCounter, ringRadius);
+    }
     // A chunk's ground (TREE_RECORD_HEIGHT_WORDS) and 4-byte records; the handle, or UINT32_MAX (no room). The far
     // volume re-bakes (throttled).
     uint32 addTreeRecordChunk(glm::ivec2 coord, oc::span<const uint32> ground, oc::span<const uint32> records)
@@ -330,14 +334,14 @@ public:
     // set). The far volume then takes EVERY tree from the records and none from that set. Drains the GPU.
     void setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types, float chunkSize, uint32 worldSeed, uint32 volumeSet)
     {
+        m_treeVolume.invalidate(); // a running bake reads the old types
         m_treeRecords.setTypes(types);
         m_treeRecordChunkSize = chunkSize;
         m_treeRecordSeed = worldSeed;
         m_treeRecordSet = volumeSet;
-        m_treeVolume.markDirty();
     }
     // Once per frame: the deferred frees, and the current frame slot's chunk table.
-    void updateTreeRecords() { m_treeRecords.update(m_swapChain.getCurrentFrameIndex(), m_frameCounter); }
+    void updateTreeRecords() { m_treeRecords.update(m_swapChain.getCurrentFrameIndex(), m_frameCounter, m_treeVolume.bakeHoldSince()); }
     TreeRecordStats treeRecordStats() const { return m_treeRecords.stats(); }
 
     // -- Procedural grass (GrassPipeline, grass.inc.glsl; "Grass" tweaks) --

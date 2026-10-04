@@ -12,6 +12,7 @@ import :GraphicsPipeline;
 import :DescriptorSet;
 import :Layout;
 import :Settings;
+import :TreeRecordPool;
 
 // FAR TREES as a marched volume (Docs/TreeRenderingPlan.md T2, prototype P1). Three stages:
 //   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
@@ -66,7 +67,11 @@ public:
     void initialize(uint32 width, uint32 height, vk::RenderPass sceneRenderPass);
     void recreateImages(uint32 width, uint32 height); // the march outputs (render size)
     void reloadShaders(vk::RenderPass sceneRenderPass); // the caller has waited for the GPU
-    void markDirty() { m_dirty = true; }               // a tree set changed: re-bake
+    void markDirty() { m_dirty = true; }               // a tree set changed: re-bake (after a running bake)
+    // What a running bake reads is going away (a tree set, the record types, the pool): drop it, re-bake from scratch.
+    void invalidate() { m_dirty = true; m_job.active = false; }
+    // The frame the running bake started on (UINT64_MAX: none): the record pool keeps the chunks it saw alive.
+    uint64 bakeHoldSince() const { return m_job.active ? m_job.startFrame : UINT64_MAX; }
     // Before recording (main thread): (re)creates the volume when its resolution changed, and the temporal images
     // when the temporal blend is first turned on - drains the GPU then.
     void prepare(const FarTreeParams& settings);
@@ -90,6 +95,8 @@ public:
         vk::DeviceAddress map = 0;         // TreeRecordMapGpu, mapSize^2 (the chunk map: a position's ground)
         uint32 mapSize = 0;
         vk::DeviceAddress chunks = 0;      // TreeRecordChunkGpu per chunk
+        oc::span<const TreeRecordChunkGpu> chunksCpu; // the same table on the CPU: the bake's snapshot, its detail chunks
+        oc::span<const TreeRecordMapGpu> mapCpu;      // the chunk map on the CPU: the bake's snapshot
         vk::DeviceAddress types = 0;       // TreeRecordTypeGpu per record type
         vk::DeviceAddress volumeTypes = 0; // the world set's TreeVolumeTypeGpu (the variants' grids)
         vk::DeviceAddress volumeData = 0;
@@ -147,7 +154,12 @@ private:
     void createTemporalImages(uint32 scale);
     void destroyTemporalImages();
     void destroyImage(Image& image);
-    void bake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
+    // THE BAKE, SPREAD OVER FRAMES ("Far bake frames"): startBake snapshots everything it reads, stepBake runs this
+    // frame's share - the clears; the floor coverage, the floor and the splat (the record splat's workgroups spread
+    // evenly); the smoothing; the records' mass; the far columns; then the resolve + the front / back swap. The march
+    // reads the FRONT floor and colour and the density, which only the last step changes.
+    void startBake(const RecordParams& params, uint32 frameNumber);
+    void stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
 
     ComputePipeline m_floorCoverPipeline; // the splat shader's TREE_FLOOR_PASS 1 variant (the coverage per column)
     ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)
@@ -182,8 +194,10 @@ private:
 
     Image m_accum;   // R32UI 3D: the splat's fixed-point sums
     Image m_density; // R16F 3D: extinction (1/m), sampled
-    Image m_colour;  // RGBA8 2D: the leaf albedo per column
-    Image m_floor;   // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
+    // FRONT (m_front: the march's) and BACK (the running bake's) copies, swapped at the bake's last step:
+    oc::array<Image, 2> m_colour; // RGBA8 2D: the leaf albedo per column
+    oc::array<Image, 2> m_floor;  // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
+    uint32 m_front = 0;
     Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass)
     Image m_farAmount;  // R32UI 2D: the records' mass per column (fixed point; TV_AMOUNT_SCALE)
     Image m_farType;    // R32UI 2D: the record type whose profile a column takes (last writer wins)
@@ -217,9 +231,37 @@ private:
     uint32 m_radialRes = 0;
     uint32 m_slices = 0;
 
-    // The baked state: re-bake when any of it changes.
+    // The baked state (the FRONT: what the march reads): re-bake when any of it changes.
     bool m_dirty = true;
     bool m_baked = false;
     glm::vec2 m_centre{ 0.0f };
     FarTreeParams m_bakedSettings;
+
+    // The running bake (the BACK).
+    enum class EBakeStage : uint8 { Clear, FloorCover, Floor, Smooth, Splat, RecordMass, FarColumns, Resolve };
+    struct BakeJob
+    {
+        bool active = false;
+        EBakeStage stage = EBakeStage::Clear;
+        uint32 progress = 0;      // the record splat's workgroups done in this stage
+        uint32 perFrame = 1;      // ... per frame
+        uint32 startFrame = 0;
+        glm::vec2 centre{ 0.0f };
+        FarTreeParams settings;
+        oc::vector<Source> sources; // the static sets
+        RecordSource records;       // with the snapshot buffers' addresses
+        uint32 detailRecords = 0;
+        uint32 numDetailChunks = 0;
+    };
+    BakeJob m_job;
+    uint32 m_lastBakeEnd = 0; // the frame the last bake swapped: the next one starts NUM_FRAMES_IN_FLIGHT later (its
+                              // snapshot buffers are rewritten, and the old front - the new back - may still be read)
+    // The bake's SNAPSHOTS (host-visible, written at its start): the record table, the chunk map, and the detail chunks -
+    // the records within "Far record detail" of the bake centre, one workgroup per RECORD (a workgroup per chunk ran its
+    // ~3000 plants in sequence - 31 ms per bake), each (coord.x, coord.y, its first record's pool word, its first
+    // workgroup).
+    Buffer m_bakeTable;
+    Buffer m_bakeMap;
+    Buffer m_bakeDetail;
+    oc::vector<glm::uvec4> m_detailScratch;
 };

@@ -119,14 +119,16 @@ export void installFileHooks()
 
 export class Session
 {
+    // The free-fly camera's start; the sandbox's skysphere spawns there too.
+    static inline const glm::vec3 START_POS{ -11837.2f, 78.3f, -4612.1f };
+
 public:
     Session(const LaunchOptions& options)
         : m_options(options)
     {
         if (options.headlessServer())
             return;
-        const glm::vec3 startPos(-22.3f, 14.6f, 0.7f);
-        m_cameraController.initialize(startPos, startPos + glm::vec3(0.9f, 0.2f, -0.4f));
+        m_cameraController.initialize(START_POS, START_POS + glm::vec3(-1.0f, 0.0f, 0.0f));
         if (Globals::rendererVK.isVrEnabled()) // the renderer is up before the session exists
             m_vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
     }
@@ -208,8 +210,8 @@ public:
         {
             TweakRegistry::get().setOverride("Terrain/Enabled=1");
             TweakRegistry::get().setOverride("Ocean/Enabled=1");
-            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
-            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(), true));
+            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
+            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(START_POS), true));
             if (Globals::networkManager.role() == ENetRole::Server)
                 Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
         }

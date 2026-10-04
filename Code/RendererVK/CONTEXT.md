@@ -1170,8 +1170,10 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   expandChunk's order (max 8), `bushesPerTree`, `bushRadius`; per variant its extinction integral at scale 1; the
   species' 32-bin height profile at the mean scale, crown radius (scale 1), leaf colour. Two regions by the chunk
   centre's distance from the bake centre against `Far record detail (m)` (4000; a rebake setting):
-  * **Within it** the splat's `TREE_SPLAT_RECORDS` variants (all three passes; one workgroup per chunk, record by
-    record): each record EXPANDS exactly as the CPU does - variant, scale, yaw from `treeRecordSeed`, its bushes - on
+  * **Within it** the splat's `TREE_SPLAT_RECORDS` variants (all three passes; ONE WORKGROUP PER RECORD: the bake
+    picks the detail chunks on the CPU from the table's CPU copy, `TreeRecordPool::tableCpu`, with each chunk's first
+    workgroup, `m_bakeDetail`, and a workgroup finds its chunk by a binary search - a workgroup per
+    chunk ran its ~3000 plants in sequence: 31 ms per bake, 2026-10-04): each record EXPANDS exactly as the CPU does - variant, scale, yaw from `treeRecordSeed`, its bushes - on
     its chunk's GROUND grid (`treeRecordGround`: the 17² heights TreeWorld took from the generator's own field;
     `terrainHeightAt` only where the chunk holds none) and runs the per-tree body (`splatPiece`) into the world set's
     volume types. Detailed floors as any tree. (The terrain map alone, ~100 m texels in its far cascade, put every
@@ -1187,6 +1189,20 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
     type's profile (its mean over each slice) into the accumulation. A column without a type takes a neighbour's,
     else the first type with mass.
   Record table changes re-bake (at most every 30 frames). `farTreesActive` is true with record types alone.
+* **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 12; 2026-10-04 - in one frame the world records cost 6-7 ms
+  of GPU per bake, after the per-record dispatch took it down from 31): `startBake` SNAPSHOTS what it reads that can
+  change before it ends - the static sets' list, the record table and the chunk map (copied into the bake's own
+  host-visible buffers), the detail chunks - and the record pool keeps every chunk it saw alive until NUM_FRAMES_IN_FLIGHT
+  frames after it ends (`bakeHoldSince` -> `TreeRecordPool::update`). `stepBake` runs one share per frame: the clears;
+  the floor coverage, the floor and the splat (the static sets whole at a stage's first frame, the record splat's
+  workgroups spread evenly: `SplatPC::wgOffset`); the smoothing; the records' mass (a frame); the far columns (a frame);
+  then the resolve and the SWAP. The bake writes the BACK `floor` / `colour` (two of each, +36 MB) and the shared
+  `accum`; the march reads the FRONT ones and `density`, which only the last step changes, so it sees the previous bake
+  until one frame switches all of it. A new bake starts only NUM_FRAMES_IN_FLIGHT frames after the last swap (the
+  snapshots are rewritten, and the old front - the new back - may still be read). `markDirty` re-bakes after a running
+  bake; `invalidate` (a set destroyed, the record types or the pool replaced) drops it; a geometry setting change drops
+  it too. **The volume lags the camera by the bake's length**: fast flight can outrun the ring's margin (`Far rebake
+  distance` + 30 m) before the swap - lower `Far bake frames` if a gap shows at the hand-over.
 * **The ring's inner radius is a FIXED `Far start` − `Far rebake distance` − 30 m** (horizontal), around the BAKE
   centre: the camera may move a rebake distance before the next bake, and the ring must still hold every tree
   past the hand-over.

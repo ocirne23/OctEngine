@@ -13,7 +13,7 @@ export struct SkyParams
     glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f); // sky "up" axis; also the sky radiance light direction
 
     // Sun
-    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.625f, 0.6f, -0.5f));
+    glm::vec3 sunDirection = glm::normalize(glm::vec3(0.635f, 0.763f, -0.122f));
     glm::vec3 sunColor = glm::vec3(0.9568f, 1.0f, 0.9214f);
     float sunIntensity = 3.0f;
     float sunAngularCos = 0.99998f;     // cos of the disc radius (1 = disc off)
@@ -83,8 +83,8 @@ export struct CloudParams
     // Shape
     float bottom = 300.0f;             // shell bottom altitude (m)
     float top = 2000.0f;               // shell top altitude (m)
-    float coverage = 0.15f;            // 0 = clear, 1 = overcast
-    float coverageVariation = 1.5f;    // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
+    float coverage = 0.75f;            // 0 = clear, 1 = overcast
+    float coverageVariation = 1.75f;   // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
@@ -402,6 +402,9 @@ export struct FarTreeParams
     // The world tree records' chunks within this of the bake centre (m) expand into their trees and bushes and splat in
     // detail; beyond, each record adds its mass per column (TreeVolumePipeline RecordSource).
     float recordDetail = 4000.0f;
+    // A bake runs over about this many frames (the record splat's three passes spread evenly, plus a few steps of their
+    // own); the march reads the previous bake until the last one. 1 = as fast as it goes.
+    int bakeFrames = 12;
     void registerTweaks();
 };
 

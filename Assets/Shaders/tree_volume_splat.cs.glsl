@@ -17,8 +17,8 @@
 // (coverage 0) keeps the lowest base of the trees whose rectangle reaches it.
 //
 // TREE_SPLAT_RECORDS (all three passes): the trees come from the WORLD TREE RECORDS (Procedural TreeWorld, W4) instead
-// of a tree set: one workgroup per record chunk within the record detail distance of the bake centre (the chunks
-// beyond add mass per column - tree_volume_records.cs, the same test), each record EXPANDED exactly as Procedural
+// of a tree set: one workgroup per record of the chunks within the record detail distance of the bake centre (the
+// chunks beyond add mass per column - tree_volume_records.cs, the same test), each record EXPANDED exactly as Procedural
 // TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on the terrain map's ground, into
 // the world set's volume types. The tree set's own copies of those trees are never splatted: one source, so a chunk
 // entering or leaving the set does not change the volume.
@@ -90,7 +90,8 @@ struct RecordType
     uint bushTypes[8];
     float shape[32];
 };
-layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ChunkList { RecordChunk c[]; };
+// A detail chunk (TreeVolumePipeline::bake): coord.xy, its first record's pool word, its first record's workgroup.
+layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer DetailList { uvec4 d[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RecordTypeList { RecordType t[]; };
 #ifndef TREE_SPLAT_RECORDS
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TreeRecordWords { uint w[]; };
@@ -105,17 +106,18 @@ layout (push_constant, scalar) uniform Push
 #endif
     TypeList types;      // TREE_SPLAT_RECORDS: the world set's
     FloatList data;
-    uint numPieces;      // TREE_SPLAT_RECORDS: the record chunks
+    uint numPieces;      // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
     uint mapSize;        // TREE_SPLAT_RECORDS: the chunk map's size
     TreeVolumeParams vol;
     // TREE_SPLAT_RECORDS only:
     TreeRecordWords records; // each chunk's ground, then its records
-    ChunkList chunks;
+    DetailList detailChunks;
     RecordTypeList recordTypes;
     float chunkSize;
     uint worldSeed;
-    float recordDetail;  // m: the chunks whose centre lies within this of the bake centre
+    uint numDetailChunks;
     uint numRecordTypes;
+    uint wgOffset;       // this dispatch's first record (the bake spreads the records over frames)
 } pc;
 
 // Fixed point of the accumulation: extinction (1/m) x this.
@@ -325,44 +327,47 @@ void splatRecordPlant(uint recordType, uint seed, vec2 p)
 void main()
 {
 #ifdef TREE_SPLAT_RECORDS
-    const uint chunkIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 chunks the dispatch wraps into y
-    if (chunkIdx >= pc.numPieces)
+    // ONE WORKGROUP PER RECORD (past 65535 the dispatch wraps into y): its chunk by a binary search over the detail
+    // chunks' first workgroups (the CPU picked them: within the record detail distance - tree_volume_records.cs takes
+    // the rest). A workgroup per CHUNK ran its ~3000 plants in sequence: 31 ms per bake.
+    const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
+    if (local >= pc.numPieces)
         return;
-    const RecordChunk chunk = pc.chunks.c[chunkIdx];
-    const vec2 origin = vec2(chunk.coord) * pc.chunkSize;
-    const float d = length(origin + 0.5 * pc.chunkSize - pc.vol.centre);
-    if (d >= pc.recordDetail)
-        return; // tree_volume_records.cs adds it as mass per column
-    const float reach = 0.7072 * pc.chunkSize + 30.0; // the chunk's half diagonal + a crown or a bush's reach
-    if (d + reach < pc.vol.rMin || d - reach > pc.vol.rMax)
-        return;
-    // Record by record, the whole workgroup on each (uniform control flow: every thread runs the same plant).
-    for (uint i = 0u; i < chunk.count; ++i)
+    const uint wg = local + pc.wgOffset; // this frame's slice of the bake
+    uint lo = 0u, hi = pc.numDetailChunks - 1u;
+    while (lo < hi)
     {
-        const uint record = pc.records.w[chunk.first + i];
-        const uint type = treeRecordType(record);
-        if (type >= pc.numRecordTypes)
-            continue;
-        const uint seed = treeRecordSeed(pc.worldSeed, chunk.coord, record);
-        const vec2 p = origin + treeRecordLocal(record, pc.chunkSize);
-        splatRecordPlant(type, seed, p);
-        // "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to the bush
-        // radius (area-uniform), a random bush type of its climate.
-        const uint numBushes = pc.recordTypes.t[type].numBushes;
-        const float perTree = pc.recordTypes.t[type].bushesPerTree;
-        if (numBushes == 0u || perTree <= 0.0)
-            continue;
-        const float whole = floor(perTree);
-        const uint count = uint(whole) + (treeHash01(treeHash(seed, 110u)) < perTree - whole ? 1u : 0u);
-        const float bushRadius = pc.recordTypes.t[type].bushRadius;
-        for (uint b = 0u; b < count; ++b)
-        {
-            const uint bushSeed = treeHash(seed, 200u + b);
-            const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531;
-            const float radius = mix(1.5, bushRadius, sqrt(treeHash01(treeHash(bushSeed, 112u))));
-            const uint bushType = pc.recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
-            splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
-        }
+        const uint mid = (lo + hi + 1u) / 2u;
+        if (pc.detailChunks.d[mid].w <= wg)
+            lo = mid;
+        else
+            hi = mid - 1u;
+    }
+    const uvec4 chunk = pc.detailChunks.d[lo];
+    const ivec2 coord = ivec2(chunk.xy);
+    const uint record = pc.records.w[chunk.z + (wg - chunk.w)];
+    const uint type = treeRecordType(record);
+    if (type >= pc.numRecordTypes)
+        return;
+    const uint seed = treeRecordSeed(pc.worldSeed, coord, record);
+    const vec2 p = vec2(coord) * pc.chunkSize + treeRecordLocal(record, pc.chunkSize);
+    splatRecordPlant(type, seed, p);
+    // "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to the bush
+    // radius (area-uniform), a random bush type of its climate.
+    const uint numBushes = pc.recordTypes.t[type].numBushes;
+    const float perTree = pc.recordTypes.t[type].bushesPerTree;
+    if (numBushes == 0u || perTree <= 0.0)
+        return;
+    const float whole = floor(perTree);
+    const uint count = uint(whole) + (treeHash01(treeHash(seed, 110u)) < perTree - whole ? 1u : 0u);
+    const float bushRadius = pc.recordTypes.t[type].bushRadius;
+    for (uint b = 0u; b < count; ++b)
+    {
+        const uint bushSeed = treeHash(seed, 200u + b);
+        const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531;
+        const float radius = mix(1.5, bushRadius, sqrt(treeHash01(treeHash(bushSeed, 112u))));
+        const uint bushType = pc.recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
+        splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
     }
 #else
     const uint pieceIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
