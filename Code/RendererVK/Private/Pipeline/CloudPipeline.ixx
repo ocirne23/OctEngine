@@ -31,6 +31,9 @@ public:
     // The sky clouds march one texel of every 2x2 block per frame (cloud_sky.cs.glsl): a texel's history
     // weight covers this many frames.
     static constexpr uint32 SKY_UPDATE_FRAMES = 4;
+    // The sky clouds' layers: 0 = seen from the ground under the camera (the mirror sky), 1 = averaged over
+    // observers around it (the GI sky - lighting that must not follow the camera's own cloud shadow).
+    static constexpr uint32 SKY_LAYERS = 2;
 
     CloudPipeline() = default;
     ~CloudPipeline();
@@ -73,7 +76,7 @@ public:
     // The clouds of the GI sky map (cloud_sky.cs.glsl), recorded straight into the primary after the shadow map
     // and before GI's sky-map bake. skyMap = the sky map itself (last frame's clear layer: the ambient).
     void recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyMapView, vk::Sampler skyMapSampler);
-    vk::ImageView getSkyCloudsView() const { return m_skyClouds.view; } // GENERAL; the sky map's texel grid
+    vk::ImageView getSkyCloudsView() const { return m_skyClouds.view; } // GENERAL, 2D array (SKY_LAYERS); the sky map's texel grid
     vk::ImageView getShadowView() const { return m_shadow.view; } // sampler2DArray, GENERAL
     vk::Sampler getShadowSampler() const { return m_linearSampler; }
     // The accumulated clouds (GENERAL): the fog apply composites them when the fog is on.
@@ -140,7 +143,7 @@ private:
     ShadowMapImage m_shadow;
     ComputePipeline m_skyPipeline;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skySets;
-    ShadowMapImage m_skyClouds; // one lat-long RGBA16F image (in-scatter, transmittance), GENERAL for life
+    ShadowMapImage m_skyClouds; // lat-long RGBA16F, SKY_LAYERS layers (in-scatter, transmittance), GENERAL for life
     oc::array<DescriptorSet, SLOTS> m_marchSets;
     oc::array<DescriptorSet, SLOTS> m_temporalSets;
     oc::array<DescriptorSet, SLOTS> m_applySets;

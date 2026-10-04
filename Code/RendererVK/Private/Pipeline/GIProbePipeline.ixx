@@ -113,8 +113,8 @@ public:
     // Bakes this frame's sky into the sky map: layer 0 = skyRadiance (GI miss rays, the forward pass's
     // skyRadiance(up) ambient), layer 1 = the mirror sky (ocean / terrain-film reflection rays: 12-step
     // march, saturation curve, no ground term), both with the volumetric clouds composited from
-    // skyClouds (CloudPipeline's lat-long cloud image, rendered earlier in the frame); layer 2 = skyRadiance
-    // without clouds (the clouds' ambient). Self-contained barriers: last frame's compute + fragment reads
+    // skyClouds (CloudPipeline's lat-long cloud image, rendered earlier in the frame); layer 2 = ONE texel,
+    // (0, 0): the clouds' ambient, skyRadiance without clouds averaged over 5 directions. Self-contained barriers: last frame's compute + fragment reads
     // of the single image -> this write -> this frame's compute + fragment reads. Recorded on EVERY frame
     // (ahead of the RT toggle) because the forward pass samples it.
     void recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, vk::ImageView skyCloudsView, vk::Sampler skyCloudsSampler);
@@ -230,7 +230,8 @@ private:
     // every frame. Single-buffered under recordSkyMap's barriers. 256x128: reflections look along the horizon
     // band, where the sunset gradient needs ~1.4 deg rows.
 public:
-    // Layers: skyRadiance + clouds, mirror sky + clouds, skyRadiance clear (atmosphere.inc.glsl SKY_MAP_LAYER_*).
+    // Layers: skyRadiance + clouds, mirror sky + clouds, the clouds' clear-sky ambient in texel (0, 0) only
+    // (atmosphere.inc.glsl SKY_MAP_LAYER_*).
     // CloudPipeline's sky clouds image uses the same width / height (one texel per sky-map texel).
     static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 3;
 private:

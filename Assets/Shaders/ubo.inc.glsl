@@ -353,8 +353,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage (the CPU's multiplier x the main coverage), w = type
     vec4 u_cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w = the UPPER layer's height variation (lift, fraction of its band)
     vec4 u_cloudLayer3;  // the main layer's SHELF PLACEMENT: x = the lowest shelf's height (the CPU centres the stack), y = the spacing to the next (fractions of the layer), z = the march's min step (m), w = the march's aerial perspective strength (x the added air light; 0 = off)
-    vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y unused, w = detail vertical drift (m, wrapped)
-    vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w unused
+    vec4 u_cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y = the GI sky clouds' history weight this frame, w = detail vertical drift (m, wrapped)
+    vec4 u_cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w = the GI sky clouds' observer radius (m)
     vec4 u_cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
     vec4 u_cloudLight1;  // x = ambient strength, y = ground albedo (folded into u_cloudLight2), z = powder strength, w = multi-scatter attenuation
     vec4 u_cloudLight2;  // rgb = the ground bounce's albedo: the sky's "Ground Albedo" COLOUR x the cloud "Ground albedo",

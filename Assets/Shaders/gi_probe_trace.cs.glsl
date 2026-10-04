@@ -138,29 +138,27 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
 // virtual sky probe (projectSkySH) samples the same bake, so the two agree by construction.
 vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
 
-// A gather MISS: the sky map, and its sun luminance for the probe's sun fraction. Below the horizon the map
-// holds a sunlit ground (skyRadiance) whose direct-sun term must count as SUN, or the lookup's cloud dimming
-// misses it: every visit's random downward misses (past rayMax or the TLAS range) then added undimmed sun
-// under a cloud shadow - flashing probes at shadow borders, worst with a low sun (more long, shallow rays).
-// Above the horizon the same holds for a CONE around the sun: the Mie aureole and the sunlit cloud edges there
-// are sun light that the shadowing cloud blocks at a shaded point, yet a small, bright target - a few rays per
-// visit hit it or not. The whole miss radiance inside the cone counts as sun, fading out toward its edge.
-#define GI_SUN_CONE_INNER_COS 0.9659 // cos 15 deg: all sun
-#define GI_SUN_CONE_OUTER_COS 0.8660 // cos 30 deg: all sky
+// A gather MISS: THE SKY SH's radiance (the virtual sky probe, giSkySHRadiance), not the sky map. A probe in open
+// space then gathers exactly the integral the out-of-field fallback evaluates (giIrradiance -> giEvalSkySHCloud),
+// cloud dimming included: under a cloud the probes were darker than the area past the field. (From the sky map,
+// a miss in a cone around the sun counted all of its radiance as SUN - the aureole, a small bright target that a
+// few rays per visit hit or not - and the lookup dimmed it again under a cloud the averaged GI layer had already
+// counted in; the fallback never dimmed it.) Its sun part is the sky SH's own (giSkySunIrradiance): the sunlit
+// ground G below the horizon, its "Ground Horizon" share w G above - as the STEP, not its L1 form (which goes
+// negative toward the zenith for w < 0.2): the probe keeps only the sun's DC, and the two have the same DC.
+// Volume mode reads LAST frame's sky SH (the bake's copy); probe mode reads the slot this dispatch's last workgroup
+// rewrites - a frame-to-frame change only, never a value from elsewhere.
 // skyOpen = the miss's weight in the sky visibility (its cosine to up, 0 below the horizon).
 // Everything from the UBO is derived HERE, per miss, not hoisted into main: a value held across the ray loop
 // is a register through the whole ray query (measured: 96 -> 128 with the sun direction, the ground sun, up and
 // the loop's sky sums held there).
 vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
 {
-    const vec3  radiance = skyMiss(d);
-    const vec3  up       = normalize(u_skyUp);
-    const float cosUp    = dot(d, up);
+    const vec3  up    = normalize(u_skyUp);
+    const float cosUp = dot(d, up);
     skyOpen = max(cosUp, 0.0);
-    sunLuma = cosUp < 0.0
-        ? dot(skyGroundSun(up), GI_LUMA_W)
-        : dot(radiance, GI_LUMA_W) * smoothstep(GI_SUN_CONE_OUTER_COS, GI_SUN_CONE_INNER_COS, dot(d, normalize(u_sunDirection.xyz)));
-    return radiance;
+    sunLuma = dot(skyGroundSun(up), GI_LUMA_W) * (cosUp < 0.0 ? 1.0 : u_groundParams.w);
+    return giSkySHRadiance(d);
 }
 
 // View-independent sun visibility from a point: one shadow ray toward the sun via the TLAS. Returns 1

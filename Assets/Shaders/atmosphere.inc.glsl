@@ -224,10 +224,11 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 // sunlit ground the probes actually see.
 // The below-horizon ground's direct-sun term (constant over directions). The GI trace counts it as SUN light
 // on its downward misses, so the lookup's cloud dimming reaches it (GI_SUN_V4 in gi_probe.inc.glsl).
+// up is always normalize(u_skyUp), so the ground's sun transmittance is the CPU's per-frame u_sunTransmittance.
 vec3 skyGroundSun(vec3 up)
 {
 	const vec3 sunDir = normalize(u_sunDirection.xyz);
-	return u_groundParams.rgb * atmosTransmittanceToLight(0.0, sunDir, up) * u_sunColor.rgb
+	return u_groundParams.rgb * u_sunTransmittance * u_sunColor.rgb
 		* (u_eclipseParams.x * max(dot(sunDir, up), 0.0) / PI);
 }
 
@@ -269,11 +270,17 @@ vec3 mirrorSkyRadiance(vec3 dir)
 // mirrorSkyRadiance. Consumers declare `sampler2DArray u_skyMap` on their own binding and sample
 // textureLod(u_skyMap, vec3(skyMapUV(dir), layer), 0.0). World +Y pole: u = atan(d.x, d.z) / 2pi + 0.5
 // (the sampler repeats U), v = acos(d.y) / pi (clamped V).
-// Layers 0 and 1 carry the volumetric clouds (seen from the ground under the camera); layer 2 is the same
-// skyRadiance WITHOUT them - the clouds' own ambient, so they never light themselves through their image.
+// Layers 0 and 1 carry the volumetric clouds; layer 2 holds per-frame CONSTANTS, one texel each, written by the
+// bake's invocation (0, 0, 0) (texelFetch them):
+//   SKY_MAP_CLOUD_AMBIENT_TEXEL - skyRadiance WITHOUT clouds, the zenith + 4 at 30 degrees, averaged: the clouds' own
+//                                 ambient, so they never light themselves through their image
+//   SKY_MAP_TREE_SKY_TEXEL      - the GI layer (WITH clouds), cosine-weighted over the zenith (0.4) + 4 at 45 degrees
+//                                 (0.15 each): the far trees' sky light
 #define SKY_MAP_LAYER_GI     0.0
 #define SKY_MAP_LAYER_MIRROR 1.0
 #define SKY_MAP_LAYER_CLEAR  2.0
+#define SKY_MAP_CLOUD_AMBIENT_TEXEL ivec3(0, 0, 2)
+#define SKY_MAP_TREE_SKY_TEXEL      ivec3(1, 0, 2)
 vec2 skyMapUV(vec3 d)
 {
 	return vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));

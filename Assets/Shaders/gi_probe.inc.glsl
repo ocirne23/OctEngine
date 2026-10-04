@@ -27,7 +27,8 @@
 //         the trace, relocation offset xyz)
 //   [6] = (sun DC luminance, sky visibility, fast visit-luma mean, visit-luma second moment):
 //         x - the part of luma(c0) that came from the SUN (the direct sun at gather hits + its multi-bounce),
-//             traced WITHOUT the cloud shadow. The lookup dims that fraction by the cloud transmittance at the
+//             traced WITHOUT the cloud shadow. The lookup turns it into the sun's share at the normal (giSunShare:
+//             modelled as light from the lower hemisphere) and dims that share by the cloud transmittance at the
 //             shaded point (giIrradiance), so a moving cloud shadow changes the GI at once instead of after each
 //             probe's update interval.
 //         y - the cosine-weighted share of the upper hemisphere (about u_skyUp) whose rays miss: open sky. Baked
@@ -281,6 +282,17 @@ vec3 giEvalSHLinear(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec4 Yk)
     return c0 * Yk.x + c1 * Yk.y + c2 * Yk.z + c3 * Yk.w;
 }
 
+// THE SUN'S SHARE OF THE IRRADIANCE AT n, from the sun's DC luminance coefficient sunDC (GI_SUN_V4.x, or its
+// weighted sum) and the irradiance eLin it belongs to (the same weights). A probe stores only the sun's DC, so
+// its DIRECTION is modelled: the sun part is the sunlit ground at the gather hits, i.e. light from the LOWER
+// hemisphere, whose L1 irradiance is its DC term x (1 - n.up) - Yk.x (A0 Y0) turns the coefficient into that
+// DC term. One DC fraction for every normal dimmed the SKY light on up-facing ground with the ground's sun under
+// a cloud: the probe field went darker than the area past it (giEvalSkySHCloud dims by direction).
+float giSunShare(float sunDC, vec3 eLin, vec3 n, vec4 Yk)
+{
+    return clamp(sunDC * Yk.x * (1.0 - dot(n, normalize(u_skyUp))) / max(dot(eLin, GI_LUMA_W), 1e-6), 0.0, 1.0);
+}
+
 // Cosine-convolved irradiance E(n) from SH-L1 coefficients. Diffuse exit radiance is albedo/PI * E(n).
 vec3 giEvalSH(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 n)
 {
@@ -304,16 +316,33 @@ vec3 giEvalCell(uint cellBase, vec3 n)
 #ifdef GI_VOLUME_TEXTURES_NAME
 // Volume mode: the bake's copy of the same 3 vec4s (the image at GI_VOLUME_SKY_IMAGE), so a consumer in volume
 // mode reads nothing from the probe buffer.
-vec3 giEvalSkySH(vec3 n)
+void giReadSkySH(out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3)
 {
     const vec4 p0 = texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(0, 0, 0), 0);
     const vec4 p1 = texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(1, 0, 0), 0);
     const vec4 p2 = texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(2, 0, 0), 0);
-    return giEvalSH(p0.xyz, vec3(p0.w, p1.xy), vec3(p1.zw, p2.x), p2.yzw, n);
+    c0 = p0.xyz;
+    c1 = vec3(p0.w, p1.xy);
+    c2 = vec3(p1.zw, p2.x);
+    c3 = p2.yzw;
 }
 #else
-vec3 giEvalSkySH(vec3 n) { return giEvalCell(GI_SKY_SH_BASE, n); }
+void giReadSkySH(out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3) { giReadSH(GI_SKY_SH_BASE, c0, c1, c2, c3); }
 #endif
+vec3 giEvalSkySH(vec3 n)
+{
+    vec3 c0, c1, c2, c3;
+    giReadSkySH(c0, c1, c2, c3);
+    return giEvalSH(c0, c1, c2, c3, n);
+}
+// The sky SH's RADIANCE along d (not the cosine-convolved irradiance): the virtual probe's coefficients are the
+// radiance projection itself. The probe trace's misses (gi_probe_trace.cs.glsl traceMiss).
+vec3 giSkySHRadiance(vec3 d)
+{
+    vec3 c0, c1, c2, c3;
+    giReadSkySH(c0, c1, c2, c3);
+    return max(giEvalSHLinear(c0, c1, c2, c3, shBasisL1(d)), vec3(0.0));
+}
 
 // The sky SH's SUN part, in closed form: the sunlit ground below the horizon (skyGroundSun, constant G) plus the
 // "Sky/Ground Horizon" share w of it above (projectSkySH). The L1 irradiance of G over the lower hemisphere is
@@ -386,13 +415,13 @@ float giVisibilityWeight(uint cellBase, vec3 dir, float len, int s)
 // Everything before the clamp is linear in the coefficients, so reducing each probe to 3 floats here is
 // exactly the old "blend the 12 coefficients, evaluate once": 3 accumulators live instead of 12, and the
 // first cascade holds 3 floats (not 12) while the second one samples - that span was the register peak.
-// sun = the blended sun fraction (see GI_SUN_V4): the weighted sun DC over the weighted DC luminance.
+// sun = the sun's share of eLin (giSunShare, from the weighted sun DC).
 void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n, vec4 Yk,
                      out vec3 eLin, out float totalW, out float sun)
 {
     eLin = vec3(0.0);
     totalW = 0.0;
-    float sunW = 0.0, lumaW = 0.0;
+    float sunW = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -435,9 +464,8 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
         eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
         sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
-        lumaW += w * dot(c0, GI_LUMA_W);
     }
-    sun = lumaW > 1e-8 ? clamp(sunW / lumaW, 0.0, 1.0) : 0.0;
+    sun = giSunShare(sunW, eLin, n, Yk); // both weighted sums: the weights cancel
     if (totalW <= 1e-4)
         return;
     eLin *= 1.0 / totalW;
@@ -534,7 +562,7 @@ vec3 giVolumeUVW(int c, vec3 p)
     return fract(p * (float(GI_VOLUME_RES) / float(giCascadeSpacing(c))) / vec3(GI_PROBE_DIMS * GI_VOLUME_RES));
 }
 
-float giVolumeCascade(int c, vec3 p, vec4 Yk, out vec3 eLin, out float sun)
+float giVolumeCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
     const vec3 uvw = giVolumeUVW(c, p);
     const int  i   = c * GI_VOLUME_IMAGES_PER_CASCADE;
@@ -549,16 +577,17 @@ float giVolumeCascade(int c, vec3 p, vec4 Yk, out vec3 eLin, out float sun)
     const vec3 c0 = l0W * invW;
     const vec3 q1 = qa.xyz, q2 = vec3(qa.w, qb.xy), q3 = vec3(qb.zw, tl.x);
     eLin = c0 * (Yk.x + GI_SQRT3 * (q1 * Yk.y + q2 * Yk.z + q3 * Yk.w));
-    sun  = min(tl.z * invW, 1.0);
+    // The stored DC sun FRACTION x luma(c0) = the sun DC coefficient.
+    sun  = giSunShare(min(tl.z * invW, 1.0) * dot(c0, GI_LUMA_W), eLin, n, Yk);
     return W;
 }
 
-// One cascade's unclamped irradiance at the biased point p, its sun fraction and its summed weight: the
+// One cascade's unclamped irradiance at the biased point p, the sun's share of it and its summed weight: the
 // irradiance volume when the includer binds it (the normal still biases p per pixel; only the probe-direction
 // half-Lambert weight is gone, see the bake), else the probe loop.
 float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float sun)
 {
-    return giVolumeCascade(c, p, Yk, eLin, sun);
+    return giVolumeCascade(c, p, n, Yk, eLin, sun);
 }
 
 // SKY VISIBILITY at a surface: the probes' cosine-weighted open share of the upper hemisphere (GI_SUN_V4.y), 1 =
@@ -604,8 +633,8 @@ float giSkyVisibility(vec3 worldPos, vec3 n) { return 1.0; }
 // as the fall-through when every probe of c is dead (a coarser, differently-aligned lattice). c dead with
 // c + 1 in ITS band does not blend on into c + 2. Dead in both, or past the outermost box: vec3(-1) with
 // coverage 0, and every caller uses only its sky fallback.
-// sun = the sun fraction of the result (GI_SUN_V4), blended like the irradiance; 0 with no data. The result is
-// NOT cloud-dimmed: giIrradiance applies that, and the trace's multi-bounce wants it undimmed.
+// sun = the sun's share of the result at n (giSunShare), blended like the irradiance; 0 with no data. The result
+// is NOT cloud-dimmed: giIrradiance applies that, and the trace's multi-bounce wants it undimmed.
 vec3 evalProbeCoverage(vec3 worldPos, vec3 n, out float coverage, out float sun)
 {
     coverage = 0.0;
@@ -718,7 +747,7 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
     const vec3  frac = pf - vec3(base);
     eLin = vec3(0.0);
     float totalW = 0.0;
-    float sunW = 0.0, lumaW = 0.0;
+    float sunW = 0.0;
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -743,9 +772,8 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
         eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
         sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
-        lumaW += w * dot(c0, GI_LUMA_W);
     }
-    sun = lumaW > 1e-8 ? clamp(sunW / lumaW, 0.0, 1.0) : 0.0;
+    sun = giSunShare(sunW, eLin, n, Yk);
     if (totalW > 1e-4)
         eLin *= 1.0 / totalW;
     return totalW;

@@ -215,14 +215,19 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     // only - the froxel volume's terrain shadow march is a sparse min() that only holds up filtered and
     // temporally blended.
     const vec3 sunDir = normalize(u_sunDirection.xyz);
-    const vec3 sunLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
+    const vec3 sunLight = u_sunTransmittance * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * u_eclipseParams.x * u_fogParams8.w); // x "Sun scatter", as the froxels
     // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
     // would report zero coverage out here and hand over to exactly this. Its sunlit-ground part
     // (giSkySunIrradiance) is cloud-shadowed like the sun: weighted by sunW, which equals 1 - T unshadowed.
-    const vec3 skyE = giEvalSkySH(-dir);
-    const vec3 groundSunE = min(giSkySunIrradiance(-dir), skyE);
-    const vec3 ambient = ((skyE - groundSunE) * (1.0 - T) + groundSunE * sunW) * (u_aoParams.y / PI) + u_ambientColor * (1.0 - T);
+    // GI off (u_aoParams.y 0): no sky SH lookup.
+    vec3 ambient = u_ambientColor * (1.0 - T);
+    if (u_aoParams.y > 0.0)
+    {
+        const vec3 skyE = giEvalSkySH(-dir);
+        const vec3 groundSunE = min(giSkySunIrradiance(-dir), skyE);
+        ambient += ((skyE - groundSunE) * (1.0 - T) + groundSunE * sunW) * (u_aoParams.y / PI);
+    }
 
     return vec4(u_fogParams1.rgb * (sunLight * (sunW + hazeW) + ambient), T);
 }

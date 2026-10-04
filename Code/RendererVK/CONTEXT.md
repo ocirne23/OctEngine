@@ -854,14 +854,13 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       default 1): a non-physical gain on the SUN in-scatter only (froxels, far field, reflection fog) - sunlit fog
       and the shafts brighten, shadowed fog (ambient only) and the extinction do not: strong god rays through thin
       fog without fogging up the world.
-    * **The fog's sky-SH ambient is cloud-shadowed too** (2026-10-04): the sky SH is ONE probe seen from the
-      camera, and holds the sunlit ground below the horizon (`skyGroundSun`, plus the "Ground Horizon" share
-      above it). Undimmed, fog under a cloud shadow kept the camera's sunlit-ground ambient: bright over the
-      whole volume. `giSkySunIrradiance` (gi_probe.inc.glsl) is that part in closed form, `giEvalSkySHCloud`
+    * **The fog's sky-SH ambient is cloud-shadowed too** (2026-10-04): the sky SH is ONE probe for every point,
+      and holds the sunlit ground below the horizon (`skyGroundSun`, plus the "Ground Horizon" share
+      above it), never cloud-shadowed. `giSkySunIrradiance` (gi_probe.inc.glsl) is that part in closed form, `giEvalSkySHCloud`
       subtracts its shadowed share: the froxels' GI-off ambient (the froxel's cloud tap), `giIrradiance`'s
       out-of-field fallback (its `cloudSunTransmittanceSoft`, so surfaces too), and the far field (weighted by
       `sunW`, no extra taps). The sun cone in the sky (aureole) is not part of it.
-    * **"Fog/Shaft haze"** (Density (1/m), default 0.0025, 0 = off; Height (m), default 300; `u_fogParams10`): the fog is a
+    * **"Fog/Shaft haze"** (Density (1/m), default 0.001, 0 = off; Height (m), default 300; `u_fogParams10`): the fog is a
       HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds showed only after cranking the base
       density. The haze is a separate thin medium reaching up to the clouds (its own scale height from the fog's
       height base) that adds SUNLIT in-scatter only (x "Sun scatter"): no extinction, no ambient - non-physical on
@@ -924,12 +923,24 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     intervals; a cloud straight overhead did not show it). Instead every probe keeps its **sun DC luminance**
     (probe vec4 `[6].x`, `GI_SUN_V4`: the direct sun at gather hits + the sun share of the multi-bounce +
     the sunlit-ground term `skyGroundSun` of every DOWNWARD MISS (past `rayMax` or the TLAS range: the sky
-    map below the horizon is a sunlit ground; left out of the sun part, each visit's random downward misses
-    added undimmed sun under a cloud shadow - probe flashes at shadow borders, worst with a low sun) + the
-    UPWARD misses inside a cone around the sun (all sun within 15°, fading out by 30°: the Mie aureole and
-    the sunlit cloud edges, which the shadowing cloud blocks at a shaded point),
-    blended at the SH's alpha), the bake stores the **sun fraction s × W** in the tail image's `.b` (RGBA16F),
-    and `giIrradiance` returns `E × (1 − s (1 − T))` with `T = cloudSunTransmittanceSoft` — the FAR cascade
+    below the horizon is a sunlit ground; left out of the sun part, each visit's random downward misses
+    added undimmed sun under a cloud shadow - probe flashes at shadow borders, worst with a low sun) + its
+    "Ground Horizon" share w on the UPWARD misses, blended at the SH's alpha),
+    **A MISS IS THE SKY SH's RADIANCE** (`giSkySHRadiance`, 2026-10-04), not the sky map: a probe in open space
+    then gathers exactly what the out-of-field fallback (`giEvalSkySHCloud`) evaluates, cloud dimming included -
+    under clouds the probe field was darker than the area past it. From the sky map, upward misses in a cone
+    around the sun (15° -> 30°) counted as sun, and the lookup dimmed the aureole under a cloud that the averaged
+    GI layer had already counted in; the fallback never did. The miss's sun part is the STEP (G below, w G above),
+    not its L1 form (negative toward the zenith for w < 0.2): only the sun's DC is kept, and both have the same.
+    Volume mode reads last frame's sky SH (the bake's copy); probe mode reads the slot this dispatch rewrites
+    (a frame-to-frame difference only). The bake stores the **sun fraction s × W** in the tail image's `.b` (RGBA16F),
+    and **each cascade lookup turns it into the sun's SHARE AT THE NORMAL** (`giSunShare`, 2026-10-04): a probe keeps
+    only the sun's DC, so its direction is MODELLED - the sunlit ground at the gather hits, light from the lower
+    hemisphere, whose L1 irradiance is its DC term × (1 − n·up). One DC fraction for every normal dimmed the sky
+    light on up-facing ground with the ground's sun under a cloud: the field was darker than the sky-SH area past
+    it (with the cloud shadows off the two matched). Sun from ABOVE (the "Ground Horizon" share w of the upward
+    misses, a sunlit wall overhead) is outside the model. The probe data and the volume images are unchanged.
+    `giIrradiance` returns `E × (1 − share (1 − T))` with `T = cloudSunTransmittanceSoft` — the FAR cascade
     only (~8 m texels, one fetch): the bounce comes from tens of metres around, so the soft value fits.
     Indoors s ≈ 0, so a roof is not dimmed by the cloud above it. `evalProbeCoverage` stays UNDIMMED (it
     returns s as well): the trace's multi-bounce needs the undimmed value. The dimming compiles in only
@@ -947,7 +958,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   noise and the reflected sky changed colour every frame. Each frame now marches with a new jitter (per-texel
   hash + golden ratio) and blends into the texel's own last value (the image is read-write, cleared to "no
   cloud" at creation). The history weight is FRAME-TIME based: `u_cloudShape4.z = exp(-3 dt / T)` with T =
-  "Sky/Clouds/Quality/Sky map history (s)" (default 1; 95 % of a change after T seconds at any frame rate; real
+  "Sky/Clouds/Quality/Sky map history (s)" (default 1; the GI layer has its own, see TWO CLOUD LAYERS below; 95 % of a change after T seconds at any frame rate; real
   time, so it still converges while the sim is paused; 0 = no history). **PROGRESSIVE:** each frame marches
   ONE texel of every 2x2 block (rotating phase, the shadow map's order; `CloudPipeline::SKY_UPDATE_FRAMES` = 4,
   so the CPU's dt spans 4 frames), and only the UPPER hemisphere is dispatched (rows [0, H/2); the lower half
@@ -955,7 +966,20 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   ray's serial chain, not its thread count. **The observer
   stands on the GROUND under the camera** (`ATMOS_OBSERVE_HEIGHT`), not at the camera: every reader of the
   sky map sits under the clouds, even while the camera flies above them. The ambient reads the sky map's
-  CLEAR layer from LAST frame (no feedback loop through the clouds' own image).
+  CLEAR layer from LAST frame (no feedback loop through the clouds' own image). **The clear layer holds per-frame
+  CONSTANTS, one texel each** (2026-10-04; `SKY_MAP_*_TEXEL` in atmosphere.inc.glsl), written by invocation (0, 0, 0)
+  of the bake, whose dispatch covers only layers 0 and 1: the clouds' ambient (the clear sky over the zenith + four
+  directions at 30°, averaged) and the far trees' sky light (the GI layer, see Far trees). The clear layer was a full
+  256x128 skyRadiance layer for 5 values, and each reader did 5 fetches per ray; now one `texelFetch`.
+  **TWO CLOUD LAYERS: the GI sky is AVERAGED OVER OBSERVERS** (2026-10-04; `CloudPipeline::SKY_LAYERS`, a 2-layer
+  array, the dispatch's z). From one observer the cloud overhead and the cloud in front of the sun ARE that
+  observer's cloud shadow, and every GI-layer reader (sky SH -> fog / ocean / out-of-field ambient, far trees, GI
+  misses) lit the whole world with it: fog, ocean and trees under a cloud brightened when the camera moved into the
+  sun. Layer 0 = from under the camera, composited into the MIRROR layer (reflections show the real clouds);
+  layer 1 = each march from a new observer in a disc around the camera (R2 over the disc per texel, uniform by
+  area: "Sky/Clouds/Quality/GI sky observer radius (m)", default 4 km, `u_cloudWind.w`), its history the average
+  over them, composited into the GI layer. A binary cloud / gap per march needs a longer history: "GI sky history
+  (s)" (default 4, `u_cloudNoiseOrigin.y`). The cost: a second sky march per frame.
 * **The visible sky is seen from the camera altitude** (`sky.fs.glsl`, `atmosphereScatter`'s observer
   height): the air above thins, and the horizon dips (`cosHorizon`). Below the dipped horizon the march ends
   at the ground, so the pixel is the haze in front of it plus the lit ground through the march's
@@ -1230,7 +1254,8 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   in an RGBA8 UNORM image) is mixed toward its Rec. 709 luminance by `Far saturation scale` (0 grey .. 1 as baked .. 2;
   a push-constant word, was `pad0`), then x `Far albedo scale`. The SKY term is the real sky: pi x the cosine-weighted
   mean radiance of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45°
-  down 4 x 0.15: one cloud overhead does not set it alone), once per ray, x `Far ambient` (1 = physical); it was a
+  down 4 x 0.15: one cloud overhead does not set it alone), baked once per frame by the sky-map bake into
+  `SKY_MAP_TREE_SKY_TEXEL` (one `texelFetch` per ray, 2026-10-04), x `Far ambient` (1 = physical); it was a
   fixed cool blue tint x the sun's luminance. The sky map is baked in the GI stage, before "Far trees".
 * **March cost rules** (2026-10-02, measured in the sandbox with the 350² grove, RelWithDebInfo: "Far trees" 0.98 →
   0.62 ms, the march 72 registers + 48 B spill → 56 registers, no spill): ONE polar lookup (`polarUv`: atan + log)
@@ -2107,6 +2132,16 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   * Film, each stubbed, NO change: the bubble radiance (the frame form), the blurred milk tap, the sharp
     foam-field tap with the stuck foam. Its 64/16 is not this session's foam; its known peak is the light
     loop's shadow rays (below).
+* **Measured 2026-10-04** (the GI sky's observer-averaged clouds + the sky SH's cloud-dimmed ground sun; RelWithDebInfo):
+  cloud_sky 64/0, gi_sky_map 68/0, vol_scatter 72/0, vol_apply FS **56/32** (was 56/16 on 09-29), lit FS 72/48
+  (#0, #1), 64/64 (#10), ocean 80/32, film 64/16, terrain ground 56/48 (#8) and 64/32, decal 55/0, particle VS 60/0.
+  A/B with the sky-SH dimming removed (`giIrradiance`, the far field): every number the same. Lit #10 and #12 trade
+  72/32 and 64/64 BETWEEN RUNS of unchanged source: the `#n` suffix follows the pipeline creation order, which is not
+  fixed - compare those two as a pair. vol_apply's +16 B and lit #0/#1's +16 B came in between 09-29 and 10-04 (the
+  far-tree layer in vol_apply 10-02, ...): not bisected.
+  Then `u_sunTransmittance` for the six per-pixel / per-ray `atmosTransmittanceToLight(0, sun, up)` left (fog scatter
+  x2, fog far field, decal, particle VS, `skyGroundSun` - per GI miss ray and in the sky-map bake) and the GI-off
+  skip of the fog / decal / particle GI lookups: no register change.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a

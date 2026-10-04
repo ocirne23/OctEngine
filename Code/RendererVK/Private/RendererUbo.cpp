@@ -410,8 +410,9 @@ void Renderer::buildUboClouds(const Camera& camera)
     // Top roundness 0..1 -> the superellipse exponent 1..6 (1 = the plain taper, 2 = a circular cap, 6 = nearly flat).
     ubo.cloudShape5 = glm::vec4(glm::clamp(c.towerVariation, 0.0f, 0.9f), 1.0f + 5.0f * glm::clamp(c.topRoundness, 0.0f, 1.0f),
         glm::clamp(c.baseSharpness, 0.0f, 1.0f), glm::clamp(c.towerCoreLink, 0.0f, 1.0f));
-    ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, 0.0f, (float)origin.y, (float)m_cloudEvolveOffset);
-    ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, 0.0f); // the field's world displacement this frame
+    const float giSkyHistory = c.giSkyHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.giSkyHistorySec) : 0.0f;
+    ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, giSkyHistory, (float)origin.y, (float)m_cloudEvolveOffset);
+    ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, glm::max(c.giSkyObserverRadius, 0.0f)); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
     // Scattering Function for Fog and Cloud Rendering"), valid for diameters 5 .. 50 um.
     // The HG part's g is the droplets' DIFFRACTION peak (0.995 at 20 um: ~5400 / sr in a ~0.3 degree lobe, the size

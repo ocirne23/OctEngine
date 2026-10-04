@@ -415,16 +415,18 @@ void main()
         }
         // "Fog/Sun scatter" (u_fogParams8.w): a gain on the SUN term only - sunlit froxels (the shafts) brighten,
         // shadowed ones keep their ambient, and the extinction is unchanged.
-        vec3 inLight = atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_eclipseParams.x * u_fogParams8.w) * sunTrans;
+        vec3 inLight = u_sunTransmittance * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_eclipseParams.x * u_fogParams8.w) * sunTrans;
 
         // Ambient: GI probe irradiance toward the camera (toggleable; the clipmap lookup is the next
         // biggest cost after the shadow rays), fading to the analytic sky over the probe field's outer
         // band (coverage) instead of stepping at its boundary. For an SH-L1 field the isotropically
         // in-scattered radiance is E_mean / PI; E(-dir) is the single-sample stand-in for E_mean.
         // u_ambientColor is an isotropic radiance, so its phase integral is just itself.
-        // The sky SH's sunlit-ground part is cloud-shadowed at this froxel (giEvalSkySHCloud).
-        const vec3 amb = u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis);
-        inLight += amb * u_aoParams.y / PI + u_ambientColor;
+        // The sky SH's sunlit-ground part is cloud-shadowed at this froxel (giEvalSkySHCloud). GI off
+        // (u_aoParams.y 0): no lookup at all.
+        inLight += u_ambientColor;
+        if (u_aoParams.y > 0.0)
+            inLight += (u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis)) * (u_aoParams.y / PI);
 
         // Local lights from the world-space hash grid cell containing this froxel.
         const bool lightShadows = u_fogParams3.w > 0.5;
@@ -468,7 +470,7 @@ void main()
         if (hazeVis > 0.0)
         {
             const vec3 sunDir = normalize(u_sunDirection.xyz);
-            result.rgb += u_fogParams1.rgb * atmosTransmittanceToLight(0.0, sunDir, u_skyUp) * u_sunColor.rgb
+            result.rgb += u_fogParams1.rgb * u_sunTransmittance * u_sunColor.rgb
                 * (hazeSigma * volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * hazeVis * u_eclipseParams.x * u_fogParams8.w);
         }
     }

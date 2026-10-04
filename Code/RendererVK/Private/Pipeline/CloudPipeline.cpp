@@ -169,7 +169,7 @@ void CloudPipeline::createSkyClouds()
         .format = CLOUD_FORMAT,
         .extent = { GIProbePipeline::SKY_MAP_WIDTH, GIProbePipeline::SKY_MAP_HEIGHT, 1 },
         .mipLevels = 1,
-        .arrayLayers = 1,
+        .arrayLayers = SKY_LAYERS,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
@@ -179,9 +179,9 @@ void CloudPipeline::createSkyClouds()
     (void)Globals::gpuAllocator.createImage(info, m_skyClouds.image, m_skyClouds.memory, "Clouds.sky");
     vk::ImageViewCreateInfo viewInfo{
         .image = m_skyClouds.image,
-        .viewType = vk::ImageViewType::e2D,
+        .viewType = vk::ImageViewType::e2DArray,
         .format = CLOUD_FORMAT,
-        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = SKY_LAYERS },
     };
     auto viewResult = Globals::device.getDevice().createImageView(viewInfo);
     assert(viewResult.result == vk::Result::eSuccess);
@@ -191,7 +191,7 @@ void CloudPipeline::createSkyClouds()
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary, "Clouds.skyInit");
     vk::CommandBuffer cmd = init.begin(true);
-    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, SKY_LAYERS };
     vk::ImageMemoryBarrier2 toGeneral{
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
         .dstStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -768,8 +768,8 @@ void CloudPipeline::recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buf
     commandBuffer.cmdUpdateDescriptorSets(m_skyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    // One thread per 2x2 block of the UPPER hemisphere (rows [0, H/2)).
-    cmd.dispatch((GIProbePipeline::SKY_MAP_WIDTH / 2 + 7) / 8, (GIProbePipeline::SKY_MAP_HEIGHT / 4 + 7) / 8, 1);
+    // One thread per 2x2 block of the UPPER hemisphere (rows [0, H/2)), per layer (camera observer, GI observers).
+    cmd.dispatch((GIProbePipeline::SKY_MAP_WIDTH / 2 + 7) / 8, (GIProbePipeline::SKY_MAP_HEIGHT / 4 + 7) / 8, SKY_LAYERS);
 
     // sky clouds -> the sky-map bake (compute, in the GI secondary)
     vk::MemoryBarrier2 toSkyMap{

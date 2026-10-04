@@ -367,12 +367,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 
     // Ambient: the CLEAR sky hemisphere from the sky map (up + four at 30 degrees), weighted by the height in the
     // shell, and the ground bounce under the shell (albedo x (sun + sky) irradiance / PI), falling off from below.
-    vec3 ambSky = textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 1.0, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
-    ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.866, 0.5, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
-    ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(-0.866, 0.5, 0.0)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
-    ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 0.5, 0.866)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
-    ambSky += textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 0.5, -0.866)), SKY_MAP_LAYER_CLEAR), 0.0).rgb;
-    ambSky *= 0.2 * u_cloudLight1.x;
+    // The 5-direction mean is baked once per frame into the clear layer's texel (0, 0) (gi_sky_map.cs.glsl).
+    const vec3 ambSky = texelFetch(u_skyMap, SKY_MAP_CLOUD_AMBIENT_TEXEL, 0).rgb * u_cloudLight1.x;
     const vec3 ambGround = u_cloudLight2.rgb * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
 
     r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;

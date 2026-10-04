@@ -428,7 +428,9 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
 
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, SKY_MAP_LAYERS);
+    // The two DIRECTIONAL layers only: the clear layer holds ONE texel, the clouds' ambient, which invocation
+    // (0, 0, 0) writes (gi_sky_map.cs.glsl).
+    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, SKY_MAP_LAYERS - 1);
 
     // sky-map write -> the trace's and the forward pass's sampled reads.
     vk::MemoryBarrier2 writeToRead{

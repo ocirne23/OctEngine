@@ -283,13 +283,8 @@ void marchAt(ivec2 px)
     const float g = pc.forwardScatter;
     const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
     const vec3 sunPart = sunRadiance * (pc.sunScale * phase);
-    vec3 skyMean = 0.4 * textureLod(u_skyMap, vec3(skyMapUV(vec3(0.0, 1.0, 0.0)), SKY_MAP_LAYER_GI), 0.0).rgb;
-    const float ringS = 0.70710678;
-    for (int k = 0; k < 4; ++k)
-    {
-        const vec2 h = k == 0 ? vec2(1.0, 0.0) : k == 1 ? vec2(-1.0, 0.0) : k == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
-        skyMean += 0.15 * textureLod(u_skyMap, vec3(skyMapUV(vec3(h.x * ringS, ringS, h.y * ringS)), SKY_MAP_LAYER_GI), 0.0).rgb;
-    }
+    // The 5-tap mean is baked once per frame (gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL).
+    const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * pc.ambient);
     const float sliceH = pc.vol.height / float(pc.vol.slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));

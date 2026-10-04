@@ -121,6 +121,8 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &lightDistance, 50.0f, 20000.0f, 10.0f); // the cap on the per-sample reach
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &skyMapHistorySec, 0.0f, 30.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "GI sky history (s)", &giSkyHistorySec, 0.0f, 30.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "GI sky observer radius (m)", &giSkyObserverRadius, 0.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near detail radius (m)", &nearDetailRadius, 0.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Detail distance (km)", &detailDistanceKm, 0.5f, 400.0f, 0.1f);
     Tweak::boolean("Sky/Clouds/Quality", "Checkerboard", &checkerboard, onDefinesChanged); // CLOUD_CHECKERBOARD

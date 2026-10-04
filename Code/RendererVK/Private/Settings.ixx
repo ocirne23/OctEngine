@@ -162,6 +162,8 @@ export struct CloudParams
                                        // toward the sun, (layer top - altitude) / sun y, capped by this for a low sun
     float temporalBlend = 0.9f;        // history weight of the temporal accumulation
     float skyMapHistorySec = 1.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
+    float giSkyHistorySec = 4.0f;      // s: the same for the GI layer (observers around the camera: each march a new one, so it needs more)
+    float giSkyObserverRadius = 4000.0f; // m: the GI layer's observers are spread over a disc this wide around the camera
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
     bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
@@ -413,7 +415,7 @@ export struct FarTreeParams
 export struct FogParams
 {
     bool  enabled = true;
-    float density = 0.050f;        // global extinction at the height base (1/m)
+    float density = 0.020f;        // global extinction at the height base (1/m)
     float heightBase = 0.0f;       // world height where the global fog is densest
     float heightFalloff = 0.25f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
@@ -429,7 +431,7 @@ export struct FogParams
     // SHAFT HAZE: a thin medium for the god rays alone - sunlit in-scatter only (x "Sun scatter"), no extinction, no
     // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
     // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. 0 = off.
-    float shaftHazeDensity = 0.0005f;  // 1/m
+    float shaftHazeDensity = 0.001f;   // 1/m
     float shaftHazeHeight = 300.0f;    // m: the scale height (density / e per this much height)
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
     float range = 1024.0f;         // froxel grid far distance (m). With the far field on, this is a
@@ -438,8 +440,8 @@ export struct FogParams
                                    // structure (local lights, fog volumes, noise)
     bool  farField = true;         // extend the fog past `range` analytically instead of with more slices
                                    // (vol_apply's volFarField); unbounded, so the horizon fully fogs
-    float farFieldDensity = 0.66f; // far-field deviations from the near field's own fog. At 1/1 the two are
-    float farFieldThickness = 0.66f; // one continuous medium; near fog is usually authored far thicker than
+    float farFieldDensity = 1.0f;  // far-field deviations from the near field's own fog. At 1/1 the two are
+    float farFieldThickness = 1.0f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
     float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (0 = unbounded).

@@ -232,13 +232,12 @@ void main()
         const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
         // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
         // like every other GI consumer.
-        const vec3 irr = giIrradiance(world, n) * u_aoParams.y;
+        const vec3 irr = u_aoParams.y > 0.0 ? giIrradiance(world, n) * u_aoParams.y : vec3(0.0);
         // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
         // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
         const vec3 toEye = n;
         const vec3 sunDir = normalize(u_sunDirection);
-        const vec3 sun = atmosTransmittanceToLight(0.0, sunDir, u_skyUp)
-            * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
+        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
         // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
         // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);
