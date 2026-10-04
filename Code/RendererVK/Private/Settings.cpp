@@ -273,6 +273,8 @@ void FogParams::registerTweaks()
     Tweak::floatVar("Fog", "Sun scatter", &sunScatter, 0.0f, 50.0f, 0.05f);
     Tweak::floatVar("Fog/Shaft haze", "Density (1/m)", &shaftHazeDensity, 0.0f, 0.01f, 0.00001f);
     Tweak::floatVar("Fog/Shaft haze", "Height (m)", &shaftHazeHeight, 10.0f, 10000.0f, 10.0f);
+    Tweak::floatVar("Fog/Aerial perspective", "Strength", &aerialStrength, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Fog/Aerial perspective", "Max distance (km)", &aerialMaxDistanceKm, 1.0f, 400.0f, 1.0f);
     Tweak::floatVar("Fog", "Anisotropy", &anisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Fog", "Range", &range, 32.0f, 4096.0f, 32.0f);
     Tweak::boolean("Fog/Far Field", "Enabled", &farField);

@@ -57,6 +57,16 @@ void VolumetricFogPipeline::buildIntegrateLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
+void VolumetricFogPipeline::buildAerialLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/aerial_lut.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
+}
+
 void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
@@ -92,13 +102,15 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     // 9 + 10 = the far-tree volume's march (colour, distance): composited inside the fog like the clouds.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 9, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    // 11 = the aerial perspective LUT.
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
     // Eye index (per-eye depth reconstruction + projection; 0 on desktop / left eye).
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
 
-void VolumetricFogPipeline::createImageSet(ImageSet& set, const char* debugName)
+void VolumetricFogPipeline::createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
@@ -106,7 +118,7 @@ void VolumetricFogPipeline::createImageSet(ImageSet& set, const char* debugName)
         vk::ImageCreateInfo info{
             .imageType = vk::ImageType::e3D,
             .format = FOG_FORMAT,
-            .extent = { RendererVKLayout::VOL_FROXEL_X, RendererVKLayout::VOL_FROXEL_Y, RendererVKLayout::VOL_FROXEL_Z },
+            .extent = extent,
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
@@ -145,6 +157,7 @@ VolumetricFogPipeline::~VolumetricFogPipeline()
 {
     destroyImageSet(m_scatter);
     destroyImageSet(m_integrated);
+    destroyImageSet(m_aerial);
     if (m_sampler)
         Globals::device.getDevice().destroySampler(m_sampler);
 }
@@ -153,21 +166,26 @@ void VolumetricFogPipeline::initialize()
 {
     ComputePipelineLayout scatterLayout;   buildScatterLayout(scatterLayout);     m_scatterPipeline.initialize(scatterLayout);
     ComputePipelineLayout integrateLayout; buildIntegrateLayout(integrateLayout); m_integratePipeline.initialize(integrateLayout);
+    ComputePipelineLayout aerialLayout;    buildAerialLayout(aerialLayout);       m_aerialPipeline.initialize(aerialLayout);
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_scatterSets[i].initialize(m_scatterPipeline.getDescriptorSetLayout(), "Fog.scatter");
         m_integrateSets[i].initialize(m_integratePipeline.getDescriptorSetLayout(), "Fog.integrate");
+        m_aerialSets[i].initialize(m_aerialPipeline.getDescriptorSetLayout(), "Fog.aerial");
     }
 
-    createImageSet(m_scatter, "Fog.scatter");
-    createImageSet(m_integrated, "Fog.integrated");
+    const vk::Extent3D froxelExtent{ RendererVKLayout::VOL_FROXEL_X, RendererVKLayout::VOL_FROXEL_Y, RendererVKLayout::VOL_FROXEL_Z };
+    createImageSet(m_scatter, froxelExtent, "Fog.scatter");
+    createImageSet(m_integrated, froxelExtent, "Fog.integrated");
+    createImageSet(m_aerial, vk::Extent3D{ RendererVKLayout::AERIAL_LUT_X, RendererVKLayout::AERIAL_LUT_Y, RendererVKLayout::AERIAL_LUT_Z }, "Fog.aerial");
 
     // One-time UNDEFINED -> GENERAL (images stay in GENERAL forever) + clear: the scatter history must read
-    // zeros on the first frame, and the integrated grid must hold "no fog" (transmittance 1) while disabled.
+    // zeros on the first frame, and the integrated grid and the aerial LUT must hold "no fog" (transmittance 1)
+    // while disabled.
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary, "Fog.init");
     vk::CommandBuffer cmd = init.begin(true);
-    const ImageSet* sets[] = { &m_scatter, &m_integrated };
+    const ImageSet* sets[] = { &m_scatter, &m_integrated, &m_aerial };
     oc::vector<vk::ImageMemoryBarrier2> bars;
     for (const ImageSet* s : sets)
         for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
@@ -186,6 +204,7 @@ void VolumetricFogPipeline::initialize()
     {
         cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
         cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
+        cmd.clearColorImage(m_aerial.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
     }
     vk::MemoryBarrier2 clearToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -232,9 +251,11 @@ void VolumetricFogPipeline::reloadShaders(vk::RenderPass renderPass)
 {
     ComputePipelineLayout scatterLayout;   buildScatterLayout(scatterLayout);
     ComputePipelineLayout integrateLayout; buildIntegrateLayout(integrateLayout);
+    ComputePipelineLayout aerialLayout;    buildAerialLayout(aerialLayout);
     GraphicsPipelineLayout applyLayout;    buildApplyLayout(applyLayout);
     bool ok = m_scatterPipeline.reloadShaders(scatterLayout);
     ok = m_integratePipeline.reloadShaders(integrateLayout) && ok;
+    ok = m_aerialPipeline.reloadShaders(aerialLayout) && ok;
     ok = m_applyPipeline.reloadShaders(renderPass, applyLayout) && ok;
     if (!ok)
         printf("VolumetricFogPipeline: shader reload failed, keeping previous pipeline(s)\n");
@@ -313,7 +334,21 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         cmd.dispatch(gx, gy, 1);
     }
 
-    // integrated grid -> fog apply fragment reads in the scene-color pass
+    { // -------- Pass 3: the aerial perspective LUT (write aerial[cur]; independent of passes 1 + 2) --------
+        DescriptorSet& set = m_aerialSets[frameIdx];
+        vk::DescriptorSet vkSet = set.getDescriptorSet();
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_aerial.view[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
+        };
+        commandBuffer.cmdUpdateDescriptorSets(m_aerialPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_aerialPipeline.getPipeline());
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_aerialPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+        cmd.dispatch((RendererVKLayout::AERIAL_LUT_X + 7) / 8, (RendererVKLayout::AERIAL_LUT_Y + 7) / 8, 1);
+    }
+
+    // integrated grid + aerial LUT -> fog apply fragment reads in the scene-color pass
     vk::MemoryBarrier2 integrateToApply{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
@@ -332,11 +367,12 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
     DescriptorSet& set = m_applySets[applySlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
-    oc::array<DescriptorSetUpdateInfo, 11> updates{
+    oc::array<DescriptorSetUpdateInfo, 12> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_integrated.view[frameIdx]) } },
+        DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_aerial.view[frameIdx]) } },
         // Binding 3 (terrain) is UPDATE_AFTER_BIND, written per frame by updateTerrainDescriptor.
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudSampler, params.cloudColorView) } },
@@ -344,13 +380,13 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesColorView) } },
         DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.farTreesSampler, params.farTreesDepthView) } },
-        DescriptorSetUpdateInfo{}, // [9] + [10] the GI volume (its sky SH): written only while it exists
+        DescriptorSetUpdateInfo{}, // [10] + [11] the GI volume (its sky SH): written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(5, updates[9], updates[10]);
+        params.giVolume.fillUpdates(5, updates[10], updates[11]);
     commandBuffer.cmdUpdateDescriptorSets(m_applyPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
-        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 9 : 11));
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 10 : 12));
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_applyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_applyPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);

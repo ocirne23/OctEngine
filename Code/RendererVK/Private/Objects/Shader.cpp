@@ -178,6 +178,9 @@ static oc::string buildLayoutPreamble()
     def("VOL_FROXEL_X", VOL_FROXEL_X);
     def("VOL_FROXEL_Y", VOL_FROXEL_Y);
     def("VOL_FROXEL_Z", VOL_FROXEL_Z);
+    def("AERIAL_LUT_X", AERIAL_LUT_X);
+    def("AERIAL_LUT_Y", AERIAL_LUT_Y);
+    def("AERIAL_LUT_Z", AERIAL_LUT_Z);
     def("ALPHA_MODE_OPAQUE", (uint32)EAlphaMode::Opaque, "u");
     def("ALPHA_MODE_MASK", (uint32)EAlphaMode::Mask, "u");
     def("ALPHA_MODE_BLEND", (uint32)EAlphaMode::Blend, "u");

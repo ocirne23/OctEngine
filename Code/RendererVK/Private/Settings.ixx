@@ -416,14 +416,14 @@ export struct FarTreeParams
 export struct FogParams
 {
     bool  enabled = true;
-    float density = 0.020f;        // global extinction at the height base (1/m)
+    float density = 0.010f;        // global extinction at the height base (1/m)
     float heightBase = 0.0f;       // world height where the global fog is densest
     float heightFalloff = 0.25f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
                                    // terrain height map, see Renderer::setFogTerrainHeightMap): 0 = flat fog,
                                    // 1 = fog hugs the terrain at constant depth; in between it reaches higher
                                    // on mountainsides but still clears the peaks
-    glm::vec3 albedo = glm::vec3(1.0f, 1.0f, 1.0f);
+    glm::vec3 albedo = glm::vec3(0.839f, 0.961f, 1.0f); // #D6F5FF
     float albedoIntensity = 1.0f;  // > 1 is a non-physical gain (emissive-ish fog)
     // Non-physical gain on the SUN in-scatter only (froxels + far field): sunlit fog - the light shafts - brightens,
     // shadowed fog (ambient only) and the extinction do not. Strong god rays through thin fog, without fogging up
@@ -433,7 +433,13 @@ export struct FogParams
     // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
     // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. 0 = off.
     float shaftHazeDensity = 0.001f;   // 1/m
-    float shaftHazeHeight = 300.0f;    // m: the scale height (density / e per this much height)
+    float shaftHazeHeight = 200.0f;   // m: the scale height (density / e per this much height)
+    // AERIAL PERSPECTIVE: the sky's own Rayleigh + Mie atmosphere between the camera and the scene (the blue haze on
+    // distant terrain), baked per frame into a frustum LUT (aerial_lut.cs.glsl) and laid behind the fog by the apply.
+    // Strength scales the air's density along the view ray only (1 = the sky's atmosphere; the sun light stays as the
+    // sky has it); 0 = off.
+    float aerialStrength = 1.0f;
+    float aerialMaxDistanceKm = 40.0f; // the LUT's depth: past it the scene takes the value at this distance
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
     float range = 1024.0f;         // froxel grid far distance (m). With the far field on, this is a
                                    // near-field quality knob rather than a view distance: shortening it

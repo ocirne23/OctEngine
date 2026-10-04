@@ -21,6 +21,10 @@
 // its weighted mean distance - not in the scene depth, so fogged at the terrain BEHIND it the trees read twice as
 // hazy as the billboards next to them. Two layers compose front to back by distance: with each layer's part
 // P = (1 - T) F_layer.rgb + F_layer.a S and transmittance T, the nearer one's P + T x the farther one's.
+// THE AERIAL PERSPECTIVE (aerial_lut.cs.glsl: the sky's atmosphere between the camera and the point) is a second
+// medium, laid BEHIND the fog: fog + fog.a x air. The height fog hugs the ground around the camera, the air fills
+// the distance; standing in thick fog, the air behind it must not shine through. Scene and far trees take it; the
+// clouds do not (their march has its own, cloudAerialScatter), and neither does the sky (it holds the whole ray).
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
@@ -34,6 +38,7 @@ layout (binding = 6) uniform sampler2D u_cloudColor; // the accumulated clouds (
 layout (binding = 7) uniform sampler2D u_cloudDepth;
 layout (binding = 9) uniform sampler2D u_farTreesColor;  // the far-tree volume's march (full res): in-scatter, T
 layout (binding = 10) uniform sampler2D u_farTreesDepth; // its weighted mean distance (m)
+layout (binding = 11) uniform sampler3D u_aerial;        // the aerial perspective LUT (centre view): in-scatter, mean T
 
 #define TERRAIN_HEIGHT_BINDING 3
 #include "terrain_height.inc.glsl"
@@ -298,6 +303,33 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
     return fog;
 }
 
+// The atmosphere (in-scatter, transmittance) from the centre view's camera to worldPos (aerial_lut.cs.glsl). Its
+// texel z holds the value at slice z's FAR edge, t = maxDist * ((z + 1) / Z)^2: the continuous slice coordinate
+// s = Z * sqrt(t / maxDist) samples at (s - 0.5) / Z, and inside the first slice it fades in from nothing (fogTo's
+// rules). Past the LUT's max distance it keeps the last slice. An eye's sliver past the centre view clamps to the
+// edge: the haze is smooth, unlike the froxels.
+vec4 aerialTo(vec3 worldPos)
+{
+    if (u_fogParams10.z <= 0.0)
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    const vec4 centerClip = u_views[VIEW_CENTER].mvp * vec4(worldPos, 1.0);
+    if (centerClip.w <= 0.0)
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    const vec2 ndc = centerClip.xy / centerClip.w;
+    const vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    const float dist = length(worldPos - u_views[VIEW_CENTER].viewPos.xyz);
+    const float s = sqrt(min(dist / u_fogParams10.w, 1.0)) * float(AERIAL_LUT_Z);
+    const vec4 air = texture(u_aerial, vec3(vpUv, (s - 0.5) / float(AERIAL_LUT_Z)));
+    return s < 1.0 ? mix(vec4(0.0, 0.0, 0.0, 1.0), air, s) : air;
+}
+
+// fog with the air BEHIND it.
+vec4 withAerial(vec4 fog, vec3 worldPos)
+{
+    const vec4 air = aerialTo(worldPos);
+    return vec4(fog.rgb + fog.a * air.rgb, fog.a * air.a);
+}
+
 void main()
 {
     g_viewIndex = int(u_viewIndex);
@@ -338,9 +370,12 @@ void main()
         }
     }
 #endif
-    const vec4 fog = fogTo(worldPosFromDepth(v_uv, depth), depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
-    if (sameFog)
+    const vec3 scenePos = worldPosFromDepth(v_uv, depth);
+    vec4 fog = fogTo(scenePos, depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
+    if (sameFog) // the cloud's fog WITHOUT the scene's air: the cloud carries its own
         cloudPart.rgb = fog.a * cloudPart.rgb + (1.0 - cloudPart.a) * fog.rgb;
+    if (depth > 0.0)
+        fog = withAerial(fog, scenePos);
     vec4 layers = cloudPart;
     if (u_foliageParams4.w > 0.5)
     {
@@ -348,7 +383,8 @@ void main()
         if (trees.a < 0.999)
         {
             const float tTrees = texelFetch(u_farTreesDepth, ivec2(gl_FragCoord.xy), 0).r;
-            const vec4 fogTrees = fogTo(u_viewPos + dir * tTrees, tTrees, dir, invCos);
+            const vec3 treesPos = u_viewPos + dir * tTrees;
+            const vec4 fogTrees = withAerial(fogTo(treesPos, tTrees, dir, invCos), treesPos);
             const vec3 treePart = fogTrees.a * trees.rgb + (1.0 - trees.a) * fogTrees.rgb;
             layers = tTrees <= tCloud
                 ? vec4(treePart + trees.a * cloudPart.rgb, trees.a * cloudPart.a)

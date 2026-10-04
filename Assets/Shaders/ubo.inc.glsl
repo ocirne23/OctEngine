@@ -98,7 +98,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_fogParams9;   // far field (past the froxel volume; vol_apply): x = enabled, y = density scale,
                          // z = multiplier on the near field's height falloff (fogParams0.z), w = ground samples
     vec4 u_fogParams10;  // the SHAFT HAZE (sunlit in-scatter only, no extinction / ambient): x = density (1/m),
-                         // y = height falloff (1/m = 1 / its scale height; from the fog's height base), zw unused
+                         // y = height falloff (1/m = 1 / its scale height; from the fog's height base),
+                         // AERIAL PERSPECTIVE (aerial_lut.cs.glsl): z = strength (0 = off), w = the LUT's max distance (m)
 
     vec4 u_moonParams;   // xyz = normalized direction towards the moon, w = cos of the moon disc radius
 

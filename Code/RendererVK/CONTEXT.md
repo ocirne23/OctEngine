@@ -660,6 +660,32 @@ take `min` with the shadow term.
 `Terrain march bias`, which is also the self-shadow bias. **Deterministic — no jitter, no temporal
 integration.**
 
+## Aerial perspective ("Fog/Aerial perspective" tweaks, 2026-10-05)
+
+The blue haze on distant geometry: the SKY'S OWN Rayleigh + Mie + ozone atmosphere (atmosphere.inc.glsl) between the
+camera and the scene. The height fog cannot give it - it is grey (one albedo, a scalar extinction) and sits on the
+ground, so tinting it turned the near valley mist blue and still never matched the sky behind the mountains.
+
+* **The LUT** (`aerial_lut.cs.glsl`, pass 3 of `VolumetricFogPipeline::record`, so it exists only while the fog
+  records - fog on AND RT on): `AERIAL_LUT_X x Y x Z` (64 x 36 x 32, Layout.ixx) RGBA16F per frame slot over the
+  CENTRE view's frustum. One thread per column marches its ray (2 steps per slice) and writes every slice: rgb = the
+  in-scatter (sun + the sky-radiance light), a = the view ray's MEAN transmittance (the apply's blend is scalar, so
+  the scene behind dims grey; the blue is all in-scatter). Slice z holds the value at its far edge,
+  `t = maxDist * ((z + 1) / Z)^2`.
+* **Matched to sky.fs.glsl:** observer at the camera altitude along `u_skyUp`, the scatter boost, the eclipse
+  saturation curve on the sun part. A level ray far out goes to the horizon sky's own colour. Each step's sun is
+  cloud-shadowed (`cloudSunTransmittanceBilinear`; past the far cascade, the layer's mean). No jitter: no temporal
+  pass averages the LUT, and a texel covers many pixels.
+* **Apply** (`vol_apply.fs.glsl` `aerialTo` / `withAerial`, binding 11): the air goes BEHIND the fog (`fog + fog.a x
+  air`), on the scene and the far-tree layer. **Not on the sky** (it holds the whole ray) **and not on the clouds**
+  (their march has its own `cloudAerialScatter`; with `sameFog` the cloud folds the scene's fog BEFORE the air is
+  added).
+* **"Strength"** (`u_fogParams10.z`, default 1, 0 = off) scales the air density along the VIEW ray only (the sun
+  still reaches each point through the unscaled atmosphere, as in the sky). **"Max distance (km)"**
+  (`u_fogParams10.w`, default 40): the LUT's depth; past it the scene keeps the last slice.
+* Not (yet): multiple scattering (the shadowed haze is too dark, as in the sky), the mirror rays' reflection fog,
+  the fog-off path (the Cloud apply / Far trees apply stages carry no air).
+
 ## Volumetric clouds (`CloudPipeline`, "Sky/Clouds" tweaks)
 
 **A SANDBOX feature: full 3D clouds the camera flies through.** The game turns them off
@@ -860,7 +886,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       subtracts its shadowed share: the froxels' GI-off ambient (the froxel's cloud tap), `giIrradiance`'s
       out-of-field fallback (its `cloudSunTransmittanceSoft`, so surfaces too), and the far field (weighted by
       `sunW`, no extra taps). The sun cone in the sky (aureole) is not part of it.
-    * **"Fog/Shaft haze"** (Density (1/m), default 0.001, 0 = off; Height (m), default 300; `u_fogParams10`): the fog is a
+    * **"Fog/Shaft haze"** (Density (1/m), default 0.001, 0 = off; Height (m), default 200; `u_fogParams10`): the fog is a
       HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds showed only after cranking the base
       density. The haze is a separate thin medium reaching up to the clouds (its own scale height from the fog's
       height base) that adds SUNLIT in-scatter only (x "Sun scatter"): no extinction, no ambient - non-physical on

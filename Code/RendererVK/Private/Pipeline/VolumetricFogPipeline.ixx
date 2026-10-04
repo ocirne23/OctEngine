@@ -16,10 +16,13 @@ import :GIProbePipeline;
 //                  light (sun via TLAS ray / cascade tap, GI probe ambient, light-grid lights), temporally
 //                  blended against last frame's reprojected grid (ping-ponged across frames in flight).
 //   2. integrate : front-to-back accumulation along Z -> in-scatter + transmittance at every slice.
-//   3. apply     : fullscreen blend in the scene-color pass (before TAA), sampling the integrated volume at
+//   3. aerial    : the atmosphere's in-scatter + transmittance over the frustum (AERIAL_LUT_*, quadratic distance
+//                  slices out to tens of km; aerial_lut.cs.glsl) - the sky's blue haze on distant geometry.
+//   4. apply     : fullscreen blend in the scene-color pass (before TAA), sampling the integrated volume at
 //                  each pixel's scene depth: out = inScatter + sceneColor * transmittance. Everything
 //                  past the volume's far plane is added analytically instead of with more slices, so the
 //                  volume's range is a near-field quality knob and not a view distance (vol_apply.fs.glsl).
+//                  The aerial LUT goes behind the fog.
 // The grid resolution is fixed (independent of the window size), so no swapchain-recreate handling is needed.
 export class VolumetricFogPipeline final
 {
@@ -96,12 +99,14 @@ private:
 
     void buildScatterLayout(ComputePipelineLayout& layout);
     void buildIntegrateLayout(ComputePipelineLayout& layout);
+    void buildAerialLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
-    void createImageSet(ImageSet& set, const char* debugName);
+    void createImageSet(ImageSet& set, vk::Extent3D extent, const char* debugName);
     void destroyImageSet(ImageSet& set);
 
     ComputePipeline m_scatterPipeline;
     ComputePipeline m_integratePipeline;
+    ComputePipeline m_aerialPipeline;
     GraphicsPipeline m_applyPipeline;
     static constexpr uint32 MAX_VIEWS = 2;
     static uint32 applySlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
@@ -109,9 +114,11 @@ private:
 
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_scatterSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_integrateSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_aerialSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_applySets;
 
     ImageSet m_scatter;    // per-froxel in-scatter/extinction; previous frame's image is the temporal history
     ImageSet m_integrated; // accumulated in-scatter + transmittance per slice
+    ImageSet m_aerial;     // the atmosphere's in-scatter + mean transmittance per distance slice
     vk::Sampler m_sampler;
 };

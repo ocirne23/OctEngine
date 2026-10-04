@@ -619,7 +619,8 @@ void Renderer::buildUboFog()
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
         1.0f / glm::clamp(fog.farFieldThickness, 0.01f, 100.0f), (float)glm::max(fog.farFieldSteps, 1));
-    ubo.fogParams10 = glm::vec4(glm::max(fog.shaftHazeDensity, 0.0f), 1.0f / glm::max(fog.shaftHazeHeight, 1.0f), 0.0f, 0.0f);
+    ubo.fogParams10 = glm::vec4(glm::max(fog.shaftHazeDensity, 0.0f), 1.0f / glm::max(fog.shaftHazeHeight, 1.0f),
+        glm::max(fog.aerialStrength, 0.0f), glm::max(fog.aerialMaxDistanceKm, 1.0f) * 1000.0f);
 }
 
 // FFT ocean simulation + shading params.

@@ -609,7 +609,9 @@ export namespace RendererVKLayout
         glm::vec4 fogParams9; // far field (past the froxel volume; vol_apply): x = enabled, y = density
                               // scale, z = multiplier on the near field's height falloff, w = ground samples
         glm::vec4 fogParams10; // the SHAFT HAZE (sunlit in-scatter only, no extinction / ambient): x = density (1/m),
-                               // y = height falloff (1/m = 1 / its scale height; from the fog's height base), zw unused
+                               // y = height falloff (1/m = 1 / its scale height; from the fog's height base),
+                               // AERIAL PERSPECTIVE (aerial_lut.cs.glsl): z = strength (air density scale along the
+                               // view ray; 0 = off), w = the LUT's max distance (m)
 
         glm::vec4 moonParams; // xyz = normalized direction towards the moon, w = cos of the moon disc radius
 
@@ -1097,6 +1099,11 @@ export namespace RendererVKLayout
     constexpr uint32 VOL_FROXEL_X = 160;
     constexpr uint32 VOL_FROXEL_Y = 90;
     constexpr uint32 VOL_FROXEL_Z = 128;
+    // The aerial perspective LUT (aerial_lut.cs.glsl): the atmosphere's in-scatter + mean transmittance over the
+    // centre view's frustum, Z = distance along the ray, quadratic out to "Fog/Aerial perspective/Max distance".
+    constexpr uint32 AERIAL_LUT_X = 64;
+    constexpr uint32 AERIAL_LUT_Y = 36;
+    constexpr uint32 AERIAL_LUT_Z = 32;
     constexpr uint32 MAX_FOG_VOLUMES = 256;
     constexpr uint32 FOG_TERRAIN_RES = 512;     // fog terrain height map resolution per cascade (CPU-baked around
                                                 // the camera; setFogTerrainHeightMap expects CASCADES*RES*RES floats)
