@@ -73,7 +73,7 @@ export struct SkyParams
 
     // Stars
     float starDensity = 0.63f;
-    float starSize = 1.3f;              // base star core size multiplier
+    float starSize = 1.0f;              // base star core size multiplier
     float starSizeVar = 0.62f;          // 0 = uniform size, 1 = full per-star variation (skewed small)
     float starBrightness = 1.23f;
     float starColorVar = 0.85f;         // 0 = white, 1 = full cool/warm per-star tint
