@@ -290,6 +290,7 @@ int main(int argc, char* argv[])
 
         if (!headlessServer)
         {
+            Globals::terrain.setFlowWindAngle(Globals::ocean.swellTravelAngle()); // follows "Sky/Wind" (the next bake takes it)
             Globals::terrain.update(Globals::rendererVK, camera);
             Globals::terrainCollider.update(camera.position, Globals::terrain.activeClimateMaps());
             Globals::ocean.update(Globals::rendererVK, camera, Globals::terrain.activeTerrainData(), Globals::terrain.seaLevel());

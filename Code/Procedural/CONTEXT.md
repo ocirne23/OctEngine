@@ -600,9 +600,13 @@ nothing** — the pass otherwise sweeps the whole broadphase every step.
 
 ## Wind
 
-The dominant spectrum term travels AGAINST `windDirection`, so the swell heading is
-`swellTravelAngle() = wind + π`. `steeredWindAngle` slews the SIM wind toward the baked shore flow so
-waves roll inland.
+The sea's wind is THE wind (RendererVK `WindParams`, "Sky/Wind"): its direction, and its speed x `Ocean/Waves/Wind
+speed scale` (2.5) = the MODEL U10 (`windSpeed()`; the surf band, foam drift and calm cap all read it). The dominant
+spectrum term travels AGAINST `windDirection`, so the sim takes the heading the wind blows FROM (`baseWindAngle()` =
+"Sky/Wind" direction + π) and the swell heading is `swellTravelAngle()` = the wind's own direction (the default
+113° keeps the former 5.12 rad sea). `steeredWindAngle` slews the SIM wind toward the baked shore flow so waves roll
+inland. The app hands `swellTravelAngle()` to the terrain's flow bake every frame (`setFlowWindAngle`), so a wind
+change reaches the next bake.
 
 > Per-pixel domain rotation is **disabled** in `ocean_wave.inc.glsl` — it creases. Read the comment
 > before reviving it.
@@ -1100,6 +1104,13 @@ TREE** (was ~16 pieces × 3). A whole-tree billboard is two crossed VERTICAL car
 tree's +Z card stands vertical too) — thin from straight above. Near-range uniqueness is planned as a per-tree
 vertex-shader warp (bend / twist / lopsided crown / noise, seeded by position) that also carries the wind.
 The pieces still exist (the bake input, the piece library rows).
+
+**The WIND payload** (RendererVK "Tree wind", `tree_wind.inc.glsl` for the bit layout): `meshPiece` writes every bark
+and leaf vertex's `texCoords.z = 1 + payload / 2^22` (`windPayload`): the module weight along the module's root bone
+(a sub-branch's vertices take it at their bone's pivot), the level-1 sub-branch weight along its bone, the bone's phase,
+a leaf card's TIP flag (corners 2 / 3; a diamond's all but the stem) - a card's weights from its STEM, so all four
+corners share one phase. Trunk pieces: the wind bit only (the trunk bend). `bakeTreeVariant` ORs each module
+placement's phase (3 bits) into its vertices. No vertex grows: the magnitude of the tangent's w was free.
 
 ## GPU expansion (G4)
 

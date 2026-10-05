@@ -6,8 +6,27 @@ import Core.glm;
 // Renderer configuration parameter blocks. Each exposes itself to the TweakPanel via registerTweaks();
 // the Renderer owns one instance of each and feeds them into the per-frame UBO / push constants.
 
+// THE WIND ("Sky/Wind"): the one wind everything that moves with it reads - the weather particles (rain, snow), the
+// tree and grass sway (wind.inc.glsl), the fog noise drift, the ocean (x "Ocean/Waves/Wind speed scale", blowing
+// from the opposite heading: its spectrum convention) and the clouds (x "Sky/Clouds/Wind speed scale"). Rides the UBO
+// as u_weatherWind0..2.
+export struct WindParams
+{
+    float speed = 2.0f;         // m/s, the mean wind
+    float angleDeg = 113.0f;    // the direction the wind blows TOWARDS, degrees from +X around +Y (113: the sea's former heading)
+    float gustStrength = 5.0f;  // m/s, the amplitude of the 2D gust vector added to the mean (calm air flurries too)
+    float gustSize = 50.0f;     // m, the gusts' feature size
+
+    glm::vec2 direction() const // unit, XZ
+    {
+        const float a = glm::radians(angleDeg);
+        return glm::vec2(std::cos(a), std::sin(a));
+    }
+    void registerTweaks();
+};
+
 // Everything in the TweakPanel's "Sky" categories (Sky / Sky/Sun / Sky/Atmosphere / Sky/Clouds /
-// Sky/Stars / Sky/Nebula / Sky/Moon).
+// Sky/Stars / Sky/Nebula / Sky/Moon; Sky/Wind is WindParams).
 export struct SkyParams
 {
     glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f); // sky "up" axis; also the sky radiance light direction
@@ -118,8 +137,7 @@ export struct CloudParams
     float weatherSizeKm = 20.0f;       // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
     int   detailRepeats = 12;          // detail noise tiles per base tile
-    float windSpeed = 10.0f;           // m/s
-    float windAngleDeg = 30.0f;        // wind direction in XZ (degrees)
+    float windSpeedScale = 3.5f;       // x "Sky/Wind/Speed" (the layer's wind; its direction is the shared one)
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
     // Lighting
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
@@ -272,6 +290,23 @@ export struct FoliageParams
     // A tree farther than this (m) from the scene focus is not in the TLAS (no GI / RT shadow / RTAO / reflection hits;
     // 0 = only the general "RT/TLAS Range"): every tree there is an overlapping box every ray has to traverse.
     float rtRange = 500.0f;
+    // TREE WIND ("Trees/Wind", tree_wind.inc.glsl): vertex-shader sway of the mesh trees, branch cards and billboards in the
+    // WEATHER wind (u_weatherWind0: "Particles/Wind ..."). Three layers: the TRUNK bend (every representation, from the
+    // height alone), the BRANCH sway and the LEAF flutter (meshes only, from the bake's per-vertex payload).
+    float windBend = 0.004f;        // the trunk's lean at the reference height, m per (m/s)^2 of wind (10 m/s: 0.4 m)
+    float windRefHeight = 10.0f;    // m: the bend grows with (height / this)^2
+    float windSway = 0.35f;         // the trunk's oscillation, x the lean
+    float windSwayFrequency = 0.25f; // Hz
+    float windBranch = 0.03f;       // a branch tip's sway, m per m/s of wind (x the tree's scale)
+    float windBranchFrequency = 0.6f; // Hz
+    float windLeaf = 0.04f;         // a leaf card tip's flutter (m)
+    float windLeafFrequency = 3.0f; // Hz
+    float windBranchFadeStart = 40.0f; // m: the branch sway fades out between these (before the mid tier's cards)
+    float windBranchFadeEnd = 70.0f;
+    float windLeafFadeStart = 20.0f;   // m: the leaf flutter fades out between these
+    float windLeafFadeEnd = 40.0f;
+    float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (0 = no limit); a 100 m band fades it out
+    float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (0 = off)
     // "Trees/Debug view" - baked as TREE_DEBUG on the lit mesh fragments (a change reloads them; 0 = no define):
     // 1 = a colour per MATERIAL (each representation and fade copy has its own: a switch shows as a colour change),
     // 2 = a colour per MESH (the LOD level the cull picked: an LOD step shows), 3 = the distance FADE side (red = a
@@ -306,11 +341,11 @@ export struct GrassParams
     float minPixelWidth = 1.0f;    // px: a blade is never narrower (fights the far shimmer)
     float groundBlendDistance = 80.0f; // m at which the normal has blended "Ground normal blend" of the way to the ground's
     float groundBlend = 0.7f;
-    float windAngleDeg = 30.0f;
-    float windBend = 0.15f;        // the steady push on the tip, in blade heights
-    float gustBend = 0.35f;
-    float gustSize = 12.0f;        // m
-    float gustSpeed = 5.0f;        // m/s
+    // The shared wind ("Sky/Wind", wind.inc.glsl: its direction, speed and gusts) bends the blades: the tip's push in
+    // blade heights per m/s, plus a small-scale ripple (value noise moving with the mean wind).
+    float windBend = 0.05f;        // blade heights per m/s
+    float rippleBend = 0.08f;      // blade heights per m/s, x the ripple noise
+    float rippleSize = 12.0f;      // m
     float swayFrequency = 0.6f;    // Hz
     // All wind movement eases out between these camera distances (m): small far blades moving read as grain.
     float windFadeStart = 15.0f;
@@ -485,7 +520,7 @@ export struct FogParams
                                     // peeked through them - more so the higher the sea
     float noiseScale = 0.08f;      // density noise frequency (1/m)
     float noiseStrength = 0.5f;    // 0 = uniform fog, 1 = fully modulated (dusty wisps)
-    float windSpeed = 1.5f;        // noise drift (m/s)
+    // (The noise drifts with the shared wind, "Sky/Wind".)
     float temporalBlend = 0.8f;    // history blend weight (jittered Z integration)
     bool  lightShadows = true;     // shadow ray per froxel per grid light (expensive)
     int   sunRays = 1;             // sun shadow rays per froxel (RT sun mode); main perf knob
@@ -684,11 +719,8 @@ export struct ParticleParams
     float streakCameraBlur = 0.15f; // fraction of the camera velocity the weather streaks subtract
     float anisotropy = 0.33f;       // the lit particles' scattering phase g (0 = isotropic, forward < 1)
 
-    // Weather wind for the volumes. A storm: speed 15, gust strength 8, sheet contrast 0.7, sheet drift 6.
-    float windSpeed = 1.0f;         // m/s
-    float windAngleDeg = 0.0f;      // direction the wind blows TOWARDS, degrees from +X around +Y
-    float windGustStrength = 5.0f;  // m/s, amplitude of the 2D gust vector added to the mean (calm air flurries too)
-    float windGustSize = 50.0f;     // m, the gust field's feature size
+    // The volumes blow in the shared wind ("Sky/Wind"); these are the rain's own sheets on top. A storm: wind speed 15,
+    // gust strength 8, sheet contrast 0.7, sheet drift 6.
     float windSheetContrast = 0.5f; // [0,1] alpha density bands sweeping through
     float windSheetSize = 50.0f;    // m
     float windSheetDrift = 5.0f;    // m/s the fields travel along the wind direction on top of half the wind speed

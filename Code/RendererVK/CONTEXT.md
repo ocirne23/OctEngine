@@ -1101,7 +1101,8 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   never narrower than `Min pixel width`.
 * **No vertex buffer:** the index buffer holds vertex IDS (`blade << GRASS_BLADE_VERTEX_SHIFT | vertex`), and
   `grass.vs.glsl` builds the blade: a quadratic Bezier from the root (control point above the root at the tip's height,
-  tip pushed by a random lean + the wind - a steady bend with a sway and value-noise gusts blowing downwind), its width
+  tip pushed by a random lean + THE wind (see "The wind": its direction, speed and gusts x `Bend` per m/s with a sway,
+  plus a value-noise ripple moving with it), its width
   narrowing to a one-vertex tip. **GEOMORPH:** over the last `LOD morph band` (fraction, 0.3) before the next LOD's
   distance, the rows the coarser LOD drops (the odd rows) move - positions, last frame's positions and normals - onto
   the midpoint of their neighbours, by the blade's OWN distance; at the switch the blade is the coarser one exactly. The
@@ -1194,6 +1195,48 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   bias, both faces, its own set (UBO + vertex mega-buffer). **REMOVED 2026-10-03:** the blades' casting into the SCENE
   cascades (`Cast shadows` / `Shadow distance` / `Shadow cascades`, default off) - its cull list, multiview VS variant,
   pipeline and record call; the canopy and this cascade replace it.
+
+## The wind (`WindParams`, "Sky/Wind", `u_weatherWind0..2`)
+
+ONE wind for everything that moves with it: speed (m/s, default 2), direction (degrees the wind blows TOWARDS, from +X around
++Y; 113 = the sea's former heading), gust strength (m/s) and gust size (m). Its readers:
+
+| Reader | How |
+|---|---|
+| Weather particles (rain, snow) | `weatherWindAt` (particle.inc.glsl) + the rain's own `Particles/Wind sheet *` |
+| Trees, grass | `vegetationWind` (`wind.inc.glsl`): the mean + a 2D GUST VECTOR, each component two analytic waves travelling downwind (1.2 / 0.46 x the gust size long). The gusts turn the wind rather than cancel it (a signed gust along the mean left ~40 % of the trees still at a 1 m/s mean, 5 m/s gusts). Grass adds its small-scale ripple (value noise moving with the mean wind), both "per m/s" (`Grass/Wind/Bend`, `Ripple`) |
+| Fog | the noise drifts along the direction at the speed (`u_fogParams2.z`), world - drift: WITH the wind |
+| Clouds | direction, speed x `Sky/Clouds/Wind speed scale` (3.5) |
+| Ocean (Procedural) | `Renderer::getWindParams()`: speed x `Ocean/Waves/Wind speed scale` (2.5) = the U10, the heading + π (the spectrum's convention) |
+
+(Until 2026-10-05: separate Particles / Grass / Clouds / Fog / Ocean speeds and angles.)
+
+## Tree wind (`tree_wind.inc.glsl`, "Trees/Wind" tweaks, `FoliageParams` wind*, `u_treeWind0..3`)
+
+Vertex-shader sway of the procedural trees in THE wind (see "The wind" below). **No textures, no per-tree or
+per-vertex memory**: the gusts are `wind.inc.glsl`'s, and the per-vertex data rides the free MAGNITUDE of the tangent's w (RenderMeshData:
+texCoords.z in (1, 2) = a tree mesh vertex's payload; >= 2 = the billboard / card codes, which mean "tree" too;
+1 = no wind). Three layers:
+
+* **Trunk** - lean (`Bend` x speed²) + sway, x (local height / `Reference height`)², the vertex dropping so the tree
+  keeps its length. From the mesh-local height alone, so the mesh, the merged branch cards and the whole-tree
+  billboard bend alike (crossfades stay aligned). The only layer of the cards / billboards and of the shadow pass.
+* **Branch** - meshes only, faded out by `Branch fade end` (70 m, before the mid tier): the module bends with the
+  placement's phase, the level-1 sub-branch on top with its own (both weights 0 at their root: continuous joints).
+* **Leaf** - the leaf cards' tip vertices along the card normal, a phase per card, faded out by `Leaf fade end`.
+* **Billboard waves** (the lit FS, `FOLIAGE`, `treeWindBillboardUv`) - a whole-tree billboard (strip code: |tangent w|
+  in [2, 3)) cannot bend its branches, so its TEXTURE lookup moves: two crossing waves over the card, growing toward
+  the card's top (on the horizontal card toward its rim) from a still base, x the wind and `Billboard waves` (0.012 of
+  the card), clamped into the card's own strip. Albedo, alpha (the outline ripples too) and normal use the moved
+  coordinate (`texUv`); the card frame's derivatives and the crown math keep `uv`. Not in the shadow pass and not in
+  the motion vectors (a texture-space motion). The branch cards (axis code) keep still.
+
+`instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
+offset minus this frame's (`u_treeWind0.w` = last frame's time) to the motion vector. `shadow_depth.vs` applies the
+trunk layer to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`; the cascade mask is the
+low 15 bits). Both culls grow a tree's bound by `u_treeWind3.z` (the reach at the strongest gust, from the UBO
+build). Beyond `Trunk fade end` (3 km, a 100 m band) nothing. **The TLAS stays static**: RT shadows / GI / reflections
+see unswayed trees.
 
 ## Far-tree volume (`TreeVolumePipeline`, "Trees/Far ..." tweaks, `FarTreeParams`)
 

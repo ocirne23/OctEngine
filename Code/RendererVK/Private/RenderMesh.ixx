@@ -23,7 +23,8 @@ export struct RenderMeshData
     // handedness is ObjectContainer's formula), so the shading matches the container path exactly.
     // texCoords.z >= 2 rides the tangent's w as its MAGNITUDE (the sign stays the handedness): the tree billboard cards'
     // strip code (2 + the strip height, < 3) or the merged branch cards' axis code (>= 3) (Procedural billboardMesh, read
-    // by the lit FS's foliageCrownFrame). Every other mesh: |w| = 1.
+    // by the lit FS's foliageCrownFrame). texCoords.z in (1, 2) does too: a tree mesh vertex's WIND payload (Procedural
+    // TreeGenerator, read by tree_wind.inc.glsl). Every other mesh: |w| = 1.
     void build(const MeshGeometryDesc& geometry)
     {
         const uint32 numVertices = geometry.numVertices;
@@ -35,7 +36,7 @@ export struct RenderMeshData
             const glm::vec3 tangent = geometry.tangents ? geometry.tangents[i] : glm::vec3(1.0f, 0.0f, 0.0f);
             const glm::vec3 bitangent = geometry.bitangents ? geometry.bitangents[i] : glm::vec3(0.0f, 0.0f, 1.0f);
             const glm::vec3 position = geometry.positions[i];
-            const float magnitude = geometry.texCoords && geometry.texCoords[i].z >= 2.0f ? geometry.texCoords[i].z : 1.0f;
+            const float magnitude = geometry.texCoords && geometry.texCoords[i].z > 1.0f ? geometry.texCoords[i].z : 1.0f;
             vertices[i].set(position, normal,
                 glm::vec4(tangent, glm::dot(normal, glm::cross(tangent, bitangent)) >= 0.0f ? magnitude : -magnitude),
                 geometry.texCoords ? glm::vec2(geometry.texCoords[i]) : glm::vec2(0.0f));

@@ -461,8 +461,32 @@ namespace
 		return out;
 	}
 
+	// THE WIND PAYLOAD (RendererVK tree_wind.inc.glsl, the layout there): texCoords.z = 1 + payload / 2^22 rides the
+	// tangent's w magnitude to the vertex shader (RenderMeshData). The module weight runs along the module's root bone
+	// (a sub-branch's vertices take it at their bone's pivot, so the sub-branch moves with the module where it attaches),
+	// the sub-branch weight along its level-1 bone; the module placement's phase is added by bakeTreeVariant.
+	constexpr uint32 TREE_WIND_BIT = 1u << 21;
+	constexpr uint32 TREE_WIND_TIP_BIT = 1u << 20;
+	constexpr uint32 TREE_WIND_MODULE_PHASE_SHIFT = 17;
+	constexpr float TREE_WIND_PAYLOAD_SCALE = 4194304.0f; // 2^22
+
+	float encodeWind(uint32 payload) { return 1.0f + (float)payload / TREE_WIND_PAYLOAD_SCALE; }
+
+	uint32 windPayload(oc::span<const TreeBone> bones, const glm::vec3& p, uint8 bone, bool trunk)
+	{
+		if (trunk || bones.empty())
+			return TREE_WIND_BIT; // the trunk bend only
+		auto along = [](const TreeBone& b, const glm::vec3& q) { return glm::clamp(glm::dot(q - b.pivot, b.axis) / glm::max(b.length, 1e-3f), 0.0f, 1.0f); };
+		if (bone == 0 || bone >= bones.size())
+			return (uint32)std::round(along(bones[0], p) * 127.0f) | TREE_WIND_BIT;
+		const uint32 rootW = (uint32)std::round(along(bones[0], bones[bone].pivot) * 127.0f);
+		const uint32 boneW = (uint32)std::round(along(bones[bone], p) * 63.0f);
+		return rootW | (boneW << 7) | ((treeHash(bone) & 15u) << 13) | TREE_WIND_BIT;
+	}
+
 	// A diamond leaf card from its stem point, both faces (no alpha test needed for the placeholder shape).
-	void appendLeaf(TreeMesh& m, const glm::vec3& stem, const glm::vec3& along, const glm::vec3& normal, float length, float width, uint8 bone)
+	void appendLeaf(TreeMesh& m, const glm::vec3& stem, const glm::vec3& along, const glm::vec3& normal, float length, float width, uint8 bone,
+		uint32 wind)
 	{
 		const glm::vec3 side = glm::normalize(glm::cross(normal, along));
 		const glm::vec3 corners[4] =
@@ -483,7 +507,7 @@ namespace
 				m.normals.push_back(n);
 				m.tangents.push_back(side); // dPos/dU on BOTH faces (same UVs): the back face's handedness flips instead
 				m.bitangents.push_back(along);
-				m.texCoords.push_back(uvs[i]);
+				m.texCoords.push_back(glm::vec3(glm::vec2(uvs[i]), encodeWind(i == 0 ? wind : wind | TREE_WIND_TIP_BIT))); // all but the stem flutter
 				m.bones.push_back(bone);
 			}
 			if (face == 0)
@@ -498,7 +522,7 @@ namespace
 	// normal - on BOTH faces - toward the direction away from `crownCentre`, so the crown shades as one round
 	// volume instead of a stack of flat cards, the same from either side of a card.
 	void appendCard(TreeMesh& m, const glm::vec3& stem, const glm::vec3& along, const glm::vec3& normal, float length, float width,
-		uint32 cell, uint8 bone, const glm::vec3& crownCentre, float normalBend)
+		uint32 cell, uint8 bone, const glm::vec3& crownCentre, float normalBend, uint32 wind)
 	{
 		constexpr float CELL = 0.5f; // 1 / TREE_LEAF_ATLAS_CELLS
 		const glm::vec2 cellOrigin((float)(cell & 1u) * CELL, (float)((cell >> 1) & 1u) * CELL);
@@ -529,7 +553,7 @@ namespace
 				m.normals.push_back(n);
 				m.tangents.push_back(glm::dot(t, t) > 1e-8f ? glm::normalize(t) : side);
 				m.bitangents.push_back(along);
-				m.texCoords.push_back(glm::vec3(uv, 0.0f));
+				m.texCoords.push_back(glm::vec3(uv, encodeWind(i >= 2 ? wind | TREE_WIND_TIP_BIT : wind))); // corners 2, 3: the tip
 				m.bones.push_back(bone);
 			}
 			if (face == 0)
@@ -544,8 +568,8 @@ namespace
 	// specs should mesh LODs come back.
 	constexpr uint32 MESHED_LODS = 1;
 
-	// Meshes the LODs of a piece from its plan (MESHED_LODS of them).
-	void meshPiece(const TreeSpeciesDesc& sp, const PiecePlan& plan, TreePiece& out)
+	// Meshes the LODs of a piece from its plan (MESHED_LODS of them). `trunk`: its vertices take the wind's trunk bend only.
+	void meshPiece(const TreeSpeciesDesc& sp, const PiecePlan& plan, TreePiece& out, bool trunk)
 	{
 		// The module root is the attach point on the trunk axis - inside the crown, the best centre a shared
 		// module knows (the composited tree's own centre differs per tree).
@@ -554,29 +578,33 @@ namespace
 		{
 			const LodSpec& spec = PIECE_LODS[lod];
 			const int keepLevel = glm::max(plan.maxLevel - spec.levelDrop, 1);
+			TreeMesh& bark = out.bark[lod];
 			for (const TubePlan& tube : plan.tubes)
 			{
 				if (tube.level > keepLevel || (tube.stub && !spec.stubs))
 					continue;
 				const int sides = glm::max(3, (int)std::round((float)tube.sides * spec.sides));
-				appendTube(out.bark[lod], subsamplePath(tube.path, spec.rings), sides, tube.bone, tube.flare, tube.stub,
+				appendTube(bark, subsamplePath(tube.path, spec.rings), sides, tube.bone, tube.flare, tube.stub,
 					tube.lobed ? &plan.profile : nullptr, tube.sink);
 			}
+			for (uint32 v = 0; v < bark.numVertices(); ++v)
+				bark.texCoords[v].z = encodeWind(windPayload(out.bones, bark.positions[v], bark.bones[v], trunk));
 
 			const float grow = std::sqrt((float)spec.leafStride);
 			for (size_t i = 0; i < plan.leaves.size(); i += spec.leafStride)
 			{
 				const LeafPlan& leaf = plan.leaves[i];
 				const float length = leaf.length * grow, width = leaf.width * grow;
+				const uint32 wind = windPayload(out.bones, leaf.stem, leaf.bone, trunk); // the stem's: one phase per card
 				if (sp.leafType == ETreeLeafType::Single)
 				{
-					appendLeaf(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.bone);
+					appendLeaf(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.bone, wind);
 					continue;
 				}
-				appendCard(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.cell, leaf.bone, crownCentre, sp.leafNormalBend);
+				appendCard(out.leaves[lod], leaf.stem, leaf.along, leaf.normal, length, width, leaf.cell, leaf.bone, crownCentre, sp.leafNormalBend, wind);
 				if (sp.leafCross)
 					appendCard(out.leaves[lod], leaf.stem, leaf.along, glm::normalize(glm::cross(leaf.along, leaf.normal)), length, width,
-						leaf.cell ^ 1u, leaf.bone, crownCentre, sp.leafNormalBend);
+						leaf.cell ^ 1u, leaf.bone, crownCentre, sp.leafNormalBend, wind);
 			}
 			out.lodError[lod] = spec.error * out.length * sp.lodErrorScale;
 		}
@@ -666,7 +694,7 @@ namespace
 			slot.radius = path.r1;
 			out.slots.push_back(slot);
 		}
-		meshPiece(sp, plan, out);
+		meshPiece(sp, plan, out, true);
 	}
 
 	// Module-local frame: +Y = the root branch direction, +Z = the side that faces world-up after the
@@ -784,7 +812,7 @@ namespace
 				plan.leaves.push_back({ s.pos, along, normal, leafLength * size, leafWidth * size, cell, branch.bone });
 			}
 		}
-		meshPiece(sp, plan, out);
+		meshPiece(sp, plan, out, false);
 	}
 }
 
@@ -819,7 +847,9 @@ namespace Procedural
 		float treeScale = 1.0f;
 		compositeTree(species, library, seed, placements, treeScale);
 
-		auto append = [](TreeMesh& dst, const TreeMesh& src, const Transform& t)
+		// `windPhase`: the module placement's wind phase, added to every module vertex's payload (two placements of one
+		// module sway apart).
+		auto append = [](TreeMesh& dst, const TreeMesh& src, const Transform& t, uint32 windPhase)
 		{
 			const uint32 base = dst.numVertices();
 			for (uint32 v = 0; v < src.numVertices(); ++v)
@@ -828,20 +858,25 @@ namespace Procedural
 				dst.normals.push_back(t.quat * src.normals[v]); // uniform scale: directions only rotate
 				dst.tangents.push_back(t.quat * src.tangents[v]);
 				dst.bitangents.push_back(t.quat * src.bitangents[v]);
-				dst.texCoords.push_back(src.texCoords[v]);
+				glm::vec3 uv = src.texCoords[v];
+				if (windPhase != 0u && uv.z > 1.0f && uv.z < 2.0f)
+					uv.z = encodeWind((uint32)std::round((uv.z - 1.0f) * TREE_WIND_PAYLOAD_SCALE) | windPhase);
+				dst.texCoords.push_back(uv);
 				dst.bones.push_back(0);
 			}
 			for (uint32 index : src.indices)
 				dst.indices.push_back(base + index);
 		};
-		for (const TreePiecePlacement& placement : placements)
+		for (uint32 p = 0; p < (uint32)placements.size(); ++p)
 		{
+			const TreePiecePlacement& placement = placements[p];
 			const TreePiece& piece = placement.trunk ? library.trunks[placement.pieceIdx] : library.modules[placement.pieceIdx];
+			const uint32 windPhase = placement.trunk ? 0u : (treeHash(seed, 7000u + p) & 7u) << TREE_WIND_MODULE_PHASE_SHIFT;
 			for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
 			{
-				append(out.bark[lod], piece.bark[lod], placement.local);
-				append(placement.trunk ? out.trunkBark[lod] : out.branchBark[lod], piece.bark[lod], placement.local);
-				append(out.leaves[lod], piece.leaves[lod], placement.local);
+				append(out.bark[lod], piece.bark[lod], placement.local, windPhase);
+				append(placement.trunk ? out.trunkBark[lod] : out.branchBark[lod], piece.bark[lod], placement.local, windPhase);
+				append(out.leaves[lod], piece.leaves[lod], placement.local, windPhase);
 				out.lodError[lod] = glm::max(out.lodError[lod], piece.lodError[lod] * placement.local.scale);
 			}
 			if (placement.trunk)

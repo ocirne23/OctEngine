@@ -16,6 +16,14 @@ namespace
     constexpr oc::string_view s_dlssPresetNames[] = { "Default", "J", "K", "L", "M" };
 }
 
+void WindParams::registerTweaks()
+{
+    Tweak::floatVar("Sky/Wind", "Speed (m/s)", &speed, 0.0f, 40.0f, 0.1f);
+    Tweak::floatVar("Sky/Wind", "Direction (deg)", &angleDeg, 0.0f, 360.0f, 1.0f);
+    Tweak::floatVar("Sky/Wind", "Gust strength (m/s)", &gustStrength, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Sky/Wind", "Gust size (m)", &gustSize, 2.0f, 200.0f, 1.0f);
+}
+
 void SkyParams::registerTweaks()
 {
     Tweak::float3("Sky", "Sun Direction", &sunDirection, 0.01f, [&]() { sunDirection = glm::normalize(sunDirection); });
@@ -63,8 +71,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &coverageVariation, 0.0f, 2.0f);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &weatherSizeKm, 5.0f, 500.0f, 0.5f);
-    Tweak::floatVar("Sky/Clouds", "Wind speed (m/s)", &windSpeed, 0.0f, 100.0f, 0.1f);
-    Tweak::floatVar("Sky/Clouds", "Wind angle (deg)", &windAngleDeg, 0.0f, 360.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds", "Wind speed scale", &windSpeedScale, 0.0f, 100.0f, 0.1f); // x "Sky/Wind/Speed"
     Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &evolveSpeed, 0.0f, 100.0f);
 
     Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &aerialStrength, 0.0f, 5.0f); // 0 = off
@@ -167,6 +174,20 @@ void FoliageParams::registerTweaks(const oc::function<void()>& onDebugViewChange
     Tweak::floatVar("Trees", "Foliage edge fade top card scale", &edgeFadeTopCardScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow cascade margin (m)", &shadowCascadeMargin, 0.0f, 10000.0f, 1.0f);
     Tweak::floatVar("Trees", "RT range (m)", &rtRange, 0.0f, 10000.0f, 5.0f);
+    Tweak::floatVar("Trees/Wind", "Bend", &windBend, 0.0f, 0.2f, 0.0005f);
+    Tweak::floatVar("Trees/Wind", "Reference height (m)", &windRefHeight, 1.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Trees/Wind", "Sway", &windSway, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees/Wind", "Sway frequency (Hz)", &windSwayFrequency, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees/Wind", "Branch", &windBranch, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Trees/Wind", "Branch frequency (Hz)", &windBranchFrequency, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees/Wind", "Leaf", &windLeaf, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Trees/Wind", "Leaf frequency (Hz)", &windLeafFrequency, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Trees/Wind", "Branch fade start (m)", &windBranchFadeStart, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Trees/Wind", "Branch fade end (m)", &windBranchFadeEnd, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Trees/Wind", "Leaf fade start (m)", &windLeafFadeStart, 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Trees/Wind", "Leaf fade end (m)", &windLeafFadeEnd, 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Trees/Wind", "Trunk fade end (m)", &windTrunkFadeEnd, 0.0f, 20000.0f, 10.0f);
+    Tweak::floatVar("Trees/Wind", "Billboard waves", &windBillboardWaves, 0.0f, 0.1f, 0.0005f);
 }
 
 void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
@@ -190,11 +211,9 @@ void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
     Tweak::floatVar("Grass/LOD", "LOD 3 distance (m)", &lod3Distance, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/LOD", "Min pixel width", &minPixelWidth, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/LOD", "LOD morph band", &lodMorphBand, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Wind", "Angle (deg)", &windAngleDeg, 0.0f, 360.0f, 1.0f);
-    Tweak::floatVar("Grass/Wind", "Bend", &windBend, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Grass/Wind", "Gust bend", &gustBend, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Grass/Wind", "Gust size (m)", &gustSize, 0.5f, 200.0f, 0.1f);
-    Tweak::floatVar("Grass/Wind", "Gust speed (m/s)", &gustSpeed, 0.0f, 50.0f, 0.05f);
+    Tweak::floatVar("Grass/Wind", "Bend (per m/s)", &windBend, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Wind", "Ripple (per m/s)", &rippleBend, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Wind", "Ripple size (m)", &rippleSize, 0.5f, 200.0f, 0.1f);
     Tweak::floatVar("Grass/Wind", "Sway frequency (Hz)", &swayFrequency, 0.0f, 5.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Fade start (m)", &windFadeStart, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/Wind", "Fade end (m)", &windFadeEnd, 0.0f, 500.0f, 0.5f);
@@ -285,7 +304,6 @@ void FogParams::registerTweaks()
     Tweak::floatVar("Fog", "Slice Power", &slicePower, 0.4f, 1.5f, 0.01f);
     Tweak::floatVar("Fog", "Noise Scale", &noiseScale, 0.005f, 1.0f, 0.005f);
     Tweak::floatVar("Fog", "Noise Strength", &noiseStrength, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Fog", "Wind Speed", &windSpeed, 0.0f, 20.0f);
     Tweak::floatVar("Fog", "Temporal Blend", &temporalBlend, 0.0f, 0.97f, 0.01f);
     Tweak::floatVar("Fog", "Region strength", &regionStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Underwater density", &underwaterDensity, 0.0f, 20.0f, 0.1f);
@@ -419,10 +437,6 @@ void ParticleParams::registerTweaks()
     Tweak::floatVar("Particles", "Rain occlusion foliage block", &rainOcclusionFoliageBlock, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Streak camera blur", &streakCameraBlur, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Anisotropy", &anisotropy, -0.9f, 0.95f, 0.01f);
-    Tweak::floatVar("Particles", "Wind speed", &windSpeed, 0.0f, 40.0f, 0.1f);
-    Tweak::floatVar("Particles", "Wind angle", &windAngleDeg, 0.0f, 360.0f, 1.0f);
-    Tweak::floatVar("Particles", "Wind gust strength", &windGustStrength, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Particles", "Wind gust size", &windGustSize, 2.0f, 200.0f, 1.0f);
     Tweak::floatVar("Particles", "Wind sheet contrast", &windSheetContrast, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Wind sheet size", &windSheetSize, 2.0f, 200.0f, 1.0f);
     Tweak::floatVar("Particles", "Wind sheet drift", &windSheetDrift, 0.0f, 20.0f, 0.1f);

@@ -5,7 +5,7 @@
 // UBO fog parameter packing (ubo.inc.glsl):
 //   u_fogParams0: x = global density (extinction 1/m), y = height fog base (world up), z = height falloff (1/m), w = fog range (m)
 //   u_fogParams1: rgb = fog albedo * intensity (scattering tint; > 1 = non-physical gain), w = phase anisotropy g
-//   u_fogParams2: x = noise scale (1/m), y = noise strength, z = wind speed (m/s), w = temporal history weight
+//   u_fogParams2: x = noise scale (1/m), y = noise strength, z = wind speed (m/s; "Sky/Wind", its direction u_weatherWind2.xy), w = temporal history weight
 //   u_fogParams3: x = terrain follow (fraction of the terrain height added to the height fog base),
 //                 y = 1 / near terrain map world size (0 = no map), z = enabled, w = light shadow rays (> 0.5)
 //   u_fogParams4: x = sun shadow rays per froxel, y = spatial filter (> 0.5), z = GI ambient (> 0.5), w = sun shadow cone half-angle (rad)

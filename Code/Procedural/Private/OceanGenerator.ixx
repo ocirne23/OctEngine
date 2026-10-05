@@ -86,13 +86,15 @@ export namespace Procedural
 		// The heading the swell actually TRAVELS in open water (radians, XZ) - the terrain streamer's baked
 		// flow field eases back to this offshore so the encoded directions meet the wind-driven open sea
 		// without a turn. NOTE the sim's convention: the spectrum's dominant term is h0(k) e^{i(k.x + wt)},
-		// which moves AGAINST the wind-direction vector, so travel = m_windAngle + pi (steeredWindAngle
-		// converts back when it feeds the sim). Derived from the BASE wind tweak, deliberately not the
-		// steered value: feeding that into the bake would re-bake both maps every frame the wind turns
-		// (bake -> steering -> bake feedback).
-		float swellTravelAngle() const { return m_windAngle + 3.14159265f; }
+		// which moves AGAINST the wind-direction vector, so travel = baseWindAngle + pi = THE wind's ("Sky/Wind")
+		// direction (steeredWindAngle converts back when it feeds the sim). Derived from the BASE wind,
+		// deliberately not the steered value: feeding that into the bake would re-bake both maps every frame the
+		// wind turns (bake -> steering -> bake feedback).
+		float swellTravelAngle() const { return baseWindAngle() + 3.14159265f; }
 
 	private:
+		float baseWindAngle() const; // THE wind's heading in the sim's convention (the direction it blows FROM)
+		float windSpeed() const;     // THE wind's speed x "Wind speed scale" (the MODEL U10)
 		// Turns the SIMULATION wind toward the baked shore flow around the camera - how the waves actually
 		// travel inland at the coast. See the .cpp.
 		float steeredWindAngle(const Camera& camera);
@@ -148,17 +150,16 @@ export namespace Procedural
 		float m_detailBias = 0.3f;
 
 		// --- Spectrum (TMA/JONSWAP + finite-depth dispersion) + shading; all live via setOceanParams ---
-		float m_windSpeed = 10.0f;     // U10 (m/s): the main sea-state knob
+		float m_windSpeedScale = 2.5f;  // x "Sky/Wind/Speed" = the U10 (m/s): the main sea-state knob
 		float m_fetchKm = 300.0f;      // wind fetch (km)
 		float m_depth = 100.0f;        // ocean depth (m): finite-depth dispersion + TMA attenuation
-		float m_windAngle = 5.12f;     // radians, XZ. The swell TRAVELS opposite this - see swellTravelAngle
 		// Flow -> wind steering (steeredWindAngle): near a coast the SIM wind turns toward the baked flow
-		// so the waves roll toward the local shore; away from any it returns to m_windAngle.
+		// so the waves roll toward the local shore; away from any it returns to baseWindAngle.
 		bool  m_windSteerEnabled = true;
 		float m_windSteerRate = 10.0f;    // deg/s the simulation wind may turn (spectrum morphs through it)
 		float m_windSteerRange = 400.0f;  // m around the camera whose baked shore directions vote
-		float m_steeredWindAngle = 0.0f;  // follows m_windAngle/the flow at the slew rate
-		bool  m_windSteerSynced = false;  // adopt m_windAngle on first use instead of turning in from 0
+		float m_steeredWindAngle = 0.0f;  // follows baseWindAngle/the flow at the slew rate
+		bool  m_windSteerSynced = false;  // adopt baseWindAngle on first use instead of turning in from 0
 		float m_amplitude = 1.0f;      // artistic scale on the spectrum (1 = physical)
 		float m_choppiness = 1.25f;     // horizontal displacement lambda
 		float m_normalStrength = 1.0f;

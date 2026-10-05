@@ -19,6 +19,7 @@
 layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertices[]; };
 
 #include "grass.inc.glsl"
+#include "wind.inc.glsl"
 
 layout (location = 0) in vec4 in_patchOrigins; // xy = the patch's min corner (world XZ), zw = its terrain chunk's origin
 layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, y = its cells per side | LOD << 16,
@@ -44,19 +45,22 @@ vec3 grassBezier(vec3 p0, vec3 p1, vec3 p2, float t)
     return s * s * p0 + 2.0 * s * t * p1 + t * t * p2;
 }
 
-// The wind's push on the tip at a point and time, in blade heights along the wind direction: a steady bend with a
-// sway, plus gusts - value noise blowing downwind at "Gust speed".
-float grassWind(vec2 xz, float time, float phase)
+// The wind's push on the tip at a point and time, in blade heights (XZ): THE shared wind (wind.inc.glsl - its direction,
+// speed and gusts, the trees bend in the same) x "Bend" per m/s with a sway, plus a small-scale RIPPLE - value noise
+// moving with the mean wind - x "Ripple" per m/s.
+vec2 grassWind(vec2 xz, float time, float phase)
 {
+    vec2 dir;
+    const float speed = vegetationWind(xz, time, dir);
     const float sway = sin(time * u_grassParams5.z * GRASS_TWO_PI + phase);
-    const float gust = grassValueNoise((xz - u_grassParams4.xy * (u_grassParams5.y * time)) * u_grassParams5.x);
-    return u_grassParams4.z * (0.85 + 0.15 * sway) + u_grassParams4.w * gust * (0.8 + 0.2 * sway);
+    const float ripple = grassValueNoise((xz - vegetationWindMeanDir() * (max(length(u_weatherWind0.xz), 1.0) * time)) * u_grassParams5.x);
+    return dir * (speed * (u_grassParams4.z * (0.85 + 0.15 * sway) + u_grassParams4.w * ripple * (0.8 + 0.2 * sway)));
 }
 
 // The tip and the control point of a blade of height h: lean + wind sideways (capped at 0.9 h), the rest upward.
-vec3 grassTip(vec3 root, vec2 lean, float wind, float h, out vec3 ctrl)
+vec3 grassTip(vec3 root, vec2 lean, vec2 wind, float h, out vec3 ctrl)
 {
-    vec2 offset = lean + u_grassParams4.xy * (wind * h);
+    vec2 offset = lean + wind * h;
     const float len = length(offset);
     if (len > 0.9 * h)
         offset *= 0.9 * h / len;

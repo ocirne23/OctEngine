@@ -262,11 +262,13 @@ Points to settle:
 * A `ScatterAsset` can name a tree species instead of an `.oc`. Placements become (position, seed) records on the
   GPU, not `RenderNode`s. Later the stateless placement (3.1) generates them on the GPU directly.
 
-### 4.6 Wind — on the bones
+### 4.6 Wind — in the vertex shader (BUILT 2026-10-05, W1-W3)
 
-**Branch sway = a per-frame rotation of each bone about its pivot** (noise by tree seed + bone), in the wind
-compute pass. The main draw and the shadow draw both skin with the same palette, so shadows sway too. Trunk sway
-on bone 0. Only leaf flutter needs a vertex-shader term (later). `[Likely]`
+The bone-palette design above was dropped: the runtime draws BAKED variants (their bones are gone), and a palette
+costs memory per resident tree. Instead (RendererVK "Tree wind"): a TRUNK bend from the mesh-local height (every
+representation alike: mesh, branch cards, billboard; also the shadow pass), a BRANCH sway and a LEAF flutter from a
+per-vertex payload in the tangent's free w magnitude, analytic travelling-wave gusts on the weather wind. Zero bytes
+of memory; the TLAS stays static. Next (W4): tune the fades and amplitudes, profile in RelWithDebInfo.
 
 ### 4.7 Known risks
 

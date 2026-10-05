@@ -80,6 +80,7 @@ void Renderer::registerTweaks()
 {
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     m_skyParams.registerTweaks();
+    m_windParams.registerTweaks();
     // "Shadows/Debug mode" is the SHADOW_DEBUG define on the lit fragment variants: GPU-idle + pipeline
     // rebuild, the wireframe pattern below.
     m_shadowParams.registerTweaks([this]() {

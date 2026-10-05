@@ -109,8 +109,9 @@ float valueNoise(vec3 p)
 // Two-octave wind-drifted value noise in [0,1]; modulates the density for a dusty, wispy look.
 float fogNoise(vec3 worldPos)
 {
-    const vec3 wind = vec3(1.0, 0.12, 0.55) * (u_fogParams2.z * u_timeSeconds);
-    const vec3 p = (worldPos + wind) * u_fogParams2.x;
+    // Drifts with THE wind ("Sky/Wind": its direction, u_fogParams2.z its speed), lifting a little.
+    const vec3 wind = vec3(u_weatherWind2.x, 0.12, u_weatherWind2.y) * (u_fogParams2.z * u_timeSeconds);
+    const vec3 p = (worldPos - wind) * u_fogParams2.x; // noise space = world - drift: the wisps travel WITH the wind
     return valueNoise(p) * 0.667 + valueNoise(p * 2.37 + vec3(17.3)) * 0.333;
 }
 

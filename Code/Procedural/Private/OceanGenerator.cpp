@@ -77,10 +77,10 @@ namespace Procedural
 		Tweak::floatVar("Ocean", "Detail bias", &m_detailBias, -2.0f, 2.0f, 0.05f);
 
 		// TMA/JONSWAP spectrum inputs (Horvath 2015); re-evaluated on the GPU every frame, so all live.
-		Tweak::floatVar("Ocean/Waves", "Wind speed (m/s)", &m_windSpeed, 0.0f, 100.0f, 0.1f);
+		// The sea's wind is THE wind ("Sky/Wind": its direction, its speed x this - the U10 the spectrum takes).
+		Tweak::floatVar("Ocean/Waves", "Wind speed scale", &m_windSpeedScale, 0.0f, 100.0f, 0.1f);
 		Tweak::floatVar("Ocean/Waves", "Fetch (km)", &m_fetchKm, 1.0f, 2000.0f, 1.0f);
 		Tweak::floatVar("Ocean/Waves", "Depth (m)", &m_depth, 1.0f, 500.0f, 0.5f);
-		Tweak::floatVar("Ocean/Waves", "Wind angle (rad)", &m_windAngle, 0.0f, 6.2831853f, 0.01f);
 		// Flow -> wind steering: near a coast the SIMULATION wind turns toward the baked flow directions
 		// (waves roll in toward the local shore); away from any shore it returns to the wind angle above.
 		Tweak::boolean("Ocean/Waves", "Flow steers wind", &m_windSteerEnabled);
@@ -419,16 +419,29 @@ namespace Procedural
 	// the spectrum smoothly through the turn. The baked field itself eases back to the base wind offshore
 	// (FlowField::oceanFade), so far-from-land votes already agree with the tweak angle and leaving the
 	// coast hands back to it by construction.
+	// The base sim wind angle: THE wind's ("Sky/Wind"), turned to the spectrum's convention - its dominant waves travel
+	// AGAINST the wind vector (see swellTravelAngle), so the sim takes the heading the wind blows FROM.
+	float OceanGenerator::baseWindAngle() const
+	{
+		return glm::radians(Globals::rendererVK.getWindParams().angleDeg) + 3.14159265f;
+	}
+
+	float OceanGenerator::windSpeed() const
+	{
+		return glm::max(Globals::rendererVK.getWindParams().speed, 0.0f) * glm::max(m_windSpeedScale, 0.0f);
+	}
+
 	float OceanGenerator::steeredWindAngle(const Camera& camera)
 	{
+		const float baseAngle = baseWindAngle();
 		if (!m_windSteerEnabled || m_windSteerRate <= 0.0f)
 		{
 			m_windSteerSynced = false; // re-adopt the base wind when steering comes back on
-			return m_windAngle;
+			return baseAngle;
 		}
 		if (!m_windSteerSynced)
 		{
-			m_steeredWindAngle = m_windAngle;
+			m_steeredWindAngle = baseAngle;
 			m_windSteerSynced = true;
 		}
 		glm::vec2 sum(0.0f);
@@ -459,7 +472,7 @@ namespace Procedural
 		// should TRAVEL; the sim's dominant waves travel AGAINST its wind vector (see swellTravelAngle),
 		// so the wind target points the opposite way - offshore votes (faded to the travel heading) then
 		// negate right back to the base tweak.
-		const float target = glm::dot(sum, sum) > 1.0f ? std::atan2(-sum.y, -sum.x) : m_windAngle;
+		const float target = glm::dot(sum, sum) > 1.0f ? std::atan2(-sum.y, -sum.x) : baseAngle;
 		float d = target - m_steeredWindAngle;
 		d -= std::floor(d * (1.0f / 6.283185307f) + 0.5f) * 6.283185307f; // shortest arc
 		// SIM delta: the steered wind reshapes the spectrum, so it must hold still under the global pause
@@ -477,11 +490,12 @@ namespace Procedural
 	void OceanGenerator::pushOceanParams(Renderer& renderer, const Camera& camera)
 	{
 		const float windAngle = steeredWindAngle(camera); // base wind, turned toward the local shore flow
+		const float modelWind = windSpeed();              // THE wind x "Wind speed scale": the MODEL U10
 		const float s = glm::max(m_worldScale, 0.001f);
 		OceanParams& params = m_params;
 		params.enabled = m_enabled;
 		params.windDirection = glm::vec2(std::cos(windAngle), std::sin(windAngle));
-		params.windSpeed = m_windSpeed * std::sqrt(s);
+		params.windSpeed = modelWind * std::sqrt(s);
 		params.fetchKm = m_fetchKm * s;
 		params.depth = m_depth * s;
 		params.horizonLevelOffset = m_horizonLevelOffset * s;
@@ -523,7 +537,7 @@ namespace Procedural
 		params.foamEdge = m_foamEdge;
 		params.foamFineWaves = m_foamFineWaves;
 		params.foamDetail = m_foamDetail; // a slope scale: dimensionless
-		params.foamDriftSpeed = m_foamDrift * 0.01f * m_windSpeed * s; // model m/s: a speed scales like a length
+		params.foamDriftSpeed = m_foamDrift * 0.01f * modelWind * s; // model m/s: a speed scales like a length
 		// The ocean shader's underside path only while the camera is really under the water: a back face
 		// seen from above is a fold (high choppiness) and shades as the top side.
 		params.cameraUnderwater = hasWater() && camera.position.y < sampleWaterHeight(camera.position.x, camera.position.z);
@@ -534,10 +548,10 @@ namespace Procedural
 		params.worldScale = s;           // the renderer scales the spray + the ocean-bound fog metres by it
 		// The surf band narrows with the wind: full width from "Foam wind full" up, off in a calm (the MODEL wind,
 		// so it holds at any world scale).
-		const float windT = glm::smoothstep(0.0f, glm::max(m_foamWindFull, 0.01f), m_windSpeed);
+		const float windT = glm::smoothstep(0.0f, glm::max(m_foamWindFull, 0.01f), modelWind);
 		params.shoreFoamDepth = m_shoreFoamDepth * s * windT;
 		// Only a near-calm thins the surf's cap: none below 0.5 m/s of MODEL wind, easing in to full at 2 m/s.
-		params.shoreFoamMax = m_shoreFoamMax * glm::smoothstep(0.5f, 2.0f, m_windSpeed);
+		params.shoreFoamMax = m_shoreFoamMax * glm::smoothstep(0.5f, 2.0f, modelWind);
 		params.swashAmp = m_swashAmp;
 		params.shoreFoamBias = m_shoreFoamBias;
 		params.swashFlow = m_swashFlow;

@@ -98,7 +98,7 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
 
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
-    const float radius                = meshInfo.radius * instancePosScale.w;
+    const float radius                = meshInfo.radius * instancePosScale.w + (isTree ? u_treeWind3.z : 0.0); // + the wind's sway reach
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     uint cascadeMask = cascadeOverlapMask(centerPos, radius);
@@ -119,7 +119,8 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
 
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
-    const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x0000FFFFu);
+    // Bit 15: a TREE - the depth VS bends it in the wind (tree_wind.inc.glsl; the cascade mask stays below it).
+    const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x00007FFFu) | (isTree ? 0x00008000u : 0u);
 
     // GPU LOD selection, stateless and two levels coarser than the main view (matches the old CPU
     // pass bias: 4x the error budget / +2 fallback levels). Off-screen casters never pop on screen,

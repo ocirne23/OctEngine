@@ -150,8 +150,8 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   drop it straight back onto the roof, and a box top that is itself indoors would pin it there.
   Tweaks `Particles/Rain occlusion*`.
 * `WindResponse <1/s>` — the horizontal velocity relaxes onto the renderer's WEATHER WIND
-  (`Particles/Wind speed / angle / gust strength / gust size / sheet contrast / sheet size / sheet
-  drift`, `Ubo::weatherWind0/1/2`) at that rate; heavy drops ~1, flakes ~4, 0 = ignores wind. The
+  (THE wind, `Sky/Wind` speed / direction / gust strength / gust size - the vegetation, fog, ocean and clouds read
+  it too - plus the rain's own `Particles/Wind sheet contrast / sheet size / sheet drift`, `Ubo::weatherWind0/1/2`) at that rate; heavy drops ~1, flakes ~4, 0 = ignores wind. The
   local wind is the mean PLUS a 2D gust vector of "gust strength" m/s from two large-scale noise
   fields (`weatherWindAt`, particle.inc.glsl) - absolute, so flurries exist in calm air. The fields
   travel along the wind direction at "sheet drift" plus half the wind speed (a gust front sweeps

@@ -159,6 +159,8 @@ public:
     void setSkyRadiance(const glm::vec3& color, float intensity) { m_skyParams.skyRadianceColor = color; m_skyParams.skyRadianceIntensity = intensity; }
     void setSkyParams(const SkyParams& sky) { m_skyParams = sky; }
     const SkyParams& getSkyParams() const { return m_skyParams; }
+    // THE wind ("Sky/Wind"): the ocean reads it (x its own speed scale) - everything renderer-side through the UBO.
+    const WindParams& getWindParams() const { return m_windParams; }
     void setFogParams(const FogParams& fog) { m_fogParams = fog; }
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
     const ShadowParams& shadowParams() const { return m_shadowParams; }
@@ -714,6 +716,7 @@ private:
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
     float m_grassPrevTime = 0.0f; // last frame's timeSeconds (the blades' motion vectors)
+    float m_treeWindPrevTime = 0.0f; // last frame's timeSeconds (the tree wind's motion vectors)
     float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
     bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
     // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
@@ -728,6 +731,7 @@ private:
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, drained into the mapped buffer in present()
 
     SkyParams m_skyParams;
+    WindParams m_windParams;
     ShadowParams m_shadowParams;
     FoliageParams m_foliageParams;
     FogParams m_fogParams;

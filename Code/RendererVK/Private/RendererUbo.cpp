@@ -83,11 +83,13 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         ubo.cameraVelocity = glm::vec4(velocity, glm::clamp(m_particles.getParams().streakCameraBlur, 0.0f, 1.0f));
     }
     {
+        // THE wind ("Sky/Wind"): the particles, the vegetation (wind.inc.glsl) and the fog all read these.
         const ParticleParams& particles = m_particles.getParams();
-        const float a = glm::radians(particles.windAngleDeg);
-        const glm::vec2 dir(std::cos(a), std::sin(a));
-        ubo.weatherWind0 = glm::vec4(dir.x * particles.windSpeed, 0.0f, dir.y * particles.windSpeed, glm::max(particles.windGustStrength, 0.0f));
-        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(particles.windGustSize, 1.0f), glm::clamp(particles.windSheetContrast, 0.0f, 1.0f),
+        const WindParams& wind = m_windParams;
+        const glm::vec2 dir = wind.direction();
+        const float speed = glm::max(wind.speed, 0.0f);
+        ubo.weatherWind0 = glm::vec4(dir.x * speed, 0.0f, dir.y * speed, glm::max(wind.gustStrength, 0.0f));
+        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(wind.gustSize, 1.0f), glm::clamp(particles.windSheetContrast, 0.0f, 1.0f),
             1.0f / glm::max(particles.windSheetSize, 1.0f), glm::max(particles.windSheetDrift, 0.0f));
         ubo.weatherWind2 = glm::vec4(dir, m_oceanSimPipeline.getCameraWaterSurface(), m_oceanSimPipeline.hasCameraWaterSurface() ? 1.0f : 0.0f);
     }
@@ -126,6 +128,20 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     buildUboForce();
     buildUboTerrain();
     buildUboGrass(camera);
+    {
+        const FoliageParams& f = m_foliageParams;
+        ubo.treeWind0 = glm::vec4(glm::max(f.windBend, 0.0f), 1.0f / glm::max(f.windRefHeight, 0.1f), glm::max(f.windSway, 0.0f), m_treeWindPrevTime);
+        ubo.treeWind1 = glm::vec4(glm::max(f.windBranch, 0.0f), glm::max(f.windBranchFrequency, 0.0f), glm::max(f.windLeaf, 0.0f), glm::max(f.windLeafFrequency, 0.0f));
+        ubo.treeWind2 = glm::vec4(f.windBranchFadeStart, glm::max(f.windBranchFadeEnd, f.windBranchFadeStart + 0.01f),
+            f.windLeafFadeStart, glm::max(f.windLeafFadeEnd, f.windLeafFadeStart + 0.01f));
+        // The culls grow a tree's bound by the sway's reach: the strongest gust, a tree twice the reference height (the
+        // bend x 4), the branch tips (x 1.5 for the tree scale) and a leaf.
+        const float strongest = glm::max(m_windParams.speed, 0.0f) + glm::max(m_windParams.gustStrength, 0.0f) * 1.42f; // the gust is a 2D vector
+        const float reach = glm::max(f.windBend, 0.0f) * strongest * strongest * (1.0f + glm::max(f.windSway, 0.0f)) * 4.0f
+            + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f);
+        ubo.treeWind3 = glm::vec4(glm::max(f.windTrunkFadeEnd, 0.0f), glm::max(f.windSwayFrequency, 0.0f), reach, glm::max(f.windBillboardWaves, 0.0f));
+        m_treeWindPrevTime = ubo.timeSeconds;
+    }
 
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
 }
@@ -213,9 +229,9 @@ void Renderer::buildUboGrass(const Camera& camera)
         glm::clamp(g.bareFraction, 0.0f, 1.0f));
     ubo.grassParams12 = glm::vec4(1.0f / glm::max(g.fleckSize, 0.01f), glm::clamp(g.fleckContrast, 0.0f, 1.0f),
         glm::max(g.fleckFadeDistance, 1.0f), glm::max(g.fleckStretch, 0.0f));
-    const float windAngle = glm::radians(g.windAngleDeg);
-    ubo.grassParams4 = glm::vec4(std::cos(windAngle), std::sin(windAngle), g.windBend, g.gustBend);
-    ubo.grassParams5 = glm::vec4(1.0f / glm::max(g.gustSize, 0.01f), g.gustSpeed, g.swayFrequency, m_grassPrevTime);
+    // The direction, speed and gusts are the shared wind's (wind.inc.glsl); these the blades' response to it.
+    ubo.grassParams4 = glm::vec4(0.0f, 0.0f, glm::max(g.windBend, 0.0f), glm::max(g.rippleBend, 0.0f));
+    ubo.grassParams5 = glm::vec4(1.0f / glm::max(g.rippleSize, 0.01f), 0.0f, g.swayFrequency, m_grassPrevTime);
     m_grassPrevTime = ubo.timeSeconds;
     ubo.grassParams6 = glm::vec4(g.curvature, 1.0f / glm::max(g.clumpSize, 0.01f), glm::clamp(g.patchiness, 0.0f, 1.0f), glm::max(g.growBand, 0.01f));
     ubo.grassColor0 = glm::vec4(linear(g.rootColor), g.roughness);
@@ -371,8 +387,8 @@ void Renderer::buildUboClouds(const Camera& camera)
     const double detailPeriod = basePeriod / detailRepeats;
 
     const double dt = glm::min((double)Globals::time.getSimDeltaSec(), 0.25);
-    const double windAngle = glm::radians((double)c.windAngleDeg);
-    const glm::dvec2 windStep = glm::dvec2(std::cos(windAngle), std::sin(windAngle)) * ((double)c.windSpeed * dt);
+    // The shared wind ("Sky/Wind"), x the layer's speed scale.
+    const glm::dvec2 windStep = glm::dvec2(m_windParams.direction()) * ((double)glm::max(m_windParams.speed, 0.0f) * (double)c.windSpeedScale * dt);
     m_cloudWindOffset = glm::mod(m_cloudWindOffset + windStep, glm::dvec2(weatherPeriod));
     m_cloudEvolveOffset = std::fmod(m_cloudEvolveOffset + (double)c.evolveSpeed * dt, detailPeriod);
     // Noise space = world - wind, so the field travels WITH the wind.
@@ -580,7 +596,7 @@ void Renderer::buildUboFog()
     const glm::vec2 fogTerrainSizes = m_terrain.getHeightMap().getWorldSizes();
     ubo.fogParams0 = glm::vec4(fog.density, fog.heightBase, fog.heightFalloff * fog.heightFalloff, fog.range);
     ubo.fogParams1 = glm::vec4(fog.albedo * fog.albedoIntensity, fog.anisotropy);
-    ubo.fogParams2 = glm::vec4(fog.noiseScale, fog.noiseStrength, fog.windSpeed, fog.temporalBlend);
+    ubo.fogParams2 = glm::vec4(fog.noiseScale, fog.noiseStrength, glm::max(m_windParams.speed, 0.0f), fog.temporalBlend); // z: the shared wind's speed
     ubo.fogParams3 = glm::vec4(glm::clamp(fog.terrainFollow, 0.0f, 1.0f),
         fogTerrainSizes.x > 1.0f ? 1.0f / fogTerrainSizes.x : 0.0f,
         fog.enabled ? 1.0f : 0.0f, fog.lightShadows ? 1.0f : 0.0f);

@@ -7,6 +7,7 @@
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
+#include "tree_wind.inc.glsl"
 
 #ifdef STEREO
 // VR renders one eye per pass (no multiview here: the forward pass's DGC execution set forbids it), so the
@@ -85,11 +86,17 @@ void main()
 
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
-    const vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
+    vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
+    const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
+    // The procedural trees sway in the wind (tree_wind.inc.glsl; its payload rides the tangent's w magnitude).
+    vec3 windPrevDelta = vec3(0.0);
+    uint windPayload;
+    if (treeWindPayload(in_tangent.w, windPayload))
+        pos += treeWind(in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windPrevDelta);
     out_posU    = vec4(pos, in_posU.w);
-    out_normalV = vec4(quat_transform(in_normalV.xyz, inst_quat), in_normalV.w);
+    out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
-    out_prevWorldDelta = prevWorldDelta(inst);
+    out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
 #ifdef FOLIAGE
     out_instanceOrigin = inst_pos;
 #endif

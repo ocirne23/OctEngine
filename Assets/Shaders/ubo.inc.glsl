@@ -374,8 +374,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_grassParams1; // x = blade height (m), y = height variation, z = blade width (m), w = root sink (m)
     vec4 u_grassParams2; // x = thinning start (m), y = thinning exponent, z = width compensation exponent, w = max width scale
     vec4 u_grassParams3; // x = LOD 1 distance (m), y = LOD 2 distance (m), z = min blade width per metre of distance, w = ground normal blend distance (m)
-    vec4 u_grassParams4; // xy = wind direction (unit XZ), z = wind bend, w = gust bend
-    vec4 u_grassParams5; // x = 1 / gust size (1/m), y = gust speed (m/s), z = sway frequency (Hz), w = LAST frame's u_timeSeconds
+    vec4 u_grassParams4; // xy unused (the shared wind: u_weatherWind*, wind.inc.glsl), z = bend per m/s, w = ripple per m/s
+    vec4 u_grassParams5; // x = 1 / ripple size (1/m), y unused, z = sway frequency (Hz), w = LAST frame's u_timeSeconds
     vec4 u_grassParams6; // x = curvature, y = 1 / clump size (1/m), z = patchiness, w = grow band
     vec4 u_grassColor0;  // rgb = root albedo (linear), w = roughness
     vec4 u_grassColor1;  // rgb = tip albedo (linear), w = colour variation
@@ -397,6 +397,11 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                           // w = the near cascade's texel (m)
     vec4 u_grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
                           // w = bare fraction (the clump noise's threshold)
+    // TREE WIND (tree_wind.inc.glsl):
+    vec4 u_treeWind0; // x = bend (m per (m/s)^2 at the ref height), y = 1 / ref height, z = sway (x lean), w = LAST frame's u_timeSeconds
+    vec4 u_treeWind1; // x = branch (m per m/s), y = branch Hz, z = leaf (m), w = leaf Hz
+    vec4 u_treeWind2; // x / y = branch fade start / end (m), z / w = leaf fade start / end (m)
+    vec4 u_treeWind3; // x = trunk fade end (m, 0 = none), y = sway Hz, z = the culls' bound growth (m), w = billboard waves (card fraction)
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

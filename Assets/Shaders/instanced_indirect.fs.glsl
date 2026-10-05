@@ -40,6 +40,9 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
 #endif
 #include "instanced_indirect_lit.inc.glsl"
+#ifdef FOLIAGE
+#include "tree_wind.inc.glsl" // the billboard waves (treeWindBillboardUv)
+#endif
 
 // THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live. The geometric
 // normal also carries the shadow's normal offset (a normal map must not bend the bias). A surface facing away from
@@ -209,8 +212,15 @@ void main()
 	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
 	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
 	const vec2 uv = vec2(in_posU.w, in_normalV.w);
+	// The texture taps' coordinate: a whole-tree billboard's moves with the wind (tree_wind.inc.glsl - the card frame and
+	// the crown keep `uv`).
+#ifdef FOLIAGE
+	const vec2 texUv = treeWindBillboardUv(uv, in_tangent.w, in_instanceOrigin, in_normalV.xyz);
+#else
+	const vec2 texUv = uv;
+#endif
 
-	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], uv);
+	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], texUv);
 #ifdef FOLIAGE
 	// The card frame from the screen derivatives (taken before any discard): d(pos)/du and d(pos)/dv.
 	const vec2 uvDx = dFdx(uv), uvDy = dFdy(uv);
@@ -283,7 +293,7 @@ void main()
 	float16_t metalness = float16_t(0.0);
 	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
 	{
-		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], uv).bg);
+		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
 		metalness = metalRoughness.x;
 		roughness = max(metalRoughness.y, float16_t(0.01));
 	}
@@ -292,7 +302,7 @@ void main()
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
 	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
 	// FOLIAGE (the billboards' CROWN layout, TreeImpostor bakeBillboards): A = the baked crown interior.
-	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], uv));
+	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
 	const f16vec3 normalSample = normalTap.xyz;
 	f16vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)

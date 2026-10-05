@@ -7,6 +7,7 @@
 #extension GL_EXT_multiview : require
 
 #include "shared.inc.glsl"
+#include "tree_wind.inc.glsl"
 
 // Depth-only vertex shader for the sun shadow cascades, rendered in a single multiview pass:
 // gl_ViewIndex selects the cascade. The shadow cull packed the set of cascades each caster overlaps
@@ -16,7 +17,7 @@ struct InMeshInstancesData
 {
     vec4 posScale;
     vec4 quat;
-    uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), low 16 = cascade mask
+    uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), bit 15 = a tree (wind), low 15 = cascade mask
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {
@@ -38,7 +39,7 @@ vec3 quat_transform(vec3 v, vec4 q)
 void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];
-    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000FFFFu;
+    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x00007FFFu;
     out_uv = vec2(in_posU.w, in_v);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
     if ((cascadeMask & (1u << gl_ViewIndex)) == 0u)
@@ -47,6 +48,13 @@ void main()
         return;
     }
     vec3 worldPos = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
+    // A tree (the shadow cull's bit 15): the wind's TRUNK bend only (its casters are mostly the billboards; no payload
+    // attribute in this pass) - the same bend the main pass gives every representation.
+    if ((inst.alphaTexIdxCascadeMask & 0x00008000u) != 0u)
+    {
+        vec3 unusedPrevDelta;
+        worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, unusedPrevDelta);
+    }
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).
     mat4 m = u_cascadeViewProj[gl_ViewIndex];
     m[0][3] = 0.0; m[1][3] = 0.0; m[2][3] = 0.0; m[3][3] = 1.0;

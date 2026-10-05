@@ -241,7 +241,8 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
-    const float radius                = meshInfo.radius * instancePosScale.w;
+    // A tree sways in the wind (tree_wind.inc.glsl): its bound grows by the sway's reach.
+    const float radius                = meshInfo.radius * instancePosScale.w + (isTree ? u_treeWind3.z : 0.0);
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by

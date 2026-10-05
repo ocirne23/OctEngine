@@ -906,8 +906,8 @@ export namespace RendererVKLayout
         glm::vec4 grassParams1; // x = blade height (m), y = height variation, z = blade width (m), w = root sink (m)
         glm::vec4 grassParams2; // x = thinning start (m), y = thinning exponent, z = width compensation exponent, w = max width scale
         glm::vec4 grassParams3; // x = LOD 1 distance (m), y = LOD 2 distance (m), z = min blade width per metre of distance, w = ground normal blend distance (m)
-        glm::vec4 grassParams4; // xy = wind direction (unit XZ), z = wind bend, w = gust bend
-        glm::vec4 grassParams5; // x = 1 / gust size (1/m), y = gust speed (m/s), z = sway frequency (Hz), w = LAST frame's timeSeconds
+        glm::vec4 grassParams4; // xy unused (the shared wind: weatherWind*), z = bend per m/s, w = ripple per m/s
+        glm::vec4 grassParams5; // x = 1 / ripple size (1/m), y unused, z = sway frequency (Hz), w = LAST frame's timeSeconds
         glm::vec4 grassParams6; // x = curvature, y = 1 / clump size (1/m), z = patchiness, w = grow band
         glm::vec4 grassColor0;  // rgb = root albedo (linear), w = roughness
         glm::vec4 grassColor1;  // rgb = tip albedo (linear), w = colour variation
@@ -929,6 +929,11 @@ export namespace RendererVKLayout
                                  // w = the near cascade's texel (m)
         glm::vec4 grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
                                  // w = bare fraction (the clump noise's threshold)
+        // TREE WIND (tree_wind.inc.glsl; FoliageParams wind*):
+        glm::vec4 treeWind0; // x = bend (m per (m/s)^2 at the ref height), y = 1 / ref height, z = sway (x lean), w = LAST frame's timeSeconds
+        glm::vec4 treeWind1; // x = branch (m per m/s), y = branch Hz, z = leaf (m), w = leaf Hz
+        glm::vec4 treeWind2; // x / y = branch fade start / end (m), z / w = leaf fade start / end (m)
+        glm::vec4 treeWind3; // x = trunk fade end (m, 0 = none), y = sway Hz, z = the culls' bound growth (m), w = billboard waves
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
