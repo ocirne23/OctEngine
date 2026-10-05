@@ -30,17 +30,26 @@ layout (binding = 5, std430) buffer DeadList { uint pd_deadList[]; };
 layout (binding = 6, std430) buffer Counters { PARTICLE_COUNTERS_BLOCK };
 layout (binding = 7, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
 layout (binding = 8) uniform sampler2D u_prevDepth;   // last frame's scene depth (centre/left view)
-layout (binding = 10) uniform sampler2DArray u_rainOcclusion; // THIS frame's top-down rain occlusion depth, one layer (standard Z; border 1 = open sky)
+layout (binding = 10) uniform usampler2D u_rainOcclusion; // THIS frame's top-down rain occlusion map (rain_occlusion.cs: packed uint)
 
-// Weather volume shelter test: true when the particle sits deeper than the occlusion map's surface at
-// its XZ by more than the tolerance (i.e. under a roof). Outside the map the border depth (1 = far)
-// never shelters.
-bool rainSheltered(vec3 pos)
+// Weather volume shelter test: true when the particle sits deeper than the map's SOLID surface at its XZ by more
+// than the tolerance (under a roof), or deeper than its top FOLIAGE layer and this drop is one the foliage stops - a
+// fixed draw per fall (hashed from the seed, which changes only at a restart), so the test does not compound over
+// frames. Outside the map nothing shelters.
+bool rainSheltered(vec3 pos, uint seed)
 {
     const vec4 clip = u_rainOcclusionViewProj * vec4(pos, 1.0); // ortho: w = 1
     const vec2 uv = clip.xy * 0.5 + 0.5;
-    const float surface = texture(u_rainOcclusion, vec3(uv, 0.0)).r;
-    return (clip.z - surface) > u_rainOcclusionParams.z * u_rainOcclusionParams.y;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+        return false;
+    const uint texel = texture(u_rainOcclusion, uv).r;
+    const float tolerance = u_rainOcclusionParams.z * u_rainOcclusionParams.y;
+    if (clip.z - float(texel & 0xFFFFu) * (1.0 / 65535.0) > tolerance)
+        return true;
+    if (clip.z - float((texel >> 16) & 0xFFFu) * (1.0 / 4095.0) <= tolerance)
+        return false; // above the canopy, or no foliage (depth 1)
+    const float pass = float(texel >> 28) * (1.0 / 15.0);
+    return float(particlePcg(seed ^ 0x68E31DA4u)) * (1.0 / 4294967296.0) >= pass;
 }
 
 void main()
@@ -179,7 +188,7 @@ void main()
         // so clustering is bounded by what one fall through the box can do (as in reality).
         // hitWater = it reached the live wave surface (the water floor above): the same restart, so a
         // volume never draws a particle below the sea.
-        const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_rainOcclusionParams.x > 0.5 && rainSheltered(pos);
+        const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_rainOcclusionParams.x > 0.5 && rainSheltered(pos, particle.misc.y);
         if (sheltered || hitWater || rel.y < -halfExt.y)
         {
             uint seed = particle.misc.y;

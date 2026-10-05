@@ -8,9 +8,8 @@ import :Layout;
 ShadowCullComputePipeline::ShadowCullComputePipeline() {}
 ShadowCullComputePipeline::~ShadowCullComputePipeline() {}
 
-void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes, bool rainOcclusion)
+void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes)
 {
-    m_rainOcclusion = rainOcclusion;
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.drawCountBuffer.initialize(sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
@@ -61,8 +60,6 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
 {
     computePipelineLayout.computeShaderDebugFilePath = "Shaders/instanced_indirect_shadow.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
-    if (m_rainOcclusion)
-        computePipelineLayout.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
     for (uint32 i = 0; i <= 15; i++) // 11/12 = LOD group idx per mesh / LOD group data; 13/14/15 the baked tree pieces / types / list

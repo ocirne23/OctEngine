@@ -542,14 +542,14 @@ void Renderer::buildUboSunShadow(const Camera& camera)
 // The weather volume's rain occlusion map: a top-down orthographic view over the latched volume box
 // (setRainOcclusionVolume), looking straight down -Y. The eye sits casterPad above the box top so a roof
 // well above the volume still shelters it; the XZ footprint is padded 25 % over the box (one-frame lag
-// behind the camera-following emitter). Standard Z, plain bottom row: the rain cull, the rain depth
-// pass and the particle sim's shelter test all read it verbatim.
+// behind the camera-following emitter). Standard Z, plain bottom row: the ray-query pass (RainOcclusionPipeline,
+// through its inverse) and the particle sim's shelter test both read it verbatim. Off without RT (no TLAS to trace).
 void Renderer::buildUboRainOcclusion()
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
     const ParticleState::RainVolume& v = m_particles.getRainVolume();
     const float anisotropy = glm::clamp(m_particles.getParams().anisotropy, -0.95f, 0.95f); // rides the params' free w
-    if (!v.active || !m_particles.getParams().rainOcclusion)
+    if (!v.active || !m_particles.getParams().rainOcclusion || !m_rtParams.enabled)
     {
         ubo.rainOcclusionViewProj = glm::mat4(1.0f);
         ubo.rainOcclusionParams = glm::vec4(0.0f, 0.0f, 0.0f, anisotropy);

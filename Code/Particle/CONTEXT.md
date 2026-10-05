@@ -144,7 +144,8 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   view.
 * `Occlude true` — the shelter test: `update` unions every occluding box and hands it to
   `Renderer::setRainOcclusionVolume`; the sim samples the renderer's top-down RAIN OCCLUSION MAP
-  (see RendererVK) and a particle deeper than the roof surface at its XZ (by more than
+  (see RendererVK: ray-traced against the TLAS, so it needs RT on; solid geometry shelters fully, foliage
+  stops "Particles/Rain occlusion foliage block" of the rain per layer - a fixed draw per drop) and a particle deeper than the roof surface at its XZ (by more than
   "Particles/Rain occlusion bias") restarts at the box top at a FRESH RANDOM XZ - the same XZ would
   drop it straight back onto the roof, and a box top that is itself indoors would pin it there.
   Tweaks `Particles/Rain occlusion*`.

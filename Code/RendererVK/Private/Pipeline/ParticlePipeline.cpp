@@ -359,7 +359,8 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
             DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_countersBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.prevDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
-            DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.rainOcclusionSampler, params.rainOcclusionView) } },
+            DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{
+                .sampler = params.rainOcclusionSampler, .imageView = params.rainOcclusionView, .imageLayout = vk::ImageLayout::eGeneral } } },
             DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.oceanMapsSampler, params.oceanMapsView) } },
             DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.terrainSampler, params.terrainView) } },
         };

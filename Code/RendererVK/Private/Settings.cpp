@@ -416,6 +416,7 @@ void ParticleParams::registerTweaks()
     Tweak::boolean("Particles", "Rain occlusion", &rainOcclusion);
     Tweak::floatVar("Particles", "Rain occlusion pad", &rainOcclusionCasterPad, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Particles", "Rain occlusion bias", &rainOcclusionTolerance, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Particles", "Rain occlusion foliage block", &rainOcclusionFoliageBlock, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Streak camera blur", &streakCameraBlur, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Anisotropy", &anisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Particles", "Wind speed", &windSpeed, 0.0f, 40.0f, 0.1f);

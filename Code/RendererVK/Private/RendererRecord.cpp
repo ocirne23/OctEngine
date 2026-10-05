@@ -242,64 +242,21 @@ void Renderer::recordGrassNearShadow(uint32 frameIdx)
     cb.end();
 }
 
-// The weather volume's rain occlusion map: the shadow cull + depth pass pair in their RAIN_OCCLUSION
-// variant (one view, u_rainOcclusionViewProj). Executed right after the indirect cull, BEFORE the
-// particle sim, so the sim reads this frame's map.
-void Renderer::recordRainOcclusionCull(uint32 frameIdx)
+// After the GI step (this frame's TLAS is built and visible to compute), both primaries: the weather volume's rain
+// occlusion trace - only while the UBO this frame was built with asks for it (buildUboRainOcclusion), so the trace
+// and the sim's shelter test always agree - then the particle sim, which reads THIS frame's map.
+void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx)
 {
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
-    CommandBuffer& cb = frameData.rainCullCommandBuffer;
-    beginComputeSecondary(cb);
-
-    ShadowCullComputePipeline::RecordParams params{
-        .descriptorSet = frameData.rainCullDescriptorSet,
-        .ubo = frameData.ubo,
-        .dispatchIndirectBuffer = m_indirectCullComputePipeline.getDispatchIndirectBuffer(frameIdx),
-        .inRenderNodeTransformsBuffer = instances.transforms,
-        .inMeshInstancesBuffer = instances.meshInstances,
-        .inMeshInstanceOffsetsBuffer = m_instanceOffsets.getBuffer(),
-        .inMeshInfoBuffer = m_meshInfos.getBuffer(),
-        .inFirstInstancesBuffer = instances.firstInstances,
-        .inMaterialInfoBuffer = m_materials.getBuffer(),
-        .inNodePassMasksBuffer = instances.passMasks,
-        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
-        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
-        .meshCountBuffer = instances.meshCount,
-        .treePiecesBuffer = treeCullPieces(),
-        .treeTypesBuffer = treeCullTypes(),
-        .treeListBuffer = treeCullList(frameIdx),
-    };
-    m_rainCullComputePipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& map = frameData.rainOcclusionMap;
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = map.getRenderPass() };
-    CommandBuffer& cb = frameData.rainDrawCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-
-    const float res = (float)map.getResolution();
-    const vk::Viewport viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
-
-    ShadowMapGraphicsPipeline::RecordParams params{
-        .descriptorSet = frameData.rainDrawDescriptorSet,
-        .ubo = frameData.ubo,
-        .meshInstanceBuffer = m_rainCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .instanceIdxBuffer = m_rainCullComputePipeline.getInstanceIdxBuffer(frameIdx),
-        .indirectCommandBuffer = m_rainCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .drawCountBuffer = m_rainCullComputePipeline.getDrawCountBuffer(frameIdx),
-    };
-    m_rainMapGraphicsPipeline.record(cb, frameIdx, params);
-    cb.end();
+    if (!m_particles.isEnabled())
+        return;
+    if (m_ubo.rainOcclusionParams.x > 0.5f && m_rainOcclusionPipeline.isActive())
+        if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
+        {
+            m_gpuProfiler.beginScope(primary, "Rain occlusion");
+            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.rainOcclusionViewProj, m_particles.getParams().rainOcclusionFoliageBlock);
+            m_gpuProfiler.endScope(primary);
+        }
+    executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
 }
 
 void Renderer::recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex)
@@ -532,7 +489,8 @@ void Renderer::recordDebugLines(uint32 frameIdx)
 }
 
 // Particle GPU sim (begin/emit/simulate compute chain), its own secondary outside any render pass;
-// executed right after the light grid in the primary. Reads LAST frame's scene depth for depth collision.
+// executed right after the GI step (the TLAS build) and the rain occlusion trace. Reads LAST frame's scene depth for
+// depth collision.
 void Renderer::recordParticleSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -543,8 +501,8 @@ void Renderer::recordParticleSim(uint32 frameIdx)
         .ubo = frameData.ubo,
         .prevDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-        .rainOcclusionView = frameData.rainOcclusionMap.getSampleView(),
-        .rainOcclusionSampler = frameData.rainOcclusionMap.getDepthSampler(),
+        .rainOcclusionView = m_rainOcclusionPipeline.getView(),
+        .rainOcclusionSampler = m_rainOcclusionPipeline.getSampler(),
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
         .terrainView = m_terrain.getHeightMap().getView(),
@@ -1295,8 +1253,6 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     recordIndirectCull(frameIdx);
     recordLightGrid(frameIdx);
     recordForceCompute(frameIdx); // indirect dispatches: emitter/query changes never re-record
-    recordRainOcclusionCull(frameIdx); // executed only while a weather volume requested the map
-    recordRainOcclusionDraw(frameIdx);
     recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
     recordTerrainWetness(frameIdx); // executed only while enabled (TerrainWetTweaks::enabled)
     if (m_sceneViewCount == 1)
@@ -1369,33 +1325,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // Forcefield grid build + force/query compute (Force library readbacks land ~2 frames later).
     if (m_force.isEnabled())
         executeScoped(primary, "Force compute", frameData.forceComputeCommandBuffer.getCommandBuffer());
-    // The weather volume's rain occlusion map (cull + top-down depth), gated on the UBO this frame was
-    // built with (buildUboRainOcclusion) so the pass and the sim's shelter test always agree.
-    if (m_particles.isEnabled() && m_ubo.rainOcclusionParams.x > 0.5f)
-    {
-        executeScoped(primary, "Rain occlusion cull", frameData.rainCullCommandBuffer.getCommandBuffer());
-        m_gpuProfiler.beginScope(primary, "Rain occlusion draw");
-        ShadowMap& map = frameData.rainOcclusionMap;
-        vk::ClearValue clear;
-        clear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
-        const vk::RenderPassBeginInfo rpBegin{
-            .renderPass = map.getRenderPass(),
-            .framebuffer = map.getFramebuffer(),
-            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } },
-            .clearValueCount = 1,
-            .pClearValues = &clear,
-        };
-        vk::CommandBuffer vkRainDraw = frameData.rainDrawCommandBuffer.getCommandBuffer();
-        primary.beginRenderPass(rpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        primary.executeCommands(1, &vkRainDraw);
-        primary.endRenderPass();
-        m_gpuProfiler.endScope(primary);
-    }
-    // Particle emit/simulate (outside any render pass; reads LAST frame's scene depth for collision and
-    // THIS frame's rain occlusion map, writes the alive list + indirect draw args the in-pass billboard
-    // draw consumes).
-    if (m_particles.isEnabled())
-        executeScoped(primary, "Particle sim", frameData.particleSimCommandBuffer.getCommandBuffer());
+    // (The particle sim and the rain occlusion trace run after the GI step: recordRainAndParticleSim.)
     // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
     // sim, before the forward pass samples it). Runs on tick frames only (the wetness tick, decided in
     // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
@@ -1470,6 +1400,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
     executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
     executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
+    recordRainAndParticleSim(vkCommandBuffer, frameIdx); // traces this frame's TLAS
     if (m_fogParams.enabled)
         executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
 
@@ -1593,6 +1524,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     executeScoped(vkCommandBuffer, "BLAS builds", vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
     executeScoped(vkCommandBuffer, "TLAS + probe trace", vkGlobalIllumCommandBuffer);
     m_gpuProfiler.endScope(vkCommandBuffer);
+    recordRainAndParticleSim(vkCommandBuffer, frameIdx); // traces this frame's TLAS
     // Fog scatter/integrate compute (the integrated grid was cleared to "no fog" at init when disabled).
     if (m_fogParams.enabled)
         executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());

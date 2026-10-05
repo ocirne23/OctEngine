@@ -676,9 +676,10 @@ export struct ParticleParams
     bool  logStats = false;       // prints GPU alive/dead counts ~once a second
 
     // Rain occlusion: a top-down depth map of the weather volume, so roofs shelter what is under them.
-    bool  rainOcclusion = false;      // off by default: the map costs a cull + depth pass per frame
+    bool  rainOcclusion = true;       // only while a rain / snow volume asks for it; one downward ray per texel (needs RT)
     float rainOcclusionCasterPad = 100.0f; // how far above the box a roof still shelters (m)
     float rainOcclusionTolerance = 0.25f;  // depth below the surface before a drop counts as sheltered (m)
+    float rainOcclusionFoliageBlock = 0.7f; // the rain one foliage layer (alpha-masked card) stops, 0..1
 
     float streakCameraBlur = 0.15f; // fraction of the camera velocity the weather streaks subtract
     float anisotropy = 0.33f;       // the lit particles' scattering phase g (0 = isotropic, forward < 1)

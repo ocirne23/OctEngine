@@ -33,6 +33,7 @@ import :ShadowMapGraphicsPipeline;
 import :AccelerationStructure;
 import :GIProbePipeline;
 import :RTAOPipeline;
+import :RainOcclusionPipeline;
 import :OceanSimulationPipeline;
 import :TerrainWetnessPipeline;
 import :VolumetricFogPipeline;
@@ -405,8 +406,7 @@ private:
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
     void recordShadowDraw(uint32 frameIdx);
-    void recordRainOcclusionCull(uint32 frameIdx);
-    void recordRainOcclusionDraw(uint32 frameIdx);
+    void recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx); // after the GI step, both primaries
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex);
@@ -615,8 +615,7 @@ private:
     BloomPipeline m_bloomPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
-    ShadowCullComputePipeline m_rainCullComputePipeline;
-    ShadowMapGraphicsPipeline m_rainMapGraphicsPipeline;
+    RainOcclusionPipeline m_rainOcclusionPipeline;
     CompositePipeline m_compositePipeline;
     EyeAdaptationPipeline m_eyeAdaptationPipeline;
     RayTracingScene m_rt;
@@ -819,7 +818,6 @@ private:
     {
         SceneColor sceneColor; // colour + scene depth (no prepass: every depth reader samples this one)
         ShadowMap shadowMap;
-        ShadowMap rainOcclusionMap;
 
         oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet; // Per-eye in VR
         DescriptorSet compositeDescriptorSet;
@@ -828,8 +826,6 @@ private:
         DescriptorSet lightGridPipelineDescriptorSet;
         DescriptorSet shadowCullDescriptorSet;
         DescriptorSet shadowDrawDescriptorSet;
-        DescriptorSet rainCullDescriptorSet;
-        DescriptorSet rainDrawDescriptorSet;
 
         CommandBuffer primaryCommandBuffer;
         CommandBuffer staticMeshCommandBuffer;
@@ -844,8 +840,6 @@ private:
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;
         CommandBuffer shadowDrawCommandBuffer;
-        CommandBuffer rainCullCommandBuffer;
-        CommandBuffer rainDrawCommandBuffer;
         CommandBuffer globalIllumCommandBuffer;
         CommandBuffer giPrepCommandBuffer;
         CommandBuffer volumetricFogCommandBuffer;

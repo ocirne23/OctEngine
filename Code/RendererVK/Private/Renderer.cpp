@@ -270,7 +270,6 @@ void Renderer::initPipelines()
         {
             m_indirectCullComputePipeline.resizeInstanceBuffers(maxInstances);
             m_shadowCullComputePipeline.resizeInstanceBuffers(maxInstances);
-            m_rainCullComputePipeline.resizeInstanceBuffers(maxInstances);
         });
 
     m_submission.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
@@ -347,11 +346,9 @@ void Renderer::initPipelines()
         perFrame.shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES, true);
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
     m_grassPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
-    // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION variant over a single-layer map per frame slot.
-    m_rainCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity(), true);
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.rainOcclusionMap.initialize("RainOcclusionMap", RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
-    m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_meshInfos.capacity(), m_textures.getLayoutCap(), true);
+    // The weather volume's top-down rain occlusion map: a ray-query pass over the TLAS (no cull, no instance buffers),
+    // allocated only while a rain / snow volume asks for it (present). Here: the sampler + 1x1 placeholders.
+    m_rainOcclusionPipeline.initialize();
 }
 
 void Renderer::initPerFrameResources()
@@ -367,8 +364,6 @@ void Renderer::initPerFrameResources()
 
         perFrame.shadowCullDescriptorSet.initialize(m_shadowCullComputePipeline.getDescriptorSetLayout(), "ShadowCull");
         perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), "ShadowDraw", m_textures.getDescriptorCount());
-        perFrame.rainCullDescriptorSet.initialize(m_rainCullComputePipeline.getDescriptorSetLayout(), "RainOcclusionCull");
-        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), "RainOcclusionDraw", m_textures.getDescriptorCount());
 
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.primary");
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMesh");
@@ -383,8 +378,6 @@ void Renderer::initPerFrameResources()
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.imgui");
         perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowCull");
         perFrame.shadowDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowDraw");
-        perFrame.rainCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rainOcclusionCull");
-        perFrame.rainDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rainOcclusionDraw");
         perFrame.globalIllumCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.gi");
         perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giPrep");
         perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.volumetricFog");
@@ -531,8 +524,7 @@ void Renderer::reloadShaders()
     m_lightGridComputePipeline.reloadShaders();
     m_shadowCullComputePipeline.reloadShaders();
     m_shadowMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
-    m_rainCullComputePipeline.reloadShaders();
-    m_rainMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
+    m_rainOcclusionPipeline.reloadShaders();
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -1132,6 +1124,18 @@ void Renderer::present()
         auto waitResult = Globals::device.graphicsQueueWaitIdle();
         assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before freeing textures");
         m_textures.processPendingFrees();
+    }
+
+    // The rain occlusion map exists only while this frame's UBO asks for it (a rain / snow volume with
+    // `Occlude true`, the tweak on, RT on): switching allocates or frees its images (and builds its pipeline
+    // once) with the GPU idle, and re-records the particle sim's set that names the image.
+    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.rainOcclusionParams.x > 0.5f;
+    if (rainOcclusion != m_rainOcclusionPipeline.isActive())
+    {
+        ProfileScope profileScope("Rain occlusion switch", EProfileCategory::Wait);
+        (void)Globals::device.graphicsQueueWaitIdle();
+        m_rainOcclusionPipeline.setActive(rainOcclusion);
+        setHaveToRecordCommandBuffers();
     }
 
     joinGridBuilds(frameIdx, frameData); // before the staging update: a growth waits the GPU and flushes staging

@@ -149,13 +149,15 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 ```
 GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
-    → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
-    → Particle sim → Terrain wetness
+    → Terrain wetness
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
-    → GI → Volumetric fog
+    → GI                                   (BLAS builds + THIS frame's TLAS, then the probe trace)
+    → Rain occlusion                       (ray query on that TLAS; only while a weather volume requested the map; see Particle)
+    → Particle sim                         (after the TLAS: it reads this frame's rain map)
+    → Volumetric fog
     → Scene opaque                         (WRITES the scene depth, then parks it read-only)
     → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
@@ -2695,20 +2697,34 @@ the sand, so the two can never disagree.
   in-shader, so the cached CB records once. Tweaks `Ocean/Spray rate / radius / threshold / kick /
   speed / forward offset / height offset`.
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
-  (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic D32 view
-  (`RAIN_OCCLUSION_RESOLUTION`², a single-layer `ShadowMap` per frame slot) rendered by SECOND
-  INSTANCES of the shadow cull + depth pipelines in their `RAIN_OCCLUSION` shader variant (one view,
-  `u_rainOcclusionViewProj`, a plain matrix - no packed bottom row - instead of the cascades; the same
-  `PASS_SHADOW` casters and alpha-mask discard). It runs right after the indirect cull and BEFORE the
-  particle sim, so the sim samples THIS frame's map (binding 10, the map's non-comparison sampler, border
-  1 = open sky). The particle system requests the box every frame (main thread after the begin-frame
+  (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic view (`u_rainOcclusionViewProj`, a
+  plain matrix), **RAY-TRACED** (`RainOcclusionPipeline`, `rain_occlusion.cs.glsl`) into ONE `R32_UINT` image
+  (`RAIN_OCCLUSION_RESOLUTION`² = 1 MB in all, always GENERAL). Per texel, two ray queries from the near plane
+  straight down against THIS frame's TLAS: SOLID (CullNoOpaque) - the closest opaque hit's ortho depth (t / range,
+  standard Z, what the old depth pass rasterized; a miss = 1); FOLIAGE (CullOpaque, up to that hit, candidates
+  never confirmed) - the alpha-masked instances' top depth and layer count, each layer stopping
+  `Particles/Rain occlusion foliage block` (0.7) of the rain (no texture alpha test; in the TLAS a tree is its
+  whole-tree billboard). Packed: bits 0..15 solid depth, 16..27 top foliage depth (1 = none), 28..31 the pass
+  fraction ×15. The sim (`rainSheltered`, usampler2D, nearest, its own bounds check = open sky outside) shelters a
+  drop below the solid surface, and one below the foliage top whose FIXED draw (a hash of its seed, which changes
+  only at a restart - no compounding over frames) is at or above the pass fraction. **ONE image for both frame
+  slots**: the trace's opening barrier (src = compute reads) covers every earlier read on the queue, the
+  previous frame's sim included. **Allocated only while active**: `present` switches it (GPU idle, re-record)
+  when this frame's UBO asks for the map (a rain / snow volume with `Occlude`, `Particles/Rain occlusion` - now
+  ON by default -, RT on); the compute pipeline is built on the first activation; inactive = a 1×1 open-sky
+  placeholder. Bushes (no BLAS) and anything outside `RT/TLAS Range` / `Trees/RT range` do not shelter. It runs
+  in the primary right after the GI step (the TLAS build's barrier covers compute), and the PARTICLE SIM moved
+  behind it (`recordRainAndParticleSim`, both primaries), so the sim samples THIS frame's map (binding 10). **Until 2026-10-05 the map was a second instance of the shadow cull + depth
+  pipelines** (a `RAIN_OCCLUSION` variant): its cull output was sized for the WHOLE instance capacity -
+  ~400 MB at 4M instances - for a map a few metres around the camera. Needs RT: with `RT/Enable RT` off the
+  UBO turns the shelter test off. The particle system requests the box every frame (main thread after the begin-frame
   join, the scene-focus pattern); `present` latches it for the NEXT frame's `buildUboRainOcclusion`
   (eye `Rain occlusion pad` m above the box top, footprint padded 25 % for the one-frame lag), and the
   primary executes the pass only when the UBO it was built with says so (`u_rainOcclusionParams.x`), so
   the pass and the sim's test never disagree. Skipped entirely (no request or "Particles/Rain
-  occlusion" off - **the default**) = the params are zero and the sim's shelter test is off. Tweaks
-  under `Particles/*`: Rain occlusion (off by default), Rain occlusion pad, Rain occlusion bias (the
-  depth below the surface that counts as sheltered).
+  occlusion" off) = the params are zero and the sim's shelter test is off. Tweaks under `Particles/*`: Rain
+  occlusion (on by default), Rain occlusion pad, Rain occlusion bias (the depth below the surface that counts as
+  sheltered), Rain occlusion foliage block.
 
 ---
 

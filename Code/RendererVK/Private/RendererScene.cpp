@@ -428,10 +428,8 @@ void Renderer::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
     m_rt.accel().resizeBlasAddressBuffer(maxUniqueMeshes);
     m_indirectCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes);
     m_shadowCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes);
-    m_rainCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes);
     m_staticMeshGraphicsPipeline.resizeMeshCapacity(maxUniqueMeshes);
     m_shadowMapGraphicsPipeline.resizeMeshCapacity(maxUniqueMeshes);
-    m_rainMapGraphicsPipeline.resizeMeshCapacity(maxUniqueMeshes);
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew unique mesh capacity to %u\n", maxUniqueMeshes);
 }
@@ -443,7 +441,7 @@ void Renderer::setSkinningPalette(const RenderNode& node, oc::span<const glm::ma
 }
 
 
-// The six consumers of the bindless arrays; BindlessTextures decides WHEN, this decides WHAT.
+// The consumers of the bindless arrays; BindlessTextures decides WHEN, this decides WHAT.
 void Renderer::initBindlessTextures()
 {
     m_textures.initialize(
@@ -458,7 +456,6 @@ void Renderer::initBindlessTextures()
                 for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
                     perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), "StaticMesh", count);
                 perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), "ShadowDraw", count);
-                perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), "RainOcclusionDraw", count);
             }
             setHaveToRecordCommandBuffers();
         },
@@ -468,7 +465,6 @@ void Renderer::initBindlessTextures()
             for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
                 m_staticMeshGraphicsPipeline.updateTextureDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), texIdx, view);
             m_shadowMapGraphicsPipeline.updateTextureDescriptor(frameData.shadowDrawDescriptorSet.getDescriptorSet(), texIdx, view);
-            m_rainMapGraphicsPipeline.updateTextureDescriptor(frameData.rainDrawDescriptorSet.getDescriptorSet(), texIdx, view);
             m_giProbePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_rtaoPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_particlePipeline.updateTextureDescriptor(frameIdx, texIdx, view);

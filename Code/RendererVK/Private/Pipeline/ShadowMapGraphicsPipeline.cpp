@@ -16,8 +16,6 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
 {
     layout.vertexShader.debugFilePath = "Shaders/shadow_depth.vs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
-    if (m_rainOcclusion)
-        layout.vertexShader.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
     // Fragment stage discards alpha-masked (cutout) fragments so foliage casts correct shadows.
     layout.fragmentShader.debugFilePath = "Shaders/shadow_depth.fs.glsl";
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
@@ -68,7 +66,7 @@ void ShadowMapGraphicsPipeline::buildIndirectState(uint32 maxUniqueMeshes)
     // The shadow pass renders all cascades in a single multiview render pass (non-zero viewMask), where DGC
     // forbids an Indirect Execution Set. We only ever use the one depth-only pipeline anyway, so the commands
     // layout omits the EXECUTION_SET token and we bind the pipeline explicitly + pass a null execution set.
-    m_indirectCommandsLayout.initialize(m_rainOcclusion ? "RainOcclusion.dgcLayout" : "Shadow.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
+    m_indirectCommandsLayout.initialize("Shadow.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, /*useExecutionSet*/ false);
 
     createPreprocessBuffers(maxUniqueMeshes);
@@ -98,13 +96,12 @@ void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
         for (Buffer& preprocess : m_preprocessBuffers)
             preprocess.initialize(m_preprocessSize,
                 vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal, false, m_rainOcclusion ? "RainOcclusion.dgcPreprocess" : "Shadow.dgcPreprocess");
+                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Shadow.dgcPreprocess");
     }
 }
 
-void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures, bool rainOcclusion)
+void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures)
 {
-    m_rainOcclusion = rainOcclusion;
     m_renderPass = shadowMap.getRenderPass();
     m_sampler.initialize();
     GraphicsPipelineLayout layout;

@@ -37,9 +37,7 @@ public:
         Buffer& treeListBuffer;               // 15 - ... and this frame's visible trees (piece | pass bits << 28)
     };
 
-    // rainOcclusion: the RAIN_OCCLUSION shader variant - one view (u_rainOcclusionViewProj) instead of
-    // the sun cascades; the weather volume's top-down shelter map (a second instance of this class).
-    void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes, bool rainOcclusion = false);
+    void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);
     void reloadShaders();
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
     // Capacity growth (caller must have the GPU idle and re-record command buffers afterwards).
@@ -59,7 +57,6 @@ private:
 
     ComputePipeline m_computePipeline;
     DrawCompactPipeline m_compact;
-    bool m_rainOcclusion = false;
 
     struct PerFrameData
     {
