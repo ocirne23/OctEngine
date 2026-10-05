@@ -189,16 +189,27 @@ uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, b
 }
 
 uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-    const oc::vector<oc::span<uint8>>* normalMips, uint32 extraFlags)
+    const oc::vector<oc::span<uint8>>* normalMips, uint32 extraFlags, ETextureEncoding albedoEncoding, ETextureEncoding normalEncoding)
 {
+    auto toFormat = [](ETextureEncoding encoding, bool sRGB)
+    {
+        switch (encoding)
+        {
+        case ETextureEncoding::BC1: return sRGB ? vk::Format::eBc1RgbaSrgbBlock : vk::Format::eBc1RgbaUnormBlock;
+        case ETextureEncoding::BC3: return sRGB ? vk::Format::eBc3SrgbBlock : vk::Format::eBc3UnormBlock;
+        case ETextureEncoding::BC5: return vk::Format::eBc5UnormBlock;
+        default:                    return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+        }
+    };
     // "<debugName>/albedo" and "/normal": the VRAM view (MemoryPanel) splits a name on '/', so each material is a
     // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
-    const uint16 texIdx = Globals::textureManager.uploadRgba8Mips(width, height, mips, true, oc::format("{}/albedo", debugName).c_str());
+    const uint16 texIdx = Globals::textureManager.uploadMips(width, height, toFormat(albedoEncoding, true), mips,
+        oc::format("{}/albedo", debugName).c_str());
     RendererVKLayout::MaterialInfo material{};
     material.flags = extraFlags;
     material.diffuseTexIdx = texIdx;
     material.normalTexIdx = normalMips
-        ? Globals::textureManager.uploadRgba8Mips(width, height, *normalMips, false, oc::format("{}/normal", debugName).c_str())
+        ? Globals::textureManager.uploadMips(width, height, toFormat(normalEncoding, false), *normalMips, oc::format("{}/normal", debugName).c_str())
         : RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
     material.metalRoughnessTexIdx = UINT16_MAX;
     if (alphaCutoff > 0.0f)

@@ -173,46 +173,24 @@ namespace
         return img;
     }
 
+    TextureConvert::EBlockFormat toBlockFormat(dds::DXGI_FORMAT format)
+    {
+        switch (format)
+        {
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM: return TextureConvert::EBlockFormat::BC1;
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM: return TextureConvert::EBlockFormat::BC3;
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM: return TextureConvert::EBlockFormat::BC4;
+        default:                                      return TextureConvert::EBlockFormat::BC5;
+        }
+    }
+
     // Compress one RGBA8 mip into BC1/BC3/BC4/BC5 blocks (edge-clamped 4x4 fetch handles non-multiple-of-4 dims).
     void compressMip(const uint8* pRgba, uint32 width, uint32 height, dds::DXGI_FORMAT format, oc::vector<uint8>& out)
     {
-        const uint32 blocksX = (width + 3) / 4;
-        const uint32 blocksY = (height + 3) / 4;
-        const uint32 blockSize = (format == dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM || format == dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM) ? 8 : 16;
+        const TextureConvert::EBlockFormat blockFormat = toBlockFormat(format);
         const size_t base = out.size();
-        out.resize(base + (size_t)blocksX * blocksY * blockSize);
-        uint8* pDst = out.data() + base;
-
-        uint8 blockRgba[16 * 4];
-        uint8 blockRg[16 * 2];
-        uint8 blockR[16];
-        for (uint32 by = 0; by < blocksY; ++by)
-        {
-            for (uint32 bx = 0; bx < blocksX; ++bx)
-            {
-                for (uint32 y = 0; y < 4; ++y)
-                {
-                    const uint32 sy = oc::min(by * 4 + y, height - 1);
-                    for (uint32 x = 0; x < 4; ++x)
-                    {
-                        const uint32 sx = oc::min(bx * 4 + x, width - 1);
-                        const uint8* pSrc = pRgba + ((size_t)sy * width + sx) * 4;
-                        memcpy(&blockRgba[(y * 4 + x) * 4], pSrc, 4);
-                        blockRg[(y * 4 + x) * 2 + 0] = pSrc[0];
-                        blockRg[(y * 4 + x) * 2 + 1] = pSrc[1];
-                        blockR[y * 4 + x] = pSrc[0];
-                    }
-                }
-                switch (format)
-                {
-                case dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM: stb_compress_dxt_block(pDst, blockRgba, 0, STB_DXT_HIGHQUAL); break;
-                case dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM: stb_compress_dxt_block(pDst, blockRgba, 1, STB_DXT_HIGHQUAL); break;
-                case dds::DXGI_FORMAT::DXGI_FORMAT_BC4_UNORM: stb_compress_bc4_block(pDst, blockR); break;
-                default:                                      stb_compress_bc5_block(pDst, blockRg); break;
-                }
-                pDst += blockSize;
-            }
-        }
+        out.resize(base + TextureConvert::compressedSize(width, height, blockFormat));
+        TextureConvert::compressBlockRows(pRgba, width, height, blockFormat, 0, (height + 3) / 4, out.data() + base);
     }
 
     float alphaCoverage(const uint8* pRgba, size_t numPixels, float alphaScale, uint8 cutoff)
@@ -876,6 +854,53 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
         }
     }
     return imported;
+}
+
+uint32 TextureConvert::blockBytes(EBlockFormat format)
+{
+    return format == EBlockFormat::BC1 || format == EBlockFormat::BC4 ? 8u : 16u;
+}
+
+size_t TextureConvert::compressedSize(uint32 width, uint32 height, EBlockFormat format)
+{
+    return (size_t)((width + 3) / 4) * ((height + 3) / 4) * blockBytes(format);
+}
+
+void TextureConvert::compressBlockRows(const uint8* pRgba, uint32 width, uint32 height, EBlockFormat format, uint32 rowBegin, uint32 rowEnd, uint8* pDstImage)
+{
+    const uint32 blocksX = (width + 3) / 4;
+    const uint32 blockSize = blockBytes(format);
+    uint8* pDst = pDstImage + (size_t)rowBegin * blocksX * blockSize;
+    uint8 blockRgba[16 * 4];
+    uint8 blockRg[16 * 2];
+    uint8 blockR[16];
+    for (uint32 by = rowBegin; by < rowEnd; ++by)
+    {
+        for (uint32 bx = 0; bx < blocksX; ++bx)
+        {
+            for (uint32 y = 0; y < 4; ++y)
+            {
+                const uint32 sy = oc::min(by * 4 + y, height - 1);
+                for (uint32 x = 0; x < 4; ++x)
+                {
+                    const uint32 sx = oc::min(bx * 4 + x, width - 1);
+                    const uint8* pSrc = pRgba + ((size_t)sy * width + sx) * 4;
+                    memcpy(&blockRgba[(y * 4 + x) * 4], pSrc, 4);
+                    blockRg[(y * 4 + x) * 2 + 0] = pSrc[0];
+                    blockRg[(y * 4 + x) * 2 + 1] = pSrc[1];
+                    blockR[y * 4 + x] = pSrc[0];
+                }
+            }
+            switch (format)
+            {
+            case EBlockFormat::BC1: stb_compress_dxt_block(pDst, blockRgba, 0, STB_DXT_HIGHQUAL); break;
+            case EBlockFormat::BC3: stb_compress_dxt_block(pDst, blockRgba, 1, STB_DXT_HIGHQUAL); break;
+            case EBlockFormat::BC4: stb_compress_bc4_block(pDst, blockR); break;
+            default:                stb_compress_bc5_block(pDst, blockRg); break;
+            }
+            pDst += blockSize;
+        }
+    }
 }
 
 bool TextureConvert::convertToDds(const char* srcPath, EUsage usage, const char* outPath)

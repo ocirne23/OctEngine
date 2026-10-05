@@ -437,12 +437,11 @@ namespace Procedural
 	}
 
 	// THE PLACEMENT FUNCTION. One candidate per cell of a lattice of ~cellSize metres over the chunk, jittered over the
-	// whole cell. Its species is picked by CLIMATE FIT alone - 1 inside the species' ideal climate box (normalized
-	// temperature / precipitation, as the scatter rules), outside a Gaussian of the distance to the box, faded to 0
-	// below "Climate fade end" of the peak, 0 outside its slope and altitude band - sharpened to fit ^ "Climate
-	// sharpness"; the tree then exists with
-	// probability (that species' density x its fit x its cluster noise) x the cell's area. Pure: every random choice
-	// hashes (seed, chunk, cell).
+	// whole cell. Each species' CLIMATE FIT - 1 inside its ideal climate box (normalized temperature / precipitation,
+	// as the scatter rules), outside a Gaussian of the distance to the box, faded to 0 below "Climate fade end" of the
+	// peak, 0 outside its slope and altitude band - gives it a density there: its own density x its fit x its cluster
+	// noise x (fit / best fit) ^ "Climate sharpness". A tree exists with probability (the summed densities) x the
+	// cell's area, its species picked by share. Pure: every random choice hashes (seed, chunk, cell).
 	void TreeWorld::placeChunk(const GenConfig& config, glm::ivec2 coord, oc::vector<TreeRecord>& out, oc::vector<uint32>& outGround)
 	{
 		out.clear();
@@ -540,11 +539,10 @@ namespace Procedural
 				// Each species' CLIMATE FIT: 1 inside its ideal climate box, outside a Gaussian of the distance to the box,
 				// faded to 0 between "Climate fade start" and "end" (fractions of the peak - no long tail of lone trees far
 				// from its forests), 0 where its slope / altitude gates exclude it.
-				float total = 0.0f;
+				float best = 0.0f;
 				for (size_t s = 0; s < config.species.size(); ++s)
 				{
 					const TreePlacementDesc& p = config.species[s].placement;
-					weights[s] = 0.0f;
 					fits[s] = 0.0f;
 					if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
 						continue;
@@ -552,17 +550,35 @@ namespace Procedural
 						+ glm::max(climate - config.species[s].climateMax, glm::vec2(0.0f));
 					float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
 					fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
-					if (fit <= 0.0f)
-						continue;
 					fits[s] = fit;
-					weights[s] = std::pow(fit, config.sharpness);
-					total += weights[s];
+					best = glm::max(best, fit);
 				}
-				if (total <= 0.0f)
+				if (best <= 0.0f)
 					continue;
-				// THE SPECIES by climate fit alone, sharpened ("Climate sharpness": fit^k) - not by fit x density, where a
-				// dense species' tail outnumbered a sparse one's core (pines among the acacias). Then whether the tree
-				// exists: the chosen species' own density x its fit x its forest patches.
+				// Each species' density here: its own density x its fit x its forest patches, suppressed by its fit
+				// RELATIVE TO THE BEST-FITTING species, sharpened ("Climate sharpness": (fit / best)^k) - a dense
+				// species' tail does not reach into a sparse one's core (pines among the acacias), and species
+				// sharing a climate ADD (a rare willow among the oaks takes no oaks away).
+				float total = 0.0f;
+				for (size_t s = 0; s < config.species.size(); ++s)
+				{
+					weights[s] = 0.0f;
+					if (fits[s] <= 0.0f)
+						continue;
+					const TreePlacementDesc& p = config.species[s].placement;
+					float density = p.density * fits[s] * std::pow(fits[s] / best, config.sharpness);
+					if (density > 0.0f && p.clusterSize > 1.0f)
+					{
+						const float noise = clusterNoise[s].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
+						const float threshold = 1.0f - p.clusterCoverage;
+						density *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
+					}
+					weights[s] = density;
+					total += density;
+				}
+				// Whether a tree exists (the summed densities), then which one (by its share).
+				if (total <= 0.0f || treeHash01(treeHash(h, 3u)) >= total * cellArea)
+					continue;
 				float pick = treeHash01(treeHash(h, 4u)) * total;
 				size_t chosen = config.species.size() - 1;
 				for (size_t s = 0; s < config.species.size(); ++s)
@@ -574,16 +590,6 @@ namespace Procedural
 						break;
 					}
 				}
-				const TreePlacementDesc& p = config.species[chosen].placement;
-				float density = p.density * fits[chosen];
-				if (p.clusterSize > 1.0f)
-				{
-					const float noise = clusterNoise[chosen].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
-					const float threshold = 1.0f - p.clusterCoverage;
-					density *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
-				}
-				if (treeHash01(treeHash(h, 3u)) >= density * cellArea)
-					continue;
 				out.push_back(makeTreeRecord(qx, qz, config.species[chosen].type));
 			}
 		}

@@ -220,8 +220,12 @@ public:
     // rides `opacity`): draw it on LitMasked. `normalMips` (optional, same size): a LINEAR RGB tangent-space
     // normal map (x along U, y along V, z out). Free with destroyTextureMaterial (textures + material slot).
     // `extraFlags`: RendererVKLayout::MATERIAL_FLAG_* to add (e.g. MATERIAL_FLAG_BILLBOARD).
+    // The encodings say what the mip bytes ARE: RGBA8, or BC blocks the caller compressed (File TextureConvert::
+    // compressBlockRows) - the albedo sRGB, the normal linear. A BC5 normal sets MATERIAL_FLAG_BC5_NORMAL (Z rebuilt).
+    enum class ETextureEncoding : uint8 { Rgba8, BC1, BC3, BC5 };
     uint16 createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-        const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0);
+        const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0,
+        ETextureEncoding albedoEncoding = ETextureEncoding::Rgba8, ETextureEncoding normalEncoding = ETextureEncoding::Rgba8);
     void destroyTextureMaterial(uint16 materialIdx);
     // A copy of `source` with `extraFlags` added, SHARING its textures: free it with releaseMaterial (the slot
     // only), never destroyTextureMaterial.

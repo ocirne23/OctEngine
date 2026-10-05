@@ -832,8 +832,12 @@ TreeSpecies <name>
 	Crown   Shape Ellipsoid|Cone|Umbrella|Column · Start (fraction of height) · Radius (m reach)
 	        Slots · Fill (probability) · Angle bottom top (deg from up) · AngleVar · Leader true|false
 	        BranchRadius (max module base radius / trunk radius at the slot; caps the module scale)
+	        Tiers count spread (slots grouped into `count` whorls up the crown, each spread over `spread` of
+	        its band; envelope and angle follow the whorl's height - layered crowns; default 1 0.35)
 	Module  Count · Length (m, 0 = crown radius) · Radius (base / length) · <shape>
-	        Level { Count · Start · Length · LengthTaper · Angle value var · Radius · <shape> }  (up to 3)
+	        Level { Count · Start · Length · LengthTaper · LengthVar (each child a random 0..this shorter,
+	        0..0.95, default 0) · Angle value var · Rise (0..1: the start direction blended toward world-up -
+	        strands that arch over before they hang; default 0) · Radius · <shape> }  (up to 3)
 	Leaves  Size (m) · Aspect (width/length) · PerBranch (per average last-level branch; other branches
 	        scale it by their length) · Levels (deepest tiers that carry leaves; 1 = last level only)
 	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate · ClusterLeaves (Needles: side
@@ -841,6 +845,8 @@ TreeSpecies <name>
 	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafSize (Needles: the needle
 	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default
 	        0.7: card normals bent away from the module root, both faces)   (Cluster only, below)
+	        Align (0..1, default 0: cards stick out of the branch facing up; 1 = they lie ALONG the branch,
+	        facing out of it at random turns - a weeping strand's curtain)
 	Lod     ErrorScale (x the per-level error; > 1 = coarser levels nearer the camera)
 	Bake    Variants (baked whole trees per species, default 4)
 	Billboard Distance (m, 0 = none; default 50) · Resolution (px, power of two, 512) · NormalBend (0..1, 0 - the user's pick, every species)
@@ -859,7 +865,13 @@ TreeSpecies <name>
 	        Cluster size coverage (m, 0..1; size 0 = no patches) · MaxSlope (rise/run, 0.6)
 	        Altitude min max (m above the local water level, 1.5 ..)
 
-<shape> (TreeBranchShape, any of): Curve value var (deg, smooth bend) · UpAttract (negative droops)
+<shape> (TreeBranchShape, any of): Curve value var (deg, smooth bend) · UpAttract (negative droops - weakly:
+        -1 over the length bends a horizontal branch only ~45° down)
+        Droop (deg turned toward straight DOWN over the length, a fixed rate that stops at vertical: 400 = the
+        strand hangs after a quarter of its length; 0..720, default 0). A species with ANY Droop grows each
+        module for its own pitch (spread over the slot angles ± AngleVar, not the mean), and the composite
+        places the nearest-pitch module AT that pitch with no roll jitter: the module's down is then exactly
+        the world's (with the mean pitch and ±25° roll the strands hung up to ~50° off plumb).
         Wobble (deg random walk per segment) · Elbows (average count) · ElbowAngle value var (deg)
         ElbowUpBias (probability a downward elbow turn is mirrored upward; default 0.5)
         ElbowMinElevation (deg vs horizontal an elbow may turn down to; default -15; a branch that already
@@ -878,8 +890,13 @@ three tiers (the module roots too: near the top of the cone the short modules ar
 reworked 2026-10-03 from single diamond leaves on one level, which read as bare poles), `Acacia` (umbrella:
 14 slots, sub-branch levels 10 + 5 up-attracted, flat 0.9 m PINNATE cards, 4 per branch - 1 compound leaf of 4
 pinna pairs, leaflets 0.07 of the card (~6 cm; true-to-life ~2 cm leaflets were invisible) - on the last two tiers; reworked
-2026-10-03 from 0.1 m single diamonds).
-Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna. Bushes (`Kind Bush`), two per climate:
+2026-10-03 from 0.1 m single diamonds), `Willow` (weeping: an 8.5-10.5 m trunk carrying 20 thin limbs in TWO whorls - `Tiers 2 0.4`,
+Ellipsoid envelope (upper reach ~84 % of the lower; Cone gave ~33 %), Angle 55 30, trunk Taper 0.35 + BranchRadius
+0.7: the thin upper trunk caps the upper modules to ~80 % - the upper layer's size knob -, arching over - Droop 80 -, 16 arcing branches each - Rise 0.3, Droop 120, leaved
+too -, 7 strands per branch that rise, arch over the dome and hang plumb - Length 2.6, Rise 0.7, Droop 280 - of random length
+(`LengthVar 0.65`: curtains ending at layered heights), narrow cluster cards along them, `Leaves Align 0.8`;
+~1000+ cards per module, ~5x Oak).
+Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate. Bushes (`Kind Bush`), two per climate:
 * Temperate: `Shrub` (broadleaf, round, sparse cluster cards) and `Thicket` (denser and wide: crown radius 1.5 m,
   flat slot angles).
 * Boreal: `Juniper` (a low SPREADING conifer, blue-green needle-spray cards, uncrossed - crossed read too dense; the first conifer bush, on
@@ -1007,6 +1024,21 @@ changing `Bark` / `Color` / cluster parameters does NOT regenerate it**: press `
 two, RGBA8; the leaf atlas keeps the 2×2 cell layout (stem at the TOP edge of each cell, v = 0); the normal
 map is tangent space with x along u (around) and y along v (along the branch, DOWN the image).
 
+**GPU formats** (`Trees/Compress textures`, default on, reloads): the PNGs stay the RGBA8 cache; at load the
+finished mip chains (coverage-preserving alpha, AlbedoScale applied) are BC-compressed in memory (File
+`TextureConvert::compressBlockRows`, stb_dxt, every level's block rows a `parallelFor` task, "Tree texture BC"):
+
+| Texture | Format |
+|---|---|
+| bark albedo | BC1 sRGB (opaque) |
+| bark normal | BC5 (XY; MATERIAL_FLAG_BC5_NORMAL rebuilds Z) |
+| leaf cluster atlas | BC3 sRGB (alpha-tested) |
+| billboard + card-atlas albedo | BC3 sRGB |
+| billboard + card-atlas normal | BC3 linear - RGB the full normal WITH its sign, A the baked interior: no two-channel format holds both, and there is no BC7 encoder |
+
+4x less VRAM (BC1: 8x). Off = the RGBA8 chains as before (the A/B for compression artefacts). The module / trunk
+billboards are uploaded only with `Show piece library` (they draw only there; that tweak reloads too).
+
 ## Bark texture
 
 PROCEDURAL per species until authored textures exist (`TreeBarkTexture.cpp`, 1024²): tiles in both directions,
@@ -1111,11 +1143,13 @@ in `Assets/Shaders/tree_record.inc.glsl` (not read by a shader yet). A member of
   to the box (per axis, sigma `ClimateWidth`), faded to 0 between `Climate fade start` and `end` (0.10 / 0.25 of the
   peak), 0 outside its slope / altitude band. (Until 2026-10-04 an attractor POINT: the density peaked at one climate
   and every climate around it thinned - a precipitation band where a minimum was meant.)
-  The SPECIES is picked by fit ^ `Climate sharpness` (4) alone; the candidate then exists with probability (the chosen
-  species' Density x its fit x its cluster fbm) x the cell's hectares x `Density scale` (so at most one tree per cell:
-  400 / ha at 5 m). (Until 2026-10-04 the pick and the existence were by Density x fit summed over the species, with
-  the Gaussian cut at 2 %: a dense species' tail outnumbered a sparse one's core - pines among the acacias - and the
-  tail scattered lone trees far from any forest.) Bushes are not stored.
+  Each species' density at the candidate: Density x fit x its cluster fbm x (fit / the BEST fit there) ^
+  `Climate sharpness` (4). The candidate exists with probability (the summed densities) x the cell's hectares x
+  `Density scale` (so at most one tree per cell: 400 / ha at 5 m); its species is picked by share. Species that share a
+  climate ADD: a rare species in a dense one's box (Willow in Oak's) takes nothing away from it.
+  (History: until 2026-10-04 the pick was by Density x fit with the Gaussian cut at 2 % - a dense species' tail
+  outnumbered a sparse one's core, pines among the acacias, and lone trees far from any forest; until 2026-10-05 by
+  fit ^ sharpness normalized by the SUM - an equal-fit species halved the other's density.) Bushes are not stored.
 * **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density tweaks,
   `Reload species`, a new sampler, a chunk size or bounds change. The generation counter is monotonic, so a late pump
   result of an old config never merges.
@@ -1132,7 +1166,7 @@ in `Assets/Shaders/tree_record.inc.glsl` (not read by a shader yet). A member of
 * `Log stats`: chunks (in flight, queued, to upload), trees, per chunk average / max; CPU and GPU MB; per species of the
   CPU-held records.
 * Placeholder ideal climates: Oak 9..18 C / 900..2200 mm, 90 / ha; Pine -5..5 C / 600..2200 mm, 90 / ha; Acacia
-  20..30 C / 300..900 mm, 12 / ha; all `ClimateWidth` 0.06.
+  20..30 C / 300..900 mm, 12 / ha; Willow as Oak, 4 / ha; all `ClimateWidth` 0.06.
 
 ## World mode (TreeSystem, W3)
 
@@ -1169,7 +1203,7 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
 `Trees/Enabled` loads every species (enable / `Reload species` re-reads the files — no hot reload yet),
 uploads each piece as two `RenderMesh`es (bark + double-sided diamond leaf cards, solid-colour `LitOpaque`
 materials), and spawns a `Grove size`² grove in front of the camera plus the piece library in rows behind it
-(`Show piece library`). `Bushes per tree` (default 4; the fraction by chance) scatters the `Kind Bush` species
+(`Show piece library`; reloads - off, the module / trunk billboards are not uploaded). `Bushes per tree` (default 4; the fraction by chance) scatters the `Kind Bush` species
 around each grove tree (1.5 m .. 0.75 × spacing out, area-uniform, a random bush species, the same variant / scale /
 yaw rules). `Bush shadow distance (m)` (default 100, GPU path): bushes farther than this from the shadow
 cascades' centre cast no sun shadow (`TreeInstanceType::shadowDistance`). `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name — the

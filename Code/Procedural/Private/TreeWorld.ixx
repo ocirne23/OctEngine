@@ -100,7 +100,7 @@ export namespace Procedural
 			float chunkSize = 256.0f;
 			float cellSize = 5.0f;       // the candidate lattice (m): at most one tree per cell
 			float densityScale = 1.0f;
-			float sharpness = 4.0f;      // the species pick: climate fit ^ this
+			float sharpness = 4.0f;      // a species' density x (its fit / the best fit) ^ this
 			float fadeStart = 0.10f;     // a species' fit fades to 0 between these fractions of its peak
 			float fadeEnd = 0.25f;
 		};

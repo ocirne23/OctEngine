@@ -1,0 +1,104 @@
+# Weeping willow: a tall thick trunk with limbs in two whorls (Crown Tiers: a wide lower skirt, a shorter steep upper
+# layer), the limbs arch over (Droop), their branches arc out and down, and thin strands of random length (LengthVar)
+# rise, arch over and hang straight down (Rise, Droop) as curtains of narrow leaf cards lying along the strand
+# (Leaves Align). Oak's climate, rare.
+TreeSpecies Willow
+	Climate Temperate
+	Seed 53
+	Scale 1.1 1.3
+	Trunk
+		Count 4
+		Height 8.5 10.5
+		Radius 0.5
+		Taper 0.35
+		Curve 8
+		UpAttract 0.2
+		Wobble 3
+		Elbows 0.5
+		ElbowAngle 15 6
+		ElbowUpBias 0.8
+		ElbowRange 0.3 0.8
+		Stubs 0.4
+		Flare 0.45
+		Lobes 6
+		LobeDepth 0.5 0.1
+		LobeHeight 0.35
+		Twist 35
+		Rings 20
+		Sides 24
+	Crown
+		Shape Ellipsoid
+		Start 0.35
+		Radius 5.5
+		Slots 20
+		Tiers 2 0.4
+		Fill 1
+		Angle 55 30
+		AngleVar 12
+		BranchRadius 0.7
+	Module
+		Count 16
+		Radius 0.025
+		Curve 25 10
+		Droop 80
+		Wobble 6
+		Elbows 1
+		ElbowAngle 15 6
+		Stubs 0.2
+		Rings 14
+		Sides 6
+		Level
+			Count 16
+			Start 0.1
+			Length 0.35
+			LengthTaper 0.3
+			Angle 50 15
+			Rise 0.3
+			Curve 20 10
+			Droop 120
+			Wobble 5
+			Radius 0.45
+			Rings 8
+			Sides 4
+		Level
+			Count 7
+			Start 0.05
+			Length 2.6
+			LengthTaper 0.2
+			LengthVar 0.65
+			Angle 30 15
+			Rise 0.7
+			Curve 5 5
+			Droop 280
+			Wobble 2
+			Radius 0.45
+			Rings 14
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.5
+		Aspect 0.28
+		PerBranch 12
+		Levels 2
+		Align 0.8
+		ClusterLeaves 12
+		ClusterLeafSize 0.4
+		NormalBend 0.0
+	Bark
+		Plates 26 4
+		Crack 0.1
+		Relief 1.2
+		Lichen 0.25
+	Billboard
+		NormalBend 0.0
+		TopCardHeight 0.6
+	Color
+		Bark 0.30 0.25 0.19
+		Leaf 0.42 0.47 0.15
+	Placement
+		Density 1
+		Temperature 9 18
+		Precipitation 1000 2200
+		ClimateWidth 0.06
+		Cluster 60 0.65
+		MaxSlope 0.4

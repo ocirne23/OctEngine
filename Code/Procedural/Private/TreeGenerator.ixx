@@ -71,6 +71,7 @@ export namespace Procedural
 		oc::vector<TreeSlot> slots; // trunks only
 		float length = 1.0f;        // trunk height / nominal module length (m)
 		float baseRadius = 0.1f;    // root radius at the base (m, unscaled)
+		float pitch = 0.0f;         // modules: the root's angle from world-up (rad) it was grown for - its up / down
 		// Baked variants only: the composite it was merged from, and `bark` split in two - the trunk's, and the module
 		// branches' (the GPU mid tier keeps the trunk while the branches give way to the branch cards).
 		oc::vector<TreePiecePlacement> placements;

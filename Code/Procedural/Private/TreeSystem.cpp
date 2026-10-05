@@ -64,7 +64,7 @@ namespace
 
 	// Trees/Grove type: "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name.
 	// The names are fixed here (a tweak enum is registered before the species load) - add a new species' name.
-	constexpr oc::string_view GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia" };
+	constexpr oc::string_view GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow" };
 
 	// Far-representation cache name infix per piece set (modules keep the original, unprefixed names).
 	constexpr const char* PIECE_KINDS[3] = { "", "trunk", "tree" };
@@ -104,6 +104,63 @@ namespace
 			weight += a;
 		}
 		return weight > 0.0f ? sum / weight : fallback;
+	}
+
+	// "Trees/Compress textures": an RGBA8 mip chain (levels halving from width x height) as BC blocks, one buffer per
+	// level, every level's block rows spread over the job system.
+	struct EncodedChain
+	{
+		oc::vector<oc::vector<uint8>> levels;
+		oc::vector<oc::span<uint8>> spans;
+	};
+	void encodeChain(const oc::vector<oc::span<uint8>>& rgba, uint32 width, uint32 height, TextureConvert::EBlockFormat format, EncodedChain& out)
+	{
+		out.levels.resize(rgba.size());
+		oc::vector<glm::uvec2> tasks; // (level, block row)
+		for (uint32 k = 0; k < (uint32)rgba.size(); ++k)
+		{
+			const uint32 w = glm::max(width >> k, 1u), h = glm::max(height >> k, 1u);
+			out.levels[k].resize(TextureConvert::compressedSize(w, h, format));
+			for (uint32 row = 0; row < (h + 3) / 4; ++row)
+				tasks.push_back({ k, row });
+		}
+		Globals::jobSystem.parallelFor(0, (uint32)tasks.size(), 4, { "Tree texture BC", EProfileCategory::Procedural },
+			[&](uint32 begin, uint32 end)
+		{
+			for (uint32 i = begin; i < end; ++i)
+			{
+				const uint32 k = tasks[i].x;
+				const uint32 w = glm::max(width >> k, 1u), h = glm::max(height >> k, 1u);
+				TextureConvert::compressBlockRows(rgba[k].data(), w, h, format, tasks[i].y, tasks[i].y + 1, out.levels[k].data());
+			}
+		});
+		out.spans.clear();
+		for (oc::vector<uint8>& level : out.levels)
+			out.spans.push_back(oc::span<uint8>(level.data(), level.size()));
+	}
+
+	// createTextureMaterial with the chains BC-compressed when `compress` (the albedo / normal format each), else RGBA8.
+	uint16 createTreeMaterial(Renderer& renderer, bool compress, uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& albedo,
+		TextureConvert::EBlockFormat albedoFormat, const oc::vector<oc::span<uint8>>* normal, TextureConvert::EBlockFormat normalFormat,
+		float alphaCutoff, const char* debugName, uint32 extraFlags)
+	{
+		if (!compress)
+			return renderer.createTextureMaterial(width, height, albedo, alphaCutoff, debugName, normal, extraFlags);
+		auto encoding = [](TextureConvert::EBlockFormat format)
+		{
+			switch (format)
+			{
+			case TextureConvert::EBlockFormat::BC1: return Renderer::ETextureEncoding::BC1;
+			case TextureConvert::EBlockFormat::BC3: return Renderer::ETextureEncoding::BC3;
+			default:                                return Renderer::ETextureEncoding::BC5;
+			}
+		};
+		EncodedChain albedoBc, normalBc;
+		encodeChain(albedo, width, height, albedoFormat, albedoBc);
+		if (normal)
+			encodeChain(*normal, width, height, normalFormat, normalBc);
+		return renderer.createTextureMaterial(width, height, albedoBc.spans, alphaCutoff, debugName, normal ? &normalBc.spans : nullptr,
+			extraFlags, encoding(albedoFormat), encoding(normalFormat));
 	}
 
 	void saveImage(const oc::string& path, uint32 size, const oc::vector<uint8>& rgba)
@@ -230,7 +287,8 @@ namespace Procedural
 		Tweak::boolean("Trees", "Reload species", &m_reload);
 		Tweak::boolean("Trees", "Respawn preview", &m_respawn);
 		Tweak::boolean("Trees", "Regenerate textures", &m_regenerateTextures, [this]() { if (m_regenerateTextures) m_reload = true; });
-		Tweak::boolean("Trees", "Show piece library", &m_showLibrary, respawn);
+		Tweak::boolean("Trees", "Show piece library", &m_showLibrary, [this]() { m_reload = true; });
+		Tweak::boolean("Trees", "Compress textures", &m_compressTextures, [this]() { m_reload = true; });
 		Tweak::intVar("Trees", "Grove size", &m_gridSize, 1, 512, 1.0f, respawn);
 		Tweak::floatVar("Trees", "Spacing (m)", &m_spacing, 2.0f, 50.0f, 0.1f, respawn);
 		Tweak::floatVar("Trees", "Position jitter", &m_positionJitter, 0.0f, 2.0f, 0.01f, respawn);
@@ -480,8 +538,8 @@ namespace Procedural
 					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : bark.normalMips)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				species.barkMaterial = renderer.createTextureMaterial(bark.size, bark.size, albedoMips, 0.0f,
-					oc::format("TreeBark/{}", name).c_str(), &normalMips);
+				species.barkMaterial = createTreeMaterial(renderer, m_compressTextures, bark.size, bark.size, albedoMips, TextureConvert::EBlockFormat::BC1,
+					&normalMips, TextureConvert::EBlockFormat::BC5, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
 				species.ownsBarkMaterial = true;
 			}
 			if (species.desc.leafType == ETreeLeafType::Cluster)
@@ -501,8 +559,9 @@ namespace Procedural
 				for (oc::vector<uint8>& level : texture.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
 				// LEAF: the sun shines through the cluster cards (the lit FS's transmission).
-				species.leafMaterial = renderer.createTextureMaterial(texture.size, texture.size, mips, TREE_LEAF_ALPHA_CUTOFF,
-					oc::format("TreeLeafCluster/{}", name).c_str(), nullptr, RendererVKLayout::MATERIAL_FLAG_LEAF);
+				species.leafMaterial = createTreeMaterial(renderer, m_compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
+					nullptr, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
+					RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitMasked;
 			}
@@ -623,17 +682,24 @@ namespace Procedural
 				albedoMips.push_back(oc::span<uint8>(albedoChain.mips[k].data(), albedoChain.mips[k].size()));
 				normalMips.push_back(oc::span<uint8>(normalChain[k].data(), normalChain[k].size()));
 			}
-			// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect.fs.glsl).
-			// "TreeBillboard/<piece>": one box per billboard in the VRAM view.
-			meshes.billboardMaterial = renderer.createTextureMaterial(size, size, albedoMips, TREE_LEAF_ALPHA_CUTOFF,
-				oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), &normalMips, RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
-				| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
+			// The module / trunk billboards draw only in the piece library (debug rows): without it they are not uploaded
+			// (the modules' chains still feed the card atlas below).
+			if (set == 2 || m_showLibrary)
+			{
+				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect.fs.glsl).
+				// "TreeBillboard/<piece>": one box per billboard in the VRAM view. BC3 normal: RGB the full normal (sign
+				// kept), A the baked interior - no two-channel format holds both.
+				meshes.billboardMaterial = createTreeMaterial(renderer, m_compressTextures, size, size, albedoMips, TextureConvert::EBlockFormat::BC3,
+					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
+					oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
+					| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
 
-			TreeMesh cards;
-			billboardMesh(box, size, numViews, horizontal, cards, false, species.desc.billboardTopCardHeight);
-			// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
-			// views), and never a bush's.
-			meshes.billboard = uploadTreeMesh(renderer, cards, horizontal && !species.desc.bush);
+				TreeMesh cards;
+				billboardMesh(box, size, numViews, horizontal, cards, false, species.desc.billboardTopCardHeight);
+				// RT: the WHOLE-TREE billboards only (the variants' - the library rows' module / trunk billboards are debug
+				// views), and never a bush's.
+				meshes.billboard = uploadTreeMesh(renderer, cards, horizontal && !species.desc.bush);
+			}
 			meshes.farCentre = (box.min + box.max) * 0.5f;
 			meshes.farRadius = glm::length(box.max - box.min) * 0.5f;
 			if (set == 0)
@@ -667,8 +733,9 @@ namespace Procedural
 			normalMips.push_back(oc::span<uint8>(atlasNormal[k].data(), atlasNormal[k].size()));
 		}
 		// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
-		species.cardAtlasMaterial = renderer.createTextureMaterial(size, size * (uint32)numModules, albedoMips, TREE_LEAF_ALPHA_CUTOFF,
-			oc::format("TreeCardAtlas/{}", name).c_str(), &normalMips, RendererVKLayout::MATERIAL_FLAG_BILLBOARD
+		species.cardAtlasMaterial = createTreeMaterial(renderer, m_compressTextures, size, size * (uint32)numModules, albedoMips,
+			TextureConvert::EBlockFormat::BC3, &normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
+			oc::format("TreeCardAtlas/{}", name).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD
 			| RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
 
 		const float invModules = 1.0f / (float)numModules;

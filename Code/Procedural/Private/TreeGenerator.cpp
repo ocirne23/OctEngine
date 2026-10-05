@@ -127,6 +127,7 @@ namespace
 		glm::vec3 d = glm::normalize(dir);
 		glm::vec3 axis = randomPerpendicular(d, rng);
 		const float wobble = glm::radians(shape.wobble);
+		const float droop = glm::radians(shape.droop);
 
 		oc::vector<glm::vec3> raw;
 		oc::vector<glm::vec3> incoming((size_t)n, glm::vec3(0.0f));
@@ -141,6 +142,15 @@ namespace
 			d = glm::normalize(glm::angleAxis(curveRad * frac, axis) * d + up * (shape.upAttract * frac));
 			if (wobble > 0.0f)
 				d = glm::normalize(glm::angleAxis(wobble * std::sqrt(frac * (float)(n - 1)) * rng.signed1(), randomPerpendicular(d, rng)) * d);
+			// Droop: a fixed turn per length toward straight down that stops there - the branch arcs over, then hangs.
+			if (droop > 0.0f)
+			{
+				const glm::vec3 fall = glm::cross(d, -up);
+				const float toDown = std::acos(glm::clamp(-glm::dot(d, up), -1.0f, 1.0f));
+				const float turn = glm::min(droop * frac, toDown);
+				if (turn > 1e-5f && glm::dot(fall, fall) > 1e-10f)
+					d = glm::normalize(glm::angleAxis(turn, glm::normalize(fall)) * d);
+			}
 			if (elbowAt[(size_t)k])
 			{
 				incoming[(size_t)k] = d;
@@ -572,6 +582,17 @@ namespace
 		}
 	}
 
+	// Any branch with Droop: its modules must know world-down exactly (generateTreeLibrary / compositeTree).
+	bool speciesHangs(const TreeSpeciesDesc& sp)
+	{
+		if (sp.moduleShape.droop > 0.0f)
+			return true;
+		for (const TreeBranchLevel& level : sp.levels)
+			if (level.shape.droop > 0.0f)
+				return true;
+		return false;
+	}
+
 	float crownEnvelope(ETreeCrownShape shape, float h)
 	{
 		switch (shape)
@@ -614,7 +635,16 @@ namespace
 		for (int i = 0; i < sp.slots; ++i)
 		{
 			const float jitter = rng.signed1() * 0.3f / (float)sp.slots;
-			const float h = glm::clamp(((float)i + 0.5f) / (float)sp.slots + jitter, 0.0f, 1.0f);
+			float h = glm::clamp(((float)i + 0.5f) / (float)sp.slots + jitter, 0.0f, 1.0f);
+			if (sp.crownTiers > 1)
+			{
+				// Tiers: slot i goes to whorl i * tiers / slots, spread over `crownTierSpread` of that whorl's band.
+				const int tier = i * sp.crownTiers / sp.slots;
+				const int first = (tier * sp.slots + sp.crownTiers - 1) / sp.crownTiers;
+				const int count = ((tier + 1) * sp.slots + sp.crownTiers - 1) / sp.crownTiers - first;
+				const float local = ((float)(i - first) + 0.5f) / (float)glm::max(count, 1) - 0.5f + jitter;
+				h = glm::clamp(((float)tier + 0.5f + local * sp.crownTierSpread) / (float)sp.crownTiers, 0.0f, 1.0f);
+			}
 			const BranchPath::Sample s = path.sample(crownStart + (1.0f - crownStart) * h);
 			const float pitch = glm::radians(glm::mix(sp.slotAngle.x, sp.slotAngle.y, h) + rng.signed1() * sp.slotAngleVar);
 			const float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.3f;
@@ -640,14 +670,14 @@ namespace
 	}
 
 	// Module-local frame: +Y = the root branch direction, +Z = the side that faces world-up after the
-	// composite. `up` is world-up in this frame for a module attached at the species' mean slot angle -
-	// what the up-attraction and the leaf orientation bend toward.
-	void generateModule(const TreeSpeciesDesc& sp, uint32 seed, float nominalLength, TreePiece& out)
+	// composite. `up` is world-up in this frame for a module attached at `pitch` (radians from up) - what the
+	// up-attraction, the droop and the leaf orientation bend toward.
+	void generateModule(const TreeSpeciesDesc& sp, uint32 seed, float nominalLength, float pitch, TreePiece& out)
 	{
 		Rng rng(seed);
 		out.length = nominalLength;
-		const float meanPitch = glm::radians((sp.slotAngle.x + sp.slotAngle.y) * 0.5f);
-		const glm::vec3 up = glm::normalize(glm::vec3(0.0f, std::cos(meanPitch), std::sin(meanPitch)));
+		out.pitch = pitch;
+		const glm::vec3 up = glm::normalize(glm::vec3(0.0f, std::cos(pitch), std::sin(pitch)));
 
 		struct Branch { BranchPath path; uint8 bone; };
 		// One entry per tier: [0] = the module root, [i] = sub-branch level i (kept for the leaf pass).
@@ -684,8 +714,16 @@ namespace
 					const float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.5f;
 					const glm::vec3 perp = glm::angleAxis(az, s.tangent) * anyPerpendicular(s.tangent);
 					const float angle = glm::radians(level.angle + rng.signed1() * level.angleVar);
-					const glm::vec3 dir = glm::normalize(std::cos(angle) * s.tangent + std::sin(angle) * perp);
-					const float length = parent.path.length * level.length * (1.0f - level.lengthTaper * t);
+					glm::vec3 dir = glm::normalize(std::cos(angle) * s.tangent + std::sin(angle) * perp);
+					if (level.rise > 0.0f)
+					{
+						const glm::vec3 risen = glm::mix(dir, up, level.rise);
+						if (glm::dot(risen, risen) > 1e-6f)
+							dir = glm::normalize(risen);
+					}
+					float length = parent.path.length * level.length * (1.0f - level.lengthTaper * t);
+					if (level.lengthVar > 0.0f)
+						length *= 1.0f - level.lengthVar * rng.next01();
 					const float cr0 = glm::min(s.radius * level.radius, s.radius * 0.9f);
 
 					Branch child;
@@ -729,9 +767,10 @@ namespace
 				const float t = glm::clamp(0.15f + 0.85f * ((float)k + 0.5f) / (float)numLeaves + rng.signed1() * 0.05f, 0.0f, 1.0f);
 				const BranchPath::Sample s = branch.path.sample(t);
 				const glm::vec3 perp = glm::angleAxis(rng.next01() * TWO_PI, s.tangent) * anyPerpendicular(s.tangent);
-				const glm::vec3 along = glm::normalize(perp * 0.8f + s.tangent * 0.6f);
+				// Align 1: the card lies along the branch, facing out from it (a weeping strand's curtain).
+				const glm::vec3 along = glm::normalize(glm::mix(glm::normalize(perp * 0.8f + s.tangent * 0.6f), s.tangent, sp.leafAlign));
 				const glm::vec3 randomDir = glm::normalize(glm::vec3(rng.signed1(), rng.signed1(), rng.signed1()) + glm::vec3(0.0f, 0.0f, 1e-3f));
-				glm::vec3 normal = up * 0.8f + perp * 0.4f + randomDir * 0.3f;
+				glm::vec3 normal = glm::mix(up * 0.8f + perp * 0.4f + randomDir * 0.3f, perp + randomDir * 0.2f, sp.leafAlign);
 				normal -= along * glm::dot(normal, along);
 				normal = glm::dot(normal, normal) > 1e-6f ? glm::normalize(normal) : anyPerpendicular(along);
 				const float size = rng.range(0.8f, 1.2f);
@@ -759,9 +798,18 @@ namespace Procedural
 		for (int i = 0; i < species.trunkCount; ++i)
 			generateTrunk(species, treeHash(species.seed, 1000u + (uint32)i), out.trunks[i]);
 		const float nominalLength = species.moduleLength > 0.0f ? species.moduleLength : species.crownRadius;
+		// A drooping species grows each module for its own pitch, spread over the slot angles (compositeTree places
+		// it at that pitch exactly, so its down is the world's); the others all for the mean pitch.
+		const float lo = glm::radians(glm::clamp(glm::min(species.slotAngle.x, species.slotAngle.y) - species.slotAngleVar, 2.0f, 175.0f));
+		const float hi = glm::radians(glm::clamp(glm::max(species.slotAngle.x, species.slotAngle.y) + species.slotAngleVar, 2.0f, 175.0f));
+		const float meanPitch = glm::radians((species.slotAngle.x + species.slotAngle.y) * 0.5f);
+		const bool hangs = speciesHangs(species);
 		out.modules.resize((size_t)species.moduleCount);
 		for (int i = 0; i < species.moduleCount; ++i)
-			generateModule(species, treeHash(species.seed, 2000u + (uint32)i), nominalLength, out.modules[i]);
+		{
+			const float pitch = hangs ? glm::mix(lo, hi, ((float)i + 0.5f) / (float)species.moduleCount) : meanPitch;
+			generateModule(species, treeHash(species.seed, 2000u + (uint32)i), nominalLength, pitch, out.modules[i]);
+		}
 	}
 
 	void bakeTreeVariant(const TreeSpeciesDesc& species, const TreeLibrary& library, uint32 seed, TreePiece& out)
@@ -823,20 +871,36 @@ namespace Procedural
 
 		const TreePiece& trunk = library.trunks[trunkIdx];
 		const float maxRoll = glm::radians(25.0f);
+		const bool hangs = speciesHangs(species);
 		for (uint32 s = 0; s < (uint32)trunk.slots.size(); ++s)
 		{
 			const TreeSlot& slot = trunk.slots[s];
 			const uint32 hs = treeHash(seed, 16u + s);
 			if (treeHash01(hs) > species.slotFill)
 				continue;
-			const uint32 moduleIdx = treeHash(hs, 1u) % (uint32)library.modules.size();
+			uint32 moduleIdx = treeHash(hs, 1u) % (uint32)library.modules.size();
 			const float roll = (treeHash01(treeHash(hs, 2u)) * 2.0f - 1.0f) * maxRoll;
 
 			// Module +Y -> slot direction, module +Z -> the up-facing side, then the roll jitter about +Y.
-			const glm::vec3 dirY = trunkRot * slot.dir;
+			glm::vec3 dirY = trunkRot * slot.dir;
 			glm::vec3 dirZ = WORLD_UP - dirY * glm::dot(WORLD_UP, dirY);
 			dirZ = glm::dot(dirZ, dirZ) > 1e-6f ? glm::normalize(dirZ) : anyPerpendicular(dirY);
-			dirZ = glm::angleAxis(roll, dirY) * dirZ;
+			if (hangs)
+			{
+				// Drooping: the module grown for the nearest pitch, placed AT that pitch with no roll - its up is then
+				// exactly world-up, and its strands hang plumb.
+				const float slotPitch = std::acos(glm::clamp(dirY.y, -1.0f, 1.0f));
+				for (uint32 m = 0; m < (uint32)library.modules.size(); ++m)
+					if (glm::abs(library.modules[m].pitch - slotPitch) < glm::abs(library.modules[moduleIdx].pitch - slotPitch))
+						moduleIdx = m;
+				const float pitch = library.modules[moduleIdx].pitch;
+				glm::vec3 horiz(dirY.x, 0.0f, dirY.z);
+				horiz = glm::dot(horiz, horiz) > 1e-8f ? glm::normalize(horiz) : glm::vec3(1.0f, 0.0f, 0.0f);
+				dirY = std::cos(pitch) * WORLD_UP + std::sin(pitch) * horiz;
+				dirZ = std::sin(pitch) * WORLD_UP - std::cos(pitch) * horiz;
+			}
+			else
+				dirZ = glm::angleAxis(roll, dirY) * dirZ;
 			const glm::vec3 dirX = glm::cross(dirY, dirZ);
 			const glm::quat rot = glm::quat_cast(glm::mat3(dirX, dirY, dirZ));
 

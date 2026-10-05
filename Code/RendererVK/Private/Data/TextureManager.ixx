@@ -20,6 +20,8 @@ public:
     // Generated RGBA8 pixels with a caller-built mip chain (level 0 first, each level half the previous):
     // for content whose mips a box blit would get wrong, e.g. alpha-coverage-preserving foliage.
     uint16 uploadRgba8Mips(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, bool sRGB, const char* debugName);
+    // The same with any format, e.g. BC blocks compressed at runtime (each level `format`'s bytes for its size).
+    uint16 uploadMips(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
     // Destroys a texture (ObjectContainer teardown) and recycles its slot for a later upload. The caller
     // guarantees the GPU is idle (Renderer::processPendingTextureFrees); unregisters from the
     // TextureStreamer and queues a fallback rewrite of the slot's bindless descriptor entries.

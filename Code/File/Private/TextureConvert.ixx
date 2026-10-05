@@ -39,4 +39,14 @@ export namespace TextureConvert
 	// must share dimensions (else false, with a warning). usage picks the format (e.g. ColorAlpha: albedo +
 	// roughness in one BC3; TwoChannel: height + AO in one BC5). At least one channel needs a path.
 	bool convertChannelsToDds(const PackChannel (&channels)[4], EUsage usage, const char* outPath);
+
+	// In-memory BC compression of RGBA8 images generated at runtime (the procedural trees). Pure, any thread; the
+	// same stb_dxt compressor as above. BC1 = RGB, BC3 = RGBA, BC4 = R, BC5 = RG. Any size: edge texels repeat
+	// into the partial blocks.
+	enum class EBlockFormat : uint8 { BC1, BC3, BC4, BC5 };
+	uint32 blockBytes(EBlockFormat format); // 8 (BC1, BC4) or 16
+	size_t compressedSize(uint32 width, uint32 height, EBlockFormat format);
+	// Block rows [rowBegin, rowEnd) of the image (each 4 texel rows) into `dst`, the start of the WHOLE image's output
+	// (block row r at r x blocksX x blockBytes) - callers split the rows over jobs.
+	void compressBlockRows(const uint8* rgba, uint32 width, uint32 height, EBlockFormat format, uint32 rowBegin, uint32 rowEnd, uint8* dst);
 }

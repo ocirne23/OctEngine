@@ -1771,7 +1771,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   `<name>/normal`: the VRAM view splits names on '/', so name a material `<group>/<item>` for one box per item)
   a material with its OWN generated sRGB RGBA8
   diffuse from a caller-built mip chain (`TextureManager::uploadRgba8Mips`; no blit-generated mips, so the
-  caller can keep alpha-test coverage per level). `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
+  caller can keep alpha-test coverage per level). `ETextureEncoding` albedo / normal (default Rgba8): BC1 / BC3 / BC5
+  when the caller compressed the levels itself (Procedural's trees, `TextureManager::uploadMips`); a BC5 normal sets
+  MATERIAL_FLAG_BC5_NORMAL. `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
   a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
   **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, variant 12 = the LitMasked shaders + `FOLIAGE`,

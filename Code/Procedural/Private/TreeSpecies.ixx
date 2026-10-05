@@ -35,6 +35,7 @@ export namespace Procedural
 		float curve = 20.0f;       // total smooth bend over the length (degrees)
 		float curveVar = 10.0f;
 		float upAttract = 0.0f;    // bend toward world-up over the length; negative droops
+		float droop = 0.0f;        // degrees turned toward straight DOWN over the length, never past it (weeping strands)
 		float wobble = 0.0f;       // random direction change per segment (degrees) - less straight
 		float elbows = 0.0f;       // average number of sharp direction changes along the branch
 		float elbowAngle = 30.0f;  // degrees per elbow
@@ -54,9 +55,11 @@ export namespace Procedural
 		float start = 0.2f;        // first child at this fraction of the parent's length
 		float length = 0.5f;       // child length / parent length
 		float lengthTaper = 0.5f;  // children near the parent's tip are up to this fraction shorter
+		float lengthVar = 0.0f;    // each child is a random 0..this fraction shorter (weeping strands end at layered heights)
 		float angle = 45.0f;       // degrees from the parent direction
 		float angleVar = 10.0f;
 		float radius = 0.6f;       // child base radius / parent radius at the attach point
+		float rise = 0.0f;         // 0..1: the child's start direction blended toward world-up (strands that arch over, then hang)
 		TreeBranchShape shape;
 	};
 
@@ -104,6 +107,8 @@ export namespace Procedural
 		float crownStart = 0.35f;   // fraction of the trunk height where slots begin
 		float crownRadius = 4.0f;   // horizontal reach at the widest point (m)
 		int slots = 16;
+		int crownTiers = 1;         // > 1: the slots grouped into this many whorls up the crown (layered crowns)
+		float crownTierSpread = 0.35f; // the fraction of its band each tier's slots spread over
 		float slotFill = 0.9f;      // probability that a slot gets a module
 		glm::vec2 slotAngle{ 70.0f, 40.0f }; // degrees from up at the crown bottom / top
 		float slotAngleVar = 10.0f;
@@ -121,6 +126,7 @@ export namespace Procedural
 		ETreeLeafType leafType = ETreeLeafType::Single;
 		bool leafCross = false;     // Cluster: a second card at 90 degrees about the card's stem axis
 		float leafNormalBend = 0.7f; // Cluster: 0 = flat card normals, 1 = normals point straight out of the crown
+		float leafAlign = 0.0f;     // 0 = leaves stick out of the branch facing up, 1 = they lie along it (weeping curtains)
 		ETreeClusterStyle clusterStyle = ETreeClusterStyle::Leaves; // Cluster: what the texture draws
 		int clusterLeaves = 12;     // Cluster: leaves drawn per texture variant (Needles: side shoots per branch;
 		                            // Pinnate: pinna pairs per compound leaf)

@@ -42,6 +42,7 @@ namespace
 	{
 		readValueVar(node, "Curve", shape.curve, shape.curveVar);
 		readFloat(node, "UpAttract", shape.upAttract);
+		readFloat(node, "Droop", shape.droop);
 		readFloat(node, "Wobble", shape.wobble);
 		readFloat(node, "Elbows", shape.elbows);
 		readValueVar(node, "ElbowAngle", shape.elbowAngle, shape.elbowAngleVar);
@@ -55,6 +56,7 @@ namespace
 
 	void clampShape(TreeBranchShape& shape, int maxRings, int maxSides)
 	{
+		shape.droop = glm::clamp(shape.droop, 0.0f, 720.0f);
 		shape.rings = glm::clamp(shape.rings, 2, maxRings);
 		shape.sides = glm::clamp(shape.sides, 3, maxSides);
 		shape.elbows = glm::clamp(shape.elbows, 0.0f, 8.0f);
@@ -146,6 +148,11 @@ namespace Procedural
 			readFloat(*crown, "Start", out.crownStart);
 			readFloat(*crown, "Radius", out.crownRadius);
 			readInt(*crown, "Slots", out.slots);
+			if (const AssetNode* n = crown->find("Tiers"))
+			{
+				out.crownTiers = n->asInt(0, out.crownTiers);
+				out.crownTierSpread = n->asFloat(1, out.crownTierSpread);
+			}
 			readFloat(*crown, "Fill", out.slotFill);
 			readRange(*crown, "Angle", out.slotAngle);
 			readFloat(*crown, "AngleVar", out.slotAngleVar);
@@ -167,6 +174,8 @@ namespace Procedural
 				readFloat(*levelNode, "Start", level.start);
 				readFloat(*levelNode, "Length", level.length);
 				readFloat(*levelNode, "LengthTaper", level.lengthTaper);
+				readFloat(*levelNode, "LengthVar", level.lengthVar);
+				readFloat(*levelNode, "Rise", level.rise);
 				readValueVar(*levelNode, "Angle", level.angle, level.angleVar);
 				readFloat(*levelNode, "Radius", level.radius);
 				readShape(*levelNode, level.shape);
@@ -190,6 +199,7 @@ namespace Procedural
 			readInt(*leaves, "ClusterLeaves", out.clusterLeaves);
 			readInt(*leaves, "Shoots", out.clusterShoots);
 			readFloat(*leaves, "NormalBend", out.leafNormalBend);
+			readFloat(*leaves, "Align", out.leafAlign);
 			readFloat(*leaves, "ClusterLeafSize", out.clusterLeafSize);
 		}
 
@@ -239,6 +249,8 @@ namespace Procedural
 		out.trunkCount = glm::clamp(out.trunkCount, 1, 64);
 		out.moduleCount = glm::clamp(out.moduleCount, 1, 256);
 		out.slots = glm::clamp(out.slots, 0, 64);
+		out.crownTiers = glm::clamp(out.crownTiers, 1, glm::max(out.slots, 1));
+		out.crownTierSpread = glm::clamp(out.crownTierSpread, 0.0f, 1.0f);
 		clampShape(out.trunkShape, 64, 32);
 		out.trunkLobes = glm::clamp(out.trunkLobes, 0, 12);
 		out.trunkLobeHeight = glm::max(out.trunkLobeHeight, 0.01f);
@@ -248,6 +260,8 @@ namespace Procedural
 		for (TreeBranchLevel& level : out.levels)
 		{
 			level.count = glm::clamp(level.count, 0, 64);
+			level.lengthVar = glm::clamp(level.lengthVar, 0.0f, 0.95f);
+			level.rise = glm::clamp(level.rise, 0.0f, 1.0f);
 			clampShape(level.shape, 32, 16);
 		}
 		out.leavesPerBranch = glm::clamp(out.leavesPerBranch, 0, 128);
@@ -255,6 +269,7 @@ namespace Procedural
 		out.clusterLeaves = glm::clamp(out.clusterLeaves, out.clusterStyle == ETreeClusterStyle::Needles ? 0 : 1, 64);
 		out.clusterShoots = glm::clamp(out.clusterShoots, 1, 5);
 		out.leafNormalBend = glm::clamp(out.leafNormalBend, 0.0f, 1.0f);
+		out.leafAlign = glm::clamp(out.leafAlign, 0.0f, 1.0f);
 		out.barkPlates = glm::clamp(glm::round(out.barkPlates), glm::vec2(1.0f), glm::vec2(64.0f));
 		out.barkCrack = glm::clamp(out.barkCrack, 0.01f, 0.5f);
 		out.barkBreakup = glm::clamp(out.barkBreakup, 0.0f, 1.0f);

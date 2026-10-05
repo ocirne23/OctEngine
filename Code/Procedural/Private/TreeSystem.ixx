@@ -175,7 +175,8 @@ export namespace Procedural
 		bool m_reload = false;      // button: re-read the .tree files, regenerate, respawn
 		bool m_respawn = false;     // button: respawn the preview in front of the camera
 		bool m_regenerateTextures = false; // button: regenerate the species textures over the files on disk
-		bool m_showLibrary = true;
+		bool m_showLibrary = true;            // also reloads: without it the module / trunk billboards are never uploaded
+		bool m_compressTextures = true;       // BC: bark BC1 + BC5 normal, leaves / billboards / card atlas BC3 (reloads)
 		int m_gridSize = 350;
 		float m_spacing = 11.0f;
 		float m_positionJitter = 0.8f;        // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)

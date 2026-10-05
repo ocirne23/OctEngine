@@ -223,3 +223,8 @@ loose textures that no `ISceneData` references — the procedural terrain's biom
   ColorAlpha, height + AO as TwoChannel).
 
 Output mip chains stream through the `TextureStreamer` like any cooked `.dds`.
+
+* **In memory** (no file): `compressBlockRows(rgba, w, h, EBlockFormat, rowBegin, rowEnd, dst)` compresses block
+  rows of one RGBA8 image into the whole image's output buffer (`compressedSize`), so a caller can split the rows
+  over jobs (File cannot link Threading). BC1 / BC3 / BC4 / BC5; the cooker's `compressMip` uses it too. User: the
+  procedural trees' runtime textures (Procedural "Texture files").
