@@ -359,6 +359,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
 	float16_t ao = float16_t(1.0);
 	f16vec3 bentN = N;
+#ifndef LIT_NO_RTAO // the grass (grass.fs.glsl): no RTAO read at all - its own root occlusion stands in
 	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (0, 1.0) - no occlusion, no
 	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
@@ -382,6 +383,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 		if (bentLen2 > 1e-6)
 			bentN = normalize(mix(bentN, f16vec3(aoSample.xyz * inversesqrt(bentLen2)), float16_t(0.75)));
 	}
+#endif
 	// Blend to the virtual sky probe over the probe field's outer band (coverage) instead of stepping
 	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.
 	// Volume mode: ~8 filtered fetches, not ~100 probe loads.

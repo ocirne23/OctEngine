@@ -8,7 +8,7 @@
 #extension GL_EXT_ray_query : enable
 
 // THE GRASS BLADES' surface (grass.vs.glsl): the scene's lit core (instanced_indirect_lit.inc.glsl - sun + shadow,
-// RTAO, GI, the light grid) on a two-sided blade. Albedo from root to tip plus per-blade variation and dry patches;
+// GI, the light grid; NOT RTAO, see LIT_NO_RTAO) on a two-sided blade. Albedo from root to tip plus per-blade variation and dry patches;
 // the root occlusion stands in for the blades shadowing each other (they cast no shadow map); the sun through the
 // blade from behind (transmission, as the tree leaves). Toward the range the normal blends to the ground's, so the
 // far blades shade like the terrain they fade into. No discard: the blades keep early depth.
@@ -27,6 +27,11 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST
+// NO RTAO: the trace works from the depth image, and on a blade that is a near-random normal from a thin sliver of
+// depth with the ray origin a few centimetres over the ground (the blades are not in the TLAS) - the rays hit or miss
+// the terrain almost at random: heavy noise, worst in shadow where only the ambient shows. The root occlusion below
+// stands in.
+#define LIT_NO_RTAO
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassCanopySun (in_vertices: the lit core's binding 14)
 

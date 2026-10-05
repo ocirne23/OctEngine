@@ -1136,7 +1136,9 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
 * **The draw:** `m_grassPipeline` in `StaticMeshGraphicsPipeline` (built from the main layout like the tess terrain, so
   the SAME descriptor set binds: the lit core), `drawIndexedIndirectCount` after the tessellated ground and before the
   film; the record is an INSTANCE-RATE vertex attribute (binding 0). Two-sided, no discard (early depth), opaque
-  family, writes motion. `grass.fs.glsl`: the lit core's `computeLitColor`; the sun shadow looked up from the blade's
+  family, writes motion. `grass.fs.glsl`: the lit core's `computeLitColor` **without RTAO** (`LIT_NO_RTAO` compiles
+  the AO read out: traced from the depth image, a blade is a near-random normal a few cm over the ground, not in the
+  TLAS - the rays hit or missed the terrain at random, heavy noise under trees; the root occlusion stands in); the sun shadow looked up from the blade's
   sun side; albedo root -> tip + per-blade variation + dry patches (sRGB tweaks, linearised in `buildUboGrass`);
   `Cold darkening` scales the albedo down as the patch's mean temperature (the cull's 4 corners, at their height; it
   rides the record's `cellTemperature` half with the cell size) falls from `Warm temperature` to `Cold temperature`; `Root
