@@ -48,10 +48,15 @@ int main(int argc, char* argv[])
     if (unattendedRun)
         installUnattendedFailureHandling();
 
+    // --fullscreen: a borderless desktop-size window with the editor panels hidden (full-resolution profiling).
+    bool fullscreen = false;
+    for (int i = 1; i < argc; ++i)
+        fullscreen |= oc::string_view(argv[i]) == "--fullscreen";
+
     Window window;
     if (!headlessServer)
     {
-        window.initialize("Vulkan", glm::ivec2(5, 35), glm::ivec2(1920, 1080));
+        window.initialize("Vulkan", glm::ivec2(5, 35), glm::ivec2(1920, 1080), fullscreen);
         Globals::input.setEventSource(&window);
         Globals::input.initialize();
     }
@@ -64,6 +69,8 @@ int main(int argc, char* argv[])
                            [] { Globals::jobSystem.wakeExternalHelper(); });
         Globals::rendererVK.initialize(window, EValidation::DISABLED, EVr::DISABLED); // DISABLED ENABLED
         Globals::ui.initialize();
+        if (fullscreen)
+            Globals::ui.setEditorPanels(false);
     }
     Globals::world.initialize();
     Globals::world.setHeadless(headlessServer);

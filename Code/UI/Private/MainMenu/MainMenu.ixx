@@ -217,6 +217,7 @@ public:
 	// section. Editor (default on): every docked panel - off leaves only the viewport, full window.
 	bool debugPanelsEnabled() const { return m_debugPanels; }
 	bool editorPanelsEnabled() const { return m_editorPanels; }
+	void setEditorPanels(bool enabled) { m_editorPanels = enabled; } // main, before the first widget pass (--fullscreen)
 
 	// Widget pass only. fullRect = the whole window (the menu centers itself in it); changed
 	// settings vars with onChange callbacks are collected into deferredCallbacks (the TweakPanel's

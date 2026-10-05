@@ -150,6 +150,8 @@ private:
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
+    void buildFloorMaxLayout(ComputePipelineLayout& layout, bool dilate);
+    vk::Extent3D floorMaxExtent() const; // the max-floor grid's size (from m_angularRes / m_radialRes)
     void createVolume(uint32 angularRes, uint32 radialRes, uint32 slices);
     void createTemporalImages(uint32 scale);
     void destroyTemporalImages();
@@ -171,6 +173,10 @@ private:
     oc::array<ComputePipeline, 3> m_recordSplatPipelines;
     oc::array<DescriptorSet, 3 * RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_recordSplatSets;
     ComputePipeline m_farPipeline;         // tree_volume_far.cs: the columns' floor from the terrain + their slices
+    // tree_volume_floor_max.cs: the floor -> the block max, then (TREE_FLOOR_MAX_DILATE) the dilated max-floor grid.
+    ComputePipeline m_floorMaxPipeline;
+    ComputePipeline m_floorDilatePipeline;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * 2> m_floorMaxSets; // per slot: the two passes
     ComputePipeline m_marchPipeline;
     ComputePipeline m_marchTemporalPipeline; // TREE_TEMPORAL_OUT: the log2 distances for the temporal pass
     // What the baked variants were compiled with (record() dispatches by these, never by the live settings):
@@ -197,6 +203,10 @@ private:
     // FRONT (m_front: the march's) and BACK (the running bake's) copies, swapped at the bake's last step:
     oc::array<Image, 2> m_colour; // RGBA8 2D: the leaf albedo per column
     oc::array<Image, 2> m_floor;  // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
+    // RG32F 2D, one texel per FLOOR_MAX_BLOCK^2 columns (the march's skip): x = the highest floor within one block each
+    // way, y = AHEAD - over this row and every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way.
+    oc::array<Image, 2> m_floorMax;
+    Image m_floorBlock; // R32F: the undilated block max (the bake's last step only)
     uint32 m_front = 0;
     Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass)
     Image m_farAmount;  // R32UI 2D: the records' mass per column (fixed point; TV_AMOUNT_SCALE)

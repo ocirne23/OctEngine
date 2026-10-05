@@ -429,12 +429,14 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
 
     // Last frame's readers of the single image (the trace, the forward pass) -> this write: an execution
     // dependency is all a write-after-read needs. Plus last frame's bake -> this one's read of its clear-sky cache
-    // (read-after-write: a memory dependency).
+    // (read-after-write: a memory dependency). AND this frame's SKY CLOUDS (CloudPipeline::recordSky, sampled
+    // here): that pass ends with no barrier of its own, so the GI prep's compute (the TLAS instance write) runs
+    // alongside it - the sky clouds are a few thousand long serial rays, latency-bound.
     vk::MemoryBarrier2 readToWrite{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &readToWrite });
 

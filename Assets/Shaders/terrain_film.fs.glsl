@@ -545,6 +545,16 @@ void main()
 	const vec3 meshFaceN = cross(dFdx(TERRAIN_LIT_POS), dFdy(TERRAIN_LIT_POS));
 	if (abs(meshFaceN.y) < 0.05 * length(meshFaceN))
 		discard;
+	// DRY: no film can stand here - an EXACT early-out before the costly part (the layer walk, the relief taps): most
+	// film pixels are dry ground. The pool: the level from the RAW wetness bounds the real one (the slope drain only
+	// lowers it, terrainPoolLevel rises with it), and a level of 0 leaves no pool over any relief. The live ocean: the
+	// ground lies at most half the largest relief depth (terrainReliefDepth's) under the mesh point. Neither -> the
+	// coverage below is 0. (resolveLiveDepth keeps its result: terrainWetness reuses it.)
+	g_waterLevelOverride = fields.waterLevel;
+	resolveLiveDepth(in_pos);
+	const float liveBound = g_liveDepthBelow + (in_pos.y - TERRAIN_LIT_POS.y) + 0.5 * max(u_terrainTessParams1.z, u_terrainTessParams1.w);
+	if (liveBound <= 0.0 && (!terrainWetPresent() || terrainPoolLevel(terrainWetnessAt(in_pos.xz), coverN.y) <= 0.0))
+		discard;
 	// The ground under this pixel: the relief height here, centred on the mesh (0.5 = the mesh).
 	const TerrainLayers filmLayers = terrainLayers(TERRAIN_LIT_POS, coverN, fields);
 	const float reliefDepth = terrainReliefDepth(filmLayers);

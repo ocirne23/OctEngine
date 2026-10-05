@@ -26,6 +26,7 @@ param(
     [switch]$Server,          # windowed listen server (--server --port $Port): the networking code is live
     [int]$Port = 27999,       # not the default 27888, so a manually running instance keeps its port
     [switch]$VSync,
+    [switch]$Fullscreen,      # --fullscreen: borderless desktop-size window, editor panels hidden (GPU work at full resolution)
     [switch]$Workers,       # one tree per worker instead of the merged one
     [switch]$NoBuild,
     [int]$TimeoutSec = 300,
@@ -55,6 +56,7 @@ if (Test-Path $reportPath) { Remove-Item $reportPath -Force }
 $culture = [System.Globalization.CultureInfo]::InvariantCulture # "10.5", never "10,5" on a Dutch locale
 $argList = @("--profile-after", $After.ToString($culture), "--profile-frames", $Frames, "--profile-out", $Out, "--quit-after", $QuitAfter.ToString($culture))
 if (-not $VSync) { $argList += "--no-vsync" }
+if ($Fullscreen) { $argList += "--fullscreen" }
 if ($Workers) { $argList += "--profile-workers" }
 if ($Game -and $Scenario -ne "") { $argList += @("--scenario", $Scenario, "--scenario-at", $ScenarioAt.ToString($culture)) }
 if ($Game) { $argList += "--game" }

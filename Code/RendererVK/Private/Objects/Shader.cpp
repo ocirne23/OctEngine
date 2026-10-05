@@ -196,6 +196,8 @@ static oc::string buildLayoutPreamble()
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement
     def("PIPELINE_IDX_TERRAIN_LIT", (uint32)EPipelineIndex::TerrainLit, "u"); // the cull emits the terrain overlay for these
     def("PIPELINE_IDX_TERRAIN_OVERLAY", (uint32)EPipelineIndex::TerrainOverlay, "u");
+    def("PIPELINE_IDX_SKY", (uint32)EPipelineIndex::Sky, "u"); // the cull routes these into the sky list
+    def("MAX_SKY_DRAWS", MAX_SKY_DRAWS, "u");
     def("PIPELINE_TRANSPARENT_MASK", PIPELINE_TRANSPARENT_MASK, "u"); // the cull's sequence routing (Layout.ixx)
     def("MOTION_BLUR_TILE", MOTION_BLUR_TILE);
     def("MOTION_BLUR_SUBTILE", MOTION_BLUR_SUBTILE);

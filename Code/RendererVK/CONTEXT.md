@@ -662,6 +662,24 @@ take `min` with the shadow term.
 `Terrain march bias`, which is also the self-shadow bias. **Deterministic — no jitter, no temporal
 integration.**
 
+## Sun shadow draw: what it costs (measured 2026-10-05, sandbox 1440p, trees off)
+
+The cascades are ONE MULTIVIEW pass over ONE caster list (the cull packs each caster's cascade mask; the VS makes
+the triangles of the other cascades degenerate). Shadow draw ~0.37 ms is nearly all TERRAIN (no terrain casters:
+0.015 ms); the trees add ~0.15 ms. With every terrain triangle made degenerate it still cost 0.26 ms: the pass is
+VERTEX-bound, not raster-bound.
+
+* **Tried and REVERTED: one draw list + one single-view pass per cascade** (the cull emitting each caster into each
+  cascade's region, plain indexed indirect draws). Shadow draw 0.37 -> 0.43 ms and the cull 0.04 -> 0.08 ms: the
+  multiview pass does NOT pay the vertex work once per view - on this hardware the views share it - so the
+  per-cascade lists only multiplied it.
+* No effect either: "Caster pad" 4000 -> 500 m, and dropping terrain chunks from the coarser cascades where a finer
+  one covers them (the masks change, the vertex work does not); and the chunk indices in column strips of 8 or 16
+  quads instead of row-major (TerrainGenerator; better post-transform reuse) - Shadow draw and Static meshes the same,
+  so vertex reuse is not the limit either.
+* What is left: fewer terrain vertices into the pass (a coarser shadow LOD - a visual trade), or caching the static
+  casters' cascades.
+
 ## Aerial perspective ("Fog/Aerial perspective" tweaks, 2026-10-05)
 
 The blue haze on distant geometry: the SKY'S OWN Rayleigh + Mie + ozone atmosphere (atmosphere.inc.glsl) between the
@@ -670,10 +688,14 @@ ground, so tinting it turned the near valley mist blue and still never matched t
 
 * **The LUT** (`aerial_lut.cs.glsl`, pass 3 of `VolumetricFogPipeline::record`, so it exists only while the fog
   records - fog on AND RT on): `AERIAL_LUT_X x Y x Z` (64 x 36 x 32, Layout.ixx) RGBA16F per frame slot over the
-  CENTRE view's frustum. One thread per column marches its ray (2 steps per slice) and writes every slice: rgb = the
-  in-scatter (sun + the sky-radiance light), a = the view ray's MEAN transmittance (the apply's blend is scalar, so
-  the scene behind dims grey; the blue is all in-scatter). Slice z holds the value at its far edge,
-  `t = maxDist * ((z + 1) / Z)^2`.
+  CENTRE view's frustum. ONE WORKGROUP PER COLUMN, one lane per slice (2 steps each), and every slice written: rgb =
+  the in-scatter (sun + the sky-radiance light), a = the view ray's MEAN transmittance (the apply's blend is scalar,
+  so the scene behind dims grey; the blue is all in-scatter). Slice z holds the value at its far edge,
+  `t = maxDist * ((z + 1) / Z)^2`. **A slice is a PREFIX SUM** (2026-10-05): every step's contribution is
+  independent (the view optical depth is closed-form, `atmosRayOD`), so each lane marches its own slice and a
+  `subgroupInclusiveAdd` adds the slices in front. The workgroup IS one subgroup: `AERIAL_LUT_Z` = 32 = the warp. (One
+  thread per column marching all 64 steps was 2304 threads on the whole GPU - latency-bound: Volumetric fog 0.28 ->
+  0.175 ms; the shader is 82 registers now, 73728 threads.)
 * **Matched to sky.fs.glsl:** observer at the camera altitude along `u_skyUp`, the scatter boost, the eclipse
   saturation curve on the sun part. A level ray far out goes to the horizon sky's own colour. Each step's sun is
   cloud-shadowed (`cloudSunTransmittanceBilinear`; past the far cascade, the layer's mean). No jitter: no temporal
@@ -991,7 +1013,9 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   ONE texel of every 2x2 block (rotating phase, the shadow map's order; `CloudPipeline::SKY_UPDATE_FRAMES` = 4,
   so the CPU's dt spans 4 frames), and only the UPPER hemisphere is dispatched (rows [0, H/2); the lower half
   stays "no cloud" from the clear). 4096 threads cannot fill the GPU, so the pass is now bound by its longest
-  ray's serial chain, not its thread count. **The observer
+  ray's serial chain, not its thread count - so `recordSky` ends WITHOUT a barrier: the sky-map bake's input barrier
+  (`GIProbePipeline::recordSkyMap`, compute writes -> compute sampled reads) orders it before its one reader, and the
+  GI prep's compute in between (the TLAS instance write) runs alongside it (~0.01 ms, 2026-10-05). **The observer
   stands on the GROUND under the camera** (`ATMOS_OBSERVE_HEIGHT`), not at the camera: every reader of the
   sky map sits under the clouds, even while the camera flies above them. The ambient reads the sky map's
   CLEAR layer from LAST frame (no feedback loop through the clouds' own image). **The clear layer (2) holds per-frame
@@ -1314,6 +1338,23 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   such a column lies 2+ columns from any density and all 4 `densityAtColumns` taps would read 0 (exact, not an
   approximation - keep the ring if the floor pass changes). It sits in the step formula and the sample's
   `hasFloor ?` - as a branch of its own it cost the march 8 registers (56 → 64, measured 2026-10-02).
+* **THE MAX-FLOOR SKIP** (2026-10-05; `tree_volume_floor_max.cs`, the bake's last step - after the far columns, the last
+  floor writes): the BACK floor -> the highest floor per block of `TV_FLOOR_MAX_BLOCK`² (16²) columns (R32F
+  `m_floorBlock`), then that DILATED by one block each way (the angle wraps; past the ring's ends nothing) into
+  `m_floorMax[back]` (front / back like the floor; march binding 12). A column without a floor counts as
+  `TV_FLOOR_MAX_NONE` - it holds no density. In the march, a point higher than its block's value + `Far height` lies
+  above every tree within one block in every direction, at least `r x skipReach` away (`min(sin(16 x 2pi / angularRes),
+  1 - exp(-16 x logSpan / radialRes))`: the block's tangential width as a chord, or the inner neighbour block's radial
+  depth), so the ray steps that far (a descending ray at most down to that height) before the floor read - only when
+  that beats the regular step (`skip > cell`). Sky rays, the air over the canopy and treeless land take ~4x longer steps
+  than the 4-cell cap of the old above-the-layer skip. Exact (it never steps over density). The grid is RG32F: y =
+  **AHEAD**, the highest floor of the block's row and every row farther out within `TV_FLOOR_AHEAD_SECTORS` (4) blocks
+  each way - a RISING ray above it + `Far height` ENDS. Valid while the ray moves outward (`dot(rel, dir.xz) >= 0`: past
+  its closest approach to the bake centre, r only grows) and its polar angle cannot leave those sectors: from radius r
+  a straight ray turns by at most asin(d / r), d <= the camera's distance from the centre, so the test needs
+  `d < r x sin(4 blocks)` (85 m at r = 436 m). Measured (sandbox, 1440p): Far trees 0.96 -> 0.39..0.53 ms (the skip)
+  -> 0.34 ms (+ the end); the march stays at 72 registers (re-deriving the pixel-skip block's pixels after the march
+  instead of holding them: still 72, reverted).
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
@@ -1990,6 +2031,14 @@ Scene opaque, nearly all with 0 instances.
   registered mesh count) is the slot count it walks.
 * Measured (sandbox, RelWithDebInfo): Static meshes 1.621 → 1.569 ms, GPU frame 3.075 → 3.019 ms (3-4 runs
   each, no overlap); the main cull + compaction 15 µs (17 µs before). Shadow draw unchanged (~0.36 ms).
+* **THE SKY LIST** (2026-10-05; main cull binding 23, `IndirectCullComputePipeline::getSkyCommandBuffer`): a Sky-variant
+  instance takes its DGC slot with `indexCount` 0 (as the tessellated ground) and appends ONE plain draw (count + up to
+  `RendererVKLayout::MAX_SKY_DRAWS` VkDrawIndexedIndirectCommands, not compacted; the count is cleared before the
+  cull). `StaticMeshGraphicsPipeline::record` draws it after the opaque execute, the tessellated ground, the grass and
+  the film - after every depth writer - so early depth rejects each sky pixel the scene covers. In mesh-slot order the
+  scene's sky sphere could draw first and run its atmosphere march under the whole terrain; in the sandbox it did not
+  (no measurable change, 2026-10-05: the sky shader costs ~0.17 ms at 1440p on its own pixels), but slot order is
+  arbitrary (slot reuse), so the order is now fixed.
 
 ---
 
@@ -2600,7 +2649,9 @@ the sand, so the two can never disagree.
   tessellated (also over tessellated chunks): the terrain VS compiled with `TERRAIN_OVERLAY_PASS` lifts it
   to its water level (see "The SURFACE" above). The pipeline's terrain define loops (lit debug, `LIT_RT_*`,
   `TERRAIN_POM`) match both FS paths (`isTerrainFragment`). Depth test GREATER_OR_EQUAL / write off,
-  `early_fragment_tests`, uncovered pixels discard, and the FS composites
+  `early_fragment_tests`, uncovered pixels discard (DRY pixels EARLY, 2026-10-05: before the layer walk and the relief
+  taps, from the raw wetness's pool level and the live ocean depth at the deepest relief - an exact bound; Static
+  meshes -0.02 ms in the sandbox), and the FS composites
   DUAL-SOURCE (`PipelineVariant::dualSourceBlend`: out = K + ground * factor per channel, the film being
   linear in the ground colour) - it never reads the scene colour. Both passes read the same mask
   (`terrainWetMask`). The overlay resolves its own sun visibility: ONE hard shadow tap (one ray with the RT

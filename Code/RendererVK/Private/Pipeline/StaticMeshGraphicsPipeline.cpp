@@ -999,6 +999,12 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     }
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);
+    // The SKY after every depth writer of the scene (the opaque execute, the tessellated ground, the grass): early depth
+    // then rejects each pixel the scene covers. In the DGC sequence it drew in mesh-slot order - the scene's sky sphere
+    // FIRST - and its atmosphere march ran under the whole terrain.
+    bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
+    vkCommandBuffer.drawIndexedIndirectCount(params.skyCommandBuffer.getBuffer(), RendererVKLayout::SKY_DRAWS_OFFSET,
+        params.skyCommandBuffer.getBuffer(), 0, RendererVKLayout::MAX_SKY_DRAWS, RendererVKLayout::SKY_DRAW_STRIDE);
     // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
     // its own (the transparent family's lowest variant).
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());

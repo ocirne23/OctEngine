@@ -76,6 +76,7 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
         else if (arg == "--headless")                     o.headless = true;
         else if (arg == "--game")                         o.gameMode = true;
         else if (arg == "--coop")                         o.coopMode = true;
+        else if (arg == "--fullscreen")                   {} // main reads it itself, before the window exists
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + oc::string(arg));
     }

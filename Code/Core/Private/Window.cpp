@@ -19,17 +19,17 @@ Window::~Window()
     m_windowHandle = nullptr;
 }
 
-bool Window::initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size)
+bool Window::initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size, bool fullscreen)
 {
     ProfileScope scope("Window::initialize", EProfileCategory::Core);
     (void)pos;
     m_running.store(true, oc::memory_order_relaxed);
-    m_thread = std::thread(&Window::threadMain, this, oc::string(windowTitle), size);
+    m_thread = std::thread(&Window::threadMain, this, oc::string(windowTitle), size, fullscreen);
     m_ready.wait(false, oc::memory_order_acquire); // window created (or creation failed)
     return m_windowHandle != nullptr;
 }
 
-void Window::threadMain(oc::string title, glm::ivec2 size)
+void Window::threadMain(oc::string title, glm::ivec2 size, bool fullscreen)
 {
     // ProfileScopes run here (the pump marker, helped jobs), so register first thing.
     Globals::profiler.registerThread("Window", Profiler::SORT_KEY_BACKGROUND);
@@ -39,7 +39,8 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
     // this thread the legal owner of the pump, the window, and every window-affine SDL call.
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
         printf("SDL_Init Error: %s\n", SDL_GetError());
-    m_windowHandle = SDL_CreateWindow(title.c_str(), size.x, size.y, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+    // SDL3: FULLSCREEN with no display mode set = borderless at the desktop size.
+    m_windowHandle = SDL_CreateWindow(title.c_str(), size.x, size.y, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (fullscreen ? SDL_WINDOW_FULLSCREEN : 0u));
     if (m_windowHandle == nullptr)
         printf("SDL_CreateWindow Error: %s\n", SDL_GetError());
     else

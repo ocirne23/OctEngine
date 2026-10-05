@@ -770,15 +770,9 @@ void CloudPipeline::recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buf
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     // One thread per 2x2 block of the UPPER hemisphere (rows [0, H/2)), per layer (camera observer, GI observers).
     cmd.dispatch((GIProbePipeline::SKY_MAP_WIDTH / 2 + 7) / 8, (GIProbePipeline::SKY_MAP_HEIGHT / 4 + 7) / 8, SKY_LAYERS);
-
-    // sky clouds -> the sky-map bake (compute, in the GI secondary)
-    vk::MemoryBarrier2 toSkyMap{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toSkyMap });
+    // NO barrier here: the sky-map bake's own input barrier (GIProbePipeline::recordSkyMap: compute writes -> compute
+    // sampled reads) orders this pass before its one reader, and the GI prep's compute between the two (the TLAS
+    // instance write) overlaps this latency-bound pass.
 }
 
 void CloudPipeline::recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const ApplyParams& params)

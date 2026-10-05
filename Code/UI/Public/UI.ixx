@@ -119,6 +119,7 @@ public:
     // main() polls takeMainMenuAction() after the post-update join and deactivates on success.
     void setMainMenuActive(bool active) { m_mainMenu.setActive(active); }
     bool isMainMenuActive() const { return m_mainMenu.isActive(); }
+    void setEditorPanels(bool enabled) { m_mainMenu.setEditorPanels(enabled); } // the escape menu's editor "Debug panels"
     void setMainMenuHostEndpoint(oc::string endpoint) { m_mainMenu.setHostEndpoint(oc::move(endpoint)); }
     void setMainMenuHostNote(oc::string note) { m_mainMenu.setHostNote(oc::move(note)); }
     void setMainMenuStatus(oc::string status) { m_mainMenu.setStatus(oc::move(status)); } // front-page line (disconnect reasons)

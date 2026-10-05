@@ -490,13 +490,22 @@ what gets measured.
 ```
 Tools/profile.ps1 [-Config RelWithDebInfo] [-After 10] [-QuitAfter After+0.5] [-Frames 256]
                   [-Out Local/profile.txt] [-Game] [-Scenario ...] [-ScenarioAt 1]
-                  [-Server] [-Port 27999] [-VSync] [-Workers] [-NoBuild]
+                  [-Server] [-Port 27999] [-VSync] [-Fullscreen] [-Workers] [-NoBuild]
                   [-Tweak "..."] [-Tweaks Scenarios/cpu-profile.tweaks]
                   [-Show 80] [-TimeoutSec 300] [-AppArgs "..."]
 ```
 
 Builds App, runs it, waits for the clean exit and prints the report head. **THE loop for Claude to
 measure → change → re-measure without looking at the screen.** It always overrides `Time/Max FPS=0`.
+
+* **GPU work: `-Fullscreen`** (App `--fullscreen`: a borderless desktop-size window, the editor panels hidden) -
+  the user's display is 1440p, and the default 1920x1080 window with docked panels renders a far smaller viewport.
+  **Sandbox GPU timings: `-Fullscreen -After 60`** - in fullscreen the terrain + tree streaming is still running at
+  30 s (TreeWorld::placeChunk, terrainUpload, ~2 ms of BLAS builds).
+* **Run-to-run noise is large (2026-10-05):** some runs are ~10-40 % slower in EVERY pass (GPU clock state), and the
+  tree-related passes (Static meshes, Far trees, Shadow draw) vary by ~15 % on their own between runs. Run each case
+  twice and compare the minimum; for terrain / sky work `-Tweak "Trees/Enabled=0"` removes the tree noise. Only ONE
+  `-Tweak` works through `powershell -File` (an array does not parse) - more overrides go in a `-Tweaks` file.
 
 Seconds are formatted InvariantCulture — a Dutch locale would print "10,5".
 

@@ -345,7 +345,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         commandBuffer.cmdUpdateDescriptorSets(m_aerialPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_aerialPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_aerialPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-        cmd.dispatch((RendererVKLayout::AERIAL_LUT_X + 7) / 8, (RendererVKLayout::AERIAL_LUT_Y + 7) / 8, 1);
+        cmd.dispatch(RendererVKLayout::AERIAL_LUT_X, RendererVKLayout::AERIAL_LUT_Y, 1); // a workgroup per column, a lane per slice
     }
 
     // integrated grid + aerial LUT -> fog apply fragment reads in the scene-color pass

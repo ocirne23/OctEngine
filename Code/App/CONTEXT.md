@@ -81,6 +81,7 @@ and `physics.setWaterSurface`.
 | `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
 | `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. **Either unattended flag also installs `App.UnattendedRun`'s failure handling**: no modal dialogs (assert / abort / OS fault box — the run FAILS instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the debugger break. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
+| `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Parsed in `main` itself, before the window exists. |
 
 **The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
 `--game`, not an unattended run (`--profile-after` or `--quit-after`), and no `--scenario`.

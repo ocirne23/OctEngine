@@ -1051,6 +1051,13 @@ export namespace RendererVKLayout
         | (1u << (uint32)EPipelineIndex::UnlitTransparent)
         | (1u << (uint32)EPipelineIndex::Ocean) | (1u << (uint32)EPipelineIndex::TerrainOverlay);
     constexpr bool isTransparentPipeline(uint32 pipelineIdx) { return ((PIPELINE_TRANSPARENT_MASK >> pipelineIdx) & 1u) != 0; }
+    // The SKY list (the main cull's binding 23): the Sky variant's instances are drawn AFTER the opaque execute and the
+    // tessellated ground, so early depth rejects every sky pixel the scene covers (in mesh-slot order the scene's sky
+    // sphere drew first, and its atmosphere march ran under the whole terrain). One draw per sky instance; past this
+    // many the rest are dropped.
+    constexpr uint32 MAX_SKY_DRAWS = 8;
+    constexpr uint32 SKY_DRAWS_OFFSET = sizeof(uint32);    // the buffer: the draw count, then the draws
+    constexpr uint32 SKY_DRAW_STRIDE = 5 * sizeof(uint32); // VkDrawIndexedIndirectCommand (the cull's SkyDraw)
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays
@@ -1103,7 +1110,7 @@ export namespace RendererVKLayout
     // centre view's frustum, Z = distance along the ray, quadratic out to "Fog/Aerial perspective/Max distance".
     constexpr uint32 AERIAL_LUT_X = 64;
     constexpr uint32 AERIAL_LUT_Y = 36;
-    constexpr uint32 AERIAL_LUT_Z = 32;
+    constexpr uint32 AERIAL_LUT_Z = 32; // = the shader's workgroup, ONE subgroup (its prefix sum): keep it at the warp size
     constexpr uint32 MAX_FOG_VOLUMES = 256;
     constexpr uint32 FOG_TERRAIN_RES = 512;     // fog terrain height map resolution per cascade (CPU-baked around
                                                 // the camera; setFogTerrainHeightMap expects CASCADES*RES*RES floats)

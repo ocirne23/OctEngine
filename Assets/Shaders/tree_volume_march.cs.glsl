@@ -38,6 +38,7 @@ layout (binding = 6, r16f) uniform writeonly image2D u_outDepth; // the weighted
 #endif
 layout (binding = 7, r32ui) uniform readonly uimage2D u_floor;   // the columns' tree floors (tree_volume.inc.glsl)
 layout (binding = 10) uniform sampler2DArray u_skyMap;           // GI's sky bake (atmosphere.inc.glsl): the canopy's sky light
+layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-floor grid: x dilated, y ahead (tree_volume_floor_max.cs.glsl)
 
 layout (push_constant, scalar) uniform Push
 {
@@ -307,6 +308,20 @@ void marchAt(ivec2 px)
     // steps are measured from the camera, so they slide through the volume as it moves; jittering only the first
     // sample left every later one on that sliding grid - blobs sampled differently each frame, "shaking".
     t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - pc.vol.centre), pc.vol) * pc.stepScale, 0.25);
+    // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs.glsl): above its value + the volume's height, a point is
+    // above every tree within one block in every direction - at least r x skipReach away (the block's tangential width
+    // as a chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a
+    // descending one at most down to that height). Sky rays, the air over the canopy and treeless land then take ~4x
+    // longer steps than the 4-cell cap below, and skip the floor + height map reads.
+    const float skipReach = min(sin(float(TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc.vol.angularRes)),
+        1.0 - exp(-float(TV_FLOOR_MAX_BLOCK) * tvLogSpan(pc.vol) / float(pc.vol.radialRes)));
+    // THE END for a RISING ray: above the grid's AHEAD value (+ the height) - the highest floor of this block's row and
+    // every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way - no tree lies ahead. Valid while the ray moves
+    // OUTWARD (past its closest approach to the bake centre, so r only grows) and its angle cannot leave those sectors:
+    // from radius r on, a straight ray's polar angle turns by at most asin(d / r), d = its distance from the centre
+    // (at most the camera's) - so while d < r x aheadSin.
+    const float aheadSin = sin(float(TV_FLOOR_AHEAD_SECTORS * TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc.vol.angularRes));
+    const float camCentre = length(rel);
     for (uint i = 0u; i < pc.maxSteps && t < tEnd; ++i)
     {
         const vec3 p = u_viewPos + dir * t;
@@ -315,6 +330,21 @@ void marchAt(ivec2 px)
         const float r = length(rel);
         const vec2 uv = polarUv(rel, r);
         const float cell = max(r * tvLogSpan(pc.vol) / float(pc.vol.radialRes), r * TV_TWO_PI / float(pc.vol.angularRes)); // tvCellSize
+        const ivec2 block = ivec2(tvWrapAngle(int(floor(uv.x * float(pc.vol.angularRes))), int(pc.vol.angularRes)),
+            clamp(int(uv.y * float(pc.vol.radialRes)), 0, int(pc.vol.radialRes) - 1)) / TV_FLOOR_MAX_BLOCK;
+        const vec2 floorMax = imageLoad(u_floorMax, block).xy;
+        if (dir.y >= 0.0 && p.y > floorMax.y + pc.vol.height && camCentre < r * aheadSin && dot(rel, dir.xz) >= 0.0)
+            break;
+        const float clearance = p.y - floorMax.x - pc.vol.height;
+        if (clearance > 0.0)
+        {
+            const float skip = dir.y >= 0.0 ? r * skipReach : min(r * skipReach, clearance / -dir.y);
+            if (skip > cell)
+            {
+                t += skip;
+                continue;
+            }
+        }
         float floorY;
         const bool hasFloor = floorAtUv(uv, floorY);
         // A column WITHOUT a tree floor: the splat floors every tree's footprint PLUS one ring, so such a column lies

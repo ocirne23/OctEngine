@@ -13,6 +13,16 @@ namespace
     constexpr vk::Format DENSITY_FORMAT = vk::Format::eR16Sfloat;
     constexpr vk::Format COLOUR_FORMAT = vk::Format::eR8G8B8A8Unorm;
     constexpr vk::Format OUT_FORMAT = vk::Format::eR16G16B16A16Sfloat;
+    constexpr vk::Format FLOOR_BLOCK_FORMAT = vk::Format::eR32Sfloat;  // the block max
+    constexpr vk::Format FLOOR_MAX_FORMAT = vk::Format::eR32G32Sfloat; // the grid: dilated, ahead
+    constexpr uint32 FLOOR_MAX_BLOCK = 16; // tree_volume.inc.glsl's TV_FLOOR_MAX_BLOCK
+
+    // tree_volume_floor_max.cs.glsl's push block.
+    struct FloorMaxPC
+    {
+        glm::uvec2 srcSize;
+        glm::uvec2 dstSize;
+    };
 
     // Mirrors TreeVolumeParams (tree_volume.inc.glsl).
     struct VolumeParamsGpu
@@ -265,6 +275,23 @@ void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(FloorSmoothPC) });
 }
 
+void TreeVolumePipeline::buildFloorMaxLayout(ComputePipelineLayout& layout, bool dilate)
+{
+    layout.computeShaderDebugFilePath = "Shaders/tree_volume_floor_max.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    if (dilate)
+        layout.defines.push_back(ShaderDefine{ "TREE_FLOOR_MAX_DILATE", "1" });
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(binding(0, vk::DescriptorType::eStorageImage)); // the floor / the block max
+    b.push_back(binding(1, vk::DescriptorType::eStorageImage)); // the block max / the dilated grid
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(FloorMaxPC) });
+}
+
+vk::Extent3D TreeVolumePipeline::floorMaxExtent() const
+{
+    return { (m_angularRes + FLOOR_MAX_BLOCK - 1) / FLOOR_MAX_BLOCK, (m_radialRes + FLOOR_MAX_BLOCK - 1) / FLOOR_MAX_BLOCK, 1 };
+}
+
 void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_records.cs.glsl";
@@ -313,6 +340,7 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(9, vk::DescriptorType::eStorageImage));         // ... and its distance
     b.push_back(binding(10, vk::DescriptorType::eCombinedImageSampler)); // GI's sky map (the canopy's sky light)
     b.push_back(binding(11, vk::DescriptorType::eCombinedImageSampler)); // the cloud shadow map
+    b.push_back(binding(12, vk::DescriptorType::eStorageImage));         // the max-floor grid
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(MarchPC) });
 }
 
@@ -517,7 +545,9 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     {
         destroyImage(m_colour[i]);
         destroyImage(m_floor[i]);
+        destroyImage(m_floorMax[i]);
     }
+    destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
     destroyImage(m_farAmount);
     destroyImage(m_farType);
@@ -534,13 +564,16 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
         createImage(vk::ImageType::e2D, COLOUR_FORMAT, { angularRes, radialRes, 1 }, storageClear | vk::ImageUsageFlagBits::eSampled,
             m_colour[i].image, m_colour[i].memory, m_colour[i].view, "TreeVolume.colour");
         createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floor[i].image, m_floor[i].memory, m_floor[i].view, "TreeVolume.floor");
+        createImage(vk::ImageType::e2D, FLOOR_MAX_FORMAT, floorMaxExtent(), storageClear, m_floorMax[i].image, m_floorMax[i].memory, m_floorMax[i].view, "TreeVolume.floorMax");
     }
+    createImage(vk::ImageType::e2D, FLOOR_BLOCK_FORMAT, floorMaxExtent(), storageClear, m_floorBlock.image, m_floorBlock.memory, m_floorBlock.view, "TreeVolume.floorBlock");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floorCover.image, m_floorCover.memory, m_floorCover.view, "TreeVolume.floorCover");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farAmount.image, m_farAmount.memory, m_farAmount.view, "TreeVolume.farAmount");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farType.image, m_farType.memory, m_farType.view, "TreeVolume.farType");
     const vk::Image images[] = { m_accum.image, m_density.image, m_colour[0].image, m_colour[1].image, m_floor[0].image, m_floor[1].image,
-        m_floorCover.image, m_farAmount.image, m_farType.image };
-    initGeneral(images, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }); // zero bits: also 0u for R32UI
+        m_floorCover.image, m_farAmount.image, m_farType.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
+    initGeneral(images, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }); // zero bits: also 0u for R32UI (an empty volume:
+                                                                                                 // a max floor of 0 skips nothing that exists)
     m_baked = false;
 }
 
@@ -577,7 +610,9 @@ TreeVolumePipeline::~TreeVolumePipeline()
     {
         destroyImage(m_colour[i]);
         destroyImage(m_floor[i]);
+        destroyImage(m_floorMax[i]);
     }
+    destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
     destroyImage(m_farAmount);
     destroyImage(m_farType);
@@ -608,10 +643,14 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
     ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout); m_floorSmoothPipeline.initialize(smoothLayout);
     ComputePipelineLayout recordsLayout; buildRecordsLayout(recordsLayout); m_recordsPipeline.initialize(recordsLayout);
     ComputePipelineLayout farLayout;     buildFarLayout(farLayout);         m_farPipeline.initialize(farLayout);
+    ComputePipelineLayout maxLayout;     buildFloorMaxLayout(maxLayout, false); m_floorMaxPipeline.initialize(maxLayout);
+    ComputePipelineLayout dilateLayout;  buildFloorMaxLayout(dilateLayout, true); m_floorDilatePipeline.initialize(dilateLayout);
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
         m_recordsSets[f].initialize(m_recordsPipeline.getDescriptorSetLayout(), "TreeVolume.records");
         m_farSets[f].initialize(m_farPipeline.getDescriptorSetLayout(), "TreeVolume.far");
+        m_floorMaxSets[f * 2].initialize(m_floorMaxPipeline.getDescriptorSetLayout(), "TreeVolume.floorMax");
+        m_floorMaxSets[f * 2 + 1].initialize(m_floorDilatePipeline.getDescriptorSetLayout(), "TreeVolume.floorDilate");
     }
     for (DescriptorSet& set : m_floorSmoothSets)
         set.initialize(m_floorSmoothPipeline.getDescriptorSetLayout(), "TreeVolume.floorSmooth");
@@ -665,7 +704,11 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     ComputePipelineLayout farLayout;     buildFarLayout(farLayout);
     ComputePipelineLayout marchLayout;   buildMarchLayout(marchLayout, false, 1, m_plainBakedSkip);
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);
+    ComputePipelineLayout maxLayout;     buildFloorMaxLayout(maxLayout, false);
+    ComputePipelineLayout dilateLayout;  buildFloorMaxLayout(dilateLayout, true);
     bool ok = m_floorCoverPipeline.reloadShaders(coverLayout) && recordsOk;
+    ok = m_floorMaxPipeline.reloadShaders(maxLayout) && ok;
+    ok = m_floorDilatePipeline.reloadShaders(dilateLayout) && ok;
     ok = m_recordsPipeline.reloadShaders(recordsLayout) && ok;
     ok = m_farPipeline.reloadShaders(farLayout) && ok;
     ok = m_floorSmoothPipeline.reloadShaders(smoothLayout) && ok;
@@ -989,6 +1032,29 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_resolvePipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, m_slices);
     }
+    {
+        // The MAX-FLOOR GRID from the finished back floor (tree_volume_floor_max.cs: the block max, then its dilation) -
+        // after the far columns, the last floor writes.
+        const vk::Extent3D extent = floorMaxExtent();
+        const FloorMaxPC maxPc{ .srcSize = glm::uvec2(m_angularRes, m_radialRes), .dstSize = glm::uvec2(extent.width, extent.height) };
+        const FloorMaxPC dilatePc{ .srcSize = glm::uvec2(extent.width, extent.height), .dstSize = glm::uvec2(extent.width, extent.height) };
+        for (uint32 pass = 0; pass < 2; ++pass)
+        {
+            ComputePipeline& pipeline = pass == 0 ? m_floorMaxPipeline : m_floorDilatePipeline;
+            const vk::DescriptorSet set = m_floorMaxSets[frameIdx * 2 + pass].getDescriptorSet();
+            oc::array<DescriptorSetUpdateInfo, 2> updates{
+                DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(pass == 0 ? m_floor[back].view : m_floorBlock.view) } },
+                DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(pass == 0 ? m_floorBlock.view : m_floorMax[back].view) } },
+            };
+            writeSet(set, updates);
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline.getPipeline());
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+            cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(FloorMaxPC), pass == 0 ? &maxPc : &dilatePc);
+            cmd.dispatch((extent.width + 7) / 8, (extent.height + 7) / 8, 1);
+            if (pass == 0)
+                cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // block max -> dilate
+        }
+    }
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &splatToResolve }); // resolve -> march
     m_front = back;
     m_centre = job.centre;
@@ -1104,13 +1170,14 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         .fullSize = glm::uvec2(m_width, m_height),
     };
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 12> updates{
+    oc::array<DescriptorSetUpdateInfo, 13> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorMax[m_front].view) } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_density.view) } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_colour[m_front].view) } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(marchColour.view) } },

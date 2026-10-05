@@ -139,6 +139,23 @@ layout (binding = 17, std430) buffer OutTerrainFilmCommandBuffer
 {
     OutIndirectCommand out_terrainFilmCommands[];
 };
+// The SKY list (RendererVKLayout::MAX_SKY_DRAWS): one plain indexed indirect draw per Sky-variant instance, drawn after
+// the opaque execute and the tessellated ground - so early depth rejects every sky pixel the scene covers. (In the
+// DGC sequence the sky draws in mesh-slot order: the scene's sky sphere came first, and its atmosphere march ran
+// under the whole terrain.) The count is cleared to 0 before the cull.
+struct SkyDraw
+{
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int vertexOffset;
+    uint firstInstance;
+};
+layout (binding = 23, std430) buffer OutSkyCommandBuffer
+{
+    uint out_skyCount;
+    SkyDraw out_skyDraws[];
+};
 // LAST frame's node transforms + stamped pass masks (InstanceStream::recordPrevCopy): the motion vectors.
 layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
 {
@@ -310,11 +327,18 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             // the VR eyes' offset from the centre view.
             const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT)
                 && distance(centerPos, u_views[VIEW_CENTER].viewPos.xyz) - radius < u_terrainTessParams1.y + 1.0;
-            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
+            // The SKY: its own list (binding 23), drawn late; its DGC entry draws nothing, as the tessellated ground's.
+            const bool sky = pipelineIdx == uint16_t(PIPELINE_IDX_SKY);            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
+            if (sky)
+            {
+                const uint s = atomicAdd(out_skyCount, 1u);
+                if (s < MAX_SKY_DRAWS)
+                    out_skyDraws[s] = SkyDraw(drawMeshInfo.indexCount, 1u, drawMeshInfo.firstIndex, drawMeshInfo.vertexOffset, firstInstance + idx);
+            }
             if (idx == 0)
             {
                 out_indirectCommands[meshIdx].pipelineIndex = pipelineIdx;
-                out_indirectCommands[meshIdx].indexCount    = terrainTess ? 0u : drawMeshInfo.indexCount;
+                out_indirectCommands[meshIdx].indexCount    = terrainTess || sky ? 0u : drawMeshInfo.indexCount;
                 out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_indirectCommands[meshIdx].firstInstance = firstInstance;

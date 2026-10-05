@@ -55,6 +55,8 @@ public:
     Buffer& getTransparentIndirectCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTransparentIndirectCommandBuffer; }
     Buffer& getTerrainTessCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainTessCommandBuffer; }
     Buffer& getTerrainFilmCommandBuffer(uint32 idx) { return m_perFrameData[idx].outTerrainFilmCommandBuffer; }
+    // The SKY list (binding 23; RendererVKLayout::MAX_SKY_DRAWS / SKY_DRAWS_OFFSET / SKY_DRAW_STRIDE).
+    Buffer& getSkyCommandBuffer(uint32 idx) { return m_perFrameData[idx].outSkyCommandBuffer; }
     // The compacted lists' draw counts: [0] opaque, [1] transparent, [2] terrain tess ground, [3] terrain film.
     Buffer& getDrawCountBuffer(uint32 idx) { return m_perFrameData[idx].drawCountBuffer; }
     Buffer& getInstanceIdxBuffer(uint32 idx)      { return m_perFrameData[idx].outMeshInstanceIndexesBuffer; }
@@ -83,6 +85,7 @@ private:
         Buffer outTerrainTessCommandBuffer;         // 16 - tessellated terrain ground (plain indirect draws)
         Buffer outTerrainFilmCommandBuffer;         // 17 - terrain film (plain indirect draws, never tessellated)
         Buffer drawCountBuffer;                     // the four lists' counts after compaction
+        Buffer outSkyCommandBuffer;                 // 23 - the sky list (count + draws; not compacted)
 
         oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };

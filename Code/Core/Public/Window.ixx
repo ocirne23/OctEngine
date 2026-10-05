@@ -34,7 +34,8 @@ public:
     Window& operator=(const Window&) = delete;
     Window& operator=(const Window&&) = delete;
 
-    bool initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size); // spawns the thread, blocks until the window exists
+    // Spawns the thread, blocks until the window exists. fullscreen = borderless at the desktop size (size ignored).
+    bool initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size, bool fullscreen = false);
 
     // -- engine main thread, once per frame --
     void requestPump();                          // kick a pump (timed by the caller: ~a lead before the frame starts)
@@ -69,7 +70,7 @@ public:
 
 private:
 
-    void threadMain(oc::string title, glm::ivec2 size);
+    void threadMain(oc::string title, glm::ivec2 size, bool fullscreen);
     void servePump();
     void queryDisplayRefresh(); // window thread only
 

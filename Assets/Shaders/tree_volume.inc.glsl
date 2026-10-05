@@ -35,6 +35,11 @@ struct TreeVolumeParams
 const float TV_TWO_PI = 6.28318531;
 // The world tree records' mass per column (tree_volume_records.cs -> tree_volume_far.cs): fixed point x this.
 const float TV_AMOUNT_SCALE = 4096.0;
+// The max-floor grid (tree_volume_floor_max.cs.glsl): columns per block side (TreeVolumePipeline's FLOOR_MAX_BLOCK), and
+// the value of a region without any floor.
+const int TV_FLOOR_MAX_BLOCK = 16;
+const float TV_FLOOR_MAX_NONE = -1e30;
+const int TV_FLOOR_AHEAD_SECTORS = 4; // the grid's AHEAD value: blocks each way of the angle it covers
 
 float tvLogSpan(TreeVolumeParams v) { return log(v.rMax / v.rMin); }
 
