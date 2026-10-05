@@ -156,9 +156,6 @@ bool SwapChain::acquireNextImage()
     vk::Result result = vkDevice.waitForFences(1, &syncObjects.inFlight, vk::True, UINT64_MAX);
     if (result != vk::Result::eSuccess)
         assert(false && "Failed to wait for fence");
-    result = vkDevice.resetFences(1, &syncObjects.inFlight);
-    if (result != vk::Result::eSuccess)
-        assert(false && "Failed to reset fence");
 
     constexpr std::chrono::nanoseconds timeout = std::chrono::seconds(10);
     uint32 imageIndex = 0;
@@ -168,13 +165,22 @@ bool SwapChain::acquireNextImage()
     case vk::Result::eSuccess:
         break;
     case vk::Result::eSuboptimalKHR:
-        return false;
+        // The image IS acquired and presentComplete WILL signal: render and present it (the present reports the
+        // suboptimal swapchain and the caller rebuilds then). Dropping it leaked the image and left the semaphore
+        // signaled for its next use.
+        break;
     case vk::Result::eErrorOutOfDateKHR:
-        return false;
+        return false; // nothing acquired: the fence stays SIGNALED (reset below only on success)
     default:
         assert(false && "Failed to acquire next image");
         return false;
     }
+    // Reset only now that this frame WILL submit (and signal it): reset before a failed acquire, the fence stayed
+    // unsignaled with nothing to signal it, and the next frame's wait (UINT64_MAX, above) hung for good whenever the
+    // swapchain was not rebuilt in between (the renderer's resize hold).
+    result = vkDevice.resetFences(1, &syncObjects.inFlight);
+    if (result != vk::Result::eSuccess)
+        assert(false && "Failed to reset fence");
     m_currentImageIdx = imageIndex;
     return true;
 }

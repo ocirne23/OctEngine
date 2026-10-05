@@ -1512,6 +1512,11 @@ The tweak carries `onReRecord`, so toggling rebuilds the descriptors either way.
 DLSS Super Resolution + DLAA, **desktop only; any mode but Off REPLACES TAA** (`taaActive()` = TAA on AND no
 DLSS; `resolveActive()` = either, the old "TAA on" test of the post chain). No frame generation / Reflex.
 
+**Resizes apply on RELEASE** (`setResizeHold`, App's resize hold): while a window-border or ImGui-splitter drag holds
+the left mouse button, the viewport rect and the window size stay the last ones, and an out-of-date swapchain skips
+the frame (`m_swapchainStale`) instead of rebuilding; the one rebuild runs when the hold ends (that frame is skipped
+too: its UBO was built for the old size). A rebuild per frame of the drag recreated the DLSS feature every frame.
+
 * **Optional, never linked** (`RendererVK:Streamline`): `sl.interposer.dll` is signature-checked
   (`sl_security.h`, hence `wintrust` + `crypt32`) and `LoadLibrary`'d from the exe's folder; it loads
   `sl.common.dll`, `sl.dlss.dll` and the model `nvngx_dlss.dll` from there (the App POST_BUILD copy). No DLL,

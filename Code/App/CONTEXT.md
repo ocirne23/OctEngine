@@ -58,6 +58,13 @@ After the loop: `joinPostUpdateJobs()` and `forceSystem.joinMerge()` for the fin
 > **Nothing added between the kicks and the joins may touch the spatial index or renderer frame
 > state.**
 
+**THE RESIZE HOLD** (main.cpp, right before the frame kicks): while the left mouse button is down
+(`SDL_GetGlobalMouseState` - an OS query, so it also sees a window-border drag in Windows' modal sizing loop on
+the window thread), the renderer keeps its sizes - `setFrameView` gets the LAST viewport rect,
+`SDL_EVENT_WINDOW_RESIZED` only sets `windowResizePending`, and `Renderer::setResizeHold` makes an out-of-date
+swapchain skip the frame instead of rebuilding. On release: one `recreateWindowSurface` (or swapchain rebuild) and
+the final viewport rect. A rebuild per frame of the drag recreated the DLSS feature every frame and broke it.
+
 ## Init order
 
 Window (**spawns the WINDOW THREAD**) → `input` → **`jobSystem`** → `registerExternalHelper` +

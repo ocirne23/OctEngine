@@ -954,6 +954,11 @@ void Renderer::updateImGuiTextures()
         if (texture->Status != ImTextureStatus_OK)
         {
             ProfileScope scope("ImGui texture update", EProfileCategory::Renderer);
+            // The backend submits on the RAW graphics queue (vkQueueSubmit): under the queue mutex like every other
+            // queue call. Assumed safe without it (no worker submit in this window), it raced a staging submit from
+            // another thread during window resizes (validation: "VkQueue is simultaneously used") - a raced submit
+            // can be lost, and its fence then never signals.
+            std::lock_guard<std::mutex> queueLock(Globals::device.getGraphicsQueueMutex());
             ImGui_ImplVulkan_UpdateTexture(texture);
         }
 }
@@ -965,6 +970,22 @@ void Renderer::present()
     {
         m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
         m_grassGround.clear(); // one frame only (setGrassGround)
+        Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
+        return;
+    }
+    // The swapchain went out of date during a resize drag: while the hold lasts every frame is skipped BEFORE the
+    // acquire (as when minimized - acquiring on an out-of-date swapchain each frame only fails again); when it ends,
+    // the one rebuild at the final size (GPU idle, fresh sync objects). That frame was built for the old size, so it
+    // is skipped too - as the acquire failure path does.
+    if (m_swapchainStale)
+    {
+        if (!m_resizeHold)
+        {
+            m_swapchainStale = false;
+            recreateSwapchain();
+        }
+        m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
+        m_grassGround.clear();
         Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
         return;
     }
@@ -1157,7 +1178,12 @@ void Renderer::present()
             // it back to the chain instead: the next flush waits it.
             Globals::stagingManager.restoreChainSemaphore(waitSemaphore);
             Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
-            recreateSwapchain();
+            // Held (a resize drag in progress, setResizeHold): no rebuild per frame of the drag - this frame is
+            // skipped (the OS stretches the last image) and the swapchain rebuilds once the hold ends.
+            if (m_resizeHold)
+                m_swapchainStale = true;
+            else
+                recreateSwapchain();
             return;
         }
     }
@@ -1191,7 +1217,10 @@ void Renderer::present()
         ProfileScope profileScope("Queue present", EProfileCategory::Wait);
         if (!m_swapChain.present())
         {
-            recreateSwapchain();
+            if (m_resizeHold)
+                m_swapchainStale = true; // rebuilt once the resize drag ends
+            else
+                recreateSwapchain();
         }
     }
     m_frameSlotWaited = false; // the slot advanced: next frame must wait its own fence first

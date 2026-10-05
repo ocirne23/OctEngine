@@ -67,7 +67,7 @@ int main(int argc, char* argv[])
         window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); },
                            [](bool (*wakeNow)(const void*), const void* user) { Globals::jobSystem.externalHelperWait(wakeNow, user); },
                            [] { Globals::jobSystem.wakeExternalHelper(); });
-        Globals::rendererVK.initialize(window, EValidation::DISABLED, EVr::DISABLED); // DISABLED ENABLED
+        Globals::rendererVK.initialize(window, EValidation::ENABLED, EVr::DISABLED); // DISABLED ENABLED
         Globals::ui.initialize();
         if (fullscreen)
             Globals::ui.setEditorPanels(false);
@@ -104,6 +104,11 @@ int main(int argc, char* argv[])
             Globals::vrInput.initialize(Globals::rendererVK.getVrSession());
     }
 
+    // RESIZE HOLD: while the left mouse button is down - dragging the window border or an ImGui panel splitter - the
+    // renderer keeps its sizes (the last viewport rect, no swapchain / window-surface rebuild) and takes the final size
+    // when the button is released. A rebuild per frame of the drag recreated the DLSS feature every frame and broke it.
+    bool windowResizePending = false;
+    Rect heldViewportRect;
     SystemEventListenerHandle systemEventListener;
     if (headlessServer)
         SetConsoleCtrlHandler([](DWORD) -> BOOL { g_running = false; return TRUE; }, TRUE);
@@ -111,9 +116,9 @@ int main(int argc, char* argv[])
     {
         systemEventListener = Globals::input.addSystemEventListener();
         systemEventListener->onQuit = []() { g_running = false; };
-        systemEventListener->onWindowEvent = [&window](const SDL_WindowEvent& evt)
+        systemEventListener->onWindowEvent = [&windowResizePending](const SDL_WindowEvent& evt)
         {
-            if (evt.type == SDL_EVENT_WINDOW_RESIZED)   Globals::rendererVK.recreateWindowSurface(window);
+            if (evt.type == SDL_EVENT_WINDOW_RESIZED)   windowResizePending = true; // applied once the resize hold ends (main loop)
             if (evt.type == SDL_EVENT_WINDOW_MINIMIZED) Globals::rendererVK.setWindowMinimized(true);
             if (evt.type == SDL_EVENT_WINDOW_MAXIMIZED) Globals::rendererVK.setWindowMinimized(false);
             if (evt.type == SDL_EVENT_WINDOW_RESTORED)  Globals::rendererVK.setWindowMinimized(false);
@@ -266,7 +271,20 @@ int main(int argc, char* argv[])
         {
             Globals::terrain.joinUploads(); // the begin-frame job and the entity pass read the mesh tables it grows
             ProfileScope kickScope("Frame kicks", EProfileCategory::App);
-            Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, Globals::ui.getViewportRect()));
+            // The resize hold (see windowResizePending). The global button state is an OS query: it also sees a drag on
+            // the window border, which runs in Windows' modal sizing loop on the window thread.
+            constexpr uint32 LEFT_BUTTON_MASK = 1u << 0; // SDL_BUTTON_LMASK (a macro: not through the module import)
+            const bool resizeHold = ((uint32)SDL_GetGlobalMouseState(nullptr, nullptr) & LEFT_BUTTON_MASK) != 0;
+            Globals::rendererVK.setResizeHold(resizeHold);
+            if (!resizeHold && windowResizePending)
+            {
+                windowResizePending = false;
+                Globals::rendererVK.recreateWindowSurface(window);
+            }
+            const Rect viewportRect = Globals::ui.getViewportRect();
+            if (!resizeHold || heldViewportRect.getSize().x <= 0 || heldViewportRect.getSize().y <= 0)
+                heldViewportRect = viewportRect;
+            Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, heldViewportRect));
             Globals::rendererVK.kickBeginFrameJob();
         }
         Globals::physics.update(simDeltaSec);

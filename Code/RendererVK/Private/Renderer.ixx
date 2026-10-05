@@ -108,6 +108,11 @@ public:
 
     void reloadShaders();
     void setWindowMinimized(bool minimized);
+    // RESIZE HOLD (App, while the left mouse button is down - a window-border or ImGui-splitter drag): an out-of-date
+    // swapchain does not rebuild per frame of the drag; the frame is skipped and the ONE rebuild runs when the hold
+    // ends (a rebuild per frame recreated the DLSS feature every frame and broke it). The App holds the viewport rect
+    // and the window-resize event the same way.
+    void setResizeHold(bool hold) { m_resizeHold = hold; }
     void recreateWindowSurface(Window& window); // Call on resize
 
     // -- View settings --
@@ -791,6 +796,8 @@ private:
     bool m_initialized = false;
     bool m_frameSlotWaited = false;
     bool m_windowMinimized = false;
+    bool m_resizeHold = false;      // setResizeHold
+    bool m_swapchainStale = false;  // out of date during a hold: rebuild when it ends
     bool m_vsyncEnabled = true;
     glm::vec2 m_prevTaaJitter{ 0.0f };
     

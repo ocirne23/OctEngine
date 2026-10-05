@@ -411,9 +411,9 @@ export struct FarTreeParams
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 15;            // height slices
     float height = 22.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 0.25f;   // x the baked extinction
+    float densityScale = 0.4f;    // x the baked extinction
     float blobShrink = 0.4f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
-    float stepScale = 2.0f;       // march step, x the cell size
+    float stepScale = 1.5f;       // march step, x the cell size
     uint32 maxSteps = 600;
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
