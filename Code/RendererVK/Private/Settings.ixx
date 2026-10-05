@@ -348,8 +348,8 @@ export struct GrassParams
     float rippleSize = 12.0f;      // m
     float swayFrequency = 0.6f;    // Hz
     // All wind movement eases out between these camera distances (m): small far blades moving read as grain.
-    float windFadeStart = 15.0f;
-    float windFadeEnd = 25.0f;
+    float windFadeStart = 100.0f;
+    float windFadeEnd = 200.0f;
     float curvature = 0.4f;        // the blades' own lean, in blade heights (random direction)
     float clumpSize = 5.0f;        // m: the size of the clumps and bare spots
     float patchiness = 0.6f;       // 0 = even cover, 1 = clumps with bare ground between

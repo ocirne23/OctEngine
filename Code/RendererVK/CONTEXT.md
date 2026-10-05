@@ -1112,7 +1112,7 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   (root normal -> the upper-half chord's normal, edge tilt x (1 - t)), which every LOD interpolates the same. The
   curve normal (horizontal tangent at the tip) spread over the single-triangle LOD made a brightness step at its
   switch. Motion vectors: the same blade at LAST frame's time (`u_grassParams5.w`). The wind
-  (not the lean) eases out between `Wind/Fade start` and `Fade end` (15 / 25 m): far blades moving read as grain.
+  (not the lean) eases out between `Wind/Fade start` and `Fade end` (100 / 200 m): far blades moving read as grain.
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
   interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
   height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the chunks within
