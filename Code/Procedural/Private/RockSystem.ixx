@@ -12,10 +12,11 @@ import :TerrainSampler;
 import :RockType;
 import :RockGenerator;
 
-// Procedural rocks ("Rocks" tweaks; Docs/RockRenderingPlan.md). Loads every Assets/Rocks/*.rock type, generates its
-// variants (an SDF each, meshed by surface nets into a regular mesh LOD chain) and shows them as a PREVIEW field in
-// front of the camera - one row per type, one rock per variant - through plain RenderNodes on the rock material
-// (RendererVK EPipelineIndex::LitRock); the GPU picks each rock's LOD level (the "LOD" tweaks).
+// Procedural rocks ("Rocks" tweaks; Docs/RockRenderingPlan.md). Loads every Assets/Rocks/*.rock type and generates its
+// variants (an SDF each, meshed by surface nets into a regular mesh LOD chain) for the WORLD (TreeWorld's rock records,
+// drawn through TreeSystem's world set) and, on request ("Show preview"), a PREVIEW field in front of the camera - one
+// row per type, one rock per variant - as plain RenderNodes. Both draw on the rock material (RendererVK
+// EPipelineIndex::LitRock); the GPU picks each rock's LOD level (the "LOD" tweaks).
 export namespace Procedural
 {
 	class RockSystem
@@ -92,13 +93,18 @@ export namespace Procedural
 		// Reads the .rock files (main) and kicks one generation job per variant: no main-thread stall. finishLoad
 		// uploads the meshes once every job is done.
 		void reload();
+		void kickGeneration(); // one Low job per variant of every loaded type
 		void finishLoad(Renderer& renderer);
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
-		void clearAll(); // joins the generation jobs, then the nodes, the LOD chains and the meshes, in that order
+		// Joins the generation jobs, then frees the nodes, the LOD chains and the meshes, in that order; the types stay
+		// loaded (their variants empty, ready for kickGeneration).
+		void clearMeshes();
+		void clearAll(); // clearMeshes, then the types too
 
 		// --- Tweaks ---
 		bool m_enabled = true;
 		bool m_reload = false;    // button: re-read the .rock files, regenerate, respawn
+		bool m_remesh = false;    // "Grid resolution" changed: regenerate the meshes of the loaded types (no re-read)
 		bool m_respawn = false;   // button: respawn the preview in front of the camera
 		bool m_showPreview = false; // the rows in front of the camera (off: the world's rocks only)
 		bool m_worldEnabled = true; // rock records in the world (TreeWorld) + rock types in TreeSystem's world set

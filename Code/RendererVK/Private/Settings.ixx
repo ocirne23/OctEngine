@@ -458,7 +458,7 @@ export struct FarTreeParams
     // persistent image of each pixel's latest march (tree_volume_march.cs.glsl). Under the temporal pass the pass
     // reconstructs instead, and 1 of 4 runs as 1 of 2 (its checkerboard).
     bool halfRes = false;
-    int pixelSkip = 1;            // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
+    int pixelSkip = 1;        // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
     bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
     float rebakeDistance = 64.0f; // the camera moves this far from the bake centre -> re-bake
     // BAKE AHEAD: the bake centres on where the camera will be at the swap (its smoothed velocity x the last bake's real
@@ -474,7 +474,7 @@ export struct FarTreeParams
     // THE HAND-OVER: a finished bake CROSS-FADES into the shown one (a dithered per-ray pick, averaged by the temporal
     // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
     // (0 = at once; the swap then still takes the copy's frames).
-    float swapTime = 0.15f;
+    float swapTime = 0.5f;
     // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
     // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
     float rockExtinction = 4.0f;

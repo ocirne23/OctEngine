@@ -2,8 +2,9 @@
 
 // FAR-TREE MARCH (TreeVolumePipeline): full res every pixel, or ("Far half res") one ray per 2x2 block - its centre,
 // to the block's FARTHEST surface (the upsample drops trees a nearer pixel has in front of it, as cloud_march) -
-// and / or ("Far checkerboard") this frame's parity only ((x + y + frame) even; cloud_temporal.cs fills the
-// rest). Both only under TREE_TEMPORAL_OUT (the temporal pass reconstructs). The view ray through the far-tree
+// and / or ("Far pixel skip") this frame's parity only ((x + y + frame) even; cloud_temporal.cs fills the rest) under
+// TREE_TEMPORAL_OUT (the temporal pass reconstructs), or 1 of 2 / 1 of 4 per block without it (main, below: the other
+// pixels copied from their latest march). The view ray through the far-tree
 // volume's ring (tree_volume.inc.glsl), from "Far start" to the scene surface or "Far end": steps of about one
 // volume cell (x "Step scale"), so they grow with the distance like the cells do; above the volume's
 // top the step is the height gap. Per step with extinction: the leaves' colour lit by the sun (its transmittance
@@ -47,11 +48,11 @@ layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-flo
 // stepped by the golden ratio per frame) lies under the fade (u_treeHandover.z). The temporal pass / TAA averages the
 // picks into an image-space blend of the two results - the opacity mixes correctly, which mixing the density per
 // sample would not. The new bake: its centre (u_treeHandover.xy), floor / colour / max-floor grid (the back copies) and
-// its density (the accumulation's R32F view: the resolve converted it in place). The whole ray reads its bake (g_new)
+// its density (the accumulation's RG16F view, two slices per texel: the resolve converted it in place). The whole ray reads its bake (g_new)
 // - the ring, the polar lookup, the skip, the floor, the density, the colour and its lighting taps - so the variant
 // costs what the normal one does. The normal variant reads the front bake only.
 #ifdef TREE_HANDOVER
-layout (binding = 13) uniform sampler3D u_densityNew;
+layout (binding = 13) uniform sampler3D u_densityNew; // RG16F: two slices per texel (densityTexelNew)
 layout (binding = 14, r32ui) uniform readonly uimage2D u_floorNew;
 layout (binding = 15) uniform sampler2D u_colourNew;
 layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
@@ -81,7 +82,7 @@ layout (push_constant, scalar) uniform Push
     uvec2 fullSize;       // the render size (the scene depth)
 } pc;
 
-// The bake a read goes to (TREE_HANDOVER: g_new per sample; else always the front one).
+// The bake a read goes to (TREE_HANDOVER: g_new, per ray; else always the front one).
 #ifdef TREE_HANDOVER
 bool g_new = false; // this ray shows the new bake
 bool handoverPicksNew(ivec2 px)
@@ -93,7 +94,20 @@ bool handoverPicksNew(ivec2 px)
 }
 vec2 bakeCentre() { return g_new ? u_treeHandover.xy : pc.vol.centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
-float densityTexel(vec3 at) { return g_new ? textureLod(u_densityNew, at, 0.0).r : textureLod(u_density, at, 0.0).r; }
+// The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice, tree_volume.inc.glsl): the hardware
+// filters across the columns only (each fetch at a texel layer's centre), the slice axis is blended here.
+float densityTexelNew(vec3 at)
+{
+    const int slices = int(pc.vol.slices);
+    const float zs = at.z * float(slices) - 0.5;
+    const float z0 = floor(zs);
+    const int s0 = clamp(int(z0), 0, slices - 1), s1 = clamp(int(z0) + 1, 0, slices - 1);
+    const float layers = float((slices + 1) / 2);
+    const vec2 a = textureLod(u_densityNew, vec3(at.xy, (float(s0 >> 1) + 0.5) / layers), 0.0).rg;
+    const vec2 b = textureLod(u_densityNew, vec3(at.xy, (float(s1 >> 1) + 0.5) / layers), 0.0).rg;
+    return mix((s0 & 1) != 0 ? a.y : a.x, (s1 & 1) != 0 ? b.y : b.x, zs - z0);
+}
+float densityTexel(vec3 at) { return g_new ? densityTexelNew(at) : textureLod(u_density, at, 0.0).r; }
 vec4 colourAt(vec2 uv) { return g_new ? textureLod(u_colourNew, uv, 0.0) : textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return g_new ? imageLoad(u_floorMaxNew, block).xy : imageLoad(u_floorMax, block).xy; }
 #else
@@ -341,9 +355,10 @@ void marchAt(ivec2 px)
     // band tree's blob beside its billboard pull its mean distance into the band and fade the far trees behind out
     // with it: a sky-coloured outline along the billboard silhouettes.
     const float fadeEnd = pc.startDistance + max(pc.overlap, 1.0);
+    // A segment's distance weights sum to 1 - its transmittance (sum of T x alpha telescopes): no weight sums are kept.
     vec3 inBand = vec3(0.0), inBehind = vec3(0.0);
     float tBand = 1.0, tBehind = 1.0;
-    float distSumBand = 0.0, distWeightBand = 0.0, distSumBehind = 0.0, distWeightBehind = 0.0;
+    float distSumBand = 0.0, distSumBehind = 0.0;
 #ifdef TREE_TEMPORAL_OUT
     float tFront = tEnd;                   // the first tree
 #endif
@@ -461,7 +476,7 @@ void marchAt(ivec2 px)
                 // (+-x / +-z / +-y at "Far interior radius" cells) - deep in a blob dense on every side, at its surface
                 // empty on one - as an AO term on the sun and the sky alike.
                 float interior = 1.0;
-                if (pc.interiorShadow > 0.0)
+                if (pc.interiorShadow > 0.0 && pc.interiorRadius > 0.0) // radius 0: the taps sit on the sample, exp(0)
                 {
                     const float rr = pc.interiorRadius * cell;
                     const float ry = min(rr, 0.5 * pc.vol.height);
@@ -481,13 +496,14 @@ void marchAt(ivec2 px)
                 {
                     inBand += tBand * alpha * lit;
                     distSumBand += tBand * alpha * tt;
-                    distWeightBand += tBand * alpha;
                     tBand *= 1.0 - alpha;
                     if (tBand < 0.01)
                     {
-                        // The band is opaque: behind it matters only while the band is not yet faded in fully.
+                        // The band is opaque: behind it matters only while the band is not yet faded in fully. Its
+                        // distance sum is normalised first (its weight becomes 1 with the transmittance at 0).
+                        distSumBand /= 1.0 - tBand;
                         tBand = 0.0;
-                        if (smoothstep(pc.startDistance, fadeEnd, distSumBand / distWeightBand) > 0.99)
+                        if (smoothstep(pc.startDistance, fadeEnd, distSumBand) > 0.99)
                             break;
                         t = fadeEnd + jitter * dt; // keep the ray's per-frame shift
                         continue;
@@ -497,10 +513,10 @@ void marchAt(ivec2 px)
                 {
                     inBehind += tBehind * alpha * lit;
                     distSumBehind += tBehind * alpha * tt;
-                    distWeightBehind += tBehind * alpha;
                     tBehind *= 1.0 - alpha;
                     if (tBehind < 0.01)
                     {
+                        distSumBehind /= 1.0 - tBehind;
                         tBehind = 0.0;
                         break;
                     }
@@ -512,8 +528,8 @@ void marchAt(ivec2 px)
     // The FADE-IN over "Far overlap": the BAND's result as a whole, by its weighted mean distance - not each sample's
     // density, which thinned a blob's front and let the ray reach its dark core (a half-faded tree read too dark).
     // Then the band over what lies behind it, unfaded.
-    const float meanBand = distWeightBand > 0.0 ? distSumBand / distWeightBand : fadeEnd;
-    const float meanBehind = distWeightBehind > 0.0 ? distSumBehind / distWeightBehind : tEnd;
+    const float meanBand = tBand < 1.0 ? distSumBand / (1.0 - tBand) : fadeEnd;
+    const float meanBehind = tBehind < 1.0 ? distSumBehind / (1.0 - tBehind) : tEnd;
     const float fade = smoothstep(pc.startDistance, fadeEnd, meanBand);
     const float coverBand = fade * (1.0 - tBand);
     const float T = (1.0 - coverBand) * tBehind;

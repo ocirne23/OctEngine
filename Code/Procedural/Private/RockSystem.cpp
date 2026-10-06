@@ -76,6 +76,12 @@ namespace Procedural
 
 	void RockSystem::clearAll()
 	{
+		clearMeshes();
+		m_types.clear();
+	}
+
+	void RockSystem::clearMeshes()
+	{
 		Globals::jobSystem.wait(m_genCounter); // the generation jobs write into m_types
 		m_generating = false;
 		// The world's set draws these meshes: it goes first.
@@ -87,11 +93,15 @@ namespace Procedural
 			++m_worldGeneration;
 		}
 		m_nodes.clear();
-		for (const Type& type : m_types)
+		for (Type& type : m_types)
+		{
 			for (const Variant& variant : type.variants)
 				if (variant.chain != UINT32_MAX)
 					Globals::rendererVK.freeMeshLodChain(variant.chain); // before its meshes
-		m_types.clear();
+			const size_t count = type.variants.size();
+			type.variants.clear(); // the meshes
+			type.variants.resize(count);
+		}
 	}
 
 	void RockSystem::initialize()
@@ -118,7 +128,8 @@ namespace Procedural
 		// flat grey on LitOpaque - the shape alone.
 		static constexpr oc::string_view PREVIEW_SHADINGS[] = { "Rock material (climate)", "Flat grey" };
 		Tweak::enumVar("Rocks", "Preview shading", &m_previewShading, PREVIEW_SHADINGS, respawn);
-		Tweak::intVar("Rocks", "Grid resolution", &m_gridResolution, 16, 256, 1.0f, [this]() { m_reload = true; });
+		// The meshes only: the types (and so TreeWorld's placement) stay as read.
+		Tweak::intVar("Rocks", "Grid resolution", &m_gridResolution, 16, 256, 1.0f, [this]() { m_remesh = true; });
 		Tweak::intVar("Rocks", "Seed", &m_seed, 0, 1000000, 1.0f, respawn);
 		Tweak::floatVar("Rocks", "Spacing", &m_spacing, 1.0f, 4.0f, 0.01f, respawn);
 	}
@@ -143,9 +154,17 @@ namespace Procedural
 			if (m_loaded)
 				++m_typesRevision; // a RE-load (the first load follows the enable, which TreeWorld sees itself)
 			m_reload = false;
+			m_remesh = false;
 			clearAll();
 			reload();
 			m_loaded = true;
+			m_spawned = false;
+		}
+		else if (m_remesh)
+		{
+			m_remesh = false;
+			clearMeshes();
+			kickGeneration();
 			m_spawned = false;
 		}
 		if (m_generating)
@@ -198,7 +217,11 @@ namespace Procedural
 			type.desc = oc::move(desc);
 			type.variants.resize((size_t)type.desc.variantCount);
 		}
+		kickGeneration();
+	}
 
+	void RockSystem::kickGeneration()
+	{
 		// One Low job per variant (each single-threaded inside), in the BACKGROUND: the main thread never waits for
 		// generation (seconds in Debug), finishLoad uploads once the last one is done. m_types is not resized until
 		// clearAll has joined them.
@@ -276,6 +299,11 @@ namespace Procedural
 			if (!world.variants.empty())
 				m_worldTypes.push_back(oc::move(world));
 		}
+		// The CPU meshes are uploaded: only the shape's numbers and the density grid are read from here on.
+		for (Type& type : m_types)
+			for (Variant& variant : type.variants)
+				for (RockMesh& mesh : variant.data.lods)
+					mesh = {};
 		++m_worldGeneration;
 	}
 

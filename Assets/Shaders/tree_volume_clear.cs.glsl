@@ -1,7 +1,7 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, the first step (TreeVolumePipeline): zero the accumulation, a range of slices per dispatch - the
-// bake spreads it over frames (vkCmdClearColorImage clears a 3D image whole, in one frame).
+// FAR-TREE VOLUME BAKE, the first step (TreeVolumePipeline): zero the accumulation, a range of texel layers (two slices
+// each) per dispatch - the bake spreads it over frames (vkCmdClearColorImage clears a 3D image whole, in one frame).
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -9,7 +9,7 @@ layout (binding = 0, r32ui) uniform writeonly uimage3D u_accum;
 
 layout (push_constant) uniform Push
 {
-    uint sliceOffset; // this dispatch's first slice
+    uint sliceOffset; // this dispatch's first texel layer
 } pc;
 
 void main()

@@ -1174,7 +1174,7 @@ namespace Procedural
 
 		m_treeSet = renderer.createDynamicTreeInstanceSet(gpuTypes, (uint32)glm::max(m_worldCapacity, 1));
 
-		// The far volume's view of the RECORDS (W4; RendererVK TreeRecordTypeGpu), per record type (TreeWorld's name-sorted
+		// The far volume's view of the RECORDS (RendererVK TreeRecordTypeGpu), per record type (TreeWorld's name-sorted
 		// species, bushes too): how a record EXPANDS - the same rules as expandChunk (its variants as this set's types,
 		// the scale range, the size variation, a tree's bushes in expandChunk's order) - and, for the mass far out, per
 		// variant its extinction's integral at scale 1, plus the species' profile over height (the variants' mean at
@@ -1269,7 +1269,7 @@ namespace Procedural
 			for (uint32 b = 0; b < TREE_RECORD_PROFILE_BINS; ++b)
 				out.shape[b] = (float)(profile[b] / (double)variants / (mass * binH));
 		}
-		// The ROCK record types (R5; RendererVK "Far-tree volume" ROCKS): a record expands as placeRock - its variant and
+		// The ROCK record types (RendererVK "Far-tree volume" ROCKS): a record expands as placeRock - its variant and
 		// yaw from the same hashes, its scale rockRecordScale (the tree rule without size variation) - into the set's rock
 		// types (the occupancy, the sink in the box, no lean). A SOLID (albedo.w 0): the volume gives it "Far rock
 		// extinction" at any size, so its mass grows with scale^3 (variantMass = its occupied volume at scale 1), and its

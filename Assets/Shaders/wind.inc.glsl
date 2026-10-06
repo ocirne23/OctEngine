@@ -5,9 +5,9 @@
 // u_weatherWind0: the mean velocity + the gust strength, u_weatherWind1.x: 1 / the gust size) - one direction, strength
 // and set of passing gusts for everything that bends. The mean + a 2D GUST VECTOR x the gust strength, as the
 // particles' weather wind: each component two waves travelling downwind (1.2 and 0.46 x the gust size long - 60 m
-// and 23 m at the default 50 m - the second skewed; the components apart in phase). The flurries turn the wind rather than cancel it - a signed gust along the mean (the trees' first version)
-// was 0 wherever the gust exceeded the mean against it: with the defaults (1 m/s mean, 5 m/s gusts) ~40 % of the
-// trees stood still, in bands drifting downwind. Analytic: no texture, a few ALU per call.
+// and 23 m at the default 50 m - the second skewed; the components apart in phase). A 2D vector, not a signed gust
+// along the mean: the flurries TURN the wind rather than cancel it (a signed gust stronger than the mean wind stopped
+// the trees dead, in bands drifting downwind). Analytic: no texture, a few ALU per call.
 // Requires the UBO.
 
 // The wind at `xz` at `time`: its speed (m/s) and direction (unit, XZ).

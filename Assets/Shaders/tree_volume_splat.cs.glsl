@@ -41,7 +41,7 @@
 
 layout (local_size_x = 64) in;
 
-layout (binding = 2, r32ui) uniform uimage3D u_accum;
+layout (binding = 2, r32ui) uniform uimage3D u_accum; // two slices per texel (tree_volume.inc.glsl tvAccumTexel)
 layout (binding = 3, rgba8) uniform writeonly image2D u_colour;
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
 layout (binding = 5, r32ui) uniform uimage2D u_floorCover; // the largest tree coverage per column (floor pass 1)
@@ -125,9 +125,6 @@ layout (push_constant, scalar) uniform Push
     uint wgOffset;       // this dispatch's first record / piece (the bake spreads both over frames)
     float rockExtinction; // a SOLID type's extinction (1/m) over its occupancy
 } pc;
-
-// Fixed point of the accumulation: extinction (1/m) x this.
-const float ACCUM_SCALE = 1024.0;
 
 vec3 quatRotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 
@@ -301,10 +298,9 @@ void splatPiece(VolumePiece piece)
         const float extinction = sampleType(type, f, mip) * cover * (solid ? pc.rockExtinction : 1.0 / scale);
         if (extinction <= 1e-4)
             continue;
-        const uint amount = uint(extinction * ACCUM_SCALE + 0.5);
-        imageAtomicAdd(u_accum, ivec3(texel, int(s)), amount);
+        imageAtomicAdd(u_accum, tvAccumTexel(texel, uint(s)), tvAccumAmount(extinction, uint(s)));
         if (solid)
-            imageAtomicAdd(u_rockSum, texel, amount);
+            imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu)); // the same units
         else
             imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
     }

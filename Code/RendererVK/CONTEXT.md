@@ -1358,7 +1358,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   the column's floor), over EVERY rock entry (a far colour needs no top-three pick). **The colour map's ALPHA is 1 - the
   rock fraction** (the clear and every tree write keep 1). **The march**: by that fraction the sun term loses its phase
   (`Far forward scatter`: a surface does not glow backlit), takes the full N.L (`Far normal strength` toward 1, only
-  while it is > 0), and the interior darkening drops to a quarter. Register count not measured after it (was 72).
+  while it is > 0), and the interior darkening drops to a quarter. The march is 64 registers with it (2026-10-06).
   The hand-over: see "Hand-over" below - a rock mesh leaves the main pass at the same distance as a billboard.
 * **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 8; 2026-10-04 - in one frame the world records cost 6-7 ms
   of GPU per bake, after the per-record dispatch took it down from 31): `startBake` SNAPSHOTS what it reads that can
@@ -1373,12 +1373,21 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   * the smoothing (2D, a frame); the RECORDS' MASS ~1/8 in chunk ranges (`RecordsPC::chunkOffset`); the FAR COLUMNS ~1/4
     in radial-row ranges of whole 8-row groups (`FarPC::rowOffset`);
   * the RESOLVE ~1/8, IN PLACE: the column pass (the rock colour; it sums each column's fixed-point slices, so it runs
-    first, `ResolvePC::columnPass`), then slice ranges turn the sums into the extinction's FLOAT BITS in `accum` itself;
-    then the max-floor grid (2D, a frame);
-  * the HAND-OVER CROSS-FADE (`Far swap time`, 0.15 s of REAL time - Time's unpaused clock, `handoverFade`; no GPU
+    first, `ResolvePC::columnPass`), then texel-layer ranges turn the sums into the extinctions as HALF FLOATS in `accum`
+    itself (`packHalf2x16`, two slices per texel - below); then the max-floor grid (2D, a frame);
+  * **`accum` PACKS TWO SLICES PER TEXEL** (2026-10-06; `tree_volume.inc.glsl` `tvAccumTexel` / `tvAccumAmount`): R32UI,
+    `(slices + 1) / 2` layers (`m_accumDepth`), slice s in layer s / 2, its low (even) or high (odd) 16 bits - 144 MB
+    instead of 270 MB at 3000 x 1500 x 15. Image atomics are 32-bit only, so the two 16-bit fixed-point halves (x 1024)
+    share one `imageAtomicAdd`. **The limit: a sum below 64 / m per slice and texel** - it is the texel's MEAN
+    extinction (each add weighted by the tree's cover of the texel: trees side by side in one cell share it by area;
+    only crowns / rocks occupying the same space add fully - a rock is `Far rock extinction`, 4), and a single add is
+    clamped to its half. Past it the half wraps and carries into the other slice (not guarded: no saturating image
+    atomic). The clear, the resolve and the copy walk the layers; the rock sum (2D) stays 32-bit;
+  * the HAND-OVER CROSS-FADE (`Far swap time`, 0.5 s of REAL time - Time's unpaused clock, `handoverFade`; no GPU
     work of its own, so a time and not frames: the same at any frame rate, where the bake's frame budgets keep the
     per-frame cost the same instead): the march's `TREE_HANDOVER` variant binds
-    BOTH bakes - the new one through `accum`'s R32F view (MUTABLE_FORMAT, `m_accumFloatView`, bindings 13-16 with the
+    BOTH bakes - the new one through `accum`'s RG16F view (MUTABLE_FORMAT, `m_accumFloatView`; the hardware filters
+    across the columns, `densityTexelNew` blends the slice axis from two layer fetches; bindings 13-16 with the
     back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped
     by the golden ratio per frame) is under the UBO's fade (`u_treeHandover.z`, `handoverUbo`). The temporal pass / TAA
     averages the picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix would keep a
@@ -1388,14 +1397,17 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
     a per-chunk pop.) The variant is used from the frame AFTER the hand-over began (that frame's UBO was built before
     the stage changed);
   * the COPY ~1/8: at fraction 1 (every chunk on the new bake) `tree_volume_copy.cs` writes `accum` into `density` in
-    slice ranges - nothing reads `density` then - and the SWAP follows. The first bake (nothing shown yet) skips the
-    hand-over.
+    slice ranges - nothing reads `density` then - and the SWAP follows. **No cross-fade** (`BakeJob::crossFade`
+    false) for the first bake (nothing shown yet) and after a volume GEOMETRY change (`sameGeometry`: start, rebake
+    distance, end, height, resolutions - the march reads both bakes through the SHOWN bake's ring and layer, so the new
+    one would sample at the wrong radius / height): the copy then runs whole in ONE frame and the swap follows in it.
   (Until 2026-10-06 only the record splat was spread: the accumulation's clear, the static sets' splats, the records' mass
   and the far columns each ran whole in one frame - a "Far trees" spike growing with the resolution - and the resolve
   wrote `density` in the swap's frame, switching the whole volume at once.) The bake writes the BACK `floor` / `colour`
   (two of each, +36 MB) and the shared `accum`; the march reads the FRONT ones and `density` until the hand-over. No
   second density: `accum` holds the new one. A new bake starts only NUM_FRAMES_IN_FLIGHT frames after the last swap
-  (the snapshots are rewritten, and the old front - the new back - may still be read). `markDirty` re-bakes after a
+  OR DROP (`m_bakeStartFrame`: the snapshots are rewritten - a dropped bake's dispatches may still be in flight, and a
+  grown snapshot buffer is re-created - and after a swap the old front, the new back, may still be read). `markDirty` re-bakes after a
   running bake; `invalidate` (a set destroyed, the record types or the pool replaced) drops it and a geometry setting
   change drops it too - **except during the hand-over / copy** (the march already shows part of it: it finishes, and
   the next bake follows). **The volume lags the camera by the bake's length plus `Far swap time`**: no gap shows while
@@ -1457,8 +1469,14 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   its closest approach to the bake centre, r only grows) and its polar angle cannot leave those sectors: from radius r
   a straight ray turns by at most asin(d / r), d <= the camera's distance from the centre, so the test needs
   `d < r x sin(4 blocks)` (85 m at r = 436 m). Measured (sandbox, 1440p): Far trees 0.96 -> 0.39..0.53 ms (the skip)
-  -> 0.34 ms (+ the end); the march stays at 72 registers (re-deriving the pixel-skip block's pixels after the march
+  -> 0.34 ms (+ the end); the march stayed at 72 registers (re-deriving the pixel-skip block's pixels after the march
   instead of holding them: still 72, reverted).
+* **The march is 64 registers, no spill** (2026-10-06, RelWithDebInfo, every variant; it was 71 / 72): a segment's
+  distance weights are not summed - `sum(T x alpha)` telescopes to `1 - T`, so the weighted mean is `distSum / (1 -
+  T)` (an opaque segment normalises its sum before its T is zeroed). No timing change measurable through the run noise
+  ("Far trees" ~0.43 ms either way). The interior taps also skip at `Far interior radius` 0 (they sat on the sample:
+  `exp(0)`). "Far trees" is the MARCH alone now; the bake's share of the frame is its own GPU scope, "Far tree bake"
+  (`recordBake`, then `record`).
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),
@@ -1468,7 +1486,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   `Far ground darkening` (the sky light's drop toward the ground), `Far albedo scale`, `Far ambient`, and
   `Far interior shadow` / `radius` (the volume's "Foliage interior shadow": `exp(−strength × the mean extinction of
   6 taps at radius × the cell size around the sample × that distance)` on the sun and the sky — a blob's core is
-  dense on every side; 6 taps per lit step, only when > 0).
+  dense on every side; 6 taps per lit step, only when both are > 0).
   The volume FADES IN over `Far overlap` ON THE RESULT - of the BAND only: the ray accumulates two segments split
   at the fade end (`Far start` + `Far overlap`), the band fades as a whole by its own weighted mean distance, and
   the segment behind it composites under it unfaded (an opaque band skips to the fade end unless it is already

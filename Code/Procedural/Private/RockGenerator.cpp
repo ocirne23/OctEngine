@@ -534,7 +534,8 @@ namespace Procedural
 		out = RockVariant{};
 		buildRockShape(type, seed, out.shape);
 
-		// The FULL surface-nets mesh (tens of thousands of vertices at 96 cells) is CPU working data only: every LOD
+		// The FULL surface-nets mesh ("Grid resolution" x the type's `Resolution` cells along the longest axis) is CPU
+		// working data only: every LOD
 		// level is simplified from it.
 		RockMesh full;
 		float cell = 0.0f;

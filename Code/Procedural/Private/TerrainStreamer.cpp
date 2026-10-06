@@ -1684,8 +1684,9 @@ namespace Procedural
 		// --- Kick THIS frame's ring scan for the next update to apply. Last in update on purpose: the
 		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and
 		// the job only reads them (its output goes to m_ringScanOut, consumed after the join at the
-		// top). Every input is captured by value so a tweak or setGeneratedBounds edit on main cannot
-		// race it. The eviction walk reads the same snapshot, in a job of its own.
+		// top). Every input is SNAPSHOT into m_ringScanIn, which only main writes and only after the
+		// joins, so a tweak or setGeneratedBounds edit on main cannot race it. The eviction walk reads the
+		// same snapshot, in a job of its own.
 		const bool ringScan = ringMoved || m_ringScanNeeded;
 		const bool evictScan = ringMoved || uploads > 0;
 		if (ringScan || evictScan)

@@ -1,8 +1,9 @@
 #version 460
 
 // FAR-TREE VOLUME BAKE, the last step (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as
-// float bits in the accumulation (its R32F view is the NEW volume of the march's hand-over cross-fade; then
-// tree_volume_copy.cs moves it into the R16F density the march samples otherwise). A slice range per dispatch.
+// two half floats per texel in the accumulation (two slices per texel, tree_volume.inc.glsl; its RG16F view is the NEW
+// volume of the march's hand-over cross-fade; then tree_volume_copy.cs moves it into the R16F density the march
+// samples otherwise). A range of texel layers per dispatch.
 // Per COLUMN (the z = 0 invocations), its ROCKS' share (R5; Procedural's world rocks): rock fraction = the column's rock
 // sum / its sum over the slices (both in the accumulation's units). A column with rocks mixes the CLIMATE'S BEDROCK into
 // its colour by that fraction - the terrain's rock materials' mean colours (each diffuse texture's smallest mip),
@@ -19,7 +20,7 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout (binding = 2, r32ui) uniform uimage3D u_accum; // the sums in, the extinction's float bits out (in place)
+layout (binding = 2, r32ui) uniform uimage3D u_accum; // the sums in, the extinction's half floats out (in place)
 layout (binding = 4, r32ui) uniform readonly uimage2D u_rockSum;
 layout (binding = 5, rgba8) uniform image2D u_colour;
 layout (binding = 6, r32ui) uniform readonly uimage2D u_floor;
@@ -29,11 +30,9 @@ layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
 layout (push_constant, scalar) uniform Push
 {
     TreeVolumeParams vol;
-    uint sliceOffset; // this dispatch's first slice (the bake spreads the conversion over frames)
-    uint columnPass;  // 1: the per-column colour pass (one slice, before any conversion); 0: convert the slices
+    uint sliceOffset; // this dispatch's first texel layer (the bake spreads the conversion over frames)
+    uint columnPass;  // 1: the per-column colour pass (one layer dispatched, before any conversion); 0: convert the layers
 } pc;
-
-const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs.glsl
 
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)
@@ -69,18 +68,22 @@ void main()
         return;
     if (pc.columnPass == 0u)
     {
-        // IN PLACE: the fixed-point sum -> the extinction's float bits in the same texel (the march's hand-over and the
-        // copy read them through the image's R32F view).
-        imageStore(u_accum, p, uvec4(floatBitsToUint(float(imageLoad(u_accum, p).r) / ACCUM_SCALE)));
+        // IN PLACE: the two slices' fixed-point sums -> their extinctions as half floats in the same texel (the march's
+        // hand-over reads them through the image's RG16F view, the copy as packed bits).
+        const uint sums = imageLoad(u_accum, p).r;
+        imageStore(u_accum, p, uvec4(packHalf2x16(vec2(float(sums & 0xFFFFu), float(sums >> 16)) / TV_ACCUM_SCALE)));
         return;
     }
-    // THE COLUMN PASS (one slice dispatched, before any slice converts: it sums the column's fixed-point slices).
+    // THE COLUMN PASS (one layer dispatched, before any layer converts: it sums the column's fixed-point slices).
     const uint rock = imageLoad(u_rockSum, p.xy).r;
     if (rock == 0u)
         return;
     uint total = 0u;
-    for (int s = 0; s < int(pc.vol.slices); ++s)
-        total += imageLoad(u_accum, ivec3(p.xy, s)).r;
+    for (int z = 0; z < imageSize(u_accum).z; ++z)
+    {
+        const uint sums = imageLoad(u_accum, ivec3(p.xy, z)).r;
+        total += (sums & 0xFFFFu) + (sums >> 16);
+    }
     const float fraction = clamp(float(rock) / max(float(total), 1.0), 0.0, 1.0);
     const vec2 xz = tvTexelWorldXZ(p.xy, pc.vol);
     const uint floorBits = imageLoad(u_floor, p.xy).r;

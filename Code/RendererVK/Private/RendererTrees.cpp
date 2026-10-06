@@ -517,6 +517,9 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
         .settings = m_farTreeParams,
         .frameNumber = m_frameCounter,
     };
+    m_gpuProfiler.beginScope(primary, "Far tree bake");
+    m_treeVolume.recordBake(primary, frameIdx, params);
+    m_gpuProfiler.endScope(primary);
     m_gpuProfiler.beginScope(primary, "Far trees");
     m_treeVolume.record(primary, frameIdx, params);
     m_gpuProfiler.endScope(primary);

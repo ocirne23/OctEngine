@@ -1449,7 +1449,10 @@ rock types in TreeSystem's world set - they need "Trees/World/Enabled", "Trees/E
 `Density scale`, `Rugged slope start / full` and `Valley relief start / full (m)` (what the types' `Plains` /
 `Rugged` / `Valley` mean - `RockWorldDesc`, see ROCK RECORDS; every change regenerates the record chunks); the system serves the world through `worldRules()` /
 `typesRevision()` / `worldTypes()` / `worldGeneration()` / `setMeshUser`. `Reload
-types` re-reads the files; `Respawn preview` re-places in front of the camera; `Grid resolution` regenerates. RT
+types` re-reads the files (a new `typesRevision`); `Respawn preview` re-places in front of the camera; `Grid
+resolution` regenerates the MESHES only (`clearMeshes` + `kickGeneration`: the types stay as read, so the revision and
+TreeWorld's placement stay too; only the world generation changes). After the upload the variants' CPU meshes are
+freed (`finishLoad`; the density grid and the shape numbers stay). RT
 sees the rocks through the chain's one BLAS. (The first enables' device-lost crash, 2026-10-05, was the renderer's:
 unzeroed BLAS address entries for not-raytraced meshes - RendererVK CONTEXT, `createMesh`.)
 

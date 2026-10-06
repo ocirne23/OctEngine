@@ -12,15 +12,15 @@ import :TreeSpecies;
 import :TreeGenerator;
 import :RockType;
 
-// WORLD TREE PLACEMENT (Docs/TreeRenderingPlan.md 3.5, phase W1): EVERY tree in the terrain ring, stored as a 4-byte
+// WORLD TREE PLACEMENT (Docs/TreeRenderingPlan.md 3.5): EVERY tree in the terrain ring, stored as a 4-byte
 // RECORD per terrain chunk - x, z and the species, nothing else. The height is the terrain's; variant, scale and yaw
 // come from the record's hash (treeRecordSeed), so the same tree comes back wherever and whenever it is asked for.
 // The records are a pure function of (seed, chunk, the species' Placement blocks, the sampler): a chunk that leaves
 // the ring is dropped and generated again when it comes back. Generated on Low pump jobs, nearest chunk first, over
 // the terrain's own ring (radius, chunk size, generated bounds). Trees only - the bushes come from the placement
-// function at expansion (W3), not from records.
-// W3: TreeSystem expands the near chunks' CPU records into its dynamic tree set (TreeSystem "world mode").
-// W2: every chunk's records go to the GPU (Renderer::addTreeRecordChunk: one fixed-size device-local pool + a chunk
+// function at expansion, not from records.
+// NEAR: TreeSystem expands the near chunks' CPU records into its dynamic tree set (TreeSystem "world mode").
+// GPU: every chunk's records go to the GPU (Renderer::addTreeRecordChunk: one fixed-size device-local pool + a chunk
 // table), within an upload budget per frame. The CPU keeps a chunk's records only inside "CPU keep radius" (the near
 // chunks, which expansion needs); beyond it they are dropped once uploaded and generated again on the way back in.
 //

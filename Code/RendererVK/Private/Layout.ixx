@@ -83,7 +83,7 @@ export namespace RendererVKLayout
     constexpr uint32 PARTICLE_TEX_NONE = 0xFFFFu;     // texIdx sentinel: procedural soft round sprite
 
     // Rain occlusion map (the weather volume's shelter test): ONE top-down orthographic depth view over
-    // the volume, ray-traced against this frame's TLAS (RainOcclusionPipeline, R32F) right after the GI
+    // the volume, ray-traced against this frame's TLAS (RainOcclusionPipeline, R32UI packed) right after the GI
     // step, so the particle sim samples THIS frame's map.
     constexpr uint32 RAIN_OCCLUSION_RESOLUTION = 512;
 

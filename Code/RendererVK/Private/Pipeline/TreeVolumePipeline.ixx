@@ -19,9 +19,10 @@ import :TreeRecordPool;
 //           log radius from "Far start" to "Far end" (cells grow linearly with the distance - tree_volume.inc.glsl),
 //           z = height above the column's tree FLOOR. tree_volume_splat.cs twice (one workgroup per tree): its
 //           TREE_FLOOR_PASS variant (each column's lowest tree base, R32UI 2D), then the splat (fixed-point atomics,
-//           R32UI 3D); then tree_volume_resolve.cs (-> R16F, filterable). Re-baked only when the camera leaves the snap radius
+//           R32UI 3D); then tree_volume_resolve.cs (in place: the extinction's float bits) and, after the hand-over,
+//           tree_volume_copy.cs (-> the R16F density, filterable). Re-baked only when the camera leaves the snap radius
 //           around the bake centre, a set changes, or a volume setting changes.
-//           W4: the WORLD TREE RECORDS: within "Far record detail" each record expands to its exact trees (the splat's
+//           The WORLD TREE RECORDS: within "Far record detail" each record expands to its exact trees (the splat's
 //           TREE_SPLAT_RECORDS variants, in every pass); beyond, their mass per column (tree_volume_records.cs, a tent
 //           over the crown's columns), then per column the terrain floor where no tree floor is and the slices from
 //           the type's height profile (tree_volume_far.cs). A dynamic set (the world) is never splatted.
@@ -71,7 +72,15 @@ public:
     void markDirty() { m_dirty = true; }               // a tree set changed: re-bake (after a running bake)
     // What a running bake reads is going away (a tree set, the record types, the pool): drop it, re-bake from scratch.
     // A bake already handing over (or copying) reads none of that any more: it finishes, the re-bake follows.
-    void invalidate() { m_dirty = true; if (!handingOver()) m_job.active = false; }
+    void invalidate()
+    {
+        m_dirty = true;
+        if (m_job.active && !handingOver())
+        {
+            m_job.active = false;
+            m_jobDropped = true; // the next record() holds the next start back (its snapshots may still be read)
+        }
+    }
     // The frame UBO's u_treeHandover as of this frame's real time (built before record(), which alone changes the state):
     // xy = the new bake's centre, z = the cross-fade to it (0..1, the fraction of rays that pick it), w unused; all 0
     // without one.
@@ -137,7 +146,9 @@ public:
         const FarTreeParams& settings;
         uint32 frameNumber = 0;       // monotonic: the history is last frame's only when this follows the last march
     };
-    // Straight into the primary: the bake when due, then the march. After the opaque stages (reads the depth).
+    // Straight into the primary, after the opaque stages: this frame's share of the bake when due (recordBake), then the
+    // march (record, which reads the depth). Two calls so each gets a GPU scope of its own.
+    void recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     void record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     // The fullscreen apply (fog OFF); the caller is inside the scene-colour render pass with the viewport set.
     void recordApply(CommandBuffer& commandBuffer, uint32 frameIdx);
@@ -166,6 +177,7 @@ private:
     void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip, bool handover = false);
     // Builds (or rebuilds) a march variant and its TREE_HANDOVER twin with the same defines. False when either failed.
     bool buildMarchPair(ComputePipeline& march, ComputePipeline& handover, bool temporalOut, uint32 scale, uint32 skip, bool reload);
+    bool ready(const FarTreeParams& s) const; // prepare() ran for these settings' resolutions
     bool handingOver() const { return m_job.active && (m_job.stage == EBakeStage::Handover || m_job.stage == EBakeStage::Copy); }
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);
@@ -178,8 +190,9 @@ private:
     void destroyImage(Image& image);
     // THE BAKE, SPREAD OVER FRAMES ("Far bake frames"): startBake snapshots everything it reads, stepBake runs this
     // frame's share - the clears; the floor coverage, the floor and the splat (the record splat's workgroups spread
-    // evenly); the smoothing; the records' mass; the far columns; then the resolve + the front / back swap. The march
-    // reads the FRONT floor and colour and the density, which only the last step changes.
+    // evenly); the smoothing; the records' mass; the far columns; the resolve; the max-floor grid; the hand-over; the
+    // copy + the front / back swap. The march reads the FRONT floor, colour, max floor and the density - during the
+    // hand-over the BACK ones and the accumulation too.
     void startBake(const RecordParams& params, uint32 frameNumber, glm::vec2 centre);
     // BAKE AHEAD ("Far bake ahead"): the camera's horizontal velocity (real time, smoothed) x the last bake's real
     // duration (start -> swap), capped at the ring's margin - where the camera will be when a bake started now swaps.
@@ -230,8 +243,11 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_applySets;
 
-    Image m_accum;   // R32UI 3D: the splat's fixed-point sums; after the resolve, the new extinction's float bits
-    vk::ImageView m_accumFloatView; // ... read as R32F (MUTABLE_FORMAT): the new bake's density during the hand-over
+    // R32UI 3D, TWO SLICES per texel (m_accumDepth deep): the splat's 16-bit fixed-point sums; after the resolve, each
+    // slice's extinction as a half float.
+    Image m_accum;
+    vk::ImageView m_accumFloatView; // ... read as RG16F (MUTABLE_FORMAT): the new bake's density during the hand-over
+    uint32 m_accumDepth = 0;        // (m_slices + 1) / 2
     Image m_density; // R16F 3D: extinction (1/m), sampled
     // FRONT (m_front: the march's) and BACK (the running bake's) copies, swapped at the bake's last step:
     oc::array<Image, 2> m_colour; // RGBA8 2D: the albedo per column; a = 1 - its ROCK fraction (the march's rock lighting)
@@ -295,7 +311,7 @@ private:
         bool active = false;
         EBakeStage stage = EBakeStage::Clear;
         // THE STAGES SPREAD OVER FRAMES ("Far bake frames"): each takes a share of them, so no stage runs whole in one
-        // frame unless it is small - only the resolve does (it writes the density the march reads: the publish step).
+        // frame unless it is small (the smoothing, the max-floor grid) - or a copy without a cross-fade (crossFade).
         uint32 progress = 0;      // the units done in this stage (slices / pieces + records / chunks / rows)
         uint32 perFrame = 1;      // the splat passes' units (the static sets' pieces, then the detail records) per frame
         uint32 clearPerFrame = 1; // the accumulation's slices per frame
@@ -303,6 +319,9 @@ private:
         uint32 rowsPerFrame = 8;  // the far columns: radial rows per frame (a multiple of the 8-row group)
         uint32 resolvePerFrame = 1; // the resolve's slices per frame
         uint32 copyPerFrame = 1;    // the copy's slices per frame
+        // The new bake CROSS-FADES in (an earlier bake on screen, of the same volume geometry: the march reads both with
+        // the shown bake's ring and height). Else the copy runs whole in one frame and the swap follows at once.
+        bool crossFade = false;
         uint32 handoverStart = 0;   // the frame the hand-over began (the march's variant starts the frame after)
         double handoverStartSec = 0.0; // ... and its real time (the UBO's fade counts from it: "Far swap time")
         uint32 staticPieces = 0;  // the static sets' pieces (each splat pass walks them before the records)
@@ -316,8 +335,11 @@ private:
         uint32 numDetailChunks = 0;
     };
     BakeJob m_job;
-    uint32 m_lastBakeEnd = 0; // the frame the last bake swapped: the next one starts NUM_FRAMES_IN_FLIGHT later (its
-                              // snapshot buffers are rewritten, and the old front - the new back - may still be read)
+    // A new bake starts from this frame on: NUM_FRAMES_IN_FLIGHT after the last swap OR DROP (its snapshot buffers are
+    // rewritten - a dropped bake's dispatches may still be in flight - and after a swap the old front, the new back,
+    // may still be read).
+    uint32 m_bakeStartFrame = 0;
+    bool m_jobDropped = false;
     double m_bakeDurationSec = 0.0;     // the last bake's start -> swap, real time (0: none yet - no lead)
     glm::vec2 m_cameraVelocity{ 0.0f }; // horizontal, m/s, smoothed
     glm::vec2 m_lastCamera{ 0.0f };

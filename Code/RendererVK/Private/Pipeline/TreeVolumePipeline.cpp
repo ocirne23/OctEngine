@@ -182,6 +182,13 @@ namespace
             oc::max(s.height, 1.0f), s.densityScale, 0.0f, 0.0f, 0.0f };
     }
 
+    // What volumeParams makes of the settings (the march's ring and layer).
+    bool sameGeometry(const FarTreeParams& a, const FarTreeParams& b)
+    {
+        return a.startDistance == b.startDistance && a.rebakeDistance == b.rebakeDistance && a.endDistance == b.endDistance
+            && a.angularRes == b.angularRes && a.radialRes == b.radialRes && a.slices == b.slices && a.height == b.height;
+    }
+
     // Everything the bake reads that is not per frame.
     bool sameBake(const FarTreeParams& a, const FarTreeParams& b)
     {
@@ -381,7 +388,7 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(5, vk::DescriptorType::eStorageImage));         // out
     b.push_back(binding(6, vk::DescriptorType::eStorageImage));         // out distance
     b.push_back(binding(7, vk::DescriptorType::eStorageImage));         // floor
-    b.push_back(binding(8, vk::DescriptorType::eStorageImage));         // the previous slot's result (the checkerboard's copy)
+    b.push_back(binding(8, vk::DescriptorType::eStorageImage));         // the latest-march colour (the plain pixel skip)
     b.push_back(binding(9, vk::DescriptorType::eStorageImage));         // ... and its distance
     b.push_back(binding(10, vk::DescriptorType::eCombinedImageSampler)); // GI's sky map (the canopy's sky light)
     b.push_back(binding(11, vk::DescriptorType::eCombinedImageSampler)); // the cloud shadow map
@@ -615,15 +622,18 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     m_angularRes = angularRes;
     m_radialRes = radialRes;
     m_slices = slices;
+    m_accumDepth = (slices + 1) / 2;
     const vk::ImageUsageFlags storageClear = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst;
-    // MUTABLE: after the resolve it holds the new extinction's float bits, sampled through an R32F view (the hand-over).
-    createImage(vk::ImageType::e3D, ACCUM_FORMAT, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
+    // TWO SLICES PER TEXEL (tree_volume.inc.glsl tvAccumTexel): 16-bit fixed-point halves, half the memory of a texel
+    // per slice. MUTABLE: after the resolve each half holds its slice's extinction as a half float, sampled through an
+    // RG16F view (the hand-over; linear filtering of it is required by the spec).
+    createImage(vk::ImageType::e3D, ACCUM_FORMAT, { angularRes, radialRes, m_accumDepth }, storageClear | vk::ImageUsageFlagBits::eSampled,
         m_accum.image, m_accum.memory, m_accum.view, "TreeVolume.accum", vk::ImageCreateFlagBits::eMutableFormat);
     {
         const vk::ImageViewCreateInfo floatViewInfo{
             .image = m_accum.image,
             .viewType = vk::ImageViewType::e3D,
-            .format = vk::Format::eR32Sfloat,
+            .format = vk::Format::eR16G16Sfloat,
             .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
         };
         auto viewResult = Globals::device.getDevice().createImageView(floatViewInfo);
@@ -846,8 +856,8 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     job.numDetailChunks = 0;
     m_dirty = false;
 
-    // Host-visible snapshot buffers: the last bake ended NUM_FRAMES_IN_FLIGHT frames ago or more (record()), so nothing
-    // still reads them.
+    // Host-visible snapshot buffers: the last bake swapped or was dropped NUM_FRAMES_IN_FLIGHT frames ago or more
+    // (m_bakeStartFrame), so nothing still reads them.
     auto upload = [](Buffer& buffer, const void* data, size_t bytes, const char* name)
     {
         if (bytes == 0)
@@ -905,21 +915,20 @@ void TreeVolumePipeline::snapshotRecords(const RecordParams& params, const oc::f
 }
 
 // THE BUDGETS: every stage that grows with the resolution or the tree count spreads over its share of "Far bake frames" -
-// the clear ~1/8, the three splat passes together ~1/2, the records' mass ~1/8, the far columns ~1/4 - so the whole bake
-// stays about that long. (Until 2026-10-06 only the record splat was spread: the clear of the accumulation, the static
-// sets' splats, the records' mass and the far columns each ran whole in one frame - a "Far trees" spike that grew with
-// the resolution.)
+// the clear ~1/8, the three splat passes together ~1/2, the records' mass ~1/8, the far columns ~1/4, the resolve and
+// the copy ~1/8 each - so no frame runs a whole stage that grows with the resolution.
 void TreeVolumePipeline::setBakeBudgets()
 {
     BakeJob& job = m_job;
     const uint32 frames = (uint32)oc::max(job.settings.bakeFrames, 1);
     auto share = [&](uint32 total, uint32 stageFrames) { return oc::max(1u, (total + stageFrames - 1u) / stageFrames); };
-    job.clearPerFrame = share(m_slices, oc::max(1u, frames / 8u));
+    // The clear, the resolve and the copy walk the accumulation's texel layers (two slices each).
+    job.clearPerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
     job.perFrame = oc::max(256u, share(3u * (job.staticPieces + job.detailRecords), oc::max(1u, frames / 2u)));
     job.massPerFrame = share(job.records.numTypes > 0 ? job.records.numChunks : 1u, oc::max(1u, frames / 8u));
     job.rowsPerFrame = (share(m_radialRes, oc::max(1u, frames / 4u)) + 7u) & ~7u; // whole 8-row groups: no overlap
-    job.resolvePerFrame = share(m_slices, oc::max(1u, frames / 8u));
-    job.copyPerFrame = share(m_slices, oc::max(1u, frames / 8u));
+    job.resolvePerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
+    job.copyPerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
 }
 
 void TreeVolumePipeline::trackCamera(glm::vec2 camera)
@@ -963,7 +972,7 @@ float TreeVolumePipeline::handoverFade() const
 
 glm::vec4 TreeVolumePipeline::handoverUbo() const
 {
-    if (!handingOver())
+    if (!handingOver() || !m_job.crossFade)
         return glm::vec4(0.0f);
     const float fraction = m_job.stage == EBakeStage::Copy ? 1.0f : handoverFade();
     return glm::vec4(m_job.centre, fraction, 0.0f);
@@ -1009,7 +1018,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
                 cmd.clearColorImage(m_farType.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<uint32, 4>{ UINT32_MAX, 0u, 0u, 0u } }, { range }); // no type
             }
         }
-        const uint32 slices = oc::min(job.clearPerFrame, m_slices - job.progress);
+        const uint32 slices = oc::min(job.clearPerFrame, m_accumDepth - job.progress); // texel layers
         if (slices > 0)
         {
             const vk::DescriptorSet set = m_clearSets[frameIdx].getDescriptorSet();
@@ -1024,7 +1033,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
             job.progress += slices;
         }
-        if (job.progress >= m_slices)
+        if (job.progress >= m_accumDepth)
         {
             job.progress = 0;
             job.stage = EBakeStage::FloorCover;
@@ -1034,7 +1043,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
 
     // The two FLOOR passes (the coverage per column, then the dominant tree's base), then the splat: the same shader,
     // the same per-tree dispatches. A pass walks ONE range - the static sets' pieces, then the detail records - within
-    // this frame's budget (the static sets ran whole at a pass's first frame until 2026-10-06). True when the pass is done.
+    // this frame's budget. True when the pass is done.
     // pass: 0 = the splat, 1 = the floor coverage, 2 = the floor (the record variants' index).
     auto splat = [&](ComputePipeline& pipeline, DescriptorSet& descriptorSet, uint32 pass)
     {
@@ -1232,8 +1241,8 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     }
     if (job.stage == EBakeStage::Resolve)
     {
-        // The sums -> the extinction IN PLACE (float bits in the accumulation: the hand-over's new volume), a slice range
-        // per frame. At its first frame first the per-column pass: the colour with the ROCKS' share (the climate's
+        // The sums -> the extinction IN PLACE (half floats in the accumulation: the hand-over's new volume), a range of
+        // texel layers (two slices each) per frame. At its first frame first the per-column pass: the colour with the ROCKS' share (the climate's
         // bedrock - the terrain's rock materials' mean colours, weighted by their climate boxes - and the rock fraction
         // in alpha), which sums each column's slices, so it runs before any slice converts.
         const vk::DescriptorSet set = m_resolveSets[frameIdx].getDescriptorSet();
@@ -1263,7 +1272,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, 1);
             cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // column sums -> conversion
         }
-        const uint32 slices = oc::min(job.resolvePerFrame, m_slices - job.progress);
+        const uint32 slices = oc::min(job.resolvePerFrame, m_accumDepth - job.progress); // texel layers
         if (slices > 0)
         {
             const ResolvePC resolvePc{ .vol = vol, .sliceOffset = job.progress, .columnPass = 0 };
@@ -1271,7 +1280,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
             job.progress += slices;
         }
-        if (job.progress >= m_slices)
+        if (job.progress >= m_accumDepth)
         {
             job.progress = 0;
             job.stage = EBakeStage::FloorMax;
@@ -1301,9 +1310,14 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             if (pass == 0)
                 cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // block max -> dilate
         }
-        // THE HAND-OVER next (the first bake has nothing to hand over: straight to the copy). It starts counting at
-        // this frame, whose UBO was built before it: the march takes the hand-over variant from the next frame on.
-        job.stage = m_baked ? EBakeStage::Handover : EBakeStage::Copy;
+        // THE HAND-OVER next. It starts counting at this frame, whose UBO was built before it: the march takes the
+        // hand-over variant from the next frame on. Without a cross-fade - the first bake (nothing to hand over), or a
+        // volume geometry change (the march reads both bakes through the SHOWN bake's ring and layer) - straight to a
+        // copy in ONE frame, then the swap: a one-off cost on a setting change, never a frame showing a half copy.
+        job.crossFade = m_baked && sameGeometry(job.settings, m_bakedSettings);
+        if (!job.crossFade)
+            job.copyPerFrame = m_accumDepth;
+        job.stage = job.crossFade ? EBakeStage::Handover : EBakeStage::Copy;
         job.handoverStart = params.frameNumber;
         job.handoverStartSec = Globals::time.getElapsedSec();
         job.progress = 0;
@@ -1320,10 +1334,10 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     if (job.stage != EBakeStage::Copy)
         return;
 
-    // THE COPY: the new extinction into the density, a slice range per frame. Meanwhile the march reads only the new
-    // bake (the fraction is 1), through the accumulation: nothing reads the density.
+    // THE COPY: the new extinction into the density, a range of texel layers (two slices each) per frame. Meanwhile the
+    // march reads only the new bake (the fraction is 1), through the accumulation: nothing reads the density.
     {
-        const uint32 slices = oc::min(job.copyPerFrame, m_slices - job.progress);
+        const uint32 slices = oc::min(job.copyPerFrame, m_accumDepth - job.progress);
         if (slices > 0)
         {
             const vk::DescriptorSet set = m_copySets[frameIdx].getDescriptorSet();
@@ -1339,7 +1353,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
             job.progress += slices;
         }
-        if (job.progress < m_slices)
+        if (job.progress < m_accumDepth)
             return;
     }
     // THE SWAP: the back floor / colour / max floor become the front, the density holds the new bake.
@@ -1354,15 +1368,20 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     m_centre = job.centre;
     m_bakedSettings = job.settings;
     m_baked = true;
-    m_lastBakeEnd = params.frameNumber;
+    m_bakeStartFrame = params.frameNumber + RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     m_bakeDurationSec = Globals::time.getElapsedSec() - job.startSec;
     job.active = false;
 }
 
-void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
+bool TreeVolumePipeline::ready(const FarTreeParams& s) const
+{
+    return m_angularRes != 0 && m_angularRes == s.angularRes && m_radialRes == s.radialRes && m_slices == s.slices;
+}
+
+void TreeVolumePipeline::recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
 {
     const FarTreeParams& s = params.settings;
-    if (m_angularRes == 0 || m_angularRes != s.angularRes || m_radialRes != s.radialRes || m_slices != s.slices)
+    if (!ready(s))
         return; // prepare() did not run for these settings yet
     // THE BAKE, spread over frames: a running one goes on (a geometry setting changed under it: dropped); a new one
     // starts when due and NUM_FRAMES_IN_FLIGHT frames after the last one swapped (its snapshot buffers and the old
@@ -1370,15 +1389,29 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     const glm::vec2 camera(params.cameraPos.x, params.cameraPos.z);
     trackCamera(camera);
     if (m_job.active && !sameBake(s, m_job.settings) && !handingOver())
+    {
         m_job.active = false; // a hand-over finishes: the march already shows part of it
+        m_jobDropped = true;
+    }
+    if (m_jobDropped)
+    {
+        m_jobDropped = false;
+        m_bakeStartFrame = params.frameNumber + RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
+    }
     // BAKE AHEAD: the test and the new centre take where the camera will be when a bake started now swaps.
     const glm::vec2 ahead = camera + bakeLead(s);
     const bool due = m_dirty || !m_baked || !sameBake(s, m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
-    if (!m_job.active && due && (!m_baked || params.frameNumber >= m_lastBakeEnd + RendererVKLayout::NUM_FRAMES_IN_FLIGHT))
+    if (!m_job.active && due && params.frameNumber >= m_bakeStartFrame)
         startBake(params, params.frameNumber, ahead);
     if (m_job.active)
         stepBake(cmd, frameIdx, params);
+}
 
+void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
+{
+    const FarTreeParams& s = params.settings;
+    if (!ready(s))
+        return;
     // TEMPORAL OFF (no blend, no half res) is the plain march: its own variant, its own barriers, no other image
     // touched. On: the march at the temporal images' scale, the temporal pass, and at half res the upsample.
     // The scale and the pixel skip are BAKED into the variants: dispatch by what they were compiled with (prepare()
@@ -1441,7 +1474,7 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     Image& marchColour = temporal ? m_raw : m_out[frameIdx];
     Image& marchDepth = temporal ? m_rawDepth : m_outDepth[frameIdx];
     // THE HAND-OVER variant reads both bakes - from the frame after it began (this frame's UBO must carry its fraction).
-    const bool handover = handingOver() && m_job.handoverStart < params.frameNumber;
+    const bool handover = handingOver() && m_job.crossFade && m_job.handoverStart < params.frameNumber;
     ComputePipeline& march = temporal ? (handover ? m_marchTemporalHandoverPipeline : m_marchTemporalPipeline)
                                       : (handover ? m_marchHandoverPipeline : m_marchPipeline);
     const uint32 back = 1u - m_front;

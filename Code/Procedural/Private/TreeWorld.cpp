@@ -915,7 +915,11 @@ namespace Procedural
 				{
 					const glm::vec2 toRock = local - rock.local;
 					const float clear = rock.radius * 0.9f + 0.5f;
-					inRock |= glm::dot(toRock, toRock) < clear * clear;
+					if (glm::dot(toRock, toRock) < clear * clear)
+					{
+						inRock = true;
+						break;
+					}
 				}
 				if (inRock)
 					continue;

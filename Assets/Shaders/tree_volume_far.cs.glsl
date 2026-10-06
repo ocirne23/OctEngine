@@ -27,7 +27,7 @@ layout (local_size_x = 8, local_size_y = 8) in;
 layout (binding = 2, r32ui) uniform readonly uimage2D u_amount;
 layout (binding = 3, r32ui) uniform readonly uimage2D u_type;
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
-layout (binding = 5, r32ui) uniform uimage3D u_accum;
+layout (binding = 5, r32ui) uniform uimage3D u_accum; // two slices per texel (tree_volume.inc.glsl tvAccumTexel)
 
 // Mirrors TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
 struct RecordType
@@ -63,7 +63,6 @@ layout (push_constant, scalar) uniform Push
 } pc;
 
 const uint PROFILE_BINS = 32u;      // TREE_RECORD_PROFILE_BINS
-const float ACCUM_SCALE = 1024.0;   // tree_volume_splat.cs's fixed point
 
 bool validType(uint type) { return type < pc.numTypes && pc.types.t[type].mass > 0.0; }
 
@@ -126,6 +125,6 @@ void main()
         }
         const float extinction = amount * sum / sliceH;
         if (extinction > 1e-4)
-            imageAtomicAdd(u_accum, ivec3(col, int(s)), uint(extinction * ACCUM_SCALE + 0.5));
+            imageAtomicAdd(u_accum, tvAccumTexel(col, s), tvAccumAmount(extinction, s));
     }
 }

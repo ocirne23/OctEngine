@@ -33,6 +33,16 @@ struct TreeVolumeParams
 };
 
 const float TV_TWO_PI = 6.28318531;
+
+// THE ACCUMULATION (the bake's R32UI 3D image) packs TWO SLICES per texel: slice s lives in texel layer s / 2, in its
+// low (even s) or high (odd s) 16 bits - each a fixed-point extinction x TV_ACCUM_SCALE, summed by imageAtomicAdd. A
+// sum must stay below 64 / m per slice and texel (it is a mean extinction over the texel: overlapping crowns and rocks
+// add, trees beside each other in one cell share it by area); a carry would spill into the other slice. After the
+// resolve each half holds its slice's extinction as a half float (packHalf2x16: x = the even slice).
+const float TV_ACCUM_SCALE = 1024.0;
+ivec3 tvAccumTexel(ivec2 col, uint s) { return ivec3(col, int(s >> 1)); }
+// One add's amount (a single add clamped to its half), shifted into slice s's half.
+uint tvAccumAmount(float extinction, uint s) { return min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu) << ((s & 1u) * 16u); }
 // The world tree records' mass per column (tree_volume_records.cs -> tree_volume_far.cs): fixed point x this.
 const float TV_AMOUNT_SCALE = 4096.0;
 // The max-floor grid (tree_volume_floor_max.cs.glsl): columns per block side (TreeVolumePipeline's FLOOR_MAX_BLOCK), and

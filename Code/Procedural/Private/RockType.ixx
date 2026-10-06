@@ -16,7 +16,7 @@ export namespace Procedural
 	};
 
 	// A rock's largest size (m, its longest axis: `Scale` is clamped to it): the far volume's layer is 22 m high
-	// (RendererVK "Far height"), and a taller rock would stick out of it (the user's limit, 2026-10-06).
+	// (RendererVK "Far height"), and a taller rock would stick out of it.
 	constexpr float ROCK_MAX_SIZE = 22.0f;
 	constexpr int ROCK_MAX_PILE = 4;       // blocks per pile / pillars per group (RockShape's block arrays)
 	constexpr int ROCK_PROFILE_POINTS = 5; // a Pillar's widths, base to top, evenly spaced

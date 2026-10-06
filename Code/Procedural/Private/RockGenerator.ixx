@@ -8,7 +8,7 @@ import :RockType;
 // The rock shape generator (Docs/RockRenderingPlan.md 4). A variant is a SIGNED DISTANCE FIELD at a nominal size
 // of 1 (the longest axis), built from the type and a seed into a RockShape: every random decision is made ONCE
 // there, so rockSdf is a pure function of (shape, point). The field is meshed on the CPU into a regular mesh LOD
-// chain (no GPU tessellation: the user's decision, 2026-10-05).
+// chain (no GPU tessellation).
 //
 // The field lives in the SHAPE frame (the body centred on the origin). The meshes are in ROCK-LOCAL space: Y up, the
 // lowest point of the body at y = 0 (the caller sinks it into the ground) - shape frame = rock-local + (0, originY, 0).
@@ -21,7 +21,7 @@ export namespace Procedural
 	// further level a quarter of the one before, down to ROCK_LOD_MIN_TRIANGLES.
 	constexpr uint32 ROCK_MAX_LODS = 4;
 	constexpr uint32 ROCK_LOD_MIN_TRIANGLES = 24;
-	// The far volume's view of a variant (RendererVK "Far-tree volume", R5): its OCCUPANCY (0..1, soft over one voxel)
+	// The far volume's view of a variant (RendererVK "Far-tree volume"): its OCCUPANCY (0..1, soft over one voxel)
 	// on a ROCK_DENSITY_RES^3 grid over its rock-local box. A rock is a solid: the volume gives it one extinction at any
 	// size ("Trees/Far rock extinction"), so the grid holds no extinction of its own.
 	constexpr uint32 ROCK_DENSITY_RES = 16;

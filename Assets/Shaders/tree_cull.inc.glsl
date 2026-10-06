@@ -58,8 +58,7 @@ struct TreeCullPiece
     vec3 centre;       // world centre of the far representation (the band test)
     float radius;
     uint type;
-    uint pad2;         // (was the LOD hysteresis base: tree meshes have no LOD chains; a rock's chain picks stateless)
-    uint pad0, pad1;
+    uint pad0, pad1, pad2;
 };
 // A ROCK (Procedural's world rocks) is a type with ONE mesh, in the bark slot, on LitRock (PIPELINE_IDX_LIT_ROCK): no
 // billboard, no fade, no mid tier. The culls give its record the mesh LOD pick trees do not have, and no wind. In the

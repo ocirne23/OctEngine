@@ -66,7 +66,7 @@ public:
         Buffer& ubo;
         vk::ImageView prevDepthView;   // last frame's scene depth (collision)
         vk::Sampler   sceneDepthSampler;
-        vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (RainOcclusionPipeline, R32F in GENERAL)
+        vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (RainOcclusionPipeline, R32UI packed, GENERAL)
         vk::Sampler   rainOcclusionSampler; // non-comparison, clamp-to-border white (outside = open sky)
         vk::ImageView oceanMapsView;        // FFT displacement maps (PARTICLE_FLAG_WATER_FLOOR: the live surface)
         vk::Sampler   oceanMapsSampler;
