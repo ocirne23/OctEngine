@@ -115,7 +115,7 @@ void GameMatch::tickWaves(float deltaSec)
     m_waveTimer -= deltaSec;
     if (m_waveTimer > 0.0f)
         return;
-    m_waveTimer = m_waveInterval;
+    m_waveTimer = m_settings.waveInterval;
     queueWave();
 }
 
@@ -132,7 +132,7 @@ int GameMatch::aiAliveCount() const
 float GameMatch::nextWaveBudget() const
 {
     const float wave = (float)m_waveIndex;
-    return (float)m_waveBudget + m_waveBudgetGrowth * wave + m_waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f;
+    return (float)m_settings.waveBudget + m_settings.waveBudgetGrowth * wave + m_settings.waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f;
 }
 
 // The wave blob's radius for `budget` points of the CURRENT mix. Area - not radius - scales with
@@ -155,7 +155,7 @@ float GameMatch::waveSpawnRadius(float budget) const
     }
     const float meanCost = weight > 0.0f ? glm::max(cost / weight, 0.1f) : 1.0f;
     const float bodies = glm::max(budget, 0.0f) / meanCost;
-    const float area = bodies * glm::max(m_waveSpawnAreaPerUnit, 1.0f);
+    const float area = bodies * glm::max(m_settings.waveSpawnAreaPerUnit, 1.0f);
     // 8 m floor keeps a handful of bodies from spawning on one spot; the ceiling is the world.
     return glm::clamp(std::sqrt(area / glm::pi<float>()), 8.0f, c_coopGroundEdge);
 }
@@ -171,7 +171,7 @@ void GameMatch::queueWave()
     // Wave i (0-based) = base + growth per wave so far, where the growth itself climbs by "Wave
     // growth growth" every wave: base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)).
     const float budget = glm::min(nextWaveBudget(),
-        (float)(m_waveMaxAlive - aiAlive) * cheapest - m_ambientPendingBudget - m_wavePendingBudget);
+        (float)(m_settings.waveMaxAlive - aiAlive) * cheapest - m_ambientPendingBudget - m_wavePendingBudget);
     ++m_waveIndex;
     if (budget <= 0.0f)
         return; // at the cap: the clock (and the scaling) still advanced
@@ -232,7 +232,7 @@ void GameMatch::tickCoopSpawns()
     // creations fan out over the job system instead of running one by one.
     ProfileScope scope("Coop spawn trickle", EProfileCategory::Game);
     oc::small_vector<NpcSystem::LooseSpawn, 64> spawns;
-    int budget = glm::max(m_spawnsPerFrame, 1);
+    int budget = glm::max(m_settings.spawnsPerFrame, 1);
     while (budget > 0 && m_wavePendingBudget > 0.0f)
     {
         --budget;
@@ -308,7 +308,7 @@ void GameMatch::tickCoopSpawns()
                 (int)(glm::linearRand(0.0f, 1.0f) * (float)m_coopMap.reachable.size()),
                 0, (int)m_coopMap.reachable.size() - 1)];
             const glm::vec3 center = coopCellCenter(cell);
-            if (glm::length(glm::vec2(center.x, center.z)) < m_ambientSafeRadius)
+            if (glm::length(glm::vec2(center.x, center.z)) < m_settings.ambientSafeRadius)
                 continue; // safe-ring reject: costs one budget tick, never the points
             // DISTANCE = DIFFICULTY: the group's archetype is gated by GEODESIC depth (BFS
             // distance from the Base over the generated map) exactly like waves gate by index -
@@ -322,13 +322,13 @@ void GameMatch::tickCoopSpawns()
             // "Ambient depth scale" < 1 reaches the top band before the map's deepest cell, so the
             // final tier (titans) is not confined to the corners: at 0.9 the mid-edges qualify.
             const float depth = glm::min((float)m_coopMap.depth[cell]
-                / ((float)m_coopMap.maxDepth * m_ambientDepthScale), 1.0f);
+                / ((float)m_coopMap.maxDepth * m_settings.ambientDepthScale), 1.0f);
             const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
             int eligible[c_numWaveArchetypes];
             int numEligible = 0;
             for (int i = 0; i < c_numWaveArchetypes; ++i)
                 if (c_waveArchetypes[i].minWave <= band
-                    && c_waveArchetypes[i].minWave >= band - m_ambientRecipeWindow)
+                    && c_waveArchetypes[i].minWave >= band - m_settings.ambientRecipeWindow)
                     eligible[numEligible++] = i;
             if (numEligible == 0) // a gap in the gate table under the window: fall back to all unlocked
                 for (int i = 0; i < c_numWaveArchetypes; ++i)
@@ -372,7 +372,7 @@ void GameMatch::tickCoopSpawns()
 // since the shared C rand is not a thing to share with main.
 void GameMatch::tickAmbientWander(float deltaSec)
 {
-    if (!m_coop || m_ambientWanderInterval <= 0.0f)
+    if (!m_coop || m_settings.ambientWanderInterval <= 0.0f)
         return;
     // The root list only mutates on main, after this post-update job joins.
     const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
@@ -385,7 +385,7 @@ void GameMatch::tickAmbientWander(float deltaSec)
     // candidates, so a whole-population budget would land every far unit's strolls on the few
     // near a player. The selected fraction is estimated from the random unit probes below (each
     // is a fair sample), smoothed - no walk.
-    m_wanderBudget += (float)aliveUnits * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
+    m_wanderBudget += (float)aliveUnits * m_wanderSelectedFrac * deltaSec / m_settings.ambientWanderInterval;
     int issue = (int)m_wanderBudget;
     if (issue <= 0)
         return;
@@ -431,13 +431,13 @@ void GameMatch::tickAmbientWander(float deltaSec)
         glm::vec2 dir(glm::cos(angle), glm::sin(angle));
         const glm::vec2 toBase(basePos.x - e->pos.x, basePos.z - e->pos.z);
         if (const float len = glm::length(toBase); len > 1e-3f)
-            dir += toBase / len * m_ambientWanderBaseBias; // the bias tilts the stroll toward the Base
+            dir += toBase / len * m_settings.ambientWanderBaseBias; // the bias tilts the stroll toward the Base
         if (glm::dot(dir, dir) < 1e-4f)
             continue;
         dir = glm::normalize(dir);
-        const float dist = (0.4f + 0.6f * rand01()) * m_ambientWanderDistance;
+        const float dist = (0.4f + 0.6f * rand01()) * m_settings.ambientWanderDistance;
         const glm::vec3 target = clampToOpenGround(e->pos + glm::vec3(dir.x, 0.0f, dir.y) * dist);
-        u->orderWander(target, m_ambientWanderTimeout);
+        u->orderWander(target, m_settings.ambientWanderTimeout);
     }
 }
 

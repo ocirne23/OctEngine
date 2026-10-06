@@ -3,89 +3,72 @@ module Spatial;
 import Core;
 import Core.glm;
 import Core.Frustum;
-import Core.Tweaks;
-
-void SpatialStressTest::initialize()
-{
-    Tweak::intVar("Spatial/Stress", "Count", &m_count, 0, 10'000'000);
-    Tweak::floatVar("Spatial/Stress", "Extent", &m_extent, 1.0f, 1'000'000.0f, 10.0f);
-    Tweak::boolean("Spatial/Stress", "Spawn", &m_spawnRequested);
-    Tweak::boolean("Spatial/Stress", "Clear", &m_clearRequested);
-    Tweak::floatVar("Spatial/Stress", "Churn %", &m_churnPercent, 0.0f, 100.0f, 0.1f);
-    Tweak::boolean("Spatial/Stress", "Sphere query", &m_runSphereQuery);
-    Tweak::floatVar("Spatial/Stress", "Query radius", &m_queryRadius, 1.0f, 100'000.0f, 1.0f);
-    Tweak::intVar("Spatial/Stress", "Query hits", &m_queryHits, 0, INT32_MAX);
-    Tweak::floatVar("Spatial/Stress", "Query ms", &m_queryMs, 0.0f, FLT_MAX, 0.001f);
-    Tweak::boolean("Spatial/Stress", "Verify brute force", &m_verifyBruteForce);
-    Tweak::intVar("Spatial/Stress", "Verify delta", &m_verifyDelta, 0, INT32_MAX);
-    Tweak::boolean("Spatial/Stress", "Frustum query", &m_runFrustumQuery);
-    Tweak::floatVar("Spatial/Stress", "Frustum max dist", &m_frustumMaxDist, 1.0f, 1'000'000.0f, 10.0f);
-    Tweak::intVar("Spatial/Stress", "Frustum hits", &m_frustumHits, 0, INT32_MAX);
-    Tweak::floatVar("Spatial/Stress", "Frustum ms", &m_frustumMs, 0.0f, FLT_MAX, 0.001f);
-}
+import Settings;
 
 void SpatialStressTest::update(const glm::dvec3& cameraPos, const Frustum& frustum)
 {
-    if (m_clearRequested)
+    SpatialStressSettings& s = m_settings;
+    if (s.clearRequested)
     {
-        m_clearRequested = false;
+        s.clearRequested = false;
         clearEntries();
     }
-    if (m_spawnRequested)
+    if (s.spawnRequested)
     {
-        m_spawnRequested = false;
+        s.spawnRequested = false;
         clearEntries();
         spawnEntries();
     }
-    if (m_churnPercent > 0.0f && !m_handles.empty())
+    if (s.churnPercent > 0.0f && !m_handles.empty())
         churn();
 
-    if (m_runSphereQuery)
+    if (s.runSphereQuery)
     {
         const auto start = Clock::now();
-        m_queryHits = int(Globals::spatialIndex.querySphere(cameraPos, m_queryRadius, SpatialLayer_Stress, m_queryResults));
-        m_queryMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
-        if (m_verifyBruteForce)
+        s.queryHits = int(Globals::spatialIndex.querySphere(cameraPos, s.queryRadius, SpatialLayer_Stress, m_queryResults));
+        s.queryMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+        if (s.verifyBruteForce)
         {
             // double-precision reference; tiny deltas are float rounding on the sphere boundary
             int expected = 0;
             for (size_t i = 0; i < m_positions.size(); ++i)
             {
-                const double r = double(m_queryRadius) + double(m_radii[i]);
+                const double r = double(s.queryRadius) + double(m_radii[i]);
                 const glm::dvec3 d = m_positions[i] - cameraPos;
                 expected += glm::dot(d, d) <= r * r ? 1 : 0;
             }
-            m_verifyDelta = glm::abs(expected - m_queryHits);
+            s.verifyDelta = glm::abs(expected - s.queryHits);
         }
     }
     else
     {
-        m_queryHits = 0;
-        m_queryMs = 0.0f;
+        s.queryHits = 0;
+        s.queryMs = 0.0f;
     }
 
-    if (m_runFrustumQuery)
+    if (s.runFrustumQuery)
     {
         const auto start = Clock::now();
-        m_frustumHits = int(Globals::spatialIndex.queryFrustum(rebaseFrustum(frustum, cameraPos), cameraPos,
-            m_frustumMaxDist, SpatialLayer_Stress, m_queryResults));
-        m_frustumMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+        s.frustumHits = int(Globals::spatialIndex.queryFrustum(rebaseFrustum(frustum, cameraPos), cameraPos,
+            s.frustumMaxDist, SpatialLayer_Stress, m_queryResults));
+        s.frustumMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
     }
     else
     {
-        m_frustumHits = 0;
-        m_frustumMs = 0.0f;
+        s.frustumHits = 0;
+        s.frustumMs = 0.0f;
     }
 }
 
 void SpatialStressTest::spawnEntries()
 {
-    m_handles.reserve(uint32(m_count));
-    m_positions.reserve(uint32(m_count));
-    m_radii.reserve(uint32(m_count));
-    for (int i = 0; i < m_count; ++i)
+    const int count = m_settings.count;
+    m_handles.reserve(uint32(count));
+    m_positions.reserve(uint32(count));
+    m_radii.reserve(uint32(count));
+    for (int i = 0; i < count; ++i)
     {
-        const glm::dvec3 pos = glm::dvec3(randomSym(), randomSym(), randomSym()) * double(m_extent);
+        const glm::dvec3 pos = glm::dvec3(randomSym(), randomSym(), randomSym()) * double(m_settings.extent);
         const float radius = 0.25f * exp2f(randomUnit() * 6.0f); // log-uniform 0.25m .. 16m
         m_positions.push_back(pos);
         m_radii.push_back(radius);
@@ -106,10 +89,10 @@ void SpatialStressTest::clearEntries()
 void SpatialStressTest::churn()
 {
     const uint32 total = uint32(m_handles.size());
-    uint32 numToMove = uint32(double(total) * double(m_churnPercent) * 0.01);
+    uint32 numToMove = uint32(double(total) * double(m_settings.churnPercent) * 0.01);
     if (numToMove > total)
         numToMove = total;
-    const double bound = double(m_extent);
+    const double bound = double(m_settings.extent);
     for (uint32 n = 0; n < numToMove; ++n)
     {
         const uint32 i = m_churnCursor++ % total;

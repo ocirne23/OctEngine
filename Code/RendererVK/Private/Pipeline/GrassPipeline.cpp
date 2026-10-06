@@ -120,7 +120,7 @@ void GrassPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameI
         return;
     oc::array<DescriptorSetUpdateInfo, 2> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = vertexBuffer.getBuffer(), .range = vertexBuffer.getSize() } } },
     };
@@ -227,7 +227,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
     };
     oc::array<DescriptorSetUpdateInfo, 8> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         storage(2, m_frames[frameIdx]),

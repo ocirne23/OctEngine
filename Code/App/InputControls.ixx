@@ -10,7 +10,7 @@ import Core.Frustum;
 import Core.Time;
 import Core.glm;
 import Core.Camera;
-import Core.Tweaks;
+import Settings;
 
 import Animation;
 import File;
@@ -43,23 +43,13 @@ private:
     oc::vector<ForceBall> forceBalls;
     KeyboardListenerHandle pKeyboardListener; // unregisters itself on destruction
     
-    float output = 1.0f;          // must exceed the iso threshold (default 0.15) or no bubble exists
-    float reach = 4.0f;           // TOTAL extent: the bubble spans pos .. pos + dir * reach
-    float focus = 0.5f;           // shape pinch: 0.5 = sphere spanning the line, 0 = cone pointed at
-                                  // the emitter, 1 = cone pointed at the target
-    int32 team = 0;
-    float distribution = 0.5f;    // where the output density sits along the line (0 = emitter end,
-                                  // 1 = target end); budget-conserving bump
-    float width = 1.0f;           // lateral scale (reach untouched): 1 = round, < 1 = narrower/sharper
+    const AppControlsSettings& controls = Globals::settings.appControls; // test emitter (N/M) + player (C)
 
     bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys - the
                                      // testbed spawn/possess keys are muted (F5/F6/gizmo modes stay)
     bool escapePressed = false;      // Esc edge, polled by main (takeEscapePressed)
     bool playerControl = false;      // key C: WASD/Space drive the player entity, camera flight paused
     bool playerJumpWasDown = false;  // Space edge detection
-    float playerMoveSpeed = 8.0f;    // m/s horizontal target (keep under Network/Validation "Max speed")
-    float playerAccel = 60.0f;       // m/s^2 velocity steering
-    float playerJumpSpeed = 6.0f;
 
     // Local player capsule (single player / server): key C spawns + possesses an upright capsule body
     // (playerCapsule.pre, LockRotation), key V switches first/third person. On a network client key C
@@ -114,17 +104,6 @@ public:
         World& world)
         : gizmo(gizmo), cameraController(cameraController), world(world)
     {
-		Tweak::floatVar("Force/Emitter", "Output", &output, 0.2f, 10.0f, 0.01f); // stay above iso (0.15)
-		Tweak::floatVar("Force/Emitter", "Reach", &reach, 0.1f, 100.0f, 0.1f);
-		Tweak::floatVar("Force/Emitter", "Focus", &focus, 0.0f, 1.0f, 0.01f);
-		Tweak::intVar("Force/Emitter", "Team", &team, 0, 7, 1);
-		Tweak::floatVar("Force/Emitter", "Distribution", &distribution, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Force/Emitter", "Width", &width, 0.05f, 2.0f, 0.01f);
-
-		Tweak::floatVar("Network/Player", "Move speed", &playerMoveSpeed, 0.5f, 30.0f, 0.1f);
-		Tweak::floatVar("Network/Player", "Accel", &playerAccel, 1.0f, 200.0f, 0.5f);
-		Tweak::floatVar("Network/Player", "Jump speed", &playerJumpSpeed, 0.5f, 20.0f, 0.1f);
-
         auto& input = Globals::input;
         pKeyboardListener = input.addKeyboardListener();
         pKeyboardListener->onKeyPressed = [this](const SDL_KeyboardEvent& evt) { handleKeyEvent(evt); };
@@ -267,8 +246,8 @@ public:
             if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
                 continue;
             glm::vec3 vel = pc->body.getLinearVelocity();
-            glm::vec3 dv = glm::vec3(move.x * playerMoveSpeed - vel.x, 0.0f, move.z * playerMoveSpeed - vel.z);
-            const float maxDv = playerAccel * deltaSec;
+            glm::vec3 dv = glm::vec3(move.x * controls.playerMoveSpeed - vel.x, 0.0f, move.z * controls.playerMoveSpeed - vel.z);
+            const float maxDv = controls.playerAccel * deltaSec;
             const float dvLen = glm::length(dv);
             if (dvLen > maxDv && dvLen > 1e-6f)
                 dv *= maxDv / dvLen;
@@ -281,7 +260,7 @@ public:
                 const glm::vec3 pos = pc->body.getPosition();
                 const float bottom = shapeBottomDistance(root.get());
                 if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
-                    vel.y = playerJumpSpeed;
+                    vel.y = controls.playerJumpSpeed;
             }
             pc->body.setLinearVelocity(vel);
         }
@@ -312,11 +291,11 @@ public:
         if (input.isKeyDown(SDL_SCANCODE_A)) move -= right;
         if (glm::dot(move, move) > 1e-8f)
             move = glm::normalize(move);
-        const float speed = playerMoveSpeed * (input.isKeyDown(SDL_SCANCODE_LSHIFT) ? playerSprintMult : 1.0f);
+        const float speed = controls.playerMoveSpeed * (input.isKeyDown(SDL_SCANCODE_LSHIFT) ? playerSprintMult : 1.0f);
 
         glm::vec3 vel = pc->body.getLinearVelocity();
         glm::vec3 dv = glm::vec3(move.x * speed - vel.x, 0.0f, move.z * speed - vel.z);
-        const float maxDv = playerAccel * deltaSec;
+        const float maxDv = controls.playerAccel * deltaSec;
         const float dvLen = glm::length(dv);
         if (dvLen > maxDv && dvLen > 1e-6f)
             dv *= maxDv / dvLen;
@@ -331,7 +310,7 @@ public:
             const float bottom = shapeBottomDistance(playerEntity.get());
             const glm::vec3 pos = pc->body.getPosition();
             if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
-                vel.y = playerJumpSpeed;
+                vel.y = controls.playerJumpSpeed;
         }
         playerJumpWasDown = jumpDown;
         pc->body.setLinearVelocity(vel);
@@ -553,8 +532,9 @@ public:
             && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
         {
             const glm::vec3 dir = cameraController.getDirection();
-            const glm::vec3 pos = cameraController.getPosition() - (dir * reach * 0.5f);
-            ForceEmitter emitter = Globals::forceSystem.createEmitter(team, pos, dir, output, reach, focus, distribution, width);
+            const AppControlsSettings& c = controls;
+            const glm::vec3 pos = cameraController.getPosition() - (dir * c.reach * 0.5f);
+            ForceEmitter emitter = Globals::forceSystem.createEmitter(c.team, pos, dir, c.output, c.reach, c.focus, c.distribution, c.width);
             spawnedForceEmitters.push_back(oc::move(emitter));
         }
         if ((evt.scancode == SDL_Scancode::SDL_SCANCODE_M)
@@ -563,12 +543,12 @@ public:
 			if (spawnedForceEmitters.empty())
 				return;
 			ForceEmitter& emitter = spawnedForceEmitters.back();
-			emitter.setOutput(output);
-			emitter.setReach(reach);
-			emitter.setFocus(focus);
-			emitter.setTeam(team);
-			emitter.setDistribution(distribution);
-			emitter.setWidth(width);
+			emitter.setOutput(controls.output);
+			emitter.setReach(controls.reach);
+			emitter.setFocus(controls.focus);
+			emitter.setTeam(controls.team);
+			emitter.setDistribution(controls.distribution);
+			emitter.setWidth(controls.width);
         }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_B && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {

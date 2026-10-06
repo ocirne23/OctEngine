@@ -1,5 +1,5 @@
 // Shared single-scattering Rayleigh + Mie atmosphere. Earth-ish geometry constants; the scattering
-// coefficients come from the UBO (u_betaRayleigh / u_betaMie), so the visible sky (sky.fs.glsl) and all
+// coefficients come from the UBO (u_sky_betaRayleigh / u_sky_betaMie), so the visible sky (sky.fs.glsl) and all
 // indirect sky lighting (GI probe miss rays, fog ambient, the surface fallback outside the probe volume)
 // are driven by the same physical settings: sun color * intensity, atmosphere lighting (moonlight), and
 // the Rayleigh/Mie coefficients. There are no extra intensity multipliers anywhere in this path: the
@@ -13,11 +13,11 @@
 const float ATMOS_R_PLANET = 6371e3;
 const float ATMOS_R_ATMOS  = 6451e3;
 const float ATMOS_OBSERVE_HEIGHT = 2.0;
-// Tweakable atmosphere shape (u_atmosParams, Sky/Atmosphere in the TweakPanel).
-#define ATMOS_H_RAY   u_atmosParams.x // Rayleigh scale height (m)
-#define ATMOS_H_MIE   u_atmosParams.y // Mie scale height (m)
-#define ATMOS_MIE_EXT u_atmosParams.z // Mie extinction/scattering ratio (absorption)
-#define ATMOS_OZONE   u_atmosParams.w // ozone absorption strength (1 = Earth-like)
+// Tweakable atmosphere shape (u_sky, Sky/Atmosphere in the TweakPanel).
+#define ATMOS_H_RAY   u_sky_rayleighHeight // Rayleigh scale height (m)
+#define ATMOS_H_MIE   u_sky_mieHeight      // Mie scale height (m)
+#define ATMOS_MIE_EXT u_sky_mieExtinction  // Mie extinction/scattering ratio (absorption)
+#define ATMOS_OZONE   u_sky_ozone          // ozone absorption strength (1 = Earth-like)
 
 // Ozone absorption (Bruneton-style coefficients, 1/m). Absorbs green/yellow strongest - this is what
 // kills the vivid green band single scattering otherwise produces at the horizon (the blue-heavy
@@ -28,7 +28,7 @@ const vec3 ATMOS_BETA_OZONE = vec3(0.650e-6, 1.881e-6, 0.085e-6);
 
 vec3 atmosTau(vec2 od) // total per-channel optical thickness from (Rayleigh, Mie) optical depths
 {
-	return u_betaRayleigh * od.x + vec3(u_betaMie * ATMOS_MIE_EXT) * od.y
+	return u_sky_betaRayleigh * od.x + vec3(u_sky_betaMie * ATMOS_MIE_EXT) * od.y
 	     + ATMOS_BETA_OZONE * (ATMOS_OZONE * od.x);
 }
 
@@ -153,7 +153,7 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observ
 
 	float mu = dot(dir, lightDir);
 	float pR = phaseRayleigh(mu);
-	float pM = phaseHG(mu, u_skySunParams.y);
+	float pM = phaseHG(mu, u_sky_mieG);
 
 	// View optical depth per sample as a difference of Chapman evaluations (atmosSegmentOD) - exact for an
 	// exponential atmosphere. The numerically-accumulated version diverges per channel at grazing
@@ -175,10 +175,10 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, float observ
 		t += dt;
 	}
 	transmittance = exp(-atmosTau(atmosRayOD(ray, tFar)));
-	// Scatter boost (u_skySunParams.x) scales how much of the light gets in-scattered - more indirect
+	// Scatter boost (u_sky_scatterBoost) scales how much of the light gets in-scattered - more indirect
 	// sky light - without touching the transmittance. Applied here so every consumer (visible sky,
 	// GI miss rays, fog ambient, surface fallback) scales consistently.
-	return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
+	return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
 }
 
 // Low-step scatter for the indirect paths. Unlike atmosphereScatter, the VIEW optical depth at each
@@ -194,7 +194,7 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 
 	float mu = dot(dir, lightDir);
 	float pR = phaseRayleigh(mu);
-	float pM = phaseHG(mu, u_skySunParams.y);
+	float pM = phaseHG(mu, u_sky_mieG);
 
 	vec2 odViewFull = atmosLightOpticalDepth(ro, dir); // ro -> space along the view ray, closed form
 	vec3 sumR = vec3(0.0), sumM = vec3(0.0);
@@ -212,7 +212,7 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 		sumM += atten * dens.y;
 		t += dt;
 	}
-	return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
+	return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
 }
 
 // Sky radiance for indirect lighting (GI miss rays, fog ambient, surface fallback): a cheap, low-step
@@ -228,8 +228,8 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 vec3 skyGroundSun(vec3 up)
 {
 	const vec3 sunDir = normalize(u_sunDirection.xyz);
-	return u_groundParams.rgb * u_sunTransmittance * u_sunColor.rgb
-		* (u_eclipseParams.x * max(dot(sunDir, up), 0.0) / PI);
+	return u_sky_groundAlbedo * u_sunTransmittance * u_sunColor.rgb
+		* (u_sunVisible * max(dot(sunDir, up), 0.0) / PI);
 }
 
 vec3 skyRadiance(vec3 dir)
@@ -241,12 +241,12 @@ vec3 skyRadiance(vec3 dir)
 	if (cosUp < 0.0)
 	{
 		dir = normalize(dir - up * (cosUp - 0.02));
-		groundAtten = u_groundParams.rgb;
+		groundAtten = u_sky_groundAlbedo;
 		groundSun = skyGroundSun(up);
 	}
-	vec3 radiance = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 4) * u_sunColor.rgb * u_eclipseParams.x;
-	if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
-		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_skyRadianceColor;
+	vec3 radiance = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 4) * u_sunColor.rgb * u_sunVisible;
+	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
+		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_sky_radiance;
 	return radiance * groundAtten + groundSun;
 }
 
@@ -256,12 +256,12 @@ vec3 skyRadiance(vec3 dir)
 vec3 mirrorSkyRadiance(vec3 dir)
 {
 	const vec3 up = normalize(u_skyUp);
-	const float eclipse = u_eclipseParams.x;
+	const float eclipse = u_sunVisible;
 	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
 	vec3 color = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 12) * u_sunColor.rgb;
 	color = mix(vec3(dot(color, luminosity)), color, 2.0 * (2.0 - eclipse)) * eclipse;
-	if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
-		color += atmosphereScatterCheap(dir, up, up, 4) * u_skyRadianceColor;
+	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
+		color += atmosphereScatterCheap(dir, up, up, 4) * u_sky_radiance;
 	return color;
 }
 
@@ -329,11 +329,11 @@ vec4 skyMapGISample(sampler2DArray tex, vec3 dir, int layer)
 //	if (cosUp < 0.0)
 //	{
 //		dir = normalize(dir - up * (cosUp - 0.02));
-//		groundAtten = u_groundParams.rgb * atmosTransmittanceToLight(0.0, sunDir, up) * u_sunColor.rgb * (u_eclipseParams.x * max(dot(sunDir, up), 0.0));
+//		groundAtten = u_sky_groundAlbedo * atmosTransmittanceToLight(0.0, sunDir, up) * u_sunColor.rgb * (u_sunVisible * max(dot(sunDir, up), 0.0));
 //	}
-//	vec3 radiance = atmosphereScatterCheap(dir, sunDir, up, 4) * u_sunColor.rgb * u_eclipseParams.x;
-//	if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
-//		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_skyRadianceColor;
+//	vec3 radiance = atmosphereScatterCheap(dir, sunDir, up, 4) * u_sunColor.rgb * u_sunVisible;
+//	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
+//		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_sky_radiance;
 //	return radiance * groundAtten;
 //}
 

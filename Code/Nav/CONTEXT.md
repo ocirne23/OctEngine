@@ -476,7 +476,7 @@ radius the unit marches lane-friendly toward the target.
 
 ## Tweaks
 
-### `Nav/*` (defaults from [System.ixx:150](Private/System.ixx#L150))
+### `Nav/*` (`NavSettings` = `Globals::settings.nav`, defaults and registration in `Code/Settings` - `Settings.Nav`)
 
 | Tweak | Default |
 |---|---|

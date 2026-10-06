@@ -259,7 +259,7 @@ components:
 
 # SIM LOD
 
-`SimLodConfig` in [World.ixx:44](Private/World.ixx#L44). "Game/Sim LOD" tweaks — per-process performance tuning, NOT Synced.
+`SimLodConfig` = `Globals::settings.world.simLod` (`Settings.World`, Code/Settings/Public/World.ixx; the World holds a const reference). "Game/Sim LOD" tweaks — per-process performance tuning, NOT Synced.
 
 **Decided ENTIRELY in World.** The entity only sees its delta.
 
@@ -1010,7 +1010,9 @@ it overwrote the push entirely — a launch / snap-back oscillation.
 Cross-entity writes are atomic CAS; cross-entity lookup is spatial queries — **no entity lists**;
 physics writes ride the body-command queue.
 
-Tuning statics (`GameUnitComponent::params` etc.) are set by the Game layer's tweaks — the full
+Tuning statics (`GameUnitComponent::params` / `GameStructureComponent::params`) are references to
+`Globals::settings.game.unitParams` / `structureParams` (types in `Settings.Game`, tweaks registered by
+`Settings::registerGame`; GameMatch writes `localTeam` / `huntSeedTeam`) — the full
 parameter tables and the steering are in [`Code/Nav/CONTEXT.md`](../Nav/CONTEXT.md) and
 [`Code/Game/CONTEXT.md`](../Game/CONTEXT.md).
 
@@ -1142,8 +1144,11 @@ The manager never null-checks `state`; the component's own `update()` and outsid
 (no flags)  = single player (ENetRole::None; fireNetworkEvent degrades to a local fireEvent)
 ```
 
-`initialize()` registers the "Network" tweak block **regardless of role**, so the section exists in
-single player too. Hard cap `MaxClients` 32.
+The "Network" tweaks are `NetworkSettings` = `Globals::settings.network` (`Settings.Network`, with
+`NetSyncParams` as its `correction` member), registered in `Code/Settings` for every role.
+NetworkManager.cpp binds them under their old `s_*` names as file-scope references. `initialize()`
+attaches the link-simulation listeners, which copy `simPacketLoss` / `simLatencyMs` / `simJitterMs` into
+the NetHost config (also after every `open()`, which resets that config). Hard cap `MaxClients` 32.
 
 **Thread contract:** every NetHost call is main-thread — `receive()` before the entity and physics
 updates, `send()` after `world.update`. Snapshot decode writes component target state on the main

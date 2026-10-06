@@ -21,15 +21,11 @@ layout (binding = 4) uniform sampler2D u_mbNeighborMax; // per MOTION_BLUR_TILE 
 layout (binding = 5) uniform sampler2D u_mbDepth;       // this frame's scene depth (the gather's depth tests)
 layout (location = 0) out vec4 out_color;
 
+// The exposure, the tonemapper, the bloom mix and the gather's samples are u_post (the frame UBO): constants while
+// "Post" is locked, so one tonemapper path and a fixed sample count remain.
 layout (push_constant) uniform PostPC
 {
-    float u_exposure;   // linear scale (exp2 of the EV tweak); in auto mode this is exposure compensation
-    int   u_tonemapper; // 0 = off (clip), 1 = Reinhard, 2 = ACES, 3 = AgX
-    int   u_autoExpEnable; // 1 = multiply by the eye-adaptation exposure, 0 = manual exposure only
-    float u_bloomKeep;  // 1 - the bloom intensity: the scene's share (1 = bloom off)
     vec4  u_bloomUv;    // bloom uv = v_uv * xy + zw (the viewport -> level 0's region)
-    float u_bloomScale; // intensity / level count: level 0 holds the SUM of every level (0 = bloom off)
-    uint  u_mbSamples;  // motion blur gather samples (0 = motion blur off)
 };
 
 // Extended Reinhard on luminance (hue-preserving, soft asymptote at white = 4).
@@ -99,27 +95,29 @@ vec3 linearToSrgb(vec3 c)
 
 void main()
 {
-    float exposure = u_exposure * (u_autoExpEnable != 0 ? u_autoExposure : 1.0);
+    float exposure = u_post_exposure * (u_post_autoExposure > 0.5 ? u_autoExposure : 1.0);
     vec3 color;
     const ivec2 px = ivec2(gl_FragCoord.xy);
-    const vec2 vN = u_mbSamples != 0u ? texelFetch(u_mbNeighborMax, px / MOTION_BLUR_TILE, 0).xy : vec2(0.0);
+    const uint mbSamples = uint(u_post_mbSamples);
+    const vec2 vN = mbSamples != 0u ? texelFetch(u_mbNeighborMax, px / MOTION_BLUR_TILE, 0).xy : vec2(0.0);
     if (dot(vN, vN) >= 1.0) // at least half a pixel of blur radius in the tile neighbourhood
     {
         const ivec2 lo = ivec2(u_viewportRect.xy * u_screenSize.xy);
         const ivec2 hi = ivec2((u_viewportRect.xy + u_viewportRect.zw) * u_screenSize.xy) - 1;
-        color = motionBlurGather(u_resolved, u_mbVelocity, u_mbDepth, px, vN, u_mbSamples, lo, hi);
+        color = motionBlurGather(u_resolved, u_mbVelocity, u_mbDepth, px, vN, mbSamples, lo, hi);
     }
     else
         color = texture(u_resolved, v_uv).rgb;
     // Bloom in HDR, before the exposure. With a threshold the blur holds only the light above it and is ADDED
-    // (u_bloomKeep 1); without one it is the energy-conserving mix - every pixel spreads a share of its light.
-    if (u_bloomScale > 0.0)
-        color = color * u_bloomKeep + textureLod(u_bloom, v_uv * u_bloomUv.xy + u_bloomUv.zw, 0.0).rgb * u_bloomScale;
+    // (u_post_bloomKeep 1); without one it is the energy-conserving mix - every pixel spreads a share of its light.
+    if (u_post_bloomScale > 0.0)
+        color = color * u_post_bloomKeep + textureLod(u_bloom, v_uv * u_bloomUv.xy + u_bloomUv.zw, 0.0).rgb * u_post_bloomScale;
     color *= exposure;
     // The swapchain is UNORM (no hardware sRGB encode), so display encoding happens here too.
     // "Off" keeps the legacy raw-linear passthrough; AgX's sigmoid already outputs display-encoded.
-    if      (u_tonemapper == 1) color = linearToSrgb(tonemapReinhard(color));
-    else if (u_tonemapper == 2) color = linearToSrgb(tonemapACES(color));
-    else if (u_tonemapper == 3) color = tonemapAgX(color);
+    const int tonemapper = int(u_post_tonemapper);
+    if      (tonemapper == 1) color = linearToSrgb(tonemapReinhard(color));
+    else if (tonemapper == 2) color = linearToSrgb(tonemapACES(color));
+    else if (tonemapper == 3) color = tonemapAgX(color);
     out_color = vec4(color, 1.0);
 }

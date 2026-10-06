@@ -31,13 +31,13 @@ bool forceSampledTierOwns(vec3 hitPos, uint team, out uint ownerIdx)
     ownerIdx = forceDominantEmitter(hitPos, team);
     if (ownerIdx == 0xFFFFFFFFu)
         return true; // no contributor (numerical fringe): draw nothing either way
-    return u_forceBake1.w > 0.5 && forceVisibleRadius(fe_emitters[ownerIdx]) >= u_forceBake0.w;
+    return u_forceLive_bakeEnabled > 0.5 && forceVisibleRadius(fe_emitters[ownerIdx]) >= u_forceLive_bakeThreshold;
 }
 
 void main()
 {
     g_viewIndex = int(u_viewIndex);
-    const float iso = u_forceParams0.x;
+    const float iso = u_force_isoThreshold;
 
     const vec2 interval = texelFetch(u_shellInterval, ivec2(gl_FragCoord.xy), 0).xy;
     float t0 = interval.x;
@@ -63,19 +63,19 @@ void main()
     if (t1 <= t0)
         discard;
 
-    // World-space step size (u_forceBake2.x), growing with DISTANCE so a far pixel never marches
-    // finer than ~2 px of world size (u_forceBake2.z = px per radius/dist), hard-capped
-    // (u_forceBake2.y): the union interval can span several disjoint bubbles, so the step count
+    // World-space step size (u_force_unionStepSize), growing with DISTANCE so a far pixel never marches
+    // finer than ~2 px of world size (u_forceLive_unionPxScale = px per radius/dist), hard-capped
+    // (u_force_unionMaxSteps): the union interval can span several disjoint bubbles, so the step count
     // follows its LENGTH instead of being a fixed budget squeezed over it.
-    const float stepSize = max(u_forceBake2.x, 2.0 * t0 / max(u_forceBake2.z, 1.0));
-    const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_forceBake2.y));
+    const float stepSize = max(u_force_unionStepSize, 2.0 * t0 / max(u_forceLive_unionPxScale, 1.0));
+    const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_force_unionMaxSteps));
     const float dt = (t1 - t0) / float(steps);
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce forceBake2.w) -
+    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce, u_forceLive_cameraInside) -
     // never re-sampled per fragment.
-    const bool cameraInsideField = t0 > 0.0 ? u_forceBake2.w > 0.5 : F > 0.0;
+    const bool cameraInsideField = t0 > 0.0 ? u_forceLive_cameraInside > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
     float fPrev = F;

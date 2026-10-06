@@ -23,11 +23,7 @@ namespace
         glm::ivec2 base;
         glm::ivec2 origin;
         glm::ivec2 size;
-        float oceanBias;
         uint32 mbEnabled;
-        float mbShutter;
-        float mbMaxRadius;
-        float mbCameraScale;
     };
 
     vk::DescriptorSetLayoutBinding binding(uint32 idx, vk::DescriptorType type)
@@ -180,7 +176,7 @@ void DlssPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const R
 
     vk::DescriptorSet vkSet = m_sets[frameIdx].getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 8> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_sampler, .imageView = params.motionView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_motion.view, .imageLayout = vk::ImageLayout::eGeneral } } },
@@ -196,8 +192,7 @@ void DlssPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const R
     // The motion blur's sub-tile grid starts at pixel 0: with it, the dispatch covers the whole target (as TAA's).
     const glm::ivec2 base = params.mbEnabled ? glm::ivec2(0) : params.renderOrigin;
     const glm::ivec2 extent = params.mbEnabled ? glm::ivec2((int)m_motion.width, (int)m_motion.height) : params.renderSize;
-    const MvecPC pc{ .base = base, .origin = params.renderOrigin, .size = params.renderSize, .oceanBias = params.oceanBias,
-        .mbEnabled = params.mbEnabled ? 1u : 0u, .mbShutter = params.mbShutter, .mbMaxRadius = params.mbMaxRadius, .mbCameraScale = params.mbCameraScale };
+    const MvecPC pc{ .base = base, .origin = params.renderOrigin, .size = params.renderSize, .mbEnabled = params.mbEnabled ? 1u : 0u };
     cmd.pushConstants(layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
     constexpr uint32 group = RendererVKLayout::MOTION_BLUR_SUBTILE; // the shader's workgroup
     cmd.dispatch(((uint32)extent.x + group - 1) / group, ((uint32)extent.y + group - 1) / group, 1);

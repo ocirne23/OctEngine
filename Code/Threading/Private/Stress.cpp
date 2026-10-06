@@ -2,36 +2,14 @@ module Threading;
 
 import Core;
 import Core.Log;
-import Core.Tweaks;
-
-static constexpr oc::string_view modeNames[] = { "Off", "Empty jobs", "ParallelFor", "Graph", "Fiber wait" };
-
-void JobSystemStress::initialize()
-{
-    Tweak::enumVar("Threading/Stress", "Mode", &m_mode, modeNames);
-    Tweak::intVar("Threading/Stress", "Jobs per batch", &m_batchSize, 1, 16000);
-    Tweak::intVar("Threading/Stress", "ParallelFor size", &m_parallelSize, 1, 1 << 24, 4096.0f);
-    Tweak::intVar("Threading/Stress", "Grain size", &m_grainSize, 1, 65536, 64.0f);
-    Tweak::boolean("Threading/Stress", "Run self test", &m_runSelfTest);
-    Tweak::floatVar("Threading/Stress", "Batch ms", &m_lastMs, 0.0f, FLT_MAX, 0.0f);
-    Tweak::intVar("Threading/Stress", "Jobs per ms", &m_jobsPerMs, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stress", "Hazard violations", &m_violationsDisplay, 0, INT32_MAX, 0.0f);
-
-    Tweak::intVar("Threading/Stats", "Executed/s", &m_executedPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Stolen/s", &m_stolenPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Parked/s", &m_parkedPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Resumed/s", &m_resumedPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Sleeps/s", &m_sleepsPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Pre-empted/s", &m_preemptedPerSec, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Inline fallbacks", &m_inlineFallbacks, 0, INT32_MAX, 0.0f);
-    Tweak::intVar("Threading/Stats", "Busy %", &m_busyPercent, 0, 100, 0.0f);
-}
+import Settings;
 
 void JobSystemStress::update()
 {
-    if (m_runSelfTest)
+    JobStressSettings& stress = m_settings.stress;
+    if (stress.runSelfTest)
     {
-        m_runSelfTest = false;
+        stress.runSelfTest = false;
         selfTest();
     }
 
@@ -44,7 +22,7 @@ void JobSystemStress::update()
         m_delayedMicros >= 240000 ? Log::info(buf) : Log::error(buf);
     }
 
-    switch (m_mode)
+    switch (stress.mode)
     {
     case 1: benchEmptyJobs(); break;
     case 2: benchParallelFor(); break;
@@ -59,29 +37,31 @@ void JobSystemStress::update()
 void JobSystemStress::benchEmptyJobs()
 {
     JobSystem& jobSystem = Globals::jobSystem;
-    const uint32 count = uint32(m_batchSize);
+    JobStressSettings& stress = m_settings.stress;
+    const uint32 count = uint32(stress.batchSize);
     const Clock::time_point start = Clock::now();
     JobCounter counter;
     for (uint32 i = 0; i < count; ++i)
         jobSystem.submit([] {}, { "stressEmpty" }, EJobPriority::Normal, &counter);
     jobSystem.wait(counter);
-    m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
-    m_jobsPerMs = m_lastMs > 0.0f ? int(float(count) / m_lastMs) : 0;
+    stress.lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+    stress.jobsPerMs = stress.lastMs > 0.0f ? int(float(count) / stress.lastMs) : 0;
 }
 
 void JobSystemStress::benchParallelFor()
 {
-    const uint32 count = uint32(m_parallelSize);
+    JobStressSettings& stress = m_settings.stress;
+    const uint32 count = uint32(stress.parallelSize);
     m_parallelData.resize(count);
     float* data = m_parallelData.data();
     const Clock::time_point start = Clock::now();
-    Globals::jobSystem.parallelFor(0, count, uint32(m_grainSize), { "stressParallelFor" }, [data](uint32 begin, uint32 end)
+    Globals::jobSystem.parallelFor(0, count, uint32(stress.grainSize), { "stressParallelFor" }, [data](uint32 begin, uint32 end)
         {
             for (uint32 i = begin; i < end; ++i)
                 data[i] = std::sqrt(float(i) * 1.618f) + float(i) * 0.001f;
         });
-    m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
-    m_jobsPerMs = m_lastMs > 0.0f ? int(float(count) / m_lastMs) : 0;
+    stress.lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+    stress.jobsPerMs = stress.lastMs > 0.0f ? int(float(count) / stress.lastMs) : 0;
 }
 
 void JobSystemStress::buildBenchGraph()
@@ -139,12 +119,13 @@ void JobSystemStress::buildBenchGraph()
 
 void JobSystemStress::benchGraph()
 {
+    JobStressSettings& stress = m_settings.stress;
     buildBenchGraph();
     const Clock::time_point start = Clock::now();
     m_benchGraph.runAndWait();
-    m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
-    m_jobsPerMs = m_lastMs > 0.0f ? int(float(NumBenchJobs) / m_lastMs) : 0;
-    m_violationsDisplay = int(m_violations.load(oc::memory_order_relaxed));
+    stress.lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+    stress.jobsPerMs = stress.lastMs > 0.0f ? int(float(NumBenchJobs) / stress.lastMs) : 0;
+    stress.violations = int(m_violations.load(oc::memory_order_relaxed));
 }
 
 void JobSystemStress::benchFiberWait()
@@ -165,9 +146,10 @@ void JobSystemStress::benchFiberWait()
                     m_violations.fetch_add(1, oc::memory_order_relaxed);
             }, { "stressOuter" }, EJobPriority::Normal, &outer);
     jobSystem.wait(outer);
-    m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
-    m_jobsPerMs = m_lastMs > 0.0f ? int((64.0f * 17.0f) / m_lastMs) : 0;
-    m_violationsDisplay = int(m_violations.load(oc::memory_order_relaxed));
+    JobStressSettings& stress = m_settings.stress;
+    stress.lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
+    stress.jobsPerMs = stress.lastMs > 0.0f ? int((64.0f * 17.0f) / stress.lastMs) : 0;
+    stress.violations = int(m_violations.load(oc::memory_order_relaxed));
 }
 
 void JobSystemStress::updateStatsDisplay()
@@ -179,14 +161,15 @@ void JobSystemStress::updateStatsDisplay()
     const JobSystemStats stats = Globals::jobSystem.getStats();
     if (m_lastStatsTime != Clock::time_point{})
     {
-        m_executedPerSec = int(double(stats.numExecuted - m_lastStats.numExecuted) / interval);
-        m_stolenPerSec = int(double(stats.numStolen - m_lastStats.numStolen) / interval);
-        m_parkedPerSec = int(double(stats.numParked - m_lastStats.numParked) / interval);
-        m_resumedPerSec = int(double(stats.numResumed - m_lastStats.numResumed) / interval);
-        m_sleepsPerSec = int(double(stats.numSleeps - m_lastStats.numSleeps) / interval);
-        m_preemptedPerSec = int(double(stats.numPreempted - m_lastStats.numPreempted) / interval);
-        m_inlineFallbacks = int(stats.numInlineFallbacks);
-        m_busyPercent = int(100.0 * double(stats.busyNs - m_lastStats.busyNs) / (interval * 1e9 * double(Globals::jobSystem.getNumContexts())));
+        JobStatsSettings& out = m_settings.stats;
+        out.executedPerSec = int(double(stats.numExecuted - m_lastStats.numExecuted) / interval);
+        out.stolenPerSec = int(double(stats.numStolen - m_lastStats.numStolen) / interval);
+        out.parkedPerSec = int(double(stats.numParked - m_lastStats.numParked) / interval);
+        out.resumedPerSec = int(double(stats.numResumed - m_lastStats.numResumed) / interval);
+        out.sleepsPerSec = int(double(stats.numSleeps - m_lastStats.numSleeps) / interval);
+        out.preemptedPerSec = int(double(stats.numPreempted - m_lastStats.numPreempted) / interval);
+        out.inlineFallbacks = int(stats.numInlineFallbacks);
+        out.busyPercent = int(100.0 * double(stats.busyNs - m_lastStats.busyNs) / (interval * 1e9 * double(Globals::jobSystem.getNumContexts())));
     }
     m_lastStats = stats;
     m_lastStatsTime = now;

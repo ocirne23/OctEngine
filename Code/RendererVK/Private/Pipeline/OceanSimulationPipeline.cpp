@@ -344,7 +344,7 @@ void OceanSimulationPipeline::reloadShaders()
         printf("OceanSimulationPipeline: spray shader reload failed, keeping previous pipeline\n");
 }
 
-void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::Ubo& ubo, const glm::vec3& cameraPos, float dt)
+void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::OceanLiveUbo& live, const glm::vec3& cameraPos, float dt)
 {
     const OceanParams& ocean = m_oceanParams;
     const float texel0 = glm::max(ocean.foamTexel, 0.01f);
@@ -365,12 +365,9 @@ void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::Ubo& ubo, const
         const glm::vec2 originCells = glm::floor(cameraQ / texel) - (float)(N / 2);
         const glm::vec2 shift = reset ? glm::vec2((float)(2 * N)) : originCells - m_foamOriginCells[level];
         m_foamOriginCells[level] = originCells;
-        ubo.oceanFoamLevels[level] = glm::vec4(originCells * texel, shift);
+        live.foamLevels[level] = glm::vec4(originCells * texel, shift);
     }
-    ubo.oceanFoamField = glm::vec4(m_foamDrift, texel0, glm::clamp(ocean.foamSurfaceDecay, 0.0f, 0.9999f));
-    ubo.oceanFoamField1 = glm::vec4(glm::max(ocean.foamSurfaceStrength, 0.0f), glm::max(ocean.foamThreshold, 0.0f),
-        glm::max(ocean.foamEdge, 0.0f), glm::max(ocean.foamDetail, 0.0f));
-    ubo.oceanFoamField2 = glm::vec4(glm::clamp(ocean.foamFineWaves, 0.0f, 1.0f), glm::max(ocean.bubbleBlur, 0.0f), 0.0f, 0.0f);
+    live.foamDrift = m_foamDrift; // the field's tweak values: Renderer::buildUboOcean (u_ocean_foam*)
 }
 
 void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray)
@@ -412,7 +409,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
     {
         oc::array<DescriptorSetUpdateInfo, 2> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             storageImage(m_spectrumView[0]),
         };
         updates[1].binding = 1;
@@ -468,7 +465,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
     {
         oc::array<DescriptorSetUpdateInfo, 4> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             storageImage(m_mapsMip0View),
             storageImage(m_foamView),
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -592,13 +589,13 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 
     // ---- 6. Spray: breaking crests -> particle spawn requests (the particle GPU spawn path). Reads the
     // finished maps; writes the shared request buffer + counter, which the particle sim's head barrier
-    // (compute -> compute) orders before the begin pass. UBO-gated (u_oceanSpray0.x = the emitter slot,
+    // (compute -> compute) orders before the begin pass. UBO-gated (u_oceanLive_sprayEmitter = the emitter slot,
     // 0xFFFFFFFF = off), so it records once. ----
     if (spray.particleCounters && spray.particleRequests)
     {
         oc::array<DescriptorSetUpdateInfo, 5> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_mapsSampler.getSampler(), .imageView = m_mapsView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,

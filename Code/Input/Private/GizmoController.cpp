@@ -6,8 +6,8 @@ import Core.Camera;
 import Core.Rect;
 import Core.Transform;
 import Core.Sphere;
-import Core.Tweaks;
 import Core.SDL;
+import Settings;
 import Entity;
 import RendererVK;
 import UI;
@@ -153,11 +153,6 @@ void GizmoController::initialize(World& world)
             }
         };
 
-    Tweak::floatVar("Editor/Gizmo", "Screen Size", &m_screenSize, 0.01f, 0.5f, 0.001f);
-    Tweak::floatVar("Editor/Gizmo", "Axis Pick Frac", &m_axisPickFrac, 0.02f, 0.5f, 0.01f);
-    Tweak::floatVar("Editor/Gizmo", "Plane Pick Scale", &m_planePickScale, 0.1f, 4.0f, 0.1f);
-    Tweak::floatVar("Editor/Gizmo", "Ring Pick Scale", &m_ringPickScale, 0.1f, 4.0f, 0.1f);
-
     applyMode();
 }
 
@@ -193,7 +188,7 @@ void GizmoController::update(const Camera& camera, const Rect& viewport, Entity*
     m_gizmoRot = (m_mode == EGizmoMode::Rotate) ? glm::normalize(worldTransform(selected).quat)
                                                 : glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
 
-    m_gizmoScale = glm::max(dist * m_screenSize, 1e-4f);
+    m_gizmoScale = glm::max(dist * Globals::settings.gizmo.screenSize, 1e-4f);
     m_gizmo->pos = targetPos;
     m_gizmo->scale = m_gizmoScale;
     m_gizmo->rot = m_gizmoRot;
@@ -218,7 +213,7 @@ GizmoController::Handle GizmoController::pickAxisInGroup(const char* group, cons
                 const float armLen = glm::abs(d[axis]) + b.radius;
                 float t = glm::clamp(closestParamOnLine(ray, origin, kAxis[axis]), 0.0f, armLen);
                 const float dist = distancePointToRay(origin + kAxis[axis] * t, ray);
-                if (dist <= armLen * m_axisPickFrac && dist < bestDist)
+                if (dist <= armLen * Globals::settings.gizmo.axisPickFrac && dist < bestDist)
                 {
                     bestDist = dist;
                     best = axisH[axis];
@@ -254,7 +249,7 @@ GizmoController::Handle GizmoController::pickRing(const glm::vec3& origin, const
                 // selects the arc the cursor is actually over, instead of any plane that crosses radius R.
                 const glm::vec3 circlePoint = origin + glm::normalize(inPlane) * ringRadius;
                 const float dist = distancePointToRay(circlePoint, ray);
-                if (dist <= b.radius * m_ringPickScale && dist < bestDist)
+                if (dist <= b.radius * Globals::settings.gizmo.ringPickScale && dist < bestDist)
                 {
                     bestDist = dist;
                     best = ringH[axis];
@@ -287,7 +282,7 @@ GizmoController::Handle GizmoController::pickHandle(const Ray& ray) const
                 glm::vec3 hit;
                 if (!rayPlane(ray, b.pos, kAxis[n], hit))
                     continue;
-                if (glm::length(hit - b.pos) <= b.radius * m_planePickScale)
+                if (glm::length(hit - b.pos) <= b.radius * Globals::settings.gizmo.planePickScale)
                     return planeForNormal[n];
             }
 

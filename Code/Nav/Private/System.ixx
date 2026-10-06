@@ -3,6 +3,7 @@ export module Nav:System;
 import Core;
 import Core.glm;
 import Threading;
+import Settings;
 import :Grid;
 import :Field;
 import :Density;
@@ -28,9 +29,9 @@ export namespace Nav
 
         ~NavSystem();
 
-        void initialize(); // registers the "Nav" tweaks; JobSystem must be initialized
-        bool isEnabled() const { return m_enabled; }
-        float rebuildInterval() const { return m_rebuildInterval; } // the cadence sources are consumed at (the game's feed slices its sweep over it)
+        void initialize(); // JobSystem must be initialized
+        bool isEnabled() const { return m_settings.enabled; }
+        float rebuildInterval() const { return m_settings.rebuildInterval; } // the cadence sources are consumed at (the game's feed slices its sweep over it)
 
         void setObstacles(oc::span<const NavObstacle> obstacles);         // main; change-detected
         void setTeamSources(uint32 team, oc::span<const NavSource> sources); // main; every frame
@@ -91,7 +92,7 @@ export namespace Nav
         // team" near `focus`, 2 = crowd FLOW arrows + PRESSURE columns of "Debug team".
         void drawDebug(const glm::vec3& focus,
             const oc::function<void(const glm::vec3&, const glm::vec3&, uint32)>& line) const;
-        int debugMode() const { return m_debugMode; }
+        int debugMode() const { return m_settings.debugMode; }
 
         void clear(); // drop every field/density chunk (game teardown / reload)
 
@@ -182,36 +183,8 @@ export namespace Nav
         uint32 m_publishedCount = 0;
         bool m_initialized = false;
 
-        // tweaks
-        bool m_enabled = true;
-        float m_fieldRadius = 400.0f; // covers a whole arena (the 600 m co-op map corner to corner from the Base); a unit outside it falls back to the local search
-        float m_rebuildInterval = 0.25f;
-        float m_buildSpread = 0.25f; // seconds a field build is spread over (= the rebuild interval: the next build is due as it lands)
-        int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
-        int m_keepFrames = 120;
-        // Fade rates are HALF-LIVES in seconds (frame-rate independent), not per-frame factors.
-        float m_flowHalfLife = 5.0f;
-        float m_pressureDiffusion = 0.1f; // Jacobi step weight at 60 Hz (dt-scaled, clamped to 0.25)
-        float m_pressureFloor = 1.6f;      // magnitude a neighbour needs before it diffuses (0 = off)
-        float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve - the seeded TROUGH has
-                                          // to outlive the walk it was planned for, and jams stay
-                                          // felt after the crowd that made them moved on
-        float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM - see FlowField::update)
-        float m_seedArea = 10.0f;         // metres: requests from/to the same area are ONE lane
-        float m_seedCooldown = 3.0f;      // seconds that area pair stays suppressed
-        int m_seedMaxPerFrame = 2;        // hard cap on plan JOBS queued per frame
-        float m_seedTrough = 20.0f;        // NEGATIVE pressure a seeded lane carves (0 = flow only)
-        float m_seedSqueeze = 10.0f;       // extra trough depth per blocked neighbour of a lane cell
-        float m_seedRange = 20.0f;        // metres of the plan actually written (0 = all of it)
-        // LOG-SCALED tweak: the slider is the EXPONENT, the gain is 10^x - one slider covers
-        // 0.01 .. 1000 m/s of flow per unit of pressure gradient, with fine control at the low end
-        // (a linear 0..20 range could neither reach "pressure dominates" nor resolve small values).
-        float m_pressureFlowGainExp = 0.3f;
-        float pressureFlowGain() const { return std::pow(10.0f, m_pressureFlowGainExp); }
-        int m_debugMode = 0;
-        int m_debugTeam = 0;
-        float m_debugRadius = 60.0f;
-        float m_debugFlowMin = 0.1f; // hide flow arrows below this (the haze buries the lanes)
+        const NavSettings& m_settings = Globals::settings.nav; // the "Nav" tweaks (Settings.Nav)
+        float pressureFlowGain() const { return std::pow(10.0f, m_settings.pressureFlowGainExp); } // the slider is the exponent
     };
 }
 

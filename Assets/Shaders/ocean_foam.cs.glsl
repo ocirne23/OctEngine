@@ -7,7 +7,7 @@
 // Jacobian folding + Longuet-Higgins downward crest acceleration), evaluated at the texel's REST position
 // with every cascade mip-filtered to this level's texel footprint.
 //
-// Last frame's state is read from the ping/pong image at xy + shift (u_oceanFoamLevels[l].zw: whole
+// Last frame's state is read from the ping/pong image at xy + shift (u_oceanLive_foamLevels[l].zw: whole
 // texels the level's origin moved since last frame as the camera travelled); texels that scrolled in
 // start from the next coarser level (see main). The result is written to the ping/pong layer AND to the maps' foam layer, whose mip chain
 // the blit then builds with everything else.
@@ -37,7 +37,7 @@ float loadPrev(int level, ivec2 xy)
 float samplePrev(int level, vec2 q)
 {
     const float texel = oceanFoamTexel(level);
-    const vec2 prevOrigin = u_oceanFoamLevels[level].xy - u_oceanFoamLevels[level].zw * texel;
+    const vec2 prevOrigin = u_oceanLive_foamLevels[level].xy - u_oceanLive_foamLevels[level].zw * texel;
     const vec2 st = (q - prevOrigin) / texel - 0.5;
     const ivec2 i = ivec2(floor(st));
     const vec2 f = st - vec2(i);
@@ -50,16 +50,16 @@ void main()
     const ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
     const int level = int(gl_GlobalInvocationID.z);
     const float N = float(OCEAN_FFT_SIZE);
-    const float chop = u_oceanParams0.w;
+    const float chop = u_ocean_choppiness;
     const float texel = oceanFoamTexel(level);
 
     // This texel's rest position: its drifted coordinate plus the drift.
-    const vec2 restXZ = u_oceanFoamLevels[level].xy + (vec2(xy) + 0.5) * texel + u_oceanFoamField.xy;
+    const vec2 restXZ = u_oceanLive_foamLevels[level].xy + (vec2(xy) + 0.5) * texel + u_oceanLive_foamDrift;
 
     float sxx = 0.0, szz = 0.0, sxz = 0.0, accel = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
-        const float Lc = u_oceanParams2[c];
+        const float Lc = u_ocean_cascadeSizes[c];
         const vec2 uv = restXZ / Lc;
         const float lod = max(log2(texel * N / Lc), 0.0); // texel footprint match: cascade texel -> field texel
         const vec4 g = textureLod(u_oceanMaps, vec3(uv, float(OCEAN_CASCADES + c)), lod);
@@ -77,16 +77,16 @@ void main()
     // covered this water for a while, so the new strip carries the right amount (softer, a 4x4 average) and
     // no emptier band trails the moving camera. The outermost level has nothing coarser: it starts empty
     // (and fades out anyway). Reading the other slot of any level is safe: this dispatch writes only its own.
-    const ivec2 prevXY = xy + ivec2(u_oceanFoamLevels[level].zw);
+    const ivec2 prevXY = xy + ivec2(u_oceanLive_foamLevels[level].zw);
     float prev;
     if (all(greaterThanEqual(prevXY, ivec2(0))) && all(lessThan(prevXY, ivec2(OCEAN_FFT_SIZE))))
         prev = loadPrev(level, prevXY);
     else if (level + 1 < OCEAN_FOAM_LEVELS)
-        prev = samplePrev(level + 1, u_oceanFoamLevels[level].xy + (vec2(xy) + 0.5) * texel);
+        prev = samplePrev(level + 1, u_oceanLive_foamLevels[level].xy + (vec2(xy) + 0.5) * texel);
     else
         prev = 0.0;
 
-    const float foam = max(prev * u_oceanFoamField.w, instant);
+    const float foam = max(prev * u_ocean_foamDecay, instant);
     imageStore(u_foam, ivec3(xy, level * 2 + int(u_writeLayer)), vec4(foam));
     imageStore(u_maps, ivec3(xy, OCEAN_FOAM_LAYER + level), vec4(foam, 0.0, 0.0, 0.0));
 }

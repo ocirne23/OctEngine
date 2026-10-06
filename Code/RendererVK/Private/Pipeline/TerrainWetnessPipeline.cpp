@@ -1,7 +1,7 @@
 module RendererVK;
 
 import Core;
-import Core.Tweaks;
+import Settings;
 import File;
 import :Device;
 import :Allocator;
@@ -31,7 +31,7 @@ void TerrainWetnessPipeline::buildLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/terrain_wetness.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    layout.defines.push_back({ "WET_DIFFUSION", m_diffusion ? "1" : "0" });
+    layout.defines.push_back({ "WET_DIFFUSION", Globals::settings.renderer.terrainWetDiffusion ? "1" : "0" });
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -104,10 +104,8 @@ void TerrainWetnessPipeline::createImage()
     }
 }
 
-void TerrainWetnessPipeline::initialize(oc::function<void()> onDefinesChanged)
+void TerrainWetnessPipeline::initialize()
 {
-    Tweak::boolean("Terrain/Water", "Diffusion on", &m_diffusion, onDefinesChanged);
-
     m_sampler.initialize(vk::SamplerAddressMode::eClampToEdge);
     createImage();
 
@@ -150,7 +148,7 @@ void TerrainWetnessPipeline::record(CommandBuffer& commandBuffer, uint32 frameId
 
     oc::array<DescriptorSetUpdateInfo, 4> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage,
             .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_view, .imageLayout = vk::ImageLayout::eGeneral } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,

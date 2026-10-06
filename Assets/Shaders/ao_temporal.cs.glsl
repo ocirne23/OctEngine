@@ -17,9 +17,8 @@ layout (push_constant) uniform PC
 {
     uint  aoWidth;
     uint  aoHeight;
-    float maxHistory;   // blend weight for valid history (e.g. 0.92)
     uint  viewIndex;    // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
-} pc;
+} pc; // the history weight is u_rt_aoMaxHistory
 
 void main()
 {
@@ -85,7 +84,7 @@ void main()
         {
             hist = sum / wsum;
             // Scale trust by surviving coverage so a mostly-disoccluded fetch leans on the fresh sample.
-            histWeight = pc.maxHistory * wsum;
+            histWeight = u_rt_aoMaxHistory * wsum;
         }
     }
 

@@ -9,63 +9,7 @@ import Core.Transform;
 import File;
 import Force;
 import Nav;
-
-export struct GameUnitParams
-{
-    float energyDrainRate = 25.0f; // energy/s per unit of pressure (player shield rule, no regen)
-    float tension = 1.5f;          // drain + push scale by (1 + tension*pressure)
-    float fieldDps = 10.0f;        // health/s while squished below damageRadius under pressure
-    float fieldDpsMult = 1.0f;
-    float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it no shove, so
-                                   // units reach the damage band instead of parking in the fringe
-    float emitterDrainMult = 0.25f;
-    float strainRange = 20.0f;     // planar reach (m) of the siege drain: the Bastion's bubble radius
-    float damageAbsorb = 2.0f;     // shield energy per hp of direct damage absorbed before health
-    float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
-    float pushGain = 20000.0f;     // shared by the emitter readback path AND the shield-less path
-    float retargetInterval = 5.0f;
-    float wanderSpeedMult = 0.25f;
-    float wanderSpeedMax = 0.75f;  // m/s
-    int localTeam = -1;            // the VIEWER's team: its units tint green on every instance
-    int huntSeedTeam = -1;         // the ONE team that also seeds lanes toward HUNTED targets (the
-                                   // co-op AI); every other team seeds only routes and move orders
-    float targetSearchRadius = 15.0f; // LOCAL harassment only: the barracks route does the delivery
-    float maxSpeed = 12.0f;        // absolute m/s cap on every unit body, every tick, any cause
-                                   // (field shoves included): ~1.5x the runner's 7.6
-    float waypointRadius = 3.0f;
-    float farSpreadDeg = 40.0f;    // far walk: persistent per-unit heading bias so a wave fans out
-    float routeEngageRadius = 5.0f;  // marching a route: an enemy this near is engaged, then resumed
-    float orderBreakRadius = 15.0f;  // a MOVE ORDER drops at the first enemy structure this near
-    float voidY = -3.0f;           // checked by the full sim AND the far tick
-    float heightLimit = 5.0f;      // world Y ceiling for units AND player capsules (GamePlayer too)
-    bool navEnabled = true;
-    float hurtLightIntensity = 8.0f;
-    float hurtLightDecay = 0.25f;  // seconds from full to dark
-    float lightArea = 8.0f;        // m: hurt-flash budget bucket size (lock-free hashed slots)
-    float hurtFlashRate = 4.0f;    // flashes per second per area
-    // steerHeading score: free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
-    //   - Pressure*gpW*dot(gradP) + Wall*dot(wallAway) - clipped*CornerClip
-    float steerGoal = 0.3f;
-    float steerFlow = 1.0f;        // a lane is a proven route: outweighs walking straight at the goal
-    float flowSplatGain = 0.5f;    // scale on the MEASURED velocity splatted into the lane (0 = no trail)
-    float steerPersist = 0.4f;
-    float targetTrackRadius = 5.0f; // geodesic m: closer = field-tracking beats the (laggy) seeded lane
-    float steerTrackGoal = 1.5f;   // goal weight floor while tracking
-    float trackFlowMult = 0.15f;   // lane weight multiplier while tracking
-    float navFollowRadius = 40.0f; // geodesic m: no target, but walk the crowd lane if one is here
-    float steerPressure = 0.5f;
-    float pressureKnee = 0.23f;    // pressure gradient scoring 0.5 (x/(x+knee))
-    float flowKnee = 0.15f;        // lane speed scoring 0.5, as a fraction of moveSpeed
-    float orderFlowBlind = 0.0f;   // s a freshly ordered unit ignores the lane (so it can turn around)
-    float seedRequestInterval = 1.0f;
-    float unstickAfter = 1.0f;     // s of stall after which goal/persistence are dropped
-    float presencePressure = 0.01f; // pressure every unit injects per tick (x60/s)
-    float steerLook = 6.0f;        // metres of whisker (min; scales with speed)
-    float steerCornerClip = 0.7f;
-    float steerWall = 1.0f;
-    float wallKeep = 0.9f;         // metres beyond the body radius the wall push reaches
-    float stuckPressure = 0.5f;    // pressure a stalled unit injects per second (x stall, <= 1.5)
-};
+import Settings; // GameUnitParams (Settings.Game) + Globals::settings
 
 // AUTHORITY: update() simulates only when this instance is not a network client; clients are state
 // containers the mirrors write into. Cross-entity writes are atomic (damage/heal/addLoad), lookup is
@@ -75,7 +19,7 @@ export struct GameUnitComponent
     static constexpr EComponentID getId() { return EComponentID_GameUnit; }
     ~GameUnitComponent() {}
 
-    static GameUnitParams params;
+    static inline GameUnitParams& params = Globals::settings.game.unitParams; // the "Game/Enemies" + "Game/Nav" tweaks
 
     struct FireRequest // ranged units ask for a shot; spawning is main-thread only
     {

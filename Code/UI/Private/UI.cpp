@@ -32,7 +32,6 @@ void UI::initialize()
     ImGui::GetStyle().Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.0, 0.0, 0.0, 0.0);
 
     m_assetBrowser.initialize();
-    m_gameHudOverlay.registerTweaks();
 }
 
 void UI::drawGizmoEntity(Renderer& renderer, float deltaSec)

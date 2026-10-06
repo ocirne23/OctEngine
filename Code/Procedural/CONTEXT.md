@@ -27,7 +27,15 @@ and deliberately independent.**
 
 `ocean.swellTravelAngle()` → `terrain.setFlowWindAngle` is wired once at init.
 
-> **Terrain is DISABLED by default** (`m_enabled = false`) — it needs 2.28 GB of ONNX weights on disk.
+**Every tweak VALUE lives in the Settings library**, not in these classes: `Globals::settings.terrain` /
+`terrainCollider` (Settings.Terrain, which also holds `WaterReach` / `FlowField`), `.ocean` (Settings.Ocean),
+`.trees` / `.treeWorld` (Settings.Trees, with `TREE_GROVE_TYPES`), `.rockSystem` (Settings.Rocks, with
+`RockWorldDesc`), `.scatter` (Settings.Scatter). Each system holds one `m_settings` reference and reads it directly;
+its `initialize()` only attaches the reactions (`Tweak::onChange`: config-dirty, grid-dirty, fade bands, remesh), so
+the settings must be registered first. Button settings (`reload`, `respawn`, `logStats`, ...) are cleared by the
+system through that reference. `FlowField::windAngle` is NOT a tweak: `setFlowWindAngle` writes it.
+
+> **Terrain is DISABLED by default** (`TerrainSettings::enabled = false`) — it needs 2.28 GB of ONNX weights on disk.
 
 ## Disabled = PARKED
 
@@ -300,14 +308,21 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
      is skipped by the query itself (`forEachInSphere(..., SpatialPassBit_Main)`), tagged sectors and
      zero scatter entries by the emit. Culling `Off` keeps the plain walk over every resident.
 
-  **The walk and the pushes run on a worker** (`"terrainRenderPush"`, High, `m_renderCounter`); main.cpp calls `joinRender()` right before `present`, and `update`
-  / `clearResidents` join it before they touch `m_residents`.
+  **The walk and the pushes run on workers** (`"terrainRenderPush"`, High, `m_renderCounter`); main.cpp calls `joinRender()` right before `present`, and `update`
+  / `clearResidents` join it before they touch `m_residents`. The job fans the hand-over list out over a High
+  `parallelFor` (`"terrainRenderPushChunk"`, auto-grain `m_renderPushCost`) and runs the sphere query BESIDE it as a
+  job of its own (`"terrainRenderPushSphere"`), then merges the vegetation. **The two sets are disjoint** (the
+  query skips main-stamped entries, and the list holds each entry once), which `renderNode` needs: it writes
+  the node's transform upload state. Culling `Off`'s walk over `m_residents` stays serial (a debug mode).
 * **THE VEGETATION IS STORED IN THE CHUNKS** (`setVegetation(lookup, sink, numChunks)`, TreeSystem's GPU
   tree set): every resident holds the index of its coordinate's vegetation chunk (`lookup`, -1 = none;
   re-stamped on every resident by `setVegetation`, which joins the walk first). The walk notes it with the
   chunk's pass mask (main-stamped `PASS_ALL`, the shadow/GI sphere `PASS_SHADOW | PASS_GI`), merges a
   coordinate drawn twice (a LOD hand-over's old + new resident: the masks OR'ed), and hands the frame's
-  list to `sink` at its end, on the walk's worker. `vegetationRouted()` = this frame's walk carries it
+  list to `sink` at its end, on the walk's worker. The pushes note it from several workers: each mask is
+  OR'ed through an `atomic_ref`, and the push that first sets a chunk's mask lists it in `m_vegTouched`
+  (one slot per vegetation chunk, `m_vegTouchedCount`); the list order does not matter to the tree culls.
+  `vegetationRouted()` = this frame's walk carries it
   (the chunks draw and a sink is set); otherwise the owner submits its vegetation itself.
   **`restampVegetation(coord)`** (TreeSystem's world mode adds / removes one coordinate): re-stamps that coordinate's
   residents (every LOD; retired ones to -1) from `lookup` WITHOUT joining the walk - the stamp is an atomic, the walk
@@ -537,7 +552,7 @@ disc every frame.**
     crest and the largest RAW horizontal displacement. **Raw on purpose**: the maps store Dx/Dz before
     the choppiness lambda, so the live tweak scales the padding with no re-scan.
   * The CPU side re-registers `baseRadius + extent` per frame; the GPU per-instance cull gets the same
-    number through `u_oceanParams10.w` and adds it for `PIPELINE_IDX_OCEAN` instances
+    number through `u_oceanLive_displacementExtent` and adds it for `PIPELINE_IDX_OCEAN` instances
     (`instanced_indirect.cs.glsl`) — **frustum test only**, so LOD selection still sees real bounds.
 * **Sector borders duplicate identical vertices, so splitting cannot open seams.**
 * **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled Ocean pipeline
@@ -726,7 +741,7 @@ rotation — `pushOceanParams` world-scales only "Detail fade (m)".
     open-sea fold field.
   * Not shore-weighted: injection is open-ocean math, so the stuck foam and the milk can show in the calm
     shallows where the waves were damped.
-* **`OceanParams::cameraUnderwater`** (`u_oceanParams12.w`) — set each frame in `pushOceanParams` from
+* **`OceanParams::cameraUnderwater`** (`u_oceanLive_cameraUnderwater`) — set each frame in `pushOceanParams` from
   `sampleWaterHeight` at the camera. `ocean.fs.glsl` takes its UNDERSIDE path only while it is set: a back
   face seen from above is a FOLD (high "Choppiness" overturns the sheet), and before this gate it shaded as
   the underside, with half-bright "foam from below" (dark grey sheets on the curls). It now shades as the top side.
@@ -1301,7 +1316,7 @@ materials), and spawns a `Grove size`² grove in front of the camera plus the pi
 around each grove tree (1.5 m .. 0.75 × spacing out, area-uniform, a random bush species, the same variant / scale /
 yaw rules). `Bush shadow distance (m)` (default 100, GPU path): bushes farther than this from the shadow
 cascades' centre cast no sun shadow (`TreeInstanceType::shadowDistance`). `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name — the
-names are a fixed list in TreeSystem.cpp (`GROVE_TYPES`; a tweak enum registers before the species load), so a
+names are a fixed list in Settings.Trees (`TREE_GROVE_TYPES`; a tweak enum registers before the species load), so a
 new species needs its name added there; a missing one falls back to mixed with a warning. Trees sit on a
 `Spacing` grid (default 11 m; `Grove size` up to 512², default 350² of `Grove type` Oak, for the far-tree volume),
 each offset by a seeded random `Position jitter` × spacing (default 0.8; 1 = anywhere in its cell;

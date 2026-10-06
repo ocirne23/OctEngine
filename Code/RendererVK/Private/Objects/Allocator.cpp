@@ -69,11 +69,11 @@ void GpuAllocator::destroy()
     }
 }
 
-void GpuAllocator::registerAllocation(VmaAllocation allocation, bool image)
+void GpuAllocator::registerAllocation(VmaAllocation allocation, const GpuAllocationInfo& desc)
 {
     std::lock_guard lock(m_liveMutex);
     vmaSetAllocationUserData(m_allocator, allocation, (void*)(uintptr_t)m_live.size());
-    m_live.push_back(LiveAllocation{ allocation, image });
+    m_live.push_back(LiveAllocation{ allocation, desc });
 }
 
 void GpuAllocator::unregisterAllocation(VmaAllocation allocation)
@@ -100,10 +100,43 @@ void GpuAllocator::forEachAllocation(GpuAllocationVisit visit, void* ctx) const
     vmaGetMemoryProperties(m_allocator, &memProps);
     for (const LiveAllocation& live : m_live)
     {
-        VmaAllocationInfo info{};
-        vmaGetAllocationInfo(m_allocator, live.allocation, &info);
-        const uint32 heap = memProps->memoryTypes[info.memoryType].heapIndex;
-        visit(ctx, info.pName, info.size, live.image, (memProps->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0);
+        VmaAllocationInfo2 info2{};
+        vmaGetAllocationInfo2(m_allocator, live.allocation, &info2);
+        const VmaAllocationInfo& info = info2.allocationInfo;
+        const VkMemoryType& type = memProps->memoryTypes[info.memoryType];
+        GpuAllocationInfo out = live.desc;
+        out.name = info.pName;
+        out.bytes = info.size;
+        out.blockBytes = info2.blockSize;
+        out.memoryFlags = type.propertyFlags;
+        out.deviceLocal = (memProps->memoryHeaps[type.heapIndex].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+        out.dedicated = info2.dedicatedMemory != VK_FALSE;
+        out.mapped = info.pMappedData != nullptr;
+        visit(ctx, out);
+    }
+}
+
+void GpuAllocator::enumName(GpuEnum kind, uint64 value, char* out, size_t outSize)
+{
+    auto copy = [out, outSize](const auto& name) // vk::to_string's std::string
+    {
+        // The flag sets print as "{ A | B }": drop the braces
+        size_t begin = 0, end = name.size();
+        if (end >= 2 && name[0] == '{' && name[end - 1] == '}')
+        {
+            begin = 1;
+            --end;
+            while (begin < end && name[begin] == ' ') ++begin;
+            while (end > begin && name[end - 1] == ' ') --end;
+        }
+        _snprintf_s(out, outSize, _TRUNCATE, "%.*s", (int)(end - begin), name.c_str() + begin);
+    };
+    switch (kind)
+    {
+    case GpuEnum::Format:           copy(vk::to_string((vk::Format)value)); break;
+    case GpuEnum::ImageUsage:       copy(vk::to_string(vk::ImageUsageFlags((vk::ImageUsageFlagBits)value))); break;
+    case GpuEnum::BufferUsage:      copy(vk::to_string(vk::BufferUsageFlags2((vk::BufferUsageFlagBits2)value))); break;
+    case GpuEnum::MemoryProperties: copy(vk::to_string(vk::MemoryPropertyFlags((vk::MemoryPropertyFlagBits)value))); break;
     }
 }
 
@@ -125,7 +158,17 @@ bool GpuAllocator::createImage(const vk::ImageCreateInfo& info, vk::Image& outIm
         // VMA's allocation name is leak-report only; the VkImage itself gets the debug-utils object name.
         Globals::device.setDebugName(vk::Image(image), debugName);
     }
-    registerAllocation(outAllocation, true);
+    GpuAllocationInfo desc;
+    desc.image = true;
+    desc.width = info.extent.width;
+    desc.height = info.extent.height;
+    desc.depth = info.extent.depth;
+    desc.mips = (uint16)info.mipLevels;
+    desc.layers = (uint16)info.arrayLayers;
+    desc.samples = (uint8)(uint32)info.samples;
+    desc.format = (uint32)info.format;
+    desc.usage = (uint32)info.usage;
+    registerAllocation(outAllocation, desc);
     outImage = vk::Image(image);
     return true;
 }
@@ -171,7 +214,14 @@ bool GpuAllocator::createBuffer(const vk::BufferCreateInfo& info, vk::MemoryProp
         vmaSetAllocationName(m_allocator, outAllocation, debugName);
         Globals::device.setDebugName(vk::Buffer(buffer), debugName);
     }
-    registerAllocation(outAllocation, false);
+    GpuAllocationInfo desc;
+    desc.bufferSize = info.size;
+    desc.usage = (uint32)info.usage;
+    // maintenance5: the real usage rides in the pNext chain (and wins over info.usage)
+    for (const VkBaseInStructure* next = (const VkBaseInStructure*)ci.pNext; next != nullptr; next = next->pNext)
+        if (next->sType == VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO)
+            desc.usage = ((const VkBufferUsageFlags2CreateInfo*)next)->usage;
+    registerAllocation(outAllocation, desc);
     outBuffer = vk::Buffer(buffer);
     outMappedData = allocInfo.pMappedData;
     return true;

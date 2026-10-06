@@ -4,8 +4,9 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.Transform;
-import Core.Tweaks;
 import Core.Log;
+import Settings;
+import Settings.Tweaks;
 
 import RendererVK;
 import File;
@@ -106,37 +107,13 @@ namespace Procedural
 
 	void RockSystem::initialize()
 	{
-		auto respawn = [this]() { m_respawn = true; };
-		Tweak::boolean("Rocks", "Enabled", &m_enabled);
-		Tweak::boolean("Rocks", "Reload types", &m_reload);
-		Tweak::boolean("Rocks", "Respawn preview", &m_respawn);
-		Tweak::boolean("Rocks", "Show preview", &m_showPreview, respawn);
-		// The WORLD's rocks (TreeWorld's records + TreeSystem's world set; they need "Trees/World/Enabled" too). A
-		// change regenerates every record chunk (the trees give way to the rocks).
-		Tweak::boolean("Rocks/World", "Enabled", &m_worldEnabled);
-		Tweak::floatVar("Rocks/World", "Density scale", &m_worldRules.densityScale, 0.0f, 8.0f, 0.01f);
-		// What the types' `Plains` / `Rugged` (.rock Placement) mean: the steepest ground within ~20 m of a rock - at
-		// or below "start" it lies on plains, at or above "full" on fully rugged ground.
-		Tweak::floatVar("Rocks/World", "Rugged slope start", &m_worldRules.ruggedSlope.x, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Rocks/World", "Rugged slope full", &m_worldRules.ruggedSlope.y, 0.0f, 2.0f, 0.01f);
-		// What their `Valley` means: low ground, where the heights within ~160 m of the rock range over "start" (no
-		// valley) .. "full" metres.
-		Tweak::floatVar("Rocks/World", "Valley relief start (m)", &m_worldRules.valleyRelief.x, 0.0f, 500.0f, 0.5f);
-		Tweak::floatVar("Rocks/World", "Valley relief full (m)", &m_worldRules.valleyRelief.y, 0.0f, 500.0f, 0.5f);
-		// (The LOD level each rock draws is the GPU's pick: the "LOD" tweaks - "Force LOD" shows one level.)
-		// The rock material (RendererVK EPipelineIndex::LitRock, "Rocks/Material": the climate's terrain bedrock), or
-		// flat grey on LitOpaque - the shape alone.
-		static constexpr oc::string_view PREVIEW_SHADINGS[] = { "Rock material (climate)", "Flat grey" };
-		Tweak::enumVar("Rocks", "Preview shading", &m_previewShading, PREVIEW_SHADINGS, respawn);
-		// The meshes only: the types (and so TreeWorld's placement) stay as read.
-		Tweak::intVar("Rocks", "Grid resolution", &m_gridResolution, 16, 256, 1.0f, [this]() { m_remesh = true; });
-		Tweak::intVar("Rocks", "Seed", &m_seed, 0, 1000000, 1.0f, respawn);
-		Tweak::floatVar("Rocks", "Spacing", &m_spacing, 1.0f, 4.0f, 0.01f, respawn);
+		// "Grid resolution": the meshes only - the types (and so TreeWorld's placement) stay as read.
+		Tweak::onChange(m_settings.gridResolution, this, [this]() { m_remesh = true; });
 	}
 
 	void RockSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
-		if (!m_enabled)
+		if (!m_settings.enabled)
 		{
 			// Disabled frees everything, so enabling again re-reads the .rock files.
 			if (m_loaded)
@@ -149,11 +126,11 @@ namespace Procedural
 		}
 
 		ProfileScope profileScope("Rocks", EProfileCategory::Procedural);
-		if (!m_loaded || m_reload)
+		if (!m_loaded || m_settings.reload)
 		{
 			if (m_loaded)
 				++m_typesRevision; // a RE-load (the first load follows the enable, which TreeWorld sees itself)
-			m_reload = false;
+			m_settings.reload = false;
 			m_remesh = false;
 			clearAll();
 			reload();
@@ -173,11 +150,11 @@ namespace Procedural
 				return; // still generating: nothing to draw yet
 			finishLoad(renderer);
 		}
-		if (!m_spawned || m_respawn)
+		if (!m_spawned || m_settings.respawn)
 		{
-			m_respawn = false;
+			m_settings.respawn = false;
 			m_nodes.clear();
-			if (m_showPreview)
+			if (m_settings.showPreview)
 				spawnPreview(renderer, camera, maps.get());
 			m_spawned = true;
 		}
@@ -228,7 +205,7 @@ namespace Procedural
 		for (uint32 t = 0; t < (uint32)m_types.size(); ++t)
 		{
 			// A type with thin features asks for more cells (`Resolution`).
-			const uint32 resolution = (uint32)glm::clamp((float)m_gridResolution * m_types[t].desc.resolution, 16.0f, 256.0f);
+			const uint32 resolution = (uint32)glm::clamp((float)m_settings.gridResolution * m_types[t].desc.resolution, 16.0f, 256.0f);
 			for (uint32 v = 0; v < (uint32)m_types[t].variants.size(); ++v)
 			{
 				m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
@@ -321,13 +298,13 @@ namespace Procedural
 		auto groundAt = [&](glm::vec2 p) { return maps ? maps->sampleHeight(p.x, p.y) : 0.0f; };
 
 		// LitRock does not read the material (the instance still needs one).
-		const RendererVKLayout::EPipelineIndex pipeline = m_previewShading == 0
+		const RendererVKLayout::EPipelineIndex pipeline = m_settings.previewShading == 0
 			? RendererVKLayout::EPipelineIndex::LitRock : RendererVKLayout::EPipelineIndex::LitOpaque;
 		float rowOffset = 0.0f;
 		for (uint32 t = 0; t < (uint32)m_types.size(); ++t)
 		{
 			const Type& type = m_types[t];
-			const float cell = type.desc.scale.y * m_spacing;
+			const float cell = type.desc.scale.y * m_settings.spacing;
 			rowOffset += cell * 0.5f;
 			const float rowWidth = cell * (float)type.variants.size();
 			for (uint32 v = 0; v < (uint32)type.variants.size(); ++v)
@@ -335,7 +312,7 @@ namespace Procedural
 				const Variant& variant = type.variants[v];
 				if (!variant.lods[0].isValid())
 					continue;
-				const uint32 seed = treeHash(treeHash((uint32)m_seed, t), v);
+				const uint32 seed = treeHash(treeHash((uint32)m_settings.seed, t), v);
 				const float scale = glm::mix(type.desc.scale.x, type.desc.scale.y, treeHash01(treeHash(seed, 1u)));
 				const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 2u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
 				const glm::vec2 p = origin + fwd * rowOffset + right * (cell * ((float)v + 0.5f) - rowWidth * 0.5f);

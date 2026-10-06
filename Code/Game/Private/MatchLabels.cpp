@@ -121,7 +121,7 @@ void GameMatch::buildWorldLabels()
     // fallback when there is no player entity - the editor, a spectating client).
     const Entity* cullEntity = m_player.entity();
     const glm::vec3 cullCenter = cullEntity ? cullEntity->pos : camera.position;
-    const float maxDist2 = m_labelMaxDistance * m_labelMaxDistance;
+    const float maxDist2 = m_settings.labelMaxDistance * m_settings.labelMaxDistance;
     const auto inRange = [&](const glm::vec3& p)
     {
         const glm::vec3 d = p - cullCenter;
@@ -323,7 +323,7 @@ void GameMatch::buildWorldLabels()
     // The query measures from the CAMERA; a unit within maxDist of the player is within
     // maxDist + |camera - player| of the camera, so that bound keeps the traversal tight and the
     // exact player-distance test below does the rest.
-    NpcSystem::queryVisibleUnits(camera, m_labelMaxDistance + glm::distance(cullCenter, camera.position), units);
+    NpcSystem::queryVisibleUnits(camera, m_settings.labelMaxDistance + glm::distance(cullCenter, camera.position), units);
     for (Entity* unitEntity : units)
     {
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);

@@ -8,7 +8,7 @@
 // breaking rolls a hashed dice at "Spray rate" x cell area x dt x breaking. A hit appends spawn
 // requests at the displaced surface with the crest's forward motion (along the wind) plus an upward
 // kick; the particle chain later this frame turns them into particles of the ONE emitter slot the CPU
-// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_oceanSpray0.x).
+// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_oceanLive_sprayEmitter).
 //
 // Land is skipped through the shore data (depth <= 0), and the grid ORIGIN is snapped to whole cells so
 // the sample lattice does not swim with the focus.
@@ -28,7 +28,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 // helper samples with implicit derivatives, which compute has none of). Same depth weighting.
 void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out float accel)
 {
-    const float chop = u_oceanParams0.w;
+    const float chop = u_ocean_choppiness;
     const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
     const vec2 fr = oceanFlowRotation(worldXZ);
     const vec2 sampleXZ = oceanFlowSamplePos(worldXZ, fr);
@@ -36,7 +36,7 @@ void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out 
     accel = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
-        const float L = u_oceanParams2[c];
+        const float L = u_ocean_cascadeSizes[c];
         const vec3 uv = vec3(sampleXZ / L, 0.0);
         const float lod = oceanVertexLod(cell, 0.0, L);
         const vec4 g = textureLod(u_oceanMaps, uv + vec3(0.0, 0.0, float(OCEAN_CASCADES + c)), lod);
@@ -56,15 +56,15 @@ void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out 
 
 void main()
 {
-    const uint slot = floatBitsToUint(u_oceanSpray0.x);
-    const float rate = u_oceanSpray0.y;
+    const uint slot = u_oceanLive_sprayEmitter;
+    const float rate = u_ocean_sprayRate;
     if (slot == 0xFFFFFFFFu || rate <= 0.0)
         return;
     const uvec2 id = gl_GlobalInvocationID.xy;
     if (any(greaterThanEqual(id, uvec2(OCEAN_SPRAY_GRID))))
         return;
 
-    const float radius = max(u_oceanSpray0.z, 1.0);
+    const float radius = max(u_ocean_sprayRadius, 1.0);
     const float cell = 2.0 * radius / float(OCEAN_SPRAY_GRID);
     const vec2 origin = floor(u_sceneFocus.xz / cell) * cell - vec2(radius);
     uint seed = particlePcg(u_frameIndex * 0x9E3779B9u + id.x * 0x85EBCA6Bu + id.y * 0xC2B2AE35u);
@@ -84,11 +84,11 @@ void main()
     sprayCrest(worldXZ, cell, shoreHW, jacobian, accel);
     // The water shader's crest foam: spray where the whitecaps break.
     const float foam = oceanInstantFoam(jacobian, accel);
-    const float breaking = smoothstep(u_oceanSpray1.x, 1.0, foam);
+    const float breaking = smoothstep(u_ocean_sprayThreshold, 1.0, foam);
     if (breaking <= 0.0)
         return;
 
-    const float expected = rate * cell * cell * u_oceanSpray0.w * breaking * edgeFade;
+    const float expected = rate * cell * cell * u_oceanLive_sprayDt * breaking * edgeFade;
     uint count = uint(expected);
     if (particleRand(seed) < fract(expected))
         ++count;
@@ -97,14 +97,14 @@ void main()
         return;
 
     const vec3 disp = oceanSampleDisplacement(worldXZ, cell, 0.0, shoreHW);
-    // The simulated field TRAVELS AGAINST u_oceanParams0.xy (see oceanFlowRotation's note), so the
+    // The simulated field TRAVELS AGAINST u_oceanLive_windDirection (see oceanFlowRotation's note), so the
     // crests move along -wind: throw the spray with them.
-    const vec2 wind = -u_oceanParams0.xy; // unit
+    const vec2 wind = -u_oceanLive_windDirection; // unit
     // Spawn AHEAD of the crest: the lip breaks forward, so the spray leaves from the front face, not
     // from the top or the back. "Spray forward offset" m of lead along the travel direction, and
     // "Spray height offset" m above the surface (so a fresh particle is not depth-cut by the wave).
-    const vec2 lead = wind * u_oceanSpray1.w;
-    const vec3 surface = vec3(worldXZ.x + disp.x + lead.x, shoreHW.y + disp.y + u_oceanSpray2.x, worldXZ.y + disp.z + lead.y);
+    const vec2 lead = wind * u_ocean_sprayForward;
+    const vec3 surface = vec3(worldXZ.x + disp.x + lead.x, shoreHW.y + disp.y + u_ocean_sprayHeight, worldXZ.y + disp.z + lead.y);
     // Energy: the stronger the breaking, the higher and faster the spray is thrown.
     const float energy = 0.6 + 0.8 * breaking;
     for (uint i = 0u; i < count; ++i)
@@ -114,9 +114,9 @@ void main()
         const vec3 jitter = vec3(j2.x + wind.x * (particleRand(seed) * cell), 0.0, j2.y + wind.y * (particleRand(seed) * cell));
         // Atomised mist: carried forward with the crest, barely lifting - it hangs at the lip rather
         // than arcing away like a thrown droplet would.
-        const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * (0.6 * u_oceanSpray2.y);
-        const float fwd = u_oceanSpray1.z * (0.4 + 0.4 * particleRand(seed)) * energy;
-        const float up = u_oceanSpray1.y * (0.05 + 0.1 * particleRand(seed)) * energy;
+        const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * (0.6 * u_ocean_worldScale);
+        const float fwd = u_ocean_spraySpeed * (0.4 + 0.4 * particleRand(seed)) * energy;
+        const float up = u_ocean_sprayKick * (0.05 + 0.1 * particleRand(seed)) * energy;
         const vec3 vel = vec3(wind.x * fwd + side.x, up, wind.y * fwd + side.y);
         if (!particleRequestSpawn(surface + jitter, vel, slot))
             return; // this frame's request buffer is full

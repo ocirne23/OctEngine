@@ -2,6 +2,7 @@ export module Procedural:RockType;
 
 import Core;
 import Core.glm;
+export import Settings.Rocks; // RockWorldDesc
 
 // One rock type, authored as a `.rock` text asset (Assets/Rocks/). The type sets the SHAPE only: a signed distance
 // field built per variant from its seed. The colour comes from the climate at the rock (the terrain's bedrock
@@ -49,18 +50,7 @@ export namespace Procedural
 		float valley = -1.0f;
 	};
 
-	// The WORLD's rules over every rock type ("Rocks/World" tweaks -> TreeWorld's placement): what the types' ground
-	// keys (RockPlacementDesc) mean.
-	struct RockWorldDesc
-	{
-		float densityScale = 1.0f;
-		// PLAINS / RUGGED: the steepest ground within ~20 m of the rock (rise / run) - at or below .x plains, at or
-		// above .y fully rugged.
-		glm::vec2 ruggedSlope{ 0.08f, 0.4f };
-		// VALLEY: the height range within ~160 m of the rock (m) - at or below .x no valley, at or above .y a full one.
-		glm::vec2 valleyRelief{ 15.0f, 60.0f };
-		bool operator==(const RockWorldDesc&) const = default;
-	};
+	// RockWorldDesc (the WORLD's rules over every rock type, "Rocks/World" tweaks) lives in Settings.Rocks.
 
 	struct RockTypeDesc
 	{

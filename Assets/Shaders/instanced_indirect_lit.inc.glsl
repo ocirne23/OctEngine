@@ -167,13 +167,13 @@ void resolveLiveDepth(vec3 worldPos)
 	// Gate against the LIVE displaced surface, not the calm level - a receded wave leaves sand below
 	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
 	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
-	// the surface's max EXCURSION - the larger of the swash reach (u_oceanParams7.w) and the open-water
-	// trough (u_fogParams7.y = 2 x trough + 0.5) - the wave decides which side of the surface the point
+	// the surface's max EXCURSION - the larger of the swash reach (u_oceanLive_swashReach) and the open-water
+	// trough (u_fogLive_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
 	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
 	// the contribution fades out over a half-excursion band instead of cutting. A hard cut at the swash
 	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
 	// wave height across it. Both terms are 0 with the ocean off, so this is free without water.
-	const float excursion = max(u_oceanParams7.w, 0.5 * (u_fogParams7.y - 0.5));
+	const float excursion = max(u_oceanLive_swashReach, 0.5 * (u_fogLive_waveBand - 0.5));
 	if (excursion > 0.0)
 	{
 		const float fadeEnd = excursion + max(0.5 * excursion, 0.5);
@@ -205,16 +205,16 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 	// darkening), past it only the march survives. Skipped up close, where the map's texels are coarser
 	// than the geometry they would be shadowing and could only produce acne.
 	// Reach is bias * 2^10 - ~77 km at the default 150 m, comfortably past the far cascade's own range.
-	if (u_terrainShadowParams.x > 0.0 && terrainHeightMapPresent())
+	if (u_shadow_terrainMarchStart > 0.0 && terrainHeightMapPresent())
 	{
-		const float fadeIn = smoothstep(u_terrainShadowParams.x, u_terrainShadowParams.x * 1.25, distance(worldPos, u_viewPos));
+		const float fadeIn = smoothstep(u_shadow_terrainMarchStart, u_shadow_terrainMarchStart * 1.25, distance(worldPos, u_viewPos));
 		if (fadeIn > 0.0)
 		{
-			const float terrainVis = terrainSunVisibility(worldPos, L, u_terrainShadowParams.y, 10, u_terrainShadowParams.z, 4.0);
+			const float terrainVis = terrainSunVisibility(worldPos, L, u_shadow_terrainMarchBias, 10, u_shadow_terrainMarchSpread, 4.0);
 			visibility = min(visibility, mix(1.0, terrainVis, fadeIn));
 		}
 	}
-	visibility *= u_eclipseParams.x;
+	visibility *= u_sunVisible;
 	if (visibility > 0.0) // in full shadow the cloud lookup (one or two fetches) changes nothing
 		visibility *= cloudSunTransmittance(worldPos);
 	return visibility;
@@ -360,16 +360,16 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	float16_t ao = float16_t(1.0);
 	f16vec3 bentN = N;
 #ifndef LIT_NO_RTAO // the grass (grass.fs.glsl): no RTAO read at all - its own root occlusion stands in
-	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (0, 1.0) - no occlusion, no
+	// Past the RTAO max distance (u_rt_aoMaxDistance) the trace writes exactly (0, 1.0) - no occlusion, no
 	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
-	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
+	// 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
 	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
 #ifdef FOLIAGE_NO_RTAO
-	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z) && !g_noRtao)
+	if (u_rt_aoEnabled > 0.5 && (u_rt_aoMaxDistance <= 0.0 || aoFocusDist < u_rt_aoMaxDistance) && !g_noRtao)
 #else
-	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z))
+	if (u_rt_aoEnabled > 0.5 && (u_rt_aoMaxDistance <= 0.0 || aoFocusDist < u_rt_aoMaxDistance))
 #endif
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);
@@ -389,7 +389,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// Volume mode: ~8 filtered fetches, not ~100 probe loads.
 	const f16vec3 indirect = giIndirectOverPiH(worldPos, bentN);
 	// indirect * strength + ambient, times AO: two scalar folds fewer than the previous grouping.
-	colorH += materialColor * ((indirect * float16_t(u_aoParams.y) + f16vec3(u_ambientColor)) * (ao * texAO));
+	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (ao * texAO));
 
 	const ivec3 gridPos = getGridPos(worldPos);
     uint tableIdx = getTableIdx(gridPos);

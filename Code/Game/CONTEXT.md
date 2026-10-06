@@ -61,7 +61,7 @@ serviced by main's menu loop and drawn by the UI's lobby page / `UI:ChatPanel`: 
 
 **`StructureSystem`'s bodies are split over six implementation units by topic** (all
 `module Game;`, the list is repeated at the end of `Structures.ixx`): `Structures.cpp` (the
-type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, `registerTweaks`,
+type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, the settings listeners,
 `refresh` / `stampTuning`, `clear`, the nodes, request queueing, `tickAuthority` / `tickMirror`),
 `StructuresPlacement.cpp` (the grid: snap, footprints, the cell hash, `cellsFree` /
 `planCrossing`; `spawnStructure` / destroy / `placeStructure` / `spawnBase` / demolish — the
@@ -563,8 +563,17 @@ authority seams as local input.
 `GameMatch::onClientJoined` / `onClientLeft` (registered from main when game + server) spawn and
 remove per-client players and replay world state.
 
-Gameplay tweaks sync automatically through the `Core.Tweaks` `Synced` flag — all `Game/*` except
-`Game/Camera`, `Game/Sim LOD` and `Game/Player/Detach camera (free fly)`.
+**Settings:** every Game tweak is a member of `Globals::settings.game` (`GameSettings`, module
+`Settings.Game` in `Code/Settings`): `match` (GameMatch), `camera`, `player`, `structures`
+(StructureSystem), `npc` (NpcSystem), plus the component baselines `unitParams` / `structureParams`
+(`GameUnitComponent::params` / `GameStructureComponent::params` are references to them).
+`Settings::registerGame` registers them ONCE at startup, so the values persist across matches. The
+systems read the settings directly (`m_settings` reference members in GameMatch / StructureSystem);
+a reaction to a change is a listener (`Tweak::onChange`) the system attaches and drops itself
+(StructureSystem: the transport tick rate / substeps / spread re-dirty the links).
+
+Gameplay tweaks sync automatically through the `Settings.Tweaks` `Synced` flag — all `Game/*` except
+`Game/Camera` and `Game/Player/Detach camera (free fly)` / `Detach focus point`.
 
 **Shadow preset:** the `GameMatch` ctor writes the top-down "Shadows" values into the renderer's live
 tweak block through `Renderer::setShadowParams` (Max distance 250 m from the player, Split lambda 0.5,

@@ -59,46 +59,46 @@ void main()
 	// Before a splat texture set is registered (the terrain off, or its bake still running): plain grey stone.
 	TerrainSample surf = TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
-	if (u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.z >= 1.0)
+	if (u_terrainLive_splatBase >= 0.0 && u_terrainLive_numRock >= 1.0)
 	{
-		const int baseMat = int(u_terrainTexParams0.x);
-		const int numGround = int(u_terrainTexParams0.y);
-		const int numRock = int(u_terrainTexParams0.z);
+		const int baseMat = int(u_terrainLive_splatBase);
+		const int numGround = int(u_terrainLive_numGround);
+		const int numRock = int(u_terrainLive_numRock);
 		const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
 		const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 		// The splat's climate space (terrainLayers): the temperature already carries the lapse to this height.
 		const vec2 climate = vec2(clamp((in_rockFields.y + 25.0) / 75.0, 0.0, 1.0), in_rockFields.z);
-		const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
+		const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
 
 		// --- The coverages first (cheap), so a buried layer never samples ---
 		// SNOW: the terrain's rule (cold x holds x humid) with this face's own slope - an underside holds none.
 		float16_t snowW = float16_t(0.0);
-		if (u_terrainTexParams3.y > 0.5)
+		if (u_terrainLive_hasSnow > 0.5)
 		{
-			const float cold = 1.0 - smoothstep(u_terrainTexParams3.z, u_terrainTexParams3.w, in_rockFields.y);
-			const float holds = 1.0 - smoothstep(u_terrainTexParams4.x, u_terrainTexParams4.y, 1.0 - clamp(geoN.y, 0.0, 1.0));
-			const float humid = smoothstep(0.0, max(u_terrainTexParams4.z, 1e-3), in_rockFields.z);
+			const float cold = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, in_rockFields.y);
+			const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, 1.0 - clamp(geoN.y, 0.0, 1.0));
+			const float humid = smoothstep(0.0, max(u_terrainTex_snowAridity, 1e-3), in_rockFields.z);
 			snowW = float16_t(cold * holds * humid);
 		}
 		// THE CONTACT BAND: 1 at the ground, 0 "Contact height" above it. The ground height is the terrain-data
 		// map's (per vertex): metres-wide texels near the camera, far coarser beyond - so the band fades out by
 		// "Contact fade distance".
-		const float bandFade = 1.0 - smoothstep(0.5 * u_rockParams2.x, u_rockParams2.x, distance(in_pos, u_viewPos));
-		contact = float16_t((1.0 - smoothstep(0.0, max(u_rockParams1.x, 1e-3), in_pos.y - in_rockFields.x)) * bandFade);
+		const float bandFade = 1.0 - smoothstep(0.5 * u_rock_contactFadeDistance, u_rock_contactFadeDistance, distance(in_pos, u_viewPos));
+		contact = float16_t((1.0 - smoothstep(0.0, max(u_rock_contactHeight, 1e-3), in_pos.y - in_rockFields.x)) * bandFade);
 		// THE GROUND COVER: "Ground cover" of the up-facing faces ("Cover start / full"), broken into patches by a
 		// world noise ("Cover patch size") - and of the CREVICES ("Cavity cover" x the baked cavity: moss and dust
 		// gather where the rock is occluded), on any face that does not look down.
-		float cover = smoothstep(u_rockParams0.y, u_rockParams0.z, geoN.y);
+		float cover = smoothstep(u_rock_coverStart, u_rock_coverFull, geoN.y);
 		if (cover > 0.0)
-			cover *= smoothstep(-0.25, 0.25, terrainFbm(in_pos.xz * u_rockParams0.w));
-		cover = u_rockParams0.x * max(cover, u_rockParams2.z * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
-		const float16_t groundW = numGround > 0 ? max(float16_t(cover), contact * float16_t(u_rockParams1.y)) : float16_t(0.0);
+			cover *= smoothstep(-0.25, 0.25, terrainFbm(in_pos.xz * u_rock_invCoverPatchSize));
+		cover = u_rock_coverAmount * max(cover, u_rock_cavityCover * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
+		const float16_t groundW = numGround > 0 ? max(float16_t(cover), contact * float16_t(u_rock_contactBlend)) : float16_t(0.0);
 
 		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below.
 		if (snowW < opaque && groundW < opaque)
 		{
 			const ClimatePick r = pickClimate(climate, numGround, numRock, invS2);
-			const float uvScale = u_terrainTexParams1.y * u_rockParams1.w;
+			const float uvScale = u_terrainTex_uvScaleRock * u_rock_uvScale;
 			surf = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), in_pos, geoNh, uvScale);
 			if (r.n1 > blendEps)
 				terrainMixInto(surf, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), in_pos, geoNh, uvScale), r.n1 / max(one - r.n2, float16_t(1e-4)));
@@ -111,9 +111,9 @@ void main()
 		if (groundW > blendEps && snowW < opaque)
 		{
 			const ClimatePick g = pickClimate(climate, 0, numGround, invS2);
-			TerrainSample ground = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 0), in_pos, geoNh, u_terrainTexParams1.x);
+			TerrainSample ground = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 0), in_pos, geoNh, u_terrainTex_uvScaleGround);
 			if (g.n1 > blendEps)
-				terrainMixInto(ground, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 1), in_pos, geoNh, u_terrainTexParams1.x), g.n1 / max(one - g.n2, float16_t(1e-4)));
+				terrainMixInto(ground, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 1), in_pos, geoNh, u_terrainTex_uvScaleGround), g.n1 / max(one - g.n2, float16_t(1e-4)));
 			if (groundW >= opaque)
 				surf = ground;
 			else
@@ -123,8 +123,8 @@ void main()
 		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough).
 		if (snowW > blendEps)
 		{
-			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
-			const TerrainSample snow = sampleTerrainXZ(snowMat, in_pos.xz * u_terrainTexParams2.w, geoNh);
+			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrainLive_hasBeach > 0.5 ? 1u : 0u);
+			const TerrainSample snow = sampleTerrainXZ(snowMat, in_pos.xz * u_terrainTex_uvScaleSnow, geoNh);
 			if (snowW >= opaque)
 				surf = snow;
 			else
@@ -134,7 +134,7 @@ void main()
 	}
 	// The foot of the rock sits in the corner it makes with the ground: "Contact darkening" on the ambient. And the
 	// shape's own crevices: the baked cavity x "Cavity AO".
-	surf.ao *= (one - contact * float16_t(u_rockParams1.z)) * float16_t(mix(1.0, cavity, u_rockParams2.y));
+	surf.ao *= (one - contact * float16_t(u_rock_contactDarkening)) * float16_t(mix(1.0, cavity, u_rock_cavityAo));
 
 	// THE WET LOOK, from the terrain's wetness field (rain, the swash): the ground's darkening and gloss with its
 	// thresholds and its slope drain (a steep face dries faster), without the ground's drying pattern, glints and
@@ -142,9 +142,9 @@ void main()
 	if (terrainWetPresent())
 	{
 		const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));
-		const float16_t wet = pow(float16_t(terrainWetnessAt(in_pos.xz)), one + slope * float16_t(u_terrainWetParams3.z));
-		surf.albedo *= mix(one, float16_t(u_terrainWetParams2.y), smoothstep(float16_t(0.0), float16_t(max(u_terrainWetParams8.x, 1e-3)), wet));
-		surf.rough = mix(surf.rough, float16_t(u_terrainWetParams7.x), smoothstep(float16_t(0.0), float16_t(max(u_terrainWetParams8.y, 1e-3)), wet));
+		const float16_t wet = pow(float16_t(terrainWetnessAt(in_pos.xz)), one + slope * float16_t(u_terrainWater_slopeDrain));
+		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), smoothstep(float16_t(0.0), float16_t(max(u_terrainWater_darkeningThreshold, 1e-3)), wet));
+		surf.rough = mix(surf.rough, float16_t(u_terrainWater_wetRoughness), smoothstep(float16_t(0.0), float16_t(max(u_terrainWater_roughnessThreshold, 1e-3)), wet));
 	}
 
 	// V HERE, not at the top: its registers are then not live across the shadow and the splat.

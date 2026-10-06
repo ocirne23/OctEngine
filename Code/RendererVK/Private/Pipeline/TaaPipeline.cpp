@@ -14,13 +14,8 @@ namespace
     {
         uint32 width;
         uint32 height;
-        float  feedback;
         uint32 viewIndex;
-        float  oceanFeedback; // history weight cap on ocean pixels (the ocean writes no motion vectors)
-        uint32 mbEnabled;     // the fused motion blur velocity + sub-tiles (MotionBlurPipeline)
-        float  mbShutter;
-        float  mbMaxRadius;
-        float  mbCameraScale;
+        uint32 mbEnabled;     // the fused motion blur velocity + sub-tiles (MotionBlurPipeline); its tweaks: u_post
     };
 
     auto imgInfoGeneral(vk::ImageView view) { return vk::DescriptorImageInfo{ .imageView = view, .imageLayout = vk::ImageLayout::eGeneral }; }
@@ -196,7 +191,7 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
 
     transitionToGeneral(cmd, m_resolved, cur, true);
 
-    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     DescriptorSet& set = m_sets[cur];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     const auto sampledDepth = [](vk::Sampler s, vk::ImageView v) { return vk::DescriptorImageInfo{ .sampler = s, .imageView = v, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT }; };
@@ -216,8 +211,7 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipelineLayout, 0, 1, &vkSet, 0, nullptr);
     // The storage transition above also orders last frame's reads of the motion blur images (the composite's
     // fragment, the neighbour pass) before this dispatch writes them: its source stages are compute + fragment.
-    TaaPC pc{ .width = m_width, .height = m_height, .feedback = params.feedback, .viewIndex = viewIndex, .oceanFeedback = params.oceanFeedback,
-        .mbEnabled = params.mbEnabled ? 1u : 0u, .mbShutter = params.mbShutter, .mbMaxRadius = params.mbMaxRadius, .mbCameraScale = params.mbCameraScale };
+    const TaaPC pc{ .width = m_width, .height = m_height, .viewIndex = viewIndex, .mbEnabled = params.mbEnabled ? 1u : 0u };
     cmd.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
     cmd.dispatch(gx, gy, 1);
     endExternalWrite(cmd);

@@ -125,14 +125,14 @@ vec3 particleTurbulence(vec3 p)
                 particleNoise(p + vec3(-17.321, 41.421, -23.606)) * 2.0 - 1.0);
 }
 
-// ---- weather wind (the UBO's u_weatherWind0/1; only for includers that have the UBO - the sim + draw) ----
+// ---- weather wind (the UBO's u_weather / u_particles; only for includers that have the UBO - the sim + draw) ----
 #ifdef UBO_INC_GLSL
 // A noise field that TRAVELS along the wind direction - at the sheet drift speed plus half the mean
 // wind, like a gust front, so it sweeps even in light wind - and evolves in time. Sampled in the
 // horizontal plane; returns [-1, 1].
 float weatherTravellingNoise(vec2 worldXZ, float invSize, float time, float phase)
 {
-    const vec2 travel = u_weatherWind2.xy * (u_weatherWind1.w * time) + u_weatherWind0.xz * (time * 0.5);
+    const vec2 travel = u_weather_windDirection * (u_particles_windSheetDrift * time) + u_weather_windVelocity.xz * (time * 0.5);
     const vec2 p = (worldXZ - travel) * invSize;
     return particleNoise(vec3(p.x, time * 0.35 + phase, p.y)) * 2.0 - 1.0;
 }
@@ -142,21 +142,21 @@ float weatherTravellingNoise(vec2 worldXZ, float invSize, float time, float phas
 // band ahead of it - the density "waves" of a storm - before the wrap evens them out again.
 vec3 weatherWindAt(vec3 pos, float time)
 {
-    const float g = u_weatherWind0.w;
+    const float g = u_weather_gustStrength;
     if (g <= 0.0)
-        return u_weatherWind0.xyz;
-    const vec2 gust = vec2(weatherTravellingNoise(pos.xz, u_weatherWind1.x, time, 0.0),
-                           weatherTravellingNoise(pos.xz, u_weatherWind1.x, time, 53.0));
-    return u_weatherWind0.xyz + vec3(gust.x, 0.0, gust.y) * g;
+        return u_weather_windVelocity;
+    const vec2 gust = vec2(weatherTravellingNoise(pos.xz, u_weather_invGustSize, time, 0.0),
+                           weatherTravellingNoise(pos.xz, u_weather_invGustSize, time, 53.0));
+    return u_weather_windVelocity + vec3(gust.x, 0.0, gust.y) * g;
 }
 // Alpha multiplier for the drawn drops: sheets of denser and thinner rain sweeping through. Contrast
 // 0 = uniform; at 1 the thinnest sheet is nearly empty and the densest twice as bright.
 float weatherSheet(vec3 pos, float time)
 {
-    const float c = u_weatherWind1.y;
+    const float c = u_particles_windSheetContrast;
     if (c <= 0.0)
         return 1.0;
-    const float n = weatherTravellingNoise(pos.xz, u_weatherWind1.z, time, 37.0);
+    const float n = weatherTravellingNoise(pos.xz, u_particles_invWindSheetSize, time, 37.0);
     return clamp(1.0 + c * n * 1.5, 0.0, 2.0);
 }
 #endif

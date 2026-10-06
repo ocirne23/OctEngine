@@ -48,7 +48,7 @@ void main()
     // The lookup moves TOWARD THE SUN by "Shadow bias (m)", full at the root and none at the tip: the root sinks below
     // the terrain mesh (root sink + half the tessellated relief), into the ground's own shadow-map surface - a dark
     // band at the bottom of every blade.
-    const vec3 shadowPos = pos + L * (u_grassParams11.x * (1.0 - in_blade.x));
+    const vec3 shadowPos = pos + L * (u_grass_shadowBias * (1.0 - in_blade.x));
     g_sunShadowFirst = sunShadowVisibility(shadowPos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN);
     // THE CANOPY's shadow (grass.inc.glsl grassCanopySun): the blades above this point along the sun, as a volume with
     // its clumps and sun flecks - the self-shadowing a shadow map cannot resolve. On the direct sun and the
@@ -60,18 +60,18 @@ void main()
     g_sunShadowFirst *= mix(canopySun, nearSun, nearWeight);
 
     const float t = in_blade.x;
-    vec3 albedo = mix(u_grassColor0.rgb, u_grassColor1.rgb, t);
-    albedo = mix(albedo, u_grassColor2.rgb * mix(0.75, 1.0, t), in_blade.z);
+    vec3 albedo = mix(u_grass_rootAlbedo, u_grass_tipAlbedo, t);
+    albedo = mix(albedo, u_grass_dryAlbedo * mix(0.75, 1.0, t), in_blade.z);
     albedo *= in_blade.y; // the per-blade variation and the cold darkening (grass.vs.glsl)
-    const float ao = mix(1.0 - u_grassShade.x, 1.0, smoothstep(0.0, 1.0, t));
+    const float ao = mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t));
 
     const vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
     // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
     // register peak): only this half colour is live across it.
     const float back = max(-dot(N, L), 0.0);
-    const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * ao * u_grassShade.y * INV_PI, MEDIUMP_FLT_MAX));
+    const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * ao * u_grass_transmission * INV_PI, MEDIUMP_FLT_MAX));
 
-    vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grassColor0.w), float16_t(0.0), float16_t(ao));
+    vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grass_roughness), float16_t(0.0), float16_t(ao));
     color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
     out_color = vec4(color, 1.0);
     out_motion = motionVector(in_prevWorldDelta);

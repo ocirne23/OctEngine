@@ -85,7 +85,7 @@ public:
         float pixelScale = 0.0f; // px per unit of (radius / distance): viewportH/2 / tan(fov/2)
         float minPixels = 0.0f;  // projected proxy radius below this skips the draw (0 = size cull off)
         bool bakeVolume = false; // a large emitter qualified this frame: dispatch the shell-volume
-                                 // bake (the UBO's forceBake0/1 carry the fitted mapping)
+                                 // bake (the UBO's u_forceLive_bakeMin / bakeInvSize carry the fitted mapping)
         // The UNION MARCH (one analytic march per pixel): the analytic-tier drawables rasterize
         // only their ray intervals; the fullscreen union pass marches each covered pixel once.
         // Off (VR, "Union march" tweak, density debug view) = the analytic tier draws per-proxy.

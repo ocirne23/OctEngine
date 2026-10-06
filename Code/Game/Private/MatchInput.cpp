@@ -898,7 +898,7 @@ bool GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
     // buildings without any of them planning. The start is the largest cluster's centre, so a lone
     // straggler cannot pull the lane's origin away from the bulk of the group.
     glm::vec3 groupPos;
-    if (freshOrder && largestClusterCentroid(m_selectedUnits, m_selectionClusterRadius, groupPos))
+    if (freshOrder && largestClusterCentroid(m_selectedUnits, m_settings.selectionClusterRadius, groupPos))
         laneSeeded = Globals::navSystem.seedPath(uint32(m_team), groupPos, target, laneSeedSpeed(), laneSeedWidth());
     // (No group re-seed timer: while they walk, the units themselves ask for a lane on their own
     // timers and Nav's proximity dedup turns the whole group's requests into one plan - see

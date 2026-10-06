@@ -2,7 +2,7 @@ module Spatial;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
+import Settings;
 
 void SpatialOccluder::reset()
 {
@@ -18,12 +18,6 @@ void OcclusionBuffer::initialize()
     ProfileScope scope("OcclusionBuffer::initialize", EProfileCategory::Spatial);
     m_depth.resize(Width * Height);
     m_blockMax.resize(BlocksX * BlocksY);
-    Tweak::boolean("Spatial/Occlusion", "Enabled", &m_enabled);
-    Tweak::floatVar("Spatial/Occlusion", "Depth bias", &m_depthBias, 0.0f, 0.05f, 0.0001f);
-    Tweak::intVar("Spatial/Occlusion", "Max occluder tris", &m_maxTriangles, 64, 16384);
-    Tweak::intVar("Spatial/Occlusion", "Triangles", &m_statTriangles, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Occlusion", "Hidden cells", &m_statHiddenCellsDisplay, 0, INT32_MAX);
-    Tweak::floatVar("Spatial/Occlusion", "Raster ms", &m_statRasterMs, 0.0f, FLT_MAX, 0.001f);
 }
 
 oc::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(oc::span<const glm::vec3> vertices,
@@ -109,13 +103,13 @@ void OcclusionBuffer::removeOccluder(SpatialHandle handle)
 void OcclusionBuffer::render(const glm::mat4& viewProjRelCamera, const glm::dvec3& cameraPos)
 {
     m_rendered = false;
-    m_statHiddenCellsDisplay = m_statHiddenCells.exchange(0, oc::memory_order_relaxed); // last frame's count
-    if (!m_enabled)
+    m_settings.statHiddenCells = m_statHiddenCells.exchange(0, oc::memory_order_relaxed); // last frame's count
+    if (!m_settings.enabled)
         return;
     const auto start = Clock::now();
     m_viewProjRel = viewProjRelCamera;
     m_depth.assign(Width * Height, 1e30f);
-    m_statTriangles = 0;
+    m_settings.statTriangles = 0;
 
     for (const Occluder& occluder : m_occluders)
     {
@@ -147,7 +141,7 @@ void OcclusionBuffer::render(const glm::mat4& viewProjRelCamera, const glm::dvec
         }
     }
 
-    m_statRasterMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+    m_settings.statRasterMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
     m_rendered = true;
 }
 
@@ -195,7 +189,7 @@ void OcclusionBuffer::rasterizeTriangle(const glm::vec4& c0, const glm::vec4& c1
     }
     if (area < 1e-4f)
         return;
-    ++m_statTriangles;
+    ++m_settings.statTriangles;
 
     const int minX = glm::max(int(glm::floor(glm::min(s0.x, glm::min(s1.x, s2.x)))), 0);
     const int maxX = glm::min(int(glm::ceil(glm::max(s0.x, glm::max(s1.x, s2.x)))), int(Width) - 1);
@@ -262,7 +256,7 @@ bool OcclusionBuffer::isVisible(const glm::vec3& centerRelCamera, const glm::vec
     if (screenMax.x < 0.0f || screenMin.x >= float(Width) || screenMax.y < 0.0f || screenMin.y >= float(Height))
         return true; // fully off-screen rects are the frustum test's business
 
-    minZ -= m_depthBias;
+    minZ -= m_settings.depthBias;
     const int bx0 = glm::max(int(screenMin.x) / int(BlockSize), 0);
     const int bx1 = glm::min(int(screenMax.x) / int(BlockSize), int(BlocksX) - 1);
     const int by0 = glm::max(int(screenMin.y) / int(BlockSize), 0);

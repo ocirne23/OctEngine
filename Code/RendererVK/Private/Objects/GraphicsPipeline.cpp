@@ -331,7 +331,13 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         }
         const oc::string debugName = pipelineDebugName(layout.vertexShader, layout.fragmentShader);
         Globals::device.setDebugName(pipeline, debugName.c_str());
-        Globals::device.logPipelineStatistics(pipeline, debugName.c_str());
+        if (Globals::device.capturePipelineStatistics())
+        {
+            oc::string defines;
+            Shader::appendDefineList(defines, layout.vertexShader.defines);
+            Shader::appendDefineList(defines, layout.fragmentShader.defines);
+            Globals::device.logPipelineStatistics(pipeline, debugName.c_str(), defines);
+        }
         outPipelines.push_back(pipeline);
     }
 
@@ -383,7 +389,13 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         const ShaderSource& fs = variant.fragmentShader.text.empty() ? layout.fragmentShader : variant.fragmentShader;
         const oc::string debugName = oc::format("{} #{}", pipelineDebugName(vs, fs), i + 1);
         Globals::device.setDebugName(pipeline, debugName.c_str());
-        Globals::device.logPipelineStatistics(pipeline, debugName.c_str());
+        if (Globals::device.capturePipelineStatistics())
+        {
+            oc::string defines;
+            Shader::appendDefineList(defines, vs.defines);
+            Shader::appendDefineList(defines, fs.defines);
+            Globals::device.logPipelineStatistics(pipeline, debugName.c_str(), defines);
+        }
         outPipelines.push_back(pipeline);
     }
     return true;

@@ -45,9 +45,9 @@ layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-flo
 
 // THE HAND-OVER (TREE_HANDOVER, a variant run only while it lasts - TreeVolumePipeline): a finished bake CROSS-FADES
 // into the shown one over "Far swap time". Per RAY a dither picks one bake: the new one when the pixel's noise (IGN,
-// stepped by the golden ratio per frame) lies under the fade (u_treeHandover.z). The temporal pass / TAA averages the
+// stepped by the golden ratio per frame) lies under the fade (u_foliageLive_handoverFade). The temporal pass / TAA averages the
 // picks into an image-space blend of the two results - the opacity mixes correctly, which mixing the density per
-// sample would not. The new bake: its centre (u_treeHandover.xy), floor / colour / max-floor grid (the back copies) and
+// sample would not. The new bake: its centre (u_foliageLive_handoverCentre), floor / colour / max-floor grid (the back copies) and
 // its density (the accumulation's RG16F view, two slices per texel: the resolve converted it in place). The whole ray reads its bake (g_new)
 // - the ring, the polar lookup, the skip, the floor, the density, the colour and its lighting taps - so the variant
 // costs what the normal one does. The normal variant reads the front bake only.
@@ -62,25 +62,9 @@ layout (push_constant, scalar) uniform Push
 {
     TreeVolumeParams vol;
     uvec2 size;          // the MARCH image's size (half the render size at "Far half res")
-    float stepScale;     // x the cell size
-    float startDistance; // m from the CAMERA: the volume fades in from here...
-    uint maxSteps;
-    float ambient;       // x the sky's irradiance on the canopy (from the sky map; "Far ambient")
-    float shrink;        // 1/m off the baked extinction: a blob shrinks toward its dense core ("Far blob shrink")
-    float overlap;       // ...over this band (m), where the billboards still draw ("Far overlap")
-    // The lighting ("Trees/Far ..."):
-    float sunScale;       // the direct sun's factor (a leaf's mean cosine)
-    float selfShadow;     // x the sun taps' optical depth
-    float normalStrength; // 0..1: the sun term toward max(N.L, 0), N = -grad(density) - the volume's "normal map"
-    float groundDark;     // how much darker the sky light gets at the ground
-    float forwardScatter; // Henyey-Greenstein g of the sun term (> 0: backlit leaves glow)
-    float albedoScale;    // x the leaf colour
-    float interiorShadow; // darkening of a blob's core ("Far interior shadow"; 0 = off)
-    float interiorRadius; // its taps' distance, x the cell size ("Far interior radius")
-    float saturation;     // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked ("Far saturation scale")
-    uint pad1;
-    uvec2 fullSize;       // the render size (the scene depth)
-} pc;
+    float startDistance; // m from the CAMERA: the volume fades in from here, over u_foliage_farOverlap
+    uvec2 fullSize;      // the render size (the scene depth)
+} pc; // the shading tweaks ("Trees/Far ..."): u_foliage_far*
 
 // The bake a read goes to (TREE_HANDOVER: g_new, per ray; else always the front one).
 #ifdef TREE_HANDOVER
@@ -90,9 +74,9 @@ bool handoverPicksNew(ivec2 px)
     // Spatially offset from the step jitter's IGN (decorrelated); the golden-ratio step spreads each pixel's picks
     // evenly over consecutive frames, so a short history already averages to the fade.
     const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
-    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_treeHandover.z;
+    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliageLive_handoverFade;
 }
-vec2 bakeCentre() { return g_new ? u_treeHandover.xy : pc.vol.centre; }
+vec2 bakeCentre() { return g_new ? u_foliageLive_handoverCentre : pc.vol.centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
 // The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice, tree_volume.inc.glsl): the hardware
 // filters across the columns only (each fetch at a texel layer's centre), the slice axis is blended here.
@@ -196,7 +180,7 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
     }
     if (floorWeight > 1e-6)
         smoothFloor = floorSum / floorWeight;
-    return max(sum - pc.shrink, 0.0) * pc.vol.densityScale;
+    return max(sum - u_foliage_farShrink, 0.0) * pc.vol.densityScale;
 }
 
 // The LIGHTING TAPS (sun, normal, interior - 12 per lit step) lie within ~10 m of their sample, which lies >= ~400 m
@@ -218,7 +202,7 @@ float densityAbove(vec2 uv, float h)
     if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc.vol.height)
         return 0.0;
     // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
-    return max(densityTexel(vec3(uv, h / pc.vol.height)) - pc.shrink, 0.0) * pc.vol.densityScale;
+    return max(densityTexel(vec3(uv, h / pc.vol.height)) - u_foliage_farShrink, 0.0) * pc.vol.densityScale;
 }
 float densityTap(vec2 uv, mat2 J, float h, vec3 d)
 {
@@ -332,21 +316,21 @@ void marchAt(ivec2 px)
     }
 
     const vec3 L = u_sunDirection.xyz;
-    // x the eclipse's visible sun fraction (u_eclipseParams.x), as every other sun consumer: without it the far trees
+    // x the eclipse's visible sun fraction (u_sunVisible), as every other sun consumer: without it the far trees
     // stayed sunlit while the moon covered the sun.
-    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x;
+    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_sunVisible;
     // PER RAY, not per lit step: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic, "Far
     // forward scatter" - 1 at g = 0 - times "Far sun scale") and the SKY LIGHT: the real sky's irradiance on an
     // up-facing leaf - pi x the mean radiance of GI's sky map over the upper hemisphere, cosine-weighted from 5 taps (the
     // zenith and a ring 45 degrees down: one cloud straight overhead does not set it alone) - x "Far ambient"; its
     // height factor stays per step. (It was a fixed cool blue tint x the sun's luminance.)
-    const float g = pc.forwardScatter;
+    const float g = u_foliage_farForwardScatter;
     const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
     // A ROCK (the colour's alpha: 1 - the column's rock fraction, R5) is a surface: no phase (it does not glow backlit).
-    const float sunLeaf = pc.sunScale * phase;
+    const float sunLeaf = u_foliage_farSunScale * phase;
     // The 5-tap mean is baked once per frame (gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL).
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
-    const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * pc.ambient);
+    const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * u_foliage_farAmbient);
     const float sliceH = pc.vol.height / float(pc.vol.slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
     // TWO SEGMENTS, split at the fade-in's end: the BAND (from "Far start" over "Far overlap", where the billboards still
@@ -354,7 +338,7 @@ void marchAt(ivec2 px)
     // fades in (as a whole, by its own mean distance - below). One fade for the whole ray let a ray that grazed a
     // band tree's blob beside its billboard pull its mean distance into the band and fade the far trees behind out
     // with it: a sky-coloured outline along the billboard silhouettes.
-    const float fadeEnd = pc.startDistance + max(pc.overlap, 1.0);
+    const float fadeEnd = pc.startDistance + max(u_foliage_farOverlap, 1.0);
     // A segment's distance weights sum to 1 - its transmittance (sum of T x alpha telescopes): no weight sums are kept.
     vec3 inBand = vec3(0.0), inBehind = vec3(0.0);
     float tBand = 1.0, tBehind = 1.0;
@@ -366,7 +350,7 @@ void marchAt(ivec2 px)
     // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling). The
     // steps are measured from the camera, so they slide through the volume as it moves; jittering only the first
     // sample left every later one on that sliding grid - blobs sampled differently each frame, "shaking".
-    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), pc.vol) * pc.stepScale, 0.25);
+    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), pc.vol) * u_foliage_farStepScale, 0.25);
     // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs.glsl): above its value + the volume's height, a point is
     // above every tree within one block in every direction - at least r x skipReach away (the block's tangential width
     // as a chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a
@@ -381,7 +365,7 @@ void marchAt(ivec2 px)
     // (at most the camera's) - so while d < r x aheadSin.
     const float aheadSin = sin(float(TV_FLOOR_AHEAD_SECTORS * TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc.vol.angularRes));
     const float camCentre = length(rel);
-    for (uint i = 0u; i < pc.maxSteps && t < tEnd; ++i)
+    for (uint i = 0u; i < uint(u_foliage_farMaxSteps) && t < tEnd; ++i)
     {
         const vec3 p = u_viewPos + dir * t;
         // ONE polar lookup per step: the cell size, the floor and the primary sample all take it.
@@ -411,7 +395,7 @@ void marchAt(ivec2 px)
         // 2+ columns from any density and all 4 of densityAtColumns' taps read 0 - no sample (its 4 floor loads, below),
         // and at least a whole cell of step (the ring column still lies between it and the density). In the step
         // formula, not a branch of its own: that branch cost the march 8 registers (56 -> 64).
-        float dt = max(cell * (hasFloor ? pc.stepScale : max(pc.stepScale, 1.0)), 0.25);
+        float dt = max(cell * (hasFloor ? u_foliage_farStepScale : max(u_foliage_farStepScale, 1.0)), 0.25);
         if (!hasFloor)
             floorY = terrainHeightAt(p.xz); // no tree reaches the column: the height map
         const float h = p.y - floorY;
@@ -447,16 +431,16 @@ void marchAt(ivec2 px)
                 const float hs = p.y - smoothFloor; // the taps' height (densityTap)
                 // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
                 const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
-                    + densityTap(uv, J, hs, L * 10.0) * 8.0) * pc.selfShadow);
+                    + densityTap(uv, J, hs, L * 10.0) * 8.0) * u_foliage_farSelfShadow);
                 const vec4 baked = colourAt(uv);
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709) - distant canopies read greyer.
-                const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, pc.saturation), 0.0) * pc.albedoScale;
+                const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale;
                 const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
                 // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
                 float sunCos = 1.0;
-                if (pc.normalStrength > 0.0)
+                if (u_foliage_farNormalStrength > 0.0)
                 {
                     const float hx = 0.5 * cell;
                     // The base of the differences on the same floor as the taps (sigma's own is the per-column blend).
@@ -467,26 +451,26 @@ void marchAt(ivec2 px)
                     const float len2 = dot(grad, grad);
                     // A rock takes the full N.L: it is a surface, not a crown of leaves facing every way.
                     if (len2 > 1e-12)
-                        sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), mix(pc.normalStrength, 1.0, rock));
+                        sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), mix(u_foliage_farNormalStrength, 1.0, rock));
                 }
                 // Leaves as Lambert surfaces of a mean cosine toward the sun (sunPart: the phase and "Far sun scale"); the
                 // sky light darker toward the ground ("Far ground darkening").
-                const vec3 sky = skyBase * mix(1.0 - pc.groundDark, 1.0, hNorm);
+                const vec3 sky = skyBase * mix(1.0 - u_foliage_farGroundDark, 1.0, hNorm);
                 // INTERIOR (the volume's "Foliage interior shadow"): the mean extinction of 6 taps around the sample
                 // (+-x / +-z / +-y at "Far interior radius" cells) - deep in a blob dense on every side, at its surface
                 // empty on one - as an AO term on the sun and the sky alike.
                 float interior = 1.0;
-                if (pc.interiorShadow > 0.0 && pc.interiorRadius > 0.0) // radius 0: the taps sit on the sample, exp(0)
+                if (u_foliage_farInteriorShadow > 0.0 && u_foliage_farInteriorRadius > 0.0) // radius 0: the taps sit on the sample, exp(0)
                 {
-                    const float rr = pc.interiorRadius * cell;
+                    const float rr = u_foliage_farInteriorRadius * cell;
                     const float ry = min(rr, 0.5 * pc.vol.height);
                     const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
                         + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
                         + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
                     // A rock's core is solid: no lit interior to darken, a quarter of the term.
-                    interior = exp(-pc.interiorShadow * m * rr * (1.0 - 0.75 * rock));
+                    interior = exp(-u_foliage_farInteriorShadow * m * rr * (1.0 - 0.75 * rock));
                 }
-                const vec3 sunPart = sunRadiance * mix(sunLeaf, pc.sunScale, rock);
+                const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
                 const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + albedo * u_ambientColor) * interior;
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT

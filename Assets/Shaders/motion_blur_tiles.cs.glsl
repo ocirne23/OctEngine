@@ -18,10 +18,7 @@ layout (push_constant) uniform PC
 {
     uint  width;
     uint  height;
-    float shutter;     // exposure / frame time (0.5 = a 180 degree shutter)
-    float maxRadius;   // px: the longest blur is 2 x this
-    float cameraScale; // the camera's share of the velocity (0 = objects only)
-} pc;
+} pc; // the tweaks: u_post_mb*
 
 #define MOTION_BLUR_REDUCE u_subTileOut
 #include "motion_blur.inc.glsl"
@@ -33,7 +30,7 @@ void main()
     if (px.x < int(pc.width) && px.y < int(pc.height))
     {
         vel = motionBlurVelocity(px, vec2(pc.width, pc.height), texelFetch(u_sceneDepth, px, 0).r,
-            texelFetch(u_motion, px, 0), pc.shutter, pc.maxRadius, pc.cameraScale);
+            texelFetch(u_motion, px, 0), u_post_mbShutter, u_post_mbMaxRadius, u_post_mbCameraScale);
         imageStore(u_velocityOut, px, vec4(vel, 0.0, 0.0));
     }
     motionBlurReduceTile(vel); // every lane: barriers inside

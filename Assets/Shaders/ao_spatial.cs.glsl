@@ -14,9 +14,10 @@ layout (push_constant) uniform PC
 {
     uint  aoWidth;
     uint  aoHeight;
-    int   radius;     // kernel half-extent (texels)
     uint  viewIndex;  // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
 } pc;
+// The kernel half-extent (texels): a constant while "Ray tracing" is locked, so the loops unroll.
+#define AO_BLUR_RADIUS int(u_rt_aoBlurRadius)
 
 void main()
 {
@@ -35,7 +36,7 @@ void main()
         // the forward pass upsamples this image with plain bilinear, so background texels bleed into
         // silhouette edge pixels and brighten their GI term (bright aliased rim). Averaging the nearby
         // geometry samples instead makes the blend across the silhouette a no-op.
-        const int r = max(pc.radius, 1);
+        const int r = max(AO_BLUR_RADIUS, 1);
         vec4 sum = vec4(0.0);
         float wsum = 0.0;
         for (int dy = -r; dy <= r; ++dy)
@@ -71,8 +72,8 @@ void main()
 
     vec4 sum = vec4(0.0); // .a = AO, .xyz = bent normal
     float wsum = 0.0;
-    for (int dy = -pc.radius; dy <= pc.radius; ++dy)
-    for (int dx = -pc.radius; dx <= pc.radius; ++dx)
+    for (int dy = -AO_BLUR_RADIUS; dy <= AO_BLUR_RADIUS; ++dy)
+    for (int dx = -AO_BLUR_RADIUS; dx <= AO_BLUR_RADIUS; ++dx)
     {
         const vec2 nuv = uv + vec2(dx, dy) * texel;
         const float nDepth = texture(u_depth, nuv).r;

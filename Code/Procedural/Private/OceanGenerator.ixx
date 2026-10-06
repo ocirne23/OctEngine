@@ -7,6 +7,7 @@ import Core.Transform;
 
 import RendererVK;
 import Spatial;
+import Settings;
 
 import :TerrainSampler;
 import :HeightMapBaker;
@@ -40,7 +41,7 @@ export namespace Procedural
 		OceanGenerator(const OceanGenerator&) = delete;
 		OceanGenerator& operator=(const OceanGenerator&) = delete;
 
-		void initialize();                                     // registers Tweaks
+		void initialize();                                     // attaches the "Ocean" listeners + declares the push sources
 		// Per-frame: push params, rebuild / re-center the clipmap, set each sector node's pass mask (the
 		// dry test) (after beginFrame). The draw is NOT here: TerrainStreamer::render calls render(),
 		// and its job's one walk of the Spatial visible hand-over pushes the visible sector nodes along
@@ -81,7 +82,7 @@ export namespace Procedural
 		// True when sampleWaterHeight can return water AT ALL (enabled + displacement readback
 		// primed) - the App wires this as buoyancy's global gate, so a disabled ocean costs the
 		// PhysicsComponents nothing.
-		bool hasWater() const { return m_enabled && !m_dispTile.empty() && m_dispTileRes != 0; }
+		bool hasWater() const { return m_settings.enabled &&!m_dispTile.empty() && m_dispTileRes != 0; }
 
 		// The heading the swell actually TRAVELS in open water (radians, XZ) - the terrain streamer's baked
 		// flow field eases back to this offshore so the encoded directions meet the wind-driven open sea
@@ -98,9 +99,9 @@ export namespace Procedural
 		// Turns the SIMULATION wind toward the baked shore flow around the camera - how the waves actually
 		// travel inland at the coast. See the .cpp.
 		float steeredWindAngle(const Camera& camera);
-		// Fills OceanParams from the tweak-backed members and pushes it (Renderer::setOceanParams);
-		// `enabled` rides along and gates the GPU FFT + the ocean draw, so the disabled transition
-		// pushes exactly once through the same path.
+		// Fills OceanParams from the settings (oceanWorldScaled) and the live wind / sea / camera, and pushes it
+		// (Renderer::setOceanParams: the simulation and the live UBO values); `enabled` rides along and gates the GPU
+		// FFT + the ocean draw, so the disabled transition pushes exactly once through the same path.
 		void pushOceanParams(Renderer& renderer, const Camera& camera);
 		void rebuildGrid();
 		glm::vec2 sampleShoreData(float x, float z) const;          // (water depth, water level) from the terrain-data CPU copy
@@ -116,136 +117,28 @@ export namespace Procedural
 		// choppiness drops sectors whose crests are still on screen, opening gaps at the screen edges.
 		float displacementExtent() const;
 
-		// --- Clipmap geometry config (a change rebuilds the mesh) ---
-		bool  m_enabled = false;
+		// The "Ocean*" tweaks (Settings.Ocean): clipmap geometry (a change rebuilds the mesh), spectrum, shading, foam,
+		// shore interaction and the ray tracing budget.
+		const OceanSettings& m_settings = Globals::settings.ocean;
 		float m_seaLevel = 0.0f;   // mirrors the terrain's datum; set every update(), never tweaked here
-		// UNIFORM world scale, the ocean's counterpart of the terrain's "Meters per pixel" (mpp / 30):
-		// every tweak below is authored in MODEL metres and the sea is drawn at model x scale. The
+		// "World scale": UNIFORM, the ocean's counterpart of the terrain's "Meters per pixel" (mpp / 30):
+		// every tweak is authored in MODEL metres and the sea is drawn at model x scale. The
 		// spectrum is scaled by Froude similarity (lengths x s, wind speed x sqrt(s), gravity untouched),
 		// which is the one scaling of the JONSWAP/TMA inputs under which wavelengths AND wave heights both
 		// come out x s - so the scaled sea is a shrunk copy of the model sea. Froude periods would be
 		// x sqrt(s) (a miniature races), so the spectrum clock runs at sqrt(s) (OceanParams::timeScale) and
 		// the periods stay the model sea's. Applied ONCE, in pushOceanParams: the shaders and the CPU
 		// buoyancy mirror both read the scaled set (m_params), so neither can disagree with the other.
-		float m_worldScale = 1.0f;  // 1 = the model sea
 		OceanParams m_params;      // the SCALED param set last pushed to the renderer; the CPU mirror reads it
-		// Reach = ringCell * res/2 * 2^(rings-1), and every ring costs the same vertex count whatever its
-		// cell size - so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip
-		// (a finer mip samples detail the mesh cannot hold and simply aliases). At 2 m cells the finest
-		// cascade sat inside ~3 texels and was averaged out of the geometry entirely; 0.5 m gives it ~13
-		// and it comes back as real chop. 0.5 x 7 rings holds the same 4 km reach 2 x 5 rings had.
-		float m_ringCell = 0.25f;      // ring 0 cell size (m); doubles per ring
-		int   m_ringRes = 256;         // cells per axis per ring (ring 0 is a full grid, outer rings are annuli)
-		int   m_rings = 8;             // ring count (defaults: 128 m fine region, ~4 km reach)
-		// One coarse quad band appended past the outermost ring, stretching its edge lattice out to the
-		// camera far plane - the sea meets the horizon in every direction instead of ending at the ring
-		// reach. Its inner edge sits on the last ring's fully-morphed (2x cell) lattice at the matching
-		// mip, so the seam is watertight by the same CDLOD construction the rings use.
-		bool  m_horizonBand = true;
-		float m_horizonLevelOffset = -0.5f; // vertical shift (m) of the band only; negative sinks it under
-		                                   // distant near-sea-level terrain (it is cull-exempt)
+		// "Horizon band": one coarse quad band appended past the outermost ring, stretching its edge lattice out to
+		// the camera far plane. Its inner edge sits on the last ring's fully-morphed (2x cell) lattice at the
+		// matching mip, so the seam is watertight by the same CDLOD construction the rings use.
 		float m_lastFar = 0.0f;        // camera far plane the current grid was built for (change = rebuild)
-		// Bias on the ring-matched displacement mip (negative = sample finer than the ring's Nyquist:
-		// slightly more detail, some sampling shimmer while moving). With fixed-cell rings 0 should be fine.
-		float m_detailBias = 0.3f;
 
-		// --- Spectrum (TMA/JONSWAP + finite-depth dispersion) + shading; all live via setOceanParams ---
-		float m_windSpeedScale = 2.5f;  // x "Sky/Wind/Speed" = the U10 (m/s): the main sea-state knob
-		float m_fetchKm = 300.0f;      // wind fetch (km)
-		float m_depth = 100.0f;        // ocean depth (m): finite-depth dispersion + TMA attenuation
 		// Flow -> wind steering (steeredWindAngle): near a coast the SIM wind turns toward the baked flow
 		// so the waves roll toward the local shore; away from any it returns to baseWindAngle.
-		bool  m_windSteerEnabled = true;
-		float m_windSteerRate = 10.0f;    // deg/s the simulation wind may turn (spectrum morphs through it)
-		float m_windSteerRange = 400.0f;  // m around the camera whose baked shore directions vote
 		float m_steeredWindAngle = 0.0f;  // follows baseWindAngle/the flow at the slew rate
 		bool  m_windSteerSynced = false;  // adopt baseWindAngle on first use instead of turning in from 0
-		float m_amplitude = 1.0f;      // artistic scale on the spectrum (1 = physical)
-		float m_choppiness = 1.25f;     // horizontal displacement lambda
-		float m_normalStrength = 1.0f;
-		// FFT patch sizes (m). Each cascade TILES with its own size, so the largest one sets how often the
-		// sea visibly repeats: at wind 20 / fetch 300 km the JONSWAP peak is a ~200 m wavelength, and the
-		// old 384 m patch held under two of them - the same crest pair every 384 m, ~10 times across the
-		// view. These hold ~7.7 instead. Scaled as a SET on purpose: the band split hands cascade c+1
-		// everything below 0.5*Nyquist(L_c), so growing only cascade 0 would push 15 m waves into a 47 m
-		// tile and just move the repetition down a cascade. Ratios (8.17, 7.52) stay non-rational so the
-		// three tilings never re-align.
-		glm::vec3 m_cascadeSizes = glm::vec3(1536.0f, 188.0f, 25.0f);
-
-		glm::vec3 m_absorption = glm::vec3(85.0f / 255.0f, 14.0f / 255.0f, 20.0f / 255.0f);  // Beer-Lambert extinction (1/m)
-		glm::vec3 m_scatterColor = glm::vec3(0.047f, 0.1f, 0.15f);
-		float m_scatterStrength = 1.0f;
-		float m_roughness = 0.07f;
-		float m_glintFilter = 1.0f;     // scale on the roughness-widening variance (spec AA + LEAN)
-		// Slope variance of the waves below the FINEST cascade's Nyquist - the capillary band no FFT size
-		// can hold. LEAN returns only what the mip chain filtered away and is exactly 0 at mip 0, so
-		// without this the near field collapses onto the 0.02 alpha clamp and mirrors the sky. NOT world
-		// scaled: a slope variance is dimensionless.
-		float m_microRoughness = 0.01f;
-		// Strength of the shading slope's soft limit, s /= 1 + k * |s|. It stops the near-fold division
-		// exploding into dark creases, but it flattens the steep crest faces with it. 0 = off.
-		float m_crestSlopeLimit = 0.0f;
-		// Sub-band detail: the finest cascade's gradient field re-sampled at a fraction of its patch size
-		// in a rotated domain, added to the SHADING slope only - wave statistics below the FFT band for
-		// one fetch. The displacement never sees it, so the CPU buoyancy mirror needs no counterpart.
-		float m_detailStrength = 0.66f;
-		float m_detailScale = 0.33f;     // fraction of the finest cascade's patch size
-		float m_detailFadeDist = 60.0f;  // MODEL metres, like every other metre here (scaled in pushOceanParams)
-		float m_detailRotation = 0.9f;   // radians
-		float m_sssStrength = 0.75f;     // crest SSS: back-lit crests glow the scatter color, per meter of height
-		float m_sssPower = 1.0f;        // crest SSS toward-the-sun view lobe exponent
-		float m_undersideTransmission = 1.0f; // sky through Snell's window from below (1 = Fresnel; less = more internal reflection)
-		bool  m_hitLighting = false; // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
-		// Foam: one instant-foam response draws the crest foam AND injects the world-space foam field, whose
-		// one amount draws white foam above "Foam threshold" and the bubble cloud below it.
-		glm::vec3 m_foamColor = glm::vec3(0.88f, 0.92f, 0.94f);
-		float m_foamBias = 0.9f;      // fold threshold (Jacobian below this foams)
-		float m_foamBreakAccel = 0.4f; // breaking threshold (downward crest accel, g units)
-		float m_foamSoftness = 1.0f;  // edge width of both thresholds
-		float m_foamWindFull = 15.0f; // model U10 (m/s) from which the surf band has its full width (off in a calm)
-		float m_bubbleDepth = 0.5f;  // m under the surface (model metre): deeper = darker, more turquoise
-		float m_bubbleBrightness = 1.25f; // the bubble cloud's albedo, x foam color
-		float m_bubbleBlur = 2.0f;   // model m: the bubble cloud reads the foam field this blurred
-		float m_foamFlatten = 0.5f;  // 0..1: the foam's Lambert normal eased toward up
-		// The world-space foam field: the foam amount sticks to the water it formed on and drifts downwind.
-		float m_foamSurfaceDecay = 0.999f; // foam amount retention per frame
-		float m_foamSurfaceStrength = 1.0f; // display scale on the stuck foam (0 = crest foam only)
-		float m_foamTexel = 0.4f;    // level 0 texel (model m); x 4 per level, 512^2 texels each
-		float m_foamThreshold = 0.5f; // stuck foam density (amount / Jacobian) where it turns on
-		float m_foamEdge = 0.33f;    // that threshold's half-width (smaller = crisper foam)
-		float m_foamFineWaves = 0.5f; // 0..1: the finest cascade's share in the Jacobian the foam reads
-		float m_foamDetail = 1.25f;  // scale on the sub-band detail slope in the foam's lighting normal
-		float m_foamDrift = 2.0f;    // % of the wind speed: the surface drift along the swell's travel
-
-		// --- Shore interaction (driven by the streamer's baked terrain-data map) ---
-		// The shore's APPROACH BAND: open water eases to the swash amplitude over depth = scale x the mid
-		// cascade's patch size (floored at two swash reaches) - oceanSwashFadeIn. Cut 4x alongside the 4x
-		// cascade sizes so the absolute band depth (and so the coastline look) was unchanged by that change.
-		float m_shoalScale = 0.005f;
-		// Past m_horizonDepthRange the waves assume at least m_horizonDepth of water, whatever the baked
-		// map says. Distant depth errors all run SHALLOW (coarse texels average shore slopes into the
-		// water, V3 reports depth exactly 0 for unresolved samples, vertScale compresses real shelves)
-		// and shallow is ruinous: it fades out the waves AND the LEAN variance, leaving a sky mirror
-		// that looks exactly like wind 0. Only the seabed moves, never the surface. 0 range = off.
-		float m_horizonDepth = 2.0f;
-		float m_horizonDepthRange = 3000.0f;
-		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
-		float m_shoreFoamMax = 1.0f; // surf band opacity cap: keeps the refracted bottom visible through the foam
-		float m_swashAmp = 0.5f;        // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
-		float m_shoreFoamBias = 0.1f;  // surf fold-threshold shift: negative = sparser/more transparent surf
-		float m_swashFlow = 0.5f;       // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
-		float m_cullMargin = 1.0f;      // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)
-		float m_farCullError = 4.0f;    // land cull from the FAR terrain cascade: flat error allowance (m); 0 = near-only
-
-		// --- Ray tracing budget (ocean.fs.glsl per-pixel refraction/reflection rays; all live) ---
-		float m_rtRefractionRange = 30.0f;   // max refracted-ray length (m): underwater visibility of traced geometry
-		int   m_debugMode = 0;                // OCEAN_DEBUG_MODE shader variant (pipeline reload on change)
-		bool  m_rtReflections = true;        // OCEAN_RT_REFLECTIONS shader variant (pipeline reload on toggle)
-		float m_rtReflectionRange = 3000.0f; // max mirror-ray length (m): how distant scenery still reflects
-		float m_rtReflectionMaxRough = 0.25f; // roughness above which the mirror ray is skipped (blurred-sky fallback)
-		float m_rtReflectionFog = 0.2f;      // fog on mirror rays: 1 = the reflected source's own fog, 0 = off
-		float m_rtRayCutoffDist = 0.0f;      // camera distance (m) beyond which NO rays trace (analytic
-		                                      // bottom + sky fallbacks - the same paths misses take); 0 = unlimited
 
 		// The streamer's active baked terrain-data map (adopted each update()); the shared_ptr keeps this
 		// snapshot alive across the frame even while the streamer ships a replacement bake - buoyancy
@@ -311,8 +204,7 @@ export namespace Procedural
 		// Conservative by construction - a per-block MAX of (water level - height) over the COARSEST
 		// cascade, rebuilt once per adopted bake, and a sector only skips when every block it overlaps is
 		// dry beyond the same burial terms the vertex cull demands; footprints leaving the baked range
-		// always count as wet (unknown terrain = open-ocean fallback in the shaders).
-		bool  m_drySectorCull = true;
+		// always count as wet (unknown terrain = open-ocean fallback in the shaders). "Dry sector cull" toggles it.
 		static constexpr uint32 DRY_BLOCKS = 32;
 		oc::array<float, DRY_BLOCKS * DRY_BLOCKS> m_blockMaxDepth{};
 		bool  m_dryGridValid = false;

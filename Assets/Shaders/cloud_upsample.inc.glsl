@@ -13,7 +13,7 @@
 
 vec4 cloudUpsample(sampler2D cloudColor, sampler2D cloudDepth, vec2 fragCoord, float logScene, out float logCloudDist)
 {
-    const float logMax = log2(u_cloudMarch0.y);
+    const float logMax = log2(u_clouds_maxDistance);
     const ivec2 size = textureSize(cloudColor, 0);
     const vec2 hp = fragCoord * 0.5 - 0.5;
     const ivec2 base = ivec2(floor(hp));

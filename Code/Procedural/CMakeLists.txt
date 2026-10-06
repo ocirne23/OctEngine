@@ -16,7 +16,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/
 # ships release-CRT only, so no $<$<CONFIG:Debug>:d> suffix (the Aftermath precedent, not the box3d one).
 # zstd (the diffusion disk tile cache) is PRIVATE for the same reason, with the usual d-suffix pair.
 # meshoptimizer (the rocks' base mesh simplification, RockGenerator.cpp) is PRIVATE too.
-target_link_libraries(${PROJECT_NAME} PUBLIC Core RendererVK File Spatial Physics PRIVATE onnxruntime zstd$<$<CONFIG:Debug>:d> meshoptimizer$<$<CONFIG:Debug>:d>)
+target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings RendererVK File Spatial Physics PRIVATE onnxruntime zstd$<$<CONFIG:Debug>:d> meshoptimizer$<$<CONFIG:Debug>:d>)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 

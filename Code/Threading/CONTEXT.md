@@ -385,9 +385,11 @@ Each of these guards a race that was actually hit.
 
 ## Stress harness
 
-`Globals::jobSystemStress`, Threading/Stress tweaks. One measured batch per frame in the selected
-mode: empty-job throughput, `parallelFor`, a 128-job hazard-checked graph, or fiber park/resume.
-Timings and scheduler rates publish under Threading/Stats.
+`Globals::jobSystemStress`, Threading/Stress tweaks (`ThreadingSettings` = `Globals::settings.threading`,
+`Settings.Threading` - Threading links the Core-only Settings library for it). One measured batch per frame
+in the selected mode: empty-job throughput, `parallelFor`, a 128-job hazard-checked graph, or fiber
+park/resume. Timings and scheduler rates publish under Threading/Stats. **Nothing calls its `update()` at
+present** — the tweaks show in the panel but do nothing until the App drives it.
 
 "Run self test" fires a one-shot correctness pass into the log: submit/wait sums, parallelFor
 coverage, read/write hazard ordering, fiber waits, delayed jobs. The graph mode validates hazards

@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Entity;
 import Threading;
+import Settings;
 import :Structures;
 
 // THE CABLE TRANSPORT - see the block in Structures.ixx. This file is the tick: the boundary
@@ -45,10 +46,10 @@ void StructureSystem::addTransportSlot(int buildingIdx, int medium, uint32 node)
     // METERED machines: the barracks' build rate and the turret's fire cadence are their cable
     // INTAKE - the store fills at that rate however many segments feed the junction.
     if (medium == 0 && isBarracksType(ref.type))
-        slot.intakePerSec = m_barracksEnergyIntake;
+        slot.intakePerSec = m_settings.barracksEnergyIntake;
     else if (medium == 0 && ref.type == EStructureType::Turret)
-        slot.intakePerSec = GameStructureComponent::params.turretShotEnergy
-            / glm::max(GameStructureComponent::params.turretFireInterval, 1e-3f);
+        slot.intakePerSec = Globals::settings.game.structureParams.turretShotEnergy
+            / glm::max(Globals::settings.game.structureParams.turretFireInterval, 1e-3f);
     m_net.slots.push_back(slot);
 }
 
@@ -58,7 +59,7 @@ void StructureSystem::transportInject(const TransportRun& run)
 {
     const float period = transportTickPeriod();
     const float cellsPerSeg = (float)cellsPerSegmentOf(run.medium);
-    const int substeps = glm::max(m_transportSubsteps, 1);
+    const int substeps = glm::max(m_settings.transportSubsteps, 1);
     for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
     {
         const TransportNode& node = m_net.nodes[n];
@@ -137,9 +138,9 @@ void StructureSystem::transportInject(const TransportRun& run)
                         fill += (float)m_net.nodes[m_net.adj[node.adjFirst + a].node].fill;
                     fill /= (float)node.adjCount * cellsPerSeg;
                 }
-                if (fill >= m_storageHighMark)
+                if (fill >= m_settings.storageHighMark)
                     slot.storageMode = 1;
-                else if (fill <= m_storageLowMark)
+                else if (fill <= m_settings.storageLowMark)
                     slot.storageMode = -1;
                 if (slot.storageMode > 0)
                     pull(false);
@@ -204,7 +205,7 @@ void StructureSystem::kickTransport()
     if (m_transportKicked || m_net.runs.empty())
         return;
     const float period = transportTickPeriod();
-    const int spread = glm::clamp(m_transportSpread, 1, 8);
+    const int spread = glm::clamp(m_settings.transportSpread, 1, 8);
     // Stagger groups: group g ticks at phase g/spread of the period, so a big base's runs land on
     // different frames. A hitch never spirals: a late group re-arms one period from NOW.
     if (m_transportTickIndex == 0)
@@ -220,7 +221,7 @@ void StructureSystem::kickTransport()
     if (dueMask == 0)
         return;
     ++m_transportTickIndex;
-    m_statTransportTicks = (int)m_transportTickIndex;
+    m_settings.statTransportTicks = (int)m_transportTickIndex;
     m_net.dueRuns.clear();
     {
         ProfileScope scope("Transport inject", EProfileCategory::Game);
@@ -235,7 +236,7 @@ void StructureSystem::kickTransport()
             for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
             {
                 TransportNode& node = m_net.nodes[n];
-                node.movedAvg += ((float)node.moved * m_transportTickHz - node.movedAvg) * avgAlpha;
+                node.movedAvg += ((float)node.moved * m_settings.transportTickHz - node.movedAvg) * avgAlpha;
                 node.moved = 0;
             }
             transportInject(run);
@@ -254,7 +255,7 @@ void StructureSystem::transportTick()
 {
     TransportNet& net = m_net;
     const int cellsPerSegOf[3] = { cellsPerSegmentOf(0), cellsPerSegmentOf(1), cellsPerSegmentOf(2) };
-    const int substeps = glm::max(m_transportSubsteps, 1);
+    const int substeps = glm::max(m_settings.transportSubsteps, 1);
     // A pass over ONE run's nodes: inline for a small run, fanned out for a large one (a big
     // base is usually one run - this is where the work splits when it is worth it).
     const auto forRunNodes = [&](const TransportRun& run, const char* name, auto&& fn)
@@ -507,7 +508,7 @@ bool StructureSystem::cableInfo(int index, CableInfo& out) const
     out.fill = node.fill;
     out.capacity = cellsPerSegmentOf(node.medium);
     out.movedPerSec = node.movedAvg; // ~2 s average, not the last tick's burst
-    out.ratePerSec = m_cableThroughput[glm::min((int)node.medium, 2)];
+    out.ratePerSec = m_settings.cableThroughput[glm::min((int)node.medium, 2)];
     out.runFill = out.runCapacity = out.runSegments = 0;
     for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
     {
@@ -532,7 +533,7 @@ void StructureSystem::collectCableFills(oc::vector<CableMirror>& out, uint32& cu
         const TransportNode& node = m_net.nodes[n];
         if (node.junction)
             continue;
-        const float rate = glm::max(m_cableThroughput[glm::min((int)node.medium, 2)], 1e-3f);
+        const float rate = glm::max(m_settings.cableThroughput[glm::min((int)node.medium, 2)], 1e-3f);
         out.push_back({ node.structureId, (uint8)glm::min((int)node.fill, 255),
             (uint8)glm::clamp(node.movedAvg / rate * 255.0f, 0.0f, 255.0f) });
     }
@@ -545,7 +546,7 @@ void StructureSystem::mirrorCableFill(uint32 id, uint8 fill, uint8 util)
     {
         TransportNode& node = m_net.nodes[it->second];
         node.fill = fill;
-        node.movedAvg = (float)util / 255.0f * m_cableThroughput[glm::min((int)node.medium, 2)];
+        node.movedAvg = (float)util / 255.0f * m_settings.cableThroughput[glm::min((int)node.medium, 2)];
     }
     else
         m_savedFills[id] = fill; // a segment the client's graph has not derived yet

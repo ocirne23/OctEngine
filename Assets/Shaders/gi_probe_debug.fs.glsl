@@ -33,7 +33,7 @@ void main()
     const vec3 n   = (hit - v_sphere.xyz) / v_sphere.w;
 
     if (v_mode == 0u)
-        out_color = vec4(giEvalCell(v_cellBase, n) / PI * u_aoParams.y, 1.0); // u_aoParams.y = GI strength (0 while GI is off)
+        out_color = vec4(giEvalCell(v_cellBase, n) / PI * u_rt_giStrength, 1.0); // u_rt_giStrength = GI strength (0 while GI is off)
     else if (v_mode == 4u)
     {
         // Visibility: what giSampleCascade's Chebyshev test sees for a surface in direction n FROM the
@@ -50,7 +50,7 @@ void main()
         vec3 col = vec3(1.0, 0.0, 1.0);
         if (d2sh.x > 1e-4) // the DC term: > 0 as soon as the probe has traced (see giSampleCascade)
         {
-            const float minDev = u_giVisParams.x * v_color.x;
+            const float minDev = u_rt_giVisVarianceFloor * v_color.x;
             // The tint MULTIPLIES the grey (black stays black) and counts only the deviation ABOVE the floor.
             // ORANGE, not blue: blue carries ~7% of the luminance, so a blue tint on grey read as plain
             // darkening - the same cue as the mean. Linear to cap / 2, the unscaled deviation's maximum (half

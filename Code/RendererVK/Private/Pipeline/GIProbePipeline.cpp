@@ -2,7 +2,7 @@
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
+import Settings;
 import File;
 import :Device;
 import :TextureManager;
@@ -10,6 +10,7 @@ import :Texture;
 import :GraphicsPipeline;
 import :RenderPass;
 import :Layout;
+import :UboFields;
 
 namespace
 {
@@ -65,50 +66,36 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     assert(volumeSamplerResult.result == vk::Result::eSuccess);
     m_volumeSampler = volumeSamplerResult.value;
     Globals::device.setDebugName(m_volumeSampler, "GI.volume");
-
-    Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
-    Tweak::floatVar("GI", "Update Interval Mult", &m_giUpdateIntervalMult, 1.0f, 32.0f, 0.5f);
-    Tweak::floatVar("GI", "Priority Distance (m)", &m_giPriorityDist, 1.0f, 512.0f, 1.0f);
-    Tweak::floatVar("GI", "Priority Falloff", &m_giPriorityFalloff, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("GI", "Priority Frustum Weight", &m_giPriorityFrustumWeight, 1.0f, 8.0f, 0.1f);
-    Tweak::floatVar("GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
-    Tweak::floatVar("GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
-    Tweak::floatVar("GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
-    Tweak::floatVar("RT", "TLAS Range", &m_tlasRange, 16.0f, 8192.0f, 16.0f);
-    Tweak::floatVar("GI", "Vis Variance Floor", &m_visVarianceFloor, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("GI", "Vis Weight Floor", &m_visWeightFloor, 0.0f, 0.25f, 0.005f);
-    Tweak::floatVar("GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
 }
 
-void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onVolumeChanged)
+void GIProbePipeline::registerUboFields(UboFieldList& list, const bool& rtEnabled, const bool& giEnabled) const
 {
-    RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
-    Tweak::intVar("GI", "Cascades", &grid.numCascades, 1, 8, 1.0f, onGridChanged);
-    Tweak::intVar("GI", "Probes X (log2)", &grid.dimLog2X, 2, 6, 1.0f, onGridChanged);
-    Tweak::intVar("GI", "Probes Y (log2)", &grid.dimLog2Y, 2, 6, 1.0f, onGridChanged);
-    Tweak::intVar("GI", "Probes Z (log2)", &grid.dimLog2Z, 2, 6, 1.0f, onGridChanged);
-    Tweak::floatVar("GI", "Focus Y offset (m)", &grid.focusOffsetY, -128.0f, 128.0f, 0.5f, onGridChanged);
-    // The irradiance volume: its images + the GI_VOLUME / GI_VOLUME_RES defines - NOT the probe buffer, so a
-    // volume change keeps the traced history (onVolumeChanged: resizeVolume + reload, no resizeGrid).
-    Tweak::boolean("GI", "Irradiance volume", &grid.volume, onVolumeChanged);
-    Tweak::intVar("GI", "Volume voxels per probe", &grid.volumeRes, 1, 2, 1.0f, onVolumeChanged);
-}
-
-void GIProbePipeline::registerDebugTweaks(const oc::function<void()>& onReRecord)
-{
-    static constexpr oc::string_view s_debugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface", "Visibility" };
-    Tweak::boolean("GI", "Debug probes", &m_debugEnabled);
-    Tweak::enumVar("GI", "Debug probe colour", &m_debugMode, s_debugModeNames, onReRecord);
-    Tweak::floatVar("GI", "Debug probe radius", &m_debugRadius, 0.02f, 1.0f, 0.01f, onReRecord);
+    const GiSettings& gi = Globals::settings.gi;
+    list.add("rt_giStrength", [&rtEnabled, &giEnabled] { return rtEnabled && giEnabled ? Globals::settings.gi.strength : 0.0f; },
+        rtEnabled, giEnabled, gi.strength);
+    list.add("rt_giTlasRange", gi.tlasRange);
+    // takeVisibilityParams' x / z / w (its y, the full bake, is live).
+    list.add("rt_giVisVarianceFloor", gi.visVarianceFloor);
+    list.add("rt_giVisWeightFloor", gi.visWeightFloor);
+    list.add("rt_giVisMeanScale", gi.visMeanScale);
+    // getTraceParams0's x / z / w (its y, the temporal alpha, rides the wall delta: live).
+    list.add("rt_giRaysPerProbe", [this] { return getTraceParams0(0.0f).x; }, gi.raysPerProbe);
+    list.add("rt_giMaxRayDistance", gi.maxRayDist);
+    list.add("rt_giIntervalMult", [this] { return getTraceParams0(0.0f).w; }, gi.updateIntervalMult);
+    list.add("rt_giPriorityDist", [this] { return getPriorityParams().x; }, gi.priorityDist);
+    list.add("rt_giPriorityFalloff", [this] { return getPriorityParams().y; }, gi.priorityFalloff);
+    list.add("rt_giPriorityFrustumWeight", [this] { return getPriorityParams().z; }, gi.priorityFrustumWeight);
 }
 
 void GIProbePipeline::resizeGrid()
 {
-    m_giGridData.initialize(RendererVKLayout::g_giGrid.gridDataBufferSize(),
+    const GiGridConfig& grid = Globals::settings.gi.grid;
+    const size_t gridDataBytes = ((size_t)grid.probesTotal() * RendererVKLayout::GI_PROBE_STRIDE + RendererVKLayout::GI_SH_STRIDE) * sizeof(uint32);
+    m_giGridData.initialize(gridDataBytes,
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.probes");
     // One uint per wave (the probe count is a multiple of 64). Zeroed with the probes; a stale stamp can
     // only ever cause an extra re-bake, never a missed one (it would have to equal this frame's stamp).
-    m_waveStamps.initialize((vk::DeviceSize)(RendererVKLayout::g_giGrid.probesTotal() / 64) * sizeof(uint32),
+    m_waveStamps.initialize((vk::DeviceSize)(grid.probesTotal() / 64) * sizeof(uint32),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.waveStamps");
     doClear(); // fresh storage: the next GI frame zeroes it before the first trace
     createVolume();
@@ -132,7 +119,7 @@ void GIProbePipeline::destroyVolume()
 void GIProbePipeline::createVolume()
 {
     destroyVolume();
-    const RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+    const GiGridConfig& grid = Globals::settings.gi.grid;
     if (!grid.volume)
         return;
 
@@ -420,7 +407,7 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
         buildUpdateScratch();
     DescriptorSet& set = m_skyMapSets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
-    m_skyUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    m_skyUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     m_skyUpdates[1].imageInfos[0] = vk::DescriptorImageInfo{ .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
     m_skyUpdates[2].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = skyCloudsSampler, .imageView = skyCloudsView, .imageLayout = vk::ImageLayout::eGeneral };
 
@@ -567,7 +554,7 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     m_tlasUpdates[5].bufferInfos[0] = bufInfo(params.materialInfos);
     m_tlasUpdates[6].bufferInfos[0] = bufInfo(params.nodePassMasks);
     m_tlasUpdates[7].bufferInfos[0] = bufInfo(params.rtMeshAlias);
-    m_tlasUpdates[8].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    m_tlasUpdates[8].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     m_tlasUpdates[9].bufferInfos[0] = bufInfo(params.treePieces);
     m_tlasUpdates[10].bufferInfos[0] = bufInfo(params.treeTypes);
     m_tlasUpdates[11].bufferInfos[0] = bufInfo(params.treeList);
@@ -588,7 +575,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
 
     // Patch this frame's handles into the persistent scratch (index map in buildUpdateScratch).
-    m_traceUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    m_traceUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     m_traceUpdates[1].bufferInfos[0] = bufInfo(params.lightInfos);
     m_traceUpdates[2].bufferInfos[0] = bufInfo(params.lightGrid);
     m_traceUpdates[3].bufferInfos[0] = bufInfo(params.lightTable);
@@ -625,10 +612,10 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
 
-    // Trace tuning + the per-frame values (frame index, previous focus) ride the UBO (u_giTrace0/1,
+    // Trace tuning + the per-frame values (frame index, previous focus) ride the UBO (u_rt_gi*, u_giLive,
     // u_frameIndex - see getTraceParams), so this record is cached. Rays are amortized over frames via the
     // temporal blend.
-    cmd.dispatch((RendererVKLayout::g_giGrid.traceThreads() + 63) / 64, 1, 1);
+    cmd.dispatch((Globals::settings.gi.grid.traceThreads() + 63) / 64, 1, 1);
 }
 
 void GIProbePipeline::buildVolumeBakeLayout(ComputePipelineLayout& layout)
@@ -660,10 +647,10 @@ void GIProbePipeline::recordVolumeBake(CommandBuffer& commandBuffer, uint32 fram
 {
     if (m_volumeViews.empty())
         return;
-    const RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+    const GiGridConfig& grid = Globals::settings.gi.grid;
 
     oc::array<DescriptorSetUpdateInfo, 7> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_giGridData.getBuffer(), .range = m_giGridData.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage },
@@ -755,7 +742,7 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
 
     oc::array<DescriptorSetUpdateInfo, 2> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_giGridData) } },
     };
 
@@ -763,8 +750,9 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     commandBuffer.cmdUpdateDescriptorSets(m_debugPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    DebugPC pc{ .radius = m_debugRadius, .mode = (uint32)m_debugMode };
+    const GiSettings& gi = Globals::settings.gi;
+    DebugPC pc{ .radius = gi.debugRadius, .mode = (uint32)gi.debugMode };
     cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, sizeof(pc), &pc);
     // One sphere impostor quad (6 verts) per clipmap probe across all cascades.
-    cmd.draw(6, RendererVKLayout::g_giGrid.probesTotal(), 0, 0);
+    cmd.draw(6, gi.grid.probesTotal(), 0, 0);
 }

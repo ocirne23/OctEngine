@@ -34,10 +34,7 @@ public:
         Buffer& ubo;
         vk::ImageView sceneDepthView;   // this frame's depth (SCENE_DEPTH_SAMPLED_LAYOUT)
         vk::ImageView motionView;       // this frame's motion target (SHADER_READ_ONLY)
-        bool velocityPass;              // TAA is off: write the velocity + sub-tiles here
-        float shutter;
-        float maxRadius;
-        float cameraScale;
+        bool velocityPass;              // TAA is off: write the velocity + sub-tiles here (the tweaks: u_post_mb*)
     };
     // After TAA: [the velocity pass] + the neighbour pass; ends with a barrier to the composite's reads.
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);

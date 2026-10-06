@@ -1,4 +1,4 @@
-// --- Terrain texture splatting (setTerrainSplatMaterials; u_terrainTexParams*/u_terrainSplatClimate) ---
+// --- Terrain texture splatting (setTerrainSplatMaterials; u_terrainTex / u_terrainLive_splatClimate) ---
 // Four physical layers composited bottom-up - no biome enum, climate selects textures directly:
 //   1. GROUND - climate-picked soil/vegetation, world-XZ projection
 //   2. BEACH  - shoreline band just above the local waterline (not climate-selected)
@@ -9,15 +9,15 @@
 // Shared by the terrain fragment shader (its own pixels) and the ocean shader (the seabed at a
 // refraction-ray hit, so the sand seen through the water IS the terrain next to it). The includer
 // declares, before including:
-//   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTexParams*, u_terrainSplatClimate,
-//   u_terrainSplatTex, u_terrainParams). The splat's texture indices come from the UBO, not the material buffer.
+//   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTex, u_terrainLive: splatClimate,
+//   splatTex, seaLevel). The splat's texture indices come from the UBO, not the material buffer.
 // Optional, before including:
 //   TERRAIN_SPLAT_TEX(tex, uv)  - the texture fetch. Defaults to texture() (screen derivatives); a ray
 //                                 hit has none, so the ocean defines it as textureLod at a ray-cone LOD.
 //   TERRAIN_SPLAT_ALBEDO_ONLY   - skip the normal + ARM taps (the seabed only needs colour: the water
 //                                 column blurs any detail normal away). TerrainSample.normal is then the
 //                                 geometric normal and rough/metal/ao are constants.
-//   TERRAIN_SPLAT_RELIEF        - the splat HEIGHT maps (u_terrainSplatHeightTex, u_terrainTexParams6/7):
+//   TERRAIN_SPLAT_RELIEF        - the splat HEIGHT maps (u_terrainLive_splatHeightTex, u_terrainTex_parallax*):
 //                                 the height blend at layer borders plus parallax occlusion mapping near the
 //                                 camera. Needs screen derivatives (the terrain FS only); without it every
 //                                 layer blend is linear, so the ocean's seabed is the terrain minus relief.
@@ -63,8 +63,8 @@ struct TerrainSample
 // The per-slot HEIGHT + AO texture (BC5: R = height, G = AO; TerrainStreamer's "hao" bake).
 uint terrainHeightTexIdx(uint matIdx)
 {
-	const uint slot = matIdx - uint(u_terrainTexParams0.x);
-	return u_terrainSplatHeightTex[slot >> 2][slot & 3u];
+	const uint slot = matIdx - uint(u_terrainLive_splatBase);
+	return u_terrainLive_splatHeightTex[slot >> 2][slot & 3u];
 }
 
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
@@ -89,7 +89,7 @@ float16_t terrainHeightGrad(uint matIdx, vec2 uv, vec2 dx, vec2 dy)
 // w = 0 -> 0 and w = 1 -> 1 for any |dh| <= 1; contrast 0 = linear.
 float16_t terrainHeightWeight(float16_t w, float16_t dh)
 {
-	const float16_t k = float16_t(u_terrainTexParams6.w);
+	const float16_t k = float16_t(u_terrainTex_heightBlendContrast);
 	return clamp((w - float16_t(0.5)) * (float16_t(1.0) + k) + dh * (k * float16_t(0.5)) + float16_t(0.5), float16_t(0.0), float16_t(1.0));
 }
 #endif
@@ -102,8 +102,8 @@ float16_t terrainHeightWeight(float16_t w, float16_t dh)
 // Metalness is always 0.
 uvec2 terrainSplatTex(uint matIdx)
 {
-	const uint slot = matIdx - uint(u_terrainTexParams0.x);
-	const uvec4 v = u_terrainSplatTex[slot >> 1];
+	const uint slot = matIdx - uint(u_terrainLive_splatBase);
+	const uvec4 v = u_terrainLive_splatTex[slot >> 1];
 	return (slot & 1u) == 0u ? v.xy : v.zw;
 }
 
@@ -302,7 +302,7 @@ float climateBoxWeight(vec2 climate, vec4 box, float invS2)
 // so a pick costs 2 registers instead of 4; TerrainLayers carries two of them live across the whole splat.
 struct ClimatePick
 {
-	uint idx;          // top three entries i0 | i1 << 8 | i2 << 16 (0-based like u_terrainSplatClimate; caller adds baseMat)
+	uint idx;          // top three entries i0 | i1 << 8 | i2 << 16 (0-based like u_terrainLive_splatClimate; caller adds baseMat)
 	float16_t n1, n2;  // normalized coverage of i1 and i2; the top pick i0 gets the rest (n0 = 1 - n1 - n2)
 };
 
@@ -325,7 +325,7 @@ ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 	float16_t w0 = float16_t(-1.0), w1 = float16_t(-1.0), w2 = float16_t(-1.0), w3 = float16_t(-1.0);
 	for (int i = first; i < first + count; ++i)
 	{
-		const float16_t w = float16_t(climateBoxWeight(climate, u_terrainSplatClimate[i], invS2));
+		const float16_t w = float16_t(climateBoxWeight(climate, u_terrainLive_splatClimate[i], invS2));
 		const uint ui = uint(i);
 		if      (w > w0) { idx = ((idx << 8) | ui) & 0xFFFFFFu;                       w3 = w2; w2 = w1; w1 = w0; w0 = w; } // i2 = i1, i1 = i0, i0 = i
 		else if (w > w1) { idx = (idx & 0xFFu) | (ui << 8) | ((idx & 0xFF00u) << 8); w3 = w2; w2 = w1; w1 = w; }        // i2 = i1, i1 = i
@@ -365,9 +365,9 @@ struct TerrainLayers
 TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 {
 	TerrainLayers L;
-	L.baseMat = int(u_terrainTexParams0.x);
-	L.numGround = int(u_terrainTexParams0.y);
-	L.numRock = int(u_terrainTexParams0.z);
+	L.baseMat = int(u_terrainLive_splatBase);
+	L.numGround = int(u_terrainLive_numGround);
+	L.numRock = int(u_terrainLive_numRock);
 	L.g = ClimatePick(0u, float16_t(0.0), float16_t(0.0));
 	L.r = L.g;
 	L.beachW = float16_t(0.0);
@@ -382,14 +382,14 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	// and needs humidity to fall at all (no white polar deserts). Evaluated first: full snow cover
 	// returns before the beach / rock coverages (the rock fBm in particular) are computed.
 	float16_t snowW = float16_t(0.0);
-	if (u_terrainTexParams3.y > 0.5)
+	if (u_terrainLive_hasSnow > 0.5)
 	{
-		const float cold  = 1.0 - smoothstep(u_terrainTexParams3.z, u_terrainTexParams3.w, f.temperature);
-		const float holds = 1.0 - smoothstep(u_terrainTexParams4.x, u_terrainTexParams4.y, slope);
-		const float wet = smoothstep(0.0, max(u_terrainTexParams4.z, 1e-3), f.humidity);
+		const float cold  = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, f.temperature);
+		const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, slope);
+		const float wet = smoothstep(0.0, max(u_terrainTex_snowAridity, 1e-3), f.humidity);
 		snowW = float16_t(cold * holds * wet);
 	}
-	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
+	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainLive_hasBeach > 0.5 ? 1u : 0u);
 	L.snowW = snowW;
 
 	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
@@ -399,12 +399,12 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	// The baked temperature already carries the altitude lapse, so elevation enters the selection as
 	// the cold it causes - snow line and vegetation cannot disagree.
 	const vec2 climate = vec2(clamp((f.temperature + 25.0) / 75.0, 0.0, 1.0), f.humidity);
-	const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
+	const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
 
 	// Beach: the band just above the local waterline.
 	float16_t beachW = float16_t(0.0);
-	if (u_terrainTexParams3.x > 0.5)
-		beachW = float16_t(1.0 - smoothstep(0.3, max(u_terrainTexParams2.z, 0.31), worldPos.y - f.waterLevel));
+	if (u_terrainLive_hasBeach > 0.5)
+		beachW = float16_t(1.0 - smoothstep(0.3, max(u_terrainTex_beachBand, 0.31), worldPos.y - f.waterLevel));
 
 	// Rock: too steep OR standing too far above the macro altitude (crag). max(), not a sum -
 	// the two coincide on a cliff. On V3 terrain crag is what puts rock on mountains (the 30 m/px field
@@ -413,17 +413,17 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	float16_t rockW = float16_t(0.0);
 	if (numRock > 0)
 	{
-		float relief = (worldPos.y - u_terrainParams.z) - f.altitude;
-		const float wanderAmp = u_terrainTexParams5.x;
+		float relief = (worldPos.y - u_terrainLive_seaLevel) - f.altitude;
+		const float wanderAmp = u_terrainTex_cragWanderAmp;
 		// The wander moves relief by at most +-amp, so only pixels where that can change the crag
 		// smoothstep pay for the 12-hash fBm - saturated flatland (crag 0) and sheer crag (1) skip it.
-		if (wanderAmp > 0.0 && relief + wanderAmp > u_terrainTexParams2.x && relief - wanderAmp < u_terrainTexParams2.y)
+		if (wanderAmp > 0.0 && relief + wanderAmp > u_terrainTex_cragStart && relief - wanderAmp < u_terrainTex_cragFull)
 		{
-			const float w = terrainFbm(worldPos.xz * u_terrainTexParams5.y) * wanderAmp;
+			const float w = terrainFbm(worldPos.xz * u_terrainTex_invCragWanderWavelength) * wanderAmp;
 			relief -= w * clamp(relief / wanderAmp, 0.0, 1.0);
 		}
-		const float crag = smoothstep(u_terrainTexParams2.x, u_terrainTexParams2.y, relief);
-		rockW = float16_t(max(smoothstep(u_terrainTexParams1.z, u_terrainTexParams1.w, slope), crag * 0.85));
+		const float crag = smoothstep(u_terrainTex_cragStart, u_terrainTex_cragFull, relief);
+		rockW = float16_t(max(smoothstep(u_terrainTex_slopeRockStart, u_terrainTex_slopeRockFull, slope), crag * 0.85));
 	}
 	L.beachW = beachW;
 	L.rockW = rockW;
@@ -451,7 +451,7 @@ float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
 {
 	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
 	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
-	const float sG = u_terrainTexParams1.x, sR = u_terrainTexParams1.y, sS = u_terrainTexParams2.w;
+	const float sG = u_terrainTex_uvScaleGround, sR = u_terrainTex_uvScaleRock, sS = u_terrainTex_uvScaleSnow;
 	if (L.snowW >= opaque)
 		return terrainHeightGrad(L.snowMatIdx, xz * sS, dx * sS, dy * sS);
 
@@ -498,7 +498,7 @@ f16vec3 terrainHeightGrad3(uint matIdx, vec2 uv, float e, vec2 dx, vec2 dy)
 
 f16vec3 terrainMixHeight3(f16vec3 acc, f16vec3 h, float16_t w)
 {
-	const float16_t k = float16_t(u_terrainTexParams6.w);
+	const float16_t k = float16_t(u_terrainTex_heightBlendContrast);
 	const f16vec3 wv = clamp((w - float16_t(0.5)) * (float16_t(1.0) + k) + (h - acc) * (k * float16_t(0.5)) + float16_t(0.5), f16vec3(0.0), f16vec3(1.0));
 	return mix(acc, h, wv);
 }
@@ -507,7 +507,7 @@ f16vec3 terrainReliefAt3(TerrainLayers L, vec2 xz, float e, vec2 dx, vec2 dy)
 {
 	const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
 	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
-	const float sG = u_terrainTexParams1.x, sR = u_terrainTexParams1.y, sS = u_terrainTexParams2.w;
+	const float sG = u_terrainTex_uvScaleGround, sR = u_terrainTex_uvScaleRock, sS = u_terrainTex_uvScaleSnow;
 	if (L.snowW >= opaque)
 		return terrainHeightGrad3(L.snowMatIdx, xz * sS, e * sS, dx * sS, dy * sS);
 
@@ -600,13 +600,13 @@ float terrainCurvatureAlong(vec3 D, vec3 dPx, vec3 dPy, vec3 dNx, vec3 dNy)
 // facet gets a large c and leaves the shell, the rest hit relief.
 vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3 faceN, vec2 dx, vec2 dy, float curv)
 {
-	const float fadeEnd = u_terrainTexParams7.x;
+	const float fadeEnd = u_terrainTex_parallaxFadeEnd;
 	const vec3 toView = u_viewPos - worldPos;
 	const float dist = length(toView);
 	if (fadeEnd <= 0.0 || dist >= fadeEnd)
 		return vec3(0.0);
-	const float strength = (1.0 - smoothstep(u_terrainTexParams6.z, fadeEnd, dist)) * smoothstep(0.35, 0.6, geoNInterp.y);
-	const float depth = mix(mix(u_terrainTexParams6.x, u_terrainTexParams6.y, float(L.rockW)), u_terrainTexParams6.x, float(L.snowW)) * strength;
+	const float strength = (1.0 - smoothstep(u_terrainTex_parallaxFadeStart, fadeEnd, dist)) * smoothstep(0.35, 0.6, geoNInterp.y);
+	const float depth = mix(mix(u_terrainTex_parallaxDepthGround, u_terrainTex_parallaxDepthRock, float(L.rockW)), u_terrainTex_parallaxDepthGround, float(L.snowW)) * strength;
 	const vec3 V = toView / dist;
 	if (depth < 1e-3)
 		return vec3(0.0);
@@ -632,7 +632,7 @@ vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3
 		sEnd = 1.0 / c;
 	else if (abs(c) > 1e-4)
 		sEnd = (1.0 - sqrt(1.0 - 4.0 * c)) / (2.0 * c);
-	const float maxSteps = u_terrainTexParams7.y;
+	const float maxSteps = u_terrainTex_parallaxSteps;
 	const float baseSteps = max(maxSteps * 0.25, 4.0); // looking straight on
 	const int steps = int(clamp(baseSteps / max(NoV, 0.05), baseSteps, maxSteps));
 	const float ds = sEnd / float(steps);
@@ -673,7 +673,7 @@ vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3
 	// Self-shadow: skipped off the sun, at the top of the relief (nothing stands above it) and when off.
 	const vec3 Ls = u_sunDirection.xyz;
 	const float NoL = dot(geoN, Ls);
-	const float shadowStrength = u_terrainTexParams7.z;
+	const float shadowStrength = u_terrainTex_parallaxShadow;
 	if (shadowStrength > 0.0 && NoL > 0.0 && hitH < 0.98)
 	{
 		// Per unit of height fraction climbed toward the sun, the texture position moves by this.
@@ -708,7 +708,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	const vec3 dNx = dFdx(geoN), dNy = dFdy(geoN);
 #endif
 #endif
-	if (u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0)
+	if (u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
 		return TerrainSample(f16vec3(0.5), geoNh, float16_t(0.92), float16_t(0.0), float16_t(1.0), float16_t(0.5));
 
 	const int baseMat = L.baseMat;
@@ -742,11 +742,11 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 	if (snowW >= opaque)
 	{
-		TerrainSample surf = sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTexParams2.w, geoNh);
+		TerrainSample surf = sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh);
 		surf.normal = normalize(surf.normal);
 		return surf;
 	}
-	const vec2 uvGround = texPos.xz * u_terrainTexParams1.x;
+	const vec2 uvGround = texPos.xz * u_terrainTex_uvScaleGround;
 
 	// --- Composite bottom-up, sampling only what shows ---
 	// 1. Ground - buried under a full beach band or a full-coverage cliff face: placeholder, mixed away.
@@ -777,11 +777,11 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	if (rockW > blendEps)
 	{
 		const ClimatePick r = L.r;
-		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), texPos, geoNh, u_terrainTexParams1.y);
+		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), texPos, geoNh, u_terrainTex_uvScaleRock);
 		if (r.n1 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), texPos, geoNh, u_terrainTexParams1.y), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), texPos, geoNh, u_terrainTex_uvScaleRock), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
 		if (r.n2 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), texPos, geoNh, u_terrainTexParams1.y), r.n2);
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), texPos, geoNh, u_terrainTex_uvScaleRock), r.n2);
 		if (rockW >= opaque)
 			surf = rock;
 		else
@@ -790,7 +790,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 
 	// 4. Snow (partial cover; full cover returned above).
 	if (snowW > blendEps)
-		terrainMixInto(surf, sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTexParams2.w, geoNh), snowW);
+		terrainMixInto(surf, sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh), snowW);
 
 	surf.normal = normalize(surf.normal);
 	return surf;

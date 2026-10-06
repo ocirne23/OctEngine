@@ -7,6 +7,7 @@ import Core.Transform;
 
 import RendererVK;
 import Threading;
+import Settings;
 
 import :TerrainSampler;
 import :TreeSpecies;
@@ -29,7 +30,7 @@ export namespace Procedural
 		TreeSystem(const TreeSystem&) = delete;
 		TreeSystem& operator=(const TreeSystem&) = delete;
 
-		void initialize(); // registers Tweaks
+		void initialize(); // attaches the "Trees" listeners (and TreeWorld's)
 		// Per frame, after scatter.update. `maps` places the grove on the terrain (y = 0 without it).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
@@ -190,28 +191,8 @@ export namespace Procedural
 		static void expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
 			oc::vector<Renderer::TreeInstancePiece>& out);
 
-		// --- Tweaks ---
-		bool m_enabled = true;
-		bool m_reload = false;      // button: re-read the .tree files, regenerate, respawn
-		bool m_respawn = false;     // button: respawn the preview in front of the camera
-		bool m_regenerateTextures = false; // button: regenerate the species textures over the files on disk
-		bool m_showLibrary = true;            // also reloads: without it the module / trunk billboards are never uploaded
-		bool m_compressTextures = true;       // BC: bark BC1 + BC5 normal, leaves / billboards / card atlas BC3 (reloads)
-		int m_gridSize = 350;
-		float m_spacing = 11.0f;
-		float m_positionJitter = 0.8f;        // random offset per tree, x spacing (1 = anywhere in its cell, > 1 overlaps)
-		float m_sizeVariation = 0.6f;        // extra per-tree scale on top of the species range: x 2^(+-this), log-uniform
-		float m_bushesPerTree = 4.0f;        // `Kind Bush` species scattered around each grove tree (the fraction by chance)
-		float m_bushShadowDistance = 100.0f;  // bushes cast no sun shadow beyond this from the cascades' centre (m); 0 = no limit
-		int m_seed = 1;
-		int m_groveType = 1;                  // 0 = mixed (species alternate), else GROVE_TYPES[i] by species name (1 = Oak)
-		int m_farMode = 0;                    // 0 = billboards, 1 = none (reloads)
-		int m_billboardViews = 0;             // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-		float m_farDistanceScale = 4.0f;      // x every species' billboard distance; 0 = off
-		float m_branchCardDistance = 0.4f;    // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
-		bool m_forceFar = false;              // debug: every module as its far representation
+		TreeSettings& m_settings = Globals::settings.trees; // "Trees" (the buttons are cleared here)
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
-		bool m_gpuExpansion = true;           // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 		uint32 m_treeSet = UINT32_MAX;        // the grove's GPU expansion set (Renderer::createTreeInstanceSet)
 		// The set's chunks are the TERRAIN's (spawnPreview: Globals::terrain.setVegetation): terrain chunk coordinate ->
 		// set chunk, at the chunk size they were sorted with. The sink reads the band settings through the atomics (it
@@ -229,9 +210,6 @@ export namespace Procedural
 
 		TreeWorld m_world; // every tree of the terrain ring as records (Docs/TreeRenderingPlan.md 3.5)
 		// World mode.
-		int m_nearRadius = 3;          // chunks (Chebyshev) around the camera chunk whose trees are expanded
-		int m_worldCapacity = 600000;  // the dynamic set's piece slots (trees + bushes)
-		int m_expandPerFrame = 2;      // expanded chunks added to the set per frame
 		bool m_worldMode = false;      // this spawn is the world (else the preview grove)
 		bool m_worldFullLogged = false;
 		bool m_recordTypesSet = false; // the renderer holds this spawn's record types (the far volume's records)

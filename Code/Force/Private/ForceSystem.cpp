@@ -2,8 +2,8 @@ module Force;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
 import RendererVK;
+import Settings;
 import Threading; // ThreadLocalScope on the PerWorker staging slots
 import :ForceSystem;
 
@@ -135,77 +135,7 @@ void ForceSystem::initialize()
     m_emitters.reserve(MAX_FORCE_INSTANCES);
     m_queries.reserve(RendererVKLayout::MAX_FORCE_QUERIES);
 
-    Tweak::boolean("Force", "Enabled", &m_params.enabled);
-    Tweak::floatVar("Force", "Iso threshold", &m_params.isoThreshold, 0.01f, 2.0f);
-    Tweak::intVar("Force", "March steps", &m_params.marchSteps, 8, 128);
-    Tweak::boolean("Force", "Use grid", &m_params.useGrid); // off = brute force (A-B correctness check)
-    Tweak::boolean("Force/Bake", "Enabled", &m_bakeEnabled);
-    Tweak::floatVar("Force/Bake", "Sample height", &m_bakeSampleHeight, 0.0f, 10.0f, 0.1f);
-    Tweak::intVar("Force/Bake", "Chunks (stat)", &m_statBakeChunks, 0, 100000);
-    Tweak::floatVar("Force", "Force gain", &m_params.forceGain, 0.0f, 10.0f);
-    Tweak::floatVar("Force", "Activate ramp (s)", &m_activateRamp, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Force/Shell", "Alpha", &m_params.shellAlpha, 0.0f, 1.0f);
-    // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
-    Tweak::floatVar("Force/Shell", "Min screen radius (px)", &m_params.minShellPixels, 0.0f, 50.0f, 0.5f);
-    Tweak::floatVar("Force/Shell", "Full-detail radius (px)", &m_params.shellFullResPixels, 8.0f, 1024.0f, 4.0f);
-    Tweak::floatVar("Force/Shell", "Sampled tier radius (m)", &m_params.sampledShellRadius, 0.0f, 100.0f, 1.0f);
-    Tweak::boolean("Force/Shell", "Union march", &m_params.unionMarch);
-    Tweak::boolean("Force/Shell", "Union half res", &m_params.unionHalfRes); // rebuild-class (device idle)
-    Tweak::boolean("Force/Shell", "Union jitter", &m_params.unionJitter);    // rebuild-class (shader define)
-    Tweak::floatVar("Force/Shell", "Union step (m)", &m_params.unionStepSize, 0.05f, 4.0f, 0.05f);
-    Tweak::intVar("Force/Shell", "Union max steps", &m_params.unionMaxSteps, 8, 512, 8);
-    // The sampled-tier volume's fit is clipped to the camera's view footprint + this (0 = the
-    // unbounded union of every large bubble's support box).
-    Tweak::floatVar("Force/Shell", "Volume view margin (m)", &m_params.shellVolumeViewMargin, 0.0f, 200.0f, 1.0f);
-    // The draw-box shrink's iso reduction (see packVisibleBounds): 0 = full support boxes.
-    Tweak::floatVar("Force/Shell", "Visible bounds iso frac", &m_visibleBoundsIsoFrac, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Force/Shell", "Interior alpha", &m_params.interiorAlpha, 0.0f, 1.0f);
-    Tweak::floatVar("Force/Shell", "Backface alpha", &m_params.backfaceAlpha, 0.0f, 1.0f);
-    Tweak::floatVar("Force/Shell", "Rim power", &m_params.rimPower, 0.5f, 8.0f);
-    Tweak::floatVar("Force/Shell", "Rim intensity", &m_params.rimIntensity, 0.0f, 8.0f);
-    Tweak::floatVar("Force/Glow", "Contact intensity", &m_params.contactGlowIntensity, 0.0f, 16.0f);
-    Tweak::floatVar("Force/Glow", "Contact width", &m_params.contactGlowWidth, 0.01f, 1.0f);
-    Tweak::floatVar("Force/Glow", "Contact wall alpha", &m_params.contactWallAlpha, 0.0f, 1.0f);
-    Tweak::floatVar("Force/Shell", "Junction smoothing", &m_params.junctionSmoothing, 0.0f, 2.0f);
-    Tweak::floatVar("Force/Glow", "Geometry distance (m)", &m_params.geoGlowDistance, 0.0f, 4.0f);
-    Tweak::boolean("Force/Glow", "Bubble light", &m_bubbleLight);
-    Tweak::floatVar("Force/Glow", "Bubble light intensity", &m_bubbleLightIntensity, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Force/Glow", "Bubble light range (x radius)", &m_bubbleLightRange, 0.5f, 4.0f, 0.05f);
-    Tweak::floatVar("Force/Glow", "Bubble light height (x radius)", &m_bubbleLightHeight, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Force/Glow", "Bubble light fade (s)", &m_bubbleLightFade, 0.02f, 3.0f, 0.02f);
-    Tweak::floatVar("Force/Glow", "Bubble light white mix", &m_bubbleLightWhite, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Force/Pattern", "Scale (1/m)", &m_params.patternScale, 0.01f, 8.0f);
-    Tweak::floatVar("Force/Pattern", "Scroll speed", &m_params.patternSpeed, 0.0f, 4.0f);
-    Tweak::floatVar("Force/Pattern", "Intensity", &m_params.patternIntensity, 0.0f, 4.0f);
-    static const char* teamNames[MAX_FORCE_TEAMS] = { "Team 0", "Team 1", "Team 2", "Team 3", "Team 4", "Team 5", "Team 6", "Team 7" };
-    for (uint32 i = 0; i < MAX_FORCE_TEAMS; ++i)
-        Tweak::color3("Force/Teams", teamNames[i], &m_params.teamColors[i]);
-    Tweak::intVar("Force", "Emitters (stat)", &m_statEmitters, 0, 1000000);
-    Tweak::intVar("Force", "GPU slots (stat)", &m_statSlots, 0, 1000000); // only ACTIVE emitters hold one
     m_bakeKeyStaging.initialize();
-    Tweak::boolean("Force/Merge", "Enabled", &m_merge.enabled);
-    Tweak::floatVar("Force/Merge", "Join distance (x radii)", &m_merge.joinDistance, 0.0f, 1.5f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Leave distance (x radii)", &m_merge.leaveDistance, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Cover spread scale", &m_merge.spreadScale, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Cover radius scale", &m_merge.radiusScale, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Cover scale", &m_merge.coverScale, 0.1f, 2.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Cover margin (m)", &m_merge.coverMargin, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Force/Merge", "Max group radius (m)", &m_merge.maxRadius, 1.0f, 256.0f, 0.5f);
-    Tweak::intVar("Force/Merge", "Max members", &m_merge.maxMembers, 2, 1024);
-    Tweak::intVar("Force/Merge", "Min members", &m_merge.minMembers, 2, 64);
-    Tweak::floatVar("Force/Merge", "Summed output fraction", &m_merge.sumFraction, 0.0f, 1.0f, 0.01f);
-    Tweak::boolean("Force/Merge", "Member readback", &m_merge.memberReadback);
-    Tweak::floatVar("Force/Merge", "Smooth time (s)", &m_merge.smoothTime, 0.0f, 3.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Blend time (s)", &m_merge.blendTime, 0.01f, 3.0f, 0.01f);
-    Tweak::floatVar("Force/Merge", "Leave from group sphere", &m_merge.leaveFromGroup, 0.0f, 1.0f, 0.01f);
-    Tweak::intVar("Force/Merge", "Groups (stat)", &m_statGroups, 0, 100000);
-    Tweak::intVar("Force/Merge", "Merged emitters (stat)", &m_statMerged, 0, 100000);
-    Tweak::boolean("Force/Debug", "Draw emitters", &m_debugDraw);
-    Tweak::boolean("Force/Debug", "Draw merge groups", &m_debugDrawGroups);
-    Tweak::boolean("Force/Debug", "Draw queries", &m_debugDrawQueries);
-    Tweak::boolean("Force/Debug", "Density view", &m_params.densityView);
-    Tweak::boolean("Force/Debug", "Log tier classification", &m_params.logTierDebug);
-    Tweak::floatVar("Force/Debug", "Density range", &m_params.densityRange, 0.1f, 10.0f, 0.05f);
 }
 
 static float forceIsoLateral(float t, float R, float m, float W, float D, float foldedOutput, float iso);
@@ -531,7 +461,7 @@ void ForceSystem::uploadEmitter(Renderer& renderer, EmitterInstance& inst, float
         inst.appliedForce = glm::vec3(readback) * m_params.forceGain;
         inst.pressure = readback.w;
     }
-    if (m_debugDraw && !merged)
+    if (m_settings.debugDraw && !merged)
         debugDrawEmitter(renderer, src);
 }
 
@@ -558,7 +488,7 @@ void ForceSystem::bakedReadback(EmitterInstance& inst, const RendererVKLayout::F
             const float a = (float)(s - 1) * (glm::two_pi<float>() / (float)ringTaps);
             x += glm::vec3(std::cos(a), 0.0f, std::sin(a)) * sampleRadius;
         }
-        x.y = m_bakeSampleHeight;
+        x.y = m_settings.bakeSampleHeight;
         const float wSelf = RendererVKLayout::forceContributionCpu(x, gpu) / emitterOutput;
         if (wSelf <= 0.0f)
             continue;
@@ -601,7 +531,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         // Free, or gated off with its rest state already written: one first-line read, no write.
         if (inst.generation == 0 || (!inst.active && inst.uploadSettled))
             continue;
-        const float rampStep = m_activateRamp > 1e-3f ? deltaSec / m_activateRamp : 1.0f;
+        const float rampStep = m_settings.activateRamp > 1e-3f ? deltaSec / m_settings.activateRamp : 1.0f;
         if (!inst.active)
         {
             // Gated off (SIM LOD): any merge transition is dropped on the spot (the merge pass
@@ -680,8 +610,8 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         }
         else if (starved == 0)
             m_slotCapWarned = false;
-        m_statEmitters = (int)m_numLiveEmitters;
-        m_statSlots = (int)m_numSlottedEmitters;
+        m_settings.statEmitters = (int)m_numLiveEmitters;
+        m_settings.statSlots = (int)m_numSlottedEmitters;
         // A group founded on the merge job has no slot yet: minted here, on main, for the same
         // reason. UINT32_MAX = out of slots this frame; its members still carry their transition
         // spheres, and the next update() tries again.
@@ -731,7 +661,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
                 member.pressure = group.pressure;
             }
         }
-        if (m_debugDrawGroups)
+        if (m_settings.debugDrawGroups)
             debugDrawGroup(renderer, group);
     }
     });
@@ -747,7 +677,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         query.result.owningTeam = query.result.inside ? result.owningTeam : 0u;
         query.result.ownField = result.ownField;
         query.result.opposingField = result.bestOpposingField;
-        if (m_debugDrawQueries)
+        if (m_settings.debugDrawQueries)
         {
             const uint32 color = query.result.inside
                 ? packDebugColor(m_params.teamColors[query.result.owningTeam]) : 0xFF404040u;
@@ -781,12 +711,13 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
 void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
     float radius, uint32 team, float deltaSec) const
 {
-    if (!m_bubbleLight || m_bubbleLightIntensity <= 0.0f)
+    const ForceSystemSettings& s = m_settings;
+    if (!s.bubbleLight || s.bubbleLightIntensity <= 0.0f)
     {
         light.fade = 0.0f;
         return;
     }
-    const float step = deltaSec / glm::max(m_bubbleLightFade, 1e-3f);
+    const float step = deltaSec / glm::max(s.bubbleLightFade, 1e-3f);
     if (lit)
     {
         light.center = center;
@@ -798,16 +729,16 @@ void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool l
     if (light.fade <= 0.0f || light.radius <= 0.0f)
         return;
     const glm::vec3 teamColor = m_params.teamColors[glm::min(team, MAX_FORCE_TEAMS - 1)];
-    const glm::vec3 color = glm::mix(teamColor, glm::vec3(1.0f), m_bubbleLightWhite);
+    const glm::vec3 color = glm::mix(teamColor, glm::vec3(1.0f), s.bubbleLightWhite);
     // Ease the fade so a light never pops at either end.
     const float f = light.fade * light.fade * (3.0f - 2.0f * light.fade);
     // Lifted above the bubble centre by a fraction of the radius: a CENTERED structure emitter (Base,
     // emitter) has its centre inside its own mesh, where a point light is swallowed by the geometry
     // (dark, or lit from within under RT light shadows). Scaling with the radius keeps it inside the
     // dome and above the mesh for every bubble size, the player's capsule included.
-    const glm::vec3 lightPos = light.center + glm::vec3(0.0f, light.radius * m_bubbleLightHeight, 0.0f);
-    renderer.addPointLight(PointLight(lightPos, light.radius * m_bubbleLightRange, color,
-        m_bubbleLightIntensity * light.radius * light.radius * f));
+    const glm::vec3 lightPos = light.center + glm::vec3(0.0f, light.radius * s.bubbleLightHeight, 0.0f);
+    renderer.addPointLight(PointLight(lightPos, light.radius * s.bubbleLightRange, color,
+        s.bubbleLightIntensity * light.radius * light.radius * f));
 }
 
 void ForceSystem::debugDrawEmitter(Renderer& renderer, const EmitterInstance& inst) const
@@ -1143,7 +1074,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
                 keys.insert(bakeChunkKey(bx, bz));
     };
     bool capped = false;
-    if (m_bakeEnabled)
+    if (m_settings.bakeEnabled)
     {
         m_bakeKeyStaging.forEach([](BakeKeySet& keys) { keys.begin(); });
         runPass((uint32)m_emitters.size(), 256u, 512u, JobProfile{ "Force bake boxes", EProfileCategory::Force },
@@ -1222,14 +1153,14 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
         for (const uint64 key : uniqueKeys)
             m_bakeChunkScratch.push_back(glm::ivec4((int)(uint32)(key >> 32), (int)(uint32)key, 0, 0));
     }
-    m_statBakeChunks = (int)m_bakeChunkScratch.size();
+    m_settings.statBakeChunks = (int)m_bakeChunkScratch.size();
     if (capped && !m_bakeCapWarned)
     {
         m_bakeCapWarned = true; // once: dropped chunks read as zero field (no push/exposure there)
         printf("ForceSystem: baked-field chunk cap hit (%u) - outermost emitter regions unbaked\n",
             MAX_FORCE_BAKE_CHUNKS);
     }
-    renderer.setForceBakeChunks(m_bakeChunkScratch, m_bakeSampleHeight);
+    renderer.setForceBakeChunks(m_bakeChunkScratch, m_settings.bakeSampleHeight);
 }
 
 void ForceSystem::publishBake(Renderer& renderer)
@@ -1278,7 +1209,7 @@ void ForceSystem::publishBake(Renderer& renderer)
             m_bakeSorted.emplace_back(bakeChunkKey(bake.chunks[b].x, bake.chunks[b].y), (uint32)b);
         oc::sort(m_bakeSorted.begin(), m_bakeSorted.end());
     }
-    m_bakePublished = m_bakeEnabled; // disabled: samplers report invalid, callers fall back
+    m_bakePublished = m_settings.bakeEnabled; // disabled: samplers report invalid, callers fall back
 }
 
 uint32 ForceSystem::findBakeChunk(int bx, int bz) const
@@ -1424,7 +1355,7 @@ void ForceSystem::updateMerging(float deltaSec)
         for (uint32 g = 0; g < numGroups; ++g)
             if (m_groups[g].generation != 0)
                 dissolveGroup(g);
-        m_statGroups = m_statMerged = 0;
+        m_settings.statGroups = m_settings.statMerged = 0;
         return;
     }
     const float joinK = glm::max(m_merge.joinDistance, 0.0f);
@@ -1644,7 +1575,7 @@ void ForceSystem::updateMerging(float deltaSec)
         }
     });
     ProfileScope dissolveScope("Force merge dissolve", EProfileCategory::Force);
-    m_statGroups = m_statMerged = 0;
+    m_settings.statGroups = m_settings.statMerged = 0;
     for (uint32 g = 0; g < numGroupsNow; ++g)
     {
         MergeGroup& group = m_groups[g];
@@ -1655,8 +1586,8 @@ void ForceSystem::updateMerging(float deltaSec)
             dissolveGroup(g);
             continue;
         }
-        ++m_statGroups;
-        m_statMerged += (int)group.members.size();
+        ++m_settings.statGroups;
+        m_settings.statMerged += (int)group.members.size();
     }
 }
 

@@ -237,7 +237,7 @@ void StructureSystem::rebuildNetworks()
         {
             TransportRun run;
             run.medium = segs[i].medium;
-            run.group = (uint8)(m_net.runs.size() % (size_t)glm::clamp(m_transportSpread, 1, 8));
+            run.group = (uint8)(m_net.runs.size() % (size_t)glm::clamp(m_settings.transportSpread, 1, 8));
             m_net.runs.push_back(run);
             runSegs.emplace_back();
             runCross.emplace_back();
@@ -365,8 +365,8 @@ void StructureSystem::rebuildNetworks()
             m_net.adj.push_back({ e, UINT32_MAX });
         // Out-rate per sub-step: the medium's cells/s over tick x substeps; a junction relays
         // every direction, so it scales with its degree (the cable stays the bottleneck).
-        const float perSub = m_cableThroughput[glm::min((int)node.medium, 2)]
-            / (glm::max(m_transportTickHz, 1.0f) * (float)glm::max(m_transportSubsteps, 1));
+        const float perSub = m_settings.cableThroughput[glm::min((int)node.medium, 2)]
+            / (glm::max(m_settings.transportTickHz, 1.0f) * (float)glm::max(m_settings.transportSubsteps, 1));
         node.rateFp = (uint32)glm::max(perSub * 1024.0f * (node.junction ? (float)glm::max(node.adjCount, 1u) : 1.0f), 1.0f);
     }
     for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
@@ -401,7 +401,7 @@ void StructureSystem::rebuildNetworks()
     m_net.outSlot.assign(m_net.slots.size(), 0);
     m_net.inSlot.assign(m_net.slots.size(), 0);
     m_net.bfsQueue.assign(m_net.nodes.size(), 0);
-    m_statTransportNodes = (int)m_net.nodes.size();
+    m_settings.statTransportNodes = (int)m_net.nodes.size();
 
     for (const Ref& s : m_frame)
         updateArms(s);

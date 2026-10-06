@@ -75,18 +75,19 @@ namespace
 // y = the range (TREE_RECORDS_PER_PIECE per piece). z = the culls' THREAD count (their dispatch,
 // IndirectCullComputePipeline::update): one per stream instance outside the range, one per PIECE inside it (w = the
 // piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
-void Renderer::uploadTreeCullUbo(PerFrameData& frameData)
+void Renderer::fillTreeCullUbo()
 {
     const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
         && m_treeSets[m_treeCullSet].hasVolume;
-    m_ubo.treeCull = glm::uvec4(m_treeCullBase, m_treeCullCount, m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces),
-        m_treeCullPieces);
-    m_ubo.treeCullParams = glm::vec4(m_treeCullDistanceScale, m_treeCullForceFar ? 1.0f : 0.0f,
-        treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f,
-        oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl
-    static_assert(offsetof(RendererVKLayout::Ubo, treeCullParams) == offsetof(RendererVKLayout::Ubo, treeCull) + sizeof(glm::uvec4));
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(glm::uvec4) + sizeof(glm::vec4), &m_ubo.treeCull,
-        offsetof(RendererVKLayout::Ubo, treeCull));
+    RendererVKLayout::PresentUbo& p = m_ubo.present;
+    p.treeRangeBase = m_treeCullBase;
+    p.treeRangeLength = m_treeCullCount;
+    p.treeThreads = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces);
+    p.treeCount = m_treeCullPieces;
+    p.treeFarScale = m_treeCullDistanceScale;
+    p.treeForceFar = m_treeCullForceFar ? 1.0f : 0.0f;
+    p.treeVolumeStart = treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f;
+    p.treeShadowMargin = oc::max(m_foliageParams.shadowCascadeMargin, 0.0f); // instanced_indirect_shadow.cs.glsl
 }
 
 Buffer& Renderer::treeCullPieces()

@@ -2,11 +2,13 @@ module Nav;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
+import Settings;
 import Threading;
 
 namespace Nav
 {
+
+static_assert(MaxTeams == 8, "the \"Nav/Debug team\" tweak range (Settings.Nav) assumes 8 teams");
 
 NavSystem::~NavSystem()
 {
@@ -49,28 +51,6 @@ void NavSystem::initialize()
         f.initialize();
     for (PressureField& p : m_pressure)
         p.initialize();
-    Tweak::boolean("Nav", "Enabled", &m_enabled);
-    Tweak::floatVar("Nav", "Flow half-life (s)", &m_flowHalfLife, 0.05f, 60.0f, 0.05f);
-    Tweak::floatVar("Nav", "Pressure diffusion", &m_pressureDiffusion, 0.0f, 0.25f, 0.005f);
-    Tweak::floatVar("Nav", "Pressure half-life (s)", &m_pressureHalfLife, 0.02f, 30.0f, 0.02f);
-    Tweak::floatVar("Nav", "Pressure floor", &m_pressureFloor, 0.0f, 5.0f, 0.02f);
-    Tweak::floatVar("Nav", "Pressure flow gain 10^x", &m_pressureFlowGainExp, -2.0f, 3.0f, 0.02f);
-    Tweak::floatVar("Nav", "Flow max (m/s)", &m_flowMaxSpeed, 0.0f, 40.0f, 0.5f);
-    Tweak::floatVar("Nav", "Seed area (m)", &m_seedArea, 2.0f, 64.0f, 1.0f);
-    Tweak::floatVar("Nav", "Seed cooldown (s)", &m_seedCooldown, 0.0f, 30.0f, 0.25f);
-    Tweak::intVar("Nav", "Seed max/frame", &m_seedMaxPerFrame, 0, 16);
-    Tweak::floatVar("Nav", "Seed trough", &m_seedTrough, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Nav", "Seed trough squeeze", &m_seedSqueeze, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Nav", "Seed range (m)", &m_seedRange, 0.0f, 400.0f, 2.0f); // 0 = the whole path
-    Tweak::floatVar("Nav", "Field radius", &m_fieldRadius, 10.0f, 2000.0f, 5.0f);
-    Tweak::floatVar("Nav", "Rebuild interval", &m_rebuildInterval, 0.05f, 5.0f, 0.05f);
-    Tweak::floatVar("Nav", "Build spread (s)", &m_buildSpread, 0.0f, 5.0f, 0.05f);
-    Tweak::intVar("Nav", "Clearance cost", &m_clearanceCost, 0, 32);
-    Tweak::intVar("Nav", "Chunk keep frames", &m_keepFrames, 1, 2000);
-    Tweak::intVar("Nav", "Debug draw", &m_debugMode, 0, 2); // 1 = chunks + team field, 2 = flow + pressure
-    Tweak::intVar("Nav", "Debug team", &m_debugTeam, 0, int(MaxTeams)); // 8 = the player's goal field
-    Tweak::floatVar("Nav", "Debug radius", &m_debugRadius, 5.0f, 400.0f, 1.0f);
-    Tweak::floatVar("Nav", "Debug flow min (m/s)", &m_debugFlowMin, 0.0f, 8.0f, 0.05f);
 }
 
 static uint64 hashBytes(const void* data, size_t size)
@@ -188,7 +168,7 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
     plan->speed = speed;
     plan->laneWidth = laneWidth;
     plan->clearance = clearance;
-    plan->range = m_seedRange;
+    plan->range = m_settings.seedRange;
     plan->team = team;
     NavSystem* self = this;
     Globals::jobSystem.submit([self, plan]
@@ -242,8 +222,8 @@ void NavSystem::applySeedPlans()
             // lives (the steering reads -grad p and the flow is pushed by -grad p), so the lane
             // pulls units and surrounding flow into itself instead of only existing where it was
             // drawn.
-            if (m_seedTrough > 0.0f)
-                m_pressure[plan.team].seedPath(plan.path, m_seedTrough, plan.laneWidth * 0.5f, raster, m_seedSqueeze);
+            if (m_settings.seedTrough > 0.0f)
+                m_pressure[plan.team].seedPath(plan.path, m_settings.seedTrough, plan.laneWidth * 0.5f, raster, m_settings.seedSqueeze);
         }
         // In order: a later re-plan that disagrees must win over an earlier one. The plan object goes
         // back to the pool (its raster reference released now, so a retired field can be reused).
@@ -257,10 +237,10 @@ void NavSystem::applySeedPlans()
 bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
     float laneWidth, float clearance)
 {
-    if (team >= MaxTeams || m_seedsThisFrame >= m_seedMaxPerFrame)
+    if (team >= MaxTeams || m_seedsThisFrame >= m_settings.seedMaxPerFrame)
         return false;
     const glm::vec2 f(from.x, from.z), t(to.x, to.z);
-    const float area = glm::max(m_seedArea, 0.5f);
+    const float area = glm::max(m_settings.seedArea, 0.5f);
     const float areaSq = area * area;
     const glm::ivec2 home(int32(glm::floor(f.x / area)), int32(glm::floor(f.y / area)));
     // Suppressed when a recent plan of this team started within `area` of here AND went to within
@@ -279,7 +259,7 @@ bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::v
             // append-only order it relies on). A stamp that expired since the last update is
             // simply skipped - at most one frame's worth ever sits here.
             for (const SeedStamp& stamp : it->second)
-                if (m_time - stamp.time < m_seedCooldown
+                if (m_time - stamp.time < m_settings.seedCooldown
                     && glm::dot(stamp.from - f, stamp.from - f) < areaSq
                     && glm::dot(stamp.to - t, stamp.to - t) < areaSq)
                     return false;
@@ -303,9 +283,9 @@ void NavSystem::kickBuild(TeamSlot& slot, float deltaSec)
     slot.retired.reset();
     slot.building = true;
     slot.sourcesDirty = false;
-    slot.timer = m_rebuildInterval;
-    const TeamField::BuildParams params{ slot.radius > 0.0f ? slot.radius : m_fieldRadius,
-        uint8(glm::clamp(m_clearanceCost, 0, 254)) };
+    slot.timer = m_settings.rebuildInterval;
+    const TeamField::BuildParams params{ slot.radius > 0.0f ? slot.radius : m_settings.fieldRadius,
+        uint8(glm::clamp(m_settings.clearanceCost, 0, 254)) };
     NavSystem* self = this;
     TeamSlot* slotPtr = &slot;
     const uint32 chunks = buildStepBudget(slot, deltaSec);
@@ -332,9 +312,9 @@ uint32 NavSystem::buildStepBudget(const TeamSlot& slot, float deltaSec) const
     // chunks per frame = last total / (frames in the spread) = last total * dt / spread. Rounded
     // UP so the build lands within the spread rather than one frame late; a build that grew since
     // last time just runs a few extra frames at the same slice.
-    if (slot.lastBuildChunks == 0 || m_buildSpread <= 0.0f)
+    if (slot.lastBuildChunks == 0 || m_settings.buildSpread <= 0.0f)
         return UINT32_MAX / 2; // no history (first build) or spread off: one step
-    const float perFrame = (float)slot.lastBuildChunks * glm::max(deltaSec, 1e-4f) / m_buildSpread;
+    const float perFrame = (float)slot.lastBuildChunks * glm::max(deltaSec, 1e-4f) / m_settings.buildSpread;
     return glm::max(uint32(glm::ceil(perFrame)), 1u);
 }
 
@@ -343,7 +323,7 @@ void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
     slot.timer -= deltaSec;
     if (slot.building)
         return;
-    if (!m_enabled || (slot.sources.empty() && !slot.rasterOnly))
+    if (!m_settings.enabled || (slot.sources.empty() && !slot.rasterOnly))
     {
         slot.published.reset(); // no sources = no field (units fall back to local search)
         slot.sourcesDirty = false;
@@ -389,7 +369,7 @@ void NavSystem::update(float deltaSec)
     m_seedsThisFrame = 0;
     // Retire expired seed stamps: the queue is in time order and each bucket is append-only, so
     // the front of the queue always names the oldest stamp of that bucket. Nothing is scanned.
-    while (!m_seedExpiry.empty() && m_time - m_seedExpiry.front().first >= m_seedCooldown)
+    while (!m_seedExpiry.empty() && m_time - m_seedExpiry.front().first >= m_settings.seedCooldown)
     {
         const auto it = m_seedBuckets.find(m_seedExpiry.front().second);
         if (it != m_seedBuckets.end())
@@ -472,7 +452,8 @@ void NavSystem::runFieldSteps()
 {
     const float deltaSec = m_stepDelta;
     {
-        const uint32 keepFrames = uint32(glm::max(m_keepFrames, 1));
+        const NavSettings& settings = m_settings;
+        const uint32 keepFrames = uint32(glm::max(settings.keepFrames, 1));
         const TeamField* raster = m_raster.published.get();
         const float gain = pressureFlowGain();
         oc::vector<FlowField::StepItem>& flowItems = m_flowItems;
@@ -482,7 +463,7 @@ void NavSystem::runFieldSteps()
         PressureField::CellVisit pushes[MaxTeams];
         for (uint32 t = 0; t < MaxTeams; ++t)
         {
-            m_flow[t].beginStep(deltaSec, keepFrames, m_flowHalfLife, raster, m_flowMaxSpeed,
+            m_flow[t].beginStep(deltaSec, keepFrames, settings.flowHalfLife, raster, settings.flowMaxSpeed,
                 flowItems);
             FlowField& flow = m_flow[t];
             pushes[t] = [&flow, gain](const glm::vec2& centre, const glm::vec2& g)
@@ -491,8 +472,8 @@ void NavSystem::runFieldSteps()
                     flow.splat(centre, -g * gain);
             };
             const size_t first = pressureItems.size();
-            m_pressure[t].beginStep(deltaSec, raster, m_pressureDiffusion, m_pressureHalfLife,
-                keepFrames, m_pressureFloor, pressureItems);
+            m_pressure[t].beginStep(deltaSec, raster, settings.pressureDiffusion, settings.pressureHalfLife,
+                keepFrames, settings.pressureFloor, pressureItems);
             if (gain > 0.0f)
                 for (size_t i = first; i < pressureItems.size(); ++i)
                     pressureItems[i].push = &pushes[t];
@@ -566,17 +547,18 @@ static uint32 packColor(float r, float g, float b)
 void NavSystem::drawDebug(const glm::vec3& focus,
     const oc::function<void(const glm::vec3&, const glm::vec3&, uint32)>& line) const
 {
-    if (m_debugMode <= 0)
+    const NavSettings& settings = m_settings;
+    if (settings.debugMode <= 0)
         return;
     // Debug team 0..7 = team fields, 8 = the local player's move-order goal.
-    const uint32 sel = uint32(glm::clamp(m_debugTeam, 0, int(MaxTeams)));
+    const uint32 sel = uint32(glm::clamp(settings.debugTeam, 0, int(MaxTeams)));
     const uint32 team = glm::min(sel, MaxTeams - 1);
     const TeamField* field = sel < MaxTeams ? m_teams[sel].published.get() : goalField(GoalKeyPlayer);
     const float y = 0.15f;
     const glm::vec2 f(focus.x, focus.z);
-    const float r2 = m_debugRadius * m_debugRadius;
+    const float r2 = settings.debugRadius * settings.debugRadius;
 
-    if (m_debugMode == 2)
+    if (settings.debugMode == 2)
     {
         // FLOW + PRESSURE of `team` in one view. Pressure = a filled-looking cell (a diamond +
         // vertical bar, height and colour yellow->red by value); flow = an arrow per cell (length +
@@ -622,7 +604,7 @@ void NavSystem::drawDebug(const glm::vec3& focus,
         const uint32 foutline = packColor(0.15f, 0.45f, 0.2f); // flow chunks: dim green
         // Yardstick = the per-cell cap the field itself enforces ("Nav/Flow max"), so arrow length
         // and colour mean the same thing from frame to frame and place to place.
-        const float flowScale = 1.0f / glm::max(m_flowMaxSpeed, 0.1f);
+        const float flowScale = 1.0f / glm::max(settings.flowMaxSpeed, 0.1f);
         flow.chunks().forEach([&](uint64 key, const FlowField::Chunk& chunk)
         {
             const glm::vec2 mn = chunkMinWorld(chunkFromKey(key));
@@ -636,7 +618,7 @@ void NavSystem::drawDebug(const glm::vec3& focus,
             {
                 const glm::vec2 v = glm::vec2(chunk.vx[fbuf][i], chunk.vz[fbuf][i]) / FlowField::Scale;
                 const float mag = glm::length(v);
-                if (mag < m_debugFlowMin) // a haze of near-zero arrows hides the lanes
+                if (mag < settings.debugFlowMin) // a haze of near-zero arrows hides the lanes
                     continue;
                 const glm::vec2 centre = cellCenter(base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits));
                 if (glm::dot(centre - f, centre - f) > r2)
@@ -705,7 +687,7 @@ void NavSystem::drawDebug(const glm::vec3& focus,
                 const TeamField::Sample s = field->sample(centre, 0);
                 if (!s.valid)
                     continue;
-                const float t = glm::clamp(s.dist / glm::max(m_fieldRadius, 1.0f), 0.0f, 1.0f);
+                const float t = glm::clamp(s.dist / glm::max(settings.fieldRadius, 1.0f), 0.0f, 1.0f);
                 const uint32 col = packColor(t, 1.0f - t, 0.2f);
                 const glm::vec2 tip = centre + s.descentDir * 0.8f;
                 const glm::vec2 side(-s.descentDir.y, s.descentDir.x);

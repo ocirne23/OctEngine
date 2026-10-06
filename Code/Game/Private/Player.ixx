@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Entity;
 import Force;
+import Settings;
 
 // The player character: upright physics capsule (Entities/Game/player.pre) carrying a personal
 // shield ForceEmitter (via its ForceComponent) and a health pool. BATTERY MODEL: while the Energy
@@ -14,10 +15,10 @@ import Force;
 // physically pushes the capsule (applied-force readback -> impulse). Health drains while the
 // equilibrium radius sits below "Damage radius" AND enemy pressure is actually present.
 // All ticks run on the main thread before physics.update (direct body setters sanctioned).
+// The tuning is the "Game/Player" settings (Globals::settings.game.player).
 export class GamePlayer final
 {
 public:
-    void registerTweaks();
     void spawn(const glm::vec3& pos); // spawnAssetFile + addRootEntity; creates the territory query
     void despawn();
     // PvP: the player's Force team - the shield, projectiles and the cover check all follow it.
@@ -56,10 +57,10 @@ public:
     void applyDamage(float amount);
     // Regeneration (standing near an own-team Base). Never revives past max; dead players are
     // handled by the respawn path, so this is a plain top-up.
-    void heal(float amount) { m_health = glm::min(m_health + glm::max(amount, 0.0f), m_healthMax); }
+    void heal(float amount) { m_health = glm::min(m_health + glm::max(amount, 0.0f), healthMax()); }
     // Shield battery top-up (a medic station). The shield tick's reboot latch reopens a collapsed
     // shield once the battery passes "Reboot energy", so this needs no state of its own.
-    void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), m_energyMax); }
+    void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), energyMax()); }
 
     // Hard move of the capsule (F10 load). Follows the respawn TELEPORT CONTRACT: physics
     // teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed -
@@ -70,29 +71,29 @@ public:
     // "Detach camera" tweak: the follow camera and ALL game mouse/hotkey input stand down and the
     // testbed fly camera takes the frame - the capsule keeps simulating (a standing move order
     // still completes), it just receives no new orders. Personal, never synced.
-    bool cameraDetached() const { return m_detachCamera; }
+    bool cameraDetached() const { return Globals::settings.game.player.detachCamera; }
     // "Detach focus point" tweak: with the camera detached, ALSO move the scene focus (shadow cascades,
     // RTAO falloff, GI clipmap) to the fly camera. Off = the focus stays on the player entity, so the
     // fly camera inspects the player's lighting from anywhere. Personal, never synced.
-    bool focusDetached() const { return m_detachFocus; }
+    bool focusDetached() const { return Globals::settings.game.player.detachFocus; }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)
 
     float health() const { return m_health; }
-    float healthMax() const { return m_healthMax; }
+    float healthMax() const { return Globals::settings.game.player.healthMax; }
     // Energy IS the shield resource: the bar drains/refills in its own units ("Energy regen/s",
     // "Energy drain/s @ pressure 1" tweaks); the emitter's field output is derived from the
     // energy fraction (full energy = "Max output").
     float energy() const { return m_energy; }
-    float energyMax() const { return m_energyMax; }
-    float shieldFrac() const { return m_energyMax > 0.0f ? m_energy / m_energyMax : 0.0f; }
+    float energyMax() const { return Globals::settings.game.player.energyMax; }
+    float shieldFrac() const { return energyMax() > 0.0f ? m_energy / energyMax() : 0.0f; }
     float shieldRadius() const; // pressure-aware equilibrium radius estimate, 0 = no bubble
     // MATERIALS inventory: refilled near own-team Silos/Base, invested into nearby blueprints.
     // Server-authoritative for every player (GameMatch runs the transfers); clients receive their
     // own value through the entity snapshot's game blob (GameUnitComponent::materialsFrac).
     float materials() const { return m_materials; }
-    float materialsMax() const { return m_materialsMax; }
-    void setMaterials(float value) { m_materials = glm::clamp(value, 0.0f, m_materialsMax); }
+    float materialsMax() const { return Globals::settings.game.player.materialsMax; }
+    void setMaterials(float value) { m_materials = glm::clamp(value, 0.0f, materialsMax()); }
     float pressure() const { return m_lastPressure; } // last readback, for the HUD (threshold tuning)
     float density() const { return m_lastDensity; }   // field density at the body (strongest team's
                                                       // field, the Density debug view's value)
@@ -117,37 +118,5 @@ private:
                                                      // that PRODUCED it (shield-state-independent)
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
-
-    // Tweaks ("Game/Player" - movement, health, and the shield battery)
-    bool m_detachCamera = false; // local-only (not Synced): free-fly view, see cameraDetached()
-    bool m_detachFocus = false;  // local-only: the scene focus follows the fly camera, see focusDetached()
-    float m_moveSpeed = 4.0f;
-    float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
-    float m_jumpSpeed = 6.0f;
-    float m_sprintMult = 2.0f;
-    float m_sprintEnergyPerSec = 15.0f; // sprint burns the shield battery; emptying it COLLAPSES
-                                        // the shield, and sprint stays locked out until the
-                                        // battery refills to "Reboot energy" (the collapse latch)
-    float m_healthMax = 100.0f;
-    float m_healthDrainRate = 15.0f;    // health/s while unshielded in enemy territory
-    float m_shieldMaxOutput = 1.5f;     // field output while the battery holds ANY charge
-    float m_energyMax = 100.0f;
-    float m_energyRegenRate = 10.0f;    // energy/s refill (battery only - never grows the bubble)
-    float m_energyDrainRate = 50.0f;    // energy/s drained per unit of pressure
-    float m_rebootEnergy = 20.0f;       // collapsed shield restarts once the battery refills to this
-    float m_damageAbsorb = 2.0f;        // shield ENERGY spent per hp of direct damage absorbed
-                                        // (0 = the shield absorbs nothing, hits go straight to hp)
-    float m_coverDrainReduction = 0.75f; // drain reduction per unit of FRIENDLY field surplus over
-                                         // the own output (standing inside a team emitter's bubble)
-    float m_materialsMax = 50.0f;        // inventory size ("Game/Player/Materials max")
-    float m_materials = m_materialsMax; // carried construction stock (see materials())
-    float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn - the
-                                         // GPU readbacks still carry the death position for ~2 frames
-    float m_arriveRadius = 0.8f;         // metres: a move order completes inside this ring
-    float m_damageRadius = 1.0f;        // metres: health drains once the equilibrium shield radius
-                                        // squishes below this (capsule half-height is 0.8 world)
-    float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)
-    float m_shieldTension = 1.5f;       // SURFACE TENSION: push AND energy drain scale by
-                                        // (1 + tension * pressure) - leaning deep into a bubble
-                                        // stiffens superlinearly and burns both sides' batteries
+    float m_materials = Globals::settings.game.player.materialsMax; // carried construction stock (see materials())
 };

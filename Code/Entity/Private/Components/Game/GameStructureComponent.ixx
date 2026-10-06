@@ -5,18 +5,7 @@ import Core;
 import Core.glm;
 import Core.Transform;
 import File;
-
-export struct GameStructureParams
-{
-    float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
-    float turretRange = 18.0f;
-    float turretFireInterval = 1.2f;
-    float turretShotEnergy = 2.0f; // keep a WHOLE number: the cable transport delivers whole cells
-                                   // into a store of this capacity, so 1.5 stalled one cell short
-    float turretDamage = 25.0f;
-    float medicRange = 12.0f;
-    float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
-};
+import Settings; // GameStructureParams (Settings.Game) + Globals::settings
 
 // Authority only (clients early-out of update). Cross-entity writes are the atomic damage()/addLoad().
 // The cable transport moves resources in whole cells; the game's StructureSystem owns that, this
@@ -26,7 +15,7 @@ export struct GameStructureComponent
     static constexpr EComponentID getId() { return EComponentID_GameStructure; }
     ~GameStructureComponent() {}
 
-    static GameStructureParams params;
+    static inline GameStructureParams& params = Globals::settings.game.structureParams; // "Game/Friendlies" + "Game/Structures" tweaks
 
     struct SpawnInfo
     {

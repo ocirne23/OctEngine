@@ -7,7 +7,7 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
-import :Settings;
+import :RenderParams;
 
 // Automatic exposure ("eye adaptation"). Two compute passes per frame over the TAA-resolved scene colour:
 //   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl);

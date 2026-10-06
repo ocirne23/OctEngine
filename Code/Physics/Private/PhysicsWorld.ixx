@@ -2,6 +2,7 @@ export module Physics:PhysicsWorld;
 
 import Core;
 import Core.glm;
+import Settings;
 
 import :Body;
 import :Joint;
@@ -116,7 +117,7 @@ public:
     // the cheap global gate (no water anywhere yet); empty = always active. THE PHYSICS WORLD
     // APPLIES NO BUOYANCY ITSELF: Entity's PhysicsComponent computes the probe forces for its own
     // body on the entity pass (workers) through the read-only queries below, and queues them.
-    // Density/drag are Tweaks under Physics/Buoyancy.
+    // Density/drag are Tweaks under Physics/Buoyancy (Globals::settings.physics).
     using WaterSurfaceFn = oc::function<float(float x, float z)>;
     using WaterActiveFn = oc::function<bool()>;
     void setWaterSurface(WaterSurfaceFn fn, WaterActiveFn active = {})
@@ -128,9 +129,9 @@ public:
     // that only main refreshes, outside the entity pass).
     bool isWaterActive() const { return m_waterSurface && (!m_waterActive || m_waterActive()); }
     float sampleWaterHeight(float x, float z) const { return m_waterSurface(x, z); } // isWaterActive first
-    float getWaterDensity() const { return m_waterDensity; }
-    float getWaterLinearDrag() const { return m_waterLinearDrag; }
-    const glm::vec3& getGravity() const { return m_gravity; }
+    float getWaterDensity() const { return Globals::settings.physics.waterDensity; }
+    float getWaterLinearDrag() const { return Globals::settings.physics.waterLinearDrag; }
+    const glm::vec3& getGravity() const { return Globals::settings.physics.gravity; }
 
     // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
     // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
@@ -154,19 +155,20 @@ public:
         m_debugLine = oc::move(line);
         m_debugViewPos = oc::move(viewPos);
     }
-    bool isDebugDrawEnabled() const { return m_debugDrawEnabled; }
+    bool isDebugDrawEnabled() const { return Globals::settings.physics.debugDrawColliders; }
 
     // Fixed-step render interpolation: total steps taken, and the fraction [0,1] of the current frame
     // into the next step (1 when interpolation is disabled via the Tweak).
     uint32 getStepCount() const { return m_stepCount; }
     float getInterpolationAlpha() const;
-    int getStepHz() const { return m_stepHz; } // for code that must pace itself in whole steps
+    int getStepHz() const { return Globals::settings.physics.stepHz; } // for code that must pace itself in whole steps
     // Whether update(deltaSec) will take a step this frame (the accumulator reaches a step and the
     // sim is live): main publishes it to the JobSystem at the frame top (setFrameHasPhysicsStep),
     // so work that can wait a frame keeps off the step's worker load.
     bool willStep(double deltaSec) const
     {
-        return m_initialized && !m_paused && m_accumulator + float(deltaSec) * m_timeScale >= 1.0f / float(m_stepHz);
+        const PhysicsSettings& settings = Globals::settings.physics;
+        return m_initialized && !settings.paused && m_accumulator + float(deltaSec) * settings.timeScale >= 1.0f / float(settings.stepHz);
     }
 
     bool isInitialized() const { return m_initialized; }
@@ -192,42 +194,22 @@ private:
 
     uint32 m_worldHandle = 0; // b3WorldId bits
     bool m_initialized = false;
-    bool m_paused = false;
-    bool m_interpolate = true;
     float m_accumulator = 0.0f;
-    float m_timeScale = 1.0f;
-    int m_subSteps = 4;
-    int m_stepHz = 20;
-    int m_workerCount = 1; // box3d parallelism, driven onto the engine job system (see :TaskScheduler)
-    // Contact tuning (b3World_SetContactTuning): hertz from box3d's default; damping and the
-    // push-out speed cap are ours, set for SOFT overlap recovery (box3d's defaults unwind a deep
-    // overlap in one step - an explosion when stacked unit bodies enable at the SIM LOD edge).
-    float m_contactHertz = 30.0f;
-    float m_contactDamping = 50.0f;
-    float m_contactSpeed = 0.1f; // m/s: max overlap resolution speed
-    void applyContactTuning();
+    void applyContactTuning(); // Globals::settings.physics' contact tuning -> box3d
     // Handed to box3d as b3WorldDef::userTaskContext and returned through both task callbacks, so
     // the solver's fork/join state is owned by this world rather than by file statics.
     PhysicsTaskScheduler m_taskScheduler;
     uint32 m_stepCount = 0;
     uint32 m_lastDispatchedStep = 0; // dispatchContactEvents' double-fire guard
-    glm::vec3 m_gravity = glm::vec3(0.0f, -9.81f, 0.0f);
     PhysicsBody m_staticBody;
 
     // Buoyancy (see setWaterSurface)
     WaterSurfaceFn m_waterSurface;
     WaterActiveFn m_waterActive; // global gate; empty = always on
-    float m_waterDensity = 200.0f;//1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
-    float m_waterLinearDrag = 0.5f;//3.0f;  // 1/s: drag on each submerged probe's point velocity
 
-    // Debug draw tweaks (Physics/Debug)
+    // Debug draw (the Physics/Debug tweaks)
     DebugLineFn m_debugLine;       // registered by the App, see setDebugDrawCallback
     DebugViewPosFn m_debugViewPos; // ditto: where the wireframes are centred/range-culled
-    bool m_debugDrawEnabled = false;
-    bool m_debugDrawJoints = false;
-    bool m_debugDrawContacts = false;
-    bool m_debugDrawBounds = false;
-    float m_debugDrawRange = 64.0f; // draw distance around viewPos (world units)
 };
 
 // OC_SEG_PHYSICS: ~PhysicsWorld (b3DestroyWorld) fans its teardown tasks onto the job system, so it

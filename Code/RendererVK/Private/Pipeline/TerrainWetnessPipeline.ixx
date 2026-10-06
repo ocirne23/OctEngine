@@ -25,9 +25,11 @@ public:
     ~TerrainWetnessPipeline();
     TerrainWetnessPipeline(const TerrainWetnessPipeline&) = delete;
 
-    // onDefinesChanged: fired when a baked-define tweak (Diffusion / Diffusion spread) changes - the
-    // Renderer idles the GPU, calls reloadShaders and re-records (the light grid's pattern).
-    void initialize(oc::function<void()> onDefinesChanged);
+    // "Terrain/Water" Diffusion (Globals::settings.renderer.terrainWetDiffusion) is BAKED as the WET_DIFFUSION
+    // define (the tent reads per texel are not worth a uniform branch): the Renderer's listener idles the GPU, calls
+    // reloadShaders and re-records. The spread RATE is UBO-driven ("Terrain/Water" diffusion rate, packed per frame
+    // with dt), so it is live and framerate independent - a define could not carry the frame delta.
+    void initialize();
     void reloadShaders();
 
     struct RecordParams
@@ -66,10 +68,4 @@ private:
     VmaAllocation m_memory{};
     vk::ImageView m_view{};
     Sampler m_sampler; // the reader uses texelFetch; the sampler only satisfies the combined binding
-
-    // "Terrain/Water" Diffusion toggle, BAKED as the WET_DIFFUSION define on the compute shader (the
-    // tent reads per texel are not worth a uniform branch); a change reloads it. The spread RATE is
-    // UBO-driven (Renderer::TerrainWetTweaks::diffusionRate, packed per frame with dt), so it is live
-    // and framerate independent - a define could not carry the frame delta.
-    bool m_diffusion = true;
 };

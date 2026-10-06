@@ -1,13 +1,14 @@
-export module Core.Tweaks;
+export module Settings.Tweaks;
 
 import Core;
 import Core.glm;
 import Core.Log;
 
-// A lightweight, global registry of "tweakable" variables. Any module can register a
-// pointer to a live variable together with how it should be presented; the UI's TweakPanel
-// iterates the registry and renders the appropriate widget. Pointers are non-owning: the
-// registered variable must outlive the registration (use globals / long-lived members).
+// A lightweight, global registry of "tweakable" variables. The Settings library registers every tweak once
+// (Settings::registerAll, the variables are members of Globals::settings) together with how it should be presented;
+// the UI's TweakPanel iterates the registry and renders the appropriate widget. Pointers are non-owning: the
+// registered variable must outlive the registration. A system that must REACT to a change attaches a listener to the
+// variable (Tweak::onChange(variable, owner, fn)) - the registration itself knows nothing of the systems.
 
 export enum class ETweakType : uint8
 {
@@ -27,14 +28,46 @@ export enum class ETweakType : uint8
 // detected. Synced: in a network session the SERVER's value broadcasts to clients on change and
 // at join (NetworkManager watches syncGeneration()). Identity is "Category/Name" - renaming a
 // flagged tweak orphans its saved value (harmless: unknown keys are kept but never applied).
+// Runtime: a LOCK never covers it (see TweakLock) - a value its owner keeps live in a locked section (the sun
+// direction, the wind). It does not count as an explicit flag, so a ScopedFlags block default still applies.
 export enum class ETweakFlags : uint8
 {
-	None   = 0,
-	Saved  = 1,
-	Synced = 2,
+	None    = 0,
+	Saved   = 1,
+	Synced  = 2,
+	Runtime = 4,
 };
 export constexpr ETweakFlags operator|(ETweakFlags a, ETweakFlags b) { return ETweakFlags(uint8(a) | uint8(b)); }
 export constexpr bool anyFlag(ETweakFlags a, ETweakFlags b) { return (uint8(a) & uint8(b)) != 0; }
+
+// A LOCK covers whole tweak SECTIONS: its owner (the renderer bakes locked values into the shaders as constants)
+// names the categories it covers. A row belongs to the NEAREST lock category above it, so "Sky/Clouds" (its own
+// lock) is not covered by "Sky"'s; ETweakFlags::Runtime rows are never covered. EVERY covered row has its OWN
+// locked state (the TweakPanel's lock button on the row, drawn read-only while locked); the section's toggle on
+// its fold sets all of its rows. A row registered later takes the section's last state. Nothing is saved: every run
+// starts at the owner's default; `--tweak "@lock/<name>=0|1"` overrides a section, `"@lock/<Category/Name>=0|1"` a row.
+//
+// An owner asks whether a VALUE is locked by its source variables' ADDRESSES (sourceState: the row that holds each),
+// and hears about every change through a change listener (addChangeListener): a lock click fires the lock's onChange,
+// a row's value change fires notifyChanged.
+export struct TweakLock
+{
+	oc::string name;
+	oc::vector<oc::string> categories;
+	oc::function<void()> onChange; // optional, main thread, fired when a row's or the section's state changes
+	bool locked = false;           // the section-wide state: what its toggle last set (and what a new row takes)
+};
+
+// sourceState's answer; combining sources takes the max.
+export enum class ETweakSource : uint8
+{
+	Locked,  // locked rows only, or rows no lock covers (nothing can unlock them: the owner re-bakes on a change)
+	Unknown, // an address no registered row holds (a source that is no tweak)
+	Live,    // an unlocked row or a Runtime row
+};
+
+// A section toggle's look: all, some or none of its rows locked.
+export enum class ETweakLockState : uint8 { None, Some, All };
 
 // The panel's top-level folds. A category's ROOT segment ("Sky" of "Sky/Clouds") maps to one group
 // through this table; the group is presentation only and is NOT part of the "Category/Name"
@@ -81,6 +114,14 @@ export namespace Tweak
 	}
 }
 
+// A system's reaction to a tweak's change (Tweak::onChange). The owner key lets the system drop its listeners
+// (Tweak::removeListeners) before it dies.
+export struct TweakListener
+{
+	const void* owner = nullptr;
+	oc::function<void()> fn;
+};
+
 export struct TweakVar
 {
 	oc::string_view name;
@@ -95,11 +136,21 @@ export struct TweakVar
 	float*           intensity = nullptr;                 // optional, Color3 only (min/max/speed then bound the intensity drag)
 	oc::span<const oc::string_view> enumNames;          // Enum only
 
-	oc::function<void()> onChange;                       // optional, fired when the value changes
+	oc::function<void()> onChange;                       // optional, fired when the value changes (the settings' own logic)
+	oc::vector<TweakListener> listeners;                 // the systems' reactions (Tweak::onChange); fired after onChange
 
 	ETweakFlags      flags = ETweakFlags::None;
 
 	bool isUnbounded() const { return max >= FLT_MAX * 0.5f; }
+
+	// Main thread: the value changed (the panel's deferred flush, an override, a synced value).
+	void fireChanged() const
+	{
+		if (onChange)
+			onChange();
+		for (const TweakListener& listener : listeners)
+			listener.fn();
+	}
 };
 
 export class TweakRegistry
@@ -136,15 +187,216 @@ public:
 		{
 			m_vars.push_back(var);
 			m_snapshots.emplace_back();
+			m_varLocks.push_back(c_noLock);
+			m_varLocked.push_back(0);
 		}
 		else
+		{
+			oc::vector<TweakListener> listeners = oc::move(m_vars[slot].listeners); // the systems' reactions stay
 			m_vars[slot] = var;
+			m_vars[slot].listeners = oc::move(listeners);
+		}
 		TweakVar& stored = m_vars[slot];
-		if (stored.flags == ETweakFlags::None)
-			stored.flags = m_defaultFlags; // ScopedFlags block default; explicit flags win
+		if (!anyFlag(stored.flags, ETweakFlags::Saved | ETweakFlags::Synced))
+			stored.flags = stored.flags | m_defaultFlags; // ScopedFlags block default; explicit flags win
+		assignLock(slot); // a re-registration keeps its row state
 		if (!applyOverride(stored) && m_savedLoaded && anyFlag(stored.flags, ETweakFlags::Saved))
 			applySavedValue(stored);
 		m_snapshots[slot] = readValue(stored); // taken AFTER the override/saved apply: not a "change", so nothing saves back
+	}
+
+	// ---- Listeners (see TweakListener) ------------------------------------------------------
+	// Attaches fn to the row whose variable holds `address` (the data, or a Color3's intensity). Main thread. Returns
+	// false when no registered row holds it.
+	bool addListener(const void* address, const void* owner, oc::function<void()> fn)
+	{
+		for (TweakVar& var : m_vars)
+			if (var.data == address || var.intensity == address)
+			{
+				var.listeners.push_back(TweakListener{ owner, oc::move(fn) });
+				return true;
+			}
+		return false;
+	}
+
+	// Hears EVERY row's value change (after the row's own listeners) - an owner that watches many rows at once (the
+	// renderer's baked UBO values).
+	void addChangeListener(const void* owner, oc::function<void(const TweakVar&)> fn)
+	{
+		m_changeListeners.push_back(ChangeListener{ owner, oc::move(fn) });
+	}
+
+	// Drops every listener `owner` attached.
+	void removeListeners(const void* owner)
+	{
+		for (TweakVar& var : m_vars)
+			for (size_t i = var.listeners.size(); i-- > 0;)
+				if (var.listeners[i].owner == owner)
+					var.listeners.erase(var.listeners.begin() + i);
+		for (size_t i = m_changeListeners.size(); i-- > 0;)
+			if (m_changeListeners[i].owner == owner)
+				m_changeListeners.erase(m_changeListeners.begin() + i);
+	}
+
+	// THE change path, main thread: the panel's deferred flush, an override, a synced value, and code that wrote a
+	// setting (Tweak::notifyChanged). Fires the row's onChange, its listeners, then the change listeners.
+	void notifyChanged(const TweakVar& var) const
+	{
+		var.fireChanged();
+		for (const ChangeListener& listener : m_changeListeners)
+			listener.fn(var);
+	}
+
+	// The row whose variable holds `address`; null when none does.
+	const TweakVar* findVar(const void* address) const
+	{
+		for (const TweakVar& var : m_vars)
+			if (var.data == address || var.intensity == address)
+				return &var;
+		return nullptr;
+	}
+
+	// ---- Locks (see TweakLock) ------------------------------------------------------------
+	static constexpr uint32 c_noLock = UINT32_MAX;
+
+	// Returns the lock's id; it starts in lockedByDefault. Re-registering a name replaces its categories and callback
+	// in place and keeps the state. An override applies here (onChange fires for it, like a tweak's override).
+	uint32 registerLock(oc::string_view name, oc::span<const oc::string_view> categories, bool lockedByDefault, oc::function<void()> onChange = {})
+	{
+		uint32 id = 0;
+		while (id < (uint32)m_locks.size() && m_locks[id].name != name)
+			++id;
+		if (id == (uint32)m_locks.size())
+			m_locks.push_back(TweakLock{ .name = oc::string(name), .locked = lockedByDefault });
+		TweakLock& lock = m_locks[id];
+		lock.categories.clear();
+		for (const oc::string_view category : categories)
+			lock.categories.emplace_back(category);
+		lock.onChange = oc::move(onChange);
+		const auto overridden = m_overrides.find(lockKey(lock));
+		if (overridden != m_overrides.end() && !overridden->second.empty())
+			lock.locked = overridden->second[0] != 0.0f;
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			assignLock(i);
+		return id;
+	}
+
+	const oc::vector<TweakLock>& locks() const { return m_locks; }
+
+	// How many of the section's rows are locked (its toggle's look).
+	ETweakLockState lockState(uint32 lock) const
+	{
+		bool any = false, all = true;
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (m_varLocks[i] == lock)
+			{
+				any |= m_varLocked[i] != 0;
+				all &= m_varLocked[i] != 0;
+			}
+		if (!any)
+			return lock < (uint32)m_locks.size() && m_locks[lock].locked && all ? ETweakLockState::All : ETweakLockState::None;
+		return all ? ETweakLockState::All : ETweakLockState::Some;
+	}
+
+	// The whole section: every row under it. Main thread (the panel defers its clicks to
+	// TweakPanel::flushDeferredCallbacks). Lasts for the run only.
+	void setLocked(uint32 lock, bool locked)
+	{
+		if (lock >= (uint32)m_locks.size())
+			return;
+		bool changed = m_locks[lock].locked != locked;
+		m_locks[lock].locked = locked;
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (m_varLocks[i] == lock && (m_varLocked[i] != 0) != locked)
+			{
+				m_varLocked[i] = locked ? 1 : 0;
+				changed = true;
+			}
+		if (!changed)
+			return;
+		if (m_locks[lock].onChange)
+			m_locks[lock].onChange();
+	}
+
+	// One row. No-op for a row no lock covers.
+	void setVarLocked(const TweakVar& var, bool locked)
+	{
+		const size_t index = (size_t)(&var - m_vars.data());
+		if (index >= m_vars.size() || m_varLocks[index] == c_noLock || (m_varLocked[index] != 0) == locked)
+			return;
+		m_varLocked[index] = locked ? 1 : 0;
+		if (m_locks[m_varLocks[index]].onChange)
+			m_locks[m_varLocks[index]].onChange();
+	}
+
+	// The row's lock (c_noLock = none covers it: no button).
+	uint32 lockOf(const TweakVar& var) const
+	{
+		const size_t index = (size_t)(&var - m_vars.data());
+		return index < m_vars.size() ? m_varLocks[index] : findLockFor(var);
+	}
+
+	// A source variable: its address and size (a vec3 over three float rows reaches all three).
+	struct Source
+	{
+		const void* address;
+		size_t size;
+	};
+
+	// Whether the value at [address, address + size) can change while its locks hold (see ETweakSource). Linear in
+	// the rows: call it on a lock change, not per frame.
+	ETweakSource sourceState(const void* address, size_t size) const
+	{
+		const uint8* a = static_cast<const uint8*>(address);
+		const auto overlaps = [a, size](const void* begin, size_t length)
+		{
+			const uint8* b = static_cast<const uint8*>(begin);
+			return a < b + length && b < a + size;
+		};
+		bool found = false;
+		for (size_t i = 0; i < m_vars.size(); ++i)
+		{
+			const TweakVar& var = m_vars[i];
+			if (!overlaps(var.data, dataSize(var)) && !(var.intensity && overlaps(var.intensity, sizeof(float))))
+				continue;
+			found = true;
+			if (anyFlag(var.flags, ETweakFlags::Runtime) || (m_varLocks[i] != c_noLock && m_varLocked[i] == 0))
+				return ETweakSource::Live;
+		}
+		return found ? ETweakSource::Locked : ETweakSource::Unknown;
+	}
+
+	// Whether the row is LOCKED or no lock covers it (a change of it moves a baked value).
+	bool isVarBakeable(const TweakVar& var) const
+	{
+		const size_t index = (size_t)(&var - m_vars.data());
+		if (index >= m_vars.size() || anyFlag(var.flags, ETweakFlags::Runtime))
+			return false;
+		return m_varLocks[index] == c_noLock || m_varLocked[index] != 0;
+	}
+
+	// The lock that names this category EXACTLY (the fold that carries its toggle); c_noLock when none does.
+	uint32 lockAt(oc::string_view category) const
+	{
+		for (uint32 id = 0; id < (uint32)m_locks.size(); ++id)
+			for (const oc::string& c : m_locks[id].categories)
+				if (c == category)
+					return id;
+		return c_noLock;
+	}
+
+	// The row is read-only: its own state (a copy - the settings page - finds its row by its key).
+	bool isVarLocked(const TweakVar& var) const
+	{
+		size_t index = (size_t)(&var - m_vars.data());
+		if (index >= m_vars.size())
+		{
+			const oc::string key = keyOf(var);
+			for (index = 0; index < m_vars.size() && keyOf(m_vars[index]) != key; ++index) {}
+			if (index == m_vars.size())
+				return false;
+		}
+		return m_varLocks[index] != c_noLock && m_varLocked[index] != 0;
 	}
 
 	// Mode-teardown support: removes every variable whose registered pointer (data or intensity)
@@ -165,7 +417,16 @@ public:
 			{
 				m_vars.erase(m_vars.begin() + i);
 				m_snapshots.erase(m_snapshots.begin() + i);
+				m_varLocks.erase(m_varLocks.begin() + i);
+				m_varLocked.erase(m_varLocked.begin() + i);
 			}
+		for (TweakVar& var : m_vars) // a listener owned by the dying object would call into freed memory
+			for (size_t i = var.listeners.size(); i-- > 0;)
+				if (inRange(var.listeners[i].owner))
+					var.listeners.erase(var.listeners.begin() + i);
+		for (size_t i = m_changeListeners.size(); i-- > 0;)
+			if (inRange(m_changeListeners[i].owner))
+				m_changeListeners.erase(m_changeListeners.begin() + i);
 	}
 
 	// A whole FILE of overrides (`--tweaks <path>`, read by main through FileSystem): the
@@ -233,6 +494,12 @@ public:
 				applyOverride(m_vars[i]);
 				m_snapshots[i] = readValue(m_vars[i]);
 			}
+		for (uint32 id = 0; id < (uint32)m_locks.size(); ++id)
+			if (lockKey(m_locks[id]) == key)
+				setLocked(id, m_overrides[key][0] != 0.0f);
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (c_lockPrefix + keyOf(m_vars[i]) == key)
+				setVarLocked(m_vars[i], m_overrides[key][0] != 0.0f);
 		return true;
 	}
 
@@ -300,7 +567,7 @@ public:
 		for (size_t i = 0; i < m_vars.size(); ++i)
 		{
 			const TweakVar& var = m_vars[i];
-			if (var.flags == ETweakFlags::None)
+			if (!anyFlag(var.flags, ETweakFlags::Saved | ETweakFlags::Synced))
 				continue;
 			const Value current = readValue(var);
 			if (current == m_snapshots[i])
@@ -400,6 +667,60 @@ private:
 	};
 
 	static oc::string keyOf(const TweakVar& var) { return oc::string(var.category) + "/" + oc::string(var.name); }
+	static constexpr const char* c_lockPrefix = "@lock/";
+	static oc::string lockKey(const TweakLock& lock) { return c_lockPrefix + lock.name; }
+
+	// Row i's lock, after a registration or a new lock: a row that changes lock takes that section's state; a row
+	// override (@lock/<Category/Name>) wins.
+	void assignLock(size_t i)
+	{
+		const uint32 lock = findLockFor(m_vars[i]);
+		if (lock != m_varLocks[i])
+		{
+			m_varLocks[i] = lock;
+			m_varLocked[i] = lock != c_noLock && m_locks[lock].locked ? 1 : 0;
+		}
+		if (lock == c_noLock || m_overrides.empty())
+			return;
+		const auto overridden = m_overrides.find(c_lockPrefix + keyOf(m_vars[i]));
+		if (overridden != m_overrides.end() && !overridden->second.empty())
+			m_varLocked[i] = overridden->second[0] != 0.0f ? 1 : 0;
+	}
+
+	// The bytes a row's variable spans (Color3's intensity is checked apart).
+	static size_t dataSize(const TweakVar& var)
+	{
+		switch (var.type)
+		{
+		case ETweakType::Bool: return sizeof(bool);
+		case ETweakType::Int:
+		case ETweakType::Enum: return sizeof(int);
+		case ETweakType::Color3: return 3 * sizeof(float);
+		default: return size_t(componentCount(var)) * sizeof(float);
+		}
+	}
+
+	// The NEAREST lock category on the var's path (the longest one that is its category or a parent of it).
+	uint32 findLockFor(const TweakVar& var) const
+	{
+		if (anyFlag(var.flags, ETweakFlags::Runtime))
+			return c_noLock;
+		uint32 best = c_noLock;
+		size_t bestLength = 0;
+		for (uint32 id = 0; id < (uint32)m_locks.size(); ++id)
+			for (const oc::string& c : m_locks[id].categories)
+			{
+				const oc::string_view category(c.data(), c.size());
+				const bool covers = var.category == category
+					|| (var.category.size() > category.size() && oc::startsWith(var.category, category) && var.category[category.size()] == '/');
+				if (covers && category.size() > bestLength)
+				{
+					best = id;
+					bestLength = category.size();
+				}
+			}
+		return best;
+	}
 
 	static int componentCount(const TweakVar& var)
 	{
@@ -476,8 +797,8 @@ private:
 			std::memcpy(var.data, value.v, size_t(glm::min(value.count, componentCount(var))) * sizeof(float));
 			break;
 		}
-		if (var.onChange && !(readValue(var) == before))
-			var.onChange();
+		if (!(readValue(var) == before))
+			get().notifyChanged(var);
 	}
 
 	bool applySavedValue(TweakVar& var)
@@ -516,6 +837,8 @@ private:
 				const Value value = readValue(var);
 				m_savedValues[keyOf(var)].assign(value.v, value.v + value.count);
 			}
+		for (auto it = m_savedValues.begin(); it != m_savedValues.end();) // locks are not saved (an older file may still hold their state)
+			it = oc::startsWith(oc::string_view(it->first.data(), it->first.size()), c_lockPrefix) ? m_savedValues.erase(it) : oc::next(it);
 		if (!m_writeFile)
 			return; // no IO hook installed (headless tooling): Saved is inert
 		std::ostringstream file;
@@ -537,6 +860,15 @@ private:
 
 	oc::vector<TweakVar> m_vars;
 	oc::vector<Value> m_snapshots; // parallel to m_vars - last value seen by update()
+	oc::vector<uint32> m_varLocks;  // parallel to m_vars - the nearest lock above each (c_noLock = none)
+	oc::vector<uint8> m_varLocked;  // parallel to m_vars - the row's own lock state (meaningful under a lock)
+	oc::vector<TweakLock> m_locks;
+	struct ChangeListener
+	{
+		const void* owner;
+		oc::function<void(const TweakVar&)> fn;
+	};
+	oc::vector<ChangeListener> m_changeListeners;
 	oc::map<oc::string, oc::vector<float>> m_savedValues; // the file image, unknown keys preserved
 	oc::map<oc::string, oc::vector<float>> m_overrides;   // --tweak command-line overrides: win over the file, never saved
 	ETweakFlags m_defaultFlags = ETweakFlags::None;
@@ -646,5 +978,31 @@ export namespace Tweak
 		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
+	}
+
+	// A lock over whole sections (see TweakLock); returns its id for TweakRegistry::setLocked / lockState.
+	inline uint32 lock(oc::string_view name, oc::span<const oc::string_view> categories, bool lockedByDefault, oc::function<void()> onChange = {})
+	{
+		return TweakRegistry::get().registerLock(name, categories, lockedByDefault, oc::move(onChange));
+	}
+
+	// A system's reaction to `variable` changing (a registered tweak's variable, e.g. Globals::settings.grass.bladesPerPatch).
+	// Main thread, after the change. The owner must call removeListeners(owner) before it dies (a member capture).
+	template<typename T>
+	void onChange(const T& variable, const void* owner, oc::function<void()> fn)
+	{
+		[[maybe_unused]] const bool found = TweakRegistry::get().addListener(&variable, owner, oc::move(fn));
+		assert(found && "Tweak::onChange: no tweak registered on this variable (Settings::registerAll ran first?)");
+	}
+
+	inline void removeListeners(const void* owner) { TweakRegistry::get().removeListeners(owner); }
+
+	// Code wrote a setting (a game preset, a stat): the same change path as a panel edit (TweakRegistry::notifyChanged).
+	// Main thread. A variable no row holds is ignored.
+	template<typename T>
+	void notifyChanged(const T& variable)
+	{
+		if (const TweakVar* var = TweakRegistry::get().findVar(&variable))
+			TweakRegistry::get().notifyChanged(*var);
 	}
 }

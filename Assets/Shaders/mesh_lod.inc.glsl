@@ -5,7 +5,7 @@
 // RendererVKLayout::GpuMeshLodGroup and the selection policy the CPU's selectMeshLods used:
 // screen-space error when the chain carries per-level simplify errors, projected-diameter
 // fallback otherwise. The instance's stored meshIdx is always level 0; the cull redirects.
-// u_lodParams0/1 come from ubo.inc.glsl.
+// u_lod and u_mipPixelScale come from ubo.inc.glsl.
 
 struct MeshLodGroup
 {
@@ -42,12 +42,12 @@ int lodPickByError(MeshLodGroup group, float errScale, float threshold)
 int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceScale,
                    float errorThreshold, float passBias, int lastLevel)
 {
-    const float forceLod = u_lodParams1.x;
+    const float forceLod = u_lod_forceLod;
     if (forceLod >= 0.0)
         return min(int(forceLod), int(group.numLods) - 1);
 
-    const float pixelsPerUnit = u_lodParams0.w / max(dist, 0.01);
-    const float hysteresis = u_lodParams0.y;
+    const float pixelsPerUnit = u_mipPixelScale / max(dist, 0.01);
+    const float hysteresis = u_lod_hysteresis;
     int level;
     if (group.errors1_4.x > 0.0)
     {
@@ -65,7 +65,7 @@ int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceS
         // No per-level error data (authored LodN_ chains): projected-size metric - each halving of
         // the on-screen diameter below fullResPixels drops one level (density ~ area).
         const float projPixels = max(1.0, radius * pixelsPerUnit);
-        const float lodF = log2(max(1.0, u_lodParams0.z / projPixels)) + u_lodParams1.y + passBias;
+        const float lodF = log2(max(1.0, u_lod_fullResPixels / projPixels)) + u_lod_bias + passBias;
         level = int(lodF);
         if (lastLevel >= 0)
         {

@@ -5,10 +5,29 @@ import <queue>;
 import Core;
 import Core.Window;
 
+// The "Time" tweaks. Core sits below the Settings library, so the type is Core's and the instance is
+// Globals::settings.time (Settings registers it; main binds it with bindSettings).
+export struct TimeSettings
+{
+    int   maxFps = 0;            // 0 = uncapped
+    int   inactiveMaxFps = 30;   // 0 = no extra cap when unfocused
+    float busyWaitMs = 2.5f;
+    bool  stableFrameTime = true;
+    bool  paused = false;        // see Time::setPaused: freezes the SIM clock, never the real one
+    float pumpLeadMs = 2.0f;
+};
+
 export class Timer;
 export class Time
 {
 public:
+
+    // The settings it reads from now on (the current pause carries over). Main, once, before the loop.
+    void bindSettings(TimeSettings& settings)
+    {
+        settings.paused = m_settings->paused;
+        m_settings = &settings;
+    }
 
     void update() { update(Clock::now()); }
     // `now` may be an ATTRIBUTED time rather than the wall clock: the frame limiter passes the
@@ -19,13 +38,13 @@ public:
         m_currentTime = now;
         m_deltaSec = std::chrono::duration<double>(m_currentTime - m_lastTime).count();
         m_elapsedSec = std::chrono::duration<double>(m_currentTime - m_startTime).count();
-        if (m_paused)
+        if (m_settings->paused)
             m_pausedSec += m_deltaSec; // real time spent paused: keeps the SIM clock (below) standing still
         m_lastTime = m_currentTime;
         processTimers();
     }
 
-    // FRAME PACING ("Time" tweaks, registerTweaks()). One call
+    // FRAME PACING ("Time" tweaks, TimeSettings). One call
     // at the loop top does the whole frame boundary: the present-queue (fence) wait, the frame-rate
     // limit, the window thread's event-pump kick, and the start of the next frame's clock.
     //  * Limit: waits until the desired end (last frame start + 1/target; target = "Max FPS", or
@@ -56,7 +75,6 @@ public:
     // waitFence(timeoutNs) = the frame-fence wait: true once signaled (or already waited), false on
     // timeout; UINT64_MAX blocks. May be null (no renderer). pumpWindow may be null. vsync = the
     // renderer presents FIFO; displayRefreshHz = the display's reported rate (0 = unknown).
-    void registerTweaks();
     void beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefreshHz, Window* pumpWindow, bool (*waitFence)(uint64 timeoutNs));
     // A frame-rate CEILING on top of the tweaks (0 = none): the target is the lower of the two, so
     // the "Max FPS" settings stay untouched while it holds. main sets it every frame - 60 while a
@@ -75,9 +93,9 @@ public:
     // script events ALSO gate on isPaused() like EEntityFlag_Frozen - a zero delta alone would not
     // stop scripts/components from acting per-call. The flag only flips on the main thread between
     // frames (tweak poll / key handler); workers read it mid-pass, which is race-free by that timing.
-    void setPaused(bool paused) { m_paused = paused; }
-    bool isPaused() const { return m_paused; }
-    double getSimDeltaSec() const { return m_paused ? 0.0 : m_deltaSec; }
+    void setPaused(bool paused) { m_settings->paused = paused; }
+    bool isPaused() const { return m_settings->paused; }
+    double getSimDeltaSec() const { return m_settings->paused ? 0.0 : m_deltaSec; }
     double getSimElapsedSec() const { return m_elapsedSec - m_pausedSec; }
 
 private:
@@ -95,16 +113,11 @@ private:
     Clock::time_point m_currentTime = Clock::now();
     double m_deltaSec = 0.0;
     double m_elapsedSec = 0.0;
-    bool   m_paused = false;   // see setPaused: freezes the SIM clock, never the real one
     double m_pausedSec = 0.0;  // total real seconds spent paused (getSimElapsedSec subtracts it)
 
-    // Frame pacing (see beginFrame)
-    int   m_maxFps = 0;            // 0 = uncapped
-    int   m_inactiveMaxFps = 30;   // 0 = no extra cap when unfocused
+    TimeSettings m_defaultSettings;            // until bindSettings
+    TimeSettings* m_settings = &m_defaultSettings;
     int   m_fpsCeiling = 0;        // see setFpsCeiling: 0 = none; not a tweak, never saved
-    float m_busyWaitMs = 2.5f;
-    bool  m_stableFrameTime = true;
-    float m_pumpLeadMs = 2.0f;
     double m_framePeriodSec = 1.0 / 60.0;    // EMA of RAW frame starts (seed only: converges in ~20 frames) - the snap grid when the display reports no refresh rate
     double m_minFramePeriodSec = 1.0 / 60.0; // decayed running MIN of the raw interval: the uncapped pump predictor targets the EARLIEST unblock
     Clock::time_point m_lastRawFrameStart = Clock::now();

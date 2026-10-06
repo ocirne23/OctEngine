@@ -23,6 +23,9 @@ public:
     // The debug-utils name of a pipeline built from this file: the file name only ("taa.cs.glsl") - no
     // directory, no defines, so the name stays short.
     static oc::string debugName(const oc::string& debugFilePath);
+    // "A B=1 C": the defines that make a variant (the pipeline stats' variant column). Appends to out, skipping
+    // names already in it.
+    static void appendDefineList(oc::string& out, const oc::vector<ShaderDefine>& defines);
 
     vk::ShaderModule getModule() const { return m_shaderModule; }
 

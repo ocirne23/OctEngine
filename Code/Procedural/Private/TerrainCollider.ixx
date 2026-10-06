@@ -5,6 +5,7 @@ import Core.glm;
 
 import Physics;
 import Threading;
+import Settings;
 
 import :TerrainSampler;
 
@@ -35,7 +36,7 @@ export namespace Procedural
 			Globals::jobSystem.wait(m_buildCounter);
 		}
 
-		void initialize(void* terrainUserData); // registers the Tweaks ("Terrain/Collision")
+		void initialize(void* terrainUserData); // attaches the "Terrain/Collision" listeners
 
 		// Per frame, after TerrainStreamer::update. Kicks the update job. maps == nullptr (terrain
 		// disabled, models still loading) clears every collider.
@@ -63,12 +64,7 @@ export namespace Procedural
 			PhysicsMesh mesh;
 		};
 
-		// --- Tweak-backed configuration ("Terrain/Collision") ---
-		bool  m_enabled = true;
-		float m_radius = 96.0f;   // world m around the focus that carries colliders
-		float m_tileSize = 32.0f; // world m per collider tile
-		float m_spacing = 1.0f;   // m between height samples (render LOD0 is chunkSize/lod0Res = 1 m)
-		float m_friction = 0.8f;
+		const TerrainColliderSettings& m_settings = Globals::settings.terrainCollider; // "Terrain/Collision"
 		bool  m_configDirty = false; // geometry-affecting tweak changed: rebuild everything
 		bool  m_inactiveIdle = false; // inactive AND cleared: update() only polls the in-flight build
 

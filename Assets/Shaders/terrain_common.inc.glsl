@@ -50,7 +50,7 @@ TerrainFields terrainFields()
 // ground under it: 0 for the ground itself, the film's height over the relief for the film.
 // Also 0 for the whole frame while the CAMERA is under water: a submerged viewer never sees water mirrored
 // off standing water (the ocean's own underside draws what it mirrors). The camera's side is the particle
-// draw's gate: the live wave height under the camera (the CPU mirror, u_weatherWind2.z), else the calm
+// draw's gate: the live wave height under the camera (the CPU mirror, u_weather_cameraWaterY), else the calm
 // level here, else sea level.
 void terrainWetness(vec3 coverN, TerrainFields fields, float groundBelow, out float16_t wet, out float16_t aboveLive)
 {
@@ -60,9 +60,9 @@ void terrainWetness(vec3 coverN, TerrainFields fields, float groundBelow, out fl
 	g_waterLevelOverride = fields.waterLevel;
 	resolveLiveDepth(in_pos);
 	const float16_t one = float16_t(1.0);
-	const float waterAtCamera = u_weatherWind2.w > 0.5 ? u_weatherWind2.z : fields.waterLevel;
+	const float waterAtCamera = u_weather_cameraWaterValid > 0.5 ? u_weather_cameraWaterY : fields.waterLevel;
 	aboveLive = float16_t(u_viewPos.y < waterAtCamera ? 0.0
-		: 1.0 - smoothstep(0.0, u_terrainWetParams5.x, g_liveDepthBelow + groundBelow));
+		: 1.0 - smoothstep(0.0, u_terrainWater_oceanBlend, g_liveDepthBelow + groundBelow));
 	wet = float16_t(0.0);
 	if (!terrainWetPresent())
 		return;
@@ -72,5 +72,5 @@ void terrainWetness(vec3 coverN, TerrainFields fields, float groundBelow, out fl
 	// the exact mesh normal (the map's 8 m texels cannot see a cliff face), with no extra state.
 	// k = 1 + slope * drain: at drain 4 a 45-degree face dries ~2.2x faster, a wall 5x.
 	const float16_t slope = one - float16_t(clamp(coverN.y, 0.0, 1.0));
-	wet = pow(wet, one + slope * float16_t(u_terrainWetParams3.z));
+	wet = pow(wet, one + slope * float16_t(u_terrainWater_slopeDrain));
 }

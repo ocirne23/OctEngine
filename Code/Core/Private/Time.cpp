@@ -9,29 +9,17 @@ import <queue>;
 import Core;
 import Core.Windows;
 import Core.Window;
-import Core.Tweaks;
 
 static Clock::duration secondsToDuration(double sec)
 {
     return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(sec));
 }
 
-void Time::registerTweaks()
-{
-    Tweak::intVar("Time", "Max FPS", &m_maxFps, 0, 1000, 1.0f, {}, ETweakFlags::Saved);
-    Tweak::intVar("Time", "Inactive max FPS", &m_inactiveMaxFps, 0, 240, 1.0f, {}, ETweakFlags::Saved);
-    Tweak::floatVar("Time", "Busy-wait window (ms)", &m_busyWaitMs, 0.0f, 8.0f, 0.1f, {}, ETweakFlags::Saved);
-    Tweak::boolean("Time", "Stable frame time", &m_stableFrameTime, {}, ETweakFlags::Saved);
-    // Synced, deliberately NOT Saved: the server's pause freezes clients too, but a pause must
-    // never persist into the next run.
-    Tweak::boolean("Time", "Paused", &m_paused, {}, ETweakFlags::Synced);
-    Tweak::floatVar("Time", "Input pump lead (ms)", &m_pumpLeadMs, 0.0f, 8.0f, 0.1f, {}, ETweakFlags::Saved);
-}
-
 void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefreshHz, Window* pumpWindow, bool (*waitFence)(uint64))
 {
+    const TimeSettings& s = *m_settings;
     const Clock::time_point lastFrameStart = m_currentTime;
-    const int tweakFps = windowFocused || m_inactiveMaxFps <= 0 ? m_maxFps : m_inactiveMaxFps;
+    const int tweakFps = windowFocused || s.inactiveMaxFps <= 0 ? s.maxFps : s.inactiveMaxFps;
     // The ceiling (menus) caps whatever the tweaks say; 0 on either side means "no limit from me".
     const int targetFps = vr ? 0
         : m_fpsCeiling <= 0 ? tweakFps
@@ -41,7 +29,7 @@ void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefr
     // The frame starts at whichever comes LAST: the limiter's desired end (capped) or the fence signal. Kick the pump a lead before the earliest of the two we can predict - the desired end is exact, the fence is predicted as raw last start + running MIN interval (FIFO unblocks early on alternate frames)
     const Clock::time_point desiredFrameEnd = capped ? lastFrameStart + secondsToDuration(1.0 / targetFps) : Clock::time_point::max();
     const Clock::time_point predictedFence = m_lastRawFrameStart + secondsToDuration(m_minFramePeriodSec);
-    const Clock::time_point pumpAt = oc::min(desiredFrameEnd, predictedFence) - secondsToDuration(m_pumpLeadMs * 0.001);
+    const Clock::time_point pumpAt = oc::min(desiredFrameEnd, predictedFence) - secondsToDuration(s.pumpLeadMs * 0.001);
     {
         // Sleep/spin to pumpAt OURSELVES, polling the fence (timeout 0): a driver's finite fence timeout may run "substantially longer than requested" (spec) - NVIDIA's ran to the signal and the kick landed at frame start
         ProfileScope scope("Pump kick wait", EProfileCategory::Wait);
@@ -70,7 +58,7 @@ void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefr
     const Clock::time_point signaled = Clock::now();
     Clock::time_point frameStart = signaled;
     const double vsyncPeriod = displayRefreshHz > 0.0f ? 1.0 / double(displayRefreshHz) : m_framePeriodSec;
-    if (m_stableFrameTime && vsync && vsyncPeriod > 0.0)
+    if (s.stableFrameTime && vsync && vsyncPeriod > 0.0)
     {
         const double intervals = std::chrono::duration<double>(signaled - lastFrameStart).count() / vsyncPeriod;
         const double rounded = std::round(intervals);
@@ -113,12 +101,12 @@ void Time::limitFrameRate(int targetFps)
     if (frameEnd < desiredFrameEnd)
     {
         ProfileScope scope("Frame limit", EProfileCategory::Wait);
-        const Clock::duration busyWindow = secondsToDuration(m_busyWaitMs * 0.001);
+        const Clock::duration busyWindow = secondsToDuration(m_settings->busyWaitMs * 0.001);
         while (Clock::now() + busyWindow < desiredFrameEnd)
             Sleep(1);
         while (Clock::now() < desiredFrameEnd)
             _mm_pause();
-        frameEnd = m_stableFrameTime ? desiredFrameEnd : Clock::now();
+        frameEnd = m_settings->stableFrameTime ? desiredFrameEnd : Clock::now();
     }
     update(frameEnd);
     trackRawPeriod();

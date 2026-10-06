@@ -2,8 +2,9 @@ module Procedural;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
 import Core.Transform;
+import Settings;
+import Settings.Tweaks;
 
 import Physics;
 
@@ -22,19 +23,15 @@ namespace Procedural
 		ProfileScope scope("TerrainCollider::initialize", EProfileCategory::Procedural);
 		m_terrainUserData = terrainUserData;
 		const auto dirty = [this]() { m_configDirty = true; };
-		Tweak::boolean("Terrain/Collision", "Enabled", &m_enabled);
-		Tweak::floatVar("Terrain/Collision", "Radius", &m_radius, 16.0f, 512.0f, 1.0f);
-		Tweak::floatVar("Terrain/Collision", "Tile size", &m_tileSize, 8.0f, 128.0f, 1.0f, dirty);
-		// 1 m matches the render LOD0 lattice (chunkSize / lod0Res), so collision == drawn surface.
-		// Coarser trades fidelity for memory; finer buys nothing the render mesh shows.
-		Tweak::floatVar("Terrain/Collision", "Spacing", &m_spacing, 0.25f, 8.0f, 0.05f, dirty);
-		Tweak::floatVar("Terrain/Collision", "Friction", &m_friction, 0.0f, 2.0f, 0.01f, dirty);
+		Tweak::onChange(m_settings.tileSize, this, dirty);
+		Tweak::onChange(m_settings.spacing, this, dirty);
+		Tweak::onChange(m_settings.friction, this, dirty);
 	}
 
 	void TerrainCollider::update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
 	{
 		joinUpdate(); // normally a no-op: main joins it before the post-update kick every frame
-		const bool active = m_enabled && maps != nullptr && Globals::physics.isInitialized();
+		const bool active = m_settings.enabled && maps != nullptr && Globals::physics.isInitialized();
 		if (!active)
 		{
 			// Inactive (disabled / terrain off): no profile scope. Clear once on the transition, then
@@ -59,10 +56,10 @@ namespace Procedural
 
 		m_jobMaps = oc::move(maps);
 		m_jobFocus = glm::vec2(focusPos.x, focusPos.z);
-		m_jobTileSize = glm::clamp(m_tileSize, 8.0f, 128.0f);
-		m_jobRadius = glm::max(m_radius, m_jobTileSize);
-		m_jobSpacing = glm::clamp(m_spacing, 0.25f, m_jobTileSize);
-		m_jobFriction = m_friction;
+		m_jobTileSize = glm::clamp(m_settings.tileSize, 8.0f, 128.0f);
+		m_jobRadius = glm::max(m_settings.radius, m_jobTileSize);
+		m_jobSpacing = glm::clamp(m_settings.spacing, 0.25f, m_jobTileSize);
+		m_jobFriction = m_settings.friction;
 		Globals::jobSystem.submit([this]() { runUpdate(); },
 			{ "Terrain collider", EProfileCategory::Procedural }, EJobPriority::Normal, &m_updateCounter);
 	}

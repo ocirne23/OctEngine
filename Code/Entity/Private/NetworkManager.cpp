@@ -3,7 +3,8 @@ module Entity;
 import Core;
 import Core.Log;
 import Core.glm;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 import Network;
 import Physics;
 import Spatial;
@@ -56,12 +57,15 @@ constexpr uint8 ChannelEvent = 1;
 constexpr uint8 ChannelSession = 2;
 constexpr uint8 ChannelClaim = 3;
 
-// ---- tweaks (server send policy; correction thresholds live in NetSyncParams) ------------------
-static float s_snapshotHz = 20.0f;       // matches the physics fixed step
-static bool  s_quantize = true;
+// ---- settings (Globals::settings.network: server send policy; correction thresholds live in NetSyncParams) --
+// Bound under their file-local names: references, so every use reads the live value.
+static float& s_snapshotHz = Globals::settings.network.snapshotHz;       // matches the physics fixed step
+static bool&  s_quantize = Globals::settings.network.quantize;
 // Snapshots are UNRELIABLE, so an oversized one is DROPPED, not fragmented - this must stay under
-// the transport's single-packet budget, which is why the cap is derived rather than written down.
-static int   s_snapshotMaxBytes = int(netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true)) - 64;
+// the transport's single-packet budget, which is why the default must equal the derived cap.
+static int&   s_snapshotMaxBytes = Globals::settings.network.snapshotMaxBytes;
+static_assert(NetworkSettings{}.snapshotMaxBytes == int(netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true)) - 64,
+    "the Network/Snapshot max bytes default no longer matches the transport's single-packet budget");
 // SNAPSHOT POLICY (per PEER - see sendSnapshotTick). An entity is due for a peer when it CHANGED
 // since that peer last received it (awake body, sleep edge, moved transform, flag or game-blob
 // change), thinned by the cadence of its distance TIER to that peer's own player: NEAR (< "Near
@@ -72,27 +76,27 @@ static int   s_snapshotMaxBytes = int(netMaxSinglePacketMessage(NetHostConfig{}.
 // an entity is re-sent unchanged on its tier's rotation, slowest for a SLEEPING body (nothing
 // moves it, so a lost sleep-edge record is the only thing to repair). A peer without a player
 // yet (joining) sees everything as far. Budget per peer per tick, near first, far capped.
-static int   s_maxEntitiesPerTick = 300;
-static int   s_keyframeEveryTicks = 20;
-static float s_nearRadius = 40.0f;
-static float s_midRadius = 100.0f;
-static int   s_midEveryTicks = 2;
-static int   s_farEveryTicks = 4;
-static int   s_farKeyframeEveryTicks = 200;
-static int   s_asleepKeyframeEveryTicks = 100;
-static int   s_farMaxPerTick = 100;
+static int&   s_maxEntitiesPerTick = Globals::settings.network.maxEntitiesPerTick;
+static int&   s_keyframeEveryTicks = Globals::settings.network.keyframeEveryTicks;
+static float& s_nearRadius = Globals::settings.network.nearRadius;
+static float& s_midRadius = Globals::settings.network.midRadius;
+static int&   s_midEveryTicks = Globals::settings.network.midEveryTicks;
+static int&   s_farEveryTicks = Globals::settings.network.farEveryTicks;
+static int&   s_farKeyframeEveryTicks = Globals::settings.network.farKeyframeEveryTicks;
+static int&   s_asleepKeyframeEveryTicks = Globals::settings.network.asleepKeyframeEveryTicks;
+static int&   s_farMaxPerTick = Globals::settings.network.farMaxPerTick;
 // SPAWN STREAM flow control (server, per ready peer, per frame): records drained while the peer's
 // session channel holds fewer than "Queue target" reliable messages, at most "Records per frame".
 // The transport disconnects a peer past maxQueuedReliablePerChannel (1024) - the target keeps a
 // bulk stream far below that, and the per-frame cap bounds the receiving client's spawn work
 // (a replicated spawn is a real prefab instantiation on its main thread).
-static int   s_spawnRecordsPerFrame = 128;
-static int   s_spawnQueueTarget = 64;
-static float s_sendPosEpsilon = 0.001f;
-static float s_sendRotEpsilonDeg = 0.1f;
-static float s_maxVel = 50.0f;    // velocity quantization range (m/s); sent per message so both ends agree
-static float s_maxAngVel = 50.0f; // angular velocity quantization range (rad/s)
-static bool  s_showStats = true;
+static int&   s_spawnRecordsPerFrame = Globals::settings.network.spawnRecordsPerFrame;
+static int&   s_spawnQueueTarget = Globals::settings.network.spawnQueueTarget;
+static float& s_sendPosEpsilon = Globals::settings.network.sendPosEpsilon;
+static float& s_sendRotEpsilonDeg = Globals::settings.network.sendRotEpsilonDeg;
+static float& s_maxVel = Globals::settings.network.maxVel;       // velocity quantization range (m/s); sent per message so both ends agree
+static float& s_maxAngVel = Globals::settings.network.maxAngVel; // angular velocity quantization range (rad/s)
+static bool&  s_showStats = Globals::settings.network.showStats;
 // ECDH handshake + AES-128-GCM on every payload packet. Not a tweak: the transport reads it at
 // open() and it cannot change on a live host, and both ends must agree or the handshake denies.
 // Without it a peer is identified only by source address, so anyone able to forge one (trivial on a
@@ -102,34 +106,34 @@ static bool  s_encrypt = true;
 // Thinning limit, not a clock: claims fire on physics step boundaries (see send()), so this only
 // caps them lower and above the step rate never binds. The two ends need not agree - the
 // displacement budget is wall-clock, so an inflated rate buys nothing.
-static float s_maxUpdateHz = 20.0f;
-static float s_maxClaimSpeed = 60.0f;     // m/s the movement token bucket refills at (cap = half a second
+static float& s_maxUpdateHz = Globals::settings.network.maxUpdateHz;
+static float& s_maxClaimSpeed = Globals::settings.network.maxClaimSpeed; // m/s the movement token bucket refills at (cap = half a second
                                           // of it); must exceed the fastest LEGITIMATE motion, free fall included
 // How hard the server's twin chases an accepted claim (1/sec - 1/step closes the gap in one step).
 // It follows through the solver rather than being teleported onto the claim; see handleClaimMessage.
-static float s_twinFollowGain = 10.0f;
-static float s_twinResyncDistance = 2.0f; // past this the follow can't close it: hard teleport
-static float s_maxClaimVelocity = 50.0f;  // cap on the claimed linear velocity magnitude
-static float s_maxClaimAngVel = 50.0f;    // ...and angular (rad/s); both applied on every accept path
-static float s_claimTeleportCap = 10.0f;  // hard displacement cap regardless of elapsed time
-static bool  s_claimPathRaycast = true;   // reject claims whose path crosses world geometry
-static int   s_forcedTicks = 30;          // snapshot ticks the owner stays force-corrected after a rejection
-static float s_claimReanchorRadius = 2.0f; // a claim this close to the twin's CURRENT state always accepts (guaranteed rejection recovery)
-static int   s_claimRedundancy = 4;       // past claims carried in EVERY packet (<= ring capacity 8): a claim survives unless this many consecutive packets drop
+static float& s_twinFollowGain = Globals::settings.network.twinFollowGain;
+static float& s_twinResyncDistance = Globals::settings.network.twinResyncDistance; // past this the follow can't close it: hard teleport
+static float& s_maxClaimVelocity = Globals::settings.network.maxClaimVelocity;     // cap on the claimed linear velocity magnitude
+static float& s_maxClaimAngVel = Globals::settings.network.maxClaimAngVel;         // ...and angular (rad/s); both applied on every accept path
+static float& s_claimTeleportCap = Globals::settings.network.claimTeleportCap;     // hard displacement cap regardless of elapsed time
+static bool&  s_claimPathRaycast = Globals::settings.network.claimPathRaycast;     // reject claims whose path crosses world geometry
+static int&   s_forcedTicks = Globals::settings.network.forcedTicks;               // snapshot ticks the owner stays force-corrected after a rejection
+static float& s_claimReanchorRadius = Globals::settings.network.claimReanchorRadius; // a claim this close to the twin's CURRENT state always accepts (guaranteed rejection recovery)
+static int&   s_claimRedundancy = Globals::settings.network.claimRedundancy;       // past claims carried in EVERY packet (<= ring capacity 8): a claim survives unless this many consecutive packets drop
 // Claim passthrough: re-emit an accepted claim extrapolated this far forward along its velocity,
 // cancelling the hold until the next snapshot tick. Must stay CONSTANT - a varying, arrival-phase
 // dependent shift is what makes remote motion pulse. Higher = prediction, and overshoot on turns.
-static float s_ownerPredictTicks = 0.5f;
+static float& s_ownerPredictTicks = Globals::settings.network.ownerPredictTicks;
 
 // proximity ownership transfer (server): a server-owned dynamic body near a client's PRIMARY owned
 // body transfers to that client (its physics then drives the object, claims-validated); it reverts
 // once outside the release radius for the delay. Release > transfer = hysteresis, no flapping.
-static bool  s_transferEnabled = true;
-static float s_transferRadius = 2.5f;
-static float s_releaseRadius = 4.0f;
-static float s_releaseDelaySec = 1.0f;
-static float s_arbitrateSec = 1.0f;  // player-vs-player contact: how long both primaries stay server-arbitrated (refreshed per contact)
-static float s_contestSec = 1.5f;    // object touched by two DISTINCT clients within this window = contested -> server-owned until it decays
+static bool&  s_transferEnabled = Globals::settings.network.transferEnabled;
+static float& s_transferRadius = Globals::settings.network.transferRadius;
+static float& s_releaseRadius = Globals::settings.network.releaseRadius;
+static float& s_releaseDelaySec = Globals::settings.network.releaseDelaySec;
+static float& s_arbitrateSec = Globals::settings.network.arbitrateSec; // player-vs-player contact: how long both primaries stay server-arbitrated (refreshed per contact)
+static float& s_contestSec = Globals::settings.network.contestSec;     // object touched by two DISTINCT clients within this window = contested -> server-owned until it decays
 
 // Every wire float passes this before reaching physics or a transform: NaN defeats the plausibility
 // gate silently, since every comparison against it is false ("not greater than the cap").
@@ -215,80 +219,26 @@ static const char* disconnectReasonName(ENetDisconnectReason reason)
 
 void NetworkManager::initialize()
 {
-    static bool s_registered = false;
-    if (s_registered)
+    if (m_initialized)
         return;
     ProfileScope scope("NetworkManager::initialize", EProfileCategory::Network);
-    s_registered = true;
+    m_initialized = true;
 
-    Tweak::floatVar("Network", "Snapshot Hz", &s_snapshotHz, 1.0f, 60.0f, 0.5f);
-    Tweak::boolean("Network", "Quantize", &s_quantize);
-    Tweak::intVar("Network", "Snapshot max bytes", &s_snapshotMaxBytes, 128, 1400);
-    Tweak::intVar("Network", "Max entities per tick", &s_maxEntitiesPerTick, 1, 4096);
-    Tweak::intVar("Network", "Keyframe every ticks", &s_keyframeEveryTicks, 1, 255);
-    Tweak::floatVar("Network/Relevance", "Near radius", &s_nearRadius, 0.0f, 1000.0f, 5.0f);
-    Tweak::floatVar("Network/Relevance", "Mid radius", &s_midRadius, 0.0f, 1000.0f, 5.0f);
-    Tweak::intVar("Network/Relevance", "Mid every ticks", &s_midEveryTicks, 1, 60);
-    Tweak::intVar("Network/Relevance", "Far every ticks", &s_farEveryTicks, 1, 60);
-    Tweak::intVar("Network/Relevance", "Far keyframe every ticks", &s_farKeyframeEveryTicks, 1, 4000);
-    Tweak::intVar("Network/Relevance", "Asleep keyframe every ticks", &s_asleepKeyframeEveryTicks, 1, 4000);
-    Tweak::intVar("Network/Relevance", "Far max per tick", &s_farMaxPerTick, 0, 4096);
-    Tweak::intVar("Network/Spawn stream", "Records per frame", &s_spawnRecordsPerFrame, 1, 4096);
-    Tweak::intVar("Network/Spawn stream", "Queue target", &s_spawnQueueTarget, 1, 512);
-    Tweak::floatVar("Network", "Send pos epsilon", &s_sendPosEpsilon, 0.0f, 0.1f, 0.0005f);
-    Tweak::floatVar("Network", "Send rot epsilon (deg)", &s_sendRotEpsilonDeg, 0.0f, 10.0f, 0.01f);
-    Tweak::floatVar("Network", "Max vel (quantize m/s)", &s_maxVel, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Network", "Max ang vel (quantize rad/s)", &s_maxAngVel, 1.0f, 200.0f, 1.0f);
-    Tweak::boolean("Network", "Show stats", &s_showStats);
+    // live-editable transport link simulation (outgoing packets): the host keeps its own copy, which open() resets
+    const NetworkSettings& settings = Globals::settings.network;
+    Tweak::onChange(settings.simPacketLoss, this, [this] { applyLinkSim(); });
+    Tweak::onChange(settings.simLatencyMs, this, [this] { applyLinkSim(); });
+    Tweak::onChange(settings.simJitterMs, this, [this] { applyLinkSim(); });
+    applyLinkSim();
+}
 
-    Tweak::floatVar("Network/Correction", "Pos deadzone", &m_params.posDeadzone, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Network/Correction", "Pos snap threshold", &m_params.posSnapThreshold, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Network/Correction", "Rot deadzone (deg)", &m_params.rotDeadzoneDeg, 0.0f, 30.0f, 0.1f);
-    Tweak::floatVar("Network/Correction", "Rot snap threshold (deg)", &m_params.rotSnapThresholdDeg, 0.0f, 180.0f, 0.5f);
-    Tweak::floatVar("Network/Correction", "Blend rate", &m_params.blendRate, 0.0f, 30.0f, 0.1f);
-    Tweak::boolean("Network/Correction", "Extrapolate", &m_params.extrapolate);
-    Tweak::intVar("Network/Correction", "Remote interp (ticks)", &m_params.remoteInterpTicks, 2, 8);
-    Tweak::floatVar("Network/Correction", "Interaction radius", &m_params.interactionRadius, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Network/Correction", "Interaction linger", &m_params.interactionLinger, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Network/Correction", "Push pos gain", &m_params.pushPosGain, 0.0f, 30.0f, 0.1f);
-    Tweak::floatVar("Network/Correction", "Push rot gain", &m_params.pushRotGain, 0.0f, 30.0f, 0.1f);
-    Tweak::floatVar("Network/Correction", "Push max vel", &m_params.pushMaxVel, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Network/Correction", "Push max ang vel", &m_params.pushMaxAngVel, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Network/Correction", "Push accel limit", &m_params.pushMaxAccel, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Network/Correction", "Push ang accel limit", &m_params.pushMaxAngAccel, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Network/Correction", "Push catch-up boost", &m_params.pushCatchUpBoost, 1.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Network/Correction", "Push mass reference (kg)", &m_params.pushMassReference, 0.1f, 1000.0f, 1.0f);
-    Tweak::floatVar("Network/Correction", "Push mass scale min", &m_params.pushMassScaleMin, 0.01f, 1.0f, 0.01f);
-    Tweak::floatVar("Network/Correction", "Arbitrate deadzone", &m_params.arbitrateDeadzone, 0.0f, 3.0f, 0.02f);
-    Tweak::floatVar("Network/Correction", "Pos teleport threshold", &m_params.posTeleportThreshold, 0.0f, 100.0f, 0.5f);
-
-    Tweak::boolean("Network/Ownership", "Transfer enabled", &s_transferEnabled);
-    Tweak::floatVar("Network/Ownership", "Transfer radius", &s_transferRadius, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Network/Ownership", "Release radius", &s_releaseRadius, 0.0f, 40.0f, 0.1f);
-    Tweak::floatVar("Network/Ownership", "Release delay", &s_releaseDelaySec, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Network/Ownership", "Arbitrate window", &s_arbitrateSec, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Network/Ownership", "Contest window", &s_contestSec, 0.0f, 5.0f, 0.05f);
-
-    Tweak::floatVar("Network/Player", "Max update Hz", &s_maxUpdateHz, 1.0f, 120.0f, 0.5f);
-    Tweak::floatVar("Network/Validation", "Max speed", &s_maxClaimSpeed, 0.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Network", "Twin follow gain", &s_twinFollowGain, 0.0f, 40.0f, 0.5f);
-    Tweak::floatVar("Network", "Twin resync (m)", &s_twinResyncDistance, 0.1f, 20.0f, 0.1f);
-    Tweak::floatVar("Network/Validation", "Max velocity", &s_maxClaimVelocity, 0.0f, 500.0f, 0.5f);
-    Tweak::floatVar("Network/Validation", "Max ang velocity", &s_maxClaimAngVel, 0.0f, 500.0f, 0.5f);
-    Tweak::floatVar("Network/Validation", "Teleport cap", &s_claimTeleportCap, 0.0f, 100.0f, 0.5f);
-    Tweak::boolean("Network/Validation", "Path raycast", &s_claimPathRaycast);
-    Tweak::intVar("Network/Validation", "Forced ticks", &s_forcedTicks, 1, 255);
-    Tweak::floatVar("Network/Validation", "Re-anchor radius", &s_claimReanchorRadius, 0.1f, 10.0f, 0.1f);
-    // NOT validation: redundancy is the owning CLIENT's send-side loss margin, and claim lead is a
-    // SERVER emit-side timeline shift. Same miscategorisation "Claim rate Hz" had before it moved.
-    Tweak::intVar("Network/Player", "Claim redundancy", &s_claimRedundancy, 1, 8);
-    Tweak::floatVar("Network", "Owner predict (ticks)", &s_ownerPredictTicks, 0.0f, 2.0f, 0.05f);
-
-    // live-editable transport link simulation (outgoing packets)
+void NetworkManager::applyLinkSim()
+{
+    const NetworkSettings& settings = Globals::settings.network;
     NetHostConfig& config = m_host.config();
-    Tweak::floatVar("Network/Link sim", "Packet loss", &config.simPacketLoss, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Network/Link sim", "Latency (ms)", &config.simLatencyMs, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Network/Link sim", "Jitter (ms)", &config.simJitterMs, 0.0f, 500.0f, 1.0f);
+    config.simPacketLoss = settings.simPacketLoss;
+    config.simLatencyMs = settings.simLatencyMs;
+    config.simJitterMs = settings.simJitterMs;
 }
 
 void NetworkManager::setEncryption(bool enabled)
@@ -308,6 +258,7 @@ bool NetworkManager::startServer(uint16 port)
         Log::error("Network: failed to open server port " + oc::to_string(port));
         return false;
     }
+    applyLinkSim();
     m_role = ENetRole::Server;
     Log::info("Network: SERVER listening on port " + oc::to_string(m_host.getLocalPort())
         + (s_encrypt ? " (encrypted)" : " (UNENCRYPTED)"));
@@ -347,6 +298,7 @@ bool NetworkManager::startClient(const oc::string& address, uint16 defaultPort)
         Log::error("Network: failed to open client socket");
         return false;
     }
+    applyLinkSim();
     m_serverAddress = addr; // kept for auto-reconnect
     m_serverPeer = m_host.connect(addr);
     m_role = ENetRole::Client;
@@ -1235,7 +1187,7 @@ void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uin
 
 void NetworkManager::setOwnershipTransfers(bool enabled)
 {
-    s_transferEnabled = enabled; // writes through the tweak's live variable - the panel shows it
+    s_transferEnabled = enabled; // writes the setting - the panel shows it
 }
 
 void NetworkManager::setServerPrimary(Entity& entity, bool primary)

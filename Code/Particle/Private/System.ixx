@@ -3,6 +3,7 @@ export module Particle:System;
 import Core;
 import Core.glm;
 import RendererVK;
+import Settings;
 import :Effect;
 
 // Runtime particle/decal manager (Globals::particleSystem). Owns effect instances (each holding one
@@ -56,7 +57,7 @@ public:
         m_oceanSprayEffect.m_id = 0;
     }
 
-    void initialize();
+    void initialize() {}
     // Advances rate accumulators/bursts into renderer spawn requests, re-uploads emitter GPU state,
     // ages + submits decals. Call once per frame from the main loop, after world.update.
     void update(Renderer& renderer, float deltaSec);
@@ -130,33 +131,22 @@ private:
     uint32 m_rngState = 0x12345678;
 
     // The BUILT-IN ambient effects, each one camera-following volume .pfx instance created/destroyed in
-    // update() by its "Particles/<Name>" toggle, with "<Name> count / size / alpha" multiplier tweaks
+    // update() by its "Particles/<Name>" toggle, with the "<Name> count / size / alpha" multipliers
     // applied on top of the .pfx (the emitter table is re-uploaded per frame, so they are live).
     struct BuiltinEffect
     {
-        // The registry keeps VIEWS of tweak names, so every name is a literal here (never a built string).
-        const char* name;
-        const char* countName;
-        const char* sizeName;
-        const char* alphaName;
-        const char* sizeVarName;
+        const ParticleBuiltinSettings& settings; // Globals::settings.particleSystem
         const char* path;
-        bool enabled;
-        float countScale = 1.0f; // fill count + rate
-        float sizeScale = 1.0f;
-        float alphaScale = 1.0f;
-        float sizeVarScale = 1.0f; // multiplier on the .pfx SizeVariance (the product clamps to 1)
         ParticleEffect effect;
     };
     BuiltinEffect m_builtins[4] = {
-        { "Rain", "Rain count", "Rain size", "Rain alpha", "Rain size variation", "Effects/rain.pfx", false, 1.0f, 1.0f, 0.5f },
-        { "Snow", "Snow count", "Snow size", "Snow alpha", "Snow size variation", "Effects/snow.pfx", false, 1.0f, 1.0f, 0.5f },
-        { "Dust", "Dust count", "Dust size", "Dust alpha", "Dust size variation", "Effects/dust.pfx", true, 1.0f, 0.5f, 0.2f, 2.0f },
-        { "Underwater", "Underwater count", "Underwater size", "Underwater alpha", "Underwater size variation", "Effects/underwater.pfx", true, 2.0f, 1.0f, 0.05f },
+        { Globals::settings.particleSystem.rain, "Effects/rain.pfx" },
+        { Globals::settings.particleSystem.snow, "Effects/snow.pfx" },
+        { Globals::settings.particleSystem.dust, "Effects/dust.pfx" },
+        { Globals::settings.particleSystem.underwater, "Effects/underwater.pfx" },
     };
     // "Particles/Ocean spray": one Effects/ocean_spray.pfx instance (no CPU spawns) whose emitter slot the
     // renderer's ocean spray producer spawns into over the particle GPU spawn path.
-    bool m_oceanSpray = true;
     ParticleEffect m_oceanSprayEffect;
 };
 

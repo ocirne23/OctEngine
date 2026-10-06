@@ -86,7 +86,7 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
 float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
 {
     temperature = 12.5;
-    if (u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0 || !terrainHeightMapPresent())
+    if (u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0 || !terrainHeightMapPresent())
         return 0.0;
     const vec4 td = terrainDataAt(xz);
     const vec4 climate = terrainClimateAt(xz);
@@ -106,7 +106,7 @@ void main()
 
     // Range, horizontally first (no fetches): the nearest point of the patch's square.
     const vec2 nearestXZ = clamp(u_viewPos.xz, origin, origin + P);
-    const float range = u_grassParams0.z;
+    const float range = u_grass_range;
     if (distance(nearestXZ, u_viewPos.xz) > range)
         return;
 
@@ -135,9 +135,9 @@ void main()
 
     // Bounds: the ground between the corners can rise above them (a finer mesh than the patch), the blades stand
     // on it and lean with the wind by up to their height.
-    const float bladeH = u_grassParams1.x + u_grassParams1.w;
+    const float bladeH = u_grass_bladeHeight + u_grass_rootSink;
     const float slack = 0.5 * P + bladeH;
-    const vec3 boxMin = vec3(origin.x - bladeH, hMin - u_grassParams1.w - 1.0, origin.y - bladeH);
+    const vec3 boxMin = vec3(origin.x - bladeH, hMin - u_grass_rootSink - 1.0, origin.y - bladeH);
     const vec3 boxMax = vec3(origin.x + P + bladeH, hMax + slack, origin.y + P + bladeH);
     const vec3 sphereCentre = 0.5 * (boxMin + boxMax);
     const float sphereRadius = 0.5 * length(boxMax - boxMin);
@@ -151,18 +151,18 @@ void main()
     const vec3 nearest = clamp(u_viewPos, vec3(origin.x, boxMin.y, origin.y), vec3(origin.x + P, hMax + bladeH, origin.y + P));
     const float dist = distance(nearest, u_viewPos);
     // THE NEAR GRASS CASCADE's casters, in view or not (a blade just off screen still casts): within half size x 1.5 +
-    // 2 m of its box's centre (u_grassParams14.yz - ahead of the camera; as grass.vs.glsl's near caster).
-    const vec2 nearCentre = u_grassParams14.yz;
-    const bool nearCaster = u_grassParams13.y > 0.0
-        && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grassParams13.y * 1.5 + 2.0;
+    // 2 m of its box's centre (u_grassLive_nearCentre - ahead of the camera; as grass.vs.glsl's near caster).
+    const vec2 nearCentre = u_grassLive_nearCentre;
+    const bool nearCaster = u_grassLive_nearRange > 0.0
+        && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grassLive_nearRange * 1.5 + 2.0;
     if (!visible && !nearCaster)
         return;
     const float keep = grassKeep(dist);
-    const uint N = uint(u_grassParams0.x);
+    const uint N = uint(u_grass_bladesPerPatch);
     const uint blades = min(N, uint(ceil(maxDensity * keep * float(N))));
     if (blades == 0u)
         return;
-    const uint lod = dist < u_grassParams3.x ? 0u : dist < u_grassParams3.y ? 1u : dist < u_grassParams10.x ? 2u : 3u;
+    const uint lod = dist < u_grass_lod1Distance ? 0u : dist < u_grass_lod2Distance ? 1u : dist < u_grass_lod3Distance ? 2u : 3u;
 
     const uint slot = atomicAdd(out_counts[2], 1u);
     if (slot >= GRASS_MAX_PATCHES)

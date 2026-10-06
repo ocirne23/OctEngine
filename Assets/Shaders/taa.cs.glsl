@@ -33,14 +33,9 @@ layout (push_constant) uniform PC
 {
     uint  width;
     uint  height;
-    float feedback;  // history weight in [0,1]; 0 disables temporal accumulation
     uint  viewIndex; // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
-    float oceanFeedback; // history weight cap on ocean pixels - see the ocean block below
-    uint  mbEnabled;     // 1 = write the motion blur velocity + sub-tiles
-    float mbShutter;
-    float mbMaxRadius;
-    float mbCameraScale;
-} pc;
+    uint  mbEnabled; // 1 = write the motion blur velocity + sub-tiles
+} pc; // the feedbacks and the blur's tweaks: u_post
 
 #define MOTION_BLUR_REDUCE u_mbSubTileOut
 #include "motion_blur.inc.glsl"
@@ -64,7 +59,7 @@ void main()
         if (inImage)
         {
             vel = motionBlurVelocity(px, vec2(pc.width, pc.height), texelFetch(u_sceneDepth, px, 0).r,
-                texelFetch(u_motion, px, 0), pc.mbShutter, pc.mbMaxRadius, pc.mbCameraScale);
+                texelFetch(u_motion, px, 0), u_post_mbShutter, u_post_mbMaxRadius, u_post_mbCameraScale);
             imageStore(u_mbVelocityOut, px, vec4(vel, 0.0, 0.0));
         }
         motionBlurReduceTile(vel);
@@ -79,7 +74,7 @@ void main()
     const vec3 current = currentRgba.rgb;
 
     // Pixels outside the editor viewport panel carry no reliable motion; pass straight through.
-    if (!insideViewport(uv) || pc.feedback <= 0.0)
+    if (!insideViewport(uv) || u_post_taaFeedback <= 0.0)
     {
         imageStore(u_resolveOut, px, vec4(current, 1.0));
         return;
@@ -170,7 +165,7 @@ void main()
     // Last frame's depth image is jittered by LAST frame's jitter (u_taaJitter.zw): the surface at unjittered
     // position prevUv lives at pixel prevUv + prevJitter, so fetch there and reconstruct at prevUv.
     const float prevDepth = texture(u_prevSceneDepth, prevUv + taaJitterUv(u_taaJitter.zw)).r;
-    float fb = mix(pc.feedback, min(pc.feedback, pc.oceanFeedback), ocean);
+    float fb = mix(u_post_taaFeedback, min(u_post_taaFeedback, u_post_taaOceanFeedback), ocean);
     const bool prevSky = prevDepth <= 0.0;
     if (sky != prevSky)
     {

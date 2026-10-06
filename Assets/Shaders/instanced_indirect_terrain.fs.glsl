@@ -80,7 +80,7 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 {
 #if TERRAIN_DEBUG_MODE == 1
 	vec3 col = debugHeatRamp((f.temperature + 25.0) / 75.0) * debugContour(f.temperature, 5.0);
-	const float snowLineC = u_terrainTexParams3.w; // the LIVE snow tweak, not a mirrored constant
+	const float snowLineC = u_terrainTex_snowTempNone; // the LIVE snow tweak, not a mirrored constant
 	if (f.temperature <= snowLineC)
 		col = mix(col, vec3(0.05), 0.75);
 	col = mix(col, vec3(0.0, 1.0, 1.0), debugIsoline(f.temperature, snowLineC, 1.5));
@@ -89,14 +89,14 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 #elif TERRAIN_DEBUG_MODE == 2
 	return vec3(clamp(f.humidity, 0.0, 1.0)) * debugContour(f.humidity, 0.1);
 #elif TERRAIN_DEBUG_MODE == 3
-	const float relief = abs((worldPos.y - u_terrainParams.z) - f.altitude);
+	const float relief = abs((worldPos.y - u_terrainLive_seaLevel) - f.altitude);
 	return debugHeatRamp(relief / 200.0) * debugContour(relief, 25.0);
 #elif TERRAIN_DEBUG_MODE == 4
 	return vec3(clamp(f.altitude / 5000.0, 0.0, 1.0)) * debugContour(f.altitude, 250.0);
 #else // 5 = which cascade fed this pixel
-	const vec2 uv0 = (worldPos.xz - u_fogParams5.xy) * u_fogParams3.y + 0.5;
+	const vec2 uv0 = (worldPos.xz - u_terrainLive_mapCentre) * u_terrainLive_mapInvNearSize + 0.5;
 	const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-	const float nearW = u_fogParams5.z > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+	const float nearW = u_terrainLive_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
 	return mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), nearW);
 #endif
 }
@@ -118,19 +118,19 @@ vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 	strengthOut = 0.0;
 	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
 	const float dist = distance(in_meshPos, u_views[VIEW_CENTER].viewPos.xyz);
-	const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
-	if (dist >= fadeEnd || u_terrainTexParams0.x < 0.0 || u_terrainTexParams0.y < 1.0)
+	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
+	if (dist >= fadeEnd || u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
 		return N;
 	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
-	const float strength = (1.0 - pow(t, u_terrainTessParams2.y)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
-	const float depth = mix(mix(u_terrainTessParams1.z, u_terrainTessParams1.w, float(L.rockW)), u_terrainTessParams1.z, float(L.snowW)) * strength;
+	const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
+	const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
 	if (depth <= 1e-4)
 		return N;
 	strengthOut = strength;
 	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the centre mvp's 3x3.
 	const mat4 centreMvp = u_views[VIEW_CENTER].mvp;
 	const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
-	const float e = max(max(dist, u_terrainTessParams2.x) * 2.0 * u_terrainTessParams0.z / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
+	const float e = max(max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
 	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
 	const float invE = 1.0 / e;
 	const float hx = (h3.y - h3.x) * invE;
@@ -201,72 +201,73 @@ void main()
 		// carries the same - and takes "Underwater roughness" instead of the wet gloss (a sky reflection has
 		// no business under the ocean's own; the ocean's edge fade shows this ground).
 		// The darkening and the gloss each hold full above their own wetness THRESHOLD ("Darkening threshold",
-		// "Roughness threshold": u_terrainWetParams8.xy) - a plateau while the ground is soaked - and fade
-		// smoothly to dry below it.
-		const float16_t darkAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWetParams8.x), wet);
-		const float16_t glossAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWetParams8.y), wet);
+		// "Roughness threshold": u_terrainWater_darkeningThreshold / roughnessThreshold) - a plateau while the
+		// ground is soaked - and fade smoothly to dry below it.
+		const float16_t darkAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWater_darkeningThreshold), wet);
+		const float16_t glossAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWater_roughnessThreshold), wet);
 		// THE DRYING PATTERN: ground does not dry uniformly - a beach breaks into metre-scale blotches
 		// (porosity, micro-drainage) that dry first while the rest stays dark. P (0..1, low = holds its water
-		// longest) is a world-anchored value fBm of "Drying pattern size (m)" (u_terrainWetParams9.y = 1 / size),
-		// with "Drying pattern relief" (9.z) of the splat's height composite mixed in for the fine breakup at
-		// the island edges. Each amount becomes a LEVEL through P: below it wet, above it a dry ISLAND, and the
-		// islands grow as the level sinks. The darkening and the gloss share P, so an island loses its gloss
-		// first (a higher roughness threshold), then its darkness. The soft band around each level is its own:
-		// "Darkening edge" (9.x) - wide, the darkening fades over a larger range - and "Roughness edge" (7.z) -
-		// crisp gloss islands. "Drying pattern" (7.w, 0..1) mixes from the uniform amount (0) to the patterned
+		// longest) is a world-anchored value fBm of "Drying pattern size (m)" (u_terrainWater_invDryingPatternSize
+		// = 1 / size), with "Drying pattern relief" (dryingPatternRelief) of the splat's height composite mixed in
+		// for the fine breakup at the island edges. Each amount becomes a LEVEL through P: below it wet, above it
+		// a dry ISLAND, and the islands grow as the level sinks. The darkening and the gloss share P, so an island
+		// loses its gloss first (a higher roughness threshold), then its darkness. The soft band around each level
+		// is its own: "Darkening edge" (darkeningEdge) - wide, the darkening fades over a larger range - and
+		// "Roughness edge" (roughnessEdge) - crisp gloss islands. "Drying pattern" (dryingPattern, 0..1) mixes
+		// from the uniform amount (0) to the patterned
 		// one, and fades out where the blotches shrink to a few pixels (the noise would shimmer).
 		// (The relief ALONE, tried before, tiles at the splat texture's scale: speckle, not drying patches.)
-		const float16_t darkBand = float16_t(max(u_terrainWetParams9.x, 1e-3));
-		const float16_t band = float16_t(max(u_terrainWetParams7.z, 1e-3));
+		const float16_t darkBand = float16_t(max(u_terrainWater_darkeningEdge, 1e-3));
+		const float16_t band = float16_t(max(u_terrainWater_roughnessEdge, 1e-3));
 		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
-		const float footprint = pixelWidth * u_terrainWetParams9.y; // pattern cells per pixel
-		const float16_t patternW = float16_t(u_terrainWetParams7.w * (1.0 - smoothstep(0.15, 0.4, footprint)));
+		const float footprint = pixelWidth * u_terrainWater_invDryingPatternSize; // pattern cells per pixel
+		const float16_t patternW = float16_t(u_terrainWater_dryingPattern * (1.0 - smoothstep(0.15, 0.4, footprint)));
 		float16_t damp = darkAmount, glossW = glossAmount;
 		if (patternW > float16_t(0.0))
 		{
 			// The fBm stays 32-bit (its hash is fract() of large products); stretched from its central
-			// bunching toward the full 0..1 by "Drying pattern contrast" (9.w, pre-halved): higher = more of the
-			// ground at the extremes, so the islands separate more strongly (clamped: fully dry / fully wet).
-			const float n = clamp(terrainFbm(TERRAIN_LIT_POS.xz * u_terrainWetParams9.y) * u_terrainWetParams9.w + 0.5, 0.0, 1.0);
-			const float16_t P = mix(float16_t(n), surf.height, float16_t(u_terrainWetParams9.z));
+			// bunching toward the full 0..1 by "Drying pattern contrast" (dryingContrastHalf, pre-halved): higher =
+			// more of the ground at the extremes, so the islands separate more strongly (clamped: fully dry / fully wet).
+			const float n = clamp(terrainFbm(TERRAIN_LIT_POS.xz * u_terrainWater_invDryingPatternSize) * u_terrainWater_dryingContrastHalf + 0.5, 0.0, 1.0);
+			const float16_t P = mix(float16_t(n), surf.height, float16_t(u_terrainWater_dryingPatternRelief));
 			damp = mix(damp, smoothstep(P - darkBand, P + darkBand, darkAmount * (one + darkBand + darkBand) - darkBand), patternW);
 			glossW = mix(glossW, smoothstep(P - band, P + band, glossAmount * (one + band + band) - band), patternW);
 		}
-		surf.albedo *= mix(one, float16_t(u_terrainWetParams2.y), damp);
+		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), damp);
 		// Where the FILM stands over this ground: the same pool level through the relief the film's coverage
 		// uses, faded over its "Edge fade (m)" (the ground/beach relief depth as the metres). The ground there is
 		// UNDER water - its wet gloss would sit beneath the film's own surface - so it takes the underwater
 		// roughness, as under the live ocean (not a wetness gate: this follows the film's actual outline).
 		const float16_t poolOver = (float16_t(terrainPoolLevel(float(wet), coverN.y)) - surf.height)
-			* float16_t(u_terrainTessParams1.z / max(u_terrainWetParams4.w, 1e-4));
+			* float16_t(u_terrainTess_depthGround / max(u_terrainWater_edgeFade, 1e-4));
 		const float16_t underFilm = clamp(poolOver, float16_t(0.0), one);
 		// "Wet roughness" with the gloss, "Underwater roughness" under the film and the live ocean.
 		const float16_t submerged = max(one - aboveLive, underFilm);
-		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWetParams7.x), glossW), float16_t(u_terrainWetParams7.y), submerged);
-		// GLINTS ("Glint size (m)" u_terrainWetParams10.z = 1 / size, "Glint coverage" 10.w, "Glint roughness"
-		// 11.x): wet sand is not uniformly glossy - beaded water and flat wet grains catch the sun in small sharp
+		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWater_wetRoughness), glossW), float16_t(u_terrainWater_underwaterRoughness), submerged);
+		// GLINTS ("Glint size (m)" u_terrainWater_invGlintSize = 1 / size, "Glint coverage" glintCoverage, "Glint
+		// roughness" glintRoughness): wet sand is not uniformly glossy - beaded water and flat wet grains catch the sun in small sharp
 		// points. Sparse world-anchored patches - a single-octave value noise over glint-size cells, its peaks
 		// (the high corner hashes) thresholded so roughly "Glint coverage" of the ground qualifies - drop the
 		// roughness to a near-mirror alpha, on the wet gloss only (not under the film or the ocean). Small and
 		// sparse, so the overall specular barely changes. Faded out where the patches shrink toward a pixel:
 		// there they would only shimmer.
-		if (u_terrainWetParams10.w > 0.0)
+		if (u_terrainWater_glintCoverage > 0.0)
 		{
-			const float glintFade = 1.0 - smoothstep(0.3, 0.7, pixelWidth * u_terrainWetParams10.z);
+			const float glintFade = 1.0 - smoothstep(0.3, 0.7, pixelWidth * u_terrainWater_invGlintSize);
 			if (glintFade > 0.0)
 			{
-				const float n = terrainValueNoise(TERRAIN_LIT_POS.xz * u_terrainWetParams10.z);
-				const float glint = smoothstep(1.0 - u_terrainWetParams10.w, 1.0 - 0.5 * u_terrainWetParams10.w, n) * glintFade;
-				surf.rough = mix(surf.rough, float16_t(u_terrainWetParams11.x), float16_t(glint) * glossW * (one - submerged));
+				const float n = terrainValueNoise(TERRAIN_LIT_POS.xz * u_terrainWater_invGlintSize);
+				const float glint = smoothstep(1.0 - u_terrainWater_glintCoverage, 1.0 - 0.5 * u_terrainWater_glintCoverage, n) * glintFade;
+				surf.rough = mix(surf.rough, float16_t(u_terrainWater_glintRoughness), float16_t(glint) * glossW * (one - submerged));
 			}
 		}
-		// "Wet normal scale" (u_terrainWetParams8.z): the normal map's tilt off the shading base, scaled with the
+		// "Wet normal scale" (u_terrainWater_wetNormalScale): the normal map's tilt off the shading base, scaled with the
 		// gloss - below 1 the water fills the micro relief (a sharper highlight: at full, the bumps scattered
 		// it over the whole wet area), above 1 it is exaggerated. Kept on the base's side of the horizon (an
 		// extrapolated tilt can pass it).
 		{
 			const f16vec3 baseN = f16vec3(geoN);
-			f16vec3 n = baseN + (surf.normal - baseN) * mix(one, float16_t(u_terrainWetParams8.z), glossW);
+			f16vec3 n = baseN + (surf.normal - baseN) * mix(one, float16_t(u_terrainWater_wetNormalScale), glossW);
 			n += baseN * max(float16_t(0.05) - dot(n, baseN), float16_t(0.0));
 			surf.normal = normalize(n);
 		}
@@ -317,7 +318,7 @@ void main()
 			R.y = max(R.y, 0.02);
 			R = normalize(R);
 			const vec3 ambientSky = texelFetch(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, 0).rgb;
-			const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x;
+			const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_sunVisible;
 			color += applyReflectionFogSky(terrainReflectedSkyRadiance(R), TERRAIN_LIT_POS, R, sunTint, u_sunDirection.xyz, ambientSky) * float(w);
 		}
 	}

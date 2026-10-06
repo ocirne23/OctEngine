@@ -109,9 +109,9 @@ float valueNoise(vec3 p)
 // Two-octave wind-drifted value noise in [0,1]; modulates the density for a dusty, wispy look.
 float fogNoise(vec3 worldPos)
 {
-    // Drifts with THE wind ("Sky/Wind": its direction, u_fogParams2.z its speed), lifting a little.
-    const vec3 wind = vec3(u_weatherWind2.x, 0.12, u_weatherWind2.y) * (u_fogParams2.z * u_timeSeconds);
-    const vec3 p = (worldPos - wind) * u_fogParams2.x; // noise space = world - drift: the wisps travel WITH the wind
+    // Drifts with THE wind ("Sky/Wind": its direction, u_weather_windSpeed its speed), lifting a little.
+    const vec3 wind = vec3(u_weather_windDirection.x, 0.12, u_weather_windDirection.y) * (u_weather_windSpeed * u_timeSeconds);
+    const vec3 p = (worldPos - wind) * u_fog_noiseScale; // noise space = world - drift: the wisps travel WITH the wind
     return valueNoise(p) * 0.667 + valueNoise(p * 2.37 + vec3(17.3)) * 0.333;
 }
 
@@ -143,8 +143,8 @@ float oceanWaveHeightAt(vec2 worldXZ, float waterDepth, float footprint)
     float h = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
-        const float L = u_oceanParams2[c];
-        const float fade = smoothstep(0.0, max(u_oceanParams4.z * L, 0.01), waterDepth);
+        const float L = u_ocean_cascadeSizes[c];
+        const float fade = smoothstep(0.0, max(u_ocean_shoalScale * L, 0.01), waterDepth);
         const float lod = max(log2(max(footprint, 1e-3) * float(OCEAN_FFT_SIZE) / L), 0.0);
         h += textureLod(u_uwOceanMaps, vec3(worldXZ / L, float(c)), lod).y * fade;
     }
@@ -249,24 +249,24 @@ void main()
     // in valleys, reaches partway up mountainsides and clears the peaks (follow < 1 keeps the fog top
     // rising slower than the ground under it). The height is clamped up to the baked sea level so fog
     // rests on the water surface instead of sinking over the seabed.
-    float heightBase = u_fogParams0.y;
-    float heightFalloff = u_fogParams0.z;
+    float heightBase = u_fog_heightBase;
+    float heightFalloff = u_fog_heightFalloff;
     float regionMul = 1.0;   // baked regional fog-thickness modulation (terrain data map, packed channel B)
     float waterY = -1.0e9;   // local CALM water level (world Y); everything below the wave surface is fogged
     float waterDepth = 0.0;  // water level - terrain height (shoal fade for the wave sampling)
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(worldPos.xz); // .x = terrain height, .y = water level, .w = macro altitude
-        waterY = td.y + u_fogParams8.x; // the fog boundary, lowered by "Fog/Underwater wave offset" x the live wave trough
+        waterY = td.y + u_fogLive_boundaryOffset; // the fog boundary, lowered by "Fog/Underwater wave offset" x the live wave trough
         waterDepth = td.y - td.x;       // wave shoal fade keys on the REAL depth, not the offset boundary
         // Terrain follow rides the MACRO ALTITUDE channel (A, m above sea level), not the raw height:
         // the fog base tracks the smooth macro landscape, so ridge bumps don't drag the layer up with
         // them and valleys carved below the macro surface sit INSIDE the fog (the generator's
         // valley-fog thickness keys on the same carve depth). Clamped to sea level so fog rests on
         // the water instead of sinking over the seabed.
-        if (u_fogParams3.x > 0.0)
-            heightBase += u_fogParams3.x * (u_fogParams5.w + max(td.w, 0.0));
-        if (u_fogParams6.z > 0.0)
+        if (u_fog_terrainFollow > 0.0)
+            heightBase += u_fog_terrainFollow * (u_terrainLive_mapSeaLevel + max(td.w, 0.0));
+        if (u_fog_regionStrength > 0.0)
         {
             // Regional climate: x = fog thickness (density multiplier), and the height-falloff multiplier
             // (fog hugs the ground in one region, towers in another) DERIVED from temperature - it is a
@@ -277,9 +277,9 @@ void main()
             // baseline directly would give a mountain valley the coast's falloff - the altitude signal is
             // the entire point of the knob.
             const vec4 climate = terrainClimateNearestAt(worldPos.xz);
-            regionMul = mix(1.0, climate.x, u_fogParams6.z);
+            regionMul = mix(1.0, climate.x, u_fog_regionStrength);
             const float groundTemp = terrainTemperatureAt(climate, td.x);
-            heightFalloff *= mix(1.0, fogFalloffFromTemperature(groundTemp), u_fogParams6.z);
+            heightFalloff *= mix(1.0, fogFalloffFromTemperature(groundTemp), u_fog_regionStrength);
         }
     }
     // Height density = the analytic mean over this slice's segment of the sample ray (see heightFogMean),
@@ -287,20 +287,20 @@ void main()
     const float tScale = 1.0 / max(dot(dir, camFwd), 1e-3);
     const float yA = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z) / float(VOL_FROXEL_Z)) * tScale);
     const float yB = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z + 1) / float(VOL_FROXEL_Z)) * tScale);
-    const float heightDensity = u_fogParams0.x * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
+    const float heightDensity = u_fog_density * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
 
     // Underwater: everything at/below the LOCAL water surface is ALWAYS fogged at the global density x
-    // "Fog/Underwater density" (u_fogParams6.w) - the height profile and the regional thickness only
+    // "Fog/Underwater density" (u_fog_underwaterDensity) - the height profile and the regional thickness only
     // shape the fog ABOVE the surface, so dipping the camera below the waterline reads as murky depth
     // regardless of the local climate (thick murk under thin haze at > 1, off at 0). The boundary is the
-    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fogParams7.y - sized CPU-side from
+    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fogLive_waveBand - sized CPU-side from
     // the readback's trough estimate, 0 = ocean off) sample the FFT displacement for the real wave height,
     // so fog neither pokes out of troughs nor recedes under crests; segments outside the band are
     // trivially above/below any possible wave, so only a thin shell pays for the wave taps.
     // Analytic per-slice fraction (mean of the step profile over the segment), like heightFogMean.
     const float y0 = min(yA, yB), y1 = max(yA, yB);
     float surfY = waterY;
-    if (u_fogParams7.y > 0.0 && y0 < waterY + u_fogParams7.y && y1 > waterY - u_fogParams7.y)
+    if (u_fogLive_waveBand > 0.0 && y0 < waterY + u_fogLive_waveBand && y1 > waterY - u_fogLive_waveBand)
         surfY += oceanWaveHeightAt(worldPos.xz, waterDepth, viewZ * (2.0 / float(VOL_FROXEL_Y)));
     // Underwater fog is a NEAR-FIELD effect: water absorbs everything within tens of meters, so distant
     // underwater froxels can never be legitimately seen - but the froxel grid integrates THROUGH the
@@ -310,20 +310,20 @@ void main()
     // fade the water column just carries the plain (continuous) height fog, as it did before.
     const float uwFade = 1.0 - smoothstep(100.0, 300.0, viewZ);
     const float underFrac = uwFade * clamp((surfY - y0) / max(y1 - y0, 1e-3), 0.0, 1.0);
-    const float underDensity = u_fogParams0.x * u_fogParams6.w * underFrac;
+    const float underDensity = u_fog_density * u_fog_underwaterDensity * underFrac;
 
     // Density noise fades out where one noise wavelength drops under the froxel footprint (sub-froxel
     // noise is pure aliasing the temporal blend turns into shimmer; its mean is 1) and is skipped
     // entirely where there is no medium to modulate - sky/above-fog froxels pay nothing.
     float noiseMul = 1.0;
-    const float noiseWavelength = 1.0 / max(u_fogParams2.x, 1e-4);
-    const float noiseAmp = u_fogParams2.y * (1.0 - smoothstep(40.0 * noiseWavelength, 80.0 * noiseWavelength, viewZ));
+    const float noiseWavelength = 1.0 / max(u_fog_noiseScale, 1e-4);
+    const float noiseAmp = u_fog_noiseStrength * (1.0 - smoothstep(40.0 * noiseWavelength, 80.0 * noiseWavelength, viewZ));
     if (noiseAmp > 0.001 && (heightDensity + underDensity > 1e-7 || in_numFogVolumes > 0u))
         noiseMul = max(1.0 + noiseAmp * (fogNoise(worldPos) * 2.0 - 1.0), 0.0);
     float density = max(heightDensity, underDensity) * noiseMul;
     // Underwater the medium is water, not air: blend the fog albedo toward the ocean's in-scatter color
     // by how submerged the slice is, so the murk reads blue-green instead of atmospheric gray.
-    vec3 albedoWeighted = mix(u_fogParams1.rgb, u_oceanScatter.rgb, underFrac) * density;
+    vec3 albedoWeighted = mix(u_fog_albedo, u_ocean_scatterColor, underFrac) * density;
     vec3 emissive = vec3(0.0);
 
     for (uint v = 0u; v < in_numFogVolumes; ++v)
@@ -347,7 +347,7 @@ void main()
     if (density > 1e-6)
     {
         const vec3 albedo = albedoWeighted / density;
-        const float g = u_fogParams1.w;
+        const float g = u_fog_anisotropy;
 
         // Sun, with either TLAS shadow rays or a single cascade tap (matching the surface shadow mode).
         // Multiple rays are jittered in a cone (sun softness) per froxel per frame; together with the
@@ -357,17 +357,17 @@ void main()
         // and mountains actually shadow far fog.
         const vec3 sunDir = normalize(u_sunDirection.xyz);
         float sunVis;
-        if (viewZ > u_fogParams6.y && terrainHeightMapPresent())
+        if (viewZ > u_fog_terrainShadowDistance && terrainHeightMapPresent())
         {
             // Froxel receivers float in air, so they need none of the surface path's self-shadow bias:
             // its own tuned 25 m start / 10 steps (~12.8 km reach), kept as-is now that the march is
-            // shared with the lit surfaces (which start much further out - see u_terrainShadowParams).
-            sunVis = terrainSunVisibility(worldPos, sunDir, 25.0, 10, max(u_fogParams4.w, 0.015), 4.0);
+            // shared with the lit surfaces (which start much further out - see u_shadow_terrainMarchStart).
+            sunVis = terrainSunVisibility(worldPos, sunDir, 25.0, 10, max(u_fog_sunSoftness, 0.015), 4.0);
         }
-        else if (u_rtSunShadow > 0.5)
+        else if (u_rt_sunShadow > 0.5)
         {
-            const uint numRays = max(uint(u_fogParams4.x), 1u);
-            const float softness = u_fogParams4.w;
+            const uint numRays = max(uint(u_fog_sunRays), 1u);
+            const float softness = u_fog_sunSoftness;
             const vec3 refAxis = abs(sunDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
             const vec3 t1 = normalize(cross(sunDir, refAxis));
             const vec3 t2 = cross(sunDir, t1);
@@ -403,20 +403,20 @@ void main()
         if (underFrac > 0.0)
         {
             const float depthMid = max((surfY - y0) - 0.5 * underFrac * (y1 - y0), 0.05);
-            // "Fog/Shaft boost" (u_fogParams7.x): non-physical gain on the underwater sun in-scatter -
+            // "Fog/Shaft boost" (u_fog_shaftBoost): non-physical gain on the underwater sun in-scatter -
             // at fog-scale densities the physically correct shaft radiance is too faint to read. Its
             // sqrt also feeds the helper's REACH, so boosting brightness stretches shaft length too.
             sunTrans = mix(vec3(1.0),
                 underwaterSunTransmittance(worldPos.xz, depthMid, viewZ * (2.0 / float(VOL_FROXEL_Y)),
-                    u_fogParams7.x,
-                    (waterY - u_fogParams8.x) - (surfY - depthMid), // calm column depth at the submerged midpoint
-                    waterY - u_fogParams8.x                          // the calm level itself (waterY carries the fog boundary offset)
+                    u_fog_shaftBoost,
+                    (waterY - u_fogLive_boundaryOffset) - (surfY - depthMid), // calm column depth at the submerged midpoint
+                    waterY - u_fogLive_boundaryOffset                          // the calm level itself (waterY carries the fog boundary offset)
                     ), underFrac);
             gSun = mix(g, 0.78, underFrac); // strong forward lobe: ~8x gain toward the sun
         }
-        // "Fog/Sun scatter" (u_fogParams8.w): a gain on the SUN term only - sunlit froxels (the shafts) brighten,
+        // "Fog/Sun scatter" (u_fog_sunScatter): a gain on the SUN term only - sunlit froxels (the shafts) brighten,
         // shadowed ones keep their ambient, and the extinction is unchanged.
-        vec3 inLight = u_sunTransmittance * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_eclipseParams.x * u_fogParams8.w) * sunTrans;
+        vec3 inLight = u_sunTransmittance * u_sunColor.rgb * (volPhaseHG(dot(dir, sunDir), gSun) * sunVis * u_sunVisible * u_fog_sunScatter) * sunTrans;
 
         // Ambient: GI probe irradiance toward the camera (toggleable; the clipmap lookup is the next
         // biggest cost after the shadow rays), fading to the analytic sky over the probe field's outer
@@ -424,13 +424,13 @@ void main()
         // in-scattered radiance is E_mean / PI; E(-dir) is the single-sample stand-in for E_mean.
         // u_ambientColor is an isotropic radiance, so its phase integral is just itself.
         // The sky SH's sunlit-ground part is cloud-shadowed at this froxel (giEvalSkySHCloud). GI off
-        // (u_aoParams.y 0): no lookup at all.
+        // (u_rt_giStrength 0): no lookup at all.
         inLight += u_ambientColor;
-        if (u_aoParams.y > 0.0)
-            inLight += (u_fogParams4.z > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis)) * (u_aoParams.y / PI);
+        if (u_rt_giStrength > 0.0)
+            inLight += (u_fog_giAmbient > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis)) * (u_rt_giStrength / PI);
 
         // Local lights from the world-space hash grid cell containing this froxel.
-        const bool lightShadows = u_fogParams3.w > 0.5;
+        const bool lightShadows = u_fog_lightShadows > 0.5;
         const ivec3 gridPos = getGridPos(worldPos);
         uint tableIdx = getTableIdx(gridPos);
         while (true)
@@ -458,21 +458,21 @@ void main()
         result = vec4(albedo * density * inLight + emissive, density);
     }
 
-    // THE SHAFT HAZE ("Fog/Shaft haze", u_fogParams10): a thin medium for the god rays alone. The fog above is a
+    // THE SHAFT HAZE ("Fog/Shaft haze", u_fog_hazeDensity / hazeInvHeight): a thin medium for the god rays alone. The fog above is a
     // HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds down showed only after cranking the
     // base density - fogging the world. The haze reaches up to the clouds (its own scale height) and adds SUNLIT
     // in-scatter only: no extinction, no ambient, so shadowed air stays clear and the lit / shadowed contrast is the
     // shaft. Non-physical on purpose (it scatters without absorbing). Its sun visibility is the fog's where the fog
     // computed one; above the fog, the clouds' alone (terrain shadows skipped - the shafts are the clouds').
-    if (u_fogParams10.x > 0.0 && underFrac < 1.0)
+    if (u_fog_hazeDensity > 0.0 && underFrac < 1.0)
     {
-        const float hazeSigma = u_fogParams10.x * heightFogMean(yA, yB, u_fogParams0.y, u_fogParams10.y) * (1.0 - underFrac);
+        const float hazeSigma = u_fog_hazeDensity * heightFogMean(yA, yB, u_fog_heightBase, u_fog_hazeInvHeight) * (1.0 - underFrac);
         const float hazeVis = fogSunVis >= 0.0 ? fogSunVis : cloudSunTransmittanceBilinear(worldPos);
         if (hazeVis > 0.0)
         {
             const vec3 sunDir = normalize(u_sunDirection.xyz);
-            result.rgb += u_fogParams1.rgb * u_sunTransmittance * u_sunColor.rgb
-                * (hazeSigma * volPhaseHG(dot(dir, sunDir), u_fogParams1.w) * hazeVis * u_eclipseParams.x * u_fogParams8.w);
+            result.rgb += u_fog_albedo * u_sunTransmittance * u_sunColor.rgb
+                * (hazeSigma * volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * hazeVis * u_sunVisible * u_fog_sunScatter);
         }
     }
 
@@ -494,7 +494,7 @@ void main()
         if (prevSlice <= 1.0)
         {
             const vec4 history = texture(u_history, vec3(clamp(prevVpUv, vec2(0.0), vec2(1.0)), prevSlice));
-            result = mix(result, history, clamp(u_fogParams2.w, 0.0, 0.97));
+            result = mix(result, history, clamp(u_fog_temporalBlend, 0.0, 0.97));
         }
     }
 

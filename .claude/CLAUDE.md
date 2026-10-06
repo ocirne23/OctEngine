@@ -201,7 +201,7 @@ Exclusively C++20 modules (`.ixx`), no headers.
 * Most libraries use module partitions: `export module RendererVK:Renderer;` in the interface `.ixx`,
   `module RendererVK;` in the implementation `.cpp`. The public surface is re-exported from
   `Public/<Lib>.ixx`.
-* `Core` uses dotted module names (`Core.Tweaks`, one module per `.ixx`). UI uses partitions
+* `Core` and `Settings` use dotted module names (`Core.Time`, `Settings.Render`, one module per `.ixx`). UI uses partitions
   (`UI:Scene`, `UI:ProfilerPanel`) except `UI.Gizmo` / `UI.fwd`.
 * `Public/` `.ixx`s are importable from outside the library; `Private/` is internal.
 * `Core.fwd` / `*.fwd.ixx` hold forward declarations.
@@ -225,7 +225,7 @@ cmath, random. **Add a missing std header there.**
 * `<bit>` is NOT among them — see `Core.OcBit`.
 * **DELIBERATE EXCEPTION:** `<filesystem>` and `<fstream>` are NOT exported. All file and directory
   access goes through the File library's `FileSystem` (see File), so a library that needs the disk
-  links File. Core itself therefore cannot do IO: `Core.Tweaks` takes injected read/write hooks
+  links File. Core and Settings therefore cannot do IO: `Settings.Tweaks` takes injected read/write hooks
   (`setFileIo`, installed by main from FileSystem).
 
 ### Containers are `oc::`, never `std::`
@@ -322,7 +322,7 @@ pattern.
 
 ## Dependency direction
 
-`target_link_libraries`, PUBLIC unless noted. Everything imports Core, and a library NEVER links one
+`target_link_libraries`, PUBLIC unless noted. Everything imports Core and (through Threading / Audio) Settings, and a library NEVER links one
 printed above it — read the stack bottom-up, where each row may use every row below it. Third-party
 libs in parentheses are PRIVATE: they never leak through a public interface.
 
@@ -346,10 +346,12 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
    Physics        Threading     (box3d's solver fork/join runs as jobs)   (+ box3d)
    File           Animation                                      (+ assimp, zlib, meshoptimizer)
    ------------------------------------------------------------------------------------------------
-   Animation      -                                              -- these four are Core-only
+   Audio          Settings                                       (+ Steam Audio, miniaudio)
+   Threading      Settings
+   Animation      -                                              -- Core-only
    Network        -                                              (+ Ws2_32, Bcrypt)
-   Audio          -                                              (+ Steam Audio, miniaudio)
-   Threading      -
+   ------------------------------------------------------------------------------------------------
+   Settings       -             (every tweak's value: Globals::settings + the tweak registry)
    ------------------------------------------------------------------------------------------------
    Core           std header units, oc:: containers (OcSTL), math, Profiler + MemoryTracker
                   (+ EASTL, vulkan, SDL3, imgui, Windows libs — all PRIVATE wrappers)
@@ -362,8 +364,9 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 | Library | Covers |
 |---|---|
 | [App](../Code/App/CONTEXT.md) | The testbed executable: **the frame loop table**, init order, command line, main menu + lobby + chat flow, escape menu, testbed keys |
-| [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, Tweaks (Synced/overrides), `Core.GameHud`, plus the **Profiling** and **Memory** sections |
-| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, procedural grass, shaders |
+| [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, `Core.GameHud`, plus the **Profiling** and **Memory** sections |
+| [Settings](../Code/Settings/CONTEXT.md) | **Every tweak**: `Globals::settings` (one copy of each value, read directly), the domain modules + `registerAll`, listeners (`Tweak::onChange`), and the tweak registry (`Settings.Tweaks`: groups, Saved / Synced / Runtime, overrides, locks) |
+| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: **the frame UBO (generated GLSL) + the tweak locks that bake it into the shaders**, frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, procedural grass, shaders |
 | [Entity](../Code/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, the parallel update pass, **SIM LOD**, parallel spawning/destruction, World, the components, script glue, and the **Multiplayer** section |
 | [Script](../Code/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
 | [Physics](../Code/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |

@@ -6,6 +6,7 @@ import Core.Camera;
 
 import Threading;
 import RendererVK;
+import Settings;
 
 import :TerrainSampler;
 import :TreeSpecies;
@@ -71,12 +72,12 @@ export namespace Procedural
 		TreeWorld(const TreeWorld&) = delete;
 		TreeWorld& operator=(const TreeWorld&) = delete;
 
-		void initialize(); // "Trees/World" tweaks
+		void initialize(); // attaches the "Trees/World" listeners
 		// Main thread, every frame (also with the tree preview off): the ring, the requests, the finished chunks.
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
-		bool enabled() const { return m_enabled; }
-		uint32 seed() const { return (uint32)m_seed; }
+		bool enabled() const { return m_settings.enabled; }
+		uint32 seed() const { return (uint32)m_settings.seed; }
 		float chunkSize() const { return m_chunkSize; }
 		// The species name of a record type ("" = none).
 		oc::string_view typeName(uint32 type) const;
@@ -89,7 +90,7 @@ export namespace Procedural
 			if (enabled == m_rocksEnabled && rules == m_rockRules && typesRevision == m_rockTypesRevision)
 				return;
 			// The type list changes / the .rock Placement blocks were edited.
-			m_reloadSpecies |= enabled != m_rocksEnabled || typesRevision != m_rockTypesRevision;
+			m_settings.reloadSpecies |= enabled != m_rocksEnabled || typesRevision != m_rockTypesRevision;
 			m_rocksEnabled = enabled;
 			m_rockRules = rules;
 			m_rockTypesRevision = typesRevision;
@@ -185,21 +186,9 @@ export namespace Procedural
 		void pumpJob();
 		void logStats(const Renderer& renderer) const;
 
-		// --- Tweaks ---
-		bool m_enabled = true;
-		int m_seed = 1;
-		float m_cellSize = 5.0f;
-		float m_densityScale = 1.0f;
-		float m_climateSharpness = 4.0f; // the species pick by climate fit ^ this (0 = every fitting species alike)
-		float m_climateFadeStart = 0.10f; // a species' climate fit fades to 0 between these (fractions of its peak): no tail
-		float m_climateFadeEnd = 0.25f;
-		int m_maxGenJobs = 2;
-		int m_poolMB = 128;         // the GPU record pool (MB; fixed - a change drains the GPU and regenerates): records + ~0.6 KB of ground per chunk
-		int m_uploadKB = 1024;      // record bytes uploaded per frame
-		int m_keepRadius = 4;       // chunks (Chebyshev) whose records the CPU keeps
+		// "Trees/World" (the buttons are cleared here). The GPU pool holds the records + ~0.6 KB of ground per chunk.
+		TreeWorldSettings& m_settings = Globals::settings.treeWorld;
 		int m_minKeepRadius = 0;    // requireKeepRadius
-		bool m_reloadSpecies = false; // button: re-read the Placement blocks, regenerate
-		bool m_logStats = false;      // button
 		bool m_configDirty = true;
 
 		// Main thread.

@@ -10,7 +10,7 @@
 // Reuses the exact world-transform composition (renderNode * instanceOffset) from instanced_indirect.cs,
 // so ray-traced geometry matches what the raster path draws. No frustum culling: GI needs off-screen
 // geometry too.
-// Dispatched PER FRAME over the live count u_giTlasNumInstances, which the TLAS build covers too; the
+// Dispatched PER FRAME over the live count u_present_giTlasNumInstances, which the TLAS build covers too; the
 // last group's padding threads past it write INACTIVE records (reference 0), which nothing reads.
 
 struct RenderNodeTransform { vec4 posScale; vec4 quat; };
@@ -87,12 +87,12 @@ void main()
     // range: an inactive record (reference 0 - not built, not traversed).
     bool isTree = false;
     uint pieceIdx = 0u, passBits = 0u;
-    const uint id = slot < u_giTlasNumInstances ? treeCullTlasInstance(slot, pc.treeRtPieces, isTree, pieceIdx, passBits) : slot;
+    const uint id = slot < u_present_giTlasNumInstances ? treeCullTlasInstance(slot, pc.treeRtPieces, isTree, pieceIdx, passBits) : slot;
     TreeCullRecord treeRec;
     vec4 treePosScale, treeQuat;
     // A tree whose terrain chunk is listed for the main view only: out of the RT set, as a stream instance would be.
-    if (slot >= u_giTlasNumInstances || (isTree && ((passBits & (PASS_GI | PASS_SHADOW)) == 0u
-        || !treeCullRtPiece(pieceIdx, u_foliageParams.x, treeRec, treePosScale, treeQuat))))
+    if (slot >= u_present_giTlasNumInstances || (isTree && ((passBits & (PASS_GI | PASS_SHADOW)) == 0u
+        || !treeCullRtPiece(pieceIdx, u_foliage_rtRange, treeRec, treePosScale, treeQuat))))
     {
         TlasInstance dead;
         dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
@@ -179,7 +179,7 @@ void main()
     // Range bound: rays never reach past the GI clipmap + max ray distance, so distant geometry
     // only bloats the TLAS build (origin-distance test: cheap, conservative via the RT/GI tweak).
     // Centered on the scene focus (the player in game mode; the camera otherwise).
-    const bool inRange = distance(pos, u_sceneFocus.xyz) <= u_giTrace1.w;
+    const bool inRange = distance(pos, u_sceneFocus.xyz) <= u_rt_giTlasRange;
     const bool traceable = hasBlas && finiteXform && !noRT && inRtSet && inRange;
     if (!traceable)
     {

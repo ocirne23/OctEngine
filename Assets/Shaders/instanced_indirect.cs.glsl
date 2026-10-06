@@ -188,14 +188,14 @@ vec4 quat_multiply(vec4 q, vec4 p)
     return r;
 }
 
-// The terrain overlay's reach: the wetness clipmap window (terrain_wetness.inc.glsl's packing - origin lattice
-// coord in u_terrainWetParams0.xy, texel size in u_terrainWetParams1.x, present flag u_terrainWetParams2.x).
+// The terrain overlay's reach: the wetness clipmap window (terrain_wetness.inc.glsl - origin lattice
+// coord u_terrainLive_wetOrigin, texel size u_terrainWater_texelSize, present flag u_terrainWater_enabled).
 bool terrainOverlayCovers(vec3 pos, float radius)
 {
-    if (u_terrainWetParams2.x < 0.5)
+    if (u_terrainWater_enabled < 0.5)
         return false;
-    const vec2 lo = u_terrainWetParams0.xy * u_terrainWetParams1.x;
-    const vec2 hi = lo + float(TERRAIN_WET_RES) * u_terrainWetParams1.x;
+    const vec2 lo = u_terrainLive_wetOrigin * u_terrainWater_texelSize;
+    const vec2 hi = lo + float(TERRAIN_WET_RES) * u_terrainWater_texelSize;
     const vec2 d = pos.xz - clamp(pos.xz, lo, hi);
     return dot(d, d) <= radius * radius;
 }
@@ -245,7 +245,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     // chain, and no wind.
     const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
     // A tree sways in the wind (tree_wind.inc.glsl): its bound grows by the sway's reach.
-    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_treeWind3.z : 0.0);
+    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliageLive_windReach : 0.0);
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by
@@ -257,7 +257,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     // selection below wants the real bounds (and the ocean has no LOD chain anyway).
     float cullRadius = radius;
     if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_OCEAN)
-        cullRadius += u_oceanParams10.w;
+        cullRadius += u_oceanLive_displacementExtent;
 
     if (frustumCheck(centerPos, cullRadius))
     {
@@ -269,12 +269,12 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         // The tree set's ROCKS have one. A tree-set record has no hysteresis slot, so a rock picks STATELESS (the
         // conservative pick, as the shadow cull's).
         const uint lodGroupIdx = isTree && !isRock ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
-        if (lodGroupIdx != 0xFFFFFFFFu && u_lodParams1.z > 0.5)
+        if (lodGroupIdx != 0xFFFFFFFFu && u_lod_enabled > 0.5)
         {
             const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
             const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
             int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
-                u_lodParams0.x, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
+                u_lod_maxErrorPx, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
             if (!isTree)
                 lodLevelState[stateSlot] = uint(level);
             uint chosenMeshIdx = lodMeshAt(group, level);
@@ -333,7 +333,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             // evaluation stages (their ISBE storage was the pass's second launch limiter). The margin covers
             // the VR eyes' offset from the centre view.
             const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT)
-                && distance(centerPos, u_views[VIEW_CENTER].viewPos.xyz) - radius < u_terrainTessParams1.y + 1.0;
+                && distance(centerPos, u_views[VIEW_CENTER].viewPos.xyz) - radius < u_terrainTess_fadeEnd + 1.0;
             // The SKY: its own list (binding 23), drawn late; its DGC entry draws nothing, as the tessellated ground's.
             const bool sky = pipelineIdx == uint16_t(PIPELINE_IDX_SKY);            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (sky)
@@ -395,7 +395,7 @@ layout (local_size_x = 64) in; // one thread per stream instance, and one per TR
 void main()
 {
     const uint gid = gl_GlobalInvocationID.x;
-    if (gid >= u_treeCull.z)
+    if (gid >= u_present_treeThreads)
         return;
     bool isTree;
     uint pieceIdx, passBits;

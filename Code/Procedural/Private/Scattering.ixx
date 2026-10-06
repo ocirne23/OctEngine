@@ -8,6 +8,7 @@ import Core.Transform;
 import RendererVK;
 import Spatial;
 import Threading;
+import Settings;
 
 import :TerrainSampler;
 
@@ -72,7 +73,7 @@ export namespace Procedural
 		ScatterSystem(const ScatterSystem&) = delete;
 		ScatterSystem& operator=(const ScatterSystem&) = delete;
 
-		void initialize();  // registers Tweaks
+		void initialize();  // attaches the "Scatter" listeners
 		// Per frame, after terrain.update: maps = terrain.activeClimateMaps() - scatter follows the live
 		// terrain field, clears itself while terrain is disabled, and regenerates when the field changes.
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
@@ -144,13 +145,7 @@ export namespace Procedural
 		void spawnGroup(RuleGroup& group);
 		void despawnGroup(RuleGroup& group);
 
-		// --- Tweak-backed configuration ---
-		bool  m_enabled = false;
-		int   m_seed = 777;
-		float m_cellSize = 64.0f;
-		float m_densityScale = 1.0f;   // global multiplier on every rule's density
-		float m_viewScale = 1.0f;      // global multiplier on every rule's view distance
-		int   m_maxSpawnsPerFrame = 768; // instance node spawns per frame (group activations spread out)
+		const ScatterSettings& m_settings = Globals::settings.scatter; // "Scatter"
 		bool  m_configDirty = false;
 		bool  m_inactiveIdle = false; // inactive AND drained: update() is a branch and a return
 		bool  m_assetsLoaded = false;
@@ -176,11 +171,10 @@ export namespace Procedural
 		static void generateCell(const ITerrainSampler& maps, glm::ivec2 coord, const GenParams& params,
 			oc::span<const RuleRuntime> ruleRt, oc::span<const uint16> order, oc::vector<GroupResult>& outGroups);
 
-		// --- Threading (mirrors TerrainStreamer: up to m_maxGenJobs Low-priority pump jobs, lazy
+		// --- Threading (mirrors TerrainStreamer: up to "Gen jobs" Low-priority pump jobs, lazy
 		// staleness at dequeue against published ring state; same claim/exit-recheck protocol.
 		// generateCell is a pure function of const rule tables, so concurrent pumps are safe) ---
 		oc::atomic<int32>      m_numPumps{ 0 };
-		int                     m_maxGenJobs = 2;
 		JobCounter              m_pumpCounter;
 		std::mutex              m_mutex;
 		oc::deque<Request>     m_requests;

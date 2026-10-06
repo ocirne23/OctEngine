@@ -7,9 +7,12 @@ module Physics;
 import Core;
 import Core.glm;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 
 import :PhysicsWorld;
+
+static_assert(B3_MAX_WORKERS == 32, "the Physics/World Worker count range (Settings.Physics) is 1..32");
 import :Body;
 import :Joint;
 import :Mesh;
@@ -44,14 +47,16 @@ bool PhysicsWorld::initialize()
         return true;
     ProfileScope scope("PhysicsWorld::initialize", EProfileCategory::Physics);
 
+    PhysicsSettings& settings = Globals::settings.physics;
     b3WorldDef def = b3DefaultWorldDef();
-    def.gravity = toB3(m_gravity);
+    def.gravity = toB3(settings.gravity);
     def.createDebugShape = createDebugShapeFcn;
     def.destroyDebugShape = destroyDebugShapeFcn;
     // Solver fork/join rides the engine job system instead of the private thread pool box3d spawns
     // for itself when workerCount > 1 without task callbacks -- see :TaskScheduler.
-    m_workerCount = PhysicsTaskScheduler::defaultWorkerCount();
-    def.workerCount = uint32(m_workerCount);
+    if (settings.workerCount <= 0) // not set by an override
+        settings.workerCount = PhysicsTaskScheduler::defaultWorkerCount();
+    def.workerCount = uint32(settings.workerCount);
     def.enqueueTask = PhysicsTaskScheduler::enqueue;
     def.finishTask = PhysicsTaskScheduler::finish;
     def.userTaskContext = &m_taskScheduler;
@@ -63,35 +68,24 @@ bool PhysicsWorld::initialize()
     }
     m_worldHandle = oc::bitCast<uint32>(world);
     m_initialized = true;
-    m_contactHertz = def.contactHertz;
+    if (settings.contactHertz <= 0.0f) // not set by an override: box3d's default
+        settings.contactHertz = def.contactHertz;
     applyContactTuning(); // our damping + push-out speed cap, hertz as box3d ships it
 
     PhysicsBodyDesc staticDesc;
     staticDesc.type = EPhysicsBodyType::Static;
     m_staticBody = createBody(staticDesc, {});
 
-    Tweak::float3("Physics/World", "Gravity", &m_gravity, 0.05f, [this] { setGravity(m_gravity); });
-    Tweak::boolean("Physics/World", "Paused", &m_paused);
-    Tweak::boolean("Physics/World", "Interpolate", &m_interpolate);
-    Tweak::floatVar("Physics/World", "Time Scale", &m_timeScale, 0.0f, 4.0f);
-    Tweak::intVar("Physics/World", "Sub Steps", &m_subSteps, 1, 16);
-    Tweak::intVar("Physics/World", "Step Hz", &m_stepHz, 5, 120);
-    // Live: box3d re-slices the step from this on the next b3World_Step. 1 = single threaded, which
-    // is also the A/B toggle for measuring what the fan-out actually buys on a given scene.
-    Tweak::intVar("Physics/World", "Worker count", &m_workerCount, 1, B3_MAX_WORKERS, 1.0f,
-        [this] { b3World_SetWorkerCount(oc::bitCast<b3WorldId>(m_worldHandle), m_workerCount); });
-    Tweak::floatVar("Physics/World", "Contact hertz", &m_contactHertz, 5.0f, 240.0f, 1.0f, [this] { applyContactTuning(); });
-    Tweak::floatVar("Physics/World", "Contact damping", &m_contactDamping, 0.0f, 50.0f, 0.5f, [this] { applyContactTuning(); });
-    Tweak::floatVar("Physics/World", "Contact push speed (m/s)", &m_contactSpeed, 0.1f, 20.0f, 0.1f, [this] { applyContactTuning(); });
-
-    Tweak::floatVar("Physics/Buoyancy", "Density (kg/m3)", &m_waterDensity, 0.0f, 3000.0f, 10.0f);
-    Tweak::floatVar("Physics/Buoyancy", "Linear drag", &m_waterLinearDrag, 0.0f, 20.0f, 0.1f);
-
-    Tweak::boolean("Physics/Debug", "Draw colliders", &m_debugDrawEnabled);
-    Tweak::boolean("Physics/Debug", "Draw joints", &m_debugDrawJoints);
-    Tweak::boolean("Physics/Debug", "Draw contacts", &m_debugDrawContacts);
-    Tweak::boolean("Physics/Debug", "Draw bounds", &m_debugDrawBounds);
-    Tweak::floatVar("Physics/Debug", "Range", &m_debugDrawRange, 4.0f, 1024.0f);
+    Tweak::removeListeners(this); // a re-initialize after shutdown attaches once
+    Tweak::onChange(settings.gravity, this, [this] { setGravity(Globals::settings.physics.gravity); });
+    // Live: box3d re-slices the step from this on the next b3World_Step.
+    Tweak::onChange(settings.workerCount, this, [this]
+        {
+            b3World_SetWorkerCount(oc::bitCast<b3WorldId>(m_worldHandle), Globals::settings.physics.workerCount);
+        });
+    Tweak::onChange(settings.contactHertz, this, [this] { applyContactTuning(); });
+    Tweak::onChange(settings.contactDamping, this, [this] { applyContactTuning(); });
+    Tweak::onChange(settings.contactSpeed, this, [this] { applyContactTuning(); });
     return true;
 }
 
@@ -149,12 +143,12 @@ void PhysicsWorld::update(double deltaSec)
 
     applyQueuedCommands(); // before the paused check: placing a body / setting its state is authoring, not simulation
 
-    if (!m_paused)
+    if (!Globals::settings.physics.paused)
         stepSimulation(deltaSec);
 
     // After the steps, so the wireframes match the poses the entities will render from this frame -- and
     // deliberately NOT gated on paused, since inspecting colliders with the simulation stopped is the point.
-    if (m_debugDrawEnabled && m_debugLine && m_debugViewPos)
+    if (Globals::settings.physics.debugDrawColliders && m_debugLine && m_debugViewPos)
     {
         ProfileScope profileScope("Collider debug draw", EProfileCategory::Physics);
         debugDraw(m_debugViewPos(), m_debugLine);
@@ -163,8 +157,9 @@ void PhysicsWorld::update(double deltaSec)
 
 void PhysicsWorld::stepSimulation(double deltaSec)
 {
-    m_accumulator += float(deltaSec) * m_timeScale;
-    const float step = 1.0f / float(m_stepHz);
+    const PhysicsSettings& settings = Globals::settings.physics;
+    m_accumulator += float(deltaSec) * settings.timeScale;
+    const float step = 1.0f / float(settings.stepHz);
     const b3WorldId world = oc::bitCast<b3WorldId>(m_worldHandle);
 
     // AT MOST ONE step per update - deliberate (see the header): it keeps box3d's contact buffers
@@ -174,7 +169,7 @@ void PhysicsWorld::stepSimulation(double deltaSec)
     if (m_accumulator >= step)
     {
         ProfileScope profileScope("Physics step", EProfileCategory::Physics);
-        b3World_Step(world, step, m_subSteps);
+        b3World_Step(world, step, settings.subSteps);
         ++m_stepCount;
         m_accumulator = oc::min(m_accumulator - step, step);
     }
@@ -268,9 +263,9 @@ void PhysicsWorld::applyQueuedCommands()
 
 float PhysicsWorld::getInterpolationAlpha() const
 {
-    if (!m_interpolate)
+    if (!Globals::settings.physics.interpolate)
         return 1.0f;
-    return glm::clamp(m_accumulator * float(m_stepHz), 0.0f, 1.0f);
+    return glm::clamp(m_accumulator * float(Globals::settings.physics.stepHz), 0.0f, 1.0f);
 }
 
 PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const PhysicsShape> shapes)
@@ -811,10 +806,12 @@ void drawStringFcn(b3Pos, const char*, b3HexColor, void*) {}
 
 void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
 {
-    if (!m_initialized || !m_debugDrawEnabled)
+    const PhysicsSettings& settings = Globals::settings.physics;
+    if (!m_initialized || !settings.debugDrawColliders)
         return;
 
-    DebugDrawContext ctx{ .line = &line, .viewPos = viewPos, .rangeSq = m_debugDrawRange * m_debugDrawRange };
+    const float range = settings.debugDrawRange;
+    DebugDrawContext ctx{ .line = &line, .viewPos = viewPos, .rangeSq = range * range };
 
     b3DebugDraw draw = b3DefaultDebugDraw();
     draw.DrawShapeFcn = drawShapeFcn;
@@ -826,12 +823,12 @@ void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
     draw.DrawBoundsFcn = drawBoundsFcn;
     draw.DrawBoxFcn = drawBoxFcn;
     draw.DrawStringFcn = drawStringFcn;
-    draw.drawingBounds = b3AABB{ toB3(viewPos - glm::vec3(m_debugDrawRange)), toB3(viewPos + glm::vec3(m_debugDrawRange)) };
+    draw.drawingBounds = b3AABB{ toB3(viewPos - glm::vec3(range)), toB3(viewPos + glm::vec3(range)) };
     draw.drawShapes = true;
-    draw.drawJoints = m_debugDrawJoints;
-    draw.drawContacts = m_debugDrawContacts;
-    draw.drawContactNormals = m_debugDrawContacts;
-    draw.drawBounds = m_debugDrawBounds;
+    draw.drawJoints = settings.debugDrawJoints;
+    draw.drawContacts = settings.debugDrawContacts;
+    draw.drawContactNormals = settings.debugDrawContacts;
+    draw.drawBounds = settings.debugDrawBounds;
     draw.context = &ctx;
 
     b3World_Draw(oc::bitCast<b3WorldId>(m_worldHandle), &draw, PhysicsLayers::All);
@@ -839,13 +836,14 @@ void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
 
 void PhysicsWorld::applyContactTuning()
 {
+    const PhysicsSettings& settings = Globals::settings.physics;
     if (m_initialized)
-        b3World_SetContactTuning(oc::bitCast<b3WorldId>(m_worldHandle), m_contactHertz, m_contactDamping, m_contactSpeed);
+        b3World_SetContactTuning(oc::bitCast<b3WorldId>(m_worldHandle), settings.contactHertz, settings.contactDamping, settings.contactSpeed);
 }
 
 void PhysicsWorld::setGravity(const glm::vec3& gravity)
 {
-    m_gravity = gravity;
+    Globals::settings.physics.gravity = gravity; // the setting, so the panel shows it
     if (m_initialized)
-        b3World_SetGravity(oc::bitCast<b3WorldId>(m_worldHandle), toB3(m_gravity));
+        b3World_SetGravity(oc::bitCast<b3WorldId>(m_worldHandle), toB3(gravity));
 }

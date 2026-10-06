@@ -56,10 +56,10 @@ layout (binding = 9, std430) readonly buffer InGridTable
 // Scattering phase, Henyey-Greenstein normalized so g = 0 gives 1: forward scattering makes a light
 // BEHIND the particle (light -> particle -> camera aligned) bright and one beside it dim - the halo
 // and dark side that stop a lit mist reading flat. cosTheta = dot(light-to-particle, particle-to-eye);
-// g = "Particles/Anisotropy" (u_rainOcclusionParams.w), separate from the fog's.
+// g = "Particles/Anisotropy" (u_particles_anisotropy), separate from the fog's.
 float particlePhase(float cosTheta)
 {
-    const float g = clamp(u_rainOcclusionParams.w, -0.95, 0.95);
+    const float g = clamp(u_particles_anisotropy, -0.95, 0.95);
     const float g2 = g * g;
     const float denom = 1.0 + g2 - 2.0 * g * cosTheta;
     return (1.0 - g2) / (denom * sqrt(max(denom, 1e-4)));
@@ -156,12 +156,12 @@ void main()
     // The camera's side of the water decides whole-emitter visibility: an underwater volume shows only
     // while the camera is under the water surface at its XZ, an above-water one only while it is over
     // it. The surface is the LIVE wave height under the camera when the ocean supplies it (the CPU
-    // mirror, u_weatherWind2.z), else the local calm water level from the terrain data, else sea level.
+    // mirror, u_weather_cameraWaterY), else the local calm water level from the terrain data, else sea level.
     // The sim keeps the particles themselves on their side of the live surface; this is the gate.
     if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
     {
-        const float waterAtCamera = u_weatherWind2.w > 0.5 ? u_weatherWind2.z
-            : (terrainHeightMapPresent() ? terrainDataAt(u_viewPos.xz).y : u_oceanParams2.w);
+        const float waterAtCamera = u_weather_cameraWaterValid > 0.5 ? u_weather_cameraWaterY
+            : (terrainHeightMapPresent() ? terrainDataAt(u_viewPos.xz).y : u_oceanLive_seaLevel);
         const bool cameraUnder = u_viewPos.y < waterAtCamera;
         if (((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u) != cameraUnder)
             envelope = 0.0;
@@ -196,9 +196,9 @@ void main()
     float halfW = size * 0.5;
     float halfH = size * 0.5;
     // Weather volume streaks: a streak is the drop's motion relative to what the EYE TRACKS. A player
-    // tracks the ground, not the camera, so only a fraction (u_cameraVelocity.w) of the camera's own
+    // tracks the ground, not the camera, so only a fraction (u_particles_streakCameraBlur) of the camera's own
     // motion smears the drops - the full amount lays fast-panned rain nearly flat.
-    const vec3 vel = volume ? particle.velLife.xyz - u_cameraVelocity.xyz * u_cameraVelocity.w : particle.velLife.xyz;
+    const vec3 vel = volume ? particle.velLife.xyz - u_weather_cameraVelocity * u_particles_streakCameraBlur : particle.velLife.xyz;
     if (e.sizeParams.w > 0.0 && dot(vel, vel) > 1e-4)
     {
         // Velocity stretch: align the quad's up axis with the screen-projected velocity, and stretch by
@@ -230,14 +230,14 @@ void main()
         // the colour across the quad), so a lamp beside a 2 m mist sprite lights its near edge more than
         // its far edge and the sprite reads as a gradient rather than a flat card.
         const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
-        // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
+        // x "GI/Strength" (u_rt_giStrength, 0 with GI or RT off, where the probes and the sky SH are stale),
         // like every other GI consumer.
-        const vec3 irr = u_aoParams.y > 0.0 ? giIrradiance(world, n) * u_aoParams.y : vec3(0.0);
+        const vec3 irr = u_rt_giStrength > 0.0 ? giIrradiance(world, n) * u_rt_giStrength : vec3(0.0);
         // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
         // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
         const vec3 toEye = n;
         const vec3 sunDir = normalize(u_sunDirection);
-        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_eclipseParams.x * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
+        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
         // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
         // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);

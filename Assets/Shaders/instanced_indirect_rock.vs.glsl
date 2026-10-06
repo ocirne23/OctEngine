@@ -66,7 +66,7 @@ void main()
     float groundHeight = inst.posScale.y;
     float temperature = 12.5;
     float humidity = 0.5;
-    float waterLevel = u_terrainParams.z;
+    float waterLevel = u_terrainLive_seaLevel;
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(out_pos.xz);

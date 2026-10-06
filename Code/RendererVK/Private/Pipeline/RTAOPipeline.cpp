@@ -1,7 +1,6 @@
 ﻿module RendererVK;
 
 import Core;
-import Core.Tweaks;
 import File;
 import :Device;
 import :Allocator;
@@ -15,32 +14,11 @@ namespace
     // evaluates the GI probe SH along the bent normal for directional indirect occlusion.
     constexpr vk::Format AO_FORMAT = vk::Format::eR16G16B16A16Sfloat;
 
-    struct RtaoPC
-    {
-        uint32 numRays;
-        float  radius;
-        float  power;
-        float  intensity;
-        uint32 aoWidth;
-        uint32 aoHeight;
-        uint32 viewIndex;
-        float  fadeStart;
-        float  maxDistance;
-        float  normalBias;
-        float  distanceBias;
-    };
-    struct TemporalPC
+    // The dispatch's own values. The tweaks ride the frame UBO (u_rt_ao*: the "Ray tracing" lock bakes them).
+    struct AoPC
     {
         uint32 aoWidth;
         uint32 aoHeight;
-        float  maxHistory;
-        uint32 viewIndex;
-    };
-    struct SpatialPC
-    {
-        uint32 aoWidth;
-        uint32 aoHeight;
-        int32  radius;
         uint32 viewIndex;
     };
 
@@ -54,7 +32,7 @@ void RTAOPipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTex
     layout.computeShaderDebugFilePath = "Shaders/rtao.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     // Alpha-masked rays are a compile-time variant: the opaque path drops the geometry fetch + alpha test
-    // entirely. Toggling the tweak rebuilds this pipeline (see RTAOParams::registerTweaks onReloadShaders).
+    // entirely. Toggling the setting rebuilds this pipeline (the Renderer's "RTAO/Alpha Test" listener).
     if (m_pParams && m_pParams->alphaTest)
         layout.defines.push_back({ "RTAO_ALPHA_TEST", "1" });
     auto storageBinding = [](uint32 binding) {
@@ -75,7 +53,7 @@ void RTAOPipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTex
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(RtaoPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(AoPC) });
 }
 
 void RTAOPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view)
@@ -101,7 +79,7 @@ void RTAOPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // motion target
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TemporalPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(AoPC) });
 }
 
 void RTAOPipeline::buildSpatialLayout(ComputePipelineLayout& layout)
@@ -113,7 +91,7 @@ void RTAOPipeline::buildSpatialLayout(ComputePipelineLayout& layout)
     for (uint32 i : oc::array<uint32, 2>{ 1u, 3u }) // depth, accumulated AO
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = i, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(SpatialPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(AoPC) });
 }
 
 RTAOPipeline::~RTAOPipeline()
@@ -311,7 +289,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
     };
 
-    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
 
     { // -------- Pass 1: trace raw AO --------
         vk::MemoryBarrier2 asVis{
@@ -354,10 +332,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
 
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, traceLayout, 0, 1, &vkSet, 0, nullptr);
-        RtaoPC pc{ .numRays = uint32(oc::max(m_pParams->rays, 1)), .radius = m_pParams->radius, .power = m_pParams->power,
-            .intensity = m_pParams->intensity, .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex,
-            .fadeStart = m_pParams->fadeStart, .maxDistance = m_pParams->maxDistance,
-            .normalBias = m_pParams->normalBias, .distanceBias = m_pParams->distanceBias };
+        const AoPC pc{ .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex };
         cmd.pushConstants(traceLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
     }
@@ -381,7 +356,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         commandBuffer.cmdUpdateDescriptorSets(temporalLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, temporalLayout, 0, 1, &vkSet, 0, nullptr);
-        TemporalPC pc{ .aoWidth = m_width, .aoHeight = m_height, .maxHistory = m_pParams->maxHistory, .viewIndex = viewIndex };
+        const AoPC pc{ .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex };
         cmd.pushConstants(temporalLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
     }
@@ -402,7 +377,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         commandBuffer.cmdUpdateDescriptorSets(spatialLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_spatialPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, spatialLayout, 0, 1, &vkSet, 0, nullptr);
-        SpatialPC pc{ .aoWidth = m_width, .aoHeight = m_height, .radius = m_pParams->blurRadius, .viewIndex = viewIndex };
+        const AoPC pc{ .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex };
         cmd.pushConstants(spatialLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
 

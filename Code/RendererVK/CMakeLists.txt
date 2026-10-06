@@ -19,7 +19,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/
 target_compile_definitions(${PROJECT_NAME} PRIVATE VULKAN_HPP_NO_SPACESHIP_OPERATOR VULKAN_HPP_NO_STRUCT_CONSTRUCTORS VULKAN_HPP_NO_EXCEPTIONS)
 target_compile_definitions(${PROJECT_NAME} PRIVATE "VULKAN_HPP_ASSERT_ON_RESULT=__noop")
 
-target_link_libraries(${PROJECT_NAME} PUBLIC Core Animation File Threading vulkan-1
+target_link_libraries(${PROJECT_NAME} PUBLIC Core Settings Animation File Threading vulkan-1
 	glslang$<$<CONFIG:Debug>:d> 
 	MachineIndependent$<$<CONFIG:Debug>:d>
 	OSDependent$<$<CONFIG:Debug>:d>

@@ -82,7 +82,7 @@ them, and routing them through here means Core.ixx has no std import of its own)
 * **`<bit>`** — see `Core.OcBit`.
 * **`<filesystem>` and `<fstream>`** — ALL file and directory access goes through the File library's
   `FileSystem`, so a library that needs the disk links File. **Core itself therefore cannot do IO:**
-  `Core.Tweaks` takes injected read/write hooks (`setFileIo`, installed by main from FileSystem).
+  the tweak registry (now `Settings.Tweaks`) and the profiler's report writer take injected hooks from main.
 
 ## Crossing to `std::`
 
@@ -208,7 +208,8 @@ it mid-pass, which is race-free by that timing.
 
 ## Frame pacing
 
-`registerTweaks()` plus **`beginFrame(windowFocused, vr, vsync, displayRefreshHz, pumpWindow,
+`TimeSettings` (the "Time" tweaks: the type is here, the instance is `Globals::settings.time` - Core sits below the
+Settings library - bound once by main with `bindSettings`) plus **`beginFrame(windowFocused, vr, vsync, displayRefreshHz, pumpWindow,
 waitFence)`** — ONE call at the loop top does the whole frame boundary: the fence wait, the frame-rate
 limit, the window thread's event-pump kick, and the start of the next frame's clock.
 
@@ -235,59 +236,11 @@ duration under 1 ms. `reset(duration)` re-arms. The one-shot `--profile-after` /
 
 ---
 
-# `Core.Tweaks`
+# Tweaks
 
-[Tweaks.ixx](Public/Tweaks.ixx).
-
-```cpp
-Tweak::floatVar("Category/Sub", "Name", &liveVariable, min, max, step, onChange, flags);
-Tweak::intVar / boolean / color3 / float3 / ...
-```
-
-Once at init, this exposes a variable in the TweakPanel. **Pointers are non-owning and the variable
-must outlive the registration.** This is the standard way to make anything runtime-configurable.
-
-**Identity is `"Category/Name"`.**
-
-## Groups
-
-The panel's top folds are **groups**, NOT part of the category string: `TweakGroups::c_table` in
-Tweaks.ixx maps each ROOT category ("Sky" of "Sky/Clouds") to a group with a header colour —
-Graphics / FX / System / Game — and a root listed nowhere lands in the trailing "Other" group.
-`Tweak::groups()` / `Tweak::groupIndexOf(category)` are the lookups the TweakPanel uses. **A new
-root category goes into that table**, otherwise it shows under "Other". Panel order = table order.
-
-## `ETweakFlags`
-
-Optional last parameter after `onChange`, or `Tweak::ScopedFlags` RAII to flag a whole
-`registerTweaks` block. **Explicit per-call flags win over the block default.**
-
-**`Synced`** broadcasts server → clients:
-
-* `TweakRegistry::update(dt)` per frame **poll-detects** changes — the panel writes through raw
-  pointers, so polling is the only reliable hook.
-* NetworkManager watches `syncGeneration()`, which the poll bumps on any Synced change.
-* `packSynced` splits every Synced var into self-contained records chunked to fit one network message.
-* It rides the engine-reserved `"OcTweakSync"` event, intercepted in `fireEventAttributed`, so it
-  never reaches scripts or game hooks. **Only CLIENTS apply**, and `applySyncedBlob` ignores keys the
-  receiver did not flag Synced and clamps to the receiver's own bounds.
-
-**Policy:** all `Game/*` tweaks are `Synced` except `Game/Camera` (personal preference) and
-`Game/Sim LOD` (per-process performance tuning registered by the Entity library's World).
-
-## Command-line overrides
-
-* **`--tweak "Category/Name=v [v v v]"`** (`setOverride`) works on any variable. It applies now or at
-  the variable's registration; the snapshot is taken after the apply so it does not read as a change.
-  This is how an unattended profiling run pins settings.
-* **`--tweaks <file>`** (`loadOverrides`) applies a whole file of `Category/Name=v` lines with `#`
-  and `//` comments. Later `--tweak` flags win over it.
-* `Assets/Scenarios/cpu-profile.tweaks` = the heavy GPU features off, for CPU-focused runs.
-
-## The IO hooks
-
-`setFileIo(read, write)`: Core cannot include `<fstream>`, so main injects `FileSystem::readFileStr` /
-`writeFileStr`. Without them the registry keeps working in memory.
+The tweak registry (`Settings.Tweaks`) and every tweak's value moved to the **Settings** library - see
+[`Code/Settings/CONTEXT.md`](../Settings/CONTEXT.md). Core has no tweak code; its own "Time" values are
+`TimeSettings` (above).
 
 ---
 
@@ -601,6 +554,12 @@ puts siblings next to each other and every segment is a C string in place. A nod
 FNV hash of its path, so zoom survives the rebuild. The header shows used / VMA blocks and the
 driver's device-local usage against the budget. VRAM mode does not sample the churn rates; switching
 back reseeds them.
+
+The VRAM tooltip lists the box's OWN allocations (up to 8; `ViewNode::firstEntry` + `liveCount` index
+`m_vramEntries`, whose self entries sort first): an image's extent, format, mips / layers / MSAA and
+usage; a buffer's requested size (and the allocation when larger) and usage; both the memory type
+flags, mapped, and dedicated vs the VMA block size. The data is `GpuAllocationInfo` (RendererVK), the
+Vulkan names come from `Renderer::gpuEnumName` (`vk::to_string`, so a hover allocates).
 
 Every node has a zoom `id` (the `MemScopeNode` pointer, or the VRAM path hash) and a `parent` index;
 the breadcrumb and tooltip path walk the parent indices. **`sortChildren` re-points the grandchildren's

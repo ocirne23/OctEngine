@@ -6,7 +6,7 @@
 // Sky variant of the static-mesh pipeline (EPipelineIndex::Sky), shading the inside of the sky sphere:
 //  - single-scattering Rayleigh + Mie atmosphere, raymarched per pixel (VIEW_STEPS x SUN_STEPS, ALU only)
 //  - sun disc attenuated by the same atmospheric transmittance (reddens and flattens at the horizon),
-//    plus a Henyey-Greenstein forward-scatter halo (u_sunGlow = strength)
+//    plus a Henyey-Greenstein forward-scatter halo (u_sky_sunGlow = strength)
 //  - hash stars, a nebula band and a moon that fade in when the sun sets
 // The clouds are NOT drawn here: the volumetric cloud pass (CloudPipeline) composites them over the
 // whole scene, sky included.
@@ -28,7 +28,7 @@ layout (location = 1) out vec4 out_motion;
 
 // ---------------------------------------------------------------------------------------------
 // Atmosphere: single-scattering Rayleigh + Mie, shared with the indirect paths (atmosphere.inc.glsl,
-// pulled in by shared.inc.glsl). Coefficients come from the UBO (u_betaRayleigh / u_betaMie).
+// pulled in by shared.inc.glsl). Coefficients come from the UBO (u_sky_betaRayleigh / u_sky_betaMie).
 // ---------------------------------------------------------------------------------------------
 const int VIEW_STEPS = 12;
 
@@ -149,7 +149,7 @@ void main()
 	// With the sun fully off (color/intensity zero) the entire scattering integral is a multiply by
 	// zero: skip the raymarch and keep only the cheap ground test for the branches below.
 	vec3 sunSurfaceColor = u_sunColor.rgb;
-	const float eclipseFactor = u_eclipseParams.x;
+	const float eclipseFactor = u_sunVisible;
 	const float sunMagnitude = (u_sunColor.r + u_sunColor.g + u_sunColor.b);
 	const bool sunLit = sunMagnitude * eclipseFactor > 1e-5;
 	vec3 transmittance = vec3(1.0);
@@ -163,11 +163,11 @@ void main()
 	const float cosHorizon = -sqrt(max(1.0 - horizonRatio * horizonRatio, 0.0));
 
 	{
-		vec3 moonDir = u_moonParams.xyz;
+		vec3 moonDir = u_sky_moonDirection;
 		float cosM = dot(dir, moonDir);
 		const float cosAngle = dot(dir, L);
 		const float sunMoonAngle = dot(L, moonDir);
-		const bool moonCovered = cosM < u_moonParams.w * 2.00 - cosM;
+		const bool moonCovered = cosM < u_sky_moonCos * 2.00 - cosM;
 
 		color = atmosphereScatter(dir, L, up, VIEW_STEPS, observerHeight, transmittance) * sunSurfaceColor.rgb;
 		color = adjustSaturation(color, 2.0 * (2.0-eclipseFactor)) * eclipseFactor; // Saturate the sky as the sun goes into eclipse, to keep it from looking like a flat gray haze
@@ -175,26 +175,26 @@ void main()
 
 		// Sky radiance (moonlight / space light): a second in-scatter pass from the sky up axis, so it
 		// gives the night sky a faint glow consistent with what GI/fog receive from skyRadiance().
-		if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
+		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 		{
 			vec3 skyLTrans;
-			color += atmosphereScatter(dir, up, up, 4, observerHeight, skyLTrans) * u_skyRadianceColor;
+			color += atmosphereScatter(dir, up, up, 4, observerHeight, skyLTrans) * u_sky_radiance;
 		}
 		airColor = color;
 
 		// Sun halo: a tight Henyey-Greenstein forward lobe (smooth peak, long graceful tail) instead of a
-		// pow() spike. u_sunGlow is the strength; the transmittance keeps it warm/dim near the horizon.
-		if (sunLit && u_sunGlow > 0.0 && moonCovered)
-			color += sunSurfaceColor * phaseHG(cosAngle, 0.985) * 0.015 * u_sunGlow * transmittance;
+		// pow() spike. u_sky_sunGlow is the strength; the transmittance keeps it warm/dim near the horizon.
+		if (sunLit && u_sky_sunGlow > 0.0 && moonCovered)
+			color += sunSurfaceColor * phaseHG(cosAngle, 0.985) * 0.015 * u_sky_sunGlow * transmittance;
 
-		if (sunLit && u_sunAngularCos < 1.0 && moonCovered) // 1.0 disables the disc
+		if (sunLit && u_sky_sunAngularCos < 1.0 && moonCovered) // 1.0 disables the disc
 		{
 			// Sun disc: analytically anti-aliased rim (pixel-footprint smoothstep, TAA-stable) and a mild
 			// limb darkening. The gradient through the overexposed sun region is recovered by the highlight
-			// roll-off at the end of main() (u_skySunParams.z), not by darkening the disc itself.
+			// roll-off at the end of main() (u_sky_sunRolloff), not by darkening the disc itself.
 			vec3 sT = normalize(cross(L, abs(L.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 sB = cross(L, sT);
-			float discSin = sqrt(max(1.0 - u_sunAngularCos * u_sunAngularCos, 1e-12));
+			float discSin = sqrt(max(1.0 - u_sky_sunAngularCos * u_sky_sunAngularCos, 1e-12));
 			vec2 suv = vec2(dot(dir, sT), dot(dir, sB)) / discSin; // disc-local, rim at |suv| = 1
 			float r2 = dot(suv, suv);
 			if (r2 < 1.1 && cosAngle > 0.0)
@@ -206,16 +206,16 @@ void main()
 			}
 		}
 
-		// Moon: a sun-lit sphere shaded into the disc around u_moonParams.xyz (independent of the sun's
+		// Moon: a sun-lit sphere shaded into the disc around u_sky_moonDirection (independent of the sun's
 		// position; the phases still fall out of lighting the reconstructed sphere normals with the
-		// actual sun direction, so they react to where the sun is). Disc size comes from u_moonParams.w.
+		// actual sun direction, so they react to where the sun is). Disc size comes from u_sky_moonCos.
 		// Drawn before the stars so its disc coverage can occlude them (even the unlit, new-moon part of
 		// the disc blocks the stars behind it). The cloud pass composites later, so clouds occlude it.
-		if (u_moonBrightness > 0.0 && !moonCovered)
+		if (u_sky_moonBrightness > 0.0 && !moonCovered)
 		{
 			vec3 mT = normalize(cross(moonDir, abs(moonDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 mB = cross(moonDir, mT);
-			float discSin = sqrt(max(1.0 - u_moonParams.w * u_moonParams.w, 1e-8));
+			float discSin = sqrt(max(1.0 - u_sky_moonCos * u_sky_moonCos, 1e-8));
 			vec2 duv = vec2(dot(dir, mT), dot(dir, mB)) / discSin;
 			float r2 = dot(duv, duv);
 
@@ -225,35 +225,35 @@ void main()
 			float lambert = clamp(dot(n, L), 0.02, 1.0);
 			float planetlit = mix(0.0, 0.07, surfAngle * surfAngle * surfAngle);
 			float rimlight = clamp(1.0 - distance(moonDir, L) * discSin, 0.0, 1.0);
-			lambert += planetlit * smoothstep(0.0, 0.2, distance(L, moonDir) * u_moonParams.w) * length(color);
-			lambert += smoothstep(0.15, 0.0, dot(n, -L)) * rimlight * clamp(0.1 * sunMagnitude * u_moonParams.w - distance(L, moonDir), 0.0, 1.0);
+			lambert += planetlit * smoothstep(0.0, 0.2, distance(L, moonDir) * u_sky_moonCos) * length(color);
+			lambert += smoothstep(0.15, 0.0, dot(n, -L)) * rimlight * clamp(0.1 * sunMagnitude * u_sky_moonCos - distance(L, moonDir), 0.0, 1.0);
 			float albedo = 0.7 + 0.6 * (fbm3(n * 7.0, 3, 0.0) - 0.5); // maria/crater mottling
-			color += vec3(0.93, 0.95, 1.0) * ((lambert * albedo * u_moonBrightness) * transmittance);
+			color += vec3(0.93, 0.95, 1.0) * ((lambert * albedo * u_sky_moonBrightness) * transmittance);
 		}
 
 		// Night sky (stars + nebula). Visibility comes from the local sky luminance - daylight in-scatter
 		// washes them out, so they fade in automatically at dusk and in dark sky regions. The moon disc
 		// masks both out (it is a solid body, not additive light).
-		if ((u_skySunParams.w > 0.0 || u_nebulaParams.x > 0.0) && moonCovered)
+		if ((u_sky_starDensity > 0.0 || u_sky_nebulaIntensity > 0.0) && moonCovered)
 		{
 			float skyLum = dot(color, vec3(0.2126, 0.7152, 0.0722));
 			float nightVis = clamp(1.0 - skyLum * 25.0, 0.0, 1.0);
 			if (nightVis > 0.0)
 			{
-				// Milky-way band: a gaussian falloff around the great circle perpendicular to u_nebulaAxis.
+				// Milky-way band: a gaussian falloff around the great circle perpendicular to u_sky_nebulaAxis.
 				// Raw value-noise FBM reads as soft low-res blobs, so the field is domain-warped by a vector
 				// FBM (turns the blobs into wisps and filaments) and squashed across the band so structure
 				// stretches lengthwise, like a galaxy seen edge-on. Composed from four layers: broad tinted
 				// gas, ridged bright filaments, a narrow hot core line, and dark dust lanes cutting through.
-				if (u_nebulaParams.x > 0.0)
+				if (u_sky_nebulaIntensity > 0.0)
 				{
-					vec3 bandPole = normalize(u_nebulaAxis.xyz);
+					vec3 bandPole = normalize(u_sky_nebulaAxis);
 					float hgt = dot(dir, bandPole);
-					float bw = max(u_nebulaParams.z, 0.01);
+					float bw = max(u_sky_nebulaBandWidth, 0.01);
 					float bandFade = exp(-(hgt * hgt) / (bw * bw));
 					if (bandFade > 0.004)
 					{
-						vec3 p = (dir - bandPole * hgt * 0.25) * u_nebulaParams.y;
+						vec3 p = (dir - bandPole * hgt * 0.25) * u_sky_nebulaScale;
 						vec3 warp = vec3(fbmR(p * 0.8 + vec3(17.1, 3.7, 9.2), 3),
 						                 fbmR(p * 0.8 + vec3(27.3, 21.9, 5.8), 3),
 						                 fbmR(p * 0.8 + vec3(91.7, 63.2, 33.4), 3)) - 0.5;
@@ -264,7 +264,7 @@ void main()
 						float gasD = smoothstep(0.10, 0.78, gas);
 						float filD = pow(fil, 3.0) * smoothstep(0.14, 0.70, gas);
 						float coreLine = exp(-(hgt * hgt) / (bw * bw * 0.52)); // narrow hot line along the band center
-						float dustCut = 1.0 - u_nebulaParams.w * smoothstep(0.36, 0.72, dust) * mix(0.5, 1.0, coreLine) * bandFade;
+						float dustCut = 1.0 - u_sky_nebulaDust * smoothstep(0.36, 0.72, dust) * mix(0.5, 1.0, coreLine) * bandFade;
 						float vary = smoothstep(0.88, 0.72, fbm3(q * 0.35 + vec3(1.2, 1.3, 2.9), 5, 0.0));
 						float dens = (gasD * 0.25 + filD * 0.4 + coreLine * gasD * 0.4) * dustCut * bandFade * (0.5 + 5.4 * vary);
 						float hueT = fbm3(q * 0.5 + vec3(3.0, 29.0, 3.0), 3, 0.0);
@@ -272,7 +272,7 @@ void main()
 						vec3 hue = vec3(0.5) + vec3(0.5) * cos(6.2831853 * (t + vec3(0.00, 0.30, 0.60)));
 						hue = mix(vec3(dot(hue, vec3(0.333))), hue, 0.65); // saturation push for vibrancy
 						hue = clamp(mix(hue, vec3(0.95), clamp(dens * 0.6, 0.0, 0.55)), 0.0, 1.0);
-						float grain = vnoise3(dir * u_nebulaParams.y * 1.0);
+						float grain = vnoise3(dir * u_sky_nebulaScale * 1.0);
 						vec3 neb = hue * dens * (0.08 + 0.14 * grain * grain);
 
 						// Micro-star grid scale: ~1.5 px per cell at 1080p, so each speck is resolvable and
@@ -293,12 +293,12 @@ void main()
 							neb += mix(vec3(1.0), hue, 0.35) * (pt * (140.3 + 1.2 * fract(h2 * 27.3)));
 						}
 
-						color += neb * (u_nebulaParams.x * 0.9) * nightVis * transmittance.b;
+						color += neb * (u_sky_nebulaIntensity * 0.9) * nightVis * transmittance.b;
 					}
 				}
 
 				// Random stars
-				if (u_skySunParams.w > 0.0)
+				if (u_sky_starDensity > 0.0)
 				{
 					vec3 sd = dir * 220.0;
 					// Cell-space size of one screen pixel (derivatives are only defined in uniform control
@@ -306,14 +306,14 @@ void main()
 					float pxr = length(fwidth(sd));
 					vec3 cell = floor(sd);
 					float h = hash13(cell);
-					float gate = step(mix(0.9995, 0.995, u_skySunParams.w), h); // density: fraction of lit cells
+					float gate = step(mix(0.9995, 0.995, u_sky_starDensity), h); // density: fraction of lit cells
 					if (gate > 0.0)
 					{
 						// Round point at a hashed position inside the cell; size/brightness vary per star,
 						// with a slow twinkle. Size variation skews small (most stars tiny, a few big), and
 						// color variation tints each star along a cool/warm "temperature" axis.
 						vec3 ofs = fract(h * vec3(113.1, 412.7, 743.3)) * 0.5 + 0.25;
-						float radius = 0.52 * u_starParams.x * mix(1.0, 0.3 + 1.3 * fract(h * 57.31), u_starParams.y);
+						float radius = 0.52 * u_sky_starSize * mix(1.0, 0.3 + 1.3 * fract(h * 57.31), u_sky_starSizeVariation);
 						// Clamp the rendered footprint to >= ~1.2 pixels with a pixel-wide smooth edge and
 						// conserve the original energy via the area ratio. A sub-pixel point lands on a
 						// different jitter sample every frame (it pops in and out), so the TAA variance
@@ -333,8 +333,8 @@ void main()
 											vec3(0.95, 0.40, 0.7), 
 											fract(h * 636)
 										), 
-									u_starParams.w);
-						color += tint * (core * twinkle * (0.5 + h) * u_starParams.z) * nightVis * transmittance.b;
+									u_sky_starColorVariation);
+						color += tint * (core * twinkle * (0.5 + h) * u_sky_starBrightness) * nightVis * transmittance.b;
 					}
 				}
 			}
@@ -343,7 +343,7 @@ void main()
 
 	// Ground plane (below the DIPPED horizon, cosHorizon): the march ends at the ground there, so the color
 	// already holds the air in front of it (the aerial haze, from any altitude); the ground behind it is a
-	// diffuse albedo (u_groundParams, Sky > Ground Albedo) lit by the direct sun (horizon-tinted) plus the
+	// diffuse albedo (u_sky_groundAlbedo, Sky > Ground Albedo) lit by the direct sun (horizon-tinted) plus the
 	// grazing sky as ambient - the same fallback skyRadiance() gives downward GI/fog rays - seen through the
 	// march's transmittance. Continuous at the horizon line: the ground fades in with that transmittance.
 	const float cosUpDir = dot(dir, up);
@@ -351,27 +351,27 @@ void main()
 	{
 		vec3 grazeDir = normalize(dir - up * (cosUpDir - 0.02));
 		vec3 skyAmb = atmosphereScatterCheap(grazeDir, L, up, 4) * u_sunColor.rgb * eclipseFactor;
-		if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
-			skyAmb += atmosphereScatterCheap(grazeDir, up, up, 2) * u_skyRadianceColor;
-		vec3 groundLit = u_groundParams.rgb *
+		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
+			skyAmb += atmosphereScatterCheap(grazeDir, up, up, 2) * u_sky_radiance;
+		vec3 groundLit = u_sky_groundAlbedo *
 			(sunSurfaceColor * atmosTransmittanceToLight(0.0, L, up) * (max(sunElev, 0.0) / PI) + skyAmb);
 		color = airColor + transmittance * (groundLit + u_ambientColor);
 	}
 
 	/*
-	// Highlight roll-off (u_skySunParams.z): there is no tonemapper, so everything over 1.0 hard-clips
+	// Highlight roll-off (u_sky_sunRolloff): there is no tonemapper, so everything over 1.0 hard-clips
 	// to flat white - the sun disc, its halo and the Mie forward peak all merge into one featureless
 	// circle. Soft-clip the max channel above a knee with an exponential shoulder that asymptotes at 1:
 	// the overexposed region keeps a smooth gradient (disc > halo core > halo tail) instead of a hard
 	// silhouette. Max-channel (not per-channel) so saturated sunset hues roll off without shifting hue.
 	// 0 = off (raw clip); higher = lower knee + longer shoulder = more of the brightness range mapped
 	// into the visible gradient.
-	const float rolloff = clamp(u_skySunParams.z, 0.0, 2.0);
+	const float rolloff = clamp(u_sky_sunRolloff, 0.0, 2.0);
 	if (rolloff > 0.0)
 	{
 		// Knee saturates at rolloff = 1; past that only the headroom keeps growing (gentler shoulder).
-		const float knee = mix(1.0, min(u_rolloffKnee, 0.99), min(rolloff, 1.0)); // where compression starts
-		const float headroom = mix(0.35, u_eclipseParams.y, rolloff);             // brightness range the shoulder absorbs
+		const float knee = mix(1.0, min(u_sky_rolloffKnee, 0.99), min(rolloff, 1.0)); // where compression starts
+		const float headroom = mix(0.35, u_sky_rolloffHeadroom, rolloff);             // brightness range the shoulder absorbs
 		float lum = max(color.r, max(color.g, color.b));
 		if (lum > knee)
 		{

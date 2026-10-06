@@ -11,6 +11,7 @@ import :DescriptorSet;
 import :Sampler;
 import :Layout;
 import :GIProbePipeline;
+import Settings;
 
 // Projected box decals, drawn inside the scene-color render pass immediately after the opaque forward
 // draw (before particles/fog, so those layer on top). Decals are submitted per frame like lights
@@ -29,8 +30,7 @@ public:
     void initialize(vk::RenderPass sceneRenderPass, uint32 maxTextures, uint32 numTextureDescriptors, uint32 viewCount);
     void reloadShaders(vk::RenderPass sceneRenderPass);
     // "Decals/Enabled" - a per-frame stage flag the Renderer reads to gate recording the decal pass.
-    void registerTweaks();
-    bool isEnabled() const { return m_enabled; }
+    bool isEnabled() const { return Globals::settings.renderer.decals; }
 
     // The current frame slot's mapped decal array; Renderer::addDecal writes claimed slots directly.
     oc::span<RendererVKLayout::DecalInfo> getMapped(uint32 frameIdx) { return m_mappedDecals[frameIdx]; }
@@ -62,7 +62,6 @@ private:
 
     GraphicsPipeline m_pipeline;
     Sampler m_textureSampler;
-    bool m_enabled = true;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_decalBuffers;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
     oc::array<oc::span<RendererVKLayout::DecalInfo>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedDecals;

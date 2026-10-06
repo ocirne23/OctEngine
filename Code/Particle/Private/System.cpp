@@ -2,8 +2,8 @@ module Particle;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
 import RendererVK;
+import Settings;
 import :Effect;
 import :System;
 
@@ -96,19 +96,6 @@ void ParticleEffect::burst()
 }
 
 // ---- ParticleSystem ----
-
-void ParticleSystem::initialize()
-{
-    for (BuiltinEffect& b : m_builtins)
-    {
-        Tweak::boolean("Particles", b.name, &b.enabled);
-        Tweak::floatVar("Particles", b.countName, &b.countScale, 0.0f, 4.0f, 0.01f);
-        Tweak::floatVar("Particles", b.sizeName, &b.sizeScale, 0.1f, 4.0f, 0.01f);
-        Tweak::floatVar("Particles", b.alphaName, &b.alphaScale, 0.0f, 4.0f, 0.01f);
-        Tweak::floatVar("Particles", b.sizeVarName, &b.sizeVarScale, 0.0f, 4.0f, 0.01f);
-    }
-    Tweak::boolean("Particles", "Ocean spray", &m_oceanSpray);
-}
 
 uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
 {
@@ -239,9 +226,9 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             effect.destroy();
     };
     for (BuiltinEffect& b : m_builtins)
-        syncWeather(b.enabled, b.effect, b.path);
+        syncWeather(b.settings.enabled, b.effect, b.path);
     // Ocean spray: the renderer's producer pass spawns into this instance's emitter slot (GPU spawn path).
-    syncWeather(m_oceanSpray, m_oceanSprayEffect, "Effects/ocean_spray.pfx");
+    syncWeather(Globals::settings.particleSystem.oceanSpray, m_oceanSprayEffect, "Effects/ocean_spray.pfx");
     {
         // The producer spawns every request into the .pfx's FIRST emitter; further emitters would never
         // be reached, so the asset authors exactly one.
@@ -270,10 +257,10 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         {
             if (b.effect.m_id == inst.id)
             {
-                countScale = b.countScale;
-                sizeScale = b.sizeScale;
-                alphaScale = b.alphaScale;
-                sizeVarScale = b.sizeVarScale;
+                countScale = b.settings.countScale;
+                sizeScale = b.settings.sizeScale;
+                alphaScale = b.settings.alphaScale;
+                sizeVarScale = b.settings.sizeVarScale;
                 break;
             }
         }

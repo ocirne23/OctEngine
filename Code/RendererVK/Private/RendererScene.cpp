@@ -9,7 +9,8 @@ import Core.Window;
 import Core.Frustum;
 import Core.imgui;
 import Core.Camera;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 import Core.Time;
 import Core.Log;
 
@@ -800,8 +801,8 @@ void Renderer::setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> 
     m_grassGround.assign(chunks.begin(), chunks.end());
 }
 
-// This slot's ground table (its fence was waited): the patch grid around the camera, from the UBO's patch size and
-// capped range (buildUboGrass), and the terrain chunks under it - the finest per cell. Then the frame's chunk list is
+// This slot's ground table (its fence was waited): the patch grid around the camera, from the patch size and the
+// capped range (grassPatchSize / grassGridRange: u_grass_patchSize / u_grass_range), and the terrain chunks under it - the finest per cell. Then the frame's chunk list is
 // spent: the next frame draws grass only if the terrain hands it over again.
 void Renderer::uploadGrassFrame(uint32 frameIdx)
 {
@@ -811,8 +812,8 @@ void Renderer::uploadGrassFrame(uint32 frameIdx)
     frame.tableDim = 0;
     if (grassActive() && !m_grassGround.empty() && m_grassChunkSize > 0.0f)
     {
-        const float patchSize = m_ubo.grassParams0.y;
-        const int half = (int)std::ceil(m_ubo.grassParams0.z / patchSize);
+        const float patchSize = grassPatchSize();
+        const int half = (int)std::ceil(grassGridRange() / patchSize);
         const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
         frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
         frame.gridDim = (uint32)(2 * half + 1);

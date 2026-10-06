@@ -7,6 +7,7 @@ import Core.Transform;
 
 import RendererVK;
 import Threading;
+import Settings;
 
 import :TerrainSampler;
 import :RockType;
@@ -27,7 +28,7 @@ export namespace Procedural
 		RockSystem(const RockSystem&) = delete;
 		RockSystem& operator=(const RockSystem&) = delete;
 
-		void initialize(); // registers Tweaks
+		void initialize(); // attaches the "Rocks" listeners
 		// Per frame, after trees.update. `maps` places the preview on the terrain (y = 0 without it).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
@@ -55,8 +56,8 @@ export namespace Procedural
 			oc::vector<WorldVariant> variants;
 		};
 		// Rock records are wanted ("Rocks/Enabled" + "Rocks/World/Enabled"); the meshes may still be generating.
-		bool worldEnabled() const { return m_enabled && m_worldEnabled; }
-		const RockWorldDesc& worldRules() const { return m_worldRules; }
+		bool worldEnabled() const { return m_settings.enabled && m_settings.worldEnabled; }
+		const RockWorldDesc& worldRules() const { return m_settings.worldRules; }
 		// Bumped by "Reload types": the .rock files were read again, so TreeWorld reads their Placement blocks again.
 		uint32 typesRevision() const { return m_typesRevision; }
 		// The types with their meshes uploaded: empty until the load finishes, and after every clear. Valid until
@@ -101,18 +102,8 @@ export namespace Procedural
 		void clearMeshes();
 		void clearAll(); // clearMeshes, then the types too
 
-		// --- Tweaks ---
-		bool m_enabled = true;
-		bool m_reload = false;    // button: re-read the .rock files, regenerate, respawn
+		RockSettings& m_settings = Globals::settings.rockSystem; // "Rocks" (the buttons are cleared here)
 		bool m_remesh = false;    // "Grid resolution" changed: regenerate the meshes of the loaded types (no re-read)
-		bool m_respawn = false;   // button: respawn the preview in front of the camera
-		bool m_showPreview = false; // the rows in front of the camera (off: the world's rocks only)
-		bool m_worldEnabled = true; // rock records in the world (TreeWorld) + rock types in TreeSystem's world set
-		RockWorldDesc m_worldRules;
-		int m_previewShading = 0; // 0 = the rock material (LitRock: the climate's bedrock), 1 = flat grey (the shape alone)
-		int m_gridResolution = 32; // surface-nets cells along the longest axis (reloads)
-		int m_seed = 1;
-		float m_spacing = 1.4f;   // x the row's largest rock size
 
 		bool m_loaded = false;     // the types are read (generation may still run)
 		bool m_generating = false; // generation jobs kicked, meshes not uploaded yet

@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import Core.SDL;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
 import Core.Camera;
 import Core.Rect;
 import Core.Transform;
@@ -35,8 +35,8 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         return;
     // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
     // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
-    GameUnitComponent::params.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
-    GameUnitComponent::params.localTeam = m_team; // own-team units tint green (re-stamped when the team changes)
+    Globals::settings.game.unitParams.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
+    Globals::settings.game.unitParams.localTeam = m_team; // own-team units tint green (re-stamped when the team changes)
 
     // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
     // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
@@ -56,59 +56,6 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // The volumetric clouds are a sandbox feature: the top-down camera sits under them and never sees them.
     Globals::rendererVK.setCloudsSuppressed(true);
 
-    {
-        // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-        const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
-        Tweak::floatVar("Game/Coop", "First wave delay (s)", &m_waveFirstDelay, 5.0f, 600.0f, 5.0f);
-        Tweak::floatVar("Game/Coop", "Wave interval (s)", &m_waveInterval, 10.0f, 600.0f, 5.0f);
-        Tweak::intVar("Game/Coop", "Wave budget", &m_waveBudget, 1, 5000, 10);
-        Tweak::floatVar("Game/Coop", "Wave budget growth", &m_waveBudgetGrowth, 0.0f, 1000.0f, 5.0f);
-        Tweak::floatVar("Game/Coop", "Wave growth growth", &m_waveGrowthGrowth, 0.0f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost grunt", &m_waveCost[(int)ENpcType::Grunt], 0.1f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost brute", &m_waveCost[(int)ENpcType::Brute], 0.1f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost runner", &m_waveCost[(int)ENpcType::Runner], 0.1f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost spitter", &m_waveCost[(int)ENpcType::Spitter], 0.1f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost swarm", &m_waveCost[(int)ENpcType::Swarm], 0.1f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost elite", &m_waveCost[(int)ENpcType::Elite], 0.1f, 500.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost giant", &m_waveCost[(int)ENpcType::Giant], 0.1f, 500.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost titan", &m_waveCost[(int)ENpcType::Titan], 0.1f, 500.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost lobber", &m_waveCost[(int)ENpcType::Lobber], 0.1f, 500.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost spawner", &m_waveCost[(int)ENpcType::Spawner], 0.1f, 500.0f, 0.5f);
-        Tweak::floatVar("Game/Coop", "Cost warrior", &m_waveCost[(int)ENpcType::Warrior], 0.1f, 500.0f, 0.5f);
-        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 100000, 50);
-        Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &m_waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
-        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 1000000, 10);
-        Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
-        Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
-        Tweak::floatVar("Game/Coop", "Ambient depth scale", &m_ambientDepthScale, 0.5f, 1.0f, 0.01f);
-        Tweak::floatVar("Game/Coop", "Ambient wander interval (s)", &m_ambientWanderInterval, 0.0f, 600.0f, 5.0f);
-        Tweak::floatVar("Game/Coop", "Ambient wander distance", &m_ambientWanderDistance, 2.0f, 60.0f, 1.0f);
-        Tweak::floatVar("Game/Coop", "Ambient wander base bias", &m_ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
-        Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &m_ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
-        Tweak::floatVar("HUD", "Label max distance", &m_labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
-        Tweak::floatVar("Game/Nav", "Nav unit source reach", &m_navUnitSourceReach, 8.0f, 400.0f, 4.0f);
-        Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &m_focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
-        Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
-        // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
-        // them: the values actually used ride the GMp event (and the save) with the seed - a
-        // joiner's tweak sync lands after the world replay, too late to drive generation.
-        Tweak::intVar("Game/Coop", "Map seed", &m_mapSeedTweak, 0, 0x7fffffff, 1);
-        Tweak::floatVar("Game/Coop", "Terrain fill", &m_terrainFill, 0.0f, 0.6f, 0.02f);
-        Tweak::intVar("Game/Coop", "Terrain lanes", &m_terrainLanes, 2, 12, 1);
-        Tweak::floatVar("Game/Construction", "Refill radius", &m_refillRadius, 1.0f, 30.0f, 0.25f);
-        Tweak::floatVar("Game/Construction", "Refill rate", &m_refillRate, 0.5f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Construction", "Player build radius", &m_buildRadius, 1.0f, 30.0f, 0.25f);
-        Tweak::floatVar("Game/Construction", "Player build rate", &m_playerBuildRate, 0.5f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Player", "Base heal radius", &m_baseHealRadius, 0.0f, 60.0f, 0.5f);
-        Tweak::floatVar("Game/Player", "Base heal/s", &m_baseHealRate, 0.0f, 100.0f, 0.5f);
-        Tweak::floatVar("Game/Player", "Melee damage/s", &m_meleeDps, 0.0f, 200.0f, 0.5f);
-        Tweak::floatVar("Game/Player", "Melee radius", &m_meleeRadius, 0.0f, 12.0f, 0.25f);
-        Tweak::floatVar("Game/Nav", "Group cluster radius", &m_selectionClusterRadius, 2.0f, 60.0f, 0.5f);
-    }
-    m_camera.registerTweaks();
-    m_player.registerTweaks();
-    m_structures.registerTweaks();
-    m_npcs.registerTweaks();
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
     // Co-op: players share team 0, the AI is team 1 - the force shaders/bakes shrink to fit. PvP
     // sets the default cap EXPLICITLY: exit-to-menu can chain a co-op session into a PvP one in
@@ -197,10 +144,8 @@ GameMatch::~GameMatch()
     restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
     Globals::rendererVK.setShadowParams(restored);
     Globals::rendererVK.setCloudsSuppressed(false);
-    // Exit-to-menu can destroy a GameMatch MID-RUN: every tweak registered on a member (the ctor's
-    // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
-    // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.
-    TweakRegistry::get().unregisterInRange(this, sizeof(GameMatch));
+    // The tweaks are global settings (registered once at startup): nothing registered on this
+    // object. StructureSystem drops its own listeners in its dtor.
     applyPause(false); // a shared pause must not outlive the match (exit-to-menu mid-pause)
     Globals::navSystem.clear(); // waits on in-flight builds before the world goes
     // The WHOLE World is wiped below (NpcSystem::clear): every holder drops its EntityPtrs FIRST,
@@ -230,7 +175,7 @@ void GameMatch::spawnWorld()
         // corridor and its border ring are PvP-only). Waves come from any compass direction.
         m_basePos = glm::vec3(0.0f);
         m_playerStart = glm::vec3(0.0f, 1.0f, -6.0f);
-        m_waveTimer = m_waveFirstDelay;
+        m_waveTimer = m_settings.waveFirstDelay;
     }
 
     m_ground = Globals::world.spawnAssetFile("Entities/Game/ground.pre",
@@ -290,10 +235,10 @@ void GameMatch::spawnWorld()
         m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
         if (!m_isClient)
         {
-            uint32 seed = (uint32)m_mapSeedTweak;
+            uint32 seed = (uint32)m_settings.mapSeed;
             if (seed == 0) // tweak 0 = roll a fresh map every run
                 seed = (std::random_device{}() & 0x7fffffffu) | 1u;
-            rebuildCoopMap(seed, m_terrainFill, m_terrainLanes);
+            rebuildCoopMap(seed, m_settings.terrainFill, m_settings.terrainLanes);
         }
     }
     else
@@ -318,14 +263,14 @@ void GameMatch::spawnWorld()
             for (uint8 t = 0; t < m_numTeams; ++t)
                 m_structures.spawnBase(baseGroundPos(t), t);
             m_team = allocateClientTeam(0);
-            GameUnitComponent::params.localTeam = m_team;
+            Globals::settings.game.unitParams.localTeam = m_team;
             m_player.setTeam(m_team);
             m_playerStart = teamStartPos((uint8)m_team);
         }
         else
         {
             m_structures.spawnBase(m_basePos);
-            m_ambientPendingBudget = (float)m_ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
+            m_ambientPendingBudget = (float)m_settings.ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
         }
         // Respawns land on a FREE cell near the anchor: buildings placed on the spawn spot after
         // the fact (a wall ring around the Base, a house) must not swallow the capsule. Rings of
@@ -426,7 +371,7 @@ void GameMatch::update(float deltaSec)
         {
             m_focusClusterTimer = 0.25f;
             m_focusClusters.clear();
-            const float r2 = m_focusClusterRadius * m_focusClusterRadius;
+            const float r2 = m_settings.focusClusterRadius * m_settings.focusClusterRadius;
             const auto nearPoint = [&](const glm::vec3& a, const glm::vec3& b) {
                 const glm::vec2 d(a.x - b.x, a.z - b.z);
                 return glm::dot(d, d) < r2; };
@@ -469,7 +414,7 @@ void GameMatch::update(float deltaSec)
         if (m_player.team() != m_team)
         {
             m_team = m_player.team();
-            GameUnitComponent::params.localTeam = m_team; // replicated units re-tint as their next snapshot lands
+            Globals::settings.game.unitParams.localTeam = m_team; // replicated units re-tint as their next snapshot lands
             m_player.setRespawnPos(teamStartPos((uint8)m_team));
             Log::info("We are team " + oc::to_string(m_team));
         }
@@ -506,10 +451,10 @@ void GameMatch::update(float deltaSec)
         ProfileScope materialsScope("Player materials", EProfileCategory::Game);
         const auto tickPlayerMaterials = [&](const glm::vec3& pos, uint8 team, float& materials)
         {
-            materials += m_structures.takeStoredMinerals(pos, m_refillRadius, team,
-                glm::min(m_refillRate * deltaSec, m_player.materialsMax() - materials));
-            materials -= m_structures.fundNearbyBlueprint(pos, m_buildRadius, team,
-                glm::min(m_playerBuildRate * deltaSec, materials));
+            materials += m_structures.takeStoredMinerals(pos, m_settings.refillRadius, team,
+                glm::min(m_settings.refillRate * deltaSec, m_player.materialsMax() - materials));
+            materials -= m_structures.fundNearbyBlueprint(pos, m_settings.buildRadius, team,
+                glm::min(m_settings.playerBuildRate * deltaSec, materials));
         };
         float serverMaterials = m_player.materials();
         tickPlayerMaterials(playerPos, (uint8)m_team, serverMaterials);
@@ -634,7 +579,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     // cycle built: one interval stale, a metre or two of motion against 64 m cells. Clients (no
     // unit sim) have an empty sweep and publish every frame. The root list only mutates on main,
     // after this job joins.
-    const float cell = glm::max(m_navUnitSourceReach, 8.0f);
+    const float cell = glm::max(m_settings.navUnitSourceReach, 8.0f);
     const auto cellKey = [&](const glm::vec3& p) {
         return (uint64)(uint32)(int)glm::floor(p.x / cell) << 32 | (uint32)(int)glm::floor(p.z / cell); };
     // A unit's field is read only by OTHER teams' units within navFollowRadius of it, so a unit
@@ -756,12 +701,12 @@ void GameMatch::tickPlayerMelee(float deltaSec)
     // hit would be stomped by the next snapshot blob. Every player capsule - the server's own AND
     // each client twin - grinds adjacent enemy UNITS (never puppets: players fighting players is
     // not a melee aura's job) through the unified GameUnitComponent::damage().
-    if (m_meleeDps <= 0.0f || m_meleeRadius <= 0.0f)
+    if (m_settings.meleeDps <= 0.0f || m_settings.meleeRadius <= 0.0f)
         return;
     ProfileScope scope("Player melee", EProfileCategory::Game);
     const auto meleeAround = [&](const glm::vec3& pos, uint8 team)
     {
-        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), m_meleeRadius, SpatialLayer_Render, [&](uint64 user)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), m_settings.meleeRadius, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             GameUnitComponent* u = getComponent<GameUnitComponent>(other);
@@ -770,8 +715,8 @@ void GameMatch::tickPlayerMelee(float deltaSec)
             // The query matches bounding spheres - the melee rule is the CENTER distance (XZ,
             // the same measure the units' own melee probes use).
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
-            if (glm::dot(d, d) <= m_meleeRadius * m_meleeRadius)
-                u->damage(m_meleeDps * deltaSec, team);
+            if (glm::dot(d, d) <= m_settings.meleeRadius * m_settings.meleeRadius)
+                u->damage(m_settings.meleeDps * deltaSec, team);
         });
     };
     meleeAround(m_player.bodyPos(), (uint8)m_team);
@@ -786,7 +731,7 @@ void GameMatch::tickBaseHealing(float deltaSec)
     ProfileScope scope("Base healing", EProfileCategory::Game);
     // Own player only: health is OWNER-computed, so every instance heals its own capsule against
     // its LOCAL structure mirror (clients hold the Bases through the GPl replay) - no sync needed.
-    if (m_baseHealRate <= 0.0f || m_baseHealRadius <= 0.0f || !m_player.entity())
+    if (m_settings.baseHealRate <= 0.0f || m_settings.baseHealRadius <= 0.0f || !m_player.entity())
         return;
     const glm::vec3 pos = m_player.bodyPos();
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -795,9 +740,9 @@ void GameMatch::tickBaseHealing(float deltaSec)
             || m_structures.structureTeam(i) != (uint8)m_team)
             continue;
         const glm::vec3 basePos = m_structures.structurePos(i);
-        if (glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(basePos.x, basePos.z)) <= m_baseHealRadius)
+        if (glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(basePos.x, basePos.z)) <= m_settings.baseHealRadius)
         {
-            m_player.heal(m_baseHealRate * deltaSec);
+            m_player.heal(m_settings.baseHealRate * deltaSec);
             return; // one Base is enough - never stack multiple
         }
     }

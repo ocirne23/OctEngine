@@ -151,7 +151,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   Tweaks `Particles/Rain occlusion*`.
 * `WindResponse <1/s>` — the horizontal velocity relaxes onto the renderer's WEATHER WIND
   (THE wind, `Sky/Wind` speed / direction / gust strength / gust size - the vegetation, fog, ocean and clouds read
-  it too - plus the rain's own `Particles/Wind sheet contrast / sheet size / sheet drift`, `Ubo::weatherWind0/1/2`) at that rate; heavy drops ~1, flakes ~4, 0 = ignores wind. The
+  it too - plus the rain's own `Particles/Wind sheet contrast / sheet size / sheet drift`, `Ubo::weather` / `Ubo::particles`) at that rate; heavy drops ~1, flakes ~4, 0 = ignores wind. The
   local wind is the mean PLUS a 2D gust vector of "gust strength" m/s from two large-scale noise
   fields (`weatherWindAt`, particle.inc.glsl) - absolute, so flurries exist in calm air. The fields
   travel along the wind direction at "sheet drift" plus half the wind speed (a gust front sweeps
@@ -165,7 +165,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
 * `Underwater true` — the volume lives BELOW the live ocean surface: the sim puts a particle that is
   above the surface (same FFT + shore sampling as `WaterFloor`) back at a random depth under it, so
   a bubble reaching the surface pops and re-forms below; the draw hides the whole volume while the
-  camera is above SEA LEVEL (`u_oceanParams2.w`, the coarse gate). `Effects/underwater.pfx` (silt +
+  camera is above SEA LEVEL (`u_oceanLive_seaLevel`, the coarse gate). `Effects/underwater.pfx` (silt +
   bubbles). `AboveWater true` is the inverse (a particle under the surface goes back up over it, hidden
   while the camera is under sea level): `Effects/dust.pfx`. On a non-volume emitter only the draw
   gate applies: the ocean spray carries it so the spray hides while the camera is under the sea.
@@ -173,7 +173,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   the water is drawn with) is a floor. On a VOLUME emitter a particle that reaches it restarts at the
   box top at a fresh random XZ, exactly like the bottom exit - a volume has no life to end - so rain
   never sinks through a wave; on a finite-life emitter (the spray) it lands and fades out there. A
-  cheap reject on the calm level plus the crest band (`u_fogParams7.y`) keeps the cascade taps to the
+  cheap reject on the calm level plus the crest band (`u_fogLive_waveBand`) keeps the cascade taps to the
   particles near the water.
 * `HeightFalloff <m>` — alpha falls off as exp(-height above the ground / m), the ground being the
   terrain or the local water level (the draw binds the terrain-data cascades at 6, refreshed per
@@ -182,7 +182,8 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
 **Built-in ambient effects** (`ParticleSystem::m_builtins`): `Rain`, `Snow`, `Dust`
 (`Effects/dust.pfx`, motes + fluff) and `Underwater`, each a `Particles/<Name>` toggle that
 creates/destroys one camera-following instance, with `<Name> count / size / alpha / size variation` multiplier tweaks
-applied on top of the `.pfx` every frame. Count scales the rate and the volume FILL COUNT, live in both
+applied on top of the `.pfx` every frame. The values live in `Globals::settings.particleSystem`
+(`ParticleSystemSettings`, registered by `Settings::registerParticleSystem` in `Settings.ParticleSystem`). Count scales the rate and the volume FILL COUNT, live in both
 directions: up by spawning the deficit over the next frames, down through `ParticleEmitterGpu::cullParams`
 - a one-frame fraction the sim uses to recycle a random subset of that emitter's live particles, because
 a volume never ages out and has nothing else to remove. The handles are DETACHED, not destroyed, in

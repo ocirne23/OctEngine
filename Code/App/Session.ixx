@@ -5,7 +5,7 @@ import Core.Log;
 import Core.glm;
 import Core.Camera;
 import Core.Time;
-import Core.Tweaks;
+import Settings.Tweaks;
 
 import App.InputControls;
 

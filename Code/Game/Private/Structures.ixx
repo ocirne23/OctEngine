@@ -6,7 +6,10 @@ import Entity;
 import File; // AssetNode (save/load)
 import Force;
 import Threading; // the transport job
+import Settings;
 export import :StructureTypes; // EStructureType + the type predicates, GameMaxTeams, ENodeType
+
+static_assert((int)EStructureType::Count == GameStructureTypeCount); // the Settings.Game cost table
 
 // The build/economy layer: every structure is an ENTITY whose GameStructureComponent holds its
 // identity (stable id, team, health, blueprint) and its three float resource stores. Resources
@@ -15,13 +18,18 @@ export import :StructureTypes; // EStructureType + the type predicates, GameMaxT
 // placement (grid/nodes/requests - the MP validation point), the network rebuild, production
 // (income, fuel burn, consumer drain, emitter ramps - over the roster), the death sweep, per-team
 // totals, mirrors and save/load. The bodies are split over six implementation units by topic -
-// the list is at the end of this file.
+// the list is at the end of this file. The tuning is Globals::settings.game.structures (m_settings).
 
 export const char* structureTypeName(EStructureType type);
 
 export class StructureSystem final
 {
 public:
+    StructureSystem();  // attaches the transport-tick listeners
+    ~StructureSystem(); // drops them
+    StructureSystem(const StructureSystem&) = delete;
+    StructureSystem& operator=(const StructureSystem&) = delete;
+
     // One ROSTER entry (index positions are valid for THIS frame only - removals reindex; anything
     // persistent goes by the stable id on the component). `owner` is an OWNING ref: the raw
     // pointers can never dangle, and every way an entity leaves the world funnels through
@@ -107,7 +115,6 @@ public:
     void loadFrom(const AssetNode& root);
     void clearAllStructures();
 
-    void registerTweaks();
     // CO-OP: GameMatch places nodes one by one from the generated map (seeded - every instance
     // derives the identical set from the same seed, the corridor-set contract).
     void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
@@ -168,7 +175,7 @@ public:
     struct CableMirror { uint32 id; uint8 fill; uint8 util; }; // util = the ~2 s throughput / rate, x255
     void collectCableFills(oc::vector<CableMirror>& out, uint32& cursor, int maxRecords) const;
     void mirrorCableFill(uint32 id, uint8 fill, uint8 util);
-    float transportTickPeriod() const { return 1.0f / glm::max(m_transportTickHz, 1.0f); }
+    float transportTickPeriod() const { return 1.0f / glm::max(m_settings.transportTickHz, 1.0f); }
     // The problem badge cached on the roster entry (see Ref::warning): GameMatch's world-labels
     // job re-checks each structure on its own jittered timer and stamps the result here.
     const char* structureWarning(int index) const { return m_frame[index].warning; }
@@ -181,18 +188,18 @@ public:
     }
     int unitPopulation(int unitType) const
     {
-        return m_unitPopulation[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
+        return m_settings.unitPopulation[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
     }
     float unitSpawnEnergy(int unitType) const
     {
-        return m_spawnEnergy[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
+        return m_settings.spawnEnergy[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
     }
-    float houseLinkRadius() const { return m_houseLinkRadius; }
+    float houseLinkRadius() const { return m_settings.houseLinkRadius; }
     // The medic's reach/rate live in GameStructureParams (the component's machine logic heals
     // units); these read them for the player heal, the ghost and the ring.
-    float medicHealRadius() const { return GameStructureComponent::params.medicRange; }
-    float medicHealRate() const { return GameStructureComponent::params.medicHealRate; }
-    int housePopulation() const { return m_housePopulation; }
+    float medicHealRadius() const { return Globals::settings.game.structureParams.medicRange; }
+    float medicHealRate() const { return Globals::settings.game.structureParams.medicHealRate; }
+    int housePopulation() const { return m_settings.housePopulation; }
     oc::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
     {
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->route
@@ -208,8 +215,8 @@ public:
         const int index = structureIndexById(id);
         return index >= 0 ? m_frame[index].state : nullptr;
     }
-    float waypointRadius() const { return m_waypointRadius; }
-    int wallBreachCost() const { return m_wallBreachCost; } // Nav step multiplier through a built wall
+    float waypointRadius() const { return m_settings.waypointRadius; }
+    int wallBreachCost() const { return m_settings.wallBreachCost; } // Nav step multiplier through a built wall
 
     int structureIndexById(uint32 id) const
     {
@@ -229,7 +236,7 @@ public:
     glm::vec3 structureLabelAnchor(int index) const;
     EStructureType structureType(int index) const { return m_frame[index].type; }
     float structureHealth(int index) const { return m_frame[index].state->health; }
-    float structureHealthMax() const { return m_structureHealthMax; }
+    float structureHealthMax() const { return m_settings.structureHealthMax; }
     float structureHealthMaxOf(int index) const { return m_frame[index].state->healthMax; } // cables are softer
     uint8 structureTeam(int index) const { return (uint8)m_frame[index].state->team; }
     bool structureBlueprint(int index) const { return m_frame[index].state->blueprint; }
@@ -263,7 +270,7 @@ public:
         const glm::vec3& p = m_nodes[nodeIndex].pos;
         return glm::vec3(p.x, 0.0f, p.z);
     }
-    float extractorSnapRadius() const { return m_extractorSnapRadius; }
+    float extractorSnapRadius() const { return m_settings.extractorSnapRadius; }
     int nodeCount() const { return (int)m_nodes.size(); }
     glm::vec3 nodePos(int index) const { return m_nodes[index].pos; }
     ENodeType nodeType(int index) const { return m_nodes[index].type; }
@@ -283,20 +290,20 @@ public:
     {
         switch (t)
         {
-        case EStructureType::Emitter:     return m_emitterBuffer; // shield emitters hold a deeper charge:
-        case EStructureType::Bastion:     return m_bastionBuffer; // pressure draw spikes under a push
-        case EStructureType::Lance:       return m_lanceBuffer;
+        case EStructureType::Emitter:     return m_settings.emitterBuffer; // shield emitters hold a deeper charge:
+        case EStructureType::Bastion:     return m_settings.bastionBuffer; // pressure draw spikes under a push
+        case EStructureType::Lance:       return m_settings.lanceBuffer;
         case EStructureType::Extractor:
         case EStructureType::Solar:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
         case EStructureType::MedicStation:
-        case EStructureType::Turret:      return m_internalBuffer;
+        case EStructureType::Turret:      return m_settings.internalBuffer;
         case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
                                                        // stamped per instance (= its unit's cost, the build bar)
-        case EStructureType::Generator:   return m_generatorBuffer;
-        case EStructureType::Battery:     return m_batteryCapacity;
-        case EStructureType::Base:        return m_baseEnergyCapacity; // feeds its always-on shield
+        case EStructureType::Generator:   return m_settings.generatorBuffer;
+        case EStructureType::Battery:     return m_settings.batteryCapacity;
+        case EStructureType::Base:        return m_settings.baseEnergyCapacity; // feeds its always-on shield
         default:                          return 0.0f;
         }
     }
@@ -309,10 +316,10 @@ public:
     {
         switch (t)
         {
-        case EStructureType::Generator:  return m_generatorFuelTank;
-        case EStructureType::FuelTank:   return m_fuelTankCapacity;
+        case EStructureType::Generator:  return m_settings.generatorFuelTank;
+        case EStructureType::FuelTank:   return m_settings.fuelTankCapacity;
         case EStructureType::Extractor:
-        case EStructureType::Fabricator: return m_internalBuffer;
+        case EStructureType::Fabricator: return m_settings.internalBuffer;
         default:                         return 0.0f;
         }
     }
@@ -322,29 +329,29 @@ public:
         {
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
-        case EStructureType::Constructor:  return m_internalBuffer;
+        case EStructureType::Constructor:  return m_settings.internalBuffer;
         // Barracks hold NO minerals: units are paid from their energy store (no conveyor attaches).
-        case EStructureType::MineralSilo:  return m_mineralSiloCapacity;
-        case EStructureType::Base:         return m_mineralBaseCapacity;
+        case EStructureType::MineralSilo:  return m_settings.mineralSiloCapacity;
+        case EStructureType::Base:         return m_settings.mineralBaseCapacity;
         default:                           return 0.0f;
         }
     }
-    float mineralCost(EStructureType type) const { return m_costs[(int)type]; }
+    float mineralCost(EStructureType type) const { return m_settings.costs[(int)type]; }
     // The build hotbar's hover card: one sentence + this type's exact per-second flows, one per
     // line, straight off the live tweaks (see the definition).
     oc::string describeType(EStructureType type) const;
     int affordableCount(EStructureType type, uint8 team = 0) const
     {
-        const float cost = m_costs[(int)type];
+        const float cost = m_settings.costs[(int)type];
         return cost > 0.0f ? (int)(minerals(team) / cost) : 0;
     }
     float emitterReachOf(EStructureType t) const
     {
-        return t == EStructureType::Bastion ? m_bastionReach
-             : t == EStructureType::Lance ? m_lanceReach
-             : t == EStructureType::Base ? m_baseShieldReach : m_emitterReach;
+        return t == EStructureType::Bastion ? m_settings.bastionReach
+             : t == EStructureType::Lance ? m_settings.lanceReach
+             : t == EStructureType::Base ? m_settings.baseShieldReach : m_settings.emitterReach;
     }
-    float placeRange() const { return m_placeRange; }
+    float placeRange() const { return m_settings.placeRange; }
 
     // ---- GRID PLACEMENT --------------------------------------------------------------------
     static constexpr float GridCellSize = 2.0f;
@@ -413,7 +420,7 @@ public:
     float fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
         bool includeRepairs = false);
     float investMaterials(const Ref& s, float amount);
-    float constructorRange() const { return m_constructorRange; }
+    float constructorRange() const { return m_settings.constructorRange; }
 
 private:
     struct Node
@@ -603,15 +610,15 @@ private:
     bool m_linksDirty = true;
     float emitterOutputOf(EStructureType t) const
     {
-        return t == EStructureType::Bastion ? m_bastionOutput
-             : t == EStructureType::Lance ? m_lanceOutput
-             : t == EStructureType::Base ? m_baseShieldOutput : m_emitterOutput;
+        return t == EStructureType::Bastion ? m_settings.bastionOutput
+             : t == EStructureType::Lance ? m_settings.lanceOutput
+             : t == EStructureType::Base ? m_settings.baseShieldOutput : m_settings.emitterOutput;
     }
     float emitterDrawOf(EStructureType t) const
     {
-        return t == EStructureType::Bastion ? m_bastionEnergyPerSec
-             : t == EStructureType::Lance ? m_lanceEnergyPerSec
-             : t == EStructureType::Base ? m_baseShieldEnergyPerSec : m_emitterEnergyPerSec;
+        return t == EStructureType::Bastion ? m_settings.bastionEnergyPerSec
+             : t == EStructureType::Lance ? m_settings.lanceEnergyPerSec
+             : t == EStructureType::Base ? m_settings.baseShieldEnergyPerSec : m_settings.emitterEnergyPerSec;
     }
 
     oc::vector<Ref> m_frame;                 // the persistent roster (owning refs - see Ref)
@@ -634,126 +641,12 @@ private:
     float m_genRateTotal = 0.0f;
     float m_useRateTotal = 0.0f;
 
-    // Tweaks (all Synced - the server's values rule)
-    float m_costs[(int)EStructureType::Count] = { // indexed by EStructureType (Base/Connector free)
-        30.0f, // Emitter
-        40.0f, // Generator
-        0.0f,  // Connector (retired)
-        25.0f, // Extractor
-        40.0f, // Battery
-        30.0f, // FuelTank
-        40.0f, // Solar
-        60.0f, // Fabricator
-        70.0f, // Bastion
-        45.0f, // Lance
-        150.0f, // Barracks
-        0.0f,  // BarracksBrute (retired)
-        0.0f,  // BarracksRunner (retired)
-        0.0f,  // BarracksSpitter (retired)
-        5.0f,  // Wall (per segment)
-        75.0f, // Turret
-        25.0f, // MineralSilo
-        50.0f, // Constructor
-        100.0f, // Base (spawned, never placed - this entry only prices its REPAIRS)
-        2.0f,  // CablePower (per segment)
-        2.0f,  // CablePipe
-        2.0f,  // CableConveyor
-        6.0f,  // CrossingPower
-        6.0f,  // CrossingPipe
-        6.0f,  // CrossingConveyor
-        40.0f, // House
-        50.0f, // MedicStation
-    };
-    float m_startMinerals = 200.0f;
-    float m_extractorSnapRadius = 6.0f;
-    float m_mineralRate = 2.0f;
-    float m_fuelRate = 4.0f;
-    float m_baseIncomeMult = 0.25f;
-    float m_placeRange = 30.0f;
-    float m_cableThroughput[3] = { // by MEDIUM: a segment's OUT-RATE in cells/s (the bottleneck unit)
-        20.0f,  // energy
-        4.0f,  // fuel
-        4.0f   // minerals
-    };
-    // The transport tick: fixed rate, `Substeps` stencil passes per tick (an empty line fills at
-    // Substeps segments per tick; a full one moves at the segment rate), runs staggered over
-    // `Spread` groups so a large base's work lands on several frames.
-    float m_transportTickHz = 10.0f;
-    int m_transportSubsteps = 4;
-    int m_transportSpread = 4;
-    int m_cellsPerSegment[3] = { 2, 1, 1 }; // soft capacity of one segment by MEDIUM (a run buffers
-                                            // segments x this): energy holds a burst, the slower
-                                            // pipe/conveyor are pure transport
-    int cellsPerSegmentOf(int medium) const { return glm::max(m_cellsPerSegment[glm::clamp(medium, 0, 2)], 1); }
-    float m_storageLowMark = 0.25f;   // storage pushes while its port node is at/below this fill
-    float m_storageHighMark = 0.75f;  // ... and pulls while at/above this (hysteresis between)
-    int m_statTransportNodes = 0;     // read-only stats under Game/Economy
-    int m_statTransportTicks = 0;
-    float m_cableHealthMax = 40.0f; // segments/crossings are softer than buildings
-    float m_internalBuffer = 10.0f;
-    float m_emitterBuffer = 50.0f;  // the shield emitters' energy stores (their pressure draw spikes)
-    float m_bastionBuffer = 150.0f;
-    float m_lanceBuffer = 100.0f;
-    float m_generatorBuffer = 10.0f;
-    float m_batteryCapacity = 200.0f;
-    float m_generatorFuelTank = 10.0f;
-    float m_fuelTankCapacity = 200.0f;
-    float m_mineralSiloCapacity = 200.0f;
-    float m_mineralBaseCapacity = 200.0f;
-    // MEDIC STATION: a plain powered consumer; while powered its component update heals own-team
-    // units in reach (GameStructureParams::medicRange/medicHealRate) and GameMatch heals the own
-    // player (tickMedicHealing).
-    float m_medicEnergyPerSec = 1.5f;
-    float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
-                                         // (build time = unit cost / this - Grunt 5 -> 2.5 s, Brute 20 -> 10 s)
-    float m_genEnergyPerSec = 5.0f;
-    float m_solarEnergyPerSec = 1.0f;
-    float m_fuelBurnRate = 1.0f;
-    float m_fabricatorMineralsPerSec = 0.5f;
-    float m_fabricatorFuelPerSec = 1.0f;
-    float m_fabricatorEnergyPerSec = 1.0f;
-    float m_extractorEnergyPerSec = 1.0f;
-    float m_pressureDrawTension = 1.5f;
-
-    float m_emitterEnergyPerSec = 1.0f;
-    float m_emitterOutput = 1.2f;
-    float m_emitterReach = 27.0f;
-    // The Base's shield (the values base.pre used to author; the shield now pays for itself from
-    // the Base's own energy store - feed it power cables or it goes dark like any emitter).
-    float m_baseEnergyCapacity = 100.0f;
-    float m_baseEnergyGenPerSec = 2.0f; // free self-generation (solar-style trickle into its own store)
-    float m_baseShieldEnergyPerSec = 1.5f;
-    float m_baseShieldOutput = 2.4f;
-    float m_baseShieldReach = 27.0f;
-
-    float m_bastionEnergyPerSec = 2.0f;
-    float m_bastionOutput = 2.6f;
-    float m_bastionReach = 45.0f;
-
-    float m_lanceEnergyPerSec = 3.0f;
-    float m_lanceOutput = 0.08f;
-    float m_lanceReach = 26.0f;
-
-    float m_emitterPressureDraw = 3.0f;
-    float m_emitterShrinkTime = 1.5f;
-    float m_emitterGrowTime = 0.5f;
-    float m_emitterRestartCharge = 6.0f;
-
-    float m_structureHealthMax = 100.0f;
-    float m_constructorRange = 27.0f;
-    float m_constructorBuildRate = 4.0f;
-    float m_waypointRadius = 3.0f;
-    int m_wallBreachCost = 10; // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
+    // The tuning: costs, the economy, the cable transport (the tick rate/substeps/spread re-dirty the links
+    // through the listeners StructureSystem() attaches), the shield structures, barracks and houses. The
+    // MEDIC STATION's reach/rate are GameStructureParams (its component update heals own-team units).
+    GameStructureSettings& m_settings = Globals::settings.game.structures;
+    int cellsPerSegmentOf(int medium) const { return glm::max(m_settings.cellsPerSegment[glm::clamp(medium, 0, 2)], 1); }
     float m_projectileStructDamage = 20.0f;
-    bool m_cheatInstantBuild = false;
-    // Per UNIT TYPE (Grunt/Brute/Runner/Spitter/Swarm - ENpcType order): the ENERGY a barracks
-    // pays per spawned unit and the POPULATION the unit holds, stamped onto each barracks'
-    // component (spawnCost/spawnPop) from its selected type.
-    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f };
-    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3 };
-    int m_barracksPopulation = 20; // a barracks' own population cap
-    int m_housePopulation = 10;    // added per linked house
-    float m_houseLinkRadius = 25.0f;
 };
 
 // Debug-line helpers shared by the Game implementation units (Structures, Npc, the Match*.cpp
@@ -763,7 +656,7 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
 
 // StructureSystem's bodies, all `module Game;` implementation units (Match.ixx lists its own the
 // same way):
-//   Structures.cpp          - the type tables, describeType, registerTweaks, refresh / stampTuning,
+//   Structures.cpp          - the type tables, describeType, the settings listeners, refresh / stampTuning,
 //                             clear, the nodes, request queueing, tickAuthority / tickMirror
 //   StructuresPlacement.cpp - the grid (snap, footprints, the cell hash, cellsFree / planCrossing),
 //                             spawnStructure / destroy / placeStructure / spawnBase / demolish

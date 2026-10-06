@@ -4,7 +4,7 @@
 // (vol_apply.fs.glsl) composites the clouds itself, inside the fog. Upsamples the half-res accumulated clouds
 // (cloud_upsample.inc.glsl) and blends (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + scene *
 // transmittance. Alpha is not written (the scene colour's alpha is TAA's ocean flag).
-// THE FAR TREES too while they marched (u_foliageParams4.w; their own "Far trees apply" stage is then skipped): the
+// THE FAR TREES too while they marched (u_foliageLive_farMarched; their own "Far trees apply" stage is then skipped): the
 // two layers compose front to back by distance, as in vol_apply.fs.glsl without the fog. The volume writes no
 // depth, so the clouds' march limit is the terrain BEHIND the trees - composited after them, the clouds between the
 // two drew OVER the trees.
@@ -33,7 +33,7 @@ void main()
     float logCloudDist;
     const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
     out_color = cloud;
-    if (u_foliageParams4.w > 0.5)
+    if (u_foliageLive_farMarched > 0.5)
     {
         const vec4 trees = texelFetch(u_farTreesColor, ivec2(gl_FragCoord.xy), 0);
         if (trees.a < 0.999)

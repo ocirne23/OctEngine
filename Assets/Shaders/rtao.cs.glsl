@@ -52,19 +52,12 @@ layout (binding = 10) uniform sampler2D u_textures[]; // highest binding: variab
 #include "rt_shadow.inc.glsl"
 #endif
 
+// The tweaks are u_rt_ao* (the frame UBO).
 layout (push_constant) uniform PC
 {
-    uint  numRays;
-    float radius;     // world units
-    float power;      // contrast curve
-    float intensity;  // 0 = off, 1 = full
     uint  aoWidth;
     uint  aoHeight;
     uint  viewIndex;    // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
-    float fadeStart;    // distance from camera where AO begins to fade out
-    float maxDistance;  // distance at which AO is fully gone; 0 disables the falloff
-    float normalBias;   // constant ray-origin offset along the surface normal (m)
-    float distanceBias; // ray-origin offset toward the camera, per meter of view distance
 } pc;
 
 // Radical-inverse base-2 -> 2D Hammersley point set.
@@ -107,7 +100,7 @@ void main()
     // (no bent normal, so the forward pass evaluates GI along its shading normal.) Measured from
     // the scene focus, like the fade below, so a top-down camera far above the ground does not fade
     // the AO out under the player.
-    if (pc.maxDistance > 0.0 && focusDist >= pc.maxDistance)
+    if (u_rt_aoMaxDistance > 0.0 && focusDist >= u_rt_aoMaxDistance)
     {
         imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0));
         return;
@@ -121,7 +114,7 @@ void main()
     // and artifacted flat walls). The small constant normal offset handles triangle self-intersection.
     const float viewDist = length(u_viewPos - worldPos);
     const vec3 V = (u_viewPos - worldPos) / max(viewDist, 1e-4);
-    const vec3 rayOrigin = worldPos + N * pc.normalBias + V * min(viewDist * pc.distanceBias, pc.radius * 0.5);
+    const vec3 rayOrigin = worldPos + N * u_rt_aoNormalBias + V * min(viewDist * u_rt_aoDistanceBias, u_rt_aoRadius * 0.5);
 
     vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 T = normalize(cross(up, N));
@@ -139,10 +132,10 @@ void main()
     // a relief low sits UNDER its own mesh and every ray hit the mesh's underside at once (dark blotches in the
     // lows, strongest in shadow where only the ambient shows). A TERRAIN hit nearer than the relief depth,
     // inside the tessellation's reach, is that underside: the ray continues past it once.
-    const float terrainSkip = (u_terrainTessParams0.x > 0.5 && viewDist < u_terrainTessParams1.y)
-        ? max(u_terrainTessParams1.z, u_terrainTessParams1.w) : 0.0;
+    const float terrainSkip = (u_terrainTess_enabled > 0.5 && viewDist < u_terrainTess_fadeEnd)
+        ? max(u_terrainTess_depthGround, u_terrainTess_depthRock) : 0.0;
 
-    const uint n = max(pc.numRays, 1u);
+    const uint n = max(uint(u_rt_aoRays), 1u);
     float occ = 0.0;
     vec3 bent = vec3(0.0); // sum of unoccluded ray directions -> bent normal (average open direction)
     for (uint i = 0u; i < n; ++i)
@@ -162,7 +155,7 @@ void main()
             // Masked geometry is non-opaque in the TLAS; run the alpha test on candidates, hardware still
             // auto-commits opaque hits. Terminate-on-first-hit gives the nearest confirmed hit for falloff.
             // Cull mask 0x01: not the FOLIAGE cards (gi_tlas_instances.cs.glsl).
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, tStart, dir, pc.radius);
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, tStart, dir, u_rt_aoRadius);
             while (rayQueryProceedEXT(rq))
             {
                 if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
@@ -170,7 +163,7 @@ void main()
                     rayQueryConfirmIntersectionEXT(rq);
             }
 #else
-            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, tStart, dir, pc.radius);
+            rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT, 0x01u, rayOrigin, tStart, dir, u_rt_aoRadius);
             while (rayQueryProceedEXT(rq)) {}
 #endif
             hit = rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT;
@@ -190,7 +183,7 @@ void main()
         }
         if (hit)
         {
-            occ += 1.0 - clamp(t / pc.radius, 0.0, 1.0); // closer hits darken more
+            occ += 1.0 - clamp(t / u_rt_aoRadius, 0.0, 1.0); // closer hits darken more
         }
         else
         {
@@ -198,14 +191,14 @@ void main()
         }
     }
 
-    float ao = clamp(1.0 - (occ / float(n)) * pc.intensity, 0.0, 1.0);
-    ao = pow(ao, pc.power);
+    float ao = clamp(1.0 - (occ / float(n)) * u_rt_aoIntensity, 0.0, 1.0);
+    ao = pow(ao, u_rt_aoPower);
     // Distance falloff: far-away surfaces get noisy/low-quality AO (radius is fixed in world units, so it
     // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart
     // - distance from the scene focus (see focusDist), matching the early-out above.
-    if (pc.maxDistance > 0.0)
+    if (u_rt_aoMaxDistance > 0.0)
     {
-        float fade = clamp((focusDist - pc.fadeStart) / max(pc.maxDistance - pc.fadeStart, 1e-3), 0.0, 1.0);
+        float fade = clamp((focusDist - u_rt_aoFadeStart) / max(u_rt_aoMaxDistance - u_rt_aoFadeStart, 1e-3), 0.0, 1.0);
         ao = mix(ao, 1.0, fade);
     }
     // Bent normal = average unoccluded direction; none (zero) when fully occluded.

@@ -61,12 +61,8 @@ private:
     bool       m_visible = false;
     Handle     m_activeHandle = Handle::None;
 
-    float m_screenSize = 0.06f;    // gizmo apparent size: world scale = distance * screenSize
     float m_gizmoScale = 1.0f;     // last applied world scale, used to size pick volumes
     glm::quat m_gizmoRot = glm::quat(1, 0, 0, 0); // last applied gizmo orientation (object-aligned in Rotate mode)
-    float m_axisPickFrac = 0.07f;  // axis pick tube radius as a fraction of the arm length
-    float m_planePickScale = 1.4f; // plane pick radius as a multiple of the plane handle's bounds radius
-    float m_ringPickScale = 0.6f;  // rotate ring radial tolerance as a multiple of the arc's bounds radius
 
     glm::vec2 m_mousePos = glm::vec2(0.0f); // window-space, matches the viewport Rect
 

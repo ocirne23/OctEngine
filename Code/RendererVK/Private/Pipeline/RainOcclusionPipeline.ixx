@@ -9,7 +9,7 @@ import :DescriptorSet;
 import :Layout;
 
 // The weather volume's RAIN OCCLUSION MAP (the particle sim's shelter test): per texel, two short ray queries straight
-// DOWN through the volume's top-down orthographic box (u_rainOcclusionViewProj) against THIS frame's TLAS - the solid
+// DOWN through the volume's top-down orthographic box (u_weather_rainOcclusionViewProj) against THIS frame's TLAS - the solid
 // surface's depth, and the foliage (alpha-masked instances) above it: its top depth + the fraction of rain its layers
 // let through - packed into ONE uint (rain_occlusion.cs.glsl). No cull, no instance buffers, ONE image (not one per
 // frame slot: the trace's opening barrier waits for every earlier read on the queue, the previous frame's sim too):
@@ -30,7 +30,7 @@ public:
     void setActive(bool active);
     bool isActive() const { return m_active; }
     // Into the primary, after the TLAS build's barrier: the trace, then a barrier to the particle sim's sampled read.
-    // viewProj = the frame UBO's u_rainOcclusionViewProj (its inverse rides the push constants); layerBlock = the
+    // viewProj = the frame UBO's u_weather_rainOcclusionViewProj (its inverse rides the push constants); layerBlock = the
     // rain one foliage layer stops (0..1).
     void record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj, float layerBlock);
 

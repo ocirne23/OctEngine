@@ -13,6 +13,8 @@ import :RenderPass;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
+import :UboFields;
+import Settings;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
 // nested toroidal probe grids (centred on the SCENE FOCUS - u_sceneFocus: the game's player, else the camera -
@@ -67,17 +69,15 @@ public:
     // variable count the trace sets are allocated with. Both owned by the Renderer.
     void initialize(uint32 maxTlasInstances, uint32 maxTextures, uint32 numTextureDescriptors);
     void reloadShaders(uint32 maxTextures);
-    // The "GI" grid-shape tweaks (RendererVKLayout::g_giGrid: cascades, probes per axis, focus Y offset).
-    // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
-    // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record. The two
-    // irradiance-volume tweaks call onVolumeChanged instead: wait, resizeVolume(), reload ALL shaders - the
-    // probe buffer and its history stay.
-    void registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onVolumeChanged);
+    // The "GI" settings live in Globals::settings.gi. The grid shape (gi.grid: cascades, probes per axis, focus Y
+    // offset) is a shader #define in EVERY pipeline that samples the probes, so the Renderer's listener waits for
+    // the GPU, calls resizeGrid(), reloads ALL shaders (Renderer::reloadShaders) and re-records. The two
+    // irradiance-volume settings call resizeVolume() instead - the probe buffer and its history stay.
     // Re-allocates the persistent SH clipmap buffer (+ the per-wave visit stamps and the volume) for the
-    // current g_giGrid and schedules the one-time clear (nothing is preserved - the toroidal slots mean
+    // current gi.grid and schedules the one-time clear (nothing is preserved - the toroidal slots mean
     // something else now). GPU must be idle.
     void resizeGrid();
-    // Re-creates only the irradiance volume for the current g_giGrid.volume / volumeRes (a full bake
+    // Re-creates only the irradiance volume for the current gi.grid.volume / volumeRes (a full bake
     // follows). GPU must be idle.
     void resizeVolume() { createVolume(); }
     // Grows the per-frame TLAS instance buffers (GPU scratch, nothing preserved; GPU must be idle).
@@ -100,11 +100,11 @@ public:
         Buffer& rtMeshAlias;     // mesh idx -> RT mesh idx (LOD chains share one BLAS; packed into sbtOffset)
         Buffer& materialInfos;   // MATERIAL_FLAG_NO_RAYTRACING -> instance mask 0
         Buffer& nodePassMasks;   // nodes without PASS_GI|PASS_SHADOW -> instance mask 0
-        Buffer& ubo;             // u_giTlasNumInstances (live count), u_giTrace1.w (range bound), u_sceneFocus (its center)
+        Buffer& ubo;             // u_present_giTlasNumInstances (live count), u_rt_giTlasRange (range bound), u_sceneFocus (its center)
         Buffer& treePieces;      // the baked tree records (tree_cull.inc.glsl): a tree's instance is built from these
         Buffer& treeTypes;
         Buffer& treeList;        // this frame's visible trees (piece | pass bits << 28): one TLAS slot each
-        uint32 count;            // this frame's live instance count (= u_giTlasNumInstances): the dispatch and the build cover it
+        uint32 count;            // this frame's live instance count (= u_present_giTlasNumInstances): the dispatch and the build cover it
         uint32 treeRtPieces;     // the tree list's RT section (push constant; tree_cull.inc.glsl treeCullTlasInstance)
     };
     // Per frame (the GI prep secondary): one thread per live instance; the range bound rides the UBO.
@@ -137,10 +137,10 @@ public:
         vk::Sampler shadowMapSampler;
     };
     // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
-    // UBO (u_frameIndex, u_giTrace0/1 - see getTraceParams0 / getTlasRange).
+    // UBO (u_frameIndex, u_rt_gi*, u_giLive - see getTraceParams0 / getTlasRange).
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
 
-    // THE IRRADIANCE VOLUME (g_giGrid.volume, "GI/Irradiance volume"): bakes the probe field into per-cascade
+    // THE IRRADIANCE VOLUME (gi.grid.volume, "GI/Irradiance volume"): bakes the probe field into per-cascade
     // 3D textures (gi_volume_bake.cs.glsl) right after the trace, plus the sky SH into its own small image,
     // for every probe consumer's filtered lookup (evalProbeCoverage / giEvalSkySH). Its own barriers:
     // the trace's writes and last frame's reads -> the bake -> this frame's fragment, vertex and compute
@@ -154,20 +154,26 @@ public:
     }
     // Rewrites one slot of the trace set's texture array (binding 15) with a new or streamed texture's view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
-    // u_giTrace0: x = rays per probe, y = temporal alpha of THIS frame, z = max ray distance, w = update interval multiplier.
+    // x = rays per probe, y = temporal alpha of THIS frame (u_giLive_temporalAlpha), z = max ray distance, w = update
+    // interval multiplier (u_rt_giRaysPerProbe / giMaxRayDistance / giIntervalMult).
     // "GI/Temporal Alpha" is the per-frame blend AT 60 FPS; y is that rate compounded over this frame's wall
     // delta, so the field converges in the same WALL time at any frame rate. Per frame and uncorrected, 0.01
     // is a 1.7 s time constant at 60 fps but 0.4 s at 240 fps, and the blend's noise wanders 4x faster - it
     // reads as flicker. The delta is clamped so a hitch frame cannot replace the history.
     glm::vec4 getTraceParams0(float wallDeltaSec) const
     {
+        const GiSettings& gi = Globals::settings.gi;
         const float frames60 = 60.0f * glm::clamp(wallDeltaSec, 0.001f, 0.1f);
-        const float frameAlpha = 1.0f - powf(1.0f - glm::clamp(m_giTemporalAlpha, 0.0f, 1.0f), frames60);
-        return glm::vec4((float)oc::max(m_giRaysPerProbe, 1), frameAlpha, m_giMaxRayDist, oc::max(m_giUpdateIntervalMult, 1.0f));
+        const float frameAlpha = 1.0f - powf(1.0f - glm::clamp(gi.temporalAlpha, 0.0f, 1.0f), frames60);
+        return glm::vec4((float)oc::max(gi.raysPerProbe, 1), frameAlpha, gi.maxRayDist, oc::max(gi.updateIntervalMult, 1.0f));
     }
-    float getTlasRange() const { return m_tlasRange; }
-    // u_giPriorityDist / Falloff / FrustumWeight: x = nominal-rate distance from the focus (m), y = distance falloff exponent, z = frustum weight.
-    glm::vec3 getPriorityParams() const { return glm::vec3(m_giPriorityDist, oc::max(m_giPriorityFalloff, 0.0f), m_giPriorityFrustumWeight); }
+    float getTlasRange() const { return Globals::settings.gi.tlasRange; }
+    // u_rt_giPriorityDist / Falloff / FrustumWeight: x = nominal-rate distance from the focus (m), y = distance falloff exponent, z = frustum weight.
+    glm::vec3 getPriorityParams() const
+    {
+        const GiSettings& gi = Globals::settings.gi;
+        return glm::vec3(gi.priorityDist, oc::max(gi.priorityFalloff, 0.0f), gi.priorityFrustumWeight);
+    }
 
     // Debug visualization: a sphere impostor at every clipmap probe, drawn into the main color pass - the SH
     // evaluated per pixel (x "GI/Strength") in the irradiance mode, a shaded flat colour in the other modes.
@@ -175,27 +181,30 @@ public:
     void initializeDebug(vk::RenderPass renderPass);
     void reloadDebugShaders(vk::RenderPass renderPass);
     void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
-    // The "GI/Debug probe*" tweaks. Enabled is a per-frame stage flag; the colour mode and the radius are
-    // push constants in the CACHED debug secondary, so a change must re-record (onReRecord).
-    void registerDebugTweaks(const oc::function<void()>& onReRecord);
-    // The testbed's P / O keys drive the same state (the caller re-records after cycleDebugMode).
-    bool isDebugEnabled() const { return m_debugEnabled; }
-    void toggleDebug() { m_debugEnabled = !m_debugEnabled; }
-    void cycleDebugMode() { m_debugMode = (m_debugMode + 1) % 5; } // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
+    // The "GI/Debug probe*" settings. Enabled is a per-frame stage flag; the colour mode and the radius are
+    // push constants in the CACHED debug secondary, so a change re-records (the Renderer's listener).
+    // The testbed's P / O keys drive the same settings (the caller re-records after cycleDebugMode).
+    bool isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
+    void toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
+    void cycleDebugMode() { Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5; } // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
 
     Buffer& getTlasInstanceBuffer(uint32 frameIdx) { return m_tlasInstanceBuffer[frameIdx]; }
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
     Buffer& getGiGridDataBuffer() { return m_giGridData; }
-    float getStrength() const { return m_giStrength; }
+    float getStrength() const { return Globals::settings.gi.strength; }
+    // The u_rt_gi* entries (Renderer::registerUboFields, inside its rt block): its tweaks are private. rtEnabled /
+    // giEnabled are long-lived RTParams members: the lambdas keep the references.
+    void registerUboFields(UboFieldList& list, const bool& rtEnabled, const bool& giEnabled) const;
     // x = Chebyshev variance floor (fraction of probe spacing), y = FULL volume bake this frame (1/0), z = probe
-    // weight floor, w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
+    // weight floor, w = mean scale. Uploaded to the frame UBO (u_rt_giVis*, u_giLive_fullBake) for every probe-sampling shader.
     // Called ONCE per frame by the UBO build: y is 1 for the one frame after the volume images were (re)created
     // or a Chebyshev knob changed - the bake is otherwise partial (only voxels whose probes the trace visits),
     // and a far probe can go hundreds of frames without a visit. bakeRuns = this frame records the bake (RT and
     // GI on): the request is held until such a frame, so a knob moved while GI is off still lands.
     glm::vec4 takeVisibilityParams(bool bakeRuns)
     {
-        const glm::vec3 knobs(m_visVarianceFloor, m_visWeightFloor, m_visMeanScale);
+        const GiSettings& gi = Globals::settings.gi;
+        const glm::vec3 knobs(gi.visVarianceFloor, gi.visWeightFloor, gi.visMeanScale);
         m_volumeFullBake = m_volumeFullBake || knobs != m_lastVisKnobs;
         m_lastVisKnobs = knobs;
         const bool fullBake = m_volumeFullBake && bakeRuns;
@@ -211,7 +220,7 @@ private:
     void buildDebugLayout(GraphicsPipelineLayout& layout);
     void buildVolumeBakeLayout(ComputePipelineLayout& layout);
     void createSkyMap();
-    // (Re)creates the volume images for the current g_giGrid (or only destroys them while it is off),
+    // (Re)creates the volume images for the current gi.grid (or only destroys them while it is off),
     // cleared to zero. GPU must be idle.
     void createVolume();
     void destroyVolume();
@@ -222,9 +231,6 @@ private:
     ComputePipeline m_volumeBakePipeline;
     GraphicsPipeline m_debugPipeline;
     vk::RenderPass m_debugRenderPass;
-    bool  m_debugEnabled = false; // a per-frame stage flag (no re-record)
-    int   m_debugMode = 0;        // recorded as a push constant: changes re-record ("GI/Debug probe colour")
-    float m_debugRadius = 0.12f;  // idem, cube half-extent as a fraction of sqrt(spacing)
 
     // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 3-layer array, GENERAL layout for life, rewritten
     // every frame. Single-buffered under recordSkyMap's barriers. 256x128: reflections look along the horizon
@@ -252,40 +258,6 @@ private:
     bool m_volumeFullBake = true;   // see takeVisibilityParams: set by createVolume, consumed by the next UBO build
     glm::vec3 m_lastVisKnobs{ -1.0f };
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_volumeBakeSets;
-
-    // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
-    int m_giRaysPerProbe = 17;         // gather rays per probe per visit
-    float m_giUpdateIntervalMult = 16.0f; // global factor of a wave's update interval: frames = max(1, this x the priority factor),
-                                         // so it is the interval AT "GI/Priority Distance" and close blocks cancel it (fresh probes always trace)
-    float m_giTemporalAlpha = 0.025f;  // blend toward freshly traced irradiance per frame AT 60 FPS (rescaled by the wall delta, see getTraceParams0)
-    float m_giMaxRayDist = 8.0f;       // gather ray max distance (world units)
-    float m_giStrength = 1.0f;         // multiplier on the sampled probe irradiance at shading time
-    float m_tlasRange = 4096.0f;        // TLAS instance range bound around the camera (origin distance)
-
-    // Update priority (gi_probe.inc.glsl giWavePriority, one factor of giWaveUpdateInterval): a wave's interval is multiplied by
-    // (focus distance / priorityDist) ^ falloff / viewBoost - NO bounds: a close wave's factor < 1 cancels the
-    // interval multiplier, and the far field has no cap. viewBoost = frustumWeight for a wave IN the view
-    // frustum (its interval divides by it), fading to 1 over priorityDist metres outside it.
-    // Defaults (first-person scene, focus = camera, interval mult 16, falloff 3, weight 5): in view the
-    // interval is 16 x (d / 10)^3 / 5 frames - every frame within ~8.5 m, 3 at 10 m, 25 at 20 m, 400 at
-    // 50 m; out of view, 5x that. A steep curve: all the rays go to what is near the focus.
-    float m_giPriorityDist = 8.0f;         // focus distance (m) of the nominal rate (factor 1) for a wave OUT of view; the falloff curve pivots here
-    float m_giPriorityFalloff = 1.5f;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic (far field all but stops), 0.5 = gentle, 0 = no distance term
-    float m_giPriorityFrustumWeight = 5.0f; // a wave IN the view frustum has its interval divided by this (1 = the frustum is ignored)
-
-    // SH-L1 depth visibility (Chebyshev) lookup tuning. Three knobs, each with its own job: the mean scale
-    // moves the occlusion THRESHOLD, the variance floor is the MINIMUM edge softness (the measured variance
-    // widens it where the depth really spreads - sideways past a wall), the weight floor is the leak level /
-    // the all-occluded fallback. The exponent is fixed (GI_VIS_CHEB_POWER = 2 in gi_probe.inc.glsl): near the
-    // threshold it only rescales the floor (weight ~ 1 - p (delta / sigma)^2), and the weight floor cuts the
-    // tail it shapes. An additive mean bias was tried and removed: the same effect as the scale or the floor.
-    float m_visVarianceFloor = 0.35f;  // min std-dev as a fraction of the cascade's probe spacing: covers the L1 mean's error
-                                       // toward a wall (0.15 .. 0.4 spacings); below ~0.25 the ray jitter moves the edge (flicker)
-    float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff, noisy when all 8 are occluded)
-    float m_visMeanScale = 1.2f;       // scales the reconstructed depth (mean AND, by its square, the second moment, so the
-                                       // variance stays consistent) before the Chebyshev test: > 1 widens each probe's visible
-                                       // footprint. A wall at distance m reads as scale x m, so points up to (scale - 1) x m
-                                       // BEHIND it keep full weight: the leak depth
 
     // Single persistent GI clipmap SH volume: irradiance carries forward in place (toroidal addressing),
     // so there is no prev/cur ping-pong. Read across frames by the fragment shader and read+written by the

@@ -161,7 +161,7 @@ void CloudPipeline::buildSkyLayout(ComputePipelineLayout& layout)
 }
 
 // The sky clouds, cleared to "no cloud" (transmittance 1): valid before the first render and while the
-// clouds are off (the sky map also gates on the CLOUDS define and u_cloudShape0.w).
+// clouds are off (the sky map also gates on the CLOUDS define and u_cloudsLive_enabled).
 void CloudPipeline::createSkyClouds()
 {
     vk::ImageCreateInfo info{
@@ -615,7 +615,7 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
     const uint32 gx = (m_width + 7) / 8;
     const uint32 gy = (m_height + 7) / 8;
     const CloudPC pc{ .viewIndex = viewIndex, .width = m_width, .height = m_height, .pad = 0 };
-    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
 
     // In: the sky map (GI compute writes), and this slot's images, last read by the previous use of this
     // slot's apply (fragment) and temporal (compute) - WAR before this frame's storage writes.
@@ -709,7 +709,7 @@ void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, 
     const vk::DescriptorSet vkSet = m_shadowSets[frameIdx].getDescriptorSet();
     const oc::array<vk::DescriptorImageInfo, 4> noise = noiseInfos();
     oc::array<DescriptorSetUpdateInfo, 6> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_shadow.view) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { noise[0] } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { noise[1] } },
@@ -756,7 +756,7 @@ void CloudPipeline::recordSky(CommandBuffer& commandBuffer, uint32 frameIdx, Buf
     const vk::DescriptorSet vkSet = m_skySets[frameIdx].getDescriptorSet();
     const oc::array<vk::DescriptorImageInfo, 4> noise = noiseInfos();
     oc::array<DescriptorSetUpdateInfo, 8> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_skyClouds.view) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(skyMapSampler, skyMapView) } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_shadow.view) } },
@@ -781,7 +781,7 @@ void CloudPipeline::recordApply(CommandBuffer& commandBuffer, uint32 frameIdx, u
     const uint32 viewIndex = RendererVKLayout::eyeToViewIndex(eye, m_viewCount);
     const uint32 cur = slot(frameIdx, eye);
     const vk::DescriptorSet vkSet = m_applySets[cur].getDescriptorSet();
-    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
     oc::array<DescriptorSetUpdateInfo, 6> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledDepth(params.sceneDepthSampler, params.sceneDepthView) } },

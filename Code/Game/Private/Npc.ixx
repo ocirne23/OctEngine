@@ -5,11 +5,12 @@ import Core.glm;
 import Core.Camera;
 import Entity;
 import File; // AssetNode (save/load)
+import Settings;
 import :Structures;
 
 // Unit types = PREFAB variants: per-type stats are authored in the .pre's Component GameUnit
 // (Entities/Game/enemyUnit/Brute/Runner/Spitter/swarmUnit.pre); the shared sim baseline lives in
-// GameUnitComponent::params (tweaked here). SWARM is the CHEAP body: health only - no Force
+// GameUnitComponent::params (= Globals::settings.game.unitParams). SWARM is the CHEAP body: health only - no Force
 // emitter, no shield battery (the co-op waves are built from it; see GameMatch's coop block).
 // SAVE FILES store the type as an int - APPEND only. Elite/Giant/Titan/Lobber are the late-wave
 // ELITE tier (enemy-only: not barracks options - see isBarracksUnitType); the Lobber is the ranged
@@ -19,6 +20,7 @@ import :Structures;
 export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior, Count };
 // The barracks' unit-type selection + its per-type price tables index by THIS order.
 static_assert((int)ENpcType::Count == GameNumUnitTypes);
+static_assert((int)ENpcType::Count == GameUnitTypeCount); // the Settings.Game per-type tables
 
 // The unit/projectile PRODUCTION layer. The per-entity simulation itself (steering, shields,
 // melee, lifetimes, contact damage) is GameUnitComponent/GameProjectileComponent inside the
@@ -32,10 +34,10 @@ static_assert((int)ENpcType::Count == GameNumUnitTypes);
 // snapshot's game blob, the overhead labels run a frustum query at the point of need, and
 // barracks roster COUNTS ride the spawn/death events.
 // All ticks main thread pre-physics (direct body setters sanctioned) - the authority seam.
+// The tuning is Globals::settings.game.npc.
 export class NpcSystem final
 {
 public:
-    void registerTweaks(); // barracks/turret production + the GameUnitComponent::params baseline
     // TEARDOWN: wipes the ENTIRE World - every root (structures, projectiles, units, player
     // capsules, terrain, ground) through World::clearRootEntities - and discards whatever the
     // removed actors left in the component queues. ~GameMatch calls it after every other holder
@@ -135,22 +137,17 @@ private:
     oc::vector<GameUnitComponent::DeathRecord> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;
     // FAR TICK (service): units the SIM LOD left unselected walk their orders by
-    // GameUnitComponent::updateFar every m_farInterval seconds of sim time - a parallelFor over
-    // the World's root list, skipping non-units.
-    float m_farInterval = 0.5f;
+    // GameUnitComponent::updateFar every "Far tick interval" seconds of sim time - a parallelFor
+    // over the World's root list, skipping non-units.
     float m_farAccum = 0.0f;
-    int m_farTicked = 0; // live readout: units moved by the last far tick
+public:
     // Seeded-lane strength, split by WHO asked for it: a player ORDER (move command, barracks
     // route) writes a strong, wide lane the whole group should commit to, while a STUCK unit's
     // request is a hint - weak and narrow enough that it bends the crowd around the jam without
     // overriding what everyone else is doing.
-    float m_orderLaneSpeed = 10.0f;
-    float m_stuckLaneSpeed = 10.0f;
-    float m_laneWidth = 3.0f; // metres PAINTED (0 = one cell)
-public:
-    float orderLaneSpeed() const { return m_orderLaneSpeed; }
-    float stuckLaneSpeed() const { return m_stuckLaneSpeed; }
-    float laneWidth() const { return m_laneWidth; }
+    float orderLaneSpeed() const { return Globals::settings.game.npc.orderLaneSpeed; }
+    float stuckLaneSpeed() const { return Globals::settings.game.npc.stuckLaneSpeed; }
+    float laneWidth() const { return Globals::settings.game.npc.laneWidth; }
 private:
     oc::vector<uint32> m_spawnScratch;
     oc::vector<GameStructureComponent::TurretFireRequest> m_turretFireScratch;
@@ -159,14 +156,4 @@ private:
 
     oc::vector<Beam> m_beams;
     oc::vector<Beam> m_newBeams;
-
-    // Tweaks (unit stats are prefab-authored; the shared sim baselines live on the components'
-    // params - barracks/turret production tuning now registers from StructureSystem. What remains
-    // here is the spitter SHOT SPEED, applied when this system services the fire queue, and the
-    // strike visuals.)
-    float m_spitterShotSpeed = 18.0f;
-    float m_lobberShotSpeed = 14.0f; // ShotKind 1: the slow splash shell
-    float m_beamLifetime = 0.5f;     // turret lightning
-    float m_hitLifetime = 0.25f;     // melee hit line + its flash
-    float m_flashIntensity = 1.0f;   // multiplier on the turret muzzle light's peak
 };

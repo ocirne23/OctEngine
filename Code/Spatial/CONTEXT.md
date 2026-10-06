@@ -263,6 +263,11 @@ the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow
 
 ### Culling config (`Spatial/Culling` tweaks)
 
+All Spatial tweaks are `SpatialSettings` = `Globals::settings.spatial` (`Settings.Spatial`, registered in
+`Code/Settings`): `culling`, `stats` (the readouts the index writes), `occlusion`, `stress`. `Spatial:Types`
+re-exports `Settings.Spatial`, so `ESpatialCullMode` / `SpatialCullingConfig` / `SpatialStats` reach every
+importer of Spatial. The index binds `m_culling` / `m_stats` as references to them.
+
 | Field | Default | Notes |
 |---|---|---|
 | `mode` | `Cull` | `Off` / `StatsOnly` / `Cull` / `MainOnly` (debug — visibly breaks off-screen shadows and GI). |
@@ -379,7 +384,8 @@ cheaply as the pool did.)
 ## Stress harness
 
 `Globals::spatialStress`, Spatial/Stress tweaks: synthetic entries on `SpatialLayer_Stress`, churn,
-timed queries, brute-force verification. Stats under Spatial/Stats.
+timed queries, brute-force verification. Stats under Spatial/Stats. **Nothing calls its `update()`
+at present** — the tweaks show in the panel but do nothing until the App drives it.
 
 ## Not yet built
 

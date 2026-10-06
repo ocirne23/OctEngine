@@ -73,6 +73,11 @@ can wait a frame keeps off the step's worker load — see Threading's "The frame
 
 ### Tweaks
 
+`PhysicsSettings` = `Globals::settings.physics` (registered in `Code/Settings`, `Settings.Physics`). The world
+reads the values directly and attaches listeners for the ones box3d keeps itself (gravity, worker count,
+contact tuning). `workerCount` and `contactHertz` start at 0 = "not set": `initialize()` fills in the
+default unless an override set them first.
+
 | Tweak | Default | Range |
 |---|---|---|
 | `Physics/World → Gravity` | (0, −9.81, 0) | |
@@ -84,8 +89,8 @@ can wait a frame keeps off the step's worker load — see Threading's "The frame
 | `Physics/World → Contact hertz` | box3d's default, read from `b3DefaultWorldDef` | live (`b3World_SetContactTuning`) |
 | `Physics/World → Contact damping` | **50** | 0..50 — high = overlap recovery bleeds energy instead of bouncing |
 | `Physics/World → Contact push speed (m/s)` | **0.1** | 0.1..20 — the cap on overlap resolution speed. box3d's own default unwinds a deep overlap in one step, which was the "explosion" when a stack of far-ticked unit bodies enabled at the SIM LOD edge. |
-| `Physics/Buoyancy → Density (kg/m3)` | 1000 | 0..3000 |
-| `Physics/Buoyancy → Linear drag` | 3 | 0..20 |
+| `Physics/Buoyancy → Density (kg/m3)` | 200 | 0..3000 |
+| `Physics/Buoyancy → Linear drag` | 0.5 | 0..20 |
 | `Physics/Debug → Draw colliders / joints / contacts / bounds` | off | |
 | `Physics/Debug → Range` | 64 m | 4..1024 |
 

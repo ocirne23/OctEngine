@@ -4,8 +4,9 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.Transform;
-import Core.Tweaks;
 import Core.Log;
+import Settings;
+import Settings.Tweaks;
 
 import RendererVK;
 import File;
@@ -153,13 +154,9 @@ namespace Procedural
 	{
 		ProfileScope scope("ScatterSystem::initialize", EProfileCategory::Procedural);
 		auto dirty = [this]() { m_configDirty = true; };
-		Tweak::boolean("Scatter", "Enabled", &m_enabled);
-		Tweak::intVar("Scatter", "Seed", &m_seed, 0, 1000000, 1.0f, dirty);
-		Tweak::floatVar("Scatter", "Cell size (m)", &m_cellSize, 16.0f, 256.0f, 1.0f, dirty);
-		Tweak::floatVar("Scatter", "Density scale", &m_densityScale, 0.0f, 8.0f, 0.05f, dirty);
-		Tweak::intVar("Scatter", "Gen jobs", &m_maxGenJobs, 1, 16, 1.0f);
-		Tweak::floatVar("Scatter", "View distance scale", &m_viewScale, 0.1f, 4.0f, 0.05f); // live: spawn range only, no regen
-		Tweak::intVar("Scatter", "Spawns/frame", &m_maxSpawnsPerFrame, 32, 8192, 1.0f);
+		Tweak::onChange(m_settings.seed, this, dirty);
+		Tweak::onChange(m_settings.cellSize, this, dirty);
+		Tweak::onChange(m_settings.densityScale, this, dirty);
 	}
 
 	// Load every asset's container, importing through its .oc so the model path and import
@@ -396,7 +393,7 @@ namespace Procedural
 
 	void ScatterSystem::kickPump(size_t numNew)
 	{
-		const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
+		const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 16);
 		for (size_t spawned = 0; spawned < numNew; )
 		{
 			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
@@ -447,7 +444,7 @@ namespace Procedural
 					if (m_requests.empty())
 						return;
 				}
-				const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
+				const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 16);
 				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{
@@ -505,9 +502,9 @@ namespace Procedural
 
 	void ScatterSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
-		if (m_enabled && maps && !m_assetsLoaded)
+		if (m_settings.enabled && maps && !m_assetsLoaded)
 			loadAssets();
-		if (!m_enabled || !maps || m_ruleOrder.empty())
+		if (!m_settings.enabled || !maps || m_ruleOrder.empty())
 		{
 			// Inactive (disabled / terrain off / no rules): no profile scope. Clear once, starve the
 			// pumps (the dtor pattern) and drop late results until they exit - then every frame is a
@@ -544,10 +541,10 @@ namespace Procedural
 			m_requests.clear();
 		}
 
-		const float cellSize = glm::clamp(m_cellSize, 16.0f, 256.0f);
+		const float cellSize = glm::clamp(m_settings.cellSize, 16.0f, 256.0f);
 		const int camCX = (int)std::floor(camera.position.x / cellSize);
 		const int camCZ = (int)std::floor(camera.position.z / cellSize);
-		const int R = glm::clamp((int)std::ceil(m_maxViewDistance * m_viewScale / cellSize) + 1, 1, 128);
+		const int R = glm::clamp((int)std::ceil(m_maxViewDistance * m_settings.viewScale / cellSize) + 1, 1, 128);
 
 		uint32 generation;
 		{
@@ -577,7 +574,7 @@ namespace Procedural
 					req.key = key;
 					req.generation = generation;
 					req.coord = coord;
-					req.params = GenParams{ cellSize, m_densityScale, (uint32)m_seed };
+					req.params = GenParams{ cellSize, m_settings.densityScale, (uint32)m_settings.seed };
 					req.maps = maps;
 					newRequests.push_back(oc::move(req));
 					m_pending.insert(key);
@@ -659,19 +656,19 @@ namespace Procedural
 			const glm::vec2 lo((float)coord.x * cellSize, (float)coord.y * cellSize);
 			return glm::distance(camXZ, glm::clamp(camXZ, lo, lo + cellSize));
 		};
-		if (m_spawnScan || ringMoved || m_viewScale != m_lastScanViewScale
+		if (m_spawnScan || ringMoved || m_settings.viewScale != m_lastScanViewScale
 			|| glm::distance(camXZ, m_lastScanPos) > hysteresis * 0.5f)
 		{
 			m_spawnScan = false;
 			m_lastScanPos = camXZ;
-			m_lastScanViewScale = m_viewScale;
-			int spawnBudget = m_maxSpawnsPerFrame;
+			m_lastScanViewScale = m_settings.viewScale;
+			int spawnBudget = m_settings.maxSpawnsPerFrame;
 			for (uint16 ruleIdx : m_ruleOrder)
 			{
 				auto& groups = m_ruleGroups[ruleIdx];
 				if (groups.empty())
 					continue;
-				const float viewDist = rules[ruleIdx].viewDistance * m_viewScale;
+				const float viewDist = rules[ruleIdx].viewDistance * m_settings.viewScale;
 				const int Rr = glm::min(R, (int)(viewDist / cellSize) + 1);
 				for (int dz = -Rr; dz <= Rr && !m_spawnScan; ++dz)
 				{
@@ -711,7 +708,7 @@ namespace Procedural
 			const auto it = groups.find(m_active[i].key);
 			RuleGroup* pGroup = it != groups.end() ? &it->second : nullptr;
 			if (!pGroup || pGroup->nodes.empty()
-				|| cellDist(cellCoord(m_active[i].key)) > rules[m_active[i].ruleIdx].viewDistance * m_viewScale + hysteresis)
+				|| cellDist(cellCoord(m_active[i].key)) > rules[m_active[i].ruleIdx].viewDistance * m_settings.viewScale + hysteresis)
 			{
 				if (pGroup)
 					despawnGroup(*pGroup);

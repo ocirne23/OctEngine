@@ -270,7 +270,7 @@ void MemoryPanel::sortChildren(uint32 first, uint32 count)
             m_nodes[m_nodes[c].firstChild + g].parent = c;
 }
 
-void MemoryPanel::addVramEntry(uint8 group, const char* name, uint64 bytes)
+void MemoryPanel::addVramEntry(uint8 group, const char* name, uint64 bytes, const GpuAllocationInfo& info)
 {
     const uint32 offset = (uint32)m_vramNames.size();
     const char* label = kVramGroupNames[group];
@@ -295,17 +295,18 @@ void MemoryPanel::addVramEntry(uint8 group, const char* name, uint64 bytes)
     }
     const uint32 nameLen = (uint32)m_vramNames.size() - offset;
     m_vramNames.push_back('\0');
-    m_vramEntries.push_back(VramEntry{ offset, nameLen, bytes, group });
+    m_vramEntries.push_back(VramEntry{ offset, nameLen, bytes, group, info });
+    m_vramEntries.back().info.name = nullptr;
 }
 
 void MemoryPanel::buildVramSnapshot()
 {
     m_vramEntries.clear();
     m_vramNames.clear();
-    Globals::rendererVK.forEachGpuAllocation(+[](void* ctx, const char* name, uint64 bytes, bool image, bool deviceLocal)
+    Globals::rendererVK.forEachGpuAllocation(+[](void* ctx, const GpuAllocationInfo& info)
         {
-            const uint8 group = !deviceLocal ? VramHost : image ? VramImages : VramBuffers;
-            static_cast<MemoryPanel*>(ctx)->addVramEntry(group, name != nullptr && name[0] != '\0' ? name : "<unnamed>", bytes);
+            const uint8 group = !info.deviceLocal ? VramHost : info.image ? VramImages : VramBuffers;
+            static_cast<MemoryPanel*>(ctx)->addVramEntry(group, info.name != nullptr && info.name[0] != '\0' ? info.name : "<unnamed>", info.bytes, info);
         }, this);
 
     const auto usage = Globals::rendererVK.getGpuMemoryUsage();
@@ -314,7 +315,7 @@ void MemoryPanel::buildVramSnapshot()
     m_vramBudget = usage.budgetBytes;
     m_vramDriverUsage = usage.deviceLocalUsageBytes;
     if (usage.reservedBytes > usage.usedBytes)
-        addVramEntry(VramSlack, nullptr, usage.reservedBytes - usage.usedBytes);
+        addVramEntry(VramSlack, nullptr, usage.reservedBytes - usage.usedBytes, GpuAllocationInfo());
 
     const char* names = m_vramNames.data();
     oc::sort(m_vramEntries.begin(), m_vramEntries.end(), [names](const VramEntry& a, const VramEntry& b)
@@ -393,6 +394,7 @@ void MemoryPanel::buildVramNode(uint32 idx, uint32 begin, uint32 end, uint32 pre
     ViewNode& view = m_nodes[idx];
     view.selfBytes = selfBytes;
     view.liveCount = selfCount;
+    view.firstEntry = begin;
     view.inclusiveBytes = inclusive;
     view.cumBytes = (uint64)inclusive;
     view.cumCount = inclusiveCount;
@@ -607,7 +609,18 @@ void MemoryPanel::drawTreemap()
                 formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.selfBytes);
                 ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
             }
-            ImGui::Text("Group: %s", kVramGroupNames[view.category < VramGroupCount ? view.category : VramRoot]);
+            if (view.category != VramRoot && view.category != VramSlack)
+            {
+                constexpr int64 kMaxShown = 8;
+                const int64 shown = oc::min(view.liveCount, kMaxShown);
+                for (int64 i = 0; i < shown; ++i)
+                {
+                    ImGui::Separator();
+                    drawVramEntry(m_vramEntries[view.firstEntry + (uint32)i]);
+                }
+                if (view.liveCount > shown)
+                    ImGui::TextDisabled("... %lld more", (long long)(view.liveCount - shown));
+            }
         }
         else
         {
@@ -636,6 +649,49 @@ void MemoryPanel::drawTreemap()
     }
     if (m_canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && m_zoomIdx != 0)
         m_clickedZoom = m_nodes[m_zoomIdx].parent; // right-click = up one level
+}
+
+void MemoryPanel::drawVramEntry(const VramEntry& entry) const
+{
+    const GpuAllocationInfo& info = entry.info;
+    char bytesBuf[64], bytesBuf2[64], names[256];
+    formatBytes(bytesBuf, sizeof(bytesBuf), (double)info.bytes);
+    if (info.image)
+    {
+        Globals::rendererVK.gpuEnumName(GpuEnum::Format, info.format, names, sizeof(names));
+        if (info.depth > 1)
+            ImGui::Text("%u x %u x %u  %s", info.width, info.height, info.depth, names);
+        else
+            ImGui::Text("%u x %u  %s", info.width, info.height, names);
+        char layersBuf[32] = {}, samplesBuf[32] = {};
+        if (info.layers > 1)
+            _snprintf_s(layersBuf, sizeof(layersBuf), _TRUNCATE, ", %u layers", info.layers);
+        if (info.samples > 1)
+            _snprintf_s(samplesBuf, sizeof(samplesBuf), _TRUNCATE, ", %ux MSAA", info.samples);
+        ImGui::Text("%s, %u mip%s%s%s", bytesBuf, info.mips, info.mips == 1 ? "" : "s", layersBuf, samplesBuf);
+        Globals::rendererVK.gpuEnumName(GpuEnum::ImageUsage, info.usage, names, sizeof(names));
+    }
+    else
+    {
+        if (info.bufferSize != info.bytes)
+        {
+            formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)info.bufferSize);
+            ImGui::Text("Buffer: %s (allocation %s)", bytesBuf2, bytesBuf);
+        }
+        else
+            ImGui::Text("Buffer: %s", bytesBuf);
+        Globals::rendererVK.gpuEnumName(GpuEnum::BufferUsage, info.usage, names, sizeof(names));
+    }
+    ImGui::Text("Usage: %s", names);
+    Globals::rendererVK.gpuEnumName(GpuEnum::MemoryProperties, info.memoryFlags, names, sizeof(names));
+    ImGui::Text("Memory: %s%s", names, info.mapped ? ", mapped" : "");
+    if (info.dedicated)
+        ImGui::TextDisabled("dedicated allocation");
+    else
+    {
+        formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)info.blockBytes);
+        ImGui::TextDisabled("in a %s VMA block", bytesBuf2);
+    }
 }
 
 void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y1, uint32 depth)

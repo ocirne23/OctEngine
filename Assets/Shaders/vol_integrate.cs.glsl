@@ -40,7 +40,7 @@ void main()
     if (any(greaterThanEqual(xy, ivec2(VOL_FROXEL_X, VOL_FROXEL_Y))))
         return;
 
-    const bool spatialFilter = u_fogParams4.y > 0.5;
+    const bool spatialFilter = u_fog_spatialFilter > 0.5;
     vec3 accum = vec3(0.0);
     float transmittance = 1.0;
     float zNear = VOL_FOG_NEAR;

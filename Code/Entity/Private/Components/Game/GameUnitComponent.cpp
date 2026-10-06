@@ -11,8 +11,6 @@ import Spatial;
 import Nav;
 import RendererVK;
 
-GameUnitParams GameUnitComponent::params;
-
 static void atomicAdd(float& value, float amount)
 {
     oc::atomic_ref<float> ref(value);

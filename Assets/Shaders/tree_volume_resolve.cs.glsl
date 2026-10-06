@@ -37,9 +37,9 @@ layout (push_constant, scalar) uniform Push
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)
 {
-    const int numGround = int(u_terrainTexParams0.y);
-    const int numRock = min(int(u_terrainTexParams0.z), ROCK_TEXTURES);
-    if (u_terrainTexParams0.x < 0.0 || numRock <= 0)
+    const int numGround = int(u_terrainLive_numGround);
+    const int numRock = min(int(u_terrainLive_numRock), ROCK_TEXTURES);
+    if (u_terrainLive_splatBase < 0.0 || numRock <= 0)
         return vec3(0.3, 0.29, 0.27); // no texture set
     vec2 climate = vec2(0.5);
     if (terrainHeightMapPresent())
@@ -47,12 +47,12 @@ vec3 bedrockAlbedo(vec2 xz, float y)
         const vec4 c = terrainClimateAt(xz);
         climate = vec2(clamp((terrainTemperatureAt(c, y) + 25.0) / 75.0, 0.0, 1.0), c.w);
     }
-    const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
+    const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
     vec3 sum = vec3(0.0);
     float weight = 0.0;
     for (int i = 0; i < numRock; ++i)
     {
-        const vec4 box = u_terrainSplatClimate[numGround + i];
+        const vec4 box = u_terrainLive_splatClimate[numGround + i];
         const vec2 d = max(max(box.xz - climate, climate - box.yw), vec2(0.0));
         const float w = exp(-dot(d, d) * invS2);
         sum += w * textureLod(u_rockTextures[i], vec2(0.5), 20.0).rgb; // the smallest mip: the mean

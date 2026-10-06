@@ -8,8 +8,9 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.Transform;
-import Core.Tweaks;
 import Core.Time;
+import Settings;
+import Settings.Tweaks;
 
 import RendererVK;
 import File;
@@ -53,145 +54,11 @@ namespace Procedural
 		ProfileScope scope("OceanGenerator::initialize", EProfileCategory::Procedural);
 		auto gridDirty = [this]() { m_gridDirty = true; };
 
-		Tweak::boolean("Ocean", "Enabled", &m_enabled);
-		// The ocean's "Meters per pixel": every metre-valued tweak in this panel is a MODEL metre, and the
-		// sea is drawn at model x scale - wavelengths, heights, cascades, the shore depths, the clipmap
-		// cells and the optical depths all shrink together, so the coastline keeps its look on a compressed
-		// terrain (terrain mpp 3 = scale 0.1). The waves keep the model sea's PERIODS (the spectrum clock
-		// slows by sqrt(scale) to undo the Froude speed-up), so the miniature moves like the model in
-		// slow motion rather than racing. Rebuilds the grid (ring cell).
-		Tweak::floatVar("Ocean", "World scale", &m_worldScale, 0.01f, 4.0f, 0.01f, gridDirty); // 1 = model scale
-		Tweak::floatVar("Ocean", "Ring cell (m)", &m_ringCell, 0.02f, 2.0f, 0.005f, gridDirty);
-		Tweak::intVar("Ocean", "Ring resolution", &m_ringRes, 64, 512, 4.0f, gridDirty);
-		Tweak::intVar("Ocean", "Rings", &m_rings, 1, 10, 1.0f, gridDirty);
-		// One coarse quad band from the outermost ring's edge to the camera far plane, so the sea always
-		// reaches the horizon; its geometry is band-limited to the coarsest mips (near-flat), which is
-		// exactly what sub-pixel waves at that distance resolve to anyway.
-		Tweak::boolean("Ocean", "Horizon band", &m_horizonBand, gridDirty);
-		// The band is exempt from the land cull (its triangles far exceed the cull's footprint bound),
-		// so it draws over distant terrain: sink it a little and its crests stay under ground sitting
-		// near sea level. Only the band moves, so large values leave a step at its inner seam.
-		Tweak::floatVar("Ocean", "Horizon level offset (m)", &m_horizonLevelOffset, -20.0f, 5.0f, 0.1f);
-		// Negative = displacement sampled finer than the ring's Nyquist (slight shimmer while moving);
-		// with fixed-cell rings the default 0 is already motion-stable.
-		Tweak::floatVar("Ocean", "Detail bias", &m_detailBias, -2.0f, 2.0f, 0.05f);
-
-		// TMA/JONSWAP spectrum inputs (Horvath 2015); re-evaluated on the GPU every frame, so all live.
-		// The sea's wind is THE wind ("Sky/Wind": its direction, its speed x this - the U10 the spectrum takes).
-		Tweak::floatVar("Ocean/Waves", "Wind speed scale", &m_windSpeedScale, 0.0f, 100.0f, 0.1f);
-		Tweak::floatVar("Ocean/Waves", "Fetch (km)", &m_fetchKm, 1.0f, 2000.0f, 1.0f);
-		Tweak::floatVar("Ocean/Waves", "Depth (m)", &m_depth, 1.0f, 500.0f, 0.5f);
-		// Flow -> wind steering: near a coast the SIMULATION wind turns toward the baked flow directions
-		// (waves roll in toward the local shore); away from any shore it returns to the wind angle above.
-		Tweak::boolean("Ocean/Waves", "Flow steers wind", &m_windSteerEnabled);
-		Tweak::floatVar("Ocean/Waves", "Steer rate (deg/s)", &m_windSteerRate, 0.0f, 90.0f, 0.5f);
-		Tweak::floatVar("Ocean/Waves", "Steer range (m)", &m_windSteerRange, 0.0f, 2000.0f, 10.0f);
-		Tweak::floatVar("Ocean/Waves", "Amplitude scale", &m_amplitude, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Waves", "Choppiness", &m_choppiness, 0.0f, 2.5f, 0.01f);
-		Tweak::floatVar("Ocean/Waves", "Normal strength", &m_normalStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Waves", "Cascade 0 (m)", &m_cascadeSizes.x, 16.0f, 2000.0f, 1.0f);
-		Tweak::floatVar("Ocean/Waves", "Cascade 1 (m)", &m_cascadeSizes.y, 4.0f, 500.0f, 0.5f);
-		Tweak::floatVar("Ocean/Waves", "Cascade 2 (m)", &m_cascadeSizes.z, 1.0f, 100.0f, 0.1f);
-
-		Tweak::color3("Ocean/Shading", "Absorption (1/m)", &m_absorption);
-		Tweak::color3("Ocean/Shading", "Scatter color", &m_scatterColor);
-		Tweak::floatVar("Ocean/Shading", "Scatter strength", &m_scatterStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shading", "Roughness", &m_roughness, 0.02f, 0.5f, 0.001f);
-		// Sharper sun glints: sharpness biases the shading-normal mips finer (some shimmer past ~1.5),
-		// filtering scales the roughness-widening variance terms (0 = raw sharp GGX, 1 = fully filtered).
-		Tweak::floatVar("Ocean/Shading", "Glint filtering", &m_glintFilter, 0.0f, 2.0f, 0.05f);
-		// The capillary band below the finest cascade: slope variance the FFT can never carry, added to
-		// the microfacet roughness at every distance. Without it the LEAN variance is 0 at mip 0 and the
-		// near water falls onto the 0.02 roughness clamp - a sky mirror, the "plastic" look. Raise it for
-		// a duller, wetter near field; 0 restores the mirror.
-		Tweak::floatVar("Ocean/Shading", "Micro roughness", &m_microRoughness, 0.0f, 0.05f, 0.0005f);
-		// The shading slope's fold-over soft limit. It also compresses the steep crest faces, so LOWER =
-		// sharper crests (and creases at real folds), 0 = no limit at all.
-		Tweak::floatVar("Ocean/Shading", "Crest slope limit", &m_crestSlopeLimit, 0.0f, 1.0f, 0.01f);
-		// Sub-band detail: the finest cascade's own gradients re-sampled at "Detail scale" x its patch
-		// size, in a domain rotated by "Detail rotation" so the borrowed field cannot line up with the
-		// cascade it came from. Shading slope only - the geometry and the buoyancy mirror never see it.
-		// It fades out past "Detail fade" because this band is absent from the LEAN moments, so what the
-		// mips filter away would just disappear instead of turning into roughness.
-		Tweak::floatVar("Ocean/Shading", "Detail strength", &m_detailStrength, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shading", "Detail scale", &m_detailScale, 0.02f, 1.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shading", "Detail fade (m)", &m_detailFadeDist, 0.0f, 500.0f, 5.0f);
-		Tweak::floatVar("Ocean/Shading", "Detail rotation (rad)", &m_detailRotation, 0.0f, 3.14159265f, 0.01f);
-		// Crest SSS (Sea of Thieves-style): sun shining through back-lit crests, scaled by wave height.
-		Tweak::floatVar("Ocean/Shading", "SSS strength", &m_sssStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shading", "SSS power", &m_sssPower, 1.0f, 16.0f, 0.1f);
-		Tweak::floatVar("Ocean/Shading", "Underside transmission", &m_undersideTransmission, 0.0f, 1.0f, 0.01f); // sky through Snell's window from below; less = more internal reflection
-		Tweak::boolean("Ocean/Shading", "Hit lighting", &m_hitLighting); // lights on geometry seen through/mirrored in the water
-		Tweak::color3("Ocean/Shading", "Foam color", &m_foamColor);
-		// One instant-foam response (thresholds + softness) draws the crest foam AND injects the foam field.
-		Tweak::floatVar("Ocean/Foam", "Fold bias", &m_foamBias, 0.0f, 1.2f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Break accel (g)", &m_foamBreakAccel, 0.05f, 1.5f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Softness", &m_foamSoftness, 0.02f, 2.0f, 0.01f);
-		// The model wind ("Ocean/Waves/Wind speed") from which the surf band has its full "Shore foam depth" (it
-		// narrows to off in a calm).
-		Tweak::floatVar("Ocean/Foam", "Foam wind full (m/s)", &m_foamWindFull, 0.0f, 60.0f, 0.1f);
-		// The world-space foam field: ONE foam amount sticks to the water it formed on (it stays behind as the
-		// crest moves on) and drifts downwind - white foam above "Foam threshold", the bubble cloud below it.
-		Tweak::floatVar("Ocean/Foam", "Foam decay", &m_foamSurfaceDecay, 0.5f, 0.9995f, 0.0005f);
-		Tweak::floatVar("Ocean/Foam", "Surface foam", &m_foamSurfaceStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Foam texel (m)", &m_foamTexel, 0.1f, 4.0f, 0.05f);
-		Tweak::floatVar("Ocean/Foam", "Foam drift (% wind)", &m_foamDrift, 0.0f, 10.0f, 0.1f);
-		// The stuck foam's coverage: a threshold on its density over the live Jacobian (packs where the water
-		// converges, tears where it stretches).
-		Tweak::floatVar("Ocean/Foam", "Foam threshold", &m_foamThreshold, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Foam edge", &m_foamEdge, 0.0f, 0.5f, 0.005f);
-		// The finest cascade's share in the Jacobian the foam reads: its short, fast waves reshape foam every frame.
-		Tweak::floatVar("Ocean/Foam", "Foam fine waves", &m_foamFineWaves, 0.0f, 1.0f, 0.01f);
-		// The foam's lighting normal: the sub-band detail slope at this scale ("Foam flatten" eases the large waves).
-		Tweak::floatVar("Ocean/Foam", "Foam detail", &m_foamDetail, 0.0f, 4.0f, 0.01f);
-		// The bubble cloud (ocean_bubbles.inc.glsl): the foam amount itself - how deep it floats and how bright it scatters.
-		Tweak::floatVar("Ocean/Foam", "Bubble depth (m)", &m_bubbleDepth, 0.0f, 10.0f, 0.05f);
-		Tweak::floatVar("Ocean/Foam", "Bubble brightness", &m_bubbleBrightness, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Ocean/Foam", "Bubble blur (m)", &m_bubbleBlur, 0.0f, 32.0f, 0.1f);		// The foam's sun term on the wave normal eased toward up: bent crests stop going dark at grazing angles.
-		Tweak::floatVar("Ocean/Foam", "Foam flatten", &m_foamFlatten, 0.0f, 1.0f, 0.01f);
-
-		// Shore interaction: driven by the terrain streamer's baked terrain-data map (nothing baked here;
-		// no data while terrain rendering is disabled - the ocean then behaves as open sea).
-		// "Shoal depth scale" sizes the APPROACH BAND (x the mid cascade's patch size, floored at two
-		// swash reaches): the depth over which open water eases to the swash amplitude. See
-		// oceanSwashFadeIn / oceanSurfaceWeight in ocean_wave.inc.glsl.
-		Tweak::floatVar("Ocean/Shore", "Shoal depth scale", &m_shoalScale, 0.0f, 0.1f, 0.001f);
-		// Past "range" the waves assume at least "Horizon depth" of water whatever the map says (see the
-		// header): distant depth readings all err shallow, and shallow reads as a dead mirror sea. Only
-		// the assumed seabed moves - the surface stays put, so this cannot put water over land.
-		Tweak::floatVar("Ocean/Shore", "Horizon depth (m)", &m_horizonDepth, 0.0f, 200.0f, 1.0f);
-		Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &m_horizonDepthRange, 0.0f, 8000.0f, 50.0f);
-		Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &m_shoreFoamDepth, 0.0f, 8.0f, 0.05f);
-		Tweak::floatVar("Ocean/Shore", "Shore foam max", &m_shoreFoamMax, 0.0f, 1.0f, 0.01f);		Tweak::floatVar("Ocean/Shore", "Swash amplitude", &m_swashAmp, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shore", "Shore foam bias", &m_shoreFoamBias, -1.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shore", "Swash backflow", &m_swashFlow, 0.0f, 3.0f, 0.01f);
-		// Land cull: clipmap triangles buried deeper than this under the local water level (over their
-		// whole footprint) are discarded in the vertex shaders - no displacement sampling, no raster.
-		Tweak::floatVar("Ocean/Shore", "Cull margin (m)", &m_cullMargin, 0.0f, 4.0f, 0.05f);
-		// Beyond the near terrain cascade (~860 m) the cull uses the FAR cascade with this flat burial
-		// error allowance in meters (covers the far mesh LODs' drift off the bake). Narrow rivers the
-		// coarse far bake cannot resolve may lose triangles out there - speed over accuracy; raise it
-		// if that shows, 0 = never cull from far data.
-		Tweak::floatVar("Ocean/Shore", "Far cull error (m)", &m_farCullError, 0.0f, 20.0f, 0.25f);
-		// Whole-sector skip when the baked terrain buries a sector's entire footprint (see the header):
-		// deep inland the ocean then costs nothing at all.
-		Tweak::boolean("Ocean/Shore", "Dry sector cull", &m_drySectorCull);
-
-		// Ray-tracing budget: the water shader traces the scene TLAS per pixel for refraction (seeing
-		// geometry through the water) and reflection (scenery mirrored in it). Refraction range = how far
-		// underwater stays visible (the ~99% Beer-Lambert extinction bound still applies on top, so this
-		// caps the clear-water case); reflection rays skip above the roughness cutoff (a wide lobe cannot
-		// be represented by one mirror sample - the blurred sky stands in); the ray cutoff distance stops
-		// ALL rays past that camera distance (refraction falls back to the analytic baked-terrain bottom,
-		// reflections to the atmosphere - the same paths misses already take), 0 = unlimited.
-		Tweak::floatVar("Ocean/RT", "Refraction range (m)", &m_rtRefractionRange, 1.0f, 100.0f, 1.0f);
-		// 1 depth, 2 swash, 3 surface weight, 5 shore foam band, 6 mirror ray (legend: ocean.fs.glsl)
-		Tweak::intVar("Ocean", "Debug mode", &m_debugMode, 0, 6);
-		Tweak::boolean("Ocean/RT", "Reflections",&m_rtReflections); // scene mirror ray (pipeline reload on toggle)
-		Tweak::floatVar("Ocean/RT", "Reflection range (m)",&m_rtReflectionRange, 50.0f, 10000.0f, 50.0f);
-		Tweak::floatVar("Ocean/RT", "Reflection max rough", &m_rtReflectionMaxRough, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Ocean/RT", "Reflection fog", &m_rtReflectionFog, 0.0f, 4.0f, 0.01f); // 1 = a reflection hazes like its source seen directly; also the terrain film's
-		Tweak::floatVar("Ocean/RT", "Ray cutoff dist (m)",&m_rtRayCutoffDist, 0.0f, 10000.0f, 50.0f);
+		Tweak::onChange(m_settings.worldScale, this, gridDirty);
+		Tweak::onChange(m_settings.ringCell, this, gridDirty);
+		Tweak::onChange(m_settings.ringRes, this, gridDirty);
+		Tweak::onChange(m_settings.rings, this, gridDirty);
+		Tweak::onChange(m_settings.horizonBand, this, gridDirty);
 	}
 
 	void OceanGenerator::rebuildGrid()
@@ -204,7 +71,7 @@ namespace Procedural
 		if (m_material == UINT16_MAX)
 			m_material = Globals::rendererVK.createMeshMaterial(RendererVKLayout::EPipelineIndex::Ocean, false); // the animated surface isn't in the TLAS
 
-		// Geometry clipmap: ring 0 is a full NxN-cell grid at m_ringCell; each outer ring is a square
+		// Geometry clipmap: ring 0 is a full NxN-cell grid at m_settings.ringCell; each outer ring is a square
 		// annulus at double the cell size whose hole is the previous ring's coverage. Per vertex, the
 		// texcoord carries (ring cell size, morph weight): the vertex shaders read them to pick the
 		// ring-matched displacement mip and to run the CDLOD boundary morph (over each ring's outer band,
@@ -217,9 +84,9 @@ namespace Procedural
 		// Every triangle is emitted in both windings, back to back, so the back-face-culled
 		// Ocean pipeline draws the surface from either side and the scene depth holds the nearest face
 		// from below as well as above. Adjacent copies hit the vertex cache; only the index count doubles.
-		const int   N = glm::clamp(m_ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
-		const float c0 = glm::max(m_ringCell * m_worldScale, 0.001f); // world metres: the cell rides the scale like the waves it holds
-		const int   rings = glm::clamp(m_rings, 1, 12);
+		const int   N = glm::clamp(m_settings.ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
+		const float c0 = glm::max(m_settings.ringCell * m_settings.worldScale, 0.001f); // world metres: the cell rides the scale like the waves it holds
+		const int   rings = glm::clamp(m_settings.rings, 1, 12);
 		constexpr float MORPH_BAND_START = 0.7f; // morph over the outer 30% of each ring
 
 		oc::vector<glm::vec3> positions;
@@ -339,7 +206,7 @@ namespace Procedural
 		// footprint is buried, which assumes no co-triangle vertex lies further away - true for the
 		// rings, FALSE here (a band triangle spans from the ring edge out to the far plane), so one
 		// buried inner vertex would take a kilometre-wide slice of the horizon with it.
-		if (m_horizonBand && m_lastFar > 0.0f)
+		if (m_settings.horizonBand && m_lastFar > 0.0f)
 		{
 			const float lastCell = c0 * float(1 << (rings - 1));
 			const float outerH = lastCell * float(N) * 0.5f;
@@ -428,13 +295,13 @@ namespace Procedural
 
 	float OceanGenerator::windSpeed() const
 	{
-		return glm::max(Globals::rendererVK.getWindParams().speed, 0.0f) * glm::max(m_windSpeedScale, 0.0f);
+		return glm::max(Globals::rendererVK.getWindParams().speed, 0.0f) * glm::max(m_settings.windSpeedScale, 0.0f);
 	}
 
 	float OceanGenerator::steeredWindAngle(const Camera& camera)
 	{
 		const float baseAngle = baseWindAngle();
-		if (!m_windSteerEnabled || m_windSteerRate <= 0.0f)
+		if (!m_settings.windSteerEnabled || m_settings.windSteerRate <= 0.0f)
 		{
 			m_windSteerSynced = false; // re-adopt the base wind when steering comes back on
 			return baseAngle;
@@ -445,13 +312,13 @@ namespace Procedural
 			m_windSteerSynced = true;
 		}
 		glm::vec2 sum(0.0f);
-		if (m_terrainData && m_terrainData->ranges.x > 0.0f && m_windSteerRange * m_worldScale > 0.0f)
+		if (m_terrainData && m_terrainData->ranges.x > 0.0f && m_settings.windSteerRange * m_settings.worldScale > 0.0f)
 		{
 			// Votes from the near cascade of the streamer's baked terrain-data map. The flow direction
 			// rides bits 8-15 of the bit-cast packed climate channel (HeightMapBaker's data-map layout).
 			const int32 res = (int32)m_terrainData->res;
 			const float texel = m_terrainData->ranges.x / (float)res;
-			const int32 radius = (int32)(m_windSteerRange * m_worldScale / texel);
+			const int32 radius = (int32)(m_settings.windSteerRange * m_settings.worldScale / texel);
 			const int32 step = glm::max(radius / 16, 1); // <= 33x33 taps of the CPU copy
 			const glm::vec2 rel = glm::vec2(camera.position.x, camera.position.z) - m_terrainData->center;
 			const int32 cx = (int32)std::floor(rel.x / texel) + res / 2;
@@ -476,7 +343,7 @@ namespace Procedural
 		float d = target - m_steeredWindAngle;
 		d -= std::floor(d * (1.0f / 6.283185307f) + 0.5f) * 6.283185307f; // shortest arc
 		// SIM delta: the steered wind reshapes the spectrum, so it must hold still under the global pause
-		const float maxStep = glm::radians(m_windSteerRate) * (float)glm::min(Globals::time.getSimDeltaSec(), 0.1);
+		const float maxStep = glm::radians(m_settings.windSteerRate) * (float)glm::min(Globals::time.getSimDeltaSec(), 0.1);
 		m_steeredWindAngle += glm::clamp(d, -maxStep, maxStep);
 		return m_steeredWindAngle;
 	}
@@ -491,77 +358,78 @@ namespace Procedural
 	{
 		const float windAngle = steeredWindAngle(camera); // base wind, turned toward the local shore flow
 		const float modelWind = windSpeed();              // THE wind x "Wind speed scale": the MODEL U10
-		const float s = glm::max(m_worldScale, 0.001f);
+		const OceanWorldScaled w = oceanWorldScaled(m_settings);
+		const float s = w.s;
 		OceanParams& params = m_params;
-		params.enabled = m_enabled;
+		params.enabled = m_settings.enabled;
 		params.windDirection = glm::vec2(std::cos(windAngle), std::sin(windAngle));
 		params.windSpeed = modelWind * std::sqrt(s);
-		params.fetchKm = m_fetchKm * s;
-		params.depth = m_depth * s;
-		params.horizonLevelOffset = m_horizonLevelOffset * s;
-		params.amplitude = m_amplitude;
-		params.choppiness = m_choppiness;
-		params.normalStrength = m_normalStrength;
-		params.cascadeSizes = m_cascadeSizes * s;
+		params.fetchKm = w.fetchKm;
+		params.depth = w.depth;
+		params.horizonLevelOffset = w.horizonLevelOffset;
+		params.amplitude = m_settings.amplitude;
+		params.choppiness = m_settings.choppiness;
+		params.normalStrength = m_settings.normalStrength;
+		params.cascadeSizes = w.cascadeSizes;
 		params.seaLevel = m_seaLevel; // the world datum: never scaled
-		params.detailBias = m_detailBias;
-		params.absorption = m_absorption / s;
-		params.scatterColor = m_scatterColor;
-		params.scatterStrength = m_scatterStrength;
-		params.roughness = m_roughness;
-		params.glintFilter = m_glintFilter;
-		params.microRoughness = m_microRoughness;   // a slope variance: dimensionless, never scaled
-		params.crestSlopeLimit = m_crestSlopeLimit; // a slope ratio: dimensionless, never scaled
-		params.detailStrength = m_detailStrength;   // a slope scale: dimensionless
-		params.detailScale = m_detailScale;         // a fraction of a patch size, which is already scaled
-		params.detailFadeDist = m_detailFadeDist * s; // a world distance: same world, fewer metres
-		params.detailRotation = m_detailRotation;   // an angle
-		params.sssStrength = m_sssStrength / s; // per metre of crest height
-		params.sssPower = m_sssPower;
-		params.undersideTransmission = m_undersideTransmission;
-		params.hitLighting = m_hitLighting;
-		params.rtReflections = m_rtReflections;
-		params.debugMode = m_debugMode;
-		params.foamColor = m_foamColor;
-		params.foamBias = m_foamBias;
-		params.foamBreakAccel = m_foamBreakAccel;
-		params.foamSoftness = m_foamSoftness;
-		params.bubbleDepth = m_bubbleDepth * s;
-		params.bubbleBrightness = m_bubbleBrightness;
-		params.bubbleBlur = m_bubbleBlur * s;
-		params.foamFlatten = m_foamFlatten; // a blend weight: never scaled
-		params.foamSurfaceDecay = m_foamSurfaceDecay;
-		params.foamSurfaceStrength = m_foamSurfaceStrength;
-		params.foamTexel = m_foamTexel * s;
-		params.foamThreshold = m_foamThreshold; // a density ratio: dimensionless
-		params.foamEdge = m_foamEdge;
-		params.foamFineWaves = m_foamFineWaves;
-		params.foamDetail = m_foamDetail; // a slope scale: dimensionless
-		params.foamDriftSpeed = m_foamDrift * 0.01f * modelWind * s; // model m/s: a speed scales like a length
+		params.detailBias = m_settings.detailBias;
+		params.absorption = w.absorption;
+		params.scatterColor = m_settings.scatterColor;
+		params.scatterStrength = m_settings.scatterStrength;
+		params.roughness = m_settings.roughness;
+		params.glintFilter = m_settings.glintFilter;
+		params.microRoughness = m_settings.microRoughness;   // a slope variance: dimensionless, never scaled
+		params.crestSlopeLimit = m_settings.crestSlopeLimit; // a slope ratio: dimensionless, never scaled
+		params.detailStrength = m_settings.detailStrength;   // a slope scale: dimensionless
+		params.detailScale = m_settings.detailScale;         // a fraction of a patch size, which is already scaled
+		params.detailFadeDist = w.detailFadeDist;
+		params.detailRotation = m_settings.detailRotation;   // an angle
+		params.sssStrength = w.sssStrength;
+		params.sssPower = m_settings.sssPower;
+		params.undersideTransmission = m_settings.undersideTransmission;
+		params.hitLighting = m_settings.hitLighting;
+		params.rtReflections = m_settings.rtReflections;
+		params.debugMode = m_settings.debugMode;
+		params.foamColor = m_settings.foamColor;
+		params.foamBias = m_settings.foamBias;
+		params.foamBreakAccel = m_settings.foamBreakAccel;
+		params.foamSoftness = m_settings.foamSoftness;
+		params.bubbleDepth = w.bubbleDepth;
+		params.bubbleBrightness = m_settings.bubbleBrightness;
+		params.bubbleBlur = w.bubbleBlur;
+		params.foamFlatten = m_settings.foamFlatten; // a blend weight: never scaled
+		params.foamSurfaceDecay = m_settings.foamSurfaceDecay;
+		params.foamSurfaceStrength = m_settings.foamSurfaceStrength;
+		params.foamTexel = w.foamTexel;
+		params.foamThreshold = m_settings.foamThreshold; // a density ratio: dimensionless
+		params.foamEdge = m_settings.foamEdge;
+		params.foamFineWaves = m_settings.foamFineWaves;
+		params.foamDetail = m_settings.foamDetail; // a slope scale: dimensionless
+		params.foamDriftSpeed = m_settings.foamDrift * 0.01f * modelWind * s; // model m/s: a speed scales like a length
 		// The ocean shader's underside path only while the camera is really under the water: a back face
 		// seen from above is a fold (high choppiness) and shades as the top side.
 		params.cameraUnderwater = hasWater() && camera.position.y < sampleWaterHeight(camera.position.x, camera.position.z);
-		params.shoalScale = m_shoalScale;
-		params.horizonDepth = m_horizonDepth * s;
-		params.horizonDepthRange = m_horizonDepthRange * s;
-		params.timeScale = std::sqrt(s); // Froude periods are x sqrt(s); slow the clock to the model's periods
+		params.shoalScale = m_settings.shoalScale;
+		params.horizonDepth = w.horizonDepth;
+		params.horizonDepthRange = w.horizonDepthRange;
+		params.timeScale = w.timeScale; // Froude periods are x sqrt(s); slow the clock to the model's periods
 		params.worldScale = s;           // the renderer scales the spray + the ocean-bound fog metres by it
 		// The surf band narrows with the wind: full width from "Foam wind full" up, off in a calm (the MODEL wind,
 		// so it holds at any world scale).
-		const float windT = glm::smoothstep(0.0f, glm::max(m_foamWindFull, 0.01f), modelWind);
-		params.shoreFoamDepth = m_shoreFoamDepth * s * windT;
+		const float windT = glm::smoothstep(0.0f, glm::max(m_settings.foamWindFull, 0.01f), modelWind);
+		params.shoreFoamDepth = m_settings.shoreFoamDepth * s * windT;
 		// Only a near-calm thins the surf's cap: none below 0.5 m/s of MODEL wind, easing in to full at 2 m/s.
-		params.shoreFoamMax = m_shoreFoamMax * glm::smoothstep(0.5f, 2.0f, modelWind);
-		params.swashAmp = m_swashAmp;
-		params.shoreFoamBias = m_shoreFoamBias;
-		params.swashFlow = m_swashFlow;
-		params.cullMargin = m_cullMargin * s;
-		params.farCullError = m_farCullError * s;
-		params.rtRefractionRange = m_rtRefractionRange * s;
-		params.rtReflectionRange = m_rtReflectionRange * s;
-		params.rtReflectionMaxRough = m_rtReflectionMaxRough;
-		params.rtRayCutoffDist = m_rtRayCutoffDist * s;
-		params.rtReflectionFog = m_rtReflectionFog;
+		params.shoreFoamMax = m_settings.shoreFoamMax * glm::smoothstep(0.5f, 2.0f, modelWind);
+		params.swashAmp = m_settings.swashAmp;
+		params.shoreFoamBias = m_settings.shoreFoamBias;
+		params.swashFlow = m_settings.swashFlow;
+		params.cullMargin = w.cullMargin;
+		params.farCullError = w.farCullError;
+		params.rtRefractionRange = w.rtRefractionRange;
+		params.rtReflectionRange = w.rtReflectionRange;
+		params.rtReflectionMaxRough = m_settings.rtReflectionMaxRough;
+		params.rtRayCutoffDist = w.rtRayCutoffDist;
+		params.rtReflectionFog = m_settings.rtReflectionFog;
 		renderer.setOceanParams(params);
 	}
 
@@ -579,7 +447,7 @@ namespace Procedural
 			if (freed > 0)
 				m_retiredGrids.erase(m_retiredGrids.begin(), m_retiredGrids.begin() + freed);
 		}
-		if (!m_enabled)
+		if (!m_settings.enabled)
 		{
 			if (m_disabledIdle)
 				return; // parked: no profile scope, no per-frame params churn
@@ -666,7 +534,7 @@ namespace Procedural
 		// same world positions (a clipmap's whole point: each world point keeps its sample position and
 		// ring-fixed mip, so waves are rock-stable under camera motion). 8*cell aligns rings 0-2 perfectly;
 		// coarser rings shift sub-texel, which is invisible against their band-limited content.
-		const float snap = 8.0f * glm::max(m_ringCell * m_worldScale, 0.001f); // the scaled cell rebuildGrid used
+		const float snap = 8.0f * glm::max(m_settings.ringCell * m_settings.worldScale, 0.001f); // the scaled cell rebuildGrid used
 		const float px = std::floor(camera.position.x / snap + 0.5f) * snap;
 		const float pz = std::floor(camera.position.z / snap + 0.5f) * snap;
 		const Transform xf(glm::vec3(px, m_seaLevel, pz), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
@@ -712,7 +580,7 @@ namespace Procedural
 
 		// The dry test, decided HERE for every sector as its node's pass mask (0 = skipped by whoever
 		// pushes it - TerrainStreamer's hand-over walk or this generator's own job).
-		const bool dryCull = m_drySectorCull && m_dryGridValid && meshRadius > 0.0f;
+		const bool dryCull = m_settings.drySectorCull && m_dryGridValid && meshRadius > 0.0f;
 		for (Sector& s : m_sectors)
 			s.node.setPassMask(dryCull && !s.horizonBand && sectorDry(s, px, pz, camXZ, meshRadius, wetNeed)
 				? 0u : RendererVKLayout::PASS_MAIN);
@@ -892,7 +760,7 @@ namespace Procedural
 	// The swash tongue's backflow rides on top, already soft-capped in the shader.
 	float OceanGenerator::displacementExtent() const
 	{
-		if (!m_enabled)
+		if (!m_settings.enabled)
 			return 0.0f;
 		const float vertical = glm::max(m_waveCrest, m_waveTrough);
 		const float horizontal = glm::max(m_params.choppiness, 0.0f) * m_waveHoriz
@@ -900,7 +768,7 @@ namespace Procedural
 		return glm::length(glm::vec3(horizontal, vertical, horizontal));
 	}
 
-	// Swash run-up reach (m). MIRRORS Renderer.cpp's UBO packing of u_oceanParams7.w - the conservative
+	// Swash run-up reach (m). MIRRORS RendererUbo.cpp's u_oceanLive_swashReach - the conservative
 	// max run-up height derived from the wave-trough estimate this class itself publishes. It sizes the
 	// on-land band the shaders draw the tongue in, so it is also the band buoyancy must find water in.
 	float OceanGenerator::swashReach() const
@@ -1007,7 +875,7 @@ namespace Procedural
 
 	float OceanGenerator::sampleWaterHeight(float x, float z) const
 	{
-		if (!m_enabled || m_dispTile.empty() || m_dispTileRes == 0)
+		if (!m_settings.enabled || m_dispTile.empty() || m_dispTileRes == 0)
 			return -FLT_MAX;
 		// Land beyond the run-up band: the surface weight is zero there, so the shaders draw no live
 		// water - the same gate the displacement uses, one shore fetch instead of the whole inverse.

@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import Core.SDL;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
 import Core.Transform;
 import Input;
 import UI;
@@ -16,45 +16,16 @@ import :Player;
 
 static constexpr uint64 c_navGoalSlot = Nav::NavSystem::GoalKeyPlayer; // the local player's move-order goal field
 
-void GamePlayer::registerTweaks()
-{
-    // A view preference like Game/Camera: registered OUTSIDE the Synced scope so the server never
-    // pushes its own value onto a client that is flying around.
-    Tweak::boolean("Game/Player", "Detach camera (free fly)", &m_detachCamera);
-    Tweak::boolean("Game/Player", "Detach focus point", &m_detachFocus); // only matters with the camera detached
-    // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-    const Tweak::ScopedFlags scoped( ETweakFlags::Synced);
-    Tweak::floatVar("Game/Player", "Move speed", &m_moveSpeed, 0.5f, 30.0f, 0.1f);
-    Tweak::floatVar("Game/Player", "Accel", &m_accel, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Player", "Jump speed", &m_jumpSpeed, 0.5f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Player", "Sprint mult", &m_sprintMult, 1.0f, 5.0f, 0.1f);
-    Tweak::floatVar("Game/Player", "Sprint energy/s", &m_sprintEnergyPerSec, 0.0f, 50.0f, 0.5f);
-    Tweak::floatVar("Game/Player", "Health max", &m_healthMax, 10.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Player", "Health drain/s", &m_healthDrainRate, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Player", "Max output", &m_shieldMaxOutput, 0.2f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Player", "Energy max", &m_energyMax, 1.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Player", "Energy regen/s", &m_energyRegenRate, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Player", "Energy drain/s @ pressure 1", &m_energyDrainRate, 0.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Player", "Reboot energy", &m_rebootEnergy, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Player", "Damage absorb (energy per hp)", &m_damageAbsorb, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Player", "Cover drain reduction", &m_coverDrainReduction, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Player", "Spawn grace (s)", &m_spawnGraceSec, 0.0f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Player", "Materials max", &m_materialsMax, 5.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Player", "Move arrive radius", &m_arriveRadius, 0.1f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Player", "Damage radius", &m_damageRadius, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Player", "Push gain", &m_shieldPushGain, 0.0f, 100000.0f, 100.0f);
-    Tweak::floatVar("Game/Player", "Surface tension", &m_shieldTension, 0.0f, 10.0f, 0.05f);
-}
-
 void GamePlayer::spawn(const glm::vec3& pos)
 {
+    const GamePlayerSettings& s = Globals::settings.game.player;
     m_spawnPos = pos;
-    m_health = m_healthMax;
-    m_energy = m_energyMax;
+    m_health = s.healthMax;
+    m_energy = s.energyMax;
     m_shieldCollapsed = false;
-    m_graceTimer = m_spawnGraceSec;
+    m_graceTimer = s.spawnGraceSec;
     for (float& h : m_outputHistory)
-        h = m_shieldMaxOutput;
+        h = s.shieldMaxOutput;
     m_entity = Globals::world.spawnAssetFile("Entities/Game/player.pre", Transform(pos), true);
     if (m_entity)
     {
@@ -85,14 +56,15 @@ void GamePlayer::clientAdopt(const glm::vec3& respawnPos)
             continue;
         if (!getComponent<PhysicsComponent>(root.get()) || !getComponent<ForceComponent>(root.get()))
             continue; // our player is the owned capsule WITH a shield
+        const GamePlayerSettings& s = Globals::settings.game.player;
         m_entity = root;
         m_spawnPos = respawnPos;
-        m_health = m_healthMax;
-        m_energy = m_energyMax;
+        m_health = s.healthMax;
+        m_energy = s.energyMax;
         m_shieldCollapsed = false;
-        m_graceTimer = m_spawnGraceSec;
+        m_graceTimer = s.spawnGraceSec;
         for (float& h : m_outputHistory)
-            h = m_shieldMaxOutput;
+            h = s.shieldMaxOutput;
         setTeam(m_team); // the replicated prefab authors team 0 - re-team the local twin's field
         Log::info("Adopted our player capsule from the server");
         return;
@@ -126,6 +98,7 @@ static float shapeBottomDistance(const Entity* entity)
 void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec)
 {
     ProfileScope scope("Player movement", EProfileCategory::Game);
+    const GamePlayerSettings& s = Globals::settings.game.player;
     Input& input = Globals::input;
     if (!input.isWindowHasFocus() || !Globals::ui.isViewportFocused())
         return;
@@ -146,7 +119,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
         const glm::vec3 bodyPos = pc->body.getPosition();
         const glm::vec2 toTarget(m_moveTarget.x - bodyPos.x, m_moveTarget.z - bodyPos.z);
         const float dist = glm::length(toTarget);
-        if (dist <= m_arriveRadius)
+        if (dist <= s.arriveRadius)
         {
             m_hasMoveTarget = false;
             Globals::navSystem.clearGoal(c_navGoalSlot);
@@ -183,15 +156,15 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
         && glm::dot(move, move) > 1e-4f && !m_shieldCollapsed;
     if (sprinting)
     {
-        m_energy = glm::max(m_energy - m_sprintEnergyPerSec * deltaSec, 0.0f);
+        m_energy = glm::max(m_energy - s.sprintEnergyPerSec * deltaSec, 0.0f);
         if (m_energy <= 0.0f)
             m_shieldCollapsed = true; // the same latch applyDamage trips
     }
-    const float speed = m_moveSpeed * (sprinting ? m_sprintMult : 1.0f);
+    const float speed = s.moveSpeed * (sprinting ? s.sprintMult : 1.0f);
 
     glm::vec3 vel = pc->body.getLinearVelocity();
     glm::vec3 dv = glm::vec3(move.x * speed - vel.x, 0.0f, move.z * speed - vel.z);
-    const float maxDv = m_accel * deltaSec;
+    const float maxDv = s.accel * deltaSec;
     const float dvLen = glm::length(dv);
     if (dvLen > maxDv && dvLen > 1e-6f)
         dv *= maxDv / dvLen;
@@ -204,7 +177,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
         const float bottom = shapeBottomDistance(m_entity.get());
         const glm::vec3 pos = pc->body.getPosition();
         if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
-            vel.y = m_jumpSpeed;
+            vel.y = s.jumpSpeed;
     }
     m_jumpWasDown = jumpDown;
     pc->body.setLinearVelocity(vel);
@@ -214,14 +187,15 @@ void GamePlayer::applyDamage(float amount)
 {
     if (m_graceTimer > 0.0f || amount <= 0.0f)
         return;
+    const GamePlayerSettings& s = Globals::settings.game.player;
     // The battery eats the hit FIRST: a live shield converts damage into energy at "Damage absorb"
     // energy per hp, and only what the battery cannot pay reaches health. An emptied battery
     // collapses right here (same latch tickShieldAndHealth uses) and flushes the co-op mirror, so
     // the bubble drops the moment a swarm chews through it instead of at the next tick.
-    if (!m_shieldCollapsed && m_damageAbsorb > 0.0f && m_energy > 0.0f)
+    if (!m_shieldCollapsed && s.damageAbsorb > 0.0f && m_energy > 0.0f)
     {
-        const float absorbedHp = glm::min(amount, m_energy / m_damageAbsorb);
-        m_energy = glm::max(m_energy - absorbedHp * m_damageAbsorb, 0.0f);
+        const float absorbedHp = glm::min(amount, m_energy / s.damageAbsorb);
+        m_energy = glm::max(m_energy - absorbedHp * s.damageAbsorb, 0.0f);
         amount -= absorbedHp;
         if (m_energy <= 0.0f)
             m_shieldCollapsed = true;
@@ -233,6 +207,7 @@ void GamePlayer::applyDamage(float amount)
 void GamePlayer::tickShieldAndHealth(float deltaSec)
 {
     ProfileScope scope("Player shield/health", EProfileCategory::Game);
+    const GamePlayerSettings& s = Globals::settings.game.player;
     PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     ForceComponent* fc = m_entity ? getComponent<ForceComponent>(m_entity.get()) : nullptr;
     if (!pc || !pc->body.isValid() || !fc)
@@ -248,10 +223,10 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     const float density = territory.field / glm::max(fc->emitter.getCenterDensityFactor(), 1e-3f);
     m_lastDensity = density;
 
-    const float currentOutput = m_shieldCollapsed ? 0.01f : m_shieldMaxOutput;
+    const float currentOutput = m_shieldCollapsed ? 0.01f : s.shieldMaxOutput;
     const float coverSurplus = territory.valid && territory.inside && territory.owningTeam == m_team
         ? glm::max(0.0f, density - currentOutput) : 0.0f;
-    float drainMult = glm::clamp(1.0f - coverSurplus * m_coverDrainReduction, 0.0f, 1.0f);
+    float drainMult = glm::clamp(1.0f - coverSurplus * s.coverDrainReduction, 0.0f, 1.0f);
 
     const bool inGrace = m_graceTimer > 0.0f;
     if (inGrace)
@@ -261,14 +236,14 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     }
     // Surface tension: contact stiffens superlinearly with pressure - the same factor scales the
     // push-out below, so shoving deep into a bubble both resists harder and drains faster.
-    const float tension = 1.0f + m_shieldTension * pressure;
-    m_energy = glm::clamp(m_energy - pressure * tension * m_energyDrainRate * drainMult * deltaSec
-        + m_energyRegenRate * deltaSec, 0.0f, m_energyMax);
+    const float tension = 1.0f + s.shieldTension * pressure;
+    m_energy = glm::clamp(m_energy - pressure * tension * s.energyDrainRate * drainMult * deltaSec
+        + s.energyRegenRate * deltaSec, 0.0f, s.energyMax);
     if (m_energy <= 0.0f)
         m_shieldCollapsed = true;
-    else if (m_shieldCollapsed && m_energy >= glm::min(m_rebootEnergy, m_energyMax))
+    else if (m_shieldCollapsed && m_energy >= glm::min(s.rebootEnergy, s.energyMax))
         m_shieldCollapsed = false;
-    fc->emitter.setOutput(m_shieldCollapsed ? 0.01f : m_shieldMaxOutput);
+    fc->emitter.setOutput(m_shieldCollapsed ? 0.01f : s.shieldMaxOutput);
 
     // Physical push-out, INDEPENDENT of the shield state: getAppliedForce scales with the
     // emitter's own output, so it is normalized by the output that produced the readback (the
@@ -276,17 +251,17 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     // spike ~150x on the collapse frame). A collapsed shield pushes exactly like a full one.
     const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
     if (glm::dot(force, force) > 1e-8f)
-        pc->body.applyImpulse(force * deltaSec * m_shieldPushGain * pressure * tension * drainMult);
+        pc->body.applyImpulse(force * deltaSec * s.shieldPushGain * pressure * tension * drainMult);
     m_outputHistory[0] = m_outputHistory[1];
     m_outputHistory[1] = m_outputHistory[2];
-    m_outputHistory[2] = m_shieldCollapsed ? 0.01f : m_shieldMaxOutput;
+    m_outputHistory[2] = m_shieldCollapsed ? 0.01f : s.shieldMaxOutput;
 
     const float iso = Globals::forceSystem.getParams().isoThreshold;
     // Exposure scales with how far the shield squished below "Damage radius": 1% under = 1% of
     // the drain rate, fully collapsed (radius 0) = the full rate - grazing contact only stings.
-    const float exposure = glm::clamp(1.0f - shieldRadius() / glm::max(m_damageRadius, 1e-3f), 0.0f, 1.0f);
+    const float exposure = glm::clamp(1.0f - shieldRadius() / glm::max(s.damageRadius, 1e-3f), 0.0f, 1.0f);
     if (!inGrace && coverSurplus <= 0.0f && exposure > 0.0f && pressure > iso)
-        m_health -= m_healthDrainRate * exposure * deltaSec;
+        m_health -= s.healthDrainRate * exposure * deltaSec;
     if (bodyPos.y < -20.0f)
         m_health = 0.0f; // fell out of the world - respawn below
 
@@ -298,7 +273,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     // respawn below (main thread, pre-physics - direct setters are sanctioned here).
     {
         const GameUnitComponent* unit = getComponent<GameUnitComponent>(m_entity.get());
-        const float ceiling = unit ? unit->effectiveHeightLimit() : GameUnitComponent::params.heightLimit;
+        const float ceiling = unit ? unit->effectiveHeightLimit() : Globals::settings.game.unitParams.heightLimit;
         if (bodyPos.y > ceiling)
         {
             const glm::vec3 clamped(bodyPos.x, ceiling, bodyPos.z);
@@ -320,11 +295,11 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         Globals::physics.teleportBody(pc->body, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
         pc->body.setLinearVelocity(glm::vec3(0.0f));
         pc->snapPose(*m_entity, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-        m_health = m_healthMax;
-        m_energy = m_energyMax;
+        m_health = s.healthMax;
+        m_energy = s.energyMax;
         m_materials = 0.0f; // death drops the carried construction stock
         m_shieldCollapsed = false;
-        m_graceTimer = m_spawnGraceSec;
+        m_graceTimer = s.spawnGraceSec;
         m_hasMoveTarget = false; // do not walk back to where we died
     }
     // Publish into the capsule's PUPPET GameUnitComponent - the state's network surface. The
@@ -336,9 +311,9 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         // Damage other actors banked on our puppet inbox (unit melee, enemy projectiles - the
         // same damage() call every victim gets) applies through the shield-absorb rules.
         applyDamage(unit->takePendingDamage());
-        unit->healthMax = m_healthMax;
+        unit->healthMax = s.healthMax;
         unit->health = m_health;
-        unit->energyMax = m_energyMax;
+        unit->energyMax = s.energyMax;
         unit->energy = m_energy;
         unit->collapsed = m_shieldCollapsed;
         const NetworkComponent* net = getComponent<NetworkComponent>(m_entity.get());
@@ -348,13 +323,13 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
             // (the snapshot game blob writes them), never stamp over them. Gated on a snapshot
             // having actually landed: until then the component still holds the PREFAB's authored
             // team, and latching that would look like a real assignment.
-            m_materials = glm::clamp(unit->materialsFrac, 0.0f, 1.0f) * m_materialsMax;
+            m_materials = glm::clamp(unit->materialsFrac, 0.0f, 1.0f) * s.materialsMax;
             if (net->state && net->state->client.hasTarget && unit->team != m_team)
                 setTeam(unit->team);
         }
         else
         {
-            unit->materialsFrac = m_materialsMax > 0.0f ? m_materials / m_materialsMax : 0.0f;
+            unit->materialsFrac = s.materialsMax > 0.0f ? m_materials / s.materialsMax : 0.0f;
             unit->team = uint8(m_team);
         }
     }

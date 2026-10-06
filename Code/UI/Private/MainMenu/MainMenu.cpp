@@ -4,7 +4,7 @@ import Core;
 import Core.imgui;
 import Core.glm;
 import Core.Rect;
-import Core.Tweaks;
+import Settings.Tweaks;
 
 import :MainMenu;
 import :TweakPanel; // drawTweakVar - the settings page draws the same widget rows

@@ -6,7 +6,6 @@ module RendererVK;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
 import Core.Log;
 import :MeshStreamer;
 import :MeshDataManager;
@@ -24,7 +23,6 @@ static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
 
 bool MeshStreamer::initialize()
 {
-    registerTweaks();
     m_worker = std::jthread([this](std::stop_token stopToken) { workerRun(stopToken); });
     return true;
 }
@@ -50,15 +48,6 @@ void MeshStreamer::shutdown()
 void MeshStreamer::onGpuIdle()
 {
     processDeferredFrees(true);
-}
-
-void MeshStreamer::registerTweaks()
-{
-    Tweak::boolean("Mesh Streaming", "Enabled", &m_enabled);
-    Tweak::intVar("Mesh Streaming", "Mesh budget (MB)", &m_budgetMB, 64, 8192);
-    Tweak::intVar("Mesh Streaming", "Mesh cold frames", &m_coldFrames, 30, 3000);
-    Tweak::intVar("Mesh Streaming", "Mesh max ops", &m_maxOpsInFlight, 1, 32);
-    Tweak::intVar("Mesh Streaming", "Mesh max MB/frame", &m_maxStreamMBPerFrame, 4, 256);
 }
 
 uint16 MeshStreamer::getFileId(oc::string_view path)
@@ -278,10 +267,10 @@ void MeshStreamer::issueStreamIns()
     if (m_sets.empty())
         return;
     uint64 issuedBytes = 0;
-    const uint64 maxBytes = (uint64)m_maxStreamMBPerFrame << 20;
+    const uint64 maxBytes = (uint64)m_settings.maxStreamMBPerFrame << 20;
     for (uint32 setIdx = 0; setIdx < (uint32)m_sets.size(); ++setIdx)
     {
-        if (m_opsInFlight >= (uint32)m_maxOpsInFlight || issuedBytes >= maxBytes)
+        if (m_opsInFlight >= (uint32)m_settings.maxOpsInFlight || issuedBytes >= maxBytes)
             break;
         MeshSet& set = m_sets[setIdx];
         // "Seen this frame while evicted" = an instance wants it back on screen (or in shadows/GI).
@@ -330,7 +319,7 @@ void MeshStreamer::evictSet(uint32 setIdx)
 
 void MeshStreamer::solveEvictions()
 {
-    if (!m_enabled || m_stats.residentBytes <= m_stats.budgetBytes)
+    if (!m_settings.enabled || m_stats.residentBytes <= m_stats.budgetBytes)
         return;
 
     // Evict least-recently-seen first, cold sets only - an over-budget scene where everything is
@@ -338,7 +327,7 @@ void MeshStreamer::solveEvictions()
     oc::vector<uint32>& candidates = m_evictCandidates; // kept scratch
     candidates.clear();
     for (uint32 i = 0; i < (uint32)m_sets.size(); ++i)
-        if (m_sets[i].state == EState::Resident && m_frameCounter - m_sets[i].lastSeenFrame >= (uint32)m_coldFrames)
+        if (m_sets[i].state == EState::Resident && m_frameCounter - m_sets[i].lastSeenFrame >= (uint32)m_settings.coldFrames)
             candidates.push_back(i);
     oc::sort(candidates.begin(), candidates.end(),
         [&](uint32 a, uint32 b) { return m_sets[a].lastSeenFrame < m_sets[b].lastSeenFrame; });
@@ -365,7 +354,7 @@ void MeshStreamer::update()
     issueStreamIns();
 
     Stats stats = {};
-    stats.budgetBytes = (uint64)m_budgetMB << 20;
+    stats.budgetBytes = (uint64)m_settings.budgetMB << 20;
     for (const MeshSet& set : m_sets)
     {
         if (set.removed)
@@ -378,7 +367,7 @@ void MeshStreamer::update()
             continue;
         }
         stats.residentBytes += set.totalBytes;
-        if (m_frameCounter - set.lastSeenFrame >= (uint32)m_coldFrames)
+        if (m_frameCounter - set.lastSeenFrame >= (uint32)m_settings.coldFrames)
             stats.coldBytes += set.totalBytes;
     }
     m_stats = stats;

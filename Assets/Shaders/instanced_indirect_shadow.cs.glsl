@@ -101,18 +101,18 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     // A ROCK of the tree set (its records draw on LitRock): a regular mesh with an LOD chain, and no wind.
     const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
     const bool sways                  = isTree && !isRock;
-    const float radius                = meshInfo.radius * instancePosScale.w + (sways ? u_treeWind3.z : 0.0); // + the wind's sway reach
+    const float radius                = meshInfo.radius * instancePosScale.w + (sways ? u_foliageLive_windReach : 0.0); // + the wind's sway reach
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     uint cascadeMask = cascadeOverlapMask(centerPos, radius);
     // FAR TREES OUT OF THE NEAR CASCADES: a cascade's box runs a long way up-sun (it must hold every caster between the
     // light and its receivers), so it takes in thousands of distant grove trees. A tree stays in cascade c only while
     // its distance from the cascades' centre (the scene focus, getSunCascade's) minus its radius lies within that
-    // cascade's split + "Foliage shadow cascade margin" (u_treeCullParams.w) - the margin keeps the long shadows of the
+    // cascade's split + "Foliage shadow cascade margin" (u_present_treeShadowMargin) - the margin keeps the long shadows of the
     // trees just up-sun of the cascade's range. (cascadeSplit: the packed scalar of shadows.inc.glsl.)
     if (isTree)
     {
-        const float reach = distance(centerPos, u_sceneFocus.xyz) - radius - u_treeCullParams.w;
+        const float reach = distance(centerPos, u_sceneFocus.xyz) - radius - u_present_treeShadowMargin;
         for (uint c = 0u; c < NUM_SHADOW_CASCADES; ++c)
             if (reach > u_cascadeViewProj[c][0][3])
                 cascadeMask &= ~(1u << c);
@@ -133,12 +133,12 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     // Trees have no mesh LOD chains (their own tiers instead; Procedural TreeSystem): no lookup for their records.
     // The tree set's rocks have one.
     const uint lodGroupIdx = sways ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
-    if (lodGroupIdx != 0xFFFFFFFFu && u_lodParams1.z > 0.5)
+    if (lodGroupIdx != 0xFFFFFFFFu && u_lod_enabled > 0.5)
     {
         const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
         const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
         int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
-            u_lodParams0.x * 4.0, 2.0, -1);
+            u_lod_maxErrorPx * 4.0, 2.0, -1);
         uint chosenMeshIdx = lodMeshAt(group, level);
         if (in_meshInfos[chosenMeshIdx].indexCount == 0u)
         {
@@ -179,7 +179,7 @@ layout (local_size_x = 64) in; // one thread per stream instance, and one per TR
 void main()
 {
     const uint gid = gl_GlobalInvocationID.x;
-    if (gid >= u_treeCull.z)
+    if (gid >= u_present_treeThreads)
         return;
     bool isTree;
     uint pieceIdx, passBits;

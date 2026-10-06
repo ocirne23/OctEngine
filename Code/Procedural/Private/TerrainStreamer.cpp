@@ -4,8 +4,9 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.Transform;
-import Core.Tweaks;
 import Core.Log;
+import Settings;
+import Settings.Tweaks;
 
 import RendererVK;
 import File;
@@ -155,7 +156,7 @@ namespace
 
 	// The entry's climate box as TerrainSplatMaterial::climate takes it: temperature normalized to t01,
 	// precipitation left in mm/yr. The renderer divides that by the GENERATOR'S live mm-per-full-humidity
-	// scale (TerrainTexTweaks::precipFullMm) rather than the shared constant: V3 exposes it as a tweak,
+	// scale ("Terrain/V3/Precip for full humidity") rather than the shared constant: V3 exposes it as a tweak,
 	// and if the two ever drift the whole table slides along the humidity axis while still looking
 	// perfectly reasonable in this file.
 	glm::vec4 terrainSplatClimate(const TerrainTexSource& src)
@@ -270,255 +271,38 @@ namespace Procedural
 		// values (see render), so neither push walks its whole set.
 		Globals::spatialIndex.setVisibleCollect(SpatialLayer_Terrain, 1, SpatialIndex::ECollect::UserData);
 
-		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
-		// never loads the 2.28 GB of models onto the GPU).
-		Tweak::boolean("Terrain", "Enabled", &m_enabled, dirty);
-		Tweak::boolean("Terrain", "Load models", &m_v3LoadModels, dirty);
-
-		// The ceiling is float-exact (overrides travel as floats): the lobby seeds the world through one.
-		Tweak::intVar("Terrain", "Seed", &m_seed, 0, 16000000, 1.0f, dirty);
-		Tweak::floatVar("Terrain", "Origin X (m)", &m_originX, -1.0e7f, 1.0e7f, 10.0f, dirty);
-		Tweak::floatVar("Terrain", "Origin Z (m)", &m_originZ, -1.0e7f, 1.0e7f, 10.0f, dirty);
-		Tweak::intVar("Terrain", "Chunk size (m)", &m_chunkSize, 128, 1024, 1.0f, dirty);
-		Tweak::intVar("Terrain", "LOD0 resolution", &m_lod0Res, 128, 1024, 1.0f, dirty);
-		Tweak::intVar("Terrain", "Range (chunks)", &m_ringRadius, 1, 128, 1.0f); // max generation radius from the camera chunk
-		Tweak::floatVar("Terrain", "LOD step (chunks)", &m_lodStep, 0.1f, 16.0f, 0.1f); // LOD0 band width; each next band doubles
-		Tweak::floatVar("Terrain", "Full-res distance (chunks)", &m_fullResDist, 0.0f, 32.0f, 0.05f); // edge distance forced to LOD0 before bands begin
-		Tweak::intVar("Terrain", "Max LOD", &m_maxLod, 0, 6, 1.0f);
-		Tweak::intVar("Terrain", "Uploads/frame", &m_maxUploadsPerFrame, 1, 32, 1.0f);
-		Tweak::floatVar("Terrain", "Upload MB/frame", &m_maxUploadMBPerFrame, 4.0f, 96.0f, 1.0f);
-		// Concurrent generation jobs: >1 lets warm-tile mesh builds overlap a cold V3 tile wait
-		// (inference itself still serializes on the pipeline lock).
-		Tweak::intVar("Terrain", "Gen jobs", &m_maxGenJobs, 1, 16, 1.0f);
-		Tweak::floatVar("Terrain", "Sea level (m)", &m_seaLevel, -200.0f, 200.0f, 0.5f, dirty);
-		Tweak::floatVar("Terrain", "Skirt depth (m)", &m_skirtDepth, 0.0f, 64.0f, 0.5f, dirty);
-		// ONE shared baked terrain-data map (height, water level, fog|falloff|temp|hum, altitude): the volumetric
-		// fog's terrain follow + regional thickness, the ocean's far shore fallback, and the terrain
-		// coloring all read these cascades. Disabling it degrades all three.
-		Tweak::boolean("Terrain", "Terrain data map", &m_terrainMapEnabled);
-		// Diagnostic: prints what each baked cascade actually contains, decoded the way the shader
-		// decodes it. The bake is otherwise invisible - a wrong sampler, pack or upload all look
-		// the same from the shader side.
-		Tweak::boolean("Terrain", "Log baked data map", &m_terrainMapDebugLog);
-		// The ocean runs swash onto anything within ~1 m of the water level, and V3 reports sea level
-		// EVERYWHERE (it models no lakes), so inland ground that happens to sit at 0..1 m reads as beach and
-		// gets waves. These sink the baked water level well below any ground the ocean cannot reach, which
-		// the swash's existing landlocked-water gate then takes care of; the beach texture overlay keys on
-		// the same field, so inland sand goes with it. Off = the raw sampler water level.
-		Tweak::boolean("Terrain", "Ocean reach limit", &m_waterReachEnabled);
-		// How deep water must be before it counts as ocean at all. Guards the reach test against shallow
-		// inland dips: one texel a hair under sea level would otherwise vouch for every hollow within the
-		// reach radius of it. Raise it if puddles still rescue ground they should not.
-		Tweak::floatVar("Terrain", "Ocean swash depth", &m_waterReach.swashDepth, 0.0f, 20.0f, 0.1f);
-		Tweak::floatVar("Terrain", "Ocean reach (m)", &m_waterReach.radius, 0.0f, 100.0f, 0.1f);
-		Tweak::floatVar("Terrain", "Ocean reach feather (m)", &m_waterReach.feather, 1.0f, 100.0f, 0.1f);
-		Tweak::floatVar("Terrain", "Ocean reach drop (m)", &m_waterReach.drop, 0.0f, 50.0f, 0.5f);
-		// Baked per-texel flow direction (the data map's 8 packed bits + the ocean shore map's B channel):
-		// toward the nearest land through the surf zone - the waves' travel direction at the coast - and
-		// downhill everywhere else (future rivers/water simulation). See applyFlowField for each knob's
-		// role; changing one re-bakes both maps, like the reach settings above.
-		Tweak::boolean("Terrain", "Flow direction", &m_flowFieldEnabled);
-		Tweak::floatVar("Terrain", "Flow shore range (m)", &m_flowField.oceanRange, 0.0f, 2000.0f, 10.0f);
-		Tweak::floatVar("Terrain", "Flow shore fade (m)", &m_flowField.oceanFade, 0.0f, 1000.0f, 10.0f);
-		Tweak::floatVar("Terrain", "Flow smoothing (m)", &m_flowField.smoothRadius, 0.0f, 200.0f, 1.0f);
-		Tweak::floatVar("Terrain", "Flow min slope", &m_flowField.minSlope, 0.0f, 0.5f, 0.005f);
-		Tweak::floatVar("Terrain", "Data map range (m)", &m_terrainMapRange, 256.0f, 8192.0f, 32.0f);
-		// Floor for the far cascade world size: the actual range is raised to cover the resident mesh ring
-		// (2*(R+1)*chunkSize) so distant terrain never reads clamp-to-edge frozen altitude/temperature.
-		Tweak::floatVar("Terrain", "Data map far range (m)", &m_terrainMapFarRange, 1024.0f, 65536.0f, 256.0f);
-
-		// Terrain texture splatting (TERRAIN pipeline variant; pushed to the renderer every frame from
-		// updateTerrainTextures via Renderer::setTerrainTextureParams). The surface composites bottom-up
-		// as ground -> beach -> rock -> snow; these shape where each layer takes over.
-		// TERRAIN SURFACE WATER (Renderer::TerrainWetTweaks). ONE wetness field - rain, the ocean's swash,
-		// submersion - drives ONE water surface: it fills the splat relief to a level (rain puddles) and
-		// follows the LIVE OCEAN where that stands higher, so the water continues across the waterline onto
-		// the sand. The ground under it darkens and glosses with the same wetness.
-		Tweak::boolean("Terrain/Water", "Enabled", &m_wetEnabled);
-		// --- The field: a toroidal clipmap around the scene focus, integrated on a fixed tick.
-		Tweak::floatVar("Terrain/Water", "Texel size (m)", &m_wetTexelSize, 0.1f, 4.0f, 0.1f);
-		// The pass integrates on a fixed tick, not per frame: a per-frame change at high fps is below the
-		// R16F image's step and rounds away (framerate-dependent wetness). Keep it well under the fps.
-		Tweak::floatVar("Terrain/Water", "Update rate (Hz)", &m_wetUpdateRate, 1.0f, 30.0f, 0.5f);
-		// Sideways spread rate; the on/off toggle is the renderer's own "Diffusion" tweak (a baked define
-		// on terrain_wetness.cs.glsl, reloaded on change).
-		Tweak::floatVar("Terrain/Water", "Diffusion (1/s)", &m_wetDiffusionRate, 0.0f, 60.0f, 0.5f);
-		Tweak::floatVar("Terrain/Water", "Rain (1/s)", &m_wetRain, 0.0f, 0.1f, 0.001f);
-		Tweak::floatVar("Terrain/Water", "Dry time (s)", &m_wetDryTime, 1.0f, 600.0f, 1.0f);
-		Tweak::floatVar("Terrain/Water", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Wet-in time (s)", &m_wetInTime, 0.0f, 10.0f, 0.05f);
-		// Steep ground sheds water: the terrain shader decays at rate x (1 + slope * drain) per pixel
-		// (mesh normal) and the compute pass divides wet-in / rain by the same factor (map gradient).
-		Tweak::floatVar("Terrain/Water", "Slope drain", &m_wetSlopeDrain, 0.0f, 20.0f, 0.1f);
-		// --- The water surface: the LEVEL it fills the relief to (0 = its low points, 1 = its top), the
-		// fade at its intersection with the terrain, and how far it follows the live ocean.
-		Tweak::floatVar("Terrain/Water", "Fill start", &m_wetFillStart, 0.0f, 0.99f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Fill full", &m_wetFillFull, 0.01f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Fill curve", &m_wetFillCurve, 0.05f, 16.0f, 0.05f);
-		Tweak::floatVar("Terrain/Water", "Edge fade (m)", &m_wetEdgeFade, 0.0f, 0.5f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Ocean blend (m)", &m_wetOceanBlend, 0.01f, 20.0f, 0.05f);
-		Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &m_wetOceanEdgeFade, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Film max slope (deg)", &m_wetFilmMaxSlope, 0.0f, 90.0f, 0.5f);
-		Tweak::floatVar("Terrain/Water", "Film slope fade (deg)", &m_wetFilmSlopeFade, 0.0f, 45.0f, 0.5f);
-		Tweak::floatVar("Terrain/Water", "Film flow speed (m/s)", &m_wetFilmFlowSpeed, 0.0f, 10.0f, 0.05f);
-		Tweak::floatVar("Terrain/Water", "Film flow min slope (deg)", &m_wetFilmFlowMinSlope, 0.0f, 45.0f, 0.5f);
-		Tweak::floatVar("Terrain/Water", "Film flow cycle (s)", &m_wetFilmFlowCycle, 0.05f, 10.0f, 0.05f);
-		// --- The look: the ocean's own surface terms, so the two meet seamlessly.
-		Tweak::floatVar("Terrain/Water", "Waviness", &m_wetWaviness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Normal scale", &m_wetNormalScale, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Wind ripples", &m_wetRippleStrength, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Water roughness", &m_wetRoughness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Wet roughness", &m_wetGroundRoughness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Drying pattern", &m_wetDryingPattern, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Darkening edge", &m_wetDarkeningEdge, 0.001f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Roughness edge", &m_wetRoughnessEdge, 0.001f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Drying pattern size (m)", &m_wetDryingPatternSize, 0.1f, 50.0f, 0.1f);
-		Tweak::floatVar("Terrain/Water", "Drying pattern relief", &m_wetDryingPatternRelief, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Drying pattern contrast", &m_wetDryingPatternContrast, 0.0f, 10.0f, 0.05f);
-		Tweak::floatVar("Terrain/Water", "Underwater roughness", &m_wetUnderwaterRoughness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Wet darkening", &m_wetDarkening, 0.1f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Darkening threshold", &m_wetDarkeningThreshold, 0.0001f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Roughness threshold", &m_wetRoughnessThreshold, 0.0001f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Wet normal scale", &m_wetGroundNormalScale, 0.0f, 4.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Glint size (m)", &m_wetGlintSize, 0.005f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Water", "Glint coverage", &m_wetGlintCoverage, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Water", "Glint roughness", &m_wetGlintRoughness, 0.01f, 1.0f, 0.005f);
-
-		Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &m_texUvScaleGround, 0.005f, 2.0f);
-		Tweak::floatVar("Terrain/Textures", "Rock uv scale (1/m)", &m_texUvScaleRock, 0.005f, 2.0f);
-		Tweak::floatVar("Terrain/Textures", "Snow uv scale (1/m)", &m_texUvScaleSnow, 0.005f, 2.0f);
-		// How far outside its climate box an entry still competes. Low = crisp climate borders.
-		Tweak::floatVar("Terrain/Textures", "Climate blend", &m_texClimateBlend, 0.01f, 0.5f, 0.005f);
-		// Slope = 1 - N.y, so 0.30 = 45 deg, 0.55 = 63. NOTE for V3: the diffusion field is 30 m/px and
-		// barely reaches 45 deg on its own, so most rock arrives via the crag test below, not this one.
-		Tweak::floatVar("Terrain/Textures", "Slope rock start", &m_texSlopeRockStart, 0.0f, 1.0f);
-		Tweak::floatVar("Terrain/Textures", "Slope rock full", &m_texSlopeRockFull, 0.0f, 1.0f);
-		// Relief above the MACRO altitude: what separates a mountain from flat ground that merely sits
-		// high. This is the main rock control under V3.
-		// V3's macro altitude is the coarse stage's 7.68 km surface - nearly flat across one mountain - so
-		// crag relief is essentially (height - constant) and the rock boundary traces an ELEVATION CONTOUR:
-		// grass gives way to stone at one height right across a range. This wanders it up and down.
-		// Scaled by the local relief in the shader, so it cannot rock a plain however high it is set; safe
-		// to push. 0 = off (contour lines). Both are metres at the model's true scale, like the thresholds
-		// below, so they hold their look across "Meters per pixel".
-		Tweak::floatVar("Terrain/Textures", "Crag wander (m)", &m_texCragWanderAmp, 0.0f, 600.0f, 5.0f);
-		Tweak::floatVar("Terrain/Textures", "Crag wander wavelength (m)", &m_texCragWanderWavelength, 200.0f, 20000.0f, 100.0f);
-		// Beyond this view distance the splat layers fetch albedo only (no normal/ARM taps, geometric
-		// normal shading) - the minified detail mips carry no visible signal there. 0 = never simplify.
-		Tweak::floatVar("Terrain/Textures", "Crag relief start (m)", &m_texCragStart, 0.0f, 200.0f);
-		Tweak::floatVar("Terrain/Textures", "Crag relief full (m)", &m_texCragFull, 0.0f, 400.0f);
-		Tweak::floatVar("Terrain/Textures", "Beach band (m)", &m_texBeachBand, 0.0f, 20.0f);
-		// Snow cover. Temperature sets the snow LINE (the generator's lapse rate is what makes it follow
-		// the mountains); slope decides how much of the mountain's own rock shows through it.
-		Tweak::floatVar("Terrain/Textures", "Snow temp full (C)", &m_texSnowTempFull, -30.0f, 20.0f, 0.5f);
-		Tweak::floatVar("Terrain/Textures", "Snow temp none (C)", &m_texSnowTempNone, -30.0f, 20.0f, 0.5f);
-		Tweak::floatVar("Terrain/Textures", "Snow slope start", &m_texSnowSlopeStart, 0.0f, 1.0f);
-		Tweak::floatVar("Terrain/Textures", "Snow slope full", &m_texSnowSlopeFull, 0.0f, 1.0f);
-		Tweak::floatVar("Terrain/Textures", "Snow min humidity", &m_texSnowAridity, 0.0f, 0.5f, 0.005f);
-		// Relief from the splat height maps: parallax occlusion mapping near the camera (one world-space
-		// march over the blended height of the visible layers) and the height blend at layer borders.
-		// Baked (TERRAIN_POM): flipping it reloads the terrain shaders.
-		Tweak::boolean("Terrain/Textures", "Parallax", &m_texParallaxEnabled);
-		Tweak::floatVar("Terrain/Textures", "Parallax depth ground (m)", &m_texParallaxDepthGround, 0.0f, 1.0f, 0.005f);
-		Tweak::floatVar("Terrain/Textures", "Parallax depth rock (m)", &m_texParallaxDepthRock, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Terrain/Textures", "Parallax fade start (m)", &m_texParallaxFadeStart, 0.0f, 200.0f, 0.5f);
-		Tweak::floatVar("Terrain/Textures", "Parallax fade end (m)", &m_texParallaxFadeEnd, 1.0f, 300.0f, 0.5f);
-		Tweak::intVar("Terrain/Textures", "Parallax steps", &m_texParallaxSteps, 2, 64, 1.0f);
-		Tweak::floatVar("Terrain/Textures", "Parallax self-shadow", &m_texParallaxShadow, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Textures", "Height blend contrast", &m_texHeightBlendContrast, 0.0f, 16.0f, 0.1f);
-		// Tessellation: the ground + overlay subdivide near the camera and displace by the same height
-		// composite, centred on the mesh. Independent of "Parallax" (both on = relief twice near the camera).
-		// Baked: flipping it reloads the cull (TERRAIN_TESS_ROUTE) and builds / drops the tess pipeline's draws.
-		Tweak::boolean("Terrain/Tessellation", "Enabled", &m_texTessEnabled);
-		Tweak::intVar("Terrain/Tessellation", "Max factor", &m_texTessMaxFactor, 1, 64, 1.0f);
-		Tweak::floatVar("Terrain/Tessellation", "Target edge (px)", &m_texTessTargetPx, 2.0f, 64.0f, 0.5f);
-		Tweak::floatVar("Terrain/Tessellation", "Fade start (m)", &m_texTessFadeStart, 0.0f, 300.0f, 0.5f);
-		Tweak::floatVar("Terrain/Tessellation", "Fade end (m)", &m_texTessFadeEnd, 1.0f, 500.0f, 0.5f);
-		// Across the fade band, 1 - t^p: 1 linear, 2 quadratic (holds, drops late), 0.5 square root (drops early).
-		// SEPARATE for the subdivision (the tess factor) and the displacement height.
-		Tweak::floatVar("Terrain/Tessellation", "Factor falloff exponent", &m_texTessFalloffExponent, 0.05f, 16.0f, 0.05f);
-		Tweak::floatVar("Terrain/Tessellation", "Height falloff exponent", &m_texTessHeightFalloffExponent, 0.05f, 16.0f, 0.05f);
-		// Closer than this nothing moves: the subdivision and the height mip hold at this distance's values.
-		Tweak::floatVar("Terrain/Tessellation", "Freeze distance (m)", &m_texTessFreezeDistance, 0.1f, 100.0f, 0.5f);
-		Tweak::floatVar("Terrain/Tessellation", "Depth ground (m)", &m_texTessDepthGround, 0.0f, 2.0f, 0.005f);
-		Tweak::floatVar("Terrain/Tessellation", "Depth rock (m)", &m_texTessDepthRock, 0.0f, 4.0f, 0.01f);
-
-
-		// V3 (Terrain Diffusion). The model resolves 30 m/px, which is what makes its continents
-		// continent-sized; everything below that is the slope-masked detail layer below.
-		// "Meters per pixel" is a UNIFORM world scale: heights and detail shrink with it, so the model's
-		// proportions survive and "Height scale" stays a pure exaggeration on top (1 = real proportions).
-		// NOTE ON COST: lowering it compresses the world (mountains become reachable sooner) but is
-		// quadratically MORE expensive - the same view distance then spans more model pixels, so more tiles
-		// must be generated. 30 -> 15 is ~4x the inference work for the same ring radius.
-		Tweak::floatVar("Terrain/V3", "Meters per pixel", &m_v3MetersPerPixel, 0.05f, 30.0f, 0.05f, dirty); // 30 = true scale
-		Tweak::floatVar("Terrain/V3", "Height scale", &m_v3HeightScale, 0.0f, 4.0f, 0.05f, dirty);
-		// The model's climate is real-world calibrated and the biome attractors are expressed in real units
-		// to match, so both of these default to 0 (= the model's own climate). "Extra lapse" pushes the
-		// snow line further down the mountains than reality; "Temp offset" makes the whole planet warmer or
-		// colder.
-		Tweak::floatVar("Terrain/V3", "Temp offset (C)", &m_v3TemperatureOffset, -30.0f, 30.0f, 0.5f, dirty);
-		// THE snow-line dial: how fast it cools with altitude, C per MODEL metre (so it rides "Meters per
-		// pixel" like every other vertical quantity). More negative = snow lower down the mountains.
-		// One number for the world, not the model's own per-region rate. That was baked into the terrain-data
-		// map and measured as buying nothing: both cascades regress the same data, so their rates agreed and
-		// dropping it left near-vs-far disagreement unchanged at 0.15 C max. It only bought fidelity to the
-		// model's absolute temperature, which nothing consumes. -0.008 is the mean of what it regressed
-		// (Earth's environmental lapse is ~-0.0065).
-		Tweak::floatVar("Terrain/V3", "Lapse rate (C/m)", &m_v3LapseRate, -0.03f, 0.0f, 0.0005f, dirty);
-		// The model's temperature is a function of ELEVATION, so every climate boundary it draws is an
-		// isotherm and therefore a contour line: grass gives way to rock at one height right across a range,
-		// and the snow line is a perfect ring. This wanders the temperature so those boundaries ride up and
-		// down instead. In degrees, so it breaks up the ground transitions and the snow line with one field,
-		// and it goes into the climate the scatter system reads too - trees keep marking the treeline the
-		// textures draw. 0 = the model's own banded climate.
-		// Roughly: at the model's lapse (~0.005 C/m in model metres) 1 C of wander moves a boundary ~200
-		// model metres up or down.
-		Tweak::floatVar("Terrain/V3", "Climate wander (C)", &m_v3ClimateNoiseC, 0.0f, 8.0f, 0.1f, dirty);
-		// Model metres, like the detail wavelengths. Floored well above the far terrain-data cascade's texel
-		// (~16 m world): this is BAKED, so a short wavelength aliases and near/far stop agreeing.
-		Tweak::floatVar("Terrain/V3", "Climate wander wavelength (m)", &m_v3ClimateNoiseWavelength, 500.0f, 20000.0f, 100.0f, dirty);
-		Tweak::intVar("Terrain/V3", "Climate wander octaves", &m_v3ClimateNoiseOctaves, 1, 6, 1.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Detail slope gain", &m_v3DetailSlopeGain, 0.0f, 4.0f, 0.05f, dirty); // higher = detail on gentler slopes
-		// THE resolution dial. The model resolves 30 m/px and nothing will make it resolve less, so every
-		// feature below that is these two fBm layers - and how far down they reach is set by the OCTAVE
-		// count, not the wavelength: finest feature = wavelength / 2^(octaves-1), in MODEL metres, then
-		// scaled by metersPerPixel/30 like everything else.
-		//
-		// At the defaults (A 220 m/4, B 45 m/3) the finest thing in the field is 45/4 = 11 model metres.
-		// That is why lowering "Meters per pixel" looks like it adds detail: at mpp=3 those 11 model metres
-		// become 1.1 world metres, which finally matches the 1 m vertex grid (chunk size / LOD0 res). It is
-		// not generating more - it is shrinking the world until the existing detail reaches the vertices.
-		// To get the same crispness at FULL scale (mpp=30), raise the octaves instead:
-		//     B 3 -> 5   finest 11.25 m -> 2.81 m
-		//     A 4 -> 6   finest 27.50 m -> 6.88 m
-		// Do not chase the last factor of two: below ~2 m the detail is finer than the 1 m vertex grid can
-		// represent and simply aliases into shimmer. fbm() is amplitude-normalised, so extra octaves add
-		// roughness without inflating the relief, and each one is a single noise lookup against a diffusion
-		// tile resolve - the cost is not measurable next to inference.
-		Tweak::floatVar("Terrain/V3", "Detail A wavelength (m)", &m_v3DetailWavelengthA, 20.0f, 1000.0f, 5.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Detail A amp (m)", &m_v3DetailAmplitudeA, 0.0f, 200.0f, 1.0f, dirty);
-		Tweak::intVar("Terrain/V3", "Detail A octaves", &m_v3DetailOctavesA, 1, 8, 1.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Detail B wavelength (m)", &m_v3DetailWavelengthB, 5.0f, 300.0f, 1.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Detail B amp (m)", &m_v3DetailAmplitudeB, 0.0f, 80.0f, 0.5f, dirty);
-		Tweak::intVar("Terrain/V3", "Detail B octaves", &m_v3DetailOctavesB, 1, 8, 1.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Precip for full humidity", &m_v3PrecipFullHumidity, 200.0f, 6000.0f, 50.0f, dirty);
-		Tweak::floatVar("Terrain/V3", "Humidity offset", &m_v3HumidityOffset, -1.0f, 1.0f, 0.01f, dirty);
-		Tweak::floatVar("Terrain/V3", "Humid fog", &m_v3HumidFog, 0.0f, 1.0f, 0.01f, dirty);
-		Tweak::floatVar("Terrain/V3", "Valley fog", &m_v3ValleyFog, 0.0f, 1.0f, 0.01f, dirty);
-		Tweak::intVar("Terrain/V3", "Resident tiles", &m_v3MaxTiles, 4, 256, 1.0f, dirty); // ~800 KB each
-		// Half-precision inference. This does NOT generate terrain faster: measured at mpp=3, the near
-		// cascade is unchanged (4.03 s -> 4.02 s) and the coarse/far path is ~15% SLOWER (1.12 s -> 1.30 s).
-		// The pipeline is dispatch-bound, not compute-bound, so halving the FLOPs buys nothing and the
-		// boundary Casts cost a little. What it does buy: model VRAM drops ~2.28 GB -> ~1.1 GB (the
-		// renderer wants that back) and the models load ~1.8x faster (2.14 s -> 1.19 s for base).
-		// Needs the optional fp16 models (Tools/convert_models_fp16.py); without them this does nothing and
-		// the log says so. Flipping it RELOADS the weights and regenerates the world - fp16 is not
-		// bit-identical, so the same seed grows visibly different fine detail.
-		Tweak::boolean("Terrain/V3", "FP16 inference", &m_v3Fp16, dirty);
-		// Off = never load the 2.28 GB of diffusion weights: the terrain runs on the .tile files already
-		// in Local/Diffusion/<seed>/ (a missing tile falls back to the coarse stage, else sea level).
-		// Turning it off with the models up unloads them.
+		// The generator config (Settings::registerTerrain): a change rebuilds the maps. Enabled included: enabling is
+		// what kicks the V3 model load (disabled terrain never loads the 2.28 GB of models onto the GPU).
+		const TerrainSettings& s = m_settings;
+		Tweak::onChange(s.enabled, this, dirty);
+		Tweak::onChange(s.v3LoadModels, this, dirty);
+		Tweak::onChange(s.seed, this, dirty);
+		Tweak::onChange(s.originX, this, dirty);
+		Tweak::onChange(s.originZ, this, dirty);
+		Tweak::onChange(s.chunkSize, this, dirty);
+		Tweak::onChange(s.lod0Res, this, dirty);
+		Tweak::onChange(s.seaLevel, this, dirty);
+		Tweak::onChange(s.skirtDepth, this, dirty);
+		Tweak::onChange(s.v3MetersPerPixel, this, dirty);
+		Tweak::onChange(s.v3HeightScale, this, dirty);
+		Tweak::onChange(s.v3TemperatureOffset, this, dirty);
+		Tweak::onChange(s.v3LapseRate, this, dirty);
+		Tweak::onChange(s.v3ClimateNoiseC, this, dirty);
+		Tweak::onChange(s.v3ClimateNoiseWavelength, this, dirty);
+		Tweak::onChange(s.v3ClimateNoiseOctaves, this, dirty);
+		Tweak::onChange(s.v3DetailSlopeGain, this, dirty);
+		Tweak::onChange(s.v3DetailWavelengthA, this, dirty);
+		Tweak::onChange(s.v3DetailAmplitudeA, this, dirty);
+		Tweak::onChange(s.v3DetailOctavesA, this, dirty);
+		Tweak::onChange(s.v3DetailWavelengthB, this, dirty);
+		Tweak::onChange(s.v3DetailAmplitudeB, this, dirty);
+		Tweak::onChange(s.v3DetailOctavesB, this, dirty);
+		Tweak::onChange(s.v3PrecipFullHumidity, this, dirty);
+		Tweak::onChange(s.v3HumidityOffset, this, dirty);
+		Tweak::onChange(s.v3HumidFog, this, dirty);
+		Tweak::onChange(s.v3ValleyFog, this, dirty);
+		Tweak::onChange(s.v3MaxTiles, this, dirty);
+		Tweak::onChange(s.v3Fp16, this, dirty);
 
 		rebuildMaps();  // (a no-op while disabled: no generator, no model load)
 		kickTexBake();  // (likewise gated: a disabled terrain reads no source images)
@@ -530,7 +314,7 @@ namespace Procedural
 	// image sets at startup - and once: enabling later kicks it from updateTerrainTextures.
 	void TerrainStreamer::kickTexBake()
 	{
-		if (!m_enabled || m_texBakeKicked)
+		if (!m_settings.enabled || m_texBakeKicked)
 			return;
 		m_texBakeKicked = true;
 		Globals::jobSystem.submit([this]
@@ -549,87 +333,10 @@ namespace Procedural
 		// difference, so it shrinks with "Meters per pixel" exactly like everything else: the same mountain
 		// measures ~15 m of relief at mpp=30 and ~1.5 m at mpp=3. Left absolute, a 12 m start is unreachable
 		// below mpp≈25 and the near field simply never grows rock (measured: mean crag 1.5 m, rock weight
-		// 0.019 at mpp=3). Scaling here keeps the tweak meaning "metres at the model's true scale", which is
-		// the same convention the detail wavelengths already use.
-		const float cragScale = TerrainGenV3::worldScale(m_v3MetersPerPixel);
-		renderer.setTerrainTextureParams({
-			.uvScaleGround = m_texUvScaleGround,
-			.uvScaleRock = m_texUvScaleRock,
-			.uvScaleSnow = m_texUvScaleSnow,
-			.climateBlend = m_texClimateBlend,
-			.slopeRockStart = m_texSlopeRockStart,
-			.slopeRockFull = m_texSlopeRockFull,
-			.cragStart = m_texCragStart * cragScale,
-			.cragFull = m_texCragFull * cragScale,
-			.beachBand = m_texBeachBand,
-			.snowTempFull = m_texSnowTempFull,
-			.snowTempNone = m_texSnowTempNone,
-			.snowSlopeStart = m_texSnowSlopeStart,
-			.snowSlopeFull = m_texSnowSlopeFull,
-			.snowAridity = m_texSnowAridity,
-			.cragWanderAmp = m_texCragWanderAmp * cragScale,
-			.cragWanderWavelength = m_texCragWanderWavelength * cragScale,
-			.parallaxEnabled = m_texParallaxEnabled,
-			.parallaxDepthGround = m_texParallaxDepthGround,
-			.parallaxDepthRock = m_texParallaxDepthRock,
-			.parallaxFadeStart = m_texParallaxFadeStart,
-			.parallaxFadeEnd = m_texParallaxEnabled ? m_texParallaxFadeEnd : 0.0f,
-			.parallaxSteps = (float)m_texParallaxSteps,
-			.parallaxShadow = m_texParallaxShadow,
-			.heightBlendContrast = m_texHeightBlendContrast,
-			.tessEnabled = m_texTessEnabled,
-			.tessMaxFactor = (float)m_texTessMaxFactor,
-			.tessTargetPx = m_texTessTargetPx,
-			.tessFadeStart = m_texTessFadeStart,
-			.tessFadeEnd = m_texTessFadeEnd,
-			.tessFalloffExponent = m_texTessFalloffExponent,
-			.tessHeightFalloffExponent = m_texTessHeightFalloffExponent,
-			.tessFreezeDistance = m_texTessFreezeDistance,
-			.tessDepthGround = m_texTessDepthGround,
-			.tessDepthRock = m_texTessDepthRock,
-			.precipFullMm = m_v3PrecipFullHumidity,
-		});
-		renderer.setTerrainWetParams({
-			.enabled = m_wetEnabled,
-			.texelSize = m_wetTexelSize,
-			.updateRate = m_wetUpdateRate,
-			.diffusionRate = m_wetDiffusionRate,
-			.rain = m_wetRain,
-			.dryTime = m_wetDryTime,
-			.dryTempSens = m_wetDryTempSens,
-			.wetInTime = m_wetInTime,
-			.slopeDrain = m_wetSlopeDrain,
-			.fillStart = m_wetFillStart,
-			.fillFull = m_wetFillFull,
-			.fillCurve = m_wetFillCurve,
-			.edgeFade = m_wetEdgeFade,
-			.oceanBlend = m_wetOceanBlend,
-			.oceanEdgeFade = m_wetOceanEdgeFade,
-			.filmMaxSlope = m_wetFilmMaxSlope,
-			.filmSlopeFade = m_wetFilmSlopeFade,
-			.filmFlowSpeed = m_wetFilmFlowSpeed,
-			.filmFlowMinSlope = m_wetFilmFlowMinSlope,
-			.filmFlowCycle = m_wetFilmFlowCycle,
-			.waviness = m_wetWaviness,
-			.normalScale = m_wetNormalScale,
-			.rippleStrength = m_wetRippleStrength,
-			.roughness = m_wetRoughness,
-			.wetRoughness = m_wetGroundRoughness,
-			.dryingPattern = m_wetDryingPattern,
-			.darkeningEdge = m_wetDarkeningEdge,
-			.roughnessEdge = m_wetRoughnessEdge,
-			.dryingPatternSize = m_wetDryingPatternSize,
-			.dryingPatternRelief = m_wetDryingPatternRelief,
-			.dryingPatternContrast = m_wetDryingPatternContrast,
-			.underwaterRoughness = m_wetUnderwaterRoughness,
-			.darkening = m_wetDarkening,
-			.darkeningThreshold = m_wetDarkeningThreshold,
-			.roughnessThreshold = m_wetRoughnessThreshold,
-			.wetNormalScale = m_wetGroundNormalScale,
-			.glintSize = m_wetGlintSize,
-			.glintCoverage = m_wetGlintCoverage,
-			.glintRoughness = m_wetGlintRoughness,
-		});
+		// 0.019 at mpp=3). Scaling keeps the tweak meaning "metres at the model's true scale", which is the same
+		// convention the detail wavelengths already use. The renderer reads every other terrain texture / water
+		// setting straight from Globals::settings.terrain.
+		renderer.setTerrainCragScale(TerrainGenV3::worldScale(m_settings.v3MetersPerPixel));
 
 		// Until the bake finishes, chunks draw with the flat-color fallback. A bake with nothing usable
 		// leaves the set unregistered; registerTerrainTextures' warnings say what.
@@ -683,7 +390,7 @@ namespace Procedural
 	//
 	//   component    range of        units
 	//   climate.xy   temperature     t01, normalized by the caller
-	//   climate.zw   precipitation   mm/yr; buildUboTerrain divides it by TerrainTexTweaks::precipFullMm
+	//   climate.zw   precipitation   mm/yr; buildUboTerrain divides it by Globals::settings.terrain.v3PrecipFullHumidity
 	//                                every frame, so that live tweak needs no re-register
 	//
 	//   Weight is 1 inside the box and a Gaussian falloff outside it; a full-width axis means "this axis
@@ -765,7 +472,7 @@ namespace Procedural
 		// "kick" below) is what starts the 2.28 GB GPU load, so a disabled terrain must never reach it. The
 		// Enabled tweak is registered dirty, so flipping it on lands back here and starts the load then.
 		// There is no unload API - models loaded during an earlier enabled stretch stay resident.
-		if (!m_enabled)
+		if (!m_settings.enabled)
 		{
 			m_v3AwaitingModels = false;
 			std::lock_guard<std::mutex> lk(m_mutex);
@@ -780,42 +487,42 @@ namespace Procedural
 		// every chunk built in the meantime would bake a flat sea-level world into the resident cache and
 		// never be revisited.
 		TerrainConfigV3 cfg;
-		cfg.seed = (uint32)m_seed;
-		cfg.seaLevel = m_seaLevel;
-		cfg.originX = m_originX;
-		cfg.originZ = m_originZ;
+		cfg.seed = (uint32)m_settings.seed;
+		cfg.seaLevel = m_settings.seaLevel;
+		cfg.originX = m_settings.originX;
+		cfg.originZ = m_settings.originZ;
 		cfg.bounded = m_bounded;
 		cfg.boundsMinX = m_boundsMin.x;
 		cfg.boundsMinZ = m_boundsMin.y;
 		cfg.boundsMaxX = m_boundsMax.x;
 		cfg.boundsMaxZ = m_boundsMax.y;
-		cfg.metersPerPixel = m_v3MetersPerPixel;
-		cfg.heightScale = m_v3HeightScale;
-		cfg.detailSlopeGain = m_v3DetailSlopeGain;
-		cfg.detailWavelengthA = m_v3DetailWavelengthA;
-		cfg.detailAmplitudeA = m_v3DetailAmplitudeA;
-		cfg.detailOctavesA = (uint32)glm::max(1, m_v3DetailOctavesA);
-		cfg.detailWavelengthB = m_v3DetailWavelengthB;
-		cfg.detailAmplitudeB = m_v3DetailAmplitudeB;
-		cfg.detailOctavesB = (uint32)glm::max(1, m_v3DetailOctavesB);
-		cfg.precipForFullHumidity = m_v3PrecipFullHumidity;
-		cfg.humidityOffset = m_v3HumidityOffset;
-		cfg.temperatureOffset = m_v3TemperatureOffset;
-		cfg.lapseRate = m_v3LapseRate;
-		cfg.climateNoiseAmplitudeC = m_v3ClimateNoiseC;
-		cfg.climateNoiseWavelength = m_v3ClimateNoiseWavelength;
-		cfg.climateNoiseOctaves = (uint32)glm::max(1, m_v3ClimateNoiseOctaves);
-		cfg.humidFogAmount = m_v3HumidFog;
-		cfg.valleyFogAmount = m_v3ValleyFog;
-		cfg.maxResidentTiles = m_v3MaxTiles;
-		cfg.useFp16 = m_v3Fp16;
+		cfg.metersPerPixel = m_settings.v3MetersPerPixel;
+		cfg.heightScale = m_settings.v3HeightScale;
+		cfg.detailSlopeGain = m_settings.v3DetailSlopeGain;
+		cfg.detailWavelengthA = m_settings.v3DetailWavelengthA;
+		cfg.detailAmplitudeA = m_settings.v3DetailAmplitudeA;
+		cfg.detailOctavesA = (uint32)glm::max(1, m_settings.v3DetailOctavesA);
+		cfg.detailWavelengthB = m_settings.v3DetailWavelengthB;
+		cfg.detailAmplitudeB = m_settings.v3DetailAmplitudeB;
+		cfg.detailOctavesB = (uint32)glm::max(1, m_settings.v3DetailOctavesB);
+		cfg.precipForFullHumidity = m_settings.v3PrecipFullHumidity;
+		cfg.humidityOffset = m_settings.v3HumidityOffset;
+		cfg.temperatureOffset = m_settings.v3TemperatureOffset;
+		cfg.lapseRate = m_settings.v3LapseRate;
+		cfg.climateNoiseAmplitudeC = m_settings.v3ClimateNoiseC;
+		cfg.climateNoiseWavelength = m_settings.v3ClimateNoiseWavelength;
+		cfg.climateNoiseOctaves = (uint32)glm::max(1, m_settings.v3ClimateNoiseOctaves);
+		cfg.humidFogAmount = m_settings.v3HumidFog;
+		cfg.valleyFogAmount = m_settings.v3ValleyFog;
+		cfg.maxResidentTiles = m_settings.v3MaxTiles;
+		cfg.useFp16 = m_settings.v3Fp16;
 
 		// BEFORE the isReady() check, not inside the generator: switching precision reloads the models
 		// and drops isReady(), so a check taken before it would publish a generator whose pipeline is
 		// being torn down underneath it - and every chunk built meanwhile would bake a flat sea-level
 		// world into the resident cache and never be revisited.
-		TerrainGenV3::setModelLoadingEnabled(m_v3LoadModels); // before any construction below kicks a load
-		TerrainGenV3::setPrecision(m_v3Fp16);
+		TerrainGenV3::setModelLoadingEnabled(m_settings.v3LoadModels); // before any construction below kicks a load
+		TerrainGenV3::setPrecision(m_settings.v3Fp16);
 
 		oc::shared_ptr<const ITerrainSampler> maps;
 		if (TerrainGenV3::isReady())
@@ -847,9 +554,9 @@ namespace Procedural
 	TerrainStreamer::StreamStatus TerrainStreamer::streamStatus() const
 	{
 		StreamStatus s;
-		s.enabled = m_enabled;
+		s.enabled = m_settings.enabled;
 		s.failed = TerrainGenV3::hasFailed();
-		s.modelsReady = m_enabled && !m_v3AwaitingModels && !s.failed;
+		s.modelsReady = m_settings.enabled && !m_v3AwaitingModels && !s.failed;
 		s.resident = (uint32)m_residents.size();
 		s.pending = (uint32)m_pending.size();
 		s.mapShipped = m_terrainMapUploaded;
@@ -937,7 +644,7 @@ namespace Procedural
 		// Top the pump pool up to min(cap, active + new work): each CAS claims one slot. Spawning
 		// more pumps than requests is impossible this way; a pump finding the pool already drained
 		// just exits through its recheck.
-		const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
+		const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 16);
 		for (size_t spawned = 0; spawned < numNew; )
 		{
 			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
@@ -1032,7 +739,7 @@ namespace Procedural
 					if (m_requests.empty())
 						return;
 				}
-				const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
+				const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 16);
 				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{
@@ -1081,8 +788,8 @@ namespace Procedural
 	}
 
 	// Shared terrain-data map: FOG_TERRAIN_CASCADES camera-centered snapshots (HeightMapBaker, sampled
-	// from the SAME sampler the chunks render from) - a near cascade over m_terrainMapRange meters at
-	// fine texels and a far cascade over m_terrainMapFarRange at the same resolution (coarse texels are
+	// from the SAME sampler the chunks render from) - a near cascade over m_settings.terrainMapRange meters at
+	// fine texels and a far cascade over m_settings.terrainMapFarRange at the same resolution (coarse texels are
 	// fine at those distances, so long-range data costs no extra memory). Per texel: height, water level,
 	// packed fog|falloff|temp|hum, macro altitude. Consumers: the volumetric fog's terrain follow + regional
 	// thickness, the ocean's shore-map fallback, and the TERRAIN pipeline's coloring. (The renderer-side
@@ -1091,18 +798,18 @@ namespace Procedural
 	{
         ProfileScope profileScope("updateFogHeightMap", EProfileCategory::Procedural);
 
-		const bool active = m_terrainMapEnabled && maps != nullptr;
+		const bool active = m_settings.terrainMapEnabled && maps != nullptr;
 		HeightMapBaker::Baked baked;
-		const WaterReach* reach = m_waterReachEnabled ? &m_waterReach : nullptr;
+		const WaterReach* reach = m_settings.waterReachEnabled ? &m_settings.waterReach : nullptr;
 		if (m_terrainMapBaker.update(baked, active, maps, glm::vec2(camera.position.x, camera.position.z),
-			glm::vec2(glm::max(m_terrainMapRange, 256.0f), farRange),
+			glm::vec2(glm::max(m_settings.terrainMapRange, 256.0f), farRange),
 			RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, // RGBA: height, water level, fog|flow|temp|hum, altitude
 			reach, activeFlowField()))
 		{
 			// Decode what actually went into the packed climate channel, per cascade, exactly as
 			// terrain_height.inc.glsl does. The bake is the one link in the chain nothing else can see: a
 			// wrong sampler, a wrong pack and a wrong upload all look identical from the shader.
-			if (m_terrainMapDebugLog)
+			if (m_settings.terrainMapDebugLog)
 			{
 				const uint32 res = RendererVKLayout::FOG_TERRAIN_RES;
 				const size_t perCascade = (size_t)res * res * 4;
@@ -1165,8 +872,8 @@ namespace Procedural
 		}
 
 		// Polls/drops the in-flight terrain-data bake and clears the renderer-side map once (active=false).
-		updateFogHeightMap(renderer, camera, nullptr, m_terrainMapFarRange); // no terrain -> no terrain-following fog
-		renderer.setTerrainParams(0.0f, m_seaLevel);   // no mesh up: disables the ocean land cull
+		updateFogHeightMap(renderer, camera, nullptr, m_settings.terrainMapFarRange); // no terrain -> no terrain-following fog
+		renderer.setTerrainParams(0.0f, m_settings.seaLevel);   // no mesh up: disables the ocean land cull
 		renderer.setCameraGround(std::numeric_limits<float>::quiet_NaN());
 
 		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
@@ -1196,8 +903,9 @@ namespace Procedural
 	// no stamps, empty hand-over) keeps the plain walk, so nothing is ever culled there; the ocean then
 	// pushes its own sectors.
 	//
-	// The walk and the pushes run on a WORKER (renderNode is lock-free from any job between
-	// beginFrame and present): the list holds VALUES (it reads no pool row the scatter's registrations
+	// The walk and the pushes run on WORKERS (renderNode is lock-free from any job between
+	// beginFrame and present, for different nodes): the list fans out over a parallelFor and the sphere
+	// query runs beside it, the two sets disjoint. The list holds VALUES (it reads no pool row the scatter's registrations
 	// on main could reallocate) and holds until the next spatial kick. main.cpp joins m_renderCounter
 	// right before present, and update/clearResidents join it before touching m_residents (nothing
 	// mutates it until then; this frame's ring scan only reads it). The ocean's sectors, their pass
@@ -1233,60 +941,79 @@ namespace Procedural
 		const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
 		Globals::jobSystem.submit([this, &renderer, sphere, reach, focus]
 		{
-			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect): an ocean sector's
-			// tagged RenderNode*, or a chunk's Resident* (its node and its vegetation).
-			for (const uint64 userData : Globals::spatialIndex.visibleUserData(1))
-			{
-				if (userData & SpatialTerrainTag_Ocean)
-					renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
-				else
-				{
-					const Resident& resident = *reinterpret_cast<const Resident*>(userData);
-					renderer.renderNode(resident.node);
-					noteVegetation(resident, RendererVKLayout::PASS_ALL);
-				}
-			}
+			// The shadow/GI sphere runs BESIDE the hand-over fan-out: it skips every main-stamped entry, so the two
+			// never push the same node (renderNode writes the node's upload state).
+			JobCounter sphereCounter;
 			if (sphere)
 			{
-				Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
+				Globals::jobSystem.submit([this, &renderer, reach, focus]
 				{
-					if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
+					Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
 					{
-						constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
-						const Resident& resident = *reinterpret_cast<const Resident*>(userData);
-						renderer.renderNode(resident.node, SHADOW_AND_GI);
-						noteVegetation(resident, SHADOW_AND_GI);
-					}
-				}, SpatialPassBit_Main); // main-stamped: pushed above
+						if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
+						{
+							constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
+							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
+							renderer.renderNode(resident.node, SHADOW_AND_GI);
+							noteVegetation(resident, SHADOW_AND_GI);
+						}
+					}, SpatialPassBit_Main); // main-stamped: pushed by the fan-out
+				}, { "terrainRenderPushSphere", EProfileCategory::Procedural }, EJobPriority::High, &sphereCounter);
 			}
+			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect): an ocean sector's
+			// tagged RenderNode*, or a chunk's Resident* (its node and its vegetation). Every entry is a
+			// different node, so the list fans out.
+			const oc::vector<uint64>& visible = Globals::spatialIndex.visibleUserData(1);
+			Globals::jobSystem.parallelFor(0, (uint32)visible.size(), m_renderPushCost, { "terrainRenderPushChunk", EProfileCategory::Procedural },
+				[&](uint32 begin, uint32 end)
+				{
+					for (uint32 i = begin; i < end; ++i)
+					{
+						const uint64 userData = visible[i];
+						if (userData & SpatialTerrainTag_Ocean)
+							renderer.renderNode(*reinterpret_cast<const RenderNode*>(userData & ~SpatialTerrainTag_Ocean));
+						else
+						{
+							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
+							renderer.renderNode(resident.node);
+							noteVegetation(resident, RendererVKLayout::PASS_ALL);
+						}
+					}
+				}, EJobPriority::High);
+			Globals::jobSystem.wait(sphereCounter);
 			flushVegetation();
 		}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
 	}
 
-	// The walk job's: a chunk's vegetation, merged per vegetation chunk (a LOD handover pushes the old and the new
-	// resident of one coordinate - the trees must not draw twice).
+	// The walk's pushes (on several workers): a chunk's vegetation, merged per vegetation chunk (a LOD handover pushes
+	// the old and the new resident of one coordinate - the trees must not draw twice).
 	void TerrainStreamer::noteVegetation(const Resident& resident, uint32 passMask)
 	{
 		const int32 vegetation = resident.vegetation.load(oc::memory_order_relaxed);
 		if (!m_vegRouted || vegetation < 0 || (size_t)vegetation >= m_vegMasks.size())
 			return;
-		uint8& mask = m_vegMasks[(size_t)vegetation];
-		if (mask == 0)
-			m_vegTouched.push_back((uint32)vegetation);
-		mask |= (uint8)passMask;
+		const uint8 bits = (uint8)passMask;
+		const oc::atomic_ref<uint8> mask(m_vegMasks[(size_t)vegetation]);
+		if ((mask.load(oc::memory_order_relaxed) & bits) == bits)
+			return;
+		if (mask.fetch_or(bits, oc::memory_order_relaxed) == 0) // the first push of this chunk lists it
+			m_vegTouched[m_vegTouchedCount.fetch_add(1, oc::memory_order_relaxed)] = (uint32)vegetation;
 	}
 
+	// The walk's end, after its pushes joined.
 	void TerrainStreamer::flushVegetation()
 	{
 		if (!m_vegRouted) // the owner submits its vegetation itself this frame
 			return;
 		m_vegDraws.clear();
-		for (const uint32 chunk : m_vegTouched)
+		const uint32 numTouched = m_vegTouchedCount.load(oc::memory_order_relaxed);
+		for (uint32 i = 0; i < numTouched; ++i)
 		{
+			const uint32 chunk = m_vegTouched[i];
 			m_vegDraws.push_back({ chunk, m_vegMasks[chunk] });
 			m_vegMasks[chunk] = 0;
 		}
-		m_vegTouched.clear();
+		m_vegTouchedCount.store(0, oc::memory_order_relaxed);
 		m_vegSink(oc::span<const VegetationDraw>(m_vegDraws.data(), m_vegDraws.size()));
 	}
 
@@ -1297,7 +1024,8 @@ namespace Procedural
 		m_vegLookup = oc::move(lookup);
 		m_vegSink = oc::move(sink);
 		m_vegMasks.assign(m_vegSink ? numChunks : 0u, 0);
-		m_vegTouched.clear();
+		m_vegTouched.assign(m_vegMasks.size(), 0u); // a chunk is listed at most once per walk
+		m_vegTouchedCount.store(0, oc::memory_order_relaxed);
 		for (auto& entry : m_residents)
 			entry.second->vegetation.store(m_vegLookup ? m_vegLookup(entry.second->coord) : -1, oc::memory_order_relaxed);
 		for (RetiredResident& retired : m_retired) // a hand-over list may still name them: no stale index
@@ -1331,7 +1059,7 @@ namespace Procedural
 			if (freed > 0)
 				m_retired.erase(m_retired.begin(), m_retired.begin() + freed);
 		}
-		if (!m_enabled)
+		if (!m_settings.enabled)
 		{
 			m_ringScanOut.clear();
 			m_evictScanReady = false;
@@ -1347,7 +1075,7 @@ namespace Procedural
 		m_disabledIdle = false;
 
 		ProfileScope profileScope("Terrain", EProfileCategory::Procedural);
-		//m_terrainMapFarRange = camera.far;
+		//m_settings.terrainMapFarRange = camera.far;
 		if (m_configDirty)
 		{
 			m_configDirty = false;
@@ -1378,13 +1106,13 @@ namespace Procedural
 
 		updateTerrainTextures(renderer);
 
-		const float chunkSize = (float)m_chunkSize;
+		const float chunkSize = (float)m_settings.chunkSize;
 		const int camCX = (int)std::floor(camera.position.x / chunkSize);
 		const int camCZ = (int)std::floor(camera.position.z / chunkSize);
-		const int R = glm::max(1, m_ringRadius);
-		const float lodStep = glm::max(0.01f, m_lodStep);
-		const float fullRes = glm::max(0.0f, m_fullResDist);
-		const uint32 maxLod = (uint32)glm::max(0, m_maxLod);
+		const int R = glm::max(1, m_settings.ringRadius);
+		const float lodStep = glm::max(0.01f, m_settings.lodStep);
+		const float fullRes = glm::max(0.0f, m_settings.fullResDist);
+		const uint32 maxLod = (uint32)glm::max(0, m_settings.maxLod);
 		// Camera position in chunk units, SNAPPED to a quarter-chunk lattice: edge-distance LOD makes the
 		// wanted set a function of the camera POSITION, not just its chunk, and the snap both bounds how
 		// often the scan re-runs and gives the worker one exact value to judge staleness against.
@@ -1411,10 +1139,10 @@ namespace Procedural
 		float lapsePerWorldM = 0.0f;
 		if (maps)
 		{
-			const float vertScale = TerrainGenV3::worldScale(m_v3MetersPerPixel) * glm::max(m_v3HeightScale, 0.01f);
+			const float vertScale = TerrainGenV3::worldScale(m_settings.v3MetersPerPixel) * glm::max(m_settings.v3HeightScale, 0.01f);
 			lapsePerWorldM = maps->lapseRatePerMetre() / glm::max(vertScale, 1e-4f);
 		}
-		renderer.setTerrainParams((float)R * chunkSize, m_seaLevel, lapsePerWorldM);
+		renderer.setTerrainParams((float)R * chunkSize, m_settings.seaLevel, lapsePerWorldM);
 		// The ground under the camera (the near grass shadow cascade's placement). The sample may read the tile under the
 		// camera from the disk cache once (a cold start or a jump): one tile, which the chunks there need anyway.
 		{
@@ -1427,7 +1155,7 @@ namespace Procedural
 		// rise). The mesh reaches ~(R+1)*chunkSize from the camera on each axis; the map is a centered
 		// square of side = range, so range must be at least twice that. Keep the tweak as a floor.
 		const float meshHalfExtent = (float)(R + 1) * chunkSize;
-		const float farRange = glm::max(m_terrainMapFarRange, 2.0f * meshHalfExtent);
+		const float farRange = glm::max(m_settings.terrainMapFarRange, 2.0f * meshHalfExtent);
 		updateFogHeightMap(renderer, camera, maps, farRange);
 
 		// Ring membership is CLOSED FORM: the column at Chebyshev distance cheb from the camera chunk
@@ -1557,7 +1285,7 @@ namespace Procedural
             // --- Pick THIS frame's upload batch (kickUploads, after present). The picks stay "pending"
             // until they are adopted, so the ring scan does not re-request them.
             ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
-            const size_t maxBytes = (size_t)(glm::max(m_maxUploadMBPerFrame, 1.0f) * 1024.0f * 1024.0f);
+            const size_t maxBytes = (size_t)(glm::max(m_settings.maxUploadMBPerFrame, 1.0f) * 1024.0f * 1024.0f);
             size_t batchBytes = 0;
             for (Result& res : ready)
             {
@@ -1576,7 +1304,7 @@ namespace Procedural
                 }
                 const size_t bytes = res.mesh.vertices.size() * sizeof(res.mesh.vertices[0])
                     + res.mesh.indices.size() * sizeof(res.mesh.indices[0]);
-                if ((int)m_uploads.size() >= m_maxUploadsPerFrame || (!m_uploads.empty() && batchBytes + bytes > maxBytes))
+                if ((int)m_uploads.size() >= m_settings.maxUploadsPerFrame || (!m_uploads.empty() && batchBytes + bytes > maxBytes))
                 {
                     m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
                     continue;
@@ -1668,7 +1396,7 @@ namespace Procedural
 			{
 				const glm::ivec2 c0(std::floor((camera.position.x - grassRange) / chunkSize), std::floor((camera.position.z - grassRange) / chunkSize));
 				const glm::ivec2 c1(std::floor((camera.position.x + grassRange) / chunkSize), std::floor((camera.position.z + grassRange) / chunkSize));
-				const uint32 lod0Res = (uint32)glm::max(1, m_lod0Res);
+				const uint32 lod0Res = (uint32)glm::max(1, m_settings.lod0Res);
 				for (int z = c0.y; z <= c1.y; ++z)
 					for (int x = c0.x; x <= c1.x; ++x)
 						for (uint32 lod = 0; lod <= maxLod; ++lod)
@@ -1694,8 +1422,8 @@ namespace Procedural
 			RingScanInput& in = m_ringScanIn;
 			in.camCX = camCX; in.camCZ = camCZ; in.R = R;
 			in.camChunks = camChunks;
-			in.chunkSize = chunkSize; in.fullRes = fullRes; in.lodStep = lodStep; in.skirtDepth = m_skirtDepth;
-			in.maxLod = maxLod; in.lod0Res = (uint32)glm::max(1, m_lod0Res); in.generation = generation;
+			in.chunkSize = chunkSize; in.fullRes = fullRes; in.lodStep = lodStep; in.skirtDepth = m_settings.skirtDepth;
+			in.maxLod = maxLod; in.lod0Res = (uint32)glm::max(1, m_settings.lod0Res); in.generation = generation;
 			in.bounded = m_bounded; in.boundsMin = m_boundsMin; in.boundsMax = m_boundsMax;
 			in.maps = maps;
 		}

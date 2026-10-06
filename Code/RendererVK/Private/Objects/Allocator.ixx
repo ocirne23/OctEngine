@@ -13,6 +13,7 @@ export module RendererVK:Allocator;
 
 import Core;
 import :VK;
+import :RenderParams;
 
 // Opaque VMA handles re-exported as aliases, so vk_mem_alloc.h stays out of this interface (and out of
 // every module that imports it). The definitions live in Vma.cpp via VMA_IMPLEMENTATION.
@@ -31,9 +32,8 @@ export enum class BufferHostAccess
     eSequentialWrite,
 };
 
-// GpuAllocator::forEachAllocation's visit. name = the debug name (or nullptr), pointing into VMA's own
-// copy: valid only inside the call. deviceLocal = in a DEVICE_LOCAL heap (VRAM, ReBAR included).
-export using GpuAllocationVisit = void (*)(void* ctx, const char* name, uint64 bytes, bool image, bool deviceLocal);
+// GpuAllocator::forEachAllocation's visit; info.name is valid only inside the call.
+export using GpuAllocationVisit = void (*)(void* ctx, const GpuAllocationInfo& info);
 
 // Thin wrapper around the VulkanMemoryAllocator. Owns a single VmaAllocator for the whole renderer and
 // is the one place GPU buffer/image memory is allocated; everything else goes through Buffer / the image
@@ -84,14 +84,18 @@ public:
     // other threads block meanwhile, so keep the visit short and never touch this allocator in it.
     void forEachAllocation(GpuAllocationVisit visit, void* ctx) const;
 
+    // The Vulkan name of a GpuAllocationInfo value ("R8G8B8A8Srgb", "Sampled | TransferDst"), into out.
+    static void enumName(GpuEnum kind, uint64 value, char* out, size_t outSize);
+
 private:
-    void registerAllocation(VmaAllocation allocation, bool image);
+    // desc = the resource's create-time fields; the visit adds the VMA-side ones
+    void registerAllocation(VmaAllocation allocation, const GpuAllocationInfo& desc);
     void unregisterAllocation(VmaAllocation allocation);
 
     struct LiveAllocation
     {
         VmaAllocation allocation;
-        bool image;
+        GpuAllocationInfo desc;
     };
 
     VmaAllocator m_allocator = nullptr;

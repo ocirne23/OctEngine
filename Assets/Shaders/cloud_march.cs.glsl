@@ -79,12 +79,12 @@ void main()
         return;
     g_viewIndex = int(u_viewIndex);
 
-    const float maxDist = u_cloudMarch0.y;
+    const float maxDist = u_clouds_maxDistance;
     const float logMax = log2(maxDist);
     const ivec2 full = px * 2;
     const vec2 uv = (vec2(full) + 1.0) * u_screenSize.zw; // the 2x2 block's centre, full-target UV
     const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
-    if (u_cloudShape0.w < 0.5 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
+    if (u_cloudsLive_enabled < 0.5 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
         writeEmpty(px, logMax);
         return;
@@ -112,7 +112,7 @@ void main()
     }
 
     const float jitter = marchJitter(px);
-    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_cloudMarch0.x), jitter, pixelAngle, CLOUD_DEBUG_MODE == 2);
+    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), jitter, pixelAngle, CLOUD_DEBUG_MODE == 2);
     // Past the march, re-derived instead of held live across it: the pixel and the limit's log.
     const ivec2 outPx = marchPixel();
     const float outLogLimit = log2(max(limit, 1.0));
@@ -124,7 +124,7 @@ void main()
 
     vec4 color = vec4(r.inScatter, r.transmittance);
 #if CLOUD_DEBUG_MODE == 1
-    color = vec4(stepHeat(float(r.steps) / u_cloudMarch0.x), 0.0);
+    color = vec4(stepHeat(float(r.steps) / u_clouds_maxSteps), 0.0);
 #endif
     imageStore(u_outColor, outPx, color);
     imageStore(u_outDepth, outPx, vec4(log2(max(r.front, 1.0)), log2(max(r.weighted, 1.0)), outLogLimit, float(r.steps)));

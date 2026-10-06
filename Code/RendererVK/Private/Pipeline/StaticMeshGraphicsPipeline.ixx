@@ -88,11 +88,11 @@ public:
     // Ocean variant: the ray-traced mirror of the scene (OCEAN_RT_REFLECTIONS define). Same reload rule.
     void setOceanRtReflections(bool enabled) { m_oceanRtReflections = enabled; }
     void setOceanDebugMode(int mode) { m_oceanDebugMode = mode; } // OCEAN_DEBUG_MODE define, same reload rule
-    // "Editor/Wireframe": global wireframe, scene variants rasterize as lines. It is baked pipeline state
-    // (polygonMode), so onReloadShaders must wait for the GPU, reloadShaders() this pipeline and re-record.
-    // "Renderer/Textures/Anisotropy": the scene texture sampler's max anisotropy. onSamplerChanged must wait for
-    // the GPU, call recreateSampler() and re-record (record() rewrites every texture slot with the sampler).
-    void registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onSamplerChanged);
+    // "Editor/Wireframe" (Globals::settings.renderer.wireframe): global wireframe, scene variants rasterize as lines.
+    // It is baked pipeline state (polygonMode), so a change must wait for the GPU, reloadShaders() this pipeline and
+    // re-record. "Renderer/Textures/Anisotropy" (renderer.anisotropyLevel): the scene texture sampler's max
+    // anisotropy - wait for the GPU, recreateSampler() and re-record (record() rewrites every texture slot with the
+    // sampler). The Renderer's listeners do both.
     void recreateSampler();
     // The scene texture sampler's LOD bias (the DLSS render scale, see Renderer::applyRenderResolution). Takes
     // effect on the next recreateSampler().
@@ -102,7 +102,7 @@ public:
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
     void setTreeDebugMode(int mode) { m_treeDebugMode = mode; }           // TREE_DEBUG define, the lit mesh fragments
     // LIT_RT_SUN_SHADOW / LIT_RT_LIGHT_SHADOWS (0/1) on the same shaders: the EFFECTIVE flags (RT master AND
-    // the toggle), matching the UBO's u_rtSunShadow / u_rtLightShadows. Same reload rule.
+    // the toggle), matching the UBO's u_rt_sunShadow / u_rt_lightShadows. Same reload rule.
     void setRtShadows(bool sun, bool lights) { m_rtSunShadow = sun; m_rtLightShadows = lights; }
     // The terrain relief, BAKED (same reload rule): TERRAIN_POM on the terrain fragment shaders; tess = whether
     // the tessellated terrain pipeline is built and its draws recorded (the cull's routing is baked apart).
@@ -141,20 +141,18 @@ private:
     IndirectExecutionSet m_transparentExecutionSet;
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler;
-    int m_anisotropyLevel = 2; // "Anisotropy" tweak index: 0 = off, else 2^level (2 = 4x)
     float m_mipLodBias = 0.0f;
     vk::RenderPass m_renderPass;
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant
     bool m_oceanRtReflections = true; // OCEAN_RT_REFLECTIONS define, matches OceanParams::rtReflections
     int  m_oceanDebugMode = 0;        // OceanParams::debugMode, baked as OCEAN_DEBUG_MODE (0 = no define)
-    bool m_wireframe = false;      // global wireframe: scene variants get vk::PolygonMode::eLine
     int  m_shadowDebugMode = 0;    // ShadowParams::debugMode, baked as SHADOW_DEBUG (0 = no define)
     int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)
     int  m_treeDebugMode = 0;      // FoliageParams::debugView, baked as TREE_DEBUG (0 = no define)
     bool m_rtSunShadow = false;    // baked as LIT_RT_SUN_SHADOW
     bool m_rtLightShadows = true;  // baked as LIT_RT_LIGHT_SHADOWS
-    // Defaults match TerrainTexTweaks (parallax off, tessellation on), so the first push rebuilds nothing.
+    // Set from Globals::settings.terrain before the pipelines are built (Renderer::attachSettingsListeners).
     bool m_terrainPom = false;     // baked as TERRAIN_POM on the terrain fragment shaders
     bool m_terrainTess = true;     // m_terrainTessPipeline built + its draws recorded
     bool m_terrainTessBuilt = false; // m_terrainTessPipeline initialized (later changes reload it)

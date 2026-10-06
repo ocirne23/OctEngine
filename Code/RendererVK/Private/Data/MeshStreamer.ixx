@@ -2,6 +2,7 @@ export module RendererVK:MeshStreamer;
 
 import Core;
 import :Layout;
+import Settings;
 
 // Mesh data streaming (counterpart of the TextureStreamer): cooked scenes register each source mesh
 // (plus its generated LOD levels - they share the vertex range) as a "mesh set" with the byte ranges
@@ -76,8 +77,6 @@ public:
     // joins this frame's staging batch): drains completions, releases matured frees, issues re-streams
     // for evicted-but-wanted sets, and evicts cold sets while over budget.
     void update();
-
-    void registerTweaks();
 
     struct Stats
     {
@@ -161,12 +160,7 @@ private:
     oc::deque<StreamInCompletion> m_completionScratch; // drainCompletions swaps the queue into this (kept)
     oc::vector<uint32> m_evictCandidates;              // solveEvictions scratch (kept)
 
-    // Tweaks ("Streaming" category, next to the texture budget)
-    int m_budgetMB = 256;
-    int m_coldFrames = 240;    // frames a set must go unseen before it may evict
-    int m_maxOpsInFlight = 8;  // concurrent re-stream reads
-    int m_maxStreamMBPerFrame = 32; // stream-in issue cap (staging pressure)
-    bool m_enabled = true;
+    const MeshStreamingSettings& m_settings = Globals::settings.meshStreaming; // "Mesh Streaming"
 };
 
 export namespace Globals

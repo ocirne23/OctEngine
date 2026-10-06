@@ -3,7 +3,7 @@ module Game;
 import Core;
 import Core.glm;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
 import Core.Time;
 import Core.Transform;
 import Core.Camera;
@@ -71,74 +71,6 @@ void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 int NpcSystem::countUnits()
 {
     return GameUnitComponent::liveCount(); // spawn/destroy edges on the component - no walk
-}
-
-void NpcSystem::registerTweaks()
-{
-    // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-    const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
-    // The shared unit-sim baseline (GameUnitComponent::params - every unit of every team).
-    GameUnitParams& up = GameUnitComponent::params;
-    Tweak::floatVar("Game/Enemies", "Unit energy drain/s @ pressure 1", &up.energyDrainRate, 0.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Push tension", &up.tension, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Field damage/s", &up.fieldDps, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Field damage mult", &up.fieldDpsMult, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Field push starts (x iso)", &up.fieldPushStart, 0.0f, 0.95f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Emitter drain mult", &up.emitterDrainMult, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Emitter drain range (m)", &up.strainRange, 0.0f, 40.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Damage absorb (energy per hp)", &up.damageAbsorb, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Enemies", "Unit damage radius", &up.damageRadius, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
-    Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
-    Tweak::floatVar("Game/Enemies", "Route engage radius", &up.routeEngageRadius, 0.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Order break radius", &up.orderBreakRadius, 0.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Unit max speed (m/s)", &up.maxSpeed, 1.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Wander speed mult", &up.wanderSpeedMult, 0.05f, 1.0f, 0.01f);
-    Tweak::floatVar("Game/Enemies", "Wander speed max (m/s)", &up.wanderSpeedMax, 0.1f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Enemies", "Far spread (deg)", &up.farSpreadDeg, 0.0f, 120.0f, 1.0f);
-    Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
-    Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);
-    Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
-    // Shared by units AND player capsules (GamePlayer reads the same param); a prefab's
-    // `HeightLimit` overrides it (< 0 = no ceiling, for flying units).
-    Tweak::floatVar("Game/Nav", "Height limit (m)", &up.heightLimit, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Flow splat gain", &up.flowSplatGain, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Track goal", &up.steerTrackGoal, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Track flow mult", &up.trackFlowMult, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Pressure knee", &up.pressureKnee, 0.01f, 3.0f, 0.01f);
-    Tweak::floatVar("Game/Nav", "Flow knee", &up.flowKnee, 0.01f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Nav", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Game/Nav", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Wall push", &up.steerWall, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Wall keep (m)", &up.wallKeep, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Corner clip penalty", &up.steerCornerClip, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Nav", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Nav", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Nav", "Seed request interval (s)", &up.seedRequestInterval, 0.5f, 30.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Order lane speed", &m_orderLaneSpeed, 0.0f, 20.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Stuck lane speed", &m_stuckLaneSpeed, 0.0f, 20.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Lane width (m)", &m_laneWidth, 0.0f, 12.0f, 0.5f);
-    Tweak::floatVar("Game/Nav", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
-    // Shot speeds, applied when the fire queues are serviced here (the rest of the production
-    // tuning registers from StructureSystem onto the component params).
-    Tweak::floatVar("Game/Friendlies", "Turret beam lifetime", &m_beamLifetime, 0.02f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Combat", "Melee hit lifetime", &m_hitLifetime, 0.02f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Combat", "Muzzle flash intensity", &m_flashIntensity, 0.0f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Combat", "Hurt light intensity", &up.hurtLightIntensity, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Combat", "Hurt light decay (s)", &up.hurtLightDecay, 0.02f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Combat", "Light area (m)", &up.lightArea, 1.0f, 64.0f, 1.0f);
-    Tweak::floatVar("Game/Combat", "Hurt flashes/s per area", &up.hurtFlashRate, 0.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Lobber shot speed", &m_lobberShotSpeed, 2.0f, 80.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies", "Spitter shot speed", &m_spitterShotSpeed, 2.0f, 80.0f, 0.5f);
-    // Far tick: neither Saved nor Synced, like the rest of Game/Sim LOD (explicit flags beat the
-    // scoped ones above).
-    Tweak::floatVar("Game/Sim LOD", "Far tick interval (s)", &m_farInterval, 0.05f, 5.0f, 0.05f, {}, ETweakFlags::None);
-    Tweak::intVar("Game/Sim LOD/Stats", "Far ticked", &m_farTicked, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
 }
 
 void NpcSystem::clear()
@@ -209,7 +141,8 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
 
 void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind)
 {
-    const float life = kind == EBeamKind::Turret ? m_beamLifetime : m_hitLifetime;
+    const GameNpcSettings& npc = Globals::settings.game.npc;
+    const float life = kind == EBeamKind::Turret ? npc.beamLifetime : npc.hitLifetime;
     const Beam beam{ from, to, life, life, kind };
     m_beams.push_back(beam);
     if (kind == EBeamKind::Turret || m_newBeams.size() < c_maxHitBroadcast)
@@ -246,7 +179,7 @@ void NpcSystem::drawBeams(float deltaSec)
         }
         if (fade > 0.0f)
             Globals::rendererVK.addPointLight(PointLight(b.from, c_muzzleRange, muzzleColor,
-                c_muzzleIntensity * m_flashIntensity * fade));
+                c_muzzleIntensity * Globals::settings.game.npc.flashIntensity * fade));
         const glm::vec3 axis = b.to - b.from;
         glm::vec3 side = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
         if (glm::dot(side, side) < 1e-4f)
@@ -396,9 +329,10 @@ void NpcSystem::fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from
 void NpcSystem::service(StructureSystem& structures)
 {
     ProfileScope scope("Npc service", EProfileCategory::Game);
+    GameNpcSettings& npc = Globals::settings.game.npc;
     // FAR TICK: units the SIM LOD did not select (no tier stamp on their spatial entry - beyond
     // the outer radius of every player, body disabled, never visited by the pass) walk their
-    // orders by teleport instead, every m_farInterval of sim time. Runs BEFORE world.update on
+    // orders by teleport instead, every "Far tick interval" of sim time. Runs BEFORE world.update on
     // main and joins here, so no far-ticked unit is ever touched by the pass in the same window.
     if (Globals::world.simLodActive())
     {
@@ -408,7 +342,7 @@ void NpcSystem::service(StructureSystem& structures)
         // A walk of the World's root list (every unit is a root; non-units are skipped per
         // element) - the list only mutates on main, and this joins before service returns.
         const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
-        if (m_farAccum >= m_farInterval && !roots.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
+        if (m_farAccum >= npc.farInterval && !roots.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
         {
             ProfileScope farScope("Npc far tick", EProfileCategory::Game);
             const float dt = m_farAccum;
@@ -431,7 +365,7 @@ void NpcSystem::service(StructureSystem& structures)
                     // entity pass no longer reaches it. Either way updateFar's own voidY test was
                     // unreachable and the body sank forever. This walk is the one thing that sees
                     // every unit, so the check belongs here.
-                    if (unit->alive() && e->pos.y < GameUnitComponent::params.voidY)
+                    if (unit->alive() && e->pos.y < Globals::settings.game.unitParams.voidY)
                     {
                         unit->kill(*e);
                         continue;
@@ -453,7 +387,7 @@ void NpcSystem::service(StructureSystem& structures)
                 }
                 moved.fetch_add(local, oc::memory_order_relaxed);
             });
-            m_farTicked = moved.load(oc::memory_order_relaxed);
+            npc.farTicked = moved.load(oc::memory_order_relaxed);
         }
     }
     else
@@ -464,7 +398,7 @@ void NpcSystem::service(StructureSystem& structures)
     GameUnitComponent::takeSeedRequests(m_seedScratch);
     for (const GameUnitComponent::SeedRequest& r : m_seedScratch)
         Globals::navSystem.requestSeedPath(r.team, r.from, r.to,
-            r.stuck ? m_stuckLaneSpeed : m_orderLaneSpeed, m_laneWidth);
+            r.stuck ? npc.stuckLaneSpeed : npc.orderLaneSpeed, npc.laneWidth);
     // Units the BARRACKS decided to produce during the pass (their component paid the energy,
     // claimed the roster slot and set the cooldown - this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.
@@ -526,7 +460,7 @@ void NpcSystem::service(StructureSystem& structures)
         const bool lob = request.shotKind == 1;
         if (const EntitySpawnTemplate* shell = shellTemplate(lob))
             fireShot(*shell, from + dir / len * 1.2f,
-                dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
+                dir / len * (lob ? npc.lobberShotSpeed : npc.spitterShotSpeed), request.team);
     }
     fireScope.stop();
     // Each reported death frees its population on its spawner - the tally is maintained by the

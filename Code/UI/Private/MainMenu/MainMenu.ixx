@@ -3,7 +3,7 @@ export module UI:MainMenu;
 import Core;
 import Core.glm;
 import Core.Rect;
-import Core.Tweaks;
+import Settings.Tweaks;
 import :ChatPanel;
 
 // The game-facing start screen, shown when App.exe launches without a mode (no --game/--server/
@@ -220,7 +220,7 @@ public:
 	void setEditorPanels(bool enabled) { m_editorPanels = enabled; } // main, before the first widget pass (--fullscreen)
 
 	// Widget pass only. fullRect = the whole window (the menu centers itself in it); changed
-	// settings vars with onChange callbacks are collected into deferredCallbacks (the TweakPanel's
+	// settings vars are collected into deferredCallbacks (the TweakPanel's
 	// list, flushed on main by UI::flushMainThreadWork).
 	void render(const Rect& fullRect, oc::vector<const TweakVar*>& deferredCallbacks);
 

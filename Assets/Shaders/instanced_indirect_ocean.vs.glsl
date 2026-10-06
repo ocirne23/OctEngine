@@ -94,7 +94,7 @@ void main()
         gl_Position = vec4(uintBitsToFloat(0x7FC00000u));
         return;
     }
-    basePos.y += shoreHW.y - u_oceanParams2.w; // lift onto the local water table (lakes/rivers at altitude)
+    basePos.y += shoreHW.y - u_oceanLive_seaLevel; // lift onto the local water table (lakes/rivers at altitude)
     out_pos = basePos;
     if (horizonBand)
     {
@@ -104,7 +104,7 @@ void main()
         // horizon and the far sea visibly heaves with the sea state; the coarse ring-matched mip damps
         // that but never removes it. The FS still shades the band with wave normals, which is all that
         // resolves at this range - and skipping the fetches makes band vertices nearly free.
-        out_pos.y += u_oceanParams3.x;
+        out_pos.y += u_ocean_horizonLevelOffset;
     }
     else
         out_pos += oceanSampleDisplacement(basePos.xz, ringCell, ringMorph, shoreHW);

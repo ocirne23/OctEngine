@@ -168,9 +168,9 @@ float giWavePriority(ivec3 waveMin, int spacing)
     // cascade 0, 58 m in cascade 3 - so a coarse block counts as nearer than a fine one at the same centre
     // distance, and the same world distance gets a different priority per cascade.
     const float focusDist = (distance(center, u_sceneFocus.xyz) - radius);// * (GI_CASCADE_BASE_SPACING / s);
-    const float priorityDist = max(u_giPriorityDist, 1.0);
-    const float viewBoost    = mix(max(u_giPriorityFrustumWeight, 1.0), 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
-    return pow(max(focusDist / priorityDist, 1e-4), max(u_giPriorityFalloff, 0.0)) / viewBoost; // pow(0, 0) is undefined
+    const float priorityDist = max(u_rt_giPriorityDist, 1.0);
+    const float viewBoost    = mix(max(u_rt_giPriorityFrustumWeight, 1.0), 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
+    return pow(max(focusDist / priorityDist, 1e-4), max(u_rt_giPriorityFalloff, 0.0)) / viewBoost; // pow(0, 0) is undefined
 }
 
 // Width of the cross-cascade fade band at a window's outer faces, in cells (a fraction of the narrowest dim).
@@ -201,7 +201,7 @@ bool giWaveCovered(int cascade, ivec3 waveMin)
 }
 
 // THE update interval of a wave, in frames: every factor of the probe update rate as ONE product -
-// "GI/Update Interval Mult" (the global factor, u_giTrace0.w; NOT a frame count on its own) x the priority
+// "GI/Update Interval Mult" (the global factor, u_rt_giIntervalMult; NOT a frame count on its own) x the priority
 // factors above x GI_COVERED_INTERVAL for a covered wave - floored once, so the interval moves in single
 // frames, and floored at ONE frame: the closest blocks trace every frame whatever the global factor. The
 // trace's per-probe factors (GI_DEAD_INTERVAL) multiply this.
@@ -209,7 +209,7 @@ uint giWaveUpdateInterval(int cascade, ivec3 waveMin, int spacing)
 {
     const float covered = giWaveCovered(cascade, waveMin) ? GI_COVERED_INTERVAL : 1.0;
     // The ceiling is numeric safety only (a float past 2^32 has no defined uint conversion), not a rate cap.
-    return max(uint(min(max(u_giTrace0.w, 1.0) * giWavePriority(waveMin, spacing) * covered, 1.0e6)), 1u);
+    return max(uint(min(max(u_rt_giIntervalMult, 1.0) * giWavePriority(waveMin, spacing) * covered, 1.0e6)), 1u);
 }
 
 // THE trace schedule. The irradiance-volume bake re-bakes a voxel on exactly the frames a probe under it can
@@ -219,7 +219,7 @@ uint giWaveUpdateInterval(int cascade, ivec3 waveMin, int spacing)
 //   toroidal slot space in 4x4x4 blocks, so it is the wave's slot block, cascade-major. In the trace it
 //   equals gl_WorkGroupID.x; the bake uses it to find a wave's stamp.
 // * giWaveVisits    - the wave's regular visit: every giWaveUpdateInterval frames, interleaved by workgroup.
-// * giProbeFresh    - the probe scrolled in since the last traced frame (u_giTrace1.xyz = that focus); a
+// * giProbeFresh    - the probe scrolled in since the last traced frame (u_giLive_prevFocus = that focus); a
 //   fresh probe traces whatever its interval. The trace and the bake both call it.
 uint giWaveWorkgroup(int cascade, ivec3 waveMin)
 {
@@ -233,7 +233,7 @@ bool giWaveVisits(uint workgroup, uint updateInterval)
 }
 bool giProbeFresh(int cascade, ivec3 lc)
 {
-    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giTrace1.xyz);
+    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giLive_prevFocus);
     return any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 }
 
@@ -351,7 +351,7 @@ vec3 giSkySHRadiance(vec3 d)
 vec3 giSkySunIrradiance(vec3 n)
 {
     const vec3 up = normalize(u_skyUp);
-    const float w = u_groundParams.w;
+    const float w = u_sky_groundHorizon;
     return skyGroundSun(up) * (PI * w + (1.0 - w) * (0.5 * PI) * (1.0 - dot(n, up)));
 }
 
@@ -363,22 +363,22 @@ vec3 giEvalSkySHCloud(vec3 n, float cloudT)
 
 // The Chebyshev test's two inputs for direction dir FROM the probe: the mean distance to geometry and its
 // variance, both after the mean scale. Shared with the debug view's visibility mode.
-// * Mean scale k (u_giVisParams.w, > 1) widens each probe's visible footprint: the blurry L1 reconstruction
+// * Mean scale k (u_rt_giVisMeanScale, > 1) widens each probe's visible footprint: the blurry L1 reconstruction
 //   underestimates distance sideways past a wall (x 1.4 .. 1.75 too short for a wall 0.5 .. 0.1 spacings
 //   away), shrinking the un-occluded region around a probe; scaling pushes the boundary back out.
 // * The scale applies to the DEPTH, so the second moment scales by k^2 and the variance by k^2. The old
 //   code scaled the mean only: mean2 - (k mean)^2 was negative nearly everywhere, the variance was ALWAYS
 //   the floor, and the stored second moment did nothing. Measured, the variance is large sideways past a
 //   wall (the depth really spreads there: soft, mostly open) and at the floor toward the wall (sharp).
-// * The variance floor (u_giVisParams.x, fraction of spacing) is the minimum edge softness: it covers the
+// * The variance floor (u_rt_giVisVarianceFloor, fraction of spacing) is the minimum edge softness: it covers the
 //   L1 mean's own error and the per-visit ray jitter.
 // Both moments are clamped at 0: toward a close wall the L1 reconstruction rings below it.
 void giVisMoments(vec4 dsh, vec4 d2sh, vec3 dir, int s, out float mean, out float variance)
 {
-    const float k      = u_giVisParams.w;
+    const float k      = u_rt_giVisMeanScale;
     const float raw    = max(giEvalDepth(dsh, dir), 0.0);
     const float raw2   = max(giEvalDepth(d2sh, dir), 0.0);
-    const float minDev = u_giVisParams.x * float(s);
+    const float minDev = u_rt_giVisVarianceFloor * float(s);
     mean     = min(raw * k, GI_DEPTH_CAP_SPACING * float(s));
     variance = max((raw2 - raw * raw) * k * k, minDev * minDev);
 }
@@ -391,7 +391,7 @@ void giVisMoments(vec4 dsh, vec4 d2sh, vec3 dir, int s, out float mean, out floa
 //   the reconstructed mean2: toward a close wall the L1 reconstruction of d^2 rings to <= 0, and the old
 //   `mean2 > 1e-3` test read that as "no data" and switched the occlusion OFF exactly where it matters most (a
 //   leak through every wall a probe sits next to). The variance floor softens the blurry L1 reconstruction.
-// * u_giVisParams.z = weight floor. The power is the GI_VIS_CHEB_POWER define: a chain of multiplies instead of
+// * u_rt_giVisWeightFloor = weight floor. The power is the GI_VIS_CHEB_POWER define: a chain of multiplies instead of
 //   a pow per probe (16 probes a pixel).
 float giVisibilityWeight(uint cellBase, vec3 dir, float len, int s)
 {
@@ -401,7 +401,7 @@ float giVisibilityWeight(uint cellBase, vec3 dir, float len, int s)
     giVisMoments(dsh, d2sh, dir, s, mean, variance);
     const float d = min(len, GI_DEPTH_CAP_SPACING * float(s) * 0.95);
     const float delta = d - mean;
-    const float vis = max(giChebPow(variance / (variance + delta * delta)), u_giVisParams.z);
+    const float vis = max(giChebPow(variance / (variance + delta * delta)), u_rt_giVisWeightFloor);
     return (d2sh.x > 1e-4 && d > mean) ? vis : 1.0;
 }
 

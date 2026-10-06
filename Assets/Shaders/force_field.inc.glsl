@@ -132,7 +132,7 @@ void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, o
 // The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box - the actual
 // bubble radius, not the authored Reach (a drained or narrow emitter is much smaller than its
 // support; a merged group sphere's reach is ~2x its bubble). THE sampled-tier metric: the shell FS
-// and the union ownership test compare this against u_forceBake0.w, and the CPU mirrors it
+// and the union ownership test compare this against u_forceLive_bakeThreshold, and the CPU mirrors it
 // (RendererVKLayout::forceEmitterVisibleRadius) for the upload partition + the bake-volume fit.
 float forceVisibleRadius(ForceEmitterData e)
 {
@@ -250,12 +250,12 @@ float forceSmoothMax(float a, float b, float k)
 }
 
 // The bound a team's field must beat to be "inside": iso or the strongest opposing field, smoothly
-// blended (u_forceParams3.w = junction smoothing as a fraction of iso; scale-free since the rim
+// blended (u_force_junctionSmoothing = junction smoothing as a fraction of iso; scale-free since the rim
 // region lives at field values ~iso). The query compute uses the same function, so gameplay
 // "inside" matches the drawn surface exactly.
 float forceOpposingBound(float iso, float opposing)
 {
-    return forceSmoothMax(iso, opposing, u_forceParams3.w * iso);
+    return forceSmoothMax(iso, opposing, u_force_junctionSmoothing * iso);
 }
 
 // The render surface function F for a FIXED team t (marched/refined/differentiated holding the hit

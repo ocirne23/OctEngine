@@ -9,7 +9,8 @@ import Core.Window;
 import Core.Frustum;
 import Core.imgui;
 import Core.Camera;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 import Core.Time;
 import Core.Log;
 
@@ -61,7 +62,10 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_particles.initialize();
     m_force.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
-    registerTweaks(); // before the device: a Saved/override value must be live when the swapchain is made
+    // The settings are registered (main, Settings::register*) before this: a Saved/override value is live when the
+    // swapchain is made and the pipelines compile.
+    attachSettingsListeners();
+    registerUboLocks(); // the sections whose UBO struct a lock bakes (applyUboLocks)
     if (!initDeviceAndSwapchain(window, validation, vr))
         return false;
     initPipelines();
@@ -71,125 +75,6 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_gpuCrashTracker.Initialize(false);
     m_initialized = true; // headless server mode never calls initialize; renderer-touching paths gate on this
     return true;
-}
-
-// EVERY reload callback below returns while !m_initialized: a --tweak override or a Saved value fires its
-// callback AT REGISTRATION, before the device and the pipelines exist. State the pipelines read at creation
-// is handed over BEFORE that test, so initialize() builds with it.
-void Renderer::registerTweaks()
-{
-    auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
-    m_skyParams.registerTweaks();
-    m_windParams.registerTweaks();
-    // "Shadows/Debug mode" is the SHADOW_DEBUG define on the lit fragment variants: GPU-idle + pipeline
-    // rebuild, the wireframe pattern below.
-    m_shadowParams.registerTweaks([this]() {
-        m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-        setHaveToRecordCommandBuffers();
-    });
-    // "Trees/Debug view" is the TREE_DEBUG define on the lit mesh fragments (the shadow debug pattern above).
-    m_foliageParams.registerTweaks([this]() {
-        m_staticMeshGraphicsPipeline.setTreeDebugMode(m_foliageParams.debugView);
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-        setHaveToRecordCommandBuffers();
-    });
-    m_farTreeParams.registerTweaks();
-    m_rockParams.registerTweaks();
-    // "Blades per patch" is the blade index buffer's size: GPU idle, rebuild, re-record (the draw binds it).
-    m_grassParams.registerTweaks([this]() {
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_grassPipeline.setBladesPerPatch((uint32)m_grassParams.bladesPerPatch);
-        setHaveToRecordCommandBuffers();
-    });
-    m_fogParams.registerTweaks();
-    // The cloud bools are baked defines (g_cloudShaders): a change reloads every shader. Registered before any
-    // pipeline compiles, so a Saved value is live for the first compile (the callback returns while !m_initialized).
-    m_cloudParams.registerTweaks([this]() {
-        if (!syncCloudDefines() || !m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        reloadShaders();
-    });
-    syncCloudDefines();
-    // The master + GI toggles are baked into the cached GI secondary; the master, "RT Sun" and "RT Lights"
-    // also into the lit fragments (LIT_RT_*).
-    m_rtParams.registerTweaks(rerecordCallback, [this]() {
-        m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-        setHaveToRecordCommandBuffers();
-    });
-    m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
-    m_rtaoParams.registerTweaks(rerecordCallback, [this]() {
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_rtaoPipeline.reloadShaders();
-        setHaveToRecordCommandBuffers();
-    });
-    m_taaParams.registerTweaks(rerecordCallback);
-    // The DLSS mode sets the render resolution: GPU idle + the render-size targets re-created. Registered before
-    // the device, so a Saved mode is live when initDeviceAndSwapchain sizes them.
-    m_dlssParams.registerTweaks([this]() {
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        applyRenderResolution();
-    }, rerecordCallback);
-    m_motionBlurParams.registerTweaks(rerecordCallback);
-    m_bloomParams.registerTweaks(rerecordCallback);
-    m_postParams.registerTweaks(rerecordCallback);
-    m_lodParams.registerTweaks();
-    m_lightGridParams.registerTweaks( // the LOD params are read by the CPU build every frame: no reload
-        [this]() { // "Debug Mode" = the LIGHT_GRID_DEBUG define on the lit fragments (the wireframe pattern below)
-            m_staticMeshGraphicsPipeline.setLightGridDebugMode(m_lightGridParams.debugMode);
-            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
-            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-            setHaveToRecordCommandBuffers();
-        });
-    // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
-    // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
-    m_staticMeshGraphicsPipeline.registerTweaks([this]() {
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-        setHaveToRecordCommandBuffers();
-    }, [this]() { // "Anisotropy": a new scene texture sampler; the re-record writes it into every texture slot
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.recreateSampler();
-        setHaveToRecordCommandBuffers();
-    });
-    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid), so it registers HERE,
-    // before any pipeline compiles: an override is then live for every shader and for the probe buffer that
-    // GIProbePipeline::initialize allocates. A later change waits for the GPU, re-allocates the SH clipmap and
-    // reloads EVERY shader (reloadShaders waits + re-records).
-    m_giProbePipeline.registerGridTweaks(
-        [this]() {
-            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
-            m_giProbePipeline.resizeGrid();
-            reloadShaders();
-        },
-        // The irradiance-volume tweaks: only the volume images and the defines change - the probe history stays.
-        [this]() {
-            if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-                return;
-            m_giProbePipeline.resizeVolume();
-            reloadShaders();
-        });
-    // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
-    m_particles.registerTweaks();
-    m_oceanSimPipeline.registerSprayTweaks();
-    m_decalPipeline.registerTweaks();
-    Tweak::boolean("Renderer", "Log pipeline stats", &Device::s_logPipelineStats); // F5 re-creates the pipelines with it
-
-    Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
 }
 
 bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr)
@@ -238,7 +123,7 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
     m_surface.initialize(window);
     assert(m_surface.deviceSupportsSurface());
 
-    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, m_vsyncEnabled);
+    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, Globals::settings.renderer.vsync);
     m_viewportRect.max = glm::ivec2(m_swapChain.getLayout().extent.width, m_swapChain.getLayout().extent.height);
     updateRenderExtent(); // initPipelines sizes the render-size targets from it
     updateRenderRect();
@@ -259,10 +144,11 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
 
 void Renderer::initPipelines()
 {
-    auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     const vk::Extent2D ext = m_swapChain.getLayout().extent; // the post chain (after the TAA / DLSS resolve)
     const vk::Extent2D renderExt = renderExtent();          // the scene's render-size targets
 
+    // Every shader includes the UBO declaration. Nothing is baked yet: a locked field bakes once a frame is built.
+    setUboDeclaration();
     initBindlessTextures(); // the layout cap the pipelines below bake in comes from here
 
     // The per-frame instance stream and the three append-only scene tables, FIRST: every pipeline below is sized from their capacities.
@@ -298,13 +184,7 @@ void Renderer::initPipelines()
     m_rtaoPipeline.initialize(&m_rtaoParams, renderExt.width, renderExt.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
 
-    // "Terrain/Water" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
-    m_terrainWetnessPipeline.initialize([this]() { // registers before it builds: an override is live for the first compile
-        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_terrainWetnessPipeline.reloadShaders();
-        setHaveToRecordCommandBuffers();
-    });
+    m_terrainWetnessPipeline.initialize();
     m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch);
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
@@ -333,7 +213,6 @@ void Renderer::initPipelines()
         });
     m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     m_giProbePipeline.initializeDebug(opaqueRenderPass);
-    m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
     m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_treeCullDummy.initialize(sizeof(glm::vec4) * 16, vk::BufferUsageFlagBits2::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal,
@@ -404,7 +283,7 @@ void Renderer::initPerFrameResources()
         perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.eyeAdapt");
         perFrame.compositeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.composite");
 
-        perFrame.ubo.initialize(sizeof(RendererVKLayout::Ubo),
+        perFrame.ubo.initialize(RendererVKLayout::UBO_RANGE,
             vk::BufferUsageFlagBits2::eUniformBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Ubo");
 
@@ -454,7 +333,7 @@ void Renderer::recreateWindowSurface(Window& window)
     window.getWindowSize(m_windowSize);
     m_swapChain.destroy();
     m_surface.initialize(window);
-    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, m_vsyncEnabled);
+    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, Globals::settings.renderer.vsync);
     m_framebuffers.initialize(m_renderPass, m_swapChain);
 
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
@@ -486,7 +365,7 @@ void Renderer::recreateSwapchain()
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
     printf("recreateSwapchain()\n");
-    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, m_vsyncEnabled);
+    m_swapChain.initialize(m_surface, RendererVKLayout::NUM_FRAMES_IN_FLIGHT, Globals::settings.renderer.vsync);
     m_framebuffers.initialize(m_renderPass, m_swapChain);
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
     m_taaPipeline.recreateImages(ext.width, ext.height);
@@ -563,22 +442,12 @@ void Renderer::setOceanParams(const OceanParams& ocean)
     }
 }
 
-void Renderer::setTerrainTextureParams(const TerrainTexTweaks& params)
+void Renderer::setTerrainCragScale(float scale)
 {
-    m_terrain.setTexTweaks(params);
-    // The terrain relief's two BAKED switches: TERRAIN_POM (the terrain fragment shaders) and the tessellation
-    // (the cull's TERRAIN_TESS_ROUTE + whether the tess pipeline exists and its draws are recorded). Compared
-    // against what the pipelines were last built with, so the first push only rebuilds on a real difference.
-    if (params.parallaxEnabled == m_staticMeshGraphicsPipeline.getTerrainPom()
-        && params.tessEnabled == m_staticMeshGraphicsPipeline.getTerrainTess())
+    if (scale == m_terrainCragScale)
         return;
-    if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-        return;
-    m_staticMeshGraphicsPipeline.setTerrainRelief(params.parallaxEnabled, params.tessEnabled);
-    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass(), m_textures.getLayoutCap());
-    m_indirectCullComputePipeline.setTerrainTess(params.tessEnabled);
-    m_indirectCullComputePipeline.reloadShaders();
-    setHaveToRecordCommandBuffers();
+    m_terrainCragScale = scale;
+    m_uboLocksDirty = true;
 }
 
 void Renderer::setWindowMinimized(bool minimized)
@@ -786,6 +655,7 @@ void Renderer::beginFrame()
 void Renderer::kickBeginFrameJob()
 {
     ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
+    applyUboLocks(); // main, quiescent: a lock change rebuilds the shaders before this frame records
     if (Globals::openXR.isEnabled())
     {
         m_beginFrameDeferred = true; // xrWaitFrame owns VR pacing and would pin a worker - run at the join instead
@@ -863,7 +733,7 @@ CullView Renderer::setFrameView(const Camera& camera, const Rect& viewportRect)
     else
     {
         view.camera = m_lastCullCamera;
-        view.frustum = m_ubo.frustum; // last frame's, matching m_lastCullCamera
+        view.frustum = m_centerFrustum; // last frame's, matching m_lastCullCamera
         view.valid = m_hasCullView;
     }
     // The occlusion rasterizer takes camera-relative positions: the translate re-bases the reversed-z
@@ -1007,17 +877,17 @@ void Renderer::present()
     assert(m_instances.getNumTransforms() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
 
     ProfileScope uploadScope("Per-frame uploads", EProfileCategory::Renderer);
-    // The UBO was uploaded in beginFrame, where the instance counter had just been reset: the TLAS-instance
-    // writer's live count is only known here, so patch that one word. (Left at the beginFrame value it
+    // The UBO was uploaded in beginFrame, where the instance counter had just been reset: the claims made since
+    // are known only here, so u_present is uploaded again on its own. (Left at the beginFrame value the TLAS count
     // read 0 every frame - every TLAS slot inactive, an EMPTY TLAS, no ray hit anywhere.)
     // The TLAS slots (tree_cull.inc.glsl treeCullTlasInstance): the stream outside the tree range, and ONE per tree of
     // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
     // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
     m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
-    m_ubo.giTlasNumInstances = oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
-        offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
-    uploadTreeCullUbo(frameData); // the same: renderTreeInstanceSet claims its range after beginFrame
+    m_ubo.present.giTlasNumInstances = oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
+    fillTreeCullUbo(); // the same: renderTreeInstanceSet claims its range after beginFrame
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::PresentUbo), &m_ubo.present,
+        offsetof(RendererVKLayout::Ubo, present));
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
@@ -1109,7 +979,7 @@ void Renderer::present()
 
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
-        m_indirectCullComputePipeline.update(frameIdx, m_ubo.treeCull.z); // the cull threads (uploadTreeCullUbo)
+        m_indirectCullComputePipeline.update(frameIdx, m_ubo.present.treeThreads); // the cull threads (fillTreeCullUbo)
         m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
         m_skinned.markJobsUploaded();
     }
@@ -1141,7 +1011,7 @@ void Renderer::present()
     // The rain occlusion map exists only while this frame's UBO asks for it (a rain / snow volume with
     // `Occlude true`, the tweak on, RT on): switching allocates or frees its images (and builds its pipeline
     // once) with the GPU idle, and re-records the particle sim's set that names the image.
-    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.rainOcclusionParams.x > 0.5f;
+    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.weather.rainOcclusionPresent > 0.5f;
     if (rainOcclusion != m_rainOcclusionPipeline.isActive())
     {
         ProfileScope profileScope("Rain occlusion switch", EProfileCategory::Wait);

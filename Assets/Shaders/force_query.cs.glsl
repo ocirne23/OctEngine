@@ -40,7 +40,7 @@ void main()
 
     uint bestTeam;
     float bestPhi, secondPhi, F;
-    forceSampleField(q.posActive.xyz, u_forceParams0.x, bestTeam, bestPhi, secondPhi, F);
+    forceSampleField(q.posActive.xyz, u_force_isoThreshold, bestTeam, bestPhi, secondPhi, F);
     ForceQueryResult result;
     result.owningTeam = F > 0.0 ? bestTeam : MAX_FORCE_TEAMS;
     result.ownField = bestPhi;

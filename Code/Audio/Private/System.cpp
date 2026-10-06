@@ -16,7 +16,8 @@ module Audio;
 import Core;
 import Core.glm;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 
 import :Buffer;
 import :Source;
@@ -60,9 +61,11 @@ bool AudioSystem::initialize()
     }
     m_initialized = true;
 
-    ma_engine_set_volume(&state.engine, m_masterVolume);
-    Tweak::floatVar("Audio/System", "Master Volume", &m_masterVolume, 0.0f, 2.0f, 0.01f,
-        [this]() { if (m_initialized) ma_engine_set_volume(&audioState().engine, m_masterVolume); });
+    const float& masterVolume = Globals::settings.audio.masterVolume;
+    ma_engine_set_volume(&state.engine, masterVolume);
+    Tweak::removeListeners(this); // a re-initialize after shutdown attaches once
+    Tweak::onChange(masterVolume, this,
+        [this]() { if (m_initialized) ma_engine_set_volume(&audioState().engine, Globals::settings.audio.masterVolume); });
 
     const ma_device* device = ma_engine_get_device(&state.engine);
     Log::info("Audio: miniaudio + Steam Audio HRTF on '" + oc::string(device ? device->playback.name : "unknown") + "'");

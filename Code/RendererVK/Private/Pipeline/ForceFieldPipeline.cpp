@@ -895,7 +895,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
     // One set shape for all three passes: 0 = UBO, 1 = emitters, 3/4 = grid table/data, 5/6 = per-pass IO.
     const auto makeUpdates = [&](const Buffer& io5, const Buffer& io6) {
         return oc::array<DescriptorSetUpdateInfo, 6>{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridDataBuffers[frameIdx]) } },
@@ -949,7 +949,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
         vkCb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = numVolumes, .pImageMemoryBarriers = acquire.data() });
         vk::DescriptorSet shellBakeSet = m_shellBakeSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 6> shellBakeUpdates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridDataBuffers[frameIdx]) } },
@@ -1159,7 +1159,7 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
     oc::array<DescriptorSetUpdateInfo, 7> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
@@ -1210,7 +1210,7 @@ void ForceFieldPipeline::recordUnionMarchDraw(CommandBuffer& commandBuffer, uint
     DescriptorSet& unionSet = m_unionSets[frameIdx];
     vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = sceneDepthSampler, .imageView = sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
@@ -1238,7 +1238,7 @@ void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 fr
         DescriptorSet& unionSet = m_unionSets[frameIdx];
         vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
                 vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
@@ -1257,7 +1257,7 @@ void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 fr
     DescriptorSet& set = m_upsampleSets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 3> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = m_intervalSampler, .imageView = m_marchView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
@@ -1293,7 +1293,7 @@ void ForceFieldPipeline::recordIntervalDraw(CommandBuffer& commandBuffer, uint32
     vkCb.setScissor(0, { scissor });
     vk::DescriptorSet set = m_intervalSets[frameIdx].getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 2> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
     };
     commandBuffer.cmdUpdateDescriptorSets(m_intervalPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, set, updates);

@@ -3,12 +3,13 @@
 import Core;
 import Core.glm;
 import :Layout;
-import :Settings;
+import :RenderParams;
+import Settings;
 import :SlotTable;
 
 // The CPU side of the GPU particle system and the weather volume it shelters: the emitter slot table,
-// this frame's spawn requests, the "Particles" tweaks (sim + wind + rain occlusion) and the two
-// one-shot flags the frame loop carries.
+// this frame's spawn requests, the "Particles" settings (sim + wind + rain occlusion; Globals::settings.particles)
+// and the two one-shot flags the frame loop carries.
 //
 // Two contracts worth knowing:
 //  * a DESTROYED emitter is not freed - its KILL flag has to drain through the sim (its particles are
@@ -30,9 +31,8 @@ public:
     };
 
     void initialize() { m_emitters.initialize(RendererVKLayout::MAX_PARTICLE_EMITTERS); }
-    void registerTweaks() { m_params.registerTweaks(); }
-    const ParticleParams& getParams() const { return m_params; }
-    bool isEnabled() const { return m_params.enabled; }
+    const ParticleParams& getParams() const { return Globals::settings.particles; }
+    bool isEnabled() const { return Globals::settings.particles.enabled; }
 
     // ---- Emitters + spawns (spawn path, caller holds the spawn mutex) ----
     uint32 createEmitter(uint32 frameCounter, const RendererVKLayout::ParticleEmitterGpu& desc)
@@ -83,7 +83,6 @@ public:
 private:
     RecycledSlotTable<RendererVKLayout::ParticleEmitterGpu> m_emitters;
     oc::vector<oc::pair<uint16, uint16>> m_spawnRequests;
-    ParticleParams m_params;
 
     RainVolume m_rainRequest;
     RainVolume m_rainActive;

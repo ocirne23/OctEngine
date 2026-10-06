@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.SDL;
-import Core.Tweaks;
+import Settings;
 import UI;
 
 import :Input;
@@ -28,13 +28,6 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
     m_worldUp = glm::normalize(up);
     m_up = glm::normalize(glm::cross(worldLockedRight(m_direction, m_worldUp, m_worldUp), m_direction));
     m_viewMatrix = glm::lookAt(m_position, m_position + m_direction, m_up);
-
-    // The controller outlives the registration (owned by main for the app's lifetime).
-    Tweak::boolean("Editor", "Lock To World Up", &m_lockToWorldUp);
-    Tweak::floatVar("Editor", "Speed", &m_speed, 0.1f, 200.0f, 0.1f);
-    Tweak::floatVar("Editor", "Sensitivity", &m_sensitivity, 0.001f, 0.015f, 0.001f);
-    Tweak::floatVar("Editor", "Camera Near", &m_near, 0.001f, 10.0f, 0.001f);
-    Tweak::floatVar("Editor", "Camera Far", &m_far, 500.0f, 262114.0f, 500.0f);
 
     m_mouseListener = Globals::input.addMouseListener();
     m_mouseListener->onMousePressed = [this](const SDL_MouseButtonEvent& evt)
@@ -75,10 +68,10 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
             if (glm::dot(delta, delta) > m_maxLookDelta * m_maxLookDelta)
                 return;
 
-            float yaw = -delta.x * m_sensitivity;
-            float pitch = -delta.y * m_sensitivity;
+            float yaw = -delta.x * m_settings.sensitivity;
+            float pitch = -delta.y * m_settings.sensitivity;
 
-            if (m_lockToWorldUp)
+            if (m_settings.lockToWorldUp)
             {
                 // Clamped so the yaw axis stays well conditioned at the pole. update() derives m_up.
                 constexpr float c_maxPitch = 1.55334303f; // 89 degrees
@@ -100,7 +93,7 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
         };
     m_mouseListener->onMouseWheelMoved = [this](const SDL_MouseWheelEvent& evt)
         {
-            m_speed = oc::clamp(m_speed * (evt.y > 0.0f ? 1.1f : 0.9f), 0.1f, 400.0f);
+            m_settings.speed = oc::clamp(m_settings.speed * (evt.y > 0.0f ? 1.1f : 0.9f), 0.1f, 400.0f);
         };
 }
 
@@ -131,20 +124,21 @@ void FreeFlyCameraController::update(double deltaTime)
     if (viewportActive && m_movementEnabled)
     {
         const float boost = input.isKeyDown(SDL_SCANCODE_LSHIFT) ? m_boostMultiplier : 1.0f;
+        const float step = m_settings.speed * deltaSec * boost;
 
         if (input.isKeyDown(SDL_SCANCODE_W))
-            m_position += m_direction * m_speed * deltaSec * boost;
+            m_position += m_direction * step;
         if (input.isKeyDown(SDL_SCANCODE_S))
-            m_position -= m_direction * m_speed * deltaSec * boost;
+            m_position -= m_direction * step;
         if (input.isKeyDown(SDL_SCANCODE_A))
-            m_position -= glm::normalize(glm::cross(m_direction, m_up)) * m_speed * deltaSec * boost;
+            m_position -= glm::normalize(glm::cross(m_direction, m_up)) * step;
         if (input.isKeyDown(SDL_SCANCODE_D))
-            m_position += glm::normalize(glm::cross(m_direction, m_up)) * m_speed * deltaSec * boost;
+            m_position += glm::normalize(glm::cross(m_direction, m_up)) * step;
         if (input.isKeyDown(SDL_SCANCODE_SPACE))
-            m_position += m_up * m_speed * deltaSec * boost;
+            m_position += m_up * step;
         if (input.isKeyDown(SDL_SCANCODE_LCTRL))
-            m_position -= m_up * m_speed * deltaSec * boost;
-        if (!m_lockToWorldUp)
+            m_position -= m_up * step;
+        if (!m_settings.lockToWorldUp)
         {
             if (input.isKeyDown(SDL_SCANCODE_Q))
                 m_up = glm::normalize(glm::vec3(glm::rotate(glm::mat4(1.0f), -1.0f * deltaSec, m_direction) * glm::vec4(m_up, 0.0f)));
@@ -155,7 +149,7 @@ void FreeFlyCameraController::update(double deltaTime)
 
     // Rebuilding from the world up every frame is what keeps roll out; it also levels out whatever
     // roll free mode left behind when the lock is toggled back on.
-    if (m_lockToWorldUp)
+    if (m_settings.lockToWorldUp)
         m_up = glm::normalize(glm::cross(worldLockedRight(m_direction, m_worldUp, m_up), m_direction));
 
     m_viewMatrix = glm::lookAt(m_position, m_position + m_direction, m_up);

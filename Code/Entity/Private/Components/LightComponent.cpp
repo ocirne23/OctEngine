@@ -3,16 +3,9 @@ module Entity;
 import Core;
 import Core.glm;
 import Core.Transform;
-import Core.Tweaks;
+import Settings;
 import :Entity;
 import RendererVK;
-
-// Forces every LightComponent's debug wireframes on, regardless of the per-component Debug flag.
-static bool s_debugDrawAllLights = false;
-static const struct LightTweaks
-{
-    LightTweaks() { Tweak::boolean("Editor", "Light debug geometry", &s_debugDrawAllLights); }
-} s_lightTweaks; // TweakRegistry is a function-local static, so registering during static init is safe
 
 const char* lightTypeToken(ELightType type)
 {
@@ -167,7 +160,7 @@ void LightComponent::destroy(Entity& entity, const SpawnInfo&)
 
 void LightComponent::update(Entity& entity, Renderer& renderer, const Transform& world)
 {
-    const bool drawDebug = debugDraw || s_debugDrawAllLights;
+    const bool drawDebug = debugDraw || Globals::settings.world.lightDebugGeometry;
     for (const LightDesc& desc : lights)
     {
         if (!desc.enabled)

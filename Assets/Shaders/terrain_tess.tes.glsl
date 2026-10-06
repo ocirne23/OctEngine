@@ -94,18 +94,18 @@ void main()
 	const vec3 N = normalize(Ni);
 	out_meshPos = pos;
 
-	const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
+	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	// The CENTRE view for every displacement decision (the fade, the mip footprint): both VR eyes displace the
 	// same surface (terrain_tess.tcs.glsl). Only gl_Position below uses the eye's matrix.
 	const float dist = distance(pos, u_views[VIEW_CENTER].viewPos.xyz);
-	if (dist < fadeEnd && u_terrainTexParams0.x >= 0.0 && u_terrainTexParams0.y >= 1.0)
+	if (dist < fadeEnd && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
 	{
 		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w);
 		const TerrainLayers L = terrainLayers(pos, N, f);
 		// Falloff across the fade band: 1 - t^p ("Falloff exponent"; the TCS eases its factor the same way).
 		const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
-		const float strength = (1.0 - pow(t, u_terrainTessParams2.y)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff
-		const float depth = mix(mix(u_terrainTessParams1.z, u_terrainTessParams1.w, float(L.rockW)), u_terrainTessParams1.z, float(L.snowW)) * strength;
+		const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff
+		const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
 		if (depth > 1e-4)
 		{
 			// Height-map footprint = the target subdivided edge at this distance: a function of the POSITION
@@ -115,7 +115,7 @@ void main()
 			// The projection's y scale is the length of row 1 of the mvp's 3x3 (P11 x a unit view row).
 			const mat4 centreMvp = u_views[VIEW_CENTER].mvp;
 			const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
-			const float spacing = max(dist, u_terrainTessParams2.x) * 2.0 * u_terrainTessParams0.z / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
+			const float spacing = max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
 			const float height = float(terrainReliefAt(L, pos.xz, vec2(spacing, 0.0), vec2(0.0, spacing)));
 			pos += N * ((height - 0.5) * depth);
 		}

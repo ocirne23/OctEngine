@@ -4,7 +4,7 @@
 #include "wind.inc.glsl"
 
 // TREE WIND: a vertex-shader sway of the procedural trees in the shared VEGETATION wind (wind.inc.glsl: the weather
-// wind + its gusts, the grass bends in the same), tuned by u_treeWind0..3 (FoliageParams wind*, "Trees/Wind"). No
+// wind + its gusts, the grass bends in the same), tuned by u_foliage_wind* (FoliageParams wind*, "Trees/Wind"). No
 // textures and no per-tree data. Three layers:
 //   TRUNK  - the whole tree leans downwind and sways, the offset growing with (height / ref height)^2 and the tree
 //            dropping slightly so it keeps its length. From the mesh-local height alone, so the mesh, the merged branch
@@ -64,10 +64,10 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
 
     // TRUNK: lean + sway, x (height / ref height)^2; the drop keeps the length (to first order).
     const float height = max(localPos.y, 0.0) * instScale;
-    const float t = height * u_treeWind0.y;
-    const float lean = u_treeWind0.x * speed * speed;
-    const float sway = lean * u_treeWind0.z;
-    const float swayAngle = time * TREE_WIND_TAU * u_treeWind3.y * (0.85 + 0.3 * treeRand) + phase;
+    const float t = height * u_foliage_windInvRefHeight;
+    const float lean = u_foliage_windBend * speed * speed;
+    const float sway = lean * u_foliage_windSway;
+    const float swayAngle = time * TREE_WIND_TAU * u_foliage_windSwayHz * (0.85 + 0.3 * treeRand) + phase;
     const float downwind = (lean + sway * sin(swayAngle)) * t * t;
     const float sideways = sway * 0.4 * sin(swayAngle * 1.37 + 1.3) * t * t;
     vec3 offset = vec3(dir * downwind + side * sideways, 0.0).xzy;
@@ -77,19 +77,19 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
 
     // BRANCH: the module bends with its own phase, the sub-branch on top with its own (continuous at the joint: a
     // sub-branch's base has weight 0 and the module's weight there).
-    const float branchFade = 1.0 - smoothstep(u_treeWind2.x, u_treeWind2.y, dist);
+    const float branchFade = 1.0 - smoothstep(u_foliage_windBranchFadeStart, u_foliage_windBranchFadeEnd, dist);
     if (branchFade > 0.0)
     {
         const float rootW = float(payload & 127u) * (1.0 / 127.0);
         const float boneW = float((payload >> 7) & 63u) * (1.0 / 63.0);
         const float bonePhase = float((payload >> 13) & 15u) * (TREE_WIND_TAU / 16.0);
         const float modulePhase = float((payload >> 17) & 7u) * (TREE_WIND_TAU / 8.0);
-        const float branchAngle = time * TREE_WIND_TAU * u_treeWind1.y + phase;
+        const float branchAngle = time * TREE_WIND_TAU * u_foliage_windBranchHz + phase;
         const float oscModule = sin(branchAngle + modulePhase);
         const float oscBone = sin(branchAngle * 1.7 + bonePhase);
         const float root2 = rootW * rootW;
         const float bone2 = boneW * boneW;
-        const float amplitude = u_treeWind1.x * speed * instScale * branchFade;
+        const float amplitude = u_foliage_windBranch * speed * instScale * branchFade;
         const float push = root2 * (0.6 + 0.4 * oscModule) + bone2 * (0.3 + 0.3 * oscBone);
         const float bob = 0.35 * (root2 * oscModule + bone2 * oscBone);
         const float lateral = 0.3 * root2 * sin(branchAngle * 0.8 + modulePhase + 1.0);
@@ -99,12 +99,12 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
     // LEAF: the card's tip along its normal, a phase per card (its stem's payload).
     if ((payload & TREE_WIND_TIP_BIT) != 0u)
     {
-        const float leafFade = 1.0 - smoothstep(u_treeWind2.z, u_treeWind2.w, dist);
+        const float leafFade = 1.0 - smoothstep(u_foliage_windLeafFadeStart, u_foliage_windLeafFadeEnd, dist);
         if (leafFade > 0.0)
         {
             const float cardRand = treeWindHash((payload & 0xFFFFFu) ^ (cell.x * 0x27d4eb2du));
-            const float flutter = sin(time * TREE_WIND_TAU * u_treeWind1.w * (0.8 + 0.4 * cardRand) + cardRand * TREE_WIND_TAU);
-            offset += worldNormal * (u_treeWind1.z * flutter * min(speed * 0.2, 1.0) * leafFade);
+            const float flutter = sin(time * TREE_WIND_TAU * u_foliage_windLeafHz * (0.8 + 0.4 * cardRand) + cardRand * TREE_WIND_TAU);
+            offset += worldNormal * (u_foliage_windLeaf * flutter * min(speed * 0.2, 1.0) * leafFade);
         }
     }
     return offset;
@@ -119,10 +119,10 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
 vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 normal)
 {
     const float code = abs(tangentW);
-    if (u_treeWind3.w <= 0.0 || code < 2.0 || code >= 3.0)
+    if (u_foliage_windBillboardWaves <= 0.0 || code < 2.0 || code >= 3.0)
         return uv;
     const float dist = distance(instanceOrigin, u_views[VIEW_CENTER].viewPos.xyz);
-    const float fade = u_treeWind3.x > 0.0 ? 1.0 - smoothstep(u_treeWind3.x - 100.0, u_treeWind3.x, dist) : 1.0;
+    const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
     if (fade <= 0.0)
         return uv;
     const float stripV = code - 2.0;
@@ -135,10 +135,10 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
     const float speed = vegetationWind(instanceOrigin.xz, u_timeSeconds, dir);
     const uvec2 cell = floatBitsToUint(instanceOrigin.xz);
     const float phase = treeWindHash(cell.x * 0x8da6b343u ^ cell.y * 0xd8163841u) * TREE_WIND_TAU;
-    const float t = u_timeSeconds * TREE_WIND_TAU * u_treeWind1.y;
+    const float t = u_timeSeconds * TREE_WIND_TAU * u_foliage_windBranchHz;
     const vec2 wave = vec2(sin(local.x * 9.0 + local.y * 5.0 - t + phase),
                            0.6 * sin(local.x * 5.0 - local.y * 11.0 - t * 1.37 + phase * 1.7));
-    const vec2 offset = wave * (u_treeWind3.w * reach * reach * min(speed * 0.125, 1.5) * fade);
+    const vec2 offset = wave * (u_foliage_windBillboardWaves * reach * reach * min(speed * 0.125, 1.5) * fade);
     return vec2(clamp(uv.x + offset.x, 0.0, 1.0),
                 clamp(uv.y + offset.y * stripV, strip * stripV, (strip + 1.0) * stripV - 1e-4));
 }
@@ -149,11 +149,11 @@ vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, ui
 {
     outPrevDelta = vec3(0.0);
     const float dist = distance(instPos, u_views[VIEW_CENTER].viewPos.xyz);
-    const float fade = u_treeWind3.x > 0.0 ? 1.0 - smoothstep(u_treeWind3.x - 100.0, u_treeWind3.x, dist) : 1.0;
+    const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
     if (fade <= 0.0)
         return vec3(0.0);
     const vec3 now = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_timeSeconds) * fade;
-    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_treeWind0.w) * fade - now;
+    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_foliageLive_windPrevTime) * fade - now;
     return now;
 }
 

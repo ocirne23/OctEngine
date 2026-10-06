@@ -48,11 +48,11 @@ void main()
     const ivec3 dst = ivec3(px, int(u_cascade));
     const vec4 noCloud = vec4(-1e30, 0.0, 0.0, 0.0);
 
-    const vec4 cascade = u_cascade == 0u ? u_cloudShadow0 : u_cloudShadow1;
+    const vec4 cascade = u_cloudsLive_shadowCascade[u_cascade];
     const vec3 L = u_sunDirection;
     const float texel = 1.0 / (cascade.w * float(u_resolution));
     const vec2 local = (vec2(px) + 0.5 - 0.5 * float(u_resolution)) * texel;
-    const vec3 origin = cascade.xyz + u_cloudShadow2.xyz * local.x + u_cloudShadow3.xyz * local.y; // on the plane through the centre
+    const vec3 origin = cascade.xyz + u_cloudsLive_shadowAxis0 * local.x + u_cloudsLive_shadowAxis1 * local.y; // on the plane through the centre
     const float camAlt = u_viewPos.y; // centre view (g_viewIndex 0)
 
     // THE MAIN LAYER ONLY: the upper layer casts no map shadow (thin, low-density sheets - a weak shadow). Over the
@@ -73,11 +73,11 @@ void main()
         return;
     }
 
-    const int steps = max(int(u_cascade == 0u ? u_cloudShadow4.y : u_cloudShadow4.z), 1); // per cascade: the far one updates less often
+    const int steps = max(int(u_cascade == 0u ? u_clouds_shadowNearSteps : u_clouds_shadowFarSteps), 1); // per cascade: the far one updates less often
     const float dt = total / float(steps);
     const vec2 noiseOffset = cloudNoiseOffset();
-    const float lodBase = max(log2(texel * u_cloudShape1.y * CLOUD_BASE_RES), 0.0);
-    const float lodDetail = max(log2(texel * u_cloudShape1.z * CLOUD_DETAIL_RES), 0.0);
+    const float lodBase = max(log2(texel * u_clouds_baseFrequency * CLOUD_BASE_RES), 0.0);
+    const float lodDetail = max(log2(texel * u_clouds_detailFrequency * CLOUD_DETAIL_RES), 0.0);
     float od = 0.0;
     float aFront = -1e30;
     float aBack = 0.0;
@@ -92,7 +92,7 @@ void main()
         const float dens = cloudMainDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
         if (dens <= 0.0)
             continue;
-        od += dens * u_cloudShape1.w * dt;
+        od += dens * u_clouds_extinction * dt;
         const float a = aStart - t; // = dot(p - centre, L): origin - centre is perpendicular to L
         if (aFront == -1e30)
             aFront = a + 0.5 * dt;

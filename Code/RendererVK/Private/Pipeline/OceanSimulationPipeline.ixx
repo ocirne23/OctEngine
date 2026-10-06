@@ -10,7 +10,8 @@ import :ComputePipeline;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
-import :Settings;
+import :RenderParams;
+import Settings;
 
 // GPU FFT ocean simulation (Tessendorf 2001, "Simulating Ocean Water"; spectrum + spreading from Horvath
 // 2015, "Empirical directional wave spectra for computer graphics"). Per frame, entirely UBO-driven so it
@@ -45,11 +46,6 @@ public:
 
     void initialize();
     void reloadShaders();
-    // The "Ocean/Spray *" tweaks plus the emitter slot the Particle system publishes (UINT32_MAX = off,
-    // Renderer::setOceanSprayEmitter). Everything rides the frame UBO (oceanSpray0/1/2), which the
-    // Renderer builds from getSprayParams() - the spray step itself reads it there.
-    void registerSprayTweaks() { m_sprayParams.registerTweaks(); }
-
     // ---- The CPU mirror of the ocean, pushed in by Procedural::OceanGenerator ----
     // The spectrum params drive BOTH this compute simulation (the TMA spectrum is re-evaluated every
     // frame, so all of it is live) and the surface shading, through the frame UBO the Renderer builds.
@@ -74,7 +70,10 @@ public:
     void clearCameraWaterSurface() { m_cameraWaterSurfaceValid = false; }
     float getCameraWaterSurface() const { return m_cameraWaterSurface; }
     bool hasCameraWaterSurface() const { return m_cameraWaterSurfaceValid; }
-    const OceanSprayParams& getSprayParams() const { return m_sprayParams; }
+    // The "Ocean/Spray *" settings plus the emitter slot the Particle system publishes (UINT32_MAX = off,
+    // Renderer::setOceanSprayEmitter). Everything rides the frame UBO (oceanSpray0/1/2), which the
+    // Renderer builds from getSprayParams() - the spray step itself reads it there.
+    const OceanSprayParams& getSprayParams() const { return Globals::settings.oceanSpray; }
     void setSprayEmitter(uint32 slot) { m_sprayEmitter = slot; }
     uint32 getSprayEmitter() const { return m_sprayEmitter; }
 
@@ -91,7 +90,7 @@ public:
     // over dt along the swell's travel, each level's origin snapped around the camera and the whole texels it
     // moved since the last call (the compute's read offset). Once per built frame, in frame order - the
     // shift is relative to the previous call, which the other ping/pong slot was simulated with.
-    void advanceFoamField(RendererVKLayout::Ubo& ubo, const glm::vec3& cameraPos, float dt);
+    void advanceFoamField(RendererVKLayout::OceanLiveUbo& live, const glm::vec3& cameraPos, float dt);
     // Records the whole per-frame simulation. ubo = that frame slot's main UBO (time + ocean params).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray);
     // Points the spray step's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image;
@@ -142,7 +141,6 @@ private:
     ComputePipeline m_assemblePipeline;
     ComputePipeline m_foamPipeline;
     ComputePipeline m_sprayPipeline; // breaking-crest spray -> particle spawn requests
-    OceanSprayParams m_sprayParams;
     uint32 m_sprayEmitter = UINT32_MAX;
     OceanParams m_oceanParams;
     float m_waveTrough = 0.0f;          // 0 while the ocean is disabled

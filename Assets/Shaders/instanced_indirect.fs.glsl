@@ -256,21 +256,21 @@ void main()
 	// FOLIAGE cards (the tree billboards) fade out as they turn EDGE-ON: a near-grazing card smears its texture
 	// into bright streaks, and the crossed card faces the view right then. A dither of its own (a decorrelated
 	// pattern), so it composes with the distance fade instead of cancelling it. Over |N.V| from "Trees/Foliage edge
-	// fade start" to "end" (u_foliageParams2.xy), both x "Foliage edge fade centre scale" (z) at the crossing axis, back to x1
+	// fade start" to "end" (u_foliage_edgeFadeStart / End), both x "Foliage edge fade centre scale" (.edgeFadeCentreScale) at the crossing axis, back to x1
 	// at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card scale"
-	// (u_foliageParams3.y). Not on MATERIAL_FLAG_NO_EDGE_FADE (the mid tier's branch cards).
+	// (u_foliage_edgeFadeTopCardScale). Not on MATERIAL_FLAG_NO_EDGE_FADE (the mid tier's branch cards).
 #ifdef FOLIAGE
 	if ((material.flags & MATERIAL_FLAG_NO_EDGE_FADE) == 0u)
 	{
 		const float facing = abs(dot(normalize(in_normalV.xyz), V));
 		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
-		const float centreScale = mix(u_foliageParams2.z, 1.0, smoothstep(0.0, 0.5, foliageAxisDistance(pos, cardDu, cardDv, uv, material.flags)))
-			* (topCard ? u_foliageParams3.y : 1.0);
-		const float fadeStart = u_foliageParams2.x * centreScale;
+		const float centreScale = mix(u_foliage_edgeFadeCentreScale, 1.0, smoothstep(0.0, 0.5, foliageAxisDistance(pos, cardDu, cardDv, uv, material.flags)))
+			* (topCard ? u_foliage_edgeFadeTopCardScale : 1.0);
+		const float fadeStart = u_foliage_edgeFadeStart * centreScale;
 		// Not from BELOW: looking up into a crown, the edge-on cards are what fills it - fading them left it see-through.
 		// The fade blends out as the view turns upward, over the first ~11 degrees below the pixel (V.y = 0 .. -0.2).
 		const float fromBelow = smoothstep(0.0, 0.2, -V.y);
-		const float visibility = mix(smoothstep(fadeStart, max(u_foliageParams2.y * centreScale, fadeStart + 1e-3), facing), 1.0, fromBelow);
+		const float visibility = mix(smoothstep(fadeStart, max(u_foliage_edgeFadeEnd * centreScale, fadeStart + 1e-3), facing), 1.0, fromBelow);
 		if (visibility < 1.0)
 		{
 			const vec2 pixel = gl_FragCoord.xy + vec2(17.0, 31.0) + 5.588238 * float((u_frameIndex + 3u) & 7u);
@@ -326,20 +326,20 @@ void main()
 #endif
 #ifdef FOLIAGE
 	// FOLIAGE: rotated into the crown normal's frame - fully at the crossing axis, by "Trees/Foliage crown normal"
-	// (u_foliageParams.y) from half the lateral radius out - and the crown INTERIOR darkening on both the sun and the
+	// (u_foliage_crownNormal) from half the lateral radius out - and the crown INTERIOR darkening on both the sun and the
 	// ambient (in place of the RTAO a card does not read): the BAKED interior (the normal map's A, from the piece's own
 	// crown field - any crown shape: 0 = the crown's surface, 1 = about its core depth), remapped by "Trees/Foliage
-	// interior depth start / end" (u_foliageParams2.w / u_foliageParams3.x), x "Trees/Foliage interior shadow"
-	// (u_foliageParams.w). An AO-like term (no sun direction - the transmitted sun shadow is the directional part), so
+	// interior depth start / end" (u_foliage_interiorStart / u_foliage_interiorEnd), x "Trees/Foliage interior shadow"
+	// (u_foliage_interiorShadow). An AO-like term (no sun direction - the transmitted sun shadow is the directional part), so
 	// a fully lit crown is not flat.
 	{
-		float interior = 1.0 - u_foliageParams.w
-			* smoothstep(u_foliageParams2.w, max(u_foliageParams3.x, u_foliageParams2.w + 1e-3), float(normalTap.w));
-		// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliageParams3.z): an EXPONENT, so > 1
+		float interior = 1.0 - u_foliage_interiorShadow
+			* smoothstep(u_foliage_interiorStart, max(u_foliage_interiorEnd, u_foliage_interiorStart + 1e-3), float(normalTap.w));
+		// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliage_interiorTopCardScale): an EXPONENT, so > 1
 		// darkens it at any strength (a multiplier on the strength saturated at 1). x |V.y|, the view's steepness: from
 		// BELOW V.y is negative - a negative factor on the AO and the sun turned the card black (from level: 0).
 		if (foliageTopCard(cardDu, cardDv, material.flags))
-			interior = pow(max(interior, 0.0), max(u_foliageParams3.z, 0.01)) * abs(V.y); // pow(0, 0) is undefined
+			interior = pow(max(interior, 0.0), max(u_foliage_interiorTopCardScale, 0.01)) * abs(V.y); // pow(0, 0) is undefined
 		// The visible leaf's depth into the crown for the self-shadow: the baked interior, faded out as the view lines up
 		// with the sun (from the front the leaves seen through the gaps are lit through those same gaps).
 		const float leafDepth = float(normalTap.w) * (1.0 - max(dot(V, u_sunDirection.xyz), 0.0));
@@ -350,7 +350,7 @@ void main()
 		// axis - while the leaf normals keep their scatter. Replacing them with the one smooth crown normal lit the axis
 		// strip brighter than the rest of the card under almost any light (a smooth normal facing the light side outshines
 		// the mean of scattered ones): a bright vertical band through every whole-tree billboard (2026-10-04).
-		const float crownWeight = mix(1.0, u_foliageParams.y, smoothstep(0.0, 0.5, crown.w));
+		const float crownWeight = mix(1.0, u_foliage_crownNormal, smoothstep(0.0, 0.5, crown.w));
 		const vec3 faceN = dot(vec3(geoN), V) >= 0.0 ? vec3(geoN) : -vec3(geoN);
 		const vec3 turn = cross(faceN, crown.xyz);
 		const float sinTurn = length(turn);
@@ -364,47 +364,47 @@ void main()
 		}
 		g_noRtao = true;
 		// THE SUN through the crown: the interior fades out of it as the view lines up with the sun (x "Foliage interior
-		// view fade" (u_foliageParams5.z) x |V.L|) - from the front the leaves seen through the gaps are lit through those
+		// view fade" (u_foliage_interiorViewFade) x |V.L|) - from the front the leaves seen through the gaps are lit through those
 		// same gaps, from the back the whole crown is in its own shadow (the self-shadow below) - and the CROWN
-		// SELF-SHADOW exp(-"Foliage self shadow" (u_foliageParams5.y) x the chord along the sun in lateral radii). On the
+		// SELF-SHADOW exp(-"Foliage self shadow" (u_foliage_selfShadow) x the chord along the sun in lateral radii). On the
 		// direct sun; the TRANSMISSION - light scattered forward through the leaves, which loses less - takes the
-		// self-shadow x "Foliage transmission self shadow" (u_foliageParams5.w; at the full share a crown seen toward the
+		// self-shadow x "Foliage transmission self shadow" (u_foliage_transmissionSelfShadow; at the full share a crown seen toward the
 		// sun hid "Foliage transmission" entirely). The ambient keeps the full interior (AO).
-		const float sunInterior = mix(interior, 1.0, clamp(u_foliageParams5.z * abs(dot(V, u_sunDirection.xyz)), 0.0, 1.0));
-		crownSun = sunInterior * exp(-u_foliageParams5.y * sunChord);
-		crownTransmit = sunInterior * exp(-u_foliageParams5.y * u_foliageParams5.w * sunChord);
+		const float sunInterior = mix(interior, 1.0, clamp(u_foliage_interiorViewFade * abs(dot(V, u_sunDirection.xyz)), 0.0, 1.0));
+		crownSun = sunInterior * exp(-u_foliage_selfShadow * sunChord);
+		crownTransmit = sunInterior * exp(-u_foliage_selfShadow * u_foliage_transmissionSelfShadow * sunChord);
 		g_sunShadowFirst *= crownSun;
 		surfaceAO = float16_t(interior);
 	}
 #endif
-	// LEAVES seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliageParams5.x).
+	// LEAVES seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliage_minNoV).
 	// The cards' normals are bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing (Fresnel -> 1,
 	// the Smith term growing) lit one leaf near the sun hundreds of times brighter than its diffuse: a blinding
 	// spot with bloom. Adding V x (min - N.V) gives N.V = min / |N'| (just under min) - and N.L barely moves.
 	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
 		const float noV = dot(vec3(N), V);
-		if (noV < u_foliageParams5.x)
-			N = f16vec3(normalize(vec3(N) + V * (u_foliageParams5.x - noV)));
+		if (noV < u_foliage_minNoV)
+			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
 	}
 #ifdef ALPHA_MASK
 	// LEAF TRANSMISSION (MATERIAL_FLAG_LEAF): thin leaves let the sun through, tinted by their own colour - a
 	// diffuse back term saturate(-N.L) (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking
-	// toward the sun: the backlit rim). x "Trees/Foliage transmission" (u_foliageParams3.w). Its visibility leans
-	// on the sun shadow by "Foliage transmission shadow" (u_foliageParams4.z) only - a leaf seen from the shaded
+	// toward the sun: the backlit rim). x "Trees/Foliage transmission" (u_foliage_transmission). Its visibility leans
+	// on the sun shadow by "Foliage transmission shadow" (u_foliage_transmissionShadow) only - a leaf seen from the shaded
 	// side sits in its own crown's shadow, which would leave the backlit view no glow - then x the crown's own
 	// darkening of the sun (FOLIAGE: the interior faded by the view, and the crown self-shadow), so the crown's
 	// depths stay dark and a crown seen toward the sun dark as a whole.
 	// Formed BEFORE computeLitColor: its light loop is the shader's register peak, and only this half colour is live
 	// across it - not the shadow, the interior term and the surface colour it is made of (LitFoliage 72 registers).
 	f16vec3 transmit = f16vec3(0.0);
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliageParams3.w > 0.0)
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliage_transmission > 0.0)
 	{
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);
-		const float glow = pow(max(-dot(V, L), 0.0), u_foliageParams4.x) * u_foliageParams4.y;
-		const float visibility = mix(1.0, sunVisibility, u_foliageParams4.z) * crownTransmit;
-		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliageParams3.w * INV_PI, MEDIUMP_FLT_MAX));
+		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
+		const float visibility = mix(1.0, sunVisibility, u_foliage_transmissionShadow) * crownTransmit;
+		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
 	}
 #endif
 

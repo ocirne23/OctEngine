@@ -3,6 +3,7 @@ export module Spatial:Occlusion;
 import Core;
 import Core.glm;
 import Core.Transform;
+import Settings;
 import :Types;
 
 // CPU software occlusion: occluder triangles (the largest triangles of static mesh colliders)
@@ -50,7 +51,7 @@ export class OcclusionBuffer final : public IOcclusionTester
 {
 public:
 
-    void initialize(); // registers the Spatial/Occlusion tweaks
+    void initialize(); // the depth buffers (the Spatial/Occlusion tweaks are Globals::settings.spatial.occlusion)
 
     // The largest maxTriangles triangles by area of an indexed mesh (degenerates dropped).
     static oc::shared_ptr<const OccluderData> extractOccluders(oc::span<const glm::vec3> vertices,
@@ -59,8 +60,8 @@ public:
     SpatialHandle addOccluder(const oc::shared_ptr<const OccluderData>& data, const Transform& world);
     void removeOccluder(SpatialHandle handle);
 
-    bool isEnabled() const { return m_enabled; }
-    int getMaxTriangles() const { return m_maxTriangles; }
+    bool isEnabled() const { return m_settings.enabled; }
+    int getMaxTriangles() const { return m_settings.maxTriangles; }
 
     // Rasterize all occluders for this frame's camera; isVisible() answers against the result
     // until the next render(). viewProjRelCamera maps camera-relative world positions to clip space.
@@ -95,16 +96,11 @@ private:
     oc::vector<float> m_depth;    // Width * Height, NDC z, 1e30 = no occluder
     oc::vector<float> m_blockMax; // BlocksX * BlocksY, farthest depth per block
     glm::mat4 m_viewProjRel = glm::mat4(1.0f);
-    bool m_enabled = false;
     bool m_rendered = false; // valid depth data for the current frame
-    float m_depthBias = 0.001f;
-    int m_maxTriangles = 2048;
-    int m_statTriangles = 0;
+    SpatialOcclusionSettings& m_settings = Globals::settings.spatial.occlusion;
     // isVisible runs concurrently from the parallel markVisible* tasks, so it counts atomically;
-    // the plain int mirrors it once per render() for the tweak panel (which binds a raw int*).
+    // the plain int setting mirrors it once per render() for the tweak panel (which binds a raw int*).
     oc::atomic<int> m_statHiddenCells = 0;
-    int m_statHiddenCellsDisplay = 0;
-    float m_statRasterMs = 0.0f;
 };
 
 export namespace Globals

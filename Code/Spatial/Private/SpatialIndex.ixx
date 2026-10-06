@@ -9,6 +9,7 @@ import Core.glm;
 import Core.Camera;
 import Core.Frustum;
 import Threading;
+import Settings;
 import :Morton;
 import :Types;
 import :CellMap;
@@ -354,8 +355,8 @@ private:
     // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
     // growth), shared over queries - see the threading contract above.
     mutable std::shared_mutex m_registerMutex;
-    SpatialCullingConfig m_culling;
-    mutable SpatialStats m_stats;
+    SpatialCullingConfig& m_culling = Globals::settings.spatial.culling; // the Spatial/Culling tweaks
+    SpatialStats& m_stats = Globals::settings.spatial.stats;             // the Spatial/Stats readouts (the const queries add to them)
     oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)
     oc::vector<FrontierCell> m_frontierNext;
     // setVisibleCollect, per collect slot: chunk list 0 = the serial frontier expansion, 1 + i =

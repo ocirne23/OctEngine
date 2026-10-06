@@ -3,12 +3,23 @@ export module UI:TweakPanel;
 import Core;
 
 import Core;
-import Core.Tweaks;
+import Settings.Tweaks;
+
+// A lock click, COLLECTED like an onChange: var set = that row, else the whole section `lock`.
+export struct TweakLockToggle
+{
+	uint32 lock;
+	const TweakVar* var;
+	bool locked;
+};
 
 // One tweak variable as its ImGui widget row (label + slider/checkbox/combo/...). Shared by the
-// Tweaks editor panel and the main menu's Settings page. A changed var with an onChange is only
+// Tweaks editor panel and the main menu's Settings page. A changed var is only
 // COLLECTED into deferredCallbacks (main-thread work - see TweakPanel::flushDeferredCallbacks).
-export void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks);
+// deferredLocks set: a row a lock covers gets its lock button in front (the panel; the Settings page
+// passes none and only greys a locked row).
+export void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks,
+	oc::vector<TweakLockToggle>* deferredLocks = nullptr);
 
 export class TweakPanel
 {
@@ -27,4 +38,5 @@ public:
 
 private:
 	oc::vector<const TweakVar*> m_deferredCallbacks;
+	oc::vector<TweakLockToggle> m_deferredLocks; // lock clicks: TweakRegistry::setLocked / setVarLocked on main
 };

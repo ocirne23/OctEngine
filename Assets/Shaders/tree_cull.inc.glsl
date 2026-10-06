@@ -1,5 +1,5 @@
 // BAKED TREE RECORDS (Renderer tree instance sets, RendererTrees.cpp): the trees are NOT written into the per-frame
-// instance stream. The CPU only claims a range of it per frame (u_treeCull.x = its first index, .y = its length =
+// instance stream. The CPU only claims a range of it per frame (u_present_treeRangeBase = its first index, treeRangeLength = its length =
 // TREE_CULL_RECORDS per tree) and every cull builds the records of that range from STATIC device-local data - the
 // placed trees (TreeCullPiece) and their types (TreeCullType) - deciding per tree from the camera distance which
 // representations draw: the meshes, the meshes on their crossfade materials, the billboard, or nothing (the
@@ -44,9 +44,9 @@ struct TreeCullType
     TreeCullRecord trunkFade;
     TreeCullRecord cardsIn;    // the mid tier only: the card mesh, fading in (the mid band) / out (the far band)
     TreeCullRecord cardsOut;
-    float farDistance;  // billboard switch distance (m); x u_treeCullParams.x
+    float farDistance;  // billboard switch distance (m); x u_present_treeFarScale
     float fadeWidth;    // crossfade band (m), centred on it
-    float midDistance;  // the mid tier's switch distance (m; x u_treeCullParams.x); 0 = no mid tier
+    float midDistance;  // the mid tier's switch distance (m; x u_present_treeFarScale); 0 = no mid tier
     float midFadeWidth;
     float shadowDistance; // m from the cascades' centre beyond which it casts no sun shadow (bushes); 0 = no limit
     uint pad0;
@@ -71,22 +71,22 @@ layout (binding = TREE_CULL_LIST_BINDING, std430) readonly buffer TreeCullList {
 
 const uint TREE_CULL_ABSENT = 0xFFFFFFFFu;
 
-bool treeCullIsTree(uint instanceIdx) { return instanceIdx - u_treeCull.x < u_treeCull.y; } // unsigned: below base wraps
+bool treeCullIsTree(uint instanceIdx) { return instanceIdx - u_present_treeRangeBase < u_present_treeRangeLength; } // unsigned: below base wraps
 
 TreeCullRecord treeCullNone() { return TreeCullRecord(TREE_CULL_ABSENT, 0u); }
 
 // THE CULLS RUN ONE THREAD PER LISTED TREE (instanced_indirect[_shadow].cs.glsl): the range's records per piece
 // collapse into one thread that decides once and emits 0-4 of them - most emit none (in the main cull every tree past
 // the far-tree volume's start; in the shadow cull the mesh records of every billboard type). Threads: the stream below
-// the range, then one per LISTED piece (u_treeCull.w), then the stream above the range; u_treeCull.z = the thread
+// the range, then one per LISTED piece (u_present_treeCount), then the stream above the range; u_present_treeThreads = the thread
 // count. The LIST (in_treeList, this frame's, written by renderTreeInstanceSet) holds the pieces of the drawn terrain
 // chunks: piece | passMask << 28 - the PASS_* bits of the chunk (a chunk only in the shadow / GI sphere draws no main
 // records). Returns the stream instance index - for a tree thread, its list entry's FIRST record - and the pass bits
 // (all of them for a stream thread).
 uint treeCullThreadInstance(uint gid, out bool isTree, out uint pieceIdx, out uint passBits)
 {
-    const uint listIdx = gid - u_treeCull.x; // unsigned: below base wraps
-    isTree = listIdx < u_treeCull.w;
+    const uint listIdx = gid - u_present_treeRangeBase; // unsigned: below base wraps
+    isTree = listIdx < u_present_treeCount;
     pieceIdx = 0u;
     passBits = PASS_MAIN | PASS_SHADOW | PASS_GI;
     if (isTree)
@@ -95,7 +95,7 @@ uint treeCullThreadInstance(uint gid, out bool isTree, out uint pieceIdx, out ui
         pieceIdx = entry & 0x0FFFFFFFu;
         passBits = entry >> 28;
     }
-    return isTree ? u_treeCull.x + listIdx * TREE_CULL_RECORDS : (gid < u_treeCull.x ? gid : gid + (u_treeCull.y - u_treeCull.w));
+    return isTree ? u_present_treeRangeBase + listIdx * TREE_CULL_RECORDS : (gid < u_present_treeRangeBase ? gid : gid + (u_present_treeRangeLength - u_present_treeCount));
 }
 
 // The TLAS writer's SLOT layout (gi_tlas_instances.cs.glsl): as the culls' threads, but with only the list's RT
@@ -104,7 +104,7 @@ uint treeCullThreadInstance(uint gid, out bool isTree, out uint pieceIdx, out ui
 // tree: its first record, unused - its instance is built from the static data).
 uint treeCullTlasInstance(uint slot, uint rtPieces, out bool isTree, out uint pieceIdx, out uint passBits)
 {
-    const uint listIdx = slot - u_treeCull.x; // unsigned: below base wraps
+    const uint listIdx = slot - u_present_treeRangeBase; // unsigned: below base wraps
     isTree = listIdx < rtPieces;
     pieceIdx = 0u;
     passBits = PASS_MAIN | PASS_SHADOW | PASS_GI;
@@ -114,7 +114,7 @@ uint treeCullTlasInstance(uint slot, uint rtPieces, out bool isTree, out uint pi
         pieceIdx = entry & 0x0FFFFFFFu;
         passBits = entry >> 28;
     }
-    return isTree ? u_treeCull.x + listIdx * TREE_CULL_RECORDS : (slot < u_treeCull.x ? slot : slot + (u_treeCull.y - rtPieces));
+    return isTree ? u_present_treeRangeBase + listIdx * TREE_CULL_RECORDS : (slot < u_present_treeRangeBase ? slot : slot + (u_present_treeRangeLength - rtPieces));
 }
 
 // A piece's decision: records [kBegin, kEnd) may draw (what slot k holds: the header; an ABSENT one is skipped).
@@ -147,7 +147,7 @@ void treeCullLoadTransform(uint pieceIdx, inout TreeCullPiecePick pick)
 
 // The MAIN pass: the meshes before the far band, the billboard after it, inside it the meshes on their fade-OUT
 // materials AND the billboard (the lit FS's dither splits the pixels); past the far-tree volume's start
-// (u_treeCullParams.z > 0) nothing - the volume draws it. With a mid tier, also the mid band (the header). False =
+// (u_present_treeVolumeStart > 0) nothing - the volume draws it. With a mid tier, also the mid band (the header). False =
 // nothing draws.
 bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
 {
@@ -157,14 +157,14 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
     bool mesh = true, fade = false, billboard = false, mid = false, inMid = false, meshGone = false;
     if (hasBillboard)
     {
-        const float switchDistance = in_treeTypes[typeIdx].farDistance * u_treeCullParams.x;
+        const float switchDistance = in_treeTypes[typeIdx].farDistance * u_present_treeFarScale;
         const float fadeWidth = in_treeTypes[typeIdx].fadeWidth;
         const float bandStart = max(switchDistance - fadeWidth * 0.5, 0.0);
         const float bandEnd = bandStart + fadeWidth;
         // A pixel's distance varies by up to the piece radius from the centre's (the material's band is per pixel).
         const float dist = distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre);
         const float radius = in_treePieces[pieceIdx].radius;
-        const float midSwitch = in_treeTypes[typeIdx].midDistance * u_treeCullParams.x;
+        const float midSwitch = in_treeTypes[typeIdx].midDistance * u_present_treeFarScale;
         mid = midSwitch > 0.0;
         if (mid)
         {
@@ -173,7 +173,7 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
             inMid = dist + radius >= midStart;               // the card mesh draws
             meshGone = dist - radius > midStart + midWidth;  // the branch bark and the leaves no longer
         }
-        if (u_treeCullParams.y > 0.5)
+        if (u_present_treeForceFar > 0.5)
         {
             mesh = false;
             billboard = true;
@@ -191,13 +191,13 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
             fade = true;
             billboard = true;
         }
-        if (u_treeCullParams.z > 0.0 && dist > u_treeCullParams.z)
+        if (u_present_treeVolumeStart > 0.0 && dist > u_present_treeVolumeStart)
         {
             mesh = false;
             billboard = false;
         }
     }
-    else if (u_treeCullParams.z > 0.0 && distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre) > u_treeCullParams.z)
+    else if (u_present_treeVolumeStart > 0.0 && distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre) > u_present_treeVolumeStart)
         mesh = false; // a ROCK (no billboard): the far volume draws it past its start, as a tree (R5)
     const uint farMode = mesh ? (fade ? 2u : 1u) : 0u; // what fades over the FAR band
     const uint midMode = mesh ? (!inMid ? 1u : meshGone ? 0u : 2u) : 0u; // what fades over the MID band
@@ -265,7 +265,7 @@ TreeCullRecord treeCullShadowRecord(TreeCullPiecePick pick, uint k)
 // The TLAS writer's (gi_tlas_instances.cs.glsl) ONE instance per tree: its billboard - for a type without one its
 // leaves only (one TLAS slot per tree: the bark of such a type is not traced) - for a type with neither (a ROCK: one
 // mesh, in the bark slot) its bark. Keep Renderer::initTreeSetTypes' RT-capable test in step. Off beyond `rtRange` (m) from the scene
-// focus ("Trees/RT range", u_foliageParams.x; <= 0 = no limit), tested before the transform loads: GI and RT shadows
+// focus ("Trees/RT range", u_foliage_rtRange; <= 0 = no limit), tested before the transform loads: GI and RT shadows
 // only need the trees near the focus, and every tree in the TLAS is an overlapping box every ray has to traverse.
 // A mesh created without a BLAS (bushes, Procedural TreeSystem) comes out inactive in the writer anyway. posScale /
 // quat only when it draws.

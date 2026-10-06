@@ -2,6 +2,7 @@ module RendererVK;
 
 import Core;
 import Core.glm;
+import Settings;
 import :TerrainResources;
 import :Layout;
 
@@ -69,13 +70,14 @@ oc::vector<uint16> TerrainResources::setSplatMaterials(oc::span<const TerrainSpl
 
 TerrainResources::WetnessTick TerrainResources::advanceWetness(float simDeltaSec, const glm::vec3& focus)
 {
-    const float texel = glm::max(m_wetTweaks.texelSize, 0.05f);
+    const TerrainSettings& s = Globals::settings.terrain;
+    const float texel = terrainWetTexelSize(s);
     constexpr int32 res = (int32)RendererVKLayout::TERRAIN_WET_RES;
     const bool wasEnabled = m_wetWasEnabled;
-    m_wetWasEnabled = m_wetTweaks.enabled;
-    m_wetTickAccum = m_wetTweaks.enabled ? m_wetTickAccum + simDeltaSec : 0.0f;
-    const float interval = 1.0f / glm::max(m_wetTweaks.updateRate, 1.0f);
-    m_wetTicking = m_wetTweaks.enabled && (!wasEnabled || m_wetTickAccum >= interval);
+    m_wetWasEnabled = s.wetEnabled;
+    m_wetTickAccum = s.wetEnabled ? m_wetTickAccum + simDeltaSec : 0.0f;
+    const float interval = 1.0f / glm::max(s.wetUpdateRate, 1.0f);
+    m_wetTicking = s.wetEnabled && (!wasEnabled || m_wetTickAccum >= interval);
 
     WetnessTick tick;
     tick.ticking = m_wetTicking;

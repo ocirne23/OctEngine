@@ -31,12 +31,8 @@ layout (push_constant) uniform PC
     ivec2 base;        // the dispatch's first pixel: the render rect's origin, or 0 with the motion blur
     ivec2 origin;      // the render rect in the render-size targets (px)
     ivec2 size;
-    float oceanBias;   // the mask value on ocean pixels
     uint  mbEnabled;   // 1 = write the motion blur velocity + sub-tiles
-    float mbShutter;
-    float mbMaxRadius; // already clamped (MotionBlurPipeline::clampMaxRadius)
-    float mbCameraScale;
-} pc;
+} pc; // the ocean mask value and the blur's tweaks: u_post
 
 #define MOTION_BLUR_REDUCE u_mbSubTileOut
 #include "motion_blur.inc.glsl"
@@ -55,7 +51,7 @@ void main()
         vec2 vel = vec2(0.0);
         if (inImage)
         {
-            vel = motionBlurVelocity(px, u_screenSize.xy, depth, motion, pc.mbShutter, pc.mbMaxRadius, pc.mbCameraScale);
+            vel = motionBlurVelocity(px, u_screenSize.xy, depth, motion, u_post_mbShutter, u_post_mbMaxRadius, u_post_mbCameraScale);
             imageStore(u_mbVelocityOut, px, vec4(vel, 0.0, 0.0));
         }
         motionBlurReduceTile(vel);
@@ -70,5 +66,5 @@ void main()
 
     // The colour is read for its alpha only, and the sky (depth 0) is never ocean: skip its 8 B there.
     const bool ocean = depth > 0.0 && texelFetch(u_sceneColor, px, 0).a < 0.004;
-    imageStore(u_biasOut, px, vec4(ocean ? pc.oceanBias : 0.0));
+    imageStore(u_biasOut, px, vec4(ocean ? u_post_dlssOceanBias : 0.0));
 }

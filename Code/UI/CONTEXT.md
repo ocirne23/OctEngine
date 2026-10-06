@@ -167,7 +167,7 @@ spot.
 | **Text Editor** | Plain text. |
 | **Log** (`OutputLog`) | `Core.Log` view with filters and search. |
 | **Entity Editor** | Authors a `.pre` document. See below. |
-| **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Core.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Core. |
+| **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Settings.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Settings. A fold that is a **lock**'s category (Settings `TweakLock`) carries a right-aligned **Lock / Partly locked / Locked** toggle (`ImGuiTreeNodeFlags_AllowOverlap`) that sets every row under it; each covered row has its own **`L` / `U`** button in front (`drawTweakVar` with `deferredLocks`; the Settings page passes none). A locked row draws read-only (`BeginDisabled`, so the Settings page greys it too). Clicks are COLLECTED (`TweakLockToggle`) like an `onChange` and applied by `flushDeferredCallbacks` on main (`TweakRegistry::setLocked` / `setVarLocked`). |
 | **Stats** (`ui.setRenderStats`), **Profiler**, **Memory** | |
 
 The docked set lives inside a `"Root"` window with a dockspace; `"Viewport"` uses

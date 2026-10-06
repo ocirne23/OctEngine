@@ -25,7 +25,7 @@ vec3 giLayerRadiance(vec3 dir)
 {
     vec3 radiance = skyRadiance(dir);
 #ifdef CLOUDS
-    if (u_cloudShape0.w > 0.5)
+    if (u_cloudsLive_enabled > 0.5)
     {
         const vec4 cloud = skyMapGISample(u_skyClouds, dir, 1);
         radiance = cloud.rgb + radiance * cloud.a;
@@ -80,7 +80,7 @@ void main()
     else
         radiance = skyRadiance(dir);
 #ifdef CLOUDS
-    if (u_cloudShape0.w > 0.5)
+    if (u_cloudsLive_enabled > 0.5)
     {
         // The GI layer takes the clouds AVERAGED over observers around the camera (cloud_sky.cs.glsl layer 1, on the
         // same low-res grid): it lights the whole world, so it must not carry the camera's own cloud shadow. The

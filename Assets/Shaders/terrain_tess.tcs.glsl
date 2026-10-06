@@ -51,8 +51,8 @@ float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 {
 	if (max(na, nb) < TERRAIN_TESS_MIN_NORMAL_Y || distance(a.xz, b.xz) < 1e-3)
 		return 1.0;
-	const float maxFactor = u_terrainTessParams0.y;
-	const float fadeStart = u_terrainTessParams1.x, fadeEnd = u_terrainTessParams1.y;
+	const float maxFactor = u_terrainTess_maxFactor;
+	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	const vec3 viewPos = u_views[VIEW_CENTER].viewPos.xyz;
 	const float dist = distance(0.5 * (a + b), viewPos);
 	if (dist >= fadeEnd)
@@ -61,12 +61,12 @@ float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 	const mat4 mvp = u_views[VIEW_CENTER].mvp;
 	const float projY = length(vec3(mvp[0][1], mvp[1][1], mvp[2][1]));
 	const float pxPerMeterAt1m = 0.5 * projY * u_screenSize.y * u_viewportRect.w;
-	float factor = distance(a, b) * pxPerMeterAt1m / (max(dist, u_terrainTessParams2.x) * u_terrainTessParams0.z);
+	float factor = distance(a, b) * pxPerMeterAt1m / (max(dist, u_terrainTess_freezeDistance) * u_terrainTess_targetEdgePx);
 	// Eased down to 1 over the fade band with its OWN falloff ("Factor falloff exponent"); the TES's height
 	// fades by "Height falloff exponent". Equal = they agree; a factor dropping before the height leaves the
 	// still-displaced relief on coarser triangles (facets).
 	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
-	factor = mix(1.0, factor, 1.0 - pow(t, u_terrainTessParams0.w));
+	factor = mix(1.0, factor, 1.0 - pow(t, u_terrainTess_factorFalloff));
 	return clamp(factor, 1.0, maxFactor);
 }
 
@@ -83,7 +83,7 @@ void main()
 	{
 		// Patch cull: all three corners outside one frustum plane (the centre view's), by more than the relief
 		// can move them.
-		const float margin = 0.5 * max(u_terrainTessParams1.z, u_terrainTessParams1.w);
+		const float margin = 0.5 * max(u_terrainTess_depthGround, u_terrainTess_depthRock);
 		bool outside = false;
 		for (int i = 0; i < 6 && !outside; ++i)
 		{

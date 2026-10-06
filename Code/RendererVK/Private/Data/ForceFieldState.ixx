@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import Core.Frustum;
 import :Layout;
-import :Settings;
+import :RenderParams;
 import :SlotTable;
 import :ForceFieldPipeline;
 

@@ -18,6 +18,10 @@
 #define OC_SEG_CORE_PROFILER       ".CRT$XCA1"
 #define OC_SEG_CORE_MEMORY_TRACKER ".CRT$XCA2"
 
+// -- Globals::settings (the Settings library): every tweak's value. Before every engine global (any of them may read
+// a setting while it constructs), after them all at teardown (a dtor may read one too).
+#define OC_SEG_SETTINGS            ".CRT$XCA3"
+
 // -- ... plain ".CRT$XCU" globals construct here: input, audio, spatialIndex,
 //       entityAllocator, scriptContext, scriptHost, assetRegistry, time, ... --
 

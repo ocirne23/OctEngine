@@ -18,7 +18,8 @@ public:
     void shutdown();
 
     // Call once per frame with the active camera: places the listener and refreshes every source's
-    // HRTF direction, distance attenuation and doppler. Master volume is a Tweak under Audio/System.
+    // HRTF direction, distance attenuation and doppler. Master volume is a Tweak under Audio/System
+    // (Globals::settings.audio; initialize attaches the listener that applies it).
 	void update(const Camera& camera, const glm::vec3& listenerVelocity = glm::vec3(0.0f));
 
     AudioBuffer createBuffer(EAudioFormat format, oc::span<const std::byte> pcmData, uint32 sampleRate);
@@ -48,7 +49,6 @@ private:
     // list on main in a window no create/release overlaps.
     std::mutex m_sourceMutex;
     bool m_initialized = false;
-    float m_masterVolume = 1.0f;
     uint32 m_oneShotSteal = 0;
     oc::vector<AudioSource> m_oneShotPool;
 };

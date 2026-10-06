@@ -40,8 +40,8 @@ float forceValueNoise(vec3 p)
 // normal is unused (3D noise needs no triplanar projection), kept for signature stability.
 float forcePattern(vec3 worldPos, vec3 n)
 {
-    const float scale = u_forceParams2.x;
-    const float t = u_timeSeconds * u_forceParams2.y;
+    const float scale = u_force_patternScale;
+    const float t = u_timeSeconds * u_force_patternSpeed;
     const vec3 p = worldPos * scale;
     // Low-frequency warp fields drifting at different rates: these bend the wave bands into
     // meandering, non-repeating swirls instead of straight noise bands. LOD: past ~60 m the warp's
@@ -87,7 +87,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
         if (t != hitTeam)
             opposingPhiVis = max(opposingPhiVis, phiVis[t]);
 
-    const float iso = u_forceParams0.x;
+    const float iso = u_force_isoThreshold;
     vec3 n = normal;
     const bool viewedFromInside = dot(n, rayDir) > 0.0;
     if (viewedFromInside)
@@ -105,26 +105,26 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     {
         float w = phiVis[t] * phiVis[t];
         w *= w;
-        teamColor += u_forceTeamColors[t].rgb * w;
+        teamColor += u_forceLive_teamColors[t].rgb * w;
         weightSum += w;
     }
     teamColor /= max(weightSum, 1e-12);
-    const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_forceParams0.y);
+    const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_force_rimPower);
     // Contact glow: the equilibrium seam lights up as the best VISIBLE opposing field approaches
     // our own - an invisible field pressing in doesn't light the whole rim as a seam.
-    const float contact = smoothstep(1.0 - u_forceParams1.y, 1.0, opposingPhiVis / max(ownPhi, 1e-4));
+    const float contact = smoothstep(1.0 - u_force_glowWidth, 1.0, opposingPhiVis / max(ownPhi, 1e-4));
     // Geometry glow: the shell surface fading into nearby opaque geometry along the view ray.
-    const float geoGlow = u_forceParams1.z > 0.0
-        ? 1.0 - clamp((sceneDist - tHit) / u_forceParams1.z, 0.0, 1.0) : 0.0;
-    const float pattern = forcePattern(hitPos, n) * u_forceParams2.z;
+    const float geoGlow = u_force_geoGlowDistance > 0.0
+        ? 1.0 - clamp((sceneDist - tHit) / u_force_geoGlowDistance, 0.0, 1.0) : 0.0;
+    const float pattern = forcePattern(hitPos, n) * u_force_patternIntensity;
     const float alphaMult = fe_emitters[ownerIdx].outputParams.y;
 
-    const float rimI = u_forceParams0.z;
+    const float rimI = u_force_rimIntensity;
     vec3 color = teamColor * (rimI * fresnel + pattern * (0.25 + 0.75 * fresnel));
-    color += mix(teamColor, vec3(1.0), 0.6) * contact * u_forceParams1.x;
+    color += mix(teamColor, vec3(1.0), 0.6) * contact * u_force_glowIntensity;
     color += teamColor * geoGlow * rimI * 0.5;
 
-    float alpha = u_forceParams0.w * alphaMult * (0.2 + 0.8 * fresnel);
+    float alpha = u_force_shellAlpha * alphaMult * (0.2 + 0.8 * fresnel);
     float layerScale = 1.0;
     if (viewedFromInside)
     {
@@ -132,13 +132,13 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
         {
             // Interior dome: pattern-forward opacity floor, so the shell stays visible looking out
             // from within (rims still brighten toward grazing angles via fresnel).
-            const float interior = u_forceParams3.x * alphaMult;
+            const float interior = u_force_interiorAlpha * alphaMult;
             color += teamColor * (0.3 + pattern) * interior;
             alpha = max(alpha, interior * (0.5 + 0.35 * pattern));
         }
         else
         {
-            layerScale = u_forceParams3.y; // far/inner surface seen from outside, through the front
+            layerScale = u_force_backfaceAlpha; // far/inner surface seen from outside, through the front
         }
     }
     alpha += contact * 0.25 + geoGlow * 0.1;
@@ -174,11 +174,11 @@ vec4 forceShadeWall(vec3 rayOrigin, vec3 rayDir, float tWall, uint teamA, uint t
     vec3 n = normal;
     if (dot(n, rayDir) > 0.0)
         n = -n;
-    const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_forceParams0.y);
-    const float pattern = forcePattern(pos, n) * u_forceParams2.z;
-    const vec3 mixed = mix(u_forceTeamColors[teamA].rgb, u_forceTeamColors[teamB].rgb, 0.5);
-    vec3 color = mix(mixed, vec3(1.0), 0.6) * u_forceParams1.x * (0.5 + 0.5 * pattern + fresnel);
-    float alpha = clamp(u_forceParams3.z * (0.35 + 0.4 * fresnel + 0.25 * pattern), 0.0, 1.0) * fade;
+    const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_force_rimPower);
+    const float pattern = forcePattern(pos, n) * u_force_patternIntensity;
+    const vec3 mixed = mix(u_forceLive_teamColors[teamA].rgb, u_forceLive_teamColors[teamB].rgb, 0.5);
+    vec3 color = mix(mixed, vec3(1.0), 0.6) * u_force_glowIntensity * (0.5 + 0.5 * pattern + fresnel);
+    float alpha = clamp(u_force_contactWallAlpha * (0.35 + 0.4 * fresnel + 0.25 * pattern), 0.0, 1.0) * fade;
     return vec4(color * alpha + color * 0.15 * fade, alpha);
 }
 

@@ -1,7 +1,7 @@
 // Punctual / spot / area / tube light evaluation + ray-traced light shadows, shared by the forward
 // static-mesh shader and the ocean water shader. Cook-Torrance GGX specular with representative-point
 // approximations for area (rect) and tube lights; doLightShadowed gates the analytic result with
-// alpha-masked-aware shadow rays (u_rtLightShadows), stratified over the emitter via a per-pixel
+// alpha-masked-aware shadow rays (u_rt_lightShadows), stratified over the emitter via a per-pixel
 // spatiotemporal jitter that TAA integrates.
 //
 // Requires the includer to have declared/included, with these names:
@@ -40,7 +40,7 @@ vec2 shadowJitter()
 }
 // R2 additive recurrence offsets successive rays so they stratify over the emitter within one frame.
 #define R2_OFFSET vec2(0.7548777, 0.5698403)
-// u_sunShadowRays rays jittered within the sun's angular cone (u_sunAngularCos), stratified across the
+// u_rt_sunShadowRays rays jittered within the sun's angular cone (u_sky_sunAngularCos), stratified across the
 // disc with the R2 recurrence; TAA resolves the remaining noise over time. More rays smooth out the
 // IGN's structured pattern when the disc is wide.
 float traceSunVisibility(vec3 pos, vec3 N)
@@ -51,13 +51,13 @@ float traceSunVisibility(vec3 pos, vec3 N)
 	const vec3 B = cross(L, T);
 	const vec3 origin = pos + N * 0.02;
 
-	const uint numRays = clamp(uint(u_sunShadowRays), 1u, 8u);
+	const uint numRays = clamp(uint(u_rt_sunShadowRays), 1u, 8u);
 	const vec2 jitter = shadowJitter();
 	float vis = 0.0;
 	for (uint i = 0u; i < numRays; ++i)
 	{
 		const vec2 u = fract(jitter + R2_OFFSET * float(i));
-		const float cosTheta = mix(u_sunAngularCos, 1.0, u.x); // uniform over the spherical cap
+		const float cosTheta = mix(u_sky_sunAngularCos, 1.0, u.x); // uniform over the spherical cap
 		const float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 		const float phi = 6.2831853 * u.y;
 		const vec3 dir = T * (sinTheta * cos(phi)) + B * (sinTheta * sin(phi)) + L * cosTheta;
@@ -443,7 +443,7 @@ float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 #define PL_RT_LIGHTS_ON true
 #else
 #define PL_RT_LIGHTS_COMPILED 1
-#define PL_RT_LIGHTS_ON (u_rtLightShadows > 0.5)
+#define PL_RT_LIGHTS_ON (u_rt_lightShadows > 0.5)
 #endif
 // One light's ray-traced shadow visibility at pos (N = the ray origin's offset): one ray, jittered over an
 // area / tube emitter. The caller gates it on PL_RT_LIGHTS_COMPILED / PL_RT_LIGHTS_ON and on a non-black

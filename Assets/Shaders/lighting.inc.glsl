@@ -91,7 +91,7 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
 // bounce is low-frequency and temporally blended, so an area light's penumbra is not worth more rays.
 // Unshadowed, a lamp lit every gather hit in its range THROUGH walls - a leak the probe visibility test
 // cannot see, because the light is already in the probe's own SH. Follows the forward pass' toggle
-// (u_rtLightShadows), and traces only past GI_LIGHT_SHADOW_MIN: a cell lists every light whose RANGE
+// (u_rt_lightShadows), and traces only past GI_LIGHT_SHADOW_MIN: a cell lists every light whose RANGE
 // touches it, and most of those contribute next to nothing at the hit.
 #ifndef GI_LIGHT_SHADOW_MIN
 #define GI_LIGHT_SHADOW_MIN 0.002
@@ -100,7 +100,7 @@ vec3 giLightIrradianceShadowed(LightInfo light, vec3 pos, vec3 N)
 {
     vec3 e = giLightIrradiance(light, pos, N);
 #ifdef GI_LIGHT_RT_SHADOWS
-    if (u_rtLightShadows > 0.5 && max(max(e.r, e.g), e.b) > GI_LIGHT_SHADOW_MIN)
+    if (u_rt_lightShadows > 0.5 && max(max(e.r, e.g), e.b) > GI_LIGHT_SHADOW_MIN)
     {
         const vec3  toLight = light.pos - pos;
         const float dist    = length(toLight);
@@ -135,7 +135,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         // light stays at full space-sun strength at low sun angles while direct light (and the
         // out-of-field skyGroundRadiance fallback) dims with transmittance. u_sunTransmittance = the
         // Chapman evaluation, done ONCE per frame on the CPU (this ran per gather hit before).
-        E += u_sunTransmittance * u_sunColor.rgb * sunShadow * sunNdotL * u_eclipseParams.x;
+        E += u_sunTransmittance * u_sunColor.rgb * sunShadow * sunNdotL * u_sunVisible;
         g_gatherSunRadiance = albedo * (E / PI);
     }
 

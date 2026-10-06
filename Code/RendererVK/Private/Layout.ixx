@@ -189,7 +189,7 @@ export namespace RendererVKLayout
     // actual bubble radius, not the authored Reach. CPU mirror of the shader's forceVisibleRadius
     // (forceVisibleBounds + the teamFlags.w pack, force_field.inc.glsl - keep in sync). THE
     // sampled-tier metric: the upload partition and the bake-volume fit classify with it, matching
-    // the shell FS / union ownership tests against u_forceBake0.w.
+    // the shell FS / union ownership tests against u_forceLive_bakeThreshold.
     inline float forceEmitterVisibleRadius(const ForceEmitterGpu& e)
     {
         const float R = e.posReach.w;
@@ -279,7 +279,7 @@ export namespace RendererVKLayout
 
     // SAMPLED SHELL TIER: a device-local 3D bake of EVERY team's field (two RGBA16F volumes =
     // phi[0..3]/phi[4..7]), refit each frame over the union of the LARGE drawable emitters'
-    // support boxes (Ubo::forceBake0/1 carry the mapping, so the FIXED texel grid's resolution
+    // support boxes (Ubo::forceLive's bakeMin / bakeInvSize carry the mapping, so the FIXED texel grid's resolution
     // self-adjusts to the active spread). Shell proxies whose reach exceeds the threshold march
     // these textures (two trilinear taps per sample) instead of the analytic candidate loop -
     // hits, normals and shading stay analytic. Written by force_shellbake.cs each frame.
@@ -339,36 +339,14 @@ export namespace RendererVKLayout
     // table, copy, or ping-pong. SH-L1 RGB per probe.
     // The GI_* sizing values are injected into EVERY shader compile (Shader.cpp buildLayoutPreamble) as
     // #defines: the grid shape is a compile-time constant in the shaders (no per-sample uniform math),
-    // and the "GI" grid tweaks change it through GIProbePipeline::registerGridTweaks - GPU idle, the SH
-    // buffer re-allocated (resizeGrid), every shader reloaded, the clipmap cleared.
+    // and the "GI" grid settings (Globals::settings.gi.grid, GiGridConfig in Settings.Render) change it through the
+    // Renderer's listener - GPU idle, the SH buffer re-allocated (resizeGrid), every shader reloaded, the clipmap
+    // cleared. The probe buffer holds probesTotal() probes of GI_PROBE_STRIDE + one extra SH-L1 slot after the last
+    // probe: the "virtual sky probe" (skyRadiance projected by the trace pass), evaluated as the out-of-field
+    // fallback so it matches the probes by construction.
     constexpr uint32 GI_SH_STRIDE = 12;                                                  // SH-L1 RGB floats per probe
     constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 16;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz + sun DC luminance (+3 spare)
     constexpr uint32 GI_CASCADE_BASE_SPACING = 2;                                        // finest cascade probe spacing, world units (power of two)
-    struct GiGridConfig
-    {
-        int numCascades = 4;                    // nested clipmap levels (1..8)
-        int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
-        float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
-        // The IRRADIANCE VOLUME (GIProbePipeline::recordVolumeBake, gi_volume_bake.cs.glsl): per frame, the probe
-        // field is baked into one set of 3D textures per cascade, visibility-weighted at every voxel centre, and
-        // the forward lit shaders read it with hardware trilinear filtering instead of looping over 8 probes.
-        // volumeRes = voxels per probe spacing per axis (1 or 2, a power of two for the toroidal mask).
-        bool volume = true;
-        int  volumeRes = 2;
-
-        uint32 dimX() const { return 1u << dimLog2X; }
-        uint32 dimY() const { return 1u << dimLog2Y; }
-        uint32 dimZ() const { return 1u << dimLog2Z; }
-        uint32 probesPerCascade() const { return dimX() * dimY() * dimZ(); } // a multiple of 64 (every dim >= 4): the trace's sky workgroup relies on it
-        uint32 probesTotal() const { return (uint32)numCascades * probesPerCascade(); }
-        uint32 traceThreads() const { return probesTotal() + 64; }            // one invocation per probe + one workgroup projecting the sky SH
-        // + one extra SH-L1 slot after the last probe: the "virtual sky probe" (skyRadiance projected by the
-        // trace pass), evaluated as the out-of-field fallback so it matches the probes by construction.
-        size_t gridDataBufferSize() const { return ((size_t)probesTotal() * GI_PROBE_STRIDE + GI_SH_STRIDE) * sizeof(uint32); }
-        uint32 volumeDimX() const { return dimX() * (uint32)volumeRes; }
-        uint32 volumeDimY() const { return dimY() * (uint32)volumeRes; }
-        uint32 volumeDimZ() const { return dimZ() * (uint32)volumeRes; }
-    };
     // Irradiance volume images per cascade, 20 B per voxel (gi_volume_bake.cs.glsl writes, giVolumeCascade reads):
     //   [0] B10G11R11_UFLOAT  L0 x W: the DC term, PREMULTIPLIED by the summed weight (a weight-correct trilinear
     //                         fetch); a small float, so the HDR range keeps ~1.5% relative steps
@@ -388,10 +366,6 @@ export namespace RendererVKLayout
         vk::Format::eB10G11R11UfloatPack32, vk::Format::eR8G8B8A8Snorm, vk::Format::eR8G8B8A8Snorm, vk::Format::eR16G16B16A16Sfloat };
     constexpr uint32 GI_VOLUME_SKY_IMAGE = GI_MAX_CASCADES * GI_VOLUME_IMAGES_PER_CASCADE;
     constexpr uint32 GI_VOLUME_MAX_IMAGES = GI_VOLUME_SKY_IMAGE + 1;
-    // THE live grid shape: GIProbePipeline owns the tweaks on it; buildLayoutPreamble reads it at every
-    // shader compile, so a change must be followed by a full shader reload (see registerGridTweaks).
-    inline GiGridConfig g_giGrid;
-
     // The cloud feature toggles as BAKED shader defines (buildLayoutPreamble: CLOUDS, CLOUD_SHADOWS,
     // CLOUD_SELF_SHADOW_MAP, CLOUD_POWDER, CLOUD_DEBUG_MODE), copied from CloudParams by Renderer::syncCloudDefines;
     // a change reloads every shader.
@@ -494,454 +468,333 @@ export namespace RendererVKLayout
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)
 
-    // A camera view's matrices grouped contiguously (AoS): one view's data in a single block, so on desktop
-    // only views[0] is touched. views[0] = centre/combined view (the sole desktop view; in VR sized to the
-    // union of both eyes' FOV so the shared world-space passes cover everything either eye sees);
-    // views[1] = left eye, views[2] = right eye (VR only). Shaders select via g_viewIndex.
-    struct alignas(16) ViewData
-    {
-        glm::mat4 mvp;
-        glm::mat4 invMvp;     // inverse(mvp): reconstruct world pos from depth + screen uv
-        glm::mat4 prevMvp;    // previous frame's mvp: reproject world pos to last frame's screen
-        glm::mat4 prevInvMvp; // previous frame's inverse(mvp): reconstruct last frame's world pos
-        glm::mat4 reprojClip; // prevMvp * inverse(mvp), fused on the CPU in double precision: reprojects
-                              // current NDC + depth straight to last frame's clip space. Near-identity at
-                              // any camera position, unlike the world-space round trip through invMvp +
-                              // prevMvp whose float32 error grows with distance from the world origin
-                              // (pixel-scale by ~500 units = temporal-history jitter).
-        glm::vec4 viewPos;    // xyz = world position
-    };
+    // ---- THE FRAME UBO ------------------------------------------------------------------------------------------
+    // ONE uniform buffer per frame slot, built by Renderer::buildFrameUbo (RendererUbo.cpp), read by every pass at
+    // its UBO_BINDING. Two parts in one buffer:
+    //
+    // * THE ROOT struct below: what nearly every pass reads (the views, the sun, the screen, the focus) and each
+    //   subject's LIVE struct (ubo.fogLive in C++, u_fogLive_<field> in GLSL) - everything that depends on the camera,
+    //   the clock, the sun, the wind or a value the outside pushes per frame. Never baked.
+    // * THE LOCKABLE VALUES (UboFieldList, UboFields.ixx), at UBO_FIELDS_OFFSET: one entry per value computed from
+    //   tweaks only (u_fog_density), registered by Renderer::registerUboFields with the tweaks it reads. An entry is a
+    //   GLSL CONST while all of them are locked (Core's TweakLock; Renderer::applyUboLocks rebuilds the shaders).
+    //
+    // The GLSL block is FLAT (one member per value, each at its byte offset), so every value can be baked on its own.
+    // Each root struct is ONE field list, OC_UBO_<NAME>(F, A): F(type, name) a member, A(type, name, count) an array
+    // (16-byte elements only). The list makes the C++ struct (std140 offsets through UboType's alignments) and its
+    // field table (UboStructInfo); buildUboDeclaration makes the GLSL from the tables and the UboFieldList (the shader
+    // includer serves it as "ubo.generated.glsl", which ubo.inc.glsl includes). Field order is std140 packing: a vec3
+    // then a float share 16 bytes.
     constexpr uint32 VIEW_CENTER = 0;  // shared passes + desktop; the eyes are 1 (left) and 2 (right)
     constexpr uint32 NUM_UBO_VIEWS = 3;
     // Maps a per-eye index (0/1, also used for per-eye history slots) to the u_views[] matrix index a
     // per-eye pass should read: desktop (viewCount 1) collapses to VIEW_CENTER; VR maps eye 0/1 -> 1/2.
     constexpr uint32 eyeToViewIndex(uint32 eye, uint32 viewCount) { return viewCount > 1 ? eye + 1 : VIEW_CENTER; }
 
-    struct alignas(16) Ubo
+    enum class EUboType : uint8 { Float, Uint, Vec2, Vec3, Vec4, Uvec4, Mat4, Struct };
+
+    struct UboStructInfo;
+    struct UboField
     {
-        ViewData views[NUM_UBO_VIEWS];
-        Frustum frustum;         // centre/combined frustum (culling, shadow cascade fit)
-        glm::vec3 sunTransmittance; // atmosphere transmittance toward the sun at ground level (the shader's
-                                 // atmosTransmittanceToLight(0, sun, up), a Chapman evaluation per channel):
-                                 // constant per frame, so buildUboSky computes it once instead of every lit pixel
-        float betaMie;           // Mie scattering coefficient at sea level (1/m), drives sky + indirect sky light
-        glm::vec3 sunDirection;  // xyz = normalized direction towards the sun, w unused
-        float sunAngularCos;     // cos of the sun disc radius (1 = point, smaller = bigger disc)
-        glm::vec3 sunColor;      // rgb = color * intensity (sun irradiance; also sources atmosphere scattering)
-        float sunGlow;           // glow falloff exponent (0 = no glow); larger = tighter
-
-        glm::vec3 betaRayleigh;  // Rayleigh scattering coefficients at sea level (1/m), drives sky + indirect
-        float rolloffKnee;       // sky highlight roll-off: luminance where compression starts (at full roll-off)
-        glm::vec3 skyRadianceColor; // directional atmosphere light (moonlight/space light) radiance, along skyUp; GI-only
-        float rtSkyRadiance;        // > 0.5: one sky-visibility ray per GI probe gates the sky radiance injection
-        glm::vec3 ambientColor;   // flat, non-physical minimum ambient radiance (applied once at final shading)
-        uint32 frameIndex;        // monotonic frame counter (RNG / temporal-rotation source so passes that read
-                                  // it can be recorded once instead of baking it into a push constant)
-        glm::vec3  skyUp;         // sky "up" axis (normalized); need not be world +Y (e.g. planet surface normal)
-        float rtSunShadow;        // > 0.5: ray-traced sun shadows instead of PCSS cascades
-        // Each cascadeViewProj has a structurally-zero bottom row ([0,0,0,1] for ortho*lookAt), so the
-        // per-cascade far distance is stashed in m[0][3] and the world texel size in m[1][3]. Readers
-        // restore the bottom row to [0,0,0,1] before using the matrix (see the shaders' cascadeMatrix).
-        glm::mat4 cascadeViewProj[NUM_SHADOW_CASCADES];
-        glm::vec4 sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from: the
-                                // sun cascade pick, the RTAO fade/early-out (the game's player via
-                                // Renderer::setSceneFocus; the camera position otherwise), w unused
-        glm::vec4 cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap -
-                                // tan(sun radius) * depthRange / texelWorldSize, once per frame instead of a
-                                // sqrt + two divides per lit pixel (shadows.inc.glsl pcssSunSizeTexels)
-        glm::vec3 shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
-        float sunShadowRays;    // RT sun shadow rays per pixel (1 = single jittered ray)
-
-        // Rain occlusion map (weather particle volumes): a plain top-down ortho view-projection (standard
-        // Z, no packed bottom row) over the volume, rendered by the rain cull + depth pass and sampled
-        // by the particle sim. Params: x = map present this frame (0/1), y = 1 / ortho depth range (m),
-        // z = shelter depth tolerance (m), w = the lit particles' scattering anisotropy g ("Particles/
-        // Anisotropy"; unrelated to the map, it rides the free slot).
-        glm::mat4 rainOcclusionViewProj;
-        glm::vec4 rainOcclusionParams;
-        glm::vec4 cameraVelocity; // xyz = the centre view's velocity this frame (m/s, frame delta), w = the
-                                  // fraction of it the weather volumes' streaks subtract ("Particles/Streak
-                                  // camera blur": 0 = the eye tracks the world, streaks stay true to the
-                                  // drop's motion; 1 = full motion blur relative to the camera)
-        // Weather wind for the volumes ("Particles/Wind *"; particle.inc.glsl weatherWindAt / weatherSheet).
-        glm::vec4 weatherWind0;   // xyz = mean wind velocity (m/s, horizontal), w = gust strength (m/s): the local
-                                  // wind adds a 2D noise vector of this amplitude, so flurries exist in calm air too
-        glm::vec4 weatherWind1;   // x = 1 / gust size (1/m), y = sheet contrast [0,1] (alpha bands of density that
-                                  // ride the wind), z = 1 / sheet size (1/m), w = sheet drift (m/s along the wind
-                                  // direction, on top of half the wind speed - the bands sweep even in light wind)
-        glm::vec4 weatherWind2;   // xy = wind direction unit vector in XZ (from the angle, valid at zero speed),
-                                  // z = the LIVE water surface world Y under the camera (setCameraWaterSurface),
-                                  // w = 1 when z is valid (the particle draw's camera-side water gate)
-
-        float rtLightShadows;   // > 0.5: ray-traced shadows for punctual/area/tube lights
-        float timeSeconds;      // elapsed sim time (sky animation)
-        float moonBrightness;
-        float skyPad0;
-
-        glm::vec4 skySunParams; // x = atmosphere scatter boost (in-scatter only), y = Mie anisotropy g, z = sky highlight roll-off, w = star density
-
-        glm::vec4 screenSize;   // xy = full render-target resolution (px); zw = 1/xy (screen-space AO lookup)
-        glm::vec4 viewportRect; // xy = viewport min, zw = viewport size, both normalized to [0,1] of the full
-                                // render target. The scene renders through this sub-rect (editor viewport panel),
-                                // so screen-space reconstruction must map full-frame UV through it.
-        glm::vec4 taaJitter;    // xy = this frame's TAA sub-pixel jitter in NDC (0 when TAA disabled), zw =
-                                // LAST frame's. ALL raster passes apply xy in clip space, so the scene depth
-                                // every screen-space pass reads is jittered too. mvp/invMvp/prevMvp stay
-                                // unjittered; TAA/AO-temporal/RTAO compensate sampled depth analytically
-                                // (taaJitterUv in shared.inc.glsl), zw compensating the PREV depth image.
-
-        // Volumetric fog (packing documented in vol_fog.inc.glsl)
-        glm::vec4 fogParams0; // x = global density (1/m), y = height base, z = height falloff (1/m), w = range (m)
-        glm::vec4 fogParams1; // rgb = fog albedo * intensity (> 1 = non-physical gain), w = phase anisotropy g
-        glm::vec4 fogParams2; // x = noise scale (1/m), y = noise strength, z = wind speed (m/s), w = temporal blend
-        glm::vec4 fogParams3; // x = terrain follow fraction, y = 1 / near terrain map world size (0 = no map), z = enabled, w = light shadow rays
-        glm::vec4 fogParams4; // x = sun shadow rays, y = spatial filter, z = GI ambient, w = sun shadow softness (rad)
-        glm::vec4 fogParams5; // xy = terrain height map world center XZ (shared by both cascades), z = 1 / far cascade world size (0 = near only), w = baked terrain sea level
-        glm::vec4 fogParams6; // x = slice power (Z distribution exponent), y = terrain shadow distance (m),
-                              // z = regional fog strength, w = underwater density multiplier
-        glm::vec4 fogParams7; // x = underwater sun in-scatter gain (fog light shafts; 1 = physical),
-                              // y = waterline band half-height gating the fog's FFT wave taps
-                              // (m; 0 = ocean off; sized from the readback trough estimate),
-                              // z = underwater caustic strength (0 = off), w = caustic depth fade (1/m)
-        glm::vec4 fogParams8; // x = underwater fog boundary offset off the local water surface (m),
-                              // y = caustic shore fade depth (m; 0 = off), z = far field max distance (m; 1e30 = unbounded),
-                              // w = sun scatter (non-physical gain on the SUN in-scatter only)
-        glm::vec4 fogParams9; // far field (past the froxel volume; vol_apply): x = enabled, y = density
-                              // scale, z = multiplier on the near field's height falloff, w = ground samples
-        glm::vec4 fogParams10; // the SHAFT HAZE (sunlit in-scatter only, no extinction / ambient): x = density (1/m),
-                               // y = height falloff (1/m = 1 / its scale height; from the fog's height base),
-                               // AERIAL PERSPECTIVE (aerial_lut.cs.glsl): z = strength (air density scale along the
-                               // view ray; 0 = off), w = the LUT's max distance (m)
-
-        glm::vec4 moonParams; // xyz = normalized direction towards the moon, w = cos of the moon disc radius
-
-        glm::vec4 starParams;   // x = star size, y = size variation, z = brightness, w = color variation
-        glm::vec4 nebulaParams; // x = intensity, y = noise scale, z = band width, w = dust lane strength
-        glm::vec4 nebulaAxis;   // xyz = normalized milky-way band pole (band lies on its great circle), w unused
-
-        glm::vec4 eclipseParams; // x = visible sun fraction (solar eclipse; sunColor is pre-multiplied by it,
-                                 // y = sky highlight roll-off headroom (stops the shoulder absorbs),
-                                 // the sky divides it back out for the unoccluded disc/corona), zw unused
-
-        glm::vec4 atmosParams;   // x = Rayleigh scale height (m), y = Mie scale height (m), z = Mie extinction ratio, w = ozone strength
-        glm::vec4 groundParams;  // rgb = ground albedo * intensity, w = horizon terrain fraction (fallback ambient)
-        glm::vec4 aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; the
-                                 // forward pass skips its AO upsample past it; 0 = no falloff),
-                                 // w = unused (the light debug overlay is the LIGHT_GRID_DEBUG define)
-        glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = full irradiance-volume bake this frame (1/0), z = probe weight floor, w = mean scale (footprint widening)
-        // GI probe trace + TLAS-instance parameters (gi_probe_trace / gi_tlas_instances): in the UBO, not push
-        // constants, so the GI command buffer is recorded ONCE (tweaks and the per-frame values ride the UBO).
-        glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)
-        glm::vec4 giTrace1;      // xyz = LAST frame's scene focus (the previous clipmap window -> probe freshness), w = TLAS range (m)
-        uint32 giTlasNumInstances; // live mesh-instance count for the TLAS-instance writer; slots past it become inactive
-        // GI update priority (gi_probe.inc.glsl giWavePriority): the per-wave factor of the update interval.
-        float giPriorityDist;          // scene-focus distance (m) of the NOMINAL rate (factor 1) for a wave OUT of view; the interval is proportional to distance, closer = faster
-        float giPriorityFalloff;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic, 0 = no distance term
-        float giPriorityFrustumWeight; // a wave IN the view frustum has its interval divided by this (>= 1; fades out outside it)
-
-        // Ocean (FFT/Tessendorf water; OceanSimulationPipeline + ocean_*.cs.glsl / ocean.fs.glsl)
-        glm::vec4 oceanParams0;    // xy = wind direction (unit), z = spectrum amplitude scale, w = choppiness lambda
-        glm::vec4 oceanParams1;    // x = wind speed U10 (m/s), y = fetch (m), z = ocean depth D (m), w = normal strength
-        glm::vec4 oceanParams2;    // xyz = cascade FFT patch sizes L0/L1/L2 (m), w = sea level (world Y)
-        glm::vec4 oceanAbsorption; // rgb = water extinction sigma_t (1/m, Beer-Lambert), w = perceptual roughness
-        glm::vec4 oceanScatter;    // rgb = in-scatter albedo color, w = scatter intensity
-        glm::vec4 oceanFoam;       // rgb = foam albedo, w = Jacobian foam bias (higher = more whitecaps)
-        glm::vec4 oceanParams3;    // x = horizon band level offset (m, usually negative: sinks ONLY the
-                                   //     horizon-band ring, which is exempt from the land cull and so
-                                   //     would otherwise draw over distant near-sea-level terrain),
-                                   // y = horizon depth (m): the minimum water depth the waves assume
-                                   //     past oceanParams4.x (only the seabed moves, not the surface),
-                                   // z unused (was the turbulence decay),
-                                   // w = vertex displacement mip bias (Detail bias; the clipmap rings carry
-                                   // their cell size per vertex, so the mip itself is baked into the mesh)
-        glm::vec4 oceanParams4;    // x = horizon depth RANGE (m): camera distance past which the waves
-                                   //     assume at least oceanParams3.y of water whatever the map says
-                                   //     (distant depth readings all err shallow; 0 = take it literally),
-                                   // y unused (was the turbulence spread), z = shoal depth scale (per-
-                                   // cascade shoaling: waves fade below depth = scale * patch size),
-                                   // w = instant-foam edge width (both thresholds' smoothstep)
-        glm::vec4 oceanParams5;    // x unused,
-                                   // y unused (was the turbidity: the bubble cloud is the foam amount itself now),
-                                   // z = shore foam depth (m; surf band width at the waterline, 0 = off),
-                                   // w = breaking-crest foam threshold (downward crest accel in g units)
-        glm::vec4 oceanParams6;    // x = far-cascade land-cull error allowance (m; flat burial slack the
-                                   //     cull demands when only far terrain data covers the footprint,
-                                   //     0 = never cull from far data - moved here from the removed params10),
-                                   // y = glint variance filter scale (spec AA + LEAN roughness),
-                                   // z = crest SSS strength (0 = off), w = crest SSS forward-lobe power
-        glm::vec4 oceanParams7;    // x = land cull margin (m): clipmap triangles whose whole footprint is
-                                   // buried deeper than this under the local water level are VS-culled
-                                   // (oceanVertexCulled; 0 = off),
-                                   // y = shore foam max coverage (surf band opacity cap),
-                                   // z = swash amplitude (0 = off), w = swash reach (m, CPU estimate)
-        glm::vec4 oceanParams8;    // x = reflection fog amount (mirror rays, ocean + terrain film; 0 = off, 1 = the scene's fog),
-                                   // y = shore foam threshold bias (negative = sparser surf),
-                                   // z = swash backflow (horizontal chop scale on the tongue),
-                                   // w = RT ray cutoff distance (m from the camera; beyond it the water
-                                   //     shader traces no scene rays, 0 = unlimited)
-        glm::vec4 oceanParams9;    // x = micro roughness (slope variance below the finest cascade's Nyquist),
-                                   // y = RT refraction ray range (m: underwater visibility),
-                                   // z = RT reflection ray range (m),
-                                   // w = RT reflection roughness cutoff (rougher = sky fallback)
-        glm::vec4 oceanParams10;   // x = crest slope limit k in s /= 1 + k * |s| (0 = no limit),
-                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
-                                   // z = underside transmission,
-                                   // w = displacement extent (m): how far the ocean VS moves a vertex off its
-                                   //     authored lattice, added to the ocean sectors' cull spheres (they were
-                                   //     built from the UNDISPLACED mesh) - see setOceanDisplacementExtent
-        // Sub-band DETAIL: cascade 2's gradient field re-sampled at a fraction of its patch size in a
-        // rotated domain, added to the SHADING slope only (oceanSampleSurface). Never reaches the
-        // displacement, so geometry and the CPU buoyancy mirror are untouched.
-        glm::vec4 oceanParams11;   // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
-                                   // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
-        // Entrained-bubble cloud (ocean_bubbles.inc.glsl; its coverage is the foam field's amount):
-        glm::vec4 oceanParams12;   // x = bubble depth (m under the surface), y = bubble brightness (x foam albedo),
-                                   // z = foam flatten (0..1: the foam's Lambert normal eased toward up),
-                                   // w = camera under water (1/0, CPU mirror): gates the underside path
-        // The world-space foam field (OceanSimulationPipeline::advanceFoamField, ocean_foam_field.inc.glsl):
-        glm::vec4 oceanFoamField;  // xy = accumulated drift (m; field coordinates = rest XZ - drift),
-                                   // z = level 0 texel (m; level l = z x 4^l), w = surface foam decay per frame
-        glm::vec4 oceanFoamField1; // x = surface foam strength, y = foam threshold (on amount / Jacobian), z = foam edge (threshold
-                                   // half-width), w = foam detail (scale on the detail slope in the foam's
-                                   // lighting normal)
-        glm::vec4 oceanFoamField2; // x = foam fine waves (the finest cascade's share in the foam's Jacobian),
-                                   // y = bubble blur (m: the bubble cloud reads the foam field this blurred), zw unused
-        // The ocean's bubble cloud, its per-FRAME factors (oceanBubbleRadianceFrame; buildUboOcean):
-        glm::vec4 oceanBubble0;    // rgb = foam albedo x brightness x exp(-sigma d / muL) x max(L.y, 0) / pi, w unused
-        glm::vec4 oceanBubble1;    // rgb = foam albedo x brightness x exp(-sigma d), w unused
-        glm::vec4 oceanFoamLevels[OCEAN_FOAM_LEVELS]; // xy = level origin (drifted coords of texel (0,0)'s
-                                   // corner, m), zw = whole texels the origin moved since last frame
-        // Ocean spray (ocean_spray.cs.glsl -> the particle GPU spawn path; "Ocean/Spray *" tweaks):
-        glm::vec4 oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns per
-                                   //     m^2 per s at full breaking), z = grid radius around the scene focus (m),
-                                   //     w = sim delta this frame (s)
-        glm::vec4 oceanSpray1;     // x = breaking threshold (instant-foam value where spray starts), y = upward
-                                   //     kick (m/s), z = forward speed along the wind (m/s), w = spawn lead ahead
-                                   //     of the crest (m)
-        glm::vec4 oceanSpray2;     // x = spawn height above the surface (m), y = "Ocean/World scale" (all spray
-                                   //     metres and m/s above already carry it), zw unused
-        glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
-                                   // 0 = no terrain mesh up - fences the ocean land cull),
-                                   // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;
-                                   //     pairs with the map's baked sea-level baseline - terrainTemperatureAt),
-                                   // z = sea level (world Y, live from the streamer), w unused
-        glm::vec4 terrainShadowParams; // long-range sun shadows marched off the terrain height cascades,
-                                   // for the ground the cascades and the TLAS cannot reach (ShadowParams):
-                                   // x = camera distance where the march fades in (m; 0 = off),
-                                   // y = first sample distance (m) = self-shadow bias vs the map's texels,
-                                   // z = penumbra growth per metre along the sun ray, w unused
-
-        // TERRAIN variant texture splatting (Renderer::setTerrainSplatMaterials; keep in sync with
-        // ubo.inc.glsl). Materials are CONTIGUOUS in the material buffer: [base .. +numGround)
-        // climate-blended ground, [.. +numRock) the bedrock exposed by slope/crag, then the optional
-        // single beach entry, then the optional single snow entry. Slot order only - the shader
-        // composites ground -> beach -> rock -> snow.
-        glm::vec4 terrainTexParams0; // x = base material idx (< 0 = no texture set: flat-color fallback),
-                                     // y = ground entry count, z = rock entry count,
-                                     // w = climate kernel sigma (Gaussian falloff OUTSIDE a climate box)
-        glm::vec4 terrainTexParams1; // x = ground uv scale (1/m), y = rock uv scale (1/m),
-                                     // z = slope where rock fades in, w = slope where rock is full
-        glm::vec4 terrainTexParams2; // x = crag relief start (m above macro altitude), y = crag relief full,
-                                     // z = beach band height (m above water level), w = snow uv scale (1/m)
-        glm::vec4 terrainTexParams3; // x = beach entry present (0/1; index base + numGround + numRock),
-                                     // y = snow entry present (0/1; the LAST material, after the beach),
-                                     // z = temperature (C) at/below which snow cover is complete,
-                                     // w = temperature (C) at/above which there is no snow
-        glm::vec4 terrainTexParams4; // x = slope where snow starts sliding off, y = slope where none remains,
-                                     // z = humidity at/below which cold ground stays bare (polar desert),
-                                     // w = unused
-        glm::vec4 terrainTexParams5; // x = crag wander amplitude (m; 0 = off), y = crag wander frequency
-                                     // (1/m), zw unused. The wander breaks the rock boundary off the
-                                     // elevation contour the crag test would otherwise trace - see terrainSplat.
-        glm::vec4 terrainTexParams6; // splat HEIGHT maps: x = ground/beach/snow parallax depth (m), y = rock
-                                     // parallax depth (m), z = parallax fade start (m from the camera),
-                                     // w = height blend contrast (0 = linear layer blend)
-        glm::vec4 terrainTexParams7; // x = parallax fade end (m; 0 = parallax off), y = max march steps,
-                                     // z = relief self-shadow strength (0 = off), w unused
-        glm::vec4 terrainTessParams0; // x = tessellation on (0/1: the cull routes terrain to the tess draws),
-                                     // y = max tess factor, z = target subdivided edge length (px),
-                                     // w = the TESS FACTOR's fade falloff exponent p (1 - t^p across the fade band)
-        glm::vec4 terrainTessParams1; // x = fade start (m), y = fade end (m: factor 1 and no displacement past
-                                     // it), z = ground/beach/snow relief depth (m), w = rock relief depth (m)
-        glm::vec4 terrainTessParams2; // x = freeze distance (m: closer in, the factor and the height mip use
-                                     // it instead of the camera distance - nothing moves), y = the displacement
-                                     // HEIGHT's fade falloff exponent p (strength = 1 - t^p), zw unused
-        // Terrain wetness clipmap (TerrainWetnessPipeline; terrain_wetness.inc.glsl). A TERRAIN_WET_RES^2
-        // toroidal window of texels around the scene focus; lattice coords are integer texel indices.
-        // TERRAIN SURFACE WATER (TerrainWetTweaks; the wetness compute pass writes the field, the terrain
-        // shaders read it). ONE field - rain, ocean swash, submersion - drives ONE water surface: it fills the
-        // splat relief to a LEVEL (rain puddles) and, where the live ocean stands higher, follows the ocean
-        // (the waterline continues onto the sand). terrain_wetness.inc.glsl + the terrain FS / tess film.
-        glm::vec4 terrainWetParams0; // xy = window origin lattice coord (min corner, as floats),
-                                     // zw = LAST frame's origin (texels that scrolled in start dry)
-        glm::vec4 terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
-                                     // (exp(-dt / dry time)), w = rain wetting added this frame
-        glm::vec4 terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full
-                                     // wetness (wet darkening), z = roughness at full wetness, w = drying
-                                     // temperature sensitivity (extra decay rate per C above 15 C; 0 = uniform)
-        glm::vec4 terrainWetParams3; // x = ping/pong layer written this frame (the reader samples it),
-                                     // y = wet-in added per frame under water (dt / wet-in time),
-                                     // z = slope drain (steep ground: decay x (1 + slope * drain) in the
-                                     //     shader, wet-in / rain divided by it in the pass; 0 = off),
-                                     // w = diffusion spread this frame (1 - exp(-rate * dt): fraction of the
-                                     //     3x3 tent replacing the centre; framerate independent)
-        glm::vec4 terrainWetParams4; // the WATER LEVEL in the relief (terrainPoolLevel), 0 = the relief's low
-                                     // points, 1 = its top: x = fill start, y = fill full (both wetnesses),
-                                     // z = fill curve (exponent between them), w = edge fade (m of water
-                                     // depth the film fades out over, so it dies where it meets the terrain)
-        glm::vec4 terrainWetParams5; // x = ocean blend (m): the film fades out over this much LIVE ocean water
-                                     //     over the ground (it lies over the ocean's shallow edge, fading into it),
-                                     // y = waviness (0 = a level plane, 1 = the live FFT wave normal),
-                                     // z = film wave normal scale (x the ocean's "Normal strength"),
-                                     // w = inland wind ripple strength (0 = off)
-        glm::vec4 terrainWetParams6; // x = ocean edge fade (m of water column the OCEAN blends out over at its
-                                     //     edge onto the ground and film; 0 = off),
-                                     // y = mesh normal.y below which no pool stands (cos "Film max slope"),
-                                     // z = normal.y where the pool level is full ("Film slope fade" flatter;
-                                     //     terrainPoolLevel sinks the level between them),
-                                     // w = film flow speed (m/s downhill at 45 degrees, x sqrt(tan slope), gated
-                                     //     by terrainWetParams10)
-        glm::vec4 terrainWetParams7; // x = wet terrain roughness, y = underwater terrain roughness (ground
-                                     // under the live ocean), z = roughness edge (soft band of the gloss's
-                                     // drying level through the pattern), w = drying pattern (0..1: uniform
-                                     // drying to dry islands)
-        glm::vec4 terrainWetParams8; // x = darkening threshold, y = roughness threshold: the wetness above
-                                     // which the ground's darkening / wet gloss is full (smoothstep from 0
-                                     // below it), z = wet normal scale
-                                     // (the normal map's tilt off the shading base at full gloss: 1 = unchanged,
-                                     // < 1 flatter, > 1 stronger), w = film flow cycle (s: the flow map's
-                                     //     two-phase period)
-        glm::vec4 terrainWetParams9; // x = darkening edge (soft band of the darkening's drying level through
-                                     // the pattern), y = 1 / drying pattern size
-                                     // (m; the world value fBm), z = drying pattern relief share, w = 0.5 x
-                                     // drying pattern contrast (the noise's stretch toward 0 / 1)
-        glm::vec4 terrainWetParams10; // film flow slope gate ("Film flow min slope"): x = tan(min slope / 2)
-                                     // (no flow below), y = tan(min slope) (full flow above); wet ground
-                                     // glints: z = 1 / glint size (m), w = glint coverage (0 = off)
-        glm::vec4 terrainWetParams11; // x = glint roughness (GGX alpha of the glint patches), yzw unused
-        glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
-                                     // (t01, h01) space: xy = temperature range, zw = humidity range.
-                                     // Weight is 1 inside the box and Gaussian-decays outside it, so a
-                                     // full-width range on an axis means "this axis does not matter here"
-                                     // (snow-line rock is cold at ANY humidity). Unused for beach/snow.
-        glm::uvec4 terrainSplatHeightTex[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = the
-                                     // BC5 HEIGHT (R) + AO (G) texture index, 0xFFFF = none (flat, AO 1: linear blend)
-        glm::uvec4 terrainSplatTex[MAX_TERRAIN_SPLAT_MATERIALS / 2]; // per slot s: [s >> 1].xy (even s) / .zw (odd):
-                                     // x = diffuse (+ roughness alpha) | normal << 16, y = 1 when the normal is BC5.
-                                     // The splat samples without reading the material buffer first.
-        glm::vec4 terrainSplatGrass[MAX_TERRAIN_SPLAT_MATERIALS / 4]; // per slot s: [s >> 2][s & 3] = its grass amount (0..1; grass_cull.cs.glsl)
-
-        // GPU mesh LOD selection (indirect + shadow cull; keep in sync with ubo.inc.glsl)
-        glm::vec4 lodParams0; // x = screen-space error threshold (px, bias pre-applied), y = hysteresis band,
-                              // z = fallback full-res pixels (authored chains), w = mipPixelScale (px per unit/dist)
-        glm::vec4 lodParams1; // x = force LOD level (< 0 = off), y = fallback-metric level bias, z = enabled (0/1), w unused
-        // FOLIAGE cards (the tree billboards; FoliageParams): x = the trees' RT range (m), y = crown normal blend,
-        // z = self-shadow transmission length (m), w = interior darkening
-        glm::vec4 foliageParams;
-        glm::vec4 foliageParams2; // x = edge fade start |N.V|, y = edge fade end, z = edge fade centre scale,
-                                  // w = interior depth start (the baked interior where the darkening starts)
-        glm::vec4 foliageParams3; // x = interior depth end (where it is full), y = edge fade top card scale,
-                                  // z = interior shadow top card scale, w = leaf transmission strength
-        glm::vec4 foliageParams4; // x = transmission glow focus, y = glow strength, z = transmission shadow weight,
-                                  // w = 1 while the far-tree volume marched this frame (the fog apply composites it)
-        glm::vec4 foliageParams5; // x = the leaves' minimum N.V (MATERIAL_FLAG_LEAF; 0 = off), y = crown self-shadow,
-                                  // z = the interior's view fade on the sun, w = the transmission's share of the self-shadow
-        // The BAKED TREE RECORDS (tree_cull.inc.glsl; Renderer::renderTreeInstanceSet): x = the first instance index
-        // of this frame's tree range, y = its length (3 per tree; 0 = none), z = the culls' thread count (one per tree
-        // in the range; their dispatch), w = the tree count. params: x = the far distance scale,
-        // y = force far (0/1), z = the far-tree volume's start (3D, m; 0 = no volume), w = "Foliage shadow cascade
-        // margin" (m; the shadow cull drops a tree from the cascades whose split + this it lies beyond).
-        glm::uvec4 treeCull;
-        glm::vec4 treeCullParams;
-        // Forcefield bubbles (Force library / ForceFieldPipeline; keep in sync with ubo.inc.glsl)
-        glm::vec4 forceTeamColors[MAX_FORCE_TEAMS]; // rgb = linear team color, w unused
-        glm::vec4 forceParams0; // x = iso threshold, y = rim power, z = rim intensity, w = shell base alpha
-        glm::vec4 forceParams1; // x = contact glow intensity, y = contact glow width (opposing/own ratio band),
-                                // z = geometry glow distance (m), w = march steps
-        glm::vec4 forceParams2; // x = pattern scale (1/m), y = pattern scroll speed, z = pattern intensity,
-                                // w = shell march LOD scale ((px per radius/dist) / full-detail px; 0 = off)
-        glm::vec4 forceParams3; // x = interior alpha (shell opacity floor seen from inside),
-                                // y = backface alpha (far/inner surface visibility from outside),
-                                // z = contact wall alpha (interior equilibrium pane),
-                                // w = junction smoothing (smooth-max width as a fraction of iso)
-        glm::vec4 forceParams4; // x = unused (the density debug view is the FORCE_DENSITY_VIEW define),
-                                // y = density range (field value mapping to white), zw = unused
-        glm::vec4 forceBake0;   // sampled shell tier: xyz = bake volume world min, w = the reach
-                                // threshold an emitter marches the volume at (see ForceFieldPipeline)
-        glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
-        glm::vec4 forceBake2;   // x = union march step size (m), y = union march max steps,
-                                // z = px per (radius/dist) - the union march's distance LOD, w unused
-
-        // Volumetric clouds (keep in sync with ubo.inc.glsl; clouds.inc.glsl consumes these)
-        glm::vec4 cloudShape0;  // x = shell bottom altitude (m), y = shell top altitude (m), z = coverage, w = enabled (0/1)
-        glm::vec4 cloudShape1;  // x = 1 / weather period (1/m), y = base noise frequency (1/m), z = detail noise frequency (1/m), w = extinction (1/m) at density 1
-        glm::vec4 cloudShape2;  // x = type, y = type variation, z = erosion, w = curl distortion (m)
-        glm::vec4 cloudShape3;  // x = coverage variation, y = near detail radius (m), z = 1 / (top - bottom) (1/m), w = 1 / near detail radius
-        glm::vec4 cloudShape4;  // x = base height variation (fraction of the main layer's height), y = 1 / ground
-                                // light depth (1/m: the ground bounce's falloff above the main layer's base), z = the
-                                // sky-map clouds' history weight this frame (exp(-3 dt / "Sky map history (s)")), w = erosion cutoff
-        glm::vec4 cloudShape5;  // the profile: x = tower variation (0..1), y = top roundness as the superellipse exponent
-                                // (1 = the plain taper), z = base sharpness (0..1), w = tower core link (0..1)
-        glm::vec4 cloudLayer0;  // the MAIN layer's band: x = bottom (m), y = 1 / height (1/m); z = the upper layer is on (0/1), w = its density scale
-        glm::vec4 cloudLayer1;  // the UPPER layer: x = bottom (m), y = 1 / height (1/m), z = coverage, w = type
-        glm::vec4 cloudLayer2;  // the main layer's SHELVES: x = count (0..3), y = strength (profile raise), z = half thickness (fraction of the layer), w = the UPPER layer's height variation (lift, fraction of its band)
-        glm::vec4 cloudLayer3;  // the main layer's SHELF PLACEMENT: x = the lowest shelf's height (the CPU centres the stack), y = the spacing to the next (fractions of the layer), z = the march's min step (m), w = the march's aerial perspective strength (x the added air light; 0 = off)
-        glm::vec4 cloudNoiseOrigin; // xz = camera + wind, wrapped by the weather period (m), y = the GI sky clouds' history weight this frame, w = detail vertical drift (m, wrapped)
-        glm::vec4 cloudWind;    // xyz = wind displacement this frame (m; the temporal reprojection), w = the GI sky clouds' observer radius (m)
-        glm::vec4 cloudLight0;  // the HG + Draine phase: x = g of the HG part, y = g of the Draine part, z = Draine alpha, w = Draine weight
-        glm::vec4 cloudLight1;  // x = ambient strength, y = ground albedo (folded into cloudLight2), z = powder strength, w = multi-scatter attenuation
-        glm::vec4 cloudLight2;  // rgb = the ground bounce's albedo: the sky's "Ground Albedo" COLOUR x the cloud "Ground albedo",
-                                // w = multi-scatter strength (x the closed-form octave sum; non-physical above 1)
-        glm::vec4 cloudMarch0;  // x = max steps, y = max distance (m), z = near step (m), w = steps per ray (the per-ray step growth is solved for it)
-        glm::vec4 cloudMarch1;  // x = light steps, y = light distance (m), z = temporal history weight, w = 1 / detail distance (1/m)
-        // Cloud shadows: the Beer shadow map (cloud_shadow.inc.glsl)
-        glm::vec4 cloudShadow0; // xyz = cascade 0 centre relative to the CENTRE view's camera (m), w = 1 / cascade 0 extent (1/m)
-        glm::vec4 cloudShadow1; // xyz = cascade 1 centre, w = 1 / cascade 1 extent
-        glm::vec4 cloudShadow2; // xyz = light-space axis e0, w = shadow strength
-        glm::vec4 cloudShadow3; // xyz = light-space axis e1, w = mean transmittance (past the cascades)
-        glm::vec4 cloudShadow4; // x = the map was rendered this frame (0/1; the toggles are the CLOUD_* defines), y = map march steps (near cascade), z = map march steps (far cascade), w = far cascade lookup jitter (texels)
-
-        // Procedural grass (GrassParams; grass.inc.glsl, grass_cull.cs.glsl, grass.vs/fs.glsl; keep in sync with ubo.inc.glsl)
-        glm::vec4 grassParams0; // x = blades per patch, y = patch size (m), z = range (m), w = range fade (m)
-        glm::vec4 grassParams1; // x = blade height (m), y = height variation, z = blade width (m), w = root sink (m)
-        glm::vec4 grassParams2; // x = thinning start (m), y = thinning exponent, z = width compensation exponent, w = max width scale
-        glm::vec4 grassParams3; // x = LOD 1 distance (m), y = LOD 2 distance (m), z = min blade width per metre of distance, w = ground normal blend distance (m)
-        glm::vec4 grassParams4; // xy unused (the shared wind: weatherWind*), z = bend per m/s, w = ripple per m/s
-        glm::vec4 grassParams5; // x = 1 / ripple size (1/m), y unused, z = sway frequency (Hz), w = LAST frame's timeSeconds
-        glm::vec4 grassParams6; // x = curvature, y = 1 / clump size (1/m), z = patchiness, w = grow band
-        glm::vec4 grassColor0;  // rgb = root albedo (linear), w = roughness
-        glm::vec4 grassColor1;  // rgb = tip albedo (linear), w = colour variation
-        glm::vec4 grassColor2;  // rgb = dry albedo (linear), w = dry amount
-        glm::vec4 grassShade;   // x = root occlusion, y = transmission, z = normal roundness, w = ground normal blend at the blend distance
-        glm::vec4 grassParams9; // x = wind fade start (m), y = wind fade end (m; no wind past it), z = size by cover (0..1),
-                                // w = LOD morph band (fraction of the next LOD's distance)
-        glm::vec4 grassParams10; // x = LOD 3 distance (m; one segment past it), y = cold temperature (C; full darkening),
-                                 // z = warm temperature (C; none), w = cold darkening (0..1)
-        glm::vec4 grassParams11; // x = shadow bias (m toward the sun at the root, none at the tip), yz unused,
-                                 // w = the canopy's base extinction (1/m; 0 = none)
-        glm::vec4 grassParams12; // the canopy's sun flecks: x = 1 / fleck size (1/m), y = contrast, z = fade distance (m),
-                                 // w = stretch along the sun (x 1 / tan(sun elevation))
-        // THE NEAR GRASS CASCADE: an extra layer of the sun shadow array (layer NUM_SHADOW_CASCADES), the blades only,
-        // an ortho box around the camera (standard Z, texel-snapped).
-        glm::mat4 grassShadowViewProj;
-        glm::vec4 grassParams13; // x unused (was the removed scene-cascade casting), y = the near
-                                 // cascade's range (m: its half size; 0 = off), z = receiver bias (m toward the sun),
-                                 // w = the near cascade's texel (m)
-        glm::vec4 grassParams14; // x = near shadow strength (0..1), yz = the near cascade's box centre (XZ, ahead of the camera),
-                                 // w = bare fraction (the clump noise's threshold)
-        // TREE WIND (tree_wind.inc.glsl; FoliageParams wind*):
-        glm::vec4 treeWind0; // x = bend (m per (m/s)^2 at the ref height), y = 1 / ref height, z = sway (x lean), w = LAST frame's timeSeconds
-        glm::vec4 treeWind1; // x = branch (m per m/s), y = branch Hz, z = leaf (m), w = leaf Hz
-        glm::vec4 treeWind2; // x / y = branch fade start / end (m), z / w = leaf fade start / end (m)
-        glm::vec4 treeWind3; // x = trunk fade end (m, 0 = none), y = sway Hz, z = the culls' bound growth (m), w = billboard waves
-        glm::vec4 treeHandover; // the far-tree volume's HAND-OVER cross-fade (TreeVolumePipeline::handoverUbo): xy = the new
-                                // bake's centre, z = the fade (the fraction of rays that pick the new bake), w unused
-        // THE ROCK MATERIAL (instanced_indirect_rock.fs.glsl; RockParams, "Rocks/Material"):
-        glm::vec4 rockParams0; // x = ground cover amount (0 = off), y / z = cover start / full (normal.y), w = 1 / cover patch size (1/m)
-        glm::vec4 rockParams1; // x = contact band height (m), y = contact blend (ground material at the foot), z = contact darkening (AO),
-                               // w = uv scale (x the terrain's rock uv scale)
-        glm::vec4 rockParams2; // x = contact fade distance (m: no band past it), y = cavity AO, z = cavity cover, w unused
+        const char* name;
+        EUboType type;
+        uint32 offset;
+        uint32 count;                          // the array length; 0 = not an array
+        const UboStructInfo* (*structInfo)();  // EUboType::Struct only
     };
+    struct UboStructInfo
+    {
+        const char* name; // the GLSL type
+        const UboField* fields;
+        uint32 numFields;
+        uint32 size;
+    };
+
+    // std140 base alignments. A struct made by OC_UBO_STRUCT aligns (and pads) to 16, like a GLSL struct.
+    template<typename T> struct UboType;
+    template<> struct UboType<float>      { static constexpr EUboType type = EUboType::Float; static constexpr size_t align = 4; };
+    template<> struct UboType<uint32>     { static constexpr EUboType type = EUboType::Uint;  static constexpr size_t align = 4; };
+    template<> struct UboType<glm::vec2>  { static constexpr EUboType type = EUboType::Vec2;  static constexpr size_t align = 8; };
+    template<> struct UboType<glm::vec3>  { static constexpr EUboType type = EUboType::Vec3;  static constexpr size_t align = 16; };
+    template<> struct UboType<glm::vec4>  { static constexpr EUboType type = EUboType::Vec4;  static constexpr size_t align = 16; };
+    template<> struct UboType<glm::uvec4> { static constexpr EUboType type = EUboType::Uvec4; static constexpr size_t align = 16; };
+    template<> struct UboType<glm::mat4>  { static constexpr EUboType type = EUboType::Mat4;  static constexpr size_t align = 16; };
+    template<typename T> requires requires { T::info(); }
+    struct UboType<T> { static constexpr EUboType type = EUboType::Struct; static constexpr size_t align = 16; };
+
+    template<typename T> constexpr const UboStructInfo* (*uboStructInfoOf())()
+    {
+        if constexpr (UboType<T>::type == EUboType::Struct)
+            return &T::info;
+        else
+            return nullptr;
+    }
+
+#define OC_UBO_MEMBER(T, name) alignas(UboType<T>::align) T name;
+#define OC_UBO_ARRAY(T, name, n) static_assert(sizeof(T) % 16 == 0, "std140 array elements: 16-byte multiples only"); alignas(16) T name[n];
+#define OC_UBO_FIELD(T, name) UboField{ #name, UboType<T>::type, (uint32)offsetof(Self, name), 0u, uboStructInfoOf<T>() },
+#define OC_UBO_FIELD_ARRAY(T, name, n) UboField{ #name, UboType<T>::type, (uint32)offsetof(Self, name), (uint32)(n), uboStructInfoOf<T>() },
+#define OC_UBO_STRUCT(Name, LIST)                                                                                       \
+    struct alignas(16) Name                                                                                             \
+    {                                                                                                                   \
+        LIST(OC_UBO_MEMBER, OC_UBO_ARRAY)                                                                               \
+        static const UboStructInfo* info()                                                                              \
+        {                                                                                                               \
+            using Self = Name;                                                                                          \
+            static constexpr UboField fields[] = { LIST(OC_UBO_FIELD, OC_UBO_FIELD_ARRAY) };                             \
+            static constexpr UboStructInfo s{ #Name, fields, (uint32)(sizeof(fields) / sizeof(fields[0])), (uint32)sizeof(Self) }; \
+            return &s;                                                                                                  \
+        }                                                                                                               \
+    };
+
+    // A camera view's matrices together, so desktop touches views[0] alone. views[VIEW_CENTER] = the centre /
+    // combined view (the only one on desktop; in VR sized to the union of both eyes' FOV, so the shared world-space
+    // passes cover what either eye sees); [1] = left eye, [2] = right eye. Shaders pick through g_viewIndex.
+#define OC_UBO_VIEW(F, A)                                                                                               \
+    F(glm::mat4, mvp)                                                                                                   \
+    F(glm::mat4, invMvp)     /* inverse(mvp), in double: the world position from depth + screen uv */                   \
+    F(glm::mat4, prevMvp)    /* last frame's mvp: a world position to last frame's screen */                            \
+    F(glm::mat4, prevInvMvp) /* last frame's inverse(mvp): last frame's world position */                               \
+    F(glm::mat4, reprojClip) /* prevMvp * inverse(mvp), fused in double: current NDC + depth -> last frame's clip, */   \
+                             /* near-identity at any camera position (the world round trip's float32 error grows */    \
+                             /* with the distance from the origin: temporal-history jitter) */                          \
+    F(glm::vec4, viewPos)    /* xyz = world position */
+    OC_UBO_STRUCT(ViewData, OC_UBO_VIEW)
+
+    // ---- Lockable values: not here - UboFieldList (UboFields.ixx), registered by Renderer::registerUboFields -------
+
+    // ---- Live structs: never baked ---------------------------------------------------------------------------------
+
+    // The clouds' per-frame values (the clock, the wind, the camera, the sun, the game's suppression).
+#define OC_UBO_CLOUDS_LIVE(F, A)                                                                                        \
+    A(glm::vec4, shadowCascade, 2)    /* the Beer shadow map's cascades: xyz = the frozen centre relative to the */     \
+                                      /* CENTRE view's camera (m), w = 1 / the extent (1/m) */                          \
+    F(glm::vec3, shadowAxis0)         /* the light-space axes */                                                        \
+    F(float, enabled)                 /* the march ran this frame (0/1) */                                              \
+    F(glm::vec3, shadowAxis1)                                                                                           \
+    F(float, shadowRendered)          /* the map was rendered this frame (0/1) */                                       \
+    F(glm::vec3, windStep)            /* the field's world displacement this frame (m; the temporal reprojection) */    \
+    F(float, skyHistory)              /* the sky-map clouds' history weight this frame */                               \
+    F(glm::vec3, groundBounceAlbedo)  /* the sky's ground colour x the cloud "Ground albedo" */                         \
+    F(float, giSkyHistory)            /* the GI sky clouds' history weight this frame */                                \
+    F(glm::vec2, noiseOrigin)         /* camera XZ - wind, wrapped by the weather period (m) */                         \
+    F(float, detailDrift)             /* the detail's vertical drift (m, wrapped) */
+    OC_UBO_STRUCT(CloudsLiveUbo, OC_UBO_CLOUDS_LIVE)
+
+    // GI's per-frame values.
+#define OC_UBO_GI_LIVE(F, A)                                                                                            \
+    F(glm::vec3, prevFocus)    /* LAST frame's scene focus (the previous clipmap window -> probe freshness) */          \
+    F(float, temporalAlpha)    /* this frame's blend: "GI/Temporal Alpha" compounded over the wall delta */             \
+    F(float, fullBake)         /* a full irradiance-volume bake this frame (0/1) */
+    OC_UBO_STRUCT(GiLiveUbo, OC_UBO_GI_LIVE)
+
+    // The fog's values that ride the ocean (its readback, its world scale).
+#define OC_UBO_FOG_LIVE(F, A)                                                                                           \
+    F(float, waveBand)          /* the waterline band gating the FFT wave taps (m; 0 = ocean off) */                    \
+    F(float, boundaryOffset)    /* the underwater boundary off the local water surface (m) */                           \
+    F(float, causticDepthFade)  /* 1/m */                                                                               \
+    F(float, causticShoreFade)  /* m (0 = off) */
+    OC_UBO_STRUCT(FogLiveUbo, OC_UBO_FOG_LIVE)
+
+    // The ocean's per-frame values: the wind, the sea level, the readback, the camera, the foam field's levels.
+#define OC_UBO_OCEAN_LIVE(F, A)                                                                                         \
+    A(glm::vec4, foamLevels, OCEAN_FOAM_LEVELS) /* xy = the level origin (drifted coords of texel (0,0)'s corner, m), */ \
+                                      /* zw = the whole texels it moved since last frame */                             \
+    F(glm::vec3, bubbleSun)           /* the bubble cloud's per-frame factors (oceanBubbleRadianceFrame): the sun's ... */ \
+    F(float, seaLevel)                /* world Y */                                                                     \
+    F(glm::vec3, bubbleSky)           /* ... and the sky's path down to "Bubble depth" x the albedo */                  \
+    F(float, windSpeed)               /* U10 (m/s) */                                                                   \
+    F(glm::vec2, windDirection)       /* unit */                                                                        \
+    F(glm::vec2, foamDrift)           /* the foam field's accumulated drift (m; its coords = rest XZ - drift) */        \
+    F(float, shoreFoamDepth)          /* the surf band's width at the waterline (m; follows the wind) */                \
+    F(float, shoreFoamMax)            /* the surf's opacity cap (follows the wind) */                                   \
+    F(float, swashReach)              /* the CPU's run-up estimate (m) */                                               \
+    F(float, displacementExtent)      /* how far the VS moves a vertex off its lattice (m; 0 with the ocean off) */     \
+    F(float, cameraUnderwater)        /* 0/1: gates the underside path */                                               \
+    F(float, sprayDt)                 /* the sim delta (s) */                                                           \
+    F(uint32, sprayEmitter)           /* the spray's particle emitter slot (UINT32_MAX = off) */
+    OC_UBO_STRUCT(OceanLiveUbo, OC_UBO_OCEAN_LIVE)
+
+    // The terrain's world, its baked height map, its splat material set, the wetness clipmap's tick.
+#define OC_UBO_TERRAIN_LIVE(F, A)                                                                                       \
+    A(glm::vec4, splatClimate, MAX_TERRAIN_SPLAT_MATERIALS) /* the ground / rock CLIMATE BOX in (t01, h01): xy = the */ \
+                                      /* temperature range, zw = the humidity range (unused for beach / snow) */        \
+    A(glm::uvec4, splatHeightTex, MAX_TERRAIN_SPLAT_MATERIALS / 4) /* slot s: [s >> 2][s & 3] = the BC5 HEIGHT + AO */  \
+                                      /* texture, 0xFFFF = none */                                                      \
+    A(glm::uvec4, splatTex, MAX_TERRAIN_SPLAT_MATERIALS / 2) /* slot s: [s >> 1].xy (even s) / .zw (odd): x = diffuse */ \
+                                      /* | normal << 16, y = 1 when the normal is BC5 */                                \
+    A(glm::vec4, splatGrass, MAX_TERRAIN_SPLAT_MATERIALS / 4) /* slot s: [s >> 2][s & 3] = its grass amount (0..1) */   \
+    F(glm::vec2, mapCentre)           /* the baked height map's world centre XZ (both cascades) */                      \
+    F(float, mapInvNearSize)          /* 1 / the near cascade's world size (0 = no map) */                              \
+    F(float, mapInvFarSize)           /* 1 / the far cascade's (0 = near only) */                                       \
+    F(float, mapSeaLevel)             /* the map's baked sea level */                                                   \
+    F(float, seaLevel)                /* world Y, live from the streamer */                                             \
+    F(float, meshRadius)              /* the streamed mesh's coverage radius (m; 0 = none - fences the ocean land cull) */ \
+    F(float, lapseRate)               /* C per world metre above sea level (<= 0; terrainTemperatureAt) */              \
+    F(float, splatBase)               /* the splat set: the base material (< 0 = none: the flat colour) */              \
+    F(float, numGround)                                                                                                 \
+    F(float, numRock)                                                                                                   \
+    F(float, hasBeach)                /* 0/1: the entry after the rock */                                               \
+    F(float, hasSnow)                 /* 0/1: the LAST entry */                                                         \
+    F(float, wetDecay)                /* the wetness pass this tick: exp(-dt / dry time) */                             \
+    F(float, wetRain)                 /* rain wetting added */                                                          \
+    F(float, wetIn)                   /* wet-in added under water */                                                    \
+    F(float, wetSpread)               /* the diffusion's mix fraction */                                                \
+    F(float, wetLayer)                /* the ping / pong layer written (the readers sample it) */                       \
+    F(glm::vec2, wetOrigin)           /* the clipmap window's origin (lattice coord, ints as floats) */                 \
+    F(glm::vec2, wetPrevOrigin)       /* the previous tick's (texels that scrolled in start dry) */
+    OC_UBO_STRUCT(TerrainLiveUbo, OC_UBO_TERRAIN_LIVE)
+
+    // The grass's per-frame values (the camera, the sun, the clock).
+#define OC_UBO_GRASS_LIVE(F, A)                                                                                         \
+    F(glm::mat4, shadowViewProj)      /* THE NEAR GRASS CASCADE: an ortho box ahead of the camera (standard Z) */       \
+    F(glm::vec2, nearCentre)          /* its box centre XZ */                                                           \
+    F(float, nearRange)               /* its half size (m; 0 = off) */                                                  \
+    F(float, nearTexel)               /* m */                                                                           \
+    F(float, minWidthPerMetre)        /* the pixel floor as world width per metre of distance */                        \
+    F(float, canopyExtinction)        /* the canopy's base extinction (1/m; 0 = no grass) */                            \
+    F(float, prevTime)                /* LAST frame's u_timeSeconds (the motion vectors) */
+    OC_UBO_STRUCT(GrassLiveUbo, OC_UBO_GRASS_LIVE)
+
+    // The trees' per-frame values.
+#define OC_UBO_FOLIAGE_LIVE(F, A)                                                                                       \
+    F(glm::vec2, handoverCentre)      /* the far-tree volume's HAND-OVER: the new bake's centre */                      \
+    F(float, handoverFade)            /* the fraction of rays that pick the new bake */                                 \
+    F(float, farMarched)              /* 1 while the far-tree volume marched this frame (the fog apply composites it) */ \
+    F(float, windPrevTime)            /* LAST frame's u_timeSeconds (the motion vectors) */                             \
+    F(float, windReach)               /* the culls' bound growth (m): the sway's reach at the strongest gust */
+    OC_UBO_STRUCT(FoliageLiveUbo, OC_UBO_FOLIAGE_LIVE)
+
+    // The force fields' per-frame values (the emitters, the camera, the view).
+#define OC_UBO_FORCE_LIVE(F, A)                                                                                         \
+    A(glm::vec4, teamColors, MAX_FORCE_TEAMS) /* rgb = linear team colour */                                            \
+    F(glm::vec3, bakeMin)             /* the sampled shell tier: the bake volume's world min */                         \
+    F(float, bakeThreshold)           /* the reach threshold an emitter marches the volume at */                        \
+    F(glm::vec3, bakeInvSize)         /* 1 / the volume's world size */                                                 \
+    F(float, bakeEnabled)             /* 0/1 */                                                                         \
+    F(float, shellLodScale)           /* the shell march's LOD: (px per radius / dist) / the full-detail px (0 = off) */ \
+    F(float, unionPxScale)            /* px per (radius / dist): the union march's distance LOD */                      \
+    F(float, cameraInside)            /* the camera is inside a bubble (0/1) */
+    OC_UBO_STRUCT(ForceLiveUbo, OC_UBO_FORCE_LIVE)
+
+    // THE wind ("Sky/Wind": the particles, the vegetation, the fog), the weather volumes' camera values and the
+    // rain occlusion map.
+#define OC_UBO_WEATHER(F, A)                                                                                            \
+    F(glm::mat4, rainOcclusionViewProj) /* a plain top-down ortho over the rain volume (standard Z) */                  \
+    F(glm::vec3, windVelocity)        /* the mean wind (m/s, horizontal) */                                             \
+    F(float, gustStrength)            /* m/s */                                                                         \
+    F(glm::vec3, cameraVelocity)      /* the centre view's velocity this frame (m/s) */                                 \
+    F(float, invGustSize)             /* 1/m */                                                                         \
+    F(glm::vec2, windDirection)       /* unit XZ (valid at zero speed) */                                               \
+    F(float, windSpeed)               /* m/s */                                                                         \
+    F(float, cameraWaterY)            /* the LIVE water surface world Y under the camera */                             \
+    F(float, cameraWaterValid)        /* 0/1 */                                                                         \
+    F(float, rainOcclusionPresent)    /* the map exists this frame (0/1) */                                             \
+    F(float, rainOcclusionInvRange)   /* 1 / its depth range (1/m) */
+    OC_UBO_STRUCT(WeatherUbo, OC_UBO_WEATHER)
+
+    // Known only in present(): the claims made after the begin-frame build. present() uploads this struct alone.
+#define OC_UBO_PRESENT(F, A)                                                                                            \
+    F(uint32, treeRangeBase)          /* the BAKED TREE RECORDS (tree_cull.inc): this frame's first instance */         \
+    F(uint32, treeRangeLength)        /* its length (0 = no trees) */                                                   \
+    F(uint32, treeThreads)            /* the culls' thread count (their dispatch) */                                    \
+    F(uint32, treeCount)              /* the listed pieces */                                                           \
+    F(float, treeFarScale)            /* the far distance scale */                                                      \
+    F(float, treeForceFar)            /* 0/1 */                                                                         \
+    F(float, treeVolumeStart)         /* the far-tree volume's start (m; 0 = no volume) */                              \
+    F(float, treeShadowMargin)        /* m: the shadow cull drops a tree from the cascades whose split + this it lies beyond */ \
+    F(uint32, giTlasNumInstances)     /* the TLAS-instance writer's live count */
+    OC_UBO_STRUCT(PresentUbo, OC_UBO_PRESENT)
+
+    // THE ROOT. The GLSL members are u_<name>.
+#define OC_UBO_ROOT(F, A)                                                                                               \
+    A(ViewData, views, NUM_UBO_VIEWS)                                                                                   \
+    A(glm::vec4, frustumPlanes, 6)              /* the centre view's frustum (Frustum::planes) */                       \
+    A(glm::mat4, cascadeViewProj, NUM_SHADOW_CASCADES) /* the sun cascades. The bottom row is structurally [0 0 0 1], */ \
+                                                /* so m[0][3] = the far distance and m[1][3] = the texel size ride it */ \
+                                                /* (the shaders' cascadeMatrix restores it) */                          \
+    F(glm::vec4, cascadeSunSizeTexels)          /* per cascade: the PCF disc radius (texels) per unit of depth gap */   \
+    F(glm::vec4, screenSize)                    /* xy = the render target (px), zw = 1 / xy */                          \
+    F(glm::vec4, viewportRect)                  /* xy = the render rect's min, zw = its size, in [0,1] of the target */ \
+    F(glm::vec4, taaJitter)                     /* xy = this frame's TAA jitter (NDC), zw = last frame's. Every */      \
+                                                /* raster pass applies xy; the mvps stay unjittered */                  \
+    F(glm::vec3, sunDirection)                  /* normalized, toward the sun */                                        \
+    F(uint32, frameIndex)                       /* monotonic (RNG / temporal rotation) */                               \
+    F(glm::vec3, sunColor)                      /* the sun irradiance (colour x intensity) */                           \
+    F(float, timeSeconds)                       /* SIM time (s): stops with the global pause */                         \
+    F(glm::vec3, sunTransmittance)              /* the atmosphere toward the sun at ground level (CPU Chapman) */       \
+    F(float, sunVisible)                        /* the eclipse's visible sun fraction */                                \
+    F(glm::vec3, skyUp)                         /* the sky's up axis (normalized) */                                    \
+    F(float, mipPixelScale)                     /* px per (size / distance): the LOD metric */                          \
+    F(glm::vec3, ambientColor)                  /* the flat minimum ambient radiance */                                 \
+    F(glm::vec3, sceneFocus)                    /* every distance-based quality falloff measures from it */             \
+    F(CloudsLiveUbo, cloudsLive)                                                                                        \
+    F(GiLiveUbo, giLive)                                                                                                \
+    F(FogLiveUbo, fogLive)                                                                                              \
+    F(OceanLiveUbo, oceanLive)                                                                                          \
+    F(TerrainLiveUbo, terrainLive)                                                                                      \
+    F(GrassLiveUbo, grassLive)                                                                                          \
+    F(FoliageLiveUbo, foliageLive)                                                                                      \
+    F(ForceLiveUbo, forceLive)                                                                                          \
+    F(WeatherUbo, weather)                                                                                              \
+    F(PresentUbo, present)
+    OC_UBO_STRUCT(Ubo, OC_UBO_ROOT)
+
+    // The frame UBO buffer: the root struct, then the lockable values' block (UboFieldList, packed at init). Every
+    // descriptor binds the whole range.
+    constexpr uint32 UBO_RANGE = 16384;
+    constexpr uint32 UBO_FIELDS_OFFSET = (uint32)((sizeof(Ubo) + 15) & ~size_t(15));
+    static_assert(UBO_FIELDS_OFFSET <= UBO_RANGE, "the frame UBO root must fit UBO_RANGE");
+
+    // The lock SECTIONS whose tweak rows the panel can lock (a TweakLock each, by this name). What bakes is a lockable
+    // value (UboFieldList) whose sources are all locked, wherever those rows live.
+    struct UboLockSection
+    {
+        const char* name;
+        oc::span<const oc::string_view> categories;
+    };
+    namespace UboLockSections
+    {
+        constexpr oc::string_view c_sky[] = { "Sky" };
+        constexpr oc::string_view c_clouds[] = { "Sky/Clouds" };
+        constexpr oc::string_view c_shadows[] = { "Shadows" };
+        constexpr oc::string_view c_rt[] = { "RT", "RTAO", "GI" };
+        constexpr oc::string_view c_fog[] = { "Fog" };
+        constexpr oc::string_view c_ocean[] = { "Ocean" };
+        constexpr oc::string_view c_terrainTex[] = { "Terrain/Textures" };
+        constexpr oc::string_view c_terrainTess[] = { "Terrain/Tessellation" };
+        constexpr oc::string_view c_terrainWater[] = { "Terrain/Water" };
+        constexpr oc::string_view c_grass[] = { "Grass" };
+        constexpr oc::string_view c_foliage[] = { "Trees" };
+        constexpr oc::string_view c_rock[] = { "Rocks" };
+        constexpr oc::string_view c_lod[] = { "LOD" };
+        constexpr oc::string_view c_force[] = { "Force" };
+        constexpr oc::string_view c_particles[] = { "Particles" };
+        constexpr oc::string_view c_post[] = { "TAA", "Post" };
+    }
+    inline constexpr UboLockSection c_uboLockSections[] = {
+        { "Sky", UboLockSections::c_sky },
+        { "Clouds", UboLockSections::c_clouds },
+        { "Shadows", UboLockSections::c_shadows },
+        { "Ray tracing", UboLockSections::c_rt },
+        { "Fog", UboLockSections::c_fog },
+        { "Ocean", UboLockSections::c_ocean },
+        { "Terrain textures", UboLockSections::c_terrainTex },
+        { "Terrain tessellation", UboLockSections::c_terrainTess },
+        { "Terrain water", UboLockSections::c_terrainWater },
+        { "Grass", UboLockSections::c_grass },
+        { "Trees", UboLockSections::c_foliage },
+        { "Rocks", UboLockSections::c_rock },
+        { "LOD", UboLockSections::c_lod },
+        { "Force", UboLockSections::c_force },
+        { "Particles", UboLockSections::c_particles },
+        { "Post", UboLockSections::c_post },
+    };
+    constexpr uint32 NUM_UBO_LOCK_SECTIONS = (uint32)(sizeof(c_uboLockSections) / sizeof(c_uboLockSections[0]));
+
+    // THE declaration every shader compile includes (Shader.cpp's includer serves it as "ubo.generated.glsl");
+    // Renderer::applyUboLocks rebuilds it (buildUboDeclaration, UboFields.ixx). Main thread, like every shader compile.
+    inline oc::string g_uboDeclaration;
 
     struct alignas(16) RenderNodeTransform : Transform {};
     struct alignas(16) MeshInstanceOffset {

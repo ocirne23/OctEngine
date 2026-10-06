@@ -105,7 +105,7 @@ void DebugLinePipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Bu
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
     oc::array<DescriptorSetUpdateInfo, 2> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_vertexBuffers[frameIdx].getBuffer(), .range = m_vertexBuffers[frameIdx].getSize() } } },
     };
 

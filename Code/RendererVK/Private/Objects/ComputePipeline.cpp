@@ -124,6 +124,11 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
     outPipeline = pipelineResult.value;
     const oc::string debugName = Shader::debugName(layout.computeShaderDebugFilePath);
     Globals::device.setDebugName(outPipeline, debugName.c_str());
-    Globals::device.logPipelineStatistics(outPipeline, debugName.c_str());
+    if (Globals::device.capturePipelineStatistics())
+    {
+        oc::string defines;
+        Shader::appendDefineList(defines, layout.defines);
+        Globals::device.logPipelineStatistics(outPipeline, debugName.c_str(), defines);
+    }
     return true;
 }

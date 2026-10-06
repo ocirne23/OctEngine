@@ -9,7 +9,8 @@ import Core.Window;
 import Core.Frustum;
 import Core.imgui;
 import Core.Camera;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 import Core.Time;
 import Core.Log;
 
@@ -249,11 +250,11 @@ void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameI
 {
     if (!m_particles.isEnabled())
         return;
-    if (m_ubo.rainOcclusionParams.x > 0.5f && m_rainOcclusionPipeline.isActive())
+    if (m_ubo.weather.rainOcclusionPresent > 0.5f && m_rainOcclusionPipeline.isActive())
         if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
         {
             m_gpuProfiler.beginScope(primary, "Rain occlusion");
-            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.rainOcclusionViewProj, m_particles.getParams().rainOcclusionFoliageBlock);
+            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.weather.rainOcclusionViewProj, m_particles.getParams().rainOcclusionFoliageBlock);
             m_gpuProfiler.endScope(primary);
         }
     executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
@@ -463,8 +464,6 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
         .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
         .sceneDepthSampler = sceneColor.getDepthSampler(),
         .motionView = sceneColor.getMotionView(eyeIndex),
-        .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
-        .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
         .mbVelocityView = m_motionBlurPipeline.getVelocityView(), // bound, not written: no motion blur in VR
         .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
     };
@@ -760,15 +759,10 @@ void Renderer::recordTaa(uint32 frameIdx)
         .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
         .sceneDepthSampler = sceneColor.getDepthSampler(),
         .motionView = sceneColor.getMotionView(0),
-        .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
-        .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
         // The fused motion blur: TAA writes its velocity + sub-tiles.
         .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
         .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
         .mbEnabled = motionBlurEnabled(),
-        .mbShutter = m_motionBlurParams.shutter,
-        .mbMaxRadius = MotionBlurPipeline::clampMaxRadius(m_motionBlurParams.maxRadius),
-        .mbCameraScale = m_motionBlurParams.cameraScale,
     };
     m_taaPipeline.record(cb, frameIdx, 0, taaParams);
     cb.end();
@@ -786,15 +780,11 @@ void Renderer::recordDlss(uint32 frameIdx)
         .sceneColorView = frameData.sceneColor.getColorLayerView(0),
         .renderOrigin = m_renderRect.min,
         .renderSize = m_renderRect.getSize(),
-        .oceanBias = m_dlssParams.oceanBias,
         // The fused motion blur (DLAA: motionBlurEnabled() is off while upscaling): this pass writes its velocity +
         // sub-tiles, as TAA does.
         .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
         .mbSubTileView = m_motionBlurPipeline.getSubTileView(),
         .mbEnabled = motionBlurEnabled(),
-        .mbShutter = m_motionBlurParams.shutter,
-        .mbMaxRadius = MotionBlurPipeline::clampMaxRadius(m_motionBlurParams.maxRadius),
-        .mbCameraScale = m_motionBlurParams.cameraScale,
     };
     m_dlssPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -901,9 +891,6 @@ void Renderer::recordMotionBlur(uint32 frameIdx)
         .sceneDepthView = sceneColor.getDepthView(),
         .motionView = sceneColor.getMotionView(0),
         .velocityPass = !resolveActive(), // TAA or DLSS's mvec pass already wrote it
-        .shutter = m_motionBlurParams.shutter,
-        .maxRadius = m_motionBlurParams.maxRadius,
-        .cameraScale = m_motionBlurParams.cameraScale,
     };
     m_motionBlurPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -963,21 +950,14 @@ void Renderer::recordComposite(uint32 frameIdx)
         .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
         .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
-        .exposureEV = m_postParams.exposureEV,
-        .tonemapper = m_postParams.tonemapper,
-        .autoExposure = m_postParams.autoExposure ? 1 : 0,
         .bloomView = m_bloomPipeline.getLevel0View(),
         .bloomSampler = m_bloomPipeline.getSampler(),
-        .bloomIntensity = bloomEnabled() ? m_bloomParams.intensity : 0.0f,
-        .bloomNormalize = m_bloomPipeline.getNormalize((uint32)m_bloomParams.levels, m_bloomParams.radius),
-        .bloomAdditive = m_bloomParams.threshold > 0.0f,
         .bloomUv = m_bloomPipeline.getUvTransform(m_viewportRect.min, m_viewportRect.getSize()),
         // The motion blur gather runs in the composite (MotionBlurPipeline).
         .mbVelocityView = m_motionBlurPipeline.getVelocityView(),
         .mbNeighborMaxView = m_motionBlurPipeline.getNeighborMaxView(),
         .mbDepthView = frameData.sceneColor.getDepthView(),
         .mbSampler = m_motionBlurPipeline.getSampler(),
-        .mbSamples = motionBlurEnabled() ? (uint32)oc::max(m_motionBlurParams.samples, 1) : 0u,
         .ubo = frameData.ubo.getBuffer(),
     };
     m_compositePipeline.record(cb, params);
@@ -1059,7 +1039,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
     if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
     {
         InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
-        const uint32 liveCount = m_ubo.giTlasNumInstances;
+        const uint32 liveCount = m_ubo.present.giTlasNumInstances;
         GIProbePipeline::TlasInstanceParams tlasParams{
             .renderNodeTransforms = instances.transforms,
             .meshInstances = instances.meshInstances,
@@ -1103,7 +1083,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 
 // The CACHED half of GI (recorded only on invalidation frames, with the scene secondaries): the sky map
 // bake and the probe trace (the TLAS it traces is built per frame, in recordGlobalIllumPrep). Everything
-// per-frame rides the UBO (u_giTrace0/1, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
+// per-frame rides the UBO (u_rt_gi*, u_giLive, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
 // buffers are stable per slot between invalidations (ensureTlasCapacity / the instance-capacity growth
 // both invalidate), and the RT / GI toggles re-record through their tweak callbacks.
 void Renderer::recordGlobalIllum(uint32 frameIdx)
@@ -1152,7 +1132,7 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
     // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
     // player in game mode, else the camera); probes that scrolled in since last frame (relative to
-    // u_giTrace1.xyz, last frame's focus, written by buildUbo) are full-replaced rather than blended.
+    // u_giLive_prevFocus, last frame's focus, written by buildUbo) are full-replaced rather than blended.
     // Gated by the GI toggle - the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
@@ -1255,7 +1235,7 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     recordLightGrid(frameIdx);
     recordForceCompute(frameIdx); // indirect dispatches: emitter/query changes never re-record
     recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
-    recordTerrainWetness(frameIdx); // executed only while enabled (TerrainWetTweaks::enabled)
+    recordTerrainWetness(frameIdx); // executed only while enabled ("Terrain/Water/Enabled")
     if (m_sceneViewCount == 1)
     {
         recordGrassCull(frameIdx);       // executed only while grass is on (grassActive)
@@ -1330,7 +1310,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
     // sim, before the forward pass samples it). Runs on tick frames only (the wetness tick, decided in
     // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
-    if (m_terrain.getWetTweaks().enabled && m_terrain.isWetnessTicking())
+    if (Globals::settings.terrain.wetEnabled && m_terrain.isWetnessTicking())
         executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
     // Grass patch cull (desktop): the draws "Static meshes" executes. Off, the count is cleared instead, so the
     // recorded draw draws nothing.
@@ -1363,7 +1343,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         primary.endRenderPass();
         m_gpuProfiler.endScope(primary);
         // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition
-        // covers this layer too). Off, the receivers do not read it (u_grassParams13.y = 0).
+        // covers this layer too). Off, the receivers do not read it (u_grassLive_nearRange = 0).
         if (m_sceneViewCount == 1 && grassNearShadowActive())
         {
             m_gpuProfiler.beginScope(primary, "Grass near shadow");
@@ -1491,9 +1471,6 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             .resolvedLayout = m_taaParams.taaEnabled ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
             .sampler = m_taaParams.taaEnabled ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
             .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
-            .exposureEV = m_postParams.exposureEV,
-            .tonemapper = m_postParams.tonemapper,
-            .autoExposure = m_postParams.autoExposure ? 1 : 0,
             .bloomView = m_bloomPipeline.getLevel0View(), // bound, unused: no bloom in VR (bloomEnabled)
             .bloomSampler = m_bloomPipeline.getSampler(),
             .mbVelocityView = m_motionBlurPipeline.getVelocityView(), // bound, unused: no motion blur in VR

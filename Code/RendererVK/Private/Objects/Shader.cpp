@@ -6,6 +6,7 @@ import :VK;
 import :Device;
 import :glslang;
 import :Layout;
+import Settings;
 
 Shader::Shader() {}
 Shader::~Shader()
@@ -57,6 +58,19 @@ oc::string Shader::debugName(const oc::string& debugFilePath)
     return slash == oc::string::npos ? debugFilePath : debugFilePath.substr(slash + 1);
 }
 
+void Shader::appendDefineList(oc::string& out, const oc::vector<ShaderDefine>& defines)
+{
+    for (const ShaderDefine& define : defines)
+    {
+        const oc::string item = define.value.empty() ? define.name : define.name + "=" + define.value;
+        if (oc::string(" " + out + " ").find(" " + item + " ") != oc::string::npos)
+            continue;
+        if (!out.empty())
+            out += ' ';
+        out += item;
+    }
+}
+
 EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
 {
     switch (stage)
@@ -102,6 +116,10 @@ public:
 private:
     IncludeResult* resolve(const char* headerName, const char* includerName)
     {
+        // The frame UBO's declaration is not a file: it is generated (RendererVKLayout::g_uboDeclaration).
+        if (std::strcmp(headerName, "ubo.generated.glsl") == 0)
+            return store(headerName, oc::string(RendererVKLayout::g_uboDeclaration));
+
         oc::vector<oc::string> candidates;
         if (includerName != nullptr && includerName[0] != '\0')
         {
@@ -118,12 +136,16 @@ private:
             oc::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
             if (content.empty())
                 continue;
-
-            const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
-            m_results.push_back(oc::make_unique<IncludeResult>(oc::toStd(resolvedPath), stored.data(), stored.size(), nullptr));
-            return m_results.back().get();
+            return store(resolvedPath, oc::move(content));
         }
         return nullptr;
+    }
+
+    IncludeResult* store(const oc::string& name, oc::string content)
+    {
+        const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
+        m_results.push_back(oc::make_unique<IncludeResult>(oc::toStd(name), stored.data(), stored.size(), nullptr));
+        return m_results.back().get();
     }
 
     oc::string m_rootDir;
@@ -141,23 +163,24 @@ static oc::string buildLayoutPreamble()
     };
     def("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES);
     def("GI_SH_STRIDE", GI_SH_STRIDE);
-    // The LIVE grid shape (g_giGrid, the "GI" grid tweaks): baked so the addressing stays constant-folded;
-    // a change reloads every shader (GIProbePipeline::registerGridTweaks).
-    def("GI_NUM_CASCADES", g_giGrid.numCascades);
-    def("GI_PROBE_DIM_X", g_giGrid.dimX());
-    def("GI_PROBE_DIM_Y", g_giGrid.dimY());
-    def("GI_PROBE_DIM_Z", g_giGrid.dimZ());
-    def("GI_FOCUS_Y_OFFSET", g_giGrid.focusOffsetY); // float literal (to_string keeps the decimal point)
+    // The LIVE grid shape (the "GI" grid settings): baked so the addressing stays constant-folded;
+    // a change reloads every shader (the Renderer's listener).
+    const GiGridConfig& giGrid = Globals::settings.gi.grid;
+    def("GI_NUM_CASCADES", giGrid.numCascades);
+    def("GI_PROBE_DIM_X", giGrid.dimX());
+    def("GI_PROBE_DIM_Y", giGrid.dimY());
+    def("GI_PROBE_DIM_Z", giGrid.dimZ());
+    def("GI_FOCUS_Y_OFFSET", giGrid.focusOffsetY); // float literal (to_string keeps the decimal point)
     def("GI_CASCADE_BASE_SPACING", GI_CASCADE_BASE_SPACING);
-    // The irradiance volume (g_giGrid.volume / volumeRes, same reload path as the grid shape). GI_VOLUME is
+    // The irradiance volume (giGrid.volume / volumeRes, same reload path as the grid shape). GI_VOLUME is
     // defined only while it is on: the lit shaders then read the volume instead of the probes.
-    def("GI_VOLUME_RES", g_giGrid.volumeRes);
+    def("GI_VOLUME_RES", giGrid.volumeRes);
     def("GI_MAX_CASCADES", GI_MAX_CASCADES);
     def("GI_VOLUME_SKY_TEXELS", GI_VOLUME_SKY_TEXELS);
     def("GI_VOLUME_IMAGES_PER_CASCADE", GI_VOLUME_IMAGES_PER_CASCADE);
     def("GI_VOLUME_SKY_IMAGE", GI_VOLUME_SKY_IMAGE);
     def("GI_VOLUME_MAX_IMAGES", GI_VOLUME_MAX_IMAGES);
-    if (g_giGrid.volume)
+    if (giGrid.volume)
         def("GI_VOLUME", 1);
     // The cloud toggles (g_cloudShaders, the "Sky/Clouds" bools): each implies the one before it.
     if (g_cloudShaders.clouds)

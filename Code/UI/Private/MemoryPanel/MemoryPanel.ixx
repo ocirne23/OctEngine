@@ -2,6 +2,7 @@ export module UI:MemoryPanel;
 
 import Core;
 import Core.MemoryTracker;
+import RendererVK;
 
 // The Memory window: a squarified treemap of the MemoryTracker's attribution tree - one nested box
 // per profile-scope path, box AREA proportional to the bytes attributed there, children nested
@@ -69,6 +70,7 @@ private:
         // inclusiveBytes in place (sortChildren re-points the grandchildren's parent indices).
         uint32 firstChild = 0;
         uint32 numChildren = 0;
+        uint32 firstEntry = 0;    // VRAM: its own liveCount allocations are m_vramEntries[firstEntry ..)
     };
 
     // Per-path rate state, persistent across frames (m_nodes is rebuilt every frame). Keyed by the
@@ -92,11 +94,13 @@ private:
         uint32 nameLen = 0; // without the final '\0'
         uint64 bytes = 0;
         uint8 group = 0;
+        GpuAllocationInfo info; // name cleared (it dies with the visit); zero for the slack entry
     };
 
     void buildSnapshot(uint32 idx, const MemScopeNode* node); // fills m_nodes[idx] (already sized) + its subtree
     void buildVramSnapshot();
-    void addVramEntry(uint8 group, const char* name, uint64 bytes); // name nullptr = the group itself
+    void addVramEntry(uint8 group, const char* name, uint64 bytes, const GpuAllocationInfo& info); // name nullptr = the group itself
+    void drawVramEntry(const VramEntry& entry) const; // the tooltip lines of one allocation
     void buildVramNode(uint32 idx, uint32 begin, uint32 end, uint32 prefixLen); // m_vramEntries[begin, end) share prefixLen name bytes
     void sortChildren(uint32 first, uint32 count);
     uint32 nodeColor(const ViewNode& view) const;

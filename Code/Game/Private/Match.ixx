@@ -11,6 +11,7 @@ import Force;
 import Input;
 import Nav;
 import RendererVK; // ShadowParams (the game's shadow preset)
+import Settings;
 import :GameCamera;
 import :Player;
 import :Structures;
@@ -68,13 +69,13 @@ public:
 
     void spawnWorld();
     // Co-op map inputs chosen OUTSIDE (the lobby page's host settings): call before spawnWorld on
-    // the authority. Writes the same variables the "Game/Coop" tweaks bind, so the panel shows
-    // what generated; seed 0 still rolls a random map.
+    // the authority. Writes the "Game/Coop" settings, so the panel shows what generated; seed 0
+    // still rolls a random map.
     void setMapSettings(uint32 seed, float fill, int lanes)
     {
-        m_mapSeedTweak = (int)(seed & 0x7fffffffu);
-        m_terrainFill = fill;
-        m_terrainLanes = lanes;
+        m_settings.mapSeed = (int)(seed & 0x7fffffffu);
+        m_settings.terrainFill = fill;
+        m_settings.terrainLanes = lanes;
     }
     // PvP team setup chosen OUTSIDE (the lobby): the host's team count (2..GameMaxTeams - one
     // Base per team, spread along the corridor) and the roster's picks (clientId, team; clientId
@@ -242,6 +243,9 @@ private:
     void saveTrickle(AssetNode& root) const;
     void loadTrickle(const AssetNode& root);
 
+    // The tuning: the co-op director, the material loop, base healing, melee, the nav feed and the
+    // labels ("Game/Coop", "Game/Construction", ...). Global: the values persist across matches.
+    GameMatchSettings& m_settings = Globals::settings.game.match;
     GamePlayer m_player;
     GameCamera m_camera;
     ShadowParams m_sandboxShadowParams; // the renderer's "Shadows" values before our preset (restored in ~GameMatch)
@@ -252,12 +256,11 @@ private:
     oc::vector<Nav::NavObstacle> m_wallObstacles; // rock terrain rects (static, both modes)
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
-    // Unit sources are culled to units with ANOTHER team's unit/player within this reach (coarse:
-    // a cell hash of that size, 3x3 neighbourhood) - see gatherNavFeed. Bucket retained per frame.
-    float m_navUnitSourceReach = 64.0f;
+    // Unit sources are culled to units with ANOTHER team's unit/player within "Nav unit source
+    // reach" (coarse: a cell hash of that size, 3x3 neighbourhood) - see gatherNavFeed.
     // Friendly unit CLUSTERS as extra SIM LOD focus points (see the focus block in update): a
-    // non-AI unit farther than this from every focus seeds a new cluster; refreshed every 0.25 s.
-    float m_focusClusterRadius = 40.0f;
+    // non-AI unit farther than "Unit cluster focus radius" from every focus seeds a new cluster;
+    // refreshed every 0.25 s.
     float m_focusClusterTimer = 0.0f;
     oc::vector<glm::vec3> m_focusClusters;
     // The shield structures' bubble spheres as SIM LOD ZONES (tier 1 + a tier 2 band, no tier 0):
@@ -368,7 +371,6 @@ private:
     // (While an ordered group walks, its lane is kept fresh by the UNITS' own periodic plan
     // requests - Nav's proximity dedup makes the whole group cost one plan. See
     // GameUnitComponent's SeedRequest and NavSystem::requestSeedPath.)
-    float m_selectionClusterRadius = 12.0f; // link radius of the selection's cluster centroid
     void pruneSelectedUnits();
     bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
@@ -467,9 +469,6 @@ private:
     oc::vector<glm::vec4> m_terrainRects; // merged blocked runs (minX, minZ, maxX, maxZ)
     EPvpMap m_pvpMap = EPvpMap::Lane; // PvP arena (setPvpMap; clients follow GMp)
     glm::vec2 m_pvpInterior{ 65.0f, 20.0f }; // the arena's open half-extents (placement bounds)
-    int m_mapSeedTweak = 0;       // "Game/Coop/Map seed": 0 = random each run (authority only)
-    float m_terrainFill = 0.3f;   // fraction of interior cells turned to rock (before carving)
-    int m_terrainLanes = 6;       // carved attack lanes from the base ring to the map edge
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
@@ -488,14 +487,13 @@ private:
     float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
     int m_waveIndex = 0;         // waves launched so far
     float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):
-                                         // each spawned unit spends its type's cost (m_waveCost)
+                                         // each spawned unit spends its type's cost (waveCostOf)
     float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
     // The blob's radius, sized ONCE per wave in queueWave so the AREA scales with the wave's
     // expected BODY COUNT (see waveSpawnRadius) - a big wave gets room instead of stacking bodies
     // on the same disc for physics to shove apart. Rides the save: a mid-wave load keeps the disc.
     float m_waveRadius = 8.0f;
-    float m_waveSpawnAreaPerUnit = 6.0f; // m² of blob per body (~2.8 m mean spacing at 6)
     float waveSpawnRadius(float budget) const;
     // Spacing: the last few wave spawn points, so a new roll can reject a spot inside a body that
     // was just placed (bodies are parked at spawn - an overlap there resolves only when a player
@@ -504,33 +502,12 @@ private:
     glm::vec2 m_waveRecent[c_waveRecentSpawns]{};
     int m_waveRecentCount = 0, m_waveRecentNext = 0;
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
-    // Tweaks ("Game/Coop", Synced):
-    float m_waveFirstDelay = 40.0f;
-    float m_waveInterval = 120.0f;
-    // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost (tweaks), so a
-    // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
-    int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
-    float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
-    float m_waveGrowthGrowth = 5.0f;  // how much that per-wave growth itself climbs every wave
+    // Waves are sized in BUDGET POINTS ("Game/Coop" settings), each type at its own cost.
     float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
-    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
-                                               15.0f, 100.0f, 500.0f, 30.0f, 40.0f,  // Elite, Giant, Titan, Lobber, Spawner
-                                               5.0f };                             // Warrior
-    float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
-    int m_waveMaxAlive = 100000;    // total AI units cap (ambient + waves)
+    float waveCostOf(ENpcType t) const { return glm::max(m_settings.waveCost[(int)t], 0.1f); }
     // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" -
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.
     int aiAliveCount() const;
-    int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
-    float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
-    int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
-    float m_ambientDepthScale = 0.9f;  // the depth fraction that already counts as the deepest band (titans off the corners)
-    float m_ambientWanderInterval = 90.0f; // mean seconds between an idle AI unit's strolls (0 = off)
-    float m_ambientWanderDistance = 12.0f; // stroll length (0.4-1x of it)
-    float m_ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
-    float m_ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
-    float m_labelMaxDistance = 120.0f;     // world labels (unit/structure bars, names) beyond this are not built
-    int m_spawnsPerFrame = 100;    // trickle budget - a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;
     uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the
@@ -551,17 +528,6 @@ private:
     glm::vec3 m_basePos{ -55.0f, 0.0f, 0.0f };        // team 0's Base
     glm::vec3 m_playerStart{ -55.0f, 1.0f, -6.0f };   // just beside it = the respawn point
     glm::vec3 m_enemyBasePos{ 55.0f, 0.0f, 0.0f };    // team 1's Base; clients spawn beside it
-    // Tweaks ("Game/Construction"): the player-inventory material loop.
-    float m_refillRadius = 6.0f;    // metres from a Silo/Base within which the inventory refills
-    float m_refillRate = 15.0f;     // materials/s pulled from the stores
-    float m_buildRadius = 6.0f;     // metres from a blueprint within which a player invests
-    float m_playerBuildRate = 8.0f; // materials/s a player invests into a blueprint
-    // Tweaks ("Game/Player"): health regen while standing near an OWN-team Base. Computed by each
-    // player's OWNER (health is owner-computed) against its local structure mirror - no sync.
-    float m_baseHealRadius = 10.0f;
-    float m_baseHealRate = 15.0f;   // health/s inside the radius
-    float m_meleeDps = 10.0f;       // player melee aura: health/s to enemy units in melee range
-    float m_meleeRadius = 2.5f;     // melee range (m, XZ from the capsule)
 };
 
 // ---- Shared by the Match*.cpp implementation units (module linkage, NOT exported) --------------
@@ -598,6 +564,7 @@ static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
     "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
+static_assert((int)ENpcType::Count == GameUnitTypeCount); // GameMatchSettings::waveCost
 // The popup's buttons, in order: the producible types (isBarracksUnitType - no Spitter).
 inline constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Warrior,
     (uint8)ENpcType::Brute, (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };

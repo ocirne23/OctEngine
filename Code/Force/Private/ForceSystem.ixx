@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import RendererVK;
 import Threading;
+import Settings;
 export import :Emitter; // the ForceEmitter handle (Emitter.ixx / Emitter.cpp)
 
 // Forcefield bubble manager (Globals::forceSystem). Emitters project analytic influence-field
@@ -71,7 +72,7 @@ private:
 export class ForceSystem final
 {
 public:
-    void initialize(); // registers the "Force" tweaks; call from main before world spawns
+    void initialize(); // call from main before world spawns
     // Pushes every live emitter's GPU config + the query positions to the renderer and latches the
     // GPU readbacks (applied forces, query results). Call once per frame from the main loop, after
     // world.update, before present.
@@ -114,8 +115,8 @@ public:
     FieldSample sampleBakedField(const glm::vec3& pos, uint32 team) const;
 
     uint32 getNumEmitters() const { return m_numLiveEmitters; }
-    uint32 getNumMergeGroups() const { return (uint32)m_statGroups; }
-    uint32 getNumMergedEmitters() const { return (uint32)m_statMerged; }
+    uint32 getNumMergeGroups() const { return (uint32)m_settings.statGroups; }
+    uint32 getNumMergedEmitters() const { return (uint32)m_settings.statMerged; }
     const ForceFieldParams& getParams() const { return m_params; }
 
     // The LIVE team count (2..MAX_FORCE_TEAMS) - a GAME-MODE setting, not a tweak (co-op = 2):
@@ -126,7 +127,7 @@ public:
     uint32 numTeams() const { return m_params.numTeams; }
     // The proxy/interval draw-box shrink's iso reduction (packVisibleBounds in ForceSystem.cpp; read
     // from the upload workers, written only by the tweak panel between passes). 0 = off.
-    float visibleBoundsIsoFrac() const { return m_visibleBoundsIsoFrac; }
+    float visibleBoundsIsoFrac() const { return m_settings.visibleBoundsIsoFrac; }
 
 
 private:
@@ -230,31 +231,6 @@ private:
         bool dissolve = false;          // set by the parallel cover pass, acted on serially (renderer slot)
         BubbleLight light;              // the group sphere's glow (see stepBubbleLight)
     };
-    struct MergeParams
-    {
-        bool enabled = true;
-        float joinDistance = 0.5f;   // join when |ci - cj| < joinDistance * (ri + rj)
-        float leaveDistance = 0.85f; // leave when no member is closer than leaveDistance * (ri + rj)
-                                     // (< 1: the own bubble reappears while still overlapping the group)
-        // Cover of one member from the group centre = spreadScale * |c - centre| + radiusScale * r;
-        // the group radius = coverScale * max over members + coverMargin. 1/1/1 covers every member
-        // bubble exactly; below 1 the group sphere hugs the crowd more tightly at the price of
-        // members' own bubble rims sticking out of it near the edge (the tuned default: 1/1/0.85).
-        float spreadScale = 1.0f;
-        float radiusScale = 1.0f;
-        float coverScale = 0.85f;
-        float coverMargin = 0.2f;    // metres added around the members' cover
-        float maxRadius = 8.0f;      // a group whose cover would exceed this refuses the member
-        int maxMembers = 255;
-        int minMembers = 2;          // smaller groups dissolve
-        float sumFraction = 0.2f;    // group output = max(largest member, sum * fraction)
-        bool memberReadback = true;  // members stay on the GPU as PASSIVE for their own force/pressure
-        float smoothTime = 0.3f;     // group sphere easing time constant (s)
-        float blendTime = 0.5f;      // member join/leave transition duration (s)
-        float leaveFromGroup = 0.5f; // where a Leaving sphere starts: 0 = the own bubble (instant own
-                                     // field, no ghost), 1 = a full copy of the group sphere shrinking
-                                     // onto the unit (reads as an empty bubble left behind)
-    };
     struct QueryInstance
     {
         uint32 generation = 0; // 0 = free slot
@@ -328,7 +304,7 @@ private:
     // then the paired readback republished for the samplers. Both main-thread inside update().
     void buildBakeChunks(Renderer& renderer);
     void publishBake(Renderer& renderer);
-    // Radius a group sphere at `center` needs to cover this member (MergeParams scales, no margin).
+    // Radius a group sphere at `center` needs to cover this member (ForceMergeSettings scales, no margin).
     float memberCover(const EmitterInstance& m, const glm::vec3& center) const
     {
         return m_merge.spreadScale * glm::distance(m.bubbleCenter, center) + m_merge.radiusScale * m.bubbleRadius;
@@ -383,15 +359,8 @@ private:
     uint32 m_generationCounter = 1;
     bool m_slotCapWarned = false;     // printed once per starvation stretch, cleared when it ends
     bool m_instanceCapWarned = false; // once
-    int m_statEmitters = 0;           // read-only stats bound under Force
-    int m_statSlots = 0;
-
-    float m_visibleBoundsIsoFrac = 1.0f; // draw-box shrink (packVisibleBounds); 0 = full boxes
 
     // Baked pressure field state (see sampleBakedField): scratch this frame, published last copy.
-    bool m_bakeEnabled = true;
-    float m_bakeSampleHeight = 1.0f; // world y the field is evaluated at (where bodies live)
-    int m_statBakeChunks = 0;
     bool m_bakePublished = false;
     bool m_bakeCapWarned = false;
     oc::vector<glm::ivec4> m_bakeChunkScratch;
@@ -427,21 +396,9 @@ private:
     oc::vector<glm::vec4> m_bakeData;               // published readback copy, sized ONCE to the cap
                                                     // (vec4PerChunk x MAX_FORCE_BAKE_CHUNKS): never resized
 
-    ForceFieldParams m_params; // owns the "Force" tweaks, pushed to the renderer every update
-    MergeParams m_merge;       // the "Force/Merge" tweaks
-    int m_statGroups = 0;      // read-only stats bound under Force/Merge
-    int m_statMerged = 0;
-    bool m_debugDraw = false;
-    bool m_debugDrawQueries = false;
-    bool m_debugDrawGroups = false;
-    float m_activateRamp = 0.6f; // "Activate ramp (s)": see EmitterInstance::ramp
-    // "Force/Glow" bubble light tweaks (see BubbleLight)
-    bool m_bubbleLight = true;
-    float m_bubbleLightIntensity = 2.0f; // x radius^2
-    float m_bubbleLightRange = 2.0f;     // x radius
-    float m_bubbleLightHeight = 0.8f;    // x radius: lift above the bubble centre (out of a Centered structure's mesh)
-    float m_bubbleLightFade = 0.5f;      // seconds, in and out
-    float m_bubbleLightWhite = 0.2f;    // team colour -> white mix
+    ForceFieldParams& m_params = Globals::settings.force; // pushed to the renderer every update
+    ForceSystemSettings& m_settings = Globals::settings.forceSystem; // writes only the stats
+    const ForceMergeSettings& m_merge = Globals::settings.forceSystem.merge;
 };
 
 export namespace Globals

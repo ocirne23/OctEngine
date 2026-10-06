@@ -3,7 +3,7 @@ module UI;
 import Core;
 import Core.imgui;
 import Core.glm;
-import Core.Tweaks;
+import Settings.Tweaks;
 import :TweakPanel;
 
 namespace
@@ -28,9 +28,29 @@ namespace
 }
 
 // exported from :TweakPanel - the settings menu draws the same rows
-void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks)
+void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks, oc::vector<TweakLockToggle>* deferredLocks)
 {
 		ImGui::PushID(index);
+		// A locked row is read-only: the values it feeds are baked into the shaders (TweakLock).
+		const TweakRegistry& registry = TweakRegistry::get();
+		const bool locked = registry.isVarLocked(var);
+		const uint32 lockId = deferredLocks ? registry.lockOf(var) : TweakRegistry::c_noLock;
+		if (lockId != TweakRegistry::c_noLock)
+		{
+			if (locked)
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.55f, 0.10f, 0.85f));
+			if (ImGui::SmallButton(locked ? "L##lock" : "U##lock"))
+				deferredLocks->push_back(TweakLockToggle{ lockId, &var, !locked });
+			if (locked)
+				ImGui::PopStyleColor();
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip(locked
+					? "LOCKED: what this tweak feeds is constant in the shaders.\nClick to unlock this one tweak (recompiles the shaders)."
+					: "Unlocked: the shaders read what this tweak feeds live.\nClick to lock it (recompiles the shaders).");
+			ImGui::SameLine();
+		}
+		if (locked)
+			ImGui::BeginDisabled();
 
 		bool changed = false;
 
@@ -129,10 +149,13 @@ void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& d
 		}
 
 		// Deferred to TweakPanel::flushDeferredCallbacks on the main thread - the widget pass runs
-		// on a worker and the callbacks are main-thread work (renderer, physics world, ...).
-		if (changed && var.onChange)
+		// on a worker and the callbacks are main-thread work (renderer, physics world, ...). Every change goes:
+		// the registry's change listeners (the UBO bake) see vars without an onChange too.
+		if (changed)
 			deferredCallbacks.push_back(&var);
 
+		if (locked)
+			ImGui::EndDisabled();
 		ImGui::PopID();
 }
 
@@ -163,7 +186,44 @@ namespace
 		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(color.x, color.y, color.z, glm::min(1.0f, alpha + 0.3f)));
 	}
 
-	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath, const glm::vec4& groupColor, oc::vector<const TweakVar*>& deferredCallbacks)
+	struct RenderTargets
+	{
+		oc::vector<const TweakVar*>& deferredCallbacks;
+		oc::vector<TweakLockToggle>& deferredLocks;
+	};
+
+	// A lock's section toggle, right-aligned on its category fold's row (the fold allows the overlap): every row
+	// under it. The click is only COLLECTED: setLocked fires the owner's main-thread work
+	// (TweakPanel::flushDeferredCallbacks).
+	void drawLockToggle(uint32 lockId, float rightX, oc::vector<TweakLockToggle>& deferredLocks)
+	{
+		const TweakRegistry& registry = TweakRegistry::get();
+		const TweakLock& lock = registry.locks()[lockId];
+		const ETweakLockState state = registry.lockState(lockId);
+		const char* label = state == ETweakLockState::All ? "Locked" : state == ETweakLockState::Some ? "Partly locked" : "Lock";
+		ImGui::SameLine(rightX - ImGui::CalcTextSize(label).x - ImGui::GetStyle().FramePadding.x * 2.0f);
+		ImGui::PushID((int)lockId);
+		if (state != ETweakLockState::None)
+			ImGui::PushStyleColor(ImGuiCol_Button, state == ETweakLockState::All ? ImVec4(0.85f, 0.55f, 0.10f, 0.85f) : ImVec4(0.55f, 0.38f, 0.12f, 0.85f));
+		if (ImGui::SmallButton(label))
+			deferredLocks.push_back(TweakLockToggle{ lockId, nullptr, state != ETweakLockState::All });
+		if (state != ETweakLockState::None)
+			ImGui::PopStyleColor();
+		if (ImGui::IsItemHovered())
+		{
+			oc::string sections;
+			for (const oc::string& category : lock.categories)
+				sections += (sections.empty() ? "" : ", ") + category;
+			ImGui::SetTooltip(state == ETweakLockState::All
+				? "%s (%s) is LOCKED: its values are constants in the shaders and its rows are read-only.\nClick to unlock every row (recompiles the shaders). Each row's own button unlocks just that tweak."
+				: "Lock every row of %s (%s): bake their values into the shaders as constants and make the rows read-only.\nRecompiles the shaders.",
+				lock.name.c_str(), sections.c_str());
+		}
+		ImGui::PopID();
+	}
+
+	// categoryPath = the node's "Category/Sub" path (its group fold excluded) - what a lock names.
+	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath, oc::string_view categoryPath, const glm::vec4& groupColor, RenderTargets& out)
 	{
 		// Visible text is node.name; everything after "##" is the (hidden) ImGui ID.
 		// Use the full category path as the ID so categories that share a display
@@ -172,9 +232,21 @@ namespace
 		path += '/';
 		path.append(node.name.data(), node.name.size()); // eastl::string has no string_view +=
 
+		oc::string category(categoryPath);
+		if (depth > 0)
+		{
+			if (!category.empty())
+				category += '/';
+			category.append(node.name.data(), node.name.size());
+		}
+
 		oc::string label(node.name);
 		label += "##";
 		label += path;
+
+		const uint32 lockId = depth > 0 ? TweakRegistry::get().lockAt(oc::string_view(category.data(), category.size())) : TweakRegistry::c_noLock;
+		const ImGuiTreeNodeFlags lockFlags = lockId != TweakRegistry::c_noLock ? ImGuiTreeNodeFlags_AllowOverlap : ImGuiTreeNodeFlags_None;
+		const float rightX = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
 
 		bool open;
 		if (depth == 0)
@@ -186,19 +258,22 @@ namespace
 		else if (depth == 1)
 		{
 			pushFoldColors(groupColor, 0.25f);
-			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_Framed);
+			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_Framed | lockFlags);
 			ImGui::PopStyleColor(3);
 		}
 		else
-			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | lockFlags);
+
+		if (lockId != TweakRegistry::c_noLock)
+			drawLockToggle(lockId, rightX, out.deferredLocks);
 
 		if (open)
 		{
 			for (int i : node.varIndices)
-				drawTweakVar(TweakRegistry::get().vars()[i], i, deferredCallbacks);
+				drawTweakVar(TweakRegistry::get().vars()[i], i, out.deferredCallbacks, &out.deferredLocks);
 
 			for (CategoryNode& child : node.children)
-				renderCategory(child, depth + 1, path, groupColor, deferredCallbacks);
+				renderCategory(child, depth + 1, path, oc::string_view(category.data(), category.size()), groupColor, out);
 
 			if (depth != 0)
 				ImGui::TreePop();
@@ -257,19 +332,28 @@ void TweakPanel::render()
 		node->varIndices.push_back(i);
 	}
 
+	RenderTargets out{ m_deferredCallbacks, m_deferredLocks };
 	for (size_t g = 0; g < groups.size(); ++g)
 	{
 		CategoryNode& group = groupNodes[g];
 		if (group.children.empty())
 			continue; // nothing registered under it (Game/* before a match, the fallback group)
 		sortRootCategories(group, groups[g].categories);
-		renderCategory(group, 0, {}, groups[g].color, m_deferredCallbacks);
+		renderCategory(group, 0, {}, {}, groups[g].color, out);
 	}
 }
 
 void TweakPanel::flushDeferredCallbacks()
 {
 	for (const TweakVar* var : m_deferredCallbacks)
-		var->onChange();
+		TweakRegistry::get().notifyChanged(*var);
 	m_deferredCallbacks.clear();
+	for (const TweakLockToggle& toggle : m_deferredLocks)
+	{
+		if (toggle.var)
+			TweakRegistry::get().setVarLocked(*toggle.var, toggle.locked);
+		else
+			TweakRegistry::get().setLocked(toggle.lock, toggle.locked);
+	}
+	m_deferredLocks.clear();
 }

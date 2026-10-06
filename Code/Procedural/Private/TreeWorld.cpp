@@ -3,8 +3,9 @@ module Procedural;
 import Core;
 import Core.glm;
 import Core.Camera;
-import Core.Tweaks;
 import Core.Log;
+import Settings;
+import Settings.Tweaks;
 
 import File;
 import Threading;
@@ -112,19 +113,16 @@ namespace Procedural
 	void TreeWorld::initialize()
 	{
 		auto dirty = [this]() { m_configDirty = true; };
-		Tweak::boolean("Trees/World", "Enabled", &m_enabled, dirty);
-		Tweak::intVar("Trees/World", "Seed", &m_seed, 0, 1000000, 1.0f, dirty);
-		Tweak::floatVar("Trees/World", "Candidate cell (m)", &m_cellSize, 2.0f, 20.0f, 0.1f, dirty);
-		Tweak::floatVar("Trees/World", "Density scale", &m_densityScale, 0.0f, 4.0f, 0.01f, dirty);
-		Tweak::floatVar("Trees/World", "Climate sharpness", &m_climateSharpness, 0.0f, 16.0f, 0.1f, dirty);
-		Tweak::floatVar("Trees/World", "Climate fade start", &m_climateFadeStart, 0.0f, 1.0f, 0.01f, dirty);
-		Tweak::floatVar("Trees/World", "Climate fade end", &m_climateFadeEnd, 0.0f, 1.0f, 0.01f, dirty);
-		Tweak::intVar("Trees/World", "Gen jobs", &m_maxGenJobs, 1, 8, 1.0f);
-		Tweak::intVar("Trees/World", "GPU pool (MB)", &m_poolMB, 1, 1024, 1.0f, dirty);
-		Tweak::intVar("Trees/World", "Upload KB per frame", &m_uploadKB, 16, 65536, 16.0f);
-		Tweak::intVar("Trees/World", "CPU keep radius (chunks)", &m_keepRadius, 0, 128, 1.0f, [this]() { m_ringCam = glm::ivec2(INT32_MAX); });
-		Tweak::boolean("Trees/World", "Reload species", &m_reloadSpecies);
-		Tweak::boolean("Trees/World", "Log stats", &m_logStats);
+		const TreeWorldSettings& s = m_settings;
+		Tweak::onChange(s.enabled, this, dirty);
+		Tweak::onChange(s.seed, this, dirty);
+		Tweak::onChange(s.cellSize, this, dirty);
+		Tweak::onChange(s.densityScale, this, dirty);
+		Tweak::onChange(s.climateSharpness, this, dirty);
+		Tweak::onChange(s.climateFadeStart, this, dirty);
+		Tweak::onChange(s.climateFadeEnd, this, dirty);
+		Tweak::onChange(s.poolMB, this, dirty);
+		Tweak::onChange(s.keepRadius, this, [this]() { m_ringCam = glm::ivec2(INT32_MAX); });
 	}
 
 	oc::string_view TreeWorld::typeName(uint32 type) const
@@ -255,7 +253,7 @@ namespace Procedural
 	void TreeWorld::restart(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
 		const uint32 generation = ++m_generation;
-		clear(renderer, (uint64)glm::max(m_poolMB, 1) << 20);
+		clear(renderer, (uint64)glm::max(m_settings.poolMB, 1) << 20);
 		auto config = oc::make_shared<GenConfig>();
 		config->maps = maps;
 		config->species = m_species;
@@ -265,14 +263,14 @@ namespace Procedural
 		config->rockRules.ruggedSlope.y = glm::max(m_rockRules.ruggedSlope.y, m_rockRules.ruggedSlope.x + 0.01f);
 		config->rockRules.valleyRelief.y = glm::max(m_rockRules.valleyRelief.y, m_rockRules.valleyRelief.x + 0.1f);
 		config->seaLevel = Globals::terrain.seaLevel();
-		config->seed = (uint32)m_seed;
+		config->seed = (uint32)m_settings.seed;
 		config->generation = generation;
 		config->chunkSize = m_chunkSize;
-		config->cellSize = glm::max(m_cellSize, 1.0f);
-		config->densityScale = glm::max(m_densityScale, 0.0f);
-		config->sharpness = glm::max(m_climateSharpness, 0.0f);
-		config->fadeStart = glm::clamp(m_climateFadeStart, 0.0f, 1.0f);
-		config->fadeEnd = glm::clamp(glm::max(m_climateFadeEnd, config->fadeStart + 1e-3f), 0.0f, 1.0f);
+		config->cellSize = glm::max(m_settings.cellSize, 1.0f);
+		config->densityScale = glm::max(m_settings.densityScale, 0.0f);
+		config->sharpness = glm::max(m_settings.climateSharpness, 0.0f);
+		config->fadeStart = glm::clamp(m_settings.climateFadeStart, 0.0f, 1.0f);
+		config->fadeEnd = glm::clamp(glm::max(m_settings.climateFadeEnd, config->fadeStart + 1e-3f), 0.0f, 1.0f);
 		m_config = config;
 		std::lock_guard<std::mutex> lk(m_mutex);
 		m_pumpConfig = m_config;
@@ -280,12 +278,12 @@ namespace Procedural
 
 	void TreeWorld::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
-		if (m_logStats)
+		if (m_settings.logStats)
 		{
-			m_logStats = false;
+			m_settings.logStats = false;
 			logStats(renderer);
 		}
-		if (!m_enabled || !maps)
+		if (!m_settings.enabled || !maps)
 		{
 			if (m_config || !m_chunks.empty())
 			{
@@ -298,9 +296,9 @@ namespace Procedural
 		ProfileScope profileScope("TreeWorld", EProfileCategory::Procedural);
 
 		// Anything the records are a function of: a new generation.
-		if (!m_speciesLoaded || m_reloadSpecies)
+		if (!m_speciesLoaded || m_settings.reloadSpecies)
 		{
-			m_reloadSpecies = false;
+			m_settings.reloadSpecies = false;
 			loadSpecies();
 			m_configDirty = true;
 		}
@@ -369,7 +367,7 @@ namespace Procedural
 
 	bool TreeWorld::insideKeepRadius(glm::ivec2 coord) const
 	{
-		return chebyshev(coord, m_ringCam) <= glm::max(m_keepRadius, m_minKeepRadius);
+		return chebyshev(coord, m_ringCam) <= glm::max(m_settings.keepRadius, m_minKeepRadius);
 	}
 
 	const oc::vector<TreeRecord>* TreeWorld::cpuRecords(glm::ivec2 coord) const
@@ -389,7 +387,7 @@ namespace Procedural
 	// their CPU records.
 	void TreeWorld::uploadChunks(Renderer& renderer)
 	{
-		size_t budget = (size_t)glm::max(m_uploadKB, 1) * 1024;
+		size_t budget = (size_t)glm::max(m_settings.uploadKB, 1) * 1024;
 		while (!m_uploadQueue.empty() && budget > 0)
 		{
 			const uint64 key = m_uploadQueue.front();
@@ -411,7 +409,7 @@ namespace Procedural
 		if (refused > m_poolRefusedLogged)
 		{
 			if (m_poolRefusedLogged == 0)
-				Log::warning(oc::format("Trees/World: the GPU record pool ({} MB) is full - raise 'GPU pool (MB)'", m_poolMB));
+				Log::warning(oc::format("Trees/World: the GPU record pool ({} MB) is full - raise 'GPU pool (MB)'", m_settings.poolMB));
 			m_poolRefusedLogged = refused;
 		}
 	}
@@ -486,7 +484,7 @@ namespace Procedural
 
 	void TreeWorld::kickPump(size_t numNew)
 	{
-		const int32 cap = glm::clamp(m_maxGenJobs, 1, 8);
+		const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 8);
 		for (size_t spawned = 0; spawned < numNew; )
 		{
 			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
@@ -538,7 +536,7 @@ namespace Procedural
 					if (m_requests.empty())
 						return;
 				}
-				const int32 cap = glm::clamp(m_maxGenJobs, 1, 8);
+				const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 8);
 				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{

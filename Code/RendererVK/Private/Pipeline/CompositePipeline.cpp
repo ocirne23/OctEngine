@@ -76,15 +76,13 @@ void CompositePipeline::record(CommandBuffer& commandBuffer, const RecordParams&
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.mbSampler, .imageView = params.mbDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eUniformBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo, .range = sizeof(RendererVKLayout::Ubo) } } } };
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo, .range = RendererVKLayout::UBO_RANGE } } } };
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet, updates);
     vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
-    const CompositePC pc{ .exposure = exp2f(params.exposureEV), .tonemapper = params.tonemapper, .autoExposure = params.autoExposure,
-        .bloomKeep = params.bloomAdditive ? 1.0f : 1.0f - params.bloomIntensity, .bloomUv = params.bloomUv, .bloomScale = params.bloomIntensity * params.bloomNormalize,
-        .mbSamples = params.mbSamples };
+    const CompositePC pc{ .bloomUv = params.bloomUv };
     vkCommandBuffer.pushConstants(m_graphicsPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(pc), &pc);
     vkCommandBuffer.draw(3, 1, 0, 0);
 }

@@ -9,6 +9,7 @@ import RendererVK;
 import Spatial;
 import Threading;
 import File;
+import Settings;
 
 import :TerrainSampler;
 import :TerrainGenerator;
@@ -34,7 +35,7 @@ export namespace Procedural
 		TerrainStreamer(const TerrainStreamer&) = delete;
 		TerrainStreamer& operator=(const TerrainStreamer&) = delete;
 
-		void initialize();                                     // registers Tweaks + starts the worker thread
+		void initialize();                                     // attaches the settings listeners + builds the maps (after Settings registered)
 		void update(Renderer& renderer, const Camera& camera); // per-frame: stream, drain, evict (call after beginFrame)
 		// Per-frame, after update() AND ocean.update(): kicks ocean.render, then this render job, whose
 		// ONE walk of the Spatial visible hand-over (slot 1: RenderNode pointers, an ocean sector's
@@ -72,24 +73,24 @@ export namespace Procedural
 		// ocean's shore-depth bake). nullptr while terrain rendering is disabled - consumers treat that
 		// as "no terrain" rather than sampling a field that isn't drawn. Thread-safe; the shared_ptr
 		// keeps the maps valid across config rebuilds (workers holding the old maps finish against them).
-		oc::shared_ptr<const ITerrainSampler> activeClimateMaps() { return m_enabled ? currentMaps() : nullptr; }
+		oc::shared_ptr<const ITerrainSampler> activeClimateMaps() { return m_settings.enabled ? currentMaps() : nullptr; }
 		// The ocean-reach rule this streamer bakes into the terrain-data map, for anything baking the SAME
 		// fields off the same sampler (the ocean's shore map, which overrides that map inside its range).
 		// Handed out rather than duplicated so the two cannot drift apart - see applyWaterReach.
 		// nullptr = the rule is off; bake the sampler's water level as-is.
-		const WaterReach* activeWaterReach() const { return m_waterReachEnabled ? &m_waterReach : nullptr; }
+		const WaterReach* activeWaterReach() const { return m_settings.waterReachEnabled ? &m_settings.waterReach : nullptr; }
 		// The flow-direction rule, handed out for the same reason (the ocean's shore map must bake the
 		// SAME directions this streamer bakes into the terrain-data map's 8 flow bits, or the wave travel
 		// direction would turn where one map hands over to the other). nullptr = flow bits carry only what
 		// the generator authors. See applyFlowField.
-		const FlowField* activeFlowField() const { return m_flowFieldEnabled ? &m_flowField : nullptr; }
+		const FlowField* activeFlowField() const { return m_settings.flowFieldEnabled ? &m_settings.flowField : nullptr; }
 		// The offshore heading the baked flow eases back into - the ocean's swell heading, pushed in by the
 		// app each frame (the streamer cannot know it; a stale angle just re-bakes one map). See FlowField.
-		void setFlowWindAngle(float radians) { m_flowField.windAngle = radians; }
+		void setFlowWindAngle(float radians) { m_settings.flowField.windAngle = radians; }
 		// THE sea level datum for the world, tweak-backed here because the terrain generator builds its
 		// heights around it (so it regenerates chunks) - the ocean floats on this rather than owning a
 		// second copy. Valid even while terrain is disabled, so the ocean can still run on its own.
-		float seaLevel() const { return m_seaLevel; }
+		float seaLevel() const { return m_settings.seaLevel; }
 		// CPU copy of the ACTIVE baked terrain-data map (the same texels setFogTerrainHeightMap shipped
 		// to the GPU) - the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
@@ -114,11 +115,11 @@ export namespace Procedural
 		StreamStatus streamStatus() const;
 		// The V3 world scale the streamer is configured with (the "Terrain/V3/Meters per pixel" tweak), so a
 		// preview sampled outside the streamer maps its texels to the same world metres the mesh will use.
-		float v3MetersPerPixel() const { return m_v3MetersPerPixel; }
+		float v3MetersPerPixel() const { return m_settings.v3MetersPerPixel; }
 		// The ring's radius in chunks and the chunk size in metres ("Terrain/Range (chunks)" / "Chunk size
 		// (m)"): the lobby sizes the ring to the seeded playable area and restores the radius after.
-		int ringRadius() const { return m_ringRadius; }
-		int chunkSize() const { return m_chunkSize; }
+		int ringRadius() const { return m_settings.ringRadius; }
+		int chunkSize() const { return m_settings.chunkSize; }
 		// The GENERATED bounds (engine metres): the playable area the lobby's seeder pre-generated
 		// full tiles for. While set, the ring never requests a chunk outside it, and the generator
 		// (TerrainConfigV3::bounded) answers every full-detail sample outside it from the coarse stage
@@ -181,9 +182,9 @@ export namespace Procedural
 		void updateDisabled(Renderer& renderer, const Camera& camera);
 		void rebuildMaps();                             // (re)builds the active generator from the tweak-backed config
 		void clearResidents();
-		// Pushes the splat shaping params (with the live precipitation divisor the climate boxes need) every
-		// frame, and registers the texture set + climate boxes once the background DDS bake finishes (the
-		// TERRAIN shader falls back to flat colors until then).
+		// Pushes V3's crag scale every frame (the renderer reads the texture settings themselves), and registers
+		// the texture set + climate boxes once the background DDS bake finishes (the TERRAIN shader falls back to
+		// flat colors until then).
 		void updateTerrainTextures(Renderer& renderer);
 		void registerTerrainTextures(Renderer& renderer); // one-shot, from updateTerrainTextures
 		oc::shared_ptr<const ITerrainSampler> currentMaps();
@@ -191,94 +192,29 @@ export namespace Procedural
 		// maps == nullptr means "no terrain" and clears the map. See the .cpp for the bake scheme.
 		void updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange);
 
-		// --- Tweak-backed configuration (source of truth; the generator/ChunkParams are built from these) ---
-		bool  m_enabled = false;
-		//int   m_seed = 62500;
-		//int   m_seed = 7236781;
-		int   m_seed = 516121;
-		// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z). The
-		// lobby's "Seed world" pick sets these through overrides so the match builds on the chosen spot.
-		float m_originX = 0.0f;
-		float m_originZ = 0.0f;
+		// --- The "Terrain*" tweaks (Settings.Terrain; source of truth: the generator/ChunkParams are built from these) ---
+		TerrainSettings& m_settings = Globals::settings.terrain;
 		// See setGeneratedBounds. Not tweaks: the session sets them with the seeded world.
 		bool m_bounded = false;
 		glm::vec2 m_boundsMin = glm::vec2(0.0f);
 		glm::vec2 m_boundsMax = glm::vec2(0.0f);
-		int   m_chunkSize = 256;
-		int   m_lod0Res = 128;
-		// IN CHUNKS (256 m since 2026-10-03; the LOD bands keep their old metre widths: x4). The ring is 24 km, not the
-		// old 32: 128 chunks would be ~51 k chunk meshes against the 16-bit mesh index (Renderer addMeshInfos).
-		int   m_ringRadius = 96;   // max generation range from the camera chunk, in chunks
-		float m_lodStep = 1.2f;   // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
-		float m_fullResDist = 1.2f; // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
-		int   m_maxLod = 4;
-		float m_seaLevel = 0.0f;
-		float m_skirtDepth = 5.0f;
-		int   m_maxUploadsPerFrame = 16;
-		// Byte cap on one frame's upload batch. It is below the 100 MB staging ring, so one batch does not
-		// wrap the ring more than once (each wrap waits a staging fence). The first chunk always goes.
-		float m_maxUploadMBPerFrame = 48.0f;
 
 		// --- The Terrain Diffusion generator. ONNX-model backed: it needs 2.28 GB of
 		// weights on disk and a DirectML-capable GPU, and it generates 7.68 km tiles rather than evaluating
 		// a point function. See Private/Diffusion/GeneratorV3.ixx.
-		float m_v3MetersPerPixel = 2.0f;  // 30 = the model's true training scale; lower compresses the world
-		float m_v3HeightScale = 1.0f;
-		float m_v3DetailSlopeGain = 0.75f; // slope -> detail mask (the model only resolves 30 m/px)
-		// Wavelengths/amplitudes are in MODEL metres and ride metersPerPixel, so the OCTAVE counts are what
-		// set how far below the model's 30 m/px the terrain actually has anything in it. See the tweak
-		// registration for the resolution arithmetic - this is the dial for "detailed at full world scale".
-		float m_v3DetailWavelengthA = 220.0f;
-		float m_v3DetailAmplitudeA = 38.0f;
-		int   m_v3DetailOctavesA = 4;
-		float m_v3DetailWavelengthB = 45.0f;
-		float m_v3DetailAmplitudeB = 11.0f;
-		int   m_v3DetailOctavesB = 3;
-		float m_v3PrecipFullHumidity = 2200.0f; // mm/yr that reads as humidity 1.0
-		float m_v3HumidityOffset = 0.0f;        // slides the planet along arid <-> lush
-		float m_v3TemperatureOffset = 0.0f;     // C, shifts the whole planet
-		float m_v3LapseRate = -0.008f;          // C per MODEL metre: THE snow-line dial. See the tweak.
-		// Microclimate wander (C): breaks climate boundaries off the contour lines the lapse rate pins them
-		// to. See the tweak registration.
-		float m_v3ClimateNoiseC = 5.0f;
-		float m_v3ClimateNoiseWavelength = 2000.0f; // model metres
-		int   m_v3ClimateNoiseOctaves = 3;
-		float m_v3HumidFog = 0.25f;
-		float m_v3ValleyFog = 0.25f;
-		int   m_v3MaxTiles = 256;           // resident tile budget (~800 KB each)
-		// Half-precision inference. Buys VRAM (~2.28 GB -> ~1.1 GB) and load time, NOT generation speed -
-		// the pipeline is dispatch-bound (see the tweak registration for the measurements). Needs the
-		// optional models from Tools/convert_models_fp16.py; without them it stays fp32. Flipping it
-		// reloads the models and changes the terrain for a given seed, so it regenerates the world.
-		bool  m_v3Fp16 = false;
-		// "Load models": off = the terrain runs on the existing .tile cache only (TerrainGenV3::
-		// setModelLoadingEnabled), so no weights are ever loaded.
-		bool  m_v3LoadModels = false;
 		// V3 can't generate until its models are downloaded+loaded. Building chunks before then would bake a
 		// flat sea-level world into the resident cache, so the streamer idles instead and rebuilds on ready.
 		bool m_v3AwaitingModels = false;
 		double m_v3LastStatusLog = 0.0; // rate-limits the download/load progress log
 
-		bool m_configDirty = false; // set by Tweak onChange; consumed at the top of update()
+		bool m_configDirty = false; // set by the settings listeners (initialize); consumed at the top of update()
 		bool m_disabledIdle = false; // disabled AND fully drained: update() is a branch and a return
 
 		// --- Shared terrain-data map (fog terrain-following + regional thickness, ocean shore fallback,
 		// terrain coloring; height / water level / fog|falloff|temp|hum / altitude per texel) ---
-		bool  m_terrainMapEnabled = true;
-		bool  m_terrainMapDebugLog = false; // log the decoded climate range of every baked cascade
-		float m_terrainMapRange = 4096.0f;     // near cascade world size (m), centered on the camera
-		float m_terrainMapFarRange = 8192.0f;  // far cascade world size (m; same texel count, coarser texels)
-		// Ocean reach: how close real ocean must be for water here to still be the sea. Beyond it the baked
-		// water level sinks below the ground, which is what stops the ocean running swash up every inland
-		// hollow that happens to sit within a metre of sea level (V3 models no lakes, so it reports sea
-		// level planet-wide). See applyWaterReach.
-		WaterReach m_waterReach;
-		bool  m_waterReachEnabled = true;
-		// Flow direction: which way the water moves per texel (toward land through the surf zone, downhill
-		// everywhere else) - the wave-travel field at the coast and the seed data for future rivers/water
-		// simulation. See applyFlowField.
-		FlowField m_flowField;
-		bool  m_flowFieldEnabled = true;
+		// The bake's config (enabled, ranges, the ocean reach and flow-direction rules) is in m_settings. Ocean reach:
+		// how close real ocean must be for water here to still be the sea (see applyWaterReach). Flow direction: which
+		// way the water moves per texel - the wave-travel field at the coast (see applyFlowField).
 		HeightMapBaker m_terrainMapBaker;
 		bool  m_terrainMapUploaded = false;    // a map is live in the renderer (cleared on disable)
 		oc::shared_ptr<const BakedTerrainData> m_terrainMapData; // CPU copy of the active bake (activeTerrainData)
@@ -292,103 +228,12 @@ export namespace Procedural
 		oc::atomic<bool> m_texBakeDone{ false };
 		bool              m_texSetRegistered = false;
 
-		// --- Terrain/Textures tweaks: splat shaping, pushed to Renderer::setTerrainTextureParams every
-		// frame from updateTerrainTextures (mirrors Renderer::TerrainTexTweaks) ---
-		float m_texUvScaleGround = 0.15f;  // 1/m: ~7 m texture repeat on flat ground
-		float m_texUvScaleRock = 0.05f;    // 1/m: rock features read larger on cliffs
-		float m_texUvScaleSnow = 0.10f;    // 1/m
-		float m_texClimateBlend = 0.02f;   // Gaussian sigma OUTSIDE a climate box, in (t01, h01) units
-		// Slope is 1 - N.y: 0.30 = 45 deg (about where soil stops holding), 0.55 = 63 deg.
-		float m_texSlopeRockStart = 0.25f;
-		float m_texSlopeRockFull = 0.60f;
-		// Crag wander: breaks the rock boundary off the elevation contour it otherwise traces. In metres at
-		// the model's true scale, like the crag thresholds it modulates. See the tweak registration.
-		float m_texCragWanderAmp = 66.0f;
-		float m_texCragWanderWavelength = 400.0f;
-		// View distance (real-world m) beyond which splats fetch albedo only; <= 0 = always full detail.
-		float m_texCragStart = 34.0f;      // crag relief start (m above macro altitude)
-		float m_texCragFull = 400.0f;
-		float m_texBeachBand = 2.5f;       // beach band height (m above water level)
-		// Snow COVER (composited over ground and rock alike, so peaks read white with their own rock
-		// showing on the steep faces). It sheds before rock appears: 0.18 = 35 deg vs rock's 45.
-		// Below freezing is NOT permanent snow (Siberia averages -10 C and is forest), so these sit well
-		// below 0. Raise "temp none" toward 0 for a more fantasy, snow-capped look.
-		float m_texSnowTempFull = -7.0f;  // C at/below which cover is complete
-		float m_texSnowTempNone = -1.0f;   // C at/above which there is none
-		float m_texSnowSlopeStart = 0.26f;
-		float m_texSnowSlopeFull = 0.60f;
-		float m_texSnowAridity = 0.10f;    // humidity at/below which cold ground stays bare (polar desert)
-		// Relief from the splat height maps (Renderer::TerrainTexTweaks has the reasoning).
-		bool  m_texParallaxEnabled = false;
-		float m_texParallaxDepthGround = 0.12f; // m
-		float m_texParallaxDepthRock = 0.35f;   // m
-		float m_texParallaxFadeStart = 15.0f;   // m from the camera
-		float m_texParallaxFadeEnd = 30.0f;     // m
-		int   m_texParallaxSteps = 24;
-		float m_texParallaxShadow = 1.0f;       // relief self-shadow strength (0 = off)
-		float m_texHeightBlendContrast = 3.0f;  // 0 = linear layer blend
-		bool  m_texTessEnabled = true;          // Terrain/Tessellation (Renderer::TerrainTexTweaks has the reasoning)
-		int   m_texTessMaxFactor = 8;
-		float m_texTessTargetPx = 7.0f;
-		float m_texTessFadeStart = 15.0f;       // m
-		float m_texTessFadeEnd = 75.0f;         // m
-		float m_texTessFalloffExponent = 0.5f;  // tess factor: 1 - t^p across the fade band
-		float m_texTessHeightFalloffExponent = 2.0f; // displacement height: 1 - t^p across the fade band
-		float m_texTessFreezeDistance = 15.0f;  // m: closer in, the factor and the height mip hold
-		float m_texTessDepthGround = 0.6f;      // m
-		float m_texTessDepthRock = 0.7f;       // m
-
-		// --- Terrain/Water tweaks: the surface water (Renderer::TerrainWetTweaks), pushed every frame from
-		// updateTerrainTextures. ONE wetness field (rain, ocean swash, submersion) drives ONE water surface:
-		// the level it fills the splat relief to, the live ocean it follows at the waterline, and the
-		// darkening / gloss of the ground under it.
-		bool  m_wetEnabled = true;
-		float m_wetTexelSize = 2.0f;      // m per texel (1024 texels = 2048 m around the scene focus)
-		float m_wetUpdateRate = 20.0f;    // Hz: the pass's fixed tick
-		float m_wetDiffusionRate = 5.0f; // 1/s sideways spread (framerate independent)
-		float m_wetRain = 0.0f;           // wetness per second added everywhere
-		float m_wetDryTime = 10.0f;       // s to decay to 1/e on cool ground
-		float m_wetDryTempSens = 0.04f;   // extra decay rate per C above 15 C
-		float m_wetInTime = 5.0f;         // s for ground under water to reach full wetness
-		float m_wetSlopeDrain = 20.0f;    // steep ground dries faster / soaks slower; 0 = off
-		float m_wetFillStart = 0.5f;     // wetness at which water begins to stand in the relief's low points
-		float m_wetFillFull = 1.0f;       // wetness that submerges the relief (level 1)
-		float m_wetFillCurve = 1.0f;      // exponent between them: 1 = linear, > 1 = fills late, < 1 = early
-		float m_wetEdgeFade = 0.5f;       // m of water depth the film fades out over at the terrain intersection
-		float m_wetOceanBlend = 5.0f;     // m of live ocean water over the ground the film fades into the ocean over
-		float m_wetOceanEdgeFade = 0.5f;  // m of column the ocean blends out over at its edge (0 = hard edge)
-		float m_wetFilmMaxSlope = 25.0f;  // degrees: no standing water on steeper ground (90 = off)
-		float m_wetFilmSlopeFade = 5.0f; // degrees below the max over which the pool level sinks to nothing
-		float m_wetFilmFlowSpeed = 1.0f;  // m/s the film's ripples run downhill at 45 degrees (x sqrt(tan slope))
-		float m_wetFilmFlowMinSlope = 8.0f; // degrees: flow full from here, fading in from half of it
-		float m_wetFilmFlowCycle = 1.0f;  // s: the flow map's phase cycle
-		float m_wetWaviness = 1.0f;       // film normal: 0 = level plane, 1 = the live FFT wave normal
-		float m_wetNormalScale = 2.0f;    // film wave normal strength, x the ocean's "Normal strength"
-		float m_wetRippleStrength = 0.1f; // inland wind ripples (0 = off)
-		float m_wetRoughness = 0.08f;     // the water film's perceptual roughness
-		float m_wetGroundRoughness = 0.3f;  // ground roughness at full wetness
-		float m_wetDryingPattern = 1.0f;    // 0..1: uniform drying (0) to dry islands (1)
-		float m_wetDarkeningEdge = 0.5f;    // soft band around the darkening's drying level: wide = smoother fade
-		float m_wetRoughnessEdge = 0.5f;    // soft band around the gloss's drying level: small = crisp islands
-		float m_wetDryingPatternSize = 0.4f;    // m: size of the drying blotches
-		float m_wetDryingPatternRelief = 0.6f;  // 0..1: share of the splat relief in the pattern
-		float m_wetDryingPatternContrast = 2.5f; // stretch of the noise toward fully dry / wet: higher = stronger islands
-		float m_wetUnderwaterRoughness = 0.9f; // ground roughness under the live ocean and the film
-		float m_wetDarkening = 0.55f;     // ground albedo multiplier at full wetness
-		float m_wetDarkeningThreshold = 0.3f;  // wetness at which the ground's darkening is full
-		float m_wetRoughnessThreshold = 1.0f;  // wetness at which the ground's wet gloss is full
-		float m_wetGroundNormalScale = 1.75f;  // normal map tilt at full gloss: 1 = unchanged, < 1 flatter, > 1 stronger
-		float m_wetGlintSize = 0.04f;          // m: glint patch cell size
-		float m_wetGlintCoverage = 0.15f;      // ~ share of the wet ground that glints (0 = off)
-		float m_wetGlintRoughness = 0.15f;     // GGX alpha inside a glint patch
-
-		// --- Threading: generation runs on up to m_maxGenJobs Low-priority pump jobs; V3 waits
+		// --- Threading: generation runs on up to "Gen jobs" Low-priority pump jobs; V3 waits
 		// inside them park their fibers (several pumps joining one cold tile all proceed when it
 		// lands, and warm-tile mesh builds overlap the cold-tile wait). Claim invariant: a pump
 		// leaving decrements m_numPumps BEFORE its empty-recheck and re-claims a slot if requests
 		// remain, and every append is followed by kickPump - so requests never strand. ---
 		oc::atomic<int32>      m_numPumps{ 0 };
-		int                     m_maxGenJobs = 12; // tweak: concurrent chunk generations
 		JobCounter              m_pumpCounter;
 		std::mutex              m_mutex;
 		// An unordered POOL of outstanding work, despite the deque: the worker rescans it on every dequeue
@@ -443,16 +288,20 @@ export namespace Procedural
 		oc::vector<uint64>                  m_evictScanOut;
 		JobCounter                          m_evictScanCounter;
 		bool                                m_evictScanReady = false; // kicked: m_evictScanOut replaces the candidates
-		// The render push runs on a worker (see render / joinRender): the hand-over walk and the
-		// sphere query both run in the job.
+		// The render push runs on workers (see render / joinRender): the hand-over walk fans out over a
+		// parallelFor, the sphere query runs beside it as a job of its own.
 		JobCounter                          m_renderCounter;
+		JobCost                             m_renderPushCost{ 250, "terrainRenderPushChunk" };
 		bool                                m_renderReady = false; // update() ran enabled: render() pushes chunks
 		// The vegetation (setVegetation): the owner's hooks, and the walk's per-frame merge (a mask per vegetation chunk,
-		// the chunks touched, the list handed to the sink) - only the walk job touches them between kick and join.
+		// the chunks touched, the list handed to the sink) - only the walk's jobs touch them between kick and join.
+		// The pushes run in parallel: a mask is OR'ed through an atomic_ref, and the push that first sets one lists its
+		// chunk in m_vegTouched (one slot per vegetation chunk, m_vegTouchedCount filled).
 		oc::function<int32(glm::ivec2)>                         m_vegLookup;
 		oc::function<void(oc::span<const VegetationDraw>)>      m_vegSink;
 		oc::vector<uint8>                   m_vegMasks;
 		oc::vector<uint32>                  m_vegTouched;
+		oc::atomic<uint32>                  m_vegTouchedCount{ 0 };
 		oc::vector<VegetationDraw>          m_vegDraws;
 		bool                                m_vegRouted = false;
 		oc::vector<Renderer::GrassGroundChunk> m_grassGround; // update's per-frame list for Renderer::setGrassGround (kept memory)

@@ -3,6 +3,7 @@
 import Core;
 import Core.glm;
 import Core.Camera;
+import Settings;
 
 import Input.fwd;
 import :Input; // MouseListenerHandle
@@ -16,9 +17,9 @@ public:
 
     void initialize(glm::vec3 position, glm::vec3 lookAt, glm::vec3 up = glm::vec3(0, 1, 0));
     void update(double deltaTime);
-    void setSpeed(float speed) { m_speed = speed; }
-    void setSensitivity(float sensitivity) { m_sensitivity = sensitivity; }
-    void setLockToWorldUp(bool lock) { m_lockToWorldUp = lock; }
+    void setSpeed(float speed) { m_settings.speed = speed; }
+    void setSensitivity(float sensitivity) { m_settings.sensitivity = sensitivity; }
+    void setLockToWorldUp(bool lock) { m_settings.lockToWorldUp = lock; }
     // Off = mouse-look only: the WASD/Space/Ctrl fly keys are released to whoever borrowed them
     // (player control routes them to the owned entity while active - see InputControls key C)
     void setMovementEnabled(bool enabled) { m_movementEnabled = enabled; }
@@ -41,8 +42,8 @@ public:
         Camera camera;
         camera.position = m_position;
         camera.viewMatrix = m_viewMatrix;
-        camera.near = m_near;
-        camera.far = m_far;
+        camera.near = m_settings.cameraNear;
+        camera.far = m_settings.cameraFar;
         return camera;
     }
 
@@ -52,14 +53,10 @@ private:
 
     bool m_isMouseDown = false;
     bool m_mousePosUpdated = false;
-    bool m_lockToWorldUp = true;
+    FreeFlyCameraSettings& m_settings = Globals::settings.freeFlyCamera; // the mouse wheel writes speed
     bool m_movementEnabled = true;
     float m_boostMultiplier = 10.0f;
-    float m_speed = 50.0f;
-    float m_sensitivity = 0.005f;
     float m_maxLookDelta = 150.0f; // pixels between two mouse events; beyond this we missed some
-    float m_near = 0.05f;
-    float m_far = 42000.0f;
     glm::vec2 m_lastMousePos;
     glm::vec3 m_position;
     glm::vec3 m_direction;

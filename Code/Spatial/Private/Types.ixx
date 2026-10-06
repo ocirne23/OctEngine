@@ -3,6 +3,7 @@ export module Spatial:Types;
 import Core;
 import Core.glm;
 import Core.Frustum;
+export import Settings.Spatial;
 import :Morton;
 
 export struct SpatialHandle
@@ -130,49 +131,15 @@ export constexpr uint32 SpatialPassBit_UpdateTier1 = 1u << 4;
 export constexpr uint32 SpatialPassBit_UpdateTier2 = 1u << 5;
 export constexpr uint32 SpatialPassBits_UpdateTiers = SpatialPassBit_UpdateTier0 | SpatialPassBit_UpdateTier1 | SpatialPassBit_UpdateTier2;
 
-export enum class ESpatialCullMode : int
-{
-    Off = 0,   // no queries, every entity is pushed for all render passes
-    StatsOnly, // the queries run for their stats, nothing is gated
-    Cull,      // main set renders fully; near-only entities are pushed for shadows/ray tracing only
-    MainOnly,  // debug: only the main-frustum set is pushed at all (visibly breaks off-screen shadows/GI)
-};
-
-// Live-tweakable culling settings (Spatial/Culling): the App drives the markVisible* queries from
-// these and Entity::updateTree pushes per-pass masks when mode >= Cull.
-export struct SpatialCullingConfig
-{
-    int mode = int(ESpatialCullMode::Cull);
-    bool freeze = false;             // stop re-stamping, fly around to inspect the culled set
-    float margin = 4.0f;             // frustum inflation masking the one-frame stamp latency
-    float nearRadius = 0.0f;       // shadow-caster + ray-tracing relevance range around the camera
-    float shadowReach = 60.0f;     // Shadow pass: how far (m) the view frustum is swept toward the sun on the
-                                   // horizontal plane - off-screen casters up to this far up-sun of the
-                                   // visible ground keep their shadow pass. 0 = off (Main + Near only).
-    float nearSlack = 16.0f;         // Near ball inflation; requery only after the camera moves this far (0 = every frame)
-    float maxDist = 5000.0f; // main-pass cull distance; overwritten each frame with the camera far plane (setCullMaxDist)
-    float skinnedRadiusScale = 1.5f; // animation can exceed the bind-pose bounds sphere
-};
+// ESpatialCullMode, SpatialCullingConfig and SpatialStats are Settings.Spatial's (Globals::settings.spatial).
+static_assert(SpatialStatsMaxLevels == Morton::MaxLevels && SpatialStatsMaxPasses == uint32(ESpatialPass::Count),
+    "SpatialStats (Settings.Spatial) is sized for the level and pass counts");
+static_assert(uint32(ESpatialPass::Main) == 0 && uint32(ESpatialPass::Near) == 1 && uint32(ESpatialPass::Shadow) == 2,
+    "the Spatial/Stats Visible rows (Settings.Spatial) index visiblePerPass by pass");
 
 export struct SpatialIndexDesc
 {
     uint32 numLevels = Morton::MaxLevels;
     uint32 initialCellCapacity = 4096;  // per level, rounded up to a power of two
     uint32 initialEntryCapacity = 4096;
-};
-
-export struct SpatialStats
-{
-    int numEntries = 0;
-    int numCells = 0;
-    int cellsTested = 0;      // per-frame query counters, reset each commitFrame
-    int cellsFullyInside = 0;
-    int entityTests = 0;
-    int visiblePerPass[uint32(ESpatialPass::Count)] = {};
-    int numBlocks = 0;  // 8-lane cell blocks in use across all levels (numEntries / numBlocks = lane fill)
-    int cellMoves = 0;  // entries that changed cell in the last commit (Move ops applied)
-    float commitMs = 0.0f;
-    float markVisibleMs = 0.0f;
-    int perLevelCells[Morton::MaxLevels] = {};
-    int perLevelEntities[Morton::MaxLevels] = {};
 };

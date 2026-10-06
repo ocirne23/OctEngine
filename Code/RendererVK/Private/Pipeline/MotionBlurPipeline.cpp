@@ -15,9 +15,6 @@ namespace
     {
         uint32 width;
         uint32 height;
-        float  shutter;
-        float  maxRadius;
-        float  cameraScale;
     };
     struct NeighborPC
     {
@@ -208,7 +205,7 @@ void MotionBlurPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, c
             vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite);
         vk::DescriptorSet vkSet = m_tilesSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 5> updates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampled(m_sampler, params.sceneDepthView, SCENE_DEPTH_SAMPLED_LAYOUT) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampled(m_sampler, params.motionView, vk::ImageLayout::eShaderReadOnlyOptimal) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storage(m_velocity.view) } },
@@ -218,8 +215,7 @@ void MotionBlurPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, c
         commandBuffer.cmdUpdateDescriptorSets(layout, vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tilesPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, layout, 0, 1, &vkSet, 0, nullptr);
-        const TilesPC pc{ .width = m_width, .height = m_height, .shutter = params.shutter,
-            .maxRadius = clampMaxRadius(params.maxRadius), .cameraScale = params.cameraScale };
+        const TilesPC pc{ .width = m_width, .height = m_height };
         cmd.pushConstants(layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(m_subTilesX, m_subTilesY, 1); // one workgroup per sub-tile
     }

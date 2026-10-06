@@ -3,6 +3,7 @@ export module Procedural:HeightMapBaker;
 import Core;
 import Core.glm;
 import Threading;
+export import Settings.Terrain; // WaterReach, FlowField
 import :TerrainSampler;
 
 export namespace Procedural
@@ -22,6 +23,7 @@ export namespace Procedural
 		uint32 cascades = 0;
 	};
 
+	// WaterReach (the rule's config, "Terrain" tweaks) lives in Settings.Terrain.
 	// Sea level everywhere is a lie the ocean believes. A generator that models no lakes (V3) reports the
 	// ocean's level at every point on the planet, so every scrap of terrain within a metre of it - an
 	// inland hollow, a river flat, anything - reads as shoreline and the ocean runs swash up it.
@@ -49,23 +51,10 @@ export namespace Procedural
 	//
 	// LAKES are never touched: a lake's surface already differs from sea level, so lakes pass through
 	// and keep their own shoreline.
-	struct WaterReach
-	{
-		float radius = 4.0f;   // world metres of ocean proximity that still counts as shore
-		float feather = 70.0f;  // world metres over which the drop eases in (no hard line on a beach)
-		float drop = 1.0f;      // how far below sea level to sink unreachable water. Must clear the swash
-		                        // gate's 1 m fade with room to spare; also pushes the beach overlay off.
-		// How deep water must be to count as OCEAN and seed reach for the ground around it. Without it any
-		// texel a hair under sea level qualifies, so one shallow inland dip vouches for every hollow within
-		// the radius of it - the thing this whole pass exists to stop, reintroduced by a puddle. Swell needs
-		// a real body of water behind it; this is where that line is drawn. 0 = any water below sea level.
-		float swashDepth = 2.0f;
-
-		// Compared to decide whether a baked map went stale (HeightMapBaker::update). Defaulted rather than
-		// hand-written so a field added above is covered without anyone remembering to extend it - a missed
-		// one would silently leave the tweak doing nothing until the camera happened to move far enough.
-		bool operator==(const WaterReach&) const = default;
-	};
+	//
+	// WaterReach::swashDepth - how deep water must be to count as OCEAN and seed reach - keeps one shallow inland
+	// dip from vouching for every hollow within the radius of it (the thing this whole pass exists to stop,
+	// reintroduced by a puddle). Swell needs a real body of water behind it; this is where that line is drawn.
 
 	// Sinks the water level of texels that no ocean reaches. `texels` is one cascade, res*res*channels with
 	// height at [0] and water level at [1]; a chamfer distance transform over the ocean texels drives it.
@@ -169,24 +158,10 @@ export namespace Procedural
 	// (submerged, water at sea level) within `oceanRange` of land point AT that land: this is what carries
 	// waves inland at the coast (the water shader rotates its wave field along it). Everything else - dry
 	// ground, lakes, reach-drained flats - points downhill, for rivers/water simulation to build on.
-	struct FlowField
-	{
-		float oceanRange = 250.0f;   // world m: how far offshore the toward-land direction still applies
-		// World m at the END of that range over which the direction eases back to the WIND heading, so the
-		// encoded field meets the unencoded (= wind-driven) open ocean without a visible turn: past the
-		// range "no direction" and "the wind's direction" are the same answer to 8-bit precision.
-		float oceanFade = 120.0f;
-		// World m of box averaging over the shore directions. The raw nearest-land field is Voronoi
-		// piecewise-constant - a jagged coastline flips it texel to texel, and waves would visibly change
-		// travel direction along the beach. Averaged as VECTORS, so opposing shores cancel to "none"
-		// rather than to a bogus average angle.
-		float smoothRadius = 40.0f;
-		float minSlope = 0.02f;      // land: slopes flatter than this (m per m) carry no direction
-		float windAngle = 0.0f;      // radians in XZ: the swell heading the fade band returns to (the ocean's)
-
-		// Staleness comparison (HeightMapBaker::update), same reasoning as WaterReach's.
-		bool operator==(const FlowField&) const = default;
-	};
+	// FlowField (the rule's config, "Terrain" tweaks + the app's wind angle) lives in Settings.Terrain. Past
+	// oceanRange + oceanFade "no direction" and "the wind's direction" are the same answer to 8-bit precision; the
+	// smoothing exists because the raw nearest-land field is Voronoi piecewise-constant - a jagged coastline flips it
+	// texel to texel, and waves would visibly change travel direction along the beach.
 
 	// Fills the 8-bit flow channel of one baked cascade. Runs AFTER applyWaterReach on purpose: reach
 	// drains inland sea-level films, so they classify as land here and get downhill directions instead of
@@ -596,7 +571,7 @@ export namespace Procedural
 								// 10.6 C too warm at peaks and its texture flipped at the crossfade. A
 								// baseline has no anchor to disagree about: consumers evaluate it at the
 								// height they shade (terrainTemperatureAt) against the generator's one
-								// published lapse rate (u_terrainParams.y).
+								// published lapse rate (u_terrainLive_lapseRate).
 								const auto q8 = [](float f) { return (uint32)(glm::clamp(f, 0.0f, 1.0f) * 255.0f + 0.5f); };
 								const uint32 packed = q8(p.fogThickness)
 									| (encodeFlowAngle01(p.flowAngle01) << 8)

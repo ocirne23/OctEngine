@@ -7,8 +7,6 @@ import :Entity;
 import Force;
 import Spatial;
 
-GameStructureParams GameStructureComponent::params;
-
 static std::mutex g_structureEventMutex;
 static oc::vector<uint32> g_spawnRequests;
 static oc::vector<GameStructureComponent::TurretFireRequest> g_turretFire;

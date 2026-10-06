@@ -13,18 +13,18 @@
 // metres long integrates over that much noise, and the view sample's fine mip only thrashed the texture cache
 // (and aliased). EARLY OUT at odCut (normalized, the caller's): past it every multi-scattering octave is gone.
 // THE REACH is the way out of the sample's OWN LAYER toward the sun, (layer top - altitude) / L.y, capped by
-// "Light distance (m)" (u_cloudMarch1.y) for a low sun. A fixed reach spent steps in the empty air above a sample
+// "Light distance (m)" (u_clouds_lightDistance) for a low sun. A fixed reach spent steps in the empty air above a sample
 // near the top, and one near the base stopped short of the tower over it. The own layer's top, not the shell's:
 // the gap between the layers would take steps for nothing.
 float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, vec3 L, float lodBase, float lodDetail, float detailWeight, float odCut)
 {
-    const int n = int(u_cloudMarch1.x);
-    const bool inUpper = u_cloudLayer0.z > 0.5 && sampleAlt >= u_cloudLayer1.x;
-    const float layerTop = inUpper ? u_cloudLayer1.x + 1.0 / u_cloudLayer1.y : u_cloudLayer0.x + 1.0 / u_cloudLayer0.y;
-    const float reach = clamp((layerTop - sampleAlt) / max(L.y, 0.02), 1.0, u_cloudMarch1.y);
-    const float invN = 1.0 / u_cloudMarch1.x;
-    const float stepLodBias = log2(u_cloudShape1.y * CLOUD_BASE_RES);
-    const float cut = odCut / u_cloudShape1.w;
+    const int n = int(u_clouds_lightSteps);
+    const bool inUpper = u_clouds_upperEnabled > 0.5 && sampleAlt >= u_clouds_upperBottom;
+    const float layerTop = inUpper ? u_clouds_upperBottom + 1.0 / u_clouds_upperInvHeight : u_clouds_mainBottom + 1.0 / u_clouds_mainInvHeight;
+    const float reach = clamp((layerTop - sampleAlt) / max(L.y, 0.02), 1.0, u_clouds_lightDistance);
+    const float invN = 1.0 / u_clouds_lightSteps;
+    const float stepLodBias = log2(u_clouds_baseFrequency * CLOUD_BASE_RES);
+    const float cut = odCut / u_clouds_extinction;
     float od = 0.0;
     float tPrev = 0.0;
     for (int i = 0; i < n; ++i)
@@ -34,7 +34,7 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
         const float tm = 0.5 * (tPrev + t1);
         const vec3 p = rel + L * tm;
         const float alt = cloudAltitude(p, camAlt);
-        if (alt > u_cloudShape0.y)
+        if (alt > u_clouds_shellTop)
             break;
         const float len = t1 - tPrev;
         const float lodStep = max(lodBase, log2(len) + stepLodBias);
@@ -43,7 +43,7 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
             break;
         tPrev = t1;
     }
-    return od * u_cloudShape1.w;
+    return od * u_clouds_extinction;
 }
 
 // The clouds' sun visibility of the AIR at a camera-relative point (this view's camera), for the aerial perspective.
@@ -56,20 +56,20 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
 float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
 {
 #ifdef CLOUD_SHADOWS
-    if (u_cloudShadow4.x < 0.5)
+    if (u_cloudsLive_shadowRendered < 0.5)
         return 1.0;
     const vec2 s = cloudShadowSample(rel + (u_viewPos - u_views[VIEW_CENTER].viewPos.xyz), false);
     float farT = 1.0;
     if (s.y < 1.0)
     {
-        const float mid = u_cloudLayer0.x + 0.5 / u_cloudLayer0.y;
+        const float mid = u_clouds_mainBottom + 0.5 / u_clouds_mainInvHeight;
         const float tSun = max(mid - cloudAltitude(rel, camAlt), 0.0) / max(L.y, 0.05);
         const vec2 nxz = (rel + L * tSun).xz + cloudNoiseOffset();
-        const float c = cloudColumnCoverage(u_cloudShape0.z, textureLod(u_cloudWeather, nxz * u_cloudShape1.x, 0.0).r);
+        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r);
         farT = 1.0 - smoothstep(0.35, 0.75, c);
     }
     const float T = mix(farT, exp(-s.x), s.y);
-    return mix(1.0, T, u_cloudShadow2.w);
+    return mix(1.0, T, u_clouds_shadowStrength);
 #else
     return 1.0;
 #endif
@@ -88,7 +88,7 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
     const vec3 ro = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // planet-centred
     const float mu = dot(dir, lightDir);
     const float pR = phaseRayleigh(mu);
-    const float pM = phaseHG(mu, u_skySunParams.y);
+    const float pM = phaseHG(mu, u_sky_mieG);
     const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
     vec3 sumR = vec3(0.0), sumM = vec3(0.0);
     const float dt = tEnd / float(steps);
@@ -105,7 +105,7 @@ vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 li
         t += dt;
     }
     transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
-    return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
+    return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
 }
 
 struct CloudMarchResult
@@ -133,17 +133,17 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const vec2 noiseOffset = cloudNoiseOffset();
     const vec3 L = u_sunDirection;
     const float mu = dot(dir, L);
-    const float ms = u_cloudLight1.w;
+    const float ms = u_clouds_multiScatterAttenuation;
     // The multiple-scattering octaves in CLOSED FORM (per ray; per sample then 2 exp, no loop): the sum over ALL
     // isotropic octaves i >= 1 of a^i e^(-od a^i) (Wrenninge, a = b = "Multi-scatter"), as its first octave exactly
     // plus the whole geometric tail a^2 / (1 - a) through ONE effective extinction a^(1 + 1/(1 - a)) (the tail's
-    // mean octave), x "Multi-scatter strength" (u_cloudLight2.w, non-physical above 1). With the sun BEHIND the
+    // mean octave), x "Multi-scatter strength" (u_clouds_multiScatterStrength, non-physical above 1). With the sun BEHIND the
     // viewer the lit side is seen near 180 degrees, where the droplet phase is ~0, so its brightness is this term
     // alone: two octaves (the old fixed count, ~0.14 of the sunlight) left thick sunlit clouds gray; all of them
     // at a = 0.9 give ~0.7.
     const float msTailScale = ms * ms / max(1.0 - ms, 0.05);
     const float msTailExt = pow(ms, 1.0 + 1.0 / max(1.0 - ms, 0.05));
-    const float msStrength = u_cloudLight2.w;
+    const float msStrength = u_clouds_multiScatterStrength;
     // The sun march's early out: the slowest octave falls as exp(-od * msTailExt), so past od = 7 / msTailExt it
     // is under 0.1 % - and so is every faster term.
     const float odCut = 7.0 / max(min(msTailExt, ms), 0.02);
@@ -160,7 +160,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // four scalar weights x the absorbed fraction: four scalars live across the loop instead of twelve colour
     // floats + the vec3 sum.
     // THE GROUND BOUNCE COMES FROM BELOW: it falls off EXPONENTIALLY with the metres above the main layer's base
-    // (u_cloudShape4.y = 1 / "Ground light depth"), so it lights the undersides and dies within that depth. (A
+    // (u_clouds_invGroundLightDepth = 1 / "Ground light depth"), so it lights the undersides and dies within that depth. (A
     // linear 1 - hf lit the whole cloud up to the shell top.) hf = the height within the sample's own layer.
     float sumSunLow = 0.0;    // sum(absorbed * sun * (1 - hf))
     float sumSunHigh = 0.0;   // sum(absorbed * sun * hf)
@@ -168,18 +168,18 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     float sumAmbGround = 0.0; // sum(absorbed * exp(-h * k)), h = metres above the main layer's base
 
     // The self-shadow comes from the shadow map where it covers the sample (one fetch instead of a sun march);
-    // the map is relative to the CENTRE view's camera. CLOUD_SELF_SHADOW_MAP is baked; u_cloudShadow4.x =
+    // the map is relative to the CENTRE view's camera. CLOUD_SELF_SHADOW_MAP is baked; u_cloudsLive_shadowRendered =
     // the map was rendered this frame (the sun is up).
 #ifdef CLOUD_SELF_SHADOW_MAP
-    const bool mapShadow = u_cloudShadow4.x > 0.5;
+    const bool mapShadow = u_cloudsLive_shadowRendered > 0.5;
 #else
     const bool mapShadow = false;
 #endif
     const vec3 toCentreView = u_viewPos - u_views[VIEW_CENTER].viewPos.xyz;
 
     // The mip levels are log2(distance) + a per-ray constant each: one log2 per step.
-    const float lodBaseBias = log2(pixelAngle * u_cloudShape1.y * CLOUD_BASE_RES);
-    const float lodDetailBias = log2(pixelAngle * u_cloudShape1.z * CLOUD_DETAIL_RES);
+    const float lodBaseBias = log2(pixelAngle * u_clouds_baseFrequency * CLOUD_BASE_RES);
+    const float lodDetailBias = log2(pixelAngle * u_clouds_detailFrequency * CLOUD_DETAIL_RES);
 
     // EMPTY-SPACE SKIPPING: in clear air the march takes COARSE steps (CLOUD_COARSE_MULT x the step) that
     // test only the cheap shape (weather + base, no detail). The detail only ERODES that shape, so a zero
@@ -192,9 +192,9 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // ray is mostly opaque (CLOUD_T_THICK) the fine steps double - the samples there are weighted by T.
     const float CLOUD_T_END = 0.02;
     const float CLOUD_T_THICK = 0.3;
-    // DETAIL FADE: the detail erosion fades out over the last 20 % of "Detail distance" (u_cloudMarch1.w =
+    // DETAIL FADE: the detail erosion fades out over the last 20 % of "Detail distance" (u_clouds_invDetailDistance =
     // 1 / that distance); past it the samples skip the detail fetches (their mips are nearly flat there).
-    const float detailInvDist = u_cloudMarch1.w;
+    const float detailInvDist = u_clouds_invDetailDistance;
 
     // THE STEP SCHEDULE: dt = max(near step, g * t), the growth rate g PER RAY from the shell. Steps for
     // [tStart, tEnd] at rate g, with n = the near step:
@@ -202,14 +202,14 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // A FIXED g ("Step growth", before 2026-09-29) gave a ray crossing the shell from below ln(top / bottom) / g
     // steps at any angle - so the step count through the clouds followed the RATIO of the layer's top and bottom
     // (300-5000 m: ~280 steps; 1500-3000 m: ~70), and every top / bottom change needed a new growth. Now g is SOLVED
-    // so every ray takes "Steps per ray" (u_cloudMarch0.w) steps over its shell span: the same quality through the
+    // so every ray takes "Steps per ray" (u_clouds_stepsPerRay) steps over its shell span: the same quality through the
     // layer whatever its top and bottom, and the same cost per ray. Capped at ~75 % of the budget (the rest absorbs
     // the coarse back-ups; the sky map's 64-step rays). A fixed-point iteration on g = (the terms) / target - the log
     // moves slowly, so a few rounds settle.
     // THE NEAR STEP SCALES WITH THE SPAN: clamp(span / target, "Min step", "Near step"). A fixed near step gave a SHORT
     // span (up through a thin layer: 1000 m at 15 m = 67 steps) fewer steps than the target - lower quality exactly
     // where the path is short. Now such a span is marched in `target` uniform steps; a long span keeps "Near step" at
-    // the camera. "Min step" (u_cloudLayer3.z) is the floor: steps finer than the noise detail only re-read the same
+    // the camera. "Min step" (u_clouds_minStep) is the floor: steps finer than the noise detail only re-read the same
     // texels, so a very short span takes fewer steps instead of paying the full target for nothing.
     // (Before the per-ray solve a long flat ray overran the budget, and a uniform floor of (distance left / steps
     // left) made EVERY step long, inside the nearby cloud too: a grainy band at the camera's altitude.)
@@ -222,7 +222,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     const float tStart = max(seg0.y > seg0.x ? seg0.x : seg1.x, 1.0);
     const float tEnd = max(seg1.y > seg1.x ? seg1.y : seg0.y, tStart + 1.0);
     float sStart = tStart, sEnd = tEnd;
-    if (u_cloudLayer0.z > 0.5)
+    if (u_clouds_upperEnabled > 0.5)
     {
         vec2 m0, m1;
         cloudMainIntervals(cloudAltitude(origin, camAlt), cloudRayB(origin, dir, camAlt), tEnd, m0, m1);
@@ -232,8 +232,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             sEnd = max(m1.y > m1.x ? m1.y : m0.y, sStart + 1.0);
         }
     }
-    const float target = max(min(u_cloudMarch0.w, 0.75 * float(maxSteps)), 1.0);
-    const float nearStep = max(min(u_cloudMarch0.z, (sEnd - sStart) / target), u_cloudLayer3.z);
+    const float target = max(min(u_clouds_stepsPerRay, 0.75 * float(maxSteps)), 1.0);
+    const float nearStep = max(min(u_clouds_nearStep, (sEnd - sStart) / target), u_clouds_minStep);
     float growth = 0.0; // near steps throughout
     if ((sEnd - sStart) / nearStep > target)
     {
@@ -304,7 +304,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             }
             emptyRun = 0;
 
-            const float sigmaT = dens * u_cloudShape1.w;
+            const float sigmaT = dens * u_clouds_extinction;
             // Energy-conserving step (Hillaire 2015): the in-scatter integrated over the step's own
             // extinction, so the result does not depend on the step length. Albedo 1.
             const float stepT = exp(-sigmaT * dt);
@@ -322,7 +322,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 const float msSum = ms * exp(-od * ms) + msTailScale * exp(-od * msTailExt);
                 const float sunTerm = phase0 * exp(-od) + isotropic * (msStrength * msSum);
 #ifdef CLOUD_POWDER // baked: "Powder" above 0
-                const float powder = mix(1.0, 1.0 - exp(-dens * 6.0), u_cloudLight1.z);
+                const float powder = mix(1.0, 1.0 - exp(-dens * 6.0), u_clouds_powder);
                 const float sunWeight = absorbed * sunTerm * powder;
 #else
                 const float sunWeight = absorbed * sunTerm;
@@ -330,7 +330,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 sumSunHigh += sunWeight * hf;
                 sumSunLow += sunWeight * (1.0 - hf);
                 sumAmbHigh += absorbed * hf;
-                sumAmbGround += absorbed * exp(-max(alt - u_cloudLayer0.x, 0.0) * u_cloudShape4.y); // metres above the main layer's base
+                sumAmbGround += absorbed * exp(-max(alt - u_clouds_mainBottom, 0.0) * u_clouds_invGroundLightDepth); // metres above the main layer's base
             }
             if (r.front < 0.0)
                 r.front = ts;
@@ -361,18 +361,18 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // is the whole sunset on distant clouds).
     const vec3 frontRel = origin + dir * r.front;
     const vec3 localUp = normalize(vec3(frontRel.x, frontRel.y + camAlt + ATMOS_R_PLANET, frontRel.z));
-    const vec3 sunColor = u_sunColor * u_eclipseParams.x;
-    const vec3 sunBottom = sunColor * atmosTransmittanceToLight(u_cloudShape0.x, L, localUp);
-    const vec3 sunTop = sunColor * atmosTransmittanceToLight(u_cloudShape0.y, L, localUp);
+    const vec3 sunColor = u_sunColor * u_sunVisible;
+    const vec3 sunBottom = sunColor * atmosTransmittanceToLight(u_clouds_shellBottom, L, localUp);
+    const vec3 sunTop = sunColor * atmosTransmittanceToLight(u_clouds_shellTop, L, localUp);
 
     // Ambient: the CLEAR sky hemisphere from the sky map (up + four at 30 degrees), weighted by the height in the
     // shell, and the ground bounce under the shell (albedo x (sun + sky) irradiance / PI), falling off from below.
     // The 5-direction mean is baked once per frame into the clear layer's texel (0, 0) (gi_sky_map.cs.glsl).
-    const vec3 ambSky = texelFetch(u_skyMap, SKY_MAP_CLOUD_AMBIENT_TEXEL, 0).rgb * u_cloudLight1.x;
-    const vec3 ambGround = u_cloudLight2.rgb * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
+    const vec3 ambSky = texelFetch(u_skyMap, SKY_MAP_CLOUD_AMBIENT_TEXEL, 0).rgb * u_clouds_ambient;
+    const vec3 ambGround = u_cloudsLive_groundBounceAlbedo * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
 
     r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;
-    if (u_cloudLayer3.w <= 0.0) // "Lighting/Aerial perspective strength" 0: the cloud as lit, no air in front
+    if (u_clouds_aerialStrength <= 0.0) // "Lighting/Aerial perspective strength" 0: the cloud as lit, no air in front
         return r;
 
     // Aerial perspective between the origin and the cloud: the cloud dims through the air, and the air in
@@ -387,9 +387,9 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // of the sun left the rest of the halo: a black hole in a ring.)
     vec3 airT;
     const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, jitter, airT) * sunColor;
-    // "Lighting/Aerial perspective strength" (u_cloudLayer3.w) scales the added air light only; the cloud's dimming
-    // through the air (airT) stays physical.
-    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * u_cloudLayer3.w);
+    // "Lighting/Aerial perspective strength" (u_clouds_aerialStrength) scales the added air light only; the cloud's
+    // dimming through the air (airT) stays physical.
+    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * u_clouds_aerialStrength);
     return r;
 }
 

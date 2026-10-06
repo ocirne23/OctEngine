@@ -1,7 +1,7 @@
 ﻿module RendererVK;
 
 import Core;
-import Core.Tweaks;
+import Settings;
 
 import File;
 
@@ -17,22 +17,10 @@ import :GIProbePipeline;
 StaticMeshGraphicsPipeline::StaticMeshGraphicsPipeline() {}
 StaticMeshGraphicsPipeline::~StaticMeshGraphicsPipeline() {}
 
-namespace
-{
-    constexpr oc::string_view s_anisotropyNames[] = { "Off", "2x", "4x", "8x", "16x" };
-}
-
-void StaticMeshGraphicsPipeline::registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onSamplerChanged)
-{
-    Tweak::boolean("Editor", "Wireframe", &m_wireframe, onReloadShaders);
-    // The scene textures' max anisotropy (materials + terrain splat). Every scene texture is sampled through
-    // m_sampler, so a change recreates it and the next record rewrites the texture slots.
-    Tweak::enumVar("Renderer/Textures", "Anisotropy", &m_anisotropyLevel, s_anisotropyNames, onSamplerChanged, ETweakFlags::Saved);
-}
-
 void StaticMeshGraphicsPipeline::recreateSampler()
 {
-    m_sampler.initialize(vk::SamplerAddressMode::eRepeat, m_anisotropyLevel <= 0 ? 1.0f : float(1 << oc::min(m_anisotropyLevel, 4)), m_mipLodBias);
+    const int anisotropyLevel = Globals::settings.renderer.anisotropyLevel;
+    m_sampler.initialize(vk::SamplerAddressMode::eRepeat, anisotropyLevel <= 0 ? 1.0f : float(1 << oc::min(anisotropyLevel, 4)), m_mipLodBias);
 }
 
 void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& graphicsPipelineLayout, uint32 maxTextures)
@@ -286,7 +274,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
 	// gizmo overlays stay solid so the view keeps a background and the editor gizmos stay usable.
-	if (m_wireframe)
+	if (Globals::settings.renderer.wireframe)
 	{
 		graphicsPipelineLayout.polygonMode = vk::PolygonMode::eLine; // variant 0 (LitOpaque)
 		for (size_t i = 0; i < graphicsPipelineLayout.additionalVariants.size(); ++i)
@@ -830,7 +818,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .bufferInfos = {
                 vk::DescriptorBufferInfo {
                     .buffer = params.ubo.getBuffer(),
-                    .range = sizeof(RendererVKLayout::Ubo),
+                    .range = RendererVKLayout::UBO_RANGE,
                 }
             }
         },

@@ -2,16 +2,7 @@ module Spatial;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
-
-static constexpr oc::string_view levelCellNames[Morton::MaxLevels] = {
-    "L0 cells", "L1 cells", "L2 cells", "L3 cells", "L4 cells", "L5 cells",
-    "L6 cells", "L7 cells", "L8 cells", "L9 cells", "L10 cells",
-};
-static constexpr oc::string_view levelEntryNames[Morton::MaxLevels] = {
-    "L0 entries", "L1 entries", "L2 entries", "L3 entries", "L4 entries", "L5 entries",
-    "L6 entries", "L7 entries", "L8 entries", "L9 entries", "L10 entries",
-};
+import Settings;
 
 void SpatialEntry::reset()
 {
@@ -40,35 +31,6 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
     m_pendingOps.initialize(); // requires the JobSystem (sized by scheduler context count)
     m_pendingOps.forEach([](oc::vector<PendingOp>& ops) { ops.reserve(1024); });
     m_initialized = true;
-
-    Tweak::intVar("Spatial/Stats", "Entries", &m_stats.numEntries, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Cells", &m_stats.numCells, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Cells tested", &m_stats.cellsTested, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Cells fully inside", &m_stats.cellsFullyInside, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Entity tests", &m_stats.entityTests, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Visible main", &m_stats.visiblePerPass[uint32(ESpatialPass::Main)], 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Visible near", &m_stats.visiblePerPass[uint32(ESpatialPass::Near)], 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Visible shadow", &m_stats.visiblePerPass[uint32(ESpatialPass::Shadow)], 0, INT32_MAX);
-    Tweak::floatVar("Spatial/Stats", "Commit ms", &m_stats.commitMs, 0.0f, FLT_MAX, 0.001f);
-    Tweak::floatVar("Spatial/Stats", "Mark visible ms", &m_stats.markVisibleMs, 0.0f, FLT_MAX, 0.001f);
-    for (uint32 i = 0; i < m_numLevels; ++i)
-    {
-        Tweak::intVar("Spatial/Stats/Levels", levelCellNames[i], &m_stats.perLevelCells[i], 0, INT32_MAX);
-        Tweak::intVar("Spatial/Stats/Levels", levelEntryNames[i], &m_stats.perLevelEntities[i], 0, INT32_MAX);
-    }
-
-    Tweak::intVar("Spatial/Stats", "Blocks", &m_stats.numBlocks, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Cell moves", &m_stats.cellMoves, 0, INT32_MAX);
-
-    static constexpr oc::string_view cullModeNames[] = { "Off", "Stats only", "Cull", "Main only (debug)" };
-    Tweak::enumVar("Spatial/Culling", "Mode", &m_culling.mode, cullModeNames);
-    Tweak::boolean("Spatial/Culling", "Freeze", &m_culling.freeze);
-    Tweak::floatVar("Spatial/Culling", "Margin", &m_culling.margin, 0.0f, 64.0f, 0.1f);
-    Tweak::floatVar("Spatial/Culling", "Near radius", &m_culling.nearRadius, 0.0f, 4096.0f, 1.0f);
-    Tweak::floatVar("Spatial/Culling", "Shadow reach (m)", &m_culling.shadowReach, 0.0f, 2000.0f, 5.0f);
-    Tweak::floatVar("Spatial/Culling", "Near requery slack", &m_culling.nearSlack, 0.0f, 128.0f, 0.5f);
-    // Max dist is not tweaked: it's driven every frame from the render camera's far plane (setCullMaxDist).
-    Tweak::floatVar("Spatial/Culling", "Skinned radius scale", &m_culling.skinnedRadiusScale, 1.0f, 4.0f, 0.01f);
 }
 
 uint32 SpatialIndex::entryLevel(float radius)

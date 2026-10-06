@@ -165,7 +165,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     Globals::world.addRootEntity(entity);
     state->structureId = id;
     state->team = team;
-    const float healthMax = isCableOrCrossing(type) ? m_cableHealthMax : m_structureHealthMax;
+    const float healthMax = isCableOrCrossing(type) ? m_settings.cableHealthMax : m_settings.structureHealthMax;
     state->healthMax = healthMax;
     state->blueprint = !built;
     state->health = built ? healthMax : 1.0f; // health IS the build progress
@@ -256,7 +256,7 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true, -1);
     if (index >= 0) // the starting war chest + a FULL shield battery (it drains like any emitter)
     {
-        m_frame[index].state->store[2] = glm::min(m_startMinerals, m_mineralBaseCapacity);
+        m_frame[index].state->store[2] = glm::min(m_settings.startMinerals, m_settings.mineralBaseCapacity);
         m_frame[index].state->store[0] = m_frame[index].state->capacity[0];
     }
 }
@@ -323,7 +323,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
                 destroyStructureAt((size_t)idx);
     // CHEAT ("Free instant build", Synced - the server's value rules): skip the blueprint phase.
     const int index = spawnStructure(m_nextStructureId++, type, pos, rot, team,
-        /*built*/ m_cheatInstantBuild, type == EStructureType::Extractor ? nodeIndex : -1);
+        /*built*/ m_settings.cheatInstantBuild, type == EStructureType::Extractor ? nodeIndex : -1);
     if (index >= 0 && onStructurePlaced)
         onStructurePlaced(index);
 }

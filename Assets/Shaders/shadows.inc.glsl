@@ -32,17 +32,17 @@ bool g_shadowFoliage = false;
 #endif
 
 // FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers -
-// 1 - exp(-gap / "Trees/Foliage shadow length") of it (u_foliageParams.z, metres). The crossed cards' own
+// 1 - exp(-gap / "Trees/Foliage shadow length") of it (u_foliage_shadowLength, metres). The crossed cards' own
 // shadow then starts at nothing on their crossing axis (where the gap is ~0) instead of as a hard edge there,
 // and deepens into the crown; a blocker far up-sun (another tree, terrain) still shadows fully.
 // `gap` = the normalized depth gap to the average blocker.
 float foliageTransmit(float visibility, float gap, int cascade)
 {
 #ifdef SHADOW_FOLIAGE_BIAS
-	if (g_shadowFoliage && u_foliageParams.z > 0.0)
+	if (g_shadowFoliage && u_foliage_shadowLength > 0.0)
 	{
 		const float metres = max(gap, 0.0) * cascadeDepthRange(cascade);
-		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliageParams.z));
+		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliage_shadowLength));
 	}
 #endif
 	return visibility;
@@ -239,13 +239,13 @@ void sunShadowBias(vec3 N, float dist, out float depthBias, out float normalScal
 #ifdef SHADOW_FOLIAGE_BIAS
 	if (g_shadowFoliage)
 	{
-		depthBias = u_shadowParams.x * distScale;
+		depthBias = u_shadow_depthBias * distScale;
 		normalScale = 0.0;
 		return;
 	}
 #endif
-	depthBias = u_shadowParams.x * slope * distScale;
-	normalScale = u_shadowParams.y * slope * distScale;
+	depthBias = u_shadow_depthBias * slope * distScale;
+	normalScale = u_shadow_normalBias * slope * distScale;
 }
 
 // ONE hardware-PCF tap (the comparison sampler's bilinear 2x2): no blocker search, no Vogel disk. For
@@ -280,7 +280,7 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 		return 1.0; // outside the single cascade's coverage: skip the dither + sincos (pcssCascade would return 1 anyway)
 	float ditherBase = interleavedGradientNoise(gl_FragCoord.xy);
 
-	float texelUV = u_shadowParams.z; // 1 / resolution
+	float texelUV = u_shadow_invResolution; // 1 / resolution
 	float rotation = ditherBase * 6.2831853;
 	vec2 rotSC = vec2(cos(rotation), sin(rotation)); // the ONE sincos per pixel every Vogel tap rotates by
 	// Outside the cross-fade band: one full-quality cascade evaluation. Inside it: split the same tap

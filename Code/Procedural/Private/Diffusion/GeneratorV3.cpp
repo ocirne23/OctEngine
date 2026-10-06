@@ -1297,7 +1297,7 @@ namespace Procedural
 		// this path cannot supply on the coarse level - macro == elev there, so relief is 0 by
 		// construction and the far cascade would silently get no wander at all while the near one did.
 		// The shader has the full-detail MESH height whichever cascade it reads, so it can always
-		// compute the real relief. See terrainSplat / u_terrainTexParams5.
+		// compute the real relief. See terrainSplat / u_terrainTex_cragWanderAmp.
 		out.altitude = s.macro * vs;
 		out.height = m_cfg.seaLevel + s.elev * vs + d;
 		out.waterLevel = m_cfg.seaLevel;

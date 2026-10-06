@@ -10,7 +10,7 @@ import :ComputePipeline;
 import :DescriptorSet;
 import :GridClaim;
 import :Layout;
-import :Settings;
+import :RenderParams;
 
 // The clustered light grid. The BUILD is split three ways, none of it on the main thread:
 //  1. addLight, INLINE on whatever thread adds the light (the entity pass, the force update, ...):

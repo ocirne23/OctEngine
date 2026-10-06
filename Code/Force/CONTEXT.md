@@ -61,8 +61,12 @@ ForceSystem.ixx. `ForceQuery` stays in ForceSystem.ixx.
 
 [ForceSystem.ixx](Private/ForceSystem.ixx).
 
-* `initialize()` from main before world spawns — registers the "Force" tweaks, which live on
-  `ForceFieldParams` and are pushed to the renderer every update.
+* `initialize()` from main before world spawns. The "Force" tweak VALUES live in
+  `Globals::settings.force` (`ForceFieldParams`, pushed to the renderer every update) and
+  `Globals::settings.forceSystem` (`ForceSystemSettings`: bake, ramp, bubble light, merge, debug,
+  stats); `Settings::registerForce` (Settings library, `Settings.Force`) registers them. ForceSystem
+  reads them through reference members (`m_params`, `m_settings`, `m_merge`) and writes only the stats
+  and `numTeams`.
 * **`update(renderer, dt)` runs main-thread after `world.update`** ([main.cpp:808](../App/main.cpp#L808))
   and is the ONLY place renderer force state is written.
 * `joinMerge()` at the main-loop top ([main.cpp:575](../App/main.cpp#L575)) — see Merging.
@@ -562,6 +566,8 @@ never rasterizes, so pane-classified walls would silently drop.
   the DSL as `self.force.*`.
 
 ## Tweaks
+
+Registered by `Settings::registerForce` (`Code/Settings/Private/Force.cpp`).
 
 | Group | Entries |
 |---|---|

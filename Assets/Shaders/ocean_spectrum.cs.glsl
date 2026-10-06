@@ -100,15 +100,15 @@ vec2 h0(ivec2 m, uint cascade, float L, float kMin, float kMax, uint which)
     if (k < 1e-5 || k < kMin || k >= kMax)
         return vec2(0.0);
 
-    float U = u_oceanParams1.x;
-    float F = u_oceanParams1.y;
-    float depth = u_oceanParams1.z;
+    float U = u_oceanLive_windSpeed;
+    float F = u_ocean_fetch;
+    float depth = u_ocean_depth;
     float w = dispersion(k, depth);
-    float theta = atan(kv.y, kv.x) - atan(u_oceanParams0.y, u_oceanParams0.x);
+    float theta = atan(kv.y, kv.x) - atan(u_oceanLive_windDirection.y, u_oceanLive_windDirection.x);
 
     float S = jonswap(w, U, F) * kitaigorodskii(w, depth) * hasselmann(theta, w, U, F);
     float dk = 6.2831853 / L;
-    float amp = sqrt(2.0 * S * dispersionDeriv(k, depth) / k) * dk * u_oceanParams0.z;
+    float amp = sqrt(2.0 * S * dispersionDeriv(k, depth) / k) * dk * u_ocean_amplitude;
 
     // Wave-age generation limit: wind cannot generate waves whose phase speed much exceeds the wind
     // itself, but JONSWAP extrapolated below its validity range (U < ~5 m/s) still assigns energy to
@@ -129,11 +129,11 @@ void main()
     const ivec2 xy = ivec2(gl_GlobalInvocationID.xy);
     const uint cascade = gl_GlobalInvocationID.z;
     const int N = OCEAN_FFT_SIZE;
-    const float L = u_oceanParams2[cascade];
+    const float L = u_ocean_cascadeSizes[cascade];
 
     // Band split: each cascade keeps a disjoint wavenumber range. Boundaries at half the coarser
     // cascade's Nyquist keep well-resolved detail in the finest cascade that can represent it.
-    float kMin = cascade == 0u ? 0.0 : 0.5 * PI * float(N) / u_oceanParams2[cascade - 1u];
+    float kMin = cascade == 0u ? 0.0 : 0.5 * PI * float(N) / u_ocean_cascadeSizes[cascade - 1u];
     float kMax = 0.5 * PI * float(N) / L;
 
     const ivec2 m = xy - ivec2(N / 2);
@@ -143,12 +143,12 @@ void main()
     // h~(k, t) = h0(k) e^{iwt} + h0*(-k) e^{-iwt}   (Tessendorf eq. 43)
     const vec2 h0p = h0( m, cascade, L, kMin, kMax, 0u);
     const vec2 h0m = h0(-m, cascade, L, kMin, kMax, 0u);
-    const float w = dispersion(max(k, 1e-5), u_oceanParams1.z);
-    // The clock rate (u_oceanParams10.y) is sqrt(world scale): the Froude-scaled inputs shrink the sea
+    const float w = dispersion(max(k, 1e-5), u_ocean_depth);
+    // The clock rate (u_ocean_timeScale) is sqrt(world scale): the Froude-scaled inputs shrink the sea
     // but shorten its periods by the same sqrt(s), and this holds them at the model sea's. Only the
     // evolution reads it - the accel/velocity signals below stay in spectrum time on purpose, so the
     // breaking criterion (accel as a fraction of g) does not change with the scale.
-    const float wt = w * u_timeSeconds * u_oceanParams10.y;
+    const float wt = w * u_timeSeconds * u_ocean_timeScale;
     const vec2 ep = vec2(cos(wt), sin(wt));
     const vec2 termP = cmul(h0p, ep);                              // h0(k) e^{+iwt}
     const vec2 termM = cmul(vec2(h0m.x, -h0m.y), vec2(ep.x, -ep.y)); // h0*(-k) e^{-iwt}

@@ -1,15 +1,16 @@
-export module RendererVK:Settings;
+export module Settings.Render;
 
 import Core;
 import Core.glm;
 
-// Renderer configuration parameter blocks. Each exposes itself to the TweakPanel via registerTweaks();
-// the Renderer owns one instance of each and feeds them into the per-frame UBO / push constants.
+// The renderer's settings (RendererVK reads them from Globals::settings; the UBO build feeds most of them to the
+// shaders). Plain data: the registration (Private/Render.cpp) knows nothing of the renderer, which attaches its
+// reactions (shader reloads, re-records, resizes) as Tweak::onChange listeners in Renderer::attachSettingsListeners.
 
 // THE WIND ("Sky/Wind"): the one wind everything that moves with it reads - the weather particles (rain, snow), the
 // tree and grass sway (wind.inc.glsl), the fog noise drift, the ocean (x "Ocean/Waves/Wind speed scale", blowing
 // from the opposite heading: its spectrum convention) and the clouds (x "Sky/Clouds/Wind speed scale"). Rides the UBO
-// as u_weatherWind0..2.
+// as u_weather (live: these tweaks are Runtime under the "Sky" lock).
 export struct WindParams
 {
     float speed = 2.0f;         // m/s, the mean wind
@@ -22,7 +23,6 @@ export struct WindParams
         const float a = glm::radians(angleDeg);
         return glm::vec2(std::cos(a), std::sin(a));
     }
-    void registerTweaks();
 };
 
 // Everything in the TweakPanel's "Sky" categories (Sky / Sky/Sun / Sky/Atmosphere / Sky/Clouds /
@@ -89,13 +89,14 @@ export struct SkyParams
     glm::vec3 moonDirection = glm::normalize(glm::vec3(0.728f, 0.659f, -0.190f)); // independent of the sun
     float moonSizeDeg = 6.0f;           // disc radius (degrees); real moon is ~0.26
     float moonBrightness = 0.3f;
-
-    void registerTweaks();
 };
 
 // Volumetric clouds (CloudPipeline) - the TweakPanel's "Sky/Clouds" categories. All UBO-driven, so
 // changes apply live. A spherical shell [bottom, top] above sea level (world Y 0) around a planet
 // centre under the camera; the noise is world-anchored and moves with the wind.
+// The three bools (enabled, shadows, selfShadowFromMap), checkerboard, the debug mode and "powder above 0" are BAKED
+// shader defines (CLOUDS, CLOUD_SHADOWS, CLOUD_SELF_SHADOW_MAP, CLOUD_CHECKERBOARD, CLOUD_DEBUG_MODE, CLOUD_POWDER -
+// Shader.cpp's preamble): the Renderer's listener reloads the shaders when one of them changes.
 export struct CloudParams
 {
     bool  enabled = true;
@@ -190,11 +191,6 @@ export struct CloudParams
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
     bool  checkerboard = true;         // the march covers half the pixels per frame; the temporal pass fills the rest (CLOUD_CHECKERBOARD)
     int   debugMode = 0;               // 0 off, 1 step count, 2 density only, 3 history rejection
-
-    // The three bools (enabled, shadows, selfShadowFromMap), the debug mode and "powder above 0" are BAKED shader
-    // defines (CLOUDS, CLOUD_SHADOWS, CLOUD_SELF_SHADOW_MAP, CLOUD_DEBUG_MODE, CLOUD_POWDER - Shader.cpp's
-    // preamble): onDefinesChanged reloads the shaders when one of them changes.
-    void registerTweaks(const oc::function<void()>& onDefinesChanged);
 };
 
 // Sun shadow cascade distribution (raster path; RT sun shadows ignore these) - the TweakPanel's
@@ -226,7 +222,7 @@ export struct ShadowParams
                                 // texel relief that is actually rendered, so a surface point sits on a
                                 // heightfield coarser than itself. Too small = acne on lit slopes.
     // Debug overlay, BAKED as the SHADOW_DEBUG define into the lit fragment variants (a change reloads
-    // the static mesh pipeline through the Renderer's callback - no uniform, no per-pixel cost when off):
+    // the static mesh pipeline through the Renderer's listener - no uniform, no per-pixel cost when off):
     // 0 off, 1 cascade index tint, 2 the cascade cross-fade band, 3 the raw sun visibility, 4 shadow-map
     // texel size heat. Cascade data only exists on the PCSS path (RT sun off).
     int debugMode = 0;
@@ -234,11 +230,10 @@ export struct ShadowParams
                                 // than the true sun disc (~0.005): the softness is what keeps the map's
                                 // texels from resolving as stair-steps, and what keeps the doubling
                                 // sample spacing self-consistent (this is a cone trace, not a point march).
-    void registerTweaks(const oc::function<void()>& onReloadShaders); // debugMode is a baked define
 };
 
 // FOLIAGE cards (MATERIAL_FLAG_BILLBOARD - the tree billboards) - "Foliage ..." in the TweakPanel's "Trees" category.
-// UBO-driven (u_foliageParams / u_foliageParams2), so changes apply live.
+// UBO-driven (u_foliage), so changes apply live.
 export struct FoliageParams
 {
     float crownNormal = 0.25f; // blend of the shading normal toward a CROWN normal - the view ray's hit on a
@@ -295,7 +290,7 @@ export struct FoliageParams
     // 0 = only the general "RT/TLAS Range"): every tree there is an overlapping box every ray has to traverse.
     float rtRange = 500.0f;
     // TREE WIND ("Trees/Wind", tree_wind.inc.glsl): vertex-shader sway of the mesh trees, branch cards and billboards in the
-    // WEATHER wind (u_weatherWind0: "Particles/Wind ..."). Three layers: the TRUNK bend (every representation, from the
+    // shared wind (u_weather: "Sky/Wind"). Three layers: the TRUNK bend (every representation, from the
     // height alone), the BRANCH sway and the LEAF flutter (meshes only, from the bake's per-vertex payload).
     float windBend = 0.004f;        // the trunk's lean at the reference height, m per (m/s)^2 of wind (10 m/s: 0.4 m)
     float windRefHeight = 10.0f;    // m: the bend grows with (height / this)^2
@@ -316,8 +311,6 @@ export struct FoliageParams
     // 2 = a colour per MESH (the LOD level the cull picked: an LOD step shows), 3 = the distance FADE side (red = a
     // fade-out material, green = fade-in, white = none).
     int debugView = 0;
-
-    void registerTweaks(const oc::function<void()>& onDebugViewChanged);
 };
 
 // PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but
@@ -325,8 +318,10 @@ export struct FoliageParams
 // converts them).
 export struct GrassParams
 {
+    static constexpr int MAX_BLADES = 1024; // = RendererVKLayout::GRASS_MAX_BLADES (static_asserted in Renderer.ixx)
+
     bool enabled = true;
-    int bladesPerPatch = 1024;     // blades in a full patch (<= GRASS_MAX_BLADES): the near density is this / patch size^2
+    int bladesPerPatch = 1024;     // blades in a full patch (<= MAX_BLADES): the near density is this / patch size^2
     float patchSize = 2.0f;        // m; ideally a divisor of the terrain chunk size
     float range = 145.0f;          // m: no blade past it
     float rangeFade = 45.0f;       // m: the blades thin out to none over the last metres of the range
@@ -397,8 +392,6 @@ export struct GrassParams
     float nearShadowStrength = 0.7f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
-
-    void registerTweaks(const oc::function<void()>& onBladesChanged);
 };
 
 // THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no
@@ -419,7 +412,6 @@ export struct RockParams
                                         // too coarse far out)
     float cavityAo = 1.0f;            // the baked per-vertex cavity (Procedural RockGenerator) on the ambient; 0 = off
     float cavityCover = 0.5f;         // the ground cover's reach into the crevices (x "Ground cover" x the cavity)
-    void registerTweaks();
 };
 
 // FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
@@ -434,7 +426,7 @@ export struct FarTreeParams
     float overlap = 128.0f;        // the billboards draw to startDistance + this; the volume fades in over it (m)
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
-    uint32 slices = 15;            // height slices
+    uint32 slices = 16;            // height slices
     float height = 22.0f;         // m above the column's tree floor the volume covers
     float densityScale = 0.4f;    // x the baked extinction
     float blobShrink = 0.4f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
@@ -478,7 +470,6 @@ export struct FarTreeParams
     // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
     // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
     float rockExtinction = 4.0f;
-    void registerTweaks();
 };
 
 // Volumetric fog (froxel grid; see VolumetricFogPipeline) - the TweakPanel's "Fog" categories.
@@ -562,12 +553,11 @@ export struct FogParams
     float sunSoftness = 0.02f;     // shadow ray cone half-angle (rad); softens + decorrelates the rays
     bool  spatialFilter = true;    // 3x3 tent on the scatter grid in the integrate pass
     bool  giAmbient = true;        // GI probe ambient (off = analytic sky only, cheaper)
-
-    void registerTweaks();
 };
 
 // Exposure + tonemapping, applied in the composite pass (the HDR -> display mapping) - the
-// TweakPanel's "Post" category. Baked into the composite push constants, so changes re-record.
+// TweakPanel's "Post" category. Exposure, tonemapper and auto exposure are baked into the composite push
+// constants: the Renderer's listener re-records.
 export struct PostParams
 {
     float exposureEV = 0.0f; // exposure in stops; manual exposure, or exposure compensation in auto mode
@@ -579,12 +569,10 @@ export struct PostParams
     float adaptMaxLogLum = 4.0f;
     float adaptMinEV = -6.0f; // auto-exposure clamp (stops)
     float adaptMaxEV = 0.0f;
-
-    // onReRecord is invoked when a tweak that's baked into the composite push constants changes, so the
-    // command buffers can be re-recorded.
-    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
+// The GI toggle is baked into the cached GI command buffer (re-record); the master, "RT Sun" and "RT Lights" into
+// the lit fragment shaders (reload + re-record) - the Renderer's listeners.
 export struct RTParams
 {
     bool enabled = true;        // master: builds BLAS/TLAS and drives RTAO + all ray-traced shadows.
@@ -599,9 +587,6 @@ export struct RTParams
                                 // chain; rays don't need per-level fidelity). Applied when containers load.
     bool blasCompaction = true; // copy-compact static BLASes after build (~30-50% of their memory back);
                                 // applies to BLASes built after a change
-    // onReRecord: the GI toggle is baked into the cached GI command buffer. onReloadLitShaders (also
-    // re-records): the master, "RT Sun" and "RT Lights" are baked into the lit fragment shaders.
-    void registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadLitShaders);
     bool effectiveSunShadow() const { return enabled && rtSunShadow; }
     bool effectiveLightShadows() const { return enabled && rtLightShadows; }
 };
@@ -631,10 +616,6 @@ export struct LightGridParams
     // grid), 2 per-cell light count heat (green -> red at the cell cap, magenta = the cell's hash
     // lookup missed), 3 light ranges (blue per covering light).
     int   debugMode = 0;
-
-    // onReloadLitShaders: debugMode (the static mesh pipeline's lit fragments). The LOD params need
-    // no callback: the CPU build reads them every frame.
-    void registerTweaks(const oc::function<void()>& onReloadLitShaders);
 };
 
 export struct RTAOParams
@@ -654,8 +635,6 @@ export struct RTAOParams
     float maxHistory = 0.77; //0.99f;
     int   blurRadius = 2; //0;
     bool  alphaTest = false; // ray-test alpha-masked geometry (vegetation) instead of treating it as solid
-
-    void registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadShaders);
 };
 
 export struct TAAParams
@@ -665,13 +644,11 @@ export struct TAAParams
     // History weight cap on OCEAN pixels: waves animate but the reprojection is camera-only (no motion
     // vectors), so full-weight history blurs the specular sparkle away. Lower = crisper, shimmerier water.
     float taaOceanFeedback = 0.2f;
-
-    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 // DLSS Super Resolution through Streamline ("Post/DLSS" tweaks; RendererVK:Streamline, DlssPipeline). Any mode
 // but Off REPLACES TAA (desktop only). The mode sets the render resolution: a change re-creates the render-size
-// targets (onResize), so the mode tweak waits for the GPU.
+// targets (the Renderer's listener), so the mode tweak waits for the GPU.
 export struct DlssParams
 {
     int mode = 2;           // Streamline::DlssMode: Off, DLAA, Quality (default), Balanced, Performance, Ultra Performance
@@ -684,8 +661,6 @@ export struct DlssParams
     float oceanBias = 0.8f;
     // Streamline's verbose log (Assets/Local/Streamline/); SL reads it at slInit, so it applies at the next start.
     bool verboseLog = false;
-
-    void registerTweaks(const oc::function<void()>& onResize, const oc::function<void()>& onReRecord);
 };
 
 // Motion blur ("Post/Motion blur" tweaks; MotionBlurPipeline). The blur is the motion over the EXPOSURE, a
@@ -697,8 +672,6 @@ export struct MotionBlurParams
     float maxRadius = 24.0f;  // px (the blur is at most twice this); capped at RendererVKLayout::MOTION_BLUR_TILE
     float cameraScale = 1.0f; // the camera's share of the blur (0 = moving objects only)
     int   samples = 12;       // gather samples per blurred pixel
-
-    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 // Bloom ("Post/Bloom" tweaks; BloomPipeline). With a threshold (> 0) only the light above it, in EXPOSED units,
@@ -712,8 +685,6 @@ export struct BloomParams
     float knee = 0.5f;       // the soft ramp's half width around the threshold (exposed units)
     float radius = 0.75f;    // level weights 2^(k (2 radius - 1)): 0.5 = equal, higher = wider glow, less haze
     int   levels = 6;        // mip levels of the chain (each doubles the reach); BloomPipeline::MAX_LEVELS at most
-
-    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 // Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) - the TweakPanel's "LOD" category.
@@ -731,13 +702,11 @@ export struct MeshLodParams
     int   generateLevels = 4;     // max generated levels beyond LOD0
     float generateReduction = 0.5f; // index-count factor per generated level (0.25 = quarter the triangles)
     int   minIndices = 32;        // don't generate for meshes below this index count
-
-    void registerTweaks();
 };
 
 // The TweakPanel's "Particles" category: the GPU particle sim's own knobs plus the weather inputs the
-// Renderer folds into the per-frame UBO (cameraVelocity.w, weatherWind0/1/2, rainOcclusion*). All live -
-// the particle stage's primary CB re-records every frame, so none of them needs a re-record callback.
+// Renderer folds into the per-frame UBO (u_particles, u_weather's rain occlusion). All live -
+// the particle stage's primary CB re-records every frame, so none of them needs a listener.
 export struct ParticleParams
 {
     bool  enabled = true;         // the whole GPU particle chain (sim + draw stage)
@@ -759,8 +728,6 @@ export struct ParticleParams
     float windSheetContrast = 0.5f; // [0,1] alpha density bands sweeping through
     float windSheetSize = 50.0f;    // m
     float windSheetDrift = 5.0f;    // m/s the fields travel along the wind direction on top of half the wind speed
-
-    void registerTweaks();
 };
 
 // The TweakPanel's "Ocean" spray knobs - the ocean spray step (ocean_spray.cs.glsl) is the particle GPU
@@ -776,170 +743,11 @@ export struct OceanSprayParams
     float speed = 10.0f;      // m/s along the wind
     float forward = 3.0f;     // m, spawn lead ahead of the crest along its travel (negative = behind)
     float height = 0.0f;      // m, spawn offset above the surface (negative = below)
-
-    void registerTweaks();
 };
 
-// FFT/Tessendorf ocean: spectrum inputs for the GPU simulation (OceanSimulationPipeline) + water shading.
-// The Renderer feeds these into the per-frame UBO (ocean* fields), which drives BOTH the compute simulation
-// (the TMA spectrum is re-evaluated every frame, so all of it is live) and the surface shading. The grid
-// geometry + Tweaks live in Procedural::OceanGenerator, which builds one of these each frame and hands it to
-// Renderer::setOceanParams.
-export struct OceanParams
-{
-    bool enabled = false;       // gates the per-frame FFT simulation + ocean draw
-
-    // Spectrum (TMA = JONSWAP x Kitaigorodskii finite-depth attenuation, Hasselmann directional spreading;
-    // Horvath 2015). Dispersion is finite-depth: w^2 = g k tanh(k D).
-    glm::vec2 windDirection = glm::normalize(glm::vec2(0.8f, 0.35f)); // dominant wave travel direction (XZ)
-    float windSpeed   = 10.5f;  // U10 wind speed (m/s): the main sea-state knob
-    float fetchKm     = 300.0f; // fetch (km): distance the wind has blown over; longer = bigger swell
-    float depth       = 100.0f; // ocean depth D (m): finite-depth dispersion + TMA shallow-water attenuation
-                                // (shallow values like 35 visibly mute the long swell - by design)
-    float horizonLevelOffset = -0.5f; // vertical shift (m, usually negative) of the HORIZON BAND only.
-                                // The band is exempt from the land cull (its triangles are far larger
-                                // than the cull's footprint bound), so it draws over distant terrain;
-                                // sinking it a little keeps its crests under near-sea-level ground.
-    float amplitude   = 1.0f;   // artistic scale on the spectrum amplitude (1 = physical)
-    float choppiness  = 1.25f;   // horizontal displacement lambda (0 = heightfield only, higher = sharper crests)
-    float normalStrength = 1.0f; // artistic scale on the shading slopes
-    glm::vec3 cascadeSizes = glm::vec3(1536.0f, 188.0f, 25.0f); // FFT patch sizes (m); each TILES with its
-                                // own size, so the largest sets how often the sea repeats - keep it many
-                                // times the peak wavelength. Non-rational ratios keep the three from
-                                // re-aligning; scale them as a SET (the band split ties cascade c+1's
-                                // range to L_c, so growing one alone just moves the repetition down)
-    float seaLevel    = 0.0f;   // world Y of the calm water plane
-    float detailBias  = 0.0f;   // bias on the ring-matched vertex displacement mip (negative = finer;
-                                // the clipmap rings carry their cell size per vertex, so 0 is motion-stable)
-
-    // Optics: extinction drives Beer-Lambert absorption of the ray-traced refraction (1/m, Jerlov-ish
-    // coastal water); scatter is the in-scattered radiance albedo (the water's "color" in deep water).
-    glm::vec3 absorption   = glm::vec3(0.42f, 0.085f, 0.04f);
-    glm::vec3 scatterColor = glm::vec3(0.012f, 0.08f, 0.085f);
-    float scatterStrength  = 1.0f;
-    float roughness        = 0.07f; // perceptual micro-roughness (widens the sun glint)
-    float glintFilter      = 0.5f;  // 1 = full variance widening, 0 = none (raw sharp GGX)
-    // Slope variance of the waves BELOW the finest cascade's Nyquist - the capillary band the FFT cannot
-    // represent at any distance. The LEAN term only returns variance the MIP CHAIN filtered away, and it
-    // is exactly 0 at mip 0, so near the camera the roughness used to collapse onto its 0.02 clamp and
-    // the water mirrored the sky (plastic). Added to alpha^2 in the same form as LEAN (alpha^2 = 2 sigma^2)
-    // and deliberately NOT scaled by glintFilter: this band is missing from the spectrum, not filtered
-    // out of it. Dimensionless, so the world scale leaves it alone.
-    float microRoughness   = 0.008f;
-    // Rational soft limit on the shading slope, s /= 1 + k * |s| (ocean_wave.inc.glsl). It keeps the
-    // near-fold division from exploding into dark creases, but it compresses exactly the steep crest
-    // faces, which reads as blobby. 0 = no limit (sharpest crests, creases possible at folds).
-    float crestSlopeLimit  = 0.0f;
-    // Sub-band detail (oceanDetailSlope): the finest cascade's gradient field re-sampled at
-    // detailScale x its patch size, in a domain rotated by detailRotation, added to the SHADING slope
-    // only. Wave statistics at a shorter wavelength than the FFT band holds, for one fetch - no extra
-    // memory, no extra FFT, and the displacement (so geometry, prepass and the CPU buoyancy mirror) is
-    // untouched. Faded out past detailFadeDist because this band is absent from the LEAN moments.
-    float detailStrength   = 0.35f; // 0 = off
-    float detailScale      = 0.18f; // fraction of the finest cascade's patch size (smaller = finer)
-    float detailFadeDist   = 60.0f; // m from the camera (a world metre: scaled); 0 = never fade
-    float detailRotation   = 0.9f;  // radians; keeps the borrowed field off the parent's crest lines
-    // Crest subsurface scattering (Sea of Thieves-style): back-lit wave crests glow the scatter color,
-    // scaled by height above the calm water line. Power shapes the toward-the-sun view lobe.
-    float sssStrength      = 0.75f;  // per meter of crest height; 0 disables (and the extra shadow rays with it)
-    float sssPower         = 1.0f;
-    float undersideTransmission = 1.0f; // scale on the sky seen through Snell's window from below (1 = Fresnel
-                                        // transmission; less = more internal reflection, a darker ceiling)
-    bool  hitLighting      = false; // evaluate the scene's grid lights at refraction/reflection ray hits
-                                    // (OCEAN_HIT_LIGHTS shader variant; toggling reloads the pipeline)
-    bool  rtReflections    = true;  // ray-traced mirror of the scene on the top side (OCEAN_RT_REFLECTIONS
-                                    // shader variant; off = sky only, no mirror ray compiled in)
-    int   debugMode        = 0;     // OCEAN_DEBUG_MODE shader variant (mode list: ocean.fs.glsl); 0 = off
-    // Foam. ONE instant-foam response (oceanInstantFoam) both draws the per-pixel crest foam and injects
-    // the world-space FOAM FIELD (the foam amount breaking leaves stuck to the water): white foam above
-    // foamThreshold, the bubble cloud (and its roughness) from the same amount below it.
-    glm::vec3 foamColor    = glm::vec3(0.88f, 0.92f, 0.94f);
-    float foamBias         = 0.6f;  // fold threshold: Jacobian below this is folding (foaming)
-    float foamBreakAccel   = 0.25f; // breaking threshold (Longuet-Higgins): downward crest acceleration
-                                    // above this fraction of g is breaking - what makes LARGE waves foam
-    float foamSoftness     = 0.5f;  // edge width of both thresholds (small = crisp crest lines)
-    float bubbleDepth      = 3.0f;  // m under the surface: the bubble cloud's water absorbs the red both
-                                    // ways, so deeper = darker and more turquoise (a world metre: scaled)
-    float bubbleBrightness = 1.0f;  // the cloud's albedo, x foam color
-    float bubbleBlur       = 4.0f;  // m (world): the cloud reads the foam field this blurred (a diffuse volume)    // The world-space foam field (ocean_foam.cs.glsl): SURFACE FOAM sticks to the water it formed on (the
-    // rest lattice, so it rides the orbits and stays behind as the crest moves on) and drifts downwind.
-    float foamSurfaceDecay    = 0.995f; // foam amount retention per frame
-    float foamSurfaceStrength = 1.0f;   // display scale on the stuck foam (0 = only crest foam, as before)
-    float foamTexel        = 0.5f;  // level 0 texel (m, world); level l = x 4^l, 512^2 texels per level
-    // The stuck foam's coverage (oceanStuckFoamCoverage): a threshold on its density amount / Jacobian.
-    float foamThreshold    = 0.5f;  // density where the foam turns on
-    float foamEdge         = 0.06f; // threshold half-width: smaller = crisper foam edges
-    float foamFineWaves    = 0.25f; // 0..1: the finest cascade's share in the Jacobian the foam reads (lower =
-                                    // steadier foam shapes; the film's crest + shore foam too)
-    float foamDetail       = 1.5f;  // scale on the sub-band detail slope in the foam's lighting normal (the
-                                    // large waves' slope is eased by foamFlatten instead)
-    float foamDriftSpeed   = 0.3f;  // m/s (world) along the swell's travel: the wind drift of the surface
-    float foamFlatten      = 0.6f;  // 0..1: the foam's Lambert normal eased toward up (bent crests stop
-                                    // going dark at grazing sun angles)
-    bool  cameraUnderwater = false; // per frame, from the CPU mirror: the camera is below the live surface.
-                                    // Gates the shader's underside path - a back face seen from above is a fold
-
-    // Shore interaction: the baked terrain-data cascades (Renderer::setFogTerrainHeightMap, baked by the
-    // terrain streamer) give the water its depth - open water eases to the swash amplitude across an
-    // approach band at the shore (oceanSurfaceWeight, ocean_wave.inc.glsl), the swash tongue runs up the
-    // beach and flows back, and a surf/foam band forms where the water column vanishes at the waterline.
-    float shoalScale     = 0.005f; // approach band depth as a fraction of the mid cascade's patch size
-                                // (floored at two swash reaches; scaled down with the cascade sizes)
-    // Horizon depth: past horizonDepthRange the waves assume AT LEAST horizonDepth of water, whatever
-    // the baked map says. Every distant depth error runs shallow - coarse texels average shore slopes
-    // into the water, the generator reports depth exactly 0 for samples it could not resolve, and the
-    // vertical scale compresses real shelves - and shallow is the ruinous direction: it fades the waves
-    // out AND (via fade^2) the LEAN variance, leaving a mirror that reflects the sky exactly like wind 0.
-    // Only the assumed seabed moves, never the surface, so it cannot put water over land; the land cull
-    // still reads the raw map. 0 range = off.
-    float horizonDepth      = 30.0f;
-    float horizonDepthRange = 1500.0f;
-    // Rate of the spectrum's clock relative to the frame clock (1 = real time). OceanGenerator sets
-    // sqrt(world scale): its Froude-scaled inputs give a shrunk sea whose periods are x sqrt(s), and this
-    // slows the evolution back to the model sea's periods so the miniature does not race. Only the
-    // e^{iwt} evolution reads it - the breaking-crest acceleration stays in the spectrum's own time, so
-    // the foam criterion (a fraction of g) keeps the model sea's look.
-    float timeScale = 1.0f;
-    // "Ocean/World scale" itself (s; 1 = the model sea). Nothing above re-applies it - they arrive in world
-    // metres already. The spray and the ocean-bound fog metres read it: the model sea at model periods,
-    // shrunk by s, so their lengths, speeds and accelerations all ride s.
-    float worldScale = 1.0f;
-    float shoreFoamDepth = 8.0f;  // water-column height (m) below which the waterline churns white; 0 = off
-    float shoreFoamMax   = 0.75f; // surf band opacity cap: shore foam coverage never exceeds this, so the
-                                  // refracted bottom stays visible through the lace (whitecaps unaffected)
-    float swashAmp       = 0.5f;  // swash run-up: scale on the un-shoaled wave height riding through the
-                                  // waterline and up the beach (waves crash and flow over; 0 = hard cutoff)
-    float shoreFoamBias  = -0.33f;  // shifts the surf fold threshold: negative = sparser lace / more
-                                  // transparent shore waves, positive = denser churn
-    float swashFlow      = 0.33f;  // backflow: scale on the raw horizontal chop riding the swash weight -
-                                  // the tongue visibly flows back seaward as the wave recedes (0 = off)
-    float cullMargin     = 1.0f;  // land cull: clipmap triangles whose whole footprint is buried deeper
-                                  // than this under the local water level are VS-culled (0 = off)
-    float farCullError = 4.0f;    // land cull from the FAR terrain cascade (beyond the near cascade's
-                                  // ~860 m): flat burial error allowance in METERS, covering how far
-                                  // the far mesh LODs stray from the bake. Deliberately NOT scaled by
-                                  // the far texel - that left everything under tens of meters of
-                                  // terrain alive (a visible band of buried water past the near
-                                  // handover). Narrow rivers the coarse point-sampled bake cannot
-                                  // resolve may lose triangles out there (speed over accuracy);
-                                  // 0 = never cull from far data
-
-    // Ray tracing budget (ocean.fs.glsl traces the scene TLAS per pixel for refraction + reflection).
-    float rtRefractionRange = 35.0f;  // max refracted-ray length (m): how far underwater geometry stays
-                                       // visible through the surface (the ~99% Beer-Lambert extinction
-                                       // bound still applies on top, so clear water is the case this caps)
-    float rtReflectionRange = 3000.0f; // max mirror-ray length (m): how distant scenery still reflects
-    float rtReflectionMaxRough = 0.25f; // filtered roughness above which the mirror ray is skipped and the
-                                        // blurred sky stands in (a wide lobe can't be one mirror sample)
-    float rtReflectionFog = 0.2f; // fog on mirror rays (ocean + terrain film): 1 = the reflected source's own fog, 0 = off
-    float rtRayCutoffDist = 0.0f; // camera distance (m) beyond which NO scene rays are traced: refraction
-                                   // falls back to the analytic baked-terrain bottom (the same path RT
-                                   // misses take), reflections to the atmosphere. 0 = unlimited
-};
-
-// Forcefield bubbles (Force library / ForceFieldPipeline / force_*.glsl). The Force library owns
-// these tweaks (TweakPanel "Force" categories) and hands the struct to Renderer::setForceFieldParams
-// every frame, like OceanParams; the values are UBO-driven, so all of them are live.
+// Forcefield bubbles (Force library / ForceFieldPipeline / force_*.glsl). The Force library registers
+// these tweaks (TweakPanel "Force" categories, Settings::registerForce) and hands the struct to
+// Renderer::setForceFieldParams every frame, like OceanParams; the values are UBO-driven, so all of them are live.
 export struct ForceFieldParams
 {
     bool enabled = true;             // gates the shell draw + force compute passes
@@ -1008,7 +816,7 @@ export struct ForceFieldParams
     float patternSpeed = 0.3f;       // pattern scroll speed
     float patternIntensity = 0.5f;
     // Per-team shell colors (linear rgb); 8 = RendererVKLayout::MAX_FORCE_TEAMS (static_asserted
-    // where both are visible - Settings deliberately doesn't import :Layout).
+    // in Renderer.ixx - Settings cannot import RendererVK's :Layout).
     glm::vec3 teamColors[8] = {
         { 0.20f, 0.55f, 1.00f }, // 0 blue
         { 1.00f, 0.30f, 0.15f }, // 1 red
@@ -1021,70 +829,142 @@ export struct ForceFieldParams
     };
 };
 
-export struct Stats
+// Diffuse GI probe clipmap shape (RendererVK GIProbePipeline; see "GI" in RendererVK's Layout.ixx). The GI_* sizing
+// values are injected into EVERY shader compile (Shader.cpp buildLayoutPreamble) as #defines, so a change makes the
+// Renderer's listener wait for the GPU, re-allocate the SH buffer (or only the volume) and reload every shader.
+export struct GiGridConfig
 {
-    uint32 numLights;
-    uint32 maxLights;
+    int numCascades = 4;                    // nested clipmap levels (1..8)
+    int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
+    float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
+    // The IRRADIANCE VOLUME (GIProbePipeline::recordVolumeBake, gi_volume_bake.cs.glsl): per frame, the probe
+    // field is baked into one set of 3D textures per cascade, visibility-weighted at every voxel centre, and
+    // the forward lit shaders read it with hardware trilinear filtering instead of looping over 8 probes.
+    // volumeRes = voxels per probe spacing per axis (1 or 2, a power of two for the toroidal mask).
+    bool volume = true;
+    int  volumeRes = 2;
 
-    uint32 numMeshInstances;
-    uint32 maxMeshInstances;
-
-    uint32 numInstanceOffsets;
-    uint32 maxInstanceOffsets;
-
-    uint32 numMeshTypes;
-    uint32 maxMeshTypes;
-
-    uint32 numMaterials;
-    uint32 maxMaterials;
-
-    uint32 numRenderNodes;
-    uint32 maxRenderNodes;
-
-    uint32 numTextures;
-    uint32 maxTextures;
-
-    uint64 vertexDataUsedBytes;
-    uint64 maxVertexDataBytes;
-
-    uint64 indexDataUsedBytes;
-    uint64 maxIndexDataBytes;
-
-    uint32 numObjectContainers;
-
-    uint32 numLightGrids;
-    uint32 maxLightGrids;
-
-    uint64 lightGridMemUsageBytes;
-    uint64 maxLightGridMemUsageBytes;
-
-    // Total GPU memory tracked by VMA across all heaps.
-    uint64 gpuMemoryUsedBytes;     // bytes our live allocations occupy
-    uint64 gpuMemoryReservedBytes; // bytes VMA has reserved in blocks (>= used)
-    uint64 gpuMemoryBudgetBytes;   // device-local budget available to the process
-
-    // Texture mip streaming (see TextureStreamer).
-    uint64 textureBudgetBytes;
-    uint64 textureResidentBytes;   // live allocations of streamable textures
-    uint64 texturePinnedBytes;     // unstreamable textures, always fully resident
-    uint64 textureDesiredBytes;    // what the priority pass wants resident
-    uint64 textureTailBytes;       // always-resident mip tails (part of resident)
-    uint32 numStreamableTextures;
-    uint32 numStreamOpsInFlight;
-
-    // Static BLAS memory (see AccelerationStructure; excludes the per-frame skinned BLASes).
-    uint64 blasBytes;
-    uint64 blasCompactionSavedBytes; // cumulative bytes reclaimed by copy-compaction
-
-    // Mesh data streaming (see MeshStreamer).
-    uint64 meshBudgetBytes;
-    uint64 meshStreamableBytes; // registered mesh sets, resident or not
-    uint64 meshResidentBytes;
-    uint64 meshColdBytes;       // resident but unseen long enough to be eviction candidates
-    uint32 numMeshSets;
-    uint32 numEvictedMeshSets;
-
-    // Mesh LOD (see MeshLodParams; selection runs in the GPU cull, counters read back a few frames late).
-    uint32 numMeshLodGroups;
-    uint32 lodInstanceCounts[5];   // VISIBLE LOD instances per selected level (MAX_MESH_LODS)
+    uint32 dimX() const { return 1u << dimLog2X; }
+    uint32 dimY() const { return 1u << dimLog2Y; }
+    uint32 dimZ() const { return 1u << dimLog2Z; }
+    uint32 probesPerCascade() const { return dimX() * dimY() * dimZ(); } // a multiple of 64 (every dim >= 4): the trace's sky workgroup relies on it
+    uint32 probesTotal() const { return (uint32)numCascades * probesPerCascade(); }
+    uint32 traceThreads() const { return probesTotal() + 64; }            // one invocation per probe + one workgroup projecting the sky SH
+    uint32 volumeDimX() const { return dimX() * (uint32)volumeRes; }
+    uint32 volumeDimY() const { return dimY() * (uint32)volumeRes; }
+    uint32 volumeDimZ() const { return dimZ() * (uint32)volumeRes; }
 };
+
+// The "GI" tweaks (GIProbePipeline). The trace knobs and the visibility knobs ride the UBO (u_rt_gi*); the debug
+// colour mode and radius are push constants of the CACHED debug secondary (a change re-records).
+export struct GiSettings
+{
+    GiGridConfig grid;
+
+    int raysPerProbe = 17;           // gather rays per probe per visit
+    float updateIntervalMult = 16.0f; // global factor of a wave's update interval: frames = max(1, this x the priority factor),
+                                     // so it is the interval AT "GI/Priority Distance" and close blocks cancel it (fresh probes always trace)
+    float temporalAlpha = 0.025f;    // blend toward freshly traced irradiance per frame AT 60 FPS (rescaled by the wall delta, see getTraceParams0)
+    float maxRayDist = 8.0f;         // gather ray max distance (world units)
+    float strength = 1.0f;           // multiplier on the sampled probe irradiance at shading time
+    float tlasRange = 4096.0f;       // TLAS instance range bound around the camera (origin distance) - "RT/TLAS Range"
+
+    // Update priority (gi_probe.inc.glsl giWavePriority, one factor of giWaveUpdateInterval): a wave's interval is multiplied by
+    // (focus distance / priorityDist) ^ falloff / viewBoost - NO bounds: a close wave's factor < 1 cancels the
+    // interval multiplier, and the far field has no cap. viewBoost = frustumWeight for a wave IN the view
+    // frustum (its interval divides by it), fading to 1 over priorityDist metres outside it.
+    // Defaults (first-person scene, focus = camera, interval mult 16, falloff 3, weight 5): in view the
+    // interval is 16 x (d / 10)^3 / 5 frames - every frame within ~8.5 m, 3 at 10 m, 25 at 20 m, 400 at
+    // 50 m; out of view, 5x that. A steep curve: all the rays go to what is near the focus.
+    float priorityDist = 8.0f;          // focus distance (m) of the nominal rate (factor 1) for a wave OUT of view; the falloff curve pivots here
+    float priorityFalloff = 1.5f;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic (far field all but stops), 0.5 = gentle, 0 = no distance term
+    float priorityFrustumWeight = 5.0f; // a wave IN the view frustum has its interval divided by this (1 = the frustum is ignored)
+
+    // SH-L1 depth visibility (Chebyshev) lookup tuning. Three knobs, each with its own job: the mean scale
+    // moves the occlusion THRESHOLD, the variance floor is the MINIMUM edge softness (the measured variance
+    // widens it where the depth really spreads - sideways past a wall), the weight floor is the leak level /
+    // the all-occluded fallback. The exponent is fixed (GI_VIS_CHEB_POWER = 2 in gi_probe.inc.glsl): near the
+    // threshold it only rescales the floor (weight ~ 1 - p (delta / sigma)^2), and the weight floor cuts the
+    // tail it shapes. An additive mean bias was tried and removed: the same effect as the scale or the floor.
+    float visVarianceFloor = 0.35f;  // min std-dev as a fraction of the cascade's probe spacing: covers the L1 mean's error
+                                     // toward a wall (0.15 .. 0.4 spacings); below ~0.25 the ray jitter moves the edge (flicker)
+    float visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff, noisy when all 8 are occluded)
+    float visMeanScale = 1.2f;       // scales the reconstructed depth (mean AND, by its square, the second moment, so the
+                                     // variance stays consistent) before the Chebyshev test: > 1 widens each probe's visible
+                                     // footprint. A wall at distance m reads as scale x m, so points up to (scale - 1) x m
+                                     // BEHIND it keep full weight: the leak depth
+
+    // Debug probes (also driven by the testbed's P / O keys)
+    bool  debugEnabled = false; // a per-frame stage flag (no re-record)
+    int   debugMode = 0;        // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
+    float debugRadius = 0.12f;  // cube half-extent as a fraction of sqrt(spacing)
+};
+
+// Texture mip streaming ("Texture Streaming"; RendererVK TextureStreamer). Read every frame.
+export struct TextureStreamingSettings
+{
+    int  budgetMB = 512;
+    bool enabled = true;
+    int  tailMaxDim = 128;
+    int  maxOpsInFlight = 4;
+    float maxMBPerFrame = 24.0f;   // issued read volume per frame; keeps stream-ins well under the staging buffer
+    bool gpuMipCopies = true;      // copy surviving mips old->new on the GPU (demotions skip the disk entirely)
+    bool debugRewriteAllSlots = false;
+    float mipBias = 0.0f;          // global quality knob: +1 = one mip level coarser everywhere
+    float texelRatio = 1.0f;       // texels wanted per projected pixel (tiling textures want > 1)
+    int  demoteHysteresisFrames = 60;
+    int  decayFrames = 120;        // unseen for this long -> desire only the tail
+};
+
+// Mesh data streaming ("Mesh Streaming"; RendererVK MeshStreamer). Read every frame.
+export struct MeshStreamingSettings
+{
+    int budgetMB = 256;
+    int coldFrames = 240;          // frames a set must go unseen before it may evict
+    int maxOpsInFlight = 8;        // concurrent re-stream reads
+    int maxStreamMBPerFrame = 32;  // stream-in issue cap (staging pressure)
+    bool enabled = true;
+};
+
+// The renderer's remaining single switches, each in its own TweakPanel category.
+export struct RendererSettings
+{
+    bool vsync = true;               // "Time/VSync": FIFO present (Time's stable-dt snap relies on it); a change re-creates the swapchain
+    bool logPipelineStats = false;   // "Renderer/Log pipeline stats": F5 re-creates the pipelines with it
+    bool wireframe = false;          // "Editor/Wireframe": baked polygon mode of the scene variants (reload + re-record)
+    int  anisotropyLevel = 2;        // "Renderer/Textures/Anisotropy" index: 0 = off, else 2^level (2 = 4x); a change re-creates the scene sampler
+    bool decals = true;              // "Decals/Enabled"
+    bool terrainWetDiffusion = true; // "Terrain/Water/Diffusion on": the WET_DIFFUSION define of the wetness compute (reload + re-record)
+};
+
+// The registration, one function per struct. Run them in this order (the TweakPanel lists a category in
+// registration order): Sky, Wind, Shadow, Foliage, FarTree, Rock, Grass, Fog, Clouds, RT, RTAO, TAA, Dlss,
+// MotionBlur, Bloom, Post, MeshLod, LightGrid, Renderer, Gi, Particles, OceanSpray, MeshStreaming, TextureStreaming.
+// ForceFieldParams is registered by the Force library (Settings::registerForce).
+export namespace Settings
+{
+    void registerSky(SkyParams& s);
+    void registerWind(WindParams& s);
+    void registerShadow(ShadowParams& s);
+    void registerFoliage(FoliageParams& s);
+    void registerFarTree(FarTreeParams& s);
+    void registerRock(RockParams& s);
+    void registerGrass(GrassParams& s);
+    void registerFog(FogParams& s);
+    void registerClouds(CloudParams& s);
+    void registerRT(RTParams& s);
+    void registerRTAO(RTAOParams& s);
+    void registerTAA(TAAParams& s);
+    void registerDlss(DlssParams& s);
+    void registerMotionBlur(MotionBlurParams& s);
+    void registerBloom(BloomParams& s);
+    void registerPost(PostParams& s);
+    void registerMeshLod(MeshLodParams& s);
+    void registerLightGrid(LightGridParams& s);
+    void registerRenderer(RendererSettings& s);
+    void registerGi(GiSettings& s);
+    void registerParticles(ParticleParams& s);
+    void registerOceanSpray(OceanSprayParams& s);
+    void registerMeshStreaming(MeshStreamingSettings& s);
+    void registerTextureStreaming(TextureStreamingSettings& s);
+}

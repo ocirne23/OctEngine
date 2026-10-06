@@ -77,11 +77,11 @@ layout (push_constant) uniform CloudPC
 #elif defined(CLOUD_CHECKERBOARD)
 #define TT_CHECKER true
 #define TT_SCALE 2
-#define TT_MAX_DIST u_cloudMarch0.y
+#define TT_MAX_DIST u_clouds_maxDistance
 #else
 #define TT_CHECKER false
 #define TT_SCALE 2
-#define TT_MAX_DIST u_cloudMarch0.y
+#define TT_MAX_DIST u_clouds_maxDistance
 #endif
 
 void main()
@@ -206,7 +206,7 @@ void main()
 #ifdef TREE_TEMPORAL
     const vec3 prevWorld = u_viewPos + dir * tCloud; // trees do not move
 #else
-    const vec3 prevWorld = u_viewPos + dir * tCloud - u_cloudWind.xyz;
+    const vec3 prevWorld = u_viewPos + dir * tCloud - u_cloudsLive_windStep;
 #endif
     float clipW;
     // Last frame marched the direction of (texel uv - ITS jitter), so the texel holding this point sits at
@@ -240,7 +240,7 @@ void main()
 #ifdef TREE_TEMPORAL
             result = mix(cur, hist, u_historyWeight);
 #else
-            result = mix(cur, hist, u_cloudMarch1.z);
+            result = mix(cur, hist, u_clouds_temporalBlend);
 #endif
         }
     }

@@ -5,7 +5,6 @@ module;
 module RendererVK;
 
 import Core;
-import Core.Tweaks;
 import :TextureStreamer;
 import :Device;
 import :Allocator;
@@ -25,18 +24,6 @@ static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
 
 bool TextureStreamer::initialize()
 {
-    Tweak::intVar("Texture Streaming", "Budget (MB)", &m_budgetMB, 64, 8192);
-    Tweak::boolean("Texture Streaming", "Enabled", &m_enabled);
-    Tweak::intVar("Texture Streaming", "Tail max dim", &m_tailMaxDim, 32, 512);
-    Tweak::floatVar("Texture Streaming", "Mip bias", &m_mipBias, -4.0f, 4.0f);
-    Tweak::floatVar("Texture Streaming", "Texel ratio", &m_texelRatio, 0.25f, 4.0f);
-    Tweak::intVar("Texture Streaming", "Max ops in flight", &m_maxOpsInFlight, 0, 32);
-    Tweak::floatVar("Texture Streaming", "Max MB/frame", &m_maxMBPerFrame, 1.0f, 64.0f);
-    Tweak::boolean("Texture Streaming", "GPU mip copies", &m_gpuMipCopies);
-    Tweak::intVar("Texture Streaming", "Demote hysteresis frames", &m_demoteHysteresisFrames, 1, 600);
-    Tweak::intVar("Texture Streaming", "Decay frames", &m_decayFrames, 1, 3600);
-    Tweak::boolean("Texture Streaming", "Debug rewrite all slots", &m_debugRewriteAllSlots);
-
     m_worker = std::jthread([this](std::stop_token stopToken) { workerRun(stopToken); });
     return true;
 }
@@ -133,7 +120,7 @@ void TextureStreamer::registerTexture(uint16 texIdx, StreamedTextureMeta&& meta,
 
     // The tail = the smallest mips (maxDim <= tailMaxDim), always resident so the texture never
     // disappears from the descriptor array. At least the last mip always qualifies.
-    state.tailTop = computeStreamTailTop(state.meta, (uint32)m_tailMaxDim);
+    state.tailTop = computeStreamTailTop(state.meta, (uint32)m_settings.tailMaxDim);
     assert(state.residentTop == 0 || state.residentTop == state.tailTop);
     state.desiredTop = state.tailTop;
     state.targetTop = state.residentTop;
@@ -179,7 +166,7 @@ void TextureStreamer::noteUse(uint16 texIdx, float log2TexelsAvailable)
     StreamState& state = m_states[texIdx];
     if (state.numMips == 0)
         return;
-    const int32 want = (int32)std::ceil(state.log2FullDim - log2TexelsAvailable - std::log2(m_texelRatio) + m_mipBias);
+    const int32 want = (int32)std::ceil(state.log2FullDim - log2TexelsAvailable - std::log2(m_settings.texelRatio) + m_settings.mipBias);
     const uint8 wantTop = (uint8)oc::clamp(want, 0, (int32)state.tailTop);
 
     oc::atomic_ref<uint8> accum(state.wantTopThisFrame);
@@ -294,18 +281,18 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
 
 void TextureStreamer::issueOps()
 {
-    if (!m_enabled)
+    if (!m_settings.enabled)
         return;
-    const uint64 budgetBytes = (uint64)m_budgetMB * 1024ull * 1024ull;
+    const uint64 budgetBytes = (uint64)m_settings.budgetMB * 1024ull * 1024ull;
     const uint64 availBytes = budgetBytes > m_pinnedBytes ? budgetBytes - m_pinnedBytes : 0;
-    uint64 bytesLeft = (uint64)((double)m_maxMBPerFrame * 1024.0 * 1024.0);
+    uint64 bytesLeft = (uint64)((double)m_settings.maxMBPerFrame * 1024.0 * 1024.0);
     bool issuedAny = false;
 
     // dataMipEnd = end of the disk-read mip range [targetTop..dataMipEnd); the rest comes from the old
     // image via GPU copies (see swapResidency).
     auto tryIssue = [&](uint32 texIdx, StreamState& state, uint8 dataMipEnd) -> bool
     {
-        if (m_numOpsInFlight >= (uint32)oc::max(0, m_maxOpsInFlight))
+        if (m_numOpsInFlight >= (uint32)oc::max(0, m_settings.maxOpsInFlight))
             return false;
         const uint64 readBytes = state.bytesFromMip[state.targetTop] - state.bytesFromMip[dataMipEnd];
         if (readBytes > bytesLeft && issuedAny)
@@ -334,13 +321,13 @@ void TextureStreamer::issueOps()
 
     // Demotions first: they free memory and never need budget headroom. With GPU copies they skip the
     // disk entirely - the surviving mips are copied out of the old image right here, synchronously.
-    uint32 demotionsLeft = (uint32)oc::max(0, m_maxOpsInFlight);
+    uint32 demotionsLeft = (uint32)oc::max(0, m_settings.maxOpsInFlight);
     for (uint32 texIdx = 0; texIdx < (uint32)m_states.size() && demotionsLeft > 0; ++texIdx)
     {
         StreamState& state = m_states[texIdx];
         if (state.numMips == 0 || state.opInFlight || state.failed || state.targetTop <= state.residentTop)
             continue;
-        if (m_gpuMipCopies)
+        if (m_settings.gpuMipCopies)
         {
             demotionsLeft--;
             if (!swapResidency((uint16)texIdx, state, state.targetTop, nullptr, state.targetTop))
@@ -373,7 +360,7 @@ void TextureStreamer::issueOps()
         if (m_committedBytes + growBytes > availBytes)
             continue;
         // With GPU copies, read only the mips the live image lacks; the rest is copied at apply time.
-        if (tryIssue(texIdx, state, m_gpuMipCopies ? state.residentTop : state.numMips))
+        if (tryIssue(texIdx, state, m_settings.gpuMipCopies ? state.residentTop : state.numMips))
             m_committedBytes += growBytes;
     }
 
@@ -419,7 +406,7 @@ void TextureStreamer::update()
             }
             else if (want > state.desiredTop)
             {
-                if (++state.demoteCounter >= (uint16)oc::max(1, m_demoteHysteresisFrames))
+                if (++state.demoteCounter >= (uint16)oc::max(1, m_settings.demoteHysteresisFrames))
                 {
                     state.desiredTop = want;
                     state.demoteCounter = 0;
@@ -428,7 +415,7 @@ void TextureStreamer::update()
             else
                 state.demoteCounter = 0;
         }
-        else if (m_frameCounter - state.lastSeenFrame > (uint32)m_decayFrames)
+        else if (m_frameCounter - state.lastSeenFrame > (uint32)m_settings.decayFrames)
         {
             state.desiredTop = state.tailTop;
             state.demoteCounter = 0;
@@ -444,7 +431,7 @@ void TextureStreamer::update()
     //    headroom is granted one mip level at a time to the largest desire deficit (cheapest grant first
     //    on ties, then lowest index - a deterministic order, so targets stay stable while desires do).
     {
-        const uint64 budgetBytes = (uint64)m_budgetMB * 1024ull * 1024ull;
+        const uint64 budgetBytes = (uint64)m_settings.budgetMB * 1024ull * 1024ull;
         const uint64 availBytes = budgetBytes > m_pinnedBytes ? budgetBytes - m_pinnedBytes : 0;
 
         // A max-heap over the kept m_grantHeap (the same order a priority_queue<Grant, ..., lowerPriority>
@@ -540,7 +527,7 @@ void TextureStreamer::queueDescriptorWrite(uint16 texIdx)
 TextureStreamer::StreamerStats TextureStreamer::getStats() const
 {
     StreamerStats stats;
-    stats.budgetBytes = (uint64)m_budgetMB * 1024ull * 1024ull;
+    stats.budgetBytes = (uint64)m_settings.budgetMB * 1024ull * 1024ull;
     stats.residentBytes = m_residentBytes;
     stats.pinnedBytes = m_pinnedBytes;
     stats.tailBytes = m_tailBytes;

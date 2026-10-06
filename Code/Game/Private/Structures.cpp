@@ -3,7 +3,8 @@ module Game;
 import Core;
 import Core.glm;
 import Core.Log;
-import Core.Tweaks;
+import Settings;
+import Settings.Tweaks;
 import Core.Transform;
 import Entity;
 import Force;
@@ -60,7 +61,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
     // ONE word for every kind of reach - a bubble's, a beam's, a heal radius, a build range -
     // so the cards never make a player wonder whether "Reach" and "Radius" mean different things.
     const auto range = [&](float metres) { line(oc::format("Range {:g} m", metres)); };
-    const GameStructureParams& p = GameStructureComponent::params;
+    const GameStructureParams& p = Globals::settings.game.structureParams;
 
     switch (type)
     {
@@ -71,58 +72,58 @@ oc::string StructureSystem::describeType(EStructureType type) const
             ? "Shield CONE along its aimed facing: pushes enemies out and drains them."
             : "Shield bubble: pushes enemies out and drains their batteries.";
         in(emitterDrawOf(type), "energy");
-        in(m_emitterPressureDraw, "energy", " more at full pressure");
+        in(m_settings.emitterPressureDraw, "energy", " more at full pressure");
         range(emitterReachOf(type));
         break;
     case EStructureType::Generator:
         desc = "Burns fuel into grid energy.";
-        in(m_fuelBurnRate, "fuel");
-        out_(m_genEnergyPerSec, "energy");
+        in(m_settings.fuelBurnRate, "fuel");
+        out_(m_settings.genEnergyPerSec, "energy");
         break;
     case EStructureType::Solar:
         desc = "Free energy trickle. Needs no fuel.";
-        out_(m_solarEnergyPerSec, "energy");
+        out_(m_settings.solarEnergyPerSec, "energy");
         break;
     case EStructureType::Extractor:
         desc = "Mines the resource node under it.";
-        in(m_extractorEnergyPerSec, "energy");
-        out_(m_mineralRate, "minerals", " on a mineral node");
-        out_(m_fuelRate, "fuel", " on a fuel node");
+        in(m_settings.extractorEnergyPerSec, "energy");
+        out_(m_settings.mineralRate, "minerals", " on a mineral node");
+        out_(m_settings.fuelRate, "fuel", " on a fuel node");
         break;
     case EStructureType::Fabricator:
         desc = "Converts fuel and power into minerals.";
-        in(m_fabricatorEnergyPerSec, "energy");
-        in(m_fabricatorFuelPerSec, "fuel");
-        out_(m_fabricatorMineralsPerSec, "minerals");
+        in(m_settings.fabricatorEnergyPerSec, "energy");
+        in(m_settings.fabricatorFuelPerSec, "fuel");
+        out_(m_settings.fabricatorMineralsPerSec, "minerals");
         break;
     case EStructureType::Constructor:
         desc = "Builds and repairs nearby structures from its mineral stock.";
-        in(m_extractorEnergyPerSec, "energy");
-        in(m_constructorBuildRate, "minerals", " while building");
-        range(m_constructorRange);
+        in(m_settings.extractorEnergyPerSec, "energy");
+        in(m_settings.constructorBuildRate, "minerals", " while building");
+        range(m_settings.constructorRange);
         break;
     case EStructureType::Battery:
         desc = "Banks grid energy for the peaks.";
-        banks(m_batteryCapacity, "energy");
+        banks(m_settings.batteryCapacity, "energy");
         break;
     case EStructureType::FuelTank:
         desc = "Banks the fuel the extractors pipe in.";
-        banks(m_fuelTankCapacity, "fuel");
+        banks(m_settings.fuelTankCapacity, "fuel");
         break;
     case EStructureType::MineralSilo:
         desc = "Banks minerals: only silos and the Base hold SPENDABLE stock.";
-        banks(m_mineralSiloCapacity, "minerals");
+        banks(m_settings.mineralSiloCapacity, "minerals");
         break;
     case EStructureType::Barracks:
         desc = "Trains units. Its power draw IS the build bar.";
-        in(m_barracksEnergyIntake, "energy");
-        line(oc::format("Build time = the unit's energy cost / {:g}", m_barracksEnergyIntake));
-        line(oc::format("Population {} (+{} per linked house)", m_barracksPopulation, m_housePopulation));
+        in(m_settings.barracksEnergyIntake, "energy");
+        line(oc::format("Build time = the unit's energy cost / {:g}", m_settings.barracksEnergyIntake));
+        line(oc::format("Population {} (+{} per linked house)", m_settings.barracksPopulation, m_settings.housePopulation));
         break;
     case EStructureType::House:
         desc = "Raises the population cap of the nearest barracks. Needs no power.";
-        line(oc::format("+ {} population", m_housePopulation));
-        range(m_houseLinkRadius); // how far it reaches for that barracks
+        line(oc::format("+ {} population", m_settings.housePopulation));
+        range(m_settings.houseLinkRadius); // how far it reaches for that barracks
         break;
     case EStructureType::Turret:
         desc = "Hitscan lightning at the nearest enemy unit. Never misses.";
@@ -133,7 +134,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
         break;
     case EStructureType::MedicStation:
         desc = "Heals own units and players standing in its radius.";
-        in(m_medicEnergyPerSec, "energy");
+        in(m_settings.medicEnergyPerSec, "energy");
         out_(medicHealRate(), "health", " and shield, per body");
         range(medicHealRadius());
         break;
@@ -147,7 +148,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
         static constexpr const char* c_what[3] = { "energy", "fuel", "minerals" };
         const int medium = cableMediumOf(type);
         desc = oc::format("Carries {} between the buildings its run touches.", c_what[medium]);
-        out_(m_cableThroughput[medium], c_what[medium], " per link");
+        out_(m_settings.cableThroughput[medium], c_what[medium], " per link");
         line("Paint it: hold and drag. Crossings place themselves.");
         break;
     }
@@ -243,126 +244,17 @@ void drawCircle(const glm::vec3& center, float radius, uint32 color, int segment
     }
 }
 
-void StructureSystem::registerTweaks()
+StructureSystem::StructureSystem()
 {
-    // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-    const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
-    Tweak::boolean("Game/Construction", "Free instant build", &m_cheatInstantBuild);
-    Tweak::floatVar("Game/Structures", "Pressure draw tension", &m_pressureDrawTension, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Start minerals", &m_startMinerals, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Extractor snap radius", &m_extractorSnapRadius, 1.0f, 20.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Minerals/s per node", &m_mineralRate, 0.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fuel/s per node", &m_fuelRate, 0.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Base income mult", &m_baseIncomeMult, 0.0f, 2.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Emitter cost", &m_costs[0], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Generator cost", &m_costs[1], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Extractor cost", &m_costs[3], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Battery cost", &m_costs[4], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Fuel tank cost", &m_costs[5], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Solar cost", &m_costs[6], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Fabricator cost", &m_costs[7], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Bastion cost", &m_costs[8], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Lance cost", &m_costs[9], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Barracks cost", &m_costs[10], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "House cost", &m_costs[(int)EStructureType::House], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Medic station cost", &m_costs[(int)EStructureType::MedicStation], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Mineral silo cost", &m_costs[16], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Constructor cost", &m_costs[17], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Power cable cost", &m_costs[(int)EStructureType::CablePower], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Pipeline cost", &m_costs[(int)EStructureType::CablePipe], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Conveyor cost", &m_costs[(int)EStructureType::CableConveyor], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Power crossing cost", &m_costs[(int)EStructureType::CrossingPower], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Pipe crossing cost", &m_costs[(int)EStructureType::CrossingPipe], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Conveyor crossing cost", &m_costs[(int)EStructureType::CrossingConveyor], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Cable health max", &m_cableHealthMax, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Structures", "Constructor range", &m_constructorRange, 2.0f, 50.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Constructor build rate", &m_constructorBuildRate, 0.5f, 50.0f, 0.25f);
-    Tweak::floatVar("Game/Structures", "Waypoint radius", &m_waypointRadius, 0.5f, 15.0f, 0.25f);
-    Tweak::intVar("Game/Structures", "Wall breach cost", &m_wallBreachCost, 1, 254, 1);
-    Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Barracks energy intake/s", &m_barracksEnergyIntake, 0.1f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &m_costs[14], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Turret cost", &m_costs[15], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Bastion energy/s", &m_bastionEnergyPerSec, 0.1f, 30.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Lance energy/s", &m_lanceEnergyPerSec, 0.1f, 30.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Solar energy/s", &m_solarEnergyPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fabricator energy/s", &m_fabricatorEnergyPerSec, 0.1f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fabricator fuel/s", &m_fabricatorFuelPerSec, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Fabricator minerals/s", &m_fabricatorMineralsPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Fuel tank capacity", &m_fuelTankCapacity, 10.0f, 1000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Fuel burn/s per generator", &m_fuelBurnRate, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &m_genEnergyPerSec, 0.5f, 50.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Emitter energy/s", &m_emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Emitter energy/s @ pressure 1", &m_emitterPressureDraw, 0.0f, 50.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Base energy capacity", &m_baseEnergyCapacity, 10.0f, 1000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Base energy gen/s", &m_baseEnergyGenPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Base shield energy/s", &m_baseShieldEnergyPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Structures", "Base shield output", &m_baseShieldOutput, 0.1f, 8.0f, 0.1f);
-    Tweak::floatVar("Game/Structures", "Base shield reach", &m_baseShieldReach, 2.0f, 46.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Extractor energy/s", &m_extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Battery capacity", &m_batteryCapacity, 10.0f, 1000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Internal buffer", &m_internalBuffer, 1.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Emitter buffer", &m_emitterBuffer, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Bastion buffer", &m_bastionBuffer, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Lance buffer", &m_lanceBuffer, 1.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Generator buffer", &m_generatorBuffer, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Economy", "Cable throughput", &m_cableThroughput[0], 0.5f, 100.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Pipeline throughput", &m_cableThroughput[1], 0.5f, 100.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Conveyor throughput", &m_cableThroughput[2], 0.5f, 100.0f, 0.25f);
-    // The transport tick (rates/capacities re-stamp at the next network rebuild).
-    Tweak::floatVar("Game/Economy", "Transport tick rate (Hz)", &m_transportTickHz, 1.0f, 60.0f, 1.0f, [this] { m_linksDirty = true; });
-    Tweak::intVar("Game/Economy", "Transport substeps", &m_transportSubsteps, 1, 16, 1.0f, [this] { m_linksDirty = true; });
-    Tweak::intVar("Game/Economy", "Transport spread (groups)", &m_transportSpread, 1, 8, 1.0f, [this] { m_linksDirty = true; });
-    Tweak::intVar("Game/Economy", "Cable cells per segment", &m_cellsPerSegment[0], 1, 64, 1.0f);
-    Tweak::intVar("Game/Economy", "Pipeline cells per segment", &m_cellsPerSegment[1], 1, 64, 1.0f);
-    Tweak::intVar("Game/Economy", "Conveyor cells per segment", &m_cellsPerSegment[2], 1, 64, 1.0f);
-    Tweak::floatVar("Game/Economy", "Storage pushes below (fill)", &m_storageLowMark, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Storage pulls above (fill)", &m_storageHighMark, 0.0f, 1.0f, 0.05f);
-    Tweak::intVar("Game/Economy", "Transport nodes (stat)", &m_statTransportNodes, 0, 1000000);
-    Tweak::intVar("Game/Economy", "Transport ticks (stat)", &m_statTransportTicks, 0, 1000000000);
-    Tweak::floatVar("Game/Economy", "Generator fuel tank", &m_generatorFuelTank, 5.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Place range", &m_placeRange, 4.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Emitter output", &m_emitterOutput, 0.2f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Structures", "Emitter reach", &m_emitterReach, 2.0f, 46.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Bastion output", &m_bastionOutput, 0.2f, 8.0f, 0.05f);
-    Tweak::floatVar("Game/Structures", "Bastion reach", &m_bastionReach, 2.0f, 46.0f, 0.5f);
-    // The lance's Width 0.2 + Focus 0.85 concentrate a CONSERVED total (~25x+ local density), so
-    // its useful output range sits far below the other emitters' - hence the tiny floor.
-    Tweak::floatVar("Game/Structures", "Lance output", &m_lanceOutput, 0.01f, 8.0f, 0.01f);
-    Tweak::floatVar("Game/Structures", "Lance reach", &m_lanceReach, 2.0f, 46.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Emitter shrink time", &m_emitterShrinkTime, 0.05f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Structures", "Emitter grow time", &m_emitterGrowTime, 0.05f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Structures", "Emitter restart charge", &m_emitterRestartCharge, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Structures", "Health max", &m_structureHealthMax, 10.0f, 1000.0f, 1.0f);
-    // The territory drain runs in GameStructureComponent::update - tune its shared param.
-    Tweak::floatVar("Game/Structures", "Damage/s in enemy field",
-        &GameStructureComponent::params.fieldDamageRate, 0.0f, 100.0f, 0.5f);
-    // Production tuning consumed by the component's machine logic (names unchanged - the saved
-    // cfg keys keep applying).
-    GameStructureParams& sp = GameStructureComponent::params;
-    Tweak::intVar("Game/Friendlies", "Barracks population", &m_barracksPopulation, 0, 200, 1);
-    Tweak::intVar("Game/Friendlies", "House population", &m_housePopulation, 0, 100, 1);
-    Tweak::floatVar("Game/Friendlies", "House link radius", &m_houseLinkRadius, 2.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Medic energy/s", &m_medicEnergyPerSec, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Friendlies", "Medic heal radius", &GameStructureComponent::params.medicRange, 2.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Medic heal/s", &GameStructureComponent::params.medicHealRate, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Grunt spawn energy", &m_spawnEnergy[0], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Brute spawn energy", &m_spawnEnergy[1], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Runner spawn energy", &m_spawnEnergy[2], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Spitter spawn energy", &m_spawnEnergy[3], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Swarm spawn energy", &m_spawnEnergy[4], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Warrior spawn energy", &m_spawnEnergy[10], 0.0f, 100.0f, 0.5f);
-    Tweak::intVar("Game/Friendlies", "Grunt population", &m_unitPopulation[0], 0, 50, 1);
-    Tweak::intVar("Game/Friendlies", "Brute population", &m_unitPopulation[1], 0, 50, 1);
-    Tweak::intVar("Game/Friendlies", "Runner population", &m_unitPopulation[2], 0, 50, 1);
-    Tweak::intVar("Game/Friendlies", "Spitter population", &m_unitPopulation[3], 0, 50, 1);
-    Tweak::intVar("Game/Friendlies", "Swarm population", &m_unitPopulation[4], 0, 50, 1);
-    Tweak::intVar("Game/Friendlies", "Warrior population", &m_unitPopulation[10], 0, 50, 1);
-    Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Friendlies", "Turret damage", &sp.turretDamage, 0.0f, 500.0f, 1.0f);
+    // The transport tick: rates/capacities re-stamp at the next network rebuild.
+    Tweak::onChange(m_settings.transportTickHz, this, [this] { m_linksDirty = true; });
+    Tweak::onChange(m_settings.transportSubsteps, this, [this] { m_linksDirty = true; });
+    Tweak::onChange(m_settings.transportSpread, this, [this] { m_linksDirty = true; });
+}
+
+StructureSystem::~StructureSystem()
+{
+    Tweak::removeListeners(this);
 }
 
 // ---------------------------------------------------------------- frame view
@@ -382,7 +274,7 @@ void StructureSystem::linkHouses()
     for (const Ref& s : m_frame)
         if (isBarracksType(s.type))
             s.state->barracks.houses = 0;
-    const float radiusSq = m_houseLinkRadius * m_houseLinkRadius;
+    const float radiusSq = m_settings.houseLinkRadius * m_settings.houseLinkRadius;
     for (Ref& h : m_frame)
     {
         if (h.type != EStructureType::House)
@@ -415,7 +307,7 @@ void StructureSystem::linkHouses()
 void StructureSystem::stampTuning(const Ref& s)
 {
     GameStructureComponent& c = *s.state;
-    c.healthMax = isCableOrCrossing(s.type) ? m_cableHealthMax : m_structureHealthMax;
+    c.healthMax = isCableOrCrossing(s.type) ? m_settings.cableHealthMax : m_settings.structureHealthMax;
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
@@ -426,13 +318,13 @@ void StructureSystem::stampTuning(const Ref& s)
     {
         if (!isBarracksUnitType(c.barracks.unitType))
             c.barracks.unitType = 0;
-        c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
+        c.barracks.spawnCost = m_settings.spawnEnergy[c.barracks.unitType];
         c.capacity[0] = glm::max(c.barracks.spawnCost, 1.0f);
     }
     // A TURRET's energy capacity is ONE SHOT - the same rule, so its store reads as a RELOAD bar
     // and a full one fires. Resolved here for the same reason: before the store clamp.
     else if (s.type == EStructureType::Turret)
-        c.capacity[0] = glm::max(GameStructureComponent::params.turretShotEnergy, 0.01f);
+        c.capacity[0] = glm::max(Globals::settings.game.structureParams.turretShotEnergy, 0.01f);
     for (int m = 0; m < 3; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
     // (Cables hold NO stores - capacity 0 everywhere: they are transport nodes, never endpoints.
@@ -448,8 +340,8 @@ void StructureSystem::stampTuning(const Ref& s)
     {
         c.machineKind = GameStructureComponent::EMachineKind::Barracks;
         // (unitType/spawnCost/capacity[0] were resolved above, ahead of the store clamp)
-        c.barracks.spawnPop = (uint8)glm::clamp(m_unitPopulation[c.barracks.unitType], 0, 255);
-        c.barracks.popCap = m_barracksPopulation + (int)c.barracks.houses * m_housePopulation;
+        c.barracks.spawnPop = (uint8)glm::clamp(m_settings.unitPopulation[c.barracks.unitType], 0, 255);
+        c.barracks.popCap = m_settings.barracksPopulation + (int)c.barracks.houses * m_settings.housePopulation;
     }
     else
         c.machineKind = s.type == EStructureType::Turret ? GameStructureComponent::EMachineKind::Turret

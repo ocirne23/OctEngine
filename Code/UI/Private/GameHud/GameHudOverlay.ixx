@@ -5,7 +5,7 @@ import Core.imgui;
 import Core.glm;
 import Core.Rect;
 import Core.GameHud;
-import Core.Tweaks;
+import Settings;
 
 // Draws the in-game HUD (Core.GameHud is the model; scripts write it) OVER the viewport: a
 // Minecraft-style hotbar bottom-center (keys 1..9,0 select -- see InputControls) and bars/counters
@@ -16,18 +16,10 @@ export class GameHudOverlay final
 {
 public:
 
-	void registerTweaks()
-	{
-		Tweak::boolean("HUD", "Enabled", &m_enabled);
-		Tweak::floatVar("HUD", "Scale", &m_scale, 0.5f, 3.0f, 0.05f);
-		Tweak::floatVar("HUD", "Opacity", &m_opacity, 0.1f, 1.0f, 0.05f);
-		Tweak::floatVar("HUD", "Hotbar slot size", &m_hotbarSlotSize, 24.0f, 160.0f, 1.0f);
-		Tweak::floatVar("HUD", "Hotbar text scale", &m_hotbarTextScale, 0.5f, 4.0f, 0.05f);
-	}
-
 	void render(const Rect& viewport)
 	{
-		if (!m_enabled)
+		const HudSettings& hudSettings = Globals::settings.hud;
+		if (!hudSettings.enabled)
 			return;
 		const glm::ivec2 size = viewport.getSize();
 		if (size.x <= 0 || size.y <= 0)
@@ -48,8 +40,8 @@ public:
 		dl->PushClipRect(vpMin, vpMax, true);
 
 		ImFont* font = ImGui::GetFont();
-		const float s = m_scale;
-		const float alpha = m_opacity;
+		const float s = hudSettings.scale;
+		const float alpha = hudSettings.opacity;
 		const auto col = [alpha](float r, float g, float b, float a)
 		{
 			return ImGui::ColorConvertFloat4ToU32(ImVec4(r, g, b, a * alpha));
@@ -234,7 +226,7 @@ public:
 		// ---- clicks can be resolved against it, and the slot under the cursor lights up. ----
 		if (hud.hotbarActive)
 		{
-			const float slot = m_hotbarSlotSize * s;
+			const float slot = hudSettings.hotbarSlotSize * s;
 			const float pad = 5.0f * s;
 			const float margin = 14.0f * s;
 			const int columns = hud.columns > 0 ? hud.columns : GameHud::NumSlots;
@@ -281,7 +273,7 @@ public:
 				// base size is deliberately large and only over-long labels scale back.
 				if (!hudSlot.label.empty())
 				{
-					float labelSize = fontSize * m_hotbarTextScale;
+					float labelSize = fontSize * hudSettings.hotbarTextScale;
 					ImVec2 ts = font->CalcTextSizeA(labelSize, noWrap, 0.0f, hudSlot.label.c_str());
 					const float maxW = slot - 8.0f * s;
 					if (ts.x > maxW)
@@ -370,9 +362,4 @@ private:
 	}
 
 	GameHud::Snapshot m_hud; // the per-frame copy, kept so its vectors and strings keep their capacity
-	bool  m_enabled = true;
-	float m_scale = 1.0f;
-	float m_opacity = 0.9f;
-	float m_hotbarSlotSize = 72.0f; // px at scale 1 (the grid is the main build UI - big enough to read)
-	float m_hotbarTextScale = 1.9f; // slot caption size, x the base font
 };

@@ -6,7 +6,7 @@ import Core.SDL;
 import Core.Time;
 import Core.glm;
 import Core.Camera;
-import Core.Tweaks;
+import Settings;
 import Core.Windows;
 
 import App.Session;
@@ -39,6 +39,10 @@ int main(int argc, char* argv[])
     oc::optional<FileSystem::AllowMainThreadIO> startupIo;
     startupIo.emplace();
     installFileHooks();
+    // Every tweak, before any system initializes (their Tweak::onChange listeners need the rows); the saved values
+    // apply as each row registers.
+    Settings::registerAll();
+    Globals::time.bindSettings(Globals::settings.time);
 
     runCommandLineTool(argc, argv);
 
@@ -184,7 +188,6 @@ int main(int argc, char* argv[])
     initScope.stop();
     startupIo.reset();
 
-    Globals::time.registerTweaks();
     Globals::time.update();
     const auto timerDelay = [](double sec) { return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(oc::max(sec, 0.001))); };
     oc::optional<Timer> scenarioTimer;

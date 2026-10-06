@@ -4,6 +4,7 @@ import Core;
 import :VK;
 import :Layout;
 import :Allocator;
+import Settings;
 
 // One mip level's byte range in the source .dds file plus its dimensions.
 export struct TextureMipRange
@@ -70,8 +71,8 @@ public:
     void unregisterTexture(uint16 texIdx, uint64 allocatedBytes);
 
     // Whether new DDS textures should load tail-only and stream up (checked at Texture load time).
-    bool isStreamingEnabled() const { return m_enabled; }
-    uint32 tailMaxDim() const { return (uint32)m_tailMaxDim; }
+    bool isStreamingEnabled() const { return m_settings.enabled; }
+    uint32 tailMaxDim() const { return (uint32)m_settings.tailMaxDim; }
 
     // Priority pass: a rendered instance using texIdx reports how many texels it can display this frame
     // (log2 of its projected screen size in pixels). Folds into a per-texture "wanted top mip" via an
@@ -91,7 +92,7 @@ public:
     void queueDescriptorWrite(uint16 texIdx);
     oc::span<const uint16> getPendingDescriptorWrites(uint32 frameIdx) const { return m_pendingDescriptorWrites[frameIdx]; }
     void clearPendingDescriptorWrites(uint32 frameIdx) { m_pendingDescriptorWrites[frameIdx].clear(); }
-    bool debugRewriteAllSlots() const { return m_debugRewriteAllSlots; }
+    bool debugRewriteAllSlots() const { return m_settings.debugRewriteAllSlots; }
 
     struct StreamerStats
     {
@@ -207,17 +208,7 @@ private:
     uint32 m_numStreamable = 0;
     uint32 m_frameCounter = 0;         // incremented once per update()
 
-    int  m_budgetMB = 512;
-    bool m_enabled = true;
-    int  m_tailMaxDim = 128;
-    int  m_maxOpsInFlight = 4;
-    float m_maxMBPerFrame = 24.0f; // issued read volume per frame; keeps stream-ins well under the staging buffer
-    bool m_gpuMipCopies = true;    // copy surviving mips old->new on the GPU (demotions skip the disk entirely)
-    bool m_debugRewriteAllSlots = false;
-    float m_mipBias = 0.0f;            // global quality knob: +1 = one mip level coarser everywhere
-    float m_texelRatio = 1.0f;         // texels wanted per projected pixel (tiling textures want > 1)
-    int  m_demoteHysteresisFrames = 60;
-    int  m_decayFrames = 120;          // unseen for this long -> desire only the tail
+    const TextureStreamingSettings& m_settings = Globals::settings.textureStreaming; // "Texture Streaming"
 };
 
 export namespace Globals

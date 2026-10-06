@@ -3,6 +3,7 @@ export module Entity:NetworkManager;
 import Core;
 import Core.glm;
 import Network;
+import Settings;
 import :Entity;
 import :NetworkComponent; // NetInputState in the claim ring; no cycle - the component never imports the manager
 
@@ -74,59 +75,13 @@ export enum class ENetRole : uint8
     Client, // corrects local entities toward server snapshots
 };
 
-// Client-side correction thresholds, shared with NetworkComponent::update (registered as tweaks).
-export struct NetSyncParams
-{
-    float posDeadzone = 0.05f;        // below: local state free-runs
-    float posSnapThreshold = 2.0f;    // entering the push's CATCH-UP band (boosted gains/caps)
-    float rotDeadzoneDeg = 0.5f;
-    float rotSnapThresholdDeg = 45.0f;
-    float blendRate = 10.0f;          // NON-physics entities: exponential blend rate toward the target
-    bool extrapolate = true;          // dead-reckon the pose target by linVel * timeSinceSnapshot
-    // REMOTE-OWNED entities (other players) skip the chase and replay the owner's recorded
-    // trajectory this many snapshot ticks in the past, interpolating between buffered snapshots.
-    // Tweak minimum is 2 - the cursor clamps to `newest - 1`, so 1 leaves it no headroom and
-    // playback advances only on snapshot arrival. Loss gaps fall through to the push for a frame.
-    int remoteInterpTicks = 2;
-
-    // PHYSICAL PUSH (dynamic bodies): error becomes corrective velocity on top of the server's, as
-    // bounded impulses through the sim. Past the snap threshold gains/caps are multiplied by
-    // pushCatchUpBoost so multi-meter errors still correct THROUGH the sim - teleporting into an
-    // occupied space would depenetration-fling both bodies into fresh desync. The teleport resync is
-    // the LAST resort, position error only (a wrong orientation can't materialize inside anything).
-    // INTERACTION GRACE: a server-owned body within this radius of one of OUR claim-driven bodies
-    // suspends its corrections - they'd fight the shove the player is applying with the server's
-    // RTT-old pre-push state. The twin gets the same push an RTT later. 0 = off.
-    float interactionRadius = 1.5f;
-    float interactionLinger = 0.5f;   // seconds the grace persists after leaving the radius
-
-    float pushPosGain = 0.5f;         // corrective velocity per meter of position error (1/s)
-    float pushRotGain = 5.0f;         // corrective angular velocity per radian of rotation error (1/s)
-    float pushMaxVel = 10.0f;         // cap on the corrective (error-driven) velocity term (m/s)
-    float pushMaxAngVel = 10.0f;      // cap on the corrective angular term (rad/s)
-    float pushMaxAccel = 10.0f;       // how hard the push may change the body's velocity (m/s^2; keep > gravity)
-    float pushMaxAngAccel = 60.0f;    // (rad/s^2)
-    float pushCatchUpBoost = 4.0f;    // gain/cap multiplier in the catch-up band (snap..teleport threshold)
-    // MASS SCALING: a light body's velocity answers every contact impulse strongly, so in a packed
-    // crowd its correction and its neighbours' pushes compound into swinging. Gains, velocity caps
-    // and acceleration limits scale by clamp(mass / pushMassReference, pushMassScaleMin, 1): a body
-    // at or above the reference corrects at full strength, a lighter one proportionally gentler.
-    float pushMassReference = 30.0f;  // kg; bodies this heavy or heavier get the full correction
-    float pushMassScaleMin = 0.15f;   // floor so a very light body still converges
-    float posTeleportThreshold = 10.0f; // beyond this the non-physical teleport resync fires after all
-    // ARBITRATED OWNER (player-vs-player contact): the local feel comes from the local contact with
-    // the opponent's replica - the server correction only reconciles REAL divergence (you actually
-    // lost ground), so it runs with this much larger deadzone and halved gains; a tight deadzone
-    // would micro-correct the pipeline lag and drag against the player's input for the whole window
-    float arbitrateDeadzone = 0.4f;
-};
-
+// The "Network" settings (send policy, NetSyncParams correction thresholds, ...) are Globals::settings.network
+// (Settings.Network).
 export class NetworkManager
 {
 public:
 
-    // Registers the "Network" tweak block; call once at startup regardless of role so the
-    // section exists in single player too.
+    // Attaches the link-simulation listeners; call once at startup regardless of role.
     void initialize();
 
     bool startServer(uint16 port);
@@ -136,7 +91,7 @@ public:
     ~NetworkManager() { shutdown(); } // init_seg XCU6: after ~World's NetworkComponents unregister, before ~JobSystem
 
     ENetRole role() const { return m_role; }
-    const NetSyncParams& params() const { return m_params; }
+    const NetSyncParams& params() const { return Globals::settings.network.correction; }
 
     // This process's stable clientId: server-minted per connection, delivered in the Welcome.
     // 0 on the server / before the Welcome - which is what makes ownerClientId == localClientId()
@@ -420,7 +375,8 @@ private:
     oc::vector<PendingEvent> m_pendingOutgoingEvents; // filled from any thread, drained by send()
     std::mutex m_eventMutex;
 
-    NetSyncParams m_params;
+    void applyLinkSim(); // Globals::settings.network's link simulation -> m_host's config
+    bool m_initialized = false;
     double m_snapshotAccum = 0.0;
     double m_netTime = 0.0; // seconds since start, advanced in receive() - the WALL CLOCK the claim
                             // displacement budget is measured against (sequence numbers are

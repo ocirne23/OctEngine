@@ -12,16 +12,16 @@
 //     less than the body) and the texel RISES toward it at the wet-in rate rather than jumping, so an
 //     advancing front reads as a gradient in time and space instead of texels popping to 1. Permanently
 //     submerged ground reaches 1 and holds it, so a receding drawdown reveals a wet seabed that dries.
-//   - rain: a uniform per-frame addition (u_terrainWetParams1.w; 0 = no rain).
+//   - rain: a uniform per-frame addition (u_terrainLive_wetRain; 0 = no rain).
 // Decay is exponential in sim time (factor precomputed per frame on the CPU), sharpened on warm ground
-// by the map's own climate (u_terrainWetParams2.w). Two layers = ping/pong: read last frame's layer,
-// write the other (frame slots alternate strictly; u_terrainWetParams3.x names the written layer).
+// by the map's own climate (u_terrainWater_dryTempSensitivity). Two layers = ping/pong: read last frame's layer,
+// write the other (frame slots alternate strictly; u_terrainLive_wetLayer names the written layer).
 
 // --- Diffusion: reads last frame's value through a wrapped 3x3 tent so wetness spreads sideways as it
 // lives (the same trick the ocean foam mask uses), which also smooths the advancing front off the texel
 // grid. The toggle is BAKED from the "Terrain/Wetness" Diffusion tweak (TerrainWetnessPipeline::
 // buildLayout; a change reloads this shader - this is the fallback). The SPREAD is live and framerate
-// independent: u_terrainWetParams3.w = 1 - exp(-rate * dt), the fraction of the tent replacing the
+// independent: u_terrainLive_wetSpread = 1 - exp(-rate * dt), the fraction of the tent replacing the
 // centre this frame, so the front advances ~rate * texel per second whatever the fps. It is a
 // one-way (max) spread: it wets the fringe without draining the body (see below).
 #ifndef WET_DIFFUSION
@@ -53,15 +53,15 @@ float prevWet(ivec2 lc, ivec2 prevOrigin, int prevLayer, float fallback)
 void main()
 {
     const ivec2 slot = ivec2(gl_GlobalInvocationID.xy);
-    const int writeLayer = int(u_terrainWetParams3.x);
-    if (u_terrainWetParams2.x < 0.5)
+    const int writeLayer = int(u_terrainLive_wetLayer);
+    if (u_terrainWater_enabled < 0.5)
     {
         imageStore(u_wet, ivec3(slot, writeLayer), vec4(0.0)); // disabled: leave nothing behind for a later enable
         return;
     }
     const int prevLayer = 1 - writeLayer;
-    const ivec2 origin = ivec2(u_terrainWetParams0.xy);
-    const ivec2 prevOrigin = ivec2(u_terrainWetParams0.zw);
+    const ivec2 origin = ivec2(u_terrainLive_wetOrigin);
+    const ivec2 prevOrigin = ivec2(u_terrainLive_wetPrevOrigin);
     // The one lattice coord in [origin, origin + RES) that maps to this slot.
     const ivec2 lc = origin + ((slot - origin) & WET_MASK);
 
@@ -80,12 +80,12 @@ void main()
         // ADDITIVE, not conserving: a texel only ever rises toward wetter neighbours, never falls toward
         // drier ones - a plain blur would drain the wet body to feed its fringe, drying it faster than
         // the decay says. Water that spreads is not lost here; the decay alone dries the ground.
-        wet = max(wet, mix(wet, tent * (1.0 / 16.0), u_terrainWetParams3.w));
+        wet = max(wet, mix(wet, tent * (1.0 / 16.0), u_terrainLive_wetSpread));
     }
 #endif
 
-    const vec2 worldXZ = (vec2(lc) + 0.5) * u_terrainWetParams1.x;
-    float decay = u_terrainWetParams1.z;
+    const vec2 worldXZ = (vec2(lc) + 0.5) * u_terrainWater_texelSize;
+    float decay = u_terrainLive_wetDecay;
     float dryMul = 1.0; // warm-ground multiplier on BOTH drain terms (see below)
     float target = 0.0;   // wetting target under water this frame
     float soak = 1.0;     // accumulation rate scale (slope drain: water runs off a face before it soaks in)
@@ -94,18 +94,18 @@ void main()
         const vec4 d = terrainDataAt(worldXZ);
         float depth = d.y - d.x; // calm water level above ground (negative on dry land)
         // Swash band: gate against the LIVE displaced surface (see doSunLight in the lit core). Ground
-        // deeper than the reach is under water at any wave phase and skips the wave taps; u_oceanParams7.w
+        // deeper than the reach is under water at any wave phase and skips the wave taps; u_oceanLive_swashReach
         // is 0 with the swash or the ocean off, so this costs nothing then.
-        const float reach = u_oceanParams7.w;
+        const float reach = u_oceanLive_swashReach;
         if (reach > 0.0 && abs(depth) < reach)
             depth += underwaterLiveWaveY(worldXZ, depth, d.y);
         target = depth > 0.0 ? 1.0 : 0.0; // under the live surface = fully wet
-        if (target <= 0.0 && u_terrainWetParams2.w > 0.0)
+        if (target <= 0.0 && u_terrainWater_dryTempSensitivity > 0.0)
         {
             // Warm ground dries faster: the decay exponent scales with the temperature above 15 C
             // (colder than that = the base dry time). Evaluated at the map's own height.
             const float tempC = terrainTemperatureAt(terrainClimateAt(worldXZ), d.x);
-            dryMul = 1.0 + max(tempC - 15.0, 0.0) * u_terrainWetParams2.w;
+            dryMul = 1.0 + max(tempC - 15.0, 0.0) * u_terrainWater_dryTempSensitivity;
             decay = pow(decay, dryMul);
         }
         // Slope drain on the ACCUMULATION side: the same drain factor the terrain shader applies to the
@@ -113,18 +113,18 @@ void main()
         // takes that much longer to soak. The slope comes from the map's height gradient - its 8 m
         // texels see cliffs and steep banks, not sub-metre ledges (those only drain faster, per pixel).
         // Only paid where something is accumulating.
-        if (u_terrainWetParams3.z > 0.0 && (target > 0.0 || u_terrainWetParams1.w > 0.0))
+        if (u_terrainWater_slopeDrain > 0.0 && (target > 0.0 || u_terrainLive_wetRain > 0.0))
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field
             const float gx = (terrainHeightAt(worldXZ + vec2(h, 0.0)) - terrainHeightAt(worldXZ - vec2(h, 0.0))) * (0.5 / h);
             const float gz = (terrainHeightAt(worldXZ + vec2(0.0, h)) - terrainHeightAt(worldXZ - vec2(0.0, h))) * (0.5 / h);
             const float ny = inversesqrt(1.0 + gx * gx + gz * gz); // the surface normal's Y
-            soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWetParams3.z);
+            soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWater_slopeDrain);
         }
     }
     // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt =
     // rain - wet / dryTime, so rain settles the ground at rain x dryTime.
-    wet = max(wet * decay, min(wet + u_terrainWetParams3.y * soak, target));
-    wet += u_terrainWetParams1.w * soak; // rain
+    wet = max(wet * decay, min(wet + u_terrainLive_wetIn * soak, target));
+    wet += u_terrainLive_wetRain * soak; // rain
     imageStore(u_wet, ivec3(slot, writeLayer), vec4(clamp(wet, 0.0, 1.0)));
 }

@@ -2,7 +2,6 @@ module RendererVK;
 
 import Core;
 import Core.glm;
-import Core.Tweaks;
 import File;
 import :DecalPipeline;
 import :GraphicsPipeline;
@@ -17,11 +16,6 @@ using namespace RendererVKLayout;
 static vk::DescriptorBufferInfo decalBufInfo(const Buffer& buffer)
 {
     return vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() };
-}
-
-void DecalPipeline::registerTweaks()
-{
-    Tweak::boolean("Decals", "Enabled", &m_enabled);
 }
 
 void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
@@ -132,7 +126,7 @@ void DecalPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, ui
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
     oc::array<DescriptorSetUpdateInfo, 8> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(m_decalBuffers[frameIdx]) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },

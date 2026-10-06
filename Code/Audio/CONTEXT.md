@@ -15,7 +15,7 @@ holds an opaque `uint64` handle:
 
 | Call | Notes |
 |---|---|
-| `initialize()` | Opens the default output device — 48 kHz stereo — then the Steam Audio context and HRTF (`IPL_SIMDLEVEL_AVX2`, `IPL_HRTFTYPE_DEFAULT`). Registers the `Audio/System → Master Volume` tweak. Returns false and logs on failure. |
+| `initialize()` | Opens the default output device — 48 kHz stereo — then the Steam Audio context and HRTF (`IPL_SIMDLEVEL_AVX2`, `IPL_HRTFTYPE_DEFAULT`). Applies the `Audio/System → Master Volume` tweak (`Globals::settings.audio.masterVolume`, registered in `Code/Settings`) and attaches its listener. Returns false and logs on failure. |
 | `update(camera[, listenerVelocity])` | **Once per frame, game thread.** Places the listener and recomputes every source's HRTF direction, distance attenuation and doppler. The audio thread reads the results through the node's atomics. |
 | `loadSound(path)` | WAV / FLAC / MP3, relative to `Assets/`. |
 | `createBuffer(format, pcm, rate)` | Procedural sounds. |

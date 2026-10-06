@@ -38,12 +38,12 @@ layout (binding = 10) uniform usampler2D u_rainOcclusion; // THIS frame's top-do
 // frames. Outside the map nothing shelters.
 bool rainSheltered(vec3 pos, uint seed)
 {
-    const vec4 clip = u_rainOcclusionViewProj * vec4(pos, 1.0); // ortho: w = 1
+    const vec4 clip = u_weather_rainOcclusionViewProj * vec4(pos, 1.0); // ortho: w = 1
     const vec2 uv = clip.xy * 0.5 + 0.5;
     if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
         return false;
     const uint texel = texture(u_rainOcclusion, uv).r;
-    const float tolerance = u_rainOcclusionParams.z * u_rainOcclusionParams.y;
+    const float tolerance = u_particles_rainShelterTolerance * u_weather_rainOcclusionInvRange;
     if (clip.z - float(texel & 0xFFFFu) * (1.0 / 65535.0) > tolerance)
         return true;
     if (clip.z - float((texel >> 16) & 0xFFFu) * (1.0 / 4095.0) <= tolerance)
@@ -148,8 +148,8 @@ void main()
     {
         const vec2 shoreHW = oceanSampleShoreData(pos.xz); // (terrain height, local calm water level)
         // Cheap reject first: no wave reaches above the calm level plus the crest band estimated from the
-        // ocean readback (u_fogParams7.y; 0 with the ocean off). Only drops near the water pay the taps.
-        if (pos.y < shoreHW.y + u_fogParams7.y + 0.5)
+        // ocean readback (u_fogLive_waveBand; 0 with the ocean off). Only drops near the water pay the taps.
+        if (pos.y < shoreHW.y + u_fogLive_waveBand + 0.5)
         {
             const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
             if (pos.y < surfaceY)
@@ -188,7 +188,7 @@ void main()
         // so clustering is bounded by what one fall through the box can do (as in reality).
         // hitWater = it reached the live wave surface (the water floor above): the same restart, so a
         // volume never draws a particle below the sea.
-        const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_rainOcclusionParams.x > 0.5 && rainSheltered(pos, particle.misc.y);
+        const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_weather_rainOcclusionPresent > 0.5 && rainSheltered(pos, particle.misc.y);
         if (sheltered || hitWater || rel.y < -halfExt.y)
         {
             uint seed = particle.misc.y;

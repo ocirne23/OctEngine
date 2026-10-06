@@ -3,7 +3,7 @@
 #extension GL_EXT_ray_query : require
 
 // The weather volume's RAIN OCCLUSION MAP (RainOcclusionPipeline): one texel = one vertical line through the
-// top-down orthographic box of u_rainOcclusionViewProj (its inverse in the push constants), from the near plane (the
+// top-down orthographic box of u_weather_rainOcclusionViewProj (its inverse in the push constants), from the near plane (the
 // eye, "Rain occlusion pad" above the box) to the far plane (1 m below the box). Two ray queries down it:
 //   SOLID   - opaque instances only (CullNoOpaque): the closest hit's ortho depth (t / range, standard Z; 1 = none).
 //   FOLIAGE - the alpha-masked (non-opaque) instances above that hit (CullOpaque, candidates never confirmed): the

@@ -10,7 +10,7 @@
 //
 // Indexed in DRIFTED REST coordinates q = rest XZ - drift: the rest (undisplaced, Lagrangian) lattice is
 // where a water parcel sits between its orbits, so foam on it rides the waves' horizontal motion and
-// stays behind as a crest passes under it; the drift (u_oceanFoamField.xy, accumulated on the CPU) moves
+// stays behind as a crest passes under it; the drift (u_oceanLive_foamDrift, accumulated on the CPU) moves
 // the whole frame downwind without resampling, so the field never blurs from advection.
 // Requires ubo.inc.glsl. fp32 only (the compute pass includes it too).
 
@@ -19,7 +19,7 @@
 
 float oceanFoamTexel(int level)
 {
-    return u_oceanFoamField.z * float(1 << (2 * level));
+    return u_ocean_foamTexel * float(1 << (2 * level));
 }
 
 // Cubic B-spline reconstruction of one mip from 4 bilinear taps (Sigg & Hadwiger, GPU Gems 2 ch. 20): a
@@ -52,13 +52,13 @@ float oceanFoamBicubic(sampler2DArray maps, vec2 uv, float layer, float mip)
 // Explicit LOD: safe in non-uniform control flow.
 float oceanSampleFoamField(sampler2DArray maps, vec2 restXZ, float footprint, float blur)
 {
-    const vec2 q = restXZ - u_oceanFoamField.xy;
+    const vec2 q = restXZ - u_oceanLive_foamDrift;
     float result = 0.0;
     float remaining = 1.0;
     for (int level = 0; level < OCEAN_FOAM_LEVELS; ++level)
     {
         const float texel = oceanFoamTexel(level);
-        const vec2 uv = (q - u_oceanFoamLevels[level].xy) / (texel * float(OCEAN_FFT_SIZE));
+        const vec2 uv = (q - u_oceanLive_foamLevels[level].xy) / (texel * float(OCEAN_FFT_SIZE));
         const vec2 edge = abs(uv - 0.5);
         const float w = 1.0 - smoothstep(0.40, 0.48, max(edge.x, edge.y));
         if (w <= 0.0)
@@ -98,13 +98,13 @@ float oceanStuckFoamDensity(float amount, float jacobian)
     return amount / max(jacobian, 0.1);
 }
 
-// Its COVERAGE: a threshold on the density ("Foam threshold", u_oceanFoamField1.y) with a narrow edge
-// ("Foam edge", 1.z) plus the caller's AA widening (the density's screen derivative, or a footprint
+// Its COVERAGE: a threshold on the density ("Foam threshold", u_ocean_foamThreshold) with a narrow edge
+// ("Foam edge", u_ocean_foamEdge) plus the caller's AA widening (the density's screen derivative, or a footprint
 // estimate where there are none) - crisp foam edges, not a gradient.
 float oceanStuckFoamCoverage(float density, float aa)
 {
-    const float threshold = u_oceanFoamField1.y;
-    const float edge = u_oceanFoamField1.z + aa;
+    const float threshold = u_ocean_foamThreshold;
+    const float edge = u_ocean_foamEdge + aa;
     return smoothstep(threshold - edge, threshold + edge, density);
 }
 

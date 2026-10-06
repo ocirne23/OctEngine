@@ -60,30 +60,17 @@ namespace
         float rockExtinction; // a SOLID type's extinction (1/m) over its occupancy ("Far rock extinction")
     };
     static_assert(sizeof(SplatPC) == 128); // the guaranteed push-constant minimum: full
+    // The BAKED geometry, the sizes and this frame's start. The shading tweaks ride the frame UBO (u_foliage_far*);
+    // the scale and the pixel skip are baked defines (TREE_MARCH_SCALE / TREE_MARCH_SKIP).
     struct MarchPC
     {
         VolumeParamsGpu vol;
         uint32 width;
         uint32 height;
-        float stepScale;
         float startDistance;
-        uint32 maxSteps;
-        float ambient;
-        float shrink;
-        float overlap;
-        float sunScale;
-        float selfShadow;
-        float normalStrength;
-        float groundDark;
-        float forwardScatter;
-        float albedoScale;
-        float interiorShadow;
-        float interiorRadius;
-        float saturation;   // "Far saturation scale" (the scale and the pixel skip are baked: TREE_MARCH_SCALE / TREE_MARCH_SKIP)
-        uint32 pad1;
         glm::uvec2 fullSize;
     };
-    static_assert(sizeof(MarchPC) == 128); // the guaranteed push-constant minimum: full
+    static_assert(sizeof(MarchPC) <= 128); // the guaranteed push-constant minimum
     // cloud_temporal.cs.glsl's push block under TREE_TEMPORAL (the scale and the checkerboard are baked).
     struct TemporalPC
     {
@@ -1052,7 +1039,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             const vk::DescriptorSet set = boundSet.getDescriptorSet();
             oc::array<DescriptorSetUpdateInfo, 7> updates{
                 DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                    .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                    .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
                 DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                     .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
                 DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
@@ -1212,7 +1199,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         const vk::DescriptorSet set = m_farSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 6> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farAmount.view) } },
@@ -1253,7 +1240,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
                 .imageView = params.rockTextures[oc::min<size_t>(i, params.rockTextures.size() - 1)], .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
         oc::array<DescriptorSetUpdateInfo, 7> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
@@ -1486,28 +1473,13 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         .vol = vol,
         .width = marchWidth,
         .height = marchHeight,
-        .stepScale = oc::max(s.stepScale, 0.05f),
         .startDistance = params.startDistance, // scaled with the camera's height (Renderer::farTreesStart)
-        .maxSteps = s.maxSteps,
-        .ambient = s.ambient,
-        .shrink = oc::max(s.blobShrink, 0.0f),
-        .overlap = oc::max(s.overlap, 1.0f),
-        .sunScale = s.sunScale,
-        .selfShadow = s.selfShadow,
-        .normalStrength = s.normalStrength,
-        .groundDark = s.groundDarkening,
-        .forwardScatter = glm::clamp(s.forwardScatter, -0.95f, 0.95f),
-        .albedoScale = s.albedoScale,
-        .interiorShadow = oc::max(s.interiorShadow, 0.0f),
-        .interiorRadius = oc::max(s.interiorRadius, 0.0f), // 0: the taps sit on the sample - no darkening
-        .saturation = oc::max(s.saturationScale, 0.0f),
-        .pad1 = 0,
         .fullSize = glm::uvec2(m_width, m_height),
     };
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 17> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -1569,7 +1541,7 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         const vk::DescriptorSet tset = m_temporalSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 9> tupdates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_raw.view) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_rawDepth.view) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, prevColour.view) } },
@@ -1595,7 +1567,7 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         const vk::DescriptorSet uset = m_upsampleSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 6> uupdates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, accumColour.view) } },

@@ -28,7 +28,7 @@ export ELightType lightTypeFromToken(oc::string_view token);
 // Each light sits at `offset` in entity space (scaled+rotated by the entity) and aims along
 // `direction` in entity space; `range`/`width`/`height`/`length` are WORLD units and do NOT scale
 // with the entity (a light's reach is a gameplay quantity, not geometry - same rule as Force).
-// `debugDraw` (per component, plus the "Lights/Debug geometry" tweak that forces it on globally)
+// `debugDraw` (per component, plus the "Editor/Light debug geometry" tweak that forces it on globally)
 // overlays wireframes of what each light actually covers.
 export struct LightComponent
 {

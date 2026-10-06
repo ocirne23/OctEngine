@@ -11,7 +11,7 @@ import :ComputePipeline;
 import :GraphicsPipeline;
 import :DescriptorSet;
 import :Layout;
-import :Settings;
+import :RenderParams;
 import :TreeRecordPool;
 
 // FAR TREES as a marched volume (Docs/TreeRenderingPlan.md T2, prototype P1). Three stages:
@@ -81,7 +81,7 @@ public:
             m_jobDropped = true; // the next record() holds the next start back (its snapshots may still be read)
         }
     }
-    // The frame UBO's u_treeHandover as of this frame's real time (built before record(), which alone changes the state):
+    // The frame UBO's u_foliageLive_handover* as of this frame's real time (built before record(), which alone changes the state):
     // xy = the new bake's centre, z = the cross-fade to it (0..1, the fraction of rays that pick it), w unused; all 0
     // without one.
     glm::vec4 handoverUbo() const;
@@ -128,7 +128,7 @@ public:
     {
         Buffer& ubo;
         // The terrain's rock materials' diffuse views, in slot order (ROCK_TEXTURES of them: a fallback past the count,
-        // u_terrainTexParams0.z, which the resolve reads from the UBO).
+        // u_terrainLive_numRock, which the resolve reads from the UBO).
         oc::span<const vk::ImageView> rockTextures;
         vk::ImageView sceneDepthView; // SCENE_DEPTH_SAMPLED_LAYOUT, after the opaque stages
         vk::Sampler sceneDepthSampler;

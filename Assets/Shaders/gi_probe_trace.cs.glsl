@@ -71,11 +71,11 @@ layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // per gather hit that the multi-bounce lookup makes.
 layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 
-// Trace parameters come from the UBO (u_giTrace0 / u_giTrace1 / u_frameIndex), not push constants, so the
+// Trace parameters come from the UBO (u_rt / u_giLive / u_frameIndex), not push constants, so the
 // GI command buffer records once: numRays, temporalAlpha, maxRayDist, updateInterval (a probe workgroup
 // traces every N frames; fresh probes always trace) and prevViewPos (last frame's scene focus, the
 // previous clipmap window for freshness).
-#define GI_MAX_RAY_DIST (u_giTrace0.z)
+#define GI_MAX_RAY_DIST (u_rt_giMaxRayDistance)
 #define GI_DEAD_INTERVAL 8 // a backface-dead probe traces every N-th regular visit
 #define GI_VISIT_ALPHA_MAX 0.15    // cap on the per-visit blend alpha the update interval can scale up to
 #define GI_FRESH_RAY_MULT 4        // ray count multiplier for a fresh (just scrolled-in) probe's replace visit
@@ -157,7 +157,7 @@ vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
     const vec3  up    = normalize(u_skyUp);
     const float cosUp = dot(d, up);
     skyOpen = max(cosUp, 0.0);
-    sunLuma = dot(skyGroundSun(up), GI_LUMA_W) * (cosUp < 0.0 ? 1.0 : u_groundParams.w);
+    sunLuma = dot(skyGroundSun(up), GI_LUMA_W) * (cosUp < 0.0 ? 1.0 : u_sky_groundHorizon);
     return giSkySHRadiance(d);
 }
 
@@ -271,10 +271,10 @@ void projectSkySH(uint lane)
     const vec3 dir = sampleSphere(lane, 64u, vec2(0.0));
     vec3 rad = skyMiss(dir);
     const vec3 up = normalize(u_skyUp);
-    // Sky/Ground Horizon (u_groundParams.w): on rolling terrain part of the above-horizon hemisphere is
+    // Sky/Ground Horizon (u_sky_groundHorizon): on rolling terrain part of the above-horizon hemisphere is
     // other sunlit ground, not sky - real probes see that as geometry hits; blend the ground in.
     if (dot(dir, up) > 0.0)
-        rad = mix(rad, skyMiss(-up), u_groundParams.w);
+        rad = mix(rad, skyMiss(-up), u_sky_groundHorizon);
     const float wsh = 4.0 * PI / 64.0;
     const vec4 Y = shBasisL1(dir) * wsh;
     s_skySH[lane]        = rad * Y.x;
@@ -298,13 +298,13 @@ void projectSkySH(uint lane)
         vec3 c0 = s_skySH[0], c1 = s_skySH[64], c2 = s_skySH[128], c3 = s_skySH[192];
         // Direct sky-radiance light (moonlight / space light) delta projection, matching the per-probe
         // injection in main() - unoccluded here (the virtual probe floats in open sky).
-        if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
+        if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
         {
             const vec4 Ysky = shBasisL1(up);
-            c0 += u_skyRadianceColor * Ysky.x;
-            c1 += u_skyRadianceColor * Ysky.y;
-            c2 += u_skyRadianceColor * Ysky.z;
-            c3 += u_skyRadianceColor * Ysky.w;
+            c0 += u_sky_radiance * Ysky.x;
+            c1 += u_sky_radiance * Ysky.y;
+            c2 += u_sky_radiance * Ysky.z;
+            c3 += u_sky_radiance * Ysky.w;
         }
         giStoreCell(GI_SKY_SH_BASE, c0, c1, c2, c3);
     }
@@ -382,7 +382,9 @@ void main()
     // priority multiplier the far tiers then refine that snapshot only every few dozen frames. It traces
     // GI_FRESH_RAY_MULT times the rays - half the noise at 4x - and costs little, because only the one
     // probe layer that scrolled in is fresh.
-    const uint N = max(uint(u_giTrace0.x), 1u) * (fresh ? uint(GI_FRESH_RAY_MULT) : 1u);
+    // LIVE even while "Ray tracing" is locked: a constant count unrolled the ray loop (96/0 -> 96/16); [[dont_unroll]]
+    // cost the unlocked shader 96 -> 125 registers instead (2026-10-06).
+    const uint N = max(uint(UBO_LIVE_rt_giRaysPerProbe), 1u) * (fresh ? uint(GI_FRESH_RAY_MULT) : 1u);
     const float wsh = 4.0 * PI / float(N);
     // The per-visit shift of the ray lattice is an R2 (plastic-number Kronecker) SEQUENCE over the wave's
     // visit number, not a white hash: the temporal blend is an average over the last ~1/alpha visits, and
@@ -449,11 +451,11 @@ void main()
     // cosine convolution then yields ~E * max(dot(n, up), 0)). Visibility is a single ray from the probe
     // center toward up (toggleable) - probes float in open space, so this is a soft, low-noise gate, and
     // the temporal blend smooths it further. Bounces arrive for free through the prevE multi-bounce.
-    if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
+    if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
     {
         const vec3 up = normalize(u_skyUp);
-        const float upVis = u_rtSkyRadiance > 0.5 ? rtShadowVisibility(probePos, up, 0.05, 1.0e4) : 1.0;
-        const vec3 cd = u_skyRadianceColor * upVis;
+        const float upVis = u_rt_skyRadiance > 0.5 ? rtShadowVisibility(probePos, up, 0.05, 1.0e4) : 1.0;
+        const vec3 cd = u_sky_radiance * upVis;
         const vec4 Ysky = shBasisL1(up);
         c0 += cd * Ysky.x;
         c1 += cd * Ysky.y;
@@ -476,7 +478,7 @@ void main()
     if (escaped)
         newOffset = escapeOffset;
 
-    // u_giTrace0.y is THIS FRAME's blend (the CPU already rescaled "GI/Temporal Alpha" by the wall delta, so
+    // u_giLive_temporalAlpha is THIS FRAME's blend (the CPU already rescaled "GI/Temporal Alpha" by the wall delta, so
     // convergence is frame-rate independent). A visit every updateInterval frames compounds it over the
     // interval - 1 - (1 - a)^k, which saturates where the linear a * k overshoots - so a slow wave converges
     // at the same WALL-time rate, up to GI_VISIT_ALPHA_MAX: past it one N-ray visit would dominate the
@@ -488,7 +490,7 @@ void main()
     const vec3  lumaW   = GI_LUMA_W;
     const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
     const bool  replace = fresh || oldLuma <= 0.0;
-    const float frameAlpha = u_giTrace0.y;
+    const float frameAlpha = u_giLive_temporalAlpha;
     const float visitAlpha = max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     float alpha = replace ? 1.0 : visitAlpha;
     if (!replace)

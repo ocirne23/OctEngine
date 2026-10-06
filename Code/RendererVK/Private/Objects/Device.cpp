@@ -590,7 +590,7 @@ void Device::endDebugLabel(vk::CommandBuffer cmd) const
         m_pfnEndDebugLabel((VkCommandBuffer)cmd);
 }
 
-void Device::logPipelineStatistics(vk::Pipeline pipeline, const char* name)
+void Device::logPipelineStatistics(vk::Pipeline pipeline, const char* name, const oc::string& defines)
 {
     if (!capturePipelineStatistics() || !pipeline)
         return;
@@ -628,6 +628,7 @@ void Device::logPipelineStatistics(vk::Pipeline pipeline, const char* name)
             default:                                                 line += oc::format("\t{}={}", statistic.name, statistic.value.f64); break;
             }
         }
+        line += "\tDefines=" + defines; // the variant: its shaders' defines (the name is the file only)
         Log::info(line);
         text += line + "\n";
     }

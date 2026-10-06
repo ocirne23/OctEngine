@@ -46,7 +46,7 @@ public:
     // TERRAIN_TESS_ROUTE (0/1): the tessellated terrain's routing, baked. Takes effect on the next reloadShaders.
     void setTerrainTess(bool enabled) { m_terrainTess = enabled; }
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& recordParams);
-    void update(uint32 frameIdx, uint32 numThreads); // the cull threads: u_treeCull.z (Renderer::uploadTreeCullUbo)
+    void update(uint32 frameIdx, uint32 numThreads); // the cull threads: u_present_treeThreads (Renderer::fillTreeCullUbo)
     // Capacity growth (caller must have the GPU idle and re-record command buffers afterwards).
     void resizeInstanceBuffers(uint32 maxMeshInstances);
     void resizeCommandBuffers(uint32 maxUniqueMeshes);
@@ -73,7 +73,7 @@ private:
 
     ComputePipeline m_computePipeline;
     DrawCompactPipeline m_compact;
-    bool m_terrainTess = true; // TERRAIN_TESS_ROUTE; the default matches TerrainTexTweaks::tessEnabled
+    bool m_terrainTess = true; // TERRAIN_TESS_ROUTE; set from "Terrain/Tessellation/Enabled" before the build
 
     struct PerFrameData
     {
