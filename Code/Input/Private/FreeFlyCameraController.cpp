@@ -32,6 +32,7 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
     // The controller outlives the registration (owned by main for the app's lifetime).
     Tweak::boolean("Editor", "Lock To World Up", &m_lockToWorldUp);
     Tweak::floatVar("Editor", "Speed", &m_speed, 0.1f, 200.0f, 0.1f);
+    Tweak::floatVar("Editor", "Sensitivity", &m_sensitivity, 0.001f, 0.015f, 0.001f);
     Tweak::floatVar("Editor", "Camera Near", &m_near, 0.001f, 10.0f, 0.001f);
     Tweak::floatVar("Editor", "Camera Far", &m_far, 500.0f, 262114.0f, 500.0f);
 
@@ -96,6 +97,10 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
                 m_direction = glm::normalize(glm::vec3(rot * glm::vec4(m_direction, 0.0f)));
                 m_up = glm::normalize(glm::cross(right, m_direction));
             }
+        };
+    m_mouseListener->onMouseWheelMoved = [this](const SDL_MouseWheelEvent& evt)
+        {
+            m_speed = oc::clamp(m_speed * (evt.y > 0.0f ? 1.1f : 0.9f), 0.1f, 400.0f);
         };
 }
 

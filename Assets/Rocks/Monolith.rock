@@ -1,0 +1,34 @@
+# Weathering pillar: one tall layered monolith on open ground, narrow at the foot and widest above the middle. Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType Monolith
+	Seed 21
+	Scale 10 22
+	Variants 6
+	Sink 0.04
+	Align 0
+	Shape Pillar
+	Squareness 3
+	Aspect 0.5 1 0.34
+	AspectVar 0.2 0.1 0.2
+	Profile 0.5 0.75 1 0.95 0.72
+	ProfileVar 0.15
+	Round 0.03
+	Erosion 0.025
+	Warp 0.05 1.3
+	Fracture 4 0.2
+	Strata 0.075 0.022 0.8
+	Noise 0.03 3.5 5
+	NoiseStretch 0.5
+	Ridged 0.3
+	Pits 6 0.05 0.02
+	Lod 6000
+	Resolution 2.5
+	# Flat-ish ground only (full up to a slope of 0.06, none from 0.2), any climate: a few together, then none for a long way.
+	Placement
+		Density 50
+		Slope 0 0 0.15 0.2
+		Cluster 400 0.15
+		# Away from rugged ground: nothing steep within ~20 m, and never on a valley floor below hills.
+		Rugged 0 0
+		Valley 0
+		Plains 4
+		Temperature 15 1000

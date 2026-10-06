@@ -39,6 +39,7 @@ void AccelerationStructure::initialize(uint32 maxUniqueMeshes)
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.blasAddresses");
         m_mappedBlasAddresses[f] = m_blasAddressBuffers[f].mapMemory<uint64>();
+        zeroBlasAddresses(f, 0);
     }
     m_staticBlasAddr.assign(maxUniqueMeshes, 0);
     m_staticAddrDirtyBits.assign(maxUniqueMeshes, 0);
@@ -46,6 +47,20 @@ void AccelerationStructure::initialize(uint32 maxUniqueMeshes)
         vk::BufferUsageFlagBits2::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.meshAlias");
     m_mappedMeshAlias = m_meshAliasBuffer.mapMemory<uint32>();
+}
+
+// AN ENTRY NOTHING WROTE MUST READ 0 ("no BLAS": the TLAS writer makes the instance inactive). An entry is written
+// only when its mesh builds, frees or evicts a BLAS - a mesh that never builds one (created not raytraced, a
+// streamed-out mesh before its first stream-in) never gets a write, and fresh buffer memory is UNDEFINED (recycled
+// allocator memory after a growth: stale bytes). The writer then took the garbage for a BLAS reference and the TLAS
+// build / traversal chased a wild pointer: DEVICE LOST - first hit by the rock preview (2026-10-05), the first
+// not-raytraced meshes drawn as plain nodes in every pass, mostly while terrain streaming grew the mesh capacity.
+void AccelerationStructure::zeroBlasAddresses(uint32 frameIdx, size_t first)
+{
+    const oc::span<uint64> mapped = m_mappedBlasAddresses[frameIdx];
+    if (first < mapped.size())
+        memset(mapped.data() + first, 0, (mapped.size() - first) * sizeof(uint64));
+    m_blasAddressBuffers[frameIdx].flushMappedMemory(m_blasAddressBuffers[frameIdx].getSize());
 }
 
 void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
@@ -57,8 +72,9 @@ void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.blasAddresses");
         m_mappedBlasAddresses[f] = m_blasAddressBuffers[f].mapMemory<uint64>();
-        memcpy(m_mappedBlasAddresses[f].data(), oldAddresses.data(), oldAddresses.size() * sizeof(uint64));
-        m_blasAddressBuffers[f].flushMappedMemory(oldAddresses.size() * sizeof(uint64));
+        const size_t kept = oc::min(oldAddresses.size(), m_mappedBlasAddresses[f].size());
+        memcpy(m_mappedBlasAddresses[f].data(), oldAddresses.data(), kept * sizeof(uint64));
+        zeroBlasAddresses(f, kept); // the grown tail (flushes the whole buffer)
     }
     if (maxUniqueMeshes > m_staticBlasAddr.size())
     {

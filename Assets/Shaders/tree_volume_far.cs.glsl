@@ -59,7 +59,7 @@ layout (push_constant, scalar) uniform Push
     TreeRecordWords records; // the chunks' ground
     TreeRecordMap map;
     float chunkSize;
-    uint pad;
+    uint rowOffset; // this dispatch's first radial row (the bake spreads the rows over frames; a multiple of the 8-row group)
 } pc;
 
 const uint PROFILE_BINS = 32u;      // TREE_RECORD_PROFILE_BINS
@@ -69,7 +69,7 @@ bool validType(uint type) { return type < pc.numTypes && pc.types.t[type].mass >
 
 void main()
 {
-    const ivec2 col = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 col = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + pc.rowOffset);
     const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
     if (col.x >= angularRes || col.y >= radialRes)
         return;

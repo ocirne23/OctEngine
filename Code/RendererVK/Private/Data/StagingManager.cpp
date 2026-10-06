@@ -70,31 +70,50 @@ bool StagingManager::initialize()
     return true;
 }
 
-vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
+vk::DeviceSize StagingManager::claimNoLock(vk::DeviceSize dataSize, vk::DeviceSize alignment)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
     assert(dataSize <= m_mappedMemory.size());
+    m_currentBufferOffset = alignUp(m_currentBufferOffset, alignment);
     if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
         m_nextUpdateSemaphore = updateNoLock();
 
     assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
-    memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
-    m_bufferCopyRegions.emplace_back(oc::pair<vk::Buffer, vk::BufferCopy>{ dstBuffer, vk::BufferCopy{ .srcOffset = m_currentBufferOffset, .dstOffset = dstOffset, .size = dataSize } });
+    const vk::DeviceSize offset = m_currentBufferOffset;
     m_currentBufferOffset += dataSize;
+    return offset;
+}
 
-    return m_semaphores[m_currentBuffer];
+// The memcpy runs OUTSIDE the mutex, so concurrent uploads copy in parallel (the terrain's chunk uploads, ~15 MB
+// each): the claimed range is this caller's alone, and the writer count keeps updateNoLock from flushing and
+// submitting the buffer before the copy has landed.
+vk::Semaphore StagingManager::copyAndUnlock(std::unique_lock<std::mutex>& lock, vk::DeviceSize offset, vk::DeviceSize dataSize, const void* data)
+{
+    const int buffer = m_currentBuffer;
+    uint8* dst = m_mappedMemory.data() + offset;
+    const vk::Semaphore semaphore = m_semaphores[buffer];
+    m_numWriters[buffer].fetch_add(1, oc::memory_order_relaxed);
+    lock.unlock();
+    memcpy(dst, data, dataSize);
+    if (m_numWriters[buffer].fetch_sub(1, oc::memory_order_release) == 1)
+        m_numWriters[buffer].notify_all();
+    return semaphore;
+}
+
+vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    const vk::DeviceSize offset = claimNoLock(dataSize, 1);
+    m_bufferCopyRegions.emplace_back(oc::pair<vk::Buffer, vk::BufferCopy>{ dstBuffer, vk::BufferCopy{ .srcOffset = offset, .dstOffset = dstOffset, .size = dataSize } });
+    return copyAndUnlock(lock, offset, dataSize, data);
 }
 
 vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth, uint32 imageHeight, vk::DeviceSize dataSize, const void* data, uint32 mipLevel, vk::DeviceSize dstOffset)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    assert(dataSize <= m_mappedMemory.size());
-    m_currentBufferOffset = alignUp(m_currentBufferOffset, IMAGE_COPY_OFFSET_ALIGNMENT);
-    if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
-        m_nextUpdateSemaphore = updateNoLock();
+    std::unique_lock<std::mutex> lock(m_mutex);
+    const vk::DeviceSize offset = claimNoLock(dataSize, IMAGE_COPY_OFFSET_ALIGNMENT);
 
     vk::BufferImageCopy bufferImageCopy{
-        .bufferOffset = m_currentBufferOffset,
+        .bufferOffset = offset,
         .imageSubresource = {
             .aspectMask = vk::ImageAspectFlagBits::eColor,
             .mipLevel = mipLevel,
@@ -103,25 +122,17 @@ vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth,
         },
         .imageExtent = { imageWidth, imageHeight, 1 }
     };
-
-    assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
-    memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
     m_imageCopyRegions.emplace_back(oc::pair<vk::Image, vk::BufferImageCopy>{ dstImage, bufferImageCopy });
-    m_currentBufferOffset += dataSize;
-
-    return m_semaphores[m_currentBuffer];
+    return copyAndUnlock(lock, offset, dataSize, data);
 }
 
 vk::Semaphore StagingManager::uploadImageAndGenerateMipMaps(vk::Image image, uint32 imageWidth, uint32 imageHeight, uint32 numMipLevels, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    assert(dataSize <= m_mappedMemory.size());
-    m_currentBufferOffset = alignUp(m_currentBufferOffset, IMAGE_COPY_OFFSET_ALIGNMENT);
-    if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
-        m_nextUpdateSemaphore = updateNoLock();
+    std::unique_lock<std::mutex> lock(m_mutex);
+    const vk::DeviceSize offset = claimNoLock(dataSize, IMAGE_COPY_OFFSET_ALIGNMENT);
 
     vk::BufferImageCopy bufferImageCopy{
-        .bufferOffset = m_currentBufferOffset,
+        .bufferOffset = offset,
         .imageSubresource = {
             .aspectMask = vk::ImageAspectFlagBits::eColor,
             .mipLevel = 0,
@@ -130,13 +141,8 @@ vk::Semaphore StagingManager::uploadImageAndGenerateMipMaps(vk::Image image, uin
         },
         .imageExtent = { imageWidth, imageHeight, 1 }
     };
-
-    assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
-    memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
     m_imageCopyAndMipList.emplace_back(image, bufferImageCopy, imageWidth, imageHeight, numMipLevels);
-    m_currentBufferOffset += dataSize;
-
-    return m_semaphores[m_currentBuffer];
+    return copyAndUnlock(lock, offset, dataSize, data);
 }
 
 vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, oc::vector<vk::ImageCopy>&& regions)
@@ -196,6 +202,12 @@ vk::Semaphore StagingManager::updateNoLock()
     result = vkDevice.resetFences(1, &m_fences[m_currentBuffer]);
     if (result != vk::Result::eSuccess)
         assert(false && "Failed to reset fence");
+
+    // Every range claimed in this buffer must be written before the flush and the submit (copyAndUnlock). No new
+    // writer can join meanwhile - a claim takes m_mutex, which this holds - and a writer takes no lock to finish.
+    oc::atomic<uint32>& writers = m_numWriters[m_currentBuffer];
+    for (uint32 n = writers.load(oc::memory_order_acquire); n != 0; n = writers.load(oc::memory_order_acquire))
+        writers.wait(n, oc::memory_order_acquire);
 
     m_stagingBuffers[m_currentBuffer].flushMappedMemory(m_currentBufferOffset);
     CommandBuffer& commandBuffer = m_commandBuffers[m_currentBuffer];

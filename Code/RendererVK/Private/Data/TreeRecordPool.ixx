@@ -33,6 +33,9 @@ static_assert(sizeof(TreeRecordChunkGpu) == 16);
 // expandChunk (variant, scale, yaw from the record's seed; the tree's bushes) into the world set's volume types - and,
 // for the columns far out, the species' extinction integrated over the ground per height: P(h) = mass x shape(h), shape
 // over [0, height] in TREE_RECORD_PROFILE_BINS bins integrating to 1, at its mean size. mass 0 = not in the volume.
+// albedo.w = 0: a ROCK type (Procedural's world rocks) - a SOLID: its variants' grids are occupancy, the volume gives it
+// "Far rock extinction" at any size (variantMass = the occupied volume at scale 1; its mass grows with scale^3), and its
+// colour is the climate's bedrock (the resolve), not albedo.rgb. No bushes, no size variation.
 export constexpr uint32 TREE_RECORD_PROFILE_BINS = 32;
 export constexpr uint32 TREE_RECORD_MAX_VARIANTS = 8;
 export constexpr uint32 TREE_RECORD_MAX_BUSHES = 8;

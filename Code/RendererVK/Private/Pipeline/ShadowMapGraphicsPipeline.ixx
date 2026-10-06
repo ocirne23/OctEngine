@@ -59,6 +59,7 @@ private:
     vk::RenderPass m_renderPass;
 
     vk::DeviceSize m_preprocessSize = 0;
+    uint32 m_maxUniqueMeshes = 0; // what the preprocess scratch was last sized for (a shader reload asks again)
     // One preprocess scratch per frame in flight (a single multiview execute renders all cascades).
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;
 };

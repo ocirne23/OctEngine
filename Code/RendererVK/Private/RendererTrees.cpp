@@ -9,6 +9,7 @@ import :Device;
 import :Buffer;
 import :Layout;
 import :InstanceStream;
+import :TextureManager; // the rock materials' textures (the far volume)
 
 // The BAKED TREE RECORDS' CPU side (tree_cull.inc.glsl): sets of placed pieces uploaded ONCE to device-local
 // memory. The culls build each piece's four records from the camera distance inside a range of the frame's instance
@@ -261,13 +262,15 @@ void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanc
         gpu.shadowDistance = type.shadowDistance;
     }
 
-    // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves)
-    // has a BLAS. The others (bushes: created without one) would only ever take inactive TLAS slots.
+    // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves,
+    // else the bark - a rock) has a BLAS. The others (bushes: created without one) would only ever take inactive TLAS
+    // slots.
     set.typeRtCapable.assign(types.size(), 0);
     set.typeMeshes.assign(types.size(), {});
     for (size_t t = 0; t < types.size(); ++t)
     {
-        const TreeCullRecordGpu& rec = gpuTypes[t].billboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].billboard : gpuTypes[t].leaves;
+        const TreeCullRecordGpu& rec = gpuTypes[t].billboard.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].billboard
+            : gpuTypes[t].leaves.meshMaterial != TREE_RECORD_ABSENT ? gpuTypes[t].leaves : gpuTypes[t].bark;
         set.typeRtCapable[t] = rec.meshMaterial != TREE_RECORD_ABSENT && m_rt.hasStaticBlas(rec.meshMaterial & 0xFFFFu) ? 1 : 0;
         // The bucket sizes: a piece draws each of its meshes at most once (normal OR fade material - the same mesh).
         // Level-0 meshes: present() sizes a chain's buckets from its level 0.
@@ -308,7 +311,7 @@ void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanc
         gpu.boxMax = type.densityMax;
         gpu.res = type.densityRes;
         gpu.offset = (uint32)volumeData.size();
-        gpu.albedo = glm::vec4(type.albedo, 1.0f);
+        gpu.albedo = glm::vec4(type.albedo, type.solid ? 0.0f : 1.0f); // w: 1 foliage, 0 a solid (tree_volume_splat.cs)
         uint32 res = type.densityRes;
         const size_t level0 = volumeData.size();
         volumeData.insert(volumeData.end(), type.density, type.density + (size_t)res * res * res);
@@ -486,8 +489,19 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
             .worldSeed = m_treeRecordSeed,
         };
     }
+    // ROCKS (R5): the terrain's rock materials' diffuse textures (slot order, after the ground ones), the volume's climate
+    // bedrock colour per column; the fallback diffuse past their count.
+    oc::array<vk::ImageView, TreeVolumePipeline::ROCK_TEXTURES> rockTextures;
+    rockTextures.fill(Globals::textureManager.getViewForDescriptor(RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX));
+    if (m_terrain.getSplatBaseMaterial() >= 0)
+    {
+        const TerrainSplatCounts& counts = m_terrain.getSplatCounts();
+        for (uint32 i = 0; i < oc::min(counts.numRock, TreeVolumePipeline::ROCK_TEXTURES); ++i)
+            rockTextures[i] = Globals::textureManager.getViewForDescriptor((uint16)(m_terrain.getSplatTex()[counts.numGround + i].x & 0xFFFFu));
+    }
     const TreeVolumePipeline::RecordParams params{
         .ubo = frameData.ubo,
+        .rockTextures = rockTextures,
         .sceneDepthView = frameData.sceneColor.getDepthView(0),
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
         .terrainView = m_terrain.getHeightMap().getView(),

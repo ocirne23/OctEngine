@@ -11,6 +11,8 @@
 // cloud shadow per step)
 // plus an ambient that darkens toward the ground. Out: rgb = in-scatter, a = transmittance (the apply composites
 // colour + scene x T, like the clouds).
+// ROCKS (R5): the colour map's alpha is 1 - the column's rock fraction (tree_volume_resolve.cs). By it the sun term
+// loses its phase (a surface does not glow backlit), takes the full N.L, and the interior darkening drops to a quarter.
 
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_control_flow_attributes : require
@@ -40,6 +42,21 @@ layout (binding = 7, r32ui) uniform readonly uimage2D u_floor;   // the columns'
 layout (binding = 10) uniform sampler2DArray u_skyMap;           // GI's sky bake (atmosphere.inc.glsl): the canopy's sky light
 layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-floor grid: x dilated, y ahead (tree_volume_floor_max.cs.glsl)
 
+// THE HAND-OVER (TREE_HANDOVER, a variant run only while it lasts - TreeVolumePipeline): a finished bake CROSS-FADES
+// into the shown one over "Far swap time". Per RAY a dither picks one bake: the new one when the pixel's noise (IGN,
+// stepped by the golden ratio per frame) lies under the fade (u_treeHandover.z). The temporal pass / TAA averages the
+// picks into an image-space blend of the two results - the opacity mixes correctly, which mixing the density per
+// sample would not. The new bake: its centre (u_treeHandover.xy), floor / colour / max-floor grid (the back copies) and
+// its density (the accumulation's R32F view: the resolve converted it in place). The whole ray reads its bake (g_new)
+// - the ring, the polar lookup, the skip, the floor, the density, the colour and its lighting taps - so the variant
+// costs what the normal one does. The normal variant reads the front bake only.
+#ifdef TREE_HANDOVER
+layout (binding = 13) uniform sampler3D u_densityNew;
+layout (binding = 14, r32ui) uniform readonly uimage2D u_floorNew;
+layout (binding = 15) uniform sampler2D u_colourNew;
+layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
+#endif
+
 layout (push_constant, scalar) uniform Push
 {
     TreeVolumeParams vol;
@@ -63,6 +80,29 @@ layout (push_constant, scalar) uniform Push
     uint pad1;
     uvec2 fullSize;       // the render size (the scene depth)
 } pc;
+
+// The bake a read goes to (TREE_HANDOVER: g_new per sample; else always the front one).
+#ifdef TREE_HANDOVER
+bool g_new = false; // this ray shows the new bake
+bool handoverPicksNew(ivec2 px)
+{
+    // Spatially offset from the step jitter's IGN (decorrelated); the golden-ratio step spreads each pixel's picks
+    // evenly over consecutive frames, so a short history already averages to the fade.
+    const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
+    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_treeHandover.z;
+}
+vec2 bakeCentre() { return g_new ? u_treeHandover.xy : pc.vol.centre; }
+uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
+float densityTexel(vec3 at) { return g_new ? textureLod(u_densityNew, at, 0.0).r : textureLod(u_density, at, 0.0).r; }
+vec4 colourAt(vec2 uv) { return g_new ? textureLod(u_colourNew, uv, 0.0) : textureLod(u_colour, uv, 0.0); }
+vec2 floorMaxAt(ivec2 block) { return g_new ? imageLoad(u_floorMaxNew, block).xy : imageLoad(u_floorMax, block).xy; }
+#else
+vec2 bakeCentre() { return pc.vol.centre; }
+uint floorBitsAt(ivec2 c) { return imageLoad(u_floor, c).r; }
+float densityTexel(vec3 at) { return textureLod(u_density, at, 0.0).r; }
+vec4 colourAt(vec2 uv) { return textureLod(u_colour, uv, 0.0); }
+vec2 floorMaxAt(ivec2 block) { return imageLoad(u_floorMax, block).xy; }
+#endif
 
 // BAKED (TreeVolumePipeline compiles a variant per setting, so the dead paths and their registers go):
 // TREE_MARCH_SCALE = render pixels per march pixel per axis (1, or 2 at "Far half res"; TREE_TEMPORAL_OUT only);
@@ -101,7 +141,7 @@ bool floorAtUv(vec2 uv, out float floorY)
     const int angularRes = int(pc.vol.angularRes);
     const ivec2 texel = ivec2(tvWrapAngle(int(floor(uv.x * float(angularRes))), angularRes),
         int(uv.y * float(pc.vol.radialRes)));
-    const uint bits = imageLoad(u_floor, texel).r;
+    const uint bits = floorBitsAt(texel);
     floorY = tvFloorDecode(bits);
     return bits != 0u;
 }
@@ -126,7 +166,7 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
     {
         const ivec2 o = ivec2(k & 1, k >> 1);
         const ivec2 col = ivec2(tvWrapAngle(base.x + o.x, angularRes), clamp(base.y + o.y, 0, radialRes - 1));
-        const uint bits = imageLoad(u_floor, col).r;
+        const uint bits = floorBitsAt(col);
         if (bits == 0u)
             continue; // no tree reaches the column: no density there
         const vec2 w2 = mix(1.0 - f, f, vec2(o));
@@ -138,7 +178,7 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
         if (h < 0.0 || h > pc.vol.height)
             continue;
         const vec3 at = vec3((vec2(col) + 0.5) / vec2(angularRes, radialRes), h / pc.vol.height);
-        sum += w * textureLod(u_density, at, 0.0).r;
+        sum += w * densityTexel(at);
     }
     if (floorWeight > 1e-6)
         smoothFloor = floorSum / floorWeight;
@@ -164,7 +204,7 @@ float densityAbove(vec2 uv, float h)
     if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc.vol.height)
         return 0.0;
     // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
-    return max(textureLod(u_density, vec3(uv, h / pc.vol.height), 0.0).r - pc.shrink, 0.0) * pc.vol.densityScale;
+    return max(densityTexel(vec3(uv, h / pc.vol.height)) - pc.shrink, 0.0) * pc.vol.densityScale;
 }
 float densityTap(vec2 uv, mat2 J, float h, vec3 d)
 {
@@ -197,6 +237,9 @@ void storeDistance(ivec2 px, float distance)
 // The march of one (march-image) pixel.
 void marchAt(ivec2 px)
 {
+#ifdef TREE_HANDOVER
+    g_new = handoverPicksNew(px);
+#endif
     const int scale = MARCH_SCALE;
     const ivec2 full = px * scale;
     const vec2 uv = (vec2(full) + 0.5 * float(scale)) / vec2(pc.fullSize); // the block's centre (full-target UV)
@@ -237,7 +280,7 @@ void marchAt(ivec2 px)
     // camera moved since the bake).
     // The march starts at "Far start" from the CAMERA and the result fades in over "Far overlap" (at the end) - the
     // billboards draw up to its end (tree_cull.inc.glsl): an overlap, not a seam. It leaves at rMax.
-    const vec2 rel = u_viewPos.xz - pc.vol.centre;
+    const vec2 rel = u_viewPos.xz - bakeCentre();
     const float a = dot(dir.xz, dir.xz);
     const float b = dot(rel, dir.xz);
     const float c = dot(rel, rel);
@@ -285,7 +328,8 @@ void marchAt(ivec2 px)
     // height factor stays per step. (It was a fixed cool blue tint x the sun's luminance.)
     const float g = pc.forwardScatter;
     const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
-    const vec3 sunPart = sunRadiance * (pc.sunScale * phase);
+    // A ROCK (the colour's alpha: 1 - the column's rock fraction, R5) is a surface: no phase (it does not glow backlit).
+    const float sunLeaf = pc.sunScale * phase;
     // The 5-tap mean is baked once per frame (gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL).
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * pc.ambient);
@@ -307,7 +351,7 @@ void marchAt(ivec2 px)
     // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling). The
     // steps are measured from the camera, so they slide through the volume as it moves; jittering only the first
     // sample left every later one on that sliding grid - blobs sampled differently each frame, "shaking".
-    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - pc.vol.centre), pc.vol) * pc.stepScale, 0.25);
+    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), pc.vol) * pc.stepScale, 0.25);
     // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs.glsl): above its value + the volume's height, a point is
     // above every tree within one block in every direction - at least r x skipReach away (the block's tangential width
     // as a chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a
@@ -326,19 +370,20 @@ void marchAt(ivec2 px)
     {
         const vec3 p = u_viewPos + dir * t;
         // ONE polar lookup per step: the cell size, the floor and the primary sample all take it.
-        const vec2 rel = p.xz - pc.vol.centre;
+        const vec2 rel = p.xz - bakeCentre();
         const float r = length(rel);
         const vec2 uv = polarUv(rel, r);
         const float cell = max(r * tvLogSpan(pc.vol) / float(pc.vol.radialRes), r * TV_TWO_PI / float(pc.vol.angularRes)); // tvCellSize
         const ivec2 block = ivec2(tvWrapAngle(int(floor(uv.x * float(pc.vol.angularRes))), int(pc.vol.angularRes)),
             clamp(int(uv.y * float(pc.vol.radialRes)), 0, int(pc.vol.radialRes) - 1)) / TV_FLOOR_MAX_BLOCK;
-        const vec2 floorMax = imageLoad(u_floorMax, block).xy;
+        const vec2 floorMax = floorMaxAt(block);
         if (dir.y >= 0.0 && p.y > floorMax.y + pc.vol.height && camCentre < r * aheadSin && dot(rel, dir.xz) >= 0.0)
             break;
+        const float reach = r * skipReach;
         const float clearance = p.y - floorMax.x - pc.vol.height;
         if (clearance > 0.0)
         {
-            const float skip = dir.y >= 0.0 ? r * skipReach : min(r * skipReach, clearance / -dir.y);
+            const float skip = dir.y >= 0.0 ? reach : min(reach, clearance / -dir.y);
             if (skip > cell)
             {
                 t += skip;
@@ -388,9 +433,10 @@ void marchAt(ivec2 px)
                 // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
                 const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
                     + densityTap(uv, J, hs, L * 10.0) * 8.0) * pc.selfShadow);
-                const vec3 baked = textureLod(u_colour, uv, 0.0).rgb;
+                const vec4 baked = colourAt(uv);
+                const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709) - distant canopies read greyer.
-                const vec3 albedo = max(mix(vec3(dot(baked, vec3(0.2126, 0.7152, 0.0722))), baked, pc.saturation), 0.0) * pc.albedoScale;
+                const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, pc.saturation), 0.0) * pc.albedoScale;
                 const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
                 // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
@@ -404,8 +450,9 @@ void marchAt(ivec2 px)
                     const vec3 grad = vec3(densityTap(uv, J, hs, vec3(hx, 0.0, 0.0)) - here, (up - here) * hx / sliceH,
                         densityTap(uv, J, hs, vec3(0.0, 0.0, hx)) - here);
                     const float len2 = dot(grad, grad);
+                    // A rock takes the full N.L: it is a surface, not a crown of leaves facing every way.
                     if (len2 > 1e-12)
-                        sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), pc.normalStrength);
+                        sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), mix(pc.normalStrength, 1.0, rock));
                 }
                 // Leaves as Lambert surfaces of a mean cosine toward the sun (sunPart: the phase and "Far sun scale"); the
                 // sky light darker toward the ground ("Far ground darkening").
@@ -421,8 +468,10 @@ void marchAt(ivec2 px)
                     const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
                         + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
                         + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
-                    interior = exp(-pc.interiorShadow * m * rr);
+                    // A rock's core is solid: no lit interior to darken, a quarter of the term.
+                    interior = exp(-pc.interiorShadow * m * rr * (1.0 - 0.75 * rock));
                 }
+                const vec3 sunPart = sunRadiance * mix(sunLeaf, pc.sunScale, rock);
                 const vec3 lit = (albedo * INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + albedo * u_ambientColor) * interior;
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT

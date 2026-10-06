@@ -111,6 +111,9 @@ public:
 
 private:
     void ensureScratch(Buffer& scratch, vk::DeviceAddress& outAlignedAddr, vk::DeviceSize needed);
+    // Zeroes this slot's mapped address entries from `first` to the end, and flushes: fresh buffer memory is
+    // undefined, and an entry no BLAS event ever wrote must read "no BLAS" (see the implementation).
+    void zeroBlasAddresses(uint32 frameIdx, size_t first);
 
     // Records a static BLAS address change: updates the CPU authoritative value and queues the write into
     // every frame slot's dirty list (each slot applies it in its own fenced frame via syncFrameAddresses).

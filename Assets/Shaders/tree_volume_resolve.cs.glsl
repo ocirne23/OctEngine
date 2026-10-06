@@ -1,19 +1,90 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, step 2 of 2 (TreeVolumePipeline): the splat's fixed-point sums -> the filterable R16F
-// extinction volume the march samples.
+// FAR-TREE VOLUME BAKE, the last step (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as
+// float bits in the accumulation (its R32F view is the NEW volume of the march's hand-over cross-fade; then
+// tree_volume_copy.cs moves it into the R16F density the march samples otherwise). A slice range per dispatch.
+// Per COLUMN (the z = 0 invocations), its ROCKS' share (R5; Procedural's world rocks): rock fraction = the column's rock
+// sum / its sum over the slices (both in the accumulation's units). A column with rocks mixes the CLIMATE'S BEDROCK into
+// its colour by that fraction - the terrain's rock materials' mean colours (each diffuse texture's smallest mip),
+// weighted by their climate boxes at the column's climate (terrain_splat.inc.glsl's box weight, over every rock entry:
+// a far colour needs no top-three pick) - and stores 1 - the fraction in alpha (the march's rock lighting). Columns
+// without rocks keep the splat's colour.
+
+#extension GL_EXT_scalar_block_layout : require
+
+#include "shared.inc.glsl"
+#define TERRAIN_HEIGHT_BINDING 1
+#include "terrain_height.inc.glsl"
+#include "tree_volume.inc.glsl"
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout (binding = 0, r32ui) uniform readonly uimage3D u_accum;
-layout (binding = 1, r16f) uniform writeonly image3D u_density;
+layout (binding = 2, r32ui) uniform uimage3D u_accum; // the sums in, the extinction's float bits out (in place)
+layout (binding = 4, r32ui) uniform readonly uimage2D u_rockSum;
+layout (binding = 5, rgba8) uniform image2D u_colour;
+layout (binding = 6, r32ui) uniform readonly uimage2D u_floor;
+const int ROCK_TEXTURES = 8; // TreeVolumePipeline::ROCK_TEXTURES
+layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
+
+layout (push_constant, scalar) uniform Push
+{
+    TreeVolumeParams vol;
+    uint sliceOffset; // this dispatch's first slice (the bake spreads the conversion over frames)
+    uint columnPass;  // 1: the per-column colour pass (one slice, before any conversion); 0: convert the slices
+} pc;
 
 const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs.glsl
 
+// The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
+vec3 bedrockAlbedo(vec2 xz, float y)
+{
+    const int numGround = int(u_terrainTexParams0.y);
+    const int numRock = min(int(u_terrainTexParams0.z), ROCK_TEXTURES);
+    if (u_terrainTexParams0.x < 0.0 || numRock <= 0)
+        return vec3(0.3, 0.29, 0.27); // no texture set
+    vec2 climate = vec2(0.5);
+    if (terrainHeightMapPresent())
+    {
+        const vec4 c = terrainClimateAt(xz);
+        climate = vec2(clamp((terrainTemperatureAt(c, y) + 25.0) / 75.0, 0.0, 1.0), c.w);
+    }
+    const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    for (int i = 0; i < numRock; ++i)
+    {
+        const vec4 box = u_terrainSplatClimate[numGround + i];
+        const vec2 d = max(max(box.xz - climate, climate - box.yw), vec2(0.0));
+        const float w = exp(-dot(d, d) * invS2);
+        sum += w * textureLod(u_rockTextures[i], vec2(0.5), 20.0).rgb; // the smallest mip: the mean
+        weight += w;
+    }
+    return weight > 1e-6 ? sum / weight : textureLod(u_rockTextures[0], vec2(0.5), 20.0).rgb;
+}
+
 void main()
 {
-    const ivec3 p = ivec3(gl_GlobalInvocationID);
-    if (any(greaterThanEqual(p, imageSize(u_density))))
+    const ivec3 p = ivec3(gl_GlobalInvocationID.xy, gl_GlobalInvocationID.z + pc.sliceOffset);
+    if (any(greaterThanEqual(p, imageSize(u_accum))))
         return;
-    imageStore(u_density, p, vec4(float(imageLoad(u_accum, p).r) / ACCUM_SCALE));
+    if (pc.columnPass == 0u)
+    {
+        // IN PLACE: the fixed-point sum -> the extinction's float bits in the same texel (the march's hand-over and the
+        // copy read them through the image's R32F view).
+        imageStore(u_accum, p, uvec4(floatBitsToUint(float(imageLoad(u_accum, p).r) / ACCUM_SCALE)));
+        return;
+    }
+    // THE COLUMN PASS (one slice dispatched, before any slice converts: it sums the column's fixed-point slices).
+    const uint rock = imageLoad(u_rockSum, p.xy).r;
+    if (rock == 0u)
+        return;
+    uint total = 0u;
+    for (int s = 0; s < int(pc.vol.slices); ++s)
+        total += imageLoad(u_accum, ivec3(p.xy, s)).r;
+    const float fraction = clamp(float(rock) / max(float(total), 1.0), 0.0, 1.0);
+    const vec2 xz = tvTexelWorldXZ(p.xy, pc.vol);
+    const uint floorBits = imageLoad(u_floor, p.xy).r;
+    const float ground = floorBits != 0u ? tvFloorDecode(floorBits) : terrainHeightAt(xz);
+    const vec3 trees = imageLoad(u_colour, p.xy).rgb;
+    imageStore(u_colour, p.xy, vec4(mix(trees, bedrockAlbedo(xz, ground), fraction), 1.0 - fraction));
 }

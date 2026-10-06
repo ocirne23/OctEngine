@@ -129,6 +129,7 @@ void CloudParams::registerTweaks(const oc::function<void()>& onDefinesChanged)
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &skyMapHistorySec, 0.0f, 30.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "GI sky history (s)", &giSkyHistorySec, 0.0f, 30.0f);
+    Tweak::floatVar("Sky/Clouds/Quality", "Sky map min samples", &skyMapMinSamples, 0.0f, 64.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "GI sky observer radius (m)", &giSkyObserverRadius, 0.0f, 20000.0f, 10.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Near detail radius (m)", &nearDetailRadius, 0.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Detail distance (km)", &detailDistanceKm, 0.5f, 400.0f, 0.1f);
@@ -247,6 +248,21 @@ void GrassParams::registerTweaks(const oc::function<void()>& onBladesChanged)
     Tweak::floatVar("Grass/Look", "Ground normal blend distance (m)", &groundBlendDistance, 1.0f, 500.0f, 0.5f);
 }
 
+void RockParams::registerTweaks()
+{
+    Tweak::floatVar("Rocks/Material", "UV scale (x terrain rock)", &uvScale, 0.1f, 32.0f, 0.05f);
+    Tweak::floatVar("Rocks/Material", "Ground cover", &coverAmount, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Cover start (normal y)", &coverSlopeStart, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Cover full (normal y)", &coverSlopeFull, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Cover patch size (m)", &coverPatchSize, 0.1f, 50.0f, 0.05f);
+    Tweak::floatVar("Rocks/Material", "Contact height (m)", &contactHeight, 0.0f, 5.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Contact blend", &contactBlend, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Contact darkening", &contactDarkening, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Contact fade distance (m)", &contactFadeDistance, 10.0f, 5000.0f, 5.0f);
+    Tweak::floatVar("Rocks/Material", "Cavity AO", &cavityAo, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Rocks/Material", "Cavity cover", &cavityCover, 0.0f, 1.0f, 0.01f);
+}
+
 void FarTreeParams::registerTweaks()
 {
     Tweak::boolean("Trees", "Far volume", &enabled);
@@ -276,9 +292,12 @@ void FarTreeParams::registerTweaks()
     static constexpr oc::string_view PIXEL_SKIP[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };
     Tweak::enumVar("Trees", "Far pixel skip", &pixelSkip, PIXEL_SKIP);
     Tweak::floatVar("Trees", "Far rebake distance (m)", &rebakeDistance, 1.0f, 2000.0f, 1.0f);
+    Tweak::boolean("Trees", "Far bake ahead", &bakeAhead);
     Tweak::floatVar("Trees", "Far record detail (m)", &recordDetail, 0.0f, 40000.0f, 10.0f);
     Tweak::intVar("Trees", "Far bake frames", &bakeFrames, 1, 120, 1.0f);
+    Tweak::floatVar("Trees", "Far swap time (s)", &swapTime, 0.0f, 10.0f, 0.01f);
     Tweak::intVar("Trees", "Far floor smoothing", &floorSmoothing, 0, 8, 1.0f);
+    Tweak::floatVar("Trees", "Far rock extinction (1/m)", &rockExtinction, 0.0f, 50.0f, 0.05f);
 }
 
 void FogParams::registerTweaks()

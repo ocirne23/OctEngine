@@ -142,11 +142,31 @@ export namespace Procedural
 			oc::vector<ExpandVariant> variants;
 			oc::vector<uint32> bushes;  // trees: the bush species of their climate (indices into species)
 		};
+		// A ROCK type of the world (RockSystem's WorldType, Docs/RockRenderingPlan.md 6): a record expands to ONE piece -
+		// its variant, scale (rockRecordScale) and yaw from the record's seed, laid on the ground under its footprint
+		// (RockSystem::groundTransform: it follows the ground's normal by `align`).
+		struct ExpandRockVariant
+		{
+			uint32 type = 0;            // the GPU type
+			glm::vec3 centre{ 0.0f };   // rock-local bounds
+			float radius = 0.0f;
+			float height = 1.0f;        // nominal
+		};
+		struct ExpandRock
+		{
+			glm::vec2 scale{ 1.0f };
+			float sink = 0.0f;
+			float align = 0.0f;
+			oc::vector<ExpandRockVariant> variants;
+		};
 		struct ExpandContext
 		{
 			oc::shared_ptr<const ITerrainSampler> maps;
 			oc::vector<int32> speciesOfRecordType; // TreeWorld record type -> species index (-1: not loaded / not a tree)
 			oc::vector<ExpandSpecies> species;
+			oc::vector<int32> rockOfRecordType;    // TreeWorld record type -> rocks index (-1: not a rock / not loaded)
+			oc::vector<ExpandRock> rocks;
+			float rockReach = 0.0f;                // the largest rock's footprint radius (m): the ground grid's margin
 			uint32 worldSeed = 1;
 			float chunkSize = 256.0f;
 			float sizeVariation = 0.0f;
@@ -216,6 +236,10 @@ export namespace Procedural
 		bool m_worldFullLogged = false;
 		bool m_recordTypesSet = false; // the renderer holds this spawn's record types (the far volume's records)
 		uint32 m_worldGeneration = 0;  // TreeWorld's, at the spawn
+		// The world set's ROCK types draw RockSystem's meshes: RockSystem's generation at the spawn (a change
+		// respawns), and whether this set holds any (RockSystem then drops the set before it frees them - initialize).
+		uint32 m_rockGeneration = 0;
+		bool m_setHasRocks = false;
 		oc::shared_ptr<const ExpandContext> m_expandContext;
 		oc::unordered_map<uint64, NearChunk> m_near;
 		uint32 m_expandGeneration = 0;

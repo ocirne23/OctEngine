@@ -58,9 +58,13 @@ struct TreeCullPiece
     vec3 centre;       // world centre of the far representation (the band test)
     float radius;
     uint type;
-    uint pad2;         // (was the LOD hysteresis base: tree meshes have no LOD chains)
+    uint pad2;         // (was the LOD hysteresis base: tree meshes have no LOD chains; a rock's chain picks stateless)
     uint pad0, pad1;
 };
+// A ROCK (Procedural's world rocks) is a type with ONE mesh, in the bark slot, on LitRock (PIPELINE_IDX_LIT_ROCK): no
+// billboard, no fade, no mid tier. The culls give its record the mesh LOD pick trees do not have, and no wind. In the
+// main pass it hands over to the far-tree volume at its start, as a tree's billboard (the volume holds the rocks, R5);
+// it keeps casting its sun shadow.
 
 layout (binding = TREE_CULL_PIECES_BINDING, std430) readonly buffer TreeCullPieces { TreeCullPiece in_treePieces[]; };
 layout (binding = TREE_CULL_TYPES_BINDING, std430) readonly buffer TreeCullTypes { TreeCullType in_treeTypes[]; };
@@ -194,6 +198,8 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
             billboard = false;
         }
     }
+    else if (u_treeCullParams.z > 0.0 && distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre) > u_treeCullParams.z)
+        mesh = false; // a ROCK (no billboard): the far volume draws it past its start, as a tree (R5)
     const uint farMode = mesh ? (fade ? 2u : 1u) : 0u; // what fades over the FAR band
     const uint midMode = mesh ? (!inMid ? 1u : meshGone ? 0u : 2u) : 0u; // what fades over the MID band
     pick.mid = mid;
@@ -258,7 +264,8 @@ TreeCullRecord treeCullShadowRecord(TreeCullPiecePick pick, uint k)
 }
 
 // The TLAS writer's (gi_tlas_instances.cs.glsl) ONE instance per tree: its billboard - for a type without one its
-// leaves only (one TLAS slot per tree: the bark of such a type is not traced). Off beyond `rtRange` (m) from the scene
+// leaves only (one TLAS slot per tree: the bark of such a type is not traced) - for a type with neither (a ROCK: one
+// mesh, in the bark slot) its bark. Keep Renderer::initTreeSetTypes' RT-capable test in step. Off beyond `rtRange` (m) from the scene
 // focus ("Trees/RT range", u_foliageParams.x; <= 0 = no limit), tested before the transform loads: GI and RT shadows
 // only need the trees near the focus, and every tree in the TLAS is an overlapping box every ray has to traverse.
 // A mesh created without a BLAS (bushes, Procedural TreeSystem) comes out inactive in the writer anyway. posScale /
@@ -274,6 +281,8 @@ bool treeCullRtPiece(uint pieceIdx, float rtRange, out TreeCullRecord rec, out v
     rec = in_treeTypes[typeIdx].billboard;
     if (rec.meshMaterial == TREE_CULL_ABSENT)
         rec = in_treeTypes[typeIdx].leaves;
+    if (rec.meshMaterial == TREE_CULL_ABSENT)
+        rec = in_treeTypes[typeIdx].bark;
     if (rec.meshMaterial == TREE_CULL_ABSENT)
         return false;
     posScale = in_treePieces[pieceIdx].posScale;

@@ -261,6 +261,28 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.writeMotion = true,
 	});
+	// Variant 13 (EPipelineIndex::LitRock): the procedural rocks. The lit core again, with the surface from the
+	// CLIMATE: the terrain splat's bedrock entries in world-space biplanar projection, the terrain's snow, a ground
+	// cover and a contact band (instanced_indirect_rock.fs.glsl; RockParams). Its own VS passes position + normal
+	// and evaluates the ground height and the climate per vertex, as the terrain's. Opaque, back-face culled,
+	// depth write on; static (the motion target stays masked).
+	const oc::string rockVertexPath = "Shaders/instanced_indirect_rock.vs.glsl";
+	const oc::string rockVariantPath = "Shaders/instanced_indirect_rock.fs.glsl";
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = FileSystem::readFileStr(rockVertexPath),
+			.debugFilePath = rockVertexPath,
+		},
+		.fragmentShader = ShaderSource{
+			.text = FileSystem::readFileStr(rockVariantPath),
+			.debugFilePath = rockVariantPath,
+		},
+	});
+	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitRock);
+	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
+	const auto isLitCoreFragment = [&](const PipelineVariant& variant) {
+		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath;
+	};
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
 	// gizmo overlays stay solid so the view keeps a background and the editor gizmos stay usable.
@@ -304,7 +326,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // LIGHT_GRID_DEBUG ("Graphics/LOD/Light grid/Debug Mode") live in the lit core
     // (instanced_indirect_lit.inc.glsl / shadows.inc.glsl), and each switch reloads this pipeline
     // through the Renderer's tweak callback. Only the shaders that include the lit core get them: the
-    // lit opaque/transparent fragment and the terrain fragment.
+    // lit opaque/transparent fragment, the terrain fragments and the rock fragment.
     const auto defineLitDebug = [&](const char* name, int mode)
     {
         if (mode == 0)
@@ -313,7 +335,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         graphicsPipelineLayout.fragmentShader.defines.push_back({ name, modeText });
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
             if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
-                || isTerrainFragment(variant))
+                || isLitCoreFragment(variant))
                 variant.fragmentShader.defines.push_back({ name, modeText });
     };
     // The terrain's surface-water film could mirror the scene with the ocean's ray, under the ocean's toggle.
@@ -343,7 +365,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         graphicsPipelineLayout.fragmentShader.defines.push_back(define);
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
             if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
-                || isTerrainFragment(variant))
+                || isLitCoreFragment(variant))
                 variant.fragmentShader.defines.push_back(define);
     };
     defineLit("LIT_RT_SUN_SHADOW", m_rtSunShadow);
@@ -725,8 +747,13 @@ void StaticMeshGraphicsPipeline::resizeMeshCapacity(uint32 maxUniqueMeshes)
 void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
 {
     // Size the preprocess scratch buffer for the worst case (one sequence per unique mesh), the larger of the
-    // two execution sets' needs.
-    m_preprocessSize = 0;
+    // two execution sets' needs. The requirement also depends on the sets' PIPELINES (the wireframe variants need
+    // 1 MB more than the fill ones at 85 MB), so reloadShaders asks again after it rebuilds the sets - it used
+    // to keep the old size, and the execute then failed VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071.
+    // GROW-ONLY: a requirement the buffers already cover keeps them (a reload does not reallocate 4 x 85 MB).
+    // The GPU is idle here (initialize, a mesh-capacity growth, a shader reload), and the caller re-records.
+    m_maxUniqueMeshes = maxUniqueMeshes;
+    vk::DeviceSize required = 0;
     for (const IndirectExecutionSet* executionSet : { &m_indirectExecutionSet, &m_transparentExecutionSet })
     {
         vk::GeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
@@ -737,20 +764,20 @@ void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
         };
         vk::MemoryRequirements2 memReq;
         Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
-        m_preprocessSize = oc::max(m_preprocessSize, memReq.memoryRequirements.size);
+        required = oc::max(required, memReq.memoryRequirements.size);
     }
-    if (m_preprocessSize > 0)
+    if (required <= m_preprocessSize)
+        return;
+    m_preprocessSize = required;
+    // Separate scratch per pass so the opaque and transparent executes don't alias preprocess memory.
+    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; i++)
     {
-        // Separate scratch per pass so the opaque and transparent executes don't alias preprocess memory.
-        for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; i++)
-        {
-            m_preprocessBuffers[i].initialize(m_preprocessSize,
-                vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocess");
-            m_transparentPreprocessBuffers[i].initialize(m_preprocessSize,
-                vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocessTransparent");
-        }
+        m_preprocessBuffers[i].initialize(m_preprocessSize,
+            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocess");
+        m_transparentPreprocessBuffers[i].initialize(m_preprocessSize,
+            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocessTransparent");
     }
 }
 
@@ -790,6 +817,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
     }
 
     createExecutionSets();
+    createPreprocessBuffers(m_maxUniqueMeshes); // the new sets' pipelines can need more scratch
 }
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)

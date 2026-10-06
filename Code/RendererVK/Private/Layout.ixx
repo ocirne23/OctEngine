@@ -934,6 +934,13 @@ export namespace RendererVKLayout
         glm::vec4 treeWind1; // x = branch (m per m/s), y = branch Hz, z = leaf (m), w = leaf Hz
         glm::vec4 treeWind2; // x / y = branch fade start / end (m), z / w = leaf fade start / end (m)
         glm::vec4 treeWind3; // x = trunk fade end (m, 0 = none), y = sway Hz, z = the culls' bound growth (m), w = billboard waves
+        glm::vec4 treeHandover; // the far-tree volume's HAND-OVER cross-fade (TreeVolumePipeline::handoverUbo): xy = the new
+                                // bake's centre, z = the fade (the fraction of rays that pick the new bake), w unused
+        // THE ROCK MATERIAL (instanced_indirect_rock.fs.glsl; RockParams, "Rocks/Material"):
+        glm::vec4 rockParams0; // x = ground cover amount (0 = off), y / z = cover start / full (normal.y), w = 1 / cover patch size (1/m)
+        glm::vec4 rockParams1; // x = contact band height (m), y = contact blend (ground material at the foot), z = contact darkening (AO),
+                               // w = uv scale (x the terrain's rock uv scale)
+        glm::vec4 rockParams2; // x = contact fade distance (m: no band past it), y = cavity AO, z = cavity cover, w unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
@@ -1045,6 +1052,9 @@ export namespace RendererVKLayout
                              // wetness clipmap, into the mesh's (otherwise unused) transparent sequence
         LitFoliage     = 12, // LitMasked + the FOLIAGE card paths (FOLIAGE): the tree billboards' materials
                              // (MATERIAL_FLAG_BILLBOARD) only - kept out of LitMasked's register allocation
+        LitRock        = 13, // the procedural rocks (instanced_indirect_rock.vs/.fs.glsl): lit opaque, no textures
+                             // of its own - the CLIMATE's terrain bedrock material, world-space biplanar, plus
+                             // the terrain's snow, a ground cover and a contact band. The material is not read.
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs

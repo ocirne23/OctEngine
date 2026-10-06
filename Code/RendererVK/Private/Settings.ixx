@@ -181,6 +181,10 @@ export struct CloudParams
     float temporalBlend = 0.9f;        // history weight of the temporal accumulation
     float skyMapHistorySec = 1.0f;     // s: the sky-map clouds' temporal blend reaches 95 % of a change in this time (0 = no history)
     float giSkyHistorySec = 4.0f;      // s: the same for the GI layer (observers around the camera: each march a new one, so it needs more)
+    // A FLOOR under both layers' history weight, as the number of jittered marches it averages (an exponential average
+    // of weight w holds (1 + w) / (1 - w)): a time-based weight averages fewer marches at a low frame rate - 1 s at
+    // 30 fps held ~5, at 120 fps ~20 - and the ocean mirrored the noise as a per-frame flicker. 0 = time only.
+    float skyMapMinSamples = 12.0f;
     float giSkyObserverRadius = 4000.0f; // m: the GI layer's observers are spread over a disc this wide around the camera
     float nearDetailRadius = 300.0f;   // extra high-frequency erosion within this camera distance (m)
     float detailDistanceKm = 12.0f;    // the detail erosion fades out over the last 20 % of this distance; no detail fetches past it
@@ -397,6 +401,27 @@ export struct GrassParams
     void registerTweaks(const oc::function<void()>& onBladesChanged);
 };
 
+// THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no
+// textures of its own: it takes the terrain's BEDROCK material of the climate it stands in (the splat's rock entries,
+// the same climate pick as a cliff there), projected in world space, then the terrain's snow, a cover of the climate's
+// GROUND material on its up-facing faces, and a contact band at its foot. UBO-driven (u_rockParams*): live.
+export struct RockParams
+{
+    float uvScale = 4.0f;             // x the terrain's "Rock uv scale": a boulder shows finer grain than a cliff face
+    float coverAmount = 0.7f;         // the climate's ground material (moss, sand, litter) on up-facing faces; 0 = off
+    float coverSlopeStart = 0.91f;    // normal.y where the cover begins ...
+    float coverSlopeFull = 1.0f;      // ... and where it is full
+    float coverPatchSize = 2.14f;     // m: the noise that breaks the cover into patches
+    float contactHeight = 0.4f;       // m above the ground: the band at the rock's foot
+    float contactBlend = 0.8f;        // the ground material's share at the very foot (it hides the cut line)
+    float contactDarkening = 0.5f;    // ambient occlusion at the very foot
+    float contactFadeDistance = 200.0f; // m: no band past it (the ground height comes from the terrain-data map,
+                                        // too coarse far out)
+    float cavityAo = 1.0f;            // the baked per-vertex cavity (Procedural RockGenerator) on the ambient; 0 = off
+    float cavityCover = 0.5f;         // the ground cover's reach into the crevices (x "Ground cover" x the cavity)
+    void registerTweaks();
+};
+
 // FAR TREES as a marched volume (TreeVolumePipeline, "Trees/Far ..." tweaks): the GPU tree sets' trees baked into
 // a camera-centred POLAR volume (angle x log radius, startDistance .. endDistance: cells grow with the distance) and
 // marched there - beyond the billboards, kilometres out. The volume geometry re-bakes on change; the resolutions
@@ -406,7 +431,7 @@ export struct FarTreeParams
     bool enabled = true;
     float startDistance = 600.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
     float endDistance = 12000.0f;  // and ends here (m)
-    float overlap = 64.0f;         // the billboards draw to startDistance + this; the volume fades in over it (m)
+    float overlap = 128.0f;        // the billboards draw to startDistance + this; the volume fades in over it (m)
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 15;            // height slices
@@ -436,13 +461,23 @@ export struct FarTreeParams
     int pixelSkip = 1;            // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
     bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
     float rebakeDistance = 64.0f; // the camera moves this far from the bake centre -> re-bake
+    // BAKE AHEAD: the bake centres on where the camera will be at the swap (its smoothed velocity x the last bake's real
+    // duration), and the re-bake test uses that point too - the lag cancels at a steady speed, at any frame rate.
+    bool bakeAhead = true;
     int floorSmoothing = 2;       // the tree floor's tent blur radius, in columns (tree_volume_floor_smooth.cs); 0 = off
     // The world tree records' chunks within this of the bake centre (m) expand into their trees and bushes and splat in
     // detail; beyond, each record adds its mass per column (TreeVolumePipeline RecordSource).
     float recordDetail = 4000.0f;
     // A bake runs over about this many frames (the record splat's three passes spread evenly, plus a few steps of their
     // own); the march reads the previous bake until the last one. 1 = as fast as it goes.
-    int bakeFrames = 12;
+    int bakeFrames = 8;
+    // THE HAND-OVER: a finished bake CROSS-FADES into the shown one (a dithered per-ray pick, averaged by the temporal
+    // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
+    // (0 = at once; the swap then still takes the copy's frames).
+    float swapTime = 0.15f;
+    // ROCKS in the volume (Procedural's world rocks, R5): a rock is a SOLID - its extinction (1/m, before "Far density"
+    // and the blob shrink) is this at any size, over its occupancy. A rebake setting.
+    float rockExtinction = 4.0f;
     void registerTweaks();
 };
 

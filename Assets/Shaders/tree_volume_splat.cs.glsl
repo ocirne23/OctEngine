@@ -22,6 +22,10 @@
 // TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on the terrain map's ground, into
 // the world set's volume types. The tree set's own copies of those trees are never splatted: one source, so a chunk
 // entering or leaving the set does not change the volume.
+//
+// A SOLID type (albedo.w 0: Procedural's world ROCKS, R5) stores OCCUPANCY (0..1): its extinction is "Far rock
+// extinction" at any size (a crown's thins with its scale - its leaves spread over a larger volume - a rock's does not).
+// It writes no colour: it adds its share to the column's ROCK SUM, and the resolve mixes the climate's bedrock in by it.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -41,6 +45,7 @@ layout (binding = 2, r32ui) uniform uimage3D u_accum;
 layout (binding = 3, rgba8) uniform writeonly image2D u_colour;
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
 layout (binding = 5, r32ui) uniform uimage2D u_floorCover; // the largest tree coverage per column (floor pass 1)
+layout (binding = 6, r32ui) uniform uimage2D u_rockSum;    // the solids' share per column (the accumulation's units)
 
 // A tree's coverage of a column as an orderable key: 0 = only the rectangle's ring reaches it.
 uint coverKey(float coverXZ) { return coverXZ > 0.0 ? 1u + uint(clamp(coverXZ, 0.0, 1.0) * 65534.0) : 0u; }
@@ -117,7 +122,8 @@ layout (push_constant, scalar) uniform Push
     uint worldSeed;
     uint numDetailChunks;
     uint numRecordTypes;
-    uint wgOffset;       // this dispatch's first record (the bake spreads the records over frames)
+    uint wgOffset;       // this dispatch's first record / piece (the bake spreads both over frames)
+    float rockExtinction; // a SOLID type's extinction (1/m) over its occupancy
 } pc;
 
 // Fixed point of the accumulation: extinction (1/m) x this.
@@ -289,12 +295,18 @@ void splatPiece(VolumePiece piece)
         const float footprint = 2.0 * max(halfXZ, halfExt.y);
         const uint mip = min(uint(max(log2(footprint / voxel), 0.0)), maxMip);
         const vec3 f = (clamp(local, type.boxMin, type.boxMax) - type.boxMin) / boxSize;
-        // Extinction (1/m) in TREE space -> world: a scaled tree's leaves are spread over a scaled volume.
-        const float extinction = sampleType(type, f, mip) * cover / scale;
+        // Extinction (1/m) in TREE space -> world: a scaled tree's leaves are spread over a scaled volume. A solid's
+        // occupancy x its extinction, at any size.
+        const bool solid = type.albedo.w < 0.5;
+        const float extinction = sampleType(type, f, mip) * cover * (solid ? pc.rockExtinction : 1.0 / scale);
         if (extinction <= 1e-4)
             continue;
-        imageAtomicAdd(u_accum, ivec3(texel, int(s)), uint(extinction * ACCUM_SCALE + 0.5));
-        imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
+        const uint amount = uint(extinction * ACCUM_SCALE + 0.5);
+        imageAtomicAdd(u_accum, ivec3(texel, int(s)), amount);
+        if (solid)
+            imageAtomicAdd(u_rockSum, texel, amount);
+        else
+            imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
     }
 }
 #endif
@@ -370,9 +382,9 @@ void main()
         splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
     }
 #else
-    const uint pieceIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
-    if (pieceIdx >= pc.numPieces)
+    const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
+    if (local >= pc.numPieces)
         return;
-    splatPiece(pc.pieces.p[pieceIdx]);
+    splatPiece(pc.pieces.p[local + pc.wgOffset]); // this frame's slice of the set (the bake spreads it over frames)
 #endif
 }

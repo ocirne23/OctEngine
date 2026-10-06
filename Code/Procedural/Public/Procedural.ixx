@@ -20,3 +20,6 @@ export import :TreeBarkTexture;
 export import :TreeImpostor;
 export import :TreeWorld;
 export import :TreeSystem;
+export import :RockType;
+export import :RockGenerator;
+export import :RockSystem;

@@ -288,6 +288,10 @@ public:
         glm::vec3 densityMin{ 0.0f };
         glm::vec3 densityMax{ 0.0f };
         glm::vec3 albedo{ 0.1f, 0.16f, 0.07f }; // the leaf colour of its volume
+        // A SOLID (a rock, Procedural's world rocks): `density` is its OCCUPANCY (0..1), and the volume gives it
+        // "Trees/Far rock extinction" at any size (a crown's extinction thins with its scale; a rock's does not). Its
+        // colour is the climate's bedrock, never `albedo`.
+        bool solid = false;
     };
     struct TreeInstancePiece
     {
@@ -718,6 +722,7 @@ private:
     // arrive per frame (setGrassGround) and go into the slot's ground table in present (uploadGrassFrame).
     GrassPipeline m_grassPipeline;
     GrassParams m_grassParams;
+    RockParams m_rockParams; // the rock material (EPipelineIndex::LitRock): UBO-driven, "Rocks/Material"
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
     float m_grassPrevTime = 0.0f; // last frame's timeSeconds (the blades' motion vectors)

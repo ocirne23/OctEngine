@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import Core.Time;
 import File;
 import :Device;
 import :Allocator;
@@ -56,8 +57,9 @@ namespace
         uint32 numDetailChunks;
         uint32 numRecordTypes;
         uint32 wgOffset;     // the first record's workgroup of this dispatch (the bake spreads them over frames)
+        float rockExtinction; // a SOLID type's extinction (1/m) over its occupancy ("Far rock extinction")
     };
-    static_assert(sizeof(SplatPC) == 128); // 124 + the struct's 8-byte alignment
+    static_assert(sizeof(SplatPC) == 128); // the guaranteed push-constant minimum: full
     struct MarchPC
     {
         VolumeParamsGpu vol;
@@ -103,9 +105,23 @@ namespace
         uint32 worldSeed;
         VolumeParamsGpu vol;
         float recordDetail;
-        uint32 pad;
+        float rockExtinction; // a rock record's mass: its occupied volume x scale^3 x this
+        uint32 chunkOffset;   // this dispatch's first chunk (numChunks: this dispatch's count)
+        uint32 pad;           // the 8-byte alignment's tail (the shader's block ends at chunkOffset)
     };
-    static_assert(sizeof(RecordsPC) == 96);
+    static_assert(sizeof(RecordsPC) == 104);
+    // tree_volume_clear.cs.glsl's.
+    struct ClearPC
+    {
+        uint32 sliceOffset;
+    };
+    // tree_volume_resolve.cs.glsl's (the column colour needs the columns' world positions).
+    struct ResolvePC
+    {
+        VolumeParamsGpu vol;
+        uint32 sliceOffset; // this dispatch's first slice
+        uint32 columnPass;  // 1: the per-column colour pass (before any conversion); 0: convert the slices in place
+    };
     struct FarPC
     {
         vk::DeviceAddress types;
@@ -115,7 +131,7 @@ namespace
         vk::DeviceAddress records; // the chunks' ground
         vk::DeviceAddress map;
         float chunkSize;
-        uint32 pad;
+        uint32 rowOffset; // this dispatch's first radial row
     };
     static_assert(sizeof(FarPC) == 88);
     // tree_volume_floor_smooth.cs.glsl's.
@@ -171,13 +187,14 @@ namespace
     {
         return a.startDistance == b.startDistance && a.rebakeDistance == b.rebakeDistance && a.endDistance == b.endDistance && a.angularRes == b.angularRes
             && a.radialRes == b.radialRes && a.slices == b.slices && a.height == b.height && a.floorSmoothing == b.floorSmoothing
-            && a.recordDetail == b.recordDetail;
+            && a.recordDetail == b.recordDetail && a.rockExtinction == b.rockExtinction;
     }
 
     void createImage(vk::ImageType type, vk::Format format, vk::Extent3D extent, vk::ImageUsageFlags usage,
-        vk::Image& outImage, VmaAllocation& outMemory, vk::ImageView& outView, const char* debugName)
+        vk::Image& outImage, VmaAllocation& outMemory, vk::ImageView& outView, const char* debugName, vk::ImageCreateFlags flags = {})
     {
         vk::ImageCreateInfo info{
+            .flags = flags,
             .imageType = type,
             .format = format,
             .extent = extent,
@@ -253,6 +270,7 @@ void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 
     b.push_back(binding(3, vk::DescriptorType::eStorageImage));         // colour
     b.push_back(binding(4, vk::DescriptorType::eStorageImage));         // floor
     b.push_back(binding(5, vk::DescriptorType::eStorageImage));         // the floor's coverage
+    b.push_back(binding(6, vk::DescriptorType::eStorageImage));         // the rocks' share per column
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(SplatPC) });
 }
 
@@ -261,8 +279,32 @@ void TreeVolumePipeline::buildResolveLayout(ComputePipelineLayout& layout)
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_resolve.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
-    b.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum
-    b.push_back(binding(1, vk::DescriptorType::eStorageImage)); // density
+    b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
+    b.push_back(binding(1, vk::DescriptorType::eCombinedImageSampler)); // terrain data (the columns' climate)
+    b.push_back(binding(2, vk::DescriptorType::eStorageImage));         // accum (converted in place)
+    b.push_back(binding(4, vk::DescriptorType::eStorageImage));         // the rocks' share per column
+    b.push_back(binding(5, vk::DescriptorType::eStorageImage));         // colour (back)
+    b.push_back(binding(6, vk::DescriptorType::eStorageImage));         // floor (back)
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 7, .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = ROCK_TEXTURES, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // the rock materials' diffuse
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(ResolvePC) });
+}
+
+void TreeVolumePipeline::buildCopyLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/tree_volume_copy.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum (the float bits)
+    layout.descriptorSetLayoutBindings.push_back(binding(1, vk::DescriptorType::eStorageImage)); // density
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(ClearPC) });
+}
+
+void TreeVolumePipeline::buildClearLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/tree_volume_clear.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(ClearPC) });
 }
 
 void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
@@ -300,6 +342,7 @@ void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
     b.push_back(binding(2, vk::DescriptorType::eStorageImage)); // the mass per column
     b.push_back(binding(3, vk::DescriptorType::eStorageImage)); // the type per column
     b.push_back(binding(4, vk::DescriptorType::eStorageImage)); // colour
+    b.push_back(binding(5, vk::DescriptorType::eStorageImage)); // the rocks' share per column
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(RecordsPC) });
 }
 
@@ -319,12 +362,14 @@ void TreeVolumePipeline::buildFarLayout(ComputePipelineLayout& layout)
 
 // The march, BAKED per setting: the temporal variant (TREE_TEMPORAL_OUT) at its scale, and the pixel skip (0 / 1 of 2 /
 // 1 of 4 - the temporal variant only knows 1 of 2).
-void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip)
+void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip, bool handover)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_march.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (temporalOut)
         layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL_OUT", "1" });
+    if (handover)
+        layout.defines.push_back(ShaderDefine{ "TREE_HANDOVER", "1" });
     layout.defines.push_back(ShaderDefine{ "TREE_MARCH_SCALE", oc::to_string(scale) });
     layout.defines.push_back(ShaderDefine{ "TREE_MARCH_SKIP", oc::to_string(skip) });
     auto& b = layout.descriptorSetLayoutBindings;
@@ -341,7 +386,22 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
     b.push_back(binding(10, vk::DescriptorType::eCombinedImageSampler)); // GI's sky map (the canopy's sky light)
     b.push_back(binding(11, vk::DescriptorType::eCombinedImageSampler)); // the cloud shadow map
     b.push_back(binding(12, vk::DescriptorType::eStorageImage));         // the max-floor grid
+    // The hand-over's NEW bake (TREE_HANDOVER reads them; in every variant's layout, so one set serves all of them).
+    b.push_back(binding(13, vk::DescriptorType::eCombinedImageSampler)); // density (the accumulation's R32F view)
+    b.push_back(binding(14, vk::DescriptorType::eStorageImage));         // floor (back)
+    b.push_back(binding(15, vk::DescriptorType::eCombinedImageSampler)); // colour (back)
+    b.push_back(binding(16, vk::DescriptorType::eStorageImage));         // the max-floor grid (back)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(MarchPC) });
+}
+
+bool TreeVolumePipeline::buildMarchPair(ComputePipeline& march, ComputePipeline& handover, bool temporalOut, uint32 scale, uint32 skip, bool reload)
+{
+    ComputePipelineLayout marchLayout;    buildMarchLayout(marchLayout, temporalOut, scale, skip, false);
+    ComputePipelineLayout handoverLayout; buildMarchLayout(handoverLayout, temporalOut, scale, skip, true);
+    if (!reload || !march.getPipeline())
+        return march.initialize(marchLayout) && handover.initialize(handoverLayout);
+    const bool marchOk = march.reloadShaders(marchLayout);
+    return handover.reloadShaders(handoverLayout) && marchOk;
 }
 
 void TreeVolumePipeline::buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker)
@@ -411,8 +471,7 @@ void TreeVolumePipeline::prepare(const FarTreeParams& settings)
         // First use: the three pipelines (compiled only now - off costs not even the startup compile), then the images.
         if (!m_temporalPipeline.getPipeline())
         {
-            ComputePipelineLayout marchLayout;    buildMarchLayout(marchLayout, true, scale, temporalChecker ? 1u : 0u);
-            m_marchTemporalPipeline.initialize(marchLayout);
+            (void)buildMarchPair(m_marchTemporalPipeline, m_marchTemporalHandoverPipeline, true, scale, temporalChecker ? 1u : 0u, false);
             ComputePipelineLayout temporalLayout; buildTemporalLayout(temporalLayout, scale, temporalChecker);
             m_temporalPipeline.initialize(temporalLayout);
             ComputePipelineLayout upsampleLayout; buildUpsampleLayout(upsampleLayout);  m_upsamplePipeline.initialize(upsampleLayout);
@@ -432,10 +491,10 @@ void TreeVolumePipeline::prepare(const FarTreeParams& settings)
         && (m_temporalBakedScale != scale || m_temporalBakedChecker != temporalChecker))
     {
         (void)Globals::device.graphicsQueueWaitIdle();
-        ComputePipelineLayout marchLayout;    buildMarchLayout(marchLayout, true, scale, temporalChecker ? 1u : 0u);
         ComputePipelineLayout temporalLayout; buildTemporalLayout(temporalLayout, scale, temporalChecker);
-        // Both or neither: the baked values describe what the two pipelines run (record() dispatches by them).
-        const bool marchOk = m_marchTemporalPipeline.reloadShaders(marchLayout);
+        // Both or neither: the baked values describe what the pipelines run (record() dispatches by them). The march
+        // pair is the march and its hand-over twin.
+        const bool marchOk = buildMarchPair(m_marchTemporalPipeline, m_marchTemporalHandoverPipeline, true, scale, temporalChecker ? 1u : 0u, true);
         if (marchOk && m_temporalPipeline.reloadShaders(temporalLayout))
         {
             m_temporalBakedScale = scale;
@@ -445,17 +504,14 @@ void TreeVolumePipeline::prepare(const FarTreeParams& settings)
         {
             printf("TreeVolumePipeline: temporal variant rebuild failed, keeping the previous one\n");
             if (marchOk) // put the march back in step with the kept temporal pass
-            {
-                ComputePipelineLayout oldLayout; buildMarchLayout(oldLayout, true, m_temporalBakedScale, m_temporalBakedChecker ? 1u : 0u);
-                (void)m_marchTemporalPipeline.reloadShaders(oldLayout);
-            }
+                (void)buildMarchPair(m_marchTemporalPipeline, m_marchTemporalHandoverPipeline, true, m_temporalBakedScale,
+                    m_temporalBakedChecker ? 1u : 0u, true);
         }
     }
     if (!settings.temporalPath() && m_plainBakedSkip != (uint32)settings.pixelSkip)
     {
         (void)Globals::device.graphicsQueueWaitIdle();
-        ComputePipelineLayout marchLayout; buildMarchLayout(marchLayout, false, 1, (uint32)settings.pixelSkip);
-        if (m_marchPipeline.reloadShaders(marchLayout))
+        if (buildMarchPair(m_marchPipeline, m_marchHandoverPipeline, false, 1, (uint32)settings.pixelSkip, true))
             m_plainBakedSkip = (uint32)settings.pixelSkip;
         else
             printf("TreeVolumePipeline: march variant rebuild failed, keeping the previous one\n");
@@ -539,6 +595,9 @@ void TreeVolumePipeline::destroyTemporalImages()
 void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint32 slices)
 {
     (void)Globals::device.graphicsQueueWaitIdle(); // in-flight frames still read the old volume
+    if (m_accumFloatView)
+        Globals::device.getDevice().destroyImageView(m_accumFloatView);
+    m_accumFloatView = nullptr;
     destroyImage(m_accum);
     destroyImage(m_density);
     for (uint32 i = 0; i < 2; ++i)
@@ -551,12 +610,27 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     destroyImage(m_floorCover);
     destroyImage(m_farAmount);
     destroyImage(m_farType);
+    destroyImage(m_rockSum);
     m_job.active = false; // its images are gone
     m_angularRes = angularRes;
     m_radialRes = radialRes;
     m_slices = slices;
     const vk::ImageUsageFlags storageClear = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst;
-    createImage(vk::ImageType::e3D, ACCUM_FORMAT, { angularRes, radialRes, slices }, storageClear, m_accum.image, m_accum.memory, m_accum.view, "TreeVolume.accum");
+    // MUTABLE: after the resolve it holds the new extinction's float bits, sampled through an R32F view (the hand-over).
+    createImage(vk::ImageType::e3D, ACCUM_FORMAT, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
+        m_accum.image, m_accum.memory, m_accum.view, "TreeVolume.accum", vk::ImageCreateFlagBits::eMutableFormat);
+    {
+        const vk::ImageViewCreateInfo floatViewInfo{
+            .image = m_accum.image,
+            .viewType = vk::ImageViewType::e3D,
+            .format = vk::Format::eR32Sfloat,
+            .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        auto viewResult = Globals::device.getDevice().createImageView(floatViewInfo);
+        assert(viewResult.result == vk::Result::eSuccess);
+        m_accumFloatView = viewResult.value;
+        Globals::device.setDebugName(m_accumFloatView, "TreeVolume.accumFloat");
+    }
     createImage(vk::ImageType::e3D, DENSITY_FORMAT, { angularRes, radialRes, slices }, storageClear | vk::ImageUsageFlagBits::eSampled,
         m_density.image, m_density.memory, m_density.view, "TreeVolume.density");
     for (uint32 i = 0; i < 2; ++i)
@@ -570,8 +644,9 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floorCover.image, m_floorCover.memory, m_floorCover.view, "TreeVolume.floorCover");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farAmount.image, m_farAmount.memory, m_farAmount.view, "TreeVolume.farAmount");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farType.image, m_farType.memory, m_farType.view, "TreeVolume.farType");
+    createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_rockSum.image, m_rockSum.memory, m_rockSum.view, "TreeVolume.rockSum");
     const vk::Image images[] = { m_accum.image, m_density.image, m_colour[0].image, m_colour[1].image, m_floor[0].image, m_floor[1].image,
-        m_floorCover.image, m_farAmount.image, m_farType.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
+        m_floorCover.image, m_farAmount.image, m_farType.image, m_rockSum.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
     initGeneral(images, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }); // zero bits: also 0u for R32UI (an empty volume:
                                                                                                  // a max floor of 0 skips nothing that exists)
     m_baked = false;
@@ -604,6 +679,8 @@ void TreeVolumePipeline::recreateImages(uint32 width, uint32 height)
 
 TreeVolumePipeline::~TreeVolumePipeline()
 {
+    if (m_accumFloatView)
+        Globals::device.getDevice().destroyImageView(m_accumFloatView);
     destroyImage(m_accum);
     destroyImage(m_density);
     for (uint32 i = 0; i < 2; ++i)
@@ -616,6 +693,7 @@ TreeVolumePipeline::~TreeVolumePipeline()
     destroyImage(m_floorCover);
     destroyImage(m_farAmount);
     destroyImage(m_farType);
+    destroyImage(m_rockSum);
     for (Image& out : m_out)
         destroyImage(out);
     for (Image& out : m_outDepth)
@@ -624,6 +702,8 @@ TreeVolumePipeline::~TreeVolumePipeline()
     destroyLatestImages();
     if (m_linearSampler)
         Globals::device.getDevice().destroySampler(m_linearSampler);
+    if (m_mipSampler)
+        Globals::device.getDevice().destroySampler(m_mipSampler);
     if (m_screenSampler)
         Globals::device.getDevice().destroySampler(m_screenSampler);
 }
@@ -640,6 +720,12 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
             m_recordSplatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + f].initialize(m_recordSplatPipelines[pass].getDescriptorSetLayout(), "TreeVolume.recordSplat");
     }
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout); m_resolvePipeline.initialize(resolveLayout);
+    ComputePipelineLayout clearLayout;   buildClearLayout(clearLayout);     m_clearPipeline.initialize(clearLayout);
+    for (DescriptorSet& set : m_clearSets)
+        set.initialize(m_clearPipeline.getDescriptorSetLayout(), "TreeVolume.clear");
+    ComputePipelineLayout copyLayout;    buildCopyLayout(copyLayout);       m_copyPipeline.initialize(copyLayout);
+    for (DescriptorSet& set : m_copySets)
+        set.initialize(m_copyPipeline.getDescriptorSetLayout(), "TreeVolume.copy");
     ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout); m_floorSmoothPipeline.initialize(smoothLayout);
     ComputePipelineLayout recordsLayout; buildRecordsLayout(recordsLayout); m_recordsPipeline.initialize(recordsLayout);
     ComputePipelineLayout farLayout;     buildFarLayout(farLayout);         m_farPipeline.initialize(farLayout);
@@ -655,7 +741,7 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
     for (DescriptorSet& set : m_floorSmoothSets)
         set.initialize(m_floorSmoothPipeline.getDescriptorSetLayout(), "TreeVolume.floorSmooth");
     // The pixel skip baked at the default setting; prepare() rebuilds it if the setting differs.
-    ComputePipelineLayout marchLayout;   buildMarchLayout(marchLayout, false, 1, m_plainBakedSkip); m_marchPipeline.initialize(marchLayout);
+    (void)buildMarchPair(m_marchPipeline, m_marchHandoverPipeline, false, 1, m_plainBakedSkip, false);
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);     m_applyPipeline.initialize(sceneRenderPass, applyLayout);
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
@@ -684,6 +770,11 @@ void TreeVolumePipeline::initialize(uint32 width, uint32 height, vk::RenderPass 
     assert(screenSamplerResult.result == vk::Result::eSuccess);
     m_screenSampler = screenSamplerResult.value;
     Globals::device.setDebugName(m_screenSampler, "TreeVolume.screen");
+    samplerInfo.maxLod = 1000.0f; // VK_LOD_CLAMP_NONE: the rock textures' smallest mip
+    auto mipSamplerResult = Globals::device.getDevice().createSampler(samplerInfo);
+    assert(mipSamplerResult.result == vk::Result::eSuccess);
+    m_mipSampler = mipSamplerResult.value;
+    Globals::device.setDebugName(m_mipSampler, "TreeVolume.mip");
     recreateImages(width, height);
 }
 
@@ -699,10 +790,11 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         recordsOk = m_recordSplatPipelines[pass].reloadShaders(recordLayout) && recordsOk;
     }
     ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout);
+    ComputePipelineLayout clearLayout;   buildClearLayout(clearLayout);
+    ComputePipelineLayout copyLayout;    buildCopyLayout(copyLayout);
     ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout);
     ComputePipelineLayout recordsLayout; buildRecordsLayout(recordsLayout);
     ComputePipelineLayout farLayout;     buildFarLayout(farLayout);
-    ComputePipelineLayout marchLayout;   buildMarchLayout(marchLayout, false, 1, m_plainBakedSkip);
     GraphicsPipelineLayout applyLayout;  buildApplyLayout(applyLayout);
     ComputePipelineLayout maxLayout;     buildFloorMaxLayout(maxLayout, false);
     ComputePipelineLayout dilateLayout;  buildFloorMaxLayout(dilateLayout, true);
@@ -715,16 +807,17 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     ok = m_floorPipeline.reloadShaders(floorLayout) && ok;
     if (m_temporalPipeline.getPipeline()) // compiled at its first use (prepare)
     {
-        ComputePipelineLayout marchTemporalLayout; buildMarchLayout(marchTemporalLayout, true, m_temporalBakedScale, m_temporalBakedChecker ? 1u : 0u);
         ComputePipelineLayout temporalLayout;      buildTemporalLayout(temporalLayout, m_temporalBakedScale, m_temporalBakedChecker);
-        ok = m_marchTemporalPipeline.reloadShaders(marchTemporalLayout) && ok;
+        ok = buildMarchPair(m_marchTemporalPipeline, m_marchTemporalHandoverPipeline, true, m_temporalBakedScale, m_temporalBakedChecker ? 1u : 0u, true) && ok;
         ok = m_temporalPipeline.reloadShaders(temporalLayout) && ok;
         ComputePipelineLayout upsampleLayout;      buildUpsampleLayout(upsampleLayout);
         ok = m_upsamplePipeline.reloadShaders(upsampleLayout) && ok;
     }
     ok = m_splatPipeline.reloadShaders(splatLayout) && ok;
     ok = m_resolvePipeline.reloadShaders(resolveLayout) && ok;
-    ok = m_marchPipeline.reloadShaders(marchLayout) && ok;
+    ok = m_clearPipeline.reloadShaders(clearLayout) && ok;
+    ok = m_copyPipeline.reloadShaders(copyLayout) && ok;
+    ok = buildMarchPair(m_marchPipeline, m_marchHandoverPipeline, false, 1, m_plainBakedSkip, true) && ok;
     ok = m_applyPipeline.reloadShaders(sceneRenderPass, applyLayout) && ok;
     if (!ok)
         printf("TreeVolumePipeline: shader reload failed, keeping previous pipeline(s)\n");
@@ -734,7 +827,7 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 // The bake's start: everything it reads that may change before it ends is SNAPSHOT here - the static sets' list, the
 // record table and the chunk map (copied into the bake's own buffers; the record pool keeps the chunks they name alive
 // until the bake ends: bakeHoldSince), and the detail chunks.
-void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumber)
+void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumber, glm::vec2 centre)
 {
     const FarTreeParams& s = params.settings;
     BakeJob& job = m_job;
@@ -742,7 +835,8 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     job.stage = EBakeStage::Clear;
     job.progress = 0;
     job.startFrame = frameNumber;
-    job.centre = glm::vec2(params.cameraPos.x, params.cameraPos.z);
+    job.startSec = Globals::time.getElapsedSec();
+    job.centre = centre;
     job.settings = s;
     job.sources.assign(params.sources.begin(), params.sources.end());
     job.records = params.records;
@@ -768,12 +862,21 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
         }
         buffer.upload(bytes, data);
     };
+    job.staticPieces = 0;
+    for (const Source& source : job.sources)
+        job.staticPieces += source.numPieces;
     if (params.records.numTypes == 0 || params.records.chunksCpu.empty() || params.records.mapCpu.empty())
-    {
         job.records.numTypes = 0; // no records this bake
-        job.perFrame = UINT32_MAX;
-        return;
-    }
+    else
+        snapshotRecords(params, upload);
+    setBakeBudgets();
+}
+
+// The record table, the chunk map and the detail chunks into the bake's snapshot buffers.
+void TreeVolumePipeline::snapshotRecords(const RecordParams& params, const oc::function<void(Buffer&, const void*, size_t, const char*)>& upload)
+{
+    BakeJob& job = m_job;
+    const FarTreeParams& s = job.settings;
     upload(m_bakeTable, params.records.chunksCpu.data(), params.records.chunksCpu.size_bytes(), "TreeVolume.bakeTable");
     upload(m_bakeMap, params.records.mapCpu.data(), params.records.mapCpu.size_bytes(), "TreeVolume.bakeMap");
     job.records.chunks = m_bakeTable.getDeviceAddress();
@@ -799,9 +902,71 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     }
     job.numDetailChunks = (uint32)m_detailScratch.size();
     upload(m_bakeDetail, m_detailScratch.data(), m_detailScratch.size() * sizeof(glm::uvec4), "TreeVolume.bakeDetail");
-    // The three record-splat passes spread evenly over "Far bake frames" (the clears, the records' mass, the far columns
-    // and the resolve take a frame of their own or share one).
-    job.perFrame = oc::max(1024u, (3u * job.detailRecords + (uint32)oc::max(s.bakeFrames, 1) - 1u) / (uint32)oc::max(s.bakeFrames, 1));
+}
+
+// THE BUDGETS: every stage that grows with the resolution or the tree count spreads over its share of "Far bake frames" -
+// the clear ~1/8, the three splat passes together ~1/2, the records' mass ~1/8, the far columns ~1/4 - so the whole bake
+// stays about that long. (Until 2026-10-06 only the record splat was spread: the clear of the accumulation, the static
+// sets' splats, the records' mass and the far columns each ran whole in one frame - a "Far trees" spike that grew with
+// the resolution.)
+void TreeVolumePipeline::setBakeBudgets()
+{
+    BakeJob& job = m_job;
+    const uint32 frames = (uint32)oc::max(job.settings.bakeFrames, 1);
+    auto share = [&](uint32 total, uint32 stageFrames) { return oc::max(1u, (total + stageFrames - 1u) / stageFrames); };
+    job.clearPerFrame = share(m_slices, oc::max(1u, frames / 8u));
+    job.perFrame = oc::max(256u, share(3u * (job.staticPieces + job.detailRecords), oc::max(1u, frames / 2u)));
+    job.massPerFrame = share(job.records.numTypes > 0 ? job.records.numChunks : 1u, oc::max(1u, frames / 8u));
+    job.rowsPerFrame = (share(m_radialRes, oc::max(1u, frames / 4u)) + 7u) & ~7u; // whole 8-row groups: no overlap
+    job.resolvePerFrame = share(m_slices, oc::max(1u, frames / 8u));
+    job.copyPerFrame = share(m_slices, oc::max(1u, frames / 8u));
+}
+
+void TreeVolumePipeline::trackCamera(glm::vec2 camera)
+{
+    const double now = Globals::time.getElapsedSec();
+    if (m_lastCameraSec >= 0.0 && now <= m_lastCameraSec)
+        return; // the same frame's reading
+    if (m_lastCameraSec >= 0.0)
+    {
+        const float dt = (float)(now - m_lastCameraSec);
+        const glm::vec2 velocity = (camera - m_lastCamera) / dt;
+        // A jump (a teleport, a scenario load) is no motion to predict: start over.
+        constexpr float MAX_SPEED = 3000.0f;
+        m_cameraVelocity = glm::length(velocity) > MAX_SPEED ? glm::vec2(0.0f)
+            : glm::mix(m_cameraVelocity, velocity, 1.0f - glm::exp(-dt / 0.25f)); // ~0.25 s smoothing
+    }
+    m_lastCamera = camera;
+    m_lastCameraSec = now;
+}
+
+glm::vec2 TreeVolumePipeline::bakeLead(const FarTreeParams& s) const
+{
+    if (!s.bakeAhead)
+        return glm::vec2(0.0f);
+    // Capped at the ring's margin: a wrong guess (a stop, a turn) leaves the camera at most that far off the new centre,
+    // and the re-bake test (on the predicted point, which then is the camera) follows at once.
+    const glm::vec2 lead = m_cameraVelocity * (float)m_bakeDurationSec;
+    const float cap = oc::max(s.rebakeDistance, 1.0f) + 30.0f;
+    const float length = glm::length(lead);
+    return length > cap ? lead * (cap / length) : lead;
+}
+
+// The cross-fade's progress at this frame's real time (Time's unpaused clock: a pause must not hold a hand-over).
+float TreeVolumePipeline::handoverFade() const
+{
+    const float swapTime = m_job.settings.swapTime;
+    if (swapTime <= 0.0f)
+        return 1.0f;
+    return glm::clamp((float)(Globals::time.getElapsedSec() - m_job.handoverStartSec) / swapTime, 0.0f, 1.0f);
+}
+
+glm::vec4 TreeVolumePipeline::handoverUbo() const
+{
+    if (!handingOver())
+        return glm::vec4(0.0f);
+    const float fraction = m_job.stage == EBakeStage::Copy ? 1.0f : handoverFade();
+    return glm::vec4(m_job.centre, fraction, 0.0f);
 }
 
 // This frame's share of the running bake (into the BACK floor / colour; the accumulation; the density at the end).
@@ -814,48 +979,69 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     const VolumeParamsGpu vol = volumeParams(s, job.centre);
     uint32 budget = job.perFrame; // the record splat's workgroups this frame
 
-    // The earlier frames' bake writes and the marches' reads of the volume (in queue order) before this frame's work.
+    // The earlier frames' bake writes and the marches' reads of the volume (in queue order) before this frame's work -
+    // and before this frame's march, which samples the new bake during the hand-over.
     const vk::MemoryBarrier2 stepStart{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
             | vk::AccessFlagBits2::eTransferWrite,
         .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eClear,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite
+            | vk::AccessFlagBits2::eTransferWrite,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &stepStart });
 
     if (job.stage == EBakeStage::Clear)
     {
-        const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
-        cmd.clearColorImage(m_accum.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
-        cmd.clearColorImage(m_colour[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.1f, 0.16f, 0.07f, 1.0f } }, { range });
-        cmd.clearColorImage(m_floor[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range }); // 0u = no floor
-        cmd.clearColorImage(m_floorCover.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
-        if (records)
+        // The 2D images whole at the first frame (small); the 3D accumulation a slice range per frame (a compute clear:
+        // vkCmdClearColorImage clears a 3D image whole). Nothing reads any of them before the splat. The next stage
+        // starts the next frame (its opening barrier orders the clears before it).
+        if (job.progress == 0)
         {
-            cmd.clearColorImage(m_farAmount.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
-            cmd.clearColorImage(m_farType.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<uint32, 4>{ UINT32_MAX, 0u, 0u, 0u } }, { range }); // no type
+            const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+            cmd.clearColorImage(m_colour[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.1f, 0.16f, 0.07f, 1.0f } }, { range });
+            cmd.clearColorImage(m_floor[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range }); // 0u = no floor
+            cmd.clearColorImage(m_floorCover.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+            cmd.clearColorImage(m_rockSum.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+            if (records)
+            {
+                cmd.clearColorImage(m_farAmount.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+                cmd.clearColorImage(m_farType.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<uint32, 4>{ UINT32_MAX, 0u, 0u, 0u } }, { range }); // no type
+            }
         }
-        const vk::MemoryBarrier2 clearToSplat{
-            .srcStageMask = vk::PipelineStageFlagBits2::eClear,
-            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-        };
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &clearToSplat });
-        job.stage = EBakeStage::FloorCover;
+        const uint32 slices = oc::min(job.clearPerFrame, m_slices - job.progress);
+        if (slices > 0)
+        {
+            const vk::DescriptorSet set = m_clearSets[frameIdx].getDescriptorSet();
+            oc::array<DescriptorSetUpdateInfo, 1> updates{
+                DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
+            };
+            writeSet(set, updates);
+            const ClearPC clearPc{ .sliceOffset = job.progress };
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_clearPipeline.getPipeline());
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_clearPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+            cmd.pushConstants(m_clearPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(clearPc), &clearPc);
+            cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
+            job.progress += slices;
+        }
+        if (job.progress >= m_slices)
+        {
+            job.progress = 0;
+            job.stage = EBakeStage::FloorCover;
+        }
+        return;
     }
 
     // The two FLOOR passes (the coverage per column, then the dominant tree's base), then the splat: the same shader,
-    // the same per-tree dispatches - the static sets whole at a stage's first frame, the records' workgroups within this
-    // frame's budget. True when the stage is done.
+    // the same per-tree dispatches. A pass walks ONE range - the static sets' pieces, then the detail records - within
+    // this frame's budget (the static sets ran whole at a pass's first frame until 2026-10-06). True when the pass is done.
     // pass: 0 = the splat, 1 = the floor coverage, 2 = the floor (the record variants' index).
     auto splat = [&](ComputePipeline& pipeline, DescriptorSet& descriptorSet, uint32 pass)
     {
         auto bindSplat = [&](ComputePipeline& bound, DescriptorSet& boundSet)
         {
             const vk::DescriptorSet set = boundSet.getDescriptorSet();
-            oc::array<DescriptorSetUpdateInfo, 6> updates{
+            oc::array<DescriptorSetUpdateInfo, 7> updates{
                 DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
                     .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
                 DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -864,33 +1050,47 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
                 DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colour[back].view) } },
                 DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
                 DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorCover.view) } },
+                DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
             };
             writeSet(set, updates);
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, bound.getPipeline());
             cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, bound.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         };
-        if (job.progress == 0)
+        // The static sets: this frame's slice of each, one workgroup per tree (past 65535 the rows wrap into y).
+        bool staticBound = false;
+        uint32 setStart = 0;
+        for (const Source& source : job.sources)
         {
-            bindSplat(pipeline, descriptorSet);
-            for (const Source& source : job.sources)
+            const uint32 setEnd = setStart + source.numPieces;
+            if (budget > 0 && job.progress < setEnd && job.progress >= setStart)
             {
-                if (source.numPieces == 0)
-                    continue;
+                const uint32 first = job.progress - setStart;
+                const uint32 count = oc::min(budget, source.numPieces - first);
+                if (!staticBound)
+                {
+                    bindSplat(pipeline, descriptorSet);
+                    staticBound = true;
+                }
                 SplatPC pc{};
                 pc.pieces = source.pieces;
                 pc.types = source.types;
                 pc.data = source.data;
-                pc.numPieces = source.numPieces;
+                pc.numPieces = count;
                 pc.vol = vol;
+                pc.wgOffset = first;
+                pc.rockExtinction = s.rockExtinction;
                 cmd.pushConstants(pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-                // One workgroup per tree; past the 65535 limit of a dimension the rows wrap into y (the shader unwraps).
-                cmd.dispatch(oc::min(source.numPieces, 65535u), (source.numPieces + 65534u) / 65535u, 1);
+                cmd.dispatch(oc::min(count, 65535u), (count + 65534u) / 65535u, 1);
+                job.progress += count;
+                budget -= count;
             }
+            setStart = setEnd;
         }
-        const uint32 count = oc::min(budget, job.detailRecords - job.progress);
+        // Then the detail chunks' records, one workgroup each.
+        const uint32 recordsDone = job.progress - oc::min(job.progress, job.staticPieces);
+        const uint32 count = job.progress >= job.staticPieces ? oc::min(budget, job.detailRecords - recordsDone) : 0u;
         if (count > 0)
         {
-            // This frame's slice of the detail chunks' records, one workgroup each (past 65535 the rows wrap into y).
             ComputePipeline& recordPipeline = m_recordSplatPipelines[pass];
             bindSplat(recordPipeline, m_recordSplatSets[pass * RendererVKLayout::NUM_FRAMES_IN_FLIGHT + frameIdx]);
             SplatPC pc{};
@@ -907,13 +1107,14 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             pc.worldSeed = job.records.worldSeed;
             pc.numDetailChunks = job.numDetailChunks;
             pc.numRecordTypes = job.records.numTypes;
-            pc.wgOffset = job.progress;
+            pc.wgOffset = recordsDone;
+            pc.rockExtinction = s.rockExtinction;
             cmd.pushConstants(recordPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
             cmd.dispatch(oc::min(count, 65535u), (count + 65534u) / 65535u, 1);
             job.progress += count;
             budget -= count;
         }
-        if (job.progress < job.detailRecords)
+        if (job.progress < job.staticPieces + job.detailRecords)
             return false;
         job.progress = 0;
         return true;
@@ -970,21 +1171,31 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         // mass per column, one workgroup per chunk (past 65535 chunks the rows wrap into y), then (the next frame) per
         // column the ground floor (where no tree floor is) and the slices from the type's height profile. After the tree
         // floors and their smoothing: a column a tree floored keeps that floor.
+        // A chunk range per frame ("Far bake frames": job.massPerFrame).
+        const uint32 count = oc::min(job.massPerFrame, job.records.numChunks - job.progress);
         const RecordsPC recordsPc{ .records = job.records.records, .chunks = job.records.chunks, .types = job.records.types,
-            .numChunks = job.records.numChunks, .numTypes = job.records.numTypes, .chunkSize = job.records.chunkSize,
-            .worldSeed = job.records.worldSeed, .vol = vol, .recordDetail = s.recordDetail, .pad = 0 };
+            .numChunks = count, .numTypes = job.records.numTypes, .chunkSize = job.records.chunkSize,
+            .worldSeed = job.records.worldSeed, .vol = vol, .recordDetail = s.recordDetail, .rockExtinction = s.rockExtinction,
+            .chunkOffset = job.progress };
         const vk::DescriptorSet set = m_recordsSets[frameIdx].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 4> updates{
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farAmount.view) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farType.view) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colour[back].view) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
         };
         writeSet(set, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_recordsPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_recordsPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.pushConstants(m_recordsPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(recordsPc), &recordsPc);
-        cmd.dispatch(oc::min(job.records.numChunks, 65535u), (job.records.numChunks + 65534u) / 65535u, 1);
-        job.stage = EBakeStage::FarColumns;
+        if (count > 0)
+            cmd.dispatch(oc::min(count, 65535u), (count + 65534u) / 65535u, 1);
+        job.progress += count;
+        if (job.progress >= job.records.numChunks)
+        {
+            job.progress = 0;
+            job.stage = EBakeStage::FarColumns;
+        }
         return;
     }
     if (job.stage == EBakeStage::FarColumns)
@@ -1001,37 +1212,73 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
         };
         writeSet(set, updates);
+        // A range of radial rows per frame ("Far bake frames": job.rowsPerFrame, whole 8-row groups so the ranges never
+        // overlap). Rows only: the ring a column checks for neighbouring mass reads the records' mass, finished above.
+        const uint32 rows = oc::min(job.rowsPerFrame, m_radialRes - job.progress);
         const FarPC farPc{ .types = job.records.types, .numTypes = job.records.numTypes, .mapSize = job.records.mapSize, .vol = vol,
-            .records = job.records.records, .map = job.records.map, .chunkSize = job.records.chunkSize, .pad = 0 };
+            .records = job.records.records, .map = job.records.map, .chunkSize = job.records.chunkSize, .rowOffset = job.progress };
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_farPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_farPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.pushConstants(m_farPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(farPc), &farPc);
-        cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, 1);
-        job.stage = EBakeStage::Resolve;
+        if (rows > 0)
+            cmd.dispatch((m_angularRes + 7) / 8, (rows + 7) / 8, 1);
+        job.progress += rows;
+        if (job.progress >= m_radialRes)
+        {
+            job.progress = 0;
+            job.stage = EBakeStage::Resolve;
+        }
         return;
     }
-    if (job.stage != EBakeStage::Resolve)
-        return;
-
-    // THE LAST STEP: the accumulation into the density, and the back floor / colour become the front - all the march
-    // reads changes in this one frame.
-    const vk::MemoryBarrier2 splatToResolve{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
-    };
+    if (job.stage == EBakeStage::Resolve)
     {
+        // The sums -> the extinction IN PLACE (float bits in the accumulation: the hand-over's new volume), a slice range
+        // per frame. At its first frame first the per-column pass: the colour with the ROCKS' share (the climate's
+        // bedrock - the terrain's rock materials' mean colours, weighted by their climate boxes - and the rock fraction
+        // in alpha), which sums each column's slices, so it runs before any slice converts.
         const vk::DescriptorSet set = m_resolveSets[frameIdx].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 2> updates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
-            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_density.view) } },
+        assert(!params.rockTextures.empty());
+        DescriptorSetUpdateInfo rockTextures{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler };
+        for (uint32 i = 0; i < ROCK_TEXTURES; ++i)
+            rockTextures.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_mipSampler,
+                .imageView = params.rockTextures[oc::min<size_t>(i, params.rockTextures.size() - 1)], .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
+        oc::array<DescriptorSetUpdateInfo, 7> updates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colour[back].view) } },
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
+            oc::move(rockTextures),
         };
         writeSet(set, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_resolvePipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_resolvePipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, m_slices);
+        if (job.progress == 0)
+        {
+            const ResolvePC columnPc{ .vol = vol, .sliceOffset = 0, .columnPass = 1 };
+            cmd.pushConstants(m_resolvePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(columnPc), &columnPc);
+            cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, 1);
+            cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // column sums -> conversion
+        }
+        const uint32 slices = oc::min(job.resolvePerFrame, m_slices - job.progress);
+        if (slices > 0)
+        {
+            const ResolvePC resolvePc{ .vol = vol, .sliceOffset = job.progress, .columnPass = 0 };
+            cmd.pushConstants(m_resolvePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(resolvePc), &resolvePc);
+            cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
+            job.progress += slices;
+        }
+        if (job.progress >= m_slices)
+        {
+            job.progress = 0;
+            job.stage = EBakeStage::FloorMax;
+        }
+        return;
     }
+    if (job.stage == EBakeStage::FloorMax)
     {
         // The MAX-FLOOR GRID from the finished back floor (tree_volume_floor_max.cs: the block max, then its dilation) -
         // after the far columns, the last floor writes.
@@ -1054,13 +1301,61 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             if (pass == 0)
                 cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // block max -> dilate
         }
+        // THE HAND-OVER next (the first bake has nothing to hand over: straight to the copy). It starts counting at
+        // this frame, whose UBO was built before it: the march takes the hand-over variant from the next frame on.
+        job.stage = m_baked ? EBakeStage::Handover : EBakeStage::Copy;
+        job.handoverStart = params.frameNumber;
+        job.handoverStartSec = Globals::time.getElapsedSec();
+        job.progress = 0;
+        return;
     }
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &splatToResolve }); // resolve -> march
+    if (job.stage == EBakeStage::Handover)
+    {
+        // Nothing to dispatch: the march cross-fades to the new bake by the UBO's fade ("Far swap time", the same
+        // clock reading as this frame's UBO). At 1 every ray shows the new bake.
+        if (handoverFade() >= 1.0f)
+            job.stage = EBakeStage::Copy;
+        return;
+    }
+    if (job.stage != EBakeStage::Copy)
+        return;
+
+    // THE COPY: the new extinction into the density, a slice range per frame. Meanwhile the march reads only the new
+    // bake (the fraction is 1), through the accumulation: nothing reads the density.
+    {
+        const uint32 slices = oc::min(job.copyPerFrame, m_slices - job.progress);
+        if (slices > 0)
+        {
+            const vk::DescriptorSet set = m_copySets[frameIdx].getDescriptorSet();
+            oc::array<DescriptorSetUpdateInfo, 2> updates{
+                DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
+                DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_density.view) } },
+            };
+            writeSet(set, updates);
+            const ClearPC copyPc{ .sliceOffset = job.progress };
+            cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_copyPipeline.getPipeline());
+            cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_copyPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+            cmd.pushConstants(m_copyPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(copyPc), &copyPc);
+            cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
+            job.progress += slices;
+        }
+        if (job.progress < m_slices)
+            return;
+    }
+    // THE SWAP: the back floor / colour / max floor become the front, the density holds the new bake.
+    const vk::MemoryBarrier2 copyToMarch{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &copyToMarch }); // copy -> march
     m_front = back;
     m_centre = job.centre;
     m_bakedSettings = job.settings;
     m_baked = true;
     m_lastBakeEnd = params.frameNumber;
+    m_bakeDurationSec = Globals::time.getElapsedSec() - job.startSec;
     job.active = false;
 }
 
@@ -1073,11 +1368,14 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     // starts when due and NUM_FRAMES_IN_FLIGHT frames after the last one swapped (its snapshot buffers and the old
     // front - the new back - may still be read until then).
     const glm::vec2 camera(params.cameraPos.x, params.cameraPos.z);
-    if (m_job.active && !sameBake(s, m_job.settings))
-        m_job.active = false;
-    const bool due = m_dirty || !m_baked || !sameBake(s, m_bakedSettings) || glm::distance(camera, m_centre) > oc::max(s.rebakeDistance, 1.0f);
+    trackCamera(camera);
+    if (m_job.active && !sameBake(s, m_job.settings) && !handingOver())
+        m_job.active = false; // a hand-over finishes: the march already shows part of it
+    // BAKE AHEAD: the test and the new centre take where the camera will be when a bake started now swaps.
+    const glm::vec2 ahead = camera + bakeLead(s);
+    const bool due = m_dirty || !m_baked || !sameBake(s, m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
     if (!m_job.active && due && (!m_baked || params.frameNumber >= m_lastBakeEnd + RendererVKLayout::NUM_FRAMES_IN_FLIGHT))
-        startBake(params, params.frameNumber);
+        startBake(params, params.frameNumber, ahead);
     if (m_job.active)
         stepBake(cmd, frameIdx, params);
 
@@ -1142,7 +1440,11 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     m_lastMarchFrame = temporal ? params.frameNumber : UINT32_MAX;
     Image& marchColour = temporal ? m_raw : m_out[frameIdx];
     Image& marchDepth = temporal ? m_rawDepth : m_outDepth[frameIdx];
-    ComputePipeline& march = temporal ? m_marchTemporalPipeline : m_marchPipeline;
+    // THE HAND-OVER variant reads both bakes - from the frame after it began (this frame's UBO must carry its fraction).
+    const bool handover = handingOver() && m_job.handoverStart < params.frameNumber;
+    ComputePipeline& march = temporal ? (handover ? m_marchTemporalHandoverPipeline : m_marchTemporalPipeline)
+                                      : (handover ? m_marchHandoverPipeline : m_marchPipeline);
+    const uint32 back = 1u - m_front;
 
     // The march reads the BAKED geometry (centre + the bake's settings) with this frame's shading settings.
     VolumeParamsGpu vol = volumeParams(m_bakedSettings, m_centre);
@@ -1170,7 +1472,7 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         .fullSize = glm::uvec2(m_width, m_height),
     };
     const vk::DescriptorSet set = m_marchSets[frameIdx].getDescriptorSet();
-    oc::array<DescriptorSetUpdateInfo, 13> updates{
+    oc::array<DescriptorSetUpdateInfo, 17> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -1188,6 +1490,12 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_hasLatest ? m_latestDepth.view : m_outDepth[prevIdx].view) } },
         DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.skyMapSampler, params.skyMapView) } },
         DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
+        // The NEW bake (the hand-over variant; the plain one never reads them): its extinction in the accumulation's
+        // float view, and the back floor / colour / max floor.
+        DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_accumFloatView) } },
+        DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
+        DescriptorSetUpdateInfo{ .binding = 15, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_linearSampler, m_colour[back].view) } },
+        DescriptorSetUpdateInfo{ .binding = 16, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorMax[back].view) } },
     };
     writeSet(set, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, march.getPipeline());

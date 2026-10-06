@@ -62,6 +62,16 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         m_foliageParams.transmissionShadow, farTreesActive() ? 1.0f : 0.0f);
     ubo.foliageParams5 = glm::vec4(glm::clamp(m_foliageParams.minNoV, 0.0f, 0.9f), glm::max(m_foliageParams.selfShadow, 0.0f),
         glm::clamp(m_foliageParams.interiorViewFade, 0.0f, 1.0f), glm::clamp(m_foliageParams.transmissionSelfShadow, 0.0f, 1.0f));
+    {
+        const RockParams& r = m_rockParams;
+        const float coverStart = glm::clamp(r.coverSlopeStart, 0.0f, 1.0f);
+        ubo.rockParams0 = glm::vec4(glm::clamp(r.coverAmount, 0.0f, 1.0f), coverStart,
+            glm::max(glm::clamp(r.coverSlopeFull, 0.0f, 1.0f), coverStart + 1e-3f), 1.0f / glm::max(r.coverPatchSize, 0.05f));
+        ubo.rockParams1 = glm::vec4(glm::max(r.contactHeight, 0.0f), glm::clamp(r.contactBlend, 0.0f, 1.0f),
+            glm::clamp(r.contactDarkening, 0.0f, 1.0f), glm::max(r.uvScale, 0.01f));
+        ubo.rockParams2 = glm::vec4(glm::max(r.contactFadeDistance, 1.0f), glm::clamp(r.cavityAo, 0.0f, 1.0f),
+            glm::clamp(r.cavityCover, 0.0f, 1.0f), 0.0f);
+    }
     ubo.treeCull = glm::uvec4(0u); // no tree range until present() patches it (uploadTreeCullUbo)
     ubo.treeCullParams = glm::vec4(0.0f);
     buildUboViews(cameraIn, camera, vrBaseOrientation);
@@ -140,6 +150,8 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         const float reach = glm::max(f.windBend, 0.0f) * strongest * strongest * (1.0f + glm::max(f.windSway, 0.0f)) * 4.0f
             + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f);
         ubo.treeWind3 = glm::vec4(glm::max(f.windTrunkFadeEnd, 0.0f), glm::max(f.windSwayFrequency, 0.0f), reach, glm::max(f.windBillboardWaves, 0.0f));
+        // The far-tree volume's hand-over as of this frame (its state changes only in record(), after this build).
+        ubo.treeHandover = m_treeVolume.handoverUbo();
         m_treeWindPrevTime = ubo.timeSeconds;
     }
 
@@ -421,13 +433,16 @@ void Renderer::buildUboClouds(const Camera& camera)
     // at any frame rate; a texel marches every SKY_UPDATE_FRAMES frames, so dt spans that many. Real time, not sim
     // time: the camera still moves while the sim is paused.
     const float realDt = glm::min((float)Globals::time.getDeltaSec(), 0.25f) * (float)CloudPipeline::SKY_UPDATE_FRAMES;
-    const float skyHistory = c.skyMapHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.skyMapHistorySec) : 0.0f;
+    // The floor ("Sky map min samples", N marches: w = (N - 1) / (N + 1)) keeps the average's noise the same at a low
+    // frame rate, where the time-based weight alone averaged a few marches and the ocean mirrored a per-frame flicker.
+    const float minSampleWeight = c.skyMapMinSamples > 1.0f ? (c.skyMapMinSamples - 1.0f) / (c.skyMapMinSamples + 1.0f) : 0.0f;
+    const float skyHistory = c.skyMapHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.skyMapHistorySec), minSampleWeight) : 0.0f;
     ubo.cloudShape4 = glm::vec4(glm::clamp(c.baseVariation, 0.0f, 0.6f), 1.0f / glm::max(c.groundLightDepth, 1.0f), skyHistory,
         glm::clamp(c.erosionCutoff, 0.0f, 0.9f));
     // Top roundness 0..1 -> the superellipse exponent 1..6 (1 = the plain taper, 2 = a circular cap, 6 = nearly flat).
     ubo.cloudShape5 = glm::vec4(glm::clamp(c.towerVariation, 0.0f, 0.9f), 1.0f + 5.0f * glm::clamp(c.topRoundness, 0.0f, 1.0f),
         glm::clamp(c.baseSharpness, 0.0f, 1.0f), glm::clamp(c.towerCoreLink, 0.0f, 1.0f));
-    const float giSkyHistory = c.giSkyHistorySec > 0.0f ? std::exp(-3.0f * realDt / c.giSkyHistorySec) : 0.0f;
+    const float giSkyHistory = c.giSkyHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.giSkyHistorySec), minSampleWeight) : 0.0f;
     ubo.cloudNoiseOrigin = glm::vec4((float)origin.x, giSkyHistory, (float)origin.y, (float)m_cloudEvolveOffset);
     ubo.cloudWind = glm::vec4((float)windStep.x, 0.0f, (float)windStep.y, glm::max(c.giSkyObserverRadius, 0.0f)); // the field's world displacement this frame
     // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie

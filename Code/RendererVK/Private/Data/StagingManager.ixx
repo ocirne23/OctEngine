@@ -9,7 +9,9 @@ import :CommandBuffer;
 class SwapChain;
 
 // THREAD-SAFE: every public entry point serializes on one internal mutex, so upload*() may be called
-// from jobs/worker threads (the beginFrame UBO upload, future streamer work). A ring overflow inside
+// from jobs/worker threads (the beginFrame UBO upload, the terrain's chunk uploads). The mutex covers only
+// the ring claim: upload*() memcpys into its claimed range after the unlock, so concurrent uploads copy
+// in parallel, and a flush waits for every writer of the buffer it submits. A ring overflow inside
 // upload*() implicitly submits the batch to the graphics queue - legal from any thread because ALL
 // queue calls go through Device's graphics-queue mutex (CommandBuffer::submitGraphics,
 // SwapChain::present, Device::graphicsQueueWaitIdle). Lock order is staging mutex -> queue mutex,
@@ -57,6 +59,8 @@ public:
 private:
 
     vk::Semaphore updateNoLock(); // the body of update(); callers hold m_mutex
+    vk::DeviceSize claimNoLock(vk::DeviceSize dataSize, vk::DeviceSize alignment); // the ring range to copy into
+    vk::Semaphore copyAndUnlock(std::unique_lock<std::mutex>& lock, vk::DeviceSize offset, vk::DeviceSize dataSize, const void* data);
 
     SwapChain* m_swapChain = nullptr;
 
@@ -91,6 +95,7 @@ private:
     oc::span<uint8> m_mappedMemory;
 
     std::mutex m_mutex;
+    oc::atomic<uint32> m_numWriters[NUM_STAGING_BUFFERS]{}; // copies in flight outside m_mutex, per buffer
     oc::atomic<bool> m_drainedForSharedWrite = false;
 };
 

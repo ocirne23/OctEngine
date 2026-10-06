@@ -19,6 +19,8 @@ import :TreeBarkTexture;
 import :TreeImpostor;
 import :TerrainSampler;
 import :TerrainStreamer;
+import :RockSystem;
+import :RockGenerator; // ROCK_DENSITY_RES
 
 namespace
 {
@@ -235,6 +237,7 @@ namespace Procedural
 		if (m_treeSet != UINT32_MAX)
 			Globals::rendererVK.destroyTreeInstanceSet(m_treeSet);
 		m_treeSet = UINT32_MAX;
+		m_setHasRocks = false;
 	}
 
 	void TreeSystem::applyFadeBands(Renderer& renderer)
@@ -314,10 +317,21 @@ namespace Procedural
 		Tweak::boolean("Trees", "Force far", &m_forceFar, [this]() { m_fadeBandsDirty = true; });
 		Tweak::boolean("Trees", "GPU expansion", &m_gpuExpansion, respawn);
 		m_world.initialize();
+		// The world set draws RockSystem's meshes (spawnWorld): before RockSystem frees them (a reload, a disable), the
+		// set goes - the next update spawns it again, without them until they are back.
+		Globals::rocks.setMeshUser([this]()
+		{
+			if (!m_setHasRocks)
+				return;
+			destroyTreeSet();
+			m_spawned = false;
+		});
 	}
 
 	void TreeSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
+		// The world's ROCK records (RockSystem's "Rocks/World" tweaks; a change is a new TreeWorld generation).
+		m_world.setRocks(Globals::rocks.worldEnabled(), Globals::rocks.worldRules(), Globals::rocks.typesRevision());
 		m_world.update(renderer, camera, maps);
 		if (!m_enabled)
 		{
@@ -349,6 +363,10 @@ namespace Procedural
 		const bool worldMode = m_world.enabled() && m_gpuExpansion && maps != nullptr;
 		m_world.requireKeepRadius(worldMode ? m_nearRadius + 1 : 0);
 		if (worldMode != m_worldMode || (worldMode && m_world.generation() != m_worldGeneration))
+			m_respawn = true;
+		// The rock meshes arrived, changed or went (RockSystem loads in the background): the set's types are fixed, so a
+		// new set.
+		if (worldMode && Globals::rocks.worldGeneration() != m_rockGeneration)
 			m_respawn = true;
 		// A respawn hooks the new set into the terrain AFTER this frame's walk (setVegetation joins it): this frame
 		// draws every chunk itself.
@@ -1047,6 +1065,7 @@ namespace Procedural
 	void TreeSystem::spawnWorld(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
 		m_worldGeneration = m_world.generation();
+		m_rockGeneration = Globals::rocks.worldGeneration();
 		m_worldFullLogged = false;
 		if (m_species.empty())
 			return;
@@ -1055,6 +1074,52 @@ namespace Procedural
 		buildGpuTypes(gpuTypes, typeOf);
 
 		auto context = oc::make_shared<ExpandContext>();
+		// THE ROCK TYPES (RockSystem's loaded types, once their meshes are up): a GPU type per variant - ONE mesh, the
+		// LOD chain's level 0 in the bark slot, on LitRock (the culls pick its level; no billboard, no fade) - and the
+		// record types they answer to, by name among TreeWorld's rock types.
+		if (Globals::rocks.worldEnabled())
+		{
+			const oc::span<const RockSystem::WorldType> rockTypes = Globals::rocks.worldTypes();
+			for (const RockSystem::WorldType& rockType : rockTypes)
+			{
+				ExpandRock& rock = context->rocks.emplace_back();
+				rock.scale = rockType.scale;
+				rock.sink = rockType.sink;
+				rock.align = rockType.align;
+				context->rockReach = glm::max(context->rockReach, 0.5f * rockType.scale.y);
+				for (const RockSystem::WorldVariant& variant : rockType.variants)
+				{
+					Renderer::TreeInstanceType type;
+					type.bark = { variant.mesh, Globals::rocks.worldMaterial(), RendererVKLayout::EPipelineIndex::LitRock };
+					if (variant.density)
+					{
+						// The FAR VOLUME's view (R5): the occupancy over its box, a SOLID. The volume stands a piece on the
+						// ground: the sink goes into the box. The lean is left out - kilometres away.
+						const glm::vec3 sink(0.0f, rockType.sink * variant.height, 0.0f);
+						type.density = variant.density;
+						type.densityRes = ROCK_DENSITY_RES;
+						type.densityMin = variant.densityMin - sink;
+						type.densityMax = variant.densityMax - sink;
+						type.solid = true;
+					}
+					rock.variants.push_back({ (uint32)gpuTypes.size(), variant.centre, variant.radius, variant.height });
+					gpuTypes.push_back(type);
+				}
+			}
+			for (uint32 type = 0; type < 256; ++type)
+			{
+				const oc::string_view name = m_world.typeName(type);
+				if (name.empty())
+					break;
+				int32 index = -1;
+				if (type >= m_world.firstRockType())
+					for (size_t r = 0; r < rockTypes.size(); ++r)
+						if (oc::string_view(rockTypes[r].name) == name)
+							index = (int32)r;
+				context->rockOfRecordType.push_back(index);
+			}
+			m_setHasRocks = !context->rocks.empty();
+		}
 		context->maps = maps;
 		context->worldSeed = m_world.seed();
 		context->chunkSize = (float)Globals::terrain.chunkSize();
@@ -1099,9 +1164,10 @@ namespace Procedural
 			if (name.empty())
 				break;
 			int32 index = -1;
-			for (size_t s = 0; s < m_species.size(); ++s)
-				if (!m_species[s].desc.bush && oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
-					index = (int32)s;
+			if (type < m_world.firstRockType())
+				for (size_t s = 0; s < m_species.size(); ++s)
+					if (!m_species[s].desc.bush && oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
+						index = (int32)s;
 			context->speciesOfRecordType.push_back(index);
 		}
 		m_expandContext = context;
@@ -1120,10 +1186,11 @@ namespace Procedural
 			const oc::string_view name = m_world.typeName(type);
 			if (name.empty())
 				break;
-			int32 index = -1;
-			for (size_t s = 0; s < m_species.size(); ++s)
-				if (oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
-					index = (int32)s;
+			int32 index = -1; // a rock type stays -1 here: the rock types follow below
+			if (type < m_world.firstRockType())
+				for (size_t s = 0; s < m_species.size(); ++s)
+					if (oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
+						index = (int32)s;
 			speciesOfType.push_back(index);
 			if (index >= 0)
 				recordTypeOfSpecies[(size_t)index] = (int32)type;
@@ -1201,6 +1268,78 @@ namespace Procedural
 			const double binH = out.height / (double)TREE_RECORD_PROFILE_BINS;
 			for (uint32 b = 0; b < TREE_RECORD_PROFILE_BINS; ++b)
 				out.shape[b] = (float)(profile[b] / (double)variants / (mass * binH));
+		}
+		// The ROCK record types (R5; RendererVK "Far-tree volume" ROCKS): a record expands as placeRock - its variant and
+		// yaw from the same hashes, its scale rockRecordScale (the tree rule without size variation) - into the set's rock
+		// types (the occupancy, the sink in the box, no lean). A SOLID (albedo.w 0): the volume gives it "Far rock
+		// extinction" at any size, so its mass grows with scale^3 (variantMass = its occupied volume at scale 1), and its
+		// colour is the climate's bedrock. The profile as a tree's, over the sunk box.
+		if (m_setHasRocks)
+		{
+			const oc::span<const RockSystem::WorldType> rockTypes = Globals::rocks.worldTypes();
+			for (size_t t = 0; t < recordTypes.size() && t < context->rockOfRecordType.size(); ++t)
+			{
+				const int32 r = context->rockOfRecordType[t];
+				if (r < 0 || (size_t)r >= rockTypes.size())
+					continue;
+				const ExpandRock& rock = context->rocks[(size_t)r];
+				const RockSystem::WorldType& world = rockTypes[(size_t)r];
+				TreeRecordTypeGpu& out = recordTypes[t];
+				out.scale = rock.scale;
+				out.sizeVariation = 0.0f;
+				out.albedo = glm::vec4(0.0f);
+				clipped |= rock.variants.size() > TREE_RECORD_MAX_VARIANTS;
+				out.numVariants = (uint32)glm::min(rock.variants.size(), (size_t)TREE_RECORD_MAX_VARIANTS);
+				const float meanScale = 0.5f * (rock.scale.x + rock.scale.y);
+				for (uint32 v = 0; v < out.numVariants; ++v)
+				{
+					out.variantType[v] = rock.variants[v].type;
+					const RockSystem::WorldVariant& variant = world.variants[v];
+					if (!variant.density)
+						continue;
+					out.height = glm::max(out.height, (variant.densityMax.y - rock.sink * variant.height) * meanScale);
+					out.radius = glm::max(out.radius, 0.5f * glm::max(variant.densityMax.x - variant.densityMin.x, variant.densityMax.z - variant.densityMin.z));
+				}
+				if (out.height <= 0.0f)
+					continue;
+				double profile[TREE_RECORD_PROFILE_BINS] = {};
+				uint32 variants = 0;
+				for (uint32 v = 0; v < out.numVariants; ++v)
+				{
+					const RockSystem::WorldVariant& variant = world.variants[v];
+					if (!variant.density)
+						continue;
+					++variants;
+					const uint32 res = ROCK_DENSITY_RES;
+					const glm::vec3 voxel = (variant.densityMax - variant.densityMin) / (float)res;
+					const double voxelVolume = (double)voxel.x * voxel.y * voxel.z;
+					const float baseY = variant.densityMin.y - rock.sink * variant.height;
+					double variantMass = 0.0;
+					for (uint32 z = 0; z < res; ++z)
+						for (uint32 y = 0; y < res; ++y)
+						{
+							const float height = (baseY + ((float)y + 0.5f) * voxel.y) * meanScale;
+							const uint32 bin = (uint32)glm::clamp(height / out.height * (float)TREE_RECORD_PROFILE_BINS, 0.0f, (float)TREE_RECORD_PROFILE_BINS - 1.0f);
+							for (uint32 x = 0; x < res; ++x)
+							{
+								const double m = variant.density[x + res * (y + res * z)] * voxelVolume;
+								variantMass += m;
+								profile[bin] += m * meanScale * meanScale * meanScale;
+							}
+						}
+					out.variantMass[v] = (float)variantMass;
+				}
+				double mass = 0.0;
+				for (double p : profile)
+					mass += p;
+				mass /= (double)glm::max(variants, 1u);
+				if (mass <= 0.0)
+					continue;
+				out.mass = (float)mass;
+				const double binH = out.height / (double)TREE_RECORD_PROFILE_BINS;
+				for (uint32 b = 0; b < TREE_RECORD_PROFILE_BINS; ++b)
+					out.shape[b] = (float)(profile[b] / (double)variants / (mass * binH));
+			}
 		}
 		if (clipped)
 			Log::warning(oc::format("Trees: a species has more than {} variants or a tree more than {} bush species - the far volume's "
@@ -1321,7 +1460,7 @@ namespace Procedural
 			return;
 		const float cs = context.chunkSize;
 		constexpr float STEP = 2.0f;
-		const float margin = std::ceil((context.bushRadius + 2.0f) / STEP) * STEP;
+		const float margin = std::ceil((glm::max(context.bushRadius, context.rockReach) + 2.0f) / STEP) * STEP;
 		const glm::vec2 origin = glm::vec2(coord) * cs - margin;
 		const uint32 res = (uint32)std::ceil((cs + 2.0f * margin) / STEP) + 1;
 		oc::vector<TerrainPoint> field((size_t)res * res);
@@ -1351,16 +1490,41 @@ namespace Procedural
 			piece.type = variant.type;
 		};
 
+		// A ROCK record: one piece. The variant and the yaw from the seed as a tree's, the scale from rockRecordScale
+		// (TreeWorld's placement keeps the trees out of the same footprint). It lies on the ground under its footprint,
+		// turned to the ground's normal by `align`: RockSystem::groundTransform, the rule the preview uses too.
+		auto placeRock = [&](const ExpandRock& rock, uint32 seed, glm::vec2 p)
+		{
+			if (rock.variants.empty())
+				return;
+			const ExpandRockVariant& variant = rock.variants[treeHash(seed, 102u) % (uint32)rock.variants.size()];
+			const float scale = rockRecordScale(seed, rock.scale);
+			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
+			const float r = RockSystem::FOOTPRINT * scale;
+			const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
+				groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
+			Renderer::TreeInstancePiece& piece = out.emplace_back();
+			piece.transform = RockSystem::groundTransform(p, ground, scale, variant.height, rock.sink, rock.align, yaw);
+			piece.centre = piece.transform.transformPoint(variant.centre);
+			piece.radius = variant.radius * scale;
+			piece.type = variant.type;
+		};
+
 		const glm::vec2 chunkOrigin = glm::vec2(coord) * cs;
 		for (TreeRecord record : records)
 		{
 			const uint32 type = treeRecordType(record);
+			const uint32 seed = treeRecordSeed(context.worldSeed, coord, record);
+			const glm::vec2 p = chunkOrigin + treeRecordLocal(record, cs);
+			if (const int32 r = type < context.rockOfRecordType.size() ? context.rockOfRecordType[type] : -1; r >= 0)
+			{
+				placeRock(context.rocks[(size_t)r], seed, p);
+				continue;
+			}
 			const int32 s = type < context.speciesOfRecordType.size() ? context.speciesOfRecordType[type] : -1;
 			if (s < 0)
 				continue;
 			const ExpandSpecies& tree = context.species[(size_t)s];
-			const uint32 seed = treeRecordSeed(context.worldSeed, coord, record);
-			const glm::vec2 p = chunkOrigin + treeRecordLocal(record, cs);
 			placeVariant(tree, seed, p);
 			// "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to
 			// bushRadius (area-uniform), a random bush species of its climate.

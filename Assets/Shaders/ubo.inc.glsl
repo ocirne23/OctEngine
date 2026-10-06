@@ -402,6 +402,13 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_treeWind1; // x = branch (m per m/s), y = branch Hz, z = leaf (m), w = leaf Hz
     vec4 u_treeWind2; // x / y = branch fade start / end (m), z / w = leaf fade start / end (m)
     vec4 u_treeWind3; // x = trunk fade end (m, 0 = none), y = sway Hz, z = the culls' bound growth (m), w = billboard waves (card fraction)
+    vec4 u_treeHandover; // the far-tree volume's HAND-OVER cross-fade (tree_volume_march.cs TREE_HANDOVER): xy = the new
+                         // bake's centre, z = the fade (the fraction of rays that pick the new bake), w unused
+    // THE ROCK MATERIAL (instanced_indirect_rock.fs.glsl; "Rocks/Material"):
+    vec4 u_rockParams0; // x = ground cover amount (0 = off), y / z = cover start / full (normal.y), w = 1 / cover patch size (1/m)
+    vec4 u_rockParams1; // x = contact band height (m), y = contact blend (ground material at the foot), z = contact darkening (AO),
+                        // w = uv scale (x the terrain's rock uv scale)
+    vec4 u_rockParams2; // x = contact fade distance (m: no band past it), y = cavity AO, z = cavity cover, w unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

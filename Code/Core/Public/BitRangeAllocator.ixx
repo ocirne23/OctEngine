@@ -2,6 +2,9 @@ export module Core.BitRangeAllocator;
 
 import Core;
 
+// ThreadSafe: acquire* / release* may run concurrently (atomic bit words, lock-free). resize() and isBitSet()
+// are NOT concurrent-safe: resize() replaces the bit array, so the owner must exclude every other call around it
+// (MeshDataManager: its grow lock).
 export template<bool ThreadSafe = false>
 class BitRangeAllocator final
 {
@@ -35,14 +38,14 @@ public:
         const int numInts = (m_size + 63) / 64;
         int startSlot;
         if constexpr (ThreadSafe)
-            startSlot = m_lastAcquiredIdx + 1; // In a multithreaded environment we spread out different allocations to minimize contention
+            startSlot = (int)lastAcquired() + 1; // In a multithreaded environment we spread out different allocations to minimize contention
         else
             startSlot = m_lastAcquiredIdx; // In a single threaded environment we try to make allocations as linear as possible
 
         for (int i = 0; i < numInts; ++i)
         {
             const int intIdx = (i + startSlot) % numInts;
-            const uint64 usedBits = m_pBits[intIdx];
+            const uint64 usedBits = loadBits(intIdx);
             if (usedBits != ~0ull)
             {
 #pragma warning(disable: 4102) // unreferenced label
@@ -54,7 +57,7 @@ public:
                     const uint64 old = oc::atomic_ref<uint64>(m_pBits[intIdx]).fetch_or(1ull << bitIdx, oc::memory_order_relaxed);
                     if ((old & (1ull << bitIdx)) == 0)
                     {
-                        m_lastAcquiredIdx = intIdx;
+                        setLastAcquired(intIdx);
                         return idx;
                     }
                     else if (old == ~0ull)
@@ -92,7 +95,7 @@ public:
             assert((m_pBits[intIdx] & (1ull << bitIdx)) != 0);
             m_pBits[intIdx] &= ~(1ull << bitIdx);
         }
-        m_lastAcquiredIdx = intIdx;
+        setLastAcquired(intIdx);
     }
 
     int acquireRange(uint32 size)
@@ -105,13 +108,13 @@ public:
 
         if constexpr (ThreadSafe)
         {	// In a multithreaded environment we spread out different thread allocations to minimize contention
-            const int lastUsed = oc::atomic_ref<uint32>(m_lastAcquiredIdx).load(oc::memory_order_relaxed);
+            const int lastUsed = (int)lastAcquired();
             int emptiestSlotBits = 64;
             startSlot = 0;
             for (int i = 0; i < numInts; ++i)
             {
                 const int intIdx = (i + lastUsed + 1) % numInts;
-                const int numSetBits = (int)oc::popcnt(m_pBits[intIdx].load(oc::memory_order_relaxed));
+                const int numSetBits = (int)oc::popcnt(loadBits(intIdx));
                 if (numSetBits + numBucketsWanted * 2 < 64) // If we find a slot that can comfortably fit the allocation try to use it
                 {
                     startSlot = intIdx;
@@ -123,7 +126,7 @@ public:
                     emptiestSlotBits = numSetBits;
                 }
             }
-            oc::atomic_ref<uint32>(m_lastAcquiredIdx).store(startSlot, oc::memory_order_relaxed);
+            setLastAcquired(startSlot);
         }
         else
         {
@@ -138,9 +141,7 @@ public:
                 continuousBitStart = -1;
                 numWantedBucketsRemaining = numBucketsWanted;
             }
-            uint64_t usedBits;
-            if constexpr (ThreadSafe) usedBits = oc::atomic_ref<uint64>(m_pBits[i]).load(oc::memory_order_relaxed);
-            else                      usedBits = m_pBits[intIdx];
+            const uint64_t usedBits = loadBits(intIdx);
 
             const int numSetBits = (int)oc::popcnt(usedBits);
             if (numSetBits == 0) // optimize for empty buckets
@@ -177,12 +178,12 @@ public:
 
             if (numWantedBucketsRemaining <= 0) // Fully fitted
             {
-                m_lastAcquiredIdx = intIdx; // Write unsynchronized
+                setLastAcquired(intIdx);
                 if (!setBitRange(continuousBitStart, continuousBitStart + numBucketsWanted))
                 {	// Someone else set bits in the range, try find new range from the current position
                     continuousBitStart = -1;
                     numWantedBucketsRemaining = numBucketsWanted;
-                    startSlot = i;
+                    startSlot = intIdx; // the WORD index: `i` counts from startSlot, so restarting at `i` jumped elsewhere
                     i = -1;
                     continue;
                 }
@@ -196,46 +197,77 @@ public:
     {
         const int intIdx = idx / 64;
         const int bitIdx = idx % 64;
-        return (m_pBits[intIdx] & (1ull << bitIdx)) != 0;
+        return (loadBits(intIdx) & (1ull << bitIdx)) != 0;
     }
 
     void releaseRange(int idx, uint32 size)
     {
         clearBitRange(idx, idx + size);
-        m_lastAcquiredIdx = idx / 64;
+        setLastAcquired((uint32)(idx / 64));
     }
 
 private:
 
-    bool setBitRange(int start, int end)
+    uint64 loadBits(int intIdx) const
     {
-        const int intStart = start / 64;
-        const int intEnd = end / 64 + (end % 64 != 0);
+        if constexpr (ThreadSafe)
+            return oc::atomic_ref<uint64>(m_pBits[intIdx]).load(oc::memory_order_relaxed);
+        else
+            return m_pBits[intIdx];
+    }
+    // A search hint only: relaxed is enough, but concurrent plain accesses would be a data race.
+    uint32 lastAcquired() const
+    {
+        if constexpr (ThreadSafe)
+            return oc::atomic_ref<uint32>(const_cast<uint32&>(m_lastAcquiredIdx)).load(oc::memory_order_relaxed);
+        else
+            return m_lastAcquiredIdx;
+    }
+    void setLastAcquired(uint32 intIdx)
+    {
+        if constexpr (ThreadSafe)
+            oc::atomic_ref<uint32>(m_lastAcquiredIdx).store(intIdx, oc::memory_order_relaxed);
+        else
+            m_lastAcquiredIdx = intIdx;
+    }
+
+    // The masks of words [intStart, intEnd), indexed from intStart: sized by the RANGE, not the whole bitmap (a
+    // large mesh buffer's bitmap is tens of KB - on a 64 KB-commit fiber stack, per allocation).
+    static void buildMasks(int start, int end, int intStart, int intEnd, uint64* bitMasks)
+    {
         int remaining = end - start;
         int bitStart = start % 64;
-        uint64* bitMasks = (uint64*)_alloca(((m_size + 63) / 64) * sizeof(uint64));
         for (int i = intStart; i < intEnd; ++i)
         {
             const int bitEnd = oc::min(bitStart + remaining, 64);
             const int bitRange = bitEnd - bitStart;
             remaining -= bitRange;
-            bitMasks[i] = bitRange == 64 ? uint64(~0) : ((1ull << bitRange) - 1) << bitStart;
+            bitMasks[i - intStart] = bitRange == 64 ? uint64(~0) : ((1ull << bitRange) - 1) << bitStart;
             bitStart = 0;
         }
+    }
+
+    bool setBitRange(int start, int end)
+    {
+        const int intStart = start / 64;
+        const int intEnd = end / 64 + (end % 64 != 0);
+        uint64* bitMasks = (uint64*)_alloca((size_t)(intEnd - intStart) * sizeof(uint64));
+        buildMasks(start, end, intStart, intEnd, bitMasks);
 
         if constexpr (ThreadSafe)
         {
             for (int i = intStart; i < intEnd; ++i)
             {
+                const uint64 mask = bitMasks[i - intStart];
                 // With extremely high contention a compare_exchange_weak loop can be slightly faster than fetch_or
-                const uint64 old = oc::atomic_ref<uint64>(m_pBits[i]).fetch_or(bitMasks[i], oc::memory_order_relaxed);
-                const uint64 oldBitMask = old & bitMasks[i];
+                const uint64 old = oc::atomic_ref<uint64>(m_pBits[i]).fetch_or(mask, oc::memory_order_relaxed);
+                const uint64 oldBitMask = old & mask;
                 if (oldBitMask != 0)
                 {	// Undo bit sets because someone else has set bits in the range
-                    if (oldBitMask != bitMasks[i]) // if we set any incorrectly in the current int, undo
-                        oc::atomic_ref<uint64>(m_pBits[i]).fetch_and(~(bitMasks[i] & ~oldBitMask), oc::memory_order_relaxed);
+                    if (oldBitMask != mask) // if we set any incorrectly in the current int, undo
+                        oc::atomic_ref<uint64>(m_pBits[i]).fetch_and(~(mask & ~oldBitMask), oc::memory_order_relaxed);
                     for (int j = i - 1; j >= intStart; --j) // if we set any previous ints, undo those also
-                        oc::atomic_ref<uint64>(m_pBits[j]).fetch_and(~bitMasks[j], oc::memory_order_relaxed);
+                        oc::atomic_ref<uint64>(m_pBits[j]).fetch_and(~bitMasks[j - intStart], oc::memory_order_relaxed);
                     return false;
                 }
             }
@@ -244,8 +276,8 @@ private:
         {
             for (int i = intStart; i < intEnd; ++i)
             {
-                assert((m_pBits[i] & bitMasks[i]) == 0);
-                m_pBits[i] |= bitMasks[i];
+                assert((m_pBits[i] & bitMasks[i - intStart]) == 0);
+                m_pBits[i] |= bitMasks[i - intStart];
             }
         }
         return true;
@@ -255,29 +287,21 @@ private:
     {
         const int intStart = start / 64;
         const int intEnd = end / 64 + ((end % 64) != 0);
-        int remaining = end - start;
-        int bitStart = start % 64;
         // prepare masks to minimize time between CAS operations
-        uint64* bitMasks = (uint64*)_alloca(((m_size + 63) / 64) * sizeof(uint64));
+        uint64* bitMasks = (uint64*)_alloca((size_t)(intEnd - intStart) * sizeof(uint64));
+        buildMasks(start, end, intStart, intEnd, bitMasks);
         for (int i = intStart; i < intEnd; ++i)
         {
-            const int bitEnd = oc::min(bitStart + remaining, 64);
-            const int bitRange = bitEnd - bitStart;
-            remaining -= bitRange;
-            bitMasks[i] = bitRange == 64 ? uint64(~0) : ((1ull << bitRange) - 1) << bitStart;
-            bitStart = 0;
-        }
-        for (int i = intStart; i < intEnd; ++i)
-        {
+            const uint64 mask = bitMasks[i - intStart];
             if constexpr (ThreadSafe)
             {
-                uint64_t old = oc::atomic_ref<uint64>(m_pBits[i]).fetch_and(~bitMasks[i], oc::memory_order_relaxed);
-                assert((old & bitMasks[i]) == bitMasks[i]);
+                uint64_t old = oc::atomic_ref<uint64>(m_pBits[i]).fetch_and(~mask, oc::memory_order_relaxed);
+                assert((old & mask) == mask);
             }
             else
             {
-                assert((m_pBits[i] & bitMasks[i]) == bitMasks[i]);
-                m_pBits[i] &= ~bitMasks[i];
+                assert((m_pBits[i] & mask) == mask);
+                m_pBits[i] &= ~mask;
             }
         }
     }

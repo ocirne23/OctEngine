@@ -82,7 +82,8 @@ float grassCoverSize(float cover)
 // THE CANOPY: grass self-shadowing without a shadow map (a blade is far below a shadow-map texel). The grass layer is
 // a thin volume of blades: its top at the mean blade height, its extinction (1/m) = u_grassParams11.w ("Canopy
 // shadow" x blades per m^2 x the mean blade width, the CPU's fold) x the COVER (not the clumps: those are sampled along
-// the sun path, grassCanopySun) x the size by cover, faded with the blades over the range's end. The blades
+// the sun path, grassCanopySun) x the size by cover; its RESULT fades with the blades over the range's end
+// (grassRangeFade). The blades
 // (grass.vs/fs.glsl) and the ground under them (instanced_indirect_terrain.fs.glsl) use the same terms, so the soil
 // between the blades matches their feet.
 float grassCanopyHeight(float clump, float coverSize)
@@ -91,7 +92,13 @@ float grassCanopyHeight(float clump, float coverSize)
 }
 float grassCanopyExtinction(float cover, float coverSize, float dist)
 {
-    return u_grassParams11.w * cover * coverSize * (1.0 - smoothstep(u_grassParams0.z - u_grassParams0.w, u_grassParams0.z, dist));
+    return u_grassParams11.w * cover * coverSize;
+}
+// The blades' "Range fade" (1 inside, 0 at the range). The canopy's RESULT fades with it, linearly: fading the
+// extinction instead kept exp(-extinction x path) nearly black until the band's last metres - an edge, not a fade.
+float grassRangeFade(float dist)
+{
+    return 1.0 - smoothstep(u_grassParams0.z - u_grassParams0.w, u_grassParams0.z, dist);
 }
 
 // The sun reaching pos, `depth` metres below the canopy top, along the sun's path up through it (capped at 10x the
@@ -115,9 +122,10 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
     for (int i = 0; i < 4; ++i)
         clumps += grassClump(pos.xz + toSun * (depth * (float(i) + 0.5) * 0.25));
     const float T = exp(-extinction * (0.25 * clumps) * depth / sunY);
+    const float rangeFade = grassRangeFade(dist);
     const float contrast = u_grassParams12.y * (1.0 - smoothstep(0.5 * u_grassParams12.z, u_grassParams12.z, dist));
     if (contrast <= 0.0)
-        return T;
+        return mix(1.0, T, rangeFade);
     // STREAKS, not round spots: the shadows of upright blades fall as lines away from the sun, longer as it sinks
     // (a blade of height h casts h / tan(elevation)). The noise is stretched along the sun's horizontal direction by
     // that ratio x "Fleck stretch" (u_grassParams12.w; capped at 16); across it the spots stay "Fleck size".
@@ -128,7 +136,7 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
     const vec2 entry = vec2(dot(entryPos, along) / stretch, dot(entryPos, vec2(-along.y, along.x))) * u_grassParams12.x;
     float n = 0.65 * grassValueNoise(entry) + 0.35 * grassValueNoise(entry * 2.7 + 5.1);
     n = clamp((n - 0.5) * 1.8 + 0.5, 0.0, 1.0); // value noise bunches at 0.5: stretched toward an even spread
-    return mix(T, smoothstep(n - 0.1, n + 0.1, T), contrast);
+    return mix(1.0, mix(T, smoothstep(n - 0.1, n + 0.1, T), contrast), rangeFade);
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL
@@ -207,7 +215,7 @@ vec2 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
     const float coverSize = grassCoverSize(cover);
     const float height = grassCanopyHeight(clump, coverSize);
     const float extinction = grassCanopyExtinction(cover, coverSize, dist);
-    const float presence = 1.0 - exp(-extinction * clump * height); // the blades standing HERE (the ambient)
+    const float presence = (1.0 - exp(-extinction * clump * height)) * grassRangeFade(dist); // the blades standing HERE (the ambient)
     const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, height, extinction, dist) : 1.0;
     return vec2(mix(canopySun, nearSun, nearWeight), mix(1.0, 1.0 - u_grassShade.x, presence));
 }

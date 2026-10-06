@@ -36,7 +36,8 @@ import :TreeRecordPool;
 // The type / piece layouts below are MIRRORED in tree_volume_splat.cs.glsl - keep them in step.
 
 // A tree TYPE's volume: its box (type space), its float mip chain in the data buffer (res^3 at `offset`, the
-// smaller mips following), its mean albedo. res 0 = the type adds nothing.
+// smaller mips following), its mean albedo. res 0 = the type adds nothing. albedo.w 0 = a SOLID (a rock): the chain is
+// occupancy (x "Far rock extinction", not / the scale), the colour the climate's bedrock (the resolve), not albedo.
 export struct TreeVolumeTypeGpu
 {
     glm::vec3 boxMin{ 0.0f };
@@ -69,7 +70,13 @@ public:
     void reloadShaders(vk::RenderPass sceneRenderPass); // the caller has waited for the GPU
     void markDirty() { m_dirty = true; }               // a tree set changed: re-bake (after a running bake)
     // What a running bake reads is going away (a tree set, the record types, the pool): drop it, re-bake from scratch.
-    void invalidate() { m_dirty = true; m_job.active = false; }
+    // A bake already handing over (or copying) reads none of that any more: it finishes, the re-bake follows.
+    void invalidate() { m_dirty = true; if (!handingOver()) m_job.active = false; }
+    // The frame UBO's u_treeHandover as of this frame's real time (built before record(), which alone changes the state):
+    // xy = the new bake's centre, z = the cross-fade to it (0..1, the fraction of rays that pick it), w unused; all 0
+    // without one.
+    glm::vec4 handoverUbo() const;
+    float handoverFade() const;
     // The frame the running bake started on (UINT64_MAX: none): the record pool keeps the chunks it saw alive.
     uint64 bakeHoldSince() const { return m_job.active ? m_job.startFrame : UINT64_MAX; }
     // Before recording (main thread): (re)creates the volume when its resolution changed, and the temporal images
@@ -105,9 +112,15 @@ public:
         float chunkSize = 256.0f;
         uint32 worldSeed = 1;
     };
+    // ROCKS (R5): the climate's bedrock colour per column comes from the terrain's ROCK splat materials - their diffuse
+    // textures' smallest mip (the mean), weighted by the climate boxes as the terrain picks them (the resolve).
+    static constexpr uint32 ROCK_TEXTURES = 8;
     struct RecordParams
     {
         Buffer& ubo;
+        // The terrain's rock materials' diffuse views, in slot order (ROCK_TEXTURES of them: a fallback past the count,
+        // u_terrainTexParams0.z, which the resolve reads from the UBO).
+        oc::span<const vk::ImageView> rockTextures;
         vk::ImageView sceneDepthView; // SCENE_DEPTH_SAMPLED_LAYOUT, after the opaque stages
         vk::Sampler sceneDepthSampler;
         vk::ImageView terrainView;    // the baked terrain-data cascades (SHADER_READ_ONLY)
@@ -144,9 +157,16 @@ private:
     void buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records);
     void buildResolveLayout(ComputePipelineLayout& layout);
     void buildFloorSmoothLayout(ComputePipelineLayout& layout);
+    void buildClearLayout(ComputePipelineLayout& layout);
+    void buildCopyLayout(ComputePipelineLayout& layout);
+    void snapshotRecords(const RecordParams& params, const oc::function<void(Buffer&, const void*, size_t, const char*)>& upload);
+    void setBakeBudgets();
     void buildRecordsLayout(ComputePipelineLayout& layout);
     void buildFarLayout(ComputePipelineLayout& layout);
-    void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip);
+    void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip, bool handover = false);
+    // Builds (or rebuilds) a march variant and its TREE_HANDOVER twin with the same defines. False when either failed.
+    bool buildMarchPair(ComputePipeline& march, ComputePipeline& handover, bool temporalOut, uint32 scale, uint32 skip, bool reload);
+    bool handingOver() const { return m_job.active && (m_job.stage == EBakeStage::Handover || m_job.stage == EBakeStage::Copy); }
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
@@ -160,13 +180,25 @@ private:
     // frame's share - the clears; the floor coverage, the floor and the splat (the record splat's workgroups spread
     // evenly); the smoothing; the records' mass; the far columns; then the resolve + the front / back swap. The march
     // reads the FRONT floor and colour and the density, which only the last step changes.
-    void startBake(const RecordParams& params, uint32 frameNumber);
+    void startBake(const RecordParams& params, uint32 frameNumber, glm::vec2 centre);
+    // BAKE AHEAD ("Far bake ahead"): the camera's horizontal velocity (real time, smoothed) x the last bake's real
+    // duration (start -> swap), capped at the ring's margin - where the camera will be when a bake started now swaps.
+    void trackCamera(glm::vec2 camera);
+    glm::vec2 bakeLead(const FarTreeParams& s) const;
     void stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
 
     ComputePipeline m_floorCoverPipeline; // the splat shader's TREE_FLOOR_PASS 1 variant (the coverage per column)
     ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)
     ComputePipeline m_splatPipeline;
     ComputePipeline m_resolvePipeline;
+    ComputePipeline m_clearPipeline;       // tree_volume_clear.cs: the accumulation, a slice range per dispatch
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_clearSets;
+    ComputePipeline m_copyPipeline;        // tree_volume_copy.cs: the new bake's extinction -> the density, after the hand-over
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_copySets;
+    // The march's TREE_HANDOVER variants (the plain one and the temporal one, the same baked scale / skip as theirs): run
+    // only while a hand-over lasts.
+    ComputePipeline m_marchHandoverPipeline;
+    ComputePipeline m_marchTemporalHandoverPipeline;
     ComputePipeline m_floorSmoothPipeline; // the floor's separable blur (floor -> floorCover -> floor)
     ComputePipeline m_recordsPipeline;     // tree_volume_records.cs: the records' mass per column
     // The splat's TREE_SPLAT_RECORDS variants, per pass: [0] the splat, [1] the floor coverage, [2] the floor.
@@ -198,10 +230,11 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_applySets;
 
-    Image m_accum;   // R32UI 3D: the splat's fixed-point sums
+    Image m_accum;   // R32UI 3D: the splat's fixed-point sums; after the resolve, the new extinction's float bits
+    vk::ImageView m_accumFloatView; // ... read as R32F (MUTABLE_FORMAT): the new bake's density during the hand-over
     Image m_density; // R16F 3D: extinction (1/m), sampled
     // FRONT (m_front: the march's) and BACK (the running bake's) copies, swapped at the bake's last step:
-    oc::array<Image, 2> m_colour; // RGBA8 2D: the leaf albedo per column
+    oc::array<Image, 2> m_colour; // RGBA8 2D: the albedo per column; a = 1 - its ROCK fraction (the march's rock lighting)
     oc::array<Image, 2> m_floor;  // R32UI 2D: the dominant tree's base per column (tree_volume.inc.glsl's encoding; 0 = none)
     // RG32F 2D, one texel per FLOOR_MAX_BLOCK^2 columns (the march's skip): x = the highest floor within one block each
     // way, y = AHEAD - over this row and every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way.
@@ -210,7 +243,11 @@ private:
     uint32 m_front = 0;
     Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass)
     Image m_farAmount;  // R32UI 2D: the records' mass per column (fixed point; TV_AMOUNT_SCALE)
-    Image m_farType;    // R32UI 2D: the record type whose profile a column takes (last writer wins)
+    Image m_farType;    // R32UI 2D: the record type whose profile a column takes (the lowest: a tree before a rock)
+    // R32UI 2D: the ROCKS' share of a column, in the accumulation's units summed over the slices (the detail splat's
+    // solid voxels, the far records' rock mass / the slice height). The resolve: rock fraction = this / the column's
+    // sum -> the colour's alpha (1 - fraction) and its rgb toward the climate's bedrock.
+    Image m_rockSum;
     oc::array<Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_out;      // RGBA16F, render size: in-scatter + T
     oc::array<Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_outDepth; // R16F: the weighted mean distance (m)
     // The TEMPORAL images (only while the temporal path is on - FarTreeParams::temporalPath; RGBA16F at the march size,
@@ -224,6 +261,7 @@ private:
     uint32 m_temporalScale = 1; // 1, or 2 at "Far half res"
     bool m_temporalLastFrame = false; // last frame ran the temporal pass (its reads need this frame's WAR barrier)
     vk::Sampler m_linearSampler; // u repeats (the volume's angle)
+    vk::Sampler m_mipSampler;    // every mip (the rock textures' smallest: their mean colour)
     vk::Sampler m_screenSampler; // clamp: the temporal pass's screen images
     uint32 m_lastMarchFrame = UINT32_MAX; // frameNumber of the last march (the history's validity)
     uint32 m_lastPlainMarchFrame = UINT32_MAX; // ... of the last plain PIXEL-SKIP march (else UINT32_MAX)
@@ -248,14 +286,28 @@ private:
     FarTreeParams m_bakedSettings;
 
     // The running bake (the BACK).
-    enum class EBakeStage : uint8 { Clear, FloorCover, Floor, Smooth, Splat, RecordMass, FarColumns, Resolve };
+    // Resolve: in place, slice ranges (a column pass first). FloorMax: the max-floor grid, then the hand-over (an earlier
+    // bake on screen) or straight to the copy. Handover: the march's TREE_HANDOVER variant cross-fades over "Far swap
+    // time". Copy: the new extinction -> the density, slice ranges; then the swap.
+    enum class EBakeStage : uint8 { Clear, FloorCover, Floor, Smooth, Splat, RecordMass, FarColumns, Resolve, FloorMax, Handover, Copy };
     struct BakeJob
     {
         bool active = false;
         EBakeStage stage = EBakeStage::Clear;
-        uint32 progress = 0;      // the record splat's workgroups done in this stage
-        uint32 perFrame = 1;      // ... per frame
+        // THE STAGES SPREAD OVER FRAMES ("Far bake frames"): each takes a share of them, so no stage runs whole in one
+        // frame unless it is small - only the resolve does (it writes the density the march reads: the publish step).
+        uint32 progress = 0;      // the units done in this stage (slices / pieces + records / chunks / rows)
+        uint32 perFrame = 1;      // the splat passes' units (the static sets' pieces, then the detail records) per frame
+        uint32 clearPerFrame = 1; // the accumulation's slices per frame
+        uint32 massPerFrame = 1;  // the records' mass: chunks per frame
+        uint32 rowsPerFrame = 8;  // the far columns: radial rows per frame (a multiple of the 8-row group)
+        uint32 resolvePerFrame = 1; // the resolve's slices per frame
+        uint32 copyPerFrame = 1;    // the copy's slices per frame
+        uint32 handoverStart = 0;   // the frame the hand-over began (the march's variant starts the frame after)
+        double handoverStartSec = 0.0; // ... and its real time (the UBO's fade counts from it: "Far swap time")
+        uint32 staticPieces = 0;  // the static sets' pieces (each splat pass walks them before the records)
         uint32 startFrame = 0;
+        double startSec = 0.0;    // real time (the next bake's lead: this one's duration)
         glm::vec2 centre{ 0.0f };
         FarTreeParams settings;
         oc::vector<Source> sources; // the static sets
@@ -266,6 +318,10 @@ private:
     BakeJob m_job;
     uint32 m_lastBakeEnd = 0; // the frame the last bake swapped: the next one starts NUM_FRAMES_IN_FLIGHT later (its
                               // snapshot buffers are rewritten, and the old front - the new back - may still be read)
+    double m_bakeDurationSec = 0.0;     // the last bake's start -> swap, real time (0: none yet - no lead)
+    glm::vec2 m_cameraVelocity{ 0.0f }; // horizontal, m/s, smoothed
+    glm::vec2 m_lastCamera{ 0.0f };
+    double m_lastCameraSec = -1.0;
     // The bake's SNAPSHOTS (host-visible, written at its start): the record table, the chunk map, and the detail chunks -
     // the records within "Far record detail" of the bake centre, one workgroup per RECORD (a workgroup per chunk ran its
     // ~3000 plants in sequence - 31 ms per bake), each (coord.x, coord.y, its first record's pool word, its first

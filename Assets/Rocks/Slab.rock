@@ -1,0 +1,31 @@
+# Flat layered slab: sandstone, slate. Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType Slab
+	Seed 13
+	Scale 1 8
+	Variants 6
+	Sink 0.25
+	Shape Block
+	Aspect 1 0.3 0.75
+	AspectVar 0.15 0.3 0.2
+	Round 0.02
+	Squareness 4
+	Erosion 0.05
+	Warp 0.03 1.5
+	Fracture 4 0.25
+	Strata 0.06 0.012 0.6
+	Noise 0.015 3 4
+	Lod 1600
+	Placement
+		Density 1
+		Slope 0 0 0.15 0.45
+		Crag 0.5
+		Plains 0.2
+		Rugged 3 0.2
+		Valley 3
+	# The savanna (the Acacia's climate box): common, on the plains too. The densities of the Placement blocks add.
+	Placement
+		Density 2
+		Temperature 20 30
+		Precipitation 300 900
+		Slope 0 0 0.12 0.4
+		Cluster 150 0.2

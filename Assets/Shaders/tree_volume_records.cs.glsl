@@ -8,8 +8,12 @@
 // summed with atomics - over a TENT as wide as its crown (at least a cell each way: far out a tree is smaller than a
 // column; near the detail distance a column can be smaller than a crown, and a point splat made thin pillars). The
 // weights are normalized per axis, so a tree adds its whole mass. Its nearest column also takes its type (whose height
-// profile tree_volume_far.cs spreads the mass with) and its colour - last writer wins, as the splat's colour. Bushes
-// are not in it (a few metres tall, kilometres out).
+// profile tree_volume_far.cs spreads the mass with) - the LOWEST type of the column's records (atomic min: a tree's
+// before a rock's, the same every bake) - and its colour - last writer wins, as the splat's colour. Bushes are not in
+// it (a few metres tall, kilometres out).
+// A ROCK record (its type's albedo.w 0, R5): a SOLID - its mass is its occupied volume x scale^3 x "Far rock
+// extinction" (the splat's rule), it writes no colour, and it adds its share to the column's ROCK SUM in the
+// accumulation's units (mass / area / the slice height = what tree_volume_far.cs adds over the slices).
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -20,8 +24,9 @@
 layout (local_size_x = 64) in;
 
 layout (binding = 2, r32ui) uniform uimage2D u_amount;
-layout (binding = 3, r32ui) uniform writeonly uimage2D u_type;
+layout (binding = 3, r32ui) uniform uimage2D u_type;
 layout (binding = 4, rgba8) uniform writeonly image2D u_colour;
+layout (binding = 5, r32ui) uniform uimage2D u_rockSum;
 
 // Mirrors TreeRecordChunkGpu / TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
 struct RecordChunk
@@ -63,16 +68,19 @@ layout (push_constant, scalar) uniform Push
     uint worldSeed;
     TreeVolumeParams vol;
     float recordDetail; // m: the chunks whose centre lies within this of the bake centre splat in detail instead
+    float rockExtinction; // a rock's extinction (1/m) over its occupied volume
+    uint chunkOffset;     // this dispatch's first chunk (the bake spreads the chunks over frames; numChunks = this dispatch's)
 } pc;
 
 const int MAX_TENT = 8; // texels each way: the crown's footprint is capped there (cost)
+const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs's fixed point (the rock sum)
 
 void main()
 {
-    const uint chunkIdx = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
-    if (chunkIdx >= pc.numChunks)
+    const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
+    if (local >= pc.numChunks)
         return;
-    const RecordChunk chunk = pc.chunks.c[chunkIdx];
+    const RecordChunk chunk = pc.chunks.c[local + pc.chunkOffset];
     const vec2 origin = vec2(chunk.coord) * pc.chunkSize;
     const float d = length(origin + 0.5 * pc.chunkSize - pc.vol.centre);
     if (d < pc.recordDetail)
@@ -97,7 +105,8 @@ void main()
         const vec2 range = pc.types.t[type].scale;
         const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
             * exp2(pc.types.t[type].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
-        const float mass = pc.types.t[type].variantMass[variant] * scale * scale;
+        const bool solid = pc.types.t[type].albedo.w < 0.5;
+        const float mass = pc.types.t[type].variantMass[variant] * scale * scale * (solid ? scale * pc.rockExtinction : 1.0);
         if (mass <= 0.0)
             continue;
         const vec2 rel = origin + treeRecordLocal(record, pc.chunkSize) - pc.vol.centre;
@@ -117,6 +126,7 @@ void main()
             sumR += max(1.0 - abs(float(y) - tc.y) / h.y, 0.0);
         if (sumA <= 0.0 || sumR <= 0.0)
             continue;
+        const float invSliceH = float(pc.vol.slices) / pc.vol.height;
         for (int y = max(lo.y, 0); y <= min(hi.y, radialRes - 1); ++y)
         {
             const float wR = max(1.0 - abs(float(y) - tc.y) / h.y, 0.0) / sumR;
@@ -129,12 +139,17 @@ void main()
             {
                 const float w = wR * max(1.0 - abs(float(x) - tc.x) / h.x, 0.0) / sumA;
                 const uint amount = uint(w * perArea * TV_AMOUNT_SCALE + 0.5);
-                if (amount != 0u)
-                    imageAtomicAdd(u_amount, ivec2(tvWrapAngle(x, angularRes), y), amount);
+                if (amount == 0u)
+                    continue;
+                const ivec2 col = ivec2(tvWrapAngle(x, angularRes), y);
+                imageAtomicAdd(u_amount, col, amount);
+                if (solid)
+                    imageAtomicAdd(u_rockSum, col, uint(w * perArea * invSliceH * ACCUM_SCALE + 0.5));
             }
         }
         const ivec2 nearest = ivec2(tvWrapAngle(int(round(tc.x)), angularRes), clamp(int(round(tc.y)), 0, radialRes - 1));
-        imageStore(u_type, nearest, uvec4(type));
-        imageStore(u_colour, nearest, vec4(pc.types.t[type].albedo.rgb, 1.0));
+        imageAtomicMin(u_type, nearest, type);
+        if (!solid)
+            imageStore(u_colour, nearest, vec4(pc.types.t[type].albedo.rgb, 1.0));
     }
 }

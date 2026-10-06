@@ -1,0 +1,27 @@
+# Rounded boulder: glacial erratics, granite fields. Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType Boulder
+	Seed 3
+	Scale 1.5 6
+	Variants 6
+	Sink 0.12
+	Shape Boulder
+	Aspect 1 0.7 0.85
+	AspectVar 0.15 0.2 0.15
+	Round 0.06
+	Erosion 0.15
+	Warp 0.05 1.2
+	Fracture 3 0.2
+	Noise 0.035 2.5 5
+	Ridged 0.15
+	Pits 6 0.07 0.025
+	Split 0.15 0.025
+	Lod 2000
+	Placement
+		Density 2
+		# A boulder rolls off a slope: full up to 0.12, none from 0.5. It collects in the valleys and at cliff bottoms.
+		Slope 0 0 0.12 0.5
+		Cluster 120 0.4
+		Plains 0.3
+		Rugged 5 0
+		Valley 6
+		Temperature 0 8

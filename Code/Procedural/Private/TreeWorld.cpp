@@ -13,6 +13,7 @@ import RendererVK;
 import :TreeWorld;
 import :TreeSpecies;
 import :TreeGenerator;
+import :RockType;
 import :TerrainSampler;
 import :TerrainStreamer;
 import :Noise;
@@ -25,8 +26,76 @@ namespace
 	glm::ivec2 chunkCoord(uint64 key) { return glm::ivec2((int32)(uint32)key, (int32)(uint32)(key >> 32)); }
 	int chebyshev(glm::ivec2 a, glm::ivec2 b) { return glm::max(glm::abs(a.x - b.x), glm::abs(a.y - b.y)); }
 
-	// The climate / height grid a chunk is placed from: about one sample per GRID_STEP metres, one-sample halo.
+	// The climate / height grid a chunk is placed from: about one sample per GRID_STEP metres, with a halo of points
+	// around the chunk. Trees only: 1 point (the slope at the border). With ROCKS: GRID_HALO, for the rocks of the
+	// neighbour chunks that reach into this one - their fit is evaluated at their own position, up to ROCK_REACH + 2 m
+	// outside (3 cells), plus the talus probe's TALUS_PROBE uphill of it and the rugged measure's RUGGED_CELLS around it.
 	constexpr float GRID_STEP = 8.0f;
+	constexpr uint32 GRID_HALO = 5;
+	constexpr float ROCK_REACH = 0.5f * ROCK_MAX_SIZE; // m: the largest rock radius (the halo allows up to 15)
+	constexpr float TALUS_PROBE = 6.0f; // m
+	constexpr uint32 RUGGED_CELLS = 2;  // RUGGED ground = the steepest grid cell within this many cells (16-24 m)
+	// The rocks' VALLEY measure has its own COARSE grid (only when a rule has a `Valley`): a point per ~VALLEY_STEP
+	// metres, the lowest and the highest within VALLEY_CELLS points (~160 m), and a halo of VALLEY_CELLS + 1 points for
+	// the neighbours' rocks. A valley = the low end of that range: none above VALLEY_LOW_START of the way down, full
+	// below VALLEY_LOW_FULL.
+	constexpr float VALLEY_STEP = 32.0f;
+	constexpr uint32 VALLEY_CELLS = 5;
+	constexpr float VALLEY_LOW_START = 0.5f, VALLEY_LOW_FULL = 0.9f;
+
+	// The lowest and the highest value of an n x n grid within +-radius points of each point (a square, separable).
+	void windowRange(const oc::vector<float>& src, uint32 n, uint32 radius, oc::vector<float>& lo, oc::vector<float>& hi)
+	{
+		oc::vector<float> rowLo(src.size()), rowHi(src.size());
+		for (uint32 j = 0; j < n; ++j)
+			for (uint32 i = 0; i < n; ++i)
+			{
+				float l = FLT_MAX, h = -FLT_MAX;
+				for (uint32 k = i - glm::min(i, radius); k <= glm::min(i + radius, n - 1); ++k)
+				{
+					l = glm::min(l, src[(size_t)j * n + k]);
+					h = glm::max(h, src[(size_t)j * n + k]);
+				}
+				rowLo[(size_t)j * n + i] = l;
+				rowHi[(size_t)j * n + i] = h;
+			}
+		lo.resize(src.size());
+		hi.resize(src.size());
+		for (uint32 j = 0; j < n; ++j)
+			for (uint32 i = 0; i < n; ++i)
+			{
+				float l = FLT_MAX, h = -FLT_MAX;
+				for (uint32 k = j - glm::min(j, radius); k <= glm::min(j + radius, n - 1); ++k)
+				{
+					l = glm::min(l, rowLo[(size_t)k * n + i]);
+					h = glm::max(h, rowHi[(size_t)k * n + i]);
+				}
+				lo[(size_t)j * n + i] = l;
+				hi[(size_t)j * n + i] = h;
+			}
+	}
+	// An n x n grid at the grid coordinate g, bilinear, clamped to it.
+	float gridAt(const oc::vector<float>& grid, uint32 n, glm::vec2 g)
+	{
+		g = glm::clamp(g, glm::vec2(0.0f), glm::vec2((float)(n - 1)));
+		const glm::uvec2 i0 = glm::min(glm::uvec2(g), glm::uvec2(n - 2));
+		const glm::vec2 f = g - glm::vec2(i0);
+		const float* r = grid.data() + (size_t)i0.y * n + i0.x;
+		return glm::mix(glm::mix(r[0], r[1], f.x), glm::mix(r[n], r[n + 1], f.x), f.y);
+	}
+	// A soft band: 0 below .x, 1 over .y .. .z, 0 above .w; a hard edge where two are equal.
+	float bandWeight(const glm::vec4& band, float v)
+	{
+		if (v < band.x || v > band.w)
+			return 0.0f;
+		const float in = v >= band.y ? 1.0f : glm::smoothstep(band.x, band.y, v);
+		const float out = v <= band.z ? 1.0f : 1.0f - glm::smoothstep(band.z, band.w, v);
+		return in * out;
+	}
+	// The terrain shader's rock coverage (terrain_splat.inc.glsl terrainLayers: steep, or far above the macro
+	// altitude) at the terrain's DEFAULT tweaks ("Terrain/Textures": slope rock start / full, crag start / full) - a
+	// mirror for the rocks' crag fit. Approximate on purpose: it places rocks, it does not shade.
+	constexpr float CRAG_SLOPE_START = 0.25f, CRAG_SLOPE_FULL = 0.60f, CRAG_RELIEF_START = 34.0f, CRAG_RELIEF_FULL = 400.0f;
 }
 
 namespace Procedural
@@ -67,6 +136,8 @@ namespace Procedural
 	{
 		m_typeNames.clear();
 		m_species.clear();
+		m_rocks.clear();
+		m_firstRockType = 0;
 		m_speciesLoaded = true;
 		oc::vector<FileSystem::DirEntry> entries;
 		{
@@ -110,6 +181,55 @@ namespace Procedural
 			species.climateMax = glm::vec2(temperatureTo01(desc.placement.temperature.y), precipTo01(desc.placement.precipitation.y));
 		}
 		Log::info(oc::format("Trees/World: {} species with a Placement block", m_species.size()));
+
+		// THE ROCK TYPES, after the trees: every .rock, name-sorted (as RockSystem loads them).
+		m_firstRockType = (uint32)m_typeNames.size();
+		if (!m_rocksEnabled)
+			return;
+		entries.clear();
+		{
+			const FileSystem::AllowMainThreadIO allowIo;
+			if (!FileSystem::listDirectory("Rocks", entries))
+				return;
+		}
+		oc::sort(entries.begin(), entries.end(), [](const FileSystem::DirEntry& a, const FileSystem::DirEntry& b) { return a.name < b.name; });
+		for (const FileSystem::DirEntry& entry : entries)
+		{
+			if (entry.isDirectory || entry.extension != ".rock")
+				continue;
+			RockTypeDesc desc;
+			oc::string error;
+			{
+				const FileSystem::AllowMainThreadIO allowIo;
+				if (!loadRockType(entry.path, desc, error))
+				{
+					Log::warning(oc::format("Trees/World: failed to load '{}': {}", entry.path, error));
+					continue;
+				}
+			}
+			if (desc.name.empty())
+				desc.name = entry.name;
+			if (m_typeNames.size() > 255)
+			{
+				Log::warning(oc::format("Trees/World: more than 256 record types, rock '{}' is not placed", desc.name));
+				continue;
+			}
+			const uint8 type = (uint8)m_typeNames.size();
+			m_typeNames.push_back(desc.name);
+			if (desc.placements.empty())
+				continue;
+			RockSpecies& rock = m_rocks.emplace_back();
+			rock.name = desc.name;
+			rock.type = type;
+			for (const RockPlacementDesc& placement : desc.placements)
+				rock.rules.push_back({ placement,
+					glm::vec2(temperatureTo01(placement.temperature.x), precipTo01(placement.precipitation.x)),
+					glm::vec2(temperatureTo01(placement.temperature.y), precipTo01(placement.precipitation.y)) });
+			rock.scale = desc.scale;
+			// One rock of the type per cell at most: a cell holds its largest rock with room to spare.
+			rock.cell = glm::max(desc.scale.y * 1.5f, 6.0f);
+		}
+		Log::info(oc::format("Trees/World: {} rock types with a Placement block", m_rocks.size()));
 	}
 
 	// Drops every chunk, CPU and GPU (the pool at `poolBytes`; 0 frees it).
@@ -139,6 +259,12 @@ namespace Procedural
 		auto config = oc::make_shared<GenConfig>();
 		config->maps = maps;
 		config->species = m_species;
+		config->rocks = m_rocks;
+		config->rockRules = m_rockRules;
+		config->rockRules.densityScale = glm::max(m_rockRules.densityScale, 0.0f);
+		config->rockRules.ruggedSlope.y = glm::max(m_rockRules.ruggedSlope.y, m_rockRules.ruggedSlope.x + 0.01f);
+		config->rockRules.valleyRelief.y = glm::max(m_rockRules.valleyRelief.y, m_rockRules.valleyRelief.x + 0.1f);
+		config->seaLevel = Globals::terrain.seaLevel();
 		config->seed = (uint32)m_seed;
 		config->generation = generation;
 		config->chunkSize = m_chunkSize;
@@ -451,17 +577,47 @@ namespace Procedural
 		const float cs = config.chunkSize;
 		const double ox = (double)coord.x * cs, oz = (double)coord.y * cs;
 
-		// The grid: res + 1 points over the chunk plus a one-point halo (the slope at the border).
+		// The grid: res + 1 points over the chunk plus the halo (the slope at the border; the neighbours' rocks). With
+		// chunk origins on the grid's own lattice, two neighbour chunks sample the same world points: a rock near
+		// their border gets the same fit from both.
 		const uint32 res = (uint32)glm::max(2.0f, std::round(cs / GRID_STEP));
 		const float step = cs / (float)res;
-		const uint32 gpr = res + 3;
+		const uint32 halo = config.rocks.empty() ? 1u : GRID_HALO;
+		const uint32 gpr = res + 1 + 2 * halo;
 		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
-		config.maps->sampleGrid(ox - step, oz - step, step, gpr, gpr, field, ESampleDetail::Full);
+		config.maps->sampleGrid(ox - step * (float)halo, oz - step * (float)halo, step, gpr, gpr, field, ESampleDetail::Full);
 		Globals::jobSystem.preemptionPoint();
 
+		// The field at a chunk-local point: bilinear in the grid (point (i, j) sits at local (i - halo, j - halo) x
+		// step), clamped to it, with the bilinear patch's gradient.
+		struct FieldSample
+		{
+			float height, water, altitude, temperature, humidity;
+			float dx, dz; // the height's gradient (rise / run)
+		};
+		auto fieldAt = [&](glm::vec2 local)
+		{
+			const glm::vec2 g = glm::clamp(local / step + (float)halo, glm::vec2(0.0f), glm::vec2((float)(gpr - 1)));
+			const glm::uvec2 i0 = glm::min(glm::uvec2(g), glm::uvec2(gpr - 2));
+			const glm::vec2 f = g - glm::vec2(i0);
+			const TerrainPoint& p00 = field[(size_t)i0.y * gpr + i0.x];
+			const TerrainPoint& p10 = field[(size_t)i0.y * gpr + i0.x + 1];
+			const TerrainPoint& p01 = field[(size_t)(i0.y + 1) * gpr + i0.x];
+			const TerrainPoint& p11 = field[(size_t)(i0.y + 1) * gpr + i0.x + 1];
+			auto lerp2 = [&](float a, float b, float c, float d) { return glm::mix(glm::mix(a, b, f.x), glm::mix(c, d, f.x), f.y); };
+			FieldSample s;
+			s.height = lerp2(p00.height, p10.height, p01.height, p11.height);
+			s.water = lerp2(p00.waterLevel, p10.waterLevel, p01.waterLevel, p11.waterLevel);
+			s.altitude = lerp2(p00.altitude, p10.altitude, p01.altitude, p11.altitude);
+			s.temperature = lerp2(p00.temperature, p10.temperature, p01.temperature, p11.temperature);
+			s.humidity = lerp2(p00.humidity, p10.humidity, p01.humidity, p11.humidity);
+			s.dx = glm::mix(p10.height - p00.height, p11.height - p01.height, f.y) / step;
+			s.dz = glm::mix(p01.height - p00.height, p11.height - p10.height, f.x) / step;
+			return s;
+		};
+
 		// THE GROUND for the far volume (TreeRecordPool's encoding): TREE_RECORD_HEIGHT_RES^2 heights over the chunk,
-		// corners included, bilinear in the grid (point (i, j) of the grid sits at local (i - 1, j - 1) x step), as
-		// 16-bit steps above the chunk's minimum.
+		// corners included, bilinear in the grid, as 16-bit steps above the chunk's minimum.
 		{
 			constexpr uint32 N = TREE_RECORD_HEIGHT_RES;
 			float heights[N * N];
@@ -469,12 +625,7 @@ namespace Procedural
 			for (uint32 j = 0; j < N; ++j)
 				for (uint32 i = 0; i < N; ++i)
 				{
-					const glm::vec2 g = glm::vec2((float)i, (float)j) * (cs / (float)(N - 1)) / step + 1.0f;
-					const glm::uvec2 i0 = glm::min(glm::uvec2(g), glm::uvec2(gpr - 2));
-					const glm::vec2 f = g - glm::vec2(i0);
-					const float h00 = field[(size_t)i0.y * gpr + i0.x].height, h10 = field[(size_t)i0.y * gpr + i0.x + 1].height;
-					const float h01 = field[(size_t)(i0.y + 1) * gpr + i0.x].height, h11 = field[(size_t)(i0.y + 1) * gpr + i0.x + 1].height;
-					const float h = glm::mix(glm::mix(h00, h10, f.x), glm::mix(h01, h11, f.x), f.y);
+					const float h = fieldAt(glm::vec2((float)i, (float)j) * (cs / (float)(N - 1))).height;
 					heights[i + j * N] = h;
 					lo = glm::min(lo, h);
 					hi = glm::max(hi, h);
@@ -489,8 +640,192 @@ namespace Procedural
 				outGround[2 + k / 2] |= (k & 1) ? q << 16 : q;
 			}
 		}
+		constexpr float TEMP_RANGE = TEMPERATURE_MAX_C - TEMPERATURE_MIN_C;
+
+		// THE ROCKS FIRST (Docs/RockRenderingPlan.md 6). Each rock type has its own WORLD lattice (RockSpecies::cell,
+		// anchored at the world origin - NOT at the chunk): a cell's rock is a pure function of (seed, type, cell), so
+		// this chunk computes its neighbours' rocks exactly as they do. Every cell that can put a rock within
+		// ROCK_REACH of the chunk is evaluated: the chunk's own rocks become records, the others only keep the trees
+		// out of them. A type's RULES (its Placement blocks) add. A rule's fit, at the rock's (quantized) record position:
+		// its optional climate box (as a tree's), its altitude and (soft) slope bands, its CRAG fit (the terrain's own
+		// rock coverage: steep ground, or ground far above the macro altitude), its TALUS fit (gentle ground just below
+		// a steep slope), the ground around it (PLAINS / RUGGED low and high end / VALLEY) and its
+		// cluster noise. Rocks do not give way to each other: boulders lie against boulders.
+		struct PlacedRock
+		{
+			glm::vec2 local{ 0.0f }; // in THIS chunk's frame (a neighbour's rock: outside [0, cs])
+			float radius = 0.0f;
+		};
+		oc::vector<PlacedRock> placedRocks;
+
+		// THE GROUND AROUND A ROCK, for the rules' `Plains` / `Rugged` / `Valley` multipliers (RockPlacementDesc). The
+		// slope under the rock cannot tell: a boulder lies on the gentle ground NEXT to the cliff, and on a valley's
+		// flat floor.
+		const RockWorldDesc& worldRules = config.rockRules;
+		bool ruggedUsed = false, valleyUsed = false;
+		for (const RockSpecies& rock : config.rocks)
+			for (const RockRule& rule : rock.rules)
+			{
+				ruggedUsed |= rule.placement.plains != 1.0f || rule.placement.rugged != glm::vec2(1.0f);
+				valleyUsed |= rule.placement.valley >= 0.0f;
+			}
+		// RUGGED: each grid cell's slope, then the steepest cell within RUGGED_CELLS of it, read between the cell
+		// centres (cell (i, j)'s centre sits at local (i - halo + 0.5, j - halo + 0.5) x step). Its LOW and HIGH end:
+		// the lowest and the highest grid point within RUGGED_CELLS, read between the points.
+		const uint32 cpr = gpr - 1;
+		oc::vector<float> steepest, nearLo, nearHi;
+		if (ruggedUsed)
+		{
+			oc::vector<float> cellSlope((size_t)cpr * cpr), heights((size_t)gpr * gpr), unused;
+			for (uint32 j = 0; j < cpr; ++j)
+				for (uint32 i = 0; i < cpr; ++i)
+				{
+					const float h00 = field[(size_t)j * gpr + i].height, h10 = field[(size_t)j * gpr + i + 1].height;
+					const float h01 = field[(size_t)(j + 1) * gpr + i].height, h11 = field[(size_t)(j + 1) * gpr + i + 1].height;
+					const float dx = (h10 - h00 + h11 - h01) * (0.5f / step), dz = (h01 - h00 + h11 - h10) * (0.5f / step);
+					cellSlope[(size_t)j * cpr + i] = std::sqrt(dx * dx + dz * dz);
+				}
+			windowRange(cellSlope, cpr, RUGGED_CELLS, unused, steepest);
+			for (size_t k = 0; k < heights.size(); ++k)
+				heights[k] = field[k].height;
+			windowRange(heights, gpr, RUGGED_CELLS, nearLo, nearHi);
+		}
+		// VALLEY: the coarse grid (VALLEY_STEP; on the chunks' common lattice, as the fine one) - the lowest and the
+		// highest point within VALLEY_CELLS of each point, read between the points (point (i, j) sits at local
+		// (i - valleyHalo, j - valleyHalo) x valleyStep).
+		constexpr uint32 valleyHalo = VALLEY_CELLS + 1;
+		const uint32 valleyRes = (uint32)glm::max(1.0f, std::round(cs / VALLEY_STEP));
+		const float valleyStep = cs / (float)valleyRes;
+		const uint32 vpr = valleyRes + 1 + 2 * valleyHalo;
+		oc::vector<float> farLo, farHi;
+		if (valleyUsed)
+		{
+			oc::vector<TerrainPoint> coarse((size_t)vpr * vpr);
+			config.maps->sampleGrid(ox - valleyStep * (float)valleyHalo, oz - valleyStep * (float)valleyHalo, valleyStep, vpr, vpr, coarse, ESampleDetail::Full);
+			Globals::jobSystem.preemptionPoint();
+			oc::vector<float> heights(coarse.size());
+			for (size_t k = 0; k < heights.size(); ++k)
+				heights[k] = coarse[k].height;
+			windowRange(heights, vpr, VALLEY_CELLS, farLo, farHi);
+		}
+
+		for (const RockSpecies& rock : config.rocks)
+		{
+			oc::small_vector<NoiseField, 4> clusterNoise; // per rule
+			for (uint32 k = 0; k < (uint32)rock.rules.size(); ++k)
+				clusterNoise.push_back(NoiseField(treeHash(treeHash(config.seed, 3000u + rock.type), k)));
+			const double c = (double)rock.cell;
+			const float cellArea = rock.cell * rock.cell * (1.0f / 10000.0f) * worldRules.densityScale; // hectares x the scale
+			const int32 cx0 = (int32)std::floor((ox - ROCK_REACH) / c), cx1 = (int32)std::floor((ox + cs + ROCK_REACH) / c);
+			const int32 cz0 = (int32)std::floor((oz - ROCK_REACH) / c), cz1 = (int32)std::floor((oz + cs + ROCK_REACH) / c);
+			const uint32 typeSeed = treeHash(config.seed, 7000u + rock.type);
+			for (int32 cz = cz0; cz <= cz1; ++cz)
+				for (int32 cx = cx0; cx <= cx1; ++cx)
+				{
+					const uint32 h = treeHash(treeHash(typeSeed, (uint32)cx), (uint32)cz);
+					// The rock's world position in its cell, then its OWNER chunk and its record there.
+					const double wx = ((double)cx + (double)treeHash01(treeHash(h, 1u))) * c;
+					const double wz = ((double)cz + (double)treeHash01(treeHash(h, 2u))) * c;
+					const glm::ivec2 owner((int32)std::floor(wx / cs), (int32)std::floor(wz / cs));
+					const uint32 qx = glm::min((uint32)((wx - (double)owner.x * cs) / cs * (double)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+					const uint32 qz = glm::min((uint32)((wz - (double)owner.y * cs) / cs * (double)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+					const TreeRecord record = makeTreeRecord(qx, qz, rock.type);
+					// Evaluated at the RECORD's position (the quantized one), in this chunk's frame.
+					const glm::vec2 local = glm::vec2((float)((double)owner.x * cs - ox), (float)((double)owner.y * cs - oz)) + treeRecordLocal(record, cs);
+					const float radius = 0.5f * rockRecordScale(treeRecordSeed(config.seed, owner, record), rock.scale);
+					const bool own = owner == coord;
+					if (!own && (local.x < -radius - 2.0f || local.x > cs + radius + 2.0f || local.y < -radius - 2.0f || local.y > cs + radius + 2.0f))
+						continue; // a neighbour's rock that does not reach this chunk
+
+					const FieldSample s = fieldAt(local);
+					const float altitude = s.height - s.water;
+					const float slope = std::sqrt(s.dx * s.dx + s.dz * s.dz);
+					const glm::vec2 climate(glm::clamp((s.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(s.humidity, 0.0f, 1.0f));
+					// The ground terms, shared by the type's rules: each on its first use.
+					float crag = -1.0f, talus = -1.0f, ruggedness = -1.0f, lowEnd = 0.0f, valley = -1.0f;
+					float density = 0.0f; // the rules ADD
+					for (uint32 k = 0; k < (uint32)rock.rules.size(); ++k)
+					{
+						const RockRule& rule = rock.rules[k];
+						const RockPlacementDesc& p = rule.placement;
+						if (altitude < p.altitude.x || altitude > p.altitude.y)
+							continue;
+						const glm::vec2 d = glm::max(rule.climateMin - climate, glm::vec2(0.0f)) + glm::max(climate - rule.climateMax, glm::vec2(0.0f));
+						float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
+						if (fit < 0.05f)
+							continue;
+						fit *= bandWeight(p.slope, slope);
+						if (fit <= 0.0f)
+							continue;
+						if (p.crag > 0.0f)
+						{
+							if (crag < 0.0f)
+							{
+								const float slopeN = 1.0f - 1.0f / std::sqrt(1.0f + slope * slope); // the shader's 1 - normal.y
+								const float relief = (s.height - config.seaLevel) - s.altitude;
+								crag = glm::max(glm::smoothstep(CRAG_SLOPE_START, CRAG_SLOPE_FULL, slopeN),
+									glm::smoothstep(CRAG_RELIEF_START, CRAG_RELIEF_FULL, relief) * 0.85f);
+							}
+							fit *= glm::mix(1.0f, crag, p.crag);
+						}
+						if (p.talus > 0.0f)
+						{
+							// Gentle ground with a steep slope TALUS_PROBE uphill of it: the foot of a cliff.
+							if (talus < 0.0f)
+							{
+								talus = 0.0f;
+								if (slope > 1e-3f)
+								{
+									const FieldSample up = fieldAt(local + glm::vec2(s.dx, s.dz) * (TALUS_PROBE / slope));
+									talus = glm::smoothstep(0.35f, 0.8f, std::sqrt(up.dx * up.dx + up.dz * up.dz)) * (1.0f - glm::smoothstep(0.25f, 0.6f, slope));
+								}
+							}
+							fit *= glm::mix(1.0f, talus, p.talus);
+						}
+						// The ground around it: plains .. rugged (its low end .. its high end), and in a valley the valley's own.
+						float ground = 1.0f;
+						if (p.plains != 1.0f || p.rugged != glm::vec2(1.0f))
+						{
+							if (ruggedness < 0.0f)
+							{
+								const glm::vec2 g = local / step + (float)halo;
+								ruggedness = glm::smoothstep(worldRules.ruggedSlope.x, worldRules.ruggedSlope.y, gridAt(steepest, cpr, g - 0.5f));
+								const float lo = gridAt(nearLo, gpr, g), hi = gridAt(nearHi, gpr, g);
+								lowEnd = glm::smoothstep(0.25f, 0.75f, (hi - s.height) / glm::max(hi - lo, 0.01f));
+							}
+							ground = glm::mix(p.plains, glm::mix(p.rugged.y, p.rugged.x, lowEnd), ruggedness);
+						}
+						if (p.valley >= 0.0f)
+						{
+							if (valley < 0.0f)
+							{
+								const glm::vec2 g = local / valleyStep + (float)valleyHalo;
+								const float lo = gridAt(farLo, vpr, g), hi = gridAt(farHi, vpr, g);
+								valley = glm::smoothstep(VALLEY_LOW_START, VALLEY_LOW_FULL, (hi - s.height) / glm::max(hi - lo, 0.01f))
+									* glm::smoothstep(worldRules.valleyRelief.x, worldRules.valleyRelief.y, hi - lo);
+							}
+							ground = glm::mix(ground, p.valley, valley);
+						}
+						fit *= ground;
+						float ruleDensity = p.density * fit;
+						if (ruleDensity > 0.0f && p.clusterSize > 1.0f)
+						{
+							const float noise = clusterNoise[k].fbm((float)(wx / p.clusterSize), (float)(wz / p.clusterSize), 2) * 0.5f + 0.5f;
+							const float threshold = 1.0f - p.clusterCoverage;
+							ruleDensity *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
+						}
+						density += ruleDensity;
+					}
+					if (treeHash01(treeHash(h, 3u)) >= density * cellArea)
+						continue;
+					placedRocks.push_back({ local, radius });
+					if (own)
+						out.push_back(record);
+				}
+		}
 		if (config.species.empty())
 			return;
+		Globals::jobSystem.preemptionPoint();
 
 		oc::small_vector<NoiseField, 8> clusterNoise;
 		for (const Species& species : config.species)
@@ -501,7 +836,6 @@ namespace Procedural
 		const uint32 n = (uint32)glm::max(1.0f, std::round(cs / config.cellSize));
 		const float cell = cs / (float)n;
 		const float cellArea = cell * cell * (1.0f / 10000.0f) * config.densityScale; // hectares x the scale
-		constexpr float TEMP_RANGE = TEMPERATURE_MAX_C - TEMPERATURE_MIN_C;
 		const uint32 chunkSeed = treeHash(treeHash(config.seed, (uint32)coord.x), (uint32)coord.y);
 		for (uint32 cj = 0; cj < n; ++cj)
 		{
@@ -515,25 +849,10 @@ namespace Procedural
 				// Evaluated at the RECORD's position (the quantized one), as everything that reads the record later.
 				const glm::vec2 local = treeRecordLocal(makeTreeRecord(qx, qz, 0), cs);
 
-				// Bilinear in the grid (point (i, j) of the grid sits at local (i - 1, j - 1) x step).
-				const glm::vec2 g = local / step + 1.0f;
-				const glm::uvec2 i0 = glm::min(glm::uvec2(g), glm::uvec2(gpr - 2));
-				const glm::vec2 f = g - glm::vec2(i0);
-				const TerrainPoint& p00 = field[(size_t)i0.y * gpr + i0.x];
-				const TerrainPoint& p10 = field[(size_t)i0.y * gpr + i0.x + 1];
-				const TerrainPoint& p01 = field[(size_t)(i0.y + 1) * gpr + i0.x];
-				const TerrainPoint& p11 = field[(size_t)(i0.y + 1) * gpr + i0.x + 1];
-				auto lerp2 = [&](float a, float b, float c, float d) { return glm::mix(glm::mix(a, b, f.x), glm::mix(c, d, f.x), f.y); };
-				const float height = lerp2(p00.height, p10.height, p01.height, p11.height);
-				const float water = lerp2(p00.waterLevel, p10.waterLevel, p01.waterLevel, p11.waterLevel);
-				const float temperature = lerp2(p00.temperature, p10.temperature, p01.temperature, p11.temperature);
-				const float humidity = lerp2(p00.humidity, p10.humidity, p01.humidity, p11.humidity);
-				// The bilinear patch's gradient.
-				const float dx = glm::mix(p10.height - p00.height, p11.height - p01.height, f.y) / step;
-				const float dz = glm::mix(p01.height - p00.height, p11.height - p10.height, f.x) / step;
-				const float slope2 = dx * dx + dz * dz;
-				const float altitude = height - water;
-				const glm::vec2 climate(glm::clamp((temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(humidity, 0.0f, 1.0f));
+				const FieldSample at = fieldAt(local);
+				const float slope2 = at.dx * at.dx + at.dz * at.dz;
+				const float altitude = at.height - at.water;
+				const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
 				const glm::vec2 world((float)(ox + local.x), (float)(oz + local.y));
 
 				// Each species' CLIMATE FIT: 1 inside its ideal climate box, outside a Gaussian of the distance to the box,
@@ -590,6 +909,16 @@ namespace Procedural
 						break;
 					}
 				}
+				// The trees give way to the rocks (this chunk's and the neighbours' that reach in).
+				bool inRock = false;
+				for (const PlacedRock& rock : placedRocks)
+				{
+					const glm::vec2 toRock = local - rock.local;
+					const float clear = rock.radius * 0.9f + 0.5f;
+					inRock |= glm::dot(toRock, toRock) < clear * clear;
+				}
+				if (inRock)
+					continue;
 				out.push_back(makeTreeRecord(qx, qz, config.species[chosen].type));
 			}
 		}

@@ -462,6 +462,15 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
 (not in git) and reused (regenerate with `Trees/Regenerate textures`).
 
+## `.rock` — rock types
+
+`RockType <name>` in `Assets/Rocks/`: the SHAPE of a rock family as an SDF recipe (`Shape`, `Aspect`, `Squareness`,
+`Erosion`, `Warp`, `Fracture`, `Strata`, `Noise`, `Pits`, `Split`, `Pile`, `Profile`, `Group`, ...); the colour comes from the
+climate, never the type. Any number of `Placement` blocks say where the world puts it (a climate box, the ground:
+`Slope`, `Crag`, `Talus`, `Plains` / `Rugged` / `Valley`); their densities add. **The grammar is
+in "Rocks" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; the plan is `Docs/RockRenderingPlan.md`.
+Loaded by `RockSystem` itself (not `AssetRegistry`).
+
 ## `.dsl` — scripts
 
 A dual-purpose file: **generated C++ on top, the `//@`-commented DSL block below**, between

@@ -866,19 +866,34 @@ namespace Procedural
 		Globals::jobSystem.wait(m_ringScanCounter);
 	}
 
+	void TerrainStreamer::joinEvictScan()
+	{
+		Globals::jobSystem.wait(m_evictScanCounter);
+	}
+
 	void TerrainStreamer::kickUploads(Renderer& renderer)
 	{
 		if (m_uploads.empty())
 			return;
 		Globals::jobSystem.submit([this, &renderer]
 		{
-			for (Upload& upload : m_uploads)
+			auto uploadOne = [&](Upload& upload)
 			{
 				if (upload.mesh.isValid() || upload.result.mesh.indices.empty())
-					continue; // uploaded (or failed) by an earlier kick
+					return; // uploaded (or failed) by an earlier kick
 				upload.mesh = renderer.createMesh(upload.result.mesh);
 				upload.result.mesh = RenderMeshData{}; // the copy is in the staging ring now
-			}
+			};
+			// The batch's first shared-buffer write drains the GPU under the staging mutex, so the first chunk goes
+			// alone: a fan-out would block one worker per chunk behind that wait. The rest copy in parallel, one
+			// chunk per task (the staging memcpy runs outside its mutex).
+			uploadOne(m_uploads[0]);
+			Globals::jobSystem.parallelFor(1, (uint32)m_uploads.size(), 1, { "terrainUploadMesh", EProfileCategory::Procedural },
+				[&](uint32 begin, uint32 end)
+				{
+					for (uint32 i = begin; i < end; ++i)
+						uploadOne(m_uploads[i]);
+				});
 		}, { "terrainUpload", EProfileCategory::Procedural }, EJobPriority::Normal, &m_uploadCounter);
 	}
 
@@ -891,9 +906,12 @@ namespace Procedural
 	{
 		joinRender();   // the render job reads m_residents
 		joinRingScan(); // so does the ring scan; its output is against the residents being cleared
+		joinEvictScan(); // and the eviction walk
 		joinUploads();  // writes m_uploads
 		m_uploads.clear();
 		m_ringScanOut.clear();
+		m_evictScanOut.clear();
+		m_evictScanReady = false;
 		for (auto& entry : m_residents)
 			retireResident(oc::move(entry.second));
 		m_residents.clear();
@@ -1301,6 +1319,7 @@ namespace Procedural
 	{
 		joinRender();   // last frame's render job (already joined before present; a cheap no-op)
 		joinRingScan(); // last frame's ring scan: applied below (enabled) or dropped here
+		joinEvictScan(); // last frame's eviction walk: the same
 		joinUploads();  // already joined before the frame kicks; a cheap no-op
 		m_renderReady = false;
 		{
@@ -1315,6 +1334,7 @@ namespace Procedural
 		if (!m_enabled)
 		{
 			m_ringScanOut.clear();
+			m_evictScanReady = false;
 			// Disabled: no profile scope, no per-frame work. The transition (and any tweak that
 			// re-dirties the config while parked, e.g. sea level) drains through updateDisabled
 			// until nothing is left in flight.
@@ -1579,34 +1599,33 @@ namespace Procedural
 		// No per-frame walk of the ring: which residents are unwanted (want < 0 or want != lod) depends
 		// on the ring and the resident set only, so that list is rebuilt by one walk when the ring moved
 		// or a chunk uploaded (m_evictCandidates; the handover replacement can only appear through an
-		// upload, and an eviction never creates a candidate). Every frame checks just the candidates
-		// against the stamps.
+		// upload, and an eviction never creates a candidate). The walk is the "terrainEvictScan" job,
+		// kicked at the end of the previous update: its list is one ring old, so every frame judges each
+		// candidate by THIS frame's ring and checks it against the stamps.
         {
             ProfileScope profileScope2("evictResidents", EProfileCategory::Procedural);
-            if (ringMoved || uploads > 0)
+            if (m_evictScanReady)
             {
-                m_evictCandidates.clear();
-                for (const auto& entry : m_residents)
-                {
-                    const int want = ringLod(entry.second->coord);
-                    if (want < 0 || (uint32)want != entry.second->lod)
-                        m_evictCandidates.push_back({ entry.first, want });
-                }
+                m_evictScanReady = false;
+                m_evictCandidates.swap(m_evictScanOut);
             }
 
             for (size_t i = 0; i < m_evictCandidates.size(); )
             {
-                const EvictCandidate& cand = m_evictCandidates[i];
-                const auto it = m_residents.find(cand.key);
-                bool evict = it == m_residents.end(); // already gone: drop the candidate
-                if (!evict)
+                const auto it = m_residents.find(m_evictCandidates[i]);
+                bool drop = it == m_residents.end(); // already gone: drop the candidate
+                if (!drop)
                 {
                     const Resident& res = *it->second;
-                    if (cand.want < 0)
+                    const int want = ringLod(res.coord);
+                    bool evict = false;
+                    if (want < 0)
                         evict = true; // column outside the ring
+                    else if ((uint32)want == res.lod)
+                        drop = true;  // wanted again (the ring moved back since the walk)
                     else
                     {
-                        const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)cand.want));
+                        const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)want));
                         evict = repIt != m_residents.end();
                         if (evict && gate)
                         {
@@ -1623,10 +1642,11 @@ namespace Procedural
                     {
                         retireResident(oc::move(it->second)); // this frame's hand-over may still hold &node
                         m_residents.erase(it);
+                        drop = true;
                     }
                 }
 
-                if (evict)
+                if (drop)
                 {
                     m_evictCandidates[i] = m_evictCandidates.back();
                     m_evictCandidates.pop_back();
@@ -1665,10 +1685,11 @@ namespace Procedural
 		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and
 		// the job only reads them (its output goes to m_ringScanOut, consumed after the join at the
 		// top). Every input is captured by value so a tweak or setGeneratedBounds edit on main cannot
-		// race it.
-		if (ringMoved || m_ringScanNeeded)
+		// race it. The eviction walk reads the same snapshot, in a job of its own.
+		const bool ringScan = ringMoved || m_ringScanNeeded;
+		const bool evictScan = ringMoved || uploads > 0;
+		if (ringScan || evictScan)
 		{
-			m_ringScanNeeded = false;
 			RingScanInput& in = m_ringScanIn;
 			in.camCX = camCX; in.camCZ = camCZ; in.R = R;
 			in.camChunks = camChunks;
@@ -1676,6 +1697,26 @@ namespace Procedural
 			in.maxLod = maxLod; in.lod0Res = (uint32)glm::max(1, m_lod0Res); in.generation = generation;
 			in.bounded = m_bounded; in.boundsMin = m_boundsMin; in.boundsMax = m_boundsMax;
 			in.maps = maps;
+		}
+		if (evictScan)
+		{
+			m_evictScanReady = true;
+			Globals::jobSystem.submit([this]
+			{
+				const RingScanInput& s = m_ringScanIn;
+				m_evictScanOut.clear();
+				for (const auto& entry : m_residents)
+				{
+					const Resident& res = *entry.second;
+					const int cheb = glm::max(glm::abs(res.coord.x - s.camCX), glm::abs(res.coord.y - s.camCZ));
+					if (cheb > s.R || ringLodAt(chunkEdgeDist(s.camChunks, res.coord), s.fullRes, s.lodStep, s.maxLod) != res.lod)
+						m_evictScanOut.push_back(entry.first);
+				}
+			}, { "terrainEvictScan", EProfileCategory::Procedural }, EJobPriority::Normal, &m_evictScanCounter);
+		}
+		if (ringScan)
+		{
+			m_ringScanNeeded = false;
 			Globals::jobSystem.submit([this]
 			{
 				const RingScanInput& s = m_ringScanIn;

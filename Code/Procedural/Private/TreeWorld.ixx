@@ -10,6 +10,7 @@ import RendererVK;
 import :TerrainSampler;
 import :TreeSpecies;
 import :TreeGenerator;
+import :RockType;
 
 // WORLD TREE PLACEMENT (Docs/TreeRenderingPlan.md 3.5, phase W1): EVERY tree in the terrain ring, stored as a 4-byte
 // RECORD per terrain chunk - x, z and the species, nothing else. The height is the terrain's; variant, scale and yaw
@@ -22,6 +23,11 @@ import :TreeGenerator;
 // W2: every chunk's records go to the GPU (Renderer::addTreeRecordChunk: one fixed-size device-local pool + a chunk
 // table), within an upload budget per frame. The CPU keeps a chunk's records only inside "CPU keep radius" (the near
 // chunks, which expansion needs); beyond it they are dropped once uploaded and generated again on the way back in.
+//
+// ROCKS (Docs/RockRenderingPlan.md 6; setRocks): the .rock types' Placement blocks place ROCK records into the same
+// chunks - the same 4 bytes, their types appended to the list after the trees (firstRockType). A rock's lattice is a
+// pure function of its WORLD cell, so a chunk also knows the rocks of its neighbours that reach into it: the trees
+// give way to every rock (placeChunk).
 export namespace Procedural
 {
 	// x, z: 12 bits each, chunk-local on a TREE_RECORD_STEPS lattice (the cell centre); type: 8 bits, the species'
@@ -50,6 +56,12 @@ export namespace Procedural
 	{
 		return treeHash(treeHash(worldSeed, (uint32)chunk.x), treeHash((uint32)chunk.y, r.bits & 0xFFFFFFu));
 	}
+	// A ROCK record's scale (m, its longest axis) from its seed and its type's Scale range. The placement (the trees'
+	// way around the rock) and the expansion (TreeSystem) both take it from here.
+	constexpr float rockRecordScale(uint32 recordSeed, glm::vec2 scaleRange)
+	{
+		return scaleRange.x + (scaleRange.y - scaleRange.x) * treeHash01(treeHash(recordSeed, 103u));
+	}
 
 	class TreeWorld
 	{
@@ -68,6 +80,21 @@ export namespace Procedural
 		float chunkSize() const { return m_chunkSize; }
 		// The species name of a record type ("" = none).
 		oc::string_view typeName(uint32 type) const;
+		// The record types from here on are ROCK types (the .rock list, name-sorted); below it, the .tree list.
+		uint32 firstRockType() const { return m_firstRockType; }
+		// Rock records on / off, the world's rules over them (RockSystem's "Rocks/World" tweaks) and RockSystem's
+		// typesRevision (its "Reload types"), handed over by TreeSystem every frame. A change is a new generation.
+		void setRocks(bool enabled, const RockWorldDesc& rules, uint32 typesRevision)
+		{
+			if (enabled == m_rocksEnabled && rules == m_rockRules && typesRevision == m_rockTypesRevision)
+				return;
+			// The type list changes / the .rock Placement blocks were edited.
+			m_reloadSpecies |= enabled != m_rocksEnabled || typesRevision != m_rockTypesRevision;
+			m_rocksEnabled = enabled;
+			m_rockRules = rules;
+			m_rockTypesRevision = typesRevision;
+			m_configDirty = true;
+		}
 		// Bumped by every restart (all records regenerated): what was built from the old records is stale.
 		uint32 generation() const { return m_generation; }
 		// Main thread: a chunk's records, when the CPU holds them (inside the keep radius); nullptr otherwise.
@@ -90,11 +117,28 @@ export namespace Procedural
 			glm::vec2 climateMin{ 0.0f };
 			glm::vec2 climateMax{ 1.0f };
 		};
+		struct RockRule
+		{
+			RockPlacementDesc placement;
+			glm::vec2 climateMin{ 0.0f }; // the ideal climate box, normalized as a tree species'
+			glm::vec2 climateMax{ 1.0f };
+		};
+		struct RockSpecies
+		{
+			oc::string name;
+			uint8 type = 0;
+			oc::vector<RockRule> rules;   // the type's Placement blocks: their densities add
+			glm::vec2 scale{ 1.0f };      // m, the type's Scale range (rockRecordScale)
+			float cell = 8.0f;            // its WORLD lattice (m): at most one rock of the type per cell
+		};
 		// Everything a chunk's records are a function of: immutable, shared with the pumps.
 		struct GenConfig
 		{
 			oc::shared_ptr<const ITerrainSampler> maps;
 			oc::vector<Species> species; // the placed ones (density > 0, trees only)
+			oc::vector<RockSpecies> rocks; // the placed rock types
+			RockWorldDesc rockRules;     // sanitized (restart)
+			float seaLevel = 0.0f;      // the rocks' crag fit (the terrain's relief above the macro altitude)
 			uint32 seed = 1;
 			uint32 generation = 0;
 			float chunkSize = 256.0f;
@@ -159,8 +203,13 @@ export namespace Procedural
 		bool m_configDirty = true;
 
 		// Main thread.
-		oc::vector<oc::string> m_typeNames;  // every .tree, name-sorted: the record type is the index
+		oc::vector<oc::string> m_typeNames;  // every .tree, name-sorted, then every .rock, name-sorted: the record type is the index
 		oc::vector<Species> m_species;
+		oc::vector<RockSpecies> m_rocks;
+		uint32 m_firstRockType = 0;
+		bool m_rocksEnabled = false;         // setRocks
+		RockWorldDesc m_rockRules;
+		uint32 m_rockTypesRevision = 0;
 		bool m_speciesLoaded = false;
 		oc::shared_ptr<const GenConfig> m_config;
 		uint32 m_generation = 0; // monotonic: a late pump result of an older config never matches

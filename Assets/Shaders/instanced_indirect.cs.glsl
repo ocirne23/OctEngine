@@ -241,8 +241,11 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
+    // A ROCK of the tree set (its records draw on LitRock - Procedural's world rocks): a regular mesh with an LOD
+    // chain, and no wind.
+    const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
     // A tree sways in the wind (tree_wind.inc.glsl): its bound grows by the sway's reach.
-    const float radius                = meshInfo.radius * instancePosScale.w + (isTree ? u_treeWind3.z : 0.0);
+    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_treeWind3.z : 0.0);
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by
@@ -263,14 +266,17 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         // member's bucket to the chain's full instance count.
         InMeshInfo drawMeshInfo = meshInfo;
         // Trees have no mesh LOD chains (their own tiers instead; Procedural TreeSystem): no lookup for their records.
-        const uint lodGroupIdx = isTree ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
+        // The tree set's ROCKS have one. A tree-set record has no hysteresis slot, so a rock picks STATELESS (the
+        // conservative pick, as the shadow cull's).
+        const uint lodGroupIdx = isTree && !isRock ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
         if (lodGroupIdx != 0xFFFFFFFFu && u_lodParams1.z > 0.5)
         {
             const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
             const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
             int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
-                u_lodParams0.x, 0.0, int(lodLevelState[stateSlot]));
-            lodLevelState[stateSlot] = uint(level);
+                u_lodParams0.x, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
+            if (!isTree)
+                lodLevelState[stateSlot] = uint(level);
             uint chosenMeshIdx = lodMeshAt(group, level);
             if (in_meshInfos[chosenMeshIdx].indexCount == 0u)
             {

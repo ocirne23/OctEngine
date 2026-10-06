@@ -79,6 +79,10 @@ void ShadowMapGraphicsPipeline::resizeMeshCapacity(uint32 maxUniqueMeshes)
 
 void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
 {
+    // The requirement depends on the PIPELINE too, so reloadShaders asks again for its new one (the static mesh
+    // pipeline's stale size failed VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071 after a wireframe toggle).
+    // GROW-ONLY: a requirement the buffers already cover keeps them. GPU idle; the caller re-records.
+    m_maxUniqueMeshes = maxUniqueMeshes;
     // With no execution set, DGC needs the pipeline it will generate draws for supplied via pNext.
     vk::GeneratedCommandsPipelineInfoEXT pipelineInfo{ .pipeline = m_graphicsPipeline.getPipeline() };
     vk::GeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
@@ -90,14 +94,13 @@ void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
     };
     vk::MemoryRequirements2 memReq;
     Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
+    if (memReq.memoryRequirements.size <= m_preprocessSize)
+        return;
     m_preprocessSize = memReq.memoryRequirements.size;
-    if (m_preprocessSize > 0)
-    {
-        for (Buffer& preprocess : m_preprocessBuffers)
-            preprocess.initialize(m_preprocessSize,
-                vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Shadow.dgcPreprocess");
-    }
+    for (Buffer& preprocess : m_preprocessBuffers)
+        preprocess.initialize(m_preprocessSize,
+            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Shadow.dgcPreprocess");
 }
 
 void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures)
@@ -122,6 +125,7 @@ void ShadowMapGraphicsPipeline::reloadShaders(uint32 maxTextures)
         return;
     }
     // No execution set to rebuild: the multiview shadow pass binds its single pipeline directly.
+    createPreprocessBuffers(m_maxUniqueMeshes); // the new pipeline can need more scratch
 }
 
 void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params)

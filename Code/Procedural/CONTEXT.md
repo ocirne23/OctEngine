@@ -7,7 +7,7 @@ The procedural world layer: diffusion terrain, FFT ocean, scattering, terrain ph
 camera-centered bakes they share. Links RendererVK, File, Spatial and Physics (+ onnxruntime, zstd
 PRIVATE).
 
-## The five globals
+## The six globals
 
 | Global | Type | Per-frame call |
 |---|---|---|
@@ -16,11 +16,12 @@ PRIVATE).
 | `Globals::ocean` | `OceanGenerator` | `update(renderer, camera, terrain.activeTerrainData(), terrain.seaLevel())` |
 | `Globals::scatter` | `ScatterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` |
 | `Globals::trees` | `TreeSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Trees" (it also runs the world records, "World records") |
+| `Globals::rocks` | `RockSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Rocks" |
 
 main.cpp updates them **in that order**, after entity updates and before present
 ([main.cpp:803](../App/main.cpp#L803)).
 
-All five sit in init_seg `OC_SEG_PROCEDURAL`, **the first globals to destruct** — their dtors free
+All six sit in init_seg `OC_SEG_PROCEDURAL`, **the first globals to destruct** — their dtors free
 renderer residency and collider bodies and may wait on in-flight jobs. **Order among them is undefined
 and deliberately independent.**
 
@@ -318,7 +319,12 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 * **Eviction does not walk the ring either.** The unwanted residents (column outside the ring, or
   wanting another LOD) are a function of the ring and the resident set only, so `m_evictCandidates`
   is rebuilt by one walk when `ringMoved` or a chunk uploaded; every frame checks only the candidates
-  against the stamps for the hole-free handover.
+  against the stamps for the hole-free handover. **The walk is a job** (`"terrainEvictScan"`, Normal,
+  `m_evictScanCounter`), kicked with the ring scan at the end of `update` over the same snapshot
+  (`m_ringScanIn`) and swapped in after the join at the top of the next one. Its list is one ring old,
+  so the per-frame check judges each candidate by the CURRENT ring (a candidate wanted again is dropped).
+  The check and the retire stay on main: `getPassMask` would race the spatial pool growth and the cull
+  job's stamps in that window, and an unregister is not allowed inside the cull job's kick/join window.
 * **The ring scan is a job too** (`"terrainRingScan"`, Normal, `m_ringScanCounter`), kicked LAST in
   `update` — after the drain and the eviction, the frame's last writers of `m_residents` /
   `m_pending`, which the scan only reads — from a by-value snapshot (`m_ringScanIn`; the job
@@ -336,14 +342,18 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   wait, and **joins it before the next frame's "Frame kicks"** (`joinUploads`): `createMesh` grows the
   MeshInfo / per-mesh tables that the begin-frame job and the entity pass's `renderNode` read.
   Everything it calls is thread-safe (the MeshDataManager alloc mutex, the staging mutex, the renderer
-  `m_spawnMutex`), like parallel entity spawning. The next `update` adopts the batch (`"adoptUploads"`:
+  `m_spawnMutex`), like parallel entity spawning. **The batch fans out across workers**: the job uploads
+  the FIRST chunk alone — the frame's first shared-buffer write drains the GPU under the staging mutex,
+  and a fan-out would block one worker per chunk behind it — then a grain-1 `parallelFor`
+  (`"terrainUploadMesh"`) uploads the rest. That only pays because the staging memcpy runs OUTSIDE the
+  staging mutex (RendererVK, `StagingManager`). The next `update` adopts the batch (`"adoptUploads"`:
   re-validate, `spawnMeshNode`, the spatial registration — all cheap, all on main). One more frame of
   latency. `clearResidents` joins it and drops the batch.
 
   What stays on main: the config/model polling, the terrain/texture/wet param setters, the fog
   height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the
-  upload pick + adopt, and the candidate eviction (a `~Resident` releases GPU residency into the
-  renderer).
+  upload pick + adopt, and the candidate check + retire (the retire releases GPU residency into the
+  renderer and unregisters the culling entry; the candidate walk is the `"terrainEvictScan"` job).
 
 ## It owns THE world datum
 
@@ -1178,6 +1188,60 @@ in `Assets/Shaders/tree_record.inc.glsl` (not read by a shader yet). A member of
   CPU-held records.
 * Placeholder ideal climates: Oak 9..18 C / 900..2200 mm, 90 / ha; Pine -5..5 C / 600..2200 mm, 90 / ha; Acacia
   20..30 C / 300..900 mm, 12 / ha; Willow as Oak, 4 / ha; all `ClimateWidth` 0.06.
+* **ROCK RECORDS** (R4 of Docs/RockRenderingPlan.md, 2026-10-05, user-untested; `setRocks` - on with "Rocks/Enabled" +
+  "Rocks/World/Enabled", handed over by TreeSystem every frame; a change is a new generation): the same 4-byte
+  records in the same chunks. The record TYPES: the `.tree` list, then every `.rock` (name-sorted) from
+  `firstRockType()` on - TreeWorld reads the `.rock` `Placement` blocks itself. `placeChunk` places the rocks FIRST:
+  * **A rock type's lattice is in WORLD space** (`RockSpecies::cell` = 1.5 x its largest `Scale`, at least 6 m;
+    anchored at the world origin, one rock per cell at most): a cell's rock is a pure function of (seed, type, cell),
+    so a chunk computes the rocks of its NEIGHBOURS exactly as they do. It evaluates every cell that can put a rock
+    within `ROCK_REACH` (11 m: half of `ROCK_MAX_SIZE`) of itself; its own rocks become records, the others only keep its trees out.
+    For that the sample grid has a halo of `GRID_HALO` = 5 points (40 m: the rock's reach, the talus probe and the
+    rugged measure's 2 cells) WHILE ROCK TYPES ARE PLACED - 43^2 samples per 256 m chunk, +51 % over the trees-only
+    halo of 1 point (35^2), which a world without rocks keeps - plus the valley measure's coarse grid, 21^2 more.
+    **The user does not mind chunk-generation cost much (2026-10-05); the per-frame cost is what counts** - all of
+    this is in the pump jobs.
+  * **A type has any number of RULES** (`RockSpecies::rules`: its `Placement` blocks) and **their densities ADD** -
+    a rule for everywhere plus one for a climate the type is common in, each with its own ground (2026-10-05, the
+    user: per-type placement, and climate controls - "the flat rocks common in the savanna with the acacias":
+    `Slab.rock`'s second block). A rule's fit at the rock's (quantized) record position: its optional climate box (as
+    a tree's), its `Altitude` band, x its `Slope` band (the slope UNDER the rock; soft edges with four values,
+    `bandWeight` - a boulder rolls off a slope), x `mix(1, crag, Crag)` (the terrain shader's rock coverage - steep,
+    or far above the macro altitude - at the terrain's DEFAULT texture tweaks: `CRAG_*`, a deliberate approximation),
+    x `mix(1, talus, Talus)` (gentle ground with a steep slope `TALUS_PROBE` = 6 m uphill of it), x THE GROUND AROUND
+    IT (below), x its cluster fbm (a noise per rule). The rock exists with probability (the rules' summed Density x
+    fit) x the cell's hectares x "Rocks/World/Density scale". The record does not keep the rule: what a rule cannot
+    set (`Scale`, `Sink`, `Align`, the shape) is the type's.
+  * **THE GROUND AROUND A ROCK** (per rule; user-untested; the user, 2026-10-05: large types off the plains, to the
+    cliffs and the hills; then "way more common in valleys, and also at cliff bottoms - rugged weighted to the lower
+    end of the height"; then "boulders shouldn't sit on sloped terrain as much, they would roll off"). The slope
+    under the rock cannot tell any of it (and with a `Slope` band below ~0.9 the crag fit's slope term is always 0,
+    so a type spread evenly over the plains). ground = `mix(Plains, mix(Rugged high, Rugged low, lowEnd), ruggedness)`,
+    then - when the rule has a `Valley` - `mix(ground, Valley, valley)`: IN A VALLEY THE MULTIPLIER IS `Valley`,
+    whatever the others say (an override, not a product: Plains 0.3 x a product would need a Valley of 20 for a flat
+    valley floor, and that x Rugged at a valley's cliff). Three measures, each only when a rule uses it:
+    * `ruggedness` = smoothstep("Rocks/World/Rugged slope start", "full", the STEEPEST grid cell within
+      `RUGGED_CELLS` = 2 cells of the rock) - 0.08..0.4 rise / run, 16-24 m. Each grid cell's slope, a separable
+      square max (`windowRange`), read between the cell centres (`gridAt`).
+    * `lowEnd` = smoothstep(0.25, 0.75, how far DOWN the rock sits between the highest and the lowest grid point
+      within the same 2 points): ~1 at a cliff's bottom, ~0 on its top, 0.5 on an even hillside.
+    * `valley` = smoothstep(`VALLEY_LOW_START` 0.5, `VALLEY_LOW_FULL` 0.9, the same over ~160 m) x
+      smoothstep("Rocks/World/Valley relief start (m)", "full", that height range) - 15..60 m: LOW ground with higher
+      ground within ~160 m - a valley's floor (flat ones too, up to ~300 m wide), the foot of a mountain. From its
+      own COARSE grid (`VALLEY_STEP` 32 m, the lowest / highest point within `VALLEY_CELLS` = 5, a halo of 6: 21^2
+      Full samples; on the chunks' common lattice, so the neighbours agree). The sampler's macro `altitude` cannot
+      serve: it is the coarse stage's 7.68 km / px surface.
+    `Plains 0` = never on flat ground (the Block). A first version was a WORLD rule by the rock's size
+    (large rocks x0.1 on plains, x3 on rugged ground): removed, the user wants the control per type, not a smaller
+    average size.
+  * "Rocks/Reload types" makes TreeWorld read the Placement blocks again too (`RockSystem::typesRevision` through
+    `setRocks`); "Trees/World/Reload species" does it WITHOUT regenerating the rock meshes - the fast way to iterate
+    a Placement block.
+  * **Rocks do not give way to each other** (boulders lie against boulders; a rejection order would chain across
+    chunk borders). **The trees give way to every rock**: a tree candidate inside 0.9 x a rock's radius + 0.5 m is
+    dropped. The radius is half of `rockRecordScale(seed, Scale)` - the scale the expansion gives the rock.
+  * With rocks off the tree records are as before (the same hashes, the same field interpolation).
+  * The far volume takes the rock records too (R5): see "World mode", THE WORLD'S ROCKS.
 
 ## World mode (TreeSystem, W3)
 
@@ -1198,6 +1262,25 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   (`m_vegChunkOf`) and re-stamped in the terrain (`restampVegetation`). A chunk past near + 1 is removed
   (`removeTreeInstanceChunk`, deferred reuse) and re-stamped; a pending one's result is dropped.
 * A respawn joins the jobs (`stopExpansion`: the generation bumps, the results are cleared).
+* **THE WORLD'S ROCKS** (R4, 2026-10-05, user-untested): `spawnWorld` appends RockSystem's loaded types
+  (`Globals::rocks.worldTypes()`) to the set - a GPU type per variant: ONE mesh, the LOD chain's level 0 in the `bark`
+  slot on `LitRock`, no billboard (RendererVK: the culls pick its level, no wind) - and maps TreeWorld's rock record
+  types to them by name. `expandChunk` turns a rock record into ONE piece (`placeRock`): variant and yaw from the seed
+  as a tree's, the scale from `rockRecordScale`, laid ON THE GROUND by `RockSystem::groundTransform` (Rocks, "A rock on
+  the ground": it follows the ground's normal by `Align`). The
+  set's types are fixed, so RockSystem's `worldGeneration()` (its meshes arrived, changed or went - it loads in the
+  background) respawns the set; and before RockSystem frees its meshes it calls TreeSystem's mesh-user hook
+  (`setMeshUser`), which destroys the set.
+  **ROCKS IN THE FAR VOLUME** (R5, 2026-10-06, user-untested): rock meshes hand over to the far-tree volume at its start
+  as a tree's billboard (RendererVK tree_cull.inc.glsl: a type without a billboard drops its mesh past `Far start` +
+  `Far overlap` in the main pass; it keeps casting its sun shadow). A rock GPU type carries its variant's OCCUPANCY grid
+  (`RockVariant::density`: `ROCK_DENSITY_RES` = 16^3 over its rock-local box, the field soft over one voxel; generated
+  with the meshes) as the type's `density`, with `solid = true` and the SINK baked into the box (`densityMin/Max` - Sink
+  x height; the volume stands a piece on the ground; the lean is left out). `spawnWorld` hands the renderer a
+  `TreeRecordTypeGpu` per rock record type too (albedo.w = 0: a SOLID): its variants as the set's rock types (max 8),
+  its Scale range with no size variation (= `rockRecordScale`), per variant its occupied volume at scale 1, the profile
+  over the sunk box. **Keep `placeRock`'s variant / scale / yaw hashes and the volume's record expansion in step**
+  (102 / 103 / 104, as a tree's). RendererVK "Far-tree volume", ROCKS, has the volume side.
 * **The far-tree volume (W4)** takes EVERY tree from the RECORDS (RendererVK "WORLD TREE RECORDS"), never from the
   set: within `Trees/Far record detail (m)` the GPU expands each record exactly as `expandChunk` (variant, scale, yaw,
   its bushes - the same hashes; the terrain map's ground) and splats it in detail; beyond, its exact mass per column.
@@ -1226,6 +1309,149 @@ the old fixed 0.3 left the rows visible), and scaled by the species' `Scale` ran
 log-uniform, default 0.6 = ×0.66..1.52). One `RenderNode` per placed piece mesh, pushed every frame. **This path is replaced
 by the dedicated GPU tree pipeline (G4: own shaders, per-tree bone palettes, own shadow draw); trees in that
 path are not in the RT scene at first, but the design keeps RT addable.**
+
+---
+
+# Rocks
+
+"Rocks" tweaks. **In development — the plan is `Docs/RockRenderingPlan.md`** (tiers, phases R1..R6). Status: R1
+(2026-10-05; the shapes had a first round with the user): the `.rock` loader, the SDF generator and a PREVIEW; R2
+(2026-10-05, user-untested): the climate rock material (RendererVK); R3 (2026-10-05, user-untested): a regular mesh
+LOD chain + the per-vertex cavity (the tessellated route was dropped - the user's decision); R4 (2026-10-05,
+user-untested): rocks in the WORLD - records in TreeWorld, pieces in TreeSystem's world set (see "World records" /
+"World mode" under Trees); R5 (2026-10-06, user-untested): rocks in the FAR VOLUME (World mode, ROCKS IN THE FAR
+VOLUME). "Rocks/Enabled" is on by default since 2026-10-06. Rocks are BIG objects (~1-22 m); small
+ground clutter (pebbles, branches) is a later, separate system. The type sets the SHAPE only; the colour comes
+from the climate's terrain bedrock material (the rock material, R2).
+
+## The model: an SDF per variant, meshed into a regular LOD chain
+
+`buildRockShape(type, seed)` (RockGenerator.cpp) makes every random decision of a variant ONCE into a `RockShape`
+(blocks, fracture planes, split plane, pits, strata / noise parameters), at a nominal size of 1 (the longest axis;
+the instance scale makes metres). `rockSdf(shape, p)` is then a pure function: the point WARPED by low-frequency
+noise (`Warp`: flat faces bulge, straight edges bend), the union of the superellipsoid blocks (smooth min, small k: a
+pile's joints stay concave) - or, for `Shape Pillar`, the standing pillars (`pillarSdf`, "THE PILLAR" below) -, cut by the planes (smooth max, `Round` / 2), minus the split slab - all built `Erosion` SMALLER and the
+field then grown by it (a Minkowski rounding: every convex edge and corner a radius-`Erosion` round, the size kept;
+2026-10-05, the first shapes read as cubes) - plus the strata (grooves + a per-layer step), minus the fbm / ridged
+noise, minus the pit spheres. CPU only: nothing evaluates the field on the GPU (GPU tessellation onto it was planned
+and dropped, 2026-10-05). The field
+lives in the SHAPE frame (body centred); the meshes in ROCK-LOCAL space, the lowest point at y = 0 (`originY`).
+
+`generateRockVariant`: surface nets over the shape's bounds (`Rocks/Grid resolution` cells along the longest
+axis, default 32 - 96 for a finer source mesh), every vertex projected onto the field (2 Newton steps) and shaded
+from its gradient: the FULL mesh, CPU working data only (never uploaded). Each vertex also takes its **CAVITY**
+(`rockCavity`: five field taps out along the normal, Quilez' SDF occlusion - 1 = open, 0 = deep in a crevice) into
+`texCoords.x`: a rock has no uv, so the u channel carries it to the rock vertex shader (AO, and where the ground
+cover gathers). **THE LOD CHAIN** (`RockVariant::lods` / `lodError`, up to `ROCK_MAX_LODS` = 4): `meshopt_simplify`
+of the full mesh to the type's `Lod` triangles (level 0), then a quarter per level down to
+`ROCK_LOD_MIN_TRIANGLES` (24), each level from the FULL mesh (its error - in rock-local units, for RendererVK's
+screen-space-error pick - is then against the true surface). The winding is fixed by the signed volume
+(`orientOutward`: counter-clockwise outward). Every variant generates on its own job ("Rock generate").
+
+## `.rock` — type asset (`Assets/Rocks/*.rock`, `loadRockType`)
+
+```
+RockType <name>
+	Seed n · Scale min max (m, the longest axis; at most `ROCK_MAX_SIZE` = 22 m - the far volume's layer height,
+	        the user's limit) · Variants n (default 6) · Sink (fraction of the height below ground)
+	Shape Boulder|Block|Pillar (superellipsoid / superellipsoid / a STANDING body with a width profile, on a flat floor)
+	Profile w0 w1 w2 w3 w4 (Pillar: its width at 5 even heights, base to top, a Catmull-Rom spline through them; the
+	        widest = the Aspect's width. `1 0.8 0.6 0.38 0.1` a spire, `0.5 0.75 1 0.95 0.72` a top-heavy monolith)
+	ProfileVar v (each width x (1 +- v) per variant and per pillar; default 0.15)
+	Group count shrink (Pillar: 1..count pillars - the variant's draw - standing TOGETHER on one floor: each later one
+	        ~x shrink, beside an earlier one, their bases overlapping; every one leans up to ~9 deg. Default 1)
+	Squareness n (the superellipsoid exponent, 2 ellipsoid .. 8 near a box - for a Pillar its horizontal section;
+	        default 2.2, Block 3 - a rounded box primitive read as cubes even with erosion, 2026-10-05)
+	Aspect x y z (axis ratios) · AspectVar x y z (+-fraction per variant) · Round (fracture-plane edge rounding)
+	Erosion (weathering: the radius every convex edge and corner is rounded to, 0..0.3, default 0.08)
+	Warp amplitude frequency (low-frequency domain warp, default 0.04 1.5)
+	Pile count shrink (Boulder / Block: 1..4 blocks HEAPED: each later block ~x shrink of the one before, turned and
+	        tilted up to ~35 deg, from a random direction 5..60 deg above horizontal pushed in until it leans ~35 % of
+	        its height into the earlier blocks; replaced the ordered `Stack`, 2026-10-05. No type uses it now)
+	Fracture count depth (random plane cuts, each to (1 - depth x 0.3..1) of the support distance; 0..16. A Pillar
+	        is never cut from below)
+	Strata spacing depth var (horizontal grooves every `spacing`, `depth` deep, each layer stepped in / out x var)
+	Noise amplitude frequency octaves · Ridged (0 fbm .. 1 ridged fbm)
+	NoiseStretch s (the noise's features x s along Y: 2.5 = vertical flutes, 0.5 = flat layered lumps; default 1)
+	Pits count size depth (spheres sunk into the surface from mostly upward directions; 0..32)
+	Split chance gap (one crack through the rock, mostly vertical)
+	Lod triangles (LOD 0's triangle count, 64..50000, default 2000; each further level a quarter of the one before)
+	Resolution x (x "Rocks/Grid resolution" for this type, 0.5..4: thin features - strata, a spire's tip - need the
+	        cells; generation time only)
+	Align (0 upright .. 1 follows the ground's normal; default 1 - the preview reads it too)
+	Placement (a world RULE - "ROCK RECORDS" under Trees. ANY NUMBER of blocks: their densities ADD, so a type gets
+	        a rule for everywhere plus one per climate it is common in. A block without a Density is dropped)
+		Density (per ha at full fit)
+		Temperature min max (C) · Precipitation min max (mm/yr) · ClimateWidth (the rule's ideal climate box, as a
+		        .tree's; default: every climate. The savanna = the Acacia's box, 20 30 / 300 900)
+		Slope min max (rise / run UNDER the rock, a hard band) or Slope none full full none (soft edges: none below
+		        the first, full between the middle two, none above the last - a boulder rolls off a slope:
+		        `Slope 0 0 0.12 0.5`)
+		Altitude min max (m above the local water)
+		Crag (0..1: only where the terrain shows bedrock) · Talus (0..1: only at the foot of a steep slope)
+		THE GROUND AROUND THE ROCK - density multipliers, default 1 ("ROCK RECORDS" has the measures):
+		Plains x (flat ground: nothing steep within ~20 m, "Rocks/World/Rugged slope start / full". 0: never there)
+		Rugged low high (rugged ground: at the LOW end of the heights within ~20 m - a cliff's bottom, the foot of
+		        a hillside - and at their HIGH end - a cliff's top, a crest. One value: both)
+		Valley x (low ground with higher ground within ~160 m - a valley's floor, the foot of a mountain;
+		        "Rocks/World/Valley relief start / full (m)". IN a valley the multiplier is x, whatever Plains and
+		        Rugged say. Default: no valley rule)
+		Cluster size coverage (m, 0..1: patches)
+```
+
+Every length is a fraction of the nominal size 1. Placeholders: `Boulder`, `Block` (a rounded block, 6 fractures), `Slab`
+(flat, strata; common in the savanna), and two `Shape Pillar` types from the user's reference photos (2026-10-06,
+user-untested): `Pinnacle` (limestone spires, 1-4.5 m, alone or up to 3 merged at the base, vertical flutes; a hot
+desert, flat ground, dense fields; `Align 0`) and `Monolith` (a weathering pillar, 10-22 m: a narrow foot, widest
+above the middle, deep strata, a blocky section; flat-ish ground only, away from rugged ground (`Rugged 0`, `Valley
+0`), a few together and then none for a long way;
+`Align 0`, `Resolution 2.5`, `Lod 6000`). They REPLACED `Column` (a columnar-basalt outcrop of packed hexagonal
+prisms: `Shape Column`, `Columns`, `columnsSdf` - removed) and `Tor` (a pile of 3 blocks).
+
+**THE PILLAR** (`pillarSdf`, RockGenerator.cpp): in its block's frame a superellipse section whose width follows the
+profile spline over the height; first-order distance (r - width) / |gradient|. It has no bottom: it runs on below its
+block and ONE horizontal floor cuts the whole group (`RockShape::floorY`, on the UNWARPED point in `bodySdf` - a
+leaning pillar and the warp cannot open a gap under a foot), so the mesh's lowest point is that flat floor and `Sink`
+only has to cover the ground's own unevenness. The top is the block's top plane. Erosion: the width - e, the top - e,
+the floor + e, then the field grown by e (a spire's tip ends as a round of radius ~e).
+
+## A rock on the ground (`RockSystem::groundTransform`)
+
+**ONE rule for the preview and the world** (`spawnPreview`, TreeSystem's `placeRock`), a pure static function - a
+rock FOLLOWS THE GROUND, it does not stand upright (2026-10-05, the user's decision; `Align` was 0.3 by default and
+the preview had yaw only). Input: the terrain height at the rock's centre and at four points `FOOTPRINT` (0.35) x its
+size out along x and z.
+
+* **Orientation** = lean x yaw: the yaw about the rock's own up axis, then the turn from straight up to the
+  footprint's normal (central differences of the four points) x `Align`.
+* **Position**: the origin (the mesh's lowest point, y = 0) on the plane through the four points, lowered to the
+  centre height in a dip and by the saddle term the plane cannot follow - no edge floats. Then sunk ALONG THE ROCK'S
+  UP AXIS by `Sink` x its height, plus - for `Align` < 1 - what the part of the slope it does not follow lifts its
+  downhill edge: r x tan(the angle left between its up axis and the normal), at most 2 r. At `Align` 0 that is the
+  old "stand on the lowest ground under the footprint".
+* The strata, the up-facing pits and a pile's stacking turn with the rock. A type that must stay vertical on a slope
+  sets `Align` below 1 in its file (`Pinnacle` and `Monolith`: `Align 0`).
+
+## The preview
+
+`Rocks/Enabled` (default ON since 2026-10-06; it was off during R1-R4) loads every type and generates its variants - one Low job each, in the BACKGROUND
+(`m_genInFlight` polled per frame; a synchronous generation stalled main for seconds in Debug) - then, once all are
+done, uploads every level (raytraced) and registers each variant's GPU LOD chain (`Renderer::createMeshLodChain`;
+freed before its meshes), and spawns one ROW per type in front of
+the camera, one rock per variant (random scale in the type's range, random yaw, on the ground by `groundTransform`), as plain
+`RenderNode`s on the chain's LEVEL 0, pushed every frame: **the cull picks each rock's level** (RendererVK "Mesh
+LODs", the "LOD" tweaks - `Force LOD` shows one level, `Max error (px)` moves the switches). `Preview shading`: **Rock material** (default; RendererVK
+`EPipelineIndex::LitRock` - the climate's terrain bedrock, snow, ground cover and contact band, "Rocks/Material"
+tweaks; R2, see RendererVK CONTEXT "The rock material") or **Flat grey** (`LitOpaque`: the shape alone). `Show
+preview` (default OFF since 2026-10-06) off: no rows, the world's rocks only. **The rows ignore every placement rule**
+(they stand wherever the camera looks, a hillside too): judge placement with the preview off. **`Rocks/World`**: `Enabled` (default on: rock records in TreeWorld +
+rock types in TreeSystem's world set - they need "Trees/World/Enabled", "Trees/Enabled" and the terrain too),
+`Density scale`, `Rugged slope start / full` and `Valley relief start / full (m)` (what the types' `Plains` /
+`Rugged` / `Valley` mean - `RockWorldDesc`, see ROCK RECORDS; every change regenerates the record chunks); the system serves the world through `worldRules()` /
+`typesRevision()` / `worldTypes()` / `worldGeneration()` / `setMeshUser`. `Reload
+types` re-reads the files; `Respawn preview` re-places in front of the camera; `Grid resolution` regenerates. RT
+sees the rocks through the chain's one BLAS. (The first enables' device-lost crash, 2026-10-05, was the renderer's:
+unzeroed BLAS address entries for not-raytraced meshes - RendererVK CONTEXT, `createMesh`.)
 
 ---
 

@@ -1,0 +1,30 @@
+# Limestone pinnacles: tapering spires standing in desert sand, alone or a few merged at the base. Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType Pinnacle
+	Seed 31
+	Scale 1 4.5
+	Variants 8
+	Sink 0.08
+	Align 0
+	Shape Pillar
+	Aspect 0.38 1 0.3
+	AspectVar 0.25 0.1 0.25
+	Profile 1 0.8 0.6 0.38 0.1
+	ProfileVar 0.2
+	Group 3 0.7
+	Round 0.02
+	Erosion 0.03
+	Warp 0.05 1.6
+	Fracture 3 0.45
+	Noise 0.03 4 4
+	NoiseStretch 2.5
+	Ridged 0.5
+	Pits 8 0.045 0.03
+	Lod 1500
+	Resolution 1.5
+	# A hot desert, on flat ground, in dense fields with empty sand between them.
+	Placement
+		Density 80
+		Temperature 16 1000
+		Precipitation 0 400
+		Slope 0 0 0.1 0.35
+		Cluster 300 0.2

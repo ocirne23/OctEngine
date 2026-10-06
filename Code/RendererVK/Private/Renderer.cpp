@@ -99,6 +99,7 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_farTreeParams.registerTweaks();
+    m_rockParams.registerTweaks();
     // "Blades per patch" is the blade index buffer's size: GPU idle, rebuild, re-record (the draw binds it).
     m_grassParams.registerTweaks([this]() {
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
@@ -1126,17 +1127,6 @@ void Renderer::present()
     // spawns): without this, this frame's record writes past the descriptor capacity beginFrame sized.
     m_textures.syncCapacity([this]() { waitForGpuAndFlushStaging(); });
 
-    // Same catch-up for the mesh vertex/index mega-buffers (beginFrame only samples the generation once,
-    // early): a mid-frame container load (terrain streaming spawning a new chunk) can grow them here, via
-    // MeshDataManager::growBuffer destroying the old buffer. Without this, recordCommandBuffers below would
-    // reuse this frame's already-recorded secondary command buffers, which still reference (e.g. via a
-    // baked vkCmdBindIndexBuffer) the now-destroyed old buffer - "invalidated because ... was destroyed".
-    if (Globals::meshDataManager.getGeneration() != m_meshDataGeneration)
-    {
-        m_meshDataGeneration = Globals::meshDataManager.getGeneration();
-        setHaveToRecordCommandBuffers();
-    }
-
     if (m_textures.hasPendingFrees())
     {
         // A container was destroyed this frame; its textures may still be sampled by an in-flight frame,
@@ -1161,6 +1151,24 @@ void Renderer::present()
     }
 
     joinGridBuilds(frameIdx, frameData); // before the staging update: a growth waits the GPU and flushes staging
+    // The GPU-profiler collect job (kicked in beginFrame) is joined HERE, before the mesh-buffer hold below:
+    // recordCommandBuffers' own join of it is then a no-op and never helps another job inside the hold.
+    Globals::jobSystem.wait(m_gpuCollectCounter);
+
+    // Same catch-up for the mesh vertex/index mega-buffers (beginFrame only samples the generation once,
+    // early): a mid-frame container load (terrain streaming spawning a new chunk) can grow them here, via
+    // MeshDataManager::growBuffer destroying the old buffer. Without this, recordCommandBuffers below would
+    // reuse this frame's already-recorded secondary command buffers, which still reference (e.g. via a
+    // baked vkCmdBindIndexBuffer) the now-destroyed old buffer - "invalidated because ... was destroyed".
+    // HELD from here through the submit: a grow on a worker (job-side createMesh) between this check and the
+    // record / submit replaced the buffers under them. NO HELPING WAIT (JobSystem::wait) and no mesh data
+    // allocation or free from here to the release (MeshDataManager::BufferHold).
+    MeshDataManager::BufferHold meshBuffersHeld(Globals::meshDataManager);
+    if (Globals::meshDataManager.getGeneration() != m_meshDataGeneration)
+    {
+        m_meshDataGeneration = Globals::meshDataManager.getGeneration();
+        setHaveToRecordCommandBuffers();
+    }
 
     vk::Semaphore waitSemaphore;
     {
@@ -1199,6 +1207,8 @@ void Renderer::present()
         ProfileScope profileScope("Submit", EProfileCategory::Renderer);
         m_swapChain.submitCommandBuffer(getCurrentCommandBuffer());
     }
+    // Submitted: a grow may replace the buffers now (it drains the GPU first; the next frame re-records).
+    meshBuffersHeld.release();
     // The reset actually reached the GPU with this submission; until here any early-out above
     // (acquire failure -> recreateSwapchain return) keeps it pending for the next frame.
     if (particleResetCarried)

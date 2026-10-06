@@ -432,12 +432,17 @@ export namespace Procedural
 		oc::vector<RetiredResident>         m_retired;
 		void retireResident(oc::unique_ptr<Resident> resident);
 		uint16                              m_material = UINT16_MAX; // shared by every chunk (created at first upload)
-		// Eviction candidates: the residents whose column left the ring (want < 0) or wants another
+		// Eviction candidates (resident keys): the residents whose column left the ring or wants another
 		// LOD. A pure function of (ring, residents), so the list is rebuilt by ONE walk only when the
 		// ring moved or a chunk uploaded; the per-frame eviction pass checks just these against the
-		// culling stamps (the hole-free handover) instead of walking every resident.
-		struct EvictCandidate { uint64 key; int want; };
-		oc::vector<EvictCandidate>          m_evictCandidates;
+		// current ring and the culling stamps (the hole-free handover) instead of walking every resident.
+		// The walk is a job ("terrainEvictScan"): kicked at the END of update with the ring scan, over the
+		// same snapshot (m_ringScanIn), into m_evictScanOut; the next update joins it and swaps it in.
+		void joinEvictScan();
+		oc::vector<uint64>                  m_evictCandidates;
+		oc::vector<uint64>                  m_evictScanOut;
+		JobCounter                          m_evictScanCounter;
+		bool                                m_evictScanReady = false; // kicked: m_evictScanOut replaces the candidates
 		// The render push runs on a worker (see render / joinRender): the hand-over walk and the
 		// sphere query both run in the job.
 		JobCounter                          m_renderCounter;

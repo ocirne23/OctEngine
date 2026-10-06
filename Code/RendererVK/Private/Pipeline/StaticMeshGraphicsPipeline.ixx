@@ -160,9 +160,11 @@ private:
     bool m_terrainTessBuilt = false; // m_terrainTessPipeline initialized (later changes reload it)
 
     vk::DeviceSize m_preprocessSize = 0;
+    uint32 m_maxUniqueMeshes = 0; // what the preprocess scratch was last sized for (a shader reload asks again)
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
 
+    // Grow-only: (re)creates the scratch buffers when the execution sets need more than they hold. GPU idle.
     void createPreprocessBuffers(uint32 maxUniqueMeshes);
     void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, const IndirectExecutionSet& executionSet, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& drawCountBuffer, uint32 countIdx);
     void createExecutionSets();

@@ -935,7 +935,9 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     its ~39 m texel; Cloud shadow 0.175 -> ~0.09 ms): one texel of each 2x2 / 4x4 / 8x8 block, the
     rotating phase's (`shadowTexel` in cloud_shadow.cs.glsl), one thread per rendered texel - a constant cost
     per frame instead of a spike every Nth frame (the old "Far update interval"). Neighbouring texels differ in
-    age by a few frames, well under a texel of cloud motion. That needs ONE texel-to-world mapping for all of
+    age by a few frames, well under a texel of cloud motion. (Tried and reverted, 2026-10-05: the frozen centre
+    travelling WITH the wind, so a texel's age stops showing as cloud motion - no artefact was observed that it
+    fixed, and it made a still camera re-centre in wind: one full cascade render every extent / 8 of travel.) That needs ONE texel-to-world mapping for all of
     them, so `buildUboClouds` FREEZES each centre (snapped to whole texels in light space, double, world
     space) and re-centres only when the camera is 1/8 of the extent away (125 m near, 1 km far), or the sun,
     the extent or the enable changed: that frame renders the whole cascade (a rare spike; a CONTINUOUSLY
@@ -1009,7 +1011,10 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   hash + golden ratio) and blends into the texel's own last value (the image is read-write, cleared to "no
   cloud" at creation). The history weight is FRAME-TIME based: `u_cloudShape4.z = exp(-3 dt / T)` with T =
   "Sky/Clouds/Quality/Sky map history (s)" (default 1; the GI layer has its own, see TWO CLOUD LAYERS below; 95 % of a change after T seconds at any frame rate; real
-  time, so it still converges while the sim is paused; 0 = no history). **PROGRESSIVE:** each frame marches
+  time, so it still converges while the sim is paused; 0 = no history). **A FLOOR under it** (both layers):
+  "Sky map min samples" N (default 12; 0 = time only) - the weight is at least (N - 1) / (N + 1), an average of N
+  marches. Time alone averaged ~5 marches at 30 fps (~20 at 120): the ocean mirrored the march noise as a per-frame
+  flicker at low frame rates (2026-10-05). **PROGRESSIVE:** each frame marches
   ONE texel of every 2x2 block (rotating phase, the shadow map's order; `CloudPipeline::SKY_UPDATE_FRAMES` = 4,
   so the CPU's dt spans 4 frames), and only the UPPER hemisphere is dispatched (rows [0, H/2); the lower half
   stays "no cloud" from the clear). 4096 threads cannot fill the GPU, so the pass is now bound by its longest
@@ -1157,7 +1162,9 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
 * **THE CANOPY: grass self-shadowing without a shadow map** (`Grass/Shadows/Canopy shadow`, 0.10; 0 = off) - a blade
   is far below a shadow-map texel. The grass layer is a thin VOLUME of blades (`grass.inc.glsl`): its top at the mean
   blade height (`grassCanopyHeight`), its extinction = `u_grassParams11.w` (the CPU fold: Canopy shadow x blades per
-  m^2 x half the blade width) x the COVER x the size by cover, faded with the range. Sun at a point `depth` below the
+  m^2 x half the blade width) x the COVER x the size by cover. Its RESULT (the sun term with the flecks, and the
+  ground's canopy ambient) fades linearly with the blades' `Range fade` (`grassRangeFade`); fading the extinction
+  kept exp(-extinction x path) nearly black until the band's last metres - an edge. Sun at a point `depth` below the
   top (`grassCanopySun`): `exp(-extinction x mean clumps x depth / max(sun.y, 0.1))`, the CLUMPS sampled at 4 points
   along the sun path (a clump shadows the bare ground beside it, stretched away from the sun), then SUN FLECKS: a
   2-octave noise at the path's ENTRY into the canopy turns T into lit / dark spots (`Fleck size` 0.08 m, `Fleck
@@ -1332,22 +1339,74 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   * `tree_volume_far.cs`, one thread per column: a column with mass, or next to one (the march's floor ring), that
     no tree floored gets the GROUND under its centre (its chunk's grid, `terrainHeightAt` where none); then mass x the
     type's profile (its mean over each slice) into the accumulation. A column without a type takes a neighbour's,
-    else the first type with mass.
+    else the first type with mass. The column's type is the LOWEST of its records' (`imageAtomicMin`, 2026-10-06; it
+    was last writer wins): a tree's before a rock's, and the same every bake.
   Record table changes re-bake (at most every 30 frames). `farTreesActive` is true with record types alone.
-* **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 12; 2026-10-04 - in one frame the world records cost 6-7 ms
+* **ROCKS** (R5 of Docs/RockRenderingPlan.md, 2026-10-06, user-untested; Procedural's world rocks): rock records are
+  record types like trees' and go through the same passes. A rock type is a **SOLID** (`TreeInstanceType::solid` ->
+  the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w` = 0): its grid is OCCUPANCY (0..1), and its extinction
+  is **`Far rock extinction (1/m)`** (4; a rebake setting - before `Far density` and the blob shrink) at ANY size - a
+  crown's extinction thins with its scale (`/ scale`: its leaves spread over a larger volume), a rock's does not. So the
+  far mass of a rock record is its occupied volume x scale^3 x that (a tree's: x scale^2). A solid writes NO colour: it
+  adds its share to **`m_rockSum`** (R32UI 2D, cleared per bake), in the accumulation's units summed over the slices -
+  the detail splat its voxel amounts, the far records pass mass / area / the slice height (what the far pass adds over
+  the slices). **The resolve** (its z = 0 invocations) then turns it into the column's ROCK FRACTION (the sum / the
+  column's accumulation over the slices) and mixes the CLIMATE'S BEDROCK into the colour by it: the terrain's rock splat
+  materials' mean colours - each diffuse texture's smallest mip (binding 7, `ROCK_TEXTURES` = 8 combined samplers, a
+  sampler with no LOD clamp; `RecordParams::rockTextures`, filled by Renderer from `TerrainResources`, the fallback
+  diffuse past `numRock`) - weighted by their climate boxes at the column's climate (`terrainClimateAt` + the lapse at
+  the column's floor), over EVERY rock entry (a far colour needs no top-three pick). **The colour map's ALPHA is 1 - the
+  rock fraction** (the clear and every tree write keep 1). **The march**: by that fraction the sun term loses its phase
+  (`Far forward scatter`: a surface does not glow backlit), takes the full N.L (`Far normal strength` toward 1, only
+  while it is > 0), and the interior darkening drops to a quarter. Register count not measured after it (was 72).
+  The hand-over: see "Hand-over" below - a rock mesh leaves the main pass at the same distance as a billboard.
+* **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 8; 2026-10-04 - in one frame the world records cost 6-7 ms
   of GPU per bake, after the per-record dispatch took it down from 31): `startBake` SNAPSHOTS what it reads that can
   change before it ends - the static sets' list, the record table and the chunk map (copied into the bake's own
   host-visible buffers), the detail chunks - and the record pool keeps every chunk it saw alive until NUM_FRAMES_IN_FLIGHT
-  frames after it ends (`bakeHoldSince` -> `TreeRecordPool::update`). `stepBake` runs one share per frame: the clears;
-  the floor coverage, the floor and the splat (the static sets whole at a stage's first frame, the record splat's
-  workgroups spread evenly: `SplatPC::wgOffset`); the smoothing; the records' mass (a frame); the far columns (a frame);
-  then the resolve and the SWAP. The bake writes the BACK `floor` / `colour` (two of each, +36 MB) and the shared
-  `accum`; the march reads the FRONT ones and `density`, which only the last step changes, so it sees the previous bake
-  until one frame switches all of it. A new bake starts only NUM_FRAMES_IN_FLIGHT frames after the last swap (the
-  snapshots are rewritten, and the old front - the new back - may still be read). `markDirty` re-bakes after a running
-  bake; `invalidate` (a set destroyed, the record types or the pool replaced) drops it; a geometry setting change drops
-  it too. **The volume lags the camera by the bake's length**: fast flight can outrun the ring's margin (`Far rebake
-  distance` + 30 m) before the swap - lower `Far bake frames` if a gap shows at the hand-over.
+  frames after it ends (`bakeHoldSince` -> `TreeRecordPool::update`). `stepBake` runs one share per frame, EVERY stage
+  that grows with the resolution or the tree count spread over its part of `Far bake frames` (`setBakeBudgets`):
+  * the CLEAR ~1/8: the 2D images whole at its first frame (small), the 3D accumulation a slice range per frame
+    (`tree_volume_clear.cs` - `vkCmdClearColorImage` clears a 3D image whole);
+  * the three SPLAT passes (floor coverage, floor, splat) together ~1/2: each walks one range - the static sets' pieces,
+    then the detail records - within the frame's budget (`SplatPC::wgOffset` for both);
+  * the smoothing (2D, a frame); the RECORDS' MASS ~1/8 in chunk ranges (`RecordsPC::chunkOffset`); the FAR COLUMNS ~1/4
+    in radial-row ranges of whole 8-row groups (`FarPC::rowOffset`);
+  * the RESOLVE ~1/8, IN PLACE: the column pass (the rock colour; it sums each column's fixed-point slices, so it runs
+    first, `ResolvePC::columnPass`), then slice ranges turn the sums into the extinction's FLOAT BITS in `accum` itself;
+    then the max-floor grid (2D, a frame);
+  * the HAND-OVER CROSS-FADE (`Far swap time`, 0.15 s of REAL time - Time's unpaused clock, `handoverFade`; no GPU
+    work of its own, so a time and not frames: the same at any frame rate, where the bake's frame budgets keep the
+    per-frame cost the same instead): the march's `TREE_HANDOVER` variant binds
+    BOTH bakes - the new one through `accum`'s R32F view (MUTABLE_FORMAT, `m_accumFloatView`, bindings 13-16 with the
+    back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped
+    by the golden ratio per frame) is under the UBO's fade (`u_treeHandover.z`, `handoverUbo`). The temporal pass / TAA
+    averages the picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix would keep a
+    dense crown opaque until late in the fade). The whole ray follows its pick - the ring, the skip, the ahead-break -
+    so the variant costs what the normal march does. **Without any temporal accumulation (temporal off, no TAA / DLSS)
+    the fade shows as noise.** (Until 2026-10-06 the first version switched 256 m world chunks one at a time by a hash:
+    a per-chunk pop.) The variant is used from the frame AFTER the hand-over began (that frame's UBO was built before
+    the stage changed);
+  * the COPY ~1/8: at fraction 1 (every chunk on the new bake) `tree_volume_copy.cs` writes `accum` into `density` in
+    slice ranges - nothing reads `density` then - and the SWAP follows. The first bake (nothing shown yet) skips the
+    hand-over.
+  (Until 2026-10-06 only the record splat was spread: the accumulation's clear, the static sets' splats, the records' mass
+  and the far columns each ran whole in one frame - a "Far trees" spike growing with the resolution - and the resolve
+  wrote `density` in the swap's frame, switching the whole volume at once.) The bake writes the BACK `floor` / `colour`
+  (two of each, +36 MB) and the shared `accum`; the march reads the FRONT ones and `density` until the hand-over. No
+  second density: `accum` holds the new one. A new bake starts only NUM_FRAMES_IN_FLIGHT frames after the last swap
+  (the snapshots are rewritten, and the old front - the new back - may still be read). `markDirty` re-bakes after a
+  running bake; `invalidate` (a set destroyed, the record types or the pool replaced) drops it and a geometry setting
+  change drops it too - **except during the hand-over / copy** (the march already shows part of it: it finishes, and
+  the next bake follows). **The volume lags the camera by the bake's length plus `Far swap time`**: no gap shows while
+  speed x lag < 30 m + `Far overlap` (the billboards cover the ring's hole up to there; `Far rebake distance` cancels
+  out). The bake's part is in frames, so it grows in seconds at a low frame rate. **BAKE AHEAD** (`Far bake ahead`, on)
+  cancels it at a steady speed: `trackCamera` keeps the camera's horizontal velocity (real time, ~0.25 s smoothing; a
+  jump past 3000 m/s resets it), `bakeLead` = that x the LAST bake's real start -> swap time (`m_bakeDurationSec`),
+  capped at `Far rebake distance` + 30 m. Both the re-bake test and the new bake's centre use camera + lead - where the
+  camera will be at the swap - so a bake starts early enough and centres where it is needed. A wrong guess (a stop, a
+  turn) is bounded by the cap, and the test (camera + 0 lead then) re-bakes at once. Without it: lower `Far bake
+  frames` / `Far swap time` if a gap shows at the hand-over.
 * **The ring's inner radius is a FIXED `Far start` − `Far rebake distance` − 30 m** (horizontal), around the BAKE
   centre: the camera may move a rebake distance before the next bake, and the ring must still hold every tree
   past the hand-over.
@@ -1493,7 +1552,8 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
 * **Hand-over:** the tree cull gets `u_treeCullParams.z` = `Far start` + `Far overlap`: a tree whose CENTRE lies
   past it drops its mesh AND its billboard from MAIN (the billboard stays the shadow caster). Over the overlap band
   both draw while the volume fades in — an overlap, not a seam; the billboards switch off at its end. (A dithered
-  billboard fade-out over the band was tried and removed 2026-10-02 at the user's request.)
+  billboard fade-out over the band was tried and removed 2026-10-02 at the user's request.) A type WITHOUT a billboard
+  (a rock, R5) drops its mesh at the same distance (`treeCullMainPiece`); its mesh stays the shadow caster.
 * Not yet: per-tree species colour beyond "last writer", half res, the analytic tail (P7), placement
   beyond the grove, a dithered billboard fade-out at the overlap's end.
 
@@ -1753,6 +1813,13 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * `createMesh(data, raytraced = true)`: `raytraced` false builds NO BLAS (`RayTracingScene`'s `m_noStaticBlas`, the
   skip the skinned output regions use too) - any TLAS instance of it is inactive (no BLAS address). For meshes RT
   never has to see: the trees' meshes / cards, the bushes (Procedural TreeSystem).
+  **"No BLAS address" = the entry reads 0, and that holds only because the BLAS address buffers are ZEROED at creation
+  and on growth** (`AccelerationStructure::zeroBlasAddresses`): an entry is written only by a BLAS build / free /
+  eviction, so a mesh that never builds one never gets a write, and fresh buffer memory is undefined (recycled
+  allocator memory after a mesh-capacity growth holds stale bytes). Unzeroed, the TLAS writer took the garbage for a
+  BLAS reference -> DEVICE LOST in the TLAS build / traversal, reported by the next `vkQueueWaitIdle` on any thread
+  (2026-10-05: the rock preview, the first not-raytraced meshes drawn as plain nodes in every pass; mostly while
+  terrain streaming grew the mesh capacity. A streamed-out mesh before its first stream-in had the same exposure).
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
@@ -1833,7 +1900,15 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
   its range. Sandbox, 350² grove: Shadow draw 1.48 → 1.06 ms. Tree meshes have NO LOD chains (Procedural uploads
   level 0 only): both culls skip the LOD group lookup for tree records, and no hysteresis slots are allocated (the
-  piece's old `lodStateBase` word is padding); prev transform = none (w 0 — trees never move). The buffers are
+  piece's old `lodStateBase` word is padding); prev transform = none (w 0 — trees never move). **A ROCK of the set**
+  (Procedural's world rocks, 2026-10-05, user-untested; cost not measured): a type with ONE mesh in the `bark` slot on
+  `LitRock` - both culls know it by the record's pipeline index (`PIPELINE_IDX_LIT_ROCK`, a compare on a loaded
+  word: no extra load for a tree record) and give it what a tree record lacks, the mesh LOD pick (STATELESS -
+  `lodSelectLevel` with no last level: the record has no hysteresis slot), and withhold what a tree gets: the wind
+  (the bound's sway growth, the shadow VS's bit 15 trunk bend). `treeCullRtPiece` and `initTreeSetTypes`' RT-capable
+  test fall back to the bark record for a type with neither billboard nor leaves. A type without a billboard has no
+  far-volume hand-over (`treeCullMainPiece` tests the volume's start for billboard types only): a rock draws wherever
+  its chunk is in the set. The buffers are
   bound at bindings 20/21 (main cull) and 13/14 (shadow culls) — descriptors written at RECORD time, so the
   culls bind ONE set (`m_treeCullSet`, the set rendered; changing it or destroying it re-records; a second set
   in one frame asserts). With no set, `m_treeCullDummy` is bound. **In the TLAS** (GI, RTAO, RT shadows, the ocean / film
@@ -2009,7 +2084,7 @@ retention order, promotion order and eviction candidates are kept member scratch
 
 Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ranges (see
 `MeshStreamSource` in [`Code/File/CONTEXT.md`](../File/CONTEXT.md)). Vertex and index mega-buffers are
-`BitRangeAllocator` free lists in `MeshDataManager`.
+`BitRangeAllocator<true>` (lock-free) free lists in `MeshDataManager` (see "The graphics-queue mutex" for its grow lock).
 
 Over `Mesh budget (MB)`, least-recently-referenced sets unseen for `Mesh cold frames` **evict**:
 
@@ -2089,6 +2164,12 @@ Scene opaque, nearly all with 0 instances.
   scene's sky sphere could draw first and run its atmosphere march under the whole terrain; in the sandbox it did not
   (no measurable change, 2026-10-05: the sky shader costs ~0.17 ms at 1440p on its own pixels), but slot order is
   arbitrary (slot reuse), so the order is now fixed.
+* **THE DGC PREPROCESS SCRATCH** (`createPreprocessBuffers` in the static mesh and the shadow pipelines) is sized
+  by `vkGetGeneratedCommandsMemoryRequirementsEXT`, and that requirement depends on the execution set's PIPELINES,
+  not only on the mesh capacity: `reloadShaders` asks again after it rebuilds them. It kept the old size until
+  2026-10-05, and "Editor/Wireframe" (line pipelines: 1 MB more at 85 MB) failed
+  VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071. Grow-only: a reload whose requirement the buffers already
+  cover keeps them.
 
 ---
 
@@ -2309,12 +2390,31 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
 ## The graphics-queue mutex
 
 **`StagingManager` is THREAD-SAFE** — one internal mutex over the ring and region lists, `upload*`
-callable from jobs — and **its ring-overflow path submits to the graphics queue.**
+callable from jobs — and **its ring-overflow path submits to the graphics queue.** The mutex covers
+only the CLAIM (the ring range plus its copy region): `upload*` memcpys into its range after the
+unlock (`copyAndUnlock`), so concurrent uploads copy in parallel (the terrain's chunk uploads fan out
+on it), and a per-buffer writer count makes `updateNoLock` wait for every copy into the buffer before
+its flush and submit (a writer takes no lock to finish, so the wait under the mutex cannot deadlock).
 
 > That is why **EVERY graphics-queue call in the engine goes through Device's queue mutex**: submits
 > through `CommandBuffer::submitGraphics`, presents through `SwapChain::present`, idles through
 > `Device::graphicsQueueWaitIdle()`. **Never call `getGraphicsQueue().submit()` or `waitIdle()` raw.**
 > Lock order: staging mutex → queue mutex.
+
+**`MeshDataManager` allocates LOCK-FREE** (`BitRangeAllocator<true>` per pool) under a `std::shared_mutex` that only
+fences a GROW: every allocate / `upload*` / `free*` holds it SHARED - over the drain and the staging copy too, which
+name the buffer by handle - and `growBuffer`, which replaces the buffer AND the allocator's bit array, holds it
+EXCLUSIVE (a full allocator re-tries under the exclusive lock before growing: another thread may have grown it).
+Before 2026-10-05 a plain mutex covered the allocation alone, and a grow on another thread could replace the buffer
+between an upload's allocation and its staging copy. Lock order: grow → staging → queue.
+
+**`present()` holds a `MeshDataManager::BufferHold`** (the grow lock, shared) from its mesh-generation check through
+the submit, so the check, the recording and the submit see ONE set of mega-buffers; a worker's grow waits for the
+release right after the submit. It starts AFTER `joinGridBuilds` and after an early join of the GPU-profiler collect
+job (`recordCommandBuffers`' own join of it is then a no-op): **NO helping `JobSystem::wait` inside the hold** - main
+helps High / Normal jobs there, and a helped job that allocates mesh data (the terrain's upload job) would take the
+grow lock again on the holding thread (deadlock behind a waiting grow). `allocate` / `release` assert that the
+calling thread is not the holder.
 
 Known unlocked queue holders, both main-thread-only by construction: the ImGui backend (texture-upload
 submits in the post-join window) and OpenXR (`xrEndFrame`; VR stays synchronous on main).
@@ -2413,6 +2513,41 @@ Both push params in every frame; the renderer owns none of the tweaks.
     the lit core's register peak. **Measure it (pipeline stats + profile) before you extend it.**
   * The ocean's seabed splat has no relief (no derivatives at a ray hit): its layer borders stay linear.
   * The relief also carries the SURFACE WATER: see "Terrain surface water" below.
+
+# The rock material (`EPipelineIndex::LitRock`, variant 13; `RockParams`, "Rocks/Material")
+
+The procedural rocks (Procedural `RockSystem`, Docs/RockRenderingPlan.md 5; R2, 2026-10-05, user-untested). A rock
+has NO textures and its material is not read: **the surface comes from the climate it stands in, through the terrain
+splat's own materials and rules** - a boulder under a sandstone cliff is that sandstone.
+
+* **`instanced_indirect_rock.vs.glsl`** (the terrain VS's shape: position + normal only): the terrain-data fields PER
+  VERTEX - the ground height under the vertex (`terrainDataAt().x`), the temperature at the vertex's own height
+  (`terrainTemperatureAt`: the top of a tall boulder is colder than its foot), the humidity, the water level - as one
+  interpolant. Without a map: the instance origin as the ground, a mild climate. Plus the vertex's baked **CAVITY**:
+  a rock mesh has no uv, so `MeshVertex`'s u (`positionU.w`) carries it (Procedural `rockCavity`: 1 = open, 0 = deep
+  in a crevice).
+* **`instanced_indirect_rock.fs.glsl`**: the lit core (`SUN_SHADOW_FIRST`, `g_waterLevelOverride`) +
+  `terrain_splat.inc.glsl` WITHOUT `TERRAIN_SPLAT_RELIEF` (linear blends, no parallax). Coverages first, then bottom-up:
+  1. **Bedrock** - `pickClimate` over the splat's ROCK entries (the cliff's pick), `sampleTerrainTriplanar` (biplanar)
+     in WORLD space at the terrain's rock uv scale x "UV scale" (4: a boulder shows finer grain than a cliff). Static
+     rocks: world space does not swim, and every instance of a shape shows its own piece of the texture.
+  2. **The ground material** (the climate's top two GROUND entries, biplanar): a patchy COVER on up-facing faces
+     ("Ground cover" x smoothstep of normal.y over "Cover start / full", x a world fBm of "Cover patch size") and in
+     the crevices ("Cavity cover" x (1 - cavity), on faces that do not look down), and the
+     **CONTACT BAND** at the foot (1 at the ground, 0 "Contact height" above it; "Contact blend" of ground material -
+     it hides the cut line - and "Contact darkening" on the AO). The ground height is the data map's, metres-wide
+     texels near the camera and far coarser beyond: the band fades out by "Contact fade distance".
+  3. **Snow** - the terrain's rule (cold x holds x humid) with the face's own slope, world-XZ projection.
+  The AO = the contact darkening x the cavity ("Cavity AO"). Then the terrain's wetness (`terrainWetnessAt`: the
+  ground's darkening + gloss thresholds and slope drain; no drying pattern, glints or sky reflection). Before a splat
+  set is registered: plain grey stone.
+* **The pipeline**: a variant like the terrain's (opaque, back-face culled, static: the motion target stays masked).
+  `isLitCoreFragment` in `buildPipelineLayout` gives it the lit core's baked defines (`LIT_RT_*`, the debug modes).
+* **Meshes**: a regular LOD chain per shape (`createMeshLodChain`; the culls pick the level per instance), raytraced
+  through the chain's one BLAS. No tessellation (planned, then dropped by the user, 2026-10-05).
+* **In the tree instance set** (R4, the world's rocks): see "BAKED TREE RECORDS" - a rock record gets the LOD pick
+  and no wind.
+* **Not yet**: the far-volume hand-over (R5). The register count is not measured.
 
 # Terrain surface water
 
