@@ -189,6 +189,7 @@ public:
 			m_snapshots.emplace_back();
 			m_varLocks.push_back(c_noLock);
 			m_varLocked.push_back(0);
+			m_varLockable.push_back(0);
 		}
 		else
 		{
@@ -283,12 +284,27 @@ public:
 
 	const oc::vector<TweakLock>& locks() const { return m_locks; }
 
-	// How many of the section's rows are locked (its toggle's look).
+	// The owner names the rows a lock means something on (the renderer: every source of a baked value). Only those get a
+	// lock button, count in their section's state and are read-only while locked. Main thread, after the rows registered.
+	void markLockable(const void* address, size_t size)
+	{
+		const uint8* a = static_cast<const uint8*>(address);
+		const auto overlaps = [a, size](const void* begin, size_t length)
+		{
+			const uint8* b = static_cast<const uint8*>(begin);
+			return a < b + length && b < a + size;
+		};
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (overlaps(m_vars[i].data, dataSize(m_vars[i])) || (m_vars[i].intensity && overlaps(m_vars[i].intensity, sizeof(float))))
+				m_varLockable[i] = 1;
+	}
+
+	// How many of the section's lockable rows are locked (its toggle's look).
 	ETweakLockState lockState(uint32 lock) const
 	{
 		bool any = false, all = true;
 		for (size_t i = 0; i < m_vars.size(); ++i)
-			if (m_varLocks[i] == lock)
+			if (m_varLocks[i] == lock && m_varLockable[i] != 0)
 			{
 				any |= m_varLocked[i] != 0;
 				all &= m_varLocked[i] != 0;
@@ -318,22 +334,22 @@ public:
 			m_locks[lock].onChange();
 	}
 
-	// One row. No-op for a row no lock covers.
+	// One row. No-op for a row no lock covers or that is not lockable.
 	void setVarLocked(const TweakVar& var, bool locked)
 	{
 		const size_t index = (size_t)(&var - m_vars.data());
-		if (index >= m_vars.size() || m_varLocks[index] == c_noLock || (m_varLocked[index] != 0) == locked)
+		if (index >= m_vars.size() || m_varLocks[index] == c_noLock || m_varLockable[index] == 0 || (m_varLocked[index] != 0) == locked)
 			return;
 		m_varLocked[index] = locked ? 1 : 0;
 		if (m_locks[m_varLocks[index]].onChange)
 			m_locks[m_varLocks[index]].onChange();
 	}
 
-	// The row's lock (c_noLock = none covers it: no button).
+	// The row's lock (c_noLock = none covers it, or it is not lockable: no button).
 	uint32 lockOf(const TweakVar& var) const
 	{
 		const size_t index = (size_t)(&var - m_vars.data());
-		return index < m_vars.size() ? m_varLocks[index] : findLockFor(var);
+		return index < m_vars.size() && m_varLockable[index] != 0 ? m_varLocks[index] : c_noLock;
 	}
 
 	// A source variable: its address and size (a vec3 over three float rows reaches all three).
@@ -366,22 +382,28 @@ public:
 		return found ? ETweakSource::Locked : ETweakSource::Unknown;
 	}
 
-	// Whether the row is LOCKED or no lock covers it (a change of it moves a baked value).
+	// Whether a change of the row moves a baked value: it is lockable, and LOCKED or no lock covers it.
 	bool isVarBakeable(const TweakVar& var) const
 	{
 		const size_t index = (size_t)(&var - m_vars.data());
-		if (index >= m_vars.size() || anyFlag(var.flags, ETweakFlags::Runtime))
+		if (index >= m_vars.size() || m_varLockable[index] == 0 || anyFlag(var.flags, ETweakFlags::Runtime))
 			return false;
 		return m_varLocks[index] == c_noLock || m_varLocked[index] != 0;
 	}
 
-	// The lock that names this category EXACTLY (the fold that carries its toggle); c_noLock when none does.
+	// The lock that names this category EXACTLY (the fold that carries its toggle); c_noLock when none does, or when
+	// none of its rows is lockable.
 	uint32 lockAt(oc::string_view category) const
 	{
 		for (uint32 id = 0; id < (uint32)m_locks.size(); ++id)
 			for (const oc::string& c : m_locks[id].categories)
 				if (c == category)
-					return id;
+				{
+					for (size_t i = 0; i < m_vars.size(); ++i)
+						if (m_varLocks[i] == id && m_varLockable[i] != 0)
+							return id;
+					return c_noLock;
+				}
 		return c_noLock;
 	}
 
@@ -396,7 +418,7 @@ public:
 			if (index == m_vars.size())
 				return false;
 		}
-		return m_varLocks[index] != c_noLock && m_varLocked[index] != 0;
+		return m_varLocks[index] != c_noLock && m_varLockable[index] != 0 && m_varLocked[index] != 0;
 	}
 
 	// Mode-teardown support: removes every variable whose registered pointer (data or intensity)
@@ -419,6 +441,7 @@ public:
 				m_snapshots.erase(m_snapshots.begin() + i);
 				m_varLocks.erase(m_varLocks.begin() + i);
 				m_varLocked.erase(m_varLocked.begin() + i);
+				m_varLockable.erase(m_varLockable.begin() + i);
 			}
 		for (TweakVar& var : m_vars) // a listener owned by the dying object would call into freed memory
 			for (size_t i = var.listeners.size(); i-- > 0;)
@@ -862,6 +885,7 @@ private:
 	oc::vector<Value> m_snapshots; // parallel to m_vars - last value seen by update()
 	oc::vector<uint32> m_varLocks;  // parallel to m_vars - the nearest lock above each (c_noLock = none)
 	oc::vector<uint8> m_varLocked;  // parallel to m_vars - the row's own lock state (meaningful under a lock)
+	oc::vector<uint8> m_varLockable; // parallel to m_vars - the owner said a lock means something here (markLockable)
 	oc::vector<TweakLock> m_locks;
 	struct ChangeListener
 	{

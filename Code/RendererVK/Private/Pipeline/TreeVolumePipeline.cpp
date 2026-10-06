@@ -7,6 +7,7 @@ import :Device;
 import :Allocator;
 import :CommandBuffer;
 import :TreeVolumePipeline;
+import :PushFields;
 
 namespace
 {
@@ -184,6 +185,19 @@ namespace
             && a.recordDetail == b.recordDetail && a.rockExtinction == b.rockExtinction;
     }
 
+    // The volume geometry entries (pc_vol_*, volumeParams) of a list, from the settings `settingsOf` returns. The sources
+    // are the live rows (`s`) either way: a snapshot holds what they were.
+    template<typename F>
+    void addGeometryFields(PushFieldList& list, const FarTreeParams& s, F settingsOf)
+    {
+        list.add("vol_rMin", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).rMin; }, s.startDistance, s.rebakeDistance);
+        list.add("vol_rMax", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).rMax; }, s.startDistance, s.rebakeDistance, s.endDistance);
+        list.add("vol_angularRes", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).angularRes; }, s.angularRes);
+        list.add("vol_radialRes", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).radialRes; }, s.radialRes);
+        list.add("vol_slices", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).slices; }, s.slices);
+        list.add("vol_height", [settingsOf] { return volumeParams(settingsOf(), glm::vec2(0.0f)).height; }, s.height);
+    }
+
     void createImage(vk::ImageType type, vk::Format format, vk::Extent3D extent, vk::ImageUsageFlags usage,
         vk::Image& outImage, VmaAllocation& outMemory, vk::ImageView& outView, const char* debugName, vk::ImageCreateFlags flags = {})
     {
@@ -247,12 +261,29 @@ namespace
     }
 }
 
+void TreeVolumePipeline::registerPushFields(const FarTreeParams& s)
+{
+    addGeometryFields(m_bakeFields, s, [&s]() -> const FarTreeParams& { return s; });
+    m_bakeFields.add("vol_densityScale", s.densityScale); // in the block; the bake passes never read it
+    m_bakeFields.add("rockExtinction", s.rockExtinction);
+    m_bakeFields.add("recordDetail", s.recordDetail);
+    m_bakeFields.add("floorSmoothing", s.floorSmoothing);
+    addGeometryFields(m_marchFields, s, [this]() -> const FarTreeParams& { return marchSettings(); });
+    m_marchFields.add("vol_densityScale", s.densityScale);
+}
+
+const FarTreeParams& TreeVolumePipeline::marchSettings() const
+{
+    return m_job.active && m_job.stage == EBakeStage::Copy && !m_job.crossFade ? m_job.settings : m_bakedSettings;
+}
+
 // floorPass: 0 = the splat, 1 = the floor's coverage pass, 2 = the floor pass (TREE_FLOOR_PASS). records: the trees
 // come from the world tree records (TREE_SPLAT_RECORDS).
 void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_splat.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_bakeFields.appendDefines(layout.defines);
     if (floorPass != 0)
         layout.defines.push_back(ShaderDefine{ "TREE_FLOOR_PASS", floorPass == 1 ? "1" : "2" });
     if (records)
@@ -272,6 +303,7 @@ void TreeVolumePipeline::buildResolveLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_resolve.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_bakeFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
     b.push_back(binding(1, vk::DescriptorType::eCombinedImageSampler)); // terrain data (the columns' climate)
@@ -305,6 +337,7 @@ void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_floor_smooth.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_bakeFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eStorageImage)); // source floor
     b.push_back(binding(1, vk::DescriptorType::eStorageImage)); // destination
@@ -332,6 +365,7 @@ void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_records.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_bakeFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(2, vk::DescriptorType::eStorageImage)); // the mass per column
     b.push_back(binding(3, vk::DescriptorType::eStorageImage)); // the type per column
@@ -344,6 +378,7 @@ void TreeVolumePipeline::buildFarLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_far.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_bakeFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
     b.push_back(binding(1, vk::DescriptorType::eCombinedImageSampler)); // terrain data
@@ -360,6 +395,7 @@ void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool te
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_march.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_marchFields.appendDefines(layout.defines);
     if (temporalOut)
         layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL_OUT", "1" });
     if (handover)
@@ -402,6 +438,7 @@ void TreeVolumePipeline::buildTemporalLayout(ComputePipelineLayout& layout, uint
 {
     layout.computeShaderDebugFilePath = "Shaders/cloud_temporal.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_marchFields.appendDefines(layout.defines);
     layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL", "1" });
     layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL_SCALE", oc::to_string(scale) });
     layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL_CHECKER", checker ? "1" : "0" });
@@ -420,6 +457,7 @@ void TreeVolumePipeline::buildUpsampleLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/tree_volume_upsample.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_marchFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
     for (uint32 i = 1; i <= 3; ++i) // scene depth, the half-res colour + distances
@@ -458,6 +496,18 @@ void TreeVolumePipeline::prepare(const FarTreeParams& settings)
 {
     if (m_angularRes != settings.angularRes || m_radialRes != settings.radialRes || m_slices != settings.slices)
         createVolume(settings.angularRes, settings.radialRes, settings.slices);
+    // THE LOCKABLE PUSH VALUES: re-baked when dirty (a lock click, a changed locked setting, the frame a bake without a
+    // cross-fade swaps), their passes rebuilt when a const changed - before this frame records any of them.
+    const bool bakeChanged = m_bakeFields.isDirty() && m_bakeFields.update();
+    const bool marchChanged = m_marchFields.isDirty() && m_marchFields.update();
+    if (bakeChanged || marchChanged)
+    {
+        (void)Globals::device.graphicsQueueWaitIdle();
+        if (bakeChanged)
+            reloadBakePasses();
+        if (marchChanged)
+            reloadMarchPasses();
+    }
     const uint32 scale = settings.halfRes ? 2u : 1u;
     const bool temporalChecker = settings.pixelSkip != 0; // the temporal pass knows 1 of 2 only
     if (settings.temporalPath() && (!m_hasTemporalImages || m_temporalScale != scale))
@@ -819,6 +869,46 @@ void TreeVolumePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     if (!ok)
         printf("TreeVolumePipeline: shader reload failed, keeping previous pipeline(s)\n");
     m_dirty = true; // a bake edit takes effect at once
+}
+
+void TreeVolumePipeline::reloadBakePasses()
+{
+    ComputePipelineLayout coverLayout;   buildSplatLayout(coverLayout, 1, false);
+    ComputePipelineLayout floorLayout;   buildSplatLayout(floorLayout, 2, false);
+    ComputePipelineLayout splatLayout;   buildSplatLayout(splatLayout, 0, false);
+    ComputePipelineLayout resolveLayout; buildResolveLayout(resolveLayout);
+    ComputePipelineLayout smoothLayout;  buildFloorSmoothLayout(smoothLayout);
+    ComputePipelineLayout recordsLayout; buildRecordsLayout(recordsLayout);
+    ComputePipelineLayout farLayout;     buildFarLayout(farLayout);
+    bool ok = m_floorCoverPipeline.reloadShaders(coverLayout);
+    ok = m_floorPipeline.reloadShaders(floorLayout) && ok;
+    ok = m_splatPipeline.reloadShaders(splatLayout) && ok;
+    for (uint32 pass = 0; pass < 3; ++pass)
+    {
+        ComputePipelineLayout recordLayout; buildSplatLayout(recordLayout, pass, true);
+        ok = m_recordSplatPipelines[pass].reloadShaders(recordLayout) && ok;
+    }
+    ok = m_resolvePipeline.reloadShaders(resolveLayout) && ok;
+    ok = m_floorSmoothPipeline.reloadShaders(smoothLayout) && ok;
+    ok = m_recordsPipeline.reloadShaders(recordsLayout) && ok;
+    ok = m_farPipeline.reloadShaders(farLayout) && ok;
+    if (!ok)
+        printf("TreeVolumePipeline: bake pass rebuild failed, keeping previous pipeline(s)\n");
+}
+
+void TreeVolumePipeline::reloadMarchPasses()
+{
+    bool ok = buildMarchPair(m_marchPipeline, m_marchHandoverPipeline, false, 1, m_plainBakedSkip, true);
+    if (m_temporalPipeline.getPipeline()) // compiled at its first use
+    {
+        ComputePipelineLayout temporalLayout; buildTemporalLayout(temporalLayout, m_temporalBakedScale, m_temporalBakedChecker);
+        ok = buildMarchPair(m_marchTemporalPipeline, m_marchTemporalHandoverPipeline, true, m_temporalBakedScale, m_temporalBakedChecker ? 1u : 0u, true) && ok;
+        ok = m_temporalPipeline.reloadShaders(temporalLayout) && ok;
+        ComputePipelineLayout upsampleLayout; buildUpsampleLayout(upsampleLayout);
+        ok = m_upsamplePipeline.reloadShaders(upsampleLayout) && ok;
+    }
+    if (!ok)
+        printf("TreeVolumePipeline: march pass rebuild failed, keeping previous pipeline(s)\n");
 }
 
 // The bake's start: everything it reads that may change before it ends is SNAPSHOT here - the static sets' list, the
@@ -1303,7 +1393,10 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         // copy in ONE frame, then the swap: a one-off cost on a setting change, never a frame showing a half copy.
         job.crossFade = m_baked && sameGeometry(job.settings, m_bakedSettings);
         if (!job.crossFade)
+        {
             job.copyPerFrame = m_accumDepth;
+            m_marchFields.markDirty(/*resolve*/ false); // the next frame's march shows this bake (marchSettings)
+        }
         job.stage = job.crossFade ? EBakeStage::Handover : EBakeStage::Copy;
         job.handoverStart = params.frameNumber;
         job.handoverStartSec = Globals::time.getElapsedSec();

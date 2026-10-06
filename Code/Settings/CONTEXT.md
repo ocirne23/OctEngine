@@ -96,6 +96,11 @@ a Saved / Synced block (`registerVar` only checks for Saved | Synced).
 names and that category's subtree. A var belongs to the **nearest** lock category on its path (the longest match),
 so a nested lock ("Sky/Clouds") is not covered by its parent's ("Sky"); `Runtime` vars are never covered.
 
+**Only LOCKABLE rows take part.** The owner names them once its sources are known (`markLockable(address, size)`;
+the renderer marks every source of a baked value). A row that is not lockable has no lock (`lockOf` = `c_noLock`, no
+panel button), is never read-only, never counts in `lockState`, and `isVarBakeable` is false for it; a fold whose
+section has no lockable row carries no toggle (`lockAt`). Without an owner (headless) nothing is lockable.
+
 **Every covered ROW has its own state** (`isVarLocked(var)`, `setVarLocked(var, state)`); `setLocked(id, state)`
 sets every row of the section, and `lockState(id)` says None / Some / All (the fold toggle's look). A row that
 registers later (or moves under a lock) takes the section's last state; a re-registration keeps its state. Main

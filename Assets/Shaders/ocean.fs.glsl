@@ -421,7 +421,7 @@ float oceanEdgeCover()
         if (u_terrainTess_enabled > 0.5 && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
         {
             // The film's lift (instanced_indirect_terrain.vs.glsl): the centre view and the HEIGHT falloff.
-            const float tf = clamp((distance(in_pos, u_views[VIEW_CENTER].viewPos.xyz) - u_terrainTess_fadeStart)
+            const float tf = clamp((distance(in_pos, u_views_viewPos[VIEW_CENTER].xyz) - u_terrainTess_fadeStart)
                 / max(u_terrainTess_fadeEnd - u_terrainTess_fadeStart, 1e-3), 0.0, 1.0);
             reliefDepth = u_terrainTess_depthGround * (1.0 - pow(tf, u_terrainTess_heightFalloff));
         }

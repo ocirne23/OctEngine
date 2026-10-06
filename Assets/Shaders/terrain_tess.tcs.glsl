@@ -53,12 +53,12 @@ float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 		return 1.0;
 	const float maxFactor = u_terrainTess_maxFactor;
 	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
-	const vec3 viewPos = u_views[VIEW_CENTER].viewPos.xyz;
+	const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
 	const float dist = distance(0.5 * (a + b), viewPos);
 	if (dist >= fadeEnd)
 		return 1.0;
 	// The projection's y scale is the length of row 1 of the centre mvp's 3x3 (P11 x a unit view row).
-	const mat4 mvp = u_views[VIEW_CENTER].mvp;
+	const mat4 mvp = u_views_mvp[VIEW_CENTER];
 	const float projY = length(vec3(mvp[0][1], mvp[1][1], mvp[2][1]));
 	const float pxPerMeterAt1m = 0.5 * projY * u_screenSize.y * u_viewportRect.w;
 	float factor = distance(a, b) * pxPerMeterAt1m / (max(dist, u_terrainTess_freezeDistance) * u_terrainTess_targetEdgePx);
@@ -96,7 +96,7 @@ void main()
 		// patch is behind the terrain facing the camera (a heightfield's back slopes are occluded), and its
 		// silhouette corners sit near dot 0, inside the margin. The rasterizer would cull its flat triangle
 		// anyway; this saves its tessellation and displacement.
-		const vec3 viewPos = u_views[VIEW_CENTER].viewPos.xyz;
+		const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
 		const vec3 n0 = normalize(in_normal[0]), n1 = normalize(in_normal[1]), n2 = normalize(in_normal[2]);
 		if (!outside)
 			outside = dot(n0, normalize(viewPos - in_pos[0])) < TERRAIN_TESS_BACKFACE_MARGIN

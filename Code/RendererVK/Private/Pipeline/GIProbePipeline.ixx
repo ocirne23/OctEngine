@@ -13,7 +13,8 @@ import :RenderPass;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
-import :UboFields;
+import :UboBlock;
+import :PushFields;
 import Settings;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
@@ -182,11 +183,18 @@ public:
     void reloadDebugShaders(vk::RenderPass renderPass);
     void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
     // The "GI/Debug probe*" settings. Enabled is a per-frame stage flag; the colour mode and the radius are
-    // push constants in the CACHED debug secondary, so a change re-records (the Renderer's listener).
-    // The testbed's P / O keys drive the same settings (the caller re-records after cycleDebugMode).
+    // lockable push values (debugPushFields) in the CACHED debug secondary, so a change re-records (the Renderer's
+    // listener) and, while locked, re-bakes. The testbed's P / O keys drive the same settings (the caller re-records
+    // after cycleDebugMode).
+    void registerDebugPushFields();
+    PushFieldList& debugPushFields() { return m_debugPushFields; }
     bool isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
     void toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
-    void cycleDebugMode() { Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5; } // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
+    void cycleDebugMode() // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
+    {
+        Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5;
+        Tweak::notifyChanged(Globals::settings.gi.debugMode);
+    }
 
     Buffer& getTlasInstanceBuffer(uint32 frameIdx) { return m_tlasInstanceBuffer[frameIdx]; }
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
@@ -194,7 +202,7 @@ public:
     float getStrength() const { return Globals::settings.gi.strength; }
     // The u_rt_gi* entries (Renderer::registerUboFields, inside its rt block): its tweaks are private. rtEnabled /
     // giEnabled are long-lived RTParams members: the lambdas keep the references.
-    void registerUboFields(UboFieldList& list, const bool& rtEnabled, const bool& giEnabled) const;
+    void registerUboFields(UboBlock& list, const bool& rtEnabled, const bool& giEnabled) const;
     // x = Chebyshev variance floor (fraction of probe spacing), y = FULL volume bake this frame (1/0), z = probe
     // weight floor, w = mean scale. Uploaded to the frame UBO (u_rt_giVis*, u_giLive_fullBake) for every probe-sampling shader.
     // Called ONCE per frame by the UBO build: y is 1 for the one frame after the volume images were (re)created
@@ -230,6 +238,7 @@ private:
     ComputePipeline m_tracePipeline;
     ComputePipeline m_volumeBakePipeline;
     GraphicsPipeline m_debugPipeline;
+    PushFieldList m_debugPushFields;
     vk::RenderPass m_debugRenderPass;
 
     // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 3-layer array, GENERAL layout for life, rewritten

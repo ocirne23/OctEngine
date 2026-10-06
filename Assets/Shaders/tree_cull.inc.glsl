@@ -162,7 +162,7 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
         const float bandStart = max(switchDistance - fadeWidth * 0.5, 0.0);
         const float bandEnd = bandStart + fadeWidth;
         // A pixel's distance varies by up to the piece radius from the centre's (the material's band is per pixel).
-        const float dist = distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre);
+        const float dist = distance(u_views_viewPos[VIEW_CENTER].xyz, in_treePieces[pieceIdx].centre);
         const float radius = in_treePieces[pieceIdx].radius;
         const float midSwitch = in_treeTypes[typeIdx].midDistance * u_present_treeFarScale;
         mid = midSwitch > 0.0;
@@ -197,7 +197,7 @@ bool treeCullMainPiece(uint pieceIdx, out TreeCullPiecePick pick)
             billboard = false;
         }
     }
-    else if (u_present_treeVolumeStart > 0.0 && distance(u_views[VIEW_CENTER].viewPos.xyz, in_treePieces[pieceIdx].centre) > u_present_treeVolumeStart)
+    else if (u_present_treeVolumeStart > 0.0 && distance(u_views_viewPos[VIEW_CENTER].xyz, in_treePieces[pieceIdx].centre) > u_present_treeVolumeStart)
         mesh = false; // a ROCK (no billboard): the far volume draws it past its start, as a tree (R5)
     const uint farMode = mesh ? (fade ? 2u : 1u) : 0u; // what fades over the FAR band
     const uint midMode = mesh ? (!inMid ? 1u : meshGone ? 0u : 2u) : 0u; // what fades over the MID band

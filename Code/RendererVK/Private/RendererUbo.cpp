@@ -29,7 +29,8 @@ import :glslang;
 import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
-import :UboFields;
+import :UboBlock;
+import :UboRoot;
 
 // The values both a lockable entry and the live build (or two entries) read: one definition, so they cannot drift.
 namespace
@@ -82,9 +83,9 @@ float Renderer::grassGridRange() const
 }
 
 // Renderer: THE FRAME UBO. buildFrameUbo assembles the one uniform buffer every pass reads, from the
-// param blocks the outside pushes in and the registries under Data/; the buildUbo* helpers below fill its root
-// and LIVE structs by subject (everything that depends on the camera, the clock, the sun, the wind or a value the
-// outside pushes per frame), and registerUboFields (at the end) lists the LOCKABLE values - computed from tweaks
+// param blocks the outside pushes in and the registries under Data/; the buildUbo* helpers below write its root
+// values by subject through m_u's handles (UboRoot.ixx: everything that depends on the camera, the clock, the sun,
+// the wind or a value the outside pushes per frame), and registerUboFields (at the end) lists the LOCKABLE values - computed from tweaks
 // only, each a constant in the shaders while its tweaks are locked (applyUboLocks, RendererUboBake.cpp). An
 // entry's lambda names every input it reads as its sources: a new input needs a new source too. Pure CPU math -
 // nothing here records or touches the device.
@@ -97,14 +98,14 @@ float Renderer::grassGridRange() const
 void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
 {
     ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
-    RendererVKLayout::Ubo& ubo = m_ubo;
+    UboBlock& ubo = m_ubo;
 
-    ubo.present = RendererVKLayout::PresentUbo{}; // the tree range and the TLAS count: present() patches them in
-    ubo.frameIndex = m_frameCounter;
+    ubo.zero(m_u.present.begin(), m_u.present.size()); // the tree range and the TLAS count: present() patches them in
+    ubo.set(m_u.frameIndex, m_frameCounter);
     // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with
     // the global pause (see Time::setPaused).
-    ubo.timeSeconds = (float)Globals::time.getSimElapsedSec();
-    ubo.mipPixelScale = m_mipPixelScale;
+    ubo.set(m_u.timeSeconds, (float)Globals::time.getSimElapsedSec());
+    ubo.set(m_u.mipPixelScale, m_mipPixelScale);
 
     buildUboViews(cameraIn, camera, vrBaseOrientation);
     buildUboWeather(camera);
@@ -119,29 +120,28 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     buildUboGrass(camera);
     buildUboFoliage();
 
-    m_uboFields.evaluate(m_uboFieldValues.data());
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
-    if (!m_uboFieldValues.empty())
-        Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_uboFieldValues.size(), m_uboFieldValues.data(), RendererVKLayout::UBO_FIELDS_OFFSET);
+    ubo.evaluate(); // the lockable values
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), ubo.size(), ubo.data());
 }
 
 // THE wind ("Sky/Wind": the particles, the vegetation - wind.inc.glsl - and the fog read it), the weather
 // volumes' camera values and the rain occlusion map.
 void Renderer::buildUboWeather(const Camera& camera)
 {
-    RendererVKLayout::WeatherUbo& weather = m_ubo.weather;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::Weather& weather = m_u.weather;
     const ParticleParams& particles = m_particles.getParams();
 
     const WindParams& wind = m_windParams;
     const glm::vec2 dir = wind.direction();
     const float speed = glm::max(wind.speed, 0.0f);
-    weather.windVelocity = glm::vec3(dir.x * speed, 0.0f, dir.y * speed);
-    weather.windDirection = dir;
-    weather.windSpeed = speed;
-    weather.gustStrength = glm::max(wind.gustStrength, 0.0f);
-    weather.invGustSize = 1.0f / glm::max(wind.gustSize, 1.0f);
-    weather.cameraWaterY = m_oceanSimPipeline.getCameraWaterSurface();
-    weather.cameraWaterValid = m_oceanSimPipeline.hasCameraWaterSurface() ? 1.0f : 0.0f;
+    ubo.set(weather.windVelocity, glm::vec3(dir.x * speed, 0.0f, dir.y * speed));
+    ubo.set(weather.windDirection, dir);
+    ubo.set(weather.windSpeed, speed);
+    ubo.set(weather.gustStrength, glm::max(wind.gustStrength, 0.0f));
+    ubo.set(weather.invGustSize, 1.0f / glm::max(wind.gustSize, 1.0f));
+    ubo.set(weather.cameraWaterY, m_oceanSimPipeline.getCameraWaterSurface());
+    ubo.set(weather.cameraWaterValid, m_oceanSimPipeline.hasCameraWaterSurface() ? 1.0f : 0.0f);
 
     // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the
     // weather volumes' streaks are motion blur relative to the eye. A teleport (first frame, scene
@@ -156,7 +156,7 @@ void Renderer::buildUboWeather(const Camera& camera)
     }
     m_prevCameraPos = camera.position;
     m_havePrevCameraPos = true;
-    weather.cameraVelocity = velocity;
+    ubo.set(weather.cameraVelocity, velocity);
 
     // The weather volume's rain occlusion map: a top-down orthographic view over the latched volume box
     // (setRainOcclusionVolume), looking straight down -Y. The eye sits casterPad above the box top so a roof
@@ -166,9 +166,9 @@ void Renderer::buildUboWeather(const Camera& camera)
     const ParticleState::RainVolume& v = m_particles.getRainVolume();
     if (!v.active || !particles.rainOcclusion || !m_rtParams.enabled)
     {
-        weather.rainOcclusionViewProj = glm::mat4(1.0f);
-        weather.rainOcclusionPresent = 0.0f;
-        weather.rainOcclusionInvRange = 0.0f;
+        ubo.set(weather.rainOcclusionViewProj, glm::mat4(1.0f));
+        ubo.set(weather.rainOcclusionPresent, 0.0f);
+        ubo.set(weather.rainOcclusionInvRange, 0.0f);
         return;
     }
     const float hx = glm::max(v.halfExtents.x, 1.0f) * 1.25f;
@@ -178,9 +178,9 @@ void Renderer::buildUboWeather(const Camera& camera)
     const glm::vec3 eye = v.center + glm::vec3(0.0f, v.halfExtents.y + pad, 0.0f);
     const glm::mat4 view = glm::lookAtRH(eye, v.center, glm::vec3(0.0f, 0.0f, 1.0f));
     const glm::mat4 proj = glm::orthoRH_ZO(-hx, hx, -hz, hz, 0.0f, range);
-    weather.rainOcclusionViewProj = proj * view;
-    weather.rainOcclusionPresent = 1.0f;
-    weather.rainOcclusionInvRange = 1.0f / range;
+    ubo.set(weather.rainOcclusionViewProj, proj * view);
+    ubo.set(weather.rainOcclusionPresent, 1.0f);
+    ubo.set(weather.rainOcclusionInvRange, 1.0f / range);
 }
 
 // GI's live values (the RT / RTAO / GI switches and settings are registerUboFields' entries).
@@ -188,12 +188,12 @@ void Renderer::buildUboRayTracing()
 {
     const bool giOn = m_rtParams.enabled && m_rtParams.giEnabled;
     // Once per frame: the fullBake flag is a one-frame request (takeVisibilityParams).
-    m_ubo.giLive.fullBake = m_giProbePipeline.takeVisibilityParams(giOn).y;
+    m_ubo.set(m_u.giLive.fullBake, m_giProbePipeline.takeVisibilityParams(giOn).y);
     // WALL delta: GI converges through a sim pause.
-    m_ubo.giLive.temporalAlpha = m_giProbePipeline.getTraceParams0((float)Globals::time.getDeltaSec()).y;
+    m_ubo.set(m_u.giLive.temporalAlpha, m_giProbePipeline.getTraceParams0((float)Globals::time.getDeltaSec()).y);
     // The previous focus advances only while GI traces, so probes that scrolled in during a GI-off spell
     // still read as fresh (full replace) on the first traced frame.
-    m_ubo.giLive.prevFocus = m_giPrevFocusPos;
+    m_ubo.set(m_u.giLive.prevFocus, m_giPrevFocusPos);
     if (giOn)
         m_giPrevFocusPos = sceneFocusOrCamera();
 }
@@ -202,18 +202,19 @@ void Renderer::buildUboRayTracing()
 // grid uploadGrassFrame writes reads the same grassPatchSize / grassRange).
 void Renderer::buildUboGrass(const Camera& camera)
 {
-    RendererVKLayout::GrassLiveUbo& live = m_ubo.grassLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::GrassLive& live = m_u.grassLive;
     const GrassParams& g = m_grassParams;
     const float patchSize = grassPatchSize();
 
     // The pixel floor as world width per metre of distance: one pixel spans 2 d / m_mipPixelScale.
-    live.minWidthPerMetre = m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f;
+    ubo.set(live.minWidthPerMetre, m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f);
     // The canopy's base extinction (1/m; grass.inc.glsl): "Canopy shadow" x blades per m^2 x the mean blade width
     // (it tapers to the tip: half the root width). 0 without grass: the terrain FS then skips the canopy.
     const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
-    live.canopyExtinction = grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
-    live.prevTime = m_grassPrevTime;
-    m_grassPrevTime = m_ubo.timeSeconds;
+    ubo.set(live.canopyExtinction, grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f);
+    ubo.set(live.prevTime, m_grassPrevTime);
+    m_grassPrevTime = ubo.get(m_u.timeSeconds);
 
     // THE NEAR GRASS CASCADE (the shadow array's extra layer): an ortho box of +-range looking down the sun - the
     // cascades' construction (LightingUtils computeSunCascades: standard Z, the eye up-sun, texel-snapped so the blade
@@ -253,7 +254,7 @@ void Renderer::buildUboGrass(const Camera& camera)
         const glm::vec2 centreXZ = glm::vec2(m_cameraPos.x, m_cameraPos.z) + horizontal * (d0 - NEAR_BACK_MARGIN + nearRange);
         nearCentre = glm::vec3(centreXZ.x, glm::min(m_cameraPos.y, ground), centreXZ.y);
 
-        const glm::vec3 L = glm::normalize(m_ubo.sunDirection);
+        const glm::vec3 L = glm::normalize(ubo.get(m_u.sunDirection));
         const glm::vec3 upRef = (fabsf(L.y) > 0.99f) ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
         const float zPad = 50.0f;
         const glm::vec3 eye = nearCentre + L * (nearRange + zPad);
@@ -264,11 +265,11 @@ void Renderer::buildUboGrass(const Camera& camera)
         const glm::vec2 off = (glm::round(glm::vec2(origin)) - glm::vec2(origin)) * (2.0f / res);
         lightProj[3][0] += off.x;
         lightProj[3][1] += off.y;
-        live.shadowViewProj = lightProj * lightView;
+        ubo.set(live.shadowViewProj, lightProj * lightView);
     }
-    live.nearRange = nearRange;
-    live.nearTexel = 2.0f * nearRange / res; // the receivers' normal offset
-    live.nearCentre = glm::vec2(nearCentre.x, nearCentre.z); // the receivers' fade disc and the casters' selection measure from it
+    ubo.set(live.nearRange, nearRange);
+    ubo.set(live.nearTexel, 2.0f * nearRange / res); // the receivers' normal offset
+    ubo.set(live.nearCentre, glm::vec2(nearCentre.x, nearCentre.z)); // the receivers' fade disc and the casters' selection measure from it
 }
 
 // The trees' live values: the wind reach and the far-tree volume's per-frame state (the "Trees" settings are
@@ -276,27 +277,29 @@ void Renderer::buildUboGrass(const Camera& camera)
 void Renderer::buildUboFoliage()
 {
     const FoliageParams& f = m_foliageParams;
-    RendererVKLayout::FoliageLiveUbo& live = m_ubo.foliageLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::FoliageLive& live = m_u.foliageLive;
 
     // The culls grow a tree's bound by the sway's reach: the strongest gust, a tree twice the reference height (the
     // bend x 4), the branch tips (x 1.5 for the tree scale) and a leaf.
     const float strongest = glm::max(m_windParams.speed, 0.0f) + glm::max(m_windParams.gustStrength, 0.0f) * 1.42f; // the gust is a 2D vector
-    live.windReach = glm::max(f.windBend, 0.0f) * strongest * strongest * (1.0f + glm::max(f.windSway, 0.0f)) * 4.0f
-        + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f);
-    live.windPrevTime = m_treeWindPrevTime;
-    m_treeWindPrevTime = m_ubo.timeSeconds;
-    live.farMarched = farTreesActive() ? 1.0f : 0.0f;
+    ubo.set(live.windReach, glm::max(f.windBend, 0.0f) * strongest * strongest * (1.0f + glm::max(f.windSway, 0.0f)) * 4.0f
+        + glm::max(f.windBranch, 0.0f) * strongest * 1.5f + glm::max(f.windLeaf, 0.0f));
+    ubo.set(live.windPrevTime, m_treeWindPrevTime);
+    m_treeWindPrevTime = ubo.get(m_u.timeSeconds);
+    ubo.set(live.farMarched, farTreesActive() ? 1.0f : 0.0f);
     // The far-tree volume's hand-over as of this frame (its state changes only in record(), after this build).
     const glm::vec4 handover = m_treeVolume.handoverUbo();
-    live.handoverCentre = glm::vec2(handover.x, handover.y);
-    live.handoverFade = handover.z;
+    ubo.set(live.handoverCentre, glm::vec2(handover.x, handover.y));
+    ubo.set(live.handoverFade, handover.z);
 }
 
 // View matrices, frustum, and TAA jitter: the center (culling) view, the VR eye views, and the
 // screen/viewport constants. Sets m_centerViewProj + m_centerFrustum + m_prevTaaJitter.
 void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
 {
-    RendererVKLayout::Ubo& ubo = m_ubo;
+    UboBlock& ubo = m_ubo;
+    const UboRoot& h = m_u;
     // The jitter is one RENDER pixel (the scene renders through m_renderRect; == m_viewportRect unless upscaling).
     const glm::ivec2 renderSize = m_renderRect.getSize();
 
@@ -314,27 +317,31 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
     const uint32 numViews = Globals::openXR.isEnabled() ? RendererVKLayout::NUM_UBO_VIEWS : 1;
     for (uint32 v = 0; v < numViews; ++v)
     {
-        ubo.views[v].prevMvp = ubo.views[v].mvp;
-        ubo.views[v].prevInvMvp = ubo.views[v].invMvp;
+        ubo.set(h.viewPrevMvp, v, ubo.get(h.viewMvp, v));
+        ubo.set(h.viewPrevInvMvp, v, ubo.get(h.viewInvMvp, v));
     }
 
-    RendererVKLayout::ViewData& centerView = ubo.views[RendererVKLayout::VIEW_CENTER];
-    centerView.mvp = computeCenterViewProj(camera);
-    // Invert in double precision: a float32 inverse of a perspective mvp is ill-conditioned and its
-    // error grows with the camera translation, which shows up as per-frame reconstruction jitter
-    // (sky ray, TAA reprojection, RTAO, fog) away from the world origin.
-    const glm::dmat4 centerInvMvpD = glm::inverse(glm::dmat4(centerView.mvp));
-    centerView.invMvp = glm::mat4(centerInvMvpD);
-    // Fused clip->prev-clip reprojection: the double product cancels the (position-scaled) translations
-    // exactly, leaving a near-identity matrix that survives float32 storage at any camera position.
-    centerView.reprojClip = glm::mat4(glm::dmat4(centerView.prevMvp) * centerInvMvpD);
-    centerView.viewPos = glm::vec4(camera.position, 1.0f);
+    // One view's matrices from its mvp: the inverse in double precision - a float32 inverse of a perspective mvp is
+    // ill-conditioned and its error grows with the camera translation, which shows up as per-frame reconstruction
+    // jitter (sky ray, TAA reprojection, RTAO, fog) away from the world origin - and the fused clip->prev-clip
+    // reprojection: the double product cancels the (position-scaled) translations exactly, leaving a near-identity
+    // matrix that survives float32 storage at any camera position.
+    const auto writeView = [&](uint32 v, const glm::mat4& mvp, const glm::vec3& position)
+    {
+        ubo.set(h.viewMvp, v, mvp);
+        const glm::dmat4 invMvpD = glm::inverse(glm::dmat4(mvp));
+        ubo.set(h.viewInvMvp, v, glm::mat4(invMvpD));
+        ubo.set(h.viewReprojClip, v, glm::mat4(glm::dmat4(ubo.get(h.viewPrevMvp, v)) * invMvpD));
+        ubo.set(h.viewPos, v, glm::vec4(position, 1.0f));
+    };
+    const glm::mat4 centerMvp = computeCenterViewProj(camera);
+    writeView(RendererVKLayout::VIEW_CENTER, centerMvp, camera.position);
     // ZO plane extraction (the projection is reversed-Z [0,1] clip; the near/far plane slots swap roles
     // under the reversal but the extracted volume is identical, so all cull consumers stay correct).
-    m_centerFrustum.fromMatrixZO(centerView.mvp);
+    m_centerFrustum.fromMatrixZO(centerMvp);
     for (uint32 i = 0; i < 6; ++i)
-        ubo.frustumPlanes[i] = m_centerFrustum.planes[i];
-    m_centerViewProj = centerView.mvp;
+        ubo.set(h.frustumPlanes, i, m_centerFrustum.planes[i]);
+    m_centerViewProj = centerMvp;
 
     if (Globals::openXR.isEnabled())
     {
@@ -344,23 +351,18 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
             glm::vec3 eyePos;
             Globals::openXR.getEyeView(eye, cameraIn.position, vrBaseOrientation, eyeView, eyePos);
             const glm::mat4 eyeProj = Globals::openXR.getEyeProjection(eye, camera.near, camera.far);
-            RendererVKLayout::ViewData& v = ubo.views[eye + 1]; // [1] = left eye, [2] = right eye
-            v.mvp = eyeProj * eyeView;
-            const glm::dmat4 eyeInvMvpD = glm::inverse(glm::dmat4(v.mvp));
-            v.invMvp = glm::mat4(eyeInvMvpD);
-            v.reprojClip = glm::mat4(glm::dmat4(v.prevMvp) * eyeInvMvpD);
-            v.viewPos = glm::vec4(eyePos, 1.0f);
+            writeView(eye + 1, eyeProj * eyeView, eyePos); // [1] = left eye, [2] = right eye
         }
     }
 
     // The render-size targets and the scene's rect in them: every scene / screen-space pass works in these.
     // Without upscaling they are the swapchain extent and the viewport rect.
     const glm::vec2 targetSize(m_renderExtent);
-    ubo.screenSize = glm::vec4(targetSize, 1.0f / targetSize);
-    ubo.viewportRect = glm::vec4(glm::vec2(m_renderRect.min) / targetSize, glm::vec2(renderSize) / targetSize);
+    ubo.set(h.screenSize, glm::vec4(targetSize, 1.0f / targetSize));
+    ubo.set(h.viewportRect, glm::vec4(glm::vec2(m_renderRect.min) / targetSize, glm::vec2(renderSize) / targetSize));
     // zw = LAST frame's jitter: TAA/AO-temporal compensate both frames' jittered depth images during
     // reprojection (all raster passes jitter, the prepass included - see taaJitterUv in shared.inc.glsl).
-    ubo.taaJitter = glm::vec4(taaJitterNdc, m_prevTaaJitter);
+    ubo.set(h.taaJitter, glm::vec4(taaJitterNdc, m_prevTaaJitter));
     m_prevTaaJitter = taaJitterNdc;
 }
 
@@ -368,16 +370,16 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
 // The "Sky" section's values are registerUboFields' entries.
 void Renderer::buildUboSky()
 {
-    RendererVKLayout::Ubo& ubo = m_ubo;
+    UboBlock& ubo = m_ubo;
     const SkyParams& sky = m_skyParams;
 
-    ubo.sunDirection = sky.sunDirection;
-    ubo.sunColor = sky.sunColor * sky.sunIntensity;
+    ubo.set(m_u.sunDirection, sky.sunDirection);
+    ubo.set(m_u.sunColor, sky.sunColor * sky.sunIntensity);
     // Solar eclipse: the moon-covered sun fraction, so every sun consumer (sky atmosphere, forward lighting, GI
     // trace, volumetric fog, clouds) dims consistently.
-    ubo.sunVisible = sunVisibleFraction(sky.sunDirection, skyMoonDirection(sky), sky.sunAngularCos, skyMoonCos(sky), sky.sunGlow);
-    ubo.ambientColor = sky.ambientColor * sky.ambientIntensity;
-    ubo.skyUp = sky.up;
+    ubo.set(m_u.sunVisible, sunVisibleFraction(sky.sunDirection, skyMoonDirection(sky), sky.sunAngularCos, skyMoonCos(sky), sky.sunGlow));
+    ubo.set(m_u.ambientColor, sky.ambientColor * sky.ambientIntensity);
+    ubo.set(m_u.skyUp, sky.up);
 
     // Sun transmittance at ground level: the CPU mirror of atmosphere.inc.glsl's
     // atmosTransmittanceToLight(0, sunDir, up) - Chapman optical depth (r = planet radius, h = 0),
@@ -399,7 +401,7 @@ void Renderer::buildUboSky()
         const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
         const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
         const glm::vec3 tau = skyBetaRayleigh(sky) * odR + glm::vec3(skyBetaMie(sky) * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
-        ubo.sunTransmittance = glm::exp(-tau);
+        ubo.set(m_u.sunTransmittance, glm::exp(-tau));
     }
 }
 
@@ -409,14 +411,15 @@ void Renderer::buildUboSky()
 // and the detail drift accumulate here in double on the SIM clock (they stop with the global pause).
 void Renderer::buildUboClouds(const Camera& camera)
 {
-    RendererVKLayout::CloudsLiveUbo& live = m_ubo.cloudsLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::CloudsLive& live = m_u.cloudsLive;
     const CloudParams& c = m_cloudParams;
 
     const double weatherPeriod = cloudWeatherPeriod(c);
     const double detailPeriod = cloudDetailPeriod(c);
 
     const bool enabled = cloudsEnabled();
-    live.enabled = enabled ? 1.0f : 0.0f;
+    ubo.set(live.enabled, enabled ? 1.0f : 0.0f);
     const double dt = glm::min((double)Globals::time.getSimDeltaSec(), 0.25);
     // The shared wind ("Sky/Wind"), x the layer's speed scale.
     const glm::dvec2 windStep = glm::dvec2(m_windParams.direction()) * ((double)glm::max(m_windParams.speed, 0.0f) * (double)c.windSpeedScale * dt);
@@ -424,9 +427,9 @@ void Renderer::buildUboClouds(const Camera& camera)
     m_cloudEvolveOffset = std::fmod(m_cloudEvolveOffset + (double)c.evolveSpeed * dt, detailPeriod);
     // Noise space = world - wind, so the field travels WITH the wind.
     const glm::dvec2 origin = glm::mod(glm::dvec2(camera.position.x, camera.position.z) - m_cloudWindOffset, glm::dvec2(weatherPeriod));
-    live.noiseOrigin = glm::vec2(origin);
-    live.detailDrift = (float)m_cloudEvolveOffset;
-    live.windStep = glm::vec3((float)windStep.x, 0.0f, (float)windStep.y); // the field's world displacement this frame
+    ubo.set(live.noiseOrigin, glm::vec2(origin));
+    ubo.set(live.detailDrift, (float)m_cloudEvolveOffset);
+    ubo.set(live.windStep, glm::vec3((float)windStep.x, 0.0f, (float)windStep.y)); // the field's world displacement this frame
     // The sky-map clouds' history weight per march of a texel: exp(-3 dt / T) reaches 95 % of a change in T seconds,
     // at any frame rate; a texel marches every SKY_UPDATE_FRAMES frames, so dt spans that many. Real time, not sim
     // time: the camera still moves while the sim is paused.
@@ -434,11 +437,11 @@ void Renderer::buildUboClouds(const Camera& camera)
     // The floor ("Sky map min samples", N marches: w = (N - 1) / (N + 1)) keeps the average's noise the same at a low
     // frame rate, where the time-based weight alone averaged a few marches and the ocean mirrored a per-frame flicker.
     const float minSampleWeight = c.skyMapMinSamples > 1.0f ? (c.skyMapMinSamples - 1.0f) / (c.skyMapMinSamples + 1.0f) : 0.0f;
-    live.skyHistory = c.skyMapHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.skyMapHistorySec), minSampleWeight) : 0.0f;
-    live.giSkyHistory = c.giSkyHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.giSkyHistorySec), minSampleWeight) : 0.0f;
+    ubo.set(live.skyHistory, c.skyMapHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.skyMapHistorySec), minSampleWeight) : 0.0f);
+    ubo.set(live.giSkyHistory, c.giSkyHistorySec > 0.0f ? glm::max(std::exp(-3.0f * realDt / c.giSkyHistorySec), minSampleWeight) : 0.0f);
     // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity - that one scales the
     // sky-sphere ground plane and defaults to 0) x the cloud "Ground albedo".
-    live.groundBounceAlbedo = m_skyParams.groundColor * c.groundAlbedo;
+    ubo.set(live.groundBounceAlbedo, m_skyParams.groundColor * c.groundAlbedo);
 
     // THE CLOUD SHADOW MAP: two sun-aligned ortho cascades around the camera, their centres snapped to whole
     // texels in light space (in double, world space) so the map does not swim when the camera moves.
@@ -452,7 +455,7 @@ void Renderer::buildUboClouds(const Camera& camera)
     const glm::dvec3 sun = glm::normalize(glm::dvec3(m_skyParams.sunDirection));
     const bool shadowOn = enabled && c.shadows && sun.y > 0.01;
     m_cloudShadowMask = 0;
-    live.shadowRendered = shadowOn ? 1.0f : 0.0f;
+    ubo.set(live.shadowRendered, shadowOn ? 1.0f : 0.0f);
     if (!shadowOn)
     {
         m_cloudShadowValid = {};
@@ -490,20 +493,20 @@ void Renderer::buildUboClouds(const Camera& camera)
             m_cloudShadowPhase[cascade] = (m_cloudShadowPhase[cascade] + 1) % phases;
         }
         m_cloudShadowMask |= 1u << cascade;
-        live.shadowCascade[cascade] = glm::vec4(glm::vec3(m_cloudShadowCenter[cascade] - camPos), (float)(1.0 / m_cloudShadowExtent[cascade]));
+        ubo.set(live.shadowCascade, cascade, glm::vec4(glm::vec3(m_cloudShadowCenter[cascade] - camPos), (float)(1.0 / m_cloudShadowExtent[cascade])));
     }
-    live.shadowAxis0 = glm::vec3(e0);
-    live.shadowAxis1 = glm::vec3(e1);
+    ubo.set(live.shadowAxis0, glm::vec3(e0));
+    ubo.set(live.shadowAxis1, glm::vec3(e1));
 }
 
 // Sun shadow route: the PCSS cascade matrices (also consumed CPU-side via getSunCascadeViewProj) unless RT sun
 // shadows replace them, plus the scene focus and the "Shadows" section's biases + long-range terrain march.
 void Renderer::buildUboSunShadow(const Camera& camera)
 {
-    RendererVKLayout::Ubo& ubo = m_ubo;
+    UboBlock& ubo = m_ubo;
     // The shaders' cascade pick and the RTAO falloff measure from here; it matches computeSunCascades'
     // origin below.
-    ubo.sceneFocus = m_sceneFocusEnabled ? m_sceneFocus : camera.position;
+    ubo.set(m_u.sceneFocus, m_sceneFocusEnabled ? m_sceneFocus : camera.position);
 
     // Use the effective flag: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
     if (rtSunShadowActive(m_rtParams))
@@ -523,21 +526,24 @@ void Renderer::buildUboSunShadow(const Camera& camera)
     static_assert(RendererVKLayout::NUM_SHADOW_CASCADES == 4, "cascadeSunSizeTexels is one vec4");
     const float cosT = glm::clamp(m_skyParams.sunAngularCos, 0.5f, 0.9999999f);
     const float tanT = std::sqrt(1.0f - cosT * cosT) / cosT;
+    glm::vec4 sunSizeTexels;
     for (uint32 c = 0; c < RendererVKLayout::NUM_SHADOW_CASCADES; ++c)
     {
-        ubo.cascadeViewProj[c] = m_sunCascadeViewProj[c];
+        ubo.set(m_u.cascadeViewProj, c, m_sunCascadeViewProj[c]);
         const float texelWorldSize = m_sunCascadeViewProj[c][1][3];
         const float depthRange = m_sunCascadeViewProj[c][2][3];
-        ubo.cascadeSunSizeTexels[c] = tanT * depthRange / glm::max(texelWorldSize, 1e-6f);
+        sunSizeTexels[c] = tanT * depthRange / glm::max(texelWorldSize, 1e-6f);
     }
+    ubo.set(m_u.cascadeSunSizeTexels, sunSizeTexels);
 }
 
 // Volumetric fog params, the baked terrain height map's placement (the fog terrain cascades: also the ocean's shore-map
 // fallback and every terrain-aware pass's), and the fog's values that ride the ocean.
 void Renderer::buildUboFog()
 {
-    RendererVKLayout::FogLiveUbo& live = m_ubo.fogLive;
-    RendererVKLayout::TerrainLiveUbo& terrain = m_ubo.terrainLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::FogLive& live = m_u.fogLive;
+    const UboRoot::TerrainLive& terrain = m_u.terrainLive;
     const FogParams& fog = m_fogParams;
 
     // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that
@@ -546,10 +552,10 @@ void Renderer::buildUboFog()
     // reads these cascades as its shore-map fallback.
     m_terrain.getHeightMap().flipIfPending();
     const glm::vec2 mapSizes = m_terrain.getHeightMap().getWorldSizes();
-    terrain.mapCentre = m_terrain.getHeightMap().getCenter();
-    terrain.mapInvNearSize = mapSizes.x > 1.0f ? 1.0f / mapSizes.x : 0.0f;
-    terrain.mapInvFarSize = mapSizes.y > 1.0f ? 1.0f / mapSizes.y : 0.0f;
-    terrain.mapSeaLevel = m_terrain.getHeightMap().getUserParam();
+    ubo.set(terrain.mapCentre, m_terrain.getHeightMap().getCenter());
+    ubo.set(terrain.mapInvNearSize, mapSizes.x > 1.0f ? 1.0f / mapSizes.x : 0.0f);
+    ubo.set(terrain.mapInvFarSize, mapSizes.y > 1.0f ? 1.0f / mapSizes.y : 0.0f);
+    ubo.set(terrain.mapSeaLevel, m_terrain.getHeightMap().getUserParam());
 
     // The waterline band gating the fog's FFT wave taps: froxel segments outside +-band of the calm level are
     // trivially above / below any possible wave, so only a thin shell pays for wave taps. The CPU trough estimate
@@ -560,73 +566,80 @@ void Renderer::buildUboFog()
     // with the amplitude.
     const float waveTrough = m_oceanSimPipeline.getWaveTrough();
     const float swashReachBand = getOceanSwashAmp() * (waveTrough + 0.25f);
-    live.waveBand = m_oceanSimPipeline.isOceanEnabled() ? glm::max(waveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f;
+    ubo.set(live.waveBand, m_oceanSimPipeline.isOceanEnabled() ? glm::max(waveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f);
     // The boundary offset - "Underwater wave offset" x the deepest live wave trough, down (world metres already;
     // 0 with the ocean off): a higher sea needs a lower boundary, or the murk peeks through the troughs the fog's
     // coarse froxels miss.
-    live.boundaryOffset = -glm::max(fog.underwaterWaveOffset, 0.0f) * waveTrough;
+    ubo.set(live.boundaryOffset, -glm::max(fog.underwaterWaveOffset, 0.0f) * waveTrough);
     // The underwater metres are measured against the sea, so they ride "Ocean/World scale" like the
     // ocean's own tweaks: lengths x s, the per-metre depth fade / s (the same water column in fewer metres).
     const float oceanScale = getOceanWorldScale();
-    live.causticDepthFade = glm::max(fog.causticDepthFade, 0.0f) / oceanScale; // the caustic contrast's decay with depth (1/m)
-    live.causticShoreFade = glm::max(fog.causticShoreFade, 0.0f) * oceanScale;
+    ubo.set(live.causticDepthFade, glm::max(fog.causticDepthFade, 0.0f) / oceanScale); // the caustic contrast's decay with depth (1/m)
+    ubo.set(live.causticShoreFade, glm::max(fog.causticShoreFade, 0.0f) * oceanScale);
 }
 
 // The ocean's live values: what follows the wind (its direction and speed, the surf band), the sea level, the readback
 // and the sun (the "Ocean" settings, in WORLD units from Procedural's setOceanParams, are registerUboFields' entries).
 void Renderer::buildUboOcean()
 {
-    RendererVKLayout::OceanLiveUbo& live = m_ubo.oceanLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::OceanLive& live = m_u.oceanLive;
     const OceanParams& ocean = m_oceanSimPipeline.getOceanParams();
 
     // Wind clamped just above 0: the JONSWAP 1/U terms must stay finite; the spectrum's wave-age limit
     // (ocean_spectrum.cs.glsl) makes this effectively glassy anyway.
-    live.windDirection = glm::length(ocean.windDirection) > 1e-4f ? glm::normalize(ocean.windDirection) : glm::vec2(1.0f, 0.0f);
-    live.windSpeed = glm::max(ocean.windSpeed, 0.01f);
-    live.seaLevel = ocean.seaLevel;
-    live.shoreFoamDepth = glm::max(ocean.shoreFoamDepth, 0.0f);
-    live.shoreFoamMax = glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f);
+    ubo.set(live.windDirection, glm::length(ocean.windDirection) > 1e-4f ? glm::normalize(ocean.windDirection) : glm::vec2(1.0f, 0.0f));
+    ubo.set(live.windSpeed, glm::max(ocean.windSpeed, 0.01f));
+    ubo.set(live.seaLevel, ocean.seaLevel);
+    ubo.set(live.shoreFoamDepth, glm::max(ocean.shoreFoamDepth, 0.0f));
+    ubo.set(live.shoreFoamMax, glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f));
     // Swash reach: conservative max run-up height from the wave-amplitude readback (trough estimate ~
     // crest scale) - sizes the on-land sampling band and keeps the vertex cull off the wet beach.
-    live.swashReach = getOceanSwashAmp() * (m_oceanSimPipeline.getWaveTrough() + 0.25f);
-    live.displacementExtent = ocean.enabled ? m_oceanSimPipeline.getDisplacementExtent() : 0.0f; // the per-instance cull padding
-    live.cameraUnderwater = ocean.cameraUnderwater ? 1.0f : 0.0f;
+    ubo.set(live.swashReach, getOceanSwashAmp() * (m_oceanSimPipeline.getWaveTrough() + 0.25f));
+    ubo.set(live.displacementExtent, ocean.enabled ? m_oceanSimPipeline.getDisplacementExtent() : 0.0f); // the per-instance cull padding
+    ubo.set(live.cameraUnderwater, ocean.cameraUnderwater ? 1.0f : 0.0f);
     // The bubble cloud's per-frame factors (ocean_bubbles.inc.glsl oceanBubbleRadianceFrame): the sun's and the
     // sky's path down to "Bubble depth" and the cloud's albedo depend on nothing per pixel, so the ocean pays one
     // exp (the path back up to the eye) per pixel, not three. The film's depth is per pixel: it keeps the full form.
     {
-        const glm::vec3 L = glm::normalize(m_ubo.sunDirection); // buildUboSky ran first
+        const glm::vec3 L = glm::normalize(ubo.get(m_u.sunDirection)); // buildUboSky ran first
         const float sunCos = glm::max(L.y, 0.0f);
         const float muL = glm::sqrt(1.0f - (1.0f - sunCos * sunCos) / (1.33f * 1.33f)); // refracted sun cosine
         const glm::vec3 albedo = ocean.foamColor * getOceanBubbleBrightness();
         const float bubbleDepth = getOceanBubbleDepth();
-        live.bubbleSun = albedo * glm::exp(-ocean.absorption * (bubbleDepth / muL)) * (sunCos / glm::pi<float>());
-        live.bubbleSky = albedo * glm::exp(-ocean.absorption * bubbleDepth);
+        ubo.set(live.bubbleSun, albedo * glm::exp(-ocean.absorption * (bubbleDepth / muL)) * (sunCos / glm::pi<float>()));
+        ubo.set(live.bubbleSky, albedo * glm::exp(-ocean.absorption * bubbleDepth));
     }
     // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off; also off while the
     // particle chain is disabled: nothing would consume and reset the request counter), the sim delta the rate
     // integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
-    live.sprayEmitter = m_particles.isEnabled() ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX;
-    live.sprayDt = sprayDt;
+    ubo.set(live.sprayEmitter, m_particles.isEnabled() ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX);
+    ubo.set(live.sprayDt, sprayDt);
     // The world-space foam field: drift over the SIM delta (frozen with the pause, like the waves), levels
     // around the camera (the water nearest the eye is where the detail shows).
-    m_oceanSimPipeline.advanceFoamField(live, m_cameraPos, sprayDt);
+    oc::array<glm::vec4, RendererVKLayout::OCEAN_FOAM_LEVELS> foamLevels;
+    glm::vec2 foamDrift;
+    m_oceanSimPipeline.advanceFoamField(foamLevels, foamDrift, m_cameraPos, sprayDt);
+    for (uint32 level = 0; level < RendererVKLayout::OCEAN_FOAM_LEVELS; ++level)
+        ubo.set(live.foamLevels, level, foamLevels[level]);
+    ubo.set(live.foamDrift, foamDrift);
 }
 
 // Forcefield bubbles' live values (the Force library pushes the params every frame; its settings are
 // registerUboFields' entries).
 void Renderer::buildUboForce()
 {
-    RendererVKLayout::ForceLiveUbo& live = m_ubo.forceLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::ForceLive& live = m_u.forceLive;
     const ForceFieldParams& force = m_force.getParams();
 
     for (uint32 i = 0; i < RendererVKLayout::MAX_FORCE_TEAMS; ++i)
-        live.teamColors[i] = glm::vec4(force.teamColors[i], 0.0f);
+        ubo.set(live.teamColors, i, glm::vec4(force.teamColors[i], 0.0f));
     // The shell march's LOD scale - (px per radius/dist) / full-detail radius, so the FS's steps taper as
     // side/dist * this (clamped <= 1); 0 disables the taper.
-    live.shellLodScale = m_mipPixelScale * 0.5f / glm::max(force.shellFullResPixels, 1.0f);
-    live.unionPxScale = m_mipPixelScale * 0.5f; // px per (radius/dist) - the union march's distance LOD
+    ubo.set(live.shellLodScale, m_mipPixelScale * 0.5f / glm::max(force.shellFullResPixels, 1.0f));
+    ubo.set(live.unionPxScale, m_mipPixelScale * 0.5f); // px per (radius/dist) - the union march's distance LOD
 
     // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
     // support boxes (+ margin) - the FIXED texel grid's resolution then self-adjusts to the active
@@ -702,17 +715,17 @@ void Renderer::buildUboForce()
         const glm::vec3 margin = (bakeHi - bakeLo) * 0.02f + 1.0f; // ~2 filter texels of slack
         bakeLo -= margin;
         bakeHi += margin;
-        live.bakeMin = bakeLo;
-        live.bakeThreshold = force.sampledShellRadius; // the VISIBLE-radius tier threshold
-        live.bakeInvSize = 1.0f / glm::max(bakeHi - bakeLo, glm::vec3(1e-3f));
-        live.bakeEnabled = 1.0f;
+        ubo.set(live.bakeMin, bakeLo);
+        ubo.set(live.bakeThreshold, force.sampledShellRadius); // the VISIBLE-radius tier threshold
+        ubo.set(live.bakeInvSize, 1.0f / glm::max(bakeHi - bakeLo, glm::vec3(1e-3f)));
+        ubo.set(live.bakeEnabled, 1.0f);
     }
     else
     {
-        live.bakeMin = glm::vec3(0.0f);
-        live.bakeThreshold = FLT_MAX; // no emitter reaches the threshold
-        live.bakeInvSize = glm::vec3(0.0f);
-        live.bakeEnabled = 0.0f;
+        ubo.set(live.bakeMin, glm::vec3(0.0f));
+        ubo.set(live.bakeThreshold, FLT_MAX); // no emitter reaches the threshold
+        ubo.set(live.bakeInvSize, glm::vec3(0.0f));
+        ubo.set(live.bakeEnabled, 0.0f);
     }
     // CAMERA-INSIDE: the marches' "camera inside a bubble" test is a property of ONE point per frame, so evaluate
     // the full field at the camera here (CPU mirror) instead of a per-fragment field re-sample at the ray origin
@@ -731,7 +744,7 @@ void Renderer::buildUboForce()
         if (p > bestCam) { secondCam = bestCam; bestCam = p; }
         else secondCam = glm::max(secondCam, p);
     }
-    live.cameraInside = bestCam - glm::max(forceIsoThreshold(force), secondCam) > 0.0f ? 1.0f : 0.0f;
+    ubo.set(live.cameraInside, bestCam - glm::max(forceIsoThreshold(force), secondCam) > 0.0f ? 1.0f : 0.0f);
 }
 
 // Terrain's live world (the splat texture, tessellation and surface water settings are registerUboFields' entries): the
@@ -739,12 +752,13 @@ void Renderer::buildUboForce()
 // textures to the mip streamer.
 void Renderer::buildUboTerrain()
 {
-    RendererVKLayout::TerrainLiveUbo& live = m_ubo.terrainLive;
+    UboBlock& ubo = m_ubo;
+    const UboRoot::TerrainLive& live = m_u.terrainLive;
     {
         const glm::vec4& params = m_terrain.getParams();
-        live.meshRadius = params.x;
-        live.lapseRate = params.y;
-        live.seaLevel = params.z;
+        ubo.set(live.meshRadius, params.x);
+        ubo.set(live.lapseRate, params.y);
+        ubo.set(live.seaLevel, params.z);
     }
 
     const TerrainSettings& terrainSettings = Globals::settings.terrain;
@@ -752,29 +766,35 @@ void Renderer::buildUboTerrain()
     // The splat set (setTerrainSplatMaterials): materials CONTIGUOUS in the material buffer - [base .. +numGround)
     // the climate-blended ground, [.. +numRock) the bedrock exposed by slope / crag, then the optional beach entry,
     // then the optional snow entry. Slot order only: the shader composites ground -> beach -> rock -> snow.
-    live.splatBase = m_terrain.getSplatBaseMaterial() < 0 ? -1.0f : (float)m_terrain.getSplatBaseMaterial();
-    live.numGround = (float)m_terrain.getSplatCounts().numGround;
-    live.numRock = (float)m_terrain.getSplatCounts().numRock;
-    live.hasBeach = m_terrain.getSplatCounts().hasBeach ? 1.0f : 0.0f;
-    live.hasSnow = m_terrain.getSplatCounts().hasSnow ? 1.0f : 0.0f;
+    ubo.set(live.splatBase, m_terrain.getSplatBaseMaterial() < 0 ? -1.0f : (float)m_terrain.getSplatBaseMaterial());
+    ubo.set(live.numGround, (float)m_terrain.getSplatCounts().numGround);
+    ubo.set(live.numRock, (float)m_terrain.getSplatCounts().numRock);
+    ubo.set(live.hasBeach, m_terrain.getSplatCounts().hasBeach ? 1.0f : 0.0f);
+    ubo.set(live.hasSnow, m_terrain.getSplatCounts().hasSnow ? 1.0f : 0.0f);
+    // Four slots per uvec4 / vec4 (two per uvec4 for the texture pairs): packed here, one set per element.
     const uint16* heightTex = m_terrain.getSplatHeightTex();
-    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
-        live.splatHeightTex[i >> 2][i & 3] = heightTex[i];
     const glm::uvec2* splatTex = m_terrain.getSplatTex();
-    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
-    {
-        live.splatTex[i >> 1][(i & 1) * 2 + 0] = splatTex[i].x;
-        live.splatTex[i >> 1][(i & 1) * 2 + 1] = splatTex[i].y;
-    }
     const float* splatGrass = m_terrain.getSplatGrass();
-    for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
-        live.splatGrass[i >> 2][i & 3] = glm::clamp(splatGrass[i], 0.0f, 1.0f);
+    for (uint32 e = 0; e < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS / 4; ++e)
+    {
+        glm::uvec4 heights;
+        glm::vec4 grass;
+        for (uint32 k = 0; k < 4; ++k)
+        {
+            heights[k] = heightTex[e * 4 + k];
+            grass[k] = glm::clamp(splatGrass[e * 4 + k], 0.0f, 1.0f);
+        }
+        ubo.set(live.splatHeightTex, e, heights);
+        ubo.set(live.splatGrass, e, grass);
+    }
+    for (uint32 e = 0; e < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS / 2; ++e)
+        ubo.set(live.splatTex, e, glm::uvec4(splatTex[e * 2].x, splatTex[e * 2].y, splatTex[e * 2 + 1].x, splatTex[e * 2 + 1].y));
     // Climate boxes: temperature arrives as t01, precipitation as mm/yr - its divisor is a live tweak.
     const float invPrecipFull = 1.0f / glm::max(terrainSettings.v3PrecipFullHumidity, 1.0f);
     const glm::vec4* climate = m_terrain.getSplatClimate();
     for (uint32 i = 0; i < RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS; ++i)
-        live.splatClimate[i] = glm::vec4(climate[i].x, climate[i].y,
-            glm::clamp(climate[i].z * invPrecipFull, 0.0f, 1.0f), glm::clamp(climate[i].w * invPrecipFull, 0.0f, 1.0f));
+        ubo.set(live.splatClimate, i, glm::vec4(climate[i].x, climate[i].y,
+            glm::clamp(climate[i].z * invPrecipFull, 0.0f, 1.0f), glm::clamp(climate[i].w * invPrecipFull, 0.0f, 1.0f)));
 
     // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
     // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
@@ -791,16 +811,16 @@ void Renderer::buildUboTerrain()
         const TerrainResources::WetnessTick tick = m_terrain.advanceWetness(
             oc::min((float)Globals::time.getSimDeltaSec(), 0.25f), sceneFocusOrCamera());
         const float dt = tick.dt;
-        live.wetOrigin = glm::vec2((float)tick.origin.x, (float)tick.origin.y);
-        live.wetPrevOrigin = glm::vec2((float)tick.prevOrigin.x, (float)tick.prevOrigin.y);
-        live.wetDecay = terrainSettings.wetDryTime > 0.0f ? std::exp(-dt / terrainSettings.wetDryTime) : 0.0f;
-        live.wetRain = glm::max(terrainSettings.wetRain, 0.0f) * dt;
-        live.wetLayer = (float)tick.writeLayer;
-        live.wetIn = terrainSettings.wetInTime > 0.0f ? dt / terrainSettings.wetInTime : 1.0f;
+        ubo.set(live.wetOrigin, glm::vec2((float)tick.origin.x, (float)tick.origin.y));
+        ubo.set(live.wetPrevOrigin, glm::vec2((float)tick.prevOrigin.x, (float)tick.prevOrigin.y));
+        ubo.set(live.wetDecay, terrainSettings.wetDryTime > 0.0f ? std::exp(-dt / terrainSettings.wetDryTime) : 0.0f);
+        ubo.set(live.wetRain, glm::max(terrainSettings.wetRain, 0.0f) * dt);
+        ubo.set(live.wetLayer, (float)tick.writeLayer);
+        ubo.set(live.wetIn, terrainSettings.wetInTime > 0.0f ? dt / terrainSettings.wetInTime : 1.0f);
         // Diffusion spread as a per-tick mix fraction from a per-second rate: the tent's variance then
         // grows by ~rate * texel^2 per second at any framerate (a fixed per-frame fraction would spread
         // twice as fast at twice the fps).
-        live.wetSpread = 1.0f - std::exp(-glm::max(terrainSettings.wetDiffusionRate, 0.0f) * dt);
+        ubo.set(live.wetSpread, 1.0f - std::exp(-glm::max(terrainSettings.wetDiffusionRate, 0.0f) * dt));
     }
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can
@@ -813,11 +833,11 @@ void Renderer::buildUboTerrain()
     }
 }
 
-// THE LOCKABLE VALUES: one entry per GLSL member u_<name> (UboFieldList), each a settings variable itself or a lambda
+// THE LOCKABLE VALUES: one entry per GLSL member u_<name> (UboBlock::add), each a settings variable itself or a lambda
 // plus EVERY settings variable it reads. A value that is also computed for live work comes from a helper above (or a
-// Settings helper like oceanWorldScaled), so the two cannot drift. Registered once (registerUboLocks); the lambdas run
-// every build and capture references to Globals::settings members or `this`.
-void Renderer::registerUboFields(UboFieldList& list)
+// Settings helper like oceanWorldScaled), so the two cannot drift. Registered once (registerUboLocks), after the root
+// values; the lambdas run every build and capture references to Globals::settings members or `this`.
+void Renderer::registerUboFields(UboBlock& list)
 {
     {
         // ---- Sky ("Sky")

@@ -58,7 +58,7 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
 #ifdef CLOUD_SHADOWS
     if (u_cloudsLive_shadowRendered < 0.5)
         return 1.0;
-    const vec2 s = cloudShadowSample(rel + (u_viewPos - u_views[VIEW_CENTER].viewPos.xyz), false);
+    const vec2 s = cloudShadowSample(rel + (u_viewPos - u_views_viewPos[VIEW_CENTER].xyz), false);
     float farT = 1.0;
     if (s.y < 1.0)
     {
@@ -175,7 +175,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 #else
     const bool mapShadow = false;
 #endif
-    const vec3 toCentreView = u_viewPos - u_views[VIEW_CENTER].viewPos.xyz;
+    const vec3 toCentreView = u_viewPos - u_views_viewPos[VIEW_CENTER].xyz;
 
     // The mip levels are log2(distance) + a per-ray constant each: one log2 per step.
     const float lodBaseBias = log2(pixelAngle * u_clouds_baseFrequency * CLOUD_BASE_RES);

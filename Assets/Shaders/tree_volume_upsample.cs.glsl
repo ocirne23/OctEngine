@@ -18,18 +18,20 @@ layout (binding = 3) uniform sampler2D u_treeDepth; // half res: log2 of the fir
 layout (binding = 4, rgba16f) uniform writeonly image2D u_outColor;
 layout (binding = 5, r16f) uniform writeonly image2D u_outDistance;
 
+// PC_DECL_ / PC_CONSTS: the march's lockable values (TreeVolumePipeline::registerPushFields, PushFields.ixx).
 layout (push_constant) uniform PC
 {
-    uvec2 size;   // the render size
-    float maxDist; // the march's max distance (the far volume's end)
-} pc;
+    uvec2 pc_size;     // the render size
+    PC_DECL_vol_rMax;  // float: the march's max distance (the far volume's end)
+};
+PC_CONSTS
 
 void main()
 {
     const ivec2 px = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(uvec2(px), pc.size)))
+    if (any(greaterThanEqual(uvec2(px), pc_size)))
         return;
-    const vec2 uv = (vec2(px) + 0.5) / vec2(pc.size);
+    const vec2 uv = (vec2(px) + 0.5) / vec2(pc_size);
     const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
     if (any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
@@ -37,7 +39,7 @@ void main()
         return;
     }
     const float depth = texelFetch(u_sceneDepth, px, 0).r;
-    const float logMax = log2(max(pc.maxDist, 1.0));
+    const float logMax = log2(max(pc_vol_rMax, 1.0));
     const float logScene = depth > 0.0 ? min(log2(max(length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0)), logMax) : logMax;
 
     const ivec2 size = textureSize(u_treeColor, 0);

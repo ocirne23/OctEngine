@@ -117,7 +117,7 @@ vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 {
 	strengthOut = 0.0;
 	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
-	const float dist = distance(in_meshPos, u_views[VIEW_CENTER].viewPos.xyz);
+	const float dist = distance(in_meshPos, u_views_viewPos[VIEW_CENTER].xyz);
 	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	if (dist >= fadeEnd || u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
 		return N;
@@ -128,7 +128,7 @@ vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 		return N;
 	strengthOut = strength;
 	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the centre mvp's 3x3.
-	const mat4 centreMvp = u_views[VIEW_CENTER].mvp;
+	const mat4 centreMvp = u_views_mvp[VIEW_CENTER];
 	const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
 	const float e = max(max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
 	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)

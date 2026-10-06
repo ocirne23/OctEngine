@@ -10,7 +10,7 @@
 // and only the non-empty bins go to the global histogram. One pixel per thread measured 0.155 ms at
 // 1440p: ~3600 workgroups x 256 global atomics, and shared atomics serialized on the few busy bins.
 //
-// BLOOM SHARES THIS READ (u_bloom, BloomPipeline): the block is 2 x 2 QUADS of 2 x 2 pixels, and each quad is
+// BLOOM SHARES THIS READ (pc_bloom, BloomPipeline): the block is 2 x 2 QUADS of 2 x 2 pixels, and each quad is
 // also one texel of bloom level 0 (half res, viewport-relative) - so bloom never reads the full-res image
 // itself. The quad's texel is the Karis average (weights 1 / (1 + luma)): one very bright pixel cannot become
 // a flickering bloom blob.
@@ -37,30 +37,32 @@ layout (binding = 2, std140) uniform Params
     float u_maxExposure;
 };
 
+// PC_DECL_ / PC_CONSTS: the lockable values (EyeAdaptationPipeline::registerPushFields, PushFields.ixx).
 layout (push_constant) uniform PC
 {
-    ivec2 u_vpMin;        // viewport origin in the resolved image
-    ivec2 u_vpSize;       // viewport size (pixels sampled)
-    int   u_bloom;        // 1 = also write bloom level 0
-    float u_bloomThreshold; // the soft threshold, in EXPOSED units (1 = display white before the tonemap); 0 = off
-    float u_bloomKnee;      // the knee's half width (exposed units)
-    float u_manualExposure; // exp2 of the EV tweak (the composite's u_exposure)
-    int   u_autoExpEnable;  // 1 = times the eye-adaptation exposure (the composite's rule)
+    ivec2 pc_vpMin;        // viewport origin in the resolved image
+    ivec2 pc_vpSize;       // viewport size (pixels sampled)
+    int   pc_bloom;        // 1 = also write bloom level 0
+    PC_DECL_bloomThreshold; // float: the soft threshold, in EXPOSED units (1 = display white before the tonemap); 0 = off
+    PC_DECL_bloomKnee;      // float: the knee's half width (exposed units)
+    PC_DECL_manualExposure; // float: exp2 of the EV tweak (the composite's u_exposure)
+    PC_DECL_autoExposure;   // int: 1 = times the eye-adaptation exposure (the composite's rule)
 };
+PC_CONSTS
 
 // The soft threshold on the quad's (Karis-averaged) colour: nothing below threshold - knee, the excess above
 // threshold + knee, a quadratic curve between (the Unity / Unreal knee). Measured on the brightest channel
 // after the exposure, so it tracks what the display will show.
 vec3 bloomThreshold(vec3 c)
 {
-    if (u_bloomThreshold <= 0.0)
+    if (pc_bloomThreshold <= 0.0)
         return c;
-    const float exposure = u_manualExposure * (u_autoExpEnable != 0 ? u_autoExposure : 1.0);
+    const float exposure = pc_manualExposure * (pc_autoExposure != 0 ? u_autoExposure : 1.0);
     const float brightness = max(max(c.r, c.g), c.b) * exposure;
-    const float knee = max(u_bloomKnee, 1e-4);
-    float soft = clamp(brightness - u_bloomThreshold + knee, 0.0, 2.0 * knee);
+    const float knee = max(pc_bloomKnee, 1e-4);
+    float soft = clamp(brightness - pc_bloomThreshold + knee, 0.0, 2.0 * knee);
     soft = soft * soft / (4.0 * knee);
-    return c * (max(soft, brightness - u_bloomThreshold) / max(brightness, 1e-6));
+    return c * (max(soft, brightness - pc_bloomThreshold) / max(brightness, 1e-6));
 }
 
 shared uint s_bins[256];
@@ -82,7 +84,7 @@ void main()
 
     // The quads are strided by the workgroup size (x 2), so a warp's reads per step stay a compact 32 x 2 block.
     const ivec2 groupBase = ivec2(gl_WorkGroupID.xy) * (16 * PIXELS_PER_THREAD);
-    const ivec2 last = u_vpSize - 1;
+    const ivec2 last = pc_vpSize - 1;
     uint runBin = 0xFFFFFFFFu;
     uint runCount = 0u;
     for (int qy = 0; qy < PIXELS_PER_THREAD / 2; ++qy)
@@ -99,9 +101,9 @@ void main()
                 const ivec2 id = quad + ivec2(p & 1, p >> 1);
                 const bool inside = id.x <= last.x && id.y <= last.y;
                 // Past an odd viewport edge the quad repeats its edge pixel for bloom; the histogram skips it.
-                const vec3 c = texelFetch(u_resolved, u_vpMin + min(id, last), 0).rgb;
+                const vec3 c = texelFetch(u_resolved, pc_vpMin + min(id, last), 0).rgb;
                 const float lum = luminance(c);
-                if (u_bloom != 0)
+                if (pc_bloom != 0)
                 {
                     const vec3 cs = clamp(c, vec3(0.0), vec3(64512.0)); // finite: the image may hold a stray Inf/NaN
                     const float w = 1.0 / (1.0 + luminance(cs));
@@ -120,7 +122,7 @@ void main()
                 }
                 ++runCount;
             }
-            if (u_bloom != 0)
+            if (pc_bloom != 0)
                 imageStore(u_bloomOut, quad >> 1, vec4(bloomThreshold(karisSum / karisWeight), 0.0));
         }
     }

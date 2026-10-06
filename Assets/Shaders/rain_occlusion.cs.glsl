@@ -17,22 +17,24 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 0) uniform accelerationStructureEXT u_tlas;
 layout (binding = 1, r32ui) uniform restrict writeonly uimage2D u_rainOcclusion;
 
+// PC_DECL_ / PC_CONSTS: the lockable values (RainOcclusionPipeline::registerPushFields, PushFields.ixx).
 layout (push_constant) uniform PC
 {
-    mat4 invViewProj;
-    uint resolution;
-    float layerBlock; // the rain one foliage layer stops (0..1)
-} pc;
+    mat4 pc_invViewProj;
+    uint pc_resolution;
+    PC_DECL_layerBlock; // float: the rain one foliage layer stops (0..1)
+};
+PC_CONSTS
 
 void main()
 {
     const uvec2 p = gl_GlobalInvocationID.xy;
-    if (p.x >= pc.resolution || p.y >= pc.resolution)
+    if (p.x >= pc_resolution || p.y >= pc_resolution)
         return;
     // Texel centre -> NDC as the rasterizer saw it (row 0 = NDC y -1, the sim's uv = ndc * 0.5 + 0.5).
-    const vec2 ndc = (vec2(p) + 0.5) / float(pc.resolution) * 2.0 - 1.0;
-    const vec4 nearPoint = pc.invViewProj * vec4(ndc, 0.0, 1.0);
-    const vec4 farPoint = pc.invViewProj * vec4(ndc, 1.0, 1.0);
+    const vec2 ndc = (vec2(p) + 0.5) / float(pc_resolution) * 2.0 - 1.0;
+    const vec4 nearPoint = pc_invViewProj * vec4(ndc, 0.0, 1.0);
+    const vec4 farPoint = pc_invViewProj * vec4(ndc, 1.0, 1.0);
     const vec3 origin = nearPoint.xyz / nearPoint.w;
     const vec3 span = farPoint.xyz / farPoint.w - origin;
     const float range = length(span);
@@ -59,7 +61,7 @@ void main()
 
     const uint solidBits = uint(round(clamp(tSolid / range, 0.0, 1.0) * 65535.0));
     const uint foliageBits = layers > 0u ? uint(round(clamp(tTop / range, 0.0, 1.0) * 4095.0)) : 4095u;
-    const float pass = pow(1.0 - clamp(pc.layerBlock, 0.0, 1.0), float(layers));
+    const float pass = pow(1.0 - clamp(pc_layerBlock, 0.0, 1.0), float(layers));
     const uint passBits = uint(round(pass * 15.0));
     imageStore(u_rainOcclusion, ivec2(p), uvec4(solidBits | (foliageBits << 16) | (passBits << 28), 0u, 0u, 0u));
 }

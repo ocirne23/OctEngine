@@ -29,10 +29,11 @@ layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
 
 layout (push_constant, scalar) uniform Push
 {
-    TreeVolumeParams vol;
-    uint sliceOffset; // this dispatch's first texel layer (the bake spreads the conversion over frames)
-    uint columnPass;  // 1: the per-column colour pass (one layer dispatched, before any conversion); 0: convert the layers
-} pc;
+    TV_PUSH_VOL_MEMBERS // TreeVolumeParams, flat (the bake's lockable values)
+    uint pc_sliceOffset; // this dispatch's first texel layer (the bake spreads the conversion over frames)
+    uint pc_columnPass;  // 1: the per-column colour pass (one layer dispatched, before any conversion); 0: convert the layers
+};
+PC_CONSTS
 
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)
@@ -63,10 +64,10 @@ vec3 bedrockAlbedo(vec2 xz, float y)
 
 void main()
 {
-    const ivec3 p = ivec3(gl_GlobalInvocationID.xy, gl_GlobalInvocationID.z + pc.sliceOffset);
+    const ivec3 p = ivec3(gl_GlobalInvocationID.xy, gl_GlobalInvocationID.z + pc_sliceOffset);
     if (any(greaterThanEqual(p, imageSize(u_accum))))
         return;
-    if (pc.columnPass == 0u)
+    if (pc_columnPass == 0u)
     {
         // IN PLACE: the two slices' fixed-point sums -> their extinctions as half floats in the same texel (the march's
         // hand-over reads them through the image's RG16F view, the copy as packed bits).
@@ -85,7 +86,7 @@ void main()
         total += (sums & 0xFFFFu) + (sums >> 16);
     }
     const float fraction = clamp(float(rock) / max(float(total), 1.0), 0.0, 1.0);
-    const vec2 xz = tvTexelWorldXZ(p.xy, pc.vol);
+    const vec2 xz = tvTexelWorldXZ(p.xy, TV_PUSH_VOL);
     const uint floorBits = imageLoad(u_floor, p.xy).r;
     const float ground = floorBits != 0u ? tvFloorDecode(floorBits) : terrainHeightAt(xz);
     const vec3 trees = imageLoad(u_colour, p.xy).rgb;

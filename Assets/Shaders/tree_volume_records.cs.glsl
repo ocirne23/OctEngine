@@ -59,18 +59,19 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Ty
 
 layout (push_constant, scalar) uniform Push
 {
-    RecordList records;
-    ChunkList chunks;
-    TypeList types;
-    uint numChunks;
-    uint numTypes;
-    float chunkSize;
-    uint worldSeed;
-    TreeVolumeParams vol;
-    float recordDetail; // m: the chunks whose centre lies within this of the bake centre splat in detail instead
-    float rockExtinction; // a rock's extinction (1/m) over its occupied volume
-    uint chunkOffset;     // this dispatch's first chunk (the bake spreads the chunks over frames; numChunks = this dispatch's)
-} pc;
+    RecordList pc_records;
+    ChunkList pc_chunks;
+    TypeList pc_types;
+    uint pc_numChunks;
+    uint pc_numTypes;
+    float pc_chunkSize;
+    uint pc_worldSeed;
+    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat (the bake's lockable values)
+    PC_DECL_recordDetail;   // float, m: the chunks whose centre lies within this of the bake centre splat in detail instead
+    PC_DECL_rockExtinction; // float: a rock's extinction (1/m) over its occupied volume
+    uint pc_chunkOffset;    // this dispatch's first chunk (the bake spreads the chunks over frames; numChunks = this dispatch's)
+};
+PC_CONSTS
 
 const int MAX_TENT = 8; // texels each way: the crown's footprint is capped there (cost)
 const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs's fixed point (the rock sum)
@@ -78,45 +79,45 @@ const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs's fixed point (the roc
 void main()
 {
     const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
-    if (local >= pc.numChunks)
+    if (local >= pc_numChunks)
         return;
-    const RecordChunk chunk = pc.chunks.c[local + pc.chunkOffset];
-    const vec2 origin = vec2(chunk.coord) * pc.chunkSize;
-    const float d = length(origin + 0.5 * pc.chunkSize - pc.vol.centre);
-    if (d < pc.recordDetail)
+    const RecordChunk chunk = pc_chunks.c[local + pc_chunkOffset];
+    const vec2 origin = vec2(chunk.coord) * pc_chunkSize;
+    const float d = length(origin + 0.5 * pc_chunkSize - pc_vol_centre);
+    if (d < pc_recordDetail)
         return; // splatted in detail (tree_volume_splat.cs)
-    const float reach = 0.7072 * pc.chunkSize; // the chunk's half diagonal
-    if (d + reach < pc.vol.rMin || d - reach > pc.vol.rMax)
+    const float reach = 0.7072 * pc_chunkSize; // the chunk's half diagonal
+    if (d + reach < pc_vol_rMin || d - reach > pc_vol_rMax)
         return;
-    const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
+    const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
 
     for (uint i = gl_LocalInvocationID.x; i < chunk.count; i += 64u)
     {
-        const uint record = pc.records.r[chunk.first + i];
+        const uint record = pc_records.r[chunk.first + i];
         const uint type = treeRecordType(record);
-        if (type >= pc.numTypes)
+        if (type >= pc_numTypes)
             continue;
-        const uint numVariants = pc.types.t[type].numVariants;
+        const uint numVariants = pc_types.t[type].numVariants;
         if (numVariants == 0u)
             continue;
         // The record's own variant and scale (expandChunk's placeVariant - keep in step).
-        const uint seed = treeRecordSeed(pc.worldSeed, chunk.coord, record);
+        const uint seed = treeRecordSeed(pc_worldSeed, chunk.coord, record);
         const uint variant = treeHash(seed, 102u) % numVariants;
-        const vec2 range = pc.types.t[type].scale;
+        const vec2 range = pc_types.t[type].scale;
         const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
-            * exp2(pc.types.t[type].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
-        const bool solid = pc.types.t[type].albedo.w < 0.5;
-        const float mass = pc.types.t[type].variantMass[variant] * scale * scale * (solid ? scale * pc.rockExtinction : 1.0);
+            * exp2(pc_types.t[type].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
+        const bool solid = pc_types.t[type].albedo.w < 0.5;
+        const float mass = pc_types.t[type].variantMass[variant] * scale * scale * (solid ? scale * pc_rockExtinction : 1.0);
         if (mass <= 0.0)
             continue;
-        const vec2 rel = origin + treeRecordLocal(record, pc.chunkSize) - pc.vol.centre;
+        const vec2 rel = origin + treeRecordLocal(record, pc_chunkSize) - pc_vol_centre;
         const float r = length(rel);
-        if (r < pc.vol.rMin || r > pc.vol.rMax)
+        if (r < pc_vol_rMin || r > pc_vol_rMax)
             continue;
         // Continuous texel coordinates (texel centres at integers) and the tent's half-width per axis, in texels.
-        const vec2 tc = vec2((atan(rel.y, rel.x) / TV_TWO_PI + 0.5) * float(angularRes), tvRadialUv(r, pc.vol) * float(radialRes)) - 0.5;
-        const float radius = pc.types.t[type].radius * scale;
-        const vec2 h = clamp(vec2(radius / tvTangentialCell(r, pc.vol), radius / tvRadialCell(r, pc.vol)), vec2(1.0), vec2(float(MAX_TENT)));
+        const vec2 tc = vec2((atan(rel.y, rel.x) / TV_TWO_PI + 0.5) * float(angularRes), tvRadialUv(r, TV_PUSH_VOL) * float(radialRes)) - 0.5;
+        const float radius = pc_types.t[type].radius * scale;
+        const vec2 h = clamp(vec2(radius / tvTangentialCell(r, TV_PUSH_VOL), radius / tvRadialCell(r, TV_PUSH_VOL)), vec2(1.0), vec2(float(MAX_TENT)));
         const ivec2 lo = ivec2(ceil(tc - h)), hi = ivec2(floor(tc + h));
         // The per-axis sums (each tent's samples normalized to 1).
         float sumA = 0.0, sumR = 0.0;
@@ -126,15 +127,15 @@ void main()
             sumR += max(1.0 - abs(float(y) - tc.y) / h.y, 0.0);
         if (sumA <= 0.0 || sumR <= 0.0)
             continue;
-        const float invSliceH = float(pc.vol.slices) / pc.vol.height;
+        const float invSliceH = float(pc_vol_slices) / pc_vol_height;
         for (int y = max(lo.y, 0); y <= min(hi.y, radialRes - 1); ++y)
         {
             const float wR = max(1.0 - abs(float(y) - tc.y) / h.y, 0.0) / sumR;
             if (wR <= 0.0)
                 continue;
             // The column's area at its centre radius.
-            const float rc = tvRadius(float(y) + 0.5, pc.vol);
-            const float perArea = mass / (tvRadialCell(rc, pc.vol) * tvTangentialCell(rc, pc.vol));
+            const float rc = tvRadius(float(y) + 0.5, TV_PUSH_VOL);
+            const float perArea = mass / (tvRadialCell(rc, TV_PUSH_VOL) * tvTangentialCell(rc, TV_PUSH_VOL));
             for (int x = lo.x; x <= hi.x; ++x)
             {
                 const float w = wR * max(1.0 - abs(float(x) - tc.x) / h.x, 0.0) / sumA;
@@ -150,6 +151,6 @@ void main()
         const ivec2 nearest = ivec2(tvWrapAngle(int(round(tc.x)), angularRes), clamp(int(round(tc.y)), 0, radialRes - 1));
         imageAtomicMin(u_type, nearest, type);
         if (!solid)
-            imageStore(u_colour, nearest, vec4(pc.types.t[type].albedo.rgb, 1.0));
+            imageStore(u_colour, nearest, vec4(pc_types.t[type].albedo.rgb, 1.0));
     }
 }

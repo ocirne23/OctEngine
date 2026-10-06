@@ -121,7 +121,7 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
     const float code = abs(tangentW);
     if (u_foliage_windBillboardWaves <= 0.0 || code < 2.0 || code >= 3.0)
         return uv;
-    const float dist = distance(instanceOrigin, u_views[VIEW_CENTER].viewPos.xyz);
+    const float dist = distance(instanceOrigin, u_views_viewPos[VIEW_CENTER].xyz);
     const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
     if (fade <= 0.0)
         return uv;
@@ -148,7 +148,7 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
 vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta)
 {
     outPrevDelta = vec3(0.0);
-    const float dist = distance(instPos, u_views[VIEW_CENTER].viewPos.xyz);
+    const float dist = distance(instPos, u_views_viewPos[VIEW_CENTER].xyz);
     const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
     if (fade <= 0.0)
         return vec3(0.0);

@@ -19,18 +19,20 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 0, r32ui) uniform readonly uimage2D u_src;
 layout (binding = 1, r32ui) uniform writeonly uimage2D u_dst;
 
+// PC_DECL_ / PC_CONSTS: the bake's lockable values (TreeVolumePipeline::registerPushFields, PushFields.ixx).
 layout (push_constant) uniform Push
 {
-    uint angularRes;
-    uint radialRes;
-    int radius;     // columns each way (> 0)
-    uint radialAxis; // 0 = along the angle (wraps), 1 = along the radius (clamps)
-} pc;
+    PC_DECL_vol_angularRes;   // uint
+    PC_DECL_vol_radialRes;    // uint
+    PC_DECL_floorSmoothing;   // int: columns each way (> 0)
+    uint pc_radialAxis; // 0 = along the angle (wraps), 1 = along the radius (clamps)
+};
+PC_CONSTS
 
 void main()
 {
     const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
-    const int angularRes = int(pc.angularRes), radialRes = int(pc.radialRes);
+    const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     if (p.x >= angularRes || p.y >= radialRes)
         return;
     const uint centre = imageLoad(u_src, p).r;
@@ -42,15 +44,15 @@ void main()
     // Relative to the centre column's floor: the sum stays small whatever the absolute height.
     const float base = tvFloorDecode(centre);
     float sum = 0.0, weight = 0.0;
-    for (int k = -pc.radius; k <= pc.radius; ++k)
+    for (int k = -pc_floorSmoothing; k <= pc_floorSmoothing; ++k)
     {
-        const ivec2 q = pc.radialAxis != 0u ? ivec2(p.x, p.y + k) : ivec2(tvWrapAngle(p.x + k, angularRes), p.y);
+        const ivec2 q = pc_radialAxis != 0u ?ivec2(p.x, p.y + k) : ivec2(tvWrapAngle(p.x + k, angularRes), p.y);
         if (q.y < 0 || q.y >= radialRes)
             continue;
         const uint bits = imageLoad(u_src, q).r;
         if (bits == 0u)
             continue;
-        const float w = float(pc.radius + 1 - abs(k));
+        const float w = float(pc_floorSmoothing + 1 - abs(k));
         sum += w * (tvFloorDecode(bits) - base);
         weight += w;
     }

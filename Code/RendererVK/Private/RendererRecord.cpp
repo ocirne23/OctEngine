@@ -250,11 +250,11 @@ void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameI
 {
     if (!m_particles.isEnabled())
         return;
-    if (m_ubo.weather.rainOcclusionPresent > 0.5f && m_rainOcclusionPipeline.isActive())
+    if (m_ubo.get(m_u.weather.rainOcclusionPresent) > 0.5f && m_rainOcclusionPipeline.isActive())
         if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
         {
             m_gpuProfiler.beginScope(primary, "Rain occlusion");
-            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.weather.rainOcclusionViewProj, m_particles.getParams().rainOcclusionFoliageBlock);
+            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.get(m_u.weather.rainOcclusionViewProj),m_particles.getParams().rainOcclusionFoliageBlock);
             m_gpuProfiler.endScope(primary);
         }
     executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
@@ -819,7 +819,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
     const glm::uvec2 renderSize(m_renderRect.getSize());
     // The engine's NDC jitter in render pixels, y down (the viewport's y flip). Verified on screen (2026-09-28):
     // the opposite sign on either axis (the UE convention) wobbles and softens the image.
-    const glm::vec2 jitterNdc(m_ubo.taaJitter.x, m_ubo.taaJitter.y);
+    const glm::vec2 jitterNdc(m_ubo.get(m_u.taaJitter));
     const glm::vec2 jitterPx(jitterNdc.x * (float)renderSize.x * 0.5f, -jitterNdc.y * (float)renderSize.y * 0.5f);
 
     // SL never enables NGX's output subrects: DLSS writes at (0, 0) only. A viewport at the origin (the game,
@@ -853,7 +853,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
         .jitterPx = jitterPx,
         .reset = m_dlssReset,
         .viewToClip = computeCenterProjection(camera),
-        .clipToPrevClip = m_ubo.views[RendererVKLayout::VIEW_CENTER].reprojClip,
+        .clipToPrevClip = m_ubo.get(m_u.viewReprojClip, RendererVKLayout::VIEW_CENTER),
         .cameraPos = camera.position,
         .cameraUp = glm::vec3(cameraToWorld[1]),
         .cameraRight = glm::vec3(cameraToWorld[0]),
@@ -1039,7 +1039,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
     if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
     {
         InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
-        const uint32 liveCount = m_ubo.present.giTlasNumInstances;
+        const uint32 liveCount = m_ubo.get(m_u.present.giTlasNumInstances);
         GIProbePipeline::TlasInstanceParams tlasParams{
             .renderNodeTransforms = instances.transforms,
             .meshInstances = instances.meshInstances,

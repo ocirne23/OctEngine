@@ -79,15 +79,16 @@ void Renderer::fillTreeCullUbo()
 {
     const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
         && m_treeSets[m_treeCullSet].hasVolume;
-    RendererVKLayout::PresentUbo& p = m_ubo.present;
-    p.treeRangeBase = m_treeCullBase;
-    p.treeRangeLength = m_treeCullCount;
-    p.treeThreads = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces);
-    p.treeCount = m_treeCullPieces;
-    p.treeFarScale = m_treeCullDistanceScale;
-    p.treeForceFar = m_treeCullForceFar ? 1.0f : 0.0f;
-    p.treeVolumeStart = treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f;
-    p.treeShadowMargin = oc::max(m_foliageParams.shadowCascadeMargin, 0.0f); // instanced_indirect_shadow.cs.glsl
+    UboBlock& ubo = m_ubo;
+    const UboRoot::Present& p = m_u.present;
+    ubo.set(p.treeRangeBase, m_treeCullBase);
+    ubo.set(p.treeRangeLength, m_treeCullCount);
+    ubo.set(p.treeThreads, m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces));
+    ubo.set(p.treeCount, m_treeCullPieces);
+    ubo.set(p.treeFarScale, m_treeCullDistanceScale);
+    ubo.set(p.treeForceFar, m_treeCullForceFar ? 1.0f : 0.0f);
+    ubo.set(p.treeVolumeStart, treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f);
+    ubo.set(p.treeShadowMargin, oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl
 }
 
 Buffer& Renderer::treeCullPieces()

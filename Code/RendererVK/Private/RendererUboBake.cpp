@@ -7,9 +7,11 @@ import Core.Log;
 import File;
 
 import :Layout;
-import :UboFields;
+import :UboBlock;
+import :PushFields;
+import :Device;
 
-// Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_uboFields, registerUboFields at the end of
+// Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_ubo, registerUboFields at the end of
 // RendererUbo.cpp) is a GLSL const of its value in every shader while every tweak it is computed from is locked, so
 // the compiler folds it; otherwise the shaders read its block member. The block is still uploaded whole every frame (a
 // baked entry's slot is unread).
@@ -21,39 +23,86 @@ import :UboFields;
 //  * a change of a row that feeds baked values (TweakRegistry's change listener, filtered by isVarBakeable). A locked
 //    row is read-only in the panel, so that is an override, a synced value, or code that wrote a setting and called
 //    Tweak::notifyChanged; an unlocked row only feeds block reads and never re-bakes.
+// The same two events mark the PUSH lists (PushFieldList, m_pushFields) dirty: applyUboLocks re-bakes the ones with an
+// onRebake and reloads only their passes; the far-tree volume re-bakes its own two in TreeVolumePipeline::prepare.
 
 void Renderer::registerUboLocks()
 {
-    const auto onLockClick = [this]() { m_uboResolveDirty = true; m_uboLocksDirty = true; };
+    const auto onLockClick = [this]()
+    {
+        m_uboResolveDirty = true;
+        m_uboLocksDirty = true;
+        for (PushFieldOwner& owner : m_pushFields)
+            owner.list->markDirty(/*resolve*/ true);
+    };
     for (uint32 s = 0; s < RendererVKLayout::NUM_UBO_LOCK_SECTIONS; ++s)
         m_uboLocks[s] = Tweak::lock(RendererVKLayout::c_uboLockSections[s].name, RendererVKLayout::c_uboLockSections[s].categories,
             /*lockedByDefault*/ true, onLockClick);
     TweakRegistry::get().addChangeListener(this, [this](const TweakVar& var)
     {
-        if (TweakRegistry::get().isVarBakeable(var))
-            m_uboLocksDirty = true;
+        if (!TweakRegistry::get().isVarBakeable(var))
+            return;
+        m_uboLocksDirty = true;
+        for (PushFieldOwner& owner : m_pushFields)
+            owner.list->markDirty(/*resolve*/ false);
     });
 
-    registerUboFields(m_uboFields);
-    assert(RendererVKLayout::UBO_FIELDS_OFFSET + m_uboFields.size() <= RendererVKLayout::UBO_RANGE && "the lockable UBO values outgrew UBO_RANGE");
-    const size_t count = m_uboFields.entries().size();
+    registerUboFields(m_ubo); // after the root values (UboRoot binds them at construction)
+    registerPushFields();
+    assert(m_ubo.size() <= RendererVKLayout::UBO_RANGE && "the frame UBO outgrew UBO_RANGE");
+
+    // A lock means something only on a row a baked value is computed from: those rows get the lock button.
+    TweakRegistry& tweaks = TweakRegistry::get();
+    for (const UboBlock::Entry& e : m_ubo.entries())
+        for (const TweakRegistry::Source& s : e.sources)
+            tweaks.markLockable(s.address, s.size);
+    for (const PushFieldOwner& owner : m_pushFields)
+        for (const PushFieldList::Entry& e : owner.list->entries())
+            for (const TweakRegistry::Source& s : e.sources)
+                tweaks.markLockable(s.address, s.size);
+    const size_t count = m_ubo.entries().size();
     m_uboLocked.assign(count, 0);
     m_uboBaked.assign(count, 0);
-    m_uboFieldValues.assign(m_uboFields.size(), 0);
-    m_uboBakedValues.assign(m_uboFields.size(), 0);
+    m_uboBakedValues.assign(m_ubo.size(), 0);
 
     // THE startup bake: the declaration the pipelines are first compiled with (initPipelines). The live entries are
     // skipped - what they read may not exist yet; they are never baked anyway.
-    m_uboFields.evaluate(m_uboFieldValues.data(), /*includeLive*/ false);
+    m_ubo.evaluate(/*includeLive*/ false);
     resolveUboLocks();
     bakeUboValues();
     m_uboResolveDirty = false;
     m_uboLocksDirty = false;
+    for (PushFieldOwner& owner : m_pushFields)
+        (void)owner.list->update();
+}
+
+// Every lockable push value, per list. A list the Renderer re-bakes (applyUboLocks) names the reload that follows.
+void Renderer::registerPushFields()
+{
+    m_eyeAdaptationPipeline.registerPushFields();
+    m_pushFields.push_back(PushFieldOwner{ &m_eyeAdaptationPipeline.pushFields(), [this]
+    {
+        m_eyeAdaptationPipeline.reloadShaders();
+        setHaveToRecordCommandBuffers();
+    } });
+    m_rainOcclusionPipeline.registerPushFields();
+    m_pushFields.push_back(PushFieldOwner{ &m_rainOcclusionPipeline.pushFields(), [this] { m_rainOcclusionPipeline.reloadShaders(); } });
+    m_giProbePipeline.registerDebugPushFields();
+    m_pushFields.push_back(PushFieldOwner{ &m_giProbePipeline.debugPushFields(), [this]
+    {
+        m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
+        setHaveToRecordCommandBuffers();
+    } });
+    // The far-tree volume: its bake and its march read different settings at the same time (a bake runs over frames
+    // while the march shows the last one), so it updates its two lists itself (TreeVolumePipeline::prepare).
+    m_treeVolume.registerPushFields(m_farTreeParams);
+    m_pushFields.push_back(PushFieldOwner{ &m_treeVolume.bakePushFields(), {} });
+    m_pushFields.push_back(PushFieldOwner{ &m_treeVolume.marchPushFields(), {} });
 }
 
 void Renderer::setUboDeclaration()
 {
-    RendererVKLayout::g_uboDeclaration = RendererVKLayout::buildUboDeclaration(m_uboFields, m_uboBakedValues.data(), m_uboBaked);
+    RendererVKLayout::g_uboDeclaration = RendererVKLayout::buildUboDeclaration(m_ubo, m_uboBakedValues.data(), m_uboBaked);
     // A copy for reading (the includer serves the string itself).
     FileSystem::createDirectories("Local/Shaders", true);
     FileSystem::writeFileStr("Local/Shaders/ubo.generated.glsl", RendererVKLayout::g_uboDeclaration, true);
@@ -64,7 +113,7 @@ void Renderer::resolveUboLocks()
 {
     ProfileScope scope("UBO lock resolve", EProfileCategory::Renderer);
     const TweakRegistry& tweaks = TweakRegistry::get();
-    const oc::vector<UboFieldList::Entry>& entries = m_uboFields.entries();
+    const oc::vector<UboBlock::Entry>& entries = m_ubo.entries();
     for (size_t i = 0; i < entries.size(); ++i)
     {
         ETweakSource source = ETweakSource::Locked;
@@ -79,16 +128,16 @@ void Renderer::resolveUboLocks()
     }
 }
 
-// The consts from m_uboFieldValues: an entry is one while it is locked and its value is finite (a const cannot spell
-// a NaN). Returns whether any const appeared, went or changed its value.
+// The consts from the block's evaluated values: an entry is one while it is locked and its value is finite (a const
+// cannot spell a NaN). Returns whether any const appeared, went or changed its value.
 bool Renderer::bakeUboValues()
 {
-    const oc::vector<UboFieldList::Entry>& entries = m_uboFields.entries();
+    const oc::vector<UboBlock::Entry>& entries = m_ubo.entries();
     bool changed = false;
     for (size_t i = 0; i < entries.size(); ++i)
     {
-        const UboFieldList::Entry& e = entries[i];
-        const uint8* value = m_uboFieldValues.data() + e.offset;
+        const UboBlock::Entry& e = entries[i];
+        const uint8* value = m_ubo.data() + e.offset;
         const bool bake = m_uboLocked[i] && RendererVKLayout::isUboValueFinite(e.type, value);
         if (!bake)
         {
@@ -109,19 +158,42 @@ bool Renderer::bakeUboValues()
 
 void Renderer::applyUboLocks()
 {
-    if (!m_initialized || !m_uboLocksDirty)
+    if (!m_initialized)
+        return;
+    bool pushDirty = false;
+    for (const PushFieldOwner& owner : m_pushFields)
+        pushDirty |= owner.onRebake && owner.list->isDirty();
+    if (!m_uboLocksDirty && !pushDirty)
         return;
     ProfileScope scope("UBO locks", EProfileCategory::Renderer);
-    m_uboLocksDirty = false;
-    if (m_uboResolveDirty)
+    // The push lists first: a full reload below compiles every shader with their new defines.
+    oc::small_vector<PushFieldOwner*, 4> rebaked;
+    for (PushFieldOwner& owner : m_pushFields)
+        if (owner.onRebake && owner.list->isDirty() && owner.list->update())
+            rebaked.push_back(&owner);
+    bool uboChanged = false;
+    if (m_uboLocksDirty)
     {
-        m_uboResolveDirty = false;
-        resolveUboLocks();
+        m_uboLocksDirty = false;
+        if (m_uboResolveDirty)
+        {
+            m_uboResolveDirty = false;
+            resolveUboLocks();
+        }
+        // The values as of now (the change landed before this frame's build).
+        m_ubo.evaluate();
+        uboChanged = bakeUboValues();
     }
-    // The values as of now (the change landed before this frame's build).
-    m_uboFields.evaluate(m_uboFieldValues.data());
-    // Rebuilding every shader reads the disk on main: an explicit stall, like F5.
+    if (!uboChanged && rebaked.empty())
+        return;
+    // Rebuilding shaders reads the disk on main: an explicit stall, like F5.
     const FileSystem::AllowMainThreadIO allowIo;
-    if (bakeUboValues())
+    if (uboChanged)
+    {
         reloadShaders();
+        return;
+    }
+    (void)Globals::device.graphicsQueueWaitIdle();
+    for (PushFieldOwner* owner : rebaked)
+        owner->onRebake();
 }

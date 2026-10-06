@@ -62,6 +62,8 @@ void Shader::appendDefineList(oc::string& out, const oc::vector<ShaderDefine>& d
 {
     for (const ShaderDefine& define : defines)
     {
+        if (define.name.compare(0, 3, "PC_") == 0)
+            continue; // the baked push values (PushFields.ixx), like the UBO's consts: no variant of their own
         const oc::string item = define.value.empty() ? define.name : define.name + "=" + define.value;
         if (oc::string(" " + out + " ").find(" " + item + " ") != oc::string::npos)
             continue;

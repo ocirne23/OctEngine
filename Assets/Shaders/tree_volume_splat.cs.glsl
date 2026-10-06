@@ -105,26 +105,27 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Tr
 layout (push_constant, scalar) uniform Push
 {
 #ifdef TREE_SPLAT_RECORDS
-    TreeRecordMap map;   // the chunk map (the records' ground)
+    TreeRecordMap pc_map;   // the chunk map (the records' ground)
 #else
-    PieceList pieces;
+    PieceList pc_pieces;
 #endif
-    TypeList types;      // TREE_SPLAT_RECORDS: the world set's
-    FloatList data;
-    uint numPieces;      // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
-    uint mapSize;        // TREE_SPLAT_RECORDS: the chunk map's size
-    TreeVolumeParams vol;
+    TypeList pc_types;      // TREE_SPLAT_RECORDS: the world set's
+    FloatList pc_data;
+    uint pc_numPieces;      // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
+    uint pc_mapSize;        // TREE_SPLAT_RECORDS: the chunk map's size
+    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat (the bake's lockable values)
     // TREE_SPLAT_RECORDS only:
-    TreeRecordWords records; // each chunk's ground, then its records
-    DetailList detailChunks;
-    RecordTypeList recordTypes;
-    float chunkSize;
-    uint worldSeed;
-    uint numDetailChunks;
-    uint numRecordTypes;
-    uint wgOffset;       // this dispatch's first record / piece (the bake spreads both over frames)
-    float rockExtinction; // a SOLID type's extinction (1/m) over its occupancy
-} pc;
+    TreeRecordWords pc_records; // each chunk's ground, then its records
+    DetailList pc_detailChunks;
+    RecordTypeList pc_recordTypes;
+    float pc_chunkSize;
+    uint pc_worldSeed;
+    uint pc_numDetailChunks;
+    uint pc_numRecordTypes;
+    uint pc_wgOffset;       // this dispatch's first record / piece (the bake spreads both over frames)
+    PC_DECL_rockExtinction; // float: a SOLID type's extinction (1/m) over its occupancy
+};
+PC_CONSTS
 
 vec3 quatRotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 
@@ -153,7 +154,7 @@ float sampleType(VolumeType t, vec3 f, uint mip)
     {
         const uvec3 c = uvec3((k & 1u) != 0u ? i1.x : i0.x, (k & 2u) != 0u ? i1.y : i0.y, (k & 4u) != 0u ? i1.z : i0.z);
         const float wk = ((k & 1u) != 0u ? w.x : 1.0 - w.x) * ((k & 2u) != 0u ? w.y : 1.0 - w.y) * ((k & 4u) != 0u ? w.z : 1.0 - w.z);
-        s += wk * pc.data.v[base + c.x + r * (c.y + r * c.z)];
+        s += wk * pc_data.v[base + c.x + r * (c.y + r * c.z)];
     }
     return s;
 }
@@ -176,7 +177,7 @@ float tentWeight(float lo, float hi, float h) { return (tentPrimitive(hi, h) - t
 // One tree, by the whole workgroup (its texels spread over the threads).
 void splatPiece(VolumePiece piece)
 {
-    const VolumeType type = pc.types.t[piece.type];
+    const VolumeType type = pc_types.t[piece.type];
     if (type.res == 0u)
         return;
     const float scale = piece.posScale.w;
@@ -193,15 +194,15 @@ void splatPiece(VolumePiece piece)
         hi = max(hi, w);
     }
     // The box in polar terms: the radius range of its xz rectangle, the angle range of the circle around it.
-    const vec2 midXZ = 0.5 * (lo.xz + hi.xz) - pc.vol.centre;
+    const vec2 midXZ = 0.5 * (lo.xz + hi.xz) - pc_vol_centre;
     const float halfDiag = 0.5 * length(hi.xz - lo.xz);
     const float rMid = length(midXZ);
     const float rLo = max(rMid - halfDiag, 0.0), rHi = rMid + halfDiag;
-    if (rHi < pc.vol.rMin || rLo > pc.vol.rMax)
+    if (rHi < pc_vol_rMin || rLo > pc_vol_rMax)
         return; // outside the volume
-    const int radialRes = int(pc.vol.radialRes), angularRes = int(pc.vol.angularRes);
-    const int r0 = clamp(int(floor(tvRadialUv(rLo, pc.vol) * float(radialRes))), 0, radialRes - 1);
-    const int r1 = clamp(int(floor(tvRadialUv(rHi, pc.vol) * float(radialRes))), 0, radialRes - 1);
+    const int radialRes = int(pc_vol_radialRes), angularRes = int(pc_vol_angularRes);
+    const int r0 = clamp(int(floor(tvRadialUv(rLo, TV_PUSH_VOL) * float(radialRes))), 0, radialRes - 1);
+    const int r1 = clamp(int(floor(tvRadialUv(rHi, TV_PUSH_VOL) * float(radialRes))), 0, radialRes - 1);
     // One texel more on every side: the tent reaches the neighbours. A box AROUND the centre (from the air the inner
     // radius is small, and a tree under the camera surrounds it) takes every angle.
     const bool around = rMid <= halfDiag;
@@ -215,8 +216,8 @@ void splatPiece(VolumePiece piece)
     // about up: the larger half axis), world.
     const vec2 treeXZ = piece.posScale.xz + quatRotate(piece.quat, 0.5 * (type.boxMin + type.boxMax) * scale).xz;
     const float treeHalf = 0.5 * max(type.boxMax.x - type.boxMin.x, type.boxMax.z - type.boxMin.z) * scale;
-    const uint slices = pc.vol.slices;
-    const float sliceH = pc.vol.height / float(slices);
+    const uint slices = pc_vol_slices;
+    const float sliceH = pc_vol_height / float(slices);
     const vec3 boxSize = type.boxMax - type.boxMin;
     const float voxel = max(max(boxSize.x, boxSize.y), boxSize.z) / float(type.res);
     const uint maxMip = uint(findMSB(type.res));
@@ -245,16 +246,16 @@ void splatPiece(VolumePiece piece)
 #endif
         ivec2 texel = base + ivec2(int(col % uint(ext.x)), int(col / uint(ext.x)));
         texel.x = tvWrapAngle(texel.x, angularRes); // the angle wraps
-        const vec2 xz = tvTexelWorldXZ(texel, pc.vol);
+        const vec2 xz = tvTexelWorldXZ(texel, TV_PUSH_VOL);
         // Horizontally a TENT per polar axis (one cell wide each way, in the texel's radial / tangential frame),
         // vertically the box overlap of the slice (slices are thin against a crown).
-        const vec2 rel = xz - pc.vol.centre;
+        const vec2 rel = xz - pc_vol_centre;
         const float r = length(rel);
         const vec2 eR = rel / r;
         const vec2 eT = vec2(-eR.y, eR.x);
         const vec2 off = vec2(dot(treeXZ - xz, eR), dot(treeXZ - xz, eT)); // the tree centre, texel frame
-        const float cellR = tvRadialCell(r, pc.vol);
-        const float cellT = tvTangentialCell(r, pc.vol);
+        const float cellR = tvRadialCell(r, TV_PUSH_VOL);
+        const float cellT = tvTangentialCell(r, TV_PUSH_VOL);
         const float coverXZ = tentWeight(off.x - treeHalf, off.x + treeHalf, cellR) * tentWeight(off.y - treeHalf, off.y + treeHalf, cellT);
 #if defined(TREE_FLOOR_PASS) && TREE_FLOOR_PASS == 1
         imageAtomicMax(u_floorCover, texel, coverKey(coverXZ));
@@ -279,7 +280,7 @@ void splatPiece(VolumePiece piece)
         // A lower tree set the floor (a slope across the column): this one sits higher in the layer. A tree that would
         // reach past the layer's top moves DOWN into it (as far as its base allows) - off by that much vertically,
         // kilometres out, instead of cut.
-        const float shift = max(min(hi.y - ground - pc.vol.height, lo.y - ground), 0.0);
+        const float shift = max(min(hi.y - ground - pc_vol_height, lo.y - ground), 0.0);
         const vec3 world = vec3(xz.x, ground + (float(s) + 0.5) * sliceH + shift, xz.y);
         if (world.y < lo.y - sliceH || world.y > hi.y + sliceH)
             continue;
@@ -295,7 +296,7 @@ void splatPiece(VolumePiece piece)
         // Extinction (1/m) in TREE space -> world: a scaled tree's leaves are spread over a scaled volume. A solid's
         // occupancy x its extinction, at any size.
         const bool solid = type.albedo.w < 0.5;
-        const float extinction = sampleType(type, f, mip) * cover * (solid ? pc.rockExtinction : 1.0 / scale);
+        const float extinction = sampleType(type, f, mip) * cover * (solid ? pc_rockExtinction : 1.0 / scale);
         if (extinction <= 1e-4)
             continue;
         imageAtomicAdd(u_accum, tvAccumTexel(texel, uint(s)), tvAccumAmount(extinction, uint(s)));
@@ -313,21 +314,21 @@ void splatPiece(VolumePiece piece)
 // the sampler's 2 m grid); the terrain map only where that chunk holds none.
 void splatRecordPlant(uint recordType, uint seed, vec2 p)
 {
-    const uint numVariants = pc.recordTypes.t[recordType].numVariants;
+    const uint numVariants = pc_recordTypes.t[recordType].numVariants;
     if (numVariants == 0u)
         return;
     const uint variant = treeHash(seed, 102u) % numVariants;
-    const vec2 range = pc.recordTypes.t[recordType].scale;
+    const vec2 range = pc_recordTypes.t[recordType].scale;
     const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
-        * exp2(pc.recordTypes.t[recordType].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
+        * exp2(pc_recordTypes.t[recordType].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
     const float yaw = treeHash01(treeHash(seed, 104u)) * 6.28318531;
     float ground;
-    if (!treeRecordGround(pc.records, pc.map, pc.mapSize, pc.chunkSize, p, ground))
+    if (!treeRecordGround(pc_records, pc_map, pc_mapSize, pc_chunkSize, p, ground))
         ground = terrainHeightAt(p);
     VolumePiece piece;
     piece.posScale = vec4(p.x, ground - 0.05, p.y, scale);
     piece.quat = vec4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw)); // about up
-    piece.type = pc.recordTypes.t[recordType].variantType[variant];
+    piece.type = pc_recordTypes.t[recordType].variantType[variant];
     splatPiece(piece);
 }
 #endif
@@ -339,48 +340,48 @@ void main()
     // chunks' first workgroups (the CPU picked them: within the record detail distance - tree_volume_records.cs takes
     // the rest). A workgroup per CHUNK ran its ~3000 plants in sequence: 31 ms per bake.
     const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
-    if (local >= pc.numPieces)
+    if (local >= pc_numPieces)
         return;
-    const uint wg = local + pc.wgOffset; // this frame's slice of the bake
-    uint lo = 0u, hi = pc.numDetailChunks - 1u;
+    const uint wg = local + pc_wgOffset; // this frame's slice of the bake
+    uint lo = 0u, hi = pc_numDetailChunks - 1u;
     while (lo < hi)
     {
         const uint mid = (lo + hi + 1u) / 2u;
-        if (pc.detailChunks.d[mid].w <= wg)
+        if (pc_detailChunks.d[mid].w <= wg)
             lo = mid;
         else
             hi = mid - 1u;
     }
-    const uvec4 chunk = pc.detailChunks.d[lo];
+    const uvec4 chunk = pc_detailChunks.d[lo];
     const ivec2 coord = ivec2(chunk.xy);
-    const uint record = pc.records.w[chunk.z + (wg - chunk.w)];
+    const uint record = pc_records.w[chunk.z + (wg - chunk.w)];
     const uint type = treeRecordType(record);
-    if (type >= pc.numRecordTypes)
+    if (type >= pc_numRecordTypes)
         return;
-    const uint seed = treeRecordSeed(pc.worldSeed, coord, record);
-    const vec2 p = vec2(coord) * pc.chunkSize + treeRecordLocal(record, pc.chunkSize);
+    const uint seed = treeRecordSeed(pc_worldSeed, coord, record);
+    const vec2 p = vec2(coord) * pc_chunkSize + treeRecordLocal(record, pc_chunkSize);
     splatRecordPlant(type, seed, p);
     // "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to the bush
     // radius (area-uniform), a random bush type of its climate.
-    const uint numBushes = pc.recordTypes.t[type].numBushes;
-    const float perTree = pc.recordTypes.t[type].bushesPerTree;
+    const uint numBushes = pc_recordTypes.t[type].numBushes;
+    const float perTree = pc_recordTypes.t[type].bushesPerTree;
     if (numBushes == 0u || perTree <= 0.0)
         return;
     const float whole = floor(perTree);
     const uint count = uint(whole) + (treeHash01(treeHash(seed, 110u)) < perTree - whole ? 1u : 0u);
-    const float bushRadius = pc.recordTypes.t[type].bushRadius;
+    const float bushRadius = pc_recordTypes.t[type].bushRadius;
     for (uint b = 0u; b < count; ++b)
     {
         const uint bushSeed = treeHash(seed, 200u + b);
         const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531;
         const float radius = mix(1.5, bushRadius, sqrt(treeHash01(treeHash(bushSeed, 112u))));
-        const uint bushType = pc.recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
+        const uint bushType = pc_recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
         splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);
     }
 #else
     const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u; // past 65535 trees the dispatch wraps into y
-    if (local >= pc.numPieces)
+    if (local >= pc_numPieces)
         return;
-    splatPiece(pc.pieces.p[local + pc.wgOffset]); // this frame's slice of the set (the bake spreads it over frames)
+    splatPiece(pc_pieces.p[local + pc_wgOffset]); // this frame's slice of the set (the bake spreads it over frames)
 #endif
 }

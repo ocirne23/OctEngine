@@ -104,7 +104,7 @@ void main()
     // Screen-space depth collision against last frame's scene depth (centre view).
     if (p_collision != 0u && (e.texFlags.y & PARTICLE_FLAG_COLLIDE) != 0u)
     {
-        const vec4 clip = u_views[VIEW_CENTER].mvp * vec4(pos, 1.0);
+        const vec4 clip = u_views_mvp[VIEW_CENTER] * vec4(pos, 1.0);
         if (clip.w > 0.0)
         {
             const vec2 ndc = clip.xy / clip.w;
@@ -115,8 +115,8 @@ void main()
                 const float depth = texture(u_prevDepth, uv).r;
                 if (depth > 0.0) // reversed-Z: 0 = far plane / sky
                 {
-                    const vec3 scenePos = worldPosFromDepthMat(uv, depth, u_views[VIEW_CENTER].invMvp);
-                    const float sceneW = (u_views[VIEW_CENTER].mvp * vec4(scenePos, 1.0)).w;
+                    const vec3 scenePos = worldPosFromDepthMat(uv, depth, u_views_invMvp[VIEW_CENTER]);
+                    const float sceneW = (u_views_mvp[VIEW_CENTER] * vec4(scenePos, 1.0)).w;
                     const float thickness = max(0.5, e.sizeParams.x);
                     if (clip.w > sceneW && clip.w - sceneW < thickness)
                     {

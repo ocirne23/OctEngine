@@ -344,7 +344,7 @@ void OceanSimulationPipeline::reloadShaders()
         printf("OceanSimulationPipeline: spray shader reload failed, keeping previous pipeline\n");
 }
 
-void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::OceanLiveUbo& live, const glm::vec3& cameraPos, float dt)
+void OceanSimulationPipeline::advanceFoamField(oc::span<glm::vec4> foamLevels, glm::vec2& foamDrift, const glm::vec3& cameraPos, float dt)
 {
     const OceanParams& ocean = m_oceanParams;
     const float texel0 = glm::max(ocean.foamTexel, 0.01f);
@@ -365,9 +365,9 @@ void OceanSimulationPipeline::advanceFoamField(RendererVKLayout::OceanLiveUbo& l
         const glm::vec2 originCells = glm::floor(cameraQ / texel) - (float)(N / 2);
         const glm::vec2 shift = reset ? glm::vec2((float)(2 * N)) : originCells - m_foamOriginCells[level];
         m_foamOriginCells[level] = originCells;
-        live.foamLevels[level] = glm::vec4(originCells * texel, shift);
+        foamLevels[level] = glm::vec4(originCells * texel, shift);
     }
-    live.foamDrift = m_foamDrift; // the field's tweak values: Renderer::buildUboOcean (u_ocean_foam*)
+    foamDrift = m_foamDrift; // the field's tweak values: Renderer::registerUboFields (u_ocean_foam*)
 }
 
 void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray)

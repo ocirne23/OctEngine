@@ -7,6 +7,7 @@ import :Allocator;
 import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
+import :PushFields;
 
 // The weather volume's RAIN OCCLUSION MAP (the particle sim's shelter test): per texel, two short ray queries straight
 // DOWN through the volume's top-down orthographic box (u_weather_rainOcclusionViewProj) against THIS frame's TLAS - the solid
@@ -26,6 +27,9 @@ public:
 
     void initialize(); // the sampler + the placeholders only
     void reloadShaders();
+    // The lockable push value (the foliage block): the Renderer bakes the list and calls reloadShaders after a change.
+    void registerPushFields();
+    PushFieldList& pushFields() { return m_pushFields; }
     // Allocates (true) or frees (false) the map. The GPU must be idle; the caller re-records the particle sim's set.
     void setActive(bool active);
     bool isActive() const { return m_active; }
@@ -45,6 +49,7 @@ private:
 
     bool m_active = false;
     bool m_pipelineBuilt = false;
+    PushFieldList m_pushFields;
     ComputePipeline m_pipeline;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_sets; // per slot: the TLAS handle is per slot
     vk::Image m_image;

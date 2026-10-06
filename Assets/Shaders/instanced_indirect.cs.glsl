@@ -272,7 +272,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         if (lodGroupIdx != 0xFFFFFFFFu && u_lod_enabled > 0.5)
         {
             const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
-            const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
+            const float dist = max(0.01, length(centerPos - u_views_viewPos[VIEW_CENTER].xyz) - radius);
             int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
                 u_lod_maxErrorPx, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
             if (!isTree)
@@ -333,7 +333,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             // evaluation stages (their ISBE storage was the pass's second launch limiter). The margin covers
             // the VR eyes' offset from the centre view.
             const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT)
-                && distance(centerPos, u_views[VIEW_CENTER].viewPos.xyz) - radius < u_terrainTess_fadeEnd + 1.0;
+                && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
             // The SKY: its own list (binding 23), drawn late; its DGC entry draws nothing, as the tessellated ground's.
             const bool sky = pipelineIdx == uint16_t(PIPELINE_IDX_SKY);            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (sky)

@@ -113,7 +113,6 @@ void Renderer::attachSettingsListeners()
     Tweak::onChange(s.dlss.mode, this, onRenderResolution);
     Tweak::onChange(s.dlss.preset, this, reRecord);
     Tweak::onChange(s.dlss.mipBias, this, onRenderResolution);
-    Tweak::onChange(s.dlss.oceanBias, this, reRecord); // a push constant of the cached mvec pass
     // Motion blur and bloom ride the cached secondaries (push constants) or gate them: every change re-records.
     Tweak::onChange(s.motionBlur.enabled, this, reRecord);
     Tweak::onChange(s.motionBlur.shutter, this, reRecord);

@@ -10,7 +10,7 @@ import :Texture;
 import :GraphicsPipeline;
 import :RenderPass;
 import :Layout;
-import :UboFields;
+import :UboBlock;
 
 namespace
 {
@@ -68,7 +68,7 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     Globals::device.setDebugName(m_volumeSampler, "GI.volume");
 }
 
-void GIProbePipeline::registerUboFields(UboFieldList& list, const bool& rtEnabled, const bool& giEnabled) const
+void GIProbePipeline::registerUboFields(UboBlock& list,const bool& rtEnabled, const bool& giEnabled) const
 {
     const GiSettings& gi = Globals::settings.gi;
     list.add("rt_giStrength", [&rtEnabled, &giEnabled] { return rtEnabled && giEnabled ? Globals::settings.gi.strength : 0.0f; },
@@ -694,10 +694,18 @@ void GIProbePipeline::recordVolumeBake(CommandBuffer& commandBuffer, uint32 fram
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &after });
 }
 
+void GIProbePipeline::registerDebugPushFields()
+{
+    const GiSettings& gi = Globals::settings.gi;
+    m_debugPushFields.add("radius", gi.debugRadius);
+    m_debugPushFields.add("mode", [&gi] { return (uint32)gi.debugMode; }, gi.debugMode);
+}
+
 void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/gi_probe_debug.vs.glsl";
     layout.fragmentShader.debugFilePath = "Shaders/gi_probe_debug.fs.glsl";
+    m_debugPushFields.appendDefines(layout.vertexShader.defines);
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone; // procedural cube, winding not guaranteed

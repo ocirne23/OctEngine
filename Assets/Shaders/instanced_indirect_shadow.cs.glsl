@@ -136,7 +136,7 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     if (lodGroupIdx != 0xFFFFFFFFu && u_lod_enabled > 0.5)
     {
         const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
-        const float dist = max(0.01, length(centerPos - u_views[VIEW_CENTER].viewPos.xyz) - radius);
+        const float dist = max(0.01, length(centerPos - u_views_viewPos[VIEW_CENTER].xyz) - radius);
         int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
             u_lod_maxErrorPx * 4.0, 2.0, -1);
         uint chosenMeshIdx = lodMeshAt(group, level);

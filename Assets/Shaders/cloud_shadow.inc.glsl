@@ -97,7 +97,7 @@ float cloudSunTransmittanceImpl(vec3 worldPos, bool filtered)
 #ifdef CLOUD_SHADOWS
     if (u_cloudsLive_shadowRendered < 0.5)
         return 1.0;
-    const vec2 s = cloudShadowSample(worldPos - u_views[VIEW_CENTER].viewPos.xyz, filtered);
+    const vec2 s = cloudShadowSample(worldPos - u_views_viewPos[VIEW_CENTER].xyz, filtered);
     const float T = mix(u_clouds_shadowMeanTransmittance, exp(-s.x), s.y);
     return mix(1.0, T, u_clouds_shadowStrength);
 #else
@@ -125,7 +125,7 @@ float cloudSunTransmittanceSoft(vec3 worldPos)
     if (u_cloudsLive_shadowRendered < 0.5)
         return 1.0;
     float w;
-    const float od = cloudShadowCascadeOD(1, worldPos - u_views[VIEW_CENTER].viewPos.xyz, w);
+    const float od = cloudShadowCascadeOD(1, worldPos - u_views_viewPos[VIEW_CENTER].xyz, w);
     const float T = mix(u_clouds_shadowMeanTransmittance, exp(-od), w);
     return mix(1.0, T, u_clouds_shadowStrength);
 #else

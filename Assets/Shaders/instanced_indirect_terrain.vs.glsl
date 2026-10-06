@@ -135,7 +135,7 @@ void main()
     {
         const vec3 N = normalize(out_normal);
         const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
-        const float dist = distance(out_pos, u_views[VIEW_CENTER].viewPos.xyz); // the centre view, as the TES: both VR eyes lift the same
+        const float dist = distance(out_pos, u_views_viewPos[VIEW_CENTER].xyz); // the centre view, as the TES: both VR eyes lift the same
         if (dist < fadeEnd)
         {
             const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);

@@ -60,11 +60,12 @@ layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
 
 layout (push_constant, scalar) uniform Push
 {
-    TreeVolumeParams vol;
-    uvec2 size;          // the MARCH image's size (half the render size at "Far half res")
-    float startDistance; // m from the CAMERA: the volume fades in from here, over u_foliage_farOverlap
-    uvec2 fullSize;      // the render size (the scene depth)
-} pc; // the shading tweaks ("Trees/Far ..."): u_foliage_far*
+    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat: the SHOWN bake's lockable values (the march's list)
+    uvec2 pc_size;          // the MARCH image's size (half the render size at "Far half res")
+    float pc_startDistance; // m from the CAMERA: the volume fades in from here, over u_foliage_farOverlap
+    uvec2 pc_fullSize;      // the render size (the scene depth)
+}; // the shading tweaks ("Trees/Far ..."): u_foliage_far*
+PC_CONSTS
 
 // The bake a read goes to (TREE_HANDOVER: g_new, per ray; else always the front one).
 #ifdef TREE_HANDOVER
@@ -76,13 +77,13 @@ bool handoverPicksNew(ivec2 px)
     const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
     return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliageLive_handoverFade;
 }
-vec2 bakeCentre() { return g_new ? u_foliageLive_handoverCentre : pc.vol.centre; }
+vec2 bakeCentre() { return g_new ? u_foliageLive_handoverCentre : pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
 // The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice, tree_volume.inc.glsl): the hardware
 // filters across the columns only (each fetch at a texel layer's centre), the slice axis is blended here.
 float densityTexelNew(vec3 at)
 {
-    const int slices = int(pc.vol.slices);
+    const int slices = int(pc_vol_slices);
     const float zs = at.z * float(slices) - 0.5;
     const float z0 = floor(zs);
     const int s0 = clamp(int(z0), 0, slices - 1), s1 = clamp(int(z0) + 1, 0, slices - 1);
@@ -95,7 +96,7 @@ float densityTexel(vec3 at) { return g_new ? densityTexelNew(at) : textureLod(u_
 vec4 colourAt(vec2 uv) { return g_new ? textureLod(u_colourNew, uv, 0.0) : textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return g_new ? imageLoad(u_floorMaxNew, block).xy : imageLoad(u_floorMax, block).xy; }
 #else
-vec2 bakeCentre() { return pc.vol.centre; }
+vec2 bakeCentre() { return pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return imageLoad(u_floor, c).r; }
 float densityTexel(vec3 at) { return textureLod(u_density, at, 0.0).r; }
 vec4 colourAt(vec2 uv) { return textureLod(u_colour, uv, 0.0); }
@@ -126,7 +127,7 @@ layout (binding = 9, r16f) uniform image2D u_latestDepth;
 // computed twice per read before (once for the density, once more for the floor), 25 times per lit step.
 vec2 polarUv(vec2 rel, float r)
 {
-    return vec2(atan(rel.y, rel.x) / TV_TWO_PI + 0.5, tvRadialUv(r, pc.vol));
+    return vec2(atan(rel.y, rel.x) / TV_TWO_PI + 0.5, tvRadialUv(r, TV_PUSH_VOL));
 }
 
 // The volume's ground at the point of `uv`: the nearest column's tree floor (the splat measured that column's slices
@@ -136,9 +137,9 @@ bool floorAtUv(vec2 uv, out float floorY)
     floorY = 0.0;
     if (uv.y < 0.0 || uv.y >= 1.0)
         return false;
-    const int angularRes = int(pc.vol.angularRes);
+    const int angularRes = int(pc_vol_angularRes);
     const ivec2 texel = ivec2(tvWrapAngle(int(floor(uv.x * float(angularRes))), angularRes),
-        int(uv.y * float(pc.vol.radialRes)));
+        int(uv.y * float(pc_vol_radialRes)));
     const uint bits = floorBitsAt(texel);
     floorY = tvFloorDecode(bits);
     return bits != 0u;
@@ -155,7 +156,7 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
     smoothFloor = fallback;
     if (uv.y < 0.0 || uv.y > 1.0)
         return 0.0;
-    const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
+    const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     const vec2 tc = uv * vec2(angularRes, radialRes) - 0.5;
     const ivec2 base = ivec2(floor(tc));
     const vec2 f = tc - vec2(base);
@@ -173,14 +174,14 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
         floorSum += w * colFloor;
         floorWeight += w;
         const float h = p.y - colFloor;
-        if (h < 0.0 || h > pc.vol.height)
+        if (h < 0.0 || h > pc_vol_height)
             continue;
-        const vec3 at = vec3((vec2(col) + 0.5) / vec2(angularRes, radialRes), h / pc.vol.height);
+        const vec3 at = vec3((vec2(col) + 0.5) / vec2(angularRes, radialRes), h / pc_vol_height);
         sum += w * densityTexel(at);
     }
     if (floorWeight > 1e-6)
         smoothFloor = floorSum / floorWeight;
-    return max(sum - u_foliage_farShrink, 0.0) * pc.vol.densityScale;
+    return max(sum - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
 }
 
 // The LIGHTING TAPS (sun, normal, interior - 12 per lit step) lie within ~10 m of their sample, which lies >= ~400 m
@@ -194,15 +195,15 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
 mat2 polarJ(vec2 rel, float r)
 {
     const float ir2 = 1.0 / (r * r);
-    const float a = ir2 / TV_TWO_PI, b = ir2 / tvLogSpan(pc.vol);
+    const float a = ir2 / TV_TWO_PI, b = ir2 / tvLogSpan(TV_PUSH_VOL);
     return mat2(vec2(-rel.y * a, rel.x * b), vec2(rel.x * a, rel.y * b)); // columns: d/dx, d/dz
 }
 float densityAbove(vec2 uv, float h)
 {
-    if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc.vol.height)
+    if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc_vol_height)
         return 0.0;
     // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
-    return max(densityTexel(vec3(uv, h / pc.vol.height)) - u_foliage_farShrink, 0.0) * pc.vol.densityScale;
+    return max(densityTexel(vec3(uv, h / pc_vol_height)) - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
 }
 float densityTap(vec2 uv, mat2 J, float h, vec3 d)
 {
@@ -240,13 +241,13 @@ void marchAt(ivec2 px)
 #endif
     const int scale = MARCH_SCALE;
     const ivec2 full = px * scale;
-    const vec2 uv = (vec2(full) + 0.5 * float(scale)) / vec2(pc.fullSize); // the block's centre (full-target UV)
+    const vec2 uv = (vec2(full) + 0.5 * float(scale)) / vec2(pc_fullSize); // the block's centre (full-target UV)
     const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
     if (any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
         storeOut(px, vec4(0.0, 0.0, 0.0, 1.0));
 #ifdef TREE_TEMPORAL_OUT
-        imageStore(u_outDepth, px, vec4(log2(max(pc.vol.rMax, 1.0))));
+        imageStore(u_outDepth, px, vec4(log2(max(pc_vol_rMax, 1.0))));
 #else
         storeDistance(px, PLAIN_LIMIT_MAX);
 #endif
@@ -257,7 +258,7 @@ void marchAt(ivec2 px)
     float depth = texelFetch(u_sceneDepth, full, 0).r;
     if (scale > 1)
     {
-        const ivec2 last = ivec2(pc.fullSize) - 1;
+        const ivec2 last = ivec2(pc_fullSize) - 1;
         depth = min(min(depth, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), last), 0).r),
                     min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), last), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), last), 0).r));
     }
@@ -288,22 +289,22 @@ void marchAt(ivec2 px)
     {
         storeOut(px, vec4(0.0, 0.0, 0.0, 1.0)); // straight up / down: never reaches the ring
 #ifdef TREE_TEMPORAL_OUT
-        imageStore(u_outDepth, px, vec4(log2(max(min(sceneT, pc.vol.rMax), 1.0))));
+        imageStore(u_outDepth, px, vec4(log2(max(min(sceneT, pc_vol_rMax), 1.0))));
 #else
         storeDistance(px, min(sceneT, PLAIN_LIMIT_MAX));
 #endif
         return;
     }
-    const float tEnd = min(sceneT, TV_RING_T(pc.vol.rMax));
+    const float tEnd = min(sceneT, TV_RING_T(pc_vol_rMax));
 #ifdef TREE_TEMPORAL_OUT
     // The stored march LIMIT is the scene distance capped at the volume's end - the rule cloud_temporal.cs applies to a
     // checkerboard's unmarched pixels (the ring exit, a function of the ray's slope, would never match it).
-    const float logLimit = log2(max(min(sceneT, pc.vol.rMax), 1.0));
+    const float logLimit = log2(max(min(sceneT, pc_vol_rMax), 1.0));
 #endif
     // From the air the inner radius shrinks (TreeVolumePipeline innerRadius: the hand-over is a 3D distance) and the
     // camera may sit OUTSIDE the small inner circle: then it is already in the ring (t from 0).
-    const float tRing = c <= pc.vol.rMin * pc.vol.rMin ? TV_RING_T(pc.vol.rMin) : 0.0;
-    float t = max(tRing, pc.startDistance);
+    const float tRing = c <= pc_vol_rMin * pc_vol_rMin ? TV_RING_T(pc_vol_rMin) : 0.0;
+    float t = max(tRing, pc_startDistance);
     if (t >= tEnd)
     {
         storeOut(px, vec4(0.0, 0.0, 0.0, 1.0));
@@ -331,14 +332,14 @@ void marchAt(ivec2 px)
     // The 5-tap mean is baked once per frame (gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL).
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * u_foliage_farAmbient);
-    const float sliceH = pc.vol.height / float(pc.vol.slices);
+    const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
     // TWO SEGMENTS, split at the fade-in's end: the BAND (from "Far start" over "Far overlap", where the billboards still
     // draw) and BEHIND it. Each accumulates its own in-scatter, transmittance and weighted distance; only the band
     // fades in (as a whole, by its own mean distance - below). One fade for the whole ray let a ray that grazed a
     // band tree's blob beside its billboard pull its mean distance into the band and fade the far trees behind out
     // with it: a sky-coloured outline along the billboard silhouettes.
-    const float fadeEnd = pc.startDistance + max(u_foliage_farOverlap, 1.0);
+    const float fadeEnd = pc_startDistance + max(u_foliage_farOverlap, 1.0);
     // A segment's distance weights sum to 1 - its transmittance (sum of T x alpha telescopes): no weight sums are kept.
     vec3 inBand = vec3(0.0), inBehind = vec3(0.0);
     float tBand = 1.0, tBehind = 1.0;
@@ -350,20 +351,20 @@ void marchAt(ivec2 px)
     // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling). The
     // steps are measured from the camera, so they slide through the volume as it moves; jittering only the first
     // sample left every later one on that sliding grid - blobs sampled differently each frame, "shaking".
-    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), pc.vol) * u_foliage_farStepScale, 0.25);
+    t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), TV_PUSH_VOL) * u_foliage_farStepScale, 0.25);
     // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs.glsl): above its value + the volume's height, a point is
     // above every tree within one block in every direction - at least r x skipReach away (the block's tangential width
     // as a chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a
     // descending one at most down to that height). Sky rays, the air over the canopy and treeless land then take ~4x
     // longer steps than the 4-cell cap below, and skip the floor + height map reads.
-    const float skipReach = min(sin(float(TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc.vol.angularRes)),
-        1.0 - exp(-float(TV_FLOOR_MAX_BLOCK) * tvLogSpan(pc.vol) / float(pc.vol.radialRes)));
+    const float skipReach = min(sin(float(TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc_vol_angularRes)),
+        1.0 - exp(-float(TV_FLOOR_MAX_BLOCK) * tvLogSpan(TV_PUSH_VOL) / float(pc_vol_radialRes)));
     // THE END for a RISING ray: above the grid's AHEAD value (+ the height) - the highest floor of this block's row and
     // every row farther out, TV_FLOOR_AHEAD_SECTORS blocks each way - no tree lies ahead. Valid while the ray moves
     // OUTWARD (past its closest approach to the bake centre, so r only grows) and its angle cannot leave those sectors:
     // from radius r on, a straight ray's polar angle turns by at most asin(d / r), d = its distance from the centre
     // (at most the camera's) - so while d < r x aheadSin.
-    const float aheadSin = sin(float(TV_FLOOR_AHEAD_SECTORS * TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc.vol.angularRes));
+    const float aheadSin = sin(float(TV_FLOOR_AHEAD_SECTORS * TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc_vol_angularRes));
     const float camCentre = length(rel);
     for (uint i = 0u; i < uint(u_foliage_farMaxSteps) && t < tEnd; ++i)
     {
@@ -372,14 +373,14 @@ void marchAt(ivec2 px)
         const vec2 rel = p.xz - bakeCentre();
         const float r = length(rel);
         const vec2 uv = polarUv(rel, r);
-        const float cell = max(r * tvLogSpan(pc.vol) / float(pc.vol.radialRes), r * TV_TWO_PI / float(pc.vol.angularRes)); // tvCellSize
-        const ivec2 block = ivec2(tvWrapAngle(int(floor(uv.x * float(pc.vol.angularRes))), int(pc.vol.angularRes)),
-            clamp(int(uv.y * float(pc.vol.radialRes)), 0, int(pc.vol.radialRes) - 1)) / TV_FLOOR_MAX_BLOCK;
+        const float cell = max(r * tvLogSpan(TV_PUSH_VOL) / float(pc_vol_radialRes), r * TV_TWO_PI / float(pc_vol_angularRes)); // tvCellSize
+        const ivec2 block = ivec2(tvWrapAngle(int(floor(uv.x * float(pc_vol_angularRes))), int(pc_vol_angularRes)),
+            clamp(int(uv.y * float(pc_vol_radialRes)), 0, int(pc_vol_radialRes) - 1)) / TV_FLOOR_MAX_BLOCK;
         const vec2 floorMax = floorMaxAt(block);
-        if (dir.y >= 0.0 && p.y > floorMax.y + pc.vol.height && camCentre < r * aheadSin && dot(rel, dir.xz) >= 0.0)
+        if (dir.y >= 0.0 && p.y > floorMax.y + pc_vol_height && camCentre < r * aheadSin && dot(rel, dir.xz) >= 0.0)
             break;
         const float reach = r * skipReach;
-        const float clearance = p.y - floorMax.x - pc.vol.height;
+        const float clearance = p.y - floorMax.x - pc_vol_height;
         if (clearance > 0.0)
         {
             const float skip = dir.y >= 0.0 ? reach : min(reach, clearance / -dir.y);
@@ -404,15 +405,15 @@ void marchAt(ivec2 px)
         // a column's floor can sit above the map's slope. The height map is read only for those two: inside the layer
         // neither applies (the lower of the two lies at or under the floor; the skip needs h above the layer), and the
         // break needs h below -0.5 x the layer.
-        if (h > pc.vol.height)
+        if (h > pc_vol_height)
         {
             // Above the volume: no tree before the ground comes within its height again.
             const float hHigh = p.y - (hasFloor ? max(floorY, terrainHeightAt(p.xz)) : floorY);
-            dt = max(dt, min((hHigh - pc.vol.height) * 0.7, 4.0 * cell));
+            dt = max(dt, min((hHigh - pc_vol_height) * 0.7, 4.0 * cell));
         }
         else if (h < 0.0)
         {
-            if (h < -0.5 * pc.vol.height && p.y - (hasFloor ? min(floorY, terrainHeightAt(p.xz)) : floorY) < -0.5 * pc.vol.height)
+            if (h < -0.5 * pc_vol_height && p.y - (hasFloor ? min(floorY, terrainHeightAt(p.xz)) : floorY) < -0.5 * pc_vol_height)
                 break; // under the ground (the scene depth ends the ray there)
         }
         else
@@ -436,7 +437,7 @@ void marchAt(ivec2 px)
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709) - distant canopies read greyer.
                 const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale;
-                const float hNorm = clamp(h / pc.vol.height, 0.0, 1.0);
+                const float hNorm = clamp(h / pc_vol_height, 0.0, 1.0);
                 // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
                 // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
                 float sunCos = 1.0;
@@ -463,7 +464,7 @@ void marchAt(ivec2 px)
                 if (u_foliage_farInteriorShadow > 0.0 && u_foliage_farInteriorRadius > 0.0) // radius 0: the taps sit on the sample, exp(0)
                 {
                     const float rr = u_foliage_farInteriorRadius * cell;
-                    const float ry = min(rr, 0.5 * pc.vol.height);
+                    const float ry = min(rr, 0.5 * pc_vol_height);
                     const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
                         + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
                         + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
@@ -487,7 +488,7 @@ void marchAt(ivec2 px)
                         // distance sum is normalised first (its weight becomes 1 with the transmittance at 0).
                         distSumBand /= 1.0 - tBand;
                         tBand = 0.0;
-                        if (smoothstep(pc.startDistance, fadeEnd, distSumBand) > 0.99)
+                        if (smoothstep(pc_startDistance, fadeEnd, distSumBand) > 0.99)
                             break;
                         t = fadeEnd + jitter * dt; // keep the ray's per-frame shift
                         continue;
@@ -514,7 +515,7 @@ void marchAt(ivec2 px)
     // Then the band over what lies behind it, unfaded.
     const float meanBand = tBand < 1.0 ? distSumBand / (1.0 - tBand) : fadeEnd;
     const float meanBehind = tBehind < 1.0 ? distSumBehind / (1.0 - tBehind) : tEnd;
-    const float fade = smoothstep(pc.startDistance, fadeEnd, meanBand);
+    const float fade = smoothstep(pc_startDistance, fadeEnd, meanBand);
     const float coverBand = fade * (1.0 - tBand);
     const float T = (1.0 - coverBand) * tBehind;
     const vec3 inScatter = fade * inBand + (1.0 - coverBand) * inBehind;
@@ -547,7 +548,7 @@ bool copyFits(vec4 colour, float distance, float surface)
 float sceneDistanceAt(ivec2 px)
 {
     const float depth = texelFetch(u_sceneDepth, px, 0).r;
-    const vec2 uv = (vec2(px) + 0.5) / vec2(pc.fullSize);
+    const vec2 uv = (vec2(px) + 0.5) / vec2(pc_fullSize);
     return depth > 0.0 ? length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)) : 1e30;
 }
 #endif
@@ -560,7 +561,7 @@ void main()
     // pixel of its row pair, so the warps stay full (an early-out per pixel would idle half of every warp) -
     // cloud_march.cs.glsl's marchPixel.
     const ivec2 px = MARCH_CHECKER ? ivec2(gid.x * 2u + ((gid.y + u_frameIndex) & 1u), gid.y) : ivec2(gid);
-    if (any(greaterThanEqual(uvec2(px), pc.size)))
+    if (any(greaterThanEqual(uvec2(px), pc_size)))
         return;
     marchAt(px);
 #else
@@ -581,7 +582,7 @@ void main()
     const bool skip = MARCH_QUAD || MARCH_CHECKER;
     const ivec2 base = MARCH_QUAD ? ivec2(gid) * 2 : MARCH_CHECKER ? ivec2(gid.x * 2u, gid.y) : ivec2(gid);
     const int count = MARCH_QUAD ? 4 : MARCH_CHECKER ? 2 : 1;
-    if (any(greaterThanEqual(uvec2(base), pc.size)))
+    if (any(greaterThanEqual(uvec2(base), pc_size)))
         return;
     // A pixel whose surface lies nearer than "Far start" needs NO march: its result is exactly "no trees" (the march
     // would stop before the volume begins). So the march goes to the first FAR pixel of the schedule: at a near
@@ -603,9 +604,9 @@ void main()
             // The schedule: 1 of 4 cycles (0,0) (1,1) (1,0) (0,1) over the frames; 1 of 2 alternates per frame and row.
             const uint j = (u_frameIndex + uint(i)) & 3u;
             pixels[i] = base + (MARCH_QUAD ? ivec2(int(((j + 1u) >> 1) & 1u), int(j & 1u)) : ivec2(int((gid.y + u_frameIndex + uint(i)) & 1u), 0));
-            const bool inside = all(lessThan(uvec2(pixels[i]), pc.size));
+            const bool inside = all(lessThan(uvec2(pixels[i]), pc_size));
             surfaces[i] = inside ? sceneDistanceAt(pixels[i]) : -1.0; // -1: outside the image
-            if (pick < 0 && surfaces[i] > pc.startDistance)
+            if (pick < 0 && surfaces[i] > pc_startDistance)
             {
                 pick = i;
                 marchPx = pixels[i];
@@ -628,7 +629,7 @@ void main()
         const float surface = surfaces[k];
         if (k == pick || surface < 0.0)
             continue;
-        if (surface <= pc.startDistance)
+        if (surface <= pc_startDistance)
         {
             // Nearer than the volume: exactly "no trees" - also this pixel's latest march.
             imageStore(u_out, q, vec4(0.0, 0.0, 0.0, 1.0));
@@ -660,7 +661,7 @@ void main()
                 if (hidden || found)
                     break;
                 // Left, right, up, down.
-                const ivec2 d = clamp(q + (n < 2 ? ivec2(n * 2 - 1, 0) : ivec2(0, n * 2 - 5)), ivec2(0), ivec2(pc.size) - 1);
+                const ivec2 d = clamp(q + (n < 2 ? ivec2(n * 2 - 1, 0) : ivec2(0, n * 2 - 5)), ivec2(0), ivec2(pc_size) - 1);
                 const vec4 c = imageLoad(u_latest, d);
                 const float dist = imageLoad(u_latestDepth, d).r;
                 if (copyFits(c, dist, surface))

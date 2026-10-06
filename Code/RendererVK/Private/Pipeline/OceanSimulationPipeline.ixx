@@ -90,7 +90,8 @@ public:
     // over dt along the swell's travel, each level's origin snapped around the camera and the whole texels it
     // moved since the last call (the compute's read offset). Once per built frame, in frame order - the
     // shift is relative to the previous call, which the other ping/pong slot was simulated with.
-    void advanceFoamField(RendererVKLayout::OceanLiveUbo& live, const glm::vec3& cameraPos, float dt);
+    // foamLevels: FOAM_LEVELS of them (u_oceanLive_foamLevels), foamDrift: u_oceanLive_foamDrift.
+    void advanceFoamField(oc::span<glm::vec4> foamLevels, glm::vec2& foamDrift, const glm::vec3& cameraPos, float dt);
     // Records the whole per-frame simulation. ubo = that frame slot's main UBO (time + ocean params).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray);
     // Points the spray step's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image;

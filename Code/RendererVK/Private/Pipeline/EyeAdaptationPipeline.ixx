@@ -8,6 +8,7 @@ import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
 import :RenderParams;
+import :PushFields;
 
 // Automatic exposure ("eye adaptation"). Two compute passes per frame over the TAA-resolved scene colour:
 //   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl);
@@ -21,6 +22,11 @@ export class EyeAdaptationPipeline final
 public:
     void initialize();
     void reloadShaders();
+
+    // The histogram's lockable push values (bloom threshold / knee, the exposure rule): registered before initialize;
+    // the Renderer bakes the list and calls reloadShaders + re-records after a change.
+    void registerPushFields();
+    PushFieldList& pushFields() { return m_pushFields; }
 
     // Geometry that depends on the viewport (baked into the command buffer; recorded once, re-recorded on
     // resize like the other passes).
@@ -83,6 +89,7 @@ private:
         float maxExposure;
     };
 
+    PushFieldList m_pushFields;
     ComputePipeline m_histogramPipeline;
     ComputePipeline m_reducePipeline;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_histogramSets;

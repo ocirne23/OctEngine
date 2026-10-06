@@ -6,6 +6,7 @@ import File;
 import :Device;
 import :Allocator;
 import :CommandBuffer;
+import Settings;
 
 namespace
 {
@@ -19,10 +20,16 @@ namespace
     };
 }
 
+void RainOcclusionPipeline::registerPushFields()
+{
+    m_pushFields.add("layerBlock", Globals::settings.particles.rainOcclusionFoliageBlock);
+}
+
 void RainOcclusionPipeline::buildLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/rain_occlusion.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    m_pushFields.appendDefines(layout.defines);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eAccelerationStructureKHR, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });

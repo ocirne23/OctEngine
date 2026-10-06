@@ -13,6 +13,7 @@ import :DescriptorSet;
 import :Layout;
 import :RenderParams;
 import :TreeRecordPool;
+import :PushFields;
 
 // FAR TREES as a marched volume (Docs/TreeRenderingPlan.md T2, prototype P1). Three stages:
 //   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
@@ -89,8 +90,18 @@ public:
     // The frame the running bake started on (UINT64_MAX: none): the record pool keeps the chunks it saw alive.
     uint64 bakeHoldSince() const { return m_job.active ? m_job.startFrame : UINT64_MAX; }
     // Before recording (main thread): (re)creates the volume when its resolution changed, and the temporal images
-    // when the temporal blend is first turned on - drains the GPU then.
+    // when the temporal blend is first turned on - drains the GPU then. Also re-bakes the two push lists when they are
+    // dirty and reloads the passes whose consts changed.
     void prepare(const FarTreeParams& settings);
+
+    // THE LOCKABLE PUSH VALUES, two lists (PushFields.ixx), registered before initialize: the BAKE's (the splat, the
+    // records, the far columns, the resolve, the floor smoothing) take the live settings - a bake that started with
+    // others is dropped anyway (recordBake: sameBake); the MARCH's (the march, the temporal pass, the upsample) take the
+    // SHOWN bake's (marchSettings) - the density scale the live one. `settings` is Globals::settings.farTree (the
+    // lambdas keep the reference).
+    void registerPushFields(const FarTreeParams& settings);
+    PushFieldList& bakePushFields() { return m_bakeFields; }
+    PushFieldList& marchPushFields() { return m_marchFields; }
 
     // One GPU tree set's volume data (device addresses).
     struct Source
@@ -199,6 +210,16 @@ private:
     void trackCamera(glm::vec2 camera);
     glm::vec2 bakeLead(const FarTreeParams& s) const;
     void stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
+    // The settings this frame's march will read, as prepare() sees them: the shown bake's (m_bakedSettings) - or, in the
+    // frame a bake without a cross-fade swaps (its whole copy and the swap run in recordBake, before the march), the new
+    // one's. record() reads m_bakedSettings itself, after that swap.
+    const FarTreeParams& marchSettings() const;
+    // The lists' passes rebuilt after a const changed (prepare; the GPU is idle). No re-bake (reloadShaders' m_dirty).
+    void reloadBakePasses();
+    void reloadMarchPasses();
+
+    PushFieldList m_bakeFields;
+    PushFieldList m_marchFields;
 
     ComputePipeline m_floorCoverPipeline; // the splat shader's TREE_FLOOR_PASS 1 variant (the coverage per column)
     ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)

@@ -32,6 +32,14 @@ struct TreeVolumeParams
     float pad0, pad1, pad2;
 };
 
+// The params in a pass's PUSH BLOCK: flat members (pc_vol_*) where each value but the centre is lockable (PushFields.ixx -
+// the pass's list, TreeVolumePipeline::registerPushFields, defines PC_DECL_vol_*), the same layout as the struct.
+// TV_PUSH_VOL is the struct of them, for the helpers below: its baked members fold.
+#define TV_PUSH_VOL_MEMBERS vec2 pc_vol_centre; PC_DECL_vol_rMin; PC_DECL_vol_rMax; PC_DECL_vol_angularRes; PC_DECL_vol_radialRes; \
+    PC_DECL_vol_slices; PC_DECL_vol_height; PC_DECL_vol_densityScale; float pc_vol_pad0, pc_vol_pad1, pc_vol_pad2;
+#define TV_PUSH_VOL TreeVolumeParams(pc_vol_centre, pc_vol_rMin, pc_vol_rMax, pc_vol_angularRes, pc_vol_radialRes, pc_vol_slices, \
+    pc_vol_height, pc_vol_densityScale, 0.0, 0.0, 0.0)
+
 const float TV_TWO_PI = 6.28318531;
 
 // THE ACCUMULATION (the bake's R32UI 3D image) packs TWO SLICES per texel: slice s lives in texel layer s / 2, in its

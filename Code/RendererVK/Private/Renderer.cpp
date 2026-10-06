@@ -884,10 +884,9 @@ void Renderer::present()
     // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
     // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
     m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
-    m_ubo.present.giTlasNumInstances = oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
+    m_ubo.set(m_u.present.giTlasNumInstances, oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances()));
     fillTreeCullUbo(); // the same: renderTreeInstanceSet claims its range after beginFrame
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::PresentUbo), &m_ubo.present,
-        offsetof(RendererVKLayout::Ubo, present));
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_u.present.size(), m_ubo.data() + m_u.present.begin(), m_u.present.begin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
@@ -979,7 +978,7 @@ void Renderer::present()
 
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
-        m_indirectCullComputePipeline.update(frameIdx, m_ubo.present.treeThreads); // the cull threads (fillTreeCullUbo)
+        m_indirectCullComputePipeline.update(frameIdx, m_ubo.get(m_u.present.treeThreads)); // the cull threads (fillTreeCullUbo)
         m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
         m_skinned.markJobsUploaded();
     }
@@ -1011,11 +1010,12 @@ void Renderer::present()
     // The rain occlusion map exists only while this frame's UBO asks for it (a rain / snow volume with
     // `Occlude true`, the tweak on, RT on): switching allocates or frees its images (and builds its pipeline
     // once) with the GPU idle, and re-records the particle sim's set that names the image.
-    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.weather.rainOcclusionPresent > 0.5f;
+    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.get(m_u.weather.rainOcclusionPresent) > 0.5f;
     if (rainOcclusion != m_rainOcclusionPipeline.isActive())
     {
         ProfileScope profileScope("Rain occlusion switch", EProfileCategory::Wait);
         (void)Globals::device.graphicsQueueWaitIdle();
+        const FileSystem::AllowMainThreadIO allowIo; // the first activation compiles the pipeline (rare, like F5)
         m_rainOcclusionPipeline.setActive(rainOcclusion);
         setHaveToRecordCommandBuffers();
     }

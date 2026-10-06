@@ -10,7 +10,9 @@ import Core.VrSession;
 import Threading;
 
 import :Layout;
-import :UboFields;
+import :UboBlock;
+import :UboRoot;
+import :PushFields;
 import :Instance;
 import :Device;
 import :GpuProfiler;
@@ -520,10 +522,12 @@ private:
     void buildUboGrass(const Camera& camera);
     void buildUboFoliage();
 
-    // ---- The lockable UBO values (UboFieldList) and the tweak locks that bake them (RendererUboBake.cpp) ----
-    UboFieldList m_uboFields;
-    oc::vector<uint8> m_uboFieldValues;        // the block, evaluated every build (UBO_FIELDS_OFFSET in the buffer)
-    oc::vector<uint8> m_uboBakedValues;        // the values the compiled shaders hold
+    // ---- THE FRAME UBO (UboBlock): the root values (m_u, bound at construction in UboRoot's declaration order), then
+    // the lockable values (registerUboFields) and the tweak locks that bake them (RendererUboBake.cpp) ----
+    // The block's bytes persist across frames: buildUboViews reprojects from last frame's mvps before overwriting them.
+    UboBlock m_ubo;
+    UboRoot m_u{ m_ubo };
+    oc::vector<uint8> m_uboBakedValues;        // the values the compiled shaders hold (the block's layout)
     oc::vector<uint8> m_uboLocked;             // parallel to the entries: every source locked (resolveUboLocks)
     oc::vector<uint8> m_uboBaked;              // parallel: a const in the compiled shaders
     oc::array<uint32, RendererVKLayout::NUM_UBO_LOCK_SECTIONS> m_uboLocks{}; // each section's TweakLock
@@ -531,11 +535,22 @@ private:
     bool m_uboLocksDirty = false;   // ... or a baked value may have changed: re-bake (applyUboLocks)
     float m_terrainCragScale = 1.0f; // setTerrainCragScale
     void registerUboLocks();   // + the bake every pipeline is first built with
-    void registerUboFields(UboFieldList& list); // every lockable value, RendererUbo.cpp
+    void registerUboFields(UboBlock& block); // every lockable value, RendererUbo.cpp
     void resolveUboLocks();
     bool bakeUboValues();      // true when a const changed
     void applyUboLocks();      // main, before the begin-frame build: only after a lock click or a bakeable change
     void setUboDeclaration();  // from m_uboBakedValues + m_uboBaked
+
+    // The lockable PUSH values (PushFieldList): one list per group of shaders, owned by its pipeline. onRebake (main,
+    // in applyUboLocks) reloads the list's shaders after a change; empty = the owner updates the list itself, at the
+    // moment its values belong to (the far-tree volume, TreeVolumePipeline::prepare).
+    struct PushFieldOwner
+    {
+        PushFieldList* list;
+        oc::function<void()> onRebake;
+    };
+    oc::vector<PushFieldOwner> m_pushFields;
+    void registerPushFields(); // fills the lists, RendererUboBake.cpp
 
     // ---- THE scene stage table ----
     // recordSceneSecondaries, recordPrimaryDesktop and recordPrimaryVR all read it, so a stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
@@ -737,7 +752,7 @@ private:
     Buffer& treeCullPieces();
     Buffer& treeCullTypes();
     Buffer& treeCullList(uint32 frameIdx);
-    void fillTreeCullUbo(); // m_ubo.present's tree range (present() uploads the struct)
+    void fillTreeCullUbo(); // m_u.present's tree range (present() uploads the group)
     TreeVolumePipeline m_treeVolume;
     TreeRecordPool m_treeRecords;
     float m_treeRecordChunkSize = 256.0f;
@@ -803,7 +818,6 @@ private:
     BloomParams& m_bloomParams = Globals::settings.bloom;
     MeshLodParams& m_lodParams = Globals::settings.lod;
 
-    RendererVKLayout::Ubo m_ubo; // buildUboViews reprojects from last frame's mvps before overwriting them.
     Frustum m_centerFrustum;     // the centre view's (buildUboViews); VR's spatial cull takes last frame's
 
     glm::vec3 m_sceneFocus = glm::vec3(0.0f); // setSceneFocus
@@ -919,8 +933,6 @@ private:
         Buffer ubo;
         Buffer lodStatsBuffer;
         oc::span<uint32> mappedLodStats;
-
-        RendererVKLayout::Ubo* mappedUniformBuffer = nullptr;
     };
     oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

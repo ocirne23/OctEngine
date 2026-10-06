@@ -56,11 +56,14 @@ layout (push_constant) uniform CloudPC
     uint u_height;
 #ifdef TREE_TEMPORAL
     float u_historyWeight;
-    float u_maxDist;  // the march's max distance (the far volume's end)
+    PC_DECL_vol_rMax; // float: the march's max distance (the far volume's end) - lockable (the march's list, PushFields.ixx)
 #else
     uint u_pad;
 #endif
 };
+#ifdef TREE_TEMPORAL
+PC_CONSTS
+#endif
 
 // The trees' variant BAKES its scale (1, or 2 at "Far half res") and checkerboard (TreeVolumePipeline compiles one per
 // setting); at full res it also writes u_outMeanDistance.
@@ -73,7 +76,7 @@ layout (push_constant) uniform CloudPC
 #if defined(TREE_TEMPORAL)
 #define TT_CHECKER (TREE_TEMPORAL_CHECKER != 0)
 #define TT_SCALE TREE_TEMPORAL_SCALE
-#define TT_MAX_DIST u_maxDist
+#define TT_MAX_DIST pc_vol_rMax
 #elif defined(CLOUD_CHECKERBOARD)
 #define TT_CHECKER true
 #define TT_SCALE 2

@@ -52,24 +52,25 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Ty
 
 layout (push_constant, scalar) uniform Push
 {
-    TypeList types;
-    uint numTypes;
-    uint mapSize;
-    TreeVolumeParams vol;
-    TreeRecordWords records; // the chunks' ground
-    TreeRecordMap map;
-    float chunkSize;
-    uint rowOffset; // this dispatch's first radial row (the bake spreads the rows over frames; a multiple of the 8-row group)
-} pc;
+    TypeList pc_types;
+    uint pc_numTypes;
+    uint pc_mapSize;
+    TV_PUSH_VOL_MEMBERS // TreeVolumeParams, flat (the bake's lockable values)
+    TreeRecordWords pc_records; // the chunks' ground
+    TreeRecordMap pc_map;
+    float pc_chunkSize;
+    uint pc_rowOffset; // this dispatch's first radial row (the bake spreads the rows over frames; a multiple of the 8-row group)
+};
+PC_CONSTS
 
 const uint PROFILE_BINS = 32u;      // TREE_RECORD_PROFILE_BINS
 
-bool validType(uint type) { return type < pc.numTypes && pc.types.t[type].mass > 0.0; }
+bool validType(uint type) { return type < pc_numTypes && pc_types.t[type].mass > 0.0; }
 
 void main()
 {
-    const ivec2 col = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + pc.rowOffset);
-    const int angularRes = int(pc.vol.angularRes), radialRes = int(pc.vol.radialRes);
+    const ivec2 col = ivec2(gl_GlobalInvocationID.x, gl_GlobalInvocationID.y + pc_rowOffset);
+    const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     if (col.x >= angularRes || col.y >= radialRes)
         return;
     const uint amountBits = imageLoad(u_amount, col).r;
@@ -85,9 +86,9 @@ void main()
     uint floorBits = imageLoad(u_floor, col).r;
     if (floorBits == 0u)
     {
-        const vec2 xz = tvTexelWorldXZ(col, pc.vol);
+        const vec2 xz = tvTexelWorldXZ(col, TV_PUSH_VOL);
         float ground;
-        if (!treeRecordGround(pc.records, pc.map, pc.mapSize, pc.chunkSize, xz, ground))
+        if (!treeRecordGround(pc_records, pc_map, pc_mapSize, pc_chunkSize, xz, ground))
             ground = terrainHeightAt(xz);
         floorBits = tvFloorEncode(ground);
         imageStore(u_floor, col, uvec4(floorBits));
@@ -102,16 +103,16 @@ void main()
         if (n.y >= 0 && n.y < radialRes)
             type = imageLoad(u_type, n).r;
     }
-    for (uint t = 0u; t < pc.numTypes && !validType(type); ++t)
+    for (uint t = 0u; t < pc_numTypes && !validType(type); ++t)
         type = t;
     if (!validType(type))
         return;
 
     const float amount = float(amountBits) / TV_AMOUNT_SCALE;
-    const float height = pc.types.t[type].height;
+    const float height = pc_types.t[type].height;
     const float binH = height / float(PROFILE_BINS);
-    const float sliceH = pc.vol.height / float(pc.vol.slices);
-    for (uint s = 0u; s < pc.vol.slices; ++s)
+    const float sliceH = pc_vol_height / float(pc_vol_slices);
+    for (uint s = 0u; s < pc_vol_slices; ++s)
     {
         // The profile's mean over the slice [s0, s1].
         const float s0 = float(s) * sliceH, s1 = s0 + sliceH;
@@ -121,7 +122,7 @@ void main()
         for (uint b = uint(s0 / binH); b < PROFILE_BINS && float(b) * binH < s1; ++b)
         {
             const float o = min(s1, float(b + 1u) * binH) - max(s0, float(b) * binH);
-            sum += pc.types.t[type].shape[b] * max(o, 0.0);
+            sum += pc_types.t[type].shape[b] * max(o, 0.0);
         }
         const float extinction = amount * sum / sliceH;
         if (extinction > 1e-4)

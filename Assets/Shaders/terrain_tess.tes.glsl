@@ -97,7 +97,7 @@ void main()
 	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	// The CENTRE view for every displacement decision (the fade, the mip footprint): both VR eyes displace the
 	// same surface (terrain_tess.tcs.glsl). Only gl_Position below uses the eye's matrix.
-	const float dist = distance(pos, u_views[VIEW_CENTER].viewPos.xyz);
+	const float dist = distance(pos, u_views_viewPos[VIEW_CENTER].xyz);
 	if (dist < fadeEnd && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
 	{
 		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w);
@@ -113,7 +113,7 @@ void main()
 			// Held at the freeze distance closer in, like the control stage's factor: a mip that kept
 			// sharpening as the camera approached moved every height under it.
 			// The projection's y scale is the length of row 1 of the mvp's 3x3 (P11 x a unit view row).
-			const mat4 centreMvp = u_views[VIEW_CENTER].mvp;
+			const mat4 centreMvp = u_views_mvp[VIEW_CENTER];
 			const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
 			const float spacing = max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
 			const float height = float(terrainReliefAt(L, pos.xz, vec2(spacing, 0.0), vec2(0.0, spacing)));

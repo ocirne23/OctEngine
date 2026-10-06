@@ -385,7 +385,7 @@ void Settings::registerDlss(DlssParams& s)
     Tweak::enumVar("Post/DLSS", "Mode", &s.mode, s_dlssModeNames);
     Tweak::enumVar("Post/DLSS", "Preset", &s.preset, s_dlssPresetNames);
     Tweak::boolean("Post/DLSS", "Mip bias", &s.mipBias);
-    Tweak::floatVar("Post/DLSS", "Ocean current bias", &s.oceanBias, 0.0f, 1.0f, 0.01f); // a push constant of the cached mvec pass
+    Tweak::floatVar("Post/DLSS", "Ocean current bias", &s.oceanBias, 0.0f, 1.0f, 0.01f); // the frame UBO's u_post_dlssOceanBias
     Tweak::boolean("Post/DLSS", "Verbose log (restart)", &s.verboseLog, {}, ETweakFlags::Saved);
 }
 

@@ -451,7 +451,7 @@ top-down camera hanging in empty sky shapes none of these:
   **Why the TLAS is per frame:** a build's primitive count is a recorded CPU value, so the cached build had
   to cover the instance buffer's whole CAPACITY, which only ever doubles — every frame read and filtered
   every slot of the largest scene seen. The live count is final before the record (`present()` sets
-  `m_ubo.present.giTlasNumInstances` before `recordCommandBuffers`), and an indirect build is no option
+  `m_u.present.giTlasNumInstances` before `recordCommandBuffers`), and an indirect build is no option
   (NVIDIA offers no `accelerationStructureIndirectBuild`). The build always runs, at count 0 too (an
   empty TLAS): a skipped one would keep records that may reference freed BLASes.
   **`u_present_giTlasNumInstances` is patched in `present()`, not written by the beginFrame UBO
@@ -635,7 +635,7 @@ instead of only the camera.
   pass masks into ONE device-local previous set (`InstanceStream::recordPrevCopy`; the other slot cannot
   serve - the CPU may write it while the GPU reads it), which next frame's cull reads (bindings 18/19). A
   pass mask carries its push frame above the PASS_* byte (`InstanceStream::stampedPassMask`, from
-  `m_ubo.frameIndex`); a node not pushed LAST frame (off screen, or just spawned into a recycled transform
+  `m_u.frameIndex`); a node not pushed LAST frame (off screen, or just spawned into a recycled transform
   slot) draws with no motion instead of a stale transform. prevScale 0 = the node did not move: the vertex
   shader then keeps the exact current transform (the previous quaternion is snorm16, moving nodes only).
 * **Skinned meshes**: the output region is 2 x vertexCount (`spawnSkinnedNode`, freed the same way). The
@@ -2207,15 +2207,17 @@ Scene opaque, nearly all with 0 instances.
 | | **`ForceFieldState`** — params, the emitter + point-query slot registries (STABLE indices across the ~2-frame readback latency), this frame's bake chunk set, the shell-cull build, and **its between-frames job** (`buildGrid` / `applyGridGrowth`), mirroring `FrameSubmission`'s. |
 | | **`BindlessTextures`** — the two counts that are not the same (the fixed LAYOUT CAP baked into every pipeline layout vs the LIVE descriptor count the variable-count sets are allocated with), the streamer's pending slot writes, and the deferred free queue. The six consumers are reached through two callbacks the Renderer wires in `initBindlessTextures`. |
 | | **`RayTracingScene`** — owns `AccelerationStructure` plus the CPU bookkeeping around it: the per-MeshInfo vertex counts (BLAS maxVertex) and skinned-output flags, the TLAS instance capacity, and **the one-time build watermark**. A static BLAS builds once, so `takeBuildList` scans forward from the watermark — which is exactly why a RE-STREAMED mesh and a RECYCLED slot below it must be queued explicitly, and why a skinned output region is never in the list at all. |
-| `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap, and **the frame UBO's `OC_UBO_*` field lists** (see "The frame UBO and the tweak locks"). The other structs must stay in sync with `shared.inc.glsl`; the UBO cannot drift (its GLSL is generated). |
-| `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the field tables, with each baked group as a `const`. |
+| `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. The structs must stay in sync with `shared.inc.glsl`; the frame UBO is not here (registered: `UboBlock.ixx` / `UboRoot.ixx`). |
+| `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes (root handles, lockable values), `UboGroup` (self-binding handles). |
+| `UboRoot.ixx` | `UboRoot`: the root value handles, in packing order (see "The frame UBO and the tweak locks"). |
+| `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and `Stats`; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
 | `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
 | `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) and `SlotTable` (`RecycledSlotTable<T>` — the deferred-recycle slot table every emitter/query registry uses). |
 | `Renderer.ixx` | The whole class. One interface, **four implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
 | `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each now a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` as five phases (`attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`), then `waitFrameSlot` → `beginFrame` (+ its job kick/join) → `present`. |
-| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo` and the `buildUbo*` helpers that fill it by subject (views, weather, ray tracing, sky, clouds, sun shadow, fog, ocean, force, terrain, grass, foliage, post). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs, and `m_ubo` persists across frames (the view build reprojects from last frame's mvps). |
+| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo` and the `buildUbo*` helpers that write its root values through `m_u`'s handles by subject (views, weather, ray tracing, sky, clouds, sun shadow, fog, ocean, force, terrain, grass, foliage, post). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs, and `m_ubo` persists across frames (the view build reprojects from last frame's mvps). |
 | `RendererScene.cpp` | The scene the outside owns, in two halves. **Residency**: container add/remove, `renderNode` (the push), the spawn-path entry points, the bindless descriptor upkeep, and the cross-cutting work a capacity growth needs (`onUniqueMeshCapacityGrown`). **Submission** (bottom of the file, mostly called from jobs): lights / fog volumes / decals and the emitter + query registries, each a thin delegate into the `Data/` object that owns the contract. |
 | `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the two primaries (desktop / VR). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only (the debug overlays). |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
@@ -2820,7 +2822,7 @@ the sand, so the two can never disagree.
     order, and a corner is the control point itself. The height mip footprint is a function of the position
     only (the pixel size at that distance), not of the patch.
   * **The CENTRE view decides every level of detail** (2026-09-28): the TCS factor, the TES fade + mip
-    footprint, the ground FS `terrainTessPixelNormal` and the film VS lift read `u_views[VIEW_CENTER]`, never
+    footprint, the ground FS `terrainTessPixelNormal` and the film VS lift read `u_views_*[VIEW_CENTER]`, never
     the eye's `u_viewPos` / `u_mvp` - per-eye decisions gave the two VR eyes different geometry. Only
     `gl_Position` projects with the eye.
   * **The TCS skips work the TES would not use** (2026-09-28, for the ISBE launch stall):
@@ -2991,19 +2993,25 @@ the sand, so the two can never disagree.
 # The frame UBO and the tweak locks
 
 ONE uniform buffer per frame slot (`RendererVKLayout::UBO_RANGE` bytes; every descriptor binds the whole range), built
-by `buildFrameUbo` in the begin-frame job and uploaded in two parts: the ROOT struct, then the LOCKABLE block at
-`UBO_FIELDS_OFFSET`.
+by `buildFrameUbo` in the begin-frame job and uploaded whole. **No C++ struct mirrors it: its layout is REGISTERED**
+(`UboBlock`, `UboBlock.ixx`) - each member a name, a type and an std140 offset in registration order, and the block
+owns the bytes (`m_ubo`; they persist across frames: the build reads last frame's mvps). Two kinds of member:
 
-* **The ROOT struct** (`RendererVKLayout::Ubo`): one `OC_UBO_<NAME>(F, A)` field list per struct in `Layout.ixx`:
-  `F(type, name)` a member, `A(type, name, count)` an array (16-byte elements only). The list makes the C++ struct
-  (std140 through `UboType`'s alignments: a vec3 then a float share 16 bytes, a struct pads to 16) and its field
-  table (`T::info()`). It holds what nearly every pass reads (`u_views`, `u_frustumPlanes`, `u_cascadeViewProj`,
+* **The ROOT values** (`UboRoot`, `UboRoot.ixx` - `m_u`): typed handles (`UboValue<T>` / `UboArray<T>`, an offset)
+  the build writes through, `m_ubo.set(m_u.fogLive.waveBand, v)` / `m_ubo.get(...)` - a memcpy at a fixed offset, the
+  cost of a struct write. **Each handle binds itself where it is declared** (`UboGroup`: `UboValue<float> enabled =
+  g("enabled");`), so the struct IS the layout and declaration order is packing order (a vec3 then a float share 16
+  bytes); a group's prefix names it (`u_cloudsLive_enabled`). No macro, no mirrored table. It holds what nearly every
+  pass reads (`u_views_mvp[3]` ... `u_views_viewPos[3]` - one array per view matrix, read through `ubo.inc.glsl`'s
+  `u_mvp` / `u_viewPos` macros or `u_views_*[VIEW_CENTER]`; `u_frustumPlanes`, `u_cascadeViewProj`,
   `u_cascadeSunSizeTexels`, `u_screenSize`, `u_viewportRect`, `u_taaJitter`, `u_sunDirection`, `u_frameIndex`,
   `u_sunColor`, `u_timeSeconds`, `u_sunTransmittance`, `u_sunVisible`, `u_skyUp`, `u_mipPixelScale`,
-  `u_ambientColor`, `u_sceneFocus`) and the LIVE structs (`u_cloudsLive`, `u_giLive`, `u_fogLive`, `u_oceanLive`,
-  `u_terrainLive`, `u_grassLive`, `u_foliageLive`, `u_forceLive`, `u_weather`, `u_present`): everything that also
-  depends on the camera, the clock, the sun, the wind, the readback or a value the outside pushes per frame.
-* **The LOCKABLE values** (`UboFieldList`, `UboFields.ixx`): ONE LIST, `Renderer::registerUboFields` at the end of
+  `u_ambientColor`, `u_sceneFocus`) and the LIVE groups (`cloudsLive`, `giLive`, `fogLive`, `oceanLive`,
+  `terrainLive`, `grassLive`, `foliageLive`, `forceLive`, `weather`, `present`): everything that also depends on the
+  camera, the clock, the sun, the wind, the readback or a value the outside pushes per frame. An array's element is a
+  16-byte multiple (vec4, uvec4, mat4); a packed array (the splat slots) is built per element. `set` takes the
+  handle's type, the value converts to it.
+* **The LOCKABLE values** (`UboBlock::add`, registered after the root): ONE LIST, `Renderer::registerUboFields` at the end of
   `RendererUbo.cpp`. One entry per value computed from tweaks alone, its GLSL name and its value:
   `list.add("fog_density", f.density)` (a tweak variable as it is: its own source) or
   `list.add("fog_albedo", [&] { return f.albedo * f.albedoIntensity; }, f.albedo, f.albedoIntensity)` (a lambda plus
@@ -3013,27 +3021,33 @@ by `buildFrameUbo` in the begin-frame job and uploaded in two parts: the ROOT st
   references to members, or `this` - never a local value. A value the live build also needs comes from one helper
   (the anonymous namespace at the top of `RendererUbo.cpp`, or a Renderer member like `grassPatchSize` /
   `getOceanSwashAmp`), so the two cannot drift. **The rule for a new value: if anything but tweaks feeds it, it is
-  live (a root struct field); else it is one `list.add` line.**
+  live (a UboRoot handle); else it is one `list.add` line.**
 * **The GLSL block is FLAT**: shaders read `u_<subject>_<field>` (`u_fog_density`, `u_fogLive_waveBand`), never a
   struct member - so ONE value can be a constant while its neighbours stay block reads. Every member carries its byte
-  offset as an explicit `layout(offset = N)`. Only a struct ARRAY keeps a struct type (`u_views[i].mvp`).
-  `buildUboDeclaration` (`UboDeclaration.cpp`) makes the GLSL from the root's field tables and the list; the shader
-  includer serves that text as **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes, and a copy for
-  reading is written to `Assets/Local/Shaders/ubo.generated.glsl`.
-* **`u_present`** is what only `present()` knows (the tree range, the TLAS live count): present() uploads that
-  struct alone after the begin-frame upload.
+  offset as an explicit `layout(offset = N)`; there is no struct type at all. `buildUboDeclaration`
+  (`UboDeclaration.cpp`) makes the GLSL from the block's entries; the shader includer serves that text as
+  **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes, and a copy for reading is written to
+  `Assets/Local/Shaders/ubo.generated.glsl`.
+* **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count): its members are contiguous
+  (`UboRoot::Present::begin()` / `size()`), and present() uploads that byte range alone after the begin-frame upload.
 * **Push constants** keep what sizes, offsets or gates a dispatch (extents, view index, `mbEnabled`, buffer
-  addresses, the far-tree bake's geometry and settings - a bake reads the settings it STARTED with). Tweak values
-  ride the UBO so a lock can bake them: RTAO's, TAA's, the motion blur's, the composite's and the far-tree march's
-  moved there. Not moved: the eye adaptation, bloom and rain-occlusion passes bind no UBO (a few scalars each).
+  addresses). Most tweak values ride the UBO so a lock can bake them: RTAO's, TAA's, the motion blur's, the
+  composite's and the far-tree march's shading moved there. A tweak value that must stay a push constant is a
+  LOCKABLE PUSH VALUE (below): the eye-adaptation histogram's bloom threshold / knee / exposure rule, the rain
+  occlusion's foliage block, the GI probe debug's radius / mode (passes that bind no frame UBO), and the far-tree
+  volume's geometry and bake settings (a bake reads the settings it STARTED with over many frames; the march the shown
+  bake's - not the frame's).
 
 ## The locks (`RendererUboBake.cpp`)
 
 **THE UNIT IS ONE VALUE, THE LOCK IS ONE TWEAK.** Core's `TweakLock` gives every tweak row its own locked state;
 `c_uboLockSections` (Layout.ixx) only names the lock SECTIONS whose rows can be locked ("Ray tracing" covers RT,
-RTAO and GI, "Post" covers TAA and Post). The TweakPanel draws an `L` / `U` button in front of each such row (a
-locked row is read-only) and a section toggle on the fold ("Lock" / "Partly locked" / "Locked") that sets all of
-its rows. `ETweakFlags::Runtime` rows have no lock (the sun direction / colour, the ambient, the up axis, the wind).
+RTAO and GI, "Post" covers TAA and Post). **Only a row that is a SOURCE of a UBO entry or of a push value is
+lockable** (`registerUboLocks` calls `TweakRegistry::markLockable` for every source): the TweakPanel draws an `L` /
+`U` button in front of each such row (a locked row is read-only) and a section toggle on the fold ("Lock" / "Partly
+locked" / "Locked") that sets all of them. A row in a section that feeds nothing baked (a CPU setting, a resource
+size, a define with its own listener) has no button and is never read-only. `ETweakFlags::Runtime` rows have no lock
+(the sun direction / colour, the ambient, the up axis, the wind).
 
 * **An entry's SOURCES are addresses** (its `list.add` arguments after the lambda), and every one is a
   `Globals::settings` member: Settings resolves it to the tweak row whose variable holds it
@@ -3079,6 +3093,35 @@ its rows. `ETweakFlags::Runtime` rows have no lock (the sun direction / colour, 
   `--tweak "@lock/Fog=0"` unlocks a section for a run, `--tweak "@lock/Fog/Density=0"` one row (a profile run's
   `-Tweaks` file can unlock them all for an A/B). A startup compiles the shaders ONCE, already baked.
 * The reload reads the shader files on main: it opens `FileSystem::AllowMainThreadIO`, like F5.
+
+## Lockable push values (`PushFields.ixx`)
+
+The UBO pattern for a push block. A `PushFieldList` per group of shaders that read the same values at the same time,
+owned by its pipeline: `list.add("vol_rMin", lambda, sources...)` / `list.add("bloomKnee", variable)`, the GLSL type
+from the value's C++ type, which must be the push member's type (`float`, `int32`, `uint32`, `vec2/3/4`, `uvec2`).
+
+* **The push block is instance-less with flat `pc_` names**, like the UBO's `u_`. A lockable member is declared
+  through its generated define, the consts follow the block:
+  `layout (push_constant) uniform PC { uvec2 pc_size; PC_DECL_vol_rMax; }; PC_CONSTS`. Baked: `PC_DECL_x` is
+  `float pc_xBaked` (the slot stays - the C++ still pushes it, unread) and `PC_CONSTS` holds `const float pc_x = v;`.
+  `PC_LIVE_x` reads the member in both modes. `appendDefines` adds them to every layout that compiles a shader of the
+  list; the pipeline stats' `Defines=` column skips them.
+* The far-tree passes declare `TreeVolumeParams` flat through `TV_PUSH_VOL_MEMBERS` and build the struct with
+  `TV_PUSH_VOL` (tree_volume.inc.glsl), so the helpers fold the baked members.
+* **Same events as the UBO**: a lock click marks every list dirty with a re-resolve, a bakeable change marks it dirty.
+  `update()` re-resolves if asked, evaluates and bakes; true = a const changed.
+* **Who updates when** (`Renderer::m_pushFields`): a list with an `onRebake` is re-baked in `applyUboLocks` and only
+  its passes reload (eye adaptation + re-record, rain occlusion, GI probe debug + re-record) - a UBO change in the same
+  frame reloads everything instead. A list without one updates itself at the moment its values belong to:
+  * the far-tree BAKE list (the splat, records, far columns, resolve, floor smoothing) takes the LIVE settings - a
+    running bake with other settings is dropped anyway (`recordBake`: `sameBake`);
+  * the far-tree MARCH list (the march pair, the temporal pass, the upsample) takes `marchSettings()`: the shown bake's,
+    or in the frame a bake without a cross-fade swaps, the new one's (its copy and swap run in that frame's
+    `recordBake`, before the march; FloorMax's end marks the list dirty). The density scale is live;
+  * both in `TreeVolumePipeline::prepare` (before any recording; GPU idle), `reloadBakePasses` / `reloadMarchPasses`.
+* Code that writes a lockable push value calls `Tweak::notifyChanged` (`GIProbePipeline::cycleDebugMode`, the P key).
+* Not lockable yet: the eye adaptation's `GpuParams` (a mapped per-frame UBO: "Post/Adapt *"), the bloom chain's
+  per-level weights, the cloud shadow split - values that also depend on runtime state.
 
 ---
 

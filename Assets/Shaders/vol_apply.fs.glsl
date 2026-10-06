@@ -263,7 +263,7 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
     // Reproject through the shared CENTRE view that the froxel volume was built in, so the lookup lands at the
     // correct froxel regardless of which eye is sampling (on desktop the centre view IS this view). Sampling
     // the centre-built volume at the eye's own screen UV would offset the fog by the eye/head parallax.
-    const vec4 centerClip = u_views[VIEW_CENTER].mvp * vec4(worldPos, 1.0);
+    const vec4 centerClip = u_views_mvp[VIEW_CENTER] * vec4(worldPos, 1.0);
     const float viewZ = centerClip.w;
     const vec2 ndc = centerClip.xy / centerClip.w;
     const vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
@@ -312,12 +312,12 @@ vec4 aerialTo(vec3 worldPos)
 {
     if (u_fog_aerialStrength <= 0.0)
         return vec4(0.0, 0.0, 0.0, 1.0);
-    const vec4 centerClip = u_views[VIEW_CENTER].mvp * vec4(worldPos, 1.0);
+    const vec4 centerClip = u_views_mvp[VIEW_CENTER] * vec4(worldPos, 1.0);
     if (centerClip.w <= 0.0)
         return vec4(0.0, 0.0, 0.0, 1.0);
     const vec2 ndc = centerClip.xy / centerClip.w;
     const vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    const float dist = length(worldPos - u_views[VIEW_CENTER].viewPos.xyz);
+    const float dist = length(worldPos - u_views_viewPos[VIEW_CENTER].xyz);
     const float s = sqrt(min(dist / u_fog_aerialMaxDistance, 1.0)) * float(AERIAL_LUT_Z);
     const vec4 air = texture(u_aerial, vec3(vpUv, (s - 0.5) / float(AERIAL_LUT_Z)));
     return s < 1.0 ? mix(vec4(0.0, 0.0, 0.0, 1.0), air, s) : air;

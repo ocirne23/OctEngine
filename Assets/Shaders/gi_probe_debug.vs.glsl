@@ -11,11 +11,13 @@
 
 layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
+// PC_DECL_ / PC_CONSTS: the lockable values (GIProbePipeline::registerDebugPushFields, PushFields.ixx).
 layout (push_constant) uniform PC
 {
-    float  u_radius; // sphere diameter scale (x sqrt(spacing))
-    uint   u_mode;   // 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state, 4 = visibility
-} pc;
+    PC_DECL_radius; // float: sphere diameter scale (x sqrt(spacing))
+    PC_DECL_mode;   // uint: 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state, 4 = visibility
+};
+PC_CONSTS
 
 #define GI_GRID_DATA_NAME  gi_gridData
 #include "gi_probe.inc.glsl"
@@ -45,11 +47,11 @@ void main()
     // distance d is wider than its radius at the centre plane - r * d / sqrt(d^2 - r^2) - so the quad takes
     // that size and the fragment shader discards what misses. A camera inside (or almost inside) the sphere
     // has no silhouette: collapse the instance.
-    const float r     = 0.5 * pc.u_radius * sqrt(float(spacing));
+    const float r     = 0.5 * pc_radius * sqrt(float(spacing));
     const vec3  toCam = u_viewPos - center;
     const float d     = length(toCam);
     v_cellBase = cellBase;
-    v_mode     = pc.u_mode;
+    v_mode     = pc_mode;
     v_sphere   = vec4(center, r);
     v_color    = vec3(0.0);
     v_world    = center;
@@ -65,13 +67,13 @@ void main()
     v_world     = center + right * q.x + up * q.y;
     gl_Position = u_mvp * vec4(v_world, 1.0);
 
-    if (pc.u_mode == 4u)
+    if (pc_mode == 4u)
     {
         // Visibility: evaluated per pixel by the fragment shader. x = spacing (the depth cap's unit),
         // y = brightness (backface-dead probes, which the lookup rejects, are dimmed).
         v_color = vec3(float(spacing), giProbeBackfaceFrac(cellBase) > GI_BACKFACE_DEAD_MAX ? 0.2 : 1.0, 0.0);
     }
-    else if (pc.u_mode == 3u)
+    else if (pc_mode == 3u)
     {
         // Relocation / backface state (the misc vec4): red = how far the lookup has faded the probe out as
         // backface-dead, blue = relocation offset as a fraction of its clamp, YELLOW = escaped on its last
@@ -85,7 +87,7 @@ void main()
         if (abs(misc.x - GI_BACKFACE_DEAD_MAX) < 1e-5)
             v_color = vec3(1.0, 1.0, 0.0);
     }
-    else if (pc.u_mode == 2u)
+    else if (pc_mode == 2u)
     {
         // Update rate: the wave's ACTUAL interval in frames (giWaveUpdateInterval, what the trace uses).
         // MAGENTA = every frame (the maximum rate) - a HUE the ramp never produces, not white: these cubes
@@ -105,7 +107,7 @@ void main()
         if (giProbeBackfaceFrac(cellBase) > GI_BACKFACE_DEAD_MAX)
             v_color *= 0.2;
     }
-    else if (pc.u_mode == 1u)
+    else if (pc_mode == 1u)
     {
         if      (cascade == 0) v_color = vec3(1.0, 0.2, 0.2);
         else if (cascade == 1) v_color = vec3(0.2, 1.0, 0.2);

@@ -470,284 +470,23 @@ export namespace RendererVKLayout
 
     // ---- THE FRAME UBO ------------------------------------------------------------------------------------------
     // ONE uniform buffer per frame slot, built by Renderer::buildFrameUbo (RendererUbo.cpp), read by every pass at
-    // its UBO_BINDING. Two parts in one buffer:
-    //
-    // * THE ROOT struct below: what nearly every pass reads (the views, the sun, the screen, the focus) and each
-    //   subject's LIVE struct (ubo.fogLive in C++, u_fogLive_<field> in GLSL) - everything that depends on the camera,
-    //   the clock, the sun, the wind or a value the outside pushes per frame. Never baked.
-    // * THE LOCKABLE VALUES (UboFieldList, UboFields.ixx), at UBO_FIELDS_OFFSET: one entry per value computed from
-    //   tweaks only (u_fog_density), registered by Renderer::registerUboFields with the tweaks it reads. An entry is a
-    //   GLSL CONST while all of them are locked (Core's TweakLock; Renderer::applyUboLocks rebuilds the shaders).
-    //
-    // The GLSL block is FLAT (one member per value, each at its byte offset), so every value can be baked on its own.
-    // Each root struct is ONE field list, OC_UBO_<NAME>(F, A): F(type, name) a member, A(type, name, count) an array
-    // (16-byte elements only). The list makes the C++ struct (std140 offsets through UboType's alignments) and its
-    // field table (UboStructInfo); buildUboDeclaration makes the GLSL from the tables and the UboFieldList (the shader
-    // includer serves it as "ubo.generated.glsl", which ubo.inc.glsl includes). Field order is std140 packing: a vec3
-    // then a float share 16 bytes.
+    // its UBO_BINDING. Its layout is REGISTERED, no C++ struct mirrors it (UboBlock.ixx): the root values first
+    // (UboRoot.ixx - the handles the build writes through), then the lockable values (Renderer::registerUboFields).
+    // buildUboDeclaration makes the flat GLSL block from the same entries (the shader includer serves it as
+    // "ubo.generated.glsl", which ubo.inc.glsl includes).
     constexpr uint32 VIEW_CENTER = 0;  // shared passes + desktop; the eyes are 1 (left) and 2 (right)
     constexpr uint32 NUM_UBO_VIEWS = 3;
-    // Maps a per-eye index (0/1, also used for per-eye history slots) to the u_views[] matrix index a
-    // per-eye pass should read: desktop (viewCount 1) collapses to VIEW_CENTER; VR maps eye 0/1 -> 1/2.
+    // Maps a per-eye index (0/1, also used for per-eye history slots) to the u_views_*[] index a per-eye pass should
+    // read: desktop (viewCount 1) collapses to VIEW_CENTER; VR maps eye 0/1 -> 1/2.
     constexpr uint32 eyeToViewIndex(uint32 eye, uint32 viewCount) { return viewCount > 1 ? eye + 1 : VIEW_CENTER; }
 
-    enum class EUboType : uint8 { Float, Uint, Vec2, Vec3, Vec4, Uvec4, Mat4, Struct };
+    enum class EUboType : uint8 { Float, Uint, Vec2, Vec3, Vec4, Uvec4, Mat4 };
 
-    struct UboStructInfo;
-    struct UboField
-    {
-        const char* name;
-        EUboType type;
-        uint32 offset;
-        uint32 count;                          // the array length; 0 = not an array
-        const UboStructInfo* (*structInfo)();  // EUboType::Struct only
-    };
-    struct UboStructInfo
-    {
-        const char* name; // the GLSL type
-        const UboField* fields;
-        uint32 numFields;
-        uint32 size;
-    };
-
-    // std140 base alignments. A struct made by OC_UBO_STRUCT aligns (and pads) to 16, like a GLSL struct.
-    template<typename T> struct UboType;
-    template<> struct UboType<float>      { static constexpr EUboType type = EUboType::Float; static constexpr size_t align = 4; };
-    template<> struct UboType<uint32>     { static constexpr EUboType type = EUboType::Uint;  static constexpr size_t align = 4; };
-    template<> struct UboType<glm::vec2>  { static constexpr EUboType type = EUboType::Vec2;  static constexpr size_t align = 8; };
-    template<> struct UboType<glm::vec3>  { static constexpr EUboType type = EUboType::Vec3;  static constexpr size_t align = 16; };
-    template<> struct UboType<glm::vec4>  { static constexpr EUboType type = EUboType::Vec4;  static constexpr size_t align = 16; };
-    template<> struct UboType<glm::uvec4> { static constexpr EUboType type = EUboType::Uvec4; static constexpr size_t align = 16; };
-    template<> struct UboType<glm::mat4>  { static constexpr EUboType type = EUboType::Mat4;  static constexpr size_t align = 16; };
-    template<typename T> requires requires { T::info(); }
-    struct UboType<T> { static constexpr EUboType type = EUboType::Struct; static constexpr size_t align = 16; };
-
-    template<typename T> constexpr const UboStructInfo* (*uboStructInfoOf())()
-    {
-        if constexpr (UboType<T>::type == EUboType::Struct)
-            return &T::info;
-        else
-            return nullptr;
-    }
-
-#define OC_UBO_MEMBER(T, name) alignas(UboType<T>::align) T name;
-#define OC_UBO_ARRAY(T, name, n) static_assert(sizeof(T) % 16 == 0, "std140 array elements: 16-byte multiples only"); alignas(16) T name[n];
-#define OC_UBO_FIELD(T, name) UboField{ #name, UboType<T>::type, (uint32)offsetof(Self, name), 0u, uboStructInfoOf<T>() },
-#define OC_UBO_FIELD_ARRAY(T, name, n) UboField{ #name, UboType<T>::type, (uint32)offsetof(Self, name), (uint32)(n), uboStructInfoOf<T>() },
-#define OC_UBO_STRUCT(Name, LIST)                                                                                       \
-    struct alignas(16) Name                                                                                             \
-    {                                                                                                                   \
-        LIST(OC_UBO_MEMBER, OC_UBO_ARRAY)                                                                               \
-        static const UboStructInfo* info()                                                                              \
-        {                                                                                                               \
-            using Self = Name;                                                                                          \
-            static constexpr UboField fields[] = { LIST(OC_UBO_FIELD, OC_UBO_FIELD_ARRAY) };                             \
-            static constexpr UboStructInfo s{ #Name, fields, (uint32)(sizeof(fields) / sizeof(fields[0])), (uint32)sizeof(Self) }; \
-            return &s;                                                                                                  \
-        }                                                                                                               \
-    };
-
-    // A camera view's matrices together, so desktop touches views[0] alone. views[VIEW_CENTER] = the centre /
-    // combined view (the only one on desktop; in VR sized to the union of both eyes' FOV, so the shared world-space
-    // passes cover what either eye sees); [1] = left eye, [2] = right eye. Shaders pick through g_viewIndex.
-#define OC_UBO_VIEW(F, A)                                                                                               \
-    F(glm::mat4, mvp)                                                                                                   \
-    F(glm::mat4, invMvp)     /* inverse(mvp), in double: the world position from depth + screen uv */                   \
-    F(glm::mat4, prevMvp)    /* last frame's mvp: a world position to last frame's screen */                            \
-    F(glm::mat4, prevInvMvp) /* last frame's inverse(mvp): last frame's world position */                               \
-    F(glm::mat4, reprojClip) /* prevMvp * inverse(mvp), fused in double: current NDC + depth -> last frame's clip, */   \
-                             /* near-identity at any camera position (the world round trip's float32 error grows */    \
-                             /* with the distance from the origin: temporal-history jitter) */                          \
-    F(glm::vec4, viewPos)    /* xyz = world position */
-    OC_UBO_STRUCT(ViewData, OC_UBO_VIEW)
-
-    // ---- Lockable values: not here - UboFieldList (UboFields.ixx), registered by Renderer::registerUboFields -------
-
-    // ---- Live structs: never baked ---------------------------------------------------------------------------------
-
-    // The clouds' per-frame values (the clock, the wind, the camera, the sun, the game's suppression).
-#define OC_UBO_CLOUDS_LIVE(F, A)                                                                                        \
-    A(glm::vec4, shadowCascade, 2)    /* the Beer shadow map's cascades: xyz = the frozen centre relative to the */     \
-                                      /* CENTRE view's camera (m), w = 1 / the extent (1/m) */                          \
-    F(glm::vec3, shadowAxis0)         /* the light-space axes */                                                        \
-    F(float, enabled)                 /* the march ran this frame (0/1) */                                              \
-    F(glm::vec3, shadowAxis1)                                                                                           \
-    F(float, shadowRendered)          /* the map was rendered this frame (0/1) */                                       \
-    F(glm::vec3, windStep)            /* the field's world displacement this frame (m; the temporal reprojection) */    \
-    F(float, skyHistory)              /* the sky-map clouds' history weight this frame */                               \
-    F(glm::vec3, groundBounceAlbedo)  /* the sky's ground colour x the cloud "Ground albedo" */                         \
-    F(float, giSkyHistory)            /* the GI sky clouds' history weight this frame */                                \
-    F(glm::vec2, noiseOrigin)         /* camera XZ - wind, wrapped by the weather period (m) */                         \
-    F(float, detailDrift)             /* the detail's vertical drift (m, wrapped) */
-    OC_UBO_STRUCT(CloudsLiveUbo, OC_UBO_CLOUDS_LIVE)
-
-    // GI's per-frame values.
-#define OC_UBO_GI_LIVE(F, A)                                                                                            \
-    F(glm::vec3, prevFocus)    /* LAST frame's scene focus (the previous clipmap window -> probe freshness) */          \
-    F(float, temporalAlpha)    /* this frame's blend: "GI/Temporal Alpha" compounded over the wall delta */             \
-    F(float, fullBake)         /* a full irradiance-volume bake this frame (0/1) */
-    OC_UBO_STRUCT(GiLiveUbo, OC_UBO_GI_LIVE)
-
-    // The fog's values that ride the ocean (its readback, its world scale).
-#define OC_UBO_FOG_LIVE(F, A)                                                                                           \
-    F(float, waveBand)          /* the waterline band gating the FFT wave taps (m; 0 = ocean off) */                    \
-    F(float, boundaryOffset)    /* the underwater boundary off the local water surface (m) */                           \
-    F(float, causticDepthFade)  /* 1/m */                                                                               \
-    F(float, causticShoreFade)  /* m (0 = off) */
-    OC_UBO_STRUCT(FogLiveUbo, OC_UBO_FOG_LIVE)
-
-    // The ocean's per-frame values: the wind, the sea level, the readback, the camera, the foam field's levels.
-#define OC_UBO_OCEAN_LIVE(F, A)                                                                                         \
-    A(glm::vec4, foamLevels, OCEAN_FOAM_LEVELS) /* xy = the level origin (drifted coords of texel (0,0)'s corner, m), */ \
-                                      /* zw = the whole texels it moved since last frame */                             \
-    F(glm::vec3, bubbleSun)           /* the bubble cloud's per-frame factors (oceanBubbleRadianceFrame): the sun's ... */ \
-    F(float, seaLevel)                /* world Y */                                                                     \
-    F(glm::vec3, bubbleSky)           /* ... and the sky's path down to "Bubble depth" x the albedo */                  \
-    F(float, windSpeed)               /* U10 (m/s) */                                                                   \
-    F(glm::vec2, windDirection)       /* unit */                                                                        \
-    F(glm::vec2, foamDrift)           /* the foam field's accumulated drift (m; its coords = rest XZ - drift) */        \
-    F(float, shoreFoamDepth)          /* the surf band's width at the waterline (m; follows the wind) */                \
-    F(float, shoreFoamMax)            /* the surf's opacity cap (follows the wind) */                                   \
-    F(float, swashReach)              /* the CPU's run-up estimate (m) */                                               \
-    F(float, displacementExtent)      /* how far the VS moves a vertex off its lattice (m; 0 with the ocean off) */     \
-    F(float, cameraUnderwater)        /* 0/1: gates the underside path */                                               \
-    F(float, sprayDt)                 /* the sim delta (s) */                                                           \
-    F(uint32, sprayEmitter)           /* the spray's particle emitter slot (UINT32_MAX = off) */
-    OC_UBO_STRUCT(OceanLiveUbo, OC_UBO_OCEAN_LIVE)
-
-    // The terrain's world, its baked height map, its splat material set, the wetness clipmap's tick.
-#define OC_UBO_TERRAIN_LIVE(F, A)                                                                                       \
-    A(glm::vec4, splatClimate, MAX_TERRAIN_SPLAT_MATERIALS) /* the ground / rock CLIMATE BOX in (t01, h01): xy = the */ \
-                                      /* temperature range, zw = the humidity range (unused for beach / snow) */        \
-    A(glm::uvec4, splatHeightTex, MAX_TERRAIN_SPLAT_MATERIALS / 4) /* slot s: [s >> 2][s & 3] = the BC5 HEIGHT + AO */  \
-                                      /* texture, 0xFFFF = none */                                                      \
-    A(glm::uvec4, splatTex, MAX_TERRAIN_SPLAT_MATERIALS / 2) /* slot s: [s >> 1].xy (even s) / .zw (odd): x = diffuse */ \
-                                      /* | normal << 16, y = 1 when the normal is BC5 */                                \
-    A(glm::vec4, splatGrass, MAX_TERRAIN_SPLAT_MATERIALS / 4) /* slot s: [s >> 2][s & 3] = its grass amount (0..1) */   \
-    F(glm::vec2, mapCentre)           /* the baked height map's world centre XZ (both cascades) */                      \
-    F(float, mapInvNearSize)          /* 1 / the near cascade's world size (0 = no map) */                              \
-    F(float, mapInvFarSize)           /* 1 / the far cascade's (0 = near only) */                                       \
-    F(float, mapSeaLevel)             /* the map's baked sea level */                                                   \
-    F(float, seaLevel)                /* world Y, live from the streamer */                                             \
-    F(float, meshRadius)              /* the streamed mesh's coverage radius (m; 0 = none - fences the ocean land cull) */ \
-    F(float, lapseRate)               /* C per world metre above sea level (<= 0; terrainTemperatureAt) */              \
-    F(float, splatBase)               /* the splat set: the base material (< 0 = none: the flat colour) */              \
-    F(float, numGround)                                                                                                 \
-    F(float, numRock)                                                                                                   \
-    F(float, hasBeach)                /* 0/1: the entry after the rock */                                               \
-    F(float, hasSnow)                 /* 0/1: the LAST entry */                                                         \
-    F(float, wetDecay)                /* the wetness pass this tick: exp(-dt / dry time) */                             \
-    F(float, wetRain)                 /* rain wetting added */                                                          \
-    F(float, wetIn)                   /* wet-in added under water */                                                    \
-    F(float, wetSpread)               /* the diffusion's mix fraction */                                                \
-    F(float, wetLayer)                /* the ping / pong layer written (the readers sample it) */                       \
-    F(glm::vec2, wetOrigin)           /* the clipmap window's origin (lattice coord, ints as floats) */                 \
-    F(glm::vec2, wetPrevOrigin)       /* the previous tick's (texels that scrolled in start dry) */
-    OC_UBO_STRUCT(TerrainLiveUbo, OC_UBO_TERRAIN_LIVE)
-
-    // The grass's per-frame values (the camera, the sun, the clock).
-#define OC_UBO_GRASS_LIVE(F, A)                                                                                         \
-    F(glm::mat4, shadowViewProj)      /* THE NEAR GRASS CASCADE: an ortho box ahead of the camera (standard Z) */       \
-    F(glm::vec2, nearCentre)          /* its box centre XZ */                                                           \
-    F(float, nearRange)               /* its half size (m; 0 = off) */                                                  \
-    F(float, nearTexel)               /* m */                                                                           \
-    F(float, minWidthPerMetre)        /* the pixel floor as world width per metre of distance */                        \
-    F(float, canopyExtinction)        /* the canopy's base extinction (1/m; 0 = no grass) */                            \
-    F(float, prevTime)                /* LAST frame's u_timeSeconds (the motion vectors) */
-    OC_UBO_STRUCT(GrassLiveUbo, OC_UBO_GRASS_LIVE)
-
-    // The trees' per-frame values.
-#define OC_UBO_FOLIAGE_LIVE(F, A)                                                                                       \
-    F(glm::vec2, handoverCentre)      /* the far-tree volume's HAND-OVER: the new bake's centre */                      \
-    F(float, handoverFade)            /* the fraction of rays that pick the new bake */                                 \
-    F(float, farMarched)              /* 1 while the far-tree volume marched this frame (the fog apply composites it) */ \
-    F(float, windPrevTime)            /* LAST frame's u_timeSeconds (the motion vectors) */                             \
-    F(float, windReach)               /* the culls' bound growth (m): the sway's reach at the strongest gust */
-    OC_UBO_STRUCT(FoliageLiveUbo, OC_UBO_FOLIAGE_LIVE)
-
-    // The force fields' per-frame values (the emitters, the camera, the view).
-#define OC_UBO_FORCE_LIVE(F, A)                                                                                         \
-    A(glm::vec4, teamColors, MAX_FORCE_TEAMS) /* rgb = linear team colour */                                            \
-    F(glm::vec3, bakeMin)             /* the sampled shell tier: the bake volume's world min */                         \
-    F(float, bakeThreshold)           /* the reach threshold an emitter marches the volume at */                        \
-    F(glm::vec3, bakeInvSize)         /* 1 / the volume's world size */                                                 \
-    F(float, bakeEnabled)             /* 0/1 */                                                                         \
-    F(float, shellLodScale)           /* the shell march's LOD: (px per radius / dist) / the full-detail px (0 = off) */ \
-    F(float, unionPxScale)            /* px per (radius / dist): the union march's distance LOD */                      \
-    F(float, cameraInside)            /* the camera is inside a bubble (0/1) */
-    OC_UBO_STRUCT(ForceLiveUbo, OC_UBO_FORCE_LIVE)
-
-    // THE wind ("Sky/Wind": the particles, the vegetation, the fog), the weather volumes' camera values and the
-    // rain occlusion map.
-#define OC_UBO_WEATHER(F, A)                                                                                            \
-    F(glm::mat4, rainOcclusionViewProj) /* a plain top-down ortho over the rain volume (standard Z) */                  \
-    F(glm::vec3, windVelocity)        /* the mean wind (m/s, horizontal) */                                             \
-    F(float, gustStrength)            /* m/s */                                                                         \
-    F(glm::vec3, cameraVelocity)      /* the centre view's velocity this frame (m/s) */                                 \
-    F(float, invGustSize)             /* 1/m */                                                                         \
-    F(glm::vec2, windDirection)       /* unit XZ (valid at zero speed) */                                               \
-    F(float, windSpeed)               /* m/s */                                                                         \
-    F(float, cameraWaterY)            /* the LIVE water surface world Y under the camera */                             \
-    F(float, cameraWaterValid)        /* 0/1 */                                                                         \
-    F(float, rainOcclusionPresent)    /* the map exists this frame (0/1) */                                             \
-    F(float, rainOcclusionInvRange)   /* 1 / its depth range (1/m) */
-    OC_UBO_STRUCT(WeatherUbo, OC_UBO_WEATHER)
-
-    // Known only in present(): the claims made after the begin-frame build. present() uploads this struct alone.
-#define OC_UBO_PRESENT(F, A)                                                                                            \
-    F(uint32, treeRangeBase)          /* the BAKED TREE RECORDS (tree_cull.inc): this frame's first instance */         \
-    F(uint32, treeRangeLength)        /* its length (0 = no trees) */                                                   \
-    F(uint32, treeThreads)            /* the culls' thread count (their dispatch) */                                    \
-    F(uint32, treeCount)              /* the listed pieces */                                                           \
-    F(float, treeFarScale)            /* the far distance scale */                                                      \
-    F(float, treeForceFar)            /* 0/1 */                                                                         \
-    F(float, treeVolumeStart)         /* the far-tree volume's start (m; 0 = no volume) */                              \
-    F(float, treeShadowMargin)        /* m: the shadow cull drops a tree from the cascades whose split + this it lies beyond */ \
-    F(uint32, giTlasNumInstances)     /* the TLAS-instance writer's live count */
-    OC_UBO_STRUCT(PresentUbo, OC_UBO_PRESENT)
-
-    // THE ROOT. The GLSL members are u_<name>.
-#define OC_UBO_ROOT(F, A)                                                                                               \
-    A(ViewData, views, NUM_UBO_VIEWS)                                                                                   \
-    A(glm::vec4, frustumPlanes, 6)              /* the centre view's frustum (Frustum::planes) */                       \
-    A(glm::mat4, cascadeViewProj, NUM_SHADOW_CASCADES) /* the sun cascades. The bottom row is structurally [0 0 0 1], */ \
-                                                /* so m[0][3] = the far distance and m[1][3] = the texel size ride it */ \
-                                                /* (the shaders' cascadeMatrix restores it) */                          \
-    F(glm::vec4, cascadeSunSizeTexels)          /* per cascade: the PCF disc radius (texels) per unit of depth gap */   \
-    F(glm::vec4, screenSize)                    /* xy = the render target (px), zw = 1 / xy */                          \
-    F(glm::vec4, viewportRect)                  /* xy = the render rect's min, zw = its size, in [0,1] of the target */ \
-    F(glm::vec4, taaJitter)                     /* xy = this frame's TAA jitter (NDC), zw = last frame's. Every */      \
-                                                /* raster pass applies xy; the mvps stay unjittered */                  \
-    F(glm::vec3, sunDirection)                  /* normalized, toward the sun */                                        \
-    F(uint32, frameIndex)                       /* monotonic (RNG / temporal rotation) */                               \
-    F(glm::vec3, sunColor)                      /* the sun irradiance (colour x intensity) */                           \
-    F(float, timeSeconds)                       /* SIM time (s): stops with the global pause */                         \
-    F(glm::vec3, sunTransmittance)              /* the atmosphere toward the sun at ground level (CPU Chapman) */       \
-    F(float, sunVisible)                        /* the eclipse's visible sun fraction */                                \
-    F(glm::vec3, skyUp)                         /* the sky's up axis (normalized) */                                    \
-    F(float, mipPixelScale)                     /* px per (size / distance): the LOD metric */                          \
-    F(glm::vec3, ambientColor)                  /* the flat minimum ambient radiance */                                 \
-    F(glm::vec3, sceneFocus)                    /* every distance-based quality falloff measures from it */             \
-    F(CloudsLiveUbo, cloudsLive)                                                                                        \
-    F(GiLiveUbo, giLive)                                                                                                \
-    F(FogLiveUbo, fogLive)                                                                                              \
-    F(OceanLiveUbo, oceanLive)                                                                                          \
-    F(TerrainLiveUbo, terrainLive)                                                                                      \
-    F(GrassLiveUbo, grassLive)                                                                                          \
-    F(FoliageLiveUbo, foliageLive)                                                                                      \
-    F(ForceLiveUbo, forceLive)                                                                                          \
-    F(WeatherUbo, weather)                                                                                              \
-    F(PresentUbo, present)
-    OC_UBO_STRUCT(Ubo, OC_UBO_ROOT)
-
-    // The frame UBO buffer: the root struct, then the lockable values' block (UboFieldList, packed at init). Every
-    // descriptor binds the whole range.
+    // The frame UBO buffer's size: every descriptor binds the whole range; the registered block must fit it.
     constexpr uint32 UBO_RANGE = 16384;
-    constexpr uint32 UBO_FIELDS_OFFSET = (uint32)((sizeof(Ubo) + 15) & ~size_t(15));
-    static_assert(UBO_FIELDS_OFFSET <= UBO_RANGE, "the frame UBO root must fit UBO_RANGE");
 
     // The lock SECTIONS whose tweak rows the panel can lock (a TweakLock each, by this name). What bakes is a lockable
-    // value (UboFieldList) whose sources are all locked, wherever those rows live.
+    // value (UboBlock) whose sources are all locked, wherever those rows live.
     struct UboLockSection
     {
         const char* name;
@@ -793,7 +532,7 @@ export namespace RendererVKLayout
     constexpr uint32 NUM_UBO_LOCK_SECTIONS = (uint32)(sizeof(c_uboLockSections) / sizeof(c_uboLockSections[0]));
 
     // THE declaration every shader compile includes (Shader.cpp's includer serves it as "ubo.generated.glsl");
-    // Renderer::applyUboLocks rebuilds it (buildUboDeclaration, UboFields.ixx). Main thread, like every shader compile.
+    // Renderer::applyUboLocks rebuilds it (buildUboDeclaration, UboBlock.ixx). Main thread, like every shader compile.
     inline oc::string g_uboDeclaration;
 
     struct alignas(16) RenderNodeTransform : Transform {};

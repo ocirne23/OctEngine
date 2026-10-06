@@ -73,7 +73,7 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         memcpy(&instances.mappedTransforms[node.m_transformIdx], &m_instances.getTransform(node.m_transformIdx), sizeof(Transform));
         node.m_transformUploadState &= uint8(~frameBit);
     }
-    instances.mappedPassMasks[node.m_transformIdx] = InstanceStream::stampedPassMask(passMask, m_ubo.frameIndex); // the push frame: see InstanceStream
+    instances.mappedPassMasks[node.m_transformIdx] = InstanceStream::stampedPassMask(passMask, m_ubo.get(m_u.frameIndex)); // the push frame: see InstanceStream
     memcpy(instances.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
     if (node.m_lodStateBase != UINT32_MAX) // allocated at spawn only when the node has a LOD chain
         noteLodChainUse(node, startIdx, instances); // benign races: same-value stamp + thread-safe noteUse

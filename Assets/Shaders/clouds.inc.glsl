@@ -34,7 +34,7 @@ float cloudRemap(float v, float lo, float hi, float newLo, float newHi)
 // adds its own offset from it (0 on desktop).
 vec2 cloudNoiseOffset()
 {
-    return u_cloudsLive_noiseOrigin + (u_viewPos - u_views[VIEW_CENTER].viewPos.xyz).xz;
+    return u_cloudsLive_noiseOrigin + (u_viewPos - u_views_viewPos[VIEW_CENTER].xyz).xz;
 }
 
 // Altitude of a camera-relative point. h = (r^2 - R^2) / (r + R): no cancellation between two ~6.4e6 values.

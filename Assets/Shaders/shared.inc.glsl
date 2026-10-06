@@ -51,7 +51,7 @@ vec3 worldPosFromDepthMat(vec2 uv, float depth, mat4 invM)
     vec4 world = invM * clip;
     return world.xyz / world.w;
 }
-// Reconstruction for the current view (u_invMvp = u_views[g_viewIndex].invMvp). Shared passes leave
+// Reconstruction for the current view (u_invMvp = u_views_invMvp[g_viewIndex]). Shared passes leave
 // g_viewIndex at VIEW_CENTER (centre view); per-eye passes set it to the eye they process.
 vec3 worldPosFromDepth(vec2 uv, float depth) { return worldPosFromDepthMat(uv, depth, u_invMvp); }
 
