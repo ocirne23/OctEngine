@@ -146,7 +146,10 @@ uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
             return (uint16)entry;
     }
 
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
+    // A new colour: its OWN mutex, not m_spawnMutex - the texture upload below (TextureManager + staging) must
+    // not stall the spawn paths that need the spawn mutex. addMaterialInfos takes that one briefly inside
+    // (order: m_solidColorMutex -> m_spawnMutex; no spawn-mutex holder calls this).
+    const std::lock_guard lock(m_solidColorMutex);
     if (const auto it = m_solidColorMaterials.find(key); it != m_solidColorMaterials.end())
         return it->second;
 

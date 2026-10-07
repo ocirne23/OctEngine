@@ -2220,6 +2220,12 @@ void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 se
 
 uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
 {
+    // LOCAL-INERT before the lock (single player, client-local content), or every networked spawn would take it.
+    // m_role changes only at host / connect / disconnect, and m_incomingSpawnCount only on main around a
+    // replicated spawn (receive, before that spawn's jobs are kicked) - never under a running spawn pass, and
+    // the lock never ordered these reads against those writes anyway.
+    if (m_role == ENetRole::None || (m_role == ENetRole::Client && m_incomingSpawnCount == 0))
+        return 0;
     // Recursive: a server tree spawn already holds this via beginTreeRegistration (id contiguity).
     const std::lock_guard registerLock(m_registerMutex);
     uint32 netId = 0;

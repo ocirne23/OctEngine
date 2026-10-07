@@ -572,7 +572,7 @@ Each seam locks ONLY create/destroy — **the parallel-pass hot paths stay lock-
 | ParticleSystem effect create/destroy/cache | Mutex held only for the map and vector work — the `.pfx` load, texture loads and renderer slot creation run outside it |
 | `ScriptHost::getOrLoad` | Mutex (cacheKey canonicalization outside) |
 | ScriptEventManager listeners | A plain mutex; `fireEvent` SNAPSHOTS the dispatch list under it and invokes the scripts after releasing |
-| NetworkManager registration | A recursive `m_registerMutex`. See below. |
+| NetworkManager registration | A recursive `m_registerMutex`, taken only for a registration that gets an id: a LOCAL-INERT one (single player, client-local content: role None, or Client outside a replicated spawn) returns before it. See below. |
 | AudioSystem source list | `m_sourceMutex` over create/release/detach; the miniaudio teardown runs outside it |
 
 **NetworkManager detail.** A replicated tree's netIds must stay CONTIGUOUS, since clients adopt

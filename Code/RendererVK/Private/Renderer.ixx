@@ -872,9 +872,10 @@ private:
     SharedTable<RendererVKLayout::MeshInfo> m_meshInfos;
     SharedTable<RendererVKLayout::MaterialInfo> m_materials;
     SharedTable<RendererVKLayout::MeshInstanceOffset> m_instanceOffsets;
-    oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache; m_spawnMutex)
+    oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache; m_solidColorMutex)
+    std::mutex m_solidColorMutex;                            // a NEW colour only (getOrCreateSolidColorMaterial)
     // Its LOCK-FREE read side: an open-addressed mirror, (key + 1) << 16 | material idx per entry, 0 = empty.
-    // Written only under m_spawnMutex after the map; a lookup that misses it takes the locked path.
+    // Written only under m_solidColorMutex after the map; a lookup that misses it takes the locked path.
     static constexpr uint32 SOLID_COLOR_TABLE_SIZE = 1024;
     oc::array<oc::atomic<uint64>, SOLID_COLOR_TABLE_SIZE> m_solidColorTable;
 

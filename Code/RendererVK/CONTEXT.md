@@ -1864,7 +1864,8 @@ is BEST-FIT so small requests do not shred the large holes.**
     frame's bucket (`frame % (NUM_FRAMES_IN_FLIGHT + 4)`), and `beginFrame` (`recycleEmitters` /
     `recycleSlots`) moves the drained bucket onto the free stack.
   * **solid-colour tints**: a lock-free open-addressed mirror of the cache answers every hit; only a new
-    colour takes `m_spawnMutex`.
+    colour locks - its own `m_solidColorMutex` (the 1×1 texture upload takes the TextureManager and staging
+    mutexes under it), with `m_spawnMutex` only briefly inside `addMaterialInfos`.
   * `spawnNodeForIdx`'s rebased-offset cache is double-checked: only the first spawn of a sub-node locks.
 
   * **skinned despawns** (`releaseSkinnedBundle` -> `SkinnedMeshRegistry::queuePark`): the bundle handle goes
