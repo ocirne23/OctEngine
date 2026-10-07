@@ -273,6 +273,12 @@ public:
     };
     // Straight into the primary, after the opaque stages: this frame's share of the bake when due (recordBake), then the
     // march (record, which reads the depth). Two calls so each gets a GPU scope of its own.
+    // updateBake first, every frame (CPU only: drops a stale bake, starts a due one): true when a bake runs, and only
+    // then does the caller open the bake's scope and call recordBake. An EMPTY GPU scope is a zero-length marker range,
+    // which Nsight's GPU Trace times at the NEXT workload - inside the force passes' render pass (SECONDARY contents:
+    // an illegal vkCmdWriteTimestamp).
+    bool updateBake(const RecordParams& params);
+    bool ready(const FarTreeParams& s) const; // prepare() ran for these settings' resolutions: record() records
     void recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     void record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
     // The fullscreen apply (fog OFF); the caller is inside the scene-colour render pass with the viewport set.
@@ -302,7 +308,6 @@ private:
     void buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip, bool handover = false);
     // Builds (or rebuilds) a march variant and its TREE_HANDOVER twin with the same defines. False when either failed.
     bool buildMarchPair(ComputePipeline& march, ComputePipeline& handover, bool temporalOut, uint32 scale, uint32 skip, bool reload);
-    bool ready(const FarTreeParams& s) const; // prepare() ran for these settings' resolutions
     bool handingOver() const { return m_job.active && (m_job.stage == EBakeStage::Handover || m_job.stage == EBakeStage::Copy); }
     void buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker);
     void buildUpsampleLayout(ComputePipelineLayout& layout);

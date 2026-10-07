@@ -1410,11 +1410,11 @@ bool TreeVolumePipeline::ready(const FarTreeParams& s) const
     return m_angularRes != 0 && m_angularRes == s.angularRes && m_radialRes == s.radialRes && m_slices == s.slices;
 }
 
-void TreeVolumePipeline::recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
+bool TreeVolumePipeline::updateBake(const RecordParams& params)
 {
     const FarTreeParams& s = params.settings;
     if (!ready(s))
-        return; // prepare() did not run for these settings yet
+        return false; // prepare() did not run for these settings yet
     // THE BAKE, spread over frames: a running one goes on (a geometry setting changed under it: dropped); a new one
     // starts when due and NUM_FRAMES_IN_FLIGHT frames after the last one swapped (its snapshot buffers and the old
     // front - the new back - may still be read until then).
@@ -1435,6 +1435,11 @@ void TreeVolumePipeline::recordBake(vk::CommandBuffer cmd, uint32 frameIdx, cons
     const bool due = m_dirty || !m_baked || !sameBake(s, m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
     if (!m_job.active && due && params.frameNumber >= m_bakeStartFrame)
         startBake(params, params.frameNumber, ahead);
+    return m_job.active;
+}
+
+void TreeVolumePipeline::recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
+{
     if (m_job.active)
         stepBake(cmd, frameIdx, params);
 }

@@ -519,12 +519,19 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
         .settings = m_farTreeParams,
         .frameNumber = m_frameCounter,
     };
-    m_gpuProfiler.beginScope(primary, "Far tree bake");
-    m_treeVolume.recordBake(primary, frameIdx, params);
-    m_gpuProfiler.endScope(primary);
-    m_gpuProfiler.beginScope(primary, "Far trees");
-    m_treeVolume.record(primary, frameIdx, params);
-    m_gpuProfiler.endScope(primary);
+    // Only while a bake runs: never an empty scope (TreeVolumePipeline::updateBake).
+    if (m_treeVolume.updateBake(params))
+    {
+        m_gpuProfiler.beginScope(primary, "Far tree bake");
+        m_treeVolume.recordBake(primary, frameIdx, params);
+        m_gpuProfiler.endScope(primary);
+    }
+    if (m_treeVolume.ready(m_farTreeParams))
+    {
+        m_gpuProfiler.beginScope(primary, "Far trees");
+        m_treeVolume.record(primary, frameIdx, params);
+        m_gpuProfiler.endScope(primary);
+    }
 }
 
 void Renderer::recordFarTreesApply(uint32 frameIdx)

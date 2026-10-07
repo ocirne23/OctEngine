@@ -2255,6 +2255,12 @@ not only with validation — the validation messenger stays validation-only.
 * **Command labels = the `GpuProfiler` scopes.** `beginScope` / `endScope` also emit
   `vkCmdBegin/EndDebugUtilsLabelEXT` (`Device::beginDebugLabel`), BEFORE their early-outs, so the pair
   holds even when timestamps are off. A new profiled pass is therefore a Nsight marker range for free.
+* **Never record an EMPTY scope** (a begin and an end with no command between them): Nsight's GPU Trace times a
+  zero-length range at the NEXT workload, and when that is the first command inside a render pass begun with
+  SECONDARY_COMMAND_BUFFERS contents (the force interval pass, a scene stage), its vkCmdWriteTimestamp is illegal -
+  `VUID-vkCmdWriteTimestamp-commandBuffer-recording`, under Nsight only (2026-10-07: the "Far tree bake" scope, empty
+  on every frame without a bake; now opened only when `TreeVolumePipeline::updateBake` reports a running bake, and
+  "Far trees" only when the volume is `ready`). Gate the scope with the work, not the work inside the scope.
 * **Nsight 2026.3.1 GPU Trace: turn OFF "multi-pass metrics"** in the capture settings. With it on,
   opening a capture that holds these labels crashes Nsight (heap corruption in its "Per Shader Warp
   Occupancy" code) for every labelled range that does not start at the beginning of the primary. The
