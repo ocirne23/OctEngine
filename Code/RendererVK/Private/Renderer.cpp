@@ -309,6 +309,8 @@ void Renderer::initSharedBuffers()
 {
     m_meshLods.initialize(m_meshInfos.capacity(),
         [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
+    for (oc::atomic<uint64>& entry : m_solidColorTable)
+        entry.store(0, oc::memory_order_relaxed);
 
 	uint16 diffuseIdx = Globals::textureManager.upload(*ITextureData::createFallbackWhiteTexture(), false);
 	assert(diffuseIdx == RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
@@ -648,6 +650,14 @@ void Renderer::beginFrame()
     m_gridBuildsKicked = false;
     m_lightGridComputePipeline.beginFrame(m_swapChain.getCurrentFrameIndex(), m_lightGridParams, m_cameraPos);
     m_frameCounter++;
+    // Retired emitter / query slots whose frames have drained become reusable (the tables are lock-free).
+    m_particles.recycleEmitters(m_frameCounter);
+    m_force.recycleSlots(m_frameCounter);
+    {
+        // Last frame's skinned despawns (queuePark): their jobs go inert and the bundles become reusable.
+        const std::lock_guard lock(m_spawnMutex);
+        m_skinned.drainParks();
+    }
     if (Globals::openXR.isEnabled())
     {
         m_lastCullCamera = camera; // head-swapped: next frame's spatial cull runs on this view (see hasCullView)
@@ -774,6 +784,8 @@ void Renderer::checkFrameCapacities()
     ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
     m_instances.growToPendingDemand(m_swapChain.getCurrentFrameIndex());
+    // LOD state ranges spawned past the state buffer last frame (allocateStateRange never grows mid-frame)
+    m_meshLods.growStateToPendingDemand();
     // Last frame's TLAS slot count (present(): the stream + the RT trees) outgrew the GI TLAS instance buffers.
     m_rt.growTlasInstancesFor(m_giTlasDemand);
     // A mesh mega-buffer was reallocated (vertex/index data growth)

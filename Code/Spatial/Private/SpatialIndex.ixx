@@ -26,11 +26,10 @@ import :BlockStore;
 // Threading contract: updateEntry is callable from any job during the parallel entity pass -
 // same-cell updates write only that entry's SoA slots, and cell-changing ops stage into per-worker
 // pending lists. registerEntry/unregisterEntry are callable from any thread in the spawn window
-// (parallel entity spawning): both take m_registerMutex exclusively - pool growth reallocates the
-// SoA the query traversals read, so the query* entry points take it SHARED (a spawning worker's
-// script OnSpawn may query while another worker registers). setLayerMask/commitFrame stay
-// single-threaded (main, outside the pass); the markVisible* traversals stay lock-free (the
-// kick/join window forbids registration by contract).
+// (parallel entity spawning), LOCK-FREE: the pool rows never move (RecordPool reserves its address
+// space), so they and the query* entry points run concurrently without a lock. setLayerMask/commitFrame
+// stay single-threaded (main, outside the pass); the markVisible* traversals run in the kick/join
+// window, which forbids registration by contract (a Link would reach the cell maps at commit anyway).
 export class SpatialIndex final
 {
 public:
@@ -327,13 +326,12 @@ private:
     // parallelFors traverseCell over the roots. emit must be thread-safe; the stamps are (each
     // entry lives in exactly ONE cell, so no two roots ever emit the same index). A chunk-aware
     // emit (idx, pos, layers, chunk) gets prepareChunks(n) called before any emit with chunk < n, so an
-    // owner-sliced list per chunk can be sized. registerLock: see the definition. Uses the
+    // owner-sliced list per chunk can be sized. Lock-free even beside spawning (RecordPool). Uses the
     // m_frontier scratch: ONE traverseParallel at a time (the cull job, or the post-update
     // selection - never both in flight).
     template <typename Tester, typename EmitFunc, typename PrepareFunc>
     void traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                          TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks,
-                          bool registerLock);
+                          TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks);
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<BlockStore, Morton::MaxLevels> m_blocks;
@@ -352,9 +350,6 @@ private:
     uint32 m_frameId = 1;
     alignas(16) SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep); one __m128i
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
-    // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
-    // growth), shared over queries - see the threading contract above.
-    mutable std::shared_mutex m_registerMutex;
     SpatialCullingConfig& m_culling = Globals::settings.spatial.culling; // the Spatial/Culling tweaks
     SpatialStats& m_stats = Globals::settings.spatial.stats;             // the Spatial/Stats readouts (the const queries add to them)
     oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)

@@ -42,8 +42,8 @@ after the physics step, `audio.update` and the nav publish
 
 That holds today because the entity-change drains, net receive and `game.update` above the kick are
 the last pre-pass writers, and contact scripts fire only AFTER the join
-(`physics.dispatchContactEvents`). Two reasons it matters: `commitFrame` relinks cells, and
-`registerEntry`'s pool growth reallocates the SoA the traversals read.
+(`physics.dispatchContactEvents`). The reason it matters: `commitFrame` relinks cells.
+(`registerEntry` no longer moves the SoA - the pool reserves its address space.)
 
 **An INVALID view skips the whole update for that frame** — the first VR frame, where no head view
 exists yet. Stamps stay a frame stale (the spawn guard keeps fresh entries visible) and the commit's
@@ -107,8 +107,8 @@ commitFrame()
 cross the segment) · `queryNearest`, all filling a caller's `oc::vector<uint64>`; plus the
 CALLBACK forms `forEachInSphere` / `forEachInFrustum`, which hand each hit to a functor straight
 out of the traversal — **the form to use from job code**: no result buffer, so nothing
-`thread_local` rides a fiber that may resume on another thread (zero-allocation type erasure; do
-not wait inside the callback — the index's shared lock is held). Every game/entity probe uses them.
+`thread_local` rides a fiber that may resume on another thread (zero-allocation type erasure; no lock
+is held, but do not wait inside the callback). Every game/entity probe uses them.
 
 ### `spawnVisible` — the spawn guard
 
@@ -125,10 +125,26 @@ sectors and scatter groups all pass false.
 | Operation | Rule |
 |---|---|
 | `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's pool slots and its block lane (~8 stores, two lines); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
-| `registerEntry` / `unregisterEntry` | Callable from any thread **in the spawn window** (parallel entity spawning). Both take `m_registerMutex` EXCLUSIVE, because pool growth reallocates the SoA. |
-| `query*` | Take `m_registerMutex` SHARED — a spawning worker's script `OnSpawn` may query while another worker registers. |
+| `registerEntry` / `unregisterEntry` | Callable from any thread **in the spawn window** (parallel entity spawning). **LOCK-FREE** (see "The record pool" below). |
+| `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
 | `setLayerMask` / `commitFrame` | Single-threaded, main, outside the pass. |
-| `markVisible*` traversals | Lock-free. Safe only because the kick/join window forbids registration **by contract**. |
+| `markVisible*` traversals | Lock-free. The kick/join window forbids registration **by contract**. |
+
+### The record pool
+
+`RecordPool` (the per-entry SoA rows) is what makes registration lock-free:
+
+* **Every row is a `Core.VirtualArray`**: `MAX_ENTRIES` (16M) reserved as ADDRESS SPACE at initialize (~1 GB
+  over all rows, no memory), pages committed as the pool grows (doubling, under a commit mutex - rare). A
+  growth never moves a row, so nothing needs to exclude the readers, and a row access stays a plain base +
+  index - no page table on the traversal / `getPassMask` paths. The committed memory shows in the Memory
+  panel as "Spatial record pool" (VirtualArray reports its commits to the tracker).
+* **Slots** come from a tagged lock-free free stack (the head's high 32 bits bump on every push and pop:
+  ABA), else a CAS bump of the high-water mark that commits FIRST - so `capacity()` (the high-water mark)
+  never passes the committed rows, and the stamp wrap sweep can walk `[0, capacity())` while spawns
+  register. `release` runs in `commitFrame` only.
+* A registered slot is the registering call's alone until its Link op at commit (no traversal reaches an
+  unlinked slot); an unregister writes only its own rows and lane tombstone.
 
 ## Layers
 
@@ -195,9 +211,8 @@ Every emit gets the lane's layer mask (`(idx, pos, layers)`), so a consumer neve
 `layerMask` row per hit. A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
 before any emit with `chunk < n`, so
 a caller can keep an owner-sliced list per chunk (slot 0 = the serial expansion, `1 + root index`
-= the fan-out). `registerLock = true` makes the expansion and every chunk take the index's SHARED
-lock per phase — never across the parallelFor's wait, which could park the fiber and carry the lock
-to another thread — for a caller outside the kick/join window (`queryUpdateTiers`). The
+= the fan-out). A caller outside the kick/join window (`queryUpdateTiers`) needs no lock either:
+registrations never move the pool rows (see "The record pool"). The
 `m_frontier` scratch allows ONE traverseParallel at a time: the cull job's, or the post-update
 selection's, never both in flight (the selection is joined before the spatial kick).
 
@@ -281,8 +296,8 @@ importer of Spatial. The index binds `m_culling` / `m_stats` as references to th
 
 ## Entity integration
 
-**Every entity registers at the end of `Entity::create`** — parallel-spawn safe, since the index
-locks. The exception is the entity `CullMode` (see [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md)):
+**Every entity registers at the end of `Entity::create`** — parallel-spawn safe and lock-free (see
+"The record pool"). The exception is the entity `CullMode` (see [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md)):
 a `RootOnly` root registers one entry over its whole subtree and the subtree registers nothing;
 `None` registers nothing.
 
@@ -302,7 +317,7 @@ selection job calls it once per selection, and NOTHING else stamps those passes,
 current until the next selection (which may be several frames later).
 
 `queryUpdateTiers(center, queryRadius, tierRadius[3], horizontal, layerMask)` is ONE PARALLEL
-traversal of the ball (`traverseParallel` with `registerLock`) that stamps every hit in each tier
+traversal of the ball (`traverseParallel`) that stamps every hit in each tier
 whose radius exceeds its distance to the center (nested balls; a `tierRadius` <= 0 is never stamped
 by that ball; `horizontal` = XZ distance) and returns the hits as **one owner-sliced list per
 traversal chunk** (`m_tierHitChunks`, some empty, valid until the next call). The World runs its

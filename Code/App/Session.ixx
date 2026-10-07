@@ -32,6 +32,7 @@ export struct LaunchOptions
     bool headless = false;
     bool gameMode = false;
     bool coopMode = false;
+    bool sandbox = false;
 
     double profileAfterSec = 0.0;
     double quitAfterSec = 0.0;
@@ -43,7 +44,7 @@ export struct LaunchOptions
 
     bool headlessServer() const { return headless && launchMode == ELaunchMode::Server; }
     bool unattendedRun() const { return profileAfterSec > 0.0 || quitAfterSec > 0.0; }
-    bool mainMenu() const { return !headlessServer() && launchMode == ELaunchMode::Single && !gameMode && !unattendedRun() && !scenario; }
+    bool mainMenu() const { return !headlessServer() && launchMode == ELaunchMode::Single && !gameMode && !unattendedRun() && !scenario && !sandbox; }
 };
 
 export LaunchOptions parseCommandLine(int argc, char* argv[])
@@ -76,6 +77,7 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
         else if (arg == "--headless")                     o.headless = true;
         else if (arg == "--game")                         o.gameMode = true;
         else if (arg == "--coop")                         o.coopMode = true;
+        else if (arg == "--sandbox")                      o.sandbox = true;
         else if (arg == "--fullscreen")                   {} // main reads it itself, before the window exists
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + oc::string(arg));
@@ -86,6 +88,11 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
     {
         Log::warning("--game needs a window (GPU field readbacks drive the authority sim), ignoring --game");
         o.gameMode = false;
+    }
+    if (o.sandbox && o.gameMode)
+    {
+        Log::warning("--sandbox and --game exclude each other, ignoring --sandbox");
+        o.sandbox = false;
     }
     if (o.coopMode && !o.gameMode)
     {

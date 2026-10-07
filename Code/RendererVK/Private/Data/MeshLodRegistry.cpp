@@ -77,17 +77,6 @@ void MeshLodRegistry::uploadMeshMapping(uint32 baseMeshInfoIdx, uint32 count)
         m_meshToGroup.data() + baseMeshInfoIdx, (size_t)baseMeshInfoIdx * sizeof(uint32));
 }
 
-uint32 MeshLodRegistry::allocateStateRange(uint32 count)
-{
-    if (const uint32 reusedBase = m_freeStateSlots.allocate(count); reusedBase != UINT32_MAX)
-        return reusedBase;
-    const uint32 base = m_stateCounter;
-    m_stateCounter += count;
-    if (m_stateCounter > m_maxStateSlots)
-        growStateCapacity(m_stateCounter);
-    return base;
-}
-
 void MeshLodRegistry::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
 {
     m_groupIdxBuffer.initialize(maxUniqueMeshes * sizeof(uint32),

@@ -114,7 +114,19 @@ uint32 SkinnedMeshRegistry::registerBundle(const Bundle& bundle)
     }
     const uint32 handle = (uint32)m_bundles.size();
     m_bundles.push_back(bundle);
+    m_parkLinks.ensure(handle); // queuePark (lock-free) must never create a page
     return handle;
+}
+
+void SkinnedMeshRegistry::drainParks()
+{
+    uint32 handle = m_pendingParks.takeAll();
+    while (handle != SlotStack::EMPTY)
+    {
+        const uint32 next = m_parkLinks[handle].load(oc::memory_order_relaxed);
+        parkBundle(handle);
+        handle = next;
+    }
 }
 
 void SkinnedMeshRegistry::parkBundle(uint32 bundleHandle)

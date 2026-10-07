@@ -46,29 +46,25 @@ uint32 SpatialIndex::entryLevel(float radius)
 SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, uint64 userData, uint32 layerMask, bool spawnVisible)
 {
     assert(m_initialized && radius >= 0.0f);
-    // All the pure math runs before the lock; the exclusive section is only the slot acquire (pool
-    // growth reallocates the SoA a concurrent shared-locked traversal reads) + the SoA writes.
+    // LOCK-FREE: the slot acquire is lock-free and the pool rows never move (RecordPool), and the slot is
+    // this call's alone until the Link op at commit - no traversal reaches an unlinked slot.
     const uint32 level = entryLevel(radius);
     const uint64 key = Morton::keyAtLevel(Morton::fineKey(pos), level);
     const glm::vec3 rel = glm::vec3(pos - Morton::cellMinWorld(key, level));
-    uint32 idx, gen;
-    {
-        const std::unique_lock lock(m_registerMutex);
-        idx = m_pool.acquire();
-        m_pool.posX[idx] = rel.x;
-        m_pool.posY[idx] = rel.y;
-        m_pool.posZ[idx] = rel.z;
-        m_pool.radius[idx] = radius;
-        m_pool.cellKey[idx] = key;
-        m_pool.userData[idx] = userData;
-        m_pool.layerMask[idx] = uint8(layerMask);
-        m_pool.stamps[idx] = {}; // never stamped: reports visible until the first query, unless NoSpawnGuard
-        m_pool.storeIdx[idx] = UINT32_MAX;
-        m_pool.level[idx] = uint8(level);
-        m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
-        gen = m_pool.gen[idx]; // captured under the lock: a later growth may move the array
-    }
-    // Staged per worker - no shared state, so the (possibly allocating) push stays outside the lock.
+    const uint32 idx = m_pool.acquire();
+    m_pool.posX[idx] = rel.x;
+    m_pool.posY[idx] = rel.y;
+    m_pool.posZ[idx] = rel.z;
+    m_pool.radius[idx] = radius;
+    m_pool.cellKey[idx] = key;
+    m_pool.userData[idx] = userData;
+    m_pool.layerMask[idx] = uint8(layerMask);
+    m_pool.stamps[idx] = {}; // never stamped: reports visible until the first query, unless NoSpawnGuard
+    m_pool.storeIdx[idx] = UINT32_MAX;
+    m_pool.level[idx] = uint8(level);
+    m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
+    const uint32 gen = m_pool.gen[idx];
+    // Staged per worker - no shared state.
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = gen, .type = PendingOp::Link, .newLevel = uint8(level) });
     return { idx, gen };
@@ -76,22 +72,20 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
 
 void SpatialIndex::unregisterEntry(SpatialHandle handle)
 {
+    // LOCK-FREE: only this handle's own rows and lane are written (one owner per entry; the pool rows never
+    // move, the blocks change only at commit).
+    if (!m_pool.isValidAlive(handle))
+        return;
+    const uint32 idx = handle.idx;
+    if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
     {
-        const std::unique_lock lock(m_registerMutex); // pairs with registerEntry (parallel spawn/despawn)
-        if (!m_pool.isValidAlive(handle))
-            return;
-        const uint32 idx = handle.idx;
-        if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
-        {
-            // tombstone the lane (queries read it lock-free); the counters and the block bookkeeping
-            // wait for the Unlink op at commit (retireLane)
-            const uint32 slot = m_pool.storeIdx[idx];
-            m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
-        }
-        m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
-        m_pool.radius[idx] = -1e30f; // getRadius reads the pool copy; the lane above is what queries test
+        // tombstone the lane (queries read it lock-free); the counters and the block bookkeeping
+        // wait for the Unlink op at commit (retireLane)
+        const uint32 slot = m_pool.storeIdx[idx];
+        m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
     }
-    // Per-worker staging: outside the lock (only the handle's own gen is needed).
+    m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
+    m_pool.radius[idx] = -1e30f; // getRadius reads the pool copy; the lane above is what queries test
     m_pendingOps.local().push_back({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f,
                                      .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unlink, .newLevel = 0 });
 }

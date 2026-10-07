@@ -774,9 +774,9 @@ RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& t
 {
     assert(idx < m_nodeMeshRanges.size() && "Invalid NodeSpawnIdx");
     // PARALLEL ENTITY SPAWNING: no whole-body lock - everything below reads immutable container
-    // data or calls renderer allocators that lock internally (addRenderNodeTransform,
-    // addMeshInstanceOffsets, allocateLodStateRange). Only the rebased-offset CACHE block takes the
-    // spawn mutex, so two concurrent spawns of the same sub-node fill it once.
+    // data or calls renderer allocators that are lock-free (addRenderNodeTransform) or lock internally
+    // (addMeshInstanceOffsets, allocateLodStateRange). Only the FIRST spawn of a sub-node takes the
+    // spawn mutex (the rebased-offset cache fill, double-checked), so two concurrent spawns fill it once.
     const NodeMeshRange& range = m_nodeMeshRanges[idx];
 
     RenderNode node;
@@ -800,19 +800,26 @@ RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& t
     uint32 rebasedOffsetBase = 0;
     if (rebase)
     {
-        // Recursive spawn mutex: guards the cache slot against a concurrent same-idx spawn (the
-        // nested addMeshInstanceOffsets re-locks it).
-        const std::lock_guard lock(Globals::rendererVK.m_spawnMutex);
-        uint32& cachedBase = m_rebasedOffsetBaseForIdx[idx];
-        if (cachedBase == UINT32_MAX)
+        // Double-checked: a filled cache slot is read lock-free (acquire pairs with the release store
+        // below, so the uploaded offsets' base is complete). Only the first spawn of an idx takes the
+        // recursive spawn mutex, so two concurrent first spawns fill it once (the nested
+        // addMeshInstanceOffsets re-locks it).
+        oc::atomic_ref<uint32> cachedBase(m_rebasedOffsetBaseForIdx[idx]);
+        rebasedOffsetBase = cachedBase.load(oc::memory_order_acquire);
+        if (rebasedOffsetBase == UINT32_MAX)
         {
-            oc::vector<RendererVKLayout::MeshInstanceOffset> rebasedOffsets;
-            rebasedOffsets.reserve(range.numNodes);
-            for (uint32 i = 0; i < range.numNodes; ++i)
-                rebasedOffsets.emplace_back(invNode * m_meshInstanceOffsets[range.startIdx + i].transform);
-            cachedBase = Globals::rendererVK.addMeshInstanceOffsets(rebasedOffsets);
+            const std::lock_guard lock(Globals::rendererVK.m_spawnMutex);
+            rebasedOffsetBase = cachedBase.load(oc::memory_order_relaxed);
+            if (rebasedOffsetBase == UINT32_MAX)
+            {
+                oc::vector<RendererVKLayout::MeshInstanceOffset> rebasedOffsets;
+                rebasedOffsets.reserve(range.numNodes);
+                for (uint32 i = 0; i < range.numNodes; ++i)
+                    rebasedOffsets.emplace_back(invNode * m_meshInstanceOffsets[range.startIdx + i].transform);
+                rebasedOffsetBase = Globals::rendererVK.addMeshInstanceOffsets(rebasedOffsets);
+                cachedBase.store(rebasedOffsetBase, oc::memory_order_release);
+            }
         }
-        rebasedOffsetBase = cachedBase;
     }
 
     bool hasLodChain = false;
@@ -842,15 +849,18 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
     assert(m_isSkinned && m_numSkinnedMeshes > 0 && "spawnSkinnedNode on a non-skinned container");
 
     Renderer& renderer = Globals::rendererVK;
-    // PARALLEL ENTITY SPAWNING: unlike spawnNodeForIdx this DOES hold the spawn mutex whole-body
-    // (recursive - the nested allocator calls re-lock): the fresh-bundle build reads registry
-    // tables between those calls (getSkinnedMeshSource, getRtMeshAlias, the inline addMeshLodGroup)
-    // that another spawn's addMeshInfos/addMeshLodGroup growth would reallocate under it. Skinned
-    // spawns are the rare path; the parked-bundle reuse hit stays short regardless.
-    const std::lock_guard lock(renderer.m_spawnMutex);
-
     RenderNode node;
-    node.m_transformIdx = renderer.addRenderNodeTransform(transform);
+    node.m_transformIdx = renderer.addRenderNodeTransform(transform); // lock-free
+    node.m_meshInstances.resize(m_numSkinnedMeshes);
+    Sphere combinedBounds{ glm::vec3(0.0f), 0.0f };
+    bool hasLodChain = false;
+
+    // PARALLEL ENTITY SPAWNING: unlike spawnNodeForIdx this holds the spawn mutex over the bundle work
+    // (recursive - the nested allocator calls re-lock): the fresh-bundle build and the instance fill read
+    // registry tables (getSkinnedMeshSource, getSkinnedBundle, getRtMeshAlias, the inline addMeshLodGroup)
+    // that another spawn's growth would reallocate under it. The lock-free allocators (transform slot,
+    // LOD state) and the allocations stay outside it.
+    std::unique_lock lock(renderer.m_spawnMutex);
 
     // A parked bundle from a destroyed skinned node of this container has everything still valid and
     // identical (MeshInfos, output vertex regions, palette region, skinning jobs), so reuse is free.
@@ -959,9 +969,6 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
     const Renderer::SkinnedInstanceBundle& bundle = renderer.getSkinnedBundle(bundleHandle);
     node.m_skinnedBundleHandle = bundleHandle;
 
-    Sphere combinedBounds{ glm::vec3(0.0f), 0.0f };
-    bool hasLodChain = false;
-    node.m_meshInstances.resize(m_numSkinnedMeshes);
     for (uint32 k = 0; k < m_numSkinnedMeshes; ++k)
     {
         const RendererVKLayout::SkinnedMeshSource& src = renderer.getSkinnedMeshSource(m_baseSkinnedMeshIdx + k);
@@ -979,6 +986,8 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
         inst.alphaMode = src.alphaMode;
         hasLodChain |= bundle.lodGroupForMesh[k] != UINT32_MAX;
     }
+    lock.unlock();
+
     if (hasLodChain)
         node.m_lodStateBase = renderer.allocateLodStateRange(m_numSkinnedMeshes); // GPU hysteresis slots, one per instance
     node.m_bounds = combinedBounds;

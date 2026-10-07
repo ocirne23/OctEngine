@@ -7,10 +7,36 @@ import Core.Transform;
 import Threading;
 
 import :Layout;
+import :SlotAlloc;
+
+// The render-node transform slots, LOCK-FREE (SlotAlloc): a slot never moves, so a spawn on one worker never
+// reallocates the array under a setTransform / push on another (the old oc::vector did).
+export class TransformSlots final
+{
+public:
+    Transform& operator[](uint32 idx) { return m_transforms[idx]; }
+    const Transform& operator[](uint32 idx) const { return m_transforms[idx]; }
+
+    uint32 allocate(const Transform& transform)
+    {
+        const uint32 idx = m_slots.allocate(1);
+        m_transforms.ensure(idx) = transform;
+        return idx;
+    }
+    void free(uint32 idx) { m_slots.release(idx, 1); }
+
+    // Every slot ever handed out (live or free): the node buffers' required size.
+    uint32 highWater() const { return m_slots.highWater(); }
+    uint32 numLive() const { return m_slots.highWater() - m_slots.numFree(); } // stats: may lag
+
+private:
+    SlotRangeAllocator m_slots;
+    PagedArray<Transform> m_transforms;
+};
 
 export namespace Globals
 {
-    oc::vector<Transform> renderNodeTransforms;
+    TransformSlots renderNodeTransforms;
 }
 
 // RAII handle to a spawned renderer instance (movable, like PhysicsBody). Destroying the handle

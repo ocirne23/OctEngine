@@ -69,12 +69,16 @@ public:
     uint32 claimInstances(uint32 count);
     void noteMeshInstances(uint16 meshIdx, uint32 count) { oc::atomic_ref<uint32>(m_numInstancesPerMesh[meshIdx]) += count; }
 
-    // ---- Render node transform slots (spawn path, caller holds the spawn mutex) ----
-    uint32 allocateTransform(const Transform& transform);
-    void freeTransform(uint32 idx) { m_freeTransformSlots.push_back(idx); }
+    // ---- Render node transform slots (spawn path, lock-free: TransformSlots) ----
+    // NEVER grows the node buffers: this runs mid-frame, and re-creating them would drop the transforms, pass masks and
+    // LOD biases every node already pushed this frame (a one-frame flicker of everything). A node past the capacity is
+    // skipped by renderNode until growToPendingDemand grows at the next beginFrame. A reused slot uploads at its
+    // first push: a fresh RenderNode starts all-dirty.
+    uint32 allocateTransform(const Transform& transform) { return m_transforms.allocate(transform); }
+    void freeTransform(uint32 idx) { m_transforms.free(idx); }
     Transform& getTransform(uint32 idx) { return m_transforms[idx]; }
-    uint32 getNumTransforms() const { return (uint32)m_transforms.size(); }
-    uint32 getNumLiveTransforms() const { return (uint32)(m_transforms.size() - m_freeTransformSlots.size()); }
+    uint32 getNumTransforms() const { return m_transforms.highWater(); }
+    uint32 getNumLiveTransforms() const { return m_transforms.numLive(); }
     uint8 getBufferGeneration() const { return m_bufferGeneration; }
 
     // ---- Per-frame bookkeeping ----
@@ -108,8 +112,7 @@ private:
     oc::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
     Buffer m_prevTransforms; // device-local, one set for every slot: last frame's transforms (recordPrevCopy)
     Buffer m_prevPassMasks;  // ... and its stamped pass masks
-    oc::vector<Transform>& m_transforms = Globals::renderNodeTransforms;
-    oc::vector<uint32> m_freeTransformSlots;
+    TransformSlots& m_transforms = Globals::renderNodeTransforms;
     oc::vector<uint32> m_numInstancesPerMesh;
 
     oc::function<void()> m_onGpuIdle;
@@ -123,6 +126,5 @@ private:
 
     uint32 m_instanceCounter = 0;
     uint32 m_pendingMaxInstances = 0;
-    uint32 m_pendingMaxRenderNodes = 0; // transform slots allocated (spawn path); grown at the next beginFrame
     uint32 m_instanceOverflowStart = UINT32_MAX; // smallest failed claim this frame
 };

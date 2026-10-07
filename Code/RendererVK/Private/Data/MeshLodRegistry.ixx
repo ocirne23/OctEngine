@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import :Buffer;
 import :Layout;
+import :SlotAlloc;
 
 // Recycles contiguous slot ranges freed by destroyed ObjectContainers (mesh infos, materials, instance
 // offsets, skinning jobs, ...). Ranges stay sorted and coalesced; allocation is best-fit so small
@@ -103,10 +104,17 @@ public:
     void setGroupIdxForMesh(uint16 meshIdx, uint32 groupIdx);
     void uploadGroup(uint32 groupIdx);
 
-    // Per-instance LOD hysteresis state slots, one contiguous range per RenderNode with LOD chains.
-    // NOT internally locked - the caller holds the spawn mutex (parallel entity spawning).
-    uint32 allocateStateRange(uint32 count);
-    void releaseStateRange(uint32 base, uint32 count) { m_freeStateSlots.release(base, count); }
+    // Per-instance LOD hysteresis state slots, one contiguous range per RenderNode with LOD chains. LOCK-FREE
+    // (SlotRangeAllocator, parallel entity spawning) and NEVER grows the buffer: a range past the capacity is
+    // skipped by renderNode until growStateToPendingDemand grows it at the next frame's capacity checks.
+    uint32 allocateStateRange(uint32 count) { return m_stateSlots.allocate(count); }
+    void releaseStateRange(uint32 base, uint32 count) { m_stateSlots.release(base, count); }
+    uint32 getStateCapacity() const { return m_maxStateSlots; }
+    void growStateToPendingDemand()
+    {
+        if (m_stateSlots.highWater() > m_maxStateSlots)
+            growStateCapacity(m_stateSlots.highWater());
+    }
 
     // The per-MeshInfo mapping mirrors m_groupIdxBuffer; the Renderer grows it with the MeshInfo array
     // and re-uploads the slice a new container claimed.
@@ -140,8 +148,7 @@ private:
     Buffer m_groupIdxBuffer;
     Buffer m_groupsBuffer;
     Buffer m_stateBuffer;
-    IndexRangeFreeList m_freeStateSlots;
-    uint32 m_stateCounter = 0;
+    SlotRangeAllocator m_stateSlots;
     uint32 m_maxStateSlots = RendererVKLayout::INITIAL_LOD_STATE_SLOTS;
     uint32 m_maxGroups = RendererVKLayout::INITIAL_MESH_LOD_GROUPS;
 };

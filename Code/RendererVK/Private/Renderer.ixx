@@ -608,8 +608,8 @@ private:
             m_rt.accel().setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
         return m_meshLods.addGroup(group);
     }
-    void freeMeshLodGroup(uint32 groupIdx) { m_meshLods.freeGroup(groupIdx); }
-    uint32 allocateLodStateRange(uint32 count) { const std::lock_guard lock(m_spawnMutex); return m_meshLods.allocateStateRange(count);  }
+    void freeMeshLodGroup(uint32 groupIdx) { const std::lock_guard lock(m_spawnMutex); m_meshLods.freeGroup(groupIdx); } // see freeMeshInfoRange
+    uint32 allocateLodStateRange(uint32 count) { return m_meshLods.allocateStateRange(count); } // lock-free
 
     void noteTextureUse(const RenderNode& node, uint32 passMask);
     void noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances);
@@ -624,7 +624,7 @@ private:
     const RendererVKLayout::SkinnedMeshSource& getSkinnedMeshSource(uint32 idx) const { return m_skinned.getSource(idx); }
     uint32 acquireSkinnedBundle(uint32 sourceKey) { const std::lock_guard lock(m_spawnMutex); return m_skinned.acquireBundle(sourceKey); }
     uint32 registerSkinnedBundle(const SkinnedInstanceBundle& bundle) { const std::lock_guard lock(m_spawnMutex); return m_skinned.registerBundle(bundle); }
-    void releaseSkinnedBundle(uint32 bundleHandle) { const std::lock_guard lock(m_spawnMutex); m_skinned.parkBundle(bundleHandle); }
+    void releaseSkinnedBundle(uint32 bundleHandle) { m_skinned.queuePark(bundleHandle); } // lock-free; parked at beginFrame
     void destroySkinnedBundle(uint32 bundleHandle);
     const SkinnedInstanceBundle& getSkinnedBundle(uint32 handle) const { return m_skinned.getBundle(handle); }
     uint32 allocateSkinningPalette(uint32 boneCount) { const std::lock_guard lock(m_spawnMutex); return m_skinned.allocatePalette(boneCount); }
@@ -872,7 +872,11 @@ private:
     SharedTable<RendererVKLayout::MeshInfo> m_meshInfos;
     SharedTable<RendererVKLayout::MaterialInfo> m_materials;
     SharedTable<RendererVKLayout::MeshInstanceOffset> m_instanceOffsets;
-    oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache)
+    oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache; m_spawnMutex)
+    // Its LOCK-FREE read side: an open-addressed mirror, (key + 1) << 16 | material idx per entry, 0 = empty.
+    // Written only under m_spawnMutex after the map; a lookup that misses it takes the locked path.
+    static constexpr uint32 SOLID_COLOR_TABLE_SIZE = 1024;
+    oc::array<oc::atomic<uint64>, SOLID_COLOR_TABLE_SIZE> m_solidColorTable;
 
     SkinnedMeshRegistry m_skinned;  // the skinning jobs, bone palettes, sources and spawn bundles
     InstanceStream m_instances;     // the per-frame mapped push buffers + the render-node transform slots
@@ -880,9 +884,11 @@ private:
     MeshLodRegistry m_meshLods;     // the chains, the per-mesh mapping and the GPU selection buffers
     oc::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
 
-    // PARALLEL ENTITY SPAWNING: one coarse mutex over every allocator the spawn/despawn path reaches.
-    // RECURSIVE because ObjectContainer::spawnNodeForIdx holds it across its whole body while calling
-    // the locked leaves below. The parallel entity PASS never takes it and stays lock-free.
+    // PARALLEL ENTITY SPAWNING: one coarse mutex over the registries the spawn/despawn path reaches that are
+    // not lock-free (the shared tables, LOD groups, skinned bundles, the solid-colour cache's miss). The hot
+    // per-entity allocators are lock-free instead: transform slots, LOD state ranges, emitter / query slots
+    // (SlotAlloc). RECURSIVE because spawnSkinnedNode / the rebased-offset fill hold it while calling the
+    // locked leaves. The parallel entity PASS never takes it.
     std::recursive_mutex m_spawnMutex;
 
     struct PerFrameData

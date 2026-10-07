@@ -270,7 +270,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
 
 ForceQuery ForceSystem::createQuery(const glm::vec3& pos)
 {
-    const uint32 slot = Globals::rendererVK.createForceQuerySlot(); // own internal lock
+    const uint32 slot = Globals::rendererVK.createForceQuerySlot(); // lock-free slot table
     if (slot == UINT32_MAX)
     {
         printf("ForceSystem: out of force query slots\n");

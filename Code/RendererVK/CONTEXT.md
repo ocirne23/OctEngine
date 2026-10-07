@@ -1851,6 +1851,32 @@ is BEST-FIT so small requests do not shred the large holes.**
   vectors.
 * **Destroying a RenderNode recycles without GPU sync**: transform slots are free-listed, skinned
   bundles parked in place per container, and rebased sub-node offsets shared.
+* **The per-entity spawn allocators are LOCK-FREE** (`Util/SlotAlloc.ixx`: `SlotStack` - a Treiber stack with
+  a 32-bit ABA tag in the head; `PagedArray` - 4096-element pages that never move, only a new page takes a
+  mutex; `SlotRangeAllocator` - a bump cursor plus one free stack per range size up to 64, never split or
+  merged):
+  * **transform slots** (`TransformSlots`, `Globals::renderNodeTransforms`): paged, so a spawn never
+    reallocates under another worker's `setTransform`. The high-water mark sizes the node buffers.
+  * **LOD state ranges** (`MeshLodRegistry::allocateStateRange`): NEVER grow mid-frame any more (the old path
+    waited for the GPU on a spawning worker). `renderNode` skips a node whose range is past the capacity, and
+    `checkFrameCapacities` grows it (`growStateToPendingDemand`), like the transforms.
+  * **emitter / query slots** (`RecycledSlotTable`): storage sized to the capacity once; a retire goes into its
+    frame's bucket (`frame % (NUM_FRAMES_IN_FLIGHT + 4)`), and `beginFrame` (`recycleEmitters` /
+    `recycleSlots`) moves the drained bucket onto the free stack.
+  * **solid-colour tints**: a lock-free open-addressed mirror of the cache answers every hit; only a new
+    colour takes `m_spawnMutex`.
+  * `spawnNodeForIdx`'s rebased-offset cache is double-checked: only the first spawn of a sub-node locks.
+
+  * **skinned despawns** (`releaseSkinnedBundle` -> `SkinnedMeshRegistry::queuePark`): the bundle handle goes
+    on a pending `SlotStack`; `beginFrame` (and `removeObjectContainer`, first) parks them all under ONE lock
+    (`drainParks`). Until then the dead bundle's skinning job and BLAS rebuild still run (≤ 1 frame, never
+    drawn), and a same-frame respawn builds a fresh bundle instead of reusing it.
+
+  So a static spawn takes NO lock after warm-up, and a despawn none at all. **Still under `m_spawnMutex`:**
+  `spawnSkinnedNode` (the bundle acquire / build and the instance fill only), the shared tables, LOD groups.
+* **Every shared-table RELEASE takes `m_spawnMutex`**, like the adds (`freeMeshInfoRange`,
+  `removeObjectContainer`, `releaseMaterial`, `freeMeshLodGroup`): an unlocked release raced a spawning job's
+  add on the free-list vector (the shutdown assert in `IndexRangeFreeList::release`, `~RockSystem`, 2026-10-07).
 * `~ObjectContainer` frees ALL renderer resources (`Renderer::removeObjectContainer`).
 * The container keeps its own copy of the source `Skeleton`, **so animators can retarget against it at
   spawn.**
@@ -2257,7 +2283,7 @@ Scene opaque, nearly all with 0 instances.
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and `Stats`; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
 | `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
-| `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) and `SlotTable` (`RecycledSlotTable<T>` — the deferred-recycle slot table every emitter/query registry uses). |
+| `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
 | `Renderer.ixx` | The whole class. One interface, **four implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
 | `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each now a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` as five phases (`attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`), then `waitFrameSlot` → `beginFrame` (+ its job kick/join) → `present`. |
 | `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo` and the `buildUbo*` helpers that write its root values through `m_u`'s handles by subject (views, weather, ray tracing, sky, clouds, sun shadow, fog, ocean, force, terrain, grass, foliage, post). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs, and `m_ubo` persists across frames (the view build reprojects from last frame's mvps). |

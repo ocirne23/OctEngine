@@ -34,10 +34,10 @@ public:
     const ParticleParams& getParams() const { return Globals::settings.particles; }
     bool isEnabled() const { return Globals::settings.particles.enabled; }
 
-    // ---- Emitters + spawns (spawn path, caller holds the spawn mutex) ----
-    uint32 createEmitter(uint32 frameCounter, const RendererVKLayout::ParticleEmitterGpu& desc)
+    // ---- Emitters + spawns (spawn path, lock-free: RecycledSlotTable) ----
+    uint32 createEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
     {
-        const uint32 slot = m_emitters.create(frameCounter);
+        const uint32 slot = m_emitters.create();
         if (slot != UINT32_MAX)
             m_emitters[slot] = desc;
         return slot;
@@ -53,6 +53,7 @@ public:
         m_emitters[slot].texFlags.y |= RendererVKLayout::PARTICLE_FLAG_KILL;
         m_emitters.retire(slot, frameCounter);
     }
+    void recycleEmitters(uint32 frameCounter) { m_emitters.recycle(frameCounter); } // main thread, once per frame
     void emit(uint32 slot, uint32 count)
     {
         assert(m_emitters.isValid(slot));

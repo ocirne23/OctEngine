@@ -50,6 +50,8 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         return; // destroyed (freeRenderNode clears the instances), empty, or masked out by its owner
     if (node.m_transformIdx >= m_instances.getMaxRenderNodes())
         return; // spawned past the node buffers this frame: skipped until the capacity grows at the next beginFrame
+    if (node.m_lodStateBase != UINT32_MAX && node.m_lodStateBase + numInstances > m_meshLods.getStateCapacity())
+        return; // the same for its LOD state range (MeshLodRegistry::growStateToPendingDemand)
     const uint32 startIdx = m_instances.claimInstances(numInstances);
     if (startIdx == UINT32_MAX)
         return; // did not fit this frame: the node is dropped and the capacity grows at the next beginFrame
@@ -129,10 +131,22 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, Instance
 
 uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
 {
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
     const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
     const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
         | (uint32(c.z * 255.0f + 0.5f) << 16);
+    // Lock-free hit (every spawn of a tinted entity after the colour's first): linear probe until an empty entry.
+    const uint32 home = (key * 2654435761u) >> 22; // 10 bits: SOLID_COLOR_TABLE_SIZE
+    static_assert(SOLID_COLOR_TABLE_SIZE == 1024);
+    for (uint32 i = 0; i < SOLID_COLOR_TABLE_SIZE; ++i)
+    {
+        const uint64 entry = m_solidColorTable[(home + i) & (SOLID_COLOR_TABLE_SIZE - 1)].load(oc::memory_order_acquire);
+        if (entry == 0)
+            break;
+        if ((entry >> 16) == (uint64)key + 1)
+            return (uint16)entry;
+    }
+
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
     if (const auto it = m_solidColorMaterials.find(key); it != m_solidColorMaterials.end())
         return it->second;
 
@@ -161,6 +175,17 @@ uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
     material.alphaMode = 0;
     const uint16 materialIdx = (uint16)addMaterialInfos({ material });
     m_solidColorMaterials.emplace(key, materialIdx);
+    // Publish to the lock-free mirror (inserts only happen here, under the lock). A full mirror just leaves
+    // the colour on the locked path.
+    for (uint32 i = 0; i < SOLID_COLOR_TABLE_SIZE; ++i)
+    {
+        oc::atomic<uint64>& entry = m_solidColorTable[(home + i) & (SOLID_COLOR_TABLE_SIZE - 1)];
+        if (entry.load(oc::memory_order_relaxed) == 0)
+        {
+            entry.store((((uint64)key + 1) << 16) | materialIdx, oc::memory_order_release);
+            break;
+        }
+    }
     // No re-record: the texture upload queued the slot's bindless write for every consuming set
     // (TextureManager::upload -> TextureStreamer::queueDescriptorWrite), and the material row is a
     // shared-buffer upload. Capacity growth (textures or materials) invalidates on its own.
@@ -237,6 +262,7 @@ void Renderer::destroyTextureMaterial(uint16 materialIdx)
     m_textures.queueFree(oc::span<const uint16>(&material.diffuseTexIdx, 1));
     if (material.normalTexIdx != RendererVKLayout::FALLBACK_NORMAL_TEX_IDX)
         m_textures.queueFree(oc::span<const uint16>(&material.normalTexIdx, 1));
+    const std::lock_guard lock(m_spawnMutex); // see freeMeshInfoRange
     m_materials.release(materialIdx, 1);
 }
 
@@ -249,6 +275,7 @@ uint16 Renderer::deriveMaterial(uint16 source, uint32 extraFlags)
 
 void Renderer::releaseMaterial(uint16 materialIdx)
 {
+    const std::lock_guard lock(m_spawnMutex); // see freeMeshInfoRange
     m_materials.release(materialIdx, 1);
 }
 
@@ -354,8 +381,7 @@ uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)
 
 uint32 Renderer::addRenderNodeTransform(const Transform& transform)
 {
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    return m_instances.allocateTransform(transform);
+    return m_instances.allocateTransform(transform); // lock-free (TransformSlots)
 }
 
 void RenderNode::destroy()
@@ -371,20 +397,19 @@ void RenderNode::destroy()
 // simply never reference the freed slots.
 void Renderer::freeRenderNode(RenderNode& node)
 {
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     if (node.m_transformIdx != UINT32_MAX)
     {
-        m_instances.freeTransform(node.m_transformIdx);
+        m_instances.freeTransform(node.m_transformIdx); // lock-free (TransformSlots)
         node.m_transformIdx = UINT32_MAX;
     }
     if (node.m_skinnedBundleHandle != UINT32_MAX)
     {
-        releaseSkinnedBundle(node.m_skinnedBundleHandle);
+        releaseSkinnedBundle(node.m_skinnedBundleHandle); // lock-free: queued, parked at the next beginFrame
         node.m_skinnedBundleHandle = UINT32_MAX;
     }
     if (node.m_lodStateBase != UINT32_MAX)
     {
-        m_meshLods.releaseStateRange(node.m_lodStateBase, (uint32)node.m_meshInstances.size());
+        m_meshLods.releaseStateRange(node.m_lodStateBase, (uint32)node.m_meshInstances.size()); // lock-free
         node.m_lodStateBase = UINT32_MAX;
     }
     node.m_meshInstances.clear();
@@ -485,9 +510,13 @@ void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
 
     // Parked skinned bundles first (they free MeshInfos/output regions that reference the sources).
     // Every live RenderNode must have been destroyed before the container, so all of its bundles are
-    // parked in m_freeSkinnedBundles by now.
+    // parked by now - after the drain, since a despawn only queues its bundle (queuePark).
     if (container.m_baseSkinnedMeshIdx != UINT32_MAX)
     {
+        {
+            const std::lock_guard lock(m_spawnMutex);
+            m_skinned.drainParks();
+        }
         const oc::span<const uint32> parked = m_skinned.getParkedBundles(container.m_baseSkinnedMeshIdx);
         // Copied: destroySkinnedBundle writes the registry's bundle table, which the span points into.
         const oc::vector<uint32> handles(parked.begin(), parked.end());
@@ -511,6 +540,8 @@ void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
         }
     }
 
+    // The shared tables' releases under the lock their adds take (parallel entity spawning): see freeMeshInfoRange.
+    const std::lock_guard lock(m_spawnMutex);
     freeMeshInfoRange(container.m_baseMeshInfoIdx, container.m_numMeshInfos);
     m_materials.release(container.m_baseMaterialInfoIdx, (uint32)container.m_materialNames.size());
 
@@ -535,6 +566,10 @@ void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
 {
     if (count == 0)
         return;
+    // The add side (addMeshInfos) runs on spawning jobs under this lock: an unlocked release raced it on the table's
+    // free list (a corrupted range vector - the shutdown assert in IndexRangeFreeList::release, 2026-10-07, where
+    // ~RockSystem freed its meshes on main while job workers still created meshes). Recursive: callers may hold it.
+    const std::lock_guard lock(m_spawnMutex);
     // Neutralize the slots: zero indexCount makes the cull's DGC draws, the shadow pass and the TLAS
     // writer no-ops for any instance still referencing them this frame (a node pushed before the
     // container died), exactly like streamed-out meshes.
@@ -672,12 +707,11 @@ void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
 }
 
-// The emitter slot contract (KILL flag drain, retirement) lives in ParticleState; the mutex here is
-// the spawn one, taken for parallel entity spawning.
+// The emitter slot contract (KILL flag drain, retirement) lives in ParticleState; the slot table is
+// lock-free (parallel entity spawning).
 uint32 Renderer::createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
-    const std::lock_guard lock(m_spawnMutex);
-    return m_particles.createEmitter(m_frameCounter, desc);
+    return m_particles.createEmitter(desc);
 }
 
 void Renderer::updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc)
@@ -692,7 +726,6 @@ void Renderer::emitParticles(uint32 slot, uint32 count)
 
 void Renderer::destroyParticleEmitter(uint32 slot)
 {
-    const std::lock_guard lock(m_spawnMutex);
     m_particles.destroyEmitter(slot, m_frameCounter);
 }
 
@@ -701,12 +734,11 @@ void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& 
     m_particles.requestRainVolume(center, halfExtents);
 }
 
-// Every force slot mutator takes the spawn mutex (parallel entity spawning); the slot bookkeeping and
-// the retirement contract live in ForceFieldState.
+// The force slot tables are lock-free (parallel entity spawning); the slot bookkeeping and the
+// retirement contract live in ForceFieldState.
 uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
 {
-    const std::lock_guard lock(m_spawnMutex);
-    return m_force.createEmitter(m_frameCounter, desc);
+    return m_force.createEmitter(desc);
 }
 
 void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc)
@@ -716,14 +748,12 @@ void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmit
 
 void Renderer::destroyForceEmitter(uint32 slot)
 {
-    const std::lock_guard lock(m_spawnMutex);
     m_force.destroyEmitter(slot, m_frameCounter);
 }
 
 uint32 Renderer::createForceQuerySlot()
 {
-    const std::lock_guard lock(m_spawnMutex);
-    return m_force.createQuery(m_frameCounter);
+    return m_force.createQuery();
 }
 
 void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
@@ -733,7 +763,6 @@ void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
 
 void Renderer::destroyForceQuerySlot(uint32 slot)
 {
-    const std::lock_guard lock(m_spawnMutex);
     m_force.destroyQuery(slot, m_frameCounter);
 }
 

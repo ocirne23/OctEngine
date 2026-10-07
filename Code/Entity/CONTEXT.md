@@ -562,10 +562,11 @@ Each seam locks ONLY create/destroy — **the parallel-pass hot paths stay lock-
 | Resource | Protection |
 |---|---|
 | EntityAllocator, `treeAllocSize` / `treeNetworkCount` caches | Already lock-free / benign-race |
-| Spatial `registerEntry` / `unregisterEntry` | `m_registerMutex` EXCLUSIVE (pool growth reallocates the SoA); `query*` take it SHARED, since a spawn job's script `OnSpawn` may query while another worker registers. The `markVisible*` traversals stay lock-free — the cull kick/join window forbids registration. |
+| Spatial `registerEntry` / `unregisterEntry` | LOCK-FREE, and so are the `query*` beside them: the record pool's rows are `VirtualArray`s that never move (see "The record pool" in Spatial). The cull kick/join window still forbids registration. |
 | `OcclusionBuffer` add/remove | Mutex (PhysicsComponent spawn and resume) |
 | box3d body create/destroy | The Physics-module `g_bodyLifecycleMutex` |
-| Renderer slot/registry allocators — transform slots, mesh/material/instance-offset registries, LOD state, skinned bundles/palettes/job ranges, solid-colour materials, force and particle slots | ONE RECURSIVE `Renderer::m_spawnMutex`, held whole-body by `spawnNodeForIdx` / `spawnSkinnedNode` |
+| Renderer transform slots, LOD state ranges, force / particle slots, solid-colour tint HITS, skinned despawns (queued, parked at beginFrame) | LOCK-FREE (RendererVK `Util/SlotAlloc.ixx`; see "The per-entity spawn allocators" in RendererVK) |
+| Renderer registries — mesh/material/instance-offset tables (adds AND releases), LOD groups, skinned bundles/palettes/job ranges, a NEW solid-colour material | ONE RECURSIVE `Renderer::m_spawnMutex`; `spawnSkinnedNode` holds it over its bundle work |
 | `MeshDataManager` range alloc/free, `TextureManager` upload/free | Mutex each |
 | ForceSystem create/destroy | Mutex, plus `m_emitters` / `m_queries` RESERVED to the renderer caps at initialize so growth never reallocates under a concurrent handle resolve |
 | ParticleSystem effect create/destroy/cache | Mutex held only for the map and vector work — the `.pfx` load, texture loads and renderer slot creation run outside it |
@@ -807,7 +808,7 @@ are gone.
 * **Open cost, in RendererVK:** the submit is one `Renderer::renderNode` per bone — per call an
   atomic claim on the shared instance cursor, per-mesh atomic counts and the texture-use note (a
   `log2` + three `noteUse`). A batched submit for one model (one claim, one texture note) is the
-  next step; so is a batched spawn (`spawnNodeForIdx` takes the renderer spawn mutex per bone).
+  next step; a bone spawn (`spawnNodeForIdx`) takes no renderer lock after warm-up.
 * **The walk drives itself**: the component measures the planar (XZ) distance its OWN entity moved
   since the last tick, so no script or gameplay code sets a speed. It runs AFTER
   `PhysicsComponent::update` in `updateSelf`, so the distance has this frame's pose. The distance is

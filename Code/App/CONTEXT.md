@@ -82,6 +82,7 @@ and `physics.setWaterSurface`.
 |---|---|
 | `--game` | The whitebox game instead of the testbed scene. **Refused with `--headless`** — GPU field readbacks drive the authority sim. |
 | `--coop` | PvE. **Needs `--game`**; clients pass it too, since the layout is local. |
+| `--sandbox` | Skips the main menu and boots straight into the sandbox (the command-line testbed path, `startWorldAndGame(false, ...)`). Ignored with `--game`. |
 | `--server` / `--connect <ip>` / `--port N` / `--tickrate N` / `--headless` / `--no-encrypt` | |
 | `--scenario <save\|default>` / `--scenario-at <sec>` | |
 | `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` / `--profile-workers` | |
@@ -91,7 +92,7 @@ and `physics.setWaterSurface`.
 | `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Parsed in `main` itself, before the window exists. |
 
 **The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
-`--game`, not an unattended run (`--profile-after` or `--quit-after`), and no `--scenario`.
+`--game`, not `--sandbox`, not an unattended run (`--profile-after` or `--quit-after`), and no `--scenario`.
 
 ## One-shot tools (`App.Tools`)
 

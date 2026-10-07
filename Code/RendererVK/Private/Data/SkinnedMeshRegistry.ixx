@@ -5,6 +5,7 @@ import Core.glm;
 import :Layout;
 import :MeshLodRegistry; // IndexRangeFreeList
 import :AccelerationStructure;
+import :SlotAlloc;
 
 // THE CPU side of skinning, owned by the Renderer: the per-instance skinning jobs and their parallel
 // skinned-BLAS builds, the bone palette store, the per-container source table, and the BUNDLES that
@@ -19,7 +20,8 @@ import :AccelerationStructure;
 //    because the store is a bump allocator with no sub-range tracking;
 //  * a job range is one CONTIGUOUS block per bundle, from the free list when one fits.
 //
-// NOT internally locked: every mutator runs under the Renderer's spawn mutex (parallel entity spawning).
+// NOT internally locked: every mutator runs under the Renderer's spawn mutex (parallel entity spawning),
+// except queuePark - a despawn only queues its bundle, drainParks parks it under the lock.
 // It knows nothing about the device or the pipelines - a capacity growth calls back out.
 export class SkinnedMeshRegistry final
 {
@@ -67,7 +69,14 @@ public:
 
     // ---- Bundles ----
     uint32 registerBundle(const Bundle& bundle);
-    void parkBundle(uint32 bundleHandle);              // node destroyed: entries go inert, handle joins its source's park list
+    // Node destroyed, LOCK-FREE (any worker): the handle joins a pending stack. Its entries stay live (the
+    // dead node is never pushed, so it only costs a skinning job and a BLAS rebuild) until drainParks.
+    void queuePark(uint32 bundleHandle)
+    {
+        m_pendingParks.push(bundleHandle, [this](uint32 h) -> oc::atomic<uint32>& { return m_parkLinks[h]; });
+    }
+    // Caller holds the spawn mutex: parks every queued bundle (beginFrame; removeObjectContainer first).
+    void drainParks();
     uint32 acquireBundle(uint32 sourceKey);            // reactivates + returns a parked bundle, UINT32_MAX if none free
     const Bundle& getBundle(uint32 handle) const { return m_bundles[handle]; }
     // The parked bundles of one container, so the Renderer can free each one's MeshInfos/LOD groups
@@ -92,6 +101,8 @@ public:
 private:
     struct PaletteRegion { uint32 offset; uint32 boneCount; };
 
+    void parkBundle(uint32 bundleHandle); // entries go inert, handle joins its source's park list
+
     oc::function<void(uint32)> m_onPaletteGrown;
     oc::function<void(uint32)> m_onJobsGrown;
 
@@ -104,6 +115,8 @@ private:
     oc::vector<Bundle> m_bundles;
     oc::unordered_map<uint32, oc::vector<uint32>> m_parkedBundles; // sourceKey -> parked bundle handles
     oc::vector<uint32> m_freeBundleSlots;
+    SlotStack m_pendingParks;                     // queuePark -> drainParks
+    PagedArray<oc::atomic<uint32>> m_parkLinks;   // per bundle handle (ensured at registerBundle)
     oc::vector<uint32> m_freePaletteHandles; // regions reused on exact boneCount match
     IndexRangeFreeList m_freeJobSlots;       // freed slots stay inert (vertexCount/indexCount 0)
     IndexRangeFreeList m_freeSourceSlots;

@@ -14,8 +14,8 @@ import :ForceFieldPipeline;
 //
 // BOTH registries hand out STABLE indices across the ~2-frame readback latency, which is why they are
 // RecycledSlotTables and not a lock-free per-frame push: the emitter force readback and the query
-// results are slot-indexed, so a slot must not be re-issued while stale results can still land. The
-// caller holds the Renderer's spawn mutex around every mutator.
+// results are slot-indexed, so a slot must not be re-issued while stale results can still land. Their
+// create / destroy are lock-free (parallel entity spawning); recycleSlots runs once per frame on main.
 //
 // Everything here is read by buildUboForce and the force record, which stay in the Renderer.
 export class ForceFieldState final
@@ -36,9 +36,9 @@ public:
     bool isEnabled() const { return m_params.enabled; }
 
     // ---- Emitters. A destroyed slot keeps FORCE_FLAG_ACTIVE cleared until the in-flight frames drain. ----
-    uint32 createEmitter(uint32 frameCounter, const RendererVKLayout::ForceEmitterGpu& desc)
+    uint32 createEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
     {
-        const uint32 slot = m_emitters.create(frameCounter);
+        const uint32 slot = m_emitters.create();
         if (slot == UINT32_MAX)
             return slot;
         m_emitters[slot] = desc;
@@ -59,9 +59,9 @@ public:
     oc::span<const RendererVKLayout::ForceEmitterGpu> getEmitters() const { return m_emitters.slots(); }
 
     // ---- Point-query slots (same contract; inactive until the first setQuery) ----
-    uint32 createQuery(uint32 frameCounter)
+    uint32 createQuery()
     {
-        const uint32 slot = m_queries.create(frameCounter);
+        const uint32 slot = m_queries.create();
         if (slot != UINT32_MAX)
             m_queries[slot].posActive = glm::vec4(0.0f);
         return slot;
@@ -76,6 +76,11 @@ public:
         assert(m_queries.isValid(slot));
         m_queries[slot].posActive = glm::vec4(0.0f);
         m_queries.retire(slot, frameCounter);
+    }
+    void recycleSlots(uint32 frameCounter) // main thread, once per frame
+    {
+        m_emitters.recycle(frameCounter);
+        m_queries.recycle(frameCounter);
     }
     oc::span<const RendererVKLayout::ForceQueryGpu> getQueries() const { return m_queries.slots(); }
 
