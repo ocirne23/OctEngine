@@ -17,9 +17,9 @@ export struct TweakLockToggle
 // Tweaks editor panel and the main menu's Settings page. A changed var is only
 // COLLECTED into deferredCallbacks (main-thread work - see TweakPanel::flushDeferredCallbacks).
 // deferredLocks set: a row a lock covers gets its lock button in front (the panel; the Settings page
-// passes none and only greys a locked row).
+// passes none and only greys a locked row). highlight = search terms to mark in the row's name.
 export void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks,
-	oc::vector<TweakLockToggle>* deferredLocks = nullptr);
+	oc::vector<TweakLockToggle>* deferredLocks = nullptr, oc::span<const oc::string_view> highlight = {});
 
 export class TweakPanel
 {
@@ -37,6 +37,7 @@ public:
 	oc::vector<const TweakVar*>& deferredCallbacks() { return m_deferredCallbacks; }
 
 private:
+	char m_search[128] = {};
 	oc::vector<const TweakVar*> m_deferredCallbacks;
 	oc::vector<TweakLockToggle> m_deferredLocks; // lock clicks: TweakRegistry::setLocked / setVarLocked on main
 };
