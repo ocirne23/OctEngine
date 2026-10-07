@@ -574,7 +574,8 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         }
 
         vk::ImageMemoryBarrier2 toSampled{
-            .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+            // The copy stage too: the readback copy above reads READBACK_MIP before this transition (WAR).
+            .srcStageMask = vk::PipelineStageFlagBits2::eBlit | vk::PipelineStageFlagBits2::eCopy,
             .srcAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
             // Compute included: the spray step below samples the finished maps.
             .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,

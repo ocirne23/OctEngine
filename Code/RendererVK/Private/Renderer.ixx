@@ -762,7 +762,13 @@ private:
     float m_farTreeCameraGround = std::numeric_limits<float>::quiet_NaN(); // setFarTreeCameraGround
     bool farTreesActive() const; // enabled, desktop, and a tree set with volume data
     float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)
-    void recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary); // bake when due + march (straight into the primary)
+    // The far-tree volume's bake when due, then `march` with this frame's record params (the march's phases run in the
+    // post-scene compute group). Straight into the primary.
+    void recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const oc::function<void(const TreeVolumePipeline::RecordParams*)>& march);
+    // THE POST-SCENE COMPUTE GROUP (desktop): RTAO, the cloud march and the far-tree march - each reads this frame's
+    // depth, none another's output - phase by phase, interleaved, with ONE barrier between phases instead of each pass's
+    // own ("Renderer/Overlap compute"; off: one pass after the other, each with its own GPU scope).
+    void recordPostSceneCompute(uint32 frameIdx, vk::CommandBuffer primary);
     void recordFarTreesApply(uint32 frameIdx);                        // the scene stage's cached secondary
     // PROCEDURAL GRASS: the patch cull + buffers (the blades draw in m_staticMeshGraphicsPipeline). The ground chunks
     // arrive per frame (setGrassGround) and go into the slot's ground table in present (uploadGrassFrame).
@@ -894,7 +900,9 @@ private:
 
         CommandBuffer primaryCommandBuffer;
         CommandBuffer staticMeshCommandBuffer;
-        CommandBuffer aoCommandBuffer;
+        // One cached secondary per PHASE (desktop): the post-scene compute group interleaves them with the other passes'
+        // (recordPostSceneCompute). RTAO: the trace, the temporal pass, the blur; the clouds: the march, the temporal pass.
+        oc::array<CommandBuffer, 3> aoCommandBuffers;
         CommandBuffer indirectCullCommandBuffer;
         CommandBuffer skinningCommandBuffer;
         CommandBuffer oceanSimCommandBuffer;
@@ -909,7 +917,7 @@ private:
         CommandBuffer giPrepCommandBuffer;
         CommandBuffer volumetricFogCommandBuffer;
         CommandBuffer fogApplyCommandBuffer;
-        CommandBuffer cloudCommandBuffer;
+        oc::array<CommandBuffer, 2> cloudCommandBuffers;
         CommandBuffer cloudApplyCommandBuffer;
         CommandBuffer farTreesApplyCommandBuffer;
         CommandBuffer giProbeDebugCommandBuffer;

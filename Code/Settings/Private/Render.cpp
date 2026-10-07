@@ -455,6 +455,7 @@ void Settings::registerRenderer(RendererSettings& s)
     Tweak::enumVar("Renderer/Textures", "Anisotropy", &s.anisotropyLevel, s_anisotropyNames, {}, ETweakFlags::Saved);
     Tweak::boolean("Decals", "Enabled", &s.decals);
     Tweak::boolean("Renderer", "Log pipeline stats", &s.logPipelineStats); // F5 re-creates the pipelines with it
+    Tweak::boolean("Renderer", "Overlap compute", &s.overlapCompute);
     Tweak::boolean("Time", "VSync", &s.vsync, {}, ETweakFlags::Saved);
     Tweak::boolean("Terrain/Water", "Diffusion on", &s.terrainWetDiffusion);
 }

@@ -248,7 +248,9 @@ void Renderer::initPerFrameResources()
 
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.primary");
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMesh");
-        perFrame.aoCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rtao");
+        perFrame.aoCommandBuffers[0].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTrace");
+        perFrame.aoCommandBuffers[1].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTemporal");
+        perFrame.aoCommandBuffers[2].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoBlur");
         perFrame.indirectCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.indirectCull");
         perFrame.skinningCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.skinning");
         perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.oceanSim");
@@ -263,7 +265,8 @@ void Renderer::initPerFrameResources()
         perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giPrep");
         perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.volumetricFog");
         perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.fogApply");
-        perFrame.cloudCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.clouds");
+        perFrame.cloudCommandBuffers[0].initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudMarch");
+        perFrame.cloudCommandBuffers[1].initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudTemporal");
         perFrame.cloudApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.cloudApply");
         perFrame.farTreesApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.farTreesApply");
         perFrame.giProbeDebugCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giProbeDebug");

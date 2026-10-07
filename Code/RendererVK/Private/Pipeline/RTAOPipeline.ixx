@@ -51,6 +51,12 @@ public:
         Buffer& materialInfos;
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params);
+    // PHASED (the renderer's post-scene compute group, desktop): one pass at a time - 0 the trace, 1 the temporal pass,
+    // 2 the blur (numPhases: 2 with the blur off) - WITHOUT barriers: the caller orders them, interleaved with the other
+    // passes of the group. The images stay in GENERAL from creation, so only execution / memory dependencies are needed
+    // (Renderer::recordPostSceneCompute). record() is the phases with barriers of their own (VR).
+    uint32 numPhases() const { return m_pParams && m_pParams->blurRadius > 0 ? 3u : 2u; }
+    void recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params, uint32 phase);
     // Rewrites one slot of the trace sets' texture array (binding 10, all eyes) with a streamed texture's current view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
 

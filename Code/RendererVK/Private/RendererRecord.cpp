@@ -413,12 +413,25 @@ void Renderer::recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
     m_cloudPipeline.record(cb, frameIdx, eyeIndex, params);
 }
 
+// Desktop: the march and the temporal pass as two cached secondaries (recordPostSceneCompute interleaves them).
 void Renderer::recordClouds(uint32 frameIdx)
 {
-    CommandBuffer& cb = m_perFrameData[frameIdx].cloudCommandBuffer;
-    beginComputeSecondary(cb);
-    recordCloudsInto(cb, frameIdx, 0);
-    cb.end();
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    const CloudPipeline::RecordParams params{
+        .ubo = frameData.ubo,
+        .sceneDepthView = frameData.sceneColor.getDepthView(0),
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
+        .skyMapView = m_giProbePipeline.getSkyMapView(),
+        .skyMapSampler = m_giProbePipeline.getSkyMapSampler(),
+    };
+    static_assert(CloudPipeline::NUM_PHASES == 2, "PerFrameData::cloudCommandBuffers holds one secondary per phase");
+    for (uint32 phase = 0; phase < CloudPipeline::NUM_PHASES; ++phase)
+    {
+        CommandBuffer& cb = frameData.cloudCommandBuffers[phase];
+        beginComputeSecondary(cb);
+        m_cloudPipeline.recordPhase(cb, frameIdx, 0, params, phase);
+        cb.end();
+    }
 }
 
 // Cloud apply draw for one eye, inside the eye's scene-colour render pass (the fog apply's viewport setup).
@@ -657,8 +670,10 @@ void Renderer::recordAO(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
-    CommandBuffer& cb = frameData.aoCommandBuffer;
-    beginComputeSecondary(cb);
+    // One secondary per phase (recordPostSceneCompute interleaves them), every one begun and ended: a phase the frame
+    // does not use (RT off, the blur off) is an empty secondary.
+    for (CommandBuffer& cb : frameData.aoCommandBuffers)
+        beginComputeSecondary(cb);
     const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx);
     if (m_rtParams.enabled && m_rtaoParams.enabled && m_meshInfos.count() > 0 && tlas)
     {
@@ -676,9 +691,11 @@ void Renderer::recordAO(uint32 frameIdx)
             .meshInstances = instances.meshInstances,
             .materialInfos = m_materials.getBuffer(),
         };
-        m_rtaoPipeline.record(cb, frameIdx, 0, aoParams);
+        for (uint32 phase = 0; phase < m_rtaoPipeline.numPhases(); ++phase)
+            m_rtaoPipeline.recordPhase(frameData.aoCommandBuffers[phase], frameIdx, 0, aoParams, phase);
     }
-    cb.end();
+    for (CommandBuffer& cb : frameData.aoCommandBuffers)
+        cb.end();
 }
 
 void Renderer::recordVolumetricFog(uint32 frameIdx)
@@ -1193,6 +1210,121 @@ void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::C
     m_gpuProfiler.endScope(primary);
 }
 
+// A compute->compute barrier waits for ALL earlier compute work in the queue, not only for the resource it protects:
+// with each pass behind barriers of its own, three latency-bound passes ran one after the other, the SMs draining at
+// every boundary. Here every pass of the group records one PHASE at a time (no barriers inside), and the group puts ONE
+// barrier between phases - the passes of a phase run side by side. The barriers are the union of the passes' own:
+//   in  - the depth (parked before), the sky map and the cloud shadow (compute), the TLAS (built in the GI step), this
+//         slot's images last read by their applies (fragment) / temporal passes (compute), the far march's restart clear;
+//   mid - a phase's storage writes -> the next phase's reads;
+//   out - the results -> the scene stages' applies (fragment) and next frame's history reads (compute).
+// "Renderer/Overlap compute" off: the same barriers around each pass alone, each in its own GPU scope (per-pass timing).
+void Renderer::recordPostSceneCompute(uint32 frameIdx, vk::CommandBuffer primary)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    const auto group = [&](const TreeVolumePipeline::RecordParams* treeParams)
+    {
+        struct Pass
+        {
+            const char* name;
+            uint32 phases;
+            const char* const* phaseNames; // one GPU scope per pass per phase
+        };
+        static constexpr const char* AO_PHASES[] = { "RTAO trace", "RTAO temporal", "RTAO blur" };
+        static constexpr const char* CLOUD_PHASES[] = { "Cloud march", "Cloud temporal" };
+        static constexpr const char* TREE_PHASES[] = { "Far trees march", "Far trees temporal", "Far trees upsample" };
+        const uint32 treePhases = treeParams ? m_treeVolume.marchPrepare(primary, *treeParams) : 0u;
+        const oc::array<Pass, 3> passes{
+            Pass{ "RTAO", m_rtaoParams.enabled ? m_rtaoPipeline.numPhases() : 0u, AO_PHASES },
+            Pass{ "Cloud march", cloudsEnabled() ? CloudPipeline::NUM_PHASES : 0u, CLOUD_PHASES },
+            Pass{ "Far trees", treePhases, TREE_PHASES },
+        };
+        const auto recordPhase = [&](uint32 pass, uint32 phase)
+        {
+            if (pass == 2)
+            {
+                m_treeVolume.recordMarchPhase(primary, frameIdx, phase, *treeParams);
+                return;
+            }
+            const vk::CommandBuffer secondary = (pass == 0 ? frameData.aoCommandBuffers[phase] : frameData.cloudCommandBuffers[phase]).getCommandBuffer();
+            primary.executeCommands(1, &secondary);
+        };
+        const auto barrier = [&](vk::PipelineStageFlags2 srcStages, vk::AccessFlags2 srcAccess, vk::PipelineStageFlags2 dstStages, vk::AccessFlags2 dstAccess)
+        {
+            const vk::MemoryBarrier2 b{ .srcStageMask = srcStages, .srcAccessMask = srcAccess, .dstStageMask = dstStages, .dstAccessMask = dstAccess };
+            primary.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &b });
+        };
+        using S = vk::PipelineStageFlagBits2;
+        using A = vk::AccessFlagBits2;
+        const auto barrierIn = [&]
+        {
+            barrier(S::eComputeShader | S::eFragmentShader | S::eClear | S::eAccelerationStructureBuildKHR,
+                A::eShaderSampledRead | A::eShaderStorageRead | A::eShaderStorageWrite | A::eTransferWrite | A::eAccelerationStructureWriteKHR,
+                S::eComputeShader,
+                A::eShaderSampledRead | A::eShaderStorageRead | A::eShaderStorageWrite | A::eAccelerationStructureReadKHR);
+        };
+        const auto barrierMid = [&]
+        {
+            barrier(S::eComputeShader, A::eShaderStorageWrite, S::eComputeShader, A::eShaderSampledRead | A::eShaderStorageRead);
+        };
+        const auto barrierOut = [&]
+        {
+            barrier(S::eComputeShader, A::eShaderStorageWrite, S::eComputeShader | S::eFragmentShader, A::eShaderSampledRead | A::eShaderStorageRead);
+        };
+
+        uint32 maxPhases = 0;
+        for (const Pass& pass : passes)
+            maxPhases = oc::max(maxPhases, pass.phases);
+        if (maxPhases == 0)
+            return;
+        if (Globals::settings.renderer.overlapCompute)
+        {
+            // One GPU scope per PHASE (its ends sit at the barriers) and inside it one per PASS. The passes of a phase run
+            // one after the other in practice (Nsight GPU Trace, 2026-10-07: the cloud march and the far march back to
+            // back, no overlap), so a pass's bottom-of-pipe stamp waits for nothing but its own dispatch: exact, free.
+            static constexpr const char* PHASE_NAMES[] = { "Trace + marches", "Temporal passes", "Blur + upsample" };
+            m_gpuProfiler.beginScope(primary, "Post-scene compute");
+            barrierIn();
+            for (uint32 phase = 0; phase < maxPhases; ++phase)
+            {
+                if (phase > 0)
+                    barrierMid();
+                m_gpuProfiler.beginScope(primary, PHASE_NAMES[oc::min(phase, 2u)]);
+                for (uint32 p = 0; p < (uint32)passes.size(); ++p)
+                    if (phase < passes[p].phases)
+                    {
+                        m_gpuProfiler.beginScope(primary, passes[p].phaseNames[phase]);
+                        recordPhase(p, phase);
+                        m_gpuProfiler.endScope(primary);
+                    }
+                m_gpuProfiler.endScope(primary);
+            }
+            barrierOut();
+            m_gpuProfiler.endScope(primary);
+            return;
+        }
+        for (uint32 p = 0; p < (uint32)passes.size(); ++p)
+        {
+            if (passes[p].phases == 0)
+                continue;
+            m_gpuProfiler.beginScope(primary, passes[p].name);
+            barrierIn();
+            for (uint32 phase = 0; phase < passes[p].phases; ++phase)
+            {
+                if (phase > 0)
+                    barrierMid();
+                recordPhase(p, phase);
+            }
+            barrierOut();
+            m_gpuProfiler.endScope(primary);
+        }
+    };
+    if (farTreesActive())
+        recordFarTrees(frameIdx, primary, group);
+    else
+        group(nullptr);
+}
+
 // Every cached secondary, on invalidation frames only (setHaveToRecordCommandBuffers).
 // THE scene stage table (see Renderer.ixx): name, gate, cached secondary and per-eye inline recorder.
 // Table order is draw order - the opaque group first (it writes the depth), then the layered group.
@@ -1545,14 +1677,9 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     recordSceneOpaqueToSampled(vkCommandBuffer, sceneColor, 0);
     m_gpuProfiler.endScope(vkCommandBuffer); // Scene opaque
 
-    if (m_rtaoParams.enabled)
-        executeScoped(vkCommandBuffer, "RTAO", frameData.aoCommandBuffer.getCommandBuffer());
-    // Cloud march + temporal: reads this frame's (now read-only) depth; the "Cloud apply" scene stage composites it.
-    if (cloudsEnabled())
-        executeScoped(vkCommandBuffer, "Cloud march", frameData.cloudCommandBuffer.getCommandBuffer());
-    // The far-tree volume: bake when due + march (straight into the primary); the "Far trees apply" stage composites it.
-    if (farTreesActive())
-        recordFarTrees(frameIdx, vkCommandBuffer);
+    // RTAO, the cloud march + temporal and the far-tree march, interleaved: each reads this frame's (now read-only)
+    // depth; the "Cloud apply" / "Far trees apply" scene stages composite the latter two.
+    recordPostSceneCompute(frameIdx, vkCommandBuffer);
 
     // The union march's interval pass + the half-res march: their render passes begin/end HERE (a
     // secondary cannot begin one), the draws are cached secondaries (recordForceMarch). Gated like the

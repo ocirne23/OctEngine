@@ -98,11 +98,13 @@ void InstanceStream::recordPrevCopy(vk::CommandBuffer cb, uint32 frameIdx, uint3
 
 void InstanceStream::createInstanceBuffer(FrameSlot& s)
 {
-    // Kept cached/random: growInstances reads the existing mapping to preserve in-flight instances
-    // across a resize, so this buffer must stay CPU-readable.
+    // SEQUENTIAL WRITE: VMA places it in device-local host-visible memory (ReBAR) where the GPU has it - the culls, the
+    // TLAS instance write and every ray-query hit read it each frame; in cached SYSTEM memory (its first version) each
+    // of those reads crossed PCIe. The CPU only memcpys whole blocks in. growInstances still reads the mapping back
+    // to preserve in-flight instances across a resize: uncached, slow, and rare.
     s.meshInstances.initialize(m_maxInstances * sizeof(RendererVKLayout::InMeshInstance),
         vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "MeshInstances");
+        vk::MemoryPropertyFlagBits::eHostVisible, false, "MeshInstances", BufferHostAccess::eSequentialWrite);
     s.mappedMeshInstances = s.meshInstances.mapMemory<RendererVKLayout::InMeshInstance>();
 }
 

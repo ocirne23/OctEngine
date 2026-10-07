@@ -27,7 +27,7 @@ public:
     // setNumMeshes (Renderer::addMeshInfos); addMeshLodGroup points chain levels at the RT level.
     void setNumMeshes(uint32 numMeshes);
     void setMeshAlias(uint32 meshIdx, uint32 aliasIdx);
-    uint32 getMeshAlias(uint32 meshIdx) const { return meshIdx < m_numAliasMeshes ? m_mappedMeshAlias[meshIdx] : meshIdx; }
+    uint32 getMeshAlias(uint32 meshIdx) const { return meshIdx < m_numAliasMeshes ? m_meshAlias[meshIdx] : meshIdx; }
     Buffer& getMeshAliasBuffer() { return m_meshAliasBuffer; }
 
     // Mesh streaming eviction: zeroes the mesh's BLAS-address entries (the TLAS writer masks null-BLAS
@@ -167,8 +167,12 @@ private:
 
     // mesh idx -> mesh idx whose BLAS it uses (identity = owns one). Single-buffered: entries are static
     // per mesh and written before the mesh can first be instanced.
+    // The buffer is SEQUENTIAL-WRITE (ReBAR: the TLAS instance write reads one entry per instance every frame), so the
+    // CPU never reads it: every read goes to the m_meshAlias mirror, every write to both (writeMeshAlias).
     Buffer m_meshAliasBuffer;
     oc::span<uint32> m_mappedMeshAlias;
+    oc::vector<uint32> m_meshAlias;
+    void writeMeshAlias(uint32 meshIdx, uint32 aliasIdx) { m_meshAlias[meshIdx] = aliasIdx; m_mappedMeshAlias[meshIdx] = aliasIdx; }
     uint32 m_numAliasMeshes = 0;
 
     // Double-buffered skinned BLASes (rebuilt every frame) + per-frame scratch. Allocated lazily/in place.

@@ -343,8 +343,9 @@ void CloudPipeline::generateNoise()
         toGeneral.push_back(vk::ImageMemoryBarrier2{
             .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
             .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            // The generator writes mip 0, the blits below the rest (mip >= 1 sees no other barrier before its write).
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eBlit,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eTransferWrite,
             .oldLayout = vk::ImageLayout::eUndefined,
             .newLayout = vk::ImageLayout::eGeneral,
             .image = tex->image,
@@ -608,15 +609,6 @@ oc::array<vk::DescriptorImageInfo, 4> CloudPipeline::noiseInfos() const
 void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    const uint32 viewIndex = RendererVKLayout::eyeToViewIndex(eye, m_viewCount);
-    const uint32 prevFrame = (frameIdx + RendererVKLayout::NUM_FRAMES_IN_FLIGHT - 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    const uint32 cur = slot(frameIdx, eye);
-    const uint32 prev = slot(prevFrame, eye);
-    const uint32 gx = (m_width + 7) / 8;
-    const uint32 gy = (m_height + 7) / 8;
-    const CloudPC pc{ .viewIndex = viewIndex, .width = m_width, .height = m_height, .pad = 0 };
-    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
-
     // In: the sky map (GI compute writes), and this slot's images, last read by the previous use of this
     // slot's apply (fragment) and temporal (compute) - WAR before this frame's storage writes.
     vk::MemoryBarrier2 inputBarrier{
@@ -626,7 +618,38 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
         .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eShaderStorageWrite,
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &inputBarrier });
+    recordPhase(commandBuffer, frameIdx, eye, params, 0);
+    vk::MemoryBarrier2 marchToTemporal{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &marchToTemporal });
+    recordPhase(commandBuffer, frameIdx, eye, params, 1);
+    // accum[cur] -> the apply's fragment reads (and next frame's temporal, as history)
+    vk::MemoryBarrier2 temporalToApply{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &temporalToApply });
+}
 
+void CloudPipeline::recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params, uint32 phase)
+{
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    const uint32 viewIndex = RendererVKLayout::eyeToViewIndex(eye, m_viewCount);
+    const uint32 prevFrame = (frameIdx + RendererVKLayout::NUM_FRAMES_IN_FLIGHT - 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
+    const uint32 cur = slot(frameIdx, eye);
+    const uint32 prev = slot(prevFrame, eye);
+    const uint32 gx = (m_width + 7) / 8;
+    const uint32 gy = (m_height + 7) / 8;
+    const CloudPC pc{ .viewIndex = viewIndex, .width = m_width, .height = m_height, .pad = 0 };
+    auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
+
+    if (phase == 0)
     { // -------- March --------
         const vk::DescriptorSet vkSet = m_marchSets[cur].getDescriptorSet();
         const oc::array<vk::DescriptorImageInfo, 4> noise = noiseInfos();
@@ -651,15 +674,7 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
         const uint32 marchWidth = RendererVKLayout::g_cloudShaders.checkerboard ? (m_width + 1) / 2 : m_width;
         cmd.dispatch((marchWidth + 7) / 8, gy, 1);
     }
-
-    vk::MemoryBarrier2 marchToTemporal{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &marchToTemporal });
-
+    else
     { // -------- Temporal (read march[cur] + accum[prev], write accum[cur]) --------
         const vk::DescriptorSet vkSet = m_temporalSets[cur].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 8> updates{
@@ -678,15 +693,6 @@ void CloudPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32
         cmd.pushConstants(m_temporalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
     }
-
-    // accum[cur] -> the apply's fragment reads (and next frame's temporal, as history)
-    vk::MemoryBarrier2 temporalToApply{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &temporalToApply });
 }
 
 void CloudPipeline::recordShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, uint32 cascadeMask,

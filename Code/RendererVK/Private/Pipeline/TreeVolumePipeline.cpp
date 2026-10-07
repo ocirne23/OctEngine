@@ -581,7 +581,6 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     }
     destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
-    destroyImage(m_farAmount);
     destroyImage(m_farType);
     destroyImage(m_rockSum);
     m_job.active = false; // its images are gone
@@ -618,11 +617,10 @@ void TreeVolumePipeline::createVolume(uint32 angularRes, uint32 radialRes, uint3
     }
     createImage(vk::ImageType::e2D, FLOOR_BLOCK_FORMAT, floorMaxExtent(), storageClear, m_floorBlock.image, m_floorBlock.memory, m_floorBlock.view, "TreeVolume.floorBlock");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_floorCover.image, m_floorCover.memory, m_floorCover.view, "TreeVolume.floorCover");
-    createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farAmount.image, m_farAmount.memory, m_farAmount.view, "TreeVolume.farAmount");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_farType.image, m_farType.memory, m_farType.view, "TreeVolume.farType");
     createImage(vk::ImageType::e2D, ACCUM_FORMAT, { angularRes, radialRes, 1 }, storageClear, m_rockSum.image, m_rockSum.memory, m_rockSum.view, "TreeVolume.rockSum");
     const vk::Image images[] = { m_accum.image, m_density.image, m_colour[0].image, m_colour[1].image, m_floor[0].image, m_floor[1].image,
-        m_floorCover.image, m_farAmount.image, m_farType.image, m_rockSum.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
+        m_floorCover.image, m_farType.image, m_rockSum.image, m_floorMax[0].image, m_floorMax[1].image, m_floorBlock.image };
     initGeneral(images, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }); // zero bits: also 0u for R32UI (an empty volume:
                                                                                                  // a max floor of 0 skips nothing that exists)
     m_baked = false;
@@ -667,7 +665,6 @@ TreeVolumePipeline::~TreeVolumePipeline()
     }
     destroyImage(m_floorBlock);
     destroyImage(m_floorCover);
-    destroyImage(m_farAmount);
     destroyImage(m_farType);
     destroyImage(m_rockSum);
     for (Image& out : m_out)
@@ -1018,11 +1015,8 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             cmd.clearColorImage(m_floor[back].image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range }); // 0u = no floor
             cmd.clearColorImage(m_floorCover.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
             cmd.clearColorImage(m_rockSum.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
-            if (records)
-            {
-                cmd.clearColorImage(m_farAmount.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+            if (records) // (the records' mass reuses floorCover, zeroed again at its own stage)
                 cmd.clearColorImage(m_farType.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<uint32, 4>{ UINT32_MAX, 0u, 0u, 0u } }, { range }); // no type
-            }
         }
         const uint32 slices = oc::min(job.clearPerFrame, m_accumDepth - job.progress); // texel layers
         if (slices > 0)
@@ -1188,6 +1182,20 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         // column the ground floor (where no tree floor is) and the slices from the type's height profile. After the tree
         // floors and their smoothing: a column a tree floored keeps that floor.
         // A chunk range per frame ("Far bake frames": job.massPerFrame).
+        // The mass sums into floorCover's memory (m_floorCover: the floor passes and the smoothing are done with it,
+        // no second 2D R32UI image): zeroed at this stage's first frame.
+        if (job.progress == 0)
+        {
+            const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+            cmd.clearColorImage(m_floorCover.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
+            const vk::MemoryBarrier2 clearToMass{
+                .srcStageMask = vk::PipelineStageFlagBits2::eClear,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+            };
+            cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &clearToMass });
+        }
         const uint32 count = oc::min(job.massPerFrame, job.records.numChunks - job.progress);
         const RecordsPush& h = m_recordsPush;
         PushData recordsPc(m_recordsBlock);
@@ -1202,7 +1210,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         recordsPc.set(h.chunkOffset, job.progress);
         const vk::DescriptorSet set = m_recordsSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 4> updates{
-            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farAmount.view) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorCover.view) } }, // the mass
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farType.view) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_colour[back].view) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_rockSum.view) } },
@@ -1229,7 +1237,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
                 .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
                 .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
-            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farAmount.view) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floorCover.view) } }, // the mass
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_farType.view) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_floor[back].view) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_accum.view) } },
@@ -1444,19 +1452,19 @@ void TreeVolumePipeline::recordBake(vk::CommandBuffer cmd, uint32 frameIdx, cons
         stepBake(cmd, frameIdx, params);
 }
 
-void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
+uint32 TreeVolumePipeline::marchPrepare(vk::CommandBuffer cmd, const RecordParams& params)
 {
     const FarTreeParams& s = params.settings;
     if (!ready(s))
-        return;
-    // TEMPORAL OFF (no blend, no half res) is the plain march: its own variant, its own barriers, no other image
-    // touched. On: the march at the temporal images' scale, the temporal pass, and at half res the upsample.
+        return 0;
+    // TEMPORAL OFF (no blend, no half res) is the plain march: its own variant, one phase, no other image touched. On:
+    // the march at the temporal images' scale, the temporal pass, and at half res the upsample (2 or 3 phases).
     // The scale and the pixel skip are BAKED into the variants: dispatch by what they were compiled with (prepare()
     // rebuilds them when the settings change), never by the live settings.
     const bool temporal = s.temporalPath() && m_hasTemporalImages && m_temporalScale == (s.halfRes ? 2u : 1u)
         && m_temporalBakedScale == m_temporalScale;
     if (!temporal && m_plainBakedSkip != 0 && !m_hasLatest)
-        return; // a failed variant rebuild left a skipping march without its images: no far trees this frame
+        return 0; // a failed variant rebuild left a skipping march without its images: no far trees this frame
     const uint32 scale = temporal ? m_temporalScale : 1u;
     // PIXEL SKIP: under the temporal pass only the checkerboard (the pass reconstructs; 1 of 4 runs as 1 of 2); on the
     // plain path 1 of 2 or 1 of 4, the skipped pixels filled from the persistent latest-march images.
@@ -1484,36 +1492,92 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
         cmd.clearColorImage(m_latest.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { range });
         cmd.clearColorImage(m_latestDepth.image, vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { range });
     }
-    // This slot's output was last read by its apply (fragment, frames back): WAR before this frame's writes. With the
-    // temporal pass (this frame or last), also its compute reads: the raw march, the history of the previous slot.
-    // The plain pixel skip READS and WRITES the latest images, last written by last frame's march (or the clear).
-    const bool computeSrc = temporal || m_temporalLastFrame || plainSkip;
-    const vk::MemoryBarrier2 inputBarrier{
-        // The clear's stage whenever its TRANSFER_WRITE access is listed (VUID-VkMemoryBarrier2-srcAccessMask-03915).
-        .srcStageMask = computeSrc ? vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader
-                                       | (plainSkip ? vk::PipelineStageFlagBits2::eClear : vk::PipelineStageFlags2{})
-                                   : vk::PipelineStageFlagBits2::eFragmentShader,
-        .srcAccessMask = plainSkip ? vk::AccessFlagBits2::eShaderSampledRead | vk::AccessFlagBits2::eShaderStorageWrite
-                                       | vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eTransferWrite
-                                   : vk::AccessFlagBits2::eShaderSampledRead,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = plainSkip ? vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderStorageRead
-                                   : vk::AccessFlagBits2::eShaderStorageWrite,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &inputBarrier });
-    m_temporalLastFrame = temporal;
-
     // The history counts when last frame ran the temporal pass too (the previous slot holds its result + distances).
-    const uint32 prevIdx = (frameIdx + RendererVKLayout::NUM_FRAMES_IN_FLIGHT - 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    const float historyWeight = temporal && m_lastMarchFrame != UINT32_MAX && params.frameNumber == m_lastMarchFrame + 1
+    MarchFrame& mf = m_marchFrame;
+    mf.temporal = temporal;
+    mf.scale = scale;
+    mf.marchWidth = marchWidth;
+    mf.marchHeight = marchHeight;
+    mf.checker = checker;
+    mf.quad = quad;
+    mf.historyWeight = temporal && m_lastMarchFrame != UINT32_MAX && params.frameNumber == m_lastMarchFrame + 1
         ? glm::clamp(s.temporalBlend, 0.0f, 0.98f) : 0.0f;
     m_lastMarchFrame = temporal ? params.frameNumber : UINT32_MAX;
+    // THE HAND-OVER variant reads both bakes - from the frame after it began (this frame's UBO must carry its fraction).
+    mf.handover = handingOver() && m_job.crossFade && m_job.handoverStart < params.frameNumber;
+    return !temporal ? 1u : scale > 1 ? 3u : 2u;
+}
+
+// The phases' inputs - this slot's output, last read by its apply (fragment, frames back); with the temporal pass, its
+// compute reads (the raw march, the previous slot's history); with the plain pixel skip, the latest images (last
+// written by last frame's march, or the restart clear) - are ordered by the CALLER's barrier before phase 0 (the post-
+// scene compute group's, Renderer::recordPostSceneCompute), as are the phases among themselves and the result before the
+// apply's fragment reads.
+void TreeVolumePipeline::recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx, uint32 phase, const RecordParams& params)
+{
+    const MarchFrame& mf = m_marchFrame;
+    const bool temporal = mf.temporal, checker = mf.checker, quad = mf.quad;
+    const uint32 scale = mf.scale, marchWidth = mf.marchWidth, marchHeight = mf.marchHeight;
+    const uint32 prevIdx = (frameIdx + RendererVKLayout::NUM_FRAMES_IN_FLIGHT - 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
+    // The temporal result: at full res the slot's own result image (also last frame's = the history colour); at half
+    // res the slot's half-res history colour, which the upsample then turns into the full-res result.
+    Image& accumColour = scale > 1 ? m_histColour[frameIdx] : m_out[frameIdx];
+    Image& prevColour = scale > 1 ? m_histColour[prevIdx] : m_out[prevIdx];
+    if (phase == 1)
+    { // -------- Temporal (read raw + the previous slot's result, write this slot's) --------
+        const vk::DescriptorSet tset = m_temporalSets[frameIdx].getDescriptorSet();
+        oc::array<DescriptorSetUpdateInfo, 9> tupdates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_raw.view) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_rawDepth.view) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, prevColour.view) } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_histDepth[prevIdx].view) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(accumColour.view) } },
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_histDepth[frameIdx].view) } },
+            DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
+            DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_outDepth[frameIdx].view) } },
+        };
+        writeSet(tset, tupdates);
+        PushData tpc(m_temporalBlock);
+        tpc.set(m_temporalPush.viewIndex, RendererVKLayout::VIEW_CENTER);
+        tpc.set(m_temporalPush.width, marchWidth);
+        tpc.set(m_temporalPush.height, marchHeight);
+        tpc.set(m_temporalPush.historyWeight, mf.historyWeight);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipeline());
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipelineLayout(), 0, 1, &tset, 0, nullptr);
+        cmd.pushConstants(m_temporalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, tpc.size(), tpc.data());
+        cmd.dispatch((marchWidth + 7) / 8, (marchHeight + 7) / 8, 1);
+        return;
+    }
+    if (phase == 2)
+    { // -------- Upsample (the half-res result -> the slot's full-res pair) --------
+        const vk::DescriptorSet uset = m_upsampleSets[frameIdx].getDescriptorSet();
+        oc::array<DescriptorSetUpdateInfo, 6> uupdates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, accumColour.view) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_histDepth[frameIdx].view) } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_out[frameIdx].view) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_outDepth[frameIdx].view) } },
+        };
+        writeSet(uset, uupdates);
+        PushData upc(m_upsampleBlock);
+        upc.set(m_upsamplePush.size, glm::uvec2(m_width, m_height));
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_upsamplePipeline.getPipeline());
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_upsamplePipeline.getPipelineLayout(), 0, 1, &uset, 0, nullptr);
+        cmd.pushConstants(m_upsamplePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, upc.size(), upc.data());
+        cmd.dispatch((m_width + 7) / 8, (m_height + 7) / 8, 1);
+        return;
+    }
+    // -------- The march --------
     Image& marchColour = temporal ? m_raw : m_out[frameIdx];
     Image& marchDepth = temporal ? m_rawDepth : m_outDepth[frameIdx];
-    // THE HAND-OVER variant reads both bakes - from the frame after it began (this frame's UBO must carry its fraction).
-    const bool handover = handingOver() && m_job.crossFade && m_job.handoverStart < params.frameNumber;
-    ComputePipeline& march = temporal ? (handover ? m_marchTemporalHandoverPipeline : m_marchTemporalPipeline)
-                                      : (handover ? m_marchHandoverPipeline : m_marchPipeline);
+    ComputePipeline& march = temporal ? (mf.handover ? m_marchTemporalHandoverPipeline : m_marchTemporalPipeline)
+                                      : (mf.handover ? m_marchHandoverPipeline : m_marchPipeline);
     const uint32 back = 1u - m_front;
 
     // The march reads the BAKED geometry (the shown bake's centre; its settings are the block's lockable values,
@@ -1557,83 +1621,6 @@ void TreeVolumePipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, const Re
     const uint32 marchColumns = checker || quad ? (marchWidth + 1) / 2 : marchWidth;
     const uint32 marchRows = quad ? (marchHeight + 1) / 2 : marchHeight;
     cmd.dispatch((marchColumns + 7) / 8, (marchRows + 7) / 8, 1);
-
-    // The result -> this frame's apply (fragment).
-    const vk::MemoryBarrier2 toApply{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-    };
-    if (!temporal)
-    {
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toApply });
-        return;
-    }
-    // The raw march -> the temporal pass; this also covers last frame's temporal writes (the history, earlier in
-    // the queue).
-    const vk::MemoryBarrier2 toTemporal{
-        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-    };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toTemporal });
-
-    // The temporal result: at full res the slot's own result image (also last frame's = the history colour); at half
-    // res the slot's half-res history colour, which the upsample then turns into the full-res result.
-    Image& accumColour = scale > 1 ? m_histColour[frameIdx] : m_out[frameIdx];
-    Image& prevColour = scale > 1 ? m_histColour[prevIdx] : m_out[prevIdx];
-    { // -------- Temporal (read raw + the previous slot's result, write this slot's) --------
-        const vk::DescriptorSet tset = m_temporalSets[frameIdx].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 9> tupdates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
-            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_raw.view) } },
-            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_rawDepth.view) } },
-            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, prevColour.view) } },
-            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_histDepth[prevIdx].view) } },
-            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(accumColour.view) } },
-            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_histDepth[frameIdx].view) } },
-            DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eCombinedImageSampler,
-                .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
-            DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_outDepth[frameIdx].view) } },
-        };
-        writeSet(tset, tupdates);
-        PushData tpc(m_temporalBlock);
-        tpc.set(m_temporalPush.viewIndex, RendererVKLayout::VIEW_CENTER);
-        tpc.set(m_temporalPush.width, marchWidth);
-        tpc.set(m_temporalPush.height, marchHeight);
-        tpc.set(m_temporalPush.historyWeight, historyWeight);
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_temporalPipeline.getPipelineLayout(), 0, 1, &tset, 0, nullptr);
-        cmd.pushConstants(m_temporalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, tpc.size(), tpc.data());
-        cmd.dispatch((marchWidth + 7) / 8, (marchHeight + 7) / 8, 1);
-    }
-    if (scale > 1)
-    {
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toTemporal }); // temporal -> upsample
-        // -------- Upsample (the half-res result -> the slot's full-res pair) --------
-        const vk::DescriptorSet uset = m_upsampleSets[frameIdx].getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 6> uupdates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
-                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
-            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
-                .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
-            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, accumColour.view) } },
-            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_screenSampler, m_histDepth[frameIdx].view) } },
-            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_out[frameIdx].view) } },
-            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { storageInfo(m_outDepth[frameIdx].view) } },
-        };
-        writeSet(uset, uupdates);
-        PushData upc(m_upsampleBlock);
-        upc.set(m_upsamplePush.size, glm::uvec2(m_width, m_height));
-        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_upsamplePipeline.getPipeline());
-        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_upsamplePipeline.getPipelineLayout(), 0, 1, &uset, 0, nullptr);
-        cmd.pushConstants(m_upsamplePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, upc.size(), upc.data());
-        cmd.dispatch((m_width + 7) / 8, (m_height + 7) / 8, 1);
-    }
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toApply });
 }
 
 void TreeVolumePipeline::recordApply(CommandBuffer& commandBuffer, uint32 frameIdx)

@@ -54,6 +54,10 @@ public:
     };
     // March + temporal for one eye (compute, no render pass).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params);
+    // PHASED (the renderer's post-scene compute group, desktop): 0 the march, 1 the temporal pass - WITHOUT barriers (the
+    // caller's, Renderer::recordPostSceneCompute). record() is the two with barriers of their own (VR).
+    static constexpr uint32 NUM_PHASES = 2;
+    void recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params, uint32 phase);
 
     struct ApplyParams
     {

@@ -452,7 +452,7 @@ bool Renderer::farTreesActive() const
     return false;
 }
 
-void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
+void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const oc::function<void(const TreeVolumePipeline::RecordParams*)>& march)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     // The record chunks changed (they stream in and out while the camera moves): re-bake at most every 30 frames.
@@ -526,12 +526,8 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary)
         m_treeVolume.recordBake(primary, frameIdx, params);
         m_gpuProfiler.endScope(primary);
     }
-    if (m_treeVolume.ready(m_farTreeParams))
-    {
-        m_gpuProfiler.beginScope(primary, "Far trees");
-        m_treeVolume.record(primary, frameIdx, params);
-        m_gpuProfiler.endScope(primary);
-    }
+    // The march's phases run in the post-scene compute group (recordPostSceneCompute); params live until it returns.
+    march(m_treeVolume.ready(m_farTreeParams) ? &params : nullptr);
 }
 
 void Renderer::recordFarTreesApply(uint32 frameIdx)

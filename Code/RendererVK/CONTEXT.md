@@ -247,6 +247,46 @@ effect immediately.**
 
 **Call `setHaveToRecordCommandBuffers()` after invalidating changes.**
 
+## Per-frame CPU -> GPU buffers live in ReBAR, not system memory (2026-10-07)
+
+A buffer the CPU writes and the GPU reads every frame is `eHostVisible` + `BufferHostAccess::eSequentialWrite`, and
+VMA (`MEMORY_USAGE_AUTO`) places it in DEVICE-LOCAL host-visible memory (ReBAR). `eHostCached` / random access puts it
+in cached SYSTEM memory, where every GPU read crosses PCIe - latency-bound: the instance stream (`MeshInstances`,
+read by the culls, the TLAS instance write and every ray-query hit) and the TLAS writer's `AS.blasAddresses` /
+`AS.meshAlias` were there; moving them took "BLAS builds" 0.21 -> 0.17 ms and "Indirect cull" 0.114 -> 0.109 ms
+(sandbox 1440p). **Cached system memory is for READBACKS only** (the GPU writes, the CPU reads: ocean, force,
+particle counters, LOD stats). A ReBAR mapping is uncached for CPU READS: a table the CPU also reads in loops keeps a
+CPU mirror (`AccelerationStructure::m_meshAlias`, written through `writeMeshAlias`); a rare read-back on growth
+(`growInstances`, `resizeBlasAddressBuffer`) is acceptable.
+
+## Barriers and overlap (measured 2026-10-07, sandbox 1440p, RTX 4090)
+
+A compute->compute barrier waits for ALL earlier compute work in the queue. **The post-scene compute group**
+(`recordPostSceneCompute`: RTAO, the cloud march + temporal, the far-tree march) records the three passes PHASE by
+phase (`RTAOPipeline::recordPhase`, `CloudPipeline::recordPhase`, `TreeVolumePipeline::marchPrepare` /
+`recordMarchPhase`; one cached secondary per phase for RTAO and the clouds) with ONE barrier between phases - their
+union - instead of each pass's own, so the passes of a phase run side by side. GPU scope "Post-scene compute", with
+one child scope per PHASE ("Trace + marches", "Temporal passes", "Blur + upsample") and inside each one per PASS
+("Cloud march", "Far trees march", "RTAO trace", ...). The passes of a phase run one after the other in practice
+(Nsight GPU Trace 2026-10-07: the cloud march and the far march back to back, no overlap - which is why the group
+gains so little), so a pass's bottom-of-pipe stamp waits only for its own dispatch: exact and free.
+"Renderer/Overlap compute" off: the same barriers around each pass alone, each in its own scope ("RTAO", "Cloud
+march", "Far trees") - for per-pass timing. **Measured gain: ~0.01-0.02 ms** (0.933-0.944 vs 0.942-0.960 ms): those
+passes each fill the GPU, only their tails overlap. **Tried and dropped:** the cloud shadow + sky recorded AFTER the
+TLAS build (their compute barriers do not wait for the AS-build stage, so they could run beside it) - 0.426/0.435 vs
+0.417/0.414 ms, no overlap in practice; and the TLAS built PREFER_FAST_BUILD - the build 0.01 ms faster, the traces
+that much slower. Overlapping BIG passes gains nothing here; small chains (the ocean sim's mip blits) were not tried
+(the whole blit chain costs ~0.03 of the ocean sim's 0.19 ms).
+
+**Synchronization validation** (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with `EValidation::ENABLED` in main.cpp; a
+hazard is an error, so the callback's break stops the run - set `setBreakOnValidationLayerError(false)` to collect them
+all). The 2026-10-07 run found three, all fixed: the cloud noise's init transition did not cover its mip BLITS
+(`CloudPipeline` noise init: dst stage + blit), the ocean's final transition did not wait for its readback COPY
+(`toSampled` src + copy), and the staging manager's buffer copies into overlapping bytes were unordered (a growth's
+whole-buffer re-upload vs a one-entry update in the same batch: `StagingManager::updateNoLock` now puts a copy -> copy
+barrier before a copy that overlaps the range written to its buffer since the last one). What remains is Streamline's
+own legacy `vkCmdPipelineBarrier` on the depth in the DLSS evaluate (a WAW against the depth store) - not ours.
+
 ---
 
 # Features
@@ -1331,7 +1371,8 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
     peak's trees under the summit - hidden until the camera came within its near cascade, ~2 km.)
   * **Beyond it** two passes, because 15 slices x ~9M records of atomics per bake would cost tens of ms:
   * `tree_volume_records.cs`, one workgroup per chunk: each record adds its exact variant's mass x its exact scale² x
-    weight / the column's area into a 2D R32UI image (`m_farAmount`, fixed point `TV_AMOUNT_SCALE`) over a TENT as
+    weight / the column's area into a 2D R32UI image (`m_floorCover`'s memory since 2026-10-07 - the floor passes and the smoothing are done
+    with it; the stage zeroes it at its first frame - fixed point `TV_AMOUNT_SCALE`; saves 17.6 MB at 3000 x 1500) over a TENT as
     wide as its crown (at least a cell each way, at most 8 texels; per-axis weights normalized, so the tree adds its
     whole mass - far out a tree is smaller than a column, near the detail distance a column can be smaller than a crown
     and a point splat made pillars); its nearest column takes its type (`m_farType`) and colour. No bushes.
@@ -1474,8 +1515,9 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   distance weights are not summed - `sum(T x alpha)` telescopes to `1 - T`, so the weighted mean is `distSum / (1 -
   T)` (an opaque segment normalises its sum before its T is zeroed). No timing change measurable through the run noise
   ("Far trees" ~0.43 ms either way). The interior taps also skip at `Far interior radius` 0 (they sat on the sample:
-  `exp(0)`). "Far trees" is the MARCH alone now; the bake's share of the frame is its own GPU scope, "Far tree bake"
-  (`recordBake`, then `record`).
+  `exp(0)`). The bake's share of the frame is its own GPU scope, "Far tree bake" (`updateBake` + `recordBake`); the
+  march runs in the post-scene compute group (`marchPrepare` + `recordMarchPhase`; see "Barriers and overlap") - its
+  own scope "Far trees" only with "Renderer/Overlap compute" off.
 * **March** (`tree_volume_march.cs`, full res, every pixel, no temporal): from `Far start` (camera distance; at
   least the ring's entry, exact circle roots; a vertical ray never enters) to the scene surface or `Far end`; the
   **Lighting tweaks:** `Far sun scale` (the direct factor), `Far self shadow` (× the sun taps' optical depth),

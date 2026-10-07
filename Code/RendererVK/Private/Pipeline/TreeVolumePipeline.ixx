@@ -278,9 +278,15 @@ public:
     // which Nsight's GPU Trace times at the NEXT workload - inside the force passes' render pass (SECONDARY contents:
     // an illegal vkCmdWriteTimestamp).
     bool updateBake(const RecordParams& params);
-    bool ready(const FarTreeParams& s) const; // prepare() ran for these settings' resolutions: record() records
+    bool ready(const FarTreeParams& s) const; // prepare() ran for these settings' resolutions: the march records
     void recordBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
-    void record(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params);
+    // THE MARCH, PHASED (the renderer's post-scene compute group, Renderer::recordPostSceneCompute): marchPrepare records
+    // what must come BEFORE the group's input barrier (the plain pixel skip's restart clear) and returns this frame's
+    // phase count (0 = no march; 1 the plain march; 2 + the temporal pass; 3 + the half-res upsample). recordMarchPhase
+    // records one phase WITHOUT barriers - the caller's order the inputs (fragment / compute / clear -> compute), the
+    // phases among themselves and the result before the apply's fragment reads.
+    uint32 marchPrepare(vk::CommandBuffer cmd, const RecordParams& params);
+    void recordMarchPhase(vk::CommandBuffer cmd, uint32 frameIdx, uint32 phase, const RecordParams& params);
     // The fullscreen apply (fog OFF); the caller is inside the scene-colour render pass with the viewport set.
     void recordApply(CommandBuffer& commandBuffer, uint32 frameIdx);
     // The result of a frame slot (GENERAL, render size): rgb = in-scatter, a = transmittance; and the
@@ -415,8 +421,10 @@ private:
     oc::array<Image, 2> m_floorMax;
     Image m_floorBlock; // R32F: the undilated block max (the bake's last step only)
     uint32 m_front = 0;
-    Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass)
-    Image m_farAmount;  // R32UI 2D: the records' mass per column (fixed point; TV_AMOUNT_SCALE)
+    Image m_floorCover; // R32UI 2D: the largest tree coverage per column (the floor's first pass); then the smoothing's
+                        // temporary; then the records' mass (below)
+    // (The records' mass per column - R32UI 2D, fixed point, TV_AMOUNT_SCALE - lives in m_floorCover's memory: the floor
+    // passes and the smoothing are done with it before the records' mass stage zeroes it.)
     Image m_farType;    // R32UI 2D: the record type whose profile a column takes (the lowest: a tree before a rock)
     // R32UI 2D: the ROCKS' share of a column, in the accumulation's units summed over the slices (the detail splat's
     // solid voxels, the far records' rock mass / the slice height). The resolve: rock fraction = this / the column's
@@ -433,7 +441,19 @@ private:
     oc::array<Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_histColour;
     bool m_hasTemporalImages = false;
     uint32 m_temporalScale = 1; // 1, or 2 at "Far half res"
-    bool m_temporalLastFrame = false; // last frame ran the temporal pass (its reads need this frame's WAR barrier)
+    // This frame's march, from marchPrepare to the phases.
+    struct MarchFrame
+    {
+        bool temporal = false;
+        bool checker = false;
+        bool quad = false;
+        bool handover = false;
+        uint32 scale = 1;
+        uint32 marchWidth = 0;
+        uint32 marchHeight = 0;
+        float historyWeight = 0.0f;
+    };
+    MarchFrame m_marchFrame;
     vk::Sampler m_linearSampler; // u repeats (the volume's angle)
     vk::Sampler m_mipSampler;    // every mip (the rock textures' smallest: their mean colour)
     vk::Sampler m_screenSampler; // clamp: the temporal pass's screen images

@@ -931,6 +931,9 @@ export struct RendererSettings
 {
     bool vsync = true;               // "Time/VSync": FIFO present (Time's stable-dt snap relies on it); a change re-creates the swapchain
     bool logPipelineStats = false;   // "Renderer/Log pipeline stats": F5 re-creates the pipelines with it
+    // "Renderer/Overlap compute": independent compute passes share their barriers so they run side by side (the primary
+    // is re-recorded every frame: takes effect at once). Off: each pass on its own, with its own GPU timing scope.
+    bool overlapCompute = true;
     bool wireframe = false;          // "Editor/Wireframe": baked polygon mode of the scene variants (reload + re-record)
     int  anisotropyLevel = 2;        // "Renderer/Textures/Anisotropy" index: 0 = off, else 2^level (2 = 4x); a change re-creates the scene sampler
     bool decals = true;              // "Decals/Enabled"

@@ -33,11 +33,15 @@ void AccelerationStructure::initialize(uint32 maxUniqueMeshes)
     if (m_scratchAlignment == 0)
         m_scratchAlignment = 256;
 
+    // The BLAS addresses and the mesh alias table: SEQUENTIAL WRITE (ReBAR, device-local) - the TLAS instance write
+    // reads one of each per instance every frame (in cached system memory each read crossed PCIe: "BLAS builds" 0.21 ->
+    // 0.19 ms with the instance stream moved too). The CPU only writes them (resizeBlasAddressBuffer's read-back is
+    // rare); the alias table's CPU reads go to the m_meshAlias mirror.
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
         m_blasAddressBuffers[f].initialize(maxUniqueMeshes * sizeof(uint64),
             vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.blasAddresses");
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "AS.blasAddresses", BufferHostAccess::eSequentialWrite);
         m_mappedBlasAddresses[f] = m_blasAddressBuffers[f].mapMemory<uint64>();
         zeroBlasAddresses(f, 0);
     }
@@ -45,8 +49,9 @@ void AccelerationStructure::initialize(uint32 maxUniqueMeshes)
     m_staticAddrDirtyBits.assign(maxUniqueMeshes, 0);
     m_meshAliasBuffer.initialize(maxUniqueMeshes * sizeof(uint32),
         vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.meshAlias");
+        vk::MemoryPropertyFlagBits::eHostVisible, false, "AS.meshAlias", BufferHostAccess::eSequentialWrite);
     m_mappedMeshAlias = m_meshAliasBuffer.mapMemory<uint32>();
+    m_meshAlias.assign(m_mappedMeshAlias.size(), 0);
 }
 
 // AN ENTRY NOTHING WROTE MUST READ 0 ("no BLAS": the TLAS writer makes the instance inactive). An entry is written
@@ -70,7 +75,7 @@ void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
         const oc::vector<uint64> oldAddresses(m_mappedBlasAddresses[f].begin(), m_mappedBlasAddresses[f].end());
         m_blasAddressBuffers[f].initialize(maxUniqueMeshes * sizeof(uint64),
             vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.blasAddresses");
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "AS.blasAddresses", BufferHostAccess::eSequentialWrite);
         m_mappedBlasAddresses[f] = m_blasAddressBuffers[f].mapMemory<uint64>();
         const size_t kept = oc::min(oldAddresses.size(), m_mappedBlasAddresses[f].size());
         memcpy(m_mappedBlasAddresses[f].data(), oldAddresses.data(), kept * sizeof(uint64));
@@ -81,13 +86,14 @@ void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
         m_staticBlasAddr.resize(maxUniqueMeshes, 0);
         m_staticAddrDirtyBits.resize(maxUniqueMeshes, 0);
     }
-    const oc::vector<uint32> oldAliases(m_mappedMeshAlias.begin(), m_mappedMeshAlias.end());
     m_meshAliasBuffer.initialize(maxUniqueMeshes * sizeof(uint32),
         vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.meshAlias");
+        vk::MemoryPropertyFlagBits::eHostVisible, false, "AS.meshAlias", BufferHostAccess::eSequentialWrite);
     m_mappedMeshAlias = m_meshAliasBuffer.mapMemory<uint32>();
-    memcpy(m_mappedMeshAlias.data(), oldAliases.data(), oldAliases.size() * sizeof(uint32));
-    m_meshAliasBuffer.flushMappedMemory(oldAliases.size() * sizeof(uint32));
+    const size_t oldCount = oc::min(m_meshAlias.size(), m_mappedMeshAlias.size());
+    m_meshAlias.resize(m_mappedMeshAlias.size(), 0);
+    memcpy(m_mappedMeshAlias.data(), m_meshAlias.data(), oldCount * sizeof(uint32));
+    m_meshAliasBuffer.flushMappedMemory(oldCount * sizeof(uint32));
 }
 
 void AccelerationStructure::setNumMeshes(uint32 numMeshes)
@@ -96,7 +102,7 @@ void AccelerationStructure::setNumMeshes(uint32 numMeshes)
         return;
     assert(numMeshes <= m_mappedMeshAlias.size() && "mesh alias buffer behind capacity growth");
     for (uint32 m = m_numAliasMeshes; m < numMeshes; ++m)
-        m_mappedMeshAlias[m] = m; // identity: owns its own BLAS until a LOD group aliases it
+        writeMeshAlias(m, m); // identity: owns its own BLAS until a LOD group aliases it
     m_numAliasMeshes = numMeshes;
     m_meshAliasBuffer.flushMappedMemory(m_numAliasMeshes * sizeof(uint32));
 }
@@ -104,7 +110,7 @@ void AccelerationStructure::setNumMeshes(uint32 numMeshes)
 void AccelerationStructure::setMeshAlias(uint32 meshIdx, uint32 aliasIdx)
 {
     assert(meshIdx < m_numAliasMeshes && aliasIdx < m_numAliasMeshes);
-    m_mappedMeshAlias[meshIdx] = aliasIdx;
+    writeMeshAlias(meshIdx, aliasIdx);
     m_meshAliasBuffer.flushMappedMemory(m_numAliasMeshes * sizeof(uint32));
 }
 
@@ -146,7 +152,7 @@ void AccelerationStructure::onMeshEvicted(uint32 meshIdx)
     if (meshIdx >= m_numAliasMeshes)
         return;
     markStaticBlasAddr(meshIdx, 0);
-    if (m_mappedMeshAlias[meshIdx] == meshIdx && meshIdx < m_blasList.size() && m_blasList[meshIdx].handle)
+    if (m_meshAlias[meshIdx] == meshIdx && meshIdx < m_blasList.size() && m_blasList[meshIdx].handle)
     {
         Globals::device.getDevice().destroyAccelerationStructureKHR(m_blasList[meshIdx].handle);
         m_blasList[meshIdx].handle = nullptr;
@@ -154,7 +160,7 @@ void AccelerationStructure::onMeshEvicted(uint32 meshIdx)
         // Anything aliased to this BLAS (authored-chain levels in other, still-resident sets) must stop
         // referencing it too - those levels go RT-invisible until this mesh re-streams and rebuilds.
         for (uint32 m = 0; m < m_numAliasMeshes; ++m)
-            if (m_mappedMeshAlias[m] == meshIdx)
+            if (m_meshAlias[m] == meshIdx)
                 markStaticBlasAddr(m, 0);
     }
 }
@@ -164,7 +170,7 @@ void AccelerationStructure::onMeshRangeFreed(uint32 firstMeshIdx, uint32 count)
     for (uint32 meshIdx = firstMeshIdx; meshIdx < firstMeshIdx + count && meshIdx < m_numAliasMeshes; ++meshIdx)
     {
         markStaticBlasAddr(meshIdx, 0);
-        if (m_mappedMeshAlias[meshIdx] == meshIdx && meshIdx < m_blasList.size() && m_blasList[meshIdx].handle)
+        if (m_meshAlias[meshIdx] == meshIdx && meshIdx < m_blasList.size() && m_blasList[meshIdx].handle)
         {
             m_retiredBlas.push_back(RetiredBlas{ m_blasList[meshIdx].handle, oc::move(m_blasList[meshIdx].buffer), m_compactionFrame });
             m_blasList[meshIdx].handle = nullptr;
@@ -172,7 +178,7 @@ void AccelerationStructure::onMeshRangeFreed(uint32 firstMeshIdx, uint32 count)
         }
         // Anything aliased to a freed mesh is a LOD level of the same container, freed in the same
         // range; identity aliases leave the slots ready for reuse by a later addMeshInfos.
-        m_mappedMeshAlias[meshIdx] = meshIdx;
+        writeMeshAlias(meshIdx, meshIdx);
     }
     m_meshAliasBuffer.flushMappedMemory(m_numAliasMeshes * sizeof(uint32));
 }
@@ -371,9 +377,9 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
     // are self-aliased no-ops here). Covers both freshly built chains and re-stream rebuilds whose aliased
     // levels live in other registration batches. syncFrameAddresses publishes these per slot.
     for (uint32 m = 0; m < m_numAliasMeshes; ++m)
-        if (m_mappedMeshAlias[m] != m)
+        if (m_meshAlias[m] != m)
         {
-            const uint32 target = m_mappedMeshAlias[m];
+            const uint32 target = m_meshAlias[m];
             markStaticBlasAddr(m, target < m_staticBlasAddr.size() ? m_staticBlasAddr[target] : 0);
         }
 }
@@ -467,9 +473,9 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
         // Compact copies execute in the acceleration-structure-build stage (no ray_tracing_maintenance1 =
         // no separate copy stage).
         for (uint32 m = 0; m < m_numAliasMeshes; ++m)
-            if (m_mappedMeshAlias[m] != m)
+            if (m_meshAlias[m] != m)
             {
-                const uint32 target = m_mappedMeshAlias[m];
+                const uint32 target = m_meshAlias[m];
                 markStaticBlasAddr(m, target < m_staticBlasAddr.size() ? m_staticBlasAddr[target] : 0);
             }
 

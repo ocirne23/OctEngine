@@ -267,6 +267,40 @@ void RTAOPipeline::transitionToGeneral(vk::CommandBuffer cmd, ImageSet& set, uin
 void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    const uint32 cur = slot(frameIdx, eye);
+    auto storeWriteToSampledRead = [&]() {
+        vk::MemoryBarrier2 bar{
+            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
+    };
+    vk::MemoryBarrier2 asVis{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
+        .srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &asVis });
+    transitionToGeneral(cmd, m_raw, cur, true);
+    recordPhase(commandBuffer, frameIdx, eye, params, 0);
+    storeWriteToSampledRead();
+    transitionToGeneral(cmd, m_accum, cur, true);
+    recordPhase(commandBuffer, frameIdx, eye, params, 1);
+    storeWriteToSampledRead();
+    if (numPhases() > 2)
+    {
+        transitionToGeneral(cmd, m_final, cur, true);
+        recordPhase(commandBuffer, frameIdx, eye, params, 2);
+        storeWriteToSampledRead();
+    }
+}
+
+void RTAOPipeline::recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params, uint32 phase)
+{
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     // eye (0/1) selects the per-eye history images; viewIndex selects the UBO matrices (0 = centre/desktop,
     // 1/2 = the eyes in VR). They differ in VR because u_views[0] is the centre view, not an eye.
     const uint32 viewIndex = RendererVKLayout::eyeToViewIndex(eye, m_viewCount);
@@ -279,28 +313,10 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
     const uint32 gx = (m_width + 7) / 8;
     const uint32 gy = (m_height + 7) / 8;
 
-    auto storeWriteToSampledRead = [&]() {
-        vk::MemoryBarrier2 bar{
-            .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-        };
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
-    };
-
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE };
 
+    if (phase == 0)
     { // -------- Pass 1: trace raw AO --------
-        vk::MemoryBarrier2 asVis{
-            .srcStageMask = vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-            .srcAccessMask = vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask = vk::AccessFlagBits2::eAccelerationStructureReadKHR,
-        };
-        cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &asVis });
-        transitionToGeneral(cmd, m_raw, cur, true);
-
         DescriptorSet& set = m_traceSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
@@ -336,11 +352,8 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         cmd.pushConstants(traceLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
     }
-    storeWriteToSampledRead();
-
+    else if (phase == 1)
     { // -------- Pass 2: temporal accumulate (read raw + history accum[prev], write accum[cur]) --------
-        transitionToGeneral(cmd, m_accum, cur, true);
-
         DescriptorSet& set = m_temporalSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 7> updates{
@@ -360,12 +373,8 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         cmd.pushConstants(temporalLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
     }
-    storeWriteToSampledRead();
-
-    if (m_pParams->blurRadius > 0)
+    else
     { // -------- Pass 3: spatial bilateral blur (read accum[cur], write final[cur]) --------
-        transitionToGeneral(cmd, m_final, cur, true);
-
         DescriptorSet& set = m_spatialSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 4> updates{
@@ -380,7 +389,5 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         const AoPC pc{ .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex };
         cmd.pushConstants(spatialLayout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
         cmd.dispatch(gx, gy, 1);
-
-        storeWriteToSampledRead();
     }
 }

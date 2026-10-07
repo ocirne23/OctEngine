@@ -216,8 +216,42 @@ vk::Semaphore StagingManager::updateNoLock()
     commandBuffer.addSignalSemaphore(m_semaphores[m_currentBuffer]);
     vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
 
+    // Copies into the SAME bytes must land in submission order - a capacity growth re-uploads a whole buffer, a later
+    // update in the same batch one entry of it (MeshLodRegistry) - but the copies of one batch are unordered. A copy
+    // that overlaps the range written to its buffer since the last barrier (one bounding range per buffer: a false
+    // positive costs a barrier, never an order) waits for the earlier ones (copy -> copy).
+    struct Written
+    {
+        vk::Buffer buffer;
+        vk::DeviceSize lo;
+        vk::DeviceSize hi;
+    };
+    oc::vector<Written> written;
+    const vk::MemoryBarrier2 copyToCopy{
+        .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+    };
     for (const auto& copyRegion : m_bufferCopyRegions)
+    {
+        const vk::DeviceSize lo = copyRegion.second.dstOffset, hi = lo + copyRegion.second.size;
+        auto it = oc::find_if(written.begin(), written.end(), [&](const Written& w) { return w.buffer == copyRegion.first; });
+        if (it != written.end() && lo < it->hi && it->lo < hi)
+        {
+            vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &copyToCopy });
+            written.clear();
+            it = written.end();
+        }
+        if (it == written.end())
+            written.push_back(Written{ copyRegion.first, lo, hi });
+        else
+        {
+            it->lo = oc::min(it->lo, lo);
+            it->hi = oc::max(it->hi, hi);
+        }
         vkCommandBuffer.copyBuffer(m_stagingBuffers[m_currentBuffer].getBuffer(), copyRegion.first, 1, &copyRegion.second);
+    }
 
     for (const auto& [image, copyRegion] : m_imageCopyRegions)
     {
