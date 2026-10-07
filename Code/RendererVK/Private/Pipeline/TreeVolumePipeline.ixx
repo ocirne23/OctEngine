@@ -13,7 +13,7 @@ import :DescriptorSet;
 import :Layout;
 import :RenderParams;
 import :TreeRecordPool;
-import :PushFields;
+import :PushBlock;
 
 // FAR TREES as a marched volume (Docs/TreeRenderingPlan.md T2, prototype P1). Three stages:
 //   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
@@ -60,6 +60,117 @@ export struct TreeVolumePieceGpu
 };
 static_assert(sizeof(TreeVolumePieceGpu) == 48);
 
+// ---- The passes' push blocks (PushBlock: bound in declaration order, each served as its shader's push.generated.glsl).
+// The VOLUME PARAMS in a block (tree_volume.inc.glsl's TV_PUSH_VOL, members pc_vol_*): the centre per dispatch, the rest
+// lockable (TreeVolumePipeline::registerPushFields).
+struct TvVolPush
+{
+    PushGroup g;
+    PushValue<glm::vec2> centre = g("centre");          // world XZ of the bake centre
+    PushValue<float> rMin = g("rMin");                  // m: the volume's inner radius (horizontal)
+    PushValue<float> rMax = g("rMax");                  // m: its outer radius ("Far end")
+    PushValue<uint32> angularRes = g("angularRes");     // texels around
+    PushValue<uint32> radialRes = g("radialRes");       // texels from rMin to rMax
+    PushValue<uint32> slices = g("slices");             // height slices
+    PushValue<float> height = g("height");              // m above the terrain the volume covers
+    PushValue<float> densityScale = g("densityScale");  // x the baked extinction
+};
+// tree_volume_splat.cs.glsl: the static sets' pieces, or (recordsVariant: TREE_SPLAT_RECORDS) the detail chunks' records.
+struct SplatPush
+{
+    bool recordsVariant;
+    PushGroup g;
+    PushValue<uint64> source = g(recordsVariant ? "map" : "pieces", recordsVariant ? "TreeRecordMap" : "PieceList"); // the pieces / the chunk map
+    PushValue<uint64> types = g("types", "TypeList");      // TREE_SPLAT_RECORDS: the world set's
+    PushValue<uint64> data = g("data", "FloatList");
+    PushValue<uint32> numPieces = g("numPieces");          // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
+    PushValue<uint32> mapSize = g("mapSize");              // TREE_SPLAT_RECORDS: the chunk map's size
+    TvVolPush vol{ { g.block, "vol_" } };
+    // TREE_SPLAT_RECORDS only:
+    PushValue<uint64> records = g("records", "TreeRecordWords"); // each chunk's ground, then its records
+    PushValue<uint64> detailChunks = g("detailChunks", "DetailList"); // uvec4 per detail chunk: coord, its first record's pool word, its first workgroup
+    PushValue<uint64> recordTypes = g("recordTypes", "RecordTypeList");
+    PushValue<float> chunkSize = g("chunkSize");
+    PushValue<uint32> worldSeed = g("worldSeed");
+    PushValue<uint32> numDetailChunks = g("numDetailChunks");
+    PushValue<uint32> numRecordTypes = g("numRecordTypes");
+    PushValue<uint32> wgOffset = g("wgOffset");            // this dispatch's first record / piece (the bake spreads both over frames)
+    PushValue<float> rockExtinction = g("rockExtinction"); // lockable: a SOLID type's extinction (1/m) over its occupancy ("Far rock extinction")
+};
+// tree_volume_records.cs.glsl: the records' mass per column.
+struct RecordsPush
+{
+    PushGroup g;
+    PushValue<uint64> records = g("records", "RecordList");
+    PushValue<uint64> chunks = g("chunks", "ChunkList");
+    PushValue<uint64> types = g("types", "TypeList");
+    PushValue<uint32> numChunks = g("numChunks");          // this dispatch's
+    PushValue<uint32> numTypes = g("numTypes");
+    PushValue<float> chunkSize = g("chunkSize");
+    PushValue<uint32> worldSeed = g("worldSeed");
+    TvVolPush vol{ { g.block, "vol_" } };
+    PushValue<float> recordDetail = g("recordDetail");     // lockable, m: the chunks whose centre lies within this of the bake centre splat in detail instead
+    PushValue<float> rockExtinction = g("rockExtinction"); // lockable: a rock record's mass: its occupied volume x scale^3 x this
+    PushValue<uint32> chunkOffset = g("chunkOffset");      // this dispatch's first chunk (the bake spreads the chunks over frames)
+};
+// tree_volume_far.cs.glsl: the columns' floor from the terrain + their slices.
+struct FarPush
+{
+    PushGroup g;
+    PushValue<uint64> types = g("types", "TypeList");
+    PushValue<uint32> numTypes = g("numTypes");
+    PushValue<uint32> mapSize = g("mapSize");
+    TvVolPush vol{ { g.block, "vol_" } };
+    PushValue<uint64> records = g("records", "TreeRecordWords"); // the chunks' ground
+    PushValue<uint64> map = g("map", "TreeRecordMap");
+    PushValue<float> chunkSize = g("chunkSize");
+    PushValue<uint32> rowOffset = g("rowOffset");          // this dispatch's first radial row (a multiple of the 8-row group)
+};
+// tree_volume_resolve.cs.glsl (the column colour needs the columns' world positions).
+struct ResolvePush
+{
+    PushGroup g;
+    TvVolPush vol{ { g.block, "vol_" } };
+    PushValue<uint32> sliceOffset = g("sliceOffset");      // this dispatch's first texel layer
+    PushValue<uint32> columnPass = g("columnPass");        // 1: the per-column colour pass (before any conversion); 0: convert the layers in place
+};
+// tree_volume_floor_smooth.cs.glsl.
+struct FloorSmoothPush
+{
+    PushGroup g;
+    PushValue<uint32> angularRes = g("vol_angularRes");    // lockable
+    PushValue<uint32> radialRes = g("vol_radialRes");      // lockable
+    PushValue<int32> floorSmoothing = g("floorSmoothing"); // lockable: columns each way (> 0)
+    PushValue<uint32> radialAxis = g("radialAxis");        // 0 = along the angle (wraps), 1 = along the radius (clamps)
+};
+// tree_volume_march.cs.glsl: the SHOWN bake's geometry, the sizes and this frame's start. The shading tweaks ride the
+// frame UBO (u_foliage_far*); the scale and the pixel skip are baked defines (TREE_MARCH_SCALE / TREE_MARCH_SKIP).
+struct MarchPush
+{
+    PushGroup g;
+    TvVolPush vol{ { g.block, "vol_" } };
+    PushValue<glm::uvec2> size = g("size");                // the MARCH image's size (half the render size at "Far half res")
+    PushValue<float> startDistance = g("startDistance");   // m from the CAMERA: the volume fades in from here, over u_foliage_farOverlap
+    PushValue<glm::uvec2> fullSize = g("fullSize");        // the render size (the scene depth)
+};
+// cloud_temporal.cs.glsl under TREE_TEMPORAL (the scale and the checkerboard are baked).
+struct TemporalPush
+{
+    PushGroup g;
+    PushValue<uint32> viewIndex = g("viewIndex");
+    PushValue<uint32> width = g("width");
+    PushValue<uint32> height = g("height");
+    PushValue<float> historyWeight = g("historyWeight");
+    PushValue<float> maxDist = g("vol_rMax");              // lockable: the march's max distance (the far volume's end)
+};
+// tree_volume_upsample.cs.glsl.
+struct UpsamplePush
+{
+    PushGroup g;
+    PushValue<glm::uvec2> size = g("size");                // the render size
+    PushValue<float> maxDist = g("vol_rMax");              // lockable: the march's max distance
+};
+
 export class TreeVolumePipeline final
 {
 public:
@@ -94,14 +205,17 @@ public:
     // dirty and reloads the passes whose consts changed.
     void prepare(const FarTreeParams& settings);
 
-    // THE LOCKABLE PUSH VALUES, two lists (PushFields.ixx), registered before initialize: the BAKE's (the splat, the
-    // records, the far columns, the resolve, the floor smoothing) take the live settings - a bake that started with
-    // others is dropped anyway (recordBake: sameBake); the MARCH's (the march, the temporal pass, the upsample) take the
-    // SHOWN bake's (marchSettings) - the density scale the live one. `settings` is Globals::settings.farTree (the
-    // lambdas keep the reference).
+    // THE LOCKABLE PUSH VALUES (PushBlock), registered before initialize: the BAKE passes' (the splat, the records, the
+    // far columns, the resolve, the floor smoothing) take the live settings - a bake that started with others is dropped
+    // anyway (recordBake: sameBake); the MARCH passes' (the march, the temporal pass, the upsample) take the SHOWN bake's
+    // (marchSettings) - the density scale the live one. `settings` is Globals::settings.farTree (the lambdas keep the
+    // reference). The Renderer marks the blocks dirty; prepare() re-bakes them.
     void registerPushFields(const FarTreeParams& settings);
-    PushFieldList& bakePushFields() { return m_bakeFields; }
-    PushFieldList& marchPushFields() { return m_marchFields; }
+    oc::array<PushBlock*, 9> pushBlocks()
+    {
+        return { &m_splatBlock, &m_recordSplatBlock, &m_resolveBlock, &m_floorSmoothBlock, &m_recordsBlock, &m_farBlock,
+            &m_marchBlock, &m_temporalBlock, &m_upsampleBlock };
+    }
 
     // One GPU tree set's volume data (device addresses).
     struct Source
@@ -214,12 +328,30 @@ private:
     // frame a bake without a cross-fade swaps (its whole copy and the swap run in recordBake, before the march), the new
     // one's. record() reads m_bakedSettings itself, after that swap.
     const FarTreeParams& marchSettings() const;
-    // The lists' passes rebuilt after a const changed (prepare; the GPU is idle). No re-bake (reloadShaders' m_dirty).
+    // The blocks' passes rebuilt after a const changed (prepare; the GPU is idle). No re-bake (reloadShaders' m_dirty).
     void reloadBakePasses();
     void reloadMarchPasses();
 
-    PushFieldList m_bakeFields;
-    PushFieldList m_marchFields;
+    // The push blocks: the bake passes' ...
+    PushBlock m_splatBlock;       // the static splat passes (the floor coverage, the floor, the splat)
+    SplatPush m_splatPush{ false, { m_splatBlock } };
+    PushBlock m_recordSplatBlock; // their TREE_SPLAT_RECORDS variants
+    SplatPush m_recordSplatPush{ true, { m_recordSplatBlock } };
+    PushBlock m_resolveBlock;
+    ResolvePush m_resolvePush{ { m_resolveBlock } };
+    PushBlock m_floorSmoothBlock;
+    FloorSmoothPush m_floorSmoothPush{ { m_floorSmoothBlock } };
+    PushBlock m_recordsBlock;
+    RecordsPush m_recordsPush{ { m_recordsBlock } };
+    PushBlock m_farBlock;
+    FarPush m_farPush{ { m_farBlock } };
+    // ... and the march passes'.
+    PushBlock m_marchBlock;       // the march pairs (plain + temporal, each with its hand-over twin)
+    MarchPush m_marchPush{ { m_marchBlock } };
+    PushBlock m_temporalBlock;
+    TemporalPush m_temporalPush{ { m_temporalBlock } };
+    PushBlock m_upsampleBlock;
+    UpsamplePush m_upsamplePush{ { m_upsampleBlock } };
 
     ComputePipeline m_floorCoverPipeline; // the splat shader's TREE_FLOOR_PASS 1 variant (the coverage per column)
     ComputePipeline m_floorPipeline;      // ... and 2 (the dominant tree's base)

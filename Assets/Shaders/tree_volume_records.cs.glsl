@@ -57,21 +57,8 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Re
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ChunkList { RecordChunk c[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { RecordType t[]; };
 
-layout (push_constant, scalar) uniform Push
-{
-    RecordList pc_records;
-    ChunkList pc_chunks;
-    TypeList pc_types;
-    uint pc_numChunks;
-    uint pc_numTypes;
-    float pc_chunkSize;
-    uint pc_worldSeed;
-    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat (the bake's lockable values)
-    PC_DECL_recordDetail;   // float, m: the chunks whose centre lies within this of the bake centre splat in detail instead
-    PC_DECL_rockExtinction; // float: a rock's extinction (1/m) over its occupied volume
-    uint pc_chunkOffset;    // this dispatch's first chunk (the bake spreads the chunks over frames; numChunks = this dispatch's)
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's RecordsPush (pc_vol_*, pc_recordDetail, pc_rockExtinction: the bake's lockable values).
+#include "push.generated.glsl"
 
 const int MAX_TENT = 8; // texels each way: the crown's footprint is capped there (cost)
 const float ACCUM_SCALE = 1024.0; // tree_volume_splat.cs's fixed point (the rock sum)

@@ -11,13 +11,8 @@
 
 layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
-// PC_DECL_ / PC_CONSTS: the lockable values (GIProbePipeline::registerDebugPushFields, PushFields.ixx).
-layout (push_constant) uniform PC
-{
-    PC_DECL_radius; // float: sphere diameter scale (x sqrt(spacing))
-    PC_DECL_mode;   // uint: 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state, 4 = visibility
-};
-PC_CONSTS
+// The push block: GIProbePipeline's DebugPush (pc_radius, pc_mode: lockable).
+#include "push.generated.glsl"
 
 #define GI_GRID_DATA_NAME  gi_gridData
 #include "gi_probe.inc.glsl"

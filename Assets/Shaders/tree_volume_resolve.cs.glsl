@@ -27,13 +27,8 @@ layout (binding = 6, r32ui) uniform readonly uimage2D u_floor;
 const int ROCK_TEXTURES = 8; // TreeVolumePipeline::ROCK_TEXTURES
 layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
 
-layout (push_constant, scalar) uniform Push
-{
-    TV_PUSH_VOL_MEMBERS // TreeVolumeParams, flat (the bake's lockable values)
-    uint pc_sliceOffset; // this dispatch's first texel layer (the bake spreads the conversion over frames)
-    uint pc_columnPass;  // 1: the per-column colour pass (one layer dispatched, before any conversion); 0: convert the layers
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's ResolvePush (pc_vol_*: the bake's lockable values).
+#include "push.generated.glsl"
 
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)

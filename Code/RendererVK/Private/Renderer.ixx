@@ -12,7 +12,7 @@ import Threading;
 import :Layout;
 import :UboBlock;
 import :UboRoot;
-import :PushFields;
+import :PushBlock;
 import :Instance;
 import :Device;
 import :GpuProfiler;
@@ -541,16 +541,16 @@ private:
     void applyUboLocks();      // main, before the begin-frame build: only after a lock click or a bakeable change
     void setUboDeclaration();  // from m_uboBakedValues + m_uboBaked
 
-    // The lockable PUSH values (PushFieldList): one list per group of shaders, owned by its pipeline. onRebake (main,
-    // in applyUboLocks) reloads the list's shaders after a change; empty = the owner updates the list itself, at the
-    // moment its values belong to (the far-tree volume, TreeVolumePipeline::prepare).
-    struct PushFieldOwner
+    // The push blocks with LOCKABLE values (PushBlock), owned by their pipelines. onRebake (main, in applyUboLocks)
+    // reloads the block's pipelines after a change; empty = the owner updates the block itself, at the moment its values
+    // belong to (the far-tree volume, TreeVolumePipeline::prepare).
+    struct PushBlockOwner
     {
-        PushFieldList* list;
+        PushBlock* block;
         oc::function<void()> onRebake;
     };
-    oc::vector<PushFieldOwner> m_pushFields;
-    void registerPushFields(); // fills the lists, RendererUboBake.cpp
+    oc::vector<PushBlockOwner> m_pushBlocks;
+    void registerPushFields(); // the blocks' lockable values, RendererUboBake.cpp
 
     // ---- THE scene stage table ----
     // recordSceneSecondaries, recordPrimaryDesktop and recordPrimaryVR all read it, so a stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.

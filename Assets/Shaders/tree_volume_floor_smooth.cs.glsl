@@ -19,15 +19,9 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 0, r32ui) uniform readonly uimage2D u_src;
 layout (binding = 1, r32ui) uniform writeonly uimage2D u_dst;
 
-// PC_DECL_ / PC_CONSTS: the bake's lockable values (TreeVolumePipeline::registerPushFields, PushFields.ixx).
-layout (push_constant) uniform Push
-{
-    PC_DECL_vol_angularRes;   // uint
-    PC_DECL_vol_radialRes;    // uint
-    PC_DECL_floorSmoothing;   // int: columns each way (> 0)
-    uint pc_radialAxis; // 0 = along the angle (wraps), 1 = along the radius (clamps)
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's FloorSmoothPush (pc_vol_angularRes / radialRes, pc_floorSmoothing: the bake's
+// lockable values).
+#include "push.generated.glsl"
 
 void main()
 {

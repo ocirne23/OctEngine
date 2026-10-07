@@ -18,13 +18,8 @@ layout (binding = 3) uniform sampler2D u_treeDepth; // half res: log2 of the fir
 layout (binding = 4, rgba16f) uniform writeonly image2D u_outColor;
 layout (binding = 5, r16f) uniform writeonly image2D u_outDistance;
 
-// PC_DECL_ / PC_CONSTS: the march's lockable values (TreeVolumePipeline::registerPushFields, PushFields.ixx).
-layout (push_constant) uniform PC
-{
-    uvec2 pc_size;     // the render size
-    PC_DECL_vol_rMax;  // float: the march's max distance (the far volume's end)
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's UpsamplePush (pc_vol_rMax: the march's lockable value).
+#include "push.generated.glsl"
 
 void main()
 {

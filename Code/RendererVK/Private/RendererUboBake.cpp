@@ -8,7 +8,7 @@ import File;
 
 import :Layout;
 import :UboBlock;
-import :PushFields;
+import :PushBlock;
 import :Device;
 
 // Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_ubo, registerUboFields at the end of
@@ -23,8 +23,8 @@ import :Device;
 //  * a change of a row that feeds baked values (TweakRegistry's change listener, filtered by isVarBakeable). A locked
 //    row is read-only in the panel, so that is an override, a synced value, or code that wrote a setting and called
 //    Tweak::notifyChanged; an unlocked row only feeds block reads and never re-bakes.
-// The same two events mark the PUSH lists (PushFieldList, m_pushFields) dirty: applyUboLocks re-bakes the ones with an
-// onRebake and reloads only their passes; the far-tree volume re-bakes its own two in TreeVolumePipeline::prepare.
+// The same two events mark the PUSH blocks (PushBlock, m_pushBlocks) dirty: applyUboLocks re-bakes the ones with an
+// onRebake and reloads only their passes; the far-tree volume re-bakes its own in TreeVolumePipeline::prepare.
 
 void Renderer::registerUboLocks()
 {
@@ -32,8 +32,8 @@ void Renderer::registerUboLocks()
     {
         m_uboResolveDirty = true;
         m_uboLocksDirty = true;
-        for (PushFieldOwner& owner : m_pushFields)
-            owner.list->markDirty(/*resolve*/ true);
+        for (PushBlockOwner& owner : m_pushBlocks)
+            owner.block->markDirty(/*resolve*/ true);
     };
     for (uint32 s = 0; s < RendererVKLayout::NUM_UBO_LOCK_SECTIONS; ++s)
         m_uboLocks[s] = Tweak::lock(RendererVKLayout::c_uboLockSections[s].name, RendererVKLayout::c_uboLockSections[s].categories,
@@ -43,8 +43,8 @@ void Renderer::registerUboLocks()
         if (!TweakRegistry::get().isVarBakeable(var))
             return;
         m_uboLocksDirty = true;
-        for (PushFieldOwner& owner : m_pushFields)
-            owner.list->markDirty(/*resolve*/ false);
+        for (PushBlockOwner& owner : m_pushBlocks)
+            owner.block->markDirty(/*resolve*/ false);
     });
 
     registerUboFields(m_ubo); // after the root values (UboRoot binds them at construction)
@@ -56,8 +56,8 @@ void Renderer::registerUboLocks()
     for (const UboBlock::Entry& e : m_ubo.entries())
         for (const TweakRegistry::Source& s : e.sources)
             tweaks.markLockable(s.address, s.size);
-    for (const PushFieldOwner& owner : m_pushFields)
-        for (const PushFieldList::Entry& e : owner.list->entries())
+    for (const PushBlockOwner& owner : m_pushBlocks)
+        for (const PushBlock::Entry& e : owner.block->entries())
             for (const TweakRegistry::Source& s : e.sources)
                 tweaks.markLockable(s.address, s.size);
     const size_t count = m_ubo.entries().size();
@@ -72,32 +72,32 @@ void Renderer::registerUboLocks()
     bakeUboValues();
     m_uboResolveDirty = false;
     m_uboLocksDirty = false;
-    for (PushFieldOwner& owner : m_pushFields)
-        (void)owner.list->update();
+    for (PushBlockOwner& owner : m_pushBlocks)
+        (void)owner.block->update();
 }
 
-// Every lockable push value, per list. A list the Renderer re-bakes (applyUboLocks) names the reload that follows.
+// Every push block's lockable values. A block the Renderer re-bakes (applyUboLocks) names the reload that follows.
 void Renderer::registerPushFields()
 {
     m_eyeAdaptationPipeline.registerPushFields();
-    m_pushFields.push_back(PushFieldOwner{ &m_eyeAdaptationPipeline.pushFields(), [this]
+    m_pushBlocks.push_back(PushBlockOwner{ &m_eyeAdaptationPipeline.pushBlock(), [this]
     {
         m_eyeAdaptationPipeline.reloadShaders();
         setHaveToRecordCommandBuffers();
     } });
     m_rainOcclusionPipeline.registerPushFields();
-    m_pushFields.push_back(PushFieldOwner{ &m_rainOcclusionPipeline.pushFields(), [this] { m_rainOcclusionPipeline.reloadShaders(); } });
+    m_pushBlocks.push_back(PushBlockOwner{ &m_rainOcclusionPipeline.pushBlock(), [this] { m_rainOcclusionPipeline.reloadShaders(); } });
     m_giProbePipeline.registerDebugPushFields();
-    m_pushFields.push_back(PushFieldOwner{ &m_giProbePipeline.debugPushFields(), [this]
+    m_pushBlocks.push_back(PushBlockOwner{ &m_giProbePipeline.debugPushBlock(), [this]
     {
         m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());
         setHaveToRecordCommandBuffers();
     } });
     // The far-tree volume: its bake and its march read different settings at the same time (a bake runs over frames
-    // while the march shows the last one), so it updates its two lists itself (TreeVolumePipeline::prepare).
+    // while the march shows the last one), so it updates its blocks itself (TreeVolumePipeline::prepare).
     m_treeVolume.registerPushFields(m_farTreeParams);
-    m_pushFields.push_back(PushFieldOwner{ &m_treeVolume.bakePushFields(), {} });
-    m_pushFields.push_back(PushFieldOwner{ &m_treeVolume.marchPushFields(), {} });
+    for (PushBlock* block : m_treeVolume.pushBlocks())
+        m_pushBlocks.push_back(PushBlockOwner{ block, {} });
 }
 
 void Renderer::setUboDeclaration()
@@ -161,15 +161,15 @@ void Renderer::applyUboLocks()
     if (!m_initialized)
         return;
     bool pushDirty = false;
-    for (const PushFieldOwner& owner : m_pushFields)
-        pushDirty |= owner.onRebake && owner.list->isDirty();
+    for (const PushBlockOwner& owner : m_pushBlocks)
+        pushDirty |= owner.onRebake && owner.block->isDirty();
     if (!m_uboLocksDirty && !pushDirty)
         return;
     ProfileScope scope("UBO locks", EProfileCategory::Renderer);
     // The push lists first: a full reload below compiles every shader with their new defines.
-    oc::small_vector<PushFieldOwner*, 4> rebaked;
-    for (PushFieldOwner& owner : m_pushFields)
-        if (owner.onRebake && owner.list->isDirty() && owner.list->update())
+    oc::small_vector<PushBlockOwner*, 4> rebaked;
+    for (PushBlockOwner& owner : m_pushBlocks)
+        if (owner.onRebake && owner.block->isDirty() && owner.block->update())
             rebaked.push_back(&owner);
     bool uboChanged = false;
     if (m_uboLocksDirty)
@@ -194,6 +194,6 @@ void Renderer::applyUboLocks()
         return;
     }
     (void)Globals::device.graphicsQueueWaitIdle();
-    for (PushFieldOwner* owner : rebaked)
+    for (PushBlockOwner* owner : rebaked)
         owner->onRebake();
 }

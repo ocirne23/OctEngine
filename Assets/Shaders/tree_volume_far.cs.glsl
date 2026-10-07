@@ -50,18 +50,8 @@ struct RecordType
 };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { RecordType t[]; };
 
-layout (push_constant, scalar) uniform Push
-{
-    TypeList pc_types;
-    uint pc_numTypes;
-    uint pc_mapSize;
-    TV_PUSH_VOL_MEMBERS // TreeVolumeParams, flat (the bake's lockable values)
-    TreeRecordWords pc_records; // the chunks' ground
-    TreeRecordMap pc_map;
-    float pc_chunkSize;
-    uint pc_rowOffset; // this dispatch's first radial row (the bake spreads the rows over frames; a multiple of the 8-row group)
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's FarPush (pc_vol_*: the bake's lockable values).
+#include "push.generated.glsl"
 
 const uint PROFILE_BINS = 32u;      // TREE_RECORD_PROFILE_BINS
 

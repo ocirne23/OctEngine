@@ -9,6 +9,7 @@ export struct ComputePipelineLayout
     oc::string computeShaderText;
     oc::string computeShaderDebugFilePath;
     oc::vector<ShaderDefine> defines;
+    oc::string pushDeclaration; // served as "push.generated.glsl" (PushBlock::declaration)
     oc::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     oc::vector<vk::DescriptorBindingFlags> descriptorBindingFlags; // parallel to descriptorSetLayoutBindings (optional)
     oc::vector<vk::PushConstantRange> pushConstantRanges;

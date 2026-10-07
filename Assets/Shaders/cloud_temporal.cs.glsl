@@ -49,20 +49,21 @@ layout (binding = 8, r16f) uniform writeonly image2D u_outMeanDistance;
 // the range of a sky texel it let the history fade to clear sky - a sky-coloured outline around every object.
 const float LIMIT_MATCH = 0.15;
 
+#ifdef TREE_TEMPORAL
+// The trees' push block: TreeVolumePipeline's TemporalPush (pc_vol_rMax, the march's max distance: lockable).
+#include "push.generated.glsl"
+#define u_viewIndex pc_viewIndex
+#define u_width pc_width
+#define u_height pc_height
+#define u_historyWeight pc_historyWeight
+#else
 layout (push_constant) uniform CloudPC
 {
     uint u_viewIndex;
     uint u_width;
     uint u_height;
-#ifdef TREE_TEMPORAL
-    float u_historyWeight;
-    PC_DECL_vol_rMax; // float: the march's max distance (the far volume's end) - lockable (the march's list, PushFields.ixx)
-#else
     uint u_pad;
-#endif
 };
-#ifdef TREE_TEMPORAL
-PC_CONSTS
 #endif
 
 // The trees' variant BAKES its scale (1, or 2 at "Far half res") and checkerboard (TreeVolumePipeline compiles one per

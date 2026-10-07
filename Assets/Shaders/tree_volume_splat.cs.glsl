@@ -102,30 +102,9 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Re
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TreeRecordWords { uint w[]; };
 #endif
 
-layout (push_constant, scalar) uniform Push
-{
-#ifdef TREE_SPLAT_RECORDS
-    TreeRecordMap pc_map;   // the chunk map (the records' ground)
-#else
-    PieceList pc_pieces;
-#endif
-    TypeList pc_types;      // TREE_SPLAT_RECORDS: the world set's
-    FloatList pc_data;
-    uint pc_numPieces;      // TREE_SPLAT_RECORDS: the detail chunks' records (one workgroup each)
-    uint pc_mapSize;        // TREE_SPLAT_RECORDS: the chunk map's size
-    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat (the bake's lockable values)
-    // TREE_SPLAT_RECORDS only:
-    TreeRecordWords pc_records; // each chunk's ground, then its records
-    DetailList pc_detailChunks;
-    RecordTypeList pc_recordTypes;
-    float pc_chunkSize;
-    uint pc_worldSeed;
-    uint pc_numDetailChunks;
-    uint pc_numRecordTypes;
-    uint pc_wgOffset;       // this dispatch's first record / piece (the bake spreads both over frames)
-    PC_DECL_rockExtinction; // float: a SOLID type's extinction (1/m) over its occupancy
-};
-PC_CONSTS
+// The push block: TreeVolumePipeline's SplatPush (pc_pieces, or pc_map under TREE_SPLAT_RECORDS; pc_vol_*: the bake's
+// lockable values).
+#include "push.generated.glsl"
 
 vec3 quatRotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 

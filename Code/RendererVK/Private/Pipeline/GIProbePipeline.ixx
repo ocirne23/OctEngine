@@ -14,7 +14,7 @@ import :DescriptorSet;
 import :Sampler;
 import :Layout;
 import :UboBlock;
-import :PushFields;
+import :PushBlock;
 import Settings;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
@@ -183,11 +183,11 @@ public:
     void reloadDebugShaders(vk::RenderPass renderPass);
     void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
     // The "GI/Debug probe*" settings. Enabled is a per-frame stage flag; the colour mode and the radius are
-    // lockable push values (debugPushFields) in the CACHED debug secondary, so a change re-records (the Renderer's
+    // lockable push values (debugPushBlock) in the CACHED debug secondary, so a change re-records (the Renderer's
     // listener) and, while locked, re-bakes. The testbed's P / O keys drive the same settings (the caller re-records
     // after cycleDebugMode).
     void registerDebugPushFields();
-    PushFieldList& debugPushFields() { return m_debugPushFields; }
+    PushBlock& debugPushBlock() { return m_debugBlock; }
     bool isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
     void toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
     void cycleDebugMode() // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
@@ -238,7 +238,15 @@ private:
     ComputePipeline m_tracePipeline;
     ComputePipeline m_volumeBakePipeline;
     GraphicsPipeline m_debugPipeline;
-    PushFieldList m_debugPushFields;
+    // gi_probe_debug.vs.glsl's push block (served as push.generated.glsl): both values lockable.
+    struct DebugPush
+    {
+        PushGroup g;
+        PushValue<float> radius = g("radius"); // sphere diameter scale (x sqrt(spacing))
+        PushValue<uint32> mode = g("mode");    // 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state, 4 = visibility
+    };
+    PushBlock m_debugBlock;
+    DebugPush m_debugPush{ { m_debugBlock } };
     vk::RenderPass m_debugRenderPass;
 
     // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 3-layer array, GENERAL layout for life, rewritten

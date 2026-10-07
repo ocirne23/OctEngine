@@ -8,7 +8,7 @@ import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
 import :RenderParams;
-import :PushFields;
+import :PushBlock;
 
 // Automatic exposure ("eye adaptation"). Two compute passes per frame over the TAA-resolved scene colour:
 //   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl);
@@ -24,9 +24,9 @@ public:
     void reloadShaders();
 
     // The histogram's lockable push values (bloom threshold / knee, the exposure rule): registered before initialize;
-    // the Renderer bakes the list and calls reloadShaders + re-records after a change.
+    // the Renderer bakes the block and calls reloadShaders + re-records after a change.
     void registerPushFields();
-    PushFieldList& pushFields() { return m_pushFields; }
+    PushBlock& pushBlock() { return m_histogramBlock; }
 
     // Geometry that depends on the viewport (baked into the command buffer; recorded once, re-recorded on
     // resize like the other passes).
@@ -42,10 +42,7 @@ public:
         // Always bound.
         vk::ImageView bloomLevel0View;
         bool bloom = false;
-        float bloomThreshold = 0.0f; // exposed units, 0 = off (see eyeadapt_histogram.cs.glsl bloomThreshold)
-        float bloomKnee = 0.5f;
-        float exposureEV = 0.0f;     // the composite's exposure rule, for the threshold
-        bool  autoExposure = true;
+        // The threshold, the knee and the exposure rule are lockable push values (registerPushFields).
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
 
@@ -60,16 +57,17 @@ private:
     void buildHistogramLayout(ComputePipelineLayout& layout);
     void buildReduceLayout(ComputePipelineLayout& layout);
 
-    // Geometry push constants (baked at record time).
-    struct HistogramPC
+    // eyeadapt_histogram.cs.glsl's push block (PushBlock: bound in declaration order, served as push.generated.glsl).
+    struct HistogramPush
     {
-        glm::ivec2 vpMin;
-        glm::ivec2 vpSize;
-        int32 bloom; // 1 = also write bloom level 0
-        float bloomThreshold;
-        float bloomKnee;
-        float manualExposure;
-        int32 autoExposure;
+        PushGroup g;
+        PushValue<glm::ivec2> vpMin = g("vpMin");             // viewport origin in the resolved image
+        PushValue<glm::ivec2> vpSize = g("vpSize");           // viewport size (pixels sampled)
+        PushValue<int32> bloom = g("bloom");                  // 1 = also write bloom level 0
+        PushValue<float> bloomThreshold = g("bloomThreshold"); // lockable: the soft threshold, in EXPOSED units (1 = display white before the tonemap); 0 = off
+        PushValue<float> bloomKnee = g("bloomKnee");          // lockable: the knee's half width (exposed units)
+        PushValue<float> manualExposure = g("manualExposure"); // lockable: exp2 of the EV tweak (the composite's u_exposure)
+        PushValue<int32> autoExposure = g("autoExposure");    // lockable: 1 = times the eye-adaptation exposure (the composite's rule)
     };
     struct ReducePC
     {
@@ -89,7 +87,8 @@ private:
         float maxExposure;
     };
 
-    PushFieldList m_pushFields;
+    PushBlock m_histogramBlock;
+    HistogramPush m_histogramPush{ { m_histogramBlock } };
     ComputePipeline m_histogramPipeline;
     ComputePipeline m_reducePipeline;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_histogramSets;

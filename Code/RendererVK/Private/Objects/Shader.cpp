@@ -27,10 +27,11 @@ bool Shader::initializeFromFile(vk::ShaderStageFlagBits stage, const oc::string&
     return initialize(stage, fileContent, filePath, defines, assertOnFailure);
 }
 
-bool Shader::initialize(vk::ShaderStageFlagBits stage, const oc::string& shaderStr, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines, bool assertOnFailure)
+bool Shader::initialize(vk::ShaderStageFlagBits stage, const oc::string& shaderStr, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines,
+    bool assertOnFailure, const oc::string& pushDeclaration)
 {
     oc::vector<unsigned int> spirv;
-    if (!GLSLtoSPV(stage, shaderStr, spirv, debugFilePath, defines))
+    if (!GLSLtoSPV(stage, shaderStr, spirv, debugFilePath, defines, pushDeclaration))
     {
         assert((!assertOnFailure) && "Failed to compile shader SPIRV");
         return false;
@@ -62,8 +63,6 @@ void Shader::appendDefineList(oc::string& out, const oc::vector<ShaderDefine>& d
 {
     for (const ShaderDefine& define : defines)
     {
-        if (define.name.compare(0, 3, "PC_") == 0)
-            continue; // the baked push values (PushFields.ixx), like the UBO's consts: no variant of their own
         const oc::string item = define.value.empty() ? define.name : define.name + "=" + define.value;
         if (oc::string(" " + out + " ").find(" " + item + " ") != oc::string::npos)
             continue;
@@ -98,7 +97,8 @@ EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
 class ShaderIncluder final : public glslang::TShader::Includer
 {
 public:
-    explicit ShaderIncluder(const oc::string& rootFilePath)
+    ShaderIncluder(const oc::string& rootFilePath, const oc::string& pushDeclaration)
+        : m_pushDeclaration(pushDeclaration)
     {
         m_rootDir = FileSystem::parentPath(rootFilePath);
     }
@@ -121,6 +121,12 @@ private:
         // The frame UBO's declaration is not a file: it is generated (RendererVKLayout::g_uboDeclaration).
         if (std::strcmp(headerName, "ubo.generated.glsl") == 0)
             return store(headerName, oc::string(RendererVKLayout::g_uboDeclaration));
+        // The compiling pipeline's push block (PushBlock::declaration): per compile, never a file either.
+        if (std::strcmp(headerName, "push.generated.glsl") == 0)
+        {
+            assert(!m_pushDeclaration.empty() && "push.generated.glsl included, but the pipeline layout has no pushDeclaration");
+            return store(headerName, oc::string(m_pushDeclaration));
+        }
 
         oc::vector<oc::string> candidates;
         if (includerName != nullptr && includerName[0] != '\0')
@@ -151,6 +157,7 @@ private:
     }
 
     oc::string m_rootDir;
+    const oc::string& m_pushDeclaration;
     oc::vector<oc::unique_ptr<oc::string>> m_contents;
     oc::vector<oc::unique_ptr<IncludeResult>> m_results;
 };
@@ -279,6 +286,8 @@ static oc::string buildLayoutPreamble()
 static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
 {
     oc::string preamble = "#extension GL_ARB_shading_language_include : require\n";
+    // The generated push blocks are scalar (PushBlock): a shader that includes one needs no extension line of its own.
+    preamble += "#extension GL_EXT_scalar_block_layout : require\n";
     preamble += buildLayoutPreamble();
     for (const ShaderDefine& define : defines)
     {
@@ -290,7 +299,8 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
     return preamble;
 }
 
-bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines)
+bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath,
+    const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration)
 {
     const oc::string spvBinPath = "Local/" + debugFilePath + ".spv";
     const oc::string spvBinFolder = FileSystem::parentPath(spvBinPath);
@@ -324,7 +334,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     const oc::string preamble = buildPreamble(defines);
     shader.setPreamble(preamble.c_str());
 
-    ShaderIncluder includer(debugFilePath);
+    ShaderIncluder includer(debugFilePath, pushDeclaration);
     if (!shader.parse(GetDefaultResources(), 100, ENoProfile, false, false, messages, includer))
     {
         puts(shader.getInfoLog());

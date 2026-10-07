@@ -17,14 +17,8 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout (binding = 0) uniform accelerationStructureEXT u_tlas;
 layout (binding = 1, r32ui) uniform restrict writeonly uimage2D u_rainOcclusion;
 
-// PC_DECL_ / PC_CONSTS: the lockable values (RainOcclusionPipeline::registerPushFields, PushFields.ixx).
-layout (push_constant) uniform PC
-{
-    mat4 pc_invViewProj;
-    uint pc_resolution;
-    PC_DECL_layerBlock; // float: the rain one foliage layer stops (0..1)
-};
-PC_CONSTS
+// The push block: RainOcclusionPipeline's RainPush (pc_layerBlock: lockable).
+#include "push.generated.glsl"
 
 void main()
 {

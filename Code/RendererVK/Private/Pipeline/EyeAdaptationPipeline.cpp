@@ -10,32 +10,30 @@ import Settings;
 namespace
 {
     constexpr uint32 NUM_BINS = 256;
-
-    float manualExposure(float exposureEV) { return exp2f(exposureEV); } // the composite's u_exposure
 }
 
 void EyeAdaptationPipeline::registerPushFields()
 {
     const BloomParams& bloom = Globals::settings.bloom;
     const PostParams& post = Globals::settings.post;
-    m_pushFields.add("bloomThreshold", bloom.threshold);
-    m_pushFields.add("bloomKnee", bloom.knee);
-    m_pushFields.add("manualExposure", [&post] { return manualExposure(post.exposureEV); }, post.exposureEV);
-    m_pushFields.add("autoExposure", [&post] { return post.autoExposure ? 1 : 0; }, post.autoExposure);
+    m_histogramBlock.lockable(m_histogramPush.bloomThreshold, bloom.threshold);
+    m_histogramBlock.lockable(m_histogramPush.bloomKnee, bloom.knee);
+    m_histogramBlock.lockable(m_histogramPush.manualExposure, [&post] { return exp2f(post.exposureEV); }, post.exposureEV); // the composite's u_exposure
+    m_histogramBlock.lockable(m_histogramPush.autoExposure, [&post] { return post.autoExposure ? 1 : 0; }, post.autoExposure);
 }
 
 void EyeAdaptationPipeline::buildHistogramLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/eyeadapt_histogram.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    m_pushFields.appendDefines(layout.defines);
+    layout.pushDeclaration = m_histogramBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // bloom level 0
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // last frame's exposure (bloom threshold)
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(HistogramPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = m_histogramBlock.size() });
 }
 
 void EyeAdaptationPipeline::buildReduceLayout(ComputePipelineLayout& layout)
@@ -136,10 +134,11 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         commandBuffer.cmdUpdateDescriptorSets(m_histogramPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_histogramPipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_histogramPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-        HistogramPC pc{ .vpMin = params.viewportMin, .vpSize = params.viewportSize, .bloom = params.bloom ? 1 : 0,
-            .bloomThreshold = params.bloomThreshold, .bloomKnee = params.bloomKnee,
-            .manualExposure = manualExposure(params.exposureEV), .autoExposure = params.autoExposure ? 1 : 0 };
-        cmd.pushConstants(m_histogramPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+        PushData pc(m_histogramBlock);
+        pc.set(m_histogramPush.vpMin, params.viewportMin);
+        pc.set(m_histogramPush.vpSize, params.viewportSize);
+        pc.set(m_histogramPush.bloom, params.bloom ? 1 : 0);
+        cmd.pushConstants(m_histogramPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
         constexpr uint32 pixelsPerGroup = 16 * 4; // 16x16 threads x PIXELS_PER_THREAD (eyeadapt_histogram.cs.glsl)
         const uint32 gx = ((uint32)params.viewportSize.x + pixelsPerGroup - 1) / pixelsPerGroup;
         const uint32 gy = ((uint32)params.viewportSize.y + pixelsPerGroup - 1) / pixelsPerGroup;

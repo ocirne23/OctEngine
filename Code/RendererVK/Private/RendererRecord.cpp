@@ -254,7 +254,7 @@ void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameI
         if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
         {
             m_gpuProfiler.beginScope(primary, "Rain occlusion");
-            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.get(m_u.weather.rainOcclusionViewProj),m_particles.getParams().rainOcclusionFoliageBlock);
+            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.get(m_u.weather.rainOcclusionViewProj));
             m_gpuProfiler.endScope(primary);
         }
     executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
@@ -912,10 +912,6 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
         .viewportSize = m_viewportRect.getSize(),
         .bloomLevel0View = m_bloomPipeline.getLevel0View(),
         .bloom = bloomEnabled(), // the histogram pass writes bloom level 0 from its own read
-        .bloomThreshold = m_bloomParams.threshold,
-        .bloomKnee = m_bloomParams.knee,
-        .exposureEV = m_postParams.exposureEV, // the composite's exposure: the threshold is in exposed units
-        .autoExposure = m_postParams.autoExposure,
     };
     m_eyeAdaptationPipeline.record(cb, frameIdx, params);
     cb.end();

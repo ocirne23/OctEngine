@@ -14,12 +14,6 @@ import :UboBlock;
 
 namespace
 {
-    struct DebugPC
-    {
-        float  radius; // cube half-extent as a fraction of probe spacing
-        uint32 mode;   // 0 = irradiance, 1 = cascade/LOD color
-    };
-
     vk::DescriptorSetLayoutBinding storageBinding(uint32 b)
     {
         return vk::DescriptorSetLayoutBinding{ .binding = b, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute };
@@ -697,15 +691,15 @@ void GIProbePipeline::recordVolumeBake(CommandBuffer& commandBuffer, uint32 fram
 void GIProbePipeline::registerDebugPushFields()
 {
     const GiSettings& gi = Globals::settings.gi;
-    m_debugPushFields.add("radius", gi.debugRadius);
-    m_debugPushFields.add("mode", [&gi] { return (uint32)gi.debugMode; }, gi.debugMode);
+    m_debugBlock.lockable(m_debugPush.radius, gi.debugRadius);
+    m_debugBlock.lockable(m_debugPush.mode, [&gi] { return (uint32)gi.debugMode; }, gi.debugMode);
 }
 
 void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/gi_probe_debug.vs.glsl";
     layout.fragmentShader.debugFilePath = "Shaders/gi_probe_debug.fs.glsl";
-    m_debugPushFields.appendDefines(layout.vertexShader.defines);
+    layout.vertexShader.pushDeclaration = m_debugBlock.declaration();
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone; // procedural cube, winding not guaranteed
@@ -719,7 +713,7 @@ void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
     constexpr vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = stages }); // UBO (mvp + viewPos)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = stages }); // clipmap SH volume
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eVertex, .offset = 0, .size = sizeof(DebugPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eVertex, .offset = 0, .size = m_debugBlock.size() });
 }
 
 void GIProbePipeline::initializeDebug(vk::RenderPass renderPass)
@@ -759,8 +753,8 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     const GiSettings& gi = Globals::settings.gi;
-    DebugPC pc{ .radius = gi.debugRadius, .mode = (uint32)gi.debugMode };
-    cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, sizeof(pc), &pc);
+    const PushData pc(m_debugBlock); // both values lockable: written by the block
+    cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, pc.size(), pc.data());
     // One sphere impostor quad (6 verts) per clipmap probe across all cascades.
     cmd.draw(6, gi.grid.probesTotal(), 0, 0);
 }

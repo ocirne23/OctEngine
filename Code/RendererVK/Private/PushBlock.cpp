@@ -3,39 +3,25 @@ module RendererVK;
 import Core;
 import Core.Log;
 import Settings.Tweaks;
-import :PushFields;
+import :PushBlock;
 
 namespace
 {
-    using EType = PushFieldsDetail::EType;
-
-    const char* glslType(EType type)
-    {
-        switch (type)
-        {
-        case EType::Float: return "float";
-        case EType::Int:   return "int";
-        case EType::Uint:  return "uint";
-        case EType::Vec2:  return "vec2";
-        case EType::Vec3:  return "vec3";
-        case EType::Vec4:  return "vec4";
-        case EType::Uvec2: return "uvec2";
-        }
-        return "?";
-    }
+    using EType = PushBlockDetail::EType;
 
     uint32 scalarCount(EType type)
     {
         switch (type)
         {
-        case EType::Vec2: case EType::Uvec2: return 2;
+        case EType::Vec2: case EType::Ivec2: case EType::Uvec2: return 2;
         case EType::Vec3: return 3;
         case EType::Vec4: return 4;
+        case EType::Mat4: return 16;
         default: return 1;
         }
     }
 
-    bool isFloat(EType type) { return type == EType::Float || type == EType::Vec2 || type == EType::Vec3 || type == EType::Vec4; }
+    bool isFloat(EType type) { return type == EType::Float || type == EType::Vec2 || type == EType::Vec3 || type == EType::Vec4 || type == EType::Mat4; }
 
     bool isFinite(EType type, const uint8* bytes)
     {
@@ -52,11 +38,11 @@ namespace
     }
 
     // %.9g round-trips every float exactly; a GLSL float literal needs a '.' or an exponent.
-    void appendValue(oc::string& out, EType type, const uint8* bytes)
+    void appendValue(oc::string& out, const char* glslType, EType type, const uint8* bytes)
     {
         const uint32 scalars = scalarCount(type);
         if (scalars > 1)
-            out += oc::format("{}(", glslType(type));
+            out += oc::format("{}(", glslType);
         for (uint32 s = 0; s < scalars; ++s)
         {
             if (s > 0)
@@ -67,10 +53,10 @@ namespace
                 std::memcpy(&value, bytes + s * 4, 4);
                 out += oc::format("{}u", value);
             }
-            else if (type == EType::Int)
+            else if (type == EType::Int || type == EType::Ivec2)
             {
                 int32 value;
-                std::memcpy(&value, bytes, 4);
+                std::memcpy(&value, bytes + s * 4, 4);
                 out += oc::format("{}", value);
             }
             else
@@ -89,12 +75,32 @@ namespace
     }
 }
 
-// Each entry's lock from its sources: locked while every source row is locked (or no lock covers it).
-void PushFieldList::resolve()
+const char* PushBlock::typeName(EType type)
+{
+    switch (type)
+    {
+    case EType::Float: return "float";
+    case EType::Int:   return "int";
+    case EType::Uint:  return "uint";
+    case EType::Vec2:  return "vec2";
+    case EType::Vec3:  return "vec3";
+    case EType::Vec4:  return "vec4";
+    case EType::Ivec2: return "ivec2";
+    case EType::Uvec2: return "uvec2";
+    case EType::Mat4:  return "mat4";
+    case EType::Address: return "uint64_t";
+    }
+    return "?";
+}
+
+// Each lockable value's lock from its sources: locked while every source row is locked (or no lock covers it).
+void PushBlock::resolve()
 {
     const TweakRegistry& tweaks = TweakRegistry::get();
     for (Entry& e : m_entries)
     {
+        if (!e.eval)
+            continue;
         ETweakSource source = ETweakSource::Locked;
         for (const TweakRegistry::Source& s : e.sources)
         {
@@ -107,7 +113,7 @@ void PushFieldList::resolve()
     }
 }
 
-bool PushFieldList::update()
+bool PushBlock::update()
 {
     if (m_resolveDirty)
         resolve();
@@ -115,6 +121,8 @@ bool PushFieldList::update()
     bool changed = false;
     for (Entry& e : m_entries)
     {
+        if (!e.eval)
+            continue;
         e.eval->write(e.value.data());
         const bool bake = e.locked && isFinite(e.type, e.value.data());
         if (!bake)
@@ -132,19 +140,23 @@ bool PushFieldList::update()
     return changed;
 }
 
-void PushFieldList::appendDefines(oc::vector<ShaderDefine>& defines) const
+oc::string PushBlock::declaration() const
 {
-    oc::string consts;
+    oc::string out = "// GENERATED (PushBlock::declaration): the compiling pipeline's push block.\n";
+    out += "layout (push_constant, scalar) uniform PC\n{\n";
+    for (const Entry& e : m_entries)
+        out += oc::format("    layout(offset = {}) {} pc_{}{};\n", e.offset, e.glslType, e.name, e.baked ? "Baked" : "");
+    out += "};\n";
+    for (const Entry& e : m_entries)
+        if (e.eval)
+            out += oc::format("#define PC_LIVE_{} pc_{}{}\n", e.name, e.name, e.baked ? "Baked" : "");
     for (const Entry& e : m_entries)
     {
-        const char* suffix = e.baked ? "Baked" : "";
-        defines.push_back(ShaderDefine{ "PC_DECL_" + e.name, oc::format("{} pc_{}{}", glslType(e.type), e.name, suffix) });
-        defines.push_back(ShaderDefine{ "PC_LIVE_" + e.name, oc::format("pc_{}{}", e.name, suffix) });
         if (!e.baked)
             continue;
-        consts += oc::format("const {} pc_{} = ", glslType(e.type), e.name);
-        appendValue(consts, e.type, e.bakedValue.data());
-        consts += "; ";
+        out += oc::format("const {} pc_{} = ", e.glslType, e.name);
+        appendValue(out, e.glslType.c_str(), e.type, e.bakedValue.data());
+        out += ";\n";
     }
-    defines.push_back(ShaderDefine{ "PC_CONSTS", consts });
+    return out;
 }

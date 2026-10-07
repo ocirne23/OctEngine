@@ -7,7 +7,7 @@ import :Allocator;
 import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
-import :PushFields;
+import :PushBlock;
 
 // The weather volume's RAIN OCCLUSION MAP (the particle sim's shelter test): per texel, two short ray queries straight
 // DOWN through the volume's top-down orthographic box (u_weather_rainOcclusionViewProj) against THIS frame's TLAS - the solid
@@ -27,16 +27,15 @@ public:
 
     void initialize(); // the sampler + the placeholders only
     void reloadShaders();
-    // The lockable push value (the foliage block): the Renderer bakes the list and calls reloadShaders after a change.
+    // The lockable push value (the foliage block): the Renderer bakes the block and calls reloadShaders after a change.
     void registerPushFields();
-    PushFieldList& pushFields() { return m_pushFields; }
+    PushBlock& pushBlock() { return m_block; }
     // Allocates (true) or frees (false) the map. The GPU must be idle; the caller re-records the particle sim's set.
     void setActive(bool active);
     bool isActive() const { return m_active; }
     // Into the primary, after the TLAS build's barrier: the trace, then a barrier to the particle sim's sampled read.
-    // viewProj = the frame UBO's u_weather_rainOcclusionViewProj (its inverse rides the push constants); layerBlock = the
-    // rain one foliage layer stops (0..1).
-    void record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj, float layerBlock);
+    // viewProj = the frame UBO's u_weather_rainOcclusionViewProj (its inverse rides the push constants).
+    void record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj);
 
     // Always in GENERAL (the particle sim samples it there, nearest, bounds-checked itself).
     vk::ImageView getView() const { return m_view; }
@@ -49,7 +48,16 @@ private:
 
     bool m_active = false;
     bool m_pipelineBuilt = false;
-    PushFieldList m_pushFields;
+    // rain_occlusion.cs.glsl's push block (served as push.generated.glsl).
+    struct RainPush
+    {
+        PushGroup g;
+        PushValue<glm::mat4> invViewProj = g("invViewProj");
+        PushValue<uint32> resolution = g("resolution");
+        PushValue<float> layerBlock = g("layerBlock"); // lockable: the rain one foliage layer stops (0..1)
+    };
+    PushBlock m_block;
+    RainPush m_push{ { m_block } };
     ComputePipeline m_pipeline;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_sets; // per slot: the TLAS handle is per slot
     vk::Image m_image;

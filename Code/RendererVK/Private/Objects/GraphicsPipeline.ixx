@@ -18,6 +18,7 @@ export struct ShaderSource
     oc::string text;
     oc::string debugFilePath;
     oc::vector<ShaderDefine> defines;
+    oc::string pushDeclaration; // served as "push.generated.glsl" (PushBlock::declaration)
 };
 
 export struct PipelineVariant

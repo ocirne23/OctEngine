@@ -2211,6 +2211,7 @@ Scene opaque, nearly all with 0 instances.
 | `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes (root handles, lockable values), `UboGroup` (self-binding handles). |
 | `UboRoot.ixx` | `UboRoot`: the root value handles, in packing order (see "The frame UBO and the tweak locks"). |
 | `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
+| `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks". |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and `Stats`; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
 | `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
@@ -3094,31 +3095,41 @@ size, a define with its own listener) has no button and is never read-only. `ETw
   `-Tweaks` file can unlock them all for an A/B). A startup compiles the shaders ONCE, already baked.
 * The reload reads the shader files on main: it opens `FileSystem::AllowMainThreadIO`, like F5.
 
-## Lockable push values (`PushFields.ixx`)
+## Push blocks (`PushBlock.ixx`)
 
-The UBO pattern for a push block. A `PushFieldList` per group of shaders that read the same values at the same time,
-owned by its pipeline: `list.add("vol_rMin", lambda, sources...)` / `list.add("bloomKnee", variable)`, the GLSL type
-from the value's C++ type, which must be the push member's type (`float`, `int32`, `uint32`, `vec2/3/4`, `uvec2`).
+The UBO's registered pattern for a push block, used by every push block with LOCKABLE values (the eye-adaptation
+histogram, rain occlusion, the GI probe debug, the far-tree splat / records / far / resolve / floor smooth / march /
+temporal / upsample). The others are still hand-written blocks with mirrored C++ structs.
 
-* **The push block is instance-less with flat `pc_` names**, like the UBO's `u_`. A lockable member is declared
-  through its generated define, the consts follow the block:
-  `layout (push_constant) uniform PC { uvec2 pc_size; PC_DECL_vol_rMax; }; PC_CONSTS`. Baked: `PC_DECL_x` is
-  `float pc_xBaked` (the slot stays - the C++ still pushes it, unread) and `PC_CONSTS` holds `const float pc_x = v;`.
-  `PC_LIVE_x` reads the member in both modes. `appendDefines` adds them to every layout that compiles a shader of the
-  list; the pipeline stats' `Defines=` column skips them.
-* The far-tree passes declare `TreeVolumeParams` flat through `TV_PUSH_VOL_MEMBERS` and build the struct with
-  `TV_PUSH_VOL` (tree_volume.inc.glsl), so the helpers fold the baked members.
-* **Same events as the UBO**: a lock click marks every list dirty with a re-resolve, a bakeable change marks it dirty.
+* **A handle struct per block IS the layout**: `PushValue<T>` members that bind themselves where they are declared
+  (`PushGroup`, like `UboGroup`): `PushValue<float> radius = g("radius");`, a buffer reference
+  `PushValue<uint64> pieces = g("pieces", "PieceList");` (an address names its GLSL type), a nested group with a prefix
+  (`TvVolPush vol{ { g.block, "vol_" } };` -> `pc_vol_*`). Scalar layout, explicit offsets, 128 bytes at most. A
+  variant can bind other names (`SplatPush::recordsVariant`: `pc_pieces` / `pc_map`).
+* **The GLSL is generated per pipeline**: the layout carries `block.declaration()` as its `pushDeclaration`, and the
+  shader writes `#include "push.generated.glsl"` where its block was (the includer serves that compile's text; the
+  preamble enables `GL_EXT_scalar_block_layout` for every shader). An instance-less block of `pc_<name>` members; a
+  baked one is `pc_<name>Baked` (the slot stays) and a `const` named like the member follows. `PC_LIVE_<name>` reads the
+  member in both modes. The push range is `block.size()`.
+* **A dispatch fills a `PushData`** (a stack buffer, so recording stays thread-safe): `PushData pc(block);
+  pc.set(h.size, v); cmd.pushConstants(layout, stages, 0, pc.size(), pc.data());`. The LOCKABLE values are written by
+  the `PushData` itself (`writeLockables`, the registered lambdas), so the fill site never computes them a second time.
+* **Lockable** = a bound handle plus `block.lockable(h, lambda, sources...)` / `block.lockable(h, variable)`, after the
+  handles are bound (the pipeline's `registerPushFields`, before its first build).
+* The far-tree passes build `TreeVolumeParams` from the flat members with `TV_PUSH_VOL` (tree_volume.inc.glsl), so the
+  helpers fold the baked ones.
+* **Same events as the UBO**: a lock click marks every block dirty with a re-resolve, a bakeable change marks it dirty.
   `update()` re-resolves if asked, evaluates and bakes; true = a const changed.
-* **Who updates when** (`Renderer::m_pushFields`): a list with an `onRebake` is re-baked in `applyUboLocks` and only
+* **Who updates when** (`Renderer::m_pushBlocks`): a block with an `onRebake` is re-baked in `applyUboLocks` and only
   its passes reload (eye adaptation + re-record, rain occlusion, GI probe debug + re-record) - a UBO change in the same
-  frame reloads everything instead. A list without one updates itself at the moment its values belong to:
-  * the far-tree BAKE list (the splat, records, far columns, resolve, floor smoothing) takes the LIVE settings - a
-    running bake with other settings is dropped anyway (`recordBake`: `sameBake`);
-  * the far-tree MARCH list (the march pair, the temporal pass, the upsample) takes `marchSettings()`: the shown bake's,
-    or in the frame a bake without a cross-fade swaps, the new one's (its copy and swap run in that frame's
-    `recordBake`, before the march; FloorMax's end marks the list dirty). The density scale is live;
-  * both in `TreeVolumePipeline::prepare` (before any recording; GPU idle), `reloadBakePasses` / `reloadMarchPasses`.
+  frame reloads everything instead. A block without one updates itself at the moment its values belong to:
+  * the far-tree BAKE blocks (the splat pair, records, far columns, resolve, floor smoothing) take the LIVE settings - a
+    running bake with other settings is dropped anyway (`recordBake`: `sameBake`), so the values a dispatch writes are
+    the bake's;
+  * the far-tree MARCH blocks (the march pairs, the temporal pass, the upsample) take `marchSettings()`: the shown
+    bake's, or in the frame a bake without a cross-fade swaps, the new one's (its copy and swap run in that frame's
+    `recordBake`, before the march; FloorMax's end marks the blocks dirty). The density scale is live;
+  * all in `TreeVolumePipeline::prepare` (before any recording; GPU idle), `reloadBakePasses` / `reloadMarchPasses`.
 * Code that writes a lockable push value calls `Tweak::notifyChanged` (`GIProbePipeline::cycleDebugMode`, the P key).
 * Not lockable yet: the eye adaptation's `GpuParams` (a mapped per-frame UBO: "Post/Adapt *"), the bloom chain's
   per-level weights, the cloud shadow split - values that also depend on runtime state.

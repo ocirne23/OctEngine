@@ -282,16 +282,20 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     };
 
     Shader defaultVS, defaultFS, tessControl, tessEval;
-    if (!defaultVS.initialize(vk::ShaderStageFlagBits::eVertex, layout.vertexShader.text, layout.vertexShader.debugFilePath, layout.vertexShader.defines, assertOnFailure))
+    if (!defaultVS.initialize(vk::ShaderStageFlagBits::eVertex, layout.vertexShader.text, layout.vertexShader.debugFilePath, layout.vertexShader.defines, assertOnFailure,
+        layout.vertexShader.pushDeclaration))
         return false;
     if (hasFS &&
-        !defaultFS.initialize(vk::ShaderStageFlagBits::eFragment, layout.fragmentShader.text, layout.fragmentShader.debugFilePath, layout.fragmentShader.defines, assertOnFailure))
+        !defaultFS.initialize(vk::ShaderStageFlagBits::eFragment, layout.fragmentShader.text, layout.fragmentShader.debugFilePath, layout.fragmentShader.defines, assertOnFailure,
+            layout.fragmentShader.pushDeclaration))
         return false;
     if (hasTess)
     {
-        if (!tessControl.initialize(vk::ShaderStageFlagBits::eTessellationControl, layout.tessControlShader.text, layout.tessControlShader.debugFilePath, layout.tessControlShader.defines, assertOnFailure))
+        if (!tessControl.initialize(vk::ShaderStageFlagBits::eTessellationControl, layout.tessControlShader.text, layout.tessControlShader.debugFilePath, layout.tessControlShader.defines,
+            assertOnFailure, layout.tessControlShader.pushDeclaration))
             return false;
-        if (!tessEval.initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, layout.tessEvalShader.text, layout.tessEvalShader.debugFilePath, layout.tessEvalShader.defines, assertOnFailure))
+        if (!tessEval.initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, layout.tessEvalShader.text, layout.tessEvalShader.debugFilePath, layout.tessEvalShader.defines,
+            assertOnFailure, layout.tessEvalShader.pushDeclaration))
             return false;
         pipelineShaderStageCreateInfos[1].module = tessControl.getModule();
         pipelineShaderStageCreateInfos[2].module = tessEval.getModule();

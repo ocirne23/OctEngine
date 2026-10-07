@@ -37,18 +37,8 @@ layout (binding = 2, std140) uniform Params
     float u_maxExposure;
 };
 
-// PC_DECL_ / PC_CONSTS: the lockable values (EyeAdaptationPipeline::registerPushFields, PushFields.ixx).
-layout (push_constant) uniform PC
-{
-    ivec2 pc_vpMin;        // viewport origin in the resolved image
-    ivec2 pc_vpSize;       // viewport size (pixels sampled)
-    int   pc_bloom;        // 1 = also write bloom level 0
-    PC_DECL_bloomThreshold; // float: the soft threshold, in EXPOSED units (1 = display white before the tonemap); 0 = off
-    PC_DECL_bloomKnee;      // float: the knee's half width (exposed units)
-    PC_DECL_manualExposure; // float: exp2 of the EV tweak (the composite's u_exposure)
-    PC_DECL_autoExposure;   // int: 1 = times the eye-adaptation exposure (the composite's rule)
-};
-PC_CONSTS
+// The push block: EyeAdaptationPipeline's HistogramPush (the bloom threshold / knee and the exposure rule: lockable).
+#include "push.generated.glsl"
 
 // The soft threshold on the quad's (Karis-averaged) colour: nothing below threshold - knee, the excess above
 // threshold + knee, a quadratic curve between (the Unity / Unreal knee). Measured on the brightest channel

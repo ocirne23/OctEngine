@@ -58,14 +58,9 @@ layout (binding = 15) uniform sampler2D u_colourNew;
 layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
 #endif
 
-layout (push_constant, scalar) uniform Push
-{
-    TV_PUSH_VOL_MEMBERS     // TreeVolumeParams, flat: the SHOWN bake's lockable values (the march's list)
-    uvec2 pc_size;          // the MARCH image's size (half the render size at "Far half res")
-    float pc_startDistance; // m from the CAMERA: the volume fades in from here, over u_foliage_farOverlap
-    uvec2 pc_fullSize;      // the render size (the scene depth)
-}; // the shading tweaks ("Trees/Far ..."): u_foliage_far*
-PC_CONSTS
+// The push block: TreeVolumePipeline's MarchPush (pc_vol_*: the SHOWN bake's lockable values). The shading tweaks
+// ("Trees/Far ...") ride the frame UBO: u_foliage_far*.
+#include "push.generated.glsl"
 
 // The bake a read goes to (TREE_HANDOVER: g_new, per ray; else always the front one).
 #ifdef TREE_HANDOVER

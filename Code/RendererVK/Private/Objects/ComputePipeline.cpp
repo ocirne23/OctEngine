@@ -91,7 +91,7 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
     vk::Device vkDevice = Globals::device.getDevice();
 
     Shader computeShader;
-    if (!computeShader.initialize(vk::ShaderStageFlagBits::eCompute, layout.computeShaderText, layout.computeShaderDebugFilePath, layout.defines, assertOnFailure))
+    if (!computeShader.initialize(vk::ShaderStageFlagBits::eCompute, layout.computeShaderText, layout.computeShaderDebugFilePath, layout.defines, assertOnFailure, layout.pushDeclaration))
         return false;
 
     vk::SpecializationInfo specializationInfo

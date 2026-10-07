@@ -11,29 +11,22 @@ import Settings;
 namespace
 {
     constexpr vk::Format RAIN_FORMAT = vk::Format::eR32Uint; // the packed texel, rain_occlusion.cs.glsl
-
-    struct RainPC
-    {
-        glm::mat4 invViewProj;
-        uint32 resolution;
-        float layerBlock;
-    };
 }
 
 void RainOcclusionPipeline::registerPushFields()
 {
-    m_pushFields.add("layerBlock", Globals::settings.particles.rainOcclusionFoliageBlock);
+    m_block.lockable(m_push.layerBlock, Globals::settings.particles.rainOcclusionFoliageBlock);
 }
 
 void RainOcclusionPipeline::buildLayout(ComputePipelineLayout& layout)
 {
     layout.computeShaderDebugFilePath = "Shaders/rain_occlusion.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
-    m_pushFields.appendDefines(layout.defines);
+    layout.pushDeclaration = m_block.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eAccelerationStructureKHR, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(RainPC) });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = m_block.size() });
 }
 
 RainOcclusionPipeline::~RainOcclusionPipeline()
@@ -175,7 +168,7 @@ void RainOcclusionPipeline::reloadShaders()
         printf("RainOcclusionPipeline: shader reload failed, keeping previous pipeline\n");
 }
 
-void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj, float layerBlock)
+void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::AccelerationStructureKHR tlas, const glm::mat4& viewProj)
 {
     assert(m_active && "RainOcclusionPipeline::record while inactive");
     // The whole image is rewritten: its old contents are discarded. The source scope (every earlier compute read on the
@@ -200,8 +193,10 @@ void RainOcclusionPipeline::record(vk::CommandBuffer cmd, uint32 frameIdx, vk::A
     const uint32 res = RendererVKLayout::RAIN_OCCLUSION_RESOLUTION;
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_pipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-    const RainPC pc{ .invViewProj = glm::inverse(viewProj), .resolution = res, .layerBlock = layerBlock };
-    cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
+    PushData pc(m_block);
+    pc.set(m_push.invViewProj, glm::inverse(viewProj));
+    pc.set(m_push.resolution, res);
+    cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, pc.size(), pc.data());
     cmd.dispatch((res + 7) / 8, (res + 7) / 8, 1);
 
     const vk::MemoryBarrier2 toSim{
