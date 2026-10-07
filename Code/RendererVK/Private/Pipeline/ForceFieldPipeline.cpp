@@ -421,8 +421,8 @@ void ForceFieldPipeline::destroyShellVolume()
 
 void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/force_shell.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/force_shell.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Force/force_shell.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Force/force_shell.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     if (m_useGrid)
@@ -477,8 +477,8 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
 // box's ray interval into the RG16F target (see beginIntervalPass / recordIntervalDraw).
 void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/force_shell.vs.glsl"; // the same proxy boxes
-    layout.fragmentShader.debugFilePath = "Shaders/force_interval.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Force/force_shell.vs.glsl"; // the same proxy boxes
+    layout.fragmentShader.debugFilePath = "Shaders/Force/force_interval.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     if (m_useGrid)
@@ -507,8 +507,8 @@ void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
 // march target (no blending: single draw over a zero clear).
 void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl"; // the engine's fullscreen triangle
-    layout.fragmentShader.debugFilePath = "Shaders/force_union.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl"; // the engine's fullscreen triangle
+    layout.fragmentShader.debugFilePath = "Shaders/Force/force_union.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     if (m_useGrid)
@@ -548,8 +548,8 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
 // blend the full-res union draw used.
 void ForceFieldPipeline::buildUpsampleLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/force_union_upsample.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Force/force_union_upsample.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;
@@ -571,7 +571,7 @@ void ForceFieldPipeline::buildUpsampleLayout(GraphicsPipelineLayout& layout)
 // two field volumes) instead of buffers.
 void ForceFieldPipeline::buildShellBakeLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/force_shellbake.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Force/force_shellbake.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (m_useGrid)
         layout.defines.push_back({ "FORCE_GRID", "" });
@@ -621,9 +621,9 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     m_pipeline.initialize(sceneRenderPass, drawLayout);
 
     ComputePipelineLayout forceLayout, queryLayout, bakeLayout, shellBakeLayout;
-    buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
-    buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
-    buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
+    buildComputeLayout(forceLayout, "Shaders/Force/force_emitter.cs.glsl");
+    buildComputeLayout(queryLayout, "Shaders/Force/force_query.cs.glsl");
+    buildComputeLayout(bakeLayout, "Shaders/Force/force_bake.cs.glsl");
     buildShellBakeLayout(shellBakeLayout);
     m_emitterForcePipeline.initialize(forceLayout);
     m_queryPipeline.initialize(queryLayout);
@@ -741,9 +741,9 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     if (!m_pipeline.reloadShaders(sceneRenderPass, drawLayout))
         printf("ForceFieldPipeline: shell shader reload failed, keeping previous pipeline\n");
     ComputePipelineLayout forceLayout, queryLayout, bakeLayout, shellBakeLayout;
-    buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
-    buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
-    buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
+    buildComputeLayout(forceLayout, "Shaders/Force/force_emitter.cs.glsl");
+    buildComputeLayout(queryLayout, "Shaders/Force/force_query.cs.glsl");
+    buildComputeLayout(bakeLayout, "Shaders/Force/force_bake.cs.glsl");
     buildShellBakeLayout(shellBakeLayout);
     if (!m_emitterForcePipeline.reloadShaders(forceLayout))
         printf("ForceFieldPipeline: emitter force shader reload failed, keeping previous pipeline\n");

@@ -10,8 +10,8 @@ import :SceneColor; // SCENE_DEPTH_SAMPLED_LAYOUT (the motion blur gather's dept
 
 void CompositePipeline::buildPipelineLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/composite.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/PostProcess/composite.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;

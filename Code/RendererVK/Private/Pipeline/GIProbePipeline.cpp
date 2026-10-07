@@ -296,7 +296,7 @@ void GIProbePipeline::reloadShaders(uint32 maxTextures)
 
 void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/gi_tlas_instances.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/GI/gi_tlas_instances.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     for (uint32 b = 0; b <= 7; ++b)
         layout.descriptorSetLayoutBindings.push_back(storageBinding(b));
@@ -311,7 +311,7 @@ void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
 
 void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/gi_sky_map.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/GI/gi_sky_map.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO (sun / sky params)
@@ -439,7 +439,7 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
 
 void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures)
 {
-    layout.computeShaderDebugFilePath = "Shaders/gi_probe_trace.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/GI/gi_probe_trace.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO
@@ -614,7 +614,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
 
 void GIProbePipeline::buildVolumeBakeLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/gi_volume_bake.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/GI/gi_volume_bake.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO (focus, vis params)
@@ -697,8 +697,8 @@ void GIProbePipeline::registerDebugPushFields()
 
 void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/gi_probe_debug.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/gi_probe_debug.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/GI/gi_probe_debug.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/GI/gi_probe_debug.fs.glsl";
     layout.vertexShader.pushDeclaration = m_debugBlock.declaration();
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);

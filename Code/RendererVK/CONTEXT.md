@@ -3190,6 +3190,14 @@ GLSL in `Assets/Shaders/`, **compiled at runtime with glslang — shader edits n
 calls `reloadShaders()`.
 
 * `*.inc.glsl` are includes.
+* **Feature folders:** `Common` (shared/ubo + small utility includes), `Mesh` (instanced_indirect, shadow
+  depth, skinning, debug lines), `Lighting` (light grid, shadows, RT shadow, RTAO), `GI`, `PostProcess`
+  (composite, bloom, TAA, DLSS mvecs, eye adaptation, motion blur), `Sky` (sky, atmosphere, clouds,
+  volumetric fog, rain occlusion), `Ocean`, `Terrain` (terrain, film, wetness, grass, rocks), `Trees`,
+  `Particles` (+ decals), `Force`. Pipelines name the full path (`"Shaders/Sky/cloud_march.cs.glsl"`).
+  **An `#include` is a bare file name**: the includer tries the includer's folder, the root shader's
+  folder, then a file-name index of the whole `Shaders/` tree — so **file names must stay unique across
+  folders.** `Local/Shaders/` mirrors the folders.
 * **Compile in ONE `parse()` with the includer** (`Shader::GLSLtoSPV`), never `preprocess()` + a
   re-parse of its output. The SPIR-V carries full NonSemantic debug info (the `-gVS` equivalent), and
   one pass embeds the original text of the file and of every include at their true lines. The old

@@ -21,7 +21,7 @@ namespace
 
 void VolumetricFogPipeline::buildScatterLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/vol_scatter.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/vol_scatter.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -49,7 +49,7 @@ void VolumetricFogPipeline::buildScatterLayout(ComputePipelineLayout& layout)
 
 void VolumetricFogPipeline::buildIntegrateLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/vol_integrate.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/vol_integrate.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -59,7 +59,7 @@ void VolumetricFogPipeline::buildIntegrateLayout(ComputePipelineLayout& layout)
 
 void VolumetricFogPipeline::buildAerialLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/aerial_lut.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/aerial_lut.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -69,8 +69,8 @@ void VolumetricFogPipeline::buildAerialLayout(ComputePipelineLayout& layout)
 
 void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/vol_apply.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Sky/vol_apply.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;

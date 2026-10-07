@@ -9,8 +9,8 @@ import :Layout;
 
 void DebugLinePipeline::buildLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/debug_line.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/debug_line.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Mesh/debug_line.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Mesh/debug_line.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.topology = vk::PrimitiveTopology::eLineList;

@@ -48,7 +48,7 @@ MotionBlurPipeline::~MotionBlurPipeline()
 
 void MotionBlurPipeline::buildLayouts(ComputePipelineLayout& tiles, ComputePipelineLayout& neighbor)
 {
-    tiles.computeShaderDebugFilePath = "Shaders/motion_blur_tiles.cs.glsl";
+    tiles.computeShaderDebugFilePath = "Shaders/PostProcess/motion_blur_tiles.cs.glsl";
     tiles.computeShaderText = FileSystem::readFileStr(tiles.computeShaderDebugFilePath);
     tiles.descriptorSetLayoutBindings = {
         binding(0, vk::DescriptorType::eUniformBuffer),
@@ -59,7 +59,7 @@ void MotionBlurPipeline::buildLayouts(ComputePipelineLayout& tiles, ComputePipel
     };
     tiles.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TilesPC) });
 
-    neighbor.computeShaderDebugFilePath = "Shaders/motion_blur_neighbor.cs.glsl";
+    neighbor.computeShaderDebugFilePath = "Shaders/PostProcess/motion_blur_neighbor.cs.glsl";
     neighbor.computeShaderText = FileSystem::readFileStr(neighbor.computeShaderDebugFilePath);
     neighbor.descriptorSetLayoutBindings = {
         binding(0, vk::DescriptorType::eCombinedImageSampler), // sub-tiles

@@ -189,7 +189,7 @@ void LightGridComputePipeline::reloadShaders()
 
 void LightGridComputePipeline::buildComputeLayout(ComputePipelineLayout& computePipelineLayout)
 {
-    computePipelineLayout.computeShaderDebugFilePath = "Shaders/light_grid.cs.glsl";
+    computePipelineLayout.computeShaderDebugFilePath = "Shaders/Lighting/light_grid.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
     auto& descriptorSetBindings = computePipelineLayout.descriptorSetLayoutBindings;
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // UBO (shared.inc.glsl)

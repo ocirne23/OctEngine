@@ -202,7 +202,7 @@ const FarTreeParams& TreeVolumePipeline::marchSettings() const
 // come from the world tree records (TREE_SPLAT_RECORDS).
 void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 floorPass, bool records)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_splat.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_splat.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     const PushBlock& block = records ? m_recordSplatBlock : m_splatBlock;
     layout.pushDeclaration = block.declaration();
@@ -223,7 +223,7 @@ void TreeVolumePipeline::buildSplatLayout(ComputePipelineLayout& layout, uint32 
 
 void TreeVolumePipeline::buildResolveLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_resolve.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_resolve.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_resolveBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -240,7 +240,7 @@ void TreeVolumePipeline::buildResolveLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildCopyLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_copy.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_copy.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum (the float bits)
     layout.descriptorSetLayoutBindings.push_back(binding(1, vk::DescriptorType::eStorageImage)); // density
@@ -249,7 +249,7 @@ void TreeVolumePipeline::buildCopyLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildClearLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_clear.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_clear.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.descriptorSetLayoutBindings.push_back(binding(0, vk::DescriptorType::eStorageImage)); // accum
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(ClearPC) });
@@ -257,7 +257,7 @@ void TreeVolumePipeline::buildClearLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_floor_smooth.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_floor_smooth.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_floorSmoothBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -268,7 +268,7 @@ void TreeVolumePipeline::buildFloorSmoothLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildFloorMaxLayout(ComputePipelineLayout& layout, bool dilate)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_floor_max.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_floor_max.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (dilate)
         layout.defines.push_back(ShaderDefine{ "TREE_FLOOR_MAX_DILATE", "1" });
@@ -285,7 +285,7 @@ vk::Extent3D TreeVolumePipeline::floorMaxExtent() const
 
 void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_records.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_records.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_recordsBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -298,7 +298,7 @@ void TreeVolumePipeline::buildRecordsLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildFarLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_far.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_far.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_farBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -315,7 +315,7 @@ void TreeVolumePipeline::buildFarLayout(ComputePipelineLayout& layout)
 // 1 of 4 - the temporal variant only knows 1 of 2).
 void TreeVolumePipeline::buildMarchLayout(ComputePipelineLayout& layout, bool temporalOut, uint32 scale, uint32 skip, bool handover)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_march.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_march.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_marchBlock.declaration();
     if (temporalOut)
@@ -358,7 +358,7 @@ bool TreeVolumePipeline::buildMarchPair(ComputePipeline& march, ComputePipeline&
 
 void TreeVolumePipeline::buildTemporalLayout(ComputePipelineLayout& layout, uint32 scale, bool checker)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_temporal.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_temporal.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_temporalBlock.declaration();
     layout.defines.push_back(ShaderDefine{ "TREE_TEMPORAL", "1" });
@@ -377,7 +377,7 @@ void TreeVolumePipeline::buildTemporalLayout(ComputePipelineLayout& layout, uint
 
 void TreeVolumePipeline::buildUpsampleLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/tree_volume_upsample.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Trees/tree_volume_upsample.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_upsampleBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -391,8 +391,8 @@ void TreeVolumePipeline::buildUpsampleLayout(ComputePipelineLayout& layout)
 
 void TreeVolumePipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/tree_volume_apply.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Trees/tree_volume_apply.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;

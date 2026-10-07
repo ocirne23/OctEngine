@@ -29,7 +29,7 @@ namespace
 
 void RTAOPipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures)
 {
-    layout.computeShaderDebugFilePath = "Shaders/rtao.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Lighting/rtao.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     // Alpha-masked rays are a compile-time variant: the opaque path drops the geometry fetch + alpha test
     // entirely. Toggling the setting rebuilds this pipeline (the Renderer's "RTAO/Alpha Test" listener).
@@ -71,7 +71,7 @@ void RTAOPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::
 
 void RTAOPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ao_temporal.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Lighting/ao_temporal.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -84,7 +84,7 @@ void RTAOPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
 
 void RTAOPipeline::buildSpatialLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ao_spatial.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Lighting/ao_spatial.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });

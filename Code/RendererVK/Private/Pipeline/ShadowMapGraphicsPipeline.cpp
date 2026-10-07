@@ -14,10 +14,10 @@ ShadowMapGraphicsPipeline::~ShadowMapGraphicsPipeline() {}
 
 void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
 {
-    layout.vertexShader.debugFilePath = "Shaders/shadow_depth.vs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Mesh/shadow_depth.vs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     // Fragment stage discards alpha-masked (cutout) fragments so foliage casts correct shadows.
-    layout.fragmentShader.debugFilePath = "Shaders/shadow_depth.fs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Mesh/shadow_depth.fs.glsl";
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
 
     layout.depthOnly = true;

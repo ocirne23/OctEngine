@@ -29,7 +29,7 @@ void TerrainWetnessPipeline::destroyImage()
 
 void TerrainWetnessPipeline::buildLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/terrain_wetness.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Terrain/terrain_wetness.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.defines.push_back({ "WET_DIFFUSION", Globals::settings.renderer.terrainWetDiffusion ? "1" : "0" });
     auto& b = layout.descriptorSetLayoutBindings;

@@ -72,7 +72,7 @@ namespace
 
 void CloudPipeline::buildNoiseLayout(ComputePipelineLayout& layout, bool is3D)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_noise.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_noise.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (is3D)
         layout.defines.push_back({ "NOISE_3D", "1" });
@@ -82,7 +82,7 @@ void CloudPipeline::buildNoiseLayout(ComputePipelineLayout& layout, bool is3D)
 
 void CloudPipeline::buildShadowLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_shadow.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_shadow.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
@@ -149,7 +149,7 @@ void CloudPipeline::createShadowMap()
 
 void CloudPipeline::buildSkyLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_sky.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_sky.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
@@ -217,7 +217,7 @@ void CloudPipeline::createSkyClouds()
 
 void CloudPipeline::buildMarchLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_march.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_march.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
@@ -233,7 +233,7 @@ void CloudPipeline::buildMarchLayout(ComputePipelineLayout& layout)
 
 void CloudPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/cloud_temporal.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/cloud_temporal.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(binding(0, vk::DescriptorType::eUniformBuffer));
@@ -247,8 +247,8 @@ void CloudPipeline::buildTemporalLayout(ComputePipelineLayout& layout)
 
 void CloudPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/cloud_apply.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/PostProcess/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Sky/cloud_apply.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;

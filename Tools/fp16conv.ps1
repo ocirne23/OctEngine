@@ -26,6 +26,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $spv = Join-Path $root "Assets/Local/Shaders/$Shader.spv"
+if (-not (Test-Path $spv)) {
+    # Shaders/ has feature folders: a bare file name is found in any of them.
+    $found = Get-ChildItem (Join-Path $root "Assets/Local/Shaders") -Recurse -Filter "$(Split-Path -Leaf $Shader).spv" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $spv = $found.FullName }
+}
 if (-not (Test-Path $spv)) { throw "No SPIR-V dump at $spv (run App once so the shader compiles)." }
 
 $dis = if ($env:VULKAN_SDK) { Join-Path $env:VULKAN_SDK 'Bin/spirv-dis.exe' } else { 'spirv-dis' }

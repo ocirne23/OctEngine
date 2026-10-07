@@ -22,7 +22,7 @@ void DrawCompactPipeline::reloadShaders()
 
 void DrawCompactPipeline::buildLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/draw_compact.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Mesh/draw_compact.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.defines.push_back({ "NUM_LISTS", oc::format("{}", m_numLists) });
     layout.pushConstantRanges.push_back(vk::PushConstantRange{

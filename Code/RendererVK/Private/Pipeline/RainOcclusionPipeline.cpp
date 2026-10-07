@@ -20,7 +20,7 @@ void RainOcclusionPipeline::registerPushFields()
 
 void RainOcclusionPipeline::buildLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/rain_occlusion.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Sky/rain_occlusion.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_block.declaration();
     auto& b = layout.descriptorSetLayoutBindings;

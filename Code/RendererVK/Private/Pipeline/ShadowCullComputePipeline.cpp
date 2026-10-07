@@ -58,7 +58,7 @@ void ShadowCullComputePipeline::reloadShaders()
 
 void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& computePipelineLayout)
 {
-    computePipelineLayout.computeShaderDebugFilePath = "Shaders/instanced_indirect_shadow.cs.glsl";
+    computePipelineLayout.computeShaderDebugFilePath = "Shaders/Mesh/instanced_indirect_shadow.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;

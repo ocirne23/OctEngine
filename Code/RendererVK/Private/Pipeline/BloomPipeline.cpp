@@ -47,8 +47,8 @@ void BloomPipeline::buildLayouts(ComputePipelineLayout& down, ComputePipelineLay
         };
         layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(BloomPC) });
     };
-    fill(down, "Shaders/bloom_downsample.cs.glsl");
-    fill(up, "Shaders/bloom_upsample.cs.glsl");
+    fill(down, "Shaders/PostProcess/bloom_downsample.cs.glsl");
+    fill(up, "Shaders/PostProcess/bloom_upsample.cs.glsl");
 }
 
 void BloomPipeline::initialize(uint32 width, uint32 height)

@@ -48,7 +48,7 @@ void OceanSimulationPipeline::destroyImages()
 
 void OceanSimulationPipeline::buildSpectrumLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ocean_spectrum.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_spectrum.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -57,7 +57,7 @@ void OceanSimulationPipeline::buildSpectrumLayout(ComputePipelineLayout& layout)
 
 void OceanSimulationPipeline::buildFftLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ocean_fft.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_fft.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -67,7 +67,7 @@ void OceanSimulationPipeline::buildFftLayout(ComputePipelineLayout& layout)
 
 void OceanSimulationPipeline::buildAssembleLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ocean_assemble.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_assemble.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -76,7 +76,7 @@ void OceanSimulationPipeline::buildAssembleLayout(ComputePipelineLayout& layout)
 
 void OceanSimulationPipeline::buildFoamLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ocean_foam.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_foam.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -88,7 +88,7 @@ void OceanSimulationPipeline::buildFoamLayout(ComputePipelineLayout& layout)
 
 void OceanSimulationPipeline::buildSprayLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/ocean_spray.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Ocean/ocean_spray.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });

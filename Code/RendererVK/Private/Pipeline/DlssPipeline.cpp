@@ -43,7 +43,7 @@ DlssPipeline::~DlssPipeline()
 
 void DlssPipeline::buildLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/dlss_mvec.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/PostProcess/dlss_mvec.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.descriptorSetLayoutBindings = {
         binding(0, vk::DescriptorType::eUniformBuffer),

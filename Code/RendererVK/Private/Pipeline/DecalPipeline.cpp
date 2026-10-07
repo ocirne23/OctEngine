@@ -20,8 +20,8 @@ static vk::DescriptorBufferInfo decalBufInfo(const Buffer& buffer)
 
 void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
 {
-    layout.vertexShader.debugFilePath = "Shaders/decal.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/decal.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Particles/decal.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Particles/decal.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     // Cull FRONT faces and skip the depth test: the box's far/inside faces rasterize exactly once per

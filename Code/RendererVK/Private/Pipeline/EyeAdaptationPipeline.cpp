@@ -24,7 +24,7 @@ void EyeAdaptationPipeline::registerPushFields()
 
 void EyeAdaptationPipeline::buildHistogramLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/eyeadapt_histogram.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/PostProcess/eyeadapt_histogram.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     layout.pushDeclaration = m_histogramBlock.declaration();
     auto& b = layout.descriptorSetLayoutBindings;
@@ -38,7 +38,7 @@ void EyeAdaptationPipeline::buildHistogramLayout(ComputePipelineLayout& layout)
 
 void EyeAdaptationPipeline::buildReduceLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/eyeadapt_reduce.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/PostProcess/eyeadapt_reduce.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });

@@ -25,8 +25,8 @@ void StaticMeshGraphicsPipeline::recreateSampler()
 
 void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& graphicsPipelineLayout, uint32 maxTextures)
 {
-    graphicsPipelineLayout.vertexShader.debugFilePath = "Shaders/instanced_indirect.vs.glsl";
-    graphicsPipelineLayout.fragmentShader.debugFilePath = "Shaders/instanced_indirect.fs.glsl";
+    graphicsPipelineLayout.vertexShader.debugFilePath = "Shaders/Mesh/instanced_indirect.vs.glsl";
+    graphicsPipelineLayout.fragmentShader.debugFilePath = "Shaders/Mesh/instanced_indirect.fs.glsl";
 
     graphicsPipelineLayout.vertexShader.text = FileSystem::readFileStr(graphicsPipelineLayout.vertexShader.debugFilePath);
     graphicsPipelineLayout.fragmentShader.text = FileSystem::readFileStr(graphicsPipelineLayout.fragmentShader.debugFilePath);
@@ -53,7 +53,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .depthWrite = false,
     });
     // Variant 2 (MeshShaderVariant::UnlitOpaque): unlit opaque.
-    const oc::string unlitVariantPath = "Shaders/instanced_indirect_unlit.fs.glsl";
+    const oc::string unlitVariantPath = "Shaders/Mesh/instanced_indirect_unlit.fs.glsl";
 	const oc::string unlitVariantText = FileSystem::readFileStr(unlitVariantPath);
     graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
         .fragmentShader = ShaderSource{
@@ -76,7 +76,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// NO DEPTH WRITE: a sky pixel's scene depth must stay at the cleared far plane (reversed-Z 0), which
 	// is how every depth reader tells "sky" - TAA reprojects it parallax-free, AO / decals / fog / the
 	// particle collision skip it. Depth-tested, so the draw order against the geometry does not matter.
-	const oc::string skyVariantPath = "Shaders/sky.fs.glsl";
+	const oc::string skyVariantPath = "Shaders/Sky/sky.fs.glsl";
 	const oc::string skyVariantText = FileSystem::readFileStr(skyVariantPath);
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.fragmentShader = ShaderSource{
@@ -136,9 +136,9 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// on (all layout defaults).
 	// A dedicated vertex shader passes only world position + normal (the terrain FS builds its own tangent
 	// bases and needs no UV), trimming the interpolated attributes from a full TBN+UV to two vec3s.
-	const oc::string terrainVertexPath = "Shaders/instanced_indirect_terrain.vs.glsl";
-	const oc::string terrainVariantPath = "Shaders/instanced_indirect_terrain.fs.glsl";
-	const oc::string terrainFilmPath = "Shaders/terrain_film.fs.glsl"; // variant 11 (TerrainOverlay)
+	const oc::string terrainVertexPath = "Shaders/Terrain/instanced_indirect_terrain.vs.glsl";
+	const oc::string terrainVariantPath = "Shaders/Terrain/instanced_indirect_terrain.fs.glsl";
+	const oc::string terrainFilmPath = "Shaders/Terrain/terrain_film.fs.glsl"; // variant 11 (TerrainOverlay)
 	const auto isTerrainFragment = [&](const PipelineVariant& variant) {
 		return variant.fragmentShader.debugFilePath == terrainVariantPath || variant.fragmentShader.debugFilePath == terrainFilmPath;
 	};
@@ -162,8 +162,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// (after the opaque execute and the tessellated ground + film). Elsewhere it writes a = 1: opaque.
 	// Back-face culled: the clipmap carries
 	// every triangle in both windings (OceanGenerator::rebuildGrid), so the underside draws from below.
-	const oc::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
-	const oc::string oceanVariantPath = "Shaders/ocean.fs.glsl";
+	const oc::string oceanVertexPath = "Shaders/Ocean/instanced_indirect_ocean.vs.glsl";
+	const oc::string oceanVariantPath = "Shaders/Ocean/ocean.fs.glsl";
 	const oc::string oceanVariantText = FileSystem::readFileStr(oceanVariantPath);
 	// OCEAN_HIT_LIGHTS: also evaluate the scene's grid lights at refraction/reflection ray hits
 	// ("Ocean/Shading/Hit lighting" tweak; toggling reloads this pipeline via setOceanParams).
@@ -254,8 +254,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// cover and a contact band (instanced_indirect_rock.fs.glsl; RockParams). Its own VS passes position + normal
 	// and evaluates the ground height and the climate per vertex, as the terrain's. Opaque, back-face culled,
 	// depth write on; static (the motion target stays masked).
-	const oc::string rockVertexPath = "Shaders/instanced_indirect_rock.vs.glsl";
-	const oc::string rockVariantPath = "Shaders/instanced_indirect_rock.fs.glsl";
+	const oc::string rockVertexPath = "Shaders/Terrain/instanced_indirect_rock.vs.glsl";
+	const oc::string rockVariantPath = "Shaders/Terrain/instanced_indirect_rock.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = FileSystem::readFileStr(rockVertexPath),
@@ -581,8 +581,8 @@ void StaticMeshGraphicsPipeline::buildTerrainTessLayout(const GraphicsPipelineLa
         return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = tessDefines };
     };
     tess.vertexShader = ShaderSource{ .text = ground.vertexShader.text, .debugFilePath = ground.vertexShader.debugFilePath, .defines = tessDefines };
-    tess.tessControlShader = source("Shaders/terrain_tess.tcs.glsl");
-    tess.tessEvalShader = source("Shaders/terrain_tess.tes.glsl");
+    tess.tessControlShader = source("Shaders/Terrain/terrain_tess.tcs.glsl");
+    tess.tessEvalShader = source("Shaders/Terrain/terrain_tess.tes.glsl");
 
     // The ground only (layout defaults: opaque, depth write, back-face culled). TERRAIN_TESS on the fragment
     // shader too: it lights from the evaluation stage's undisplaced position. The film is NEVER tessellated: it
@@ -614,9 +614,9 @@ void StaticMeshGraphicsPipeline::buildGrassLayout(const GraphicsPipelineLayout& 
     const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
         return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
     };
-    grass.vertexShader = source("Shaders/grass.vs.glsl", {});
+    grass.vertexShader = source("Shaders/Terrain/grass.vs.glsl", {});
     // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
-    grass.fragmentShader = source("Shaders/grass.fs.glsl", main.fragmentShader.defines);
+    grass.fragmentShader = source("Shaders/Terrain/grass.fs.glsl",main.fragmentShader.defines);
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)

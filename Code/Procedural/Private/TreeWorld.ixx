@@ -32,7 +32,7 @@ import :RockType;
 export namespace Procedural
 {
 	// x, z: 12 bits each, chunk-local on a TREE_RECORD_STEPS lattice (the cell centre); type: 8 bits, the species'
-	// index in TreeWorld's name-sorted .tree list. MIRRORED in Assets/Shaders/tree_record.inc.glsl - keep in step.
+	// index in TreeWorld's name-sorted .tree list. MIRRORED in Assets/Shaders/Trees/tree_record.inc.glsl - keep in step.
 	struct TreeRecord
 	{
 		uint32 bits = 0;

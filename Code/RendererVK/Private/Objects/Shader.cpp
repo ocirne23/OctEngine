@@ -136,6 +136,9 @@ private:
                 candidates.push_back(FileSystem::join(includerDir, headerName));
         }
         candidates.push_back(FileSystem::join(m_rootDir, headerName));
+        // Shaders/ is split into feature folders: a bare include name is found in any of them (names are unique).
+        if (const oc::string* indexed = findInShaderTree(headerName))
+            candidates.push_back(*indexed);
 
         for (const oc::string& candidate : candidates)
         {
@@ -149,6 +152,21 @@ private:
         return nullptr;
     }
 
+    const oc::string* findInShaderTree(const char* headerName)
+    {
+        if (!m_treeIndexed)
+        {
+            m_treeIndexed = true;
+            oc::vector<FileSystem::DirEntry> entries;
+            FileSystem::listDirectoryRecursive("Shaders", entries, /*allowMainThread*/ true);
+            for (const FileSystem::DirEntry& entry : entries)
+                if (!entry.isDirectory)
+                    m_shaderTree.emplace(entry.name, entry.path);
+        }
+        const auto it = m_shaderTree.find(oc::string(headerName));
+        return it != m_shaderTree.end() ? &it->second : nullptr;
+    }
+
     IncludeResult* store(const oc::string& name, oc::string content)
     {
         const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
@@ -158,6 +176,8 @@ private:
 
     oc::string m_rootDir;
     const oc::string& m_pushDeclaration;
+    oc::unordered_map<oc::string, oc::string> m_shaderTree; // file name -> path, every file under Shaders/
+    bool m_treeIndexed = false;
     oc::vector<oc::unique_ptr<oc::string>> m_contents;
     oc::vector<oc::unique_ptr<IncludeResult>> m_results;
 };

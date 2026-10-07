@@ -33,7 +33,7 @@ static vk::DescriptorImageInfo sampledRO(vk::Sampler sampler, vk::ImageView view
 
 void ParticlePipeline::buildBeginLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/particle_begin.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Particles/particle_begin.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -43,7 +43,7 @@ void ParticlePipeline::buildBeginLayout(ComputePipelineLayout& layout)
 
 void ParticlePipeline::buildEmitLayout(ComputePipelineLayout& layout, bool gpuSpawn)
 {
-    layout.computeShaderDebugFilePath = "Shaders/particle_emit.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Particles/particle_emit.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (gpuSpawn)
         layout.defines.push_back(ShaderDefine{ "PARTICLE_GPU_SPAWN", "1" }); // binding 6 = the request buffer
@@ -56,7 +56,7 @@ void ParticlePipeline::buildEmitLayout(ComputePipelineLayout& layout, bool gpuSp
 
 void ParticlePipeline::buildSimLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/particle_sim.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Particles/particle_sim.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
@@ -87,8 +87,8 @@ void ParticlePipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageView te
 
 void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
 {
-    layout.vertexShader.debugFilePath = "Shaders/particle.vs.glsl";
-    layout.fragmentShader.debugFilePath = "Shaders/particle.fs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Particles/particle.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/Particles/particle.fs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone;

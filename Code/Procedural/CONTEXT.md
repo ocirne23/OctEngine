@@ -1167,7 +1167,7 @@ paths). Off, it keeps the CPU path below (one
 Every tree of the terrain ring as a **4-byte record per terrain chunk** (`TreeRecord`: x, z 12 bits each, chunk-local
 on a 4096 lattice; the species type 8 bits = its index in the NAME-SORTED `.tree` list). No height (the terrain's), no
 variant / scale / yaw: `treeRecordSeed(seed, chunk, record)` hashes the chunk and the QUANTIZED position, mirrored
-in `Assets/Shaders/tree_record.inc.glsl` (not read by a shader yet). A member of TreeSystem, updated before its
+in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A member of TreeSystem, updated before its
 `Enabled` check: it runs with the preview off.
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.

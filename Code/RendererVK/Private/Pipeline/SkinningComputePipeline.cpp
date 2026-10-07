@@ -63,7 +63,7 @@ void SkinningComputePipeline::reloadShaders()
 
 void SkinningComputePipeline::buildComputeLayout(ComputePipelineLayout& computePipelineLayout)
 {
-    computePipelineLayout.computeShaderDebugFilePath = "Shaders/skinning.cs.glsl";
+    computePipelineLayout.computeShaderDebugFilePath = "Shaders/Mesh/skinning.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
     auto& bindings = computePipelineLayout.descriptorSetLayoutBindings;
     bindings.push_back(vk::DescriptorSetLayoutBinding{ // vertex buffer (read base, write output)

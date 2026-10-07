@@ -14,7 +14,7 @@ namespace
 
 void GrassPipeline::buildLayout(ComputePipelineLayout& layout)
 {
-    layout.computeShaderDebugFilePath = "Shaders/grass_cull.cs.glsl";
+    layout.computeShaderDebugFilePath = "Shaders/Terrain/grass_cull.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     auto& b = layout.descriptorSetLayoutBindings;
     constexpr vk::ShaderStageFlags CS = vk::ShaderStageFlagBits::eCompute;
@@ -64,7 +64,7 @@ void GrassPipeline::initialize(uint32 bladesPerPatch)
 // binding numbers, so the VS source is the same.
 void GrassPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout)
 {
-    layout.vertexShader.debugFilePath = "Shaders/grass.vs.glsl";
+    layout.vertexShader.debugFilePath = "Shaders/Terrain/grass.vs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.vertexShader.defines.push_back(ShaderDefine{ "GRASS_SHADOW", "1" });
     layout.vertexShader.defines.push_back(ShaderDefine{ "GRASS_NEAR_SHADOW", "1" });

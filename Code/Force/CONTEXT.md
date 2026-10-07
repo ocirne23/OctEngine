@@ -48,7 +48,7 @@ ForceSystem.ixx. `ForceQuery` stays in ForceSystem.ixx.
 >
 > `forceAccumulate` / `forceAccumulateVisible` instead compare inside the unrolled per-team loop
 > (`phi[t] += team == t ? c : 0.0`), which compiles to predicated adds and is correct at every team
-> count ([force_field.inc.glsl:183](../../Assets/Shaders/force_field.inc.glsl#L183)). Reads by a loop
+> count ([force_field.inc.glsl:183](../../Assets/Shaders/Force/force_field.inc.glsl#L183)). Reads by a loop
 > induction variable unroll statically and are fine.
 >
 > **Reads at a RUN-TIME team index go through `forcePhiAt(phi, team)`** (the same unrolled select):

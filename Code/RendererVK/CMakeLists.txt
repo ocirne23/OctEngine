@@ -10,7 +10,7 @@ add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FIL
 target_sources(${PROJECT_NAME} PRIVATE FILE_SET modules BASE_DIRS "${ROOT_DIR}/Dependencies/include" TYPE CXX_MODULES FILES ${EXTRA_MODULE_FILES})
 target_sources(${PROJECT_NAME} PRIVATE FILE_SET headers BASE_DIRS "${ROOT_DIR}/Assets/Shaders" TYPE HEADERS FILES ${PROJECT_SHADER_FILES})
 
-source_group("Private/Shaders" FILES ${PROJECT_SHADER_FILES})
+source_group(TREE "${ROOT_DIR}/Assets/Shaders" PREFIX "Private/Shaders" FILES ${PROJECT_SHADER_FILES})
 source_group("Private/Util" FILES ${EXTRA_MODULE_FILES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
