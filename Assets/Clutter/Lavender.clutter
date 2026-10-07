@@ -1,0 +1,21 @@
+# Wild lavender: slender violet spikes in clumps, on hot, dry ground - bare ground too.
+ClutterType Lavender
+	Kind Flower
+	Seed 107
+	Scale 0.96 1.44
+	Range 70
+	Color 0.55 0.45 0.85
+	Color2 0.55 0.45 0.85
+	Head Spike
+	Petals 16
+	PetalWidth 0.7
+	Stem 0.5
+	HeadSize 0.01
+	Placement
+		Density 3.2
+		Temperature 14 28
+		Precipitation 250 800
+		Grass 0 1
+		Canopy 1 0.3
+		Cluster 10 0.3
+		Slope 0.8

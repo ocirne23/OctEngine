@@ -1,0 +1,22 @@
+# Treasure flowers: orange rays round a dark eye, low on the warm savanna.
+ClutterType Gazania
+	Kind Flower
+	Seed 109
+	Scale 0.96 1.44
+	Range 70
+	Color 0.95 0.45 0.08
+	Color2 0.30 0.10 0.05
+	Head Radial
+	Petals 14
+	Open 10
+	PetalWidth 0.3
+	Stem 0.15
+	HeadSize 0.025
+	Placement
+		Density 2.4
+		Temperature 18 32
+		Precipitation 200 900
+		Grass 0 1
+		Canopy 1 0.3
+		Cluster 12 0.3
+		Slope 0.7

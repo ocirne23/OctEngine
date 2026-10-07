@@ -5,7 +5,10 @@ Procedural CONTEXT "Rocks"); the shapes had a first round with the user (erosion
 piles, the columnar outcrop - the last two types then REPLACED from the user's reference photos, 2026-10-06: 3).
 **R2 built, user-untested** (the `LitRock` material: 5.1). **R3 built,
 user-untested** - and CHANGED: no tessellation, a regular mesh LOD chain (2). **R4 built, user-untested** (rocks in
-the world: 6). **R5 built 2026-10-06, user-untested** (the far volume: 7). R6 not started. Companion to
+the world: 6). **R5 built 2026-10-06, user-untested** (the far volume: 7). R6 done 2026-10-07 (the scatter is removed).
+DEAD WOOD added 2026-10-07 (the user's request: dead / fallen trees as rock types): `Shape Trunk` + `Surface Wood` -
+fallen logs, stumps and snags through every tier above, wearing a tree species' bark texture (`Bark`); placed under trees
+(`Forest`), the trees kept out of each log's capsule footprint. As built: Procedural CONTEXT "Rocks", DEAD WOOD. Companion to
 `Docs/TreeRenderingPlan.md`: rocks use the tree machinery again where they can, and this document names each
 place where they differ.
 
@@ -293,7 +296,7 @@ Visual risk [Guessing]: a soft blob reads as a bush, not as a rock. If it does, 
 | **R3** (built 2026-10-05, user-untested; was the tessellated route) | the regular mesh LOD chain per variant (level 0 at `Lod` triangles, the GPU's per-instance pick), the per-vertex CAVITY (AO + the ground cover in crevices), the preview raytraced through the chain's BLAS | LOD switches do not show; crevices read darker |
 | **R4** (built 2026-10-05, user-untested) | world placement: rock records in `TreeWorld` (a world lattice per type, crag / talus fit, the halo for the neighbours' rocks, trees rejected inside rocks); rock types in the world's instance set, with the culls' LOD pick for rock records and the TLAS fallback (2). Not built: satellites | rocks in the streamed world |
 | **R5** (built 2026-10-06, user-untested) | far volume: albedo accumulation + rock fraction, rock lighting in the march, record splat for rock types (detail + far mass passes) | boulder fields visible to `Far end` |
-| **R6** | remove the `boulder` / `rocks` scatter rules and their assets from `Scattering.cpp` | one rock system |
+| **R6** (done 2026-10-07) | remove the `boulder` / `rocks` scatter rules - the whole `ScatterSystem` went with the ground clutter (`Docs/GroundClutterPlan.md`, C6) | one rock system |
 
 R1-R3 can be judged by the user without any world integration (the preview). R4-R5 follow the tree path step by
 step, so most of their risk is already known.

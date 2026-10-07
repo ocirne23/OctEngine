@@ -1,0 +1,22 @@
+# Heather: short purple spikes, dense on cold, wet moorland and between the rocks there.
+ClutterType Heather
+	Kind Flower
+	Seed 103
+	Scale 0.96 1.44
+	Range 70
+	Color 0.75 0.40 0.70
+	Color2 0.75 0.40 0.70
+	Head Spike
+	Petals 20
+	PetalWidth 0.8
+	Stem 0.25
+	HeadSize 0.008
+	Placement
+		Density 16
+		Temperature -3 10
+		Precipitation 700 2200
+		Grass 0 1
+		Crag 1 2
+		Canopy 1 0.2
+		Cluster 20 0.5
+		Slope 1

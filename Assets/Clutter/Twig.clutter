@@ -1,0 +1,20 @@
+# Small fallen twigs: under the trees only, more near the trunks.
+ClutterType Twig
+	Kind Branch
+	Seed 31
+	Variants 6
+	Scale 0.2 0.55
+	Range 35
+	Sink 0.15
+	Align 1
+	Color 0.40 0.32 0.24
+	Color2 0.62 0.52 0.36
+	Roughness 0.85
+	Thickness 0.03
+	Twigs 2
+	Bend 25
+	Placement
+		Density 0.5
+		Canopy 0 1
+		Trunk 1 2.5
+		Slope 1

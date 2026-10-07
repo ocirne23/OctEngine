@@ -25,11 +25,11 @@ export namespace RendererVKLayout
 
     // Initial capacities only: the Renderer tracks the live capacities and grows the backing buffers
     // at runtime when they are exceeded (GPU idle + buffer recreate + command buffer re-record).
-    constexpr uint32 INITIAL_RENDER_NODES = 8;
-    constexpr uint32 INITIAL_UNIQUE_MESHES = 4;
+    constexpr uint32 INITIAL_RENDER_NODES = 64 * 1024;
+    constexpr uint32 INITIAL_UNIQUE_MESHES = USHRT_MAX - 1; // MESH_MATERIAL_INDEX_LIMIT: the uint16 mesh index's whole range
     constexpr uint32 INITIAL_UNIQUE_MATERIALS = 8;
     constexpr uint32 INITIAL_INSTANCE_OFFSETS = 64;
-    constexpr uint32 INITIAL_INSTANCE_DATA = 4;
+    constexpr uint32 INITIAL_INSTANCE_DATA = 512 * 1024; // the world's load does not grow it
     constexpr uint32 INITIAL_TEXTURES = 64; // TextureManager grows this, clamped to the device limit
     constexpr size_t INITIAL_LIGHT_GRID_BUFFER_SIZE = 10 * 1024 * 1024;
 	constexpr size_t INITIAL_LIGHT_TABLE_NUM_ENTRIES = 4096; // power of 2 (doubling preserves this); 4x the CPU build's initial 1024-grid claim capacity, so a normal scene never grows
@@ -382,7 +382,7 @@ export namespace RendererVKLayout
     };
     inline CloudShaderConfig g_cloudShaders;
 
-    constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 256; // grown when the instance count exceeds it
+    constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 16 * 1024; // grown when the instance count exceeds it; the world's load does not
     constexpr size_t GI_TLAS_INSTANCE_SIZE = 64;                                         // sizeof(VkAccelerationStructureInstanceKHR)
 
     // FFT ocean simulation (OceanSimulationPipeline / ocean_*.cs.glsl). Injected into every shader compile.
@@ -461,9 +461,10 @@ export namespace RendererVKLayout
 
     constexpr uint32 SKINNING_THREADS_PER_GROUP = 64;
 
-    // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents).
-    constexpr size_t INITIAL_VERTEX_DATA = 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
-    constexpr size_t INITIAL_INDEX_DATA = 4 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+    // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
+    // load does not grow them: 1.5 GiB of vertices, 512 MiB of indices.
+    constexpr size_t INITIAL_VERTEX_DATA = 32 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_INDEX_DATA = 128 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)
@@ -504,6 +505,7 @@ export namespace RendererVKLayout
         constexpr oc::string_view c_terrainTess[] = { "Terrain/Tessellation" };
         constexpr oc::string_view c_terrainWater[] = { "Terrain/Water" };
         constexpr oc::string_view c_grass[] = { "Grass" };
+        constexpr oc::string_view c_clutter[] = { "Clutter" };
         constexpr oc::string_view c_foliage[] = { "Trees" };
         constexpr oc::string_view c_rock[] = { "Rocks" };
         constexpr oc::string_view c_lod[] = { "LOD" };
@@ -522,6 +524,7 @@ export namespace RendererVKLayout
         { "Terrain tessellation", UboLockSections::c_terrainTess },
         { "Terrain water", UboLockSections::c_terrainWater },
         { "Grass", UboLockSections::c_grass },
+        { "Clutter", UboLockSections::c_clutter },
         { "Trees", UboLockSections::c_foliage },
         { "Rocks", UboLockSections::c_rock },
         { "LOD", UboLockSections::c_lod },
@@ -758,6 +761,105 @@ export namespace RendererVKLayout
         uint32 tableDim;       // cells per axis (<= GRASS_TABLE_DIM)
         float chunkSize;       // m
         glm::uvec2 chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM]; // x = the mesh's first vertex, y = grid cells per side (0 = none)
+    };
+
+    // GROUND CLUTTER (ClutterPipeline; clutter.inc.glsl, Docs/GroundClutterPlan.md): pebbles, branches, mushrooms and
+    // flowers, placed on the GPU every frame. A grid of PATCHES around the camera; per patch and clutter TYPE a ranked
+    // list of CLUTTER_CANDIDATES points (an R2 sequence, so every prefix is evenly spread): candidate k of a type is kept
+    // where k + 0.5 < the type's density there x the patch area. One cull workgroup per patch, one thread per rank.
+    // The kept objects go into BUCKETS - one per (mesh, LOD), the flowers' first - then a prefix pass writes one
+    // indexed draw per bucket and a scatter pass sorts the records into the buckets' ranges (instance-rate attributes).
+    constexpr uint32 CLUTTER_CANDIDATES = 256;     // ranked points per patch and type = the cull's workgroup (16 / m^2 at 4 m patches)
+    constexpr uint32 CLUTTER_MAX_PATCHES = 6400;   // the cull's dispatch (80^2): the patch grid is capped to it
+    constexpr uint32 CLUTTER_MAX_TYPES = 32;
+    constexpr uint32 CLUTTER_MAX_MESHES = 256;     // variant meshes of every rigid type together
+    constexpr uint32 CLUTTER_LODS = 3;             // mesh levels per rigid variant
+    constexpr uint32 CLUTTER_FLOWER_LODS = 3;      // flower geometry levels (built in the vertex shader)
+    constexpr uint32 CLUTTER_MAX_BUCKETS = CLUTTER_FLOWER_LODS + CLUTTER_MAX_MESHES * CLUTTER_LODS;
+    constexpr uint32 CLUTTER_PREFIX_GROUP = 1024;  // the prefix pass: ONE workgroup, a thread per bucket
+    static_assert(CLUTTER_MAX_BUCKETS <= CLUTTER_PREFIX_GROUP);
+    constexpr uint32 CLUTTER_MAX_INSTANCES = 131072; // kept objects per frame (a bucket-local index fits 17 bits)
+    constexpr uint32 CLUTTER_LOCAL_BITS = 17;
+    static_assert(CLUTTER_MAX_INSTANCES <= (1u << CLUTTER_LOCAL_BITS) && CLUTTER_MAX_BUCKETS < (1u << (32 - CLUTTER_LOCAL_BITS)));
+    constexpr uint32 CLUTTER_SCATTER_GROUP = 256;
+    // THE FOREST FLOOR MAP (Procedural ClutterSystem, re-baked as the camera moves): rgba8 per texel - canopy, trunk
+    // proximity, rock proximity, occupied (inside a trunk or a rock: nothing grows) - over CLUTTER_FLOOR_DIM^2 texels
+    // of CLUTTER_FLOOR_TEXEL metres around its centre.
+    constexpr uint32 CLUTTER_FLOOR_DIM = 384;
+    constexpr float CLUTTER_FLOOR_TEXEL = 1.0f;
+    // Flower geometry (clutter_flower.vs.glsl): per LOD the stem's segments and the petal slots (a quad each).
+    constexpr uint32 CLUTTER_FLOWER_STEM_SEGMENTS[CLUTTER_FLOWER_LODS] = { 4, 2, 1 };
+    constexpr uint32 CLUTTER_FLOWER_PETALS[CLUTTER_FLOWER_LODS] = { 16, 8, 4 };
+
+    // The kinds of clutter (ClutterTypeGpu::info.z): how the cull places it and which draw and material it takes.
+    enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3 };
+    // A flower's head (clutter_flower.vs.glsl).
+    enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3 };
+
+    // One clutter TYPE (Procedural's .clutter file): where it grows and what it looks like. The density is the product
+    // of the type's terms; each two-value term is mix(.x, .y, its measure 0..1). Colours are LINEAR.
+    struct ClutterTypeGpu
+    {
+        glm::vec4 climate;   // the ideal climate box: x..y temperature (t01: (C + 25) / 75), z..w precipitation (01)
+        glm::vec4 placement; // x density (per m^2), y 1 / climate width, z 1 / cluster size (0 = no clusters), w cluster coverage
+        glm::vec4 terms0;    // xy Grass (the terrain's grass cover: bare .. full), zw Crag (bedrock showing: none .. full)
+        glm::vec4 terms1;    // xy Beach (none .. full), zw Canopy (open .. under a full crown)
+        glm::vec4 terms2;    // xy Trunk (far .. at a trunk), zw RockNear (far .. at a rock's foot)
+        glm::vec4 terms3;    // xy Wet (dry .. wet: the climate's humidity), z max slope (rise / run), w min altitude above water (m)
+        glm::vec4 ring;      // x ring radius (m, 0 = none), y ring width (m), z ring cell (m), w the chance a cell holds a ring
+        glm::vec4 shape;     // x..y scale range, z range (m), w sink (fraction of the mesh height below the ground)
+        glm::vec4 albedo0;   // rgb main colour (pebble: a tint on the climate's bedrock; flower: the petals), w roughness
+        glm::vec4 albedo1;   // rgb second colour (end grain / the stem & gills / the flower's centre), w ground align 0..1
+        glm::vec4 flower;    // x stem height (m at scale 1), y head size (m), z petal width (x the head size), w petal open angle (rad)
+        glm::vec4 bound;     // x max density (per m^2, every term at its largest: the candidates evaluated), y spots (mushroom), zw unused
+        glm::uvec4 info;     // x first mesh, y variant meshes, z kind (EClutterKind), w flower head (EFlowerHead) | petals << 8
+    };
+    static_assert(sizeof(ClutterTypeGpu) == 13 * 16);
+
+    // One rigid variant mesh: its levels in the clutter index / vertex buffers, and its bounds at scale 1.
+    struct ClutterMeshGpu
+    {
+        glm::uvec4 lods[CLUTTER_LODS]; // x first index, y index count (0 = no such level), z vertex offset
+        glm::vec4 bounds;              // x radius around (0, height / 2, 0), y height (the lowest point is y = 0)
+    };
+    static_assert(sizeof(ClutterMeshGpu) == 64);
+
+    // A rigid clutter vertex (48 B, its own buffer).
+    struct ClutterVertexGpu
+    {
+        glm::vec4 posAo;      // xyz position (scale 1, y up, the lowest point at 0), w ambient occlusion 0..1
+        glm::vec4 normalPart; // xyz normal, w the PART: Branch 0 bark / 1 end grain; Mushroom 0 stem / 1 cap / 2 gills
+        glm::vec4 uv;         // Branch bark: x along the wood, y around it (both m at scale 1); end grain: zw the point
+                              // across the cut (m from its axis). Mushroom: x around (0..1), y up its profile (0..1)
+    };
+    static_assert(sizeof(ClutterVertexGpu) == 48);
+
+    // One kept object (the cull's output, sorted into its bucket's range): instance-rate vertex attributes.
+    struct ClutterInstanceGpu
+    {
+        glm::vec4 posScale;   // the ground contact point (world), the scale (already x the grow factor)
+        glm::uvec4 data;      // xy the rotation quaternion (4 halves), z type | variant << 8 | lod << 16 | kind << 24, w its hash
+        glm::uvec4 look;      // x albedo0 (rgba8: rgb, roughness), y albedo1 (rgba8: rgb, spots), z packHalf2x16(stem height, head size)
+                              // - a rigid object: packHalf2x16(its height (m), 0) -, w head | petals << 8 | petal width (unorm8) << 16 | open angle (unorm8 of pi / 2) << 24
+    };
+    static_assert(sizeof(ClutterInstanceGpu) == 48);
+
+    // The per-frame CLUTTER FRAME (host-visible; written in present when changed): the patch grid, the type / mesh counts,
+    // the flower draws' index ranges and the forest floor map.
+    struct ClutterFrameGpu
+    {
+        glm::vec2 floorOrigin; // world XZ of texel (0, 0)'s min corner
+        float floorInvTexel;   // 1 / the texel (m)
+        uint32 floorDim;       // texels per axis (0 = no map: the floor measures read 0)
+        glm::vec2 gridOrigin;  // the patch grid's min corner
+        uint32 gridDim;        // patches per axis (0 = no clutter)
+        float patchSize;       // m
+        uint32 numTypes;
+        uint32 numMeshes;
+        float range;           // m: the farthest type's range (the patch test)
+        uint32 pad0;
+        glm::uvec4 flowerLods[CLUTTER_FLOWER_LODS]; // x first index, y index count (the flower index buffer)
+        uint32 floor[CLUTTER_FLOOR_DIM * CLUTTER_FLOOR_DIM];
     };
 
     // Local participating-media box, submitted per frame like lights (Renderer::addFogVolume). Density adds

@@ -1,0 +1,33 @@
+# A snapped piece of a fallen tree: the BASE HALF of a FallenLog (the same thickness at half the length, with the base's
+# slow taper), both ends long splintered breaks. Its upper half: SnappedTop. Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType SnappedLog
+	Seed 47
+	Scale 2.4 7.2
+	Variants 8
+	Sink 0.15
+	Align 1
+	Shape Trunk
+	Lying 1
+	Aspect 1 0.12 0.13
+	AspectVar 0.1 0.25 0.25
+	Profile 1 0.94 0.88 0.83 0.78
+	ProfileVar 0.08
+	Break 4 4
+	Stubs 2 0.12
+	Hollow 0.2 0.6
+	Erosion 0.006
+	Warp 0.024 0.65
+	Noise 0.004 20 3
+	NoiseStretch 6
+	Pits 2 0.02 0.008
+	Surface Wood
+	Bark Oak
+	Color 0.85 0.85 0.85
+	Lod 2500
+	Resolution 6
+	# In forests only, in patches; it rests on gentle ground.
+	Placement
+		Density 3
+		Forest 0 1
+		Slope 0 0 0.35 0.8
+		Cluster 60 0.5

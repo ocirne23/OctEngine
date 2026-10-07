@@ -1,0 +1,24 @@
+# Buttercups: small glossy yellow cups, thick in damp meadows.
+ClutterType Buttercup
+	Kind Flower
+	Seed 73
+	Scale 0.96 1.44
+	Range 60
+	Color 0.98 0.85 0.08
+	Color2 0.90 0.75 0.10
+	Roughness 0.4
+	Head Radial
+	Petals 5
+	Open 30
+	PetalWidth 0.75
+	Stem 0.3
+	HeadSize 0.012
+	Placement
+		Density 6
+		Temperature 2 18
+		Precipitation 600 2000
+		Grass 0 1
+		Wet 0.3 1
+		Canopy 1 0.1
+		Cluster 15 0.4
+		Slope 0.6

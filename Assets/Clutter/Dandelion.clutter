@@ -1,0 +1,22 @@
+# Dandelions: many thin yellow rays, low in the grass almost everywhere temperate.
+ClutterType Dandelion
+	Kind Flower
+	Seed 79
+	Scale 0.96 1.44
+	Range 60
+	Color 1.00 0.80 0.05
+	Color2 1.00 0.75 0.05
+	Head Radial
+	Petals 30
+	Open 15
+	PetalWidth 0.15
+	Stem 0.15
+	HeadSize 0.016
+	Placement
+		Density 2
+		Temperature 0 22
+		Precipitation 400 2000
+		Grass 0 1
+		Canopy 1 0.2
+		Cluster 20 0.5
+		Slope 0.7

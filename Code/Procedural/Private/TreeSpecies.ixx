@@ -65,7 +65,7 @@ export namespace Procedural
 
 	// WORLD placement (`Placement` block; TreeWorld): the expected trees per hectare in the species' IDEAL climate - a
 	// box of mean annual temperature x annual precipitation - falling off as a Gaussian of the distance OUTSIDE the box,
-	// in the normalized (temperature, precipitation) space the scatter rules and the terrain textures use, then gated by
+	// in the normalized (temperature, precipitation) space the clutter types and the terrain textures use, then gated by
 	// cluster noise, slope and the height above the water. density 0 = never placed.
 	struct TreePlacementDesc
 	{

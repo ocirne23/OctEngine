@@ -2,11 +2,13 @@ export module Procedural:RockType;
 
 import Core;
 import Core.glm;
+import File; // AssetNode
 export import Settings.Rocks; // RockWorldDesc
 
-// One rock type, authored as a `.rock` text asset (Assets/Rocks/). The type sets the SHAPE only: a signed distance
-// field built per variant from its seed. The colour comes from the climate at the rock (the terrain's bedrock
-// materials), never from the type. See Docs/RockRenderingPlan.md.
+// One rock type, authored as a `.rock` text asset (Assets/Rocks/). The type sets the SHAPE: a signed distance field
+// built per variant from its seed. A ROCK's colour comes from the climate at the rock (the terrain's bedrock
+// materials), never from the type; DEAD WOOD (`Surface Wood`) takes a tree species' bark texture (`Bark`). See
+// Docs/RockRenderingPlan.md.
 export namespace Procedural
 {
 	enum class ERockShape : uint8
@@ -14,6 +16,13 @@ export namespace Procedural
 		Boulder, // superellipsoid, default squareness 2.2 (near an ellipsoid)
 		Block,   // superellipsoid, default squareness 3 (a rounded block)
 		Pillar,  // a STANDING body whose width follows a profile over its height (a spire, a top-heavy monolith), on a flat floor
+		Trunk,   // a dead TREE TRUNK: a fallen log (`Lying`), a stump or a snag - broken ends, stubs, roots, a root plate
+	};
+
+	enum class ERockSurface : uint8
+	{
+		Rock, // the climate's bedrock (RendererVK LitRock)
+		Wood, // a tree species' bark texture (`Bark`), end grain on the broken faces (LitRock's wood path)
 	};
 
 	// A rock's largest size (m, its longest axis: `Scale` is clamped to it): the far volume's layer is 22 m high
@@ -21,6 +30,7 @@ export namespace Procedural
 	constexpr float ROCK_MAX_SIZE = 22.0f;
 	constexpr int ROCK_MAX_PILE = 4;       // blocks per pile / pillars per group (RockShape's block arrays)
 	constexpr int ROCK_PROFILE_POINTS = 5; // a Pillar's widths, base to top, evenly spaced
+	constexpr int ROCK_MAX_LIMBS = 12;     // a Trunk's branch stubs + roots (RockShape::limbs)
 
 	// One world placement RULE (Docs/RockRenderingPlan.md 6): TreeWorld's rock records. A type has any number of them
 	// (`Placement` blocks) and their densities ADD - a rule for everywhere plus one for a climate it is common in, each
@@ -48,7 +58,11 @@ export namespace Procedural
 		float plains = 1.0f;
 		glm::vec2 rugged{ 1.0f };
 		float valley = -1.0f;
+		// FOREST (.x open ground .. .y a full forest): the density x mix(x, y, the tree density the trees' own Placement
+		// blocks give there / ROCK_FOREST_FULL) - dead wood lies where trees grow. Default 1 1: no matter.
+		glm::vec2 forest{ 1.0f };
 	};
+	constexpr float ROCK_FOREST_FULL = 60.0f; // trees per ha that count as a full forest (the Forest term)
 
 	// RockWorldDesc (the WORLD's rules over every rock type, "Rocks/World" tweaks) lives in Settings.Rocks.
 
@@ -94,6 +108,22 @@ export namespace Procedural
 		float pitDepth = 0.02f;
 		float splitChance = 0.0f;                // probability of one crack through the rock
 		float splitGap = 0.02f;
+		// Trunk (Aspect: the trunk's length along its axis, its thickness across; Profile: its radius base to top):
+		bool lying = false;                      // the axis along X (a fallen log); else along Y (a stump, a snag)
+		glm::vec2 breakDepth{ 0.0f };            // the broken top / base: splinter length x the trunk's radius there; 0 = a worn end
+		float rootPlateChance = 0.0f;            // lying: the base is a torn-out ROOT PLATE (else broken)
+		float rootPlateSize = 4.0f;              // its radius x the trunk's base radius
+		int stubCount = 0;                       // broken branch stubs
+		float stubLength = 0.05f;                // x the nominal size (1 = the trunk's length)
+		int rootCount = 0;                       // standing: buttress roots into the ground at the base
+		float rootSpread = 2.5f;                 // their reach x the trunk's base radius
+		float hollowChance = 0.0f;               // a hollow core, open at the broken end(s)
+		float hollowSize = 0.6f;                 // its radius x the trunk's
+
+		// --- Surface ---
+		ERockSurface surface = ERockSurface::Rock;
+		oc::string bark;                         // Wood: the tree species whose bark texture it wears (Assets/Trees/<bark>.tree)
+		glm::vec3 color{ 1.0f };                 // Wood: a tint on that bark (sRGB 0..1; dead wood greys)
 
 		// --- Meshes ---
 		int lodTriangles = 2000;                 // LOD 0's triangle count; each further level a quarter of the one before
@@ -102,7 +132,22 @@ export namespace Procedural
 		oc::vector<RockPlacementDesc> placements; // the rules with a density; empty = never placed in the world
 	};
 
+	// The ground a type covers, from its desc (its variants are not generated where it is placed - TreeWorld): a
+	// CAPSULE in rock-local XZ along X, x the record's scale. A round rock: halfLength 0, radius 0.5 (as before); a
+	// lying trunk: its axis' half length and its thickness; a standing one: its base and roots.
+	struct RockFootprint
+	{
+		float halfLength = 0.0f;
+		float radius = 0.5f;
+		float flat = 1.0f; // its widest horizontal extent / its longest axis: groundTransform's footprint
+	};
+	RockFootprint rockFootprint(const RockTypeDesc& type);
+
 	// Parses an Assets/Rocks/*.rock file (AssetParser syntax, a `RockType <name>` root). Clamps what would break
 	// the generator. MAIN THREAD under FileSystem::AllowMainThreadIO, or a job.
 	bool loadRockType(const oc::string& path, RockTypeDesc& out, oc::string& outError);
+	// The SHAPE keys alone (Shape .. Resolution: no Seed / Scale / Variants / Sink / Align / Placement) and their clamps -
+	// shared with the ground clutter's pebbles (ClutterType: a `.clutter` Pebble is a small RockType).
+	void readRockShapeKeys(const AssetNode& type, RockTypeDesc& out);
+	void clampRockShape(RockTypeDesc& out);
 }

@@ -1170,7 +1170,7 @@ Sleep-based tick limiter. Ctrl+C is a clean shutdown; there is a 5 s status line
 > `getComponent`-check, and `Renderer::isInitialized()` gates the few thunks that touch renderer
 > state.
 
-**Deliberately skipped headless:** terrain, ocean, scatter and the terrain collider (camera-centered
+**Deliberately skipped headless:** terrain, ocean, trees, rocks, ground clutter and the terrain collider (camera-centered
 streaming — the test scene carries its own ground), buoyancy, and audio. Spatial entries DO register.
 
 ## The wire protocol

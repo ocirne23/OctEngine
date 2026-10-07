@@ -31,8 +31,10 @@ export namespace Procedural
 		TreeSystem& operator=(const TreeSystem&) = delete;
 
 		void initialize(); // attaches the "Trees" listeners (and TreeWorld's)
-		// Per frame, after scatter.update. `maps` places the grove on the terrain (y = 0 without it).
+		// Per frame, after the terrain. `maps` places the grove on the terrain (y = 0 without it).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
+		// Every tree and rock of the terrain ring as records (the ground clutter's forest floor reads them; main thread).
+		const TreeWorld& world() const { return m_world; }
 
 	private:
 		// Every LOD level uploaded; nodes spawn on level 0 and the GPU picks the level per instance through
@@ -158,6 +160,7 @@ export namespace Procedural
 			glm::vec2 scale{ 1.0f };
 			float sink = 0.0f;
 			float align = 0.0f;
+			float footprint = 1.0f; // RockSystem::WorldType::footprint
 			oc::vector<ExpandRockVariant> variants;
 		};
 		struct ExpandContext

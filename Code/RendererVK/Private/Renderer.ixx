@@ -48,6 +48,7 @@ import :ParticlePipeline;
 import :TreeVolumePipeline;
 import :TreeRecordPool;
 import :GrassPipeline;
+import :ClutterPipeline;
 import :DecalPipeline;
 import :ForceFieldPipeline;
 import :TaaPipeline;
@@ -299,8 +300,9 @@ public:
         glm::vec3 albedo{ 0.1f, 0.16f, 0.07f }; // the leaf colour of its volume
         // A SOLID (a rock, Procedural's world rocks): `density` is its OCCUPANCY (0..1), and the volume gives it
         // "Trees/Far rock extinction" at any size (a crown's extinction thins with its scale; a rock's does not). Its
-        // colour is the climate's bedrock, never `albedo`.
+        // colour is the climate's bedrock - or, with solidOwnColour (dead wood), `albedo`.
         bool solid = false;
+        bool solidOwnColour = false;
     };
     struct TreeInstancePiece
     {
@@ -380,6 +382,23 @@ public:
     // the near grass cascade's placement (where the bottom of the view meets the ground).
     void setCameraGround(float groundY) { m_cameraGround = groundY; }
     float grassRange() const { return grassActive() ? m_grassParams.range : 0.0f; } // m; 0 = no grass
+    // The range the ground chunks must cover (setGrassGround): the grass's and the ground clutter's.
+    float groundRange() const { return glm::max(grassRange(), clutterRange()); }
+
+    // -- Ground clutter (ClutterPipeline, clutter_cull.cs.glsl; Procedural ClutterSystem; "Clutter" tweaks) --
+    // One rigid variant mesh: its LOD levels (level 0 first; an empty level = none), y up, the lowest point at 0.
+    struct ClutterMesh
+    {
+        oc::vector<RendererVKLayout::ClutterVertexGpu> vertices[RendererVKLayout::CLUTTER_LODS];
+        oc::vector<uint32> indices[RendererVKLayout::CLUTTER_LODS];
+    };
+    // The clutter types and their meshes (a type's info.x / .y name its first mesh and its count; flowers have none).
+    // MAIN THREAD; idles the GPU and re-records. Empty = no clutter.
+    void setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu> types, oc::span<const ClutterMesh> meshes);
+    // THE FOREST FLOOR MAP: CLUTTER_FLOOR_DIM^2 rgba8 texels (canopy, trunk, rock, occupied) of CLUTTER_FLOOR_TEXEL m
+    // centred on `centre` (empty = none). MAIN THREAD; each frame slot takes it in present.
+    void setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels);
+    float clutterRange() const; // m: the farthest type's range x "Range scale", capped by the patch grid; 0 = no clutter
 
     // -- Debug rendering --
     uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
@@ -421,7 +440,8 @@ private:
     void recordOceanSim(uint32 frameIdx);
     void recordTerrainWetness(uint32 frameIdx);
     void recordGrassCull(uint32 frameIdx);
-    void recordGrassNearShadow(uint32 frameIdx); // the near grass cascade's casters (the shadow map's extra-layer pass)
+    void recordClutterCull(uint32 frameIdx);
+    void recordGrassNearShadow(uint32 frameIdx); // the near grass cascade's casters (the blades + the clutter; the shadow map's extra-layer pass)
     void recordIndirectCull(uint32 frameIdx);
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
@@ -787,6 +807,18 @@ private:
     // map - the cascades' pass that this layer must follow).
     bool grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }
     void uploadGrassFrame(uint32 frameIdx);
+    bool m_groundTableValid = false; // this frame's ground table holds chunks (uploadGrassFrame): the clutter's ground
+    // GROUND CLUTTER: the cull + buffers (the objects draw in m_staticMeshGraphicsPipeline). The patch grid and the
+    // floor map go into the slot's clutter frame in present (uploadClutterFrame).
+    ClutterPipeline m_clutterPipeline;
+    ClutterSettings& m_clutterParams = Globals::settings.clutter;
+    float m_clutterMaxRange = 0.0f;                    // the types' largest `Range` (setClutterAssets)
+    oc::vector<uint32> m_clutterFloor;                 // the floor map's texels (setClutterFloorMap)
+    glm::vec2 m_clutterFloorCentre{ 0.0f };
+    oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_clutterFloorDirty{}; // the slot has not taken the map yet
+    bool clutterActive() const { return m_clutterParams.enabled && m_sceneViewCount == 1 && m_clutterPipeline.numTypes() > 0; } // desktop only
+    float clutterPatchSize() const { return glm::clamp(m_clutterParams.patchSize, 1.0f, 16.0f); }
+    void uploadClutterFrame(uint32 frameIdx);
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
     ParticleState m_particles;
@@ -915,6 +947,7 @@ private:
         CommandBuffer oceanSimCommandBuffer;
         CommandBuffer terrainWetnessCommandBuffer;
         CommandBuffer grassCullCommandBuffer;
+        CommandBuffer clutterCullCommandBuffer;
         CommandBuffer grassNearShadowCommandBuffer;
         CommandBuffer lightGridCommandBuffer;
         CommandBuffer imguiCommandBuffer;

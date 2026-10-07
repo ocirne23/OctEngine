@@ -41,7 +41,7 @@ namespace
 	constexpr oc::string_view c_displayCats[]  = { "Time", "HUD", "Post" };
 	constexpr oc::string_view c_graphicsCats[] = { "TAA", "Shadows", "RT", "RTAO", "GI", "LOD",
 		"Fog", "Decals", "Particles", "Sky", "Force/Shell", "Texture Streaming", "Mesh Streaming" };
-	constexpr oc::string_view c_worldCats[]    = { "Terrain", "Ocean", "Scatter" };
+	constexpr oc::string_view c_worldCats[]    = { "Terrain", "Ocean", "Clutter" };
 	constexpr oc::string_view c_audioCats[]    = { "Audio" };
 	constexpr oc::string_view c_gameplayCats[] = { "Game" };
 

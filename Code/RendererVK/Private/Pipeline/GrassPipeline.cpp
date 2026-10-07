@@ -20,7 +20,7 @@ void GrassPipeline::buildLayout(ComputePipelineLayout& layout)
     constexpr vk::ShaderStageFlags CS = vk::ShaderStageFlagBits::eCompute;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = CS });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = CS });
-    for (uint32 binding = 2; binding <= 7; ++binding) // ground table, vertices, patches, commands, counts, the near casters
+    for (uint32 binding = 2; binding <= 8; ++binding) // ground table, vertices, patches, commands, counts, the near casters, the clutter frame (the floor map)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = CS });
     // Binding 1 (the terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
     layout.descriptorBindingFlags.resize(b.size());
@@ -225,7 +225,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         return DescriptorSetUpdateInfo{ .binding = binding, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() } } };
     };
-    oc::array<DescriptorSetUpdateInfo, 8> updates{
+    oc::array<DescriptorSetUpdateInfo, 9> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
@@ -236,6 +236,7 @@ void GrassPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const 
         storage(5, m_commands[frameIdx]),
         storage(6, count),
         storage(7, m_nearShadowCommands[frameIdx]),
+        storage(8, *params.clutterFrame),
     };
     vk::DescriptorSet set = m_sets[frameIdx].getDescriptorSet();
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());

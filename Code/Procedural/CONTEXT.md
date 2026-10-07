@@ -3,7 +3,7 @@
 > Library documentation for `Code/Procedural`.
 > Read [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
-The procedural world layer: diffusion terrain, FFT ocean, scattering, terrain physics, and the
+The procedural world layer: diffusion terrain, FFT ocean, trees, rocks, ground clutter, terrain physics, and the
 camera-centered bakes they share. Links RendererVK, File, Spatial and Physics (+ onnxruntime, zstd
 PRIVATE).
 
@@ -14,9 +14,9 @@ PRIVATE).
 | `Globals::terrain` | `TerrainStreamer` | `update(renderer, camera)` |
 | `Globals::terrainCollider` | `TerrainCollider` | `update(camera.position, terrain.activeClimateMaps())` |
 | `Globals::ocean` | `OceanGenerator` | `update(renderer, camera, terrain.activeTerrainData(), terrain.seaLevel())` |
-| `Globals::scatter` | `ScatterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` |
 | `Globals::trees` | `TreeSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Trees" (it also runs the world records, "World records") |
 | `Globals::rocks` | `RockSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Rocks" |
+| `Globals::clutter` | `ClutterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Ground clutter" (after the trees: it reads their records) |
 
 main.cpp updates them **in that order**, after entity updates and before present
 ([main.cpp:803](../App/main.cpp#L803)).
@@ -30,7 +30,7 @@ and deliberately independent.**
 **Every tweak VALUE lives in the Settings library**, not in these classes: `Globals::settings.terrain` /
 `terrainCollider` (Settings.Terrain, which also holds `WaterReach` / `FlowField`), `.ocean` (Settings.Ocean),
 `.trees` / `.treeWorld` (Settings.Trees, with `TREE_GROVE_TYPES`), `.rockSystem` (Settings.Rocks, with
-`RockWorldDesc`), `.scatter` (Settings.Scatter). Each system holds one `m_settings` reference and reads it directly;
+`RockWorldDesc`), `.clutter` (Settings.Clutter). Each system holds one `m_settings` reference and reads it directly;
 its `initialize()` only attaches the reactions (`Tweak::onChange`: config-dirty, grid-dirty, fade bands, remesh), so
 the settings must be registered first. Button settings (`reload`, `respawn`, `logStats`, ...) are cleared by the
 system through that reference. `FlowField::windAngle` is NOT a tweak: `setFlowWindAngle` writes it.
@@ -39,8 +39,9 @@ system through that reference. `FlowField::windAngle` is NOT a tweak: `setFlowWi
 
 ## Disabled = PARKED
 
-Each system's `update()` self-gates on its Enabled tweak — collider and scatter also on
-`maps == nullptr` — with an idle latch.
+Each system's `update()` self-gates on its Enabled tweak — the collider also on
+`maps == nullptr` — with an idle latch. (The clutter keeps its types and meshes while disabled, so an enable draws at
+once; only its floor map goes.)
 
 1. The enable → disable transition clears ONCE: residents, tiles and sectors freed, requests starved,
    renderer state pushed once (terrain params 0 / ocean params `enabled=false` / cleared terrain-data
@@ -48,7 +49,7 @@ Each system's `update()` self-gates on its Enabled tweak — collider and scatte
 2. It then keeps **DRAINING what is still in flight** — late pump results, the terrain-data bake, the
    collider build — **scope-free** until nothing is left.
 3. After that a parked `update()` is a branch and a return: **no "Terrain" / "Terrain collider" /
-   "Ocean" / "Scatter" profile scopes, no renderer calls.**
+   "Ocean" / "Clutter" profile scopes, no renderer calls.**
 
 A config-dirty tweak while parked (sea level, say) re-runs the terrain drain once. The ocean frees its
 clipmap sectors on disable, and `rebuildGrid()` restores them on re-enable.
@@ -120,7 +121,7 @@ Shared with the shaders (`terrain_height.inc.glsl` mirrors them — **keep them 
 | `HUMIDITY_FULL_PRECIP_MM` | 2200 mm/yr = humidity 1.0 |
 | `FOG_FALLOFF_MUL_MAX` | 4.0 |
 
-`temperatureTo01` / `precipTo01` map into the normalized space **the scatter rules' climate attractors
+`temperatureTo01` / `precipTo01` map into the normalized space **the tree / rock / clutter Placement climate boxes
 and the terrain shader's texture splatting BOTH share.**
 
 `fogFalloffFromTemperature` — cold air hugs the ground, warm air lets fog tower. **It is no longer
@@ -140,7 +141,7 @@ but this one generates **256×256-pixel TILES through three ONNX models.**
   tile is generated — **~1.5 s cold, ~0 once resident**, and one tile covers ~225 chunks at chunkSize
   512.
 * **All inference is serialized onto one thread.** *Required, not a convenience*: the tile store is not
-  thread-safe, and `sampleHeight` is called from the terrain streamer worker, the scatter worker AND
+  thread-safe, and `sampleHeight` is called from the terrain streamer worker, the tree record pumps AND
   the height-map baker. The lock is a fiber-parking `JobMutex`
   ([GeneratorV3.cpp:606](Private/Diffusion/GeneratorV3.cpp#L606)) so a ~1.5 s cold-tile wait parks a
   FIBER rather than a pooled worker, and concurrent requesters park on a per-tile `JobEvent`.
@@ -189,7 +190,7 @@ by the session to the seeder's tile-aligned coverage): **inside a bounded genera
 only fetched inside the rect** — `resolveBlock` leaves the slot null past it — **and every sample that
 lands on a null slot falls back to the COARSE stage** (`sampleField`, and `sampleGrid` resolves the
 coarse block once per grid). So the terrain-data bake's 4 km Full near cascade, the collider and the
-scatter cost nothing past the playable area, and the streamer's ring scan skips chunks that do not
+tree records cost nothing past the playable area, and the streamer's ring scan skips chunks that do not
 touch it. Without bounds a 512 m area still pulled ~800 tiles: the 3×3 chunk ring (~600 at 128 m
 tiles) plus the near cascade (~1000).
 
@@ -298,7 +299,7 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   1. **Main-visible chunks** come from the cull job's Main stamp through the Spatial visible-set
      hand-over, collect slot 1 (`setVisibleCollect(SpatialLayer_Terrain, 1, ECollect::UserData)` in
      `initialize`, `visibleUserData(1)` in `render`) → `PASS_ALL`. The slot holds userData VALUES
-     read in the cull job (zeros — the scatter groups — dropped there), so the walk reads no pool
+     read in the cull job (zeros dropped there - the removed scatter's groups were the only ones), so the walk reads no pool
      row; a chunk evicted since the stamp is a retired, destroyed node, skipped by the push.
   2. **Main-culled chunks keep shadow + GI** (the ground behind the camera must stay in the TLAS and
      the sun cascades), but only inside a `forEachInSphere` around the renderer's scene focus with
@@ -306,7 +307,7 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
      shadow cull and the TLAS range bound drop the push anyway; farther ground gets its sun shadow
      from the terrain march over the baked height map. `MainOnly` skips this set; a main-stamped hit
      is skipped by the query itself (`forEachInSphere(..., SpatialPassBit_Main)`), tagged sectors and
-     zero scatter entries by the emit. Culling `Off` keeps the plain walk over every resident.
+     zero entries by the emit. Culling `Off` keeps the plain walk over every resident.
 
   **The walk and the pushes run on workers** (`"terrainRenderPush"`, High, `m_renderCounter`); main.cpp calls `joinRender()` right before `present`, and `update`
   / `clearResidents` join it before they touch `m_residents`. The job fans the hand-over list out over a High
@@ -377,7 +378,7 @@ Handed out, never duplicated:
 | Accessor | Consumer |
 |---|---|
 | `seaLevel()` | **The ocean floats on this rather than owning a second copy** — the generator builds its heights around it (moving it regenerates chunks), and the swash gate compares the two, so a fork switches the swash off everywhere. Valid even while terrain is disabled. |
-| `activeClimateMaps()` | The collider, the scatter. **nullptr while terrain is disabled** — consumers treat that as "no terrain" rather than sampling a field that is not drawn. |
+| `activeClimateMaps()` | The collider, the trees, the rocks. **nullptr while terrain is disabled** — consumers treat that as "no terrain" rather than sampling a field that is not drawn. |
 | `activeWaterReach()` / `activeFlowField()` | The ocean's shore bake, **so the two bakes cannot drift apart.** |
 | `activeTerrainData()` | The ocean's CPU buoyancy and wind-steering votes. **A re-bake swaps in a NEW object**, so a consumer holding the old `shared_ptr` keeps a coherent snapshot. |
 
@@ -568,8 +569,8 @@ disc every frame.**
 * **`update` never walks the grid for the push, and mostly not at all.** The re-centering of the
   sector entries (transform + `updateEntry`, padded by `displacementExtent()`) runs only when the
   snapped position, the sea level or the pad changed — the snap steps by 8 cells and the pad
-  refreshes every 15 frames — and stays on main (the scatter registers entries later in the frame;
-  an `updateEntry` on a worker could race the pool growth). `update` only prepares the render job's
+  refreshes every 15 frames — and stays on main (an `updateEntry` on a worker could race the pool
+  growth by a later registration in the frame). `update` only prepares the render job's
   input (`m_cameraPos`, `m_renderReady`); **`render(culled)`**, called by `TerrainStreamer::render`,
   kicks the job. The main-visible sectors come from the Spatial hand-over, collect slot 1: the
   TERRAIN's render job walks it once and pushes the sector nodes with the chunks (from that worker;
@@ -771,7 +772,7 @@ build, creates / destroys the static bodies (layer "Terrain"; box3d create/destr
 `g_bodyLifecycleMutex`), scans for the nearest missing tile and kicks its build. **main.cpp joins it
 (`joinUpdate`) right before `kickPostUpdateJobs`**: the Sim batch (the game's nav feed) reads body
 positions, and the next frame's main-thread physics users (player controls, scripts, net receive, the
-step) must not overlap a body create/destroy. Between the kick and the join only ocean / scatter /
+step) must not overlap a body create/destroy. Between the kick and the join only ocean / trees / rocks / clutter /
 particles / force / UI kick run on main — none touches box3d. Sub-scopes `"Terrain collider clear"` /
 `"... create body"` / `"... evict"` show the box3d cost.
 
@@ -780,51 +781,6 @@ has half-tile hysteresis. `maps == nullptr` clears everything (on main, once, af
 job). The dtor waits out the update job, then the in-flight build (main helps).
 
 Verify with `Physics/Debug/Draw colliders`.
-
----
-
-# `ScatterSystem`
-
-"Scatter" tweaks. Trees, rocks and grass.
-
-**Config is two function-local tables in Scattering.cpp**, `scatterAssets()` and `scatterRules()` —
-assets are shared, so any number of rules can reference one by name.
-
-## `ScatterAsset`
-
-`ocPath` is an `.oc` file, **so the model path AND its import options (MergeNodes /
-PreTransformVertices / DecimationFactor) come from it and scatter shares ONE cooked `.vsc` per model
-with World.** Plus `nodes` (spawnable node paths — each placement picks one at random for variants;
-empty = the model root), `footprintRadius` (ground exclusion; **0 = never blocks or is blocked — cheap
-grass**), `minScale` / `maxScale`, `slopeAlign` (0 upright .. 1 fully following the terrain normal), and
-`sinkDepth` (embedded below the surface, **hiding floating edges on slopes**).
-
-## `ScatterRule`
-
-**Climate ATTRACTORS in REAL units** — mean annual temperature °C and annual precipitation mm/yr, the
-same units the terrain's texture table uses — with a Gaussian falloff of width `climateWidth`.
-
-> **A rule says what climate it WANTS**, rather than pointing at a table entry that says it somewhere
-> else. It named a biome enum once; that enum belonged to the old noise generator and went with it, and
-> **the indirection was worth losing on its own.** Density falls off smoothly, so scatter borders are
-> soft and track the ground they stand on instead of snapping at a classification boundary.
-
-Plus `density` (instances per hectare at full climate weight), `viewDistance`, `clusterSize` /
-`clusterCoverage` (patch feature size; 0 = even coverage), `maxSlope`, and a `minAltitude` /
-`maxAltitude` band **above the local WATER level, which keeps things off beaches.**
-
-## How it runs
-
-Cell placements are computed **deterministically** on pump jobs — the same CAS-claim protocol,
-"Scatter/Gen jobs" — from the SAME sampler the terrain renders: footprint dart-throw (larger footprints
-placed first), cluster noise, slope and altitude bands.
-
-**Per-rule `viewDistance` spawns and despawns instance groups WITHOUT regenerating cells.** Groups
-register on `SpatialLayer_Terrain` with `spawnVisible = false`, register once (instances never move),
-and everything regenerates on a sampler identity change.
-
-> Like terrain chunks, scatter uses its **own layer so gameplay queries never see it** — its
-> `userData` is 0, not an `Entity*`.
 
 ---
 
@@ -1172,10 +1128,10 @@ in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A mem
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.
   On a camera chunk change the main thread requests the missing chunks and re-sorts the queue nearest first; Low pump
-  jobs (`Gen jobs`, 2) take the front, with lazy staleness as the terrain / scatter pumps.
+  jobs (`Gen jobs`, 2) take the front, with lazy staleness as the terrain pumps.
 * **Pure function** (`placeChunk`): one `sampleGrid` at Full detail, ~8 m step + halo, then one candidate per cell of
   a `Candidate cell (m)` (5) lattice, jittered over the cell. Per species (`Placement`) its CLIMATE FIT: 1 inside its
-  IDEAL box (`Temperature` / `Precipitation` min max, normalized as `ScatterRule`), outside a Gaussian of the distance
+  IDEAL box (`Temperature` / `Precipitation` min max, normalized by `temperatureTo01` / `precipTo01`), outside a Gaussian of the distance
   to the box (per axis, sigma `ClimateWidth`), faded to 0 between `Climate fade start` and `end` (0.10 / 0.25 of the
   peak), 0 outside its slope / altitude band. (Until 2026-10-04 an attractor POINT: the density peaked at one climate
   and every climate around it thinned - a precipitation band where a minimum was meant.)
@@ -1249,12 +1205,21 @@ in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A mem
     `Plains 0` = never on flat ground (the Block). A first version was a WORLD rule by the rock's size
     (large rocks x0.1 on plains, x3 on rugged ground): removed, the user wants the control per type, not a smaller
     average size.
+  * **FOREST** (per rule, `Forest open forest`; 2026-10-07, for dead wood): the density x mix(open, forest, the
+    trees' own expected density there / `ROCK_FOREST_FULL` (60 per ha), clamped) - `speciesWeights`, the tree pass's
+    own sum (every species' climate fit, faded, sharpened by the best fit, x its density and cluster patches, x "Trees/
+    World/Density scale"), evaluated at the rock. The rocks are placed before the trees, so the measure is what the
+    trees WILL be there, not the trees placed. `Forest 0 1`: only in forests, never in their clearings.
   * "Rocks/Reload types" makes TreeWorld read the Placement blocks again too (`RockSystem::typesRevision` through
     `setRocks`); "Trees/World/Reload species" does it WITHOUT regenerating the rock meshes - the fast way to iterate
     a Placement block.
   * **Rocks do not give way to each other** (boulders lie against boulders; a rejection order would chain across
-    chunk borders). **The trees give way to every rock**: a tree candidate inside 0.9 x a rock's radius + 0.5 m is
-    dropped. The radius is half of `rockRecordScale(seed, Scale)` - the scale the expansion gives the rock.
+    chunk borders). **The trees give way to every rock**: a tree candidate inside its FOOTPRINT is dropped - a
+    CAPSULE along the record's yaw (hash 104, rock-local X turned to (cos, -sin) as the expansion turns it), its half
+    length and radius `rockFootprint(type)` x `rockRecordScale(seed, Scale)`: a round rock's has no length and a radius
+    of half its size (tree out inside 0.9 x that + 0.5 m, as before); a lying trunk's runs along the log with its
+    thickness (+ 0.9 m: a disc over a 15 m log cleared the forest around it); a standing one's covers its base and
+    roots. The clutter's floor map uses the same capsules (`FloorType::footprint`).
   * With rocks off the tree records are as before (the same hashes, the same field interpolation).
   * The far volume takes the rock records too (R5): see "World mode", THE WORLD'S ROCKS.
 
@@ -1336,8 +1301,11 @@ LOD chain + the per-vertex cavity (the tessellated route was dropped - the user'
 user-untested): rocks in the WORLD - records in TreeWorld, pieces in TreeSystem's world set (see "World records" /
 "World mode" under Trees); R5 (2026-10-06, user-untested): rocks in the FAR VOLUME (World mode, ROCKS IN THE FAR
 VOLUME). "Rocks/Enabled" is on by default since 2026-10-06. Rocks are BIG objects (~1-22 m); small
-ground clutter (pebbles, branches) is a later, separate system. The type sets the SHAPE only; the colour comes
-from the climate's terrain bedrock material (the rock material, R2).
+stones are the GROUND CLUTTER (see "Ground clutter": its pebbles reuse the rock SDF generator). The type sets the SHAPE only; the colour comes
+from the climate's terrain bedrock material (the rock material, R2). **DEAD WOOD** (2026-10-07, the user's request: "Dead /
+fallen tree Rock types") is rock types too - `Shape Trunk` + `Surface Wood` ("DEAD WOOD" below): fallen logs, stumps
+and snags through the same records, LOD chains, far volume and placement rules, wearing a tree species' bark texture
+(the user, 2026-10-07: "just use a wood texture instead, can use an existing one" - no procedural wood noise).
 
 ## The model: an SDF per variant, meshed into a regular LOD chain
 
@@ -1350,10 +1318,14 @@ field then grown by it (a Minkowski rounding: every convex edge and corner a rad
 2026-10-05, the first shapes read as cubes) - plus the strata (grooves + a per-layer step), minus the fbm / ridged
 noise, minus the pit spheres. CPU only: nothing evaluates the field on the GPU (GPU tessellation onto it was planned
 and dropped, 2026-10-05). The field
-lives in the SHAPE frame (body centred); the meshes in ROCK-LOCAL space, the lowest point at y = 0 (`originY`).
+lives in the SHAPE frame (body centred); the meshes in ROCK-LOCAL space, the lowest point at y = 0 (`originY`) - a
+TRUNK's ground line instead (`RockShape::groundY`: a log's underside, a stump's base), its roots and root plate below.
 
 `generateRockVariant`: surface nets over the shape's bounds (`Rocks/Grid resolution` cells along the longest
-axis, default 32 - 96 for a finer source mesh), every vertex projected onto the field (2 Newton steps) and shaded
+axis, default 32 - 96 for a finer source mesh; when the body reaches the grid's outer border - the bounds are a guess,
+and the superellipsoid field is no exact distance, so a large `Erosion` on a thin axis grows the body past them - the
+bounds grow by 15 % per side and it meshes again, up to 4 times: the mesh was OPEN at the border, the clutter's thin
+pebbles, 2026-10-07; the erosion is also capped at 80 % of the body's thinnest half-axis), every vertex projected onto the field (2 Newton steps) and shaded
 from its gradient: the FULL mesh, CPU working data only (never uploaded). Each vertex also takes its **CAVITY**
 (`rockCavity`: five field taps out along the normal, Quilez' SDF occlusion - 1 = open, 0 = deep in a crevice) into
 `texCoords.x`: a rock has no uv, so the u channel carries it to the rock vertex shader (AO, and where the ground
@@ -1368,8 +1340,21 @@ screen-space-error pick - is then against the true surface). The winding is fixe
 ```
 RockType <name>
 	Seed n · Scale min max (m, the longest axis; at most `ROCK_MAX_SIZE` = 22 m - the far volume's layer height,
-	        the user's limit) · Variants n (default 6) · Sink (fraction of the height below ground)
-	Shape Boulder|Block|Pillar (superellipsoid / superellipsoid / a STANDING body with a width profile, on a flat floor)
+	        the user's limit) · Variants n (default 6) · Sink (fraction of the height below ground; a lying trunk's
+	        height is its thickness)
+	Surface Rock|Wood (default Rock: the climate's bedrock. Wood: a tree species' bark texture - "DEAD WOOD" below)
+	Bark <TreeSpecies> (Wood: whose bark texture it wears; default Oak) · Color r g b (Wood: a tint on that bark,
+	        sRGB 0..1, default 1 1 1)
+	Shape Boulder|Block|Pillar|Trunk (superellipsoid / superellipsoid / a STANDING body with a width profile, on a flat
+	        floor / a dead TREE TRUNK - "DEAD WOOD" below)
+	TRUNK: Lying 0|1 (1: along X, a fallen log; 0: along Y, a stump or a snag) · Aspect = the trunk's length along its
+	        axis and its thickness across · Profile = its radius base to top · Squareness default 2 (round) ·
+	        Break top base (splinter length x the trunk's radius at that end; one value: both; 0 = a worn end; a
+	        standing trunk's base is cut flat into the ground) · RootPlate chance size (lying: an uprooted root plate
+	        across the base, radius x the base radius) · Stubs count length (broken branch stubs, length x the
+	        nominal size) · Roots count spread (standing: buttress roots, reach x the base radius) · Hollow chance
+	        size (a hollow core, radius x the trunk's, open at the broken ends) · Resolution up to 8 (a log is thin:
+	        its thickness needs the cells)
 	Profile w0 w1 w2 w3 w4 (Pillar: its width at 5 even heights, base to top, a Catmull-Rom spline through them; the
 	        widest = the Aspect's width. `1 0.8 0.6 0.38 0.1` a spire, `0.5 0.75 1 0.95 0.72` a top-heavy monolith)
 	ProfileVar v (each width x (1 +- v) per variant and per pillar; default 0.15)
@@ -1411,6 +1396,8 @@ RockType <name>
 		Valley x (low ground with higher ground within ~160 m - a valley's floor, the foot of a mountain;
 		        "Rocks/World/Valley relief start / full (m)". IN a valley the multiplier is x, whatever Plains and
 		        Rugged say. Default: no valley rule)
+		Forest open forest (x mix(open, forest, the trees' own density there / 60 per ha): dead wood lies under trees.
+		        One value: both; default 1 1)
 		Cluster size coverage (m, 0..1: patches)
 ```
 
@@ -1430,12 +1417,62 @@ leaning pillar and the warp cannot open a gap under a foot), so the mesh's lowes
 only has to cover the ground's own unevenness. The top is the block's top plane. Erosion: the width - e, the top - e,
 the floor + e, then the field grown by e (a spire's tip ends as a round of radius ~e).
 
+## DEAD WOOD (`Shape Trunk`, `Surface Wood`; 2026-10-07)
+
+Placeholders: `FallenLog` (4.8-14.4 m, lying, snapped or uprooted - a root plate in 35 % - stubs, sometimes hollow; `Bark
+Oak`), the SNAPPED pieces of a fallen tree, 2.4-7.2 m (the user found the full logs too common, 2026-10-07 - FallenLog
+density 8 -> 4, each piece 3): `SnappedLog` (its BASE HALF - FallenLog's thickness at half the length - both ends long
+splintered breaks, `Break 4 4`, no root plate) and `SnappedTop` (its UPPER HALF - the top half's taper, more stubs -
+`Break 2 4`: the snap at its base, the crown's break at its top), `Stump` (its roots' span 1-2.2 m, hollow in 30 %; `Bark Oak`), `Snag` (a standing dead tree, 5-14 m, its top
+broken; `Bark Pine`, tinted cool); all `Forest 0 1`, in patches.
+
+* **THE FIELD** (`trunkSdf` / `trunkBodySdf`, RockGenerator.cpp; the random decisions in `buildTrunk`): block 0 is the
+  trunk with its axis along the block's Y - turned onto the shape's X when it lies (shape Y -> block -X: the block's x
+  half is the vertical thickness), leaning up to ~5 degrees when it stands. Its side is the pillar's (`pillarSdf`: the
+  profile as its radius). Its ends: BROKEN - the end surface `breakDepth` x the end's radius deep where `splinter()`
+  is 0, at the end where it is 1 (ridged noise over the section: long splinters; a random lean across the section) -
+  or worn (no depth: a cap rounded by the erosion); a standing trunk's base is cut flat (in the ground). The end terms
+  are divided by their steepness (1 + 3 x depth): the field stays near a distance for the projection. The HOLLOW core
+  (`Hollow`) runs the whole axis. Then, blended in with a fillet as wide as each: the LIMBS - round cones (iq's
+  sdRoundCone): branch stubs along the upper trunk leaning toward the top (a lying trunk's within 126 degrees of up,
+  never into the ground), buttress roots out of a standing trunk's base and down into the ground - and a lying
+  trunk's ROOT PLATE (a lumpy superellipsoid disc across its base, the trunk entering its upper part). The box the
+  normalization takes includes the limbs and the plate, so `Scale` is the longest extent of the whole (a stump's is
+  its roots' span). The pits (knot holes) cast from the trunk's axis.
+* **THE GROUND LINE** (`RockShape::groundY` = the mesh's y = 0): a log's underside, a standing trunk's base plane -
+  the root plate's lower half and the roots go into the ground. A lying trunk's `height` (the sink's base) is its
+  thickness, not its root plate.
+* **THE WOOD DATA** (`woodCoords`, per vertex of the full mesh, carried through the simplification): the part the
+  vertex lies on (the trunk, the nearest limb, or the root plate - by the smallest distance), its coordinates along
+  and across that part - into the mesh's TANGENT; along in units of the part's BASE CIRCUMFERENCE (the bark
+  texture's v, as on a tree branch; each limb offset), across in nominal units - and its BARK cover (smoothstep(0.68,
+  0.86, the distance from the part's axis / its radius there): the outer skin is bark, the cuts, the hollow and a
+  splinter's inner face are not) into texCoords.y as 1 + it. The rock shader's wood path reads both (RendererVK "The
+  rock material", DEAD WOOD).
+* **THE BARK** is the type's MATERIAL (`RockSystem`: `Type::woodMaterial`): the `Bark` species' texture pair -
+  `Assets/Local/Trees/Textures/<Bark>_bark.png` + `_bark_normal.png`, the files TreeSystem writes once; when missing,
+  generated from `Trees/<Bark>.tree` (`generateBarkImages`, not saved: TreeSystem owns those files) - x the `Color`
+  tint, mipped (`buildBarkMips`) and BC1 / BC5-compressed in a Low job per wood type (`loadBark`, kicked with the
+  variant jobs, in the same counter), uploaded in `finishLoad`. Kept over a remesh, freed in `clearAll`. A rock type's
+  instances keep the shared grey material (`WorldType::material`). The far volume takes a wood type as a solid in its
+  own colour (`WorldType::woodAlbedo`: the tinted texture's linear mean).
+* **THE GROUND IT COVERS** (`rockFootprint(desc)`, from the type - TreeWorld places records without the meshes): a
+  CAPSULE along rock-local X (a lying trunk: its half length and thickness; a standing one: its base and roots'
+  reach; any other rock: a disc of half its size), x the record's scale, turned by its yaw. The trees keep out of it
+  (World records, ROCK RECORDS); the clutter's floor map treats dead wood as a TRUNK (FloorType kind 3: the trunk
+  proximity around the capsule - mushrooms and fallen branches gather there - and occupied inside it), a rock as
+  before. `RockFootprint::flat` (the widest horizontal extent / the longest axis) scales `groundTransform`'s footprint
+  (a snag's is its thin base, not its height - this also halves Pinnacle's and Monolith's, which sank too deep on a
+  slope).
+* **WHERE** (`Forest`, ROCK RECORDS): the trees' own expected density at the record.
+
 ## A rock on the ground (`RockSystem::groundTransform`)
 
 **ONE rule for the preview and the world** (`spawnPreview`, TreeSystem's `placeRock`), a pure static function - a
 rock FOLLOWS THE GROUND, it does not stand upright (2026-10-05, the user's decision; `Align` was 0.3 by default and
 the preview had yaw only). Input: the terrain height at the rock's centre and at four points `FOOTPRINT` (0.35) x its
-size out along x and z.
+size x the type's `RockFootprint::flat` (its widest horizontal extent / its longest axis: a snag's thin base, not its
+height) out along x and z.
 
 * **Orientation** = lean x yaw: the yaw about the rock's own up axis, then the turn from straight up to the
   footprint's normal (central differences of the four points) x `Align`.
@@ -1470,6 +1507,90 @@ TreeWorld's placement stay too; only the world generation changes). After the up
 freed (`finishLoad`; the density grid and the shape numbers stay). RT
 sees the rocks through the chain's one BLAS. (The first enables' device-lost crash, 2026-10-05, was the renderer's:
 unzeroed BLAS address entries for not-raytraced meshes - RendererVK CONTEXT, `createMesh`.)
+
+---
+
+# Ground clutter
+
+"Clutter" tweaks (Settings.Clutter). **The plan is `Docs/GroundClutterPlan.md`.** Built 2026-10-07: pebbles, fallen
+branches, mushrooms and flowers. It REPLACED `ScatterSystem` (one CPU `RenderNode` per instance, imported `.oc`
+models; removed the same day - the user's decision). **Nothing per object lives on the CPU**: RendererVK's
+`ClutterPipeline` places every object on the GPU each frame (RendererVK CONTEXT "Ground clutter": a grid of patches,
+a ranked candidate list per patch and type, kept by the type's density there). `ClutterSystem` feeds it two things:
+
+* **THE TYPES** - every `Assets/Clutter/*.clutter` (name-sorted; `loadClutterType`, ClutterType.cpp), loaded on the
+  first enabled frame and on `Reload types`. Their meshes generate on one Low job per type ("Clutter generate",
+  ClutterGenerator.cpp; `Mesh resolution` regenerates them), then `Renderer::setClutterAssets` takes them once (GPU
+  idle): **a GPU type per `Placement` block** (their densities ADD; at most `CLUTTER_MAX_TYPES` = 32 blocks), the
+  meshes concatenated (at most 256). The CPU meshes are freed after. Disabling keeps them (an enable draws at once).
+* **THE FOREST FLOOR MAP** - the trees' and rocks' RECORDS (TreeWorld, through `Globals::trees.world()`; the CPU holds
+  them inside "Trees/World/CPU keep radius") splatted on a Low job ("Clutter floor map", `bakeFloor`) into
+  `CLUTTER_FLOOR_DIM`^2 (384^2) rgba8 texels of 1 m around the camera, MAX-blended: **R canopy** (a tree's crown: 1
+  inside 0.75 x its radius, none past 1.1 x), **G trunk proximity** (1 at the trunk, squared falloff to none at
+  max(3 m, 0.8 x the crown)), **B rock proximity** (1 up to 0.85 x the rock's radius, none at 1.6 x + 1.5 m - the
+  apron at its foot), **A occupied** (inside a trunk + 0.15 m or 0.85 x a rock's radius: nothing grows there). The
+  record types' meaning comes from `TreeWorld::floorTypes()` (a tree's crown / trunk radius at its species' MEAN scale
+  - `.tree` CrownRadius / TrunkRadius x (1 + Flare); a rock's footprint CAPSULE from `rockFootprint` x
+  `rockRecordScale` along its yaw, as the world places it; DEAD WOOD - a `.rock` of `Surface Wood`, kind 3 - counts as a
+  trunk: the trunk proximity around its capsule, occupied inside it, no rock proximity).
+  Re-baked when the camera leaves `Floor map/Rebake distance` (40 m; capped so the map still covers the clutter range)
+  from its centre, when the CPU records under it change (a signature over the chunks and their counts) or on a
+  TreeWorld restart; one bake at a time, handed over by `Renderer::setClutterFloorMap`. Without "Trees/World/Enabled"
+  no map (the floor measures read 0). The GRASS reads it too: "Grass/Cover/Canopy thinning" (0.3).
+* Main thread, after `trees.update` and `rocks.update`. Headless: never initialized.
+
+## `.clutter` - type asset (`Assets/Clutter/*.clutter`, `loadClutterType`)
+
+```
+ClutterType <name>
+	Kind Pebble|Branch|Mushroom|Flower
+	Seed n · Variants n (meshes; not flowers) · Scale min max (x the nominal size 1: m for a pebble's longest axis, a
+	        branch's length, a mushroom's height; for a flower x its Stem and HeadSize)
+	Range m (from the camera; x "Clutter/Range scale"; the patch grid caps it, ~156 m at 4 m patches)
+	Sink f (fraction of the height below the ground) · Align f (0 upright .. 1 follows the ground's normal; flowers: upright)
+	Color r g b · Color2 r g b (sRGB 0..1) · Roughness f · Lod triangles (pebble level 0; a quarter per level)
+	PEBBLE:   every .rock SHAPE key (Shape, Aspect, AspectVar, Squareness, Erosion, Warp, Fracture, Strata, Noise,
+	          Ridged, Pits, Split - `readRockShapeKeys`): a small rock through the rock SDF generator. Color TINTS the
+	          climate's bedrock (the rock material's pick)
+	BRANCH:   Thickness (radius / length at the thick end) · Twigs n (0..6, lying flat) · Bend (degrees). Color = bark,
+	          Color2 = end grain
+	MUSHROOM: Cap Dome|Flat|Cone|Funnel · CapSize radius height (x its height) · StemRadius · Group n (1..5 per variant,
+	          each smaller, leaning out) · Spots 0..1 (white spots on the cap). Color = cap, Color2 = stem and gills
+	FLOWER:   Head Radial|Spike|Umbel|Bell · Petals n · Open degrees (Radial: the petals' tilt up; below 0 swept back) ·
+	          PetalWidth (x HeadSize) · Stem m · HeadSize m. Color = petals, Color2 = the centre. NO MESH: the
+	          vertex shader builds it (RendererVK "Ground clutter", the flowers)
+	Placement (ANY NUMBER: each is its own GPU type, their densities add)
+		Density (per m^2 at full fit) · Temperature min max (C) · Precipitation min max (mm/yr) · ClimateWidth
+		Cluster size coverage (m, 0..1: drifts / groups) · Slope max (rise / run) · Altitude min (m above the water)
+		THE TERMS - each `a b`: the density x mix(a, b, its measure 0..1); one value = both; default 1 1 (no matter):
+		Grass bare full (the GRASS AS DRAWN: the terrain's cover x the blades' clumps / bare spots x the canopy thinning;
+		        every flower type has bare 0: no flower where no grass) · Crag none full (bedrock showing) · Beach none full ·
+		Canopy open shaded (crowns overhead) · Trunk far near · Rock far near (a rock's foot) · Wet dry wet (humidity)
+		Ring radius width cell chance (fairy rings: the density x 1 on a ring of radius +-30 %, falling off over width;
+		        one ring per `cell` metres with `chance`. 0 radius = none)
+```
+
+Snow removes everything; so does the floor map's "occupied". Placeholders (2026-10-07): stones
+`Pebble` (everywhere a little, many at a rock's foot, on bedrock and the beach), `Flint` (flat, broken: dry stony
+ground); wood `Twig`, `Branch` (under the canopy only, more at the trunks); mushrooms `Bolete`, `FlyAgaric` (red,
+spots, cool forest), `Chanterelle` (groups, damp), `InkCap` (meadows), `FairyRing` (rings in the grass); flowers
+`Daisy`, `Poppy`, `Cornflower`, `Buttercup`, `Dandelion` (radial), `Lupine`, `Heather`, `Lavender` (spikes),
+`Yarrow` (umbel), `Foxglove` (bells, forest edge), `Bluebell` (bells, UNDER the canopy), `Gazania` (savanna),
+`Gentian` (alpine).
+
+## The meshes (`generateClutterMeshes`)
+
+Nominal size 1, y up, the lowest point at y = 0, `CLUTTER_LODS` = 3 levels each (`Renderer::ClutterMesh`;
+`RendererVKLayout::ClutterVertexGpu`: position + AO, normal + PART):
+
+* **Pebble** - `generateRockVariant` with the type's rock keys at `Mesh resolution` (20) x its `Resolution` cells: the
+  rock chain's levels 0-2, its cavity as the AO. `finishGeneration` CHECKS every pebble mesh level (`countBadEdges`:
+  edges used once = a hole, more than twice = a fold) and logs a warning per bad one. As of 2026-10-07 no holes; the
+  coarse levels (~50 triangles) of a few variants keep 1-2 non-manifold edges from the simplification.
+* **Branch** - a bent, tapering tube along X (7 / 5 / 3 sides, 10 / 5 / 3 rings), lying on the ground (the underside
+  darker), its end grain capped (part 1); levels 0-1 add the twigs (thinner tubes drooping to the ground).
+* **Mushroom** - per group member a lathe (12 / 7 / 5 segments): the stem (part 0, wider at the foot), the cap top
+  (part 1; the cap shape's profile, its rim curled down) and the gills underneath (part 2).
 
 ---
 

@@ -1242,6 +1242,23 @@ void Renderer::registerUboFields(UboBlock& list)
         list.add("grass_fleckStretch", [&] { return glm::max(g.fleckStretch, 0.0f); }, g.fleckStretch);
         list.add("grass_nearStrength", [&] { return glm::clamp(g.nearShadowStrength, 0.0f, 1.0f); }, g.nearShadowStrength);
         list.add("grass_nearBias", [&] { return glm::max(g.nearShadowBias, 0.0f); }, g.nearShadowBias);
+        list.add("grass_canopyThinning", [&] { return glm::clamp(g.canopyThinning, 0.0f, 1.0f); }, g.canopyThinning);
+    }
+    {
+        // ---- Ground clutter ("Clutter": clutter_cull.cs.glsl and the clutter / flower shaders)
+        const ClutterSettings& c = Globals::settings.clutter;
+        list.add("clutter_densityScale", [&] { return glm::max(c.densityScale, 0.0f); }, c.densityScale);
+        list.add("clutter_rangeScale", [&] { return glm::max(c.rangeScale, 0.0f); }, c.rangeScale);
+        list.add("clutter_growBand", [&] { return glm::max(c.growBand, 0.01f); }, c.growBand);
+        list.add("clutter_rangeFade", [&] { return glm::clamp(c.rangeFade, 0.01f, 1.0f); }, c.rangeFade);
+        list.add("clutter_lod1Size", c.lod1Size);
+        list.add("clutter_lod2Size", [&] { return glm::min(c.lod2Size, c.lod1Size); }, c.lod2Size, c.lod1Size);
+        list.add("clutter_flowerLod1Distance", c.flowerLod1Distance);
+        list.add("clutter_flowerLod2Distance", [&] { return glm::max(c.flowerLod2Distance, c.flowerLod1Distance); }, c.flowerLod2Distance, c.flowerLod1Distance);
+        list.add("clutter_flowerTransmission", c.flowerTransmission);
+        list.add("clutter_flowerRoughness", [&] { return glm::clamp(c.flowerRoughness, 0.05f, 1.0f); }, c.flowerRoughness);
+        list.add("clutter_contactDarkening", [&] { return glm::clamp(c.contactDarkening, 0.0f, 1.0f); }, c.contactDarkening);
+        list.add("clutter_contactHeight", [&] { return glm::max(c.contactHeight, 0.001f); }, c.contactHeight);
     }
     {
         // ---- Trees ("Trees": the foliage cards, the tree wind, the far-tree volume's march shading - the bake's

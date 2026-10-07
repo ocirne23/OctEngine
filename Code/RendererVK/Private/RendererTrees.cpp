@@ -313,7 +313,8 @@ void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanc
         gpu.boxMax = type.densityMax;
         gpu.res = type.densityRes;
         gpu.offset = (uint32)volumeData.size();
-        gpu.albedo = glm::vec4(type.albedo, type.solid ? 0.0f : 1.0f); // w: 1 foliage, 0 a solid (tree_volume_splat.cs)
+        // w (tree_volume_splat.cs): 1 foliage, 0 a solid in the climate's bedrock colour, 0.5 a solid in its own (dead wood).
+        gpu.albedo = glm::vec4(type.albedo, !type.solid ? 1.0f : type.solidOwnColour ? 0.5f : 0.0f);
         uint32 res = type.densityRes;
         const size_t level0 = volumeData.size();
         volumeData.insert(volumeData.end(), type.density, type.density + (size_t)res * res * res);

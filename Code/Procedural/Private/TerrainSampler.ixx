@@ -14,7 +14,7 @@ export namespace Procedural
 	// and maps through this.
 	inline constexpr float HUMIDITY_FULL_PRECIP_MM = 2200.0f;
 
-	// Physical climate -> the normalized (t01, h01) space that the scatter rules' climate attractors and
+	// Physical climate -> the normalized (t01, h01) space that the tree / rock / clutter Placement boxes and
 	// the terrain shader's texture splatting BOTH share. The shader mirrors temperatureTo01 as
 	// clamp((temp + 25) / 75) - keep them in step.
 	constexpr float temperatureTo01(float celsius)

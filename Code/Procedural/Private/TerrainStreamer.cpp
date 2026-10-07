@@ -905,8 +905,8 @@ namespace Procedural
 	//
 	// The walk and the pushes run on WORKERS (renderNode is lock-free from any job between
 	// beginFrame and present, for different nodes): the list fans out over a parallelFor and the sphere
-	// query runs beside it, the two sets disjoint. The list holds VALUES (it reads no pool row the scatter's registrations
-	// on main could reallocate) and holds until the next spatial kick. main.cpp joins m_renderCounter
+	// query runs beside it, the two sets disjoint. The list holds VALUES (it reads no pool row a registration on main
+	// could reallocate) and holds until the next spatial kick. main.cpp joins m_renderCounter
 	// right before present, and update/clearResidents join it before touching m_residents (nothing
 	// mutates it until then; this frame's ring scan only reads it). The ocean's sectors, their pass
 	// masks and transforms hold until its next update, which follows that same join. The sphere query
@@ -950,7 +950,7 @@ namespace Procedural
 				{
 					Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
 					{
-						if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not scatter groups, not sectors)
+						if (userData && !(userData & SpatialTerrainTag_Ocean)) // chunks only (not a 0 userData, not sectors)
 						{
 							constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
 							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
@@ -960,7 +960,7 @@ namespace Procedural
 					}, SpatialPassBit_Main); // main-stamped: pushed by the fan-out
 				}, { "terrainRenderPushSphere", EProfileCategory::Procedural }, EJobPriority::High, &sphereCounter);
 			}
-			// The ONE walk of the hand-over (zeros - scatter groups - dropped at collect): an ocean sector's
+			// The ONE walk of the hand-over (zeros dropped at collect): an ocean sector's
 			// tagged RenderNode*, or a chunk's Resident* (its node and its vegetation). Every entry is a
 			// different node, so the list fans out.
 			const oc::vector<uint64>& visible = Globals::spatialIndex.visibleUserData(1);
@@ -1386,13 +1386,14 @@ namespace Procedural
 
 		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
 
-		// The GRASS stands on these chunks (Renderer::setGrassGround): its blades read the mesh vertices. Only the
-		// columns within its range - a handful of lookups per LOD, not a walk of the ring. The finest resident per
-		// column wins in the renderer (a LOD hand-over keeps two).
+		// The GRASS and the GROUND CLUTTER stand on these chunks (Renderer::setGrassGround): they read the mesh vertices.
+		// Only the columns within their range - a handful of lookups per LOD, not a walk of the ring. The finest resident
+		// per column wins in the renderer (a LOD hand-over keeps two).
 		{
-			const float grassRange = renderer.grassRange();
+			const float groundRange = renderer.groundRange();
+			const float grassRange = groundRange + 16.0f; // + the largest patch
 			m_grassGround.clear();
-			if (grassRange > 0.0f)
+			if (groundRange > 0.0f)
 			{
 				const glm::ivec2 c0(std::floor((camera.position.x - grassRange) / chunkSize), std::floor((camera.position.z - grassRange) / chunkSize));
 				const glm::ivec2 c1(std::floor((camera.position.x + grassRange) / chunkSize), std::floor((camera.position.z + grassRange) / chunkSize));

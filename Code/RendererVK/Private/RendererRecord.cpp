@@ -147,8 +147,25 @@ void Renderer::recordGrassCull(uint32 frameIdx)
         .terrainView = m_terrain.getHeightMap().getView(),
         .terrainSampler = m_terrain.getHeightMap().getSampler(),
         .vertexBuffer = &Globals::meshDataManager.getVertexBuffer(),
+        .clutterFrame = &m_clutterPipeline.frameBuffer(frameIdx),
     };
     m_grassPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
+void Renderer::recordClutterCull(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& cb = frameData.clutterCullCommandBuffer;
+    beginComputeSecondary(cb);
+    const ClutterPipeline::RecordParams params{
+        .ubo = &frameData.ubo,
+        .terrainView = m_terrain.getHeightMap().getView(),
+        .terrainSampler = m_terrain.getHeightMap().getSampler(),
+        .vertexBuffer = &Globals::meshDataManager.getVertexBuffer(),
+        .groundTable = &m_grassPipeline.frameBuffer(frameIdx),
+    };
+    m_clutterPipeline.record(cb, frameIdx, params);
     cb.end();
 }
 
@@ -240,6 +257,8 @@ void Renderer::recordGrassNearShadow(uint32 frameIdx)
     vkCb.setViewport(0, { vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f } });
     vkCb.setScissor(0, { vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } } });
     m_grassPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer());
+    // The ground clutter in the same cascade (its draws are empty while it is off: recordClear).
+    m_clutterPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer());
     cb.end();
 }
 
@@ -307,6 +326,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
     setFullViewport(cb.getCommandBuffer());
     const GrassPipeline::Draw grassDraw = m_grassPipeline.getDraw(frameIdx);
+    const ClutterPipeline::Draw clutterDraw = m_clutterPipeline.getDraw(frameIdx);
     StaticMeshGraphicsPipeline::RecordParams drawParams
     {
         .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
@@ -338,6 +358,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
         .viewIndex = RendererVKLayout::eyeToViewIndex(eyeIndex, m_sceneViewCount),
         .grass = m_sceneViewCount == 1 ? &grassDraw : nullptr, // desktop only (the count is 0 while grass is off)
+        .clutter = m_sceneViewCount == 1 ? &clutterDraw : nullptr, // the same (its draws are empty while it is off)
     };
     // Each eye has its own descriptor set (per-eye AO + last frame's depth), so both eyes write their own.
     m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, true);
@@ -1367,6 +1388,7 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     if (m_sceneViewCount == 1)
     {
         recordGrassCull(frameIdx);       // executed only while grass is on (grassActive)
+        recordClutterCull(frameIdx);     // executed only while the clutter is on (clutterActive)
         recordGrassNearShadow(frameIdx); // executed only while its cascade is on (grassNearShadowActive)
     }
     recordShadowCull(frameIdx);
@@ -1448,6 +1470,11 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
             executeScoped(primary, "Grass cull", frameData.grassCullCommandBuffer.getCommandBuffer());
         else
             m_grassPipeline.recordClear(primary, frameIdx);
+        // The ground clutter: cull + bucket layout + sort. Off (or no ground this frame), its draws are emptied.
+        if (clutterActive() && m_groundTableValid)
+            executeScoped(primary, "Clutter cull", frameData.clutterCullCommandBuffer.getCommandBuffer());
+        else
+            m_clutterPipeline.recordClear(primary, frameIdx);
     }
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
     // so skip the shadow cull + cascade render.
@@ -1783,6 +1810,7 @@ void Renderer::recordCommandBuffers()
         m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_grassPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
+        m_clutterPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_oceanSimPipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         m_particlePipeline.updateTerrainDescriptor(frameIdx, m_terrain.getHeightMap().getView(), m_terrain.getHeightMap().getSampler());
         // The wetness clipmap, the GI sky map and the cloud shadow map never change handle; rewritten

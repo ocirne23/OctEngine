@@ -1058,21 +1058,25 @@ namespace Procedural
 				rock.scale = rockType.scale;
 				rock.sink = rockType.sink;
 				rock.align = rockType.align;
+				rock.footprint = rockType.footprint;
 				context->rockReach = glm::max(context->rockReach, 0.5f * rockType.scale.y);
 				for (const RockSystem::WorldVariant& variant : rockType.variants)
 				{
 					Renderer::TreeInstanceType type;
-					type.bark = { variant.mesh, Globals::rocks.worldMaterial(), RendererVKLayout::EPipelineIndex::LitRock };
+					type.bark = { variant.mesh, rockType.material, RendererVKLayout::EPipelineIndex::LitRock };
 					if (variant.density)
 					{
 						// The FAR VOLUME's view (R5): the occupancy over its box, a SOLID. The volume stands a piece on the
-						// ground: the sink goes into the box. The lean is left out - kilometres away.
+						// ground: the sink goes into the box. The lean is left out - kilometres away. Dead wood keeps its
+						// own colour (not the climate's bedrock).
 						const glm::vec3 sink(0.0f, rockType.sink * variant.height, 0.0f);
 						type.density = variant.density;
 						type.densityRes = ROCK_DENSITY_RES;
 						type.densityMin = variant.densityMin - sink;
 						type.densityMax = variant.densityMax - sink;
 						type.solid = true;
+						type.solidOwnColour = rockType.wood;
+						type.albedo = rockType.woodAlbedo;
 					}
 					rock.variants.push_back({ (uint32)gpuTypes.size(), variant.centre, variant.radius, variant.height });
 					gpuTypes.push_back(type);
@@ -1259,7 +1263,7 @@ namespace Procedural
 				TreeRecordTypeGpu& out = recordTypes[t];
 				out.scale = rock.scale;
 				out.sizeVariation = 0.0f;
-				out.albedo = glm::vec4(0.0f);
+				out.albedo = world.wood ? glm::vec4(world.woodAlbedo, 0.5f) : glm::vec4(0.0f); // w: 0.5 a solid in its own colour
 				clipped |= rock.variants.size() > TREE_RECORD_MAX_VARIANTS;
 				out.numVariants = (uint32)glm::min(rock.variants.size(), (size_t)TREE_RECORD_MAX_VARIANTS);
 				const float meanScale = 0.5f * (rock.scale.x + rock.scale.y);
@@ -1472,11 +1476,11 @@ namespace Procedural
 			const ExpandRockVariant& variant = rock.variants[treeHash(seed, 102u) % (uint32)rock.variants.size()];
 			const float scale = rockRecordScale(seed, rock.scale);
 			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
-			const float r = RockSystem::FOOTPRINT * scale;
+			const float r = RockSystem::FOOTPRINT * scale * rock.footprint;
 			const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
 				groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
 			Renderer::TreeInstancePiece& piece = out.emplace_back();
-			piece.transform = RockSystem::groundTransform(p, ground, scale, variant.height, rock.sink, rock.align, yaw);
+			piece.transform = RockSystem::groundTransform(p, ground, r, scale, variant.height, rock.sink, rock.align, yaw);
 			piece.centre = piece.transform.transformPoint(variant.centre);
 			piece.radius = variant.radius * scale;
 			piece.type = variant.type;

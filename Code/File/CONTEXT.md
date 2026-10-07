@@ -107,7 +107,8 @@ Indentation defines hierarchy — tabs or spaces.
 `parseAssetText` · `loadAssetFile` · `writeAssetText`.
 
 **`File:ObjectDescription`** parses `.oc` into `ObjectContainerDesc` (`loadObjectContainerDesc`,
-`toObjectContainerDesc`). It lives here so Procedural's scatter assets can import through `.oc` too:
+`toObjectContainerDesc`). It lives here so a library below Entity can import through `.oc` too (Procedural's
+scatter did, until it was removed 2026-10-07):
 `name`, `path`, `procedural`, `mergeNodes`, `preTransformVertices`, `decimationFactor`, plus
 `MaterialOverridesDesc` (pipeline name, `excludeFromRayTracing`, `useSceneTextures`, and
 diffuse/normal/metalRoughness texture index overrides where −1 keeps the default).

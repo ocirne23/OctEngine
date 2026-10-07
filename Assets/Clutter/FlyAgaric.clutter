@@ -1,0 +1,25 @@
+# Fly agaric: a red cap with white spots, alone, in cool forests (pine and birch).
+ClutterType FlyAgaric
+	Kind Mushroom
+	Seed 43
+	Variants 4
+	Scale 0.16 0.36
+	Range 40
+	Sink 0.04
+	Align 0.4
+	Color 0.78 0.08 0.04
+	Color2 0.93 0.91 0.86
+	Roughness 0.45
+	Cap Dome
+	CapSize 0.55 0.28
+	StemRadius 0.1
+	Group 1
+	Spots 0.8
+	Placement
+		Density 0.015
+		Temperature -4 14
+		Precipitation 500 2500
+		Canopy 0.05 1
+		Trunk 1 2
+		Cluster 10 0.3
+		Slope 0.8

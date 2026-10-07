@@ -62,6 +62,9 @@ layout (binding = 5, std430) writeonly buffer OutCommands { DrawIndexedIndirect 
 // list's firstInstance).
 layout (binding = 6, std430) buffer OutCounts { uint out_counts[3]; };
 layout (binding = 7, std430) writeonly buffer OutNearShadowCommands { DrawIndexedIndirect out_nearShadowCommands[]; };
+// THE FOREST FLOOR MAP (the clutter's: ClutterPipeline's frame; floorDim 0 = none): "Canopy thinning" under the crowns.
+#define CLUTTER_FRAME_BINDING 8
+#include "clutter.inc.glsl"
 
 bool grassGroundAt(vec2 xz, out GrassGround g)
 {
@@ -92,7 +95,9 @@ float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
     const vec4 climate = terrainClimateAt(xz);
     temperature = terrainTemperatureAt(climate, h);
     const TerrainFields fields = TerrainFields(td.w, temperature, climate.w, td.y);
-    return grassTerrainCover(terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields)); // grass.inc.glsl
+    // Under a closed canopy a forest floor holds little grass: x (1 - "Canopy thinning" x the crown cover).
+    return grassTerrainCover(terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields)) // grass.inc.glsl
+        * (1.0 - u_grass_canopyThinning * clutterFloorAt(xz).x);
 }
 
 void main()

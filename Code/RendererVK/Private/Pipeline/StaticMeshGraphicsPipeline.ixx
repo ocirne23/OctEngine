@@ -13,6 +13,7 @@ import :Texture;
 import :Sampler;
 import :GIProbePipeline;
 import :GrassPipeline;
+import :ClutterPipeline;
 
 class CommandBuffer;
 class ObjectContainer;
@@ -64,6 +65,8 @@ public:
 
 		// The grass blades (GrassPipeline's cull outputs + the blade index buffer); null = none (VR).
 		const GrassPipeline::Draw* grass = nullptr;
+		// The ground clutter (ClutterPipeline's sorted records + draws, the rigid meshes); null = none (VR).
+		const ClutterPipeline::Draw* clutter = nullptr;
     };
 
     void initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
@@ -126,6 +129,10 @@ private:
     // The grass blades from the main layout: its bindings (the SAME descriptor set binds: the lit core), their own
     // vertex input (the patch record, instance rate) and shaders. Desktop only.
     void buildGrassLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& grass);
+    // The ground clutter the same way: the rigid meshes (their vertices + the record, instance rate) or the flowers
+    // (the record only: built in the VS). Desktop only.
+    void buildClutterLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& clutter, bool flowers);
+    void buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload); // grass + clutter + flowers
 
     GraphicsPipeline m_graphicsPipeline;
     // NOT in the execution set (its stages differ from the set's initial pipeline): drawn by plain indirect
@@ -134,6 +141,11 @@ private:
     // The grass blades: also outside the execution set, one indexed indirect draw per visible patch (GrassPipeline).
     GraphicsPipeline m_grassPipeline;
     bool m_grassBuilt = false;
+    // The ground clutter (ClutterPipeline): one indexed indirect draw per bucket, outside the execution set too.
+    GraphicsPipeline m_clutterPipeline;
+    GraphicsPipeline m_flowerPipeline;
+    bool m_clutterBuilt = false;
+    bool m_flowerBuilt = false;
     // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
     // opaque family (colour + the motion target), the transparent sequence the transparent family (colour only;
     // RendererVKLayout::PIPELINE_TRANSPARENT_MASK).

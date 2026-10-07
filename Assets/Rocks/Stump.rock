@@ -1,0 +1,31 @@
+# A tree stump: the broken-off base of a dead tree, its roots spread into the ground, often hollow. Scale is the roots'
+# span (the stump stands ~0.75 of it). Format: Code/Procedural/CONTEXT.md, "Rocks".
+RockType Stump
+	Seed 43
+	Scale 1 2.2
+	Variants 8
+	Sink 0.05
+	Align 0.3
+	Shape Trunk
+	Aspect 0.75 1 0.75
+	AspectVar 0.15 0.35 0.15
+	Profile 1 0.82 0.75 0.72 0.7
+	ProfileVar 0.08
+	Break 0.8
+	Roots 5 1.8
+	Hollow 0.3 0.65
+	Erosion 0.01
+	Warp 0.02 1.5
+	Noise 0.006 9 3
+	NoiseStretch 3
+	Pits 3 0.04 0.012
+	Surface Wood
+	Bark Oak
+	Color 0.9 0.9 0.9
+	Lod 1500
+	Resolution 2
+	Placement
+		Density 6
+		Forest 0 1
+		Slope 0 0 0.4 0.8
+		Cluster 50 0.6

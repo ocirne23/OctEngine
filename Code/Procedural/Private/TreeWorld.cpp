@@ -133,6 +133,7 @@ namespace Procedural
 	void TreeWorld::loadSpecies()
 	{
 		m_typeNames.clear();
+		m_floorTypes.clear();
 		m_species.clear();
 		m_rocks.clear();
 		m_firstRockType = 0;
@@ -169,8 +170,13 @@ namespace Procedural
 			}
 			const uint8 type = (uint8)m_typeNames.size();
 			m_typeNames.push_back(desc.name);
+			FloorType& floor = m_floorTypes.emplace_back();
 			if (desc.bush || desc.placement.density <= 0.0f)
 				continue;
+			const float meanScale = 0.5f * (desc.scale.x + desc.scale.y);
+			floor.kind = 1;
+			floor.crown = desc.crownRadius * meanScale;
+			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
 			Species& species = m_species.emplace_back();
 			species.name = desc.name;
 			species.type = type;
@@ -214,11 +220,16 @@ namespace Procedural
 			}
 			const uint8 type = (uint8)m_typeNames.size();
 			m_typeNames.push_back(desc.name);
+			FloorType& floor = m_floorTypes.emplace_back();
 			if (desc.placements.empty())
 				continue;
+			floor.kind = desc.surface == ERockSurface::Wood ? 3 : 2;
+			floor.rockScale = desc.scale;
+			floor.footprint = rockFootprint(desc);
 			RockSpecies& rock = m_rocks.emplace_back();
 			rock.name = desc.name;
 			rock.type = type;
+			rock.footprint = floor.footprint;
 			for (const RockPlacementDesc& placement : desc.placements)
 				rock.rules.push_back({ placement,
 					glm::vec2(temperatureTo01(placement.temperature.x), precipTo01(placement.precipitation.x)),
@@ -508,7 +519,7 @@ namespace Procedural
 			bool haveWork = false;
 			{
 				std::lock_guard<std::mutex> lk(m_mutex);
-				// Lazy staleness, as the terrain / scatter pumps: a chunk that left the ring while queued goes back as a
+				// Lazy staleness, as the terrain pumps: a chunk that left the ring while queued goes back as a
 				// dropped result (the main thread releases its key).
 				while (!m_requests.empty())
 				{
@@ -562,7 +573,7 @@ namespace Procedural
 
 	// THE PLACEMENT FUNCTION. One candidate per cell of a lattice of ~cellSize metres over the chunk, jittered over the
 	// whole cell. Each species' CLIMATE FIT - 1 inside its ideal climate box (normalized temperature / precipitation,
-	// as the scatter rules), outside a Gaussian of the distance to the box, faded to 0 below "Climate fade end" of the
+	// temperatureTo01 / precipTo01), outside a Gaussian of the distance to the box, faded to 0 below "Climate fade end" of the
 	// peak, 0 outside its slope and altitude band - gives it a density there: its own density x its fit x its cluster
 	// noise x (fit / best fit) ^ "Climate sharpness". A tree exists with probability (the summed densities) x the
 	// cell's area, its species picked by share. Pure: every random choice hashes (seed, chunk, cell).
@@ -640,6 +651,59 @@ namespace Procedural
 		}
 		constexpr float TEMP_RANGE = TEMPERATURE_MAX_C - TEMPERATURE_MIN_C;
 
+		// THE TREES' DENSITY at a point, per species (into `weights`, per ha; the sum returned): each species' CLIMATE FIT
+		// - 1 inside its ideal climate box, outside a Gaussian of the distance to the box, faded to 0 between "Climate fade
+		// start" and "end" (fractions of the peak - no long tail of lone trees far from its forests), 0 where its slope /
+		// altitude gates exclude it - then its own density x its fit x its forest patches, suppressed by its fit RELATIVE
+		// TO THE BEST-FITTING species, sharpened ("Climate sharpness": (fit / best)^k) - a dense species' tail does not
+		// reach into a sparse one's core (pines among the acacias), and species sharing a climate ADD (a rare willow among
+		// the oaks takes no oaks away). The tree pass picks by it; the rocks' FOREST term reads the sum.
+		oc::small_vector<NoiseField, 8> clusterNoise;
+		for (const Species& species : config.species)
+			clusterNoise.push_back(NoiseField(treeHash(config.seed, 1000u + species.type)));
+		oc::small_vector<float, 8> weights(config.species.size(), 0.0f);
+		oc::small_vector<float, 8> fits(config.species.size(), 0.0f);
+		const auto speciesWeights = [&](const FieldSample& at, glm::vec2 world) -> float
+		{
+			const float slope2 = at.dx * at.dx + at.dz * at.dz;
+			const float altitude = at.height - at.water;
+			const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
+			float best = 0.0f;
+			for (size_t s = 0; s < config.species.size(); ++s)
+			{
+				const TreePlacementDesc& p = config.species[s].placement;
+				fits[s] = 0.0f;
+				weights[s] = 0.0f;
+				if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
+					continue;
+				const glm::vec2 d = glm::max(config.species[s].climateMin - climate, glm::vec2(0.0f))
+					+ glm::max(climate - config.species[s].climateMax, glm::vec2(0.0f));
+				float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
+				fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
+				fits[s] = fit;
+				best = glm::max(best, fit);
+			}
+			if (best <= 0.0f)
+				return 0.0f;
+			float total = 0.0f;
+			for (size_t s = 0; s < config.species.size(); ++s)
+			{
+				if (fits[s] <= 0.0f)
+					continue;
+				const TreePlacementDesc& p = config.species[s].placement;
+				float density = p.density * fits[s] * std::pow(fits[s] / best, config.sharpness);
+				if (density > 0.0f && p.clusterSize > 1.0f)
+				{
+					const float noise = clusterNoise[s].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
+					const float threshold = 1.0f - p.clusterCoverage;
+					density *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
+				}
+				weights[s] = density;
+				total += density;
+			}
+			return total;
+		};
+
 		// THE ROCKS FIRST (Docs/RockRenderingPlan.md 6). Each rock type has its own WORLD lattice (RockSpecies::cell,
 		// anchored at the world origin - NOT at the chunk): a cell's rock is a pure function of (seed, type, cell), so
 		// this chunk computes its neighbours' rocks exactly as they do. Every cell that can put a rock within
@@ -647,11 +711,14 @@ namespace Procedural
 		// out of them. A type's RULES (its Placement blocks) add. A rule's fit, at the rock's (quantized) record position:
 		// its optional climate box (as a tree's), its altitude and (soft) slope bands, its CRAG fit (the terrain's own
 		// rock coverage: steep ground, or ground far above the macro altitude), its TALUS fit (gentle ground just below
-		// a steep slope), the ground around it (PLAINS / RUGGED low and high end / VALLEY) and its
-		// cluster noise. Rocks do not give way to each other: boulders lie against boulders.
+		// a steep slope), the ground around it (PLAINS / RUGGED low and high end / VALLEY), the FOREST there (the trees'
+		// own density: dead wood lies where trees grow) and its cluster noise. Rocks do not give way to each other:
+		// boulders lie against boulders.
+		// A placed rock keeps its FOOTPRINT, a capsule (a round rock's has no length; a fallen log's runs along its yaw).
 		struct PlacedRock
 		{
 			glm::vec2 local{ 0.0f }; // in THIS chunk's frame (a neighbour's rock: outside [0, cs])
+			glm::vec2 half{ 0.0f };  // the capsule's half axis (m)
 			float radius = 0.0f;
 		};
 		oc::vector<PlacedRock> placedRocks;
@@ -709,9 +776,9 @@ namespace Procedural
 
 		for (const RockSpecies& rock : config.rocks)
 		{
-			oc::small_vector<NoiseField, 4> clusterNoise; // per rule
+			oc::small_vector<NoiseField, 4> ruleNoise; // per rule
 			for (uint32 k = 0; k < (uint32)rock.rules.size(); ++k)
-				clusterNoise.push_back(NoiseField(treeHash(treeHash(config.seed, 3000u + rock.type), k)));
+				ruleNoise.push_back(NoiseField(treeHash(treeHash(config.seed, 3000u + rock.type), k)));
 			const double c = (double)rock.cell;
 			const float cellArea = rock.cell * rock.cell * (1.0f / 10000.0f) * worldRules.densityScale; // hectares x the scale
 			const int32 cx0 = (int32)std::floor((ox - ROCK_REACH) / c), cx1 = (int32)std::floor((ox + cs + ROCK_REACH) / c);
@@ -730,7 +797,9 @@ namespace Procedural
 					const TreeRecord record = makeTreeRecord(qx, qz, rock.type);
 					// Evaluated at the RECORD's position (the quantized one), in this chunk's frame.
 					const glm::vec2 local = glm::vec2((float)((double)owner.x * cs - ox), (float)((double)owner.y * cs - oz)) + treeRecordLocal(record, cs);
-					const float radius = 0.5f * rockRecordScale(treeRecordSeed(config.seed, owner, record), rock.scale);
+					const uint32 recordSeed = treeRecordSeed(config.seed, owner, record);
+					const float scale = rockRecordScale(recordSeed, rock.scale);
+					const float radius = 0.5f * scale; // its reach (the longest axis)
 					const bool own = owner == coord;
 					if (!own && (local.x < -radius - 2.0f || local.x > cs + radius + 2.0f || local.y < -radius - 2.0f || local.y > cs + radius + 2.0f))
 						continue; // a neighbour's rock that does not reach this chunk
@@ -740,7 +809,7 @@ namespace Procedural
 					const float slope = std::sqrt(s.dx * s.dx + s.dz * s.dz);
 					const glm::vec2 climate(glm::clamp((s.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(s.humidity, 0.0f, 1.0f));
 					// The ground terms, shared by the type's rules: each on its first use.
-					float crag = -1.0f, talus = -1.0f, ruggedness = -1.0f, lowEnd = 0.0f, valley = -1.0f;
+					float crag = -1.0f, talus = -1.0f, ruggedness = -1.0f, lowEnd = 0.0f, valley = -1.0f, forest = -1.0f;
 					float density = 0.0f; // the rules ADD
 					for (uint32 k = 0; k < (uint32)rock.rules.size(); ++k)
 					{
@@ -804,11 +873,17 @@ namespace Procedural
 							}
 							ground = glm::mix(ground, p.valley, valley);
 						}
+						if (p.forest != glm::vec2(1.0f))
+						{
+							if (forest < 0.0f)
+								forest = glm::clamp(speciesWeights(s, glm::vec2((float)wx, (float)wz)) * config.densityScale / ROCK_FOREST_FULL, 0.0f, 1.0f);
+							ground *= glm::mix(p.forest.x, p.forest.y, forest);
+						}
 						fit *= ground;
 						float ruleDensity = p.density * fit;
 						if (ruleDensity > 0.0f && p.clusterSize > 1.0f)
 						{
-							const float noise = clusterNoise[k].fbm((float)(wx / p.clusterSize), (float)(wz / p.clusterSize), 2) * 0.5f + 0.5f;
+							const float noise = ruleNoise[k].fbm((float)(wx / p.clusterSize), (float)(wz / p.clusterSize), 2) * 0.5f + 0.5f;
 							const float threshold = 1.0f - p.clusterCoverage;
 							ruleDensity *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
 						}
@@ -816,7 +891,10 @@ namespace Procedural
 					}
 					if (treeHash01(treeHash(h, 3u)) >= density * cellArea)
 						continue;
-					placedRocks.push_back({ local, radius });
+					// Its footprint along its yaw (the expansion's: hash 104 about up, rock-local X turned to (cos, -sin)).
+					const float yaw = treeHash01(treeHash(recordSeed, 104u)) * 6.28318531f;
+					placedRocks.push_back({ local, glm::vec2(std::cos(yaw), -std::sin(yaw)) * (rock.footprint.halfLength * scale),
+						rock.footprint.radius * scale });
 					if (own)
 						out.push_back(record);
 				}
@@ -824,12 +902,6 @@ namespace Procedural
 		if (config.species.empty())
 			return;
 		Globals::jobSystem.preemptionPoint();
-
-		oc::small_vector<NoiseField, 8> clusterNoise;
-		for (const Species& species : config.species)
-			clusterNoise.push_back(NoiseField(treeHash(config.seed, 1000u + species.type)));
-		oc::small_vector<float, 8> weights(config.species.size(), 0.0f);
-		oc::small_vector<float, 8> fits(config.species.size(), 0.0f);
 
 		const uint32 n = (uint32)glm::max(1.0f, std::round(cs / config.cellSize));
 		const float cell = cs / (float)n;
@@ -848,51 +920,7 @@ namespace Procedural
 				const glm::vec2 local = treeRecordLocal(makeTreeRecord(qx, qz, 0), cs);
 
 				const FieldSample at = fieldAt(local);
-				const float slope2 = at.dx * at.dx + at.dz * at.dz;
-				const float altitude = at.height - at.water;
-				const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
-				const glm::vec2 world((float)(ox + local.x), (float)(oz + local.y));
-
-				// Each species' CLIMATE FIT: 1 inside its ideal climate box, outside a Gaussian of the distance to the box,
-				// faded to 0 between "Climate fade start" and "end" (fractions of the peak - no long tail of lone trees far
-				// from its forests), 0 where its slope / altitude gates exclude it.
-				float best = 0.0f;
-				for (size_t s = 0; s < config.species.size(); ++s)
-				{
-					const TreePlacementDesc& p = config.species[s].placement;
-					fits[s] = 0.0f;
-					if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
-						continue;
-					const glm::vec2 d = glm::max(config.species[s].climateMin - climate, glm::vec2(0.0f))
-						+ glm::max(climate - config.species[s].climateMax, glm::vec2(0.0f));
-					float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
-					fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
-					fits[s] = fit;
-					best = glm::max(best, fit);
-				}
-				if (best <= 0.0f)
-					continue;
-				// Each species' density here: its own density x its fit x its forest patches, suppressed by its fit
-				// RELATIVE TO THE BEST-FITTING species, sharpened ("Climate sharpness": (fit / best)^k) - a dense
-				// species' tail does not reach into a sparse one's core (pines among the acacias), and species
-				// sharing a climate ADD (a rare willow among the oaks takes no oaks away).
-				float total = 0.0f;
-				for (size_t s = 0; s < config.species.size(); ++s)
-				{
-					weights[s] = 0.0f;
-					if (fits[s] <= 0.0f)
-						continue;
-					const TreePlacementDesc& p = config.species[s].placement;
-					float density = p.density * fits[s] * std::pow(fits[s] / best, config.sharpness);
-					if (density > 0.0f && p.clusterSize > 1.0f)
-					{
-						const float noise = clusterNoise[s].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
-						const float threshold = 1.0f - p.clusterCoverage;
-						density *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
-					}
-					weights[s] = density;
-					total += density;
-				}
+				const float total = speciesWeights(at, glm::vec2((float)(ox + local.x), (float)(oz + local.y)));
 				// Whether a tree exists (the summed densities), then which one (by its share).
 				if (total <= 0.0f || treeHash01(treeHash(h, 3u)) >= total * cellArea)
 					continue;
@@ -907,12 +935,15 @@ namespace Procedural
 						break;
 					}
 				}
-				// The trees give way to the rocks (this chunk's and the neighbours' that reach in).
+				// The trees give way to the rocks (this chunk's and the neighbours' that reach in): out of each footprint
+				// capsule (a fallen log's runs along it - a disc over its length would clear the forest around it).
 				bool inRock = false;
 				for (const PlacedRock& rock : placedRocks)
 				{
-					const glm::vec2 toRock = local - rock.local;
-					const float clear = rock.radius * 0.9f + 0.5f;
+					const glm::vec2 rel = local - rock.local;
+					const float along = glm::dot(rock.half, rock.half) > 1e-8f ? glm::clamp(glm::dot(rel, rock.half) / glm::dot(rock.half, rock.half), -1.0f, 1.0f) : 0.0f;
+					const glm::vec2 toRock = rel - rock.half * along;
+					const float clear = rock.radius * 0.9f + (rock.half == glm::vec2(0.0f) ? 0.5f : 0.9f);
 					if (glm::dot(toRock, toRock) < clear * clear)
 					{
 						inRock = true;

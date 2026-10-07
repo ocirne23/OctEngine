@@ -12,6 +12,8 @@ import :RockType;
 //
 // The field lives in the SHAPE frame (the body centred on the origin). The meshes are in ROCK-LOCAL space: Y up, the
 // lowest point of the body at y = 0 (the caller sinks it into the ground) - shape frame = rock-local + (0, originY, 0).
+// A TRUNK stands on its own ground line instead (RockShape::groundY: a log's underside, a stump's base), so its roots
+// and its root plate reach below y = 0, into the ground.
 export namespace Procedural
 {
 	constexpr uint32 ROCK_MAX_BLOCKS = (uint32)ROCK_MAX_PILE;
@@ -60,6 +62,19 @@ export namespace Procedural
 		glm::vec3 boundsMin{ -0.5f };          // conservative: the body plus its noise
 		glm::vec3 boundsMax{ 0.5f };
 		float originY = 0.0f;                  // the body's lowest point in the shape frame (generateRockVariant)
+
+		// TRUNK (block 0: the trunk, its axis the block's Y, its radius blockProfile[0] base to top; trunkSdf):
+		glm::vec2 breakDepth{ 0.0f };          // the top / base end: splinter length x the trunk's radius there
+		glm::vec2 breakSlant[2] = {};          // per end: the break's lean across the section
+		float hollow = 0.0f;                   // the hollow core's radius x the trunk's (0 = solid)
+		bool standing = false;                 // the base is cut flat (it goes into the ground)
+		struct Limb { glm::vec3 a, b; float ra, rb; };
+		uint32 limbCount = 0;                  // branch stubs and roots: round cones, shape frame
+		Limb limbs[ROCK_MAX_LIMBS] = {};
+		glm::vec4 plate{ 0.0f };               // the ROOT PLATE: xyz centre (shape frame), w its radius (0 = none)
+		float plateThickness = 0.0f;           // ... along the trunk's axis (shape X: a lying trunk)
+		float groundY = 0.0f;                  // a trunk's ground line (shape frame) - the mesh's y = 0
+		bool wood = false;                     // the mesh carries the wood coordinates (projectAndShade)
 	};
 
 	// Pure; any thread. Deterministic from the type (its seed included) and `seed`.
@@ -71,6 +86,11 @@ export namespace Procedural
 	// A rock mesh in plain arrays (MeshGeometryDesc-compatible). texCoords.x = the vertex's CAVITY (1 = open,
 	// 0 = deep in a crevice: an ambient occlusion from the field itself) - a rock has no uv (the rock material
 	// projects in world space), so the u channel carries it to the rock vertex shader.
+	// DEAD WOOD (`Surface Wood`): texCoords.y = 1 + the BARK cover (1 = bark, 0 = the cut / broken wood inside it), and
+	// the TANGENT is not a direction but the vertex's WOOD COORDINATES: x along the wood part it belongs to (the trunk, a
+	// stub, a root) in units of that part's base circumference (the bark texture's v), yz across it from the part's
+	// axis in nominal units - the rock shader's bark mapping and growth rings (RendererVK "The rock material", WOOD). A
+	// rock: texCoords.y = 0 and a plain tangent.
 	struct RockMesh
 	{
 		oc::vector<glm::vec3> positions;

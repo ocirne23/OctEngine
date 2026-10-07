@@ -11,7 +11,7 @@ export import Settings.Network;
 export import Settings.Nav;
 export import Settings.Threading;
 export import Settings.Terrain;
-export import Settings.Scatter;
+export import Settings.Clutter;
 export import Settings.Trees;
 export import Settings.Rocks;
 export import Settings.Ocean;
@@ -69,7 +69,7 @@ export struct EngineSettings
 
     TerrainSettings terrain;
     TerrainColliderSettings terrainCollider;
-    ScatterSettings scatter;
+    ClutterSettings clutter;
     TreeSettings trees;
     TreeWorldSettings treeWorld;
     RockSettings rockSystem;

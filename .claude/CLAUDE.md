@@ -10,6 +10,7 @@ Guidance for Claude Code when working in this repository.
   * [Style](#style)
 * [Libraries](#libraries) — dependency direction, and where each library's documentation lives
 * [Asset files](#asset-files)
+* [`TODO.md`](../TODO.md) — loose list of improvements and open issues (not a plan). Add ideas there.
 
 ---
 
@@ -291,7 +292,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | `XCU7` | scriptEvents |
 | `XCU8` | world |
 | `XCU9` | ui |
-| `XCUA` | terrain, terrainCollider, ocean, scatter |
+| `XCUA` | terrain, terrainCollider, ocean, trees, rocks, clutter |
 | `XCUB` | navSystem |
 
 So **destruction** runs: nav → procedural → ui → world → scriptEvents → networkManager → physics →
@@ -375,7 +376,7 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 | [Spatial](../Code/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
 | [Nav](../Code/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
 | [Threading](../Code/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
-| [Procedural](../Code/Procedural/CONTEXT.md) | `ITerrainSampler`, the V3 diffusion generator, TerrainStreamer, HeightMapBaker (water reach / flow), ocean clipmap, terrain collider, scatter |
+| [Procedural](../Code/Procedural/CONTEXT.md) | `ITerrainSampler`, the V3 diffusion generator, TerrainStreamer, HeightMapBaker (water reach / flow), ocean clipmap, terrain collider, trees, rocks, **ground clutter** (`.clutter`, the forest floor map) |
 | [Network](../Code/Network/CONTEXT.md) | Winsock transport: `NetHost`, deliveries/channels, handshake + encryption, abuse limits, serialization, sockets |
 | [NetFuzz](../Code/NetFuzz/CONTEXT.md) | The protocol fuzzer — **the regression gate for wire changes** |
 | [Audio](../Code/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources, AudioComponent |
@@ -403,9 +404,6 @@ All text formats are parsed through `AssetParser` and registered by `AssetRegist
   `UseSceneTextures`, `DiffuseTexIdx` / `NormalTexIdx` / `MetalRoughnessTexIdx`.
 
 **Skinned containers MUST keep `PreTransformVertices false`.**
-
-The `.oc` is also what the procedural scatter imports through, **so scatter and World share one cooked
-`.vsc` per model.**
 
 ## `.pre` — Prefab
 
@@ -469,10 +467,22 @@ Entity, above Procedural). Their generated textures are saved once to `Assets/Lo
 
 `RockType <name>` in `Assets/Rocks/`: the SHAPE of a rock family as an SDF recipe (`Shape`, `Aspect`, `Squareness`,
 `Erosion`, `Warp`, `Fracture`, `Strata`, `Noise`, `Pits`, `Split`, `Pile`, `Profile`, `Group`, ...); the colour comes from the
-climate, never the type. Any number of `Placement` blocks say where the world puts it (a climate box, the ground:
-`Slope`, `Crag`, `Talus`, `Plains` / `Rugged` / `Valley`); their densities add. **The grammar is
+climate, never the type. DEAD WOOD is rock types too: `Shape Trunk` (a fallen log, a stump, a snag: `Lying`, `Break`,
+`RootPlate`, `Stubs`, `Roots`, `Hollow`) with `Surface Wood` (`Bark <TreeSpecies>`: that species' bark texture, x a `Color` tint). Any
+number of `Placement` blocks say where the world puts it (a climate box, the ground: `Slope`, `Crag`, `Talus`,
+`Plains` / `Rugged` / `Valley`, `Forest`); their densities add. **The grammar is
 in "Rocks" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; the plan is `Docs/RockRenderingPlan.md`.
 Loaded by `RockSystem` itself (not `AssetRegistry`).
+
+## `.clutter` — ground clutter types
+
+`ClutterType <name>` in `Assets/Clutter/`: a pebble, a fallen branch, a mushroom or a flower (`Kind`), its shape
+(a pebble takes the `.rock` shape keys; a flower has no mesh: `Head`, `Petals`, `Open`, ...), and any number of
+`Placement` blocks (density per m², a climate box, and `a b` TERMS over the terrain and the FOREST FLOOR - `Grass`,
+`Crag`, `Beach`, `Canopy`, `Trunk`, `Rock`, `Wet` - plus `Cluster` and fairy `Ring`s); their densities add. Placed on the
+GPU every frame, nothing per object on the CPU. **The grammar is in "Ground clutter" in
+[`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; the plan is `Docs/GroundClutterPlan.md`. Loaded by
+`ClutterSystem` itself (not `AssetRegistry`).
 
 ## `.dsl` — scripts
 

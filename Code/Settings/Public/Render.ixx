@@ -356,6 +356,8 @@ export struct GrassParams
     float growBand = 0.7f;         // a blade shrinks into the ground over this fraction of the kept range (no pops)
     float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter and
                                    // narrower by the cover - not only fewer (sparse long stalks otherwise)
+    float canopyThinning = 0.3f;   // 0..1: under a closed tree canopy the cover is x (1 - this) - a forest floor holds
+                                   // little grass (the clutter's FOREST FLOOR MAP: needs "Clutter/Enabled" and the trees)
     // WHERE it grows is the terrain textures' logic (grass_cull.cs.glsl): the ground layer's coverage (no rock, beach,
     // snow) x the grass amount of its climate-picked textures (Procedural's TERRAIN_TEX_SOURCES .grass).
     // The look (sRGB).

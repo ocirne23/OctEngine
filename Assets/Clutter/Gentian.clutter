@@ -1,0 +1,23 @@
+# Gentians: deep blue trumpets right on the ground, in cold alpine grass.
+ClutterType Gentian
+	Kind Flower
+	Seed 113
+	Scale 0.96 1.44
+	Range 50
+	Color 0.10 0.20 0.75
+	Color2 0.15 0.30 0.55
+	Head Radial
+	Petals 5
+	Open 60
+	PetalWidth 0.6
+	Stem 0.08
+	HeadSize 0.02
+	Placement
+		Density 2
+		Temperature -8 6
+		Precipitation 600 2500
+		Grass 0 1
+		Crag 1 1.5
+		Canopy 1 0
+		Cluster 6 0.3
+		Slope 1

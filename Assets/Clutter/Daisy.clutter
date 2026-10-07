@@ -1,0 +1,22 @@
+# Daisies: short, white rays around a yellow centre, in drifts on temperate grassland.
+ClutterType Daisy
+	Kind Flower
+	Seed 61
+	Scale 0.96 1.44
+	Range 60
+	Color 0.95 0.95 0.92
+	Color2 0.95 0.75 0.10
+	Head Radial
+	Petals 18
+	Open 5
+	PetalWidth 0.22
+	Stem 0.12
+	HeadSize 0.012
+	Placement
+		Density 4.8
+		Temperature 3 20
+		Precipitation 500 1800
+		Grass 0 1
+		Canopy 1 0.1
+		Cluster 8 0.35
+		Slope 0.7

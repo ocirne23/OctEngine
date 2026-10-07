@@ -53,6 +53,10 @@ export namespace Procedural
 			glm::vec2 scale{ 1.0f };
 			float sink = 0.0f;
 			float align = 0.0f;
+			float footprint = 1.0f;       // RockFootprint::flat: groundTransform's footprint x FOOTPRINT x the scale
+			uint16 material = 0;          // the instances' (a wood type's is its bark texture: the rock shader samples it)
+			bool wood = false;            // `Surface Wood`
+			glm::vec3 woodAlbedo{ 0.0f }; // linear: the far volume's colour of a wood type (its bark texture's mean)
 			oc::vector<WorldVariant> variants;
 		};
 		// Rock records are wanted ("Rocks/Enabled" + "Rocks/World/Enabled"); the meshes may still be generating.
@@ -64,7 +68,6 @@ export namespace Procedural
 		// worldGeneration() changes.
 		oc::span<const WorldType> worldTypes() const { return m_worldTypes; }
 		uint32 worldGeneration() const { return m_worldGeneration; }
-		uint16 worldMaterial() const { return m_material; } // LitRock does not read it; an instance needs one
 		// Called right BEFORE the world types' meshes are freed (a reload, a disable): the user drops everything that
 		// draws them. Never called from the destructor.
 		void setMeshUser(oc::function<void()> beforeFree) { m_beforeFree = oc::move(beforeFree); }
@@ -72,9 +75,10 @@ export namespace Procedural
 		// A ROCK ON THE GROUND - the one rule for the preview and the world (TreeSystem::expandChunk): the rock leans
 		// from upright toward the ground's NORMAL by `align` (1 = it lies on its slope), stands on the ground under its
 		// footprint and is sunk by `sink` of its height along its own up axis. `ground`: the terrain height at p, then at
-		// p -/+ (r, 0) and p -/+ (0, r) with r = FOOTPRINT x scale. Pure.
+		// p -/+ (r, 0) and p -/+ (0, r) with r = FOOTPRINT x scale x the type's footprint (RockFootprint::flat: a snag's
+		// is its thin base, not its height). Pure.
 		static constexpr float FOOTPRINT = 0.35f;
-		static Transform groundTransform(glm::vec2 p, const float ground[5], float scale, float height, float sink, float align, const glm::quat& yaw);
+		static Transform groundTransform(glm::vec2 p, const float ground[5], float r, float scale, float height, float sink, float align, const glm::quat& yaw);
 
 	private:
 		// The uploaded LOD chain: nodes spawn on level 0 and the cull redirects each instance (UINT32_MAX = one level
@@ -89,18 +93,25 @@ export namespace Procedural
 		{
 			RockTypeDesc desc;
 			oc::vector<Variant> variants;
+			// A WOOD type's material: its `Bark` species' bark texture x its tint (BC1 albedo + BC5 normal map), which the
+			// rock shader maps around the wood (RendererVK "The rock material", WOOD). Its job (kickGeneration) fills the
+			// chains, finishLoad uploads and drops them. UINT16_MAX = none (a rock: m_material). Kept over a remesh.
+			uint16 woodMaterial = UINT16_MAX;
+			oc::vector<oc::vector<uint8>> barkAlbedo, barkNormal;
+			uint32 barkSize = 0;          // 0 = no bark loaded
+			glm::vec3 barkMean{ 0.1f };   // linear: the tinted texture's mean (WorldType::woodAlbedo)
 		};
 
-		// Reads the .rock files (main) and kicks one generation job per variant: no main-thread stall. finishLoad
-		// uploads the meshes once every job is done.
+		// Reads the .rock files (main) and kicks one generation job per variant (and one per wood type's bark): no
+		// main-thread stall. finishLoad uploads the meshes once every job is done.
 		void reload();
-		void kickGeneration(); // one Low job per variant of every loaded type
+		void kickGeneration(); // one Low job per variant of every loaded type, one per wood type without its material
 		void finishLoad(Renderer& renderer);
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
 		// Joins the generation jobs, then frees the nodes, the LOD chains and the meshes, in that order; the types stay
-		// loaded (their variants empty, ready for kickGeneration).
+		// loaded (their variants empty, ready for kickGeneration) and keep their wood materials.
 		void clearMeshes();
-		void clearAll(); // clearMeshes, then the types too
+		void clearAll(); // clearMeshes, then the wood materials and the types too
 
 		RockSettings& m_settings = Globals::settings.rockSystem; // "Rocks" (the buttons are cleared here)
 		bool m_remesh = false;    // "Grid resolution" changed: regenerate the meshes of the loaded types (no re-read)
@@ -110,7 +121,7 @@ export namespace Procedural
 		bool m_spawned = false;
 		oc::atomic<int32> m_genInFlight{ 0 };
 		JobCounter m_genCounter;
-		uint16 m_material = 0;
+		uint16 m_material = 0;     // every rock's (LitRock does not read it; an instance needs one)
 		oc::vector<WorldType> m_worldTypes; // point into m_types' meshes
 		uint32 m_worldGeneration = 0;
 		uint32 m_typesRevision = 0;

@@ -14,6 +14,7 @@
 // A ROCK record (its type's albedo.w 0, R5): a SOLID - its mass is its occupied volume x scale^3 x "Far rock
 // extinction" (the splat's rule), it writes no colour, and it adds its share to the column's ROCK SUM in the
 // accumulation's units (mass / area / the slice height = what tree_volume_far.cs adds over the slices).
+// albedo.w 0.5 (dead wood): a solid's mass, a tree's colour write, no rock sum.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -93,7 +94,8 @@ void main()
         const vec2 range = pc_types.t[type].scale;
         const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
             * exp2(pc_types.t[type].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
-        const bool solid = pc_types.t[type].albedo.w < 0.5;
+        const bool solid = pc_types.t[type].albedo.w < 0.75;
+        const bool bedrock = pc_types.t[type].albedo.w < 0.25; // a rock: the resolve's climate colour
         const float mass = pc_types.t[type].variantMass[variant] * scale * scale * (solid ? scale * pc_rockExtinction : 1.0);
         if (mass <= 0.0)
             continue;
@@ -131,13 +133,13 @@ void main()
                     continue;
                 const ivec2 col = ivec2(tvWrapAngle(x, angularRes), y);
                 imageAtomicAdd(u_amount, col, amount);
-                if (solid)
+                if (bedrock)
                     imageAtomicAdd(u_rockSum, col, uint(w * perArea * invSliceH * ACCUM_SCALE + 0.5));
             }
         }
         const ivec2 nearest = ivec2(tvWrapAngle(int(round(tc.x)), angularRes), clamp(int(round(tc.y)), 0, radialRes - 1));
         imageAtomicMin(u_type, nearest, type);
-        if (!solid)
+        if (!bedrock)
             imageStore(u_colour, nearest, vec4(pc_types.t[type].albedo.rgb, 1.0));
     }
 }

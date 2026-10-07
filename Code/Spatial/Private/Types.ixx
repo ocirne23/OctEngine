@@ -56,19 +56,18 @@ export struct IOcclusionTester
 
 export constexpr uint32 SpatialLayer_Render = 1u << 0;  // entities with a RenderComponent
 export constexpr uint32 SpatialLayer_Stress = 1u << 1;  // synthetic stress-test entries
-export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // procedural terrain chunks, ocean sectors and scatter
-                                                        // groups (render culling only: NOT entities - the
-                                                        // userData is a chunk's RenderNode*, a sector's
-                                                        // RenderNode* | SpatialTerrainTag_Ocean, or 0,
-                                                        // never an Entity*, so gameplay queries must never
-                                                        // include this layer)
+export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // procedural terrain chunks and ocean sectors (render
+                                                        // culling only: NOT entities - the userData is a
+                                                        // chunk's RenderNode*, a sector's RenderNode* |
+                                                        // SpatialTerrainTag_Ocean, or 0, never an Entity*,
+                                                        // so gameplay queries must never include this layer)
 export constexpr uint32 SpatialLayer_Entity = 1u << 3;  // EVERY non-global entity (userData = Entity*): the
                                                         // World's update-selection layer. Render is the
                                                         // subset with a render node (gameplay queries)
 static_assert((SpatialLayer_Render | SpatialLayer_Stress | SpatialLayer_Terrain | SpatialLayer_Entity) < 256, "RecordPool stores the layer mask in a byte");
 
 // SpatialLayer_Terrain userData type bit, above the 47-bit user-mode address range: set on ocean
-// sectors' RenderNode pointers, clear on terrain chunks' and on scatter groups (0). The collect list
+// sectors' RenderNode pointers, clear on terrain chunks' (and on a 0 userData). The collect list
 // masks it off and pushes both alike; the terrain's shadow ball skips the tagged ones.
 export constexpr uint64 SpatialTerrainTag_Ocean = 1ull << 63;
 

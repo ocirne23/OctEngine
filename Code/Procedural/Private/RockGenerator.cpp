@@ -96,6 +96,100 @@ namespace
 		return (r - glm::max(radius * width - e, 0.004f)) / std::sqrt(1.0f + slope * slope);
 	}
 
+	// A profile's width at t (0 = the base, 1 = the top): pillarSdf's spline, without the slope.
+	float profileAt(const float* profile, float t)
+	{
+		constexpr int LAST = ROCK_PROFILE_POINTS - 1;
+		const float x = glm::clamp(t, 0.0f, 1.0f) * (float)LAST;
+		const int i = glm::min((int)x, LAST - 1);
+		const float f = x - (float)i;
+		const float p0 = profile[glm::max(i - 1, 0)], p1 = profile[i], p2 = profile[i + 1], p3 = profile[glm::min(i + 2, LAST)];
+		return 0.5f * (2.0f * p1 + f * ((p2 - p0) + f * ((2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) + f * (3.0f * (p1 - p2) + p3 - p0))));
+	}
+
+	// A cone with rounded ends from a (radius ra) to b (radius rb) - a branch stub, a root (iq's sdRoundCone).
+	float roundConeSdf(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b, float ra, float rb)
+	{
+		const glm::vec3 ba = b - a;
+		const float l2 = glm::dot(ba, ba);
+		const float rr = ra - rb;
+		const float a2 = l2 - rr * rr;
+		const float il2 = 1.0f / l2;
+		const glm::vec3 pa = p - a;
+		const float y = glm::dot(pa, ba);
+		const float z = y - l2;
+		const glm::vec3 xv = pa * l2 - ba * y;
+		const float x2 = glm::dot(xv, xv);
+		const float y2 = y * y * l2;
+		const float z2 = z * z * l2;
+		const float k = glm::sign(rr) * rr * rr * x2;
+		if (glm::sign(z) * a2 * z2 > k)
+			return std::sqrt(x2 + z2) * il2 - rb;
+		if (glm::sign(y) * a2 * y2 < k)
+			return std::sqrt(x2 + y2) * il2 - ra;
+		return (std::sqrt(x2 * a2 * il2) + y * rr) * il2 - ra;
+	}
+
+	// A BROKEN END over the trunk's section (u: the section point / the end's radius): 1 where the wood reaches the end
+	// (a splinter's tip), 0 at the deepest point of the break - long ridged splinters, the break leaning across (`slant`).
+	float splinter(glm::vec2 u, uint32 seed, glm::vec2 slant)
+	{
+		const float ridge = glm::clamp(1.0f - glm::abs(gradientNoise(glm::vec3(u * 2.3f, 0.37f), seed) * 1.6f), 0.0f, 1.0f);
+		const float fine = gradientNoise(glm::vec3(u * 7.0f, 1.71f), seed ^ 0x5A17u);
+		return glm::clamp(0.2f + glm::dot(u, slant) + 0.6f * ridge * ridge * ridge + 0.15f * fine, 0.0f, 1.0f);
+	}
+
+	// THE TRUNK (block 0, its axis the block's Y): the profile's side, the two ends and the hollow core. An end is BROKEN
+	// - the surface `breakDepth` x the end's radius deep where splinter() is 0, at the end where it is 1 - or, with no
+	// depth, worn round by the erosion; a standing trunk's base is cut flat (it goes into the ground). The ends' terms
+	// are scaled down by their steepness: the field stays near a distance for the projection.
+	float trunkSdf(const RockShape& s, const glm::vec3& p, float e)
+	{
+		const glm::vec3 q = s.blockRot[0] * (p - s.blockCentre[0]);
+		const glm::vec3& half = s.blockHalf[0];
+		const float radius = glm::min(half.x, half.z);
+		const glm::vec2 section(q.x, q.z);
+		const float k = 0.004f + 0.5f * e;
+		float d = pillarSdf(q, half, s.blockProfile[0], s.squareness, e);
+		const float rTop = glm::max(radius * s.blockProfile[0][ROCK_PROFILE_POINTS - 1], 1e-4f);
+		const float top = half.y - e - s.breakDepth.x * rTop * (1.0f - splinter(section / rTop, s.noiseSeed ^ 0x7A11u, s.breakSlant[0]));
+		d = smax(d, (q.y - top) / (1.0f + 3.0f * s.breakDepth.x), k);
+		if (s.standing)
+			d = glm::max(d, -half.y + e - q.y);
+		else
+		{
+			const float rBase = glm::max(radius * s.blockProfile[0][0], 1e-4f);
+			const float base = -half.y + e + s.breakDepth.y * rBase * (1.0f - splinter(section / rBase, s.noiseSeed ^ 0x3B5Du, s.breakSlant[1]));
+			d = smax(d, (base - q.y) / (1.0f + 3.0f * s.breakDepth.y), k);
+		}
+		// The hollow core runs the whole axis (open at the broken ends; a standing trunk's base is in the ground). The
+		// cavity grows by the erosion (the Minkowski shrink).
+		if (s.hollow > 0.0f)
+		{
+			const float core = s.hollow * radius * profileAt(s.blockProfile[0], (q.y + half.y) / (2.0f * half.y));
+			d = smax(d, core + e - glm::length(section), k);
+		}
+		return d;
+	}
+
+	// The whole dead tree: the trunk, its root plate (a lumpy disc across the base) and its limbs (stubs, roots), each
+	// blended in with a fillet as wide as its own size.
+	float trunkBodySdf(const RockShape& s, const glm::vec3& p, float e)
+	{
+		float d = trunkSdf(s, p, e);
+		if (s.plate.w > 0.0f)
+		{
+			const glm::vec3 h = glm::max(glm::vec3(0.5f * s.plateThickness, s.plate.w, s.plate.w) - e, glm::vec3(0.004f));
+			d = smin(d, superellipsoidSdf(p - glm::vec3(s.plate), h, 2.6f), 0.15f * s.plate.w);
+		}
+		for (uint32 i = 0; i < s.limbCount; ++i)
+		{
+			const RockShape::Limb& l = s.limbs[i];
+			d = smin(d, roundConeSdf(p, l.a, l.b, glm::max(l.ra - e, 0.002f), glm::max(l.rb - e, 0.002f)), 0.6f * l.ra);
+		}
+		return d;
+	}
+
 	// The union of the first `count` blocks, each shrunk by `e` (unwarped: the pile placement reads it too).
 	float blocksSdf(const RockShape& s, const glm::vec3& p, uint32 count, float e)
 	{
@@ -120,7 +214,7 @@ namespace
 	{
 		const glm::vec3 p = warpPoint(s, pIn);
 		const float e = s.erosion;
-		float d = blocksSdf(s, p, s.blockCount, e);
+		float d = s.kind == ERockShape::Trunk ? trunkBodySdf(s, p, e) : blocksSdf(s, p, s.blockCount, e);
 		for (uint32 i = 0; i < s.planeCount; ++i)
 			d = smax(d, glm::dot(p, glm::vec3(s.planes[i])) - (s.planes[i].w - e), s.round * 0.5f);
 		if (s.split)
@@ -166,8 +260,10 @@ namespace
 		return d;
 	}
 
+	// A wood mesh keeps its tangents (its wood coordinates); the bitangent only sets the stored sign, unread.
 	void addTangentFrame(RockMesh& m)
 	{
+		const bool wood = !m.tangents.empty();
 		m.tangents.resize(m.positions.size());
 		m.bitangents.resize(m.positions.size());
 		for (size_t i = 0; i < m.positions.size(); ++i)
@@ -175,7 +271,8 @@ namespace
 			const glm::vec3 n = m.normals[i];
 			const glm::vec3 ref = glm::abs(n.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
 			const glm::vec3 t = glm::normalize(glm::cross(ref, n));
-			m.tangents[i] = t;
+			if (!wood)
+				m.tangents[i] = t;
 			m.bitangents[i] = glm::cross(n, t);
 		}
 	}
@@ -197,8 +294,9 @@ namespace
 	}
 
 	// Surface nets over `s`'s bounds: one vertex per cell the surface crosses (the mean of its edge crossings), one quad
-	// per grid edge it crosses. Positions only (+ indices); the caller projects and shades.
-	void surfaceNets(const RockShape& s, uint32 resolution, RockMesh& out, float& outCell)
+	// per grid edge it crosses. Positions only (+ indices); the caller projects and shades. False when the body reaches
+	// the grid's outer border: the mesh is then OPEN there (no cell outside to close it) - the caller grows the bounds.
+	bool surfaceNets(const RockShape& s, uint32 resolution, RockMesh& out, float& outCell)
 	{
 		const glm::vec3 extent = s.boundsMax - s.boundsMin;
 		const float cell = glm::max(extent.x, glm::max(extent.y, extent.z)) / (float)resolution;
@@ -209,10 +307,16 @@ namespace
 		auto cornerPos = [&](int x, int y, int z) { return s.boundsMin + glm::vec3((float)x, (float)y, (float)z) * cell; };
 
 		oc::vector<float> field((size_t)corners.x * corners.y * corners.z);
+		bool closed = true;
 		for (int z = 0; z < corners.z; ++z)
 			for (int y = 0; y < corners.y; ++y)
 				for (int x = 0; x < corners.x; ++x)
-					field[cornerIdx(x, y, z)] = rockSdf(s, cornerPos(x, y, z));
+				{
+					const float d = rockSdf(s, cornerPos(x, y, z));
+					field[cornerIdx(x, y, z)] = d;
+					const bool border = x == 0 || y == 0 || z == 0 || x == corners.x - 1 || y == corners.y - 1 || z == corners.z - 1;
+					closed &= !(border && d < 0.0f);
+				}
 
 		static constexpr int EDGES[12][2] = { { 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 }, { 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
 		oc::vector<int32> vertexOf((size_t)cells.x * cells.y * cells.z, -1);
@@ -280,11 +384,12 @@ namespace
 						quad(vertexOf[cellIdx(x - 1, y - 1, z)], vertexOf[cellIdx(x, y - 1, z)], vertexOf[cellIdx(x, y, z)], vertexOf[cellIdx(x - 1, y, z)], in0);
 				}
 		outCell = cell;
+		return closed;
 	}
 
-	// `src` simplified to about `triangles` (positions, normals and the cavity; unused vertices dropped, the index
-	// order optimized for the vertex cache). Returns the simplification's error in `src`'s own units (meshopt reports
-	// it relative to the mesh extent).
+	// `src` simplified to about `triangles` (positions, normals, the cavity / bark and a wood mesh's coordinates; unused
+	// vertices dropped, the index order optimized for the vertex cache). Returns the simplification's error in `src`'s
+	// own units (meshopt reports it relative to the mesh extent).
 	float simplifyRockMesh(const RockMesh& src, uint32 triangles, RockMesh& out)
 	{
 		oc::vector<uint32> simplified(src.indices.size());
@@ -302,6 +407,8 @@ namespace
 				out.positions.push_back(src.positions[idx]);
 				out.normals.push_back(src.normals[idx]);
 				out.texCoords.push_back(src.texCoords[idx]);
+				if (!src.tangents.empty())
+					out.tangents.push_back(src.tangents[idx]);
 			}
 			out.indices.push_back(remap[idx]);
 		}
@@ -323,12 +430,67 @@ namespace
 		return glm::clamp(1.0f - 8.0f * occlusion, 0.0f, 1.0f);
 	}
 
+	// A WOOD vertex (RockMesh): the part it lies on - the trunk, the nearest limb, or the root plate (the trunk's frame) -
+	// by the smallest distance; its coordinates along and across that part, and its BARK cover: the outer skin is bark,
+	// anything inside the part's radius (a break, the hollow, a splinter's inner face) bare wood. Along is in units of the
+	// part's base CIRCUMFERENCE - the bark texture's v, as on a tree branch (the shader's u is the angle around). Not a
+	// trunk: the shape frame, all bark.
+	void woodCoords(const RockShape& s, const glm::vec3& pIn, glm::vec3& coords, float& bark)
+	{
+		constexpr float TWO_PI = 6.28318531f;
+		const glm::vec3 p = warpPoint(s, pIn);
+		bark = 1.0f;
+		if (s.kind != ERockShape::Trunk)
+		{
+			coords = glm::vec3(p.y / (TWO_PI * 0.25f), p.x, p.z);
+			return;
+		}
+		const glm::vec3 q = s.blockRot[0] * (p - s.blockCentre[0]);
+		const glm::vec3& half = s.blockHalf[0];
+		float best = pillarSdf(q, half, s.blockProfile[0], s.squareness, 0.0f);
+		const float baseRadius = glm::max(glm::min(half.x, half.z) * s.blockProfile[0][0], 1e-3f);
+		coords = glm::vec3((q.y + half.y) / (TWO_PI * baseRadius), q.x, q.z);
+		float outer = glm::min(half.x, half.z) * profileAt(s.blockProfile[0], (q.y + half.y) / (2.0f * half.y));
+		if (s.plate.w > 0.0f)
+		{
+			const float plate = superellipsoidSdf(p - glm::vec3(s.plate), glm::vec3(0.5f * s.plateThickness, s.plate.w, s.plate.w), 2.6f);
+			if (plate < best)
+			{
+				best = plate;
+				outer = 0.0f; // the torn root mass: no cut face
+			}
+		}
+		for (uint32 i = 0; i < s.limbCount; ++i)
+		{
+			const RockShape::Limb& l = s.limbs[i];
+			const float d = roundConeSdf(p, l.a, l.b, l.ra, l.rb);
+			if (d >= best)
+				continue;
+			best = d;
+			const glm::vec3 axis = l.b - l.a;
+			const float length = glm::length(axis);
+			const glm::vec3 dir = axis / glm::max(length, 1e-6f);
+			const glm::vec3 u = glm::normalize(glm::cross(dir, glm::abs(dir.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)));
+			const glm::vec3 v = glm::cross(dir, u);
+			const float along = glm::dot(p - l.a, dir);
+			const glm::vec3 off = p - l.a - dir * along;
+			coords = glm::vec3(along / (TWO_PI * glm::max(l.ra, 1e-3f)) + 0.37f * (float)(i + 1), glm::dot(off, u), glm::dot(off, v)); // each limb its own stretch of bark
+			outer = glm::mix(l.ra, l.rb, glm::clamp(along / glm::max(length, 1e-6f), 0.0f, 1.0f));
+		}
+		// Below ~70 % of the radius: a cut. The surface noise moves the skin in and out by a few % - still bark.
+		if (outer > 0.0f)
+			bark = glm::smoothstep(0.68f, 0.86f, glm::length(glm::vec2(coords.y, coords.z)) / outer);
+	}
+
 	// Moves every vertex onto the field's zero set (Newton steps along the gradient), then shades it from the gradient
-	// and takes its cavity (texCoords.x). In the SHAPE frame.
+	// and takes its cavity (texCoords.x) - and for WOOD its bark cover (texCoords.y) and wood coordinates (the tangent).
+	// In the SHAPE frame.
 	void projectAndShade(const RockShape& s, RockMesh& m, float cell, uint32 steps)
 	{
 		m.normals.resize(m.positions.size());
 		m.texCoords.resize(m.positions.size());
+		if (s.wood)
+			m.tangents.resize(m.positions.size());
 		for (size_t i = 0; i < m.positions.size(); ++i)
 		{
 			glm::vec3 p = m.positions[i];
@@ -341,6 +503,90 @@ namespace
 			m.positions[i] = p;
 			m.normals[i] = rockSdfNormal(s, p, cell * 0.5f);
 			m.texCoords[i] = glm::vec3(rockCavity(s, p, m.normals[i]), 0.0f, 0.0f);
+			if (s.wood)
+			{
+				float bark = 1.0f;
+				woodCoords(s, p, m.tangents[i], bark);
+				m.texCoords[i].y = 1.0f + bark;
+			}
+		}
+	}
+
+	// THE TRUNK's random decisions (buildRockShape; before the normalization, in the aspect's units): block 0 turned so
+	// its axis runs along the shape's X when it lies (shape Y -> block -X: the block's x half is the vertical
+	// thickness), a slight lean when it stands; its profile; the breaks and the hollow; the limbs - roots out of a
+	// standing trunk's base, branch stubs along the upper trunk (a lying one's never into the ground) - and a lying
+	// trunk's root plate.
+	void buildTrunk(const RockTypeDesc& type, RockShape& s, auto&& rnd)
+	{
+		const auto rnds = [&](uint32 salt) { return rnd(salt) * 2.0f - 1.0f; };
+		const glm::vec3 aspectHalf = s.blockHalf[0];
+		s.standing = !type.lying;
+		if (type.lying)
+		{
+			s.blockRot[0] = glm::mat3(glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(-1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+			s.blockHalf[0] = glm::vec3(aspectHalf.y, aspectHalf.x, aspectHalf.z);
+		}
+		else
+		{
+			const float leanAxis = rnd(60) * 6.28318531f; // up to ~5 degrees
+			const glm::quat lean = glm::angleAxis(rnd(50) * 0.09f, glm::vec3(std::cos(leanAxis), 0.0f, std::sin(leanAxis)));
+			s.blockRot[0] = glm::transpose(glm::mat3_cast(lean));
+		}
+		float widest = 0.0f;
+		for (int i = 0; i < ROCK_PROFILE_POINTS; ++i)
+		{
+			s.blockProfile[0][i] = type.profile[i] * (1.0f + type.profileVar * rnds(600 + (uint32)i));
+			widest = glm::max(widest, s.blockProfile[0][i]);
+		}
+		for (float& width : s.blockProfile[0])
+			width /= widest;
+		const glm::vec3 half = s.blockHalf[0];
+		const float radius = glm::min(half.x, half.z);
+		const float rBase = radius * s.blockProfile[0][0];
+		const bool plate = type.lying && rnd(700) < type.rootPlateChance;
+		s.breakDepth = glm::vec2(type.breakDepth.x * (0.6f + 0.6f * rnd(701)),
+			plate || s.standing ? 0.0f : type.breakDepth.y * (0.6f + 0.6f * rnd(702)));
+		s.breakSlant[0] = 0.35f * glm::vec2(rnds(703), rnds(704));
+		s.breakSlant[1] = 0.35f * glm::vec2(rnds(705), rnds(706));
+		s.hollow = rnd(707) < type.hollowChance ? type.hollowSize * (0.8f + 0.3f * rnd(708)) : 0.0f;
+
+		const glm::mat3 toShape = glm::transpose(s.blockRot[0]);
+		const auto addLimb = [&](glm::vec3 a, glm::vec3 b, float ra, float rb) {
+			if (s.limbCount < ROCK_MAX_LIMBS)
+				s.limbs[s.limbCount++] = { toShape * a + s.blockCentre[0], toShape * b + s.blockCentre[0], ra, rb };
+		};
+		// Roots: out of a standing trunk's base and down into the ground, thick at the trunk.
+		const int roots = s.standing ? type.rootCount : 0;
+		for (int i = 0; i < roots; ++i)
+		{
+			const float phi = ((float)i + 0.6f * rnd(720 + (uint32)i)) * 6.28318531f / (float)roots;
+			const glm::vec3 out(std::cos(phi), 0.0f, std::sin(phi));
+			const float reach = type.rootSpread * rBase * (0.75f + 0.5f * rnd(740 + (uint32)i));
+			addLimb(out * (0.55f * rBase) + glm::vec3(0.0f, -half.y + 0.6f * rBase, 0.0f), out * reach + glm::vec3(0.0f, -half.y - 0.35f * rBase, 0.0f),
+				rBase * (0.35f + 0.15f * rnd(760 + (uint32)i)), rBase * 0.1f);
+		}
+		// Branch stubs, leaning toward the top; a lying trunk's within 126 degrees of up (block -X is up).
+		for (int i = 0; i < type.stubCount; ++i)
+		{
+			const uint32 k = 800u + 8u * (uint32)i;
+			const float t = s.standing ? 0.35f + 0.6f * rnd(k) : 0.2f + 0.72f * rnd(k);
+			const float phi = s.standing ? rnd(k + 1) * 6.28318531f : 3.14159265f + 2.2f * rnds(k + 1);
+			const glm::vec3 radial(std::cos(phi), 0.0f, std::sin(phi));
+			const float r = radius * profileAt(s.blockProfile[0], t);
+			const glm::vec3 a = radial * (0.85f * r) + glm::vec3(0.0f, -half.y + 2.0f * half.y * t, 0.0f);
+			const glm::vec3 dir = glm::normalize(radial + glm::vec3(0.0f, 0.3f + 0.5f * rnd(k + 2), 0.0f));
+			const float ra = r * (0.25f + 0.2f * rnd(k + 3));
+			addLimb(a, a + dir * (r + type.stubLength * (0.5f + 0.5f * rnd(k + 4))), ra, ra * (0.5f + 0.2f * rnd(k + 5)));
+		}
+		// The ROOT PLATE: a lumpy disc across a lying trunk's base, the trunk entering its upper part (the lower part was
+		// the root ball: it goes into the ground below the ground line).
+		if (plate)
+		{
+			const float plateR = type.rootPlateSize * rBase * (0.85f + 0.3f * rnd(709));
+			s.plateThickness = 1.1f * rBase;
+			s.plate = glm::vec4(toShape * glm::vec3(0.0f, -half.y + 0.3f * s.plateThickness, 0.0f) + s.blockCentre[0]
+				+ glm::vec3(0.0f, -0.25f * plateR, 0.0f), plateR);
 		}
 	}
 }
@@ -388,8 +634,9 @@ namespace Procedural
 		// its own aspect jitter, yaw and tilt, from a random direction (sideways to upward) pushed in until it LEANS into
 		// the blocks before it - sunk ~35 % of its own height into them. A heap, not a column.
 		glm::vec3 aspect = type.aspect * (1.0f + type.aspectVar * glm::vec3(rnds(1), rnds(2), rnds(3)));
-		aspect = glm::max(aspect, glm::vec3(0.05f));
+		aspect = glm::max(aspect, glm::vec3(type.shape == ERockShape::Trunk ? 0.005f : 0.05f)); // a log is thin
 		const bool pillar = type.shape == ERockShape::Pillar;
+		const bool trunk = type.shape == ERockShape::Trunk;
 		glm::vec3 half = aspect * 0.5f;
 		s.blockHalf[0] = half;
 		s.blockCentre[0] = glm::vec3(0.0f);
@@ -397,7 +644,9 @@ namespace Procedural
 		// PILLARS: 1..Group of them (the variant's draw), each with its own profile (the type's, jittered, its widest
 		// point 1) and a lean of up to ~9 degrees; a later one is smaller and stands beside an earlier one, their bases
 		// overlapping, on the same floor.
-		s.blockCount = pillar ? 1u + glm::min((uint32)(rnd(5) * (float)type.group), (uint32)type.group - 1u) : (uint32)type.pile;
+		s.blockCount = pillar ? 1u + glm::min((uint32)(rnd(5) * (float)type.group), (uint32)type.group - 1u) : trunk ? 1u : (uint32)type.pile;
+		if (trunk)
+			buildTrunk(type, s, rnd);
 		for (uint32 b = 0; pillar && b < s.blockCount; ++b)
 		{
 			if (b > 0)
@@ -427,7 +676,7 @@ namespace Procedural
 				s.blockCentre[b].y = s.blockHalf[b].y - s.blockHalf[0].y; // its base on block 0's
 			}
 		}
-		for (uint32 b = 1; !pillar && b < s.blockCount; ++b)
+		for (uint32 b = 1; !pillar && !trunk && b < s.blockCount; ++b)
 		{
 			half *= type.pileShrink * (0.85f + 0.3f * rnd(20 + b));
 			const glm::vec3 jitter = 1.0f + 0.25f * glm::vec3(rnds(10 + b * 4), rnds(11 + b * 4), rnds(12 + b * 4));
@@ -463,6 +712,19 @@ namespace Procedural
 			lo = glm::min(lo, s.blockCentre[b] - e);
 			hi = glm::max(hi, s.blockCentre[b] + e);
 		}
+		// A trunk's limbs and root plate reach past its block.
+		for (uint32 i = 0; i < s.limbCount; ++i)
+		{
+			const RockShape::Limb& l = s.limbs[i];
+			lo = glm::min(lo, glm::min(l.a - l.ra, l.b - l.rb));
+			hi = glm::max(hi, glm::max(l.a + l.ra, l.b + l.rb));
+		}
+		if (s.plate.w > 0.0f)
+		{
+			const glm::vec3 e(0.5f * s.plateThickness, s.plate.w, s.plate.w);
+			lo = glm::min(lo, glm::vec3(s.plate) - e);
+			hi = glm::max(hi, glm::vec3(s.plate) + e);
+		}
 		const glm::vec3 size = hi - lo;
 		const float norm = 1.0f / glm::max(size.x, glm::max(size.y, size.z));
 		const glm::vec3 centre = (lo + hi) * 0.5f;
@@ -471,8 +733,22 @@ namespace Procedural
 			s.blockCentre[b] = (s.blockCentre[b] - centre) * norm;
 			s.blockHalf[b] *= norm;
 		}
+		for (uint32 i = 0; i < s.limbCount; ++i)
+		{
+			RockShape::Limb& l = s.limbs[i];
+			l = { (l.a - centre) * norm, (l.b - centre) * norm, l.ra * norm, l.rb * norm };
+		}
+		s.plate = glm::vec4((glm::vec3(s.plate) - centre) * norm, s.plate.w * norm);
+		s.plateThickness *= norm;
 		const glm::vec3 boxHalf = size * 0.5f * norm;
 		s.floorY = s.blockCentre[0].y - s.blockHalf[0].y;
+		// A trunk's ground line: a log lies on its underside (the trunk's vertical half: block x), a stump / snag stands
+		// on its flat-cut base.
+		s.groundY = s.standing ? s.blockCentre[0].y - s.blockHalf[0].y : s.blockCentre[0].y - s.blockHalf[0].x;
+		// EROSION shrinks every block by its radius before the field grows back: past the thinnest half-axis the block
+		// turns inside out, its field negative out to the bounds - an OPEN mesh (the clutter's thin pebbles at Erosion
+		// 0.2, 2026-10-07). Capped at 80 % of block 0's thinnest half-axis.
+		s.erosion = glm::min(s.erosion, 0.8f * glm::min(s.blockHalf[0].x, glm::min(s.blockHalf[0].y, s.blockHalf[0].z)));
 
 		// Fracture: planes cut into the body from random directions, each to a random fraction of its support distance.
 		s.planeCount = (uint32)type.fractureCount;
@@ -501,27 +777,31 @@ namespace Procedural
 		s.noiseAmplitude = type.noiseAmplitude;
 		s.noiseFrequency = type.noiseFrequency;
 		s.noiseOctaves = (uint32)type.noiseOctaves;
-		s.noiseScale = glm::vec3(1.0f, 1.0f / type.noiseStretch, 1.0f);
+		// The stretch runs along a lying trunk (its X), else along Y.
+		s.noiseScale = trunk && type.lying ? glm::vec3(1.0f / type.noiseStretch, 1.0f, 1.0f) : glm::vec3(1.0f, 1.0f / type.noiseStretch, 1.0f);
 		s.ridged = type.ridged;
+		s.wood = type.surface == ERockSurface::Wood;
 
 		// Pits: a sphere sunk into the body's surface from a random, mostly upward direction (the bisection finds the
 		// surface along it on the body alone).
+		// A trunk's rays start on its axis (the shape's origin may lie outside a log); a knot hole sits along it.
 		const float reachMax = glm::length(boxHalf) * 1.5f;
 		for (uint32 i = 0; i < (uint32)type.pitCount && s.pitCount < ROCK_MAX_PITS; ++i)
 		{
 			glm::vec3 dir = randomDir(500 + i * 3);
 			dir.y = glm::abs(dir.y) + 0.3f;
 			dir = glm::normalize(dir);
+			const glm::vec3 from = trunk ? glm::transpose(s.blockRot[0]) * glm::vec3(0.0f, s.blockHalf[0].y * rnds(900 + i) * 0.8f, 0.0f) + s.blockCentre[0] : glm::vec3(0.0f);
 			float t0 = 0.0f, t1 = reachMax;
-			if (bodySdf(s, dir * t1) < 0.0f)
+			if (bodySdf(s, from + dir * t1) < 0.0f || bodySdf(s, from) > 0.0f)
 				continue;
 			for (int k = 0; k < 24; ++k)
 			{
 				const float t = (t0 + t1) * 0.5f;
-				(bodySdf(s, dir * t) < 0.0f ? t0 : t1) = t;
+				(bodySdf(s, from + dir * t) < 0.0f ? t0 : t1) = t;
 			}
 			const float r = type.pitSize * (0.6f + 0.8f * rnd(502 + i * 3));
-			s.pits[s.pitCount++] = glm::vec4(dir * (t0 + r - type.pitDepth), r);
+			s.pits[s.pitCount++] = glm::vec4(from + dir * (t0 + r - type.pitDepth), r);
 		}
 
 		const float pad = type.noiseAmplitude * 1.5f + type.strataDepth * (1.0f + type.strataVar) + type.warpAmplitude * 1.8f + 0.03f;
@@ -539,23 +819,38 @@ namespace Procedural
 		// level is simplified from it.
 		RockMesh full;
 		float cell = 0.0f;
-		surfaceNets(out.shape, glm::max(gridResolution, 16u), full, cell);
+		// The bounds are a conservative guess, but not always: the superellipsoid field is no exact distance, so the
+		// erosion's grow-back can carry a thin body past them (the clutter's pebbles, 2026-10-07) - the mesh was then
+		// open at the grid's border. Grown by 15 % of the extent each side and meshed again, up to 4 times.
+		for (int attempt = 0; ; ++attempt)
+		{
+			full = {};
+			if (surfaceNets(out.shape, glm::max(gridResolution, 16u), full, cell) || attempt == 3)
+				break;
+			const glm::vec3 grow = (out.shape.boundsMax - out.shape.boundsMin) * 0.15f;
+			out.shape.boundsMin -= grow;
+			out.shape.boundsMax += grow;
+		}
 		if (full.indices.empty())
 			return;
 		projectAndShade(out.shape, full, cell, 2);
 
-		// Rock-local origin: the lowest point at y = 0. Shifting the BLOCKS, planes, pits and bounds would also move the
-		// strata and the noise (world-fixed in the shape's frame), so the shape keeps its frame and every mesh shifts.
+		// Rock-local origin: the lowest point at y = 0 - a trunk's ground line (its roots and root plate below it).
+		// Shifting the BLOCKS, planes, pits and bounds would also move the strata and the noise (world-fixed in the
+		// shape's frame), so the shape keeps its frame and every mesh shifts.
 		float minY = 1e9f, maxY = -1e9f;
 		for (const glm::vec3& p : full.positions)
 		{
 			minY = glm::min(minY, p.y);
 			maxY = glm::max(maxY, p.y);
 		}
+		const float originY = out.shape.kind == ERockShape::Trunk ? glm::clamp(out.shape.groundY, minY, maxY) : minY;
 		for (glm::vec3& p : full.positions)
-			p.y -= minY;
-		out.shape.originY = minY;
-		out.height = maxY - minY;
+			p.y -= originY;
+		out.shape.originY = originY;
+		// A lying trunk's height is its thickness (the sink buries a share of the log, not of its root plate).
+		const bool lyingTrunk = out.shape.kind == ERockShape::Trunk && !out.shape.standing;
+		out.height = lyingTrunk ? 2.0f * out.shape.blockHalf[0].x : maxY - originY;
 		orientOutward(full);
 
 		// THE FAR VOLUME's occupancy: the field at each voxel centre, soft over one voxel (a surface through the
@@ -576,7 +871,7 @@ namespace Procedural
 				for (uint32 x = 0; x < ROCK_DENSITY_RES; ++x)
 				{
 					const glm::vec3 local = lo + (glm::vec3((float)x, (float)y, (float)z) + 0.5f) * voxel;
-					const float d = rockSdf(out.shape, local + glm::vec3(0.0f, minY, 0.0f)); // rock-local -> the shape frame
+					const float d = rockSdf(out.shape, local + glm::vec3(0.0f, originY, 0.0f)); // rock-local -> the shape frame
 					out.density[x + ROCK_DENSITY_RES * (y + ROCK_DENSITY_RES * z)] = glm::clamp(0.5f - d / voxelSize, 0.0f, 1.0f);
 				}
 

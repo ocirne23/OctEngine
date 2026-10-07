@@ -100,6 +100,17 @@ export namespace Procedural
 		uint32 generation() const { return m_generation; }
 		// Main thread: a chunk's records, when the CPU holds them (inside the keep radius); nullptr otherwise.
 		const oc::vector<TreeRecord>* cpuRecords(glm::ivec2 coord) const;
+		// THE FOREST FLOOR (Procedural ClutterSystem, Docs/GroundClutterPlan.md 4.2): what each record type means on the
+		// ground around it - indexed by the record's type, read by the clutter's floor map bake.
+		struct FloorType
+		{
+			uint8 kind = 0;           // 0 = nothing (not placed), 1 = a tree, 2 = a rock, 3 = dead wood (a rock type of `Surface Wood`)
+			float crown = 0.0f;       // tree: the crown's radius (m, at the species' mean scale)
+			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m)
+			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
+			RockFootprint footprint;  // rock / wood: its capsule x the record's scale (along the record's yaw, hash 104)
+		};
+		const oc::vector<FloorType>& floorTypes() const { return m_floorTypes; }
 		// The keep radius is at least this (the expansion's near radius needs the records).
 		void requireKeepRadius(int chunks)
 		{
@@ -131,6 +142,7 @@ export namespace Procedural
 			oc::vector<RockRule> rules;   // the type's Placement blocks: their densities add
 			glm::vec2 scale{ 1.0f };      // m, the type's Scale range (rockRecordScale)
 			float cell = 8.0f;            // its WORLD lattice (m): at most one rock of the type per cell
+			RockFootprint footprint;      // the ground it covers (the trees keep out of it)
 		};
 		// Everything a chunk's records are a function of: immutable, shared with the pumps.
 		struct GenConfig
@@ -193,6 +205,7 @@ export namespace Procedural
 
 		// Main thread.
 		oc::vector<oc::string> m_typeNames;  // every .tree, name-sorted, then every .rock, name-sorted: the record type is the index
+		oc::vector<FloorType> m_floorTypes;  // parallel to m_typeNames
 		oc::vector<Species> m_species;
 		oc::vector<RockSpecies> m_rocks;
 		uint32 m_firstRockType = 0;

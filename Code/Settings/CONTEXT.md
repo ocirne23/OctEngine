@@ -9,7 +9,7 @@ above them has it (App links it directly).
 | `Settings` (umbrella) | [Settings.ixx](Public/Settings.ixx), [Settings.cpp](Private/Settings.cpp) | `EngineSettings` + `Globals::settings` + `Settings::registerAll()` |
 | `Settings.<Domain>` | `Public/<Domain>.ixx` + `Private/<Domain>.cpp` | one domain's plain-data types and its `Settings::register<X>(X&)` |
 
-Domains: Time, Render, World, Physics, Audio, Spatial, Network, Nav, Threading, Terrain, Scatter, Trees, Rocks, Ocean,
+Domains: Time, Render, World, Physics, Audio, Spatial, Network, Nav, Threading, Terrain, Clutter, Trees, Rocks, Ocean,
 Force, ParticleSystem, Hud, Input, App, Game.
 
 ---

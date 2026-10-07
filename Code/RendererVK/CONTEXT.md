@@ -151,6 +151,7 @@ GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Terrain wetness
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
+    → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
@@ -1160,10 +1161,12 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
   interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
   height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the chunks within
-  `grassRange()` to `Renderer::setGrassGround` EVERY frame (coord, `RenderMesh::getFirstVertex`, grid cells); the list
-  lives ONE frame (a frame without it draws no grass: a disabled terrain or freed chunks are never read). `present` writes
-  it into the slot's host-visible GROUND TABLE (`GrassFrameGpu`: the patch grid + a `GRASS_TABLE_DIM`^2 chunk table,
-  the finest resident per cell; `uploadGrassFrame`). The tessellated relief (`terrain_tess.tes.glsl`) is not sampled:
+  `groundRange()` (+ 16 m: the grass's AND the ground clutter's range) to `Renderer::setGrassGround` EVERY frame (coord,
+  `RenderMesh::getFirstVertex`, grid cells); the list lives ONE frame (a frame without it draws no grass: a disabled
+  terrain or freed chunks are never read). `present` writes it into the slot's host-visible GROUND TABLE
+  (`GrassFrameGpu`: the patch grid + a `GRASS_TABLE_DIM`^2 chunk table around the camera, the finest resident per cell;
+  `uploadGrassFrame`) - also with the grass off while the clutter is on (no patch grid then): the clutter cull reads the
+  same table (`m_groundTableValid`). The tessellated relief (`terrain_tess.tes.glsl`) is not sampled:
   the root sinks by `Root sink` + half the relief depth (the same fade and slope gate) and the blade grows by as much,
   so no blade floats over a displaced hollow.
 * **The cull** (`grass_cull.cs.glsl`, a cached compute secondary "Grass cull" before the shadow cull): one thread per
@@ -1172,7 +1175,10 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   `TERRAIN_SPLAT_HEIGHT_ONLY`), fed as the terrain VS feeds it (the baked fields, the temperature at the height, the
   SMOOTH mesh normal from the chunk's vertex normals: `grassGroundSmoothNormal`). Density = what the beach, rock and
   snow layers leave of the GROUND x the grass amount of its climate pick's textures (`u_terrainLive_splatGrass` per slot,
-  `TerrainSplatMaterial::grass`, set in Procedural's `TERRAIN_TEX_SOURCES`: grassland 1, savanna 0.6, cracked steppe / sand / scree 0).
+  `TerrainSplatMaterial::grass`, set in Procedural's `TERRAIN_TEX_SOURCES`: grassland 1, savanna 0.6, cracked steppe / sand / scree 0)
+  x (1 - `Cover/Canopy thinning` (0.3) x the FOREST FLOOR MAP's canopy (the ground clutter's: binding 8, the clutter
+  frame; no map = no thinning): a closed canopy holds little grass. The ground's canopy shading under the blades
+  (`grassGroundCanopy`) does not see the thinning.
   No grass until the terrain texture set is registered (the startup bake). The splat's relief height blend is not
   applied (linear coverages). Corners are shared, so the bilinear density is continuous across patches. Output per visible
   patch: a `GrassPatchGpu` record (32 B) and a `VkDrawIndexedIndirectCommand` (`firstInstance` = the slot - needs
@@ -1238,11 +1244,75 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   texel, x `Near shadow strength` (0.7); its weight fades over the box's edge (85-98 %) AND over 1.0-1.3 x the range from
   the box's centre (the box is square in light space: on the ground it reaches range / sin(sun elevation) along the
   sun, past the casters - an empty, lit band there showed as a gap) into the canopy term (which it REPLACES inside: real blades instead of
-  the statistical volume). Other objects do not read it. `GrassPipeline::recordNearShadow` draws the list (the same
+  the statistical volume). The ground clutter reads it too (its rigid and flower fragments). `GrassPipeline::recordNearShadow` draws the list (the same
   records and LOD as the main draw: counts [0] main, [1] near casters, [2] records), depth only, the shadow pass's depth
-  bias, both faces, its own set (UBO + vertex mega-buffer). **REMOVED 2026-10-03:** the blades' casting into the SCENE
+  bias, both faces, its own set (UBO + vertex mega-buffer); `ClutterPipeline::recordNearShadow` adds the clutter in the
+  same secondary. **REMOVED 2026-10-03:** the blades' casting into the SCENE
   cascades (`Cast shadows` / `Shadow distance` / `Shadow cascades`, default off) - its cull list, multiview VS variant,
   pipeline and record call; the canopy and this cascade replace it.
+
+## Ground clutter (`ClutterPipeline`, "Clutter" tweaks, `ClutterSettings`)
+
+**Built 2026-10-07** (Docs/GroundClutterPlan.md; Procedural CONTEXT "Ground clutter" has the types, the
+`.clutter` grammar and the FOREST FLOOR MAP). Pebbles, fallen branches, mushrooms and flowers, placed on the GPU every
+frame - no CPU memory per object, no CPU work per frame but the clutter frame's header. Desktop only (as the grass).
+
+* **THE MODEL** (`clutter_cull.cs.glsl`): a grid of PATCHES (`Patch size`, 4 m) around the camera (`uploadClutterFrame`:
+  capped to `CLUTTER_MAX_PATCHES` = 80^2, so the range is at most ~156 m at 4 m), ONE WORKGROUP PER PATCH, ONE THREAD PER
+  RANK (`CLUTTER_CANDIDATES` = 256: at most 16 / m^2 per type at 4 m patches; 128 capped the dense flowers). Per clutter TYPE (a `.clutter` Placement block), rank k stands at the k-th point of
+  an R2 sequence over the patch (offset per patch and type) and is KEPT where `k + 0.5 < density x Density scale x
+  patch area x range fade` - the grass's ranked prefix: a thinning density removes objects evenly, and one near the
+  threshold shrinks into the ground over `Grow band` (no pops). Types are INDEPENDENT lists (no type swaps for another as
+  the camera moves; two can overlap). A rank past the type's bound (`ClutterTypeGpu::bound.x`: every term at its
+  largest) never tests.
+* **THE DENSITY** of a type at a point = Density x the climate fit (1 inside the ideal box, a Gaussian outside, as a
+  tree's) x per term `mix(a, b, measure)`: the terrain's GRASS cover, CRAG (bedrock), BEACH - a 5 x 5 grid over the
+  patch (every 1 m at 4 m patches) computed by threads 0..24 into shared memory (the grass cull's `terrainLayers` feed),
+  bilinear per candidate; the 4 corners alone aliased the bedrock's small-scale noise into grid-aligned diamonds, and the
+  stones gathered in a regular pattern; the GRASS measure is the blades' own density: that cover x `grassClump` x the
+  canopy thinning, so no flower stands in a bare spot; a flower also SHRINKS with the cover as a blade does
+  (`grassCoverSize`, "Grass/Cover/Size by cover"): at the shore's beach band the few blades left are tiny -, the
+  climate's humidity (WET), and the FOREST FLOOR MAP's CANOPY, TRUNK and ROCK proximity (binding 4, the clutter frame,
+  `clutterFloorAt`, bilinear); x (1 - snow) x (1 - occupied); x its cluster noise (`Cluster`) and fairy rings (`Ring`);
+  0 above `Slope` (the drawn mesh's facet under it) or below `Altitude` above the water.
+* **A KEPT OBJECT**: its scale (x the grow factor), a yaw then the turn to the ground's normal by `Align` (flowers stay
+  upright), ON THE DRAWN GROUND - the chunk mesh + the TESSELLATED RELIEF there (`clutterRelief`: the TES's own
+  displacement - layers, fade, slope gate, depth, height mip - from the splat height maps through the bindless array at
+  binding 11, a seventh consumer of BindlessTextures; over a rigid object's footprint the height lies between the mean and
+  the lowest of 5 taps; without it the objects floated over the relief's hollows, up to half the 0.6 m depth) -, sunk
+  by `Sink` x its height, a sphere test against the frustum (or within the near grass cascade's caster
+  reach - an object just off screen still casts), the LOD by its projected size (`LOD 1 size` / `LOD 2 size`, radius /
+  distance) - flowers by distance (`Flower LOD 1/2 distance`). The record (`ClutterInstanceGpu`, 48 B: position + scale,
+  the quaternion in halves, type / variant / LOD / kind, a hash, and the LOOK: both colours as rgba8 of their square
+  root, the flower's stem / head / petals / open angle) goes to a flat array with a BUCKET key.
+* **THE BUCKETS**: one per (mesh, LOD), the flowers' `CLUTTER_FLOWER_LODS` first. Three dispatches in the "Clutter
+  cull" secondary: the CULL (atomic bucket counts + bucket-local indices), the PREFIX (`clutter_prefix.cs.glsl`, ONE
+  1024-thread workgroup: an exclusive scan of the counts, one `VkDrawIndexedIndirectCommand` per bucket with
+  `firstInstance` = its range, and the rigid draw COUNT), the SCATTER (`clutter_scatter.cs.glsl`: each record to its
+  bucket's range). At most `CLUTTER_MAX_INSTANCES` = 131072 objects per frame.
+* **THE DRAWS** (`StaticMeshGraphicsPipeline`, with the grass: the main layout, so the lit core's set binds; after the
+  grass, before the film): the RIGID meshes (`clutter.vs/fs.glsl`; `drawIndexedIndirectCount` over the (mesh, LOD)
+  buckets: the meshes' own vertex / index buffers, `ClutterVertexGpu` at binding 0, the record instance-rate at
+  binding 1) and the FLOWERS (`clutter_flower.vs/fs.glsl`; `drawIndexedIndirect` of the 3 flower buckets over the
+  flower topology index buffer, the record at binding 0, no vertex buffer). Two-sided, no discard, the opaque family,
+  `LIT_NO_RTAO` (not in the TLAS; no RT, no GI of their own), the near grass cascade received; the flowers write motion.
+* **THE RIGID MATERIAL** per kind: PEBBLE - the climate's BEDROCK (the splat's rock entries, the top climate pick,
+  triplanar at 4 x the rocks' uv scale) x the type's colour; BRANCH - bark with streaks along the wood (part 0), end
+  grain (part 1); MUSHROOM - the cap (part 1) with optional SPOTS, the stem (0) and the gills (2). The vertex AO, and
+  `Contact darkening` over `Contact height` at the foot.
+* **THE FLOWERS** (`clutter_flower.vs.glsl`): the STEM is a grass blade - the same Bezier, lean and wind
+  (`grass_wind.inc.glsl`, moved out of grass.vs.glsl: `grassBezier` / `grassWind` / `grassTip`), so a flower sways
+  exactly as the grass around it; motion vectors from last frame's time. The HEAD sits at the tip in a frame along the
+  stem's upper chord: RADIAL (petals around a centre disc, tilted up by `Open`), SPIKE (florets spiralling up the top
+  of the stem), UMBEL (small flat florets over a disc), BELL (florets hanging from the arching top). The topology per
+  LOD: the stem's strip (4 / 2 / 1 segments) + `CLUTTER_FLOWER_PETALS` (16 / 8 / 4) petal quads + a centre quad; a slot
+  past the flower's petal count collapses (no area), fewer slots than petals widen them. The FS: the grass's root -> tip
+  colours on the stem, the type's colours on the petals and the centre, transmission (`Flower transmission`).
+* **NEAR SHADOWS**: the rigid and flower VS with `CLUTTER_NEAR_SHADOW` into the near grass cascade (the casters within
+  its reach). Nothing casts into the scene cascades (the user's choice, 2026-10-07).
+* Off (`Enabled`, no types, VR, or no ground table this frame): `recordClear` zeroes the counts and the flower commands.
+  `setClutterAssets` (GPU idle, re-record) / `setClutterFloorMap` (each slot takes it in present: the clutter frame's
+  floor part is flushed only then) are Procedural ClutterSystem's. The GPU cost is not measured yet.
 
 ## The wind (`WindParams`, "Sky/Wind", `u_weather`)
 
@@ -1252,7 +1322,7 @@ ONE wind for everything that moves with it: speed (m/s, default 2), direction (d
 | Reader | How |
 |---|---|
 | Weather particles (rain, snow) | `weatherWindAt` (particle.inc.glsl) + the rain's own `Particles/Wind sheet *` |
-| Trees, grass | `vegetationWind` (`wind.inc.glsl`): the mean + a 2D GUST VECTOR, each component two analytic waves travelling downwind (1.2 / 0.46 x the gust size long). The gusts turn the wind rather than cancel it (a signed gust along the mean left ~40 % of the trees still at a 1 m/s mean, 5 m/s gusts). Grass adds its small-scale ripple (value noise moving with the mean wind), both "per m/s" (`Grass/Wind/Bend`, `Ripple`) |
+| Trees, grass, flowers | `vegetationWind` (`wind.inc.glsl`; the flower stems through the grass's `grass_wind.inc.glsl`): the mean + a 2D GUST VECTOR, each component two analytic waves travelling downwind (1.2 / 0.46 x the gust size long). The gusts turn the wind rather than cancel it (a signed gust along the mean left ~40 % of the trees still at a 1 m/s mean, 5 m/s gusts). Grass adds its small-scale ripple (value noise moving with the mean wind), both "per m/s" (`Grass/Wind/Bend`, `Ripple`) |
 | Fog | the noise drifts along the direction at the speed (`u_weather_windSpeed`), world - drift: WITH the wind |
 | Clouds | direction, speed x `Sky/Clouds/Wind speed scale` (3.5) |
 | Ocean (Procedural) | `Renderer::getWindParams()`: speed x `Ocean/Waves/Wind speed scale` (2.5) = the U10, the heading + π (the spectrum's convention) |
@@ -1387,7 +1457,10 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w` = 0): its grid is OCCUPANCY (0..1), and its extinction
   is **`Far rock extinction (1/m)`** (4; a rebake setting - before `Far density` and the blob shrink) at ANY size - a
   crown's extinction thins with its scale (`/ scale`: its leaves spread over a larger volume), a rock's does not. So the
-  far mass of a rock record is its occupied volume x scale^3 x that (a tree's: x scale^2). A solid writes NO colour: it
+  far mass of a rock record is its occupied volume x scale^3 x that (a tree's: x scale^2). **DEAD WOOD** (2026-10-07;
+  `solidOwnColour` -> `albedo.w` = 0.5, the record type's too): a solid's extinction and mass, but a TREE's colour write
+  (its own albedo: its bark texture's mean) and no rock sum - the shaders test `w < 0.75`
+  (solid) and `w < 0.25` (the climate's bedrock). A rock writes NO colour: it
   adds its share to **`m_rockSum`** (R32UI 2D, cleared per bake), in the accumulation's units summed over the slices -
   the detail splat its voxel amounts, the far records pass mass / area / the slice height (what the far pass adds over
   the slices). **The resolve** (its z = 0 invocations) then turns it into the column's ROCK FRACTION (the sum / the
@@ -2171,6 +2244,10 @@ retention order, promotion order and eviction candidates are kept member scratch
 Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ranges (see
 `MeshStreamSource` in [`Code/File/CONTEXT.md`](../File/CONTEXT.md)). Vertex and index mega-buffers are
 `BitRangeAllocator<true>` (lock-free) free lists in `MeshDataManager` (see "The graphics-queue mutex" for its grow lock).
+Their initial sizes (`INITIAL_VERTEX_DATA` 1.5 GiB, `INITIAL_INDEX_DATA` 512 MiB), the mesh instance capacity
+(`INITIAL_INSTANCE_DATA` 524288), the render node capacity (`INITIAL_RENDER_NODES` 65536) and the unique mesh capacity
+(`INITIAL_UNIQUE_MESHES` 65534 = `MESH_MATERIAL_INDEX_LIMIT`, so it never grows) and the GI TLAS instance capacity
+(`GI_INITIAL_TLAS_INSTANCES` 16384) are set so the world's load does not grow them (each grow idles the GPU).
 
 Over `Mesh budget (MB)`, least-recently-referenced sets unseen for `Mesh cold frames` **evict**:
 
@@ -2649,7 +2726,22 @@ splat's own materials and rules** - a boulder under a sandstone cliff is that sa
   through the chain's one BLAS. No tessellation (planned, then dropped by the user, 2026-10-05).
 * **In the tree instance set** (R4, the world's rocks): see "BAKED TREE RECORDS" - a rock record gets the LOD pick
   and no wind.
-* **Not yet**: the far-volume hand-over (R5). The register count is not measured.
+* **DEAD WOOD** (2026-10-07; Procedural `Surface Wood`: fallen logs, stumps, snags - the same pipeline, the same
+  records). The mesh marks it: its **v** (`normalV.w`) is 1 + the vertex's BARK cover (1 the outer skin, 0 a cut or
+  broken face), 0 for a rock; its **TANGENT is not a direction but the vertex's WOOD COORDINATES** (Procedural
+  RockMesh: along the part it belongs to - the trunk, a stub, a root - in units of its base circumference, and across
+  it from that part's axis, nominal units). The VS passes along as is and across in metres (x the instance scale),
+  with the instance's material index. The FS replaces the bedrock (step 1) with `woodSurface`: the MATERIAL is a tree
+  species' BARK TEXTURE (Procedural RockSystem: BC1 albedo with the type's tint baked in + a BC5 normal map), mapped as
+  on a tree branch - u = the angle around the part (once around), v = along. 2 taps (`textureGrad`: at u's wrap the
+  derivatives come from a copy that wraps on the far side, so the seam keeps its mip) and the normal map through a
+  cotangent frame from the screen derivatives (the part's axis is not known in the FS). The cut faces (bark cover 0)
+  show END GRAIN: the same tap paled and greyed, growth rings ~5 mm around the axis (faded out before they alias), a
+  darker core. Steps 2 and 3 and the wetness lie on top unchanged: litter or moss on the top, the contact band, snow.
+  Without a splat set the wood still shows. GI and the RT hits sample the same bark texture (at the mesh's uv: its
+  mean colour, roughly). Nothing else in the renderer reads a rock mesh's tangent (the GI / RTAO hits read no
+  tangents).
+* The register count is not measured.
 
 # Terrain surface water
 
@@ -3220,7 +3312,8 @@ calls `reloadShaders()`.
 * **Feature folders:** `Common` (shared/ubo + small utility includes), `Mesh` (instanced_indirect, shadow
   depth, skinning, debug lines), `Lighting` (light grid, shadows, RT shadow, RTAO), `GI`, `PostProcess`
   (composite, bloom, TAA, DLSS mvecs, eye adaptation, motion blur), `Sky` (sky, atmosphere, clouds,
-  volumetric fog, rain occlusion), `Ocean`, `Terrain` (terrain, film, wetness, grass, rocks), `Trees`,
+  volumetric fog, rain occlusion), `Ocean`, `Terrain` (terrain, film, wetness, grass, rocks), `Clutter` (the ground
+  clutter), `Trees`,
   `Particles` (+ decals), `Force`. Pipelines name the full path (`"Shaders/Sky/cloud_march.cs.glsl"`).
   **An `#include` is a bare file name**: the includer tries the includer's folder, the root shader's
   folder, then a file-name index of the whole `Shaders/` tree — so **file names must stay unique across

@@ -619,6 +619,62 @@ void StaticMeshGraphicsPipeline::buildGrassLayout(const GraphicsPipelineLayout& 
     grass.fragmentShader = source("Shaders/Terrain/grass.fs.glsl",main.fragmentShader.defines);
 }
 
+void StaticMeshGraphicsPipeline::buildClutterLayout(const GraphicsPipelineLayout& main, GraphicsPipelineLayout& clutter, bool flowers)
+{
+    using namespace RendererVKLayout;
+    clutter.descriptorSetLayoutBindings = main.descriptorSetLayoutBindings;
+    clutter.descriptorBindingFlags = main.descriptorBindingFlags;
+    clutter.pushConstantRanges = main.pushConstantRanges;
+    clutter.indirectBindable = false;
+    clutter.motionTarget = true; // the opaque family; the wind moves the flowers
+    clutter.writeMotion = flowers;
+    clutter.cullMode = vk::CullModeFlagBits::eNone; // two-sided petals; the branch ends are open
+    clutter.polygonMode = main.polygonMode;
+
+    // The rigid meshes: binding 0 = the mesh's vertices, binding 1 = the record (instance rate, firstInstance = the
+    // bucket's range). The flowers: binding 0 = the record only.
+    auto& bindings = clutter.vertexLayoutInfo.bindingDescriptions;
+    auto& attributes = clutter.vertexLayoutInfo.attributeDescriptions;
+    const uint32 instanceBinding = flowers ? 0 : 1;
+    const uint32 firstInstanceLocation = flowers ? 0 : 2;
+    if (!flowers)
+    {
+        bindings.push_back(vk::VertexInputBindingDescription{ .binding = 0, .stride = sizeof(ClutterVertexGpu), .inputRate = vk::VertexInputRate::eVertex });
+        attributes.push_back(vk::VertexInputAttributeDescription{ .location = 0, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(ClutterVertexGpu, posAo) });
+        attributes.push_back(vk::VertexInputAttributeDescription{ .location = 1, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(ClutterVertexGpu, normalPart) });
+        attributes.push_back(vk::VertexInputAttributeDescription{ .location = 5, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(ClutterVertexGpu, uv) });
+    }
+    bindings.push_back(vk::VertexInputBindingDescription{ .binding = instanceBinding, .stride = sizeof(ClutterInstanceGpu), .inputRate = vk::VertexInputRate::eInstance });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = firstInstanceLocation, .binding = instanceBinding, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(ClutterInstanceGpu, posScale) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = firstInstanceLocation + 1, .binding = instanceBinding, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(ClutterInstanceGpu, data) });
+    attributes.push_back(vk::VertexInputAttributeDescription{ .location = firstInstanceLocation + 2, .binding = instanceBinding, .format = vk::Format::eR32G32B32A32Uint, .offset = offsetof(ClutterInstanceGpu, look) });
+
+    const auto source = [](const char* path, const oc::vector<ShaderDefine>& defines) {
+        return ShaderSource{ .text = FileSystem::readFileStr(path), .debugFilePath = path, .defines = defines };
+    };
+    clutter.vertexShader = source(flowers ? "Shaders/Clutter/clutter_flower.vs.glsl" : "Shaders/Clutter/clutter.vs.glsl", {});
+    // The lit core's baked defines (LIT_RT_*, the debug overlays), as the lit fragment has them.
+    clutter.fragmentShader = source(flowers ? "Shaders/Clutter/clutter_flower.fs.glsl" : "Shaders/Clutter/clutter.fs.glsl", main.fragmentShader.defines);
+}
+
+// The desktop-only pipelines built from the main layout: the grass blades, the rigid clutter, the flowers.
+void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout& main, bool reload)
+{
+    const auto build = [&](GraphicsPipeline& pipeline, bool& built, GraphicsPipelineLayout& layout, const char* name) {
+        if (!reload || !built)
+            built = pipeline.initialize(m_renderPass, layout);
+        else if (!pipeline.reloadShaders(m_renderPass, layout))
+            printf("StaticMeshGraphicsPipeline: %s shader reload failed, keeping previous pipeline\n", name);
+    };
+    GraphicsPipelineLayout grassLayout, clutterLayout, flowerLayout;
+    buildGrassLayout(main, grassLayout);
+    buildClutterLayout(main, clutterLayout, false);
+    buildClutterLayout(main, flowerLayout, true);
+    build(m_grassPipeline, m_grassBuilt, grassLayout, "grass");
+    build(m_clutterPipeline, m_clutterBuilt, clutterLayout, "clutter");
+    build(m_flowerPipeline, m_flowerBuilt, flowerLayout, "flower");
+}
+
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
@@ -706,11 +762,7 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
         m_terrainTessBuilt = m_terrainTessPipeline.initialize(renderPass, terrainTessLayout);
     }
     if (!m_stereo)
-    {
-        GraphicsPipelineLayout grassLayout;
-        buildGrassLayout(graphicsPipelineLayout, grassLayout);
-        m_grassBuilt = m_grassPipeline.initialize(renderPass, grassLayout);
-    }
+        buildDesktopExtras(graphicsPipelineLayout, false);
 
     createExecutionSets();
     m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
@@ -795,14 +847,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
             printf("StaticMeshGraphicsPipeline: terrain tess shader reload failed, keeping previous pipeline\n");
     }
     if (!m_stereo)
-    {
-        GraphicsPipelineLayout grassLayout;
-        buildGrassLayout(graphicsPipelineLayout, grassLayout);
-        if (!m_grassBuilt)
-            m_grassBuilt = m_grassPipeline.initialize(m_renderPass, grassLayout);
-        else if (!m_grassPipeline.reloadShaders(m_renderPass, grassLayout))
-            printf("StaticMeshGraphicsPipeline: grass shader reload failed, keeping previous pipeline\n");
-    }
+        buildDesktopExtras(graphicsPipelineLayout, true);
 
     createExecutionSets();
     createPreprocessBuffers(m_maxUniqueMeshes); // the new sets' pipelines can need more scratch
@@ -1012,6 +1057,32 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
         vkCommandBuffer.bindIndexBuffer(grass.indices->getBuffer(), 0, vk::IndexType::eUint32);
         vkCommandBuffer.drawIndexedIndirectCount(grass.commands->getBuffer(), 0, grass.count->getBuffer(), 0, grass.maxDraws,
             5 * sizeof(uint32)); // VkDrawIndexedIndirectCommand
+    }
+    // THE GROUND CLUTTER, with the grass (before the film: a pebble in a puddle stays under its water): one indexed
+    // draw per bucket of ClutterPipeline's sorted records - the rigid meshes' (mesh, LOD) buckets, their count written
+    // by the prefix pass, then the flowers' fixed LOD buckets.
+    if (params.clutter)
+    {
+        using namespace RendererVKLayout;
+        constexpr uint32 commandSize = 5 * sizeof(uint32); // VkDrawIndexedIndirectCommand
+        const ClutterPipeline::Draw& clutter = *params.clutter;
+        if (m_clutterBuilt && clutter.rigid)
+        {
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_clutterPipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_clutterPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+            vkCommandBuffer.bindVertexBuffers(0, { clutter.vertices->getBuffer(), clutter.instances->getBuffer() }, { 0, 0 });
+            vkCommandBuffer.bindIndexBuffer(clutter.indices->getBuffer(), 0, vk::IndexType::eUint32);
+            vkCommandBuffer.drawIndexedIndirectCount(clutter.commands->getBuffer(), CLUTTER_FLOWER_LODS * commandSize,
+                clutter.counts->getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_LODS, commandSize);
+        }
+        if (m_flowerBuilt)
+        {
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_flowerPipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_flowerPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+            vkCommandBuffer.bindVertexBuffers(0, { clutter.instances->getBuffer() }, { 0 });
+            vkCommandBuffer.bindIndexBuffer(clutter.flowerIndices->getBuffer(), 0, vk::IndexType::eUint32);
+            vkCommandBuffer.drawIndexedIndirect(clutter.commands->getBuffer(), 0, CLUTTER_FLOWER_LODS, commandSize);
+        }
     }
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);

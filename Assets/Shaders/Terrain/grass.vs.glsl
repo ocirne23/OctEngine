@@ -20,6 +20,7 @@ layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertice
 
 #include "grass.inc.glsl"
 #include "wind.inc.glsl"
+#include "grass_wind.inc.glsl" // grassBezier, grassWind, grassTip (shared with the flower stems)
 
 layout (location = 0) in vec4 in_patchOrigins; // xy = the patch's min corner (world XZ), zw = its terrain chunk's origin
 layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, y = its cells per side | LOD << 16,
@@ -36,38 +37,6 @@ layout (location = 4) out vec3 out_prevWorldDelta;
 // THE CANOPY (grass.inc.glsl): x = the point's depth below the canopy top (m), y = the canopy's extinction (1/m). The
 // FS turns them into the sun reaching the point; the depth is linear along the blade, so it interpolates exactly.
 layout (location = 5) out vec2 out_canopy;
-
-const float GRASS_TWO_PI = 6.28318530718;
-
-vec3 grassBezier(vec3 p0, vec3 p1, vec3 p2, float t)
-{
-    const float s = 1.0 - t;
-    return s * s * p0 + 2.0 * s * t * p1 + t * t * p2;
-}
-
-// The wind's push on the tip at a point and time, in blade heights (XZ): THE shared wind (wind.inc.glsl - its direction,
-// speed and gusts, the trees bend in the same) x "Bend" per m/s with a sway, plus a small-scale RIPPLE - value noise
-// moving with the mean wind - x "Ripple" per m/s.
-vec2 grassWind(vec2 xz, float time, float phase)
-{
-    vec2 dir;
-    const float speed = vegetationWind(xz, time, dir);
-    const float sway = sin(time * u_grass_swayFrequency * GRASS_TWO_PI + phase);
-    const float ripple = grassValueNoise((xz - vegetationWindMeanDir() * (max(length(u_weather_windVelocity.xz), 1.0) * time)) * u_grass_invRippleSize);
-    return dir * (speed * (u_grass_windBend * (0.85 + 0.15 * sway) + u_grass_rippleBend * ripple * (0.8 + 0.2 * sway)));
-}
-
-// The tip and the control point of a blade of height h: lean + wind sideways (capped at 0.9 h), the rest upward.
-vec3 grassTip(vec3 root, vec2 lean, vec2 wind, float h, out vec3 ctrl)
-{
-    vec2 offset = lean + wind * h;
-    const float len = length(offset);
-    if (len > 0.9 * h)
-        offset *= 0.9 * h / len;
-    const float y = sqrt(max(h * h - dot(offset, offset), 0.0));
-    ctrl = root + vec3(0.0, y, 0.0);
-    return root + vec3(offset.x, y, offset.y);
-}
 
 // The blade being built (set in main): its curve, its width axis and half width at the root, and the blend from the
 // curve normal to the linear one.

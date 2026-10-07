@@ -117,8 +117,8 @@ spawn does not flash invisible during its link + stamp latency.
 
 **Streamed geometry passes `false`** (`RecordFlag_NoSpawnGuard`). Appearing one frame late is
 invisible for something that did not exist before, while the guard would leak never-stamped
-off-screen entries into the main pass — permanently while culling is frozen. Terrain chunks, ocean
-sectors and scatter groups all pass false.
+off-screen entries into the main pass — permanently while culling is frozen. Terrain chunks and ocean
+sectors both pass false.
 
 ### Threading contract
 
@@ -152,13 +152,13 @@ sectors and scatter groups all pass false.
 |---|---|---|
 | `SpatialLayer_Render` | 0 | Entities that have a RenderComponent. **This is the gameplay-query layer.** |
 | `SpatialLayer_Stress` | 1 | Synthetic stress-test entries. |
-| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean clipmap sectors, scatter groups. |
+| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean clipmap sectors. |
 | `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
 
 > **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is its
 > streamer `Resident*` (its node AND its vegetation), an ocean sector's is its `RenderNode*` **with
-> `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set**, and scatter groups carry
-> 0. The streamer and the ocean share ONE hand-over list (collect slot 1), walked ONCE by
+> `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set** (a 0 userData is still dropped:
+> the removed scatter's groups carried it). The streamer and the ocean share ONE hand-over list (collect slot 1), walked ONCE by
 > `TerrainStreamer::render`'s job, which tells the two apart by the tag and pushes every node with its own
 > pass mask; the tag also keeps the sectors out of the terrain's shadow ball. The owners keep a dead node's memory until `visibleCollectGeneration`
 > moves on (see the hand-over below). **Gameplay queries must never include that layer**
@@ -241,8 +241,8 @@ live check, and must tolerate an entry that changed or died since the stamp). **
 * slot 0 — the World's (`SpatialLayer_Entity`, Handles, the default arguments): entities die in the
   destroy windows between the join and the World's pass, and `userData(handle)` reads 0 for those.
 * slot 1 — the terrain streamer's (`SpatialLayer_Terrain`, UserData): `RenderNode` pointers of its
-  chunks and of the ocean's sectors, pushed in ONE walk by `TerrainStreamer::render`'s job (scatter
-  groups carry 0 and never enter the list) — see Procedural.
+  chunks and of the ocean's sectors, pushed in ONE walk by `TerrainStreamer::render`'s job (a 0
+  userData never enters the list) — see Procedural.
 
 The lists are valid from `joinUpdateJob` until the next kick, and a FROZEN cull keeps the last list,
 like the stamps. **`visibleCollectGeneration()`** counts the list rebuilds (real Main stamps only —

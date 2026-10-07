@@ -480,6 +480,7 @@ void Renderer::initBindlessTextures()
             m_rtaoPipeline.resizeTextureDescriptors(count);
             m_particlePipeline.resizeTextureDescriptors(count);
             m_decalPipeline.resizeTextureDescriptors(count);
+            m_clutterPipeline.resizeTextureDescriptors(count);
             for (PerFrameData& perFrame : m_perFrameData)
             {
                 for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
@@ -498,6 +499,7 @@ void Renderer::initBindlessTextures()
             m_rtaoPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_particlePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
             m_decalPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
+            m_clutterPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
         });
 }
 
@@ -842,17 +844,24 @@ void Renderer::uploadGrassFrame(uint32 frameIdx)
     RendererVKLayout::GrassFrameGpu& frame = m_grassPipeline.frame(frameIdx);
     frame.gridDim = 0;
     frame.tableDim = 0;
-    if (grassActive() && !m_grassGround.empty() && m_grassChunkSize > 0.0f)
+    m_groundTableValid = false;
+    // The GROUND TABLE serves the grass AND the ground clutter (its cull reads the same chunks): it covers groundRange().
+    if ((grassActive() || clutterActive()) && !m_grassGround.empty() && m_grassChunkSize > 0.0f)
     {
-        const float patchSize = grassPatchSize();
-        const int half = (int)std::ceil(grassGridRange() / patchSize);
-        const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
-        frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
-        frame.gridDim = (uint32)(2 * half + 1);
-        frame.patchSize = patchSize;
+        if (grassActive())
+        {
+            const float patchSize = grassPatchSize();
+            const int half = (int)std::ceil(grassGridRange() / patchSize);
+            const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
+            frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
+            frame.gridDim = (uint32)(2 * half + 1);
+            frame.patchSize = patchSize;
+        }
 
-        const glm::ivec2 tableMin(glm::floor(frame.gridOrigin / m_grassChunkSize));
-        const glm::ivec2 tableMax(glm::floor((frame.gridOrigin + (float)frame.gridDim * patchSize) / m_grassChunkSize));
+        const float range = groundRange() + 16.0f; // + the largest patch: a patch grid reaches past its range by up to one
+        const glm::vec2 camXZ(m_cameraPos.x, m_cameraPos.z);
+        const glm::ivec2 tableMin(glm::floor((camXZ - range) / m_grassChunkSize));
+        const glm::ivec2 tableMax(glm::floor((camXZ + range) / m_grassChunkSize));
         const uint32 tableDim = (uint32)oc::min(oc::max(tableMax.x - tableMin.x, tableMax.y - tableMin.y) + 1, (int)GRASS_TABLE_DIM);
         frame.tableMin = tableMin;
         frame.tableDim = tableDim;
@@ -869,7 +878,101 @@ void Renderer::uploadGrassFrame(uint32 frameIdx)
                 entry = glm::uvec2(chunk.firstVertex, chunk.res);
         }
         memcpy(frame.chunks, table.data(), tableDim * tableDim * sizeof(glm::uvec2));
+        m_groundTableValid = true;
     }
     m_grassPipeline.flushFrame(frameIdx);
     m_grassGround.clear();
+}
+
+// ---- Ground clutter (ClutterPipeline; Procedural ClutterSystem) ----
+
+// Every mesh's levels go into one vertex / index buffer (ClutterMeshGpu: each level's range; bounds from level 0).
+void Renderer::setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu> types, oc::span<const ClutterMesh> meshes)
+{
+    using namespace RendererVKLayout;
+    if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+        return;
+    oc::vector<ClutterMeshGpu> meshGpu;
+    oc::vector<ClutterVertexGpu> vertices;
+    oc::vector<uint32> indices;
+    for (const ClutterMesh& mesh : meshes)
+    {
+        ClutterMeshGpu& gpu = meshGpu.emplace_back();
+        gpu = ClutterMeshGpu{};
+        float height = 0.0f;
+        for (const ClutterVertexGpu& v : mesh.vertices[0])
+            height = glm::max(height, v.posAo.y);
+        float radius = 0.0f;
+        for (const ClutterVertexGpu& v : mesh.vertices[0])
+            radius = glm::max(radius, glm::length(glm::vec3(v.posAo) - glm::vec3(0.0f, 0.5f * height, 0.0f)));
+        gpu.bounds = glm::vec4(radius, height, 0.0f, 0.0f);
+        for (uint32 lod = 0; lod < CLUTTER_LODS; ++lod)
+        {
+            if (mesh.indices[lod].empty())
+                continue;
+            gpu.lods[lod] = glm::uvec4((uint32)indices.size(), (uint32)mesh.indices[lod].size(), (uint32)vertices.size(), 0u);
+            vertices.insert(vertices.end(), mesh.vertices[lod].begin(), mesh.vertices[lod].end());
+            indices.insert(indices.end(), mesh.indices[lod].begin(), mesh.indices[lod].end());
+        }
+    }
+    m_clutterMaxRange = 0.0f;
+    for (const ClutterTypeGpu& type : types)
+        m_clutterMaxRange = glm::max(m_clutterMaxRange, type.shape.z);
+    m_clutterPipeline.setAssets(types, meshGpu, vertices, indices);
+    setHaveToRecordCommandBuffers(); // the draws bind the new buffers
+}
+
+void Renderer::setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels)
+{
+    constexpr size_t TEXELS = (size_t)RendererVKLayout::CLUTTER_FLOOR_DIM * RendererVKLayout::CLUTTER_FLOOR_DIM;
+    m_clutterFloorCentre = centre;
+    if (texels.size() == TEXELS)
+        m_clutterFloor.assign(texels.begin(), texels.end());
+    else
+        m_clutterFloor.clear();
+    m_clutterFloorDirty.fill(true);
+}
+
+float Renderer::clutterRange() const
+{
+    if (!clutterActive())
+        return 0.0f;
+    const uint32 maxHalf = (uint32)std::sqrt((float)RendererVKLayout::CLUTTER_MAX_PATCHES) / 2u - 1u; // (2 half + 1)^2 patches
+    return glm::min(m_clutterMaxRange * glm::max(m_clutterParams.rangeScale, 0.0f), clutterPatchSize() * (float)maxHalf);
+}
+
+// This slot's clutter frame (its fence was waited): the patch grid around the camera, the counts the cull and the
+// prefix read, the flower draws' index ranges - and the floor map, when this slot has not taken the current one.
+void Renderer::uploadClutterFrame(uint32 frameIdx)
+{
+    using namespace RendererVKLayout;
+    ClutterFrameGpu& frame = m_clutterPipeline.frame(frameIdx);
+    frame.gridDim = 0;
+    const float range = clutterRange();
+    if (range > 0.0f && m_groundTableValid)
+    {
+        const float patchSize = clutterPatchSize();
+        const int half = (int)std::ceil(range / patchSize);
+        const glm::ivec2 camCell(glm::floor(glm::vec2(m_cameraPos.x, m_cameraPos.z) / patchSize));
+        frame.gridOrigin = glm::vec2(camCell - glm::ivec2(half)) * patchSize;
+        frame.gridDim = (uint32)(2 * half + 1);
+        frame.patchSize = patchSize;
+        frame.range = range;
+    }
+    frame.numTypes = m_clutterPipeline.numTypes();
+    frame.numMeshes = m_clutterPipeline.numMeshes();
+    for (uint32 lod = 0; lod < CLUTTER_FLOWER_LODS; ++lod)
+        frame.flowerLods[lod] = m_clutterPipeline.flowerLods()[lod];
+    const bool floorDirty = m_clutterFloorDirty[frameIdx];
+    if (floorDirty)
+    {
+        m_clutterFloorDirty[frameIdx] = false;
+        const float size = (float)CLUTTER_FLOOR_DIM * CLUTTER_FLOOR_TEXEL;
+        frame.floorOrigin = m_clutterFloorCentre - 0.5f * size;
+        frame.floorInvTexel = 1.0f / CLUTTER_FLOOR_TEXEL;
+        frame.floorDim = m_clutterFloor.empty() ? 0u : CLUTTER_FLOOR_DIM;
+        if (!m_clutterFloor.empty())
+            memcpy(frame.floor, m_clutterFloor.data(), m_clutterFloor.size() * sizeof(uint32));
+    }
+    m_clutterPipeline.flushFrame(frameIdx, floorDirty);
 }

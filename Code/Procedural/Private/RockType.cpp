@@ -73,68 +73,12 @@ namespace Procedural
 		readInt(*type, "Variants", out.variantCount);
 		readFloat(*type, "Sink", out.sink);
 		readFloat(*type, "Align", out.align);
-
-		if (const AssetNode* n = type->find("Shape"))
-		{
-			const oc::string shape = n->asString();
-			out.shape = iequals(shape, "Block") ? ERockShape::Block : iequals(shape, "Pillar") ? ERockShape::Pillar : ERockShape::Boulder;
-		}
-		readVec3(*type, "Aspect", out.aspect);
-		readVec3(*type, "AspectVar", out.aspectVar);
-		readFloat(*type, "Round", out.round);
-		readFloat(*type, "Squareness", out.squareness);
-		readFloat(*type, "Erosion", out.erosion);
-		if (const AssetNode* n = type->find("Warp"))
-		{
-			out.warpAmplitude = n->asFloat(0, out.warpAmplitude);
-			out.warpFrequency = n->asFloat(1, out.warpFrequency);
-		}
-		if (const AssetNode* n = type->find("Profile"))
-			for (int i = 0; i < ROCK_PROFILE_POINTS; ++i)
-				out.profile[i] = n->asFloat((size_t)i, out.profile[i]);
-		readFloat(*type, "ProfileVar", out.profileVar);
-		if (const AssetNode* n = type->find("Group"))
-		{
-			out.group = n->asInt(0, out.group);
-			out.groupShrink = n->asFloat(1, out.groupShrink);
-		}
-		if (const AssetNode* n = type->find("Pile"))
-		{
-			out.pile = n->asInt(0, out.pile);
-			out.pileShrink = n->asFloat(1, out.pileShrink);
-		}
-		if (const AssetNode* n = type->find("Fracture"))
-		{
-			out.fractureCount = n->asInt(0, out.fractureCount);
-			out.fractureDepth = n->asFloat(1, out.fractureDepth);
-		}
-		if (const AssetNode* n = type->find("Strata"))
-		{
-			out.strataSpacing = n->asFloat(0, out.strataSpacing);
-			out.strataDepth = n->asFloat(1, out.strataDepth);
-			out.strataVar = n->asFloat(2, out.strataVar);
-		}
-		if (const AssetNode* n = type->find("Noise"))
-		{
-			out.noiseAmplitude = n->asFloat(0, out.noiseAmplitude);
-			out.noiseFrequency = n->asFloat(1, out.noiseFrequency);
-			out.noiseOctaves = n->asInt(2, out.noiseOctaves);
-		}
-		readFloat(*type, "NoiseStretch", out.noiseStretch);
-		readFloat(*type, "Ridged", out.ridged);
-		if (const AssetNode* n = type->find("Pits"))
-		{
-			out.pitCount = n->asInt(0, out.pitCount);
-			out.pitSize = n->asFloat(1, out.pitSize);
-			out.pitDepth = n->asFloat(2, out.pitDepth);
-		}
-		if (const AssetNode* n = type->find("Split"))
-		{
-			out.splitChance = n->asFloat(0, out.splitChance);
-			out.splitGap = n->asFloat(1, out.splitGap);
-		}
-		readInt(*type, "Lod", out.lodTriangles);
-		readFloat(*type, "Resolution", out.resolution);
+		readRockShapeKeys(*type, out);
+		if (const AssetNode* n = type->find("Surface"))
+			out.surface = iequals(n->asString(), "Wood") ? ERockSurface::Wood : ERockSurface::Rock;
+		if (const AssetNode* n = type->find("Bark"))
+			out.bark = n->asString();
+		readVec3(*type, "Color", out.color);
 
 		for (const AssetNode* placement : type->findAll("Placement"))
 		{
@@ -163,6 +107,7 @@ namespace Procedural
 			readFloat(*placement, "Plains", p.plains);
 			readRange(*placement, "Rugged", p.rugged); // low end, high end (one value: both)
 			readFloat(*placement, "Valley", p.valley);
+			readRange(*placement, "Forest", p.forest); // open, forest (one value: both)
 			if (p.density <= 0.0f)
 				continue;
 			p.climateWidth = glm::max(p.climateWidth, 0.01f);
@@ -171,6 +116,7 @@ namespace Procedural
 			p.clusterCoverage = glm::clamp(p.clusterCoverage, 0.0f, 1.0f);
 			p.plains = glm::max(p.plains, 0.0f);
 			p.rugged = glm::max(p.rugged, glm::vec2(0.0f));
+			p.forest = glm::max(p.forest, glm::vec2(0.0f));
 			out.placements.push_back(p);
 		}
 
@@ -179,11 +125,134 @@ namespace Procedural
 		out.scale.y = glm::max(out.scale.y, out.scale.x);
 		out.variantCount = glm::clamp(out.variantCount, 1, 32);
 		out.sink = glm::clamp(out.sink, 0.0f, 0.9f);
+		out.align = glm::clamp(out.align, 0.0f, 1.0f);
+		out.color = glm::clamp(out.color, glm::vec3(0.0f), glm::vec3(1.0f));
+		if (out.surface == ERockSurface::Wood && out.bark.empty())
+			out.bark = "Oak";
+		clampRockShape(out);
+		return true;
+	}
+
+	RockFootprint rockFootprint(const RockTypeDesc& type)
+	{
+		const glm::vec3 a = type.aspect / glm::max(type.aspect.x, glm::max(type.aspect.y, type.aspect.z));
+		RockFootprint f;
+		f.flat = glm::max(a.x, a.z);
+		if (type.shape != ERockShape::Trunk)
+			return f;
+		float widest = 0.0f;
+		for (float w : type.profile)
+			widest = glm::max(widest, w);
+		if (type.lying)
+		{
+			// Along X; the thickness is the widest of the profile.
+			f.halfLength = 0.5f * a.x;
+			f.radius = 0.5f * glm::max(a.y, a.z);
+			return f;
+		}
+		// Standing: the base (and the roots' reach around it).
+		const float base = 0.5f * glm::max(a.x, a.z) * type.profile[0] / glm::max(widest, 1e-3f);
+		f.radius = glm::max(0.5f * glm::max(a.x, a.z), type.rootCount > 0 ? base * type.rootSpread : 0.0f);
+		f.flat = glm::min(2.0f * f.radius, 1.0f);
+		return f;
+	}
+
+	void readRockShapeKeys(const AssetNode& type, RockTypeDesc& out)
+	{
+		if (const AssetNode* n = type.find("Shape"))
+		{
+			const oc::string shape = n->asString();
+			out.shape = iequals(shape, "Block") ? ERockShape::Block : iequals(shape, "Pillar") ? ERockShape::Pillar
+				: iequals(shape, "Trunk") ? ERockShape::Trunk : ERockShape::Boulder;
+		}
+		if (const AssetNode* n = type.find("Lying"))
+			out.lying = n->asFloat(0, 1.0f) > 0.5f;
+		readRange(type, "Break", out.breakDepth); // top, base (one value: both)
+		if (const AssetNode* n = type.find("RootPlate"))
+		{
+			out.rootPlateChance = n->asFloat(0, out.rootPlateChance);
+			out.rootPlateSize = n->asFloat(1, out.rootPlateSize);
+		}
+		if (const AssetNode* n = type.find("Stubs"))
+		{
+			out.stubCount = n->asInt(0, out.stubCount);
+			out.stubLength = n->asFloat(1, out.stubLength);
+		}
+		if (const AssetNode* n = type.find("Roots"))
+		{
+			out.rootCount = n->asInt(0, out.rootCount);
+			out.rootSpread = n->asFloat(1, out.rootSpread);
+		}
+		if (const AssetNode* n = type.find("Hollow"))
+		{
+			out.hollowChance = n->asFloat(0, out.hollowChance);
+			out.hollowSize = n->asFloat(1, out.hollowSize);
+		}
+		readVec3(type, "Aspect", out.aspect);
+		readVec3(type, "AspectVar", out.aspectVar);
+		readFloat(type, "Round", out.round);
+		readFloat(type, "Squareness", out.squareness);
+		readFloat(type, "Erosion", out.erosion);
+		if (const AssetNode* n = type.find("Warp"))
+		{
+			out.warpAmplitude = n->asFloat(0, out.warpAmplitude);
+			out.warpFrequency = n->asFloat(1, out.warpFrequency);
+		}
+		if (const AssetNode* n = type.find("Profile"))
+			for (int i = 0; i < ROCK_PROFILE_POINTS; ++i)
+				out.profile[i] = n->asFloat((size_t)i, out.profile[i]);
+		readFloat(type, "ProfileVar", out.profileVar);
+		if (const AssetNode* n = type.find("Group"))
+		{
+			out.group = n->asInt(0, out.group);
+			out.groupShrink = n->asFloat(1, out.groupShrink);
+		}
+		if (const AssetNode* n = type.find("Pile"))
+		{
+			out.pile = n->asInt(0, out.pile);
+			out.pileShrink = n->asFloat(1, out.pileShrink);
+		}
+		if (const AssetNode* n = type.find("Fracture"))
+		{
+			out.fractureCount = n->asInt(0, out.fractureCount);
+			out.fractureDepth = n->asFloat(1, out.fractureDepth);
+		}
+		if (const AssetNode* n = type.find("Strata"))
+		{
+			out.strataSpacing = n->asFloat(0, out.strataSpacing);
+			out.strataDepth = n->asFloat(1, out.strataDepth);
+			out.strataVar = n->asFloat(2, out.strataVar);
+		}
+		if (const AssetNode* n = type.find("Noise"))
+		{
+			out.noiseAmplitude = n->asFloat(0, out.noiseAmplitude);
+			out.noiseFrequency = n->asFloat(1, out.noiseFrequency);
+			out.noiseOctaves = n->asInt(2, out.noiseOctaves);
+		}
+		readFloat(type, "NoiseStretch", out.noiseStretch);
+		readFloat(type, "Ridged", out.ridged);
+		if (const AssetNode* n = type.find("Pits"))
+		{
+			out.pitCount = n->asInt(0, out.pitCount);
+			out.pitSize = n->asFloat(1, out.pitSize);
+			out.pitDepth = n->asFloat(2, out.pitDepth);
+		}
+		if (const AssetNode* n = type.find("Split"))
+		{
+			out.splitChance = n->asFloat(0, out.splitChance);
+			out.splitGap = n->asFloat(1, out.splitGap);
+		}
+		readInt(type, "Lod", out.lodTriangles);
+		readFloat(type, "Resolution", out.resolution);
+	}
+
+	void clampRockShape(RockTypeDesc& out)
+	{
 		out.aspect = glm::max(out.aspect, glm::vec3(0.05f));
 		out.aspectVar = glm::clamp(out.aspectVar, glm::vec3(0.0f), glm::vec3(0.9f));
 		out.round = glm::clamp(out.round, 0.0f, 0.4f);
 		if (out.squareness <= 0.0f)
-			out.squareness = out.shape == ERockShape::Block ? 3.0f : 2.2f;
+			out.squareness = out.shape == ERockShape::Block ? 3.0f : out.shape == ERockShape::Trunk ? 2.0f : 2.2f;
 		out.squareness = glm::clamp(out.squareness, 1.5f, 12.0f);
 		out.erosion = glm::clamp(out.erosion, 0.0f, 0.3f);
 		out.warpAmplitude = glm::clamp(out.warpAmplitude, 0.0f, 0.2f);
@@ -196,7 +265,16 @@ namespace Procedural
 		out.group = glm::clamp(out.group, 1, ROCK_MAX_PILE);
 		out.groupShrink = glm::clamp(out.groupShrink, 0.2f, 1.0f);
 		out.noiseStretch = glm::clamp(out.noiseStretch, 0.1f, 10.0f);
-		out.resolution = glm::clamp(out.resolution, 0.5f, 4.0f);
+		out.resolution = glm::clamp(out.resolution, 0.5f, 8.0f); // a long thin log needs ~8 (its thickness in cells)
+		out.breakDepth = glm::clamp(out.breakDepth, glm::vec2(0.0f), glm::vec2(8.0f));
+		out.rootPlateChance = glm::clamp(out.rootPlateChance, 0.0f, 1.0f);
+		out.rootPlateSize = glm::clamp(out.rootPlateSize, 1.5f, 10.0f);
+		out.rootCount = glm::clamp(out.rootCount, 0, ROCK_MAX_LIMBS);
+		out.stubCount = glm::clamp(out.stubCount, 0, ROCK_MAX_LIMBS - out.rootCount);
+		out.stubLength = glm::clamp(out.stubLength, 0.005f, 0.4f);
+		out.rootSpread = glm::clamp(out.rootSpread, 1.0f, 6.0f);
+		out.hollowChance = glm::clamp(out.hollowChance, 0.0f, 1.0f);
+		out.hollowSize = glm::clamp(out.hollowSize, 0.1f, 0.9f);
 		out.fractureCount = glm::clamp(out.fractureCount, 0, 16);
 		out.fractureDepth = glm::clamp(out.fractureDepth, 0.0f, 0.9f);
 		out.strataSpacing = glm::max(out.strataSpacing, 0.0f);
@@ -205,7 +283,5 @@ namespace Procedural
 		out.pitCount = glm::clamp(out.pitCount, 0, 32);
 		out.splitChance = glm::clamp(out.splitChance, 0.0f, 1.0f);
 		out.lodTriangles = glm::clamp(out.lodTriangles, 64, 50000);
-		out.align = glm::clamp(out.align, 0.0f, 1.0f);
-		return true;
 	}
 }

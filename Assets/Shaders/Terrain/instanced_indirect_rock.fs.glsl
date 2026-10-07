@@ -17,7 +17,12 @@
 //   2. GROUND  - the climate's ground material (moss, sand, leaf litter): a patchy COVER on the up-facing faces,
 //                and the CONTACT BAND at the foot (it hides the line where the rock enters the ground).
 //   3. SNOW    - the terrain's snow rule with this face's own slope: on the top, sliding off the sides.
-// Then the terrain's wetness (darker, glossier). The material the instance carries is not read.
+// Then the terrain's wetness (darker, glossier). A rock's material is not read.
+// DEAD WOOD (Procedural `Surface Wood`: in_wood.w = 1 + the bark cover) replaces 1 with WOOD - its material is a tree
+// species' bark texture (albedo + normal map, the type's tint baked in). On the outer skin, BARK, mapped as on a tree
+// branch: u once around the part, v along it in units of its base circumference. On the cut and broken faces (bark
+// cover 0), END GRAIN: the bark's colour paled and greyed, with growth rings around the part's axis. 2 and 3 lie on top
+// of it as on a rock (litter or moss on the top, the contact band, snow).
 
 #include "shared.inc.glsl"
 
@@ -25,6 +30,8 @@ layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal; // geometric (interpolated vertex) normal
 layout (location = 2) in vec4 in_rockFields; // VS-evaluated: x = ground height under the vertex (world Y), y = temperature C, z = humidity, w = water level
 layout (location = 3) in float in_cavity;    // the vertex's baked cavity: 1 = open, 0 = deep in a crevice
+layout (location = 4) in vec4 in_wood;       // dead wood: x = along (base circumferences), yz = across (m), w = 1 + the bark cover; 0 = a rock
+layout (location = 5) flat in uint in_material;
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
@@ -42,6 +49,62 @@ layout (location = 1) out vec4 out_motion;
 // No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax (R3's tessellation displaces by the height maps instead).
 #include "terrain_splat.inc.glsl"
 
+// --- DEAD WOOD ---
+// The wood surface at this pixel (w = in_wood: x along the part in base circumferences, yz across it in metres - and
+// the bark cover).
+TerrainSample woodSurface(vec3 geoN)
+{
+	const MaterialInfo material = in_materialInfos[in_material];
+	const uint albedoIdx = material.diffuseNormalTexIdx & 0xFFFFu;
+	const uint normalIdx = material.diffuseNormalTexIdx >> 16;
+	const vec3 w = in_wood.xyz;
+	const float r = length(w.yz);
+	const float bark = clamp(in_wood.w - 1.0, 0.0, 1.0);
+
+	// u: the angle around the part (0..1). Where it wraps, its derivatives come from a copy that wraps on the far side
+	// (whichever is smaller), so the seam's pixels keep their mip level.
+	const vec2 across = r > 1e-6 ? w.yz : vec2(1.0, 0.0);
+	const vec2 uv = vec2(atan(across.y, across.x) * (1.0 / 6.28318531) + 0.5, w.x);
+	vec2 dx = dFdx(uv), dy = dFdy(uv);
+	const float wrapped = fract(uv.x + 0.5);
+	const float wrappedDx = dFdx(wrapped), wrappedDy = dFdy(wrapped);
+	dx.x = abs(wrappedDx) < abs(dx.x) ? wrappedDx : dx.x;
+	dy.x = abs(wrappedDy) < abs(dy.x) ? wrappedDy : dy.x;
+	const vec3 albedo = textureGrad(u_textures[nonuniformEXT(albedoIdx)], uv, dx, dy).rgb;
+	const vec3 normalTap = textureGrad(u_textures[nonuniformEXT(normalIdx)], uv, dx, dy).xyz;
+	vec3 tangentNormal;
+	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
+	{
+		const vec2 xy = normalTap.xy * 2.0 - 1.0;
+		tangentNormal = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+	}
+	else
+		tangentNormal = normalize(normalTap * 2.0 - 1.0);
+	// The bark's tangent frame from the screen derivatives of the position and the uv (Schueler 2013, the cotangent
+	// frame): the part's axis is not known here.
+	const vec3 dpx = dFdx(in_pos), dpy = dFdy(in_pos);
+	const vec3 perpY = cross(dpy, geoN), perpX = cross(geoN, dpx);
+	const vec3 T = perpY * dx.x + perpX * dy.x;
+	const vec3 B = perpY * dx.y + perpX * dy.y;
+	const float invMax = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
+	const vec3 barkN = normalize((T * tangentNormal.x + B * tangentNormal.y) * invMax + geoN * tangentNormal.z);
+
+	// END GRAIN: the bark's colour paled and greyed (bare, weathered wood), growth rings ~5 mm apart around the axis
+	// (faded out before they alias), the heartwood a little darker.
+	const float luma = dot(albedo, vec3(0.2126, 0.7152, 0.0722));
+	const float rings = (0.5 + 0.5 * sin(r * 1200.0)) * (1.0 - smoothstep(0.001, 0.0026, fwidth(r)));
+	const vec3 grain = min(mix(vec3(luma), albedo, 0.35) * 2.6, vec3(0.55)) * (0.94 - 0.12 * rings) * mix(0.75, 1.0, smoothstep(0.0, 0.1, r));
+
+	TerrainSample s;
+	s.albedo = f16vec3(mix(grain, albedo, bark));
+	s.normal = f16vec3(normalize(mix(geoN, barkN, bark)));
+	s.rough = float16_t(mix(0.8, 0.9, bark));
+	s.metal = float16_t(0.0);
+	s.ao = float16_t(1.0);
+	s.height = float16_t(0.5);
+	return s;
+}
+
 void main()
 {
 #ifdef STEREO
@@ -56,8 +119,10 @@ void main()
 	const float16_t one = float16_t(1.0);
 	const f16vec3 geoNh = f16vec3(geoN);
 	const float cavity = clamp(in_cavity, 0.0, 1.0);
-	// Before a splat texture set is registered (the terrain off, or its bake still running): plain grey stone.
-	TerrainSample surf = TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
+	// Before a splat texture set is registered (the terrain off, or its bake still running): plain grey stone. Dead wood
+	// is its own (no splat needed).
+	const bool wood = in_wood.w > 0.5;
+	TerrainSample surf = wood ? woodSurface(geoN) : TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
 	if (u_terrainLive_splatBase >= 0.0 && u_terrainLive_numRock >= 1.0)
 	{
@@ -94,8 +159,9 @@ void main()
 		cover = u_rock_coverAmount * max(cover, u_rock_cavityCover * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
 		const float16_t groundW = numGround > 0 ? max(float16_t(cover), contact * float16_t(u_rock_contactBlend)) : float16_t(0.0);
 
-		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below.
-		if (snowW < opaque && groundW < opaque)
+		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below. Dead wood
+		// keeps its wood.
+		if (!wood && snowW < opaque && groundW < opaque)
 		{
 			const ClimatePick r = pickClimate(climate, numGround, numRock, invS2);
 			const float uvScale = u_terrainTex_uvScaleRock * u_rock_uvScale;

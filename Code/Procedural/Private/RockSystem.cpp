@@ -16,6 +16,8 @@ import :RockSystem;
 import :RockType;
 import :RockGenerator;
 import :TreeGenerator; // treeHash
+import :TreeSpecies;
+import :TreeBarkTexture;
 import :TerrainSampler;
 
 namespace
@@ -41,13 +43,73 @@ namespace
 		data.build(geometry);
 		return renderer.createMesh(data, true);
 	}
+
+	constexpr uint32 BARK_TEXTURE_SIZE = 1024; // TreeSystem's generated textures
+
+	// A WOOD type's bark: its `Bark` species' texture pair - the files TreeSystem writes once to Assets/Local/Trees/Textures,
+	// else generated from Assets/Trees/<bark>.tree (not saved: TreeSystem owns those files) - x the type's tint, with the
+	// mip chains BC1 / BC5-compressed. A job: the IO, and seconds of work in Debug. False without a bark.
+	bool loadBark(const RockTypeDesc& desc, oc::vector<oc::vector<uint8>>& outAlbedo, oc::vector<oc::vector<uint8>>& outNormal,
+		uint32& outSize, glm::vec3& outMean)
+	{
+		oc::vector<uint8> albedo, normal;
+		uint32 w = 0, h = 0, nw = 0, nh = 0;
+		const bool loaded = ImageIO::readImageRgba8(oc::format("Local/Trees/Textures/{}_bark.png", desc.bark), w, h, albedo)
+			&& ImageIO::readImageRgba8(oc::format("Local/Trees/Textures/{}_bark_normal.png", desc.bark), nw, nh, normal)
+			&& w == h && nw == w && nh == h && w > 0 && (w & (w - 1)) == 0;
+		uint32 size = w;
+		if (!loaded)
+		{
+			TreeSpeciesDesc species;
+			oc::string error;
+			if (!loadTreeSpecies(oc::format("Trees/{}.tree", desc.bark), species, error))
+			{
+				Log::warning(oc::format("Rocks: '{}' - no bark '{}': {}", desc.name, desc.bark, error));
+				return false;
+			}
+			size = BARK_TEXTURE_SIZE;
+			generateBarkImages(species, size, albedo, normal);
+		}
+
+		// The tint (sRGB), and the far volume's colour: the tinted texture's LINEAR mean (it uploads as sRGB).
+		float toLinear[256];
+		for (int i = 0; i < 256; ++i)
+		{
+			const float c = (float)i / 255.0f;
+			toLinear[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+		}
+		glm::dvec3 sum(0.0);
+		for (size_t i = 0; i + 3 < albedo.size(); i += 4)
+			for (int c = 0; c < 3; ++c)
+			{
+				albedo[i + c] = (uint8)glm::min((float)albedo[i + c] * desc.color[c] + 0.5f, 255.0f);
+				sum[c] += toLinear[albedo[i + c]];
+			}
+		outMean = glm::vec3(sum / (double)glm::max(albedo.size() / 4, (size_t)1));
+
+		TreeBarkTexture bark;
+		buildBarkMips(albedo, normal, size, bark);
+		const auto encode = [size](const oc::vector<oc::vector<uint8>>& mips, TextureConvert::EBlockFormat format, oc::vector<oc::vector<uint8>>& out)
+		{
+			out.resize(mips.size());
+			for (uint32 k = 0; k < (uint32)mips.size(); ++k)
+			{
+				const uint32 s = glm::max(size >> k, 1u);
+				out[k].resize(TextureConvert::compressedSize(s, s, format));
+				TextureConvert::compressBlockRows(mips[k].data(), s, s, format, 0, (s + 3) / 4, out[k].data());
+			}
+		};
+		encode(bark.albedoMips, TextureConvert::EBlockFormat::BC1, outAlbedo);
+		encode(bark.normalMips, TextureConvert::EBlockFormat::BC5, outNormal);
+		outSize = size;
+		return true;
+	}
 }
 
 namespace Procedural
 {
-	Transform RockSystem::groundTransform(glm::vec2 p, const float ground[5], float scale, float height, float sink, float align, const glm::quat& yaw)
+	Transform RockSystem::groundTransform(glm::vec2 p, const float ground[5], float r, float scale, float height, float sink, float align, const glm::quat& yaw)
 	{
-		const float r = FOOTPRINT * scale;
 		const float h0 = ground[0], hx0 = ground[1], hx1 = ground[2], hz0 = ground[3], hz1 = ground[4];
 		const glm::vec3 normal = glm::normalize(glm::vec3(hx0 - hx1, 2.0f * r, hz0 - hz1));
 		// `align` of the turn from straight up to the normal, about their common perpendicular (cross(up, normal)).
@@ -78,6 +140,9 @@ namespace Procedural
 	void RockSystem::clearAll()
 	{
 		clearMeshes();
+		for (const Type& type : m_types)
+			if (type.woodMaterial != UINT16_MAX)
+				Globals::rendererVK.destroyTextureMaterial(type.woodMaterial);
 		m_types.clear();
 	}
 
@@ -216,6 +281,18 @@ namespace Procedural
 					m_genInFlight.fetch_sub(1, oc::memory_order_release);
 				}, { "Rock generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 			}
+			// A wood type's bark texture (writes only the type's bark fields; the variant jobs write their variants).
+			if (m_types[t].desc.surface == ERockSurface::Wood && m_types[t].woodMaterial == UINT16_MAX)
+			{
+				m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
+				Globals::jobSystem.submit([this, t]
+				{
+					Type& type = m_types[t];
+					if (!loadBark(type.desc, type.barkAlbedo, type.barkNormal, type.barkSize, type.barkMean))
+						type.barkSize = 0;
+					m_genInFlight.fetch_sub(1, oc::memory_order_release);
+				}, { "Rock bark", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
+			}
 		}
 		m_generating = true;
 	}
@@ -228,6 +305,20 @@ namespace Procedural
 		m_material = renderer.getOrCreateSolidColorMaterial(glm::vec3(0.42f, 0.40f, 0.38f));
 		for (Type& type : m_types)
 		{
+			// DEAD WOOD's material: the bark its job loaded. GI and the RT hits sample the same texture: wood-coloured
+			// bounce light.
+			if (type.woodMaterial == UINT16_MAX && type.barkSize > 0)
+			{
+				oc::vector<oc::span<uint8>> albedoMips, normalMips;
+				for (oc::vector<uint8>& level : type.barkAlbedo)
+					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
+				for (oc::vector<uint8>& level : type.barkNormal)
+					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
+				type.woodMaterial = renderer.createTextureMaterial(type.barkSize, type.barkSize, albedoMips, 0.0f,
+					oc::format("Rocks/{}", type.desc.name).c_str(), &normalMips, 0u, Renderer::ETextureEncoding::BC1, Renderer::ETextureEncoding::BC5);
+				type.barkAlbedo = {};
+				type.barkNormal = {};
+			}
 			size_t triangles[ROCK_MAX_LODS] = {};
 			for (Variant& variant : type.variants)
 			{
@@ -260,6 +351,10 @@ namespace Procedural
 			world.scale = type.desc.scale;
 			world.sink = type.desc.sink;
 			world.align = type.desc.align;
+			world.footprint = rockFootprint(type.desc).flat;
+			world.wood = type.woodMaterial != UINT16_MAX;
+			world.material = world.wood ? type.woodMaterial : m_material;
+			world.woodAlbedo = type.barkMean; // the far volume's colour
 			for (const Variant& variant : type.variants)
 			{
 				if (!variant.lods[0].isValid())
@@ -297,7 +392,7 @@ namespace Procedural
 		const FileSystem::AllowMainThreadIO groundIo; // explicit user action: enable / respawn
 		auto groundAt = [&](glm::vec2 p) { return maps ? maps->sampleHeight(p.x, p.y) : 0.0f; };
 
-		// LitRock does not read the material (the instance still needs one).
+		// LitRock reads only a wood type's material (its bark); a rock's instance still needs one.
 		const RendererVKLayout::EPipelineIndex pipeline = m_settings.previewShading == 0
 			? RendererVKLayout::EPipelineIndex::LitRock : RendererVKLayout::EPipelineIndex::LitOpaque;
 		float rowOffset = 0.0f;
@@ -316,12 +411,13 @@ namespace Procedural
 				const float scale = glm::mix(type.desc.scale.x, type.desc.scale.y, treeHash01(treeHash(seed, 1u)));
 				const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 2u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
 				const glm::vec2 p = origin + fwd * rowOffset + right * (cell * ((float)v + 0.5f) - rowWidth * 0.5f);
-				const float r = FOOTPRINT * scale;
+				const float r = FOOTPRINT * scale * rockFootprint(type.desc).flat;
 				const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
 					groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
 				// Level 0: the cull redirects the instance to its LOD through the chain.
-				m_nodes.push_back(renderer.spawnMeshNode(variant.lods[0], m_material, pipeline,
-					groundTransform(p, ground, scale, variant.data.height, type.desc.sink, type.desc.align, yaw)));
+				const bool woodColours = type.woodMaterial != UINT16_MAX && pipeline == RendererVKLayout::EPipelineIndex::LitRock;
+				m_nodes.push_back(renderer.spawnMeshNode(variant.lods[0], woodColours ? type.woodMaterial : m_material, pipeline,
+					groundTransform(p, ground, r, scale, variant.data.height, type.desc.sink, type.desc.align, yaw)));
 			}
 			rowOffset += cell * 0.5f;
 		}

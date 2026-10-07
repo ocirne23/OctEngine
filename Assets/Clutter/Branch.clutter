@@ -1,0 +1,20 @@
+# Fallen branches, up to ~1.6 m: under the trees, most near the trunks they fell from.
+ClutterType Branch
+	Kind Branch
+	Seed 37
+	Variants 6
+	Scale 0.6 1.6
+	Range 70
+	Sink 0.2
+	Align 1
+	Color 0.44 0.38 0.31
+	Color2 0.66 0.55 0.40
+	Roughness 0.9
+	Thickness 0.045
+	Twigs 3
+	Bend 18
+	Placement
+		Density 0.05
+		Canopy 0 1
+		Trunk 1 3
+		Slope 0.8

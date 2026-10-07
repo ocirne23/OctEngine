@@ -1,0 +1,32 @@
+# A snag: a dead tree still standing - greyed, its top broken off, a few branch stubs left. Format:
+# Code/Procedural/CONTEXT.md, "Rocks".
+RockType Snag
+	Seed 47
+	Scale 5 14
+	Variants 8
+	Sink 0.01
+	Align 0
+	Shape Trunk
+	Aspect 0.06 1 0.06
+	AspectVar 0.25 0.1 0.25
+	Profile 1 0.78 0.62 0.48 0.32
+	ProfileVar 0.1
+	Break 3.5
+	Roots 4 1.8
+	Stubs 8 0.04
+	Hollow 0.15 0.5
+	Erosion 0.002
+	Warp 0.01 1.5
+	Noise 0.0015 30 3
+	NoiseStretch 6
+	Surface Wood
+	Bark Pine
+	Color 0.85 0.88 0.92
+	Lod 2500
+	Resolution 8
+	# In forests, rare, in dead patches.
+	Placement
+		Density 1.5
+		Forest 0 1
+		Slope 0 0 0.4 0.7
+		Cluster 200 0.3

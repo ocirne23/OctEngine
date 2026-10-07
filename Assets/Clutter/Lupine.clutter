@@ -1,0 +1,21 @@
+# Lupines: tall spikes of blue-violet florets, in big stands on cool, open ground.
+ClutterType Lupine
+	Kind Flower
+	Seed 83
+	Scale 0.96 1.56
+	Range 90
+	Color 0.45 0.35 0.85
+	Color2 0.90 0.90 0.95
+	Head Spike
+	Petals 28
+	PetalWidth 0.6
+	Stem 0.7
+	HeadSize 0.022
+	Placement
+		Density 1.2
+		Temperature 0 16
+		Precipitation 500 1600
+		Grass 0 1
+		Canopy 1 0.2
+		Cluster 14 0.2
+		Slope 0.7

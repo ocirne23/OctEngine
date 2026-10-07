@@ -43,6 +43,7 @@ public:
         vk::ImageView terrainView; // the baked terrain-data cascades (climate, water level)
         vk::Sampler terrainSampler;
         Buffer* vertexBuffer = nullptr; // the vertex mega-buffer (the terrain chunks' vertices)
+        Buffer* clutterFrame = nullptr; // that frame slot's ClutterFrameGpu (the forest floor map: "Canopy thinning")
     };
     // The cull: count reset, dispatch, and the barrier to the draw (indirect + vertex attribute + index reads).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
@@ -53,8 +54,9 @@ public:
     // Points the terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image.
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 
-    // This slot's ground table (present, after the slot's fence).
+    // This slot's ground table (present, after the slot's fence). The clutter cull reads it too (frameBuffer).
     RendererVKLayout::GrassFrameGpu& frame(uint32 frameIdx) { return *m_mappedFrames[frameIdx]; }
+    Buffer& frameBuffer(uint32 frameIdx) { return m_frames[frameIdx]; }
     void flushFrame(uint32 frameIdx);
 
     struct Draw

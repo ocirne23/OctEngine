@@ -49,7 +49,7 @@ void Settings::registerAll()
 
     registerTerrain(s.terrain);
     registerTerrainCollider(s.terrainCollider);
-    registerScatter(s.scatter);
+    registerClutter(s.clutter);
     registerTrees(s.trees);
     registerTreeWorld(s.treeWorld);
     registerRocks(s.rockSystem);

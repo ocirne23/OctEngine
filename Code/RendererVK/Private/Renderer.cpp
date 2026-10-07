@@ -186,6 +186,7 @@ void Renderer::initPipelines()
 
     m_terrainWetnessPipeline.initialize();
     m_grassPipeline.initialize((uint32)m_grassParams.bladesPerPatch);
+    m_clutterPipeline.initialize(m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
     m_cloudPipeline.initialize(renderExt.width, renderExt.height, sceneRenderPass, m_sceneViewCount);
@@ -227,6 +228,7 @@ void Renderer::initPipelines()
         perFrame.shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES, true);
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
     m_grassPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
+    m_clutterPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
     // The weather volume's top-down rain occlusion map: a ray-query pass over the TLAS (no cull, no instance buffers),
     // allocated only while a rain / snow volume asks for it (present). Here: the sampler + 1x1 placeholders.
     m_rainOcclusionPipeline.initialize();
@@ -256,6 +258,7 @@ void Renderer::initPerFrameResources()
         perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.oceanSim");
         perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.terrainWetness");
         perFrame.grassCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.grassCull");
+        perFrame.clutterCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.clutterCull");
         perFrame.grassNearShadowCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.grassNearShadow");
         perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.lightGrid");
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.imgui");
@@ -402,6 +405,7 @@ void Renderer::reloadShaders()
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
     m_grassPipeline.reloadShaders();
+    m_clutterPipeline.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_cloudPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_treeVolume.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -903,6 +907,7 @@ void Renderer::present()
     fillTreeCullUbo(); // the same: renderTreeInstanceSet claims its range after beginFrame
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_u.present.size(), m_ubo.data() + m_u.present.begin(), m_u.present.begin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
+    uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the

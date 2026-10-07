@@ -203,6 +203,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Cover", "Bare fraction", &s.bareFraction, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Grow band", &s.growBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Cover", "Size by cover", &s.sizeByCover, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Cover", "Canopy thinning", &s.canopyThinning, 0.0f, 1.0f, 0.01f);
     Tweak::color3("Grass/Look", "Root colour", &s.rootColor);
     Tweak::color3("Grass/Look", "Tip colour", &s.tipColor);
     Tweak::color3("Grass/Look", "Dry colour", &s.dryColor);

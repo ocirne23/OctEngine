@@ -1,0 +1,24 @@
+# Chanterelles: small yellow funnels in groups, on mossy, damp forest floor.
+ClutterType Chanterelle
+	Kind Mushroom
+	Seed 47
+	Variants 5
+	Scale 0.07 0.15
+	Range 30
+	Sink 0.05
+	Align 0.6
+	Color 0.93 0.66 0.16
+	Color2 0.95 0.72 0.25
+	Roughness 0.55
+	Cap Funnel
+	CapSize 0.45 0.35
+	StemRadius 0.13
+	Group 4
+	Placement
+		Density 0.05
+		Temperature 0 22
+		Precipitation 800 2500
+		Canopy 0 1
+		Wet 0.3 1
+		Cluster 5 0.25
+		Slope 0.8

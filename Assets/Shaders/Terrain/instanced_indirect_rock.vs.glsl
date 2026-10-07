@@ -9,6 +9,9 @@
 // takes its material from the climate and projects it in world space, so this VS passes only the world position, the
 // geometric normal (no tangent, no uv - as the terrain's) and the vertex's baked cavity, and evaluates the
 // terrain-data fields here, per vertex: the ground height under the vertex (the contact band) and the climate.
+// DEAD WOOD (Procedural `Surface Wood`): the mesh's v is 1 + the vertex's bark cover and its TANGENT holds the wood
+// coordinates (Procedural RockMesh) - both passed on, across in metres - with the instance's material (the bark
+// texture).
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
@@ -34,14 +37,17 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-layout (location = 0) in vec4 in_posU;   // xyz = position, w = uv.x: a rock has no uv - the u channel is its CAVITY
-layout (location = 1) in vec3 in_normal;
+layout (location = 0) in vec4 in_posU;    // xyz = position, w = uv.x: a rock has no uv - the u channel is its CAVITY
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y: 0 a rock, 1 + the bark cover dead wood
+layout (location = 2) in vec4 in_tangent; // dead wood: its wood coordinates - x along (base circumferences), yz across (nominal units)
 layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_rockFields; // x = ground height under the vertex (world Y), y = temperature C, z = humidity, w = water level
 layout (location = 3) out float out_cavity;    // 1 = open, 0 = deep in a crevice (Procedural RockGenerator, from the shape's field)
+layout (location = 4) out vec4 out_wood;       // x = along (base circumferences), yz = across (m), w = 0 a rock, 1 + the bark cover dead wood
+layout (location = 5) flat out uint out_material;
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -55,9 +61,11 @@ void main()
 #endif
     const InMeshInstancesData inst = in_instances[inst_idx];
 
-    out_normal = quat_transform(in_normal, inst.quat);
+    out_normal = quat_transform(in_normalV.xyz, inst.quat);
     out_pos    = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
     out_cavity = in_posU.w;
+    out_wood = in_normalV.w > 0.5 ? vec4(in_tangent.x, in_tangent.yz * inst.posScale.w, in_normalV.w) : vec4(0.0);
+    out_material = inst.meshIdxMaterialIdx >> 16;
 
     // The baked terrain fields PER VERTEX, interpolated - the terrain VS's reasoning: each is band-limited far
     // below a rock's vertex spacing, and temperature = baseline + lapse x height is linear in height (the top of a

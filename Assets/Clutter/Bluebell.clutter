@@ -1,0 +1,22 @@
+# Bluebells: nodding blue bells - a WOODLAND flower, carpeting the floor under broadleaf trees.
+ClutterType Bluebell
+	Kind Flower
+	Seed 97
+	Scale 0.96 1.44
+	Range 60
+	Color 0.30 0.35 0.85
+	Color2 0.85 0.85 0.95
+	Head Bell
+	Petals 6
+	PetalWidth 0.8
+	Stem 0.3
+	HeadSize 0.018
+	Placement
+		Density 8
+		Temperature 4 16
+		Precipitation 800 2200
+		Grass 0 1
+		Canopy 0.05 1.5
+		Trunk 1 0.5
+		Cluster 10 0.4
+		Slope 0.7

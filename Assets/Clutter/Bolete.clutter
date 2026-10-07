@@ -1,0 +1,25 @@
+# Brown-capped boletes in pairs: damp, shaded forest floor, near the trunks.
+ClutterType Bolete
+	Kind Mushroom
+	Seed 41
+	Variants 5
+	Scale 0.12 0.28
+	Range 35
+	Sink 0.05
+	Align 0.5
+	Color 0.45 0.28 0.15
+	Color2 0.86 0.80 0.68
+	Roughness 0.6
+	Cap Dome
+	CapSize 0.5 0.35
+	StemRadius 0.14
+	Group 2
+	Placement
+		Density 0.06
+		Temperature 2 20
+		Precipitation 700 2500
+		Canopy 0.05 1
+		Trunk 1 2.5
+		Wet 0.2 1
+		Cluster 6 0.35
+		Slope 0.8

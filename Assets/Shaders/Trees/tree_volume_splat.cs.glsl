@@ -26,6 +26,7 @@
 // A SOLID type (albedo.w 0: Procedural's world ROCKS, R5) stores OCCUPANCY (0..1): its extinction is "Far rock
 // extinction" at any size (a crown's thins with its scale - its leaves spread over a larger volume - a rock's does not).
 // It writes no colour: it adds its share to the column's ROCK SUM, and the resolve mixes the climate's bedrock in by it.
+// albedo.w 0.5: a solid in its OWN colour (dead wood) - the solid's extinction, the tree's colour write.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -274,12 +275,12 @@ void splatPiece(VolumePiece piece)
         const vec3 f = (clamp(local, type.boxMin, type.boxMax) - type.boxMin) / boxSize;
         // Extinction (1/m) in TREE space -> world: a scaled tree's leaves are spread over a scaled volume. A solid's
         // occupancy x its extinction, at any size.
-        const bool solid = type.albedo.w < 0.5;
+        const bool solid = type.albedo.w < 0.75;
         const float extinction = sampleType(type, f, mip) * cover * (solid ? pc_rockExtinction : 1.0 / scale);
         if (extinction <= 1e-4)
             continue;
         imageAtomicAdd(u_accum, tvAccumTexel(texel, uint(s)), tvAccumAmount(extinction, uint(s)));
-        if (solid)
+        if (type.albedo.w < 0.25)
             imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu)); // the same units
         else
             imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));

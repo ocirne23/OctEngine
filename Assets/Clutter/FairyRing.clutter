@@ -1,0 +1,25 @@
+# Fairy ring champignons: small tan caps standing in RINGS in the grass (a few metres across, here and there).
+ClutterType FairyRing
+	Kind Mushroom
+	Seed 59
+	Variants 4
+	Scale 0.06 0.12
+	Range 35
+	Sink 0.04
+	Align 0.5
+	Color 0.76 0.60 0.42
+	Color2 0.88 0.80 0.66
+	Roughness 0.55
+	Cap Dome
+	CapSize 0.42 0.2
+	StemRadius 0.06
+	Group 1
+	Placement
+		Density 3
+		Temperature 2 20
+		Precipitation 500 2000
+		Grass 0 1
+		Canopy 1 0.2
+		# radius, width (m), one ring per cell (m) with this chance
+		Ring 3 0.3 40 0.3
+		Slope 0.4
