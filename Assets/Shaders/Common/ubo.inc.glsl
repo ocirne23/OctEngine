@@ -11,7 +11,7 @@
 // root values of UboRoot.ixx, then the lockable values of Renderer::registerUboFields) and served by the shader
 // includer; a copy for reading is written to Assets/Local/Shaders/ubo.generated.glsl. The ROOT members (u_views_*,
 // u_sunDirection, u_screenSize, u_sceneFocus, ...) are what nearly every pass reads; each subject has its own FLAT
-// fields (u_fog_density, u_ocean_amplitude, ...) next to LIVE ones (u_fogLive_waveBand, ...). While every tweak a field
+// fields (u_fog_density, u_ocean_amplitude, ...) next to LIVE ones (u_fog_waveBand, ...). While every tweak a field
 // comes from is LOCKED, that field is a const here: read it exactly like the block member (UBO_LIVE_<name> reads the
 // block member in both modes).
 #include "ubo.generated.glsl"

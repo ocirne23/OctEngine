@@ -596,6 +596,11 @@ namespace Procedural
 
 		oc::vector<FileSystem::DirEntry> existing;
 		FileSystem::listDirectory(TREE_TEXTURE_DIR, existing, true);
+		// The cache key's source: the species file's text (every piece's geometry comes from it and the generator code,
+		// which BAKE_VERSION covers).
+		uint32 speciesHash = 2166136261u;
+		for (const char c : FileSystem::readFileStr(species.desc.path, true))
+			speciesHash = (speciesHash ^ (uint8)c) * 16777619u;
 
 		// Modules, trunks and the baked whole trees alike. A trunk's / tree's +Y is world up, so its "top" card
 		// (normal +Z) stands vertical too: two crossed vertical cards through the trunk axis. A whole tree also gets
@@ -624,7 +629,7 @@ namespace Procedural
 			const oc::string legacyPrefix = oc::format("{}_{}billboard{}_", name, PIECE_KINDS[set], i);
 			const float bend = species.desc.billboardNormalBend;
 			const uint32 settingsHash = treeHash(0xB1B0A2D5u ^ numViews, (uint32)std::round(bend * 1000.0f));
-			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(piece, 2u, size) ^ settingsHash);
+			const oc::string stem = oc::format("{}{:08x}", prefix, treeBakeHash(treeHash(speciesHash, treeHash(set, (uint32)i)), 2u, size) ^ settingsHash);
 			const oc::string albedoPath = oc::format("{}/{}.png", TREE_TEXTURE_DIR, stem);
 			const oc::string normalPath = oc::format("{}/{}_normal.png", TREE_TEXTURE_DIR, stem);
 

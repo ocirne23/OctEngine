@@ -33,9 +33,9 @@ layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)
 {
-    const int numGround = int(u_terrainLive_numGround);
-    const int numRock = min(int(u_terrainLive_numRock), ROCK_TEXTURES);
-    if (u_terrainLive_splatBase < 0.0 || numRock <= 0)
+    const int numGround = int(u_terrain_numGround);
+    const int numRock = min(int(u_terrain_numRock), ROCK_TEXTURES);
+    if (u_terrain_splatBase < 0.0 || numRock <= 0)
         return vec3(0.3, 0.29, 0.27); // no texture set
     vec2 climate = vec2(0.5);
     if (terrainHeightMapPresent())
@@ -48,7 +48,7 @@ vec3 bedrockAlbedo(vec2 xz, float y)
     float weight = 0.0;
     for (int i = 0; i < numRock; ++i)
     {
-        const vec4 box = u_terrainLive_splatClimate[numGround + i];
+        const vec4 box = u_terrain_splatClimate[numGround + i];
         const vec2 d = max(max(box.xz - climate, climate - box.yw), vec2(0.0));
         const float w = exp(-dot(d, d) * invS2);
         sum += w * textureLod(u_rockTextures[i], vec2(0.5), 20.0).rgb; // the smallest mip: the mean

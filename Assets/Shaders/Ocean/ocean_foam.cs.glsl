@@ -7,7 +7,7 @@
 // Jacobian folding + Longuet-Higgins downward crest acceleration), evaluated at the texel's REST position
 // with every cascade mip-filtered to this level's texel footprint.
 //
-// Last frame's state is read from the ping/pong image at xy + shift (u_oceanLive_foamLevels[l].zw: whole
+// Last frame's state is read from the ping/pong image at xy + shift (u_ocean_foamLevels[l].zw: whole
 // texels the level's origin moved since last frame as the camera travelled); texels that scrolled in
 // start from the next coarser level (see main). The result is written to the ping/pong layer AND to the maps' foam layer, whose mip chain
 // the blit then builds with everything else.
@@ -37,7 +37,7 @@ float loadPrev(int level, ivec2 xy)
 float samplePrev(int level, vec2 q)
 {
     const float texel = oceanFoamTexel(level);
-    const vec2 prevOrigin = u_oceanLive_foamLevels[level].xy - u_oceanLive_foamLevels[level].zw * texel;
+    const vec2 prevOrigin = u_ocean_foamLevels[level].xy - u_ocean_foamLevels[level].zw * texel;
     const vec2 st = (q - prevOrigin) / texel - 0.5;
     const ivec2 i = ivec2(floor(st));
     const vec2 f = st - vec2(i);
@@ -54,7 +54,7 @@ void main()
     const float texel = oceanFoamTexel(level);
 
     // This texel's rest position: its drifted coordinate plus the drift.
-    const vec2 restXZ = u_oceanLive_foamLevels[level].xy + (vec2(xy) + 0.5) * texel + u_oceanLive_foamDrift;
+    const vec2 restXZ = u_ocean_foamLevels[level].xy + (vec2(xy) + 0.5) * texel + u_ocean_foamDrift;
 
     float sxx = 0.0, szz = 0.0, sxz = 0.0, accel = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
@@ -77,12 +77,12 @@ void main()
     // covered this water for a while, so the new strip carries the right amount (softer, a 4x4 average) and
     // no emptier band trails the moving camera. The outermost level has nothing coarser: it starts empty
     // (and fades out anyway). Reading the other slot of any level is safe: this dispatch writes only its own.
-    const ivec2 prevXY = xy + ivec2(u_oceanLive_foamLevels[level].zw);
+    const ivec2 prevXY = xy + ivec2(u_ocean_foamLevels[level].zw);
     float prev;
     if (all(greaterThanEqual(prevXY, ivec2(0))) && all(lessThan(prevXY, ivec2(OCEAN_FFT_SIZE))))
         prev = loadPrev(level, prevXY);
     else if (level + 1 < OCEAN_FOAM_LEVELS)
-        prev = samplePrev(level + 1, u_oceanLive_foamLevels[level].xy + (vec2(xy) + 0.5) * texel);
+        prev = samplePrev(level + 1, u_ocean_foamLevels[level].xy + (vec2(xy) + 0.5) * texel);
     else
         prev = 0.0;
 

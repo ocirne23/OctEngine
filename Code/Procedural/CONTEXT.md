@@ -261,7 +261,7 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 "Terrain*" tweaks. Render-only chunk streaming.
 
 * A bounded LOD ring around the camera: `ringRadius` 96 chunks (24 km), `chunkSize` 256, `lod0Res` 128, `maxLod`
-  4, `lodStep` 1.2 chunks for the LOD0 band (each next band twice as wide, geometric), `fullResDist` 1.2,
+  6, `lodStep` 1.1 chunks for the LOD0 band (each next band twice as wide, geometric), `fullResDist` 0.7,
   `skirtDepth` 5, `maxUploadsPerFrame` 16. (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32, `lodStep` /
   `fullResDist` 0.3 - the same 2 m LOD0 texel and LOD band metres; the ring stays below the old 32 km because 128
   chunks would be ~51 k chunk meshes against the 16-bit mesh index.)
@@ -350,8 +350,8 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   request the ring moved away from is stale like any other and dropped by the pump.
 
 * **The mesh upload is a job too** (`"terrainUpload"`, Normal, `m_uploadCounter`).
-  `Renderer::createMesh` copies the chunk into the staging ring. A LOD0 chunk is ~15 MB, a wrap of the
-  100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
+  `Renderer::createMesh` copies the chunk into the staging ring. A LOD0 chunk is ~1.3 MB at the current
+  128-quad LOD0 (~19 MB at the old 512; see "Chunk memory" below), a wrap of the 100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
   uploads on main were ~45 ms. `update` only PICKS the batch into `m_uploads` (cap "Uploads/frame"
   AND "Upload MB/frame", 48 MB default; the first chunk always goes; the picks stay in `m_pending`).
   **main.cpp kicks it right AFTER `present`** (`kickUploads`), so it runs through the frame-pacing
@@ -370,6 +370,27 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the
   upload pick + adopt, and the candidate check + retire (the retire releases GPU residency into the
   renderer and unregisters the culling entry; the candidate walk is the `"terrainEvictScan"` job).
+
+## Chunk memory
+
+A chunk at LOD `l` is a `res = lod0Res >> l` quad grid: `(res+1)²` surface vertices + `8·res` skirt vertices (two per
+perimeter edge), `6·res²` + `48·res` indices (the skirt is double-sided). 48-byte `MeshVertex`, 4-byte index. At the
+defaults (camera mid-chunk, ring 96, `lodStep` 1.1, `fullResDist` 0.7):
+
+| LOD | res | chunks | KB / chunk | MB total |
+|---|---|---|---|---|
+| 0 | 128 | 25 | 1236 | 32 |
+| 1 | 64 | 56 | 330 | 19 |
+| 2 | 32 | 208 | 93 | 20 |
+| 3 | 16 | 936 | 29 | 27 |
+| 4 | 8 | 3816 | 10 | 38 |
+| 5 | 4 | 14840 | 3.8 | 58 |
+| 6 | 2 | 17368 | 1.6 | 29 |
+
+~37 k chunks, ~3.2 M vertices, ~220 MB of mega-buffer (plus the briefly doubled hand-over pairs). **The far LODs are
+mostly skirt**: at LOD 6 a chunk has 9 surface vertices and 16 skirt vertices, at LOD 5 25 and 32. A chunk whose wanted
+LOD changes is replaced, and the old one's ranges free at once (`retireResident` -> `RenderMesh::destroy`), so
+residency follows the camera; the mega-buffers never shrink - the freed ranges are holes for later uploads.
 
 ## It owns THE world datum
 
@@ -553,7 +574,7 @@ disc every frame.**
     crest and the largest RAW horizontal displacement. **Raw on purpose**: the maps store Dx/Dz before
     the choppiness lambda, so the live tweak scales the padding with no re-scan.
   * The CPU side re-registers `baseRadius + extent` per frame; the GPU per-instance cull gets the same
-    number through `u_oceanLive_displacementExtent` and adds it for `PIPELINE_IDX_OCEAN` instances
+    number through `u_ocean_displacementExtent` and adds it for `PIPELINE_IDX_OCEAN` instances
     (`instanced_indirect.cs.glsl`) — **frustum test only**, so LOD selection still sees real bounds.
 * **Sector borders duplicate identical vertices, so splitting cannot open seams.**
 * **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled Ocean pipeline
@@ -742,7 +763,7 @@ rotation — `pushOceanParams` world-scales only "Detail fade (m)".
     open-sea fold field.
   * Not shore-weighted: injection is open-ocean math, so the stuck foam and the milk can show in the calm
     shallows where the waves were damped.
-* **`OceanParams::cameraUnderwater`** (`u_oceanLive_cameraUnderwater`) — set each frame in `pushOceanParams` from
+* **`OceanParams::cameraUnderwater`** (`u_ocean_cameraUnderwater`) — set each frame in `pushOceanParams` from
   `sampleWaterHeight` at the camera. `ocean.fs.glsl` takes its UNDERSIDE path only while it is set: a back
   face seen from above is a FOLD (high "Choppiness" overturns the sheet), and before this gate it shaded as
   the underside, with half-bright "foam from below" (dark grey sheets on the curls). It now shades as the top side.
@@ -922,7 +943,11 @@ world up, so its billboard's "top" card stands vertical: two crossed vertical tr
 `Trees/Far distance scale` (`Trees/Force far` shows them all). Two modes, `Billboards` and `None`; changing the mode
 reloads. (The octahedral-impostor fallback mode was removed 2026-10-04.) The bakes live in `TreeImpostor.cpp` (the
 file name is historical): a small software rasterizer (2×2 supersampled, back faces culled, leaves alpha-tested);
-`treeBakeHash` (geometry + `BAKE_VERSION` + settings) names the cache files.
+`treeBakeHash` names the cache files by the bake's INPUTS: the species file's text, the piece's set and index,
+`BAKE_VERSION` and the settings. **Not by the geometry** (it was, until 2026-10-07): the floats differ in their last
+bits between Debug and the optimized builds (`/fp:fast`), so a position on a millimetre rounding edge renamed the file
+at every config switch - each build deleted the other's cache and re-baked it. **A generator change that moves geometry
+must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenerate textures`.
 
 * **Billboards** (default): two crossed cards along the module axis from its LOD-0 box — a vertical card
   (normal +X) and a horizontal card (normal +Z = world-up after the composite), their views stacked as strips

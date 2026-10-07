@@ -274,10 +274,11 @@ void Settings::registerClouds(CloudParams& s)
 {
     CloudParams* p = &s;
     Tweak::boolean("Sky/Clouds", "Enabled", &s.enabled);
-    Tweak::floatVar("Sky/Clouds", "Bottom (m)", &s.bottom, 0.0f, 12000.0f, 10.0f, [p]() { p->top = oc::max(p->top, p->bottom + 100.0f); });
-    Tweak::floatVar("Sky/Clouds", "Top (m)", &s.top, 100.0f, 10000.0f, 10.0f, [p]() { p->bottom = oc::min(p->bottom, p->top - 100.0f); });
-    Tweak::floatVar("Sky/Clouds", "Coverage", &s.coverage, 0.0f, 1.0f);
-    Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Clouds", "Bottom (m)", &s.bottom, 0.0f, 12000.0f, 10.0f, [p]() { p->top = oc::max(p->top, p->bottom + 100.0f); }, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds", "Top (m)", &s.top, 100.0f, 10000.0f, 10.0f, [p]() { p->bottom = oc::min(p->bottom, p->top - 100.0f); }, ETweakFlags::Runtime);
+    // Live under the "Sky/Clouds" lock: the values it feeds (upper coverage, the shadow's mean) are never baked.
+    Tweak::floatVar("Sky/Clouds", "Coverage", &s.coverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &s.densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds", "Wind speed scale", &s.windSpeedScale, 0.0f, 100.0f, 0.1f); // x "Sky/Wind/Speed"

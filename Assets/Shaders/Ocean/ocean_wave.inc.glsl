@@ -29,13 +29,13 @@ layout (binding = OCEAN_MAPS_BINDING) uniform sampler2DArray u_oceanMaps;
 // horizon band exists to draw - so blend to it rather than trusting the clamp.
 vec2 oceanSampleShoreData(vec2 worldXZ)
 {
-    float height = u_oceanLive_seaLevel - u_ocean_depth; // open-ocean bottom: sea level - depth D
-    float level = u_oceanLive_seaLevel;                  // sea level
+    float height = u_ocean_seaLevel - u_ocean_depth; // open-ocean bottom: sea level - depth D
+    float level = u_ocean_seaLevel;                  // sea level
 #ifdef TERRAIN_HEIGHT_BINDING
     if (terrainHeightMapPresent())
     {
-        const float invOuter = u_terrainLive_mapInvFarSize > 0.0 ? u_terrainLive_mapInvFarSize : u_terrainLive_mapInvNearSize; // far cascade, else near
-        const vec2 uv = abs((worldXZ - u_terrainLive_mapCentre) * invOuter); // 0.5 = the map's edge
+        const float invOuter = u_terrain_mapInvFarSize > 0.0 ? u_terrain_mapInvFarSize : u_terrain_mapInvNearSize; // far cascade, else near
+        const vec2 uv = abs((worldXZ - u_terrain_mapCentre) * invOuter); // 0.5 = the map's edge
         const float w = 1.0 - smoothstep(0.40, 0.49, max(uv.x, uv.y));
         if (w > 0.0)
         {
@@ -58,7 +58,7 @@ float oceanSampleShoreDepth(vec2 worldXZ)
 // Per-texel wave-travel rotation. DISABLED (identity): rotating the sample domain pivots on the world
 // origin, so the sea creases along every 8-bit angle contour - the baked flow steers the SIMULATION
 // wind instead (OceanGenerator::steeredWindAngle). If ever revived: every wave-sampling pass must
-// apply the identical rotation, and the field TRAVELS AGAINST u_oceanLive_windDirection.
+// apply the identical rotation, and the field TRAVELS AGAINST u_ocean_windDirection.
 vec2 oceanFlowRotation(vec2 worldXZ)
 {
     return vec2(1.0, 0.0);
@@ -82,23 +82,23 @@ bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
         return false;
     const float reach = 3.0 * cellSize; // after the CDLOD morph no co-triangle vertex lies further away
 
-    // Never cull past the streamed terrain mesh (u_terrainLive_meshRadius): the cull is only invisible while
+    // Never cull past the streamed terrain mesh (u_terrain_meshRadius): the cull is only invisible while
     // a rendered mesh stands above the water - the clamp-to-edge-extended bakes report "land" forever.
-    if (distance(worldXZ, u_viewPos.xz) + reach >= u_terrainLive_meshRadius)
+    if (distance(worldXZ, u_viewPos.xz) + reach >= u_terrain_meshRadius)
         return false;
 
     float err = -1.0; // burial slack on top of margin + swash reach
 #ifdef TERRAIN_HEIGHT_BINDING
     if (terrainHeightMapPresent())
     {
-        const vec2 rel = worldXZ - u_terrainLive_mapCentre;
+        const vec2 rel = worldXZ - u_terrain_mapCentre;
         const float cheb = max(abs(rel.x), abs(rel.y));
-        const float invNear = u_terrainLive_mapInvNearSize;
+        const float invNear = u_terrain_mapInvNearSize;
         if ((cheb + reach) * invNear < 0.42) // full-weight near region (blend starts at 0.42)
             err = reach + 0.5 / (float(textureSize(u_terrainHeight, 0).x) * invNear);
         else
         {
-            const float invFar = u_terrainLive_mapInvFarSize;
+            const float invFar = u_terrain_mapInvFarSize;
             if (u_ocean_farCullError <= 0.0 || invFar <= 0.0 || (cheb + reach) * invFar >= 0.48)
                 return false; // far cull off / footprint reaches the far map's clamp-to-edge border
             err = u_ocean_farCullError;
@@ -108,8 +108,8 @@ bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
     if (err < 0.0)
         return false; // no baked terrain data: open-ocean fallback, always water
 
-    // Swash reach (u_oceanLive_swashReach) keeps the wet band above the waterline alive.
-    return shoreHW.y - shoreHW.x < -(margin + u_oceanLive_swashReach + err);
+    // Swash reach (u_ocean_swashReach) keeps the wet band above the waterline alive.
+    return shoreHW.y - shoreHW.x < -(margin + u_ocean_swashReach + err);
 }
 
 // The water depth the WAVES use: the baked depth, floored at "Ocean/Shore/Horizon depth" once past
@@ -152,7 +152,7 @@ float oceanVertexLod(float cellSize, float morph, float patchSize)
 // scale" x the mid cascade's patch size. The band across which open water becomes the shore.
 float oceanSwashFadeIn(float depth)
 {
-    const float reach = max(u_oceanLive_swashReach, 0.01);
+    const float reach = max(u_ocean_swashReach, 0.01);
     return 1.0 - smoothstep(0.0, max(2.0 * reach, u_ocean_shoalScale * u_ocean_cascadeSizes.y), depth);
 }
 
@@ -164,8 +164,8 @@ float oceanSwashBase(float depth, float waterLevel)
     const float amp = u_ocean_swashAmp;
     if (amp <= 0.0)
         return 0.0;
-    const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanLive_seaLevel));
-    const float reach = max(u_oceanLive_swashReach, 0.01);
+    const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_ocean_seaLevel));
+    const float reach = max(u_ocean_swashReach, 0.01);
     const float landFade = clamp(1.0 + min(depth, 0.0) / reach, 0.0, 1.0);
     return amp * seaFade * landFade;
 }
@@ -232,7 +232,7 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
     vec3 disp = vec3(0.0);
     float sw = 0.0;
     // Buried deeper than the swash band: the surface weight is zero - skip the fetches (bit-identical).
-    if (depth > -u_oceanLive_swashReach)
+    if (depth > -u_ocean_swashReach)
     {
         const vec2 fr = oceanFlowRotation(worldXZ);
         const vec2 sampleXZ = oceanFlowSamplePos(worldXZ, fr);
@@ -258,7 +258,7 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
         // ~the swash reach (the raw offset is unbounded and would shear triangles into streaks).
         const float flowFade = smoothstep(0.0, 0.35, rawY * sw + depth);
         vec2 flowOff = rawXZ * (chop * u_ocean_swashFlow * sw * flowFade);
-        const float flowCap = clamp(0.5 * u_oceanLive_swashReach, 0.25, 1.0);
+        const float flowCap = clamp(0.5 * u_ocean_swashReach, 0.25, 1.0);
         flowOff *= flowCap / (flowCap + length(flowOff));
         disp.xz += flowOff;
         disp.xz = oceanFlowToWorld(disp.xz, fr);
@@ -311,7 +311,7 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
     // Buried under land: flat calm surface (with swash on, the run-up band still shades, and its surf
     // lace still reads the raw folds).
-    if (depth <= (u_ocean_swashAmp > 0.0 ? -u_oceanLive_swashReach : 0.0))
+    if (depth <= (u_ocean_swashAmp > 0.0 ? -u_ocean_swashReach : 0.0))
     {
         slope = vec2(0.0);
         jacobian = 1.0;

@@ -10,7 +10,7 @@
 //
 // Indexed in DRIFTED REST coordinates q = rest XZ - drift: the rest (undisplaced, Lagrangian) lattice is
 // where a water parcel sits between its orbits, so foam on it rides the waves' horizontal motion and
-// stays behind as a crest passes under it; the drift (u_oceanLive_foamDrift, accumulated on the CPU) moves
+// stays behind as a crest passes under it; the drift (u_ocean_foamDrift, accumulated on the CPU) moves
 // the whole frame downwind without resampling, so the field never blurs from advection.
 // Requires ubo.inc.glsl. fp32 only (the compute pass includes it too).
 
@@ -52,13 +52,13 @@ float oceanFoamBicubic(sampler2DArray maps, vec2 uv, float layer, float mip)
 // Explicit LOD: safe in non-uniform control flow.
 float oceanSampleFoamField(sampler2DArray maps, vec2 restXZ, float footprint, float blur)
 {
-    const vec2 q = restXZ - u_oceanLive_foamDrift;
+    const vec2 q = restXZ - u_ocean_foamDrift;
     float result = 0.0;
     float remaining = 1.0;
     for (int level = 0; level < OCEAN_FOAM_LEVELS; ++level)
     {
         const float texel = oceanFoamTexel(level);
-        const vec2 uv = (q - u_oceanLive_foamLevels[level].xy) / (texel * float(OCEAN_FFT_SIZE));
+        const vec2 uv = (q - u_ocean_foamLevels[level].xy) / (texel * float(OCEAN_FFT_SIZE));
         const vec2 edge = abs(uv - 0.5);
         const float w = 1.0 - smoothstep(0.40, 0.48, max(edge.x, edge.y));
         if (w <= 0.0)

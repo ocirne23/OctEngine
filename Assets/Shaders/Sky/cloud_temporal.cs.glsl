@@ -210,7 +210,7 @@ void main()
 #ifdef TREE_TEMPORAL
     const vec3 prevWorld = u_viewPos + dir * tCloud; // trees do not move
 #else
-    const vec3 prevWorld = u_viewPos + dir * tCloud - u_cloudsLive_windStep;
+    const vec3 prevWorld = u_viewPos + dir * tCloud - u_clouds_windStep;
 #endif
     float clipW;
     // Last frame marched the direction of (texel uv - ITS jitter), so the texel holding this point sits at

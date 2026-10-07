@@ -1,4 +1,4 @@
-// --- Terrain texture splatting (setTerrainSplatMaterials; u_terrainTex / u_terrainLive_splatClimate) ---
+// --- Terrain texture splatting (setTerrainSplatMaterials; u_terrainTex / u_terrain_splatClimate) ---
 // Four physical layers composited bottom-up - no biome enum, climate selects textures directly:
 //   1. GROUND - climate-picked soil/vegetation, world-XZ projection
 //   2. BEACH  - shoreline band just above the local waterline (not climate-selected)
@@ -9,15 +9,20 @@
 // Shared by the terrain fragment shader (its own pixels) and the ocean shader (the seabed at a
 // refraction-ray hit, so the sand seen through the water IS the terrain next to it). The includer
 // declares, before including:
-//   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTex, u_terrainLive: splatClimate,
+//   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTex, u_terrain: splatClimate,
 //   splatTex, seaLevel). The splat's texture indices come from the UBO, not the material buffer.
+// The terrain NOISE texture (TerrainResources::createNoiseTexture, u_terrain_noiseTex): R, G = the macro variation
+// (terrainMacroAt), B = the crag wander (terrainLayers). Tileable; sampled with repeat.
 // Optional, before including:
 //   TERRAIN_SPLAT_TEX(tex, uv)  - the texture fetch. Defaults to texture() (screen derivatives); a ray
 //                                 hit has none, so the ocean defines it as textureLod at a ray-cone LOD.
+//   TERRAIN_MACRO_TEX(tex, uv)  - the macro variation's noise fetch, the same way (the ocean: textureLod 0).
+//   TERRAIN_NOISE_SAMPLER       - the noise texture. Defaults to its slot of u_textures[]; the grass cull, which has
+//                                 no bindless array, binds it on its own.
 //   TERRAIN_SPLAT_ALBEDO_ONLY   - skip the normal + ARM taps (the seabed only needs colour: the water
 //                                 column blurs any detail normal away). TerrainSample.normal is then the
 //                                 geometric normal and rough/metal/ao are constants.
-//   TERRAIN_SPLAT_RELIEF        - the splat HEIGHT maps (u_terrainLive_splatHeightTex, u_terrainTex_parallax*):
+//   TERRAIN_SPLAT_RELIEF        - the splat HEIGHT maps (u_terrain_splatHeightTex, u_terrainTex_parallax*):
 //                                 the height blend at layer borders plus parallax occlusion mapping near the
 //                                 camera. Needs screen derivatives (the terrain FS only); without it every
 //                                 layer blend is linear, so the ocean's seabed is the terrain minus relief.
@@ -37,6 +42,12 @@
 
 #ifndef TERRAIN_SPLAT_TEX
 #define TERRAIN_SPLAT_TEX(tex, uv) texture(tex, uv)
+#endif
+#ifndef TERRAIN_MACRO_TEX
+#define TERRAIN_MACRO_TEX(tex, uv) texture(tex, uv)
+#endif
+#ifndef TERRAIN_NOISE_SAMPLER
+#define TERRAIN_NOISE_SAMPLER u_textures[u_terrain_noiseTex]
 #endif
 #ifndef TERRAIN_POM
 #define TERRAIN_POM 0
@@ -63,8 +74,8 @@ struct TerrainSample
 // The per-slot HEIGHT + AO texture (BC5: R = height, G = AO; TerrainStreamer's "hao" bake).
 uint terrainHeightTexIdx(uint matIdx)
 {
-	const uint slot = matIdx - uint(u_terrainLive_splatBase);
-	return u_terrainLive_splatHeightTex[slot >> 2][slot & 3u];
+	const uint slot = matIdx - uint(u_terrain_splatBase);
+	return u_terrain_splatHeightTex[slot >> 2][slot & 3u];
 }
 
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
@@ -102,8 +113,8 @@ float16_t terrainHeightWeight(float16_t w, float16_t dh)
 // Metalness is always 0.
 uvec2 terrainSplatTex(uint matIdx)
 {
-	const uint slot = matIdx - uint(u_terrainLive_splatBase);
-	const uvec4 v = u_terrainLive_splatTex[slot >> 1];
+	const uint slot = matIdx - uint(u_terrain_splatBase);
+	const uvec4 v = u_terrain_splatTex[slot >> 1];
 	return (slot & 1u) == 0u ? v.xy : v.zw;
 }
 
@@ -242,9 +253,8 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 }
 #endif // !TERRAIN_SPLAT_HEIGHT_ONLY
 
-// Crag wander noise (value fBm over world XZ). Lives HERE and not in the generator: the wander must be
-// scaled by local relief, which the generator's coarse path cannot supply (its relief is 0 by
-// construction - the cascades would disagree). The shader always has the true mesh height.
+// Value noise and fBm over world XZ, computed (no texture): the drying pattern and the rock cover patches. (The crag
+// wander, which used this fBm, reads the noise texture's B channel now: the same 3-octave value fBm, baked.)
 float terrainHash12(vec2 p)
 {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -302,7 +312,7 @@ float climateBoxWeight(vec2 climate, vec4 box, float invS2)
 // so a pick costs 2 registers instead of 4; TerrainLayers carries two of them live across the whole splat.
 struct ClimatePick
 {
-	uint idx;          // top three entries i0 | i1 << 8 | i2 << 16 (0-based like u_terrainLive_splatClimate; caller adds baseMat)
+	uint idx;          // top three entries i0 | i1 << 8 | i2 << 16 (0-based like u_terrain_splatClimate; caller adds baseMat)
 	float16_t n1, n2;  // normalized coverage of i1 and i2; the top pick i0 gets the rest (n0 = 1 - n1 - n2)
 };
 
@@ -325,7 +335,7 @@ ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 	float16_t w0 = float16_t(-1.0), w1 = float16_t(-1.0), w2 = float16_t(-1.0), w3 = float16_t(-1.0);
 	for (int i = first; i < first + count; ++i)
 	{
-		const float16_t w = float16_t(climateBoxWeight(climate, u_terrainLive_splatClimate[i], invS2));
+		const float16_t w = float16_t(climateBoxWeight(climate, u_terrain_splatClimate[i], invS2));
 		const uint ui = uint(i);
 		if      (w > w0) { idx = ((idx << 8) | ui) & 0xFFFFFFu;                       w3 = w2; w2 = w1; w1 = w0; w0 = w; } // i2 = i1, i1 = i0, i0 = i
 		else if (w > w1) { idx = (idx & 0xFFu) | (ui << 8) | ((idx & 0xFF00u) << 8); w3 = w2; w2 = w1; w1 = w; }        // i2 = i1, i1 = i
@@ -365,9 +375,9 @@ struct TerrainLayers
 TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 {
 	TerrainLayers L;
-	L.baseMat = int(u_terrainLive_splatBase);
-	L.numGround = int(u_terrainLive_numGround);
-	L.numRock = int(u_terrainLive_numRock);
+	L.baseMat = int(u_terrain_splatBase);
+	L.numGround = int(u_terrain_numGround);
+	L.numRock = int(u_terrain_numRock);
 	L.g = ClimatePick(0u, float16_t(0.0), float16_t(0.0));
 	L.r = L.g;
 	L.beachW = float16_t(0.0);
@@ -382,14 +392,14 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	// and needs humidity to fall at all (no white polar deserts). Evaluated first: full snow cover
 	// returns before the beach / rock coverages (the rock fBm in particular) are computed.
 	float16_t snowW = float16_t(0.0);
-	if (u_terrainLive_hasSnow > 0.5)
+	if (u_terrain_hasSnow > 0.5)
 	{
 		const float cold  = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, f.temperature);
 		const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, slope);
 		const float wet = smoothstep(0.0, max(u_terrainTex_snowAridity, 1e-3), f.humidity);
 		snowW = float16_t(cold * holds * wet);
 	}
-	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainLive_hasBeach > 0.5 ? 1u : 0u);
+	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
 	L.snowW = snowW;
 
 	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
@@ -403,23 +413,27 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 
 	// Beach: the band just above the local waterline.
 	float16_t beachW = float16_t(0.0);
-	if (u_terrainLive_hasBeach > 0.5)
+	if (u_terrain_hasBeach > 0.5)
 		beachW = float16_t(1.0 - smoothstep(0.3, max(u_terrainTex_beachBand, 0.31), worldPos.y - f.waterLevel));
 
 	// Rock: too steep OR standing too far above the macro altitude (crag). max(), not a sum -
 	// the two coincide on a cliff. On V3 terrain crag is what puts rock on mountains (the 30 m/px field
 	// rarely reaches the slope threshold). The relief is wandered by fBm first or the rock boundary is
 	// an elevation contour across a whole range; |wander| <= relief keeps flat lowlands untouched.
+	// The wander lives HERE and not in the generator: it must be scaled by the local relief, which the generator's
+	// coarse path cannot supply (its relief is 0 by construction - the cascades would disagree).
 	float16_t rockW = float16_t(0.0);
 	if (numRock > 0)
 	{
-		float relief = (worldPos.y - u_terrainLive_seaLevel) - f.altitude;
+		float relief = (worldPos.y - u_terrain_seaLevel) - f.altitude;
 		const float wanderAmp = u_terrainTex_cragWanderAmp;
 		// The wander moves relief by at most +-amp, so only pixels where that can change the crag
-		// smoothstep pay for the 12-hash fBm - saturated flatland (crag 0) and sheer crag (1) skip it.
+		// smoothstep pay for the fBm - saturated flatland (crag 0) and sheer crag (1) skip it.
+		// The noise texture's B channel at its top mip (textureLod: also from the TES and the culls, which have no
+		// screen derivatives; its texels are ~1/32 of a wavelength, far below anything the boundary shows).
 		if (wanderAmp > 0.0 && relief + wanderAmp > u_terrainTex_cragStart && relief - wanderAmp < u_terrainTex_cragFull)
 		{
-			const float w = terrainFbm(worldPos.xz * u_terrainTex_invCragWanderWavelength) * wanderAmp;
+			const float w = (textureLod(TERRAIN_NOISE_SAMPLER, worldPos.xz * u_terrainTex_cragWanderUvScale, 0.0).b * 2.0 - 1.0) * wanderAmp;
 			relief -= w * clamp(relief / wanderAmp, 0.0, 1.0);
 		}
 		const float crag = smoothstep(u_terrainTex_cragStart, u_terrainTex_cragFull, relief);
@@ -694,6 +708,32 @@ vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3
 #endif // TERRAIN_SPLAT_RELIEF
 
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
+// MACRO VARIATION ("Terrain/Textures/Macro *"): the splat textures repeat every few metres, and at a distance the eye
+// finds that grid in their low-frequency content. Two taps of the noise texture's macro channels at unrelated scales
+// and orientations - the second 3.71x larger and turned 34 deg, so the pair does not repeat in view - give a
+// brightness (x) and an independent warm/cool hue (y), both ~[-1, 1]. Call in uniform flow (screen derivatives).
+bool terrainMacroEnabled()
+{
+	return u_terrainTex_macroStrength + u_terrainTex_macroHue + u_terrainTex_macroRoughness > 0.0;
+}
+
+f16vec2 terrainMacroAt(vec2 xz)
+{
+	const vec2 uv = xz * u_terrainTex_macroUvScale;
+	const f16vec2 a = f16vec2(TERRAIN_MACRO_TEX(TERRAIN_NOISE_SAMPLER, uv).rg);
+	const f16vec2 b = f16vec2(TERRAIN_MACRO_TEX(TERRAIN_NOISE_SAMPLER, mat2(0.829, 0.559, -0.559, 0.829) * uv * (1.0 / 3.71)).rg);
+	return f16vec2(a.x + b.y - float16_t(1.0), a.y - b.x);
+}
+
+// Brightness and roughness follow x (bright = drier, rougher), the hue y (warm <-> cool).
+void terrainApplyMacro(inout TerrainSample s, f16vec2 m)
+{
+	const float16_t one = float16_t(1.0);
+	s.albedo *= max(one + float16_t(u_terrainTex_macroStrength) * m.x, float16_t(0.0))
+		* (one + float16_t(u_terrainTex_macroHue) * m.y * f16vec3(1.0, 0.0, -1.0));
+	s.rough = clamp(s.rough * (one + float16_t(u_terrainTex_macroRoughness) * m.x), float16_t(0.01), one);
+}
+
 // The full splatted terrain surface from precomputed coverages (terrainLayers) - for a caller that needs them
 // itself too (the tessellated terrain's pixel normal); neutral mid-gray before a texture set is registered.
 // geoN = the shading base the normal maps reorient onto. Call in uniform flow (screen derivatives).
@@ -708,8 +748,12 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	const vec3 dNx = dFdx(geoN), dNy = dFdy(geoN);
 #endif
 #endif
-	if (u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
+	if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
 		return TerrainSample(f16vec3(0.5), geoNh, float16_t(0.92), float16_t(0.0), float16_t(1.0), float16_t(0.5));
+
+	// The macro taps here, in uniform flow; applied under the snow (step 4).
+	const bool macroOn = terrainMacroEnabled();
+	const f16vec2 macro = macroOn ? terrainMacroAt(worldPos.xz) : f16vec2(0.0);
 
 	const int baseMat = L.baseMat;
 	const int numGround = L.numGround;
@@ -788,7 +832,11 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 			terrainMixInto(surf, rock, rockW);
 	}
 
-	// 4. Snow (partial cover; full cover returned above).
+	// 4. Macro variation over ground, beach and rock: the snow lies on top, clean.
+	if (macroOn)
+		terrainApplyMacro(surf, macro);
+
+	// 5. Snow (partial cover; full cover returned above).
 	if (snowW > blendEps)
 		terrainMixInto(surf, sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh), snowW);
 

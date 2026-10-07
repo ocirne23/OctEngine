@@ -344,7 +344,7 @@ void OceanSimulationPipeline::reloadShaders()
         printf("OceanSimulationPipeline: spray shader reload failed, keeping previous pipeline\n");
 }
 
-void OceanSimulationPipeline::advanceFoamField(oc::span<glm::vec4> foamLevels, glm::vec2& foamDrift, const glm::vec3& cameraPos, float dt)
+void OceanSimulationPipeline::advanceFoamField(const glm::vec3& cameraPos, float dt)
 {
     const OceanParams& ocean = m_oceanParams;
     const float texel0 = glm::max(ocean.foamTexel, 0.01f);
@@ -365,9 +365,8 @@ void OceanSimulationPipeline::advanceFoamField(oc::span<glm::vec4> foamLevels, g
         const glm::vec2 originCells = glm::floor(cameraQ / texel) - (float)(N / 2);
         const glm::vec2 shift = reset ? glm::vec2((float)(2 * N)) : originCells - m_foamOriginCells[level];
         m_foamOriginCells[level] = originCells;
-        foamLevels[level] = glm::vec4(originCells * texel, shift);
+        m_foamLevels[level] = glm::vec4(originCells * texel, shift);
     }
-    foamDrift = m_foamDrift; // the field's tweak values: Renderer::registerUboFields (u_ocean_foam*)
 }
 
 void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray)
@@ -590,7 +589,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 
     // ---- 6. Spray: breaking crests -> particle spawn requests (the particle GPU spawn path). Reads the
     // finished maps; writes the shared request buffer + counter, which the particle sim's head barrier
-    // (compute -> compute) orders before the begin pass. UBO-gated (u_oceanLive_sprayEmitter = the emitter slot,
+    // (compute -> compute) orders before the begin pass. UBO-gated (u_ocean_sprayEmitter = the emitter slot,
     // 0xFFFFFFFF = off), so it records once. ----
     if (spray.particleCounters && spray.particleRequests)
     {

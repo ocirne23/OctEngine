@@ -153,7 +153,7 @@ vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, ui
     if (fade <= 0.0)
         return vec3(0.0);
     const vec3 now = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_timeSeconds) * fade;
-    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_foliageLive_windPrevTime) * fade - now;
+    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_foliage_windPrevTime) * fade - now;
     return now;
 }
 

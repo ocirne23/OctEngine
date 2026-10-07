@@ -101,7 +101,7 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     // A ROCK of the tree set (its records draw on LitRock): a regular mesh with an LOD chain, and no wind.
     const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
     const bool sways                  = isTree && !isRock;
-    const float radius                = meshInfo.radius * instancePosScale.w + (sways ? u_foliageLive_windReach : 0.0); // + the wind's sway reach
+    const float radius                = meshInfo.radius * instancePosScale.w + (sways ? u_foliage_windReach : 0.0); // + the wind's sway reach
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     uint cascadeMask = cascadeOverlapMask(centerPos, radius);

@@ -257,7 +257,7 @@ void main()
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(worldPos.xz); // .x = terrain height, .y = water level, .w = macro altitude
-        waterY = td.y + u_fogLive_boundaryOffset; // the fog boundary, lowered by "Fog/Underwater wave offset" x the live wave trough
+        waterY = td.y + u_fog_boundaryOffset; // the fog boundary, lowered by "Fog/Underwater wave offset" x the live wave trough
         waterDepth = td.y - td.x;       // wave shoal fade keys on the REAL depth, not the offset boundary
         // Terrain follow rides the MACRO ALTITUDE channel (A, m above sea level), not the raw height:
         // the fog base tracks the smooth macro landscape, so ridge bumps don't drag the layer up with
@@ -265,7 +265,7 @@ void main()
         // valley-fog thickness keys on the same carve depth). Clamped to sea level so fog rests on
         // the water instead of sinking over the seabed.
         if (u_fog_terrainFollow > 0.0)
-            heightBase += u_fog_terrainFollow * (u_terrainLive_mapSeaLevel + max(td.w, 0.0));
+            heightBase += u_fog_terrainFollow * (u_terrain_mapSeaLevel + max(td.w, 0.0));
         if (u_fog_regionStrength > 0.0)
         {
             // Regional climate: x = fog thickness (density multiplier), and the height-falloff multiplier
@@ -293,14 +293,14 @@ void main()
     // "Fog/Underwater density" (u_fog_underwaterDensity) - the height profile and the regional thickness only
     // shape the fog ABOVE the surface, so dipping the camera below the waterline reads as murky depth
     // regardless of the local climate (thick murk under thin haze at > 1, off at 0). The boundary is the
-    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fogLive_waveBand - sized CPU-side from
+    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fog_waveBand - sized CPU-side from
     // the readback's trough estimate, 0 = ocean off) sample the FFT displacement for the real wave height,
     // so fog neither pokes out of troughs nor recedes under crests; segments outside the band are
     // trivially above/below any possible wave, so only a thin shell pays for the wave taps.
     // Analytic per-slice fraction (mean of the step profile over the segment), like heightFogMean.
     const float y0 = min(yA, yB), y1 = max(yA, yB);
     float surfY = waterY;
-    if (u_fogLive_waveBand > 0.0 && y0 < waterY + u_fogLive_waveBand && y1 > waterY - u_fogLive_waveBand)
+    if (u_fog_waveBand > 0.0 && y0 < waterY + u_fog_waveBand && y1 > waterY - u_fog_waveBand)
         surfY += oceanWaveHeightAt(worldPos.xz, waterDepth, viewZ * (2.0 / float(VOL_FROXEL_Y)));
     // Underwater fog is a NEAR-FIELD effect: water absorbs everything within tens of meters, so distant
     // underwater froxels can never be legitimately seen - but the froxel grid integrates THROUGH the
@@ -409,8 +409,8 @@ void main()
             sunTrans = mix(vec3(1.0),
                 underwaterSunTransmittance(worldPos.xz, depthMid, viewZ * (2.0 / float(VOL_FROXEL_Y)),
                     u_fog_shaftBoost,
-                    (waterY - u_fogLive_boundaryOffset) - (surfY - depthMid), // calm column depth at the submerged midpoint
-                    waterY - u_fogLive_boundaryOffset                          // the calm level itself (waterY carries the fog boundary offset)
+                    (waterY - u_fog_boundaryOffset) - (surfY - depthMid), // calm column depth at the submerged midpoint
+                    waterY - u_fog_boundaryOffset                          // the calm level itself (waterY carries the fog boundary offset)
                     ), underFrac);
             gSun = mix(g, 0.78, underFrac); // strong forward lobe: ~8x gain toward the sun
         }

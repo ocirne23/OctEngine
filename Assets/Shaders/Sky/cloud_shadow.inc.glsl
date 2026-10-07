@@ -1,8 +1,8 @@
 // Cloud shadows: the BEER SHADOW MAP lookup (CloudPipeline, cloud_shadow.cs.glsl). Requires ubo.inc.glsl.
 // The includer defines CLOUD_SHADOW_BINDING (a sampler2DArray, one layer per cascade, RGBA32F).
 //
-// Two sun-aligned orthographic cascades around the camera (u_cloudsLive_shadowCascade[]: the centre relative to
-// the CENTRE view's camera + 1 / extent; the light-space axes e0 / e1 in u_cloudsLive_shadowAxis0/1,
+// Two sun-aligned orthographic cascades around the camera (u_clouds_shadowCascade[]: the centre relative to
+// the CENTRE view's camera + 1 / extent; the light-space axes e0 / e1 in u_clouds_shadowAxis0/1,
 // L = u_sunDirection).
 // A texel is one line along L through the cloud shell:
 //   x = the along-light coordinate a = dot(p - centre, L) of the FIRST cloud met coming from the sun,
@@ -22,9 +22,9 @@ layout (binding = CLOUD_SHADOW_BINDING) uniform sampler2DArray u_cloudShadow;
 // weight (1 inside, 0 at the border) in `weight`, 0 = outside.
 float cloudShadowCascadeOD(int cascade, vec3 rel, out float weight)
 {
-    const vec4 c = u_cloudsLive_shadowCascade[cascade];
+    const vec4 c = u_clouds_shadowCascade[cascade];
     const vec3 s = rel - c.xyz;
-    const vec2 uv = vec2(dot(s, u_cloudsLive_shadowAxis0), dot(s, u_cloudsLive_shadowAxis1)) * c.w + 0.5;
+    const vec2 uv = vec2(dot(s, u_clouds_shadowAxis0), dot(s, u_clouds_shadowAxis1)) * c.w + 0.5;
     const vec2 edge = min(uv, 1.0 - uv);
     weight = clamp(min(edge.x, edge.y) * 6.0, 0.0, 1.0); // fades over the outer ~17 %: the cascades differ in resolution
     if (weight <= 0.0)
@@ -40,8 +40,8 @@ float cloudShadowCascadeOD(int cascade, vec3 rel, out float weight)
 // to that much per pixel and frame, which the TAA / the fog's temporal blend average into a soft penumbra.
 float cloudShadowFarODFiltered(vec3 rel, out float weight)
 {
-    const vec3 s = rel - u_cloudsLive_shadowCascade[1].xyz;
-    const vec2 uv = vec2(dot(s, u_cloudsLive_shadowAxis0), dot(s, u_cloudsLive_shadowAxis1)) * u_cloudsLive_shadowCascade[1].w + 0.5;
+    const vec3 s = rel - u_clouds_shadowCascade[1].xyz;
+    const vec2 uv = vec2(dot(s, u_clouds_shadowAxis0), dot(s, u_clouds_shadowAxis1)) * u_clouds_shadowCascade[1].w + 0.5;
     const vec2 edge = min(uv, 1.0 - uv);
     weight = clamp(min(edge.x, edge.y) * 6.0, 0.0, 1.0);
     if (weight <= 0.0)
@@ -89,13 +89,13 @@ vec2 cloudShadowSample(vec3 rel, bool filtered)
 
 // Sun transmittance through the clouds at a WORLD position (1 = no cloud, or cloud shadows off). Past the
 // far cascade it fades to the mean transmittance of the layer, so distant ground does not turn fully lit.
-// CLOUD_SHADOWS (baked: "Sky/Clouds" + "Shadows" enabled) compiles it in; u_cloudsLive_shadowRendered is the runtime
+// CLOUD_SHADOWS (baked: "Sky/Clouds" + "Shadows" enabled) compiles it in; u_clouds_shadowRendered is the runtime
 // part the define cannot hold - the map was not rendered this frame (the game suppresses the clouds, or
 // the sun is at the horizon).
 float cloudSunTransmittanceImpl(vec3 worldPos, bool filtered)
 {
 #ifdef CLOUD_SHADOWS
-    if (u_cloudsLive_shadowRendered < 0.5)
+    if (u_clouds_shadowRendered < 0.5)
         return 1.0;
     const vec2 s = cloudShadowSample(worldPos - u_views_viewPos[VIEW_CENTER].xyz, filtered);
     const float T = mix(u_clouds_shadowMeanTransmittance, exp(-s.x), s.y);
@@ -122,7 +122,7 @@ float cloudSunTransmittanceBilinear(vec3 worldPos)
 float cloudSunTransmittanceSoft(vec3 worldPos)
 {
 #ifdef CLOUD_SHADOWS
-    if (u_cloudsLive_shadowRendered < 0.5)
+    if (u_clouds_shadowRendered < 0.5)
         return 1.0;
     float w;
     const float od = cloudShadowCascadeOD(1, worldPos - u_views_viewPos[VIEW_CENTER].xyz, w);

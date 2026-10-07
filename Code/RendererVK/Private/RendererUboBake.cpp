@@ -11,7 +11,7 @@ import :UboBlock;
 import :PushBlock;
 import :Device;
 
-// Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_ubo, registerUboFields at the end of
+// Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_ubo, registerUboValues at the end of
 // RendererUbo.cpp) is a GLSL const of its value in every shader while every tweak it is computed from is locked, so
 // the compiler folds it; otherwise the shaders read its block member. The block is still uploaded whole every frame (a
 // baked entry's slot is unread).
@@ -47,7 +47,7 @@ void Renderer::registerUboLocks()
             owner.block->markDirty(/*resolve*/ false);
     });
 
-    registerUboFields(m_ubo); // after the root values (UboRoot binds them at construction)
+    registerUboValues(m_ubo);
     registerPushFields();
     assert(m_ubo.size() <= RendererVKLayout::UBO_RANGE && "the frame UBO outgrew UBO_RANGE");
 

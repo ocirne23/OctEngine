@@ -146,7 +146,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// easing to the swash base (amplitude x sea x land fades) across the approach band. On dry sand the
 	// weight IS the swash base, which is the water's surface shape at the waterline, so the film
 	// continues the water.
-	const float reach = max(u_oceanLive_swashReach, 0.01);
+	const float reach = max(u_ocean_swashReach, 0.01);
 	float swashW32, w32;
 	oceanShoreWeights(depth, waterLevel, swashW32, w32);
 	const float16_t w = float16_t(w32);
@@ -154,7 +154,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// sea level - not a lake, a river, or ground the water-reach bake sank the level under) within ONE
 	// swash reach above that level, as far as the tongue ever runs. Gates everything breaking makes (foam,
 	// bubbles); its complement is where the wind ripples live.
-	const float16_t shore = float16_t((1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanLive_seaLevel)))
+	const float16_t shore = float16_t((1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_ocean_seaLevel)))
 		* (1.0 - smoothstep(0.6 * reach, reach, -depth)));
 	// Wind ripples ("Wind ripple strength"): off the shore w is 0 and the film would lie dead flat, so
 	// the FINEST cascade keeps a weight of its own there - the taps the loop makes anyway. Slope + LEAN
@@ -298,7 +298,7 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 	// (u_ocean_foamFineWaves, as the ocean's foamJacobian): the short, fast waves would reshape it every frame.
 	const f16vec3 rFoam = f16vec3(rxx, rzz, rxz) + fineJ * float16_t(u_ocean_foamFineWaves - 1.0);
 	float16_t foam = float16_t(0.0);
-	if (u_oceanLive_shoreFoamDepth > 0.0)
+	if (u_ocean_shoreFoamDepth > 0.0)
 	{
 		const float16_t Jraw = (one + chop * rFoam.x) * (one + chop * rFoam.y) - chop * rFoam.z * chop * rFoam.z;
 		// The ocean's tongue has column ~ 0, i.e. lace target 1, over its whole run-up - so does its film.
@@ -307,9 +307,9 @@ TerrainFilm terrainFilmSurface(vec3 worldPos, float16_t footprintH, float16_t ma
 		// multiplier. `shore` alone still multiplies, as the LAND gate: the raw Jacobian is the full open-sea
 		// fold field inland too, so a threshold alone would foam the puddles.
 		const float16_t b = mix(float16_t(u_ocean_foamBias - 0.8), float16_t(1.45), target) + float16_t(u_ocean_shoreFoamBias);
-		const float16_t foamMax = float16_t(max(u_oceanLive_shoreFoamMax, 1e-3));
+		const float16_t foamMax = float16_t(max(u_ocean_shoreFoamMax, 1e-3));
 		// The ocean's knee, normalised so full lace reaches the cap (ocean.fs.glsl: the bare knee stopped at 0.63).
-		const float16_t kneeNorm = float16_t(1.0 / (1.0 - exp(-1.0 / max(u_oceanLive_shoreFoamMax, 1e-3))));
+		const float16_t kneeNorm = float16_t(1.0 / (1.0 - exp(-1.0 / max(u_ocean_shoreFoamMax, 1e-3))));
 		foam = shore * foamMax * (one - exp(-(one - smoothstep(b - float16_t(0.4), b + float16_t(0.4), Jraw)) / foamMax)) * kneeNorm;
 	}
 	// The ocean's crest foam: oceanInstantFoam (ocean_wave.inc.glsl) inlined - fold of the WEIGHTED Jacobian

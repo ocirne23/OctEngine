@@ -140,6 +140,11 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// below, so they hold their look across "Meters per pixel".
 	Tweak::floatVar("Terrain/Textures", "Crag wander (m)", &s.texCragWanderAmp, 0.0f, 600.0f, 5.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag wander wavelength (m)", &s.texCragWanderWavelength, 200.0f, 20000.0f, 100.0f);
+	// Macro variation against the visible texture repeat: brightness, warm/cool hue and roughness from a world noise.
+	Tweak::floatVar("Terrain/Textures", "Macro variation", &s.texMacroStrength, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Textures", "Macro hue", &s.texMacroHue, 0.0f, 0.5f, 0.005f);
+	Tweak::floatVar("Terrain/Textures", "Macro roughness", &s.texMacroRoughness, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Textures", "Macro size (m)", &s.texMacroSize, 2.0f, 1000.0f, 1.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag relief start (m)", &s.texCragStart, 0.0f, 200.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag relief full (m)", &s.texCragFull, 0.0f, 400.0f);
 	Tweak::floatVar("Terrain/Textures", "Beach band (m)", &s.texBeachBand, 0.0f, 20.0f);

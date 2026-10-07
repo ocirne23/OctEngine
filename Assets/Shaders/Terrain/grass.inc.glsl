@@ -80,7 +80,7 @@ float grassCoverSize(float cover)
 }
 
 // THE CANOPY: grass self-shadowing without a shadow map (a blade is far below a shadow-map texel). The grass layer is
-// a thin volume of blades: its top at the mean blade height, its extinction (1/m) = u_grassLive_canopyExtinction ("Canopy
+// a thin volume of blades: its top at the mean blade height, its extinction (1/m) = u_grass_canopyExtinction ("Canopy
 // shadow" x blades per m^2 x the mean blade width, the CPU's fold) x the COVER (not the clumps: those are sampled along
 // the sun path, grassCanopySun) x the size by cover; its RESULT fades with the blades over the range's end
 // (grassRangeFade). The blades
@@ -92,7 +92,7 @@ float grassCanopyHeight(float clump, float coverSize)
 }
 float grassCanopyExtinction(float cover, float coverSize, float dist)
 {
-    return u_grassLive_canopyExtinction * cover * coverSize;
+    return u_grass_canopyExtinction * cover * coverSize;
 }
 // The blades' "Range fade" (1 inside, 0 at the range). The canopy's RESULT fades with it, linearly: fading the
 // extinction instead kept exp(-extinction x path) nearly black until the band's last metres - an edge, not a fade.
@@ -148,18 +148,18 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 float grassNearShadow(vec3 pos, vec3 N, out float weight)
 {
     weight = 0.0;
-    if (u_grassLive_nearRange <= 0.0)
+    if (u_grass_nearRange <= 0.0)
         return 1.0;
-    const vec4 lp = u_grassLive_shadowViewProj * vec4(pos + u_sunDirection.xyz * u_grass_nearBias + N * u_grassLive_nearTexel, 1.0);
+    const vec4 lp = u_grass_shadowViewProj * vec4(pos + u_sunDirection.xyz * u_grass_nearBias + N * u_grass_nearTexel, 1.0);
     const vec2 uv = lp.xy * 0.5 + 0.5;
     const vec2 edge = abs(uv - 0.5) * 2.0;
-    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (u_grassLive_nearCentre, ahead of the
+    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (u_grass_nearCentre, ahead of the
     // camera: full within the range, gone at 1.3 x): the box is square in LIGHT space, so on the ground it reaches
     // range / sin(sun elevation) along the sun - far past the casters, which are drawn within range x 1.5 + 2 m of the
     // centre only. There the map is empty (lit) and replaced the canopy: a bright gap between the two.
-    const float range = u_grassLive_nearRange;
+    const float range = u_grass_nearRange;
     weight = (1.0 - smoothstep(0.85, 0.98, max(edge.x, edge.y)))
-           * (1.0 - smoothstep(range, 1.3 * range, distance(pos.xz, u_grassLive_nearCentre)));
+           * (1.0 - smoothstep(range, 1.3 * range, distance(pos.xz, u_grass_nearCentre)));
     if (weight <= 0.0 || lp.z >= 1.0)
     {
         weight = 0.0;
@@ -179,10 +179,10 @@ float grassNearShadow(vec3 pos, vec3 N, out float weight)
 
 #ifdef TERRAIN_SPLAT_INC_GLSL
 // THE TERRAIN TEXTURES' grass (terrain_splat.inc.glsl terrainLayers): what the beach, rock and snow layers leave of
-// the GROUND x the grass amount of its climate-picked textures (u_terrainLive_splatGrass, TerrainSplatMaterial::grass).
+// the GROUND x the grass amount of its climate-picked textures (u_terrain_splatGrass, TerrainSplatMaterial::grass).
 float grassTextureAmount(uint slot)
 {
-    return u_terrainLive_splatGrass[slot >> 2u][slot & 3u];
+    return u_terrain_splatGrass[slot >> 2u][slot & 3u];
 }
 float grassTerrainCover(TerrainLayers L)
 {
@@ -201,7 +201,7 @@ float grassTerrainCover(TerrainLayers L)
 // is). (1, 1) without grass there.
 vec2 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 {
-    if (u_grassLive_canopyExtinction <= 0.0 && u_grassLive_nearRange <= 0.0) // no canopy, no near cascade (or no grass at all)
+    if (u_grass_canopyExtinction <= 0.0 && u_grass_nearRange <= 0.0) // no canopy, no near cascade (or no grass at all)
         return vec2(1.0);
     const float dist = distance(pos, u_viewPos);
     if (dist >= u_grass_range)

@@ -768,7 +768,7 @@ namespace Procedural
 		return glm::length(glm::vec3(horizontal, vertical, horizontal));
 	}
 
-	// Swash run-up reach (m). MIRRORS RendererUbo.cpp's u_oceanLive_swashReach - the conservative
+	// Swash run-up reach (m). MIRRORS RendererUbo.cpp's u_ocean_swashReach - the conservative
 	// max run-up height derived from the wave-trough estimate this class itself publishes. It sizes the
 	// on-land band the shaders draw the tongue in, so it is also the band buoyancy must find water in.
 	float OceanGenerator::swashReach() const

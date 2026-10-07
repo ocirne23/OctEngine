@@ -8,6 +8,7 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :GraphicsPipeline;
 import :DescriptorSet;
+import :Sampler;
 import :Layout;
 
 // PROCEDURAL GRASS, its compute half and its buffers (the blades draw in StaticMeshGraphicsPipeline: they need the
@@ -44,6 +45,7 @@ public:
         vk::Sampler terrainSampler;
         Buffer* vertexBuffer = nullptr; // the vertex mega-buffer (the terrain chunks' vertices)
         Buffer* clutterFrame = nullptr; // that frame slot's ClutterFrameGpu (the forest floor map: "Canopy thinning")
+        vk::ImageView noiseView;        // the terrain noise texture (TerrainResources): the splat's crag wander
     };
     // The cull: count reset, dispatch, and the barrier to the draw (indirect + vertex attribute + index reads).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
@@ -87,5 +89,6 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_commands;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_counts;
     Buffer m_indices;
+    Sampler m_noiseSampler; // repeat: the noise texture tiles
     uint32 m_bladesPerPatch = 0;
 };

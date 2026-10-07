@@ -56,7 +56,7 @@ float cloudLightOpticalDepth(vec3 rel, vec2 nxz, float camAlt, float sampleAlt, 
 float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
 {
 #ifdef CLOUD_SHADOWS
-    if (u_cloudsLive_shadowRendered < 0.5)
+    if (u_clouds_shadowRendered < 0.5)
         return 1.0;
     const vec2 s = cloudShadowSample(rel + (u_viewPos - u_views_viewPos[VIEW_CENTER].xyz), false);
     float farT = 1.0;
@@ -168,10 +168,10 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     float sumAmbGround = 0.0; // sum(absorbed * exp(-h * k)), h = metres above the main layer's base
 
     // The self-shadow comes from the shadow map where it covers the sample (one fetch instead of a sun march);
-    // the map is relative to the CENTRE view's camera. CLOUD_SELF_SHADOW_MAP is baked; u_cloudsLive_shadowRendered =
+    // the map is relative to the CENTRE view's camera. CLOUD_SELF_SHADOW_MAP is baked; u_clouds_shadowRendered =
     // the map was rendered this frame (the sun is up).
 #ifdef CLOUD_SELF_SHADOW_MAP
-    const bool mapShadow = u_cloudsLive_shadowRendered > 0.5;
+    const bool mapShadow = u_clouds_shadowRendered > 0.5;
 #else
     const bool mapShadow = false;
 #endif
@@ -369,7 +369,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // shell, and the ground bounce under the shell (albedo x (sun + sky) irradiance / PI), falling off from below.
     // The 5-direction mean is baked once per frame into the clear layer's texel (0, 0) (gi_sky_map.cs.glsl).
     const vec3 ambSky = texelFetch(u_skyMap, SKY_MAP_CLOUD_AMBIENT_TEXEL, 0).rgb * u_clouds_ambient;
-    const vec3 ambGround = u_cloudsLive_groundBounceAlbedo * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
+    const vec3 ambGround = u_clouds_groundBounceAlbedo * (sunColor * u_sunTransmittance * (max(L.y, 0.0) * INV_PI) + ambSky); // the sky's ground colour x the cloud albedo
 
     r.inScatter = sunBottom * sumSunLow + sunTop * sumSunHigh + ambGround * sumAmbGround + ambSky * sumAmbHigh;
     if (u_clouds_aerialStrength <= 0.0) // "Lighting/Aerial perspective strength" 0: the cloud as lit, no air in front

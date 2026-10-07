@@ -606,7 +606,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
 
-    // Trace tuning + the per-frame values (frame index, previous focus) ride the UBO (u_rt_gi*, u_giLive,
+    // Trace tuning + the per-frame values (frame index, previous focus) ride the UBO (u_rt_gi*, u_gi,
     // u_frameIndex - see getTraceParams), so this record is cached. Rays are amortized over frames via the
     // temporal blend.
     cmd.dispatch((Globals::settings.gi.grid.traceThreads() + 63) / 64, 1, 1);

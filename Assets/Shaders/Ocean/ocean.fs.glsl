@@ -119,7 +119,7 @@ layout (location = 0, index = 1) out vec4 out_factor;
 //   1 = calm depth      black 0 -> white 4 m, green iso-lines every 0.5 m, RED = land (depth < 0)
 //   2 = swash weight    the tongue weight (backflow): white = full, black = none
 //   3 = surface weight  oceanSurfaceWeight: white = open water, darker = eased toward the swash amplitude
-//   5 = shore foam band the surf band's nearShore target (u_oceanLive_shoreFoamDepth)
+//   5 = shore foam band the surf band's nearShore target (u_ocean_shoreFoamDepth)
 //   6 = mirror ray      GREEN = scene hit (pink-white near, pure green far), BLUE = fired, missed (TLAS has
 //                       geometry), WHITE = hit only past "Reflection range", GREY = nothing hits anywhere
 //                       (the TLAS is EMPTY - every RT effect is dead, not just this ray),
@@ -212,6 +212,7 @@ struct SceneHit
 // away), at a ray-cone LOD instead of screen derivatives (a ray hit has none).
 float g_seabedLod = 0.0;
 #define TERRAIN_SPLAT_TEX(tex, uv) textureLod(tex, uv, g_seabedLod)
+#define TERRAIN_MACRO_TEX(tex, uv) textureLod(tex, uv, 0.0) // metres-wide texels: the top mip is fine under the water
 #define TERRAIN_SPLAT_ALBEDO_ONLY
 #include "terrain_splat.inc.glsl"
 
@@ -219,10 +220,10 @@ float g_seabedLod = 0.0;
 vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLevel)
 {
     TerrainFields f; // mild-climate fallbacks without a map, as the terrain VS
-    f.altitude = worldPos.y - u_terrainLive_seaLevel;
+    f.altitude = worldPos.y - u_terrain_seaLevel;
     f.temperature = 12.5;
     f.humidity = 0.5;
-    f.waterLevel = u_terrainLive_seaLevel;
+    f.waterLevel = u_terrain_seaLevel;
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(worldPos.xz);
@@ -413,12 +414,12 @@ float oceanEdgeCover()
 {
     if (u_terrainWater_oceanEdgeFade <= 0.0)
         return 1.0;
-    float filmY = u_oceanLive_seaLevel - u_ocean_depth;
+    float filmY = u_ocean_seaLevel - u_ocean_depth;
     if (terrainHeightMapPresent())
     {
         filmY = terrainHeightAt(in_pos.xz);
         float reliefDepth = 0.0;
-        if (u_terrainTess_enabled > 0.5 && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
+        if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
         {
             // The film's lift (instanced_indirect_terrain.vs.glsl): the centre view and the HEIGHT falloff.
             const float tf = clamp((distance(in_pos, u_views_viewPos[VIEW_CENTER].xyz) - u_terrainTess_fadeStart)
@@ -507,7 +508,7 @@ void main()
     // through the RAW (un-shoaled) fold Jacobian so it reads as filaments along the swell, not a
     // painted gradient.
     float shoreFoam = 0.0;
-    const float shoreFoamDepth = u_oceanLive_shoreFoamDepth;
+    const float shoreFoamDepth = u_ocean_shoreFoamDepth;
     if (shoreFoamDepth > 0.0)
     {
         // Same floored depth the waves use: a distant too-shallow reading otherwise drives the
@@ -533,7 +534,7 @@ void main()
             // exceeded the cap. NORMALISED so full lace (1) reaches the cap exactly: the bare knee
             // fm (1 - e^(-x / fm)) gave 1 - 1/e = 0.63 at full lace and cap 1 - a grey veil next to the
             // fully covering foam offshore, whatever the cap.
-            const float foamMax = max(u_oceanLive_shoreFoamMax, 1e-3);
+            const float foamMax = max(u_ocean_shoreFoamMax, 1e-3);
             shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax)) / (1.0 - exp(-1.0 / foamMax));
         }
     }
@@ -555,7 +556,7 @@ void main()
 #elif OCEAN_DEBUG_MODE == 3
         dbg = vec3(oceanSurfaceWeight(depthDbg, shoreHW.y));
 #elif OCEAN_DEBUG_MODE == 5
-        dbg = vec3(u_oceanLive_shoreFoamDepth > 0.0 ? 1.0 - smoothstep(u_oceanLive_shoreFoamDepth, 4.0 * u_oceanLive_shoreFoamDepth, depthDbg) : 0.0);
+        dbg = vec3(u_ocean_shoreFoamDepth > 0.0 ? 1.0 - smoothstep(u_ocean_shoreFoamDepth, 4.0 * u_ocean_shoreFoamDepth, depthDbg) : 0.0);
 #endif
         out_color = vec4(dbg, 1.0);
         out_factor = vec4(0.0);
@@ -566,10 +567,10 @@ void main()
     // Underside (camera on the water side of this triangle): through Snell's window the scene above the
     // water or the sky, outside it (TIR) the mirrored water body, surface foam over both. The side comes from the rasterized triangle's plane, not
     // gl_FrontFacing: the clipmap carries both windings under back-face culling, so the surviving copy
-    // is always front-facing. Only while the camera is under the water (u_oceanLive_cameraUnderwater, the CPU mirror):
+    // is always front-facing. Only while the camera is under the water (u_ocean_cameraUnderwater, the CPU mirror):
     // a back face seen from above is a FOLD (high choppiness overturns the sheet) and shades as the top side,
     // whose grazing flip turns N to the camera and whose foam lights on the un-flipped, flattened normal.
-    if (u_oceanLive_cameraUnderwater > 0.5 && dot(faceN, V) * dot(faceN, N) < 0.0)
+    if (u_ocean_cameraUnderwater > 0.5 && dot(faceN, V) * dot(faceN, N) < 0.0)
     {
         // Keep the detail normal inside the camera's hemisphere at grazing (a flip would open the window
         // at TIR angles).

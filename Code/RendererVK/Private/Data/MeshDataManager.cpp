@@ -67,11 +67,13 @@ bool MeshDataManager::initialize(size_t vertexBufSize, size_t indexBufSize)
     return true;
 }
 
-void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSize, size_t neededSize, vk::BufferUsageFlags2 usage)
+void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSize, size_t neededSize, size_t bucketBytes,
+    vk::BufferUsageFlags2 usage)
 {
-    size_t newSize = bufSize;
-    while (newSize < neededSize)
-        newSize *= 2;
+    // 1.1x, not 2x: these are the largest device-local buffers, and a doubling left up to half of one unused.
+    // Rounded up to whole buckets so the allocator's resize covers every byte of the fresh tail.
+    size_t newSize = oc::max(neededSize, bufSize + bufSize / 10);
+    newSize = (newSize + bucketBytes - 1) / bucketBytes * bucketBytes;
 
     // Drain first: this buffer is shared (not per-frame-in-flight) and read full-range every frame by GI
     // probe trace / RTAO / BLAS builds, so an already-submitted dispatch may still be reading it while a
@@ -141,7 +143,7 @@ size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsage
     {
         // No contiguous free run: grow the buffer (the whole old range is copied over - it may be
         // fragmented, so everything allocated must survive) and retry in the fresh tail.
-        growBuffer(pool.buffer, pool.bufSize, pool.bufSize, pool.bufSize + size, usage);
+        growBuffer(pool.buffer, pool.bufSize, pool.bufSize, pool.bufSize + (size_t)numBuckets * bucketBytes, bucketBytes, usage);
         pool.allocator.resize(uint32(pool.bufSize / bucketBytes));
         bucketStart = pool.allocator.acquireRange(numBuckets);
         assert(bucketStart >= 0 && "Mesh data allocation failed after growth");

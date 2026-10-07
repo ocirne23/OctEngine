@@ -11,7 +11,7 @@
 // patch cell and the blade rank. A blade is a quadratic Bezier from its root on the terrain mesh: the control point
 // straight above the root at the tip's height, the tip pushed sideways by its lean and the wind (the curve keeps
 // about its length). Its width narrows to the tip; the tip is one vertex.
-// MOTION VECTORS: the same blade at LAST frame's time (u_grassLive_prevTime) - the wind is the only motion.
+// MOTION VECTORS: the same blade at LAST frame's time (u_grass_prevTime) - the wind is the only motion.
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -146,7 +146,7 @@ void main()
     const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, dist);
     vec3 ctrl, ctrlPrev;
     const vec3 tip = grassTip(root, lean, grassWind(xz, u_timeSeconds, phase) * windFade, height, ctrl);
-    const vec3 tipPrev = grassTip(root, lean, grassWind(xz, u_grassLive_prevTime, phase) * windFade, height, ctrlPrev);
+    const vec3 tipPrev = grassTip(root, lean, grassWind(xz, u_grass_prevTime, phase) * windFade, height, ctrlPrev);
 
     // The vertex: row r of S (2 per row, sides -1 / +1), the tip last.
     const uint row = min(vert >> 1u, segments);
@@ -156,7 +156,7 @@ void main()
     const float widthScale = min(pow(1.0 / max(thinning, 1e-3), u_grass_widthCompensation), u_grass_maxWidthScale);
     g_blade.root = root;
     g_blade.side = side;
-    g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * coverSize, dist * u_grassLive_minWidthPerMetre);
+    g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * coverSize, dist * u_grass_minWidthPerMetre);
     g_blade.ctrl = ctrl;
     g_blade.tip = tip;
     // The normal: NEAR the curve's own (the bent top catches the light), easing per blade into one LINEAR in t from
@@ -182,12 +182,12 @@ void main()
     // box (ahead of the camera); past its half size x 1.5 + 2 m from the box's centre (the receivers' disc, and casters
     // up-sun of it) nothing. (The blades never cast into the scene cascades: the "Cast shadows" path was removed
     // 2026-10-03 - the canopy and this cascade replace it.)
-    if (distance(xz, u_grassLive_nearCentre) > u_grassLive_nearRange * 1.5 + 2.0)
+    if (distance(xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
-    gl_Position = u_grassLive_shadowViewProj * vec4(pos, 1.0);
+    gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
     vec3 normal = grassBladeNormal(t, sideSign);
     if (morph > 0.0)

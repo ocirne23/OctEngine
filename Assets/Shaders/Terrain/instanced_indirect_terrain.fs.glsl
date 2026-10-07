@@ -89,14 +89,14 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 #elif TERRAIN_DEBUG_MODE == 2
 	return vec3(clamp(f.humidity, 0.0, 1.0)) * debugContour(f.humidity, 0.1);
 #elif TERRAIN_DEBUG_MODE == 3
-	const float relief = abs((worldPos.y - u_terrainLive_seaLevel) - f.altitude);
+	const float relief = abs((worldPos.y - u_terrain_seaLevel) - f.altitude);
 	return debugHeatRamp(relief / 200.0) * debugContour(relief, 25.0);
 #elif TERRAIN_DEBUG_MODE == 4
 	return vec3(clamp(f.altitude / 5000.0, 0.0, 1.0)) * debugContour(f.altitude, 250.0);
 #else // 5 = which cascade fed this pixel
-	const vec2 uv0 = (worldPos.xz - u_terrainLive_mapCentre) * u_terrainLive_mapInvNearSize + 0.5;
+	const vec2 uv0 = (worldPos.xz - u_terrain_mapCentre) * u_terrain_mapInvNearSize + 0.5;
 	const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-	const float nearW = u_terrainLive_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+	const float nearW = u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
 	return mix(vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), nearW);
 #endif
 }
@@ -119,7 +119,7 @@ vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
 	const float dist = distance(in_meshPos, u_views_viewPos[VIEW_CENTER].xyz);
 	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
-	if (dist >= fadeEnd || u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
+	if (dist >= fadeEnd || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
 		return N;
 	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
 	const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES

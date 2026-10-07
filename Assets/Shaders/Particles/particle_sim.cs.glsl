@@ -148,8 +148,8 @@ void main()
     {
         const vec2 shoreHW = oceanSampleShoreData(pos.xz); // (terrain height, local calm water level)
         // Cheap reject first: no wave reaches above the calm level plus the crest band estimated from the
-        // ocean readback (u_fogLive_waveBand; 0 with the ocean off). Only drops near the water pay the taps.
-        if (pos.y < shoreHW.y + u_fogLive_waveBand + 0.5)
+        // ocean readback (u_fog_waveBand; 0 with the ocean off). Only drops near the water pay the taps.
+        if (pos.y < shoreHW.y + u_fog_waveBand + 0.5)
         {
             const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
             if (pos.y < surfaceY)

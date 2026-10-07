@@ -20,7 +20,9 @@
 #define TERRAIN_HEIGHT_BINDING 1
 #include "terrain_height.inc.glsl"
 #include "mesh_vertex.inc.glsl"
-#define TERRAIN_SPLAT_HEIGHT_ONLY // the coverages only: no texture taps
+layout (binding = 9) uniform sampler2D u_terrainNoise; // the terrain noise texture (the crag wander): no bindless array here
+#define TERRAIN_NOISE_SAMPLER u_terrainNoise
+#define TERRAIN_SPLAT_HEIGHT_ONLY // the coverages only: no material texture taps
 #include "terrain_splat.inc.glsl"
 
 layout (local_size_x = GRASS_CULL_GROUP) in;
@@ -89,7 +91,7 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
 float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
 {
     temperature = 12.5;
-    if (u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0 || !terrainHeightMapPresent())
+    if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
         return 0.0;
     const vec4 td = terrainDataAt(xz);
     const vec4 climate = terrainClimateAt(xz);
@@ -156,10 +158,10 @@ void main()
     const vec3 nearest = clamp(u_viewPos, vec3(origin.x, boxMin.y, origin.y), vec3(origin.x + P, hMax + bladeH, origin.y + P));
     const float dist = distance(nearest, u_viewPos);
     // THE NEAR GRASS CASCADE's casters, in view or not (a blade just off screen still casts): within half size x 1.5 +
-    // 2 m of its box's centre (u_grassLive_nearCentre - ahead of the camera; as grass.vs.glsl's near caster).
-    const vec2 nearCentre = u_grassLive_nearCentre;
-    const bool nearCaster = u_grassLive_nearRange > 0.0
-        && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grassLive_nearRange * 1.5 + 2.0;
+    // 2 m of its box's centre (u_grass_nearCentre - ahead of the camera; as grass.vs.glsl's near caster).
+    const vec2 nearCentre = u_grass_nearCentre;
+    const bool nearCaster = u_grass_nearRange > 0.0
+        && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grass_nearRange * 1.5 + 2.0;
     if (!visible && !nearCaster)
         return;
     const float keep = grassKeep(dist);

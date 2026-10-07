@@ -45,9 +45,9 @@ layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-flo
 
 // THE HAND-OVER (TREE_HANDOVER, a variant run only while it lasts - TreeVolumePipeline): a finished bake CROSS-FADES
 // into the shown one over "Far swap time". Per RAY a dither picks one bake: the new one when the pixel's noise (IGN,
-// stepped by the golden ratio per frame) lies under the fade (u_foliageLive_handoverFade). The temporal pass / TAA averages the
+// stepped by the golden ratio per frame) lies under the fade (u_foliage_handoverFade). The temporal pass / TAA averages the
 // picks into an image-space blend of the two results - the opacity mixes correctly, which mixing the density per
-// sample would not. The new bake: its centre (u_foliageLive_handoverCentre), floor / colour / max-floor grid (the back copies) and
+// sample would not. The new bake: its centre (u_foliage_handoverCentre), floor / colour / max-floor grid (the back copies) and
 // its density (the accumulation's RG16F view, two slices per texel: the resolve converted it in place). The whole ray reads its bake (g_new)
 // - the ring, the polar lookup, the skip, the floor, the density, the colour and its lighting taps - so the variant
 // costs what the normal one does. The normal variant reads the front bake only.
@@ -70,9 +70,9 @@ bool handoverPicksNew(ivec2 px)
     // Spatially offset from the step jitter's IGN (decorrelated); the golden-ratio step spreads each pixel's picks
     // evenly over consecutive frames, so a short history already averages to the fade.
     const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
-    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliageLive_handoverFade;
+    return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliage_handoverFade;
 }
-vec2 bakeCentre() { return g_new ? u_foliageLive_handoverCentre : pc_vol_centre; }
+vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
 // The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice, tree_volume.inc.glsl): the hardware
 // filters across the columns only (each fetch at a texel layer's centre), the slice axis is blended here.

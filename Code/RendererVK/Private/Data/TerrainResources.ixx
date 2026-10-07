@@ -53,6 +53,15 @@ public:
         m_heightMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, "FogTerrainHeight");
     }
 
+    // ---- The terrain NOISE texture (u_terrain_noiseTex): tileable RGBA8, NOISE_SIZE^2, made once at startup ----
+    // R, G: two independent gradient fBms (NOISE_MACRO_CELLS lattice cells across the tile, 4 octaves, stretched to
+    // 0..1) - the macro variation. B: a value fBm (NOISE_CRAG_CELLS cells, 3 octaves, 0..1) - the crag wander. A: 1.
+    static constexpr uint32 NOISE_SIZE = 512;
+    static constexpr uint32 NOISE_MACRO_CELLS = 8;
+    static constexpr uint32 NOISE_CRAG_CELLS = 16;
+    void createNoiseTexture();
+    uint16 getNoiseTexture() const { return m_noiseTex; }
+
     // ---- Pushed in by Procedural ----
     void setParams(float meshRadius, float lapseRate, float seaLevel) { m_params = glm::vec4(meshRadius, glm::min(lapseRate, 0.0f), seaLevel, 0.0f); }
     const glm::vec4& getParams() const { return m_params; } // x = 0 disables the ocean land cull
@@ -109,6 +118,7 @@ public:
 
 private:
     glm::vec4 m_params{ 0.0f };
+    uint16 m_noiseTex = RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX;
     int32 m_splatBaseMaterial = -1;
     TerrainSplatCounts m_splatCounts;
     oc::vector<uint16> m_splatTextures; // for the per-frame streaming noteUse + replacement frees

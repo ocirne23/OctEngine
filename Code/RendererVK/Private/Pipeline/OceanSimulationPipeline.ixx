@@ -90,8 +90,10 @@ public:
     // over dt along the swell's travel, each level's origin snapped around the camera and the whole texels it
     // moved since the last call (the compute's read offset). Once per built frame, in frame order - the
     // shift is relative to the previous call, which the other ping/pong slot was simulated with.
-    // foamLevels: FOAM_LEVELS of them (u_oceanLive_foamLevels), foamDrift: u_oceanLive_foamDrift.
-    void advanceFoamField(oc::span<glm::vec4> foamLevels, glm::vec2& foamDrift, const glm::vec3& cameraPos, float dt);
+    void advanceFoamField(const glm::vec3& cameraPos, float dt);
+    // Its results (u_ocean_foamLevels / foamDrift): a level's origin (xy, m) and the whole texels it moved (zw).
+    const glm::vec4& getFoamLevel(uint32 level) const { return m_foamLevels[level]; }
+    glm::vec2 getFoamDrift() const { return m_foamDrift; }
     // Records the whole per-frame simulation. ubo = that frame slot's main UBO (time + ocean params).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray);
     // Points the spray step's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image;
@@ -178,6 +180,7 @@ private:
     // texel the origins were addressed with (a change re-addresses everything: the field starts over).
     glm::vec2 m_foamDrift = glm::vec2(0.0f);
     oc::array<glm::vec2, FOAM_LEVELS> m_foamOriginCells{};
+    oc::array<glm::vec4, FOAM_LEVELS> m_foamLevels{};
     float m_foamTexel = 0.0f;
     bool m_foamValid = false; // false after a frame with the ocean off (no simulation ran: stale state)
 

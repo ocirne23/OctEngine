@@ -22,4 +22,5 @@ ClutterType Pebble
 		Rock 1 10
 		Canopy 1 0.6
 		Slope 1.2
-		Altitude -0.5
+		# never on or under the water: at least 0.3 m above the local water level
+		Altitude 0.3

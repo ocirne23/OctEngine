@@ -16,8 +16,11 @@ export namespace Procedural
 		uint32 size = 0;
 	};
 
-	// A hash of what the bake depends on (geometry + two settings words), for cache file names.
-	uint32 treeBakeHash(const TreePiece& piece, uint32 a, uint32 b);
+	// A hash of what the bake depends on, for cache file names: `source` (what the piece was generated from - TreeSystem:
+	// the species file's text, the piece's set and index) + BAKE_VERSION + two settings words. NOT the geometry's floats:
+	// those differ in their last bits between Debug and the optimized builds (/fp:fast), and a position on a rounding
+	// edge renamed the file at every switch - each build deleted the other's cache and baked it again.
+	uint32 treeBakeHash(uint32 source, uint32 a, uint32 b);
 
 	// --- Billboards: the branch module as two crossed cards along its axis (module +Y). ---
 	// The vertical card (normal +X) and the horizontal card (normal +Z, i.e. world-up after the composite), their

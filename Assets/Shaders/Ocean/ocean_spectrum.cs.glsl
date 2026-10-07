@@ -100,11 +100,11 @@ vec2 h0(ivec2 m, uint cascade, float L, float kMin, float kMax, uint which)
     if (k < 1e-5 || k < kMin || k >= kMax)
         return vec2(0.0);
 
-    float U = u_oceanLive_windSpeed;
+    float U = u_ocean_windSpeed;
     float F = u_ocean_fetch;
     float depth = u_ocean_depth;
     float w = dispersion(k, depth);
-    float theta = atan(kv.y, kv.x) - atan(u_oceanLive_windDirection.y, u_oceanLive_windDirection.x);
+    float theta = atan(kv.y, kv.x) - atan(u_ocean_windDirection.y, u_ocean_windDirection.x);
 
     float S = jonswap(w, U, F) * kitaigorodskii(w, depth) * hasselmann(theta, w, U, F);
     float dk = 6.2831853 / L;

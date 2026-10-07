@@ -5,7 +5,7 @@
 // UBO fog fields (u_fog, ubo.inc.glsl), the less obvious ones:
 //   albedo: fog albedo * intensity (scattering tint; > 1 = non-physical gain); anisotropy: phase g
 //   noiseScale (1/m) / noiseStrength drift with the wind (u_weather_windSpeed m/s, "Sky/Wind", its direction u_weather_windDirection)
-//   terrainFollow: fraction of the terrain height added to the height fog base (the height map is u_terrainLive_mapCentre /
+//   terrainFollow: fraction of the terrain height added to the height fog base (the height map is u_terrain_mapCentre /
 //                  mapInvNearSize (0 = no map) / mapInvFarSize (0 = near only) / mapSeaLevel (fog clamp floor))
 //   slicePower: exponent on the normalized slice before the exponential mapping:
 //               1 = plain exponential, < 1 shifts Z resolution from near to far - useful at long ranges

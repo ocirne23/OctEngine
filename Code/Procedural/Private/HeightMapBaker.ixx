@@ -571,7 +571,7 @@ export namespace Procedural
 								// 10.6 C too warm at peaks and its texture flipped at the crossfade. A
 								// baseline has no anchor to disagree about: consumers evaluate it at the
 								// height they shade (terrainTemperatureAt) against the generator's one
-								// published lapse rate (u_terrainLive_lapseRate).
+								// published lapse rate (u_terrain_lapseRate).
 								const auto q8 = [](float f) { return (uint32)(glm::clamp(f, 0.0f, 1.0f) * 255.0f + 0.5f); };
 								const uint32 packed = q8(p.fogThickness)
 									| (encodeFlowAngle01(p.flowAngle01) << 8)

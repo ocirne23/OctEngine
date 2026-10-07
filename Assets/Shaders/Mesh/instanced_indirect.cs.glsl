@@ -189,12 +189,12 @@ vec4 quat_multiply(vec4 q, vec4 p)
 }
 
 // The terrain overlay's reach: the wetness clipmap window (terrain_wetness.inc.glsl - origin lattice
-// coord u_terrainLive_wetOrigin, texel size u_terrainWater_texelSize, present flag u_terrainWater_enabled).
+// coord u_terrain_wetOrigin, texel size u_terrainWater_texelSize, present flag u_terrainWater_enabled).
 bool terrainOverlayCovers(vec3 pos, float radius)
 {
     if (u_terrainWater_enabled < 0.5)
         return false;
-    const vec2 lo = u_terrainLive_wetOrigin * u_terrainWater_texelSize;
+    const vec2 lo = u_terrain_wetOrigin * u_terrainWater_texelSize;
     const vec2 hi = lo + float(TERRAIN_WET_RES) * u_terrainWater_texelSize;
     const vec2 d = pos.xz - clamp(pos.xz, lo, hi);
     return dot(d, d) <= radius * radius;
@@ -245,7 +245,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     // chain, and no wind.
     const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
     // A tree sways in the wind (tree_wind.inc.glsl): its bound grows by the sway's reach.
-    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliageLive_windReach : 0.0);
+    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliage_windReach : 0.0);
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
     // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by
@@ -257,7 +257,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
     // selection below wants the real bounds (and the ocean has no LOD chain anyway).
     float cullRadius = radius;
     if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_OCEAN)
-        cullRadius += u_oceanLive_displacementExtent;
+        cullRadius += u_ocean_displacementExtent;
 
     if (frustumCheck(centerPos, cullRadius))
     {

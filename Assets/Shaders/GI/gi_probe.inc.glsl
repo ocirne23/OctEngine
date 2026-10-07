@@ -219,7 +219,7 @@ uint giWaveUpdateInterval(int cascade, ivec3 waveMin, int spacing)
 //   toroidal slot space in 4x4x4 blocks, so it is the wave's slot block, cascade-major. In the trace it
 //   equals gl_WorkGroupID.x; the bake uses it to find a wave's stamp.
 // * giWaveVisits    - the wave's regular visit: every giWaveUpdateInterval frames, interleaved by workgroup.
-// * giProbeFresh    - the probe scrolled in since the last traced frame (u_giLive_prevFocus = that focus); a
+// * giProbeFresh    - the probe scrolled in since the last traced frame (u_gi_prevFocus = that focus); a
 //   fresh probe traces whatever its interval. The trace and the bake both call it.
 uint giWaveWorkgroup(int cascade, ivec3 waveMin)
 {
@@ -233,7 +233,7 @@ bool giWaveVisits(uint workgroup, uint updateInterval)
 }
 bool giProbeFresh(int cascade, ivec3 lc)
 {
-    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giLive_prevFocus);
+    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_gi_prevFocus);
     return any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 }
 

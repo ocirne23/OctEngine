@@ -103,7 +103,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_water[i] = td.y;
     s_temperature[i] = temperature;
     s_humidity[i] = climate.w;
-    if (u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0)
+    if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
         return;
     const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz), TerrainFields(td.w, temperature, climate.w, td.y));
     s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowW));
@@ -116,7 +116,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
 // bump buries a little rather than float at its ends.
 vec3 clutterRelief(vec3 meshPos, vec3 smoothN, float footprint)
 {
-    if (u_terrainTess_enabled < 0.5 || u_terrainLive_splatBase < 0.0 || u_terrainLive_numGround < 1.0 || !terrainHeightMapPresent())
+    if (u_terrainTess_enabled < 0.5 || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
         return vec3(0.0);
     const float dist = distance(meshPos, u_views_viewPos[VIEW_CENTER].xyz);
     if (dist >= u_terrainTess_fadeEnd)
@@ -224,9 +224,9 @@ void main()
     for (int i = 0; i < 6; ++i)
         if (dot(vec4(sphereCentre, 1.0), u_frustumPlanes[i]) + sphereRadius < 0.0)
             patchVisible = false;
-    const vec2 nearCentre = u_grassLive_nearCentre;
-    const float nearReach = u_grassLive_nearRange * 1.5 + 2.0;
-    const bool patchNear = u_grassLive_nearRange > 0.0 && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= nearReach;
+    const vec2 nearCentre = u_grass_nearCentre;
+    const float nearReach = u_grass_nearRange * 1.5 + 2.0;
+    const bool patchNear = u_grass_nearRange > 0.0 && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= nearReach;
     if (!patchVisible && !patchNear)
         return;
 

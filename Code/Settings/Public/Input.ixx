@@ -8,8 +8,8 @@ export struct FreeFlyCameraSettings
     bool lockToWorldUp = true;
     float speed = 50.0f;          // also stepped by the mouse wheel
     float sensitivity = 0.005f;
-    float cameraNear = 0.05f;
-    float cameraFar = 42000.0f;
+    float cameraNear = 0.1f;
+    float cameraFar = 60000.0f;
 };
 
 // "Editor/Gizmo": the transform gizmo (GizmoController).

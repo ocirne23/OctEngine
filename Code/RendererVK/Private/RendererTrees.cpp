@@ -67,28 +67,29 @@ namespace
     static_assert(sizeof(TreeCullPieceGpu) == 64);
 }
 
-// The baked tree records' UBO words (tree_cull.inc.glsl): the claimed range, the band scale, forceFar, and the
-// far-tree volume's start (0 = none; the billboards draw through its fade-in band - an overlap, not a seam).
-// Patched in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet claims the range - left at
-// that upload's 0 / 0, the culls read the range's never-written stream entries as instances (garbage mesh
-// indices, out-of-bounds bucket writes).
-// y = the range (TREE_RECORDS_PER_PIECE per piece). z = the culls' THREAD count (their dispatch,
-// IndirectCullComputePipeline::update): one per stream instance outside the range, one per PIECE inside it (w = the
-// piece count) - tree_cull.inc.glsl's treeCullThreadInstance.
-void Renderer::fillTreeCullUbo()
+// The baked tree records' UBO words (u_present_tree*, tree_cull.inc.glsl): the claimed range, the band scale, forceFar,
+// and the far-tree volume's start. Evaluated in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet
+// claims the range - left at that upload's values, the culls read the range's never-written stream entries as
+// instances (garbage mesh indices, out-of-bounds bucket writes).
+// The culls' THREAD count (their dispatch, IndirectCullComputePipeline::update): one per stream instance outside the
+// range, one per PIECE inside it - tree_cull.inc.glsl's treeCullThreadInstance.
+uint32 Renderer::treeCullThreads() const
+{
+    return m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces);
+}
+
+// The TLAS-instance writer's live count (u_present_giTlasNumInstances): present()'s demand, clamped to the capacity.
+uint32 Renderer::giTlasLiveCount() const
+{
+    return oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
+}
+
+// 0 = no volume; the billboards draw through its fade-in band - an overlap, not a seam.
+float Renderer::treeCullVolumeStart() const
 {
     const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
         && m_treeSets[m_treeCullSet].hasVolume;
-    UboBlock& ubo = m_ubo;
-    const UboRoot::Present& p = m_u.present;
-    ubo.set(p.treeRangeBase, m_treeCullBase);
-    ubo.set(p.treeRangeLength, m_treeCullCount);
-    ubo.set(p.treeThreads, m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces));
-    ubo.set(p.treeCount, m_treeCullPieces);
-    ubo.set(p.treeFarScale, m_treeCullDistanceScale);
-    ubo.set(p.treeForceFar, m_treeCullForceFar ? 1.0f : 0.0f);
-    ubo.set(p.treeVolumeStart, treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f);
-    ubo.set(p.treeShadowMargin, oc::max(m_foliageParams.shadowCascadeMargin, 0.0f)); // instanced_indirect_shadow.cs.glsl
+    return treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f;
 }
 
 Buffer& Renderer::treeCullPieces()

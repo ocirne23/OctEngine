@@ -71,7 +71,7 @@ layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // per gather hit that the multi-bounce lookup makes.
 layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 
-// Trace parameters come from the UBO (u_rt / u_giLive / u_frameIndex), not push constants, so the
+// Trace parameters come from the UBO (u_rt / u_gi / u_frameIndex), not push constants, so the
 // GI command buffer records once: numRays, temporalAlpha, maxRayDist, updateInterval (a probe workgroup
 // traces every N frames; fresh probes always trace) and prevViewPos (last frame's scene focus, the
 // previous clipmap window for freshness).
@@ -478,7 +478,7 @@ void main()
     if (escaped)
         newOffset = escapeOffset;
 
-    // u_giLive_temporalAlpha is THIS FRAME's blend (the CPU already rescaled "GI/Temporal Alpha" by the wall delta, so
+    // u_gi_temporalAlpha is THIS FRAME's blend (the CPU already rescaled "GI/Temporal Alpha" by the wall delta, so
     // convergence is frame-rate independent). A visit every updateInterval frames compounds it over the
     // interval - 1 - (1 - a)^k, which saturates where the linear a * k overshoots - so a slow wave converges
     // at the same WALL-time rate, up to GI_VISIT_ALPHA_MAX: past it one N-ray visit would dominate the
@@ -490,7 +490,7 @@ void main()
     const vec3  lumaW   = GI_LUMA_W;
     const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
     const bool  replace = fresh || oldLuma <= 0.0;
-    const float frameAlpha = u_giLive_temporalAlpha;
+    const float frameAlpha = u_gi_temporalAlpha;
     const float visitAlpha = max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     float alpha = replace ? 1.0 : visitAlpha;
     if (!replace)

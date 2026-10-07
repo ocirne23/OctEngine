@@ -94,7 +94,7 @@ void main()
         gl_Position = vec4(uintBitsToFloat(0x7FC00000u));
         return;
     }
-    basePos.y += shoreHW.y - u_oceanLive_seaLevel; // lift onto the local water table (lakes/rivers at altitude)
+    basePos.y += shoreHW.y - u_ocean_seaLevel; // lift onto the local water table (lakes/rivers at altitude)
     out_pos = basePos;
     if (horizonBand)
     {

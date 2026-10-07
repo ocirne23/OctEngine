@@ -34,7 +34,7 @@ float cloudRemap(float v, float lo, float hi, float newLo, float newHi)
 // adds its own offset from it (0 on desktop).
 vec2 cloudNoiseOffset()
 {
-    return u_cloudsLive_noiseOrigin + (u_viewPos - u_views_viewPos[VIEW_CENTER].xyz).xz;
+    return u_clouds_noiseOrigin + (u_viewPos - u_views_viewPos[VIEW_CENTER].xyz).xz;
 }
 
 // Altitude of a camera-relative point. h = (r^2 - R^2) / (r + R): no cancellation between two ~6.4e6 values.
@@ -173,7 +173,7 @@ float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, f
         // Curl-distorted detail: stronger toward the base (wispy undersides), rising with the evolve drift.
         const vec2 curl = textureLod(u_cloudCurl, nxz * (u_clouds_baseFrequency * 4.0), 0.0).xy * 2.0 - 1.0;
         const vec2 dxz = nxz + curl * (u_clouds_curl * (1.0 - hfCloud));
-        const vec3 pd = vec3(dxz.x, noiseAlt + u_cloudsLive_detailDrift, dxz.y) * u_clouds_detailFrequency;
+        const vec3 pd = vec3(dxz.x, noiseAlt + u_clouds_detailDrift, dxz.y) * u_clouds_detailFrequency;
         float hfFbm = dot(textureLod(u_cloudDetailNoise, pd, lodDetail).rgb, vec3(0.625, 0.25, 0.125));
         if (camDist < u_clouds_nearDetailRadius)
         {

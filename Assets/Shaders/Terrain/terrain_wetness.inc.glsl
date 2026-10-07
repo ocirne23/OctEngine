@@ -5,7 +5,7 @@
 // the coords that scroll out are overwritten by the ones wrapping in. terrain_wetness.cs.glsl writes it
 // (decay + swash/rain injection); the terrain fragment shader reads it to darken and gloss the ground.
 //
-// UBO (requires ubo.inc.glsl): u_terrainLive_wetOrigin = window origin lattice coord (min corner),
+// UBO (requires ubo.inc.glsl): u_terrain_wetOrigin = window origin lattice coord (min corner),
 //   u_terrainWater_texelSize / invTexelSize, u_terrainWater_enabled = present (0/1).
 //
 // The includer defines TERRAIN_WET_BINDING before including (the image lives in GENERAL layout).
@@ -18,10 +18,10 @@ layout (binding = TERRAIN_WET_BINDING) uniform sampler2DArray u_terrainWet; // 2
 bool terrainWetPresent() { return u_terrainWater_enabled > 0.5; }
 
 // The layer the compute pass wrote THIS frame (the other holds last frame's field).
-int terrainWetLayer() { return int(u_terrainLive_wetLayer); }
+int terrainWetLayer() { return int(u_terrain_wetLayer); }
 
 // Lattice coord of the window's min corner. The floats carry exact integers (|coord| << 2^24).
-ivec2 terrainWetOrigin() { return ivec2(u_terrainLive_wetOrigin); }
+ivec2 terrainWetOrigin() { return ivec2(u_terrain_wetOrigin); }
 
 // Storage slot of an absolute lattice coord: & mask is a true mod for power-of-two RES, correct for
 // negative coords under two's complement.

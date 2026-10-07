@@ -148,6 +148,7 @@ void Renderer::recordGrassCull(uint32 frameIdx)
         .terrainSampler = m_terrain.getHeightMap().getSampler(),
         .vertexBuffer = &Globals::meshDataManager.getVertexBuffer(),
         .clutterFrame = &m_clutterPipeline.frameBuffer(frameIdx),
+        .noiseView = Globals::textureManager.getViewForDescriptor(m_terrain.getNoiseTexture()),
     };
     m_grassPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -269,11 +270,11 @@ void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameI
 {
     if (!m_particles.isEnabled())
         return;
-    if (m_ubo.get(m_u.weather.rainOcclusionPresent) > 0.5f && m_rainOcclusionPipeline.isActive())
+    if (m_rainOcclusion.present && m_rainOcclusionPipeline.isActive())
         if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
         {
             m_gpuProfiler.beginScope(primary, "Rain occlusion");
-            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_ubo.get(m_u.weather.rainOcclusionViewProj));
+            m_rainOcclusionPipeline.record(primary, frameIdx, tlas, m_rainOcclusion.viewProj);
             m_gpuProfiler.endScope(primary);
         }
     executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
@@ -857,7 +858,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
     const glm::uvec2 renderSize(m_renderRect.getSize());
     // The engine's NDC jitter in render pixels, y down (the viewport's y flip). Verified on screen (2026-09-28):
     // the opposite sign on either axis (the UE convention) wobbles and softens the image.
-    const glm::vec2 jitterNdc(m_ubo.get(m_u.taaJitter));
+    const glm::vec2 jitterNdc(m_taaJitter);
     const glm::vec2 jitterPx(jitterNdc.x * (float)renderSize.x * 0.5f, -jitterNdc.y * (float)renderSize.y * 0.5f);
 
     // SL never enables NGX's output subrects: DLSS writes at (0, 0) only. A viewport at the origin (the game,
@@ -891,7 +892,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
         .jitterPx = jitterPx,
         .reset = m_dlssReset,
         .viewToClip = computeCenterProjection(camera),
-        .clipToPrevClip = m_ubo.get(m_u.viewReprojClip, RendererVKLayout::VIEW_CENTER),
+        .clipToPrevClip = m_views[RendererVKLayout::VIEW_CENTER].reprojClip,
         .cameraPos = camera.position,
         .cameraUp = glm::vec3(cameraToWorld[1]),
         .cameraRight = glm::vec3(cameraToWorld[0]),
@@ -1073,7 +1074,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
     if (const vk::AccelerationStructureKHR tlas = m_rt.accel().getTlas(frameIdx))
     {
         InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
-        const uint32 liveCount = m_ubo.get(m_u.present.giTlasNumInstances);
+        const uint32 liveCount = giTlasLiveCount();
         GIProbePipeline::TlasInstanceParams tlasParams{
             .renderNodeTransforms = instances.transforms,
             .meshInstances = instances.meshInstances,
@@ -1117,7 +1118,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 
 // The CACHED half of GI (recorded only on invalidation frames, with the scene secondaries): the sky map
 // bake and the probe trace (the TLAS it traces is built per frame, in recordGlobalIllumPrep). Everything
-// per-frame rides the UBO (u_rt_gi*, u_giLive, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
+// per-frame rides the UBO (u_rt_gi*, u_gi, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
 // buffers are stable per slot between invalidations (ensureTlasCapacity / the instance-capacity growth
 // both invalidate), and the RT / GI toggles re-record through their tweak callbacks.
 void Renderer::recordGlobalIllum(uint32 frameIdx)
@@ -1166,7 +1167,7 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
     // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
     // player in game mode, else the camera); probes that scrolled in since last frame (relative to
-    // u_giLive_prevFocus, last frame's focus, written by buildUbo) are full-replaced rather than blended.
+    // u_gi_prevFocus, last frame's focus, written by buildUbo) are full-replaced rather than blended.
     // Gated by the GI toggle - the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
@@ -1498,7 +1499,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         primary.endRenderPass();
         m_gpuProfiler.endScope(primary);
         // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition
-        // covers this layer too). Off, the receivers do not read it (u_grassLive_nearRange = 0).
+        // covers this layer too). Off, the receivers do not read it (u_grass_nearRange = 0).
         if (m_sceneViewCount == 1 && grassNearShadowActive())
         {
             m_gpuProfiler.beginScope(primary, "Grass near shadow");

@@ -98,7 +98,7 @@ void main()
 	// The CENTRE view for every displacement decision (the fade, the mip footprint): both VR eyes displace the
 	// same surface (terrain_tess.tcs.glsl). Only gl_Position below uses the eye's matrix.
 	const float dist = distance(pos, u_views_viewPos[VIEW_CENTER].xyz);
-	if (dist < fadeEnd && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
+	if (dist < fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
 	{
 		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w);
 		const TerrainLayers L = terrainLayers(pos, N, f);

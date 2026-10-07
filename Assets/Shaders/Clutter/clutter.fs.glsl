@@ -27,6 +27,7 @@ layout (location = 3) in vec4 in_fields; // x ao, y height above the base (m), z
 layout (location = 4) flat in uvec4 in_look; // x albedo0, y albedo1, z kind, w part
 layout (location = 5) in vec4 in_uv;         // the mesh's pattern coordinates (a branch's in metres)
 layout (location = 6) flat in float in_height; // the object's height (m)
+layout (location = 7) in vec3 in_relPos;       // the position relative to the camera (exact near it: the bump's derivatives)
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target (the opaque family): static
@@ -68,13 +69,19 @@ float clutterBarkHeight(vec2 uv)
 }
 
 // A bump normal from a height (m) over the surface, by its screen derivatives (Mikkelsen 2010): no tangent frame needed.
+// `pos` must be smooth across the quad (the camera-relative position, not the world one). A degenerate frame (the
+// surface edge-on, or no area: det ~ 0) keeps N - its gradient would be noise divided by nothing.
 vec3 clutterBump(vec3 pos, vec3 N, float h)
 {
     const vec3 dpdx = dFdx(pos), dpdy = dFdy(pos);
     const vec3 r1 = cross(dpdy, N), r2 = cross(N, dpdx);
     const float det = dot(dpdx, r1);
+    if (abs(det) < 1e-12)
+        return N;
     const vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
-    return normalize(abs(det) * N - grad);
+    const vec3 bumped = abs(det) * N - grad;
+    // Never past the horizon: a bump tilts the normal, it does not turn it away from the surface.
+    return dot(bumped, N) > 0.1 * length(bumped) ? normalize(bumped) : N;
 }
 
 void main()
@@ -101,13 +108,13 @@ void main()
     if (kind == CLUTTER_KIND_PEBBLE)
     {
         albedo = vec3(0.42, 0.40, 0.38) * albedo0;
-        if (u_terrainLive_splatBase >= 0.0 && u_terrainLive_numRock >= 1.0)
+        if (u_terrain_splatBase >= 0.0 && u_terrain_numRock >= 1.0)
         {
             const vec2 climate = vec2(clamp((in_fields.z + 25.0) / 75.0, 0.0, 1.0), in_fields.w);
             const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
-            const ClimatePick r = pickClimate(climate, int(u_terrainLive_numGround), int(u_terrainLive_numRock), invS2);
+            const ClimatePick r = pickClimate(climate, int(u_terrain_numGround), int(u_terrain_numRock), invS2);
             // Finer than a boulder: a pebble shows a few centimetres of the bedrock's grain.
-            const TerrainSample s = sampleTerrainTriplanar(uint(u_terrainLive_splatBase) + climatePickIdx(r, 0), in_pos,
+            const TerrainSample s = sampleTerrainTriplanar(uint(u_terrain_splatBase) + climatePickIdx(r, 0), in_pos,
                 f16vec3(geoN), u_terrainTex_uvScaleRock * u_rock_uvScale * 4.0);
             albedo = vec3(s.albedo) * albedo0;
             N = normalize(s.normal);
@@ -134,7 +141,7 @@ void main()
             const float blotch = grassValueNoise(in_uv.xy * vec2(3.0, 6.0) + 3.7);
             albedo = albedo0 * mix(1.0, mix(0.4, 1.2, h), detail) * mix(0.8, 1.15, blotch);
             albedo = mix(albedo, vec3(0.20, 0.23, 0.15) * (0.8 + 0.4 * h), lichen * h);
-            N = f16vec3(clutterBump(in_pos, geoN, h * 0.004 * detail)); // fissures ~4 mm deep
+            N = f16vec3(clutterBump(in_relPos, geoN, h * 0.004 * detail)); // fissures ~4 mm deep
             ao *= mix(1.0, mix(0.6, 1.0, h), detail);
         }
     }

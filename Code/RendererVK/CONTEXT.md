@@ -332,7 +332,7 @@ top-down camera hanging in empty sky shapes none of these:
   floored at ONE frame: **a close block's priority factor < 1 cancels the multiplier, down to every
   frame.** A wave traces every that many frames, interleaved per WORKGROUP (whole waves exit); the
   **`"GI/Temporal Alpha"` is the per-frame blend AT 60 FPS**: `getTraceParams0` compounds it over the
-  WALL delta (`u_giLive_temporalAlpha` = this frame's alpha; wall, not sim, so GI converges through a pause;
+  WALL delta (`u_gi_temporalAlpha` = this frame's alpha; wall, not sim, so GI converges through a pause;
   clamped so a hitch cannot replace the history), which makes convergence — and the speed at which
   the blend's noise wanders — frame-rate independent (uncorrected, 0.01 was a 1.7 s time constant at
   60 fps and 0.4 s at 240). The per-visit alpha compounds that over the interval,
@@ -391,7 +391,7 @@ top-down camera hanging in empty sky shapes none of these:
   scale, cap and variance floor): grey = mean distance over the cap (black = occluder at the probe,
   white = open), orange tint (multiplied, so black stays black) = deviation above the variance floor
   (edge softness, linear to cap / 2), magenta = no depth data yet,
-  dead probes dimmed. **The Chebyshev test has THREE knobs, one job each** (`u_rt_giVis*`; the irradiance volume's full-bake flag is `u_giLive_fullBake`; `giVisMoments` in gi_probe.inc.glsl, shared with the debug view): `giVisMeanScale` "Vis Mean Scale" (1.2)
+  dead probes dimmed. **The Chebyshev test has THREE knobs, one job each** (`u_rt_giVis*`; the irradiance volume's full-bake flag is `u_gi_fullBake`; `giVisMoments` in gi_probe.inc.glsl, shared with the debug view): `giVisMeanScale` "Vis Mean Scale" (1.2)
   moves the occlusion THRESHOLD — it scales the DEPTH, so the second moment scales by k² and the
   variance stays consistent (**the old code scaled the mean only: `mean2 - (k·mean)²` was negative
   nearly everywhere, the variance was always the floor and the stored second moment did nothing**);
@@ -487,12 +487,12 @@ top-down camera hanging in empty sky shapes none of these:
   copies, the skinned BLAS rebuild, **the TLAS-instance write and the TLAS build over this frame's LIVE
   instance count**, the one-time probe clear. `recordGlobalIllum` is a CACHED secondary (recorded with the
   scene secondaries, scope "TLAS + probe trace"): the sky map and the probe trace. **Everything per-frame
-  in it rides the UBO** — `u_rt` / `u_giLive` (the trace tweaks, last frame's focus, the TLAS range),
+  in it rides the UBO** — `u_rt` / `u_gi` (the trace tweaks, last frame's focus, the TLAS range),
   `u_frameIndex`, `u_sceneFocus` — so neither shader has push constants.
   **Why the TLAS is per frame:** a build's primitive count is a recorded CPU value, so the cached build had
   to cover the instance buffer's whole CAPACITY, which only ever doubles — every frame read and filtered
   every slot of the largest scene seen. The live count is final before the record (`present()` sets
-  `m_u.present.giTlasNumInstances` before `recordCommandBuffers`), and an indirect build is no option
+  `m_giTlasDemand`, `giTlasLiveCount`, before `recordCommandBuffers`), and an indirect build is no option
   (NVIDIA offers no `accelerationStructureIndirectBuild`). The build always runs, at count 0 too (an
   empty TLAS): a skipped one would keep records that may reference freed BLASes.
   **`u_present_giTlasNumInstances` is patched in `present()`, not written by the beginFrame UBO
@@ -572,7 +572,7 @@ top-down camera hanging in empty sky shapes none of these:
   value. The bake never evaluates `giWaveUpdateInterval` itself, so it cannot drift from the schedule. The
   stamp is written before the trace's dead-probe skip, so dead waves re-bake more often than they trace
   (harmless). **A new trace skip condition before the stamp must keep the stamp exact; a fresh-probe change
-  goes through `giProbeFresh`.** `u_giLive_fullBake` = one full bake: `takeVisibilityParams` sets it after
+  goes through `giProbeFresh`.** `u_gi_fullBake` = one full bake: `takeVisibilityParams` sets it after
   `createVolume` and when a Chebyshev knob moves (the baked value depends on them), held until a frame with
   RT + GI on. **The two volume tweaks reload through their own callback** (`resizeVolume` + reload): they
   never re-allocate the probe buffer, so the traced history survives a volume toggle.
@@ -594,7 +594,7 @@ top-down camera hanging in empty sky shapes none of these:
 * **GI clipmap + TLAS range.** `giCascadeOrigin(c, u_sceneFocus.xyz)` centres every probe cascade on the
   focus (sample, trace and debug sides alike), the trace's previous-window freshness test uses last
   frame's focus (`m_giPrevFocusPos`, advanced in `buildUbo` only while GI traces, published as
-  `u_giLive_prevFocus`), and the TLAS instance range bound (`RT/TLAS Range`, `u_rt_giTlasRange`) is measured
+  `u_gi_prevFocus`), and the TLAS instance range bound (`RT/TLAS Range`, `u_rt_giTlasRange`) is measured
   from `u_sceneFocus` too, so the ray-traced set is the geometry around the player.
 * **RTAO** "Fade Start" / "Max Distance": the fade and the trace early-out in `rtao.cs.glsl`, and the
   forward pass's upsample-skip gate, all measure from `u_sceneFocus`. The ray-origin distance bias
@@ -676,7 +676,7 @@ instead of only the camera.
   pass masks into ONE device-local previous set (`InstanceStream::recordPrevCopy`; the other slot cannot
   serve - the CPU may write it while the GPU reads it), which next frame's cull reads (bindings 18/19). A
   pass mask carries its push frame above the PASS_* byte (`InstanceStream::stampedPassMask`, from
-  `m_u.frameIndex`); a node not pushed LAST frame (off screen, or just spawned into a recycled transform
+  `m_uboFrameIndex`, the UBO's `u_frameIndex`); a node not pushed LAST frame (off screen, or just spawned into a recycled transform
   slot) draws with no motion instead of a stale transform. prevScale 0 = the node did not move: the vertex
   shader then keeps the exact current transform (the previous quaternion is snorm16, moving nodes only).
 * **Skinned meshes**: the output region is 2 x vertexCount (`spawnSkinnedNode`, freed the same way). The
@@ -891,7 +891,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     powder term, and an ambient: the sky map's CLEAR layer weighted by hf = the height within the sample's OWN
     LAYER (`cloudLayerHeightFraction`: main or upper band, not the union shell - a main-layer top would otherwise
     lose its sky light under a tall shell; the sun's bottom / top blend uses it too), plus the
-    ground bounce falling off EXPONENTIALLY from below (its albedo `u_cloudsLive_groundBounceAlbedo` = the sky's "Ground Albedo"
+    ground bounce falling off EXPONENTIALLY from below (its albedo `u_clouds_groundBounceAlbedo` = the sky's "Ground Albedo"
     COLOUR - its hue, not its intensity, which scales the sky-sphere ground plane and defaults to 0 - x the cloud
     "Ground albedo"), `exp(-h / depth)` with h = metres above the MAIN layer's base and depth =
     "Ground light depth (m)" (`u_clouds_invGroundLightDepth`, default 297 m) - it lights the undersides only (2026-09-28; the
@@ -984,7 +984,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     moving sun re-renders every frame). The lookup is unchanged: only the frozen centre's camera-relative
     offset is rebuilt each frame. **Steps per cascade** ("Near steps", "Far steps", `u_clouds_shadowNearSteps` /
     `shadowFarSteps`). **So the map is ONE image, not per frame slot.** It is cleared to "no cloud" at creation and
-    stays bound while the clouds are off (`u_cloudsLive_shadowRendered = 0` makes the lookup return 1).
+    stays bound while the clouds are off (`u_clouds_shadowRendered = 0` makes the lookup return 1).
   * **THE FAR CASCADE IS FILTERED ON THE RESULT** (`cloudShadowFarODFiltered`): its texels are tens of
     metres, and the OD is non-linear in the stored terms, so the sampler's bilinear blend of (x, y, z) stayed
     blocky. Instead it `texelFetch`es the 2x2 texels, computes each one's transmittance and blends those
@@ -1049,7 +1049,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   mostly those directions), and the samples sit relative to the camera, so a FAST camera slid them through the
   noise and the reflected sky changed colour every frame. Each frame now marches with a new jitter (per-texel
   hash + golden ratio) and blends into the texel's own last value (the image is read-write, cleared to "no
-  cloud" at creation). The history weight is FRAME-TIME based: `u_cloudsLive_skyHistory = exp(-3 dt / T)` with T =
+  cloud" at creation). The history weight is FRAME-TIME based: `u_clouds_skyHistory = exp(-3 dt / T)` with T =
   "Sky/Clouds/Quality/Sky map history (s)" (default 1; the GI layer has its own, see TWO CLOUD LAYERS below; 95 % of a change after T seconds at any frame rate; real
   time, so it still converges while the sim is paused; 0 = no history). **A FLOOR under it** (both layers):
   "Sky map min samples" N (default 12; 0 = time only) - the weight is at least (N - 1) / (N + 1), an average of N
@@ -1076,7 +1076,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   layer 1 = each march from a new observer in a disc around the camera (R2 over the disc per texel, uniform by
   area: "Sky/Clouds/Quality/GI sky observer radius (m)", default 4 km, `u_clouds_giSkyObserverRadius`), its history the average
   over them, composited into the GI layer. A binary cloud / gap per march needs a longer history: "GI sky history
-  (s)" (default 4, `u_cloudsLive_giSkyHistory`).
+  (s)" (default 4, `u_clouds_giSkyHistory`).
   **THE GI LAYER IS LOW-RES** (2026-10-04): since the probe misses read the sky SH and the far trees a constant
   texel, its only readers were the sky-SH projection (64 directions + −up) and the GI-off zenith ambient (terrain,
   ocean, film) - yet the clouds' layer 1 marched and the sky map composited the full 256x128 grid. Now both live in
@@ -1122,8 +1122,8 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
   came out of it: **the march applies its four light colours AFTER the loop** (the in-scatter is linear in
   them, so the loop sums three scalar weights: 56 -> 48 on the sky pass), and **the fog apply folds the
   cloud part before the scene's fog** (4 live values across the second `fogTo`, not 8: 56 -> 48). What a define
-  cannot hold stays a runtime UBO flag: `u_cloudsLive_enabled` = the march ran this frame (the game suppresses
-  it), `u_cloudsLive_shadowRendered` = the map was rendered this frame (suppressed, or the sun at the horizon).
+  cannot hold stays a runtime UBO flag: `u_clouds_enabled` = the march ran this frame (the game suppresses
+  it), `u_clouds_shadowRendered` = the map was rendered this frame (suppressed, or the sun at the horizon).
 * **Debug mode** ("Sky/Clouds/Quality"): step count heat, density only, history rejection.
 
 ## Procedural grass (`GrassPipeline`, "Grass" tweaks, `GrassParams`)
@@ -1156,7 +1156,7 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   user's preferred look); it eases (per blade) between `LOD 2 distance` and `LOD 3 distance` into a normal LINEAR in t
   (root normal -> the upper-half chord's normal, edge tilt x (1 - t)), which every LOD interpolates the same. The
   curve normal (horizontal tangent at the tip) spread over the single-triangle LOD made a brightness step at its
-  switch. Motion vectors: the same blade at LAST frame's time (`u_grassLive_prevTime`). The wind
+  switch. Motion vectors: the same blade at LAST frame's time (`u_grass_prevTime`). The wind
   (not the lean) eases out between `Wind/Fade start` and `Fade end` (100 / 200 m): far blades moving read as grain.
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
   interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
@@ -1174,7 +1174,7 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   heights and DENSITIES - **the terrain textures' own logic**: `terrainLayers` (terrain_splat.inc.glsl, included with
   `TERRAIN_SPLAT_HEIGHT_ONLY`), fed as the terrain VS feeds it (the baked fields, the temperature at the height, the
   SMOOTH mesh normal from the chunk's vertex normals: `grassGroundSmoothNormal`). Density = what the beach, rock and
-  snow layers leave of the GROUND x the grass amount of its climate pick's textures (`u_terrainLive_splatGrass` per slot,
+  snow layers leave of the GROUND x the grass amount of its climate pick's textures (`u_terrain_splatGrass` per slot,
   `TerrainSplatMaterial::grass`, set in Procedural's `TERRAIN_TEX_SOURCES`: grassland 1, savanna 0.6, cracked steppe / sand / scree 0)
   x (1 - `Cover/Canopy thinning` (0.3) x the FOREST FLOOR MAP's canopy (the ground clutter's: binding 8, the clutter
   frame; no map = no thinning): a closed canopy holds little grass. The ground's canopy shading under the blades
@@ -1206,7 +1206,7 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
 
 * **THE CANOPY: grass self-shadowing without a shadow map** (`Grass/Shadows/Canopy shadow`, 0.10; 0 = off) - a blade
   is far below a shadow-map texel. The grass layer is a thin VOLUME of blades (`grass.inc.glsl`): its top at the mean
-  blade height (`grassCanopyHeight`), its extinction = `u_grassLive_canopyExtinction` (the CPU fold: Canopy shadow x blades per
+  blade height (`grassCanopyHeight`), its extinction = `u_grass_canopyExtinction` (the CPU fold: Canopy shadow x blades per
   m^2 x half the blade width) x the COVER x the size by cover. Its RESULT (the sun term with the flecks, and the
   ground's canopy ambient) fades linearly with the blades' `Range fade` (`grassRangeFade`); fading the extinction
   kept exp(-extinction x path) nearly black until the band's last metres - an edge. Sun at a point `depth` below the
@@ -1228,11 +1228,11 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   extraLayer)`: layer `NUM_SHADOW_CASCADES`, 2048^2, its own single-view render pass + framebuffer), so the lit shaders
   read it through the binding they already have (`u_shadowMap`). The cascades' multiview pass transitions the WHOLE
   array view (UNDEFINED -> read-only), so this layer is drawn right AFTER it in the primary ("Grass near shadow"; its
-  pass's source dependency waits for that pass's depth writes). Its matrix (`u_grassLive_shadowViewProj`, `buildUboGrass`):
+  pass's source dependency waits for that pass's depth writes). Its matrix (`u_grass_shadowViewProj`, `buildUboGrass`):
   an ortho box of +-`Near shadow range` (8 m: 0.8 cm texels) down the sun, the cascades' construction, texel-snapped,
   a 50 m up-sun slab, centred AHEAD of the camera (a centred box spent half its texels behind the view): where the
   view's bottom-centre ray meets the ground + range - 1 m along the horizontal view direction - so the receivers'
-  full-weight disc starts 1 m behind the bottom of the frustum (the centre XZ: `u_grassLive_nearCentre`). That ground
+  full-weight disc starts 1 m behind the bottom of the frustum (the centre XZ: `u_grass_nearCentre`). That ground
   point is capped at HALF the range ahead (was 4 x the range: a low camera looking near the horizon meets the ground
   far ahead, and the box slid up to ~5 x the range forward - the near grass fell out; 2026-10-03). The ground is the
   terrain height under the camera (`Renderer::setCameraGround`, from Procedural's TerrainStreamer every frame; unknown:
@@ -1329,7 +1329,7 @@ ONE wind for everything that moves with it: speed (m/s, default 2), direction (d
 
 (Until 2026-10-05: separate Particles / Grass / Clouds / Fog / Ocean speeds and angles.)
 
-## Tree wind (`tree_wind.inc.glsl`, "Trees/Wind" tweaks, `FoliageParams` wind*, `u_foliage_wind*` / `u_foliageLive_wind*`)
+## Tree wind (`tree_wind.inc.glsl`, "Trees/Wind" tweaks, `FoliageParams` wind*, `u_foliage_wind*`)
 
 Vertex-shader sway of the procedural trees in THE wind (see "The wind" below). **No textures, no per-tree or
 per-vertex memory**: the gusts are `wind.inc.glsl`'s, and the per-vertex data rides the free MAGNITUDE of the tangent's w (RenderMeshData:
@@ -1350,9 +1350,9 @@ texCoords.z in (1, 2) = a tree mesh vertex's payload; >= 2 = the billboard / car
   the motion vectors (a texture-space motion). The branch cards (axis code) keep still.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
-offset minus this frame's (`u_foliageLive_windPrevTime`) to the motion vector. `shadow_depth.vs` applies the
+offset minus this frame's (`u_foliage_windPrevTime`) to the motion vector. `shadow_depth.vs` applies the
 trunk layer to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`; the cascade mask is the
-low 15 bits). Both culls grow a tree's bound by `u_foliageLive_windReach` (the reach at the strongest gust, from the UBO
+low 15 bits). Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO
 build). Beyond `Trunk fade end` (3 km, a 100 m band) nothing. **The TLAS stays static**: RT shadows / GI / reflections
 see unswayed trees.
 
@@ -1502,7 +1502,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
     BOTH bakes - the new one through `accum`'s RG16F view (MUTABLE_FORMAT, `m_accumFloatView`; the hardware filters
     across the columns, `densityTexelNew` blends the slice axis from two layer fetches; bindings 13-16 with the
     back floor / colour / max floor) - and per RAY a dither picks one: the new bake when the pixel's noise (IGN, stepped
-    by the golden ratio per frame) is under the UBO's fade (`u_foliageLive_handoverFade`, `handoverUbo`). The temporal pass / TAA
+    by the golden ratio per frame) is under the UBO's fade (`u_foliage_handoverFade`, `handoverUbo`). The temporal pass / TAA
     averages the picks into an image-space blend, so the opacity mixes correctly (a per-sample density mix would keep a
     dense crown opaque until late in the fade). The whole ray follows its pick - the ring, the skip, the ahead-break -
     so the variant costs what the normal march does. **Without any temporal accumulation (temporal off, no TAA / DLSS)
@@ -1676,7 +1676,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   by distance, `vol_apply`'s layering without the fog - and the tree stage is skipped. (Composited separately, the
   clouds came AFTER the trees: the volume writes no depth, so the clouds' march limit was the terrain behind the
   trees, and clouds between the two drew over them - 2026-10-02.)
-  **FOG ON: the fog apply composites the trees itself** (`vol_apply.fs`, bindings 9 / 10; `u_foliageLive_farMarched` =
+  **FOG ON: the fog apply composites the trees itself** (`vol_apply.fs`, bindings 9 / 10; `u_foliage_farMarched` =
   it marched this frame — the fog apply is a cached secondary, so the flag rides the UBO), at the march's
   transmittance-weighted MEAN DISTANCE (`exp2` of the distances' y): over the finished trees, the fog fogged them at
   the scene depth — the terrain BEHIND them, km farther — and they read twice as hazy as the billboards beside
@@ -2121,7 +2121,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   PCSS average blocker (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)`
   (`u_foliage_shadowLength`, default 3.5, 0 = hard). ~0 on the axis, deepening into the crown; far blockers shadow fully. All
   foliage values live in `Globals::settings.foliage` (`FoliageParams`, Settings.Render; registered as "Foliage ..." in the TreeSystem's
-  "Trees" tweak category) and ride `u_foliage` / `u_foliageLive` (Ubo). **The
+  "Trees" tweak category) and ride `u_foliage_*` (Ubo). **The
   billboard normal map is the CROWN layout** (Procedural TreeImpostor `bakeBillboards`, 2026-10-04): RGB = the full
   tangent-space normal, SIGN KEPT (a normal may face away, toward a sun behind the tree), **A = the BAKED INTERIOR**
   (linear: 0 on the crown's surface .. 1 at about the crown's core depth, from the piece's own blurred leaf field -
@@ -2244,10 +2244,12 @@ retention order, promotion order and eviction candidates are kept member scratch
 Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ranges (see
 `MeshStreamSource` in [`Code/File/CONTEXT.md`](../File/CONTEXT.md)). Vertex and index mega-buffers are
 `BitRangeAllocator<true>` (lock-free) free lists in `MeshDataManager` (see "The graphics-queue mutex" for its grow lock).
-Their initial sizes (`INITIAL_VERTEX_DATA` 1.5 GiB, `INITIAL_INDEX_DATA` 512 MiB), the mesh instance capacity
-(`INITIAL_INSTANCE_DATA` 524288), the render node capacity (`INITIAL_RENDER_NODES` 65536) and the unique mesh capacity
+A full pool grows by **1.1x** (at least the request, rounded up to whole buckets), not 2x: these are the largest
+device-local buffers, and a doubling left up to half of one unused. Each grow is a GPU drain + a full GPU copy.
+Their initial sizes (`INITIAL_VERTEX_DATA` 3 GiB, `INITIAL_INDEX_DATA` 1 GiB), the mesh instance capacity
+(`INITIAL_INSTANCE_DATA` 1048576), the render node capacity (`INITIAL_RENDER_NODES` 65536) and the unique mesh capacity
 (`INITIAL_UNIQUE_MESHES` 65534 = `MESH_MATERIAL_INDEX_LIMIT`, so it never grows) and the GI TLAS instance capacity
-(`GI_INITIAL_TLAS_INSTANCES` 16384) are set so the world's load does not grow them (each grow idles the GPU).
+(`GI_INITIAL_TLAS_INSTANCES` 32768) are set so the world's load does not grow them (each grow idles the GPU).
 
 Over `Mesh budget (MB)`, least-recently-referenced sets unseen for `Mesh cold frames` **evict**:
 
@@ -2353,9 +2355,8 @@ Scene opaque, nearly all with 0 instances.
 | | **`ForceFieldState`** — params, the emitter + point-query slot registries (STABLE indices across the ~2-frame readback latency), this frame's bake chunk set, the shell-cull build, and **its between-frames job** (`buildGrid` / `applyGridGrowth`), mirroring `FrameSubmission`'s. |
 | | **`BindlessTextures`** — the two counts that are not the same (the fixed LAYOUT CAP baked into every pipeline layout vs the LIVE descriptor count the variable-count sets are allocated with), the streamer's pending slot writes, and the deferred free queue. The six consumers are reached through two callbacks the Renderer wires in `initBindlessTextures`. |
 | | **`RayTracingScene`** — owns `AccelerationStructure` plus the CPU bookkeeping around it: the per-MeshInfo vertex counts (BLAS maxVertex) and skinned-output flags, the TLAS instance capacity, and **the one-time build watermark**. A static BLAS builds once, so `takeBuildList` scans forward from the watermark — which is exactly why a RE-STREAMED mesh and a RECYCLED slot below it must be queued explicitly, and why a skinned output region is never in the list at all. |
-| `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. The structs must stay in sync with `shared.inc.glsl`; the frame UBO is not here (registered: `UboBlock.ixx` / `UboRoot.ixx`). |
-| `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes (root handles, lockable values), `UboGroup` (self-binding handles). |
-| `UboRoot.ixx` | `UboRoot`: the root value handles, in packing order (see "The frame UBO and the tweak locks"). |
+| `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. The structs must stay in sync with `shared.inc.glsl`; the frame UBO is not here (registered: `UboBlock.ixx`). |
+| `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes - every value one `add` / `addArray` line with its sources (tweaks = lockable, `UboLive`, `UboPresent`). |
 | `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
 | `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks". |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
@@ -2364,7 +2365,7 @@ Scene opaque, nearly all with 0 instances.
 | `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
 | `Renderer.ixx` | The whole class. One interface, **four implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
 | `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each now a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` as five phases (`attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`), then `waitFrameSlot` → `beginFrame` (+ its job kick/join) → `present`. |
-| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo` and the `buildUbo*` helpers that write its root values through `m_u`'s handles by subject (views, weather, ray tracing, sky, clouds, sun shadow, fog, ocean, force, terrain, grass, foliage, post). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs, and `m_ubo` persists across frames (the view build reprojects from last frame's mvps). |
+| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo`, the `buildUbo*` frame-state steps (the views, the camera velocity, GI's one-frame flags, the cloud wind + shadow recentre, the sun cascades, the force bake box, the wetness tick, the grass cascade), `registerUboValues` (every value, live and lockable, by subject). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs; `m_views` keeps last frame's mvps (the reprojection). |
 | `RendererScene.cpp` | The scene the outside owns, in two halves. **Residency**: container add/remove, `renderNode` (the push), the spawn-path entry points, the bindless descriptor upkeep, and the cross-cutting work a capacity growth needs (`onUniqueMeshCapacityGrown`). **Submission** (bottom of the file, mostly called from jobs): lights / fog volumes / decals and the emitter + query registries, each a thin delegate into the `Data/` object that owns the contract. |
 | `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the two primaries (desktop / VR). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only (the debug overlays). |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
@@ -2535,7 +2536,7 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   ocean **80/32** (the rework had taken it to 80/48), film **64/16** (was 56/48: the same demand, 68).
   * The ocean's +16 B was the bubble cloud's THREE half-vec3 `exp`s (sun path down, sky path down, path up)
     in the middle of the top side. The two DOWN paths and the albedo are per-frame constants: `buildUboOcean`
-    folds them into `u_oceanLive_bubbleSun` / `bubbleSky`, and `oceanBubbleRadianceFrame` keeps the one per-pixel `exp` (up).
+    folds them into `u_ocean_bubbleSun` / `bubbleSky`, and `oceanBubbleRadianceFrame` keeps the one per-pixel `exp` (up).
     The film's depth is per pixel (capped at its water), so it keeps the full `oceanBubbleRadiance`.
   * The ocean's blurred bubble tap (up to 16 B-spline taps) moved to the top of main: NEUTRAL, but kept there
     (the cheapest point for it). It refracts through the level plane since.
@@ -2636,9 +2637,9 @@ Both push params in every frame; the renderer owns none of the tweaks.
   diffuse = sRGB albedo + linear ROUGHNESS in the alpha (BC3); normal (BC5 sets
   `MATERIAL_FLAG_BC5_NORMAL`); height = HEIGHT (R, 0.5 = flat) + AO (G) (BC5). **Metalness is always 0**
   (the ARM texture is gone; `metalRoughnessTexIdx` stays none). **`MaterialInfo` has no free slot, so the
-  height + AO index rides the UBO per slot** (`u_terrainLive_splatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat, AO 1),
+  height + AO index rides the UBO per slot** (`u_terrain_splatHeightTex[s >> 2][s & 3]`, 0xFFFF = flat, AO 1),
   like the climate boxes. **The splat reads its other texture indices from the UBO too**
-  (`u_terrainLive_splatTex[s >> 1]`, .xy even slot / .zw odd: diffuse | normal << 16, BC5 flag;
+  (`u_terrain_splatTex[s >> 1]`, .xy even slot / .zw odd: diffuse | normal << 16, BC5 flag;
   `terrainSplatTex()`), not from `in_materialInfos`: each fetch then does not wait on a storage-buffer load
   first. `sampleTerrainXZ` issues its three fetches back to back. The materials are still registered
   (`addMaterials`) for everything else. The full contract is on the definition in `Renderer.cpp`.
@@ -2651,6 +2652,19 @@ Both push params in every frame; the renderer owns none of the tweaks.
   the height/AO tap (triplanar paid up to 3 x 3 + 1). Roughness rides each plane's diffuse alpha; height AND
   AO come from the top plane (uvY) alone, so on a steep face the AO is the top projection's, stretched (it
   multiplies only the ambient term).
+* **The terrain NOISE texture** (`TerrainResources::createNoiseTexture`, made once in `initSharedBuffers`;
+  `u_terrain_noiseTex`): 512² RGBA8, tileable, box mips. R, G = two gradient fBms (8 lattice cells per tile, 4 octaves,
+  stretched to 0..1); B = a value fBm (16 cells, 3 octaves, 0..1) - the old computed `terrainFbm`, baked.
+  * **The crag wander reads B** (`textureLod` 0, `u_terrainTex_cragWanderUvScale` = one wavelength per cell): one fetch
+    instead of the 12-hash fBm, and from every `terrainLayers` caller (the TES and the culls too). **The grass cull has
+    no bindless array**, so it binds the texture alone (binding 9, `TERRAIN_NOISE_SAMPLER`) - its coverages must match
+    the ground's, or grass grows on the rock border.
+  * **MACRO VARIATION** ("Terrain/Textures/Macro variation / hue / roughness / size"; `terrainMacroAt` +
+    `terrainApplyMacro`): against the visible texture repeat. Two R/G taps, the second 3.71x larger and turned 34°,
+    give a brightness and a warm/cool hue (~[-1, 1]); the roughness follows the brightness. Applied over ground, beach
+    and rock, UNDER the snow (step 4 of `terrainSplatLayers`), and to the boulders (`instanced_indirect_rock.fs`, not
+    dead wood) so a rock keeps the tone of its ground. The taps are in uniform flow (screen derivatives); the ocean's
+    seabed uses `TERRAIN_MACRO_TEX` = `textureLod` 0.
 * **"Renderer/Textures/Anisotropy"** (Off / 2x / 4x / 8x / 16x, default 4x - a user decision; was a fixed 16x): the max anisotropy of
   `StaticMeshGraphicsPipeline::m_sampler`, the sampler of EVERY scene texture slot (materials + the splat). A
   change waits for the GPU, recreates the sampler (`recreateSampler`) and re-records; `record()` writes all
@@ -2746,7 +2760,7 @@ splat's own materials and rules** - a boulder under a sandstone cliff is that sa
 # Terrain surface water
 
 ONE wetness field feeds ONE water surface ("Terrain/Water" tweaks, `TerrainWetTweaks`,
-`u_terrainWater` / `u_terrainLive_wet*`). It is both the rain puddles on the ground and the continuation of the ocean onto
+`u_terrainWater` / `u_terrain_wet*`). It is both the rain puddles on the ground and the continuation of the ocean onto
 the sand, so the two can never disagree.
 
 * **The field** is the wetness clipmap (`TerrainWetnessPipeline`, see its entry below): rain everywhere,
@@ -3094,7 +3108,7 @@ the sand, so the two can never disagree.
   `terrain_wetness.cs.glsl` / `.inc.glsl`): ONE persistent R16F image, `TERRAIN_WET_RES`² texels of
   `texelSize` m, stored **toroidally around the scene focus** exactly like the GI probe clipmap (slot =
   lattice & (RES−1); the CPU packs this frame's and last frame's window origin into
-  `u_terrainLive_wetOrigin` / `wetPrevOrigin`, and a texel whose coord was outside last frame's window starts dry). The pass
+  `u_terrain_wetOrigin` / `wetPrevOrigin`, and a texel whose coord was outside last frame's window starts dry). The pass
   runs after the particle sim: decay `exp(−dt/dryTime)` (sharpened on warm ground from the map's own
   climate), then **ground under the LIVE ocean surface is set to 1** — the same calm-depth + swash
   residual predicate the lit core uses for underwater sunlight, so the wet tongue is where the water
@@ -3123,7 +3137,7 @@ the sand, so the two can never disagree.
   own `oceanInstantFoam`, land skipped through the shore data (binding 2, the fog terrain map,
   UPDATE_AFTER_BIND + refreshed per frame like the wetness pass), and a hashed dice at "Spray rate" ×
   cell area × dt × breaking. The emitter slot arrives through `setOceanSprayEmitter` (the Particle
-  system's `Effects/ocean_spray.pfx` instance) in `u_oceanLive_sprayEmitter`; `UINT32_MAX` switches the step off
+  system's `Effects/ocean_spray.pfx` instance) in `u_ocean_sprayEmitter`; `UINT32_MAX` switches the step off
   in-shader, so the cached CB records once. Tweaks `Ocean/Spray rate / radius / threshold / kick /
   speed / forward offset / height offset`.
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
@@ -3162,42 +3176,50 @@ the sand, so the two can never disagree.
 
 ONE uniform buffer per frame slot (`RendererVKLayout::UBO_RANGE` bytes; every descriptor binds the whole range), built
 by `buildFrameUbo` in the begin-frame job and uploaded whole. **No C++ struct mirrors it: its layout is REGISTERED**
-(`UboBlock`, `UboBlock.ixx`) - each member a name, a type and an std140 offset in registration order, and the block
-owns the bytes (`m_ubo`; they persist across frames: the build reads last frame's mvps). Two kinds of member:
+(`UboBlock`, `UboBlock.ixx`) - each member a name, a type and an std140 offset in registration order.
 
-* **The ROOT values** (`UboRoot`, `UboRoot.ixx` - `m_u`): typed handles (`UboValue<T>` / `UboArray<T>`, an offset)
-  the build writes through, `m_ubo.set(m_u.fogLive.waveBand, v)` / `m_ubo.get(...)` - a memcpy at a fixed offset, the
-  cost of a struct write. **Each handle binds itself where it is declared** (`UboGroup`: `UboValue<float> enabled =
-  g("enabled");`), so the struct IS the layout and declaration order is packing order (a vec3 then a float share 16
-  bytes); a group's prefix names it (`u_cloudsLive_enabled`). No macro, no mirrored table. It holds what nearly every
-  pass reads (`u_views_mvp[3]` ... `u_views_viewPos[3]` - one array per view matrix, read through `ubo.inc.glsl`'s
-  `u_mvp` / `u_viewPos` macros or `u_views_*[VIEW_CENTER]`; `u_frustumPlanes`, `u_cascadeViewProj`,
-  `u_cascadeSunSizeTexels`, `u_screenSize`, `u_viewportRect`, `u_taaJitter`, `u_sunDirection`, `u_frameIndex`,
-  `u_sunColor`, `u_timeSeconds`, `u_sunTransmittance`, `u_sunVisible`, `u_skyUp`, `u_mipPixelScale`,
-  `u_ambientColor`, `u_sceneFocus`) and the LIVE groups (`cloudsLive`, `giLive`, `fogLive`, `oceanLive`,
-  `terrainLive`, `grassLive`, `foliageLive`, `forceLive`, `weather`, `present`): everything that also depends on the
-  camera, the clock, the sun, the wind, the readback or a value the outside pushes per frame. An array's element is a
-  16-byte multiple (vec4, uvec4, mat4); a packed array (the splat slots) is built per element. `set` takes the
-  handle's type, the value converts to it.
-* **The LOCKABLE values** (`UboBlock::add`, registered after the root): ONE LIST, `Renderer::registerUboFields` at the end of
-  `RendererUbo.cpp`. One entry per value computed from tweaks alone, its GLSL name and its value:
-  `list.add("fog_density", f.density)` (a tweak variable as it is: its own source) or
-  `list.add("fog_albedo", [&] { return f.albedo * f.albedoIntensity; }, f.albedo, f.albedoIntensity)` (a lambda plus
-  EVERY variable it reads). **The GLSL type comes from the value's C++ type** (`float`, `vec2/3/4`, `uint32` ->
-  `uint`; `bool` / `int` -> `float`, the way the shaders compare them). The list packs the entries with std140 rules
-  in registration order and runs every lambda each build (~430 virtual calls). A lambda captures `[&]` over local
-  references to members, or `this` - never a local value. A value the live build also needs comes from one helper
-  (the anonymous namespace at the top of `RendererUbo.cpp`, or a Renderer member like `grassPatchSize` /
-  `getOceanSwashAmp`), so the two cannot drift. **The rule for a new value: if anything but tweaks feeds it, it is
-  live (a UboRoot handle); else it is one `list.add` line.**
-* **The GLSL block is FLAT**: shaders read `u_<subject>_<field>` (`u_fog_density`, `u_fogLive_waveBand`), never a
+**EVERY VALUE IS ONE LINE: its GLSL name, a lambda, and its SOURCES** - the sources alone decide live or lockable:
+```cpp
+ubo.add("fog_density", f.density);                                                  // a tweak as it is: lockable
+ubo.add("fog_albedo", [&] { return f.albedo * f.albedoIntensity; }, f.albedo, f.albedoIntensity); // lockable
+ubo.add("sunColor", [&sky] { return sky.sunColor * sky.sunIntensity; }, UboLive);   // reads no-tweak state: live
+ubo.addArray("views_mvp", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].mvp; }, UboLive);
+```
+**Moving a value between live and baked is editing its sources** - `UboLive` for the tweaks it reads, or back. Its name
+and its place stay: neither says live or lockable.
+
+* **ONE function, by subject:** `Renderer::registerUboValues` (the end of `RendererUbo.cpp`) has a section per subject
+  (the frame, Sky, Clouds, Shadows, Ray tracing, Fog, Ocean, Terrain, Terrain textures / tessellation / water, Grass,
+  Clutter, Trees, Rocks, LOD, Force, Particles, Weather, Post, present), and each section holds its subject's live and
+  lockable values side by side, all named `<subject>_<field>` (`fog_density` lockable, `fog_waveBand` live).
+* **LIVE** = everything that also reads the camera, the clock, the sun, the wind, a readback or a value the outside
+  pushes per frame: the frame section (the views `u_views_mvp[3]` ... `u_views_viewPos[3]`, one array per view matrix,
+  read through `ubo.inc.glsl`'s `u_mvp` / `u_viewPos` macros or `u_views_*[VIEW_CENTER]`; the frustum, the screen, the
+  time), the sun, the sun cascades, the terrain's streamer / splat / wetness state, the weather, and the per-frame
+  values in the other sections.
+* **LOCKABLE** = computed from tweaks alone, sources = EVERY settings variable the lambda reads.
+* **THE FRAME STATE the lambdas read** comes from the `buildUbo*` steps that `buildFrameUbo` runs first - only what has
+  a side effect, carries over from the last frame or comes out of one calculation with several results: `m_views`
+  (prev mvps), `m_taaJitter`, `m_cameraVelocity`, `m_rainOcclusion`, `m_giFullBake` / `m_giUboPrevFocus`, the cloud
+  wind / evolve offsets and shadow recentre (`m_cloudShadow*`), `m_sunCascadeViewProj` + `m_cascadeSunSizeTexels`, the
+  force bake box (`m_forceBake*`), `m_wetTick`, `m_grassNear`, the foam field (`OceanSimulationPipeline::advanceFoamField`).
+  Everything else a lambda computes itself from the params and getters. Then `evaluate()` runs every lambda once, in
+  registration order (~570 virtual calls). CPU code that needs one of these values reads the frame state, never the
+  block (`m_views[VIEW_CENTER].reprojClip`, `m_taaJitter`, `m_rainOcclusion`, `m_uboFrameIndex`).
+* **The GLSL type comes from the lambda's return type** (`float`, `vec2/3/4`, `uint32` -> `uint`, `uvec4`, `mat4`;
+  `bool` / `int` -> `float`, the way the shaders compare them). std140 packing in registration order; an array's element
+  is a 16-byte multiple (vec4, uvec4, mat4). A lambda captures `[&]` over local references to members, or `this` -
+  never a local value. A value two lambdas need comes from one helper (the anonymous namespace at the top of
+  `RendererUbo.cpp`, or a Renderer member like `grassPatchSize` / `getOceanSwashAmp`), so they cannot drift.
+* **The GLSL block is FLAT**: shaders read `u_<subject>_<field>` (`u_fog_density`, `u_fog_waveBand`), never a
   struct member - so ONE value can be a constant while its neighbours stay block reads. Every member carries its byte
   offset as an explicit `layout(offset = N)`; there is no struct type at all. `buildUboDeclaration`
   (`UboDeclaration.cpp`) makes the GLSL from the block's entries; the shader includer serves that text as
   **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes, and a copy for reading is written to
   `Assets/Local/Shaders/ubo.generated.glsl`.
-* **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count): its members are contiguous
-  (`UboRoot::Present::begin()` / `size()`), and present() uploads that byte range alone after the begin-frame upload.
+* **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count): source `UboPresent`, registered
+  together (contiguous), skipped by `evaluate()`; present() runs `evaluatePresent()` and uploads that byte range alone
+  (`presentBegin` / `presentSize`) after the begin-frame upload.
 * **Push constants** keep what sizes, offsets or gates a dispatch (extents, view index, `mbEnabled`, buffer
   addresses). Most tweak values ride the UBO so a lock can bake them: RTAO's, TAA's, the motion blur's, the
   composite's and the far-tree march's shading moved there. A tweak value that must stay a push constant is a
@@ -3223,9 +3245,6 @@ size, a define with its own listener) has no button and is never read-only. `ETw
   `oceanWorldScaled(settings.ocean)` (Settings.Ocean, the one world-scale conversion OceanGenerator also pushes
   with), the terrain textures / wetness from `settings.terrain` (`terrainWetTexelSize`), the force field from
   `settings.force`. GI's private tweaks: `GIProbePipeline::registerUboFields`.
-* **`list.addLive(name, lambda)`** is an entry that is never baked (no sources): a value fed by something that is not
-  a tweak but changes rarely. The four terrain crag values (× `m_terrainCragScale`, which TerrainStreamer sets
-  through `setTerrainCragScale` from the V3 metres per pixel), `post_mbSamples` and `post_bloomScale` (resolution).
 * **An entry is baked while every source is locked.** A row no lock covers counts as locked (nothing unlocks it: a
   change just re-bakes); a Runtime row or an unlocked row makes it live. A source that resolves to nothing warns
   once and bakes.
@@ -3269,7 +3288,7 @@ histogram, rain occlusion, the GI probe debug, the far-tree splat / records / fa
 temporal / upsample). The others are still hand-written blocks with mirrored C++ structs.
 
 * **A handle struct per block IS the layout**: `PushValue<T>` members that bind themselves where they are declared
-  (`PushGroup`, like `UboGroup`): `PushValue<float> radius = g("radius");`, a buffer reference
+  (`PushGroup`): `PushValue<float> radius = g("radius");`, a buffer reference
   `PushValue<uint64> pieces = g("pieces", "PieceList");` (an address names its GLSL type), a nested group with a prefix
   (`TvVolPush vol{ { g.block, "vol_" } };` -> `pc_vol_*`). Scalar layout, explicit offsets, 128 bytes at most. A
   variant can bind other names (`SplatPush::recordsVariant`: `pc_pieces` / `pc_map`).

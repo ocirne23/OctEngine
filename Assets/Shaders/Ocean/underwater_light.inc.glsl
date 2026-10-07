@@ -9,7 +9,7 @@
 //   - BEER-LAMBERT: exp(-u_ocean_absorption * pathLength) - the blue-green shift with depth that
 //     makes accumulated froxel light read as colored shafts.
 // Tweaks: u_fog_causticStrength (0 disables the focus term, absorption remains),
-// u_fogLive_causticDepthFade (1/m: contrast decay with depth, approximating defocus - paired with a mip
+// u_fog_causticDepthFade (1/m: contrast decay with depth, approximating defocus - paired with a mip
 // that coarsens with depth so deep caustics blur out instead of aliasing).
 //
 // The includer defines UNDERWATER_OCEAN_BINDING for the FFT maps (fog binds them at 11, the forward
@@ -41,8 +41,8 @@ layout (binding = UNDERWATER_OCEAN_BINDING) uniform sampler2DArray u_uwOceanMaps
 //             1 in open water, easing to the swash base across the approach band)
 void oceanShoreWeights(float columnDepth, float waterLevel, out float swash, out float surface)
 {
-    const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanLive_seaLevel));
-    const float reach = max(u_oceanLive_swashReach, 0.01);
+    const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_ocean_seaLevel));
+    const float reach = max(u_ocean_swashReach, 0.01);
     const float landFade = clamp(1.0 + min(columnDepth, 0.0) / reach, 0.0, 1.0);
     const float fadeIn = 1.0 - smoothstep(0.0, max(2.0 * reach, u_ocean_shoalScale * u_ocean_cascadeSizes.y), columnDepth);
     const float base = u_ocean_swashAmp * seaFade * landFade;
@@ -75,7 +75,7 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
         // Same thickness gate + reach soft-cap as the displacement: a buried tongue doesn't slide, and
         // the slide distance stays bounded.
         vec2 flowOff = off * (flow * smoothstep(0.0, 0.35, rawY0 * sw + columnDepth));
-        const float flowCap = clamp(0.5 * u_oceanLive_swashReach, 0.25, 1.0);
+        const float flowCap = clamp(0.5 * u_ocean_swashReach, 0.25, 1.0);
         sampleXZ -= flowOff * (flowCap / (flowCap + length(flowOff)));
     }
 
@@ -126,11 +126,11 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         // filaments (up to 8x) instead of a gentle modulation, which is what makes fog columns read as
         // distinct rays. The exponent decays with depth (defocus), flattening focus toward 1.
         const float J = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
-        const float depthFade = exp(-dEff * u_fogLive_causticDepthFade);
+        const float depthFade = exp(-dEff * u_fog_causticDepthFade);
         // Shoreline fade: contrast ramps in over the first meters of TRUE depth, so the pattern
         // dissolves at the terrain-waterline intersection instead of cutting off there (a caustic
         // needs a water column to focus through; at depth 0 there is none).
-        const float shoreFade = u_fogLive_causticShoreFade > 0.0 ? smoothstep(0.0, u_fogLive_causticShoreFade, depthBelow) : 1.0;
+        const float shoreFade = u_fog_causticShoreFade > 0.0 ? smoothstep(0.0, u_fog_causticShoreFade, depthBelow) : 1.0;
         focus = pow(clamp(1.0 / max(J, 0.125), 0.02, 8.0), 1.5 * u_fog_causticStrength * depthFade * shoreFade);
     }
 

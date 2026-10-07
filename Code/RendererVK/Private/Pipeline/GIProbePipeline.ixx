@@ -138,7 +138,7 @@ public:
         vk::Sampler shadowMapSampler;
     };
     // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
-    // UBO (u_frameIndex, u_rt_gi*, u_giLive - see getTraceParams0 / getTlasRange).
+    // UBO (u_frameIndex, u_rt_gi*, u_gi - see getTraceParams0 / getTlasRange).
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
 
     // THE IRRADIANCE VOLUME (gi.grid.volume, "GI/Irradiance volume"): bakes the probe field into per-cascade
@@ -155,7 +155,7 @@ public:
     }
     // Rewrites one slot of the trace set's texture array (binding 15) with a new or streamed texture's view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
-    // x = rays per probe, y = temporal alpha of THIS frame (u_giLive_temporalAlpha), z = max ray distance, w = update
+    // x = rays per probe, y = temporal alpha of THIS frame (u_gi_temporalAlpha), z = max ray distance, w = update
     // interval multiplier (u_rt_giRaysPerProbe / giMaxRayDistance / giIntervalMult).
     // "GI/Temporal Alpha" is the per-frame blend AT 60 FPS; y is that rate compounded over this frame's wall
     // delta, so the field converges in the same WALL time at any frame rate. Per frame and uncorrected, 0.01
@@ -200,11 +200,11 @@ public:
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
     Buffer& getGiGridDataBuffer() { return m_giGridData; }
     float getStrength() const { return Globals::settings.gi.strength; }
-    // The u_rt_gi* entries (Renderer::registerUboFields, inside its rt block): its tweaks are private. rtEnabled /
+    // The u_rt_gi* entries (Renderer::registerUboValues, inside its rt block): its tweaks are private. rtEnabled /
     // giEnabled are long-lived RTParams members: the lambdas keep the references.
     void registerUboFields(UboBlock& list, const bool& rtEnabled, const bool& giEnabled) const;
     // x = Chebyshev variance floor (fraction of probe spacing), y = FULL volume bake this frame (1/0), z = probe
-    // weight floor, w = mean scale. Uploaded to the frame UBO (u_rt_giVis*, u_giLive_fullBake) for every probe-sampling shader.
+    // weight floor, w = mean scale. Uploaded to the frame UBO (u_rt_giVis*, u_gi_fullBake) for every probe-sampling shader.
     // Called ONCE per frame by the UBO build: y is 1 for the one frame after the volume images were (re)created
     // or a Chebyshev knob changed - the bake is otherwise partial (only voxels whose probes the trace visits),
     // and a far probe can go hundreds of frames without a visit. bakeRuns = this frame records the bake (RT and

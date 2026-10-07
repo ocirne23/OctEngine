@@ -37,7 +37,7 @@ const float REFLECTION_FOG_ALTITUDE_SHARE = 0.5;
 // The layer's base at a point of height pointY: 0 rise on the ocean, the followed ground under an inland film.
 float reflectionFogBase(float pointY)
 {
-    return u_fog_heightBase + u_fog_terrainFollow * (u_terrainLive_mapSeaLevel + REFLECTION_FOG_ALTITUDE_SHARE * max(pointY - u_terrainLive_mapSeaLevel, 0.0));
+    return u_fog_heightBase + u_fog_terrainFollow * (u_terrain_mapSeaLevel + REFLECTION_FOG_ALTITUDE_SHARE * max(pointY - u_terrain_mapSeaLevel, 0.0));
 }
 
 // "Ocean/RT/Reflection fog" (u_ocean_rtReflectionFog) x the scene's density; 0 with the fog off.

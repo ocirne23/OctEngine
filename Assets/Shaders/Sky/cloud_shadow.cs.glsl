@@ -48,11 +48,11 @@ void main()
     const ivec3 dst = ivec3(px, int(u_cascade));
     const vec4 noCloud = vec4(-1e30, 0.0, 0.0, 0.0);
 
-    const vec4 cascade = u_cloudsLive_shadowCascade[u_cascade];
+    const vec4 cascade = u_clouds_shadowCascade[u_cascade];
     const vec3 L = u_sunDirection;
     const float texel = 1.0 / (cascade.w * float(u_resolution));
     const vec2 local = (vec2(px) + 0.5 - 0.5 * float(u_resolution)) * texel;
-    const vec3 origin = cascade.xyz + u_cloudsLive_shadowAxis0 * local.x + u_cloudsLive_shadowAxis1 * local.y; // on the plane through the centre
+    const vec3 origin = cascade.xyz + u_clouds_shadowAxis0 * local.x + u_clouds_shadowAxis1 * local.y; // on the plane through the centre
     const float camAlt = u_viewPos.y; // centre view (g_viewIndex 0)
 
     // THE MAIN LAYER ONLY: the upper layer casts no map shadow (thin, low-density sheets - a weak shadow). Over the

@@ -3,7 +3,7 @@
 // The SAMPLED SHELL TIER's volume bake: one thread per voxel of the fixed-size 3D bake volume,
 // accumulating EVERY team's analytic field (the same forceAccumulate every evaluation uses - the
 // volume therefore carries small-bubble deformation of the big shells too) into two RGBA16F
-// volumes (phi[0..3] / phi[4..7]). The volume's world mapping (u_forceLive_bakeMin / bakeInvSize) is refit each frame
+// volumes (phi[0..3] / phi[4..7]). The volume's world mapping (u_force_bakeMin / bakeInvSize) is refit each frame
 // over the union of the LARGE drawable emitters' support boxes, so the fixed texel grid's
 // resolution self-adjusts. Shell proxies of large emitters march THESE textures instead of the
 // per-sample analytic candidate loop (force_shell.fs.glsl).
@@ -35,8 +35,8 @@ void main()
         return;
     // Voxel CENTERS: world = min + (i + 0.5) / dims * size - texture() at uvw = (x - min) / size
     // then samples exactly these centers (the shell FS's mapping).
-    const vec3 size = 1.0 / max(u_forceLive_bakeInvSize, vec3(1e-9));
-    const vec3 world = u_forceLive_bakeMin +(vec3(p) + 0.5) / vec3(dims) * size;
+    const vec3 size = 1.0 / max(u_force_bakeInvSize, vec3(1e-9));
+    const vec3 world = u_force_bakeMin +(vec3(p) + 0.5) / vec3(dims) * size;
 
     float phi[NUM_FORCE_TEAMS];
     forceAccumulate(world, phi);

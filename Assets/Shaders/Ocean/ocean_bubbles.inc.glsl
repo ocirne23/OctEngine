@@ -25,14 +25,14 @@ f16vec3 oceanBubbleRadiance(float16_t depth, float16_t NoV, float16_t sunCos, f1
 }
 
 // The same at the frame's own "Bubble depth" (the ocean): the light's path DOWN and the albedo are per-frame
-// constants the CPU folds (u_oceanLive_bubbleSun / bubbleSky, buildUboOcean), so only the path back up is per pixel - one
+// constants the CPU folds (u_ocean_bubbleSun / bubbleSky, buildUboOcean), so only the path back up is per pixel - one
 // exp, not three (the three set the ocean's register peak: 80/32 -> 80/48).
 f16vec3 oceanBubbleRadianceFrame(float16_t NoV, f16vec3 sunLight, f16vec3 skyLight, f16vec3 inscatter)
 {
     const float16_t one = float16_t(1.0);
     const float16_t muV = sqrt(one - (one - NoV * NoV) * float16_t(1.0 / (1.33 * 1.33))); // refracted view cosine
     const f16vec3 tUp = exp(-f16vec3(u_ocean_absorption) * (float16_t(u_ocean_bubbleDepth) / muV));
-    return (sunLight * f16vec3(u_oceanLive_bubbleSun) + skyLight * f16vec3(u_oceanLive_bubbleSky)) * tUp + inscatter * (f16vec3(1.0) - tUp);
+    return (sunLight * f16vec3(u_ocean_bubbleSun) + skyLight * f16vec3(u_ocean_bubbleSky)) * tUp + inscatter * (f16vec3(1.0) - tUp);
 }
 
 #endif

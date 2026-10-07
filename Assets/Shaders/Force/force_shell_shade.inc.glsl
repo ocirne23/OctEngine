@@ -105,7 +105,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     {
         float w = phiVis[t] * phiVis[t];
         w *= w;
-        teamColor += u_forceLive_teamColors[t].rgb * w;
+        teamColor += u_force_teamColors[t].rgb * w;
         weightSum += w;
     }
     teamColor /= max(weightSum, 1e-12);
@@ -176,7 +176,7 @@ vec4 forceShadeWall(vec3 rayOrigin, vec3 rayDir, float tWall, uint teamA, uint t
         n = -n;
     const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_force_rimPower);
     const float pattern = forcePattern(pos, n) * u_force_patternIntensity;
-    const vec3 mixed = mix(u_forceLive_teamColors[teamA].rgb, u_forceLive_teamColors[teamB].rgb, 0.5);
+    const vec3 mixed = mix(u_force_teamColors[teamA].rgb, u_force_teamColors[teamB].rgb, 0.5);
     vec3 color = mix(mixed, vec3(1.0), 0.6) * u_force_glowIntensity * (0.5 + 0.5 * pattern + fresnel);
     float alpha = clamp(u_force_contactWallAlpha * (0.35 + 0.4 * fresnel + 0.25 * pattern), 0.0, 1.0) * fade;
     return vec4(color * alpha + color * 0.15 * fade, alpha);

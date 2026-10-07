@@ -11,7 +11,9 @@ namespace
 	using namespace Procedural;
 
 	constexpr uint32 SUPERSAMPLE = 2; // per axis; coverage alpha comes from the 2x2 subsamples
-	constexpr uint32 BAKE_VERSION = 9; // bump when the bake changes: cached billboards re-bake
+	// Bump when the bake OR the tree generator's geometry changes: cached billboards re-bake (treeBakeHash names them
+	// by their inputs, not by the geometry).
+	constexpr uint32 BAKE_VERSION = 10;
 
 	glm::vec3 sampleWrap(const TreeBakeImage& image, glm::vec2 uv, float& outAlpha)
 	{
@@ -364,22 +366,9 @@ namespace
 
 namespace Procedural
 {
-	uint32 treeBakeHash(const TreePiece& piece, uint32 a, uint32 b)
+	uint32 treeBakeHash(uint32 source, uint32 a, uint32 b)
 	{
-		uint32 h = treeHash(BAKE_VERSION, treeHash(a, b));
-		for (const TreeMesh* mesh : { &piece.bark[0], &piece.leaves[0] })
-		{
-			h = treeHash(h, mesh->numVertices());
-			h = treeHash(h, (uint32)mesh->indices.size());
-			// A strided sample of the positions, quantized to millimetres: any shape change moves some of them.
-			const size_t step = glm::max<size_t>(mesh->positions.size() / 64, 1);
-			for (size_t i = 0; i < mesh->positions.size(); i += step)
-			{
-				const glm::ivec3 q = glm::ivec3(glm::round(mesh->positions[i] * 1000.0f));
-				h = treeHash(h, treeHash((uint32)q.x, treeHash((uint32)q.y, (uint32)q.z)));
-			}
-		}
-		return h;
+		return treeHash(BAKE_VERSION, treeHash(source, treeHash(a, b)));
 	}
 
 	void bakeTreeDensity(const TreePiece& piece, uint32 res, float leafCoverage, oc::vector<float>& out, TreeBillboardBox& outBox)

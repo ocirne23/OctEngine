@@ -88,7 +88,7 @@ private:
 
     // Doubles the buffer until neededSize fits, GPU-copying the used range into the new allocation.
     // Under m_growMutex EXCLUSIVE.
-    void growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSize, size_t neededSize, vk::BufferUsageFlags2 usage);
+    void growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSize, size_t neededSize, size_t bucketBytes, vk::BufferUsageFlags2 usage);
 
     // Range allocation in fixed element-aligned buckets: offsets stay exact multiples of the element
     // size (MeshInfo stores offsets in elements), holes left by frees are reused by later allocations.

@@ -75,7 +75,7 @@ float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reli
         float depthBelow = waterLevel - meshPos.y; // calm column over this point (negative on dry land)
         // The swash band rides the live displaced surface (the lit core's gate; underwater_light.inc.glsl).
         // Ground deeper than the reach is under water at any wave phase and skips the wave taps.
-        const float reach = u_oceanLive_swashReach;
+        const float reach = u_ocean_swashReach;
         if (reach > 0.0 && abs(depthBelow) < reach)
             depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
         level = max(level, clamp(0.5 + depthBelow / max(reliefDepth, 1e-3), 0.0, 1.0));
@@ -106,10 +106,10 @@ void main()
     // LINEAR in height, so interpolating the evaluated value equals evaluating at the interpolated height.
     // Climate must stay BILINEAR here (terrainClimateAt, not the nearest variant): the splat blend weights
     // derive from it, and nearest sampling quantizes the blending to the data map's texel grid.
-    float altitude = out_pos.y - u_terrainLive_seaLevel; // mild-climate fallbacks without a map
+    float altitude = out_pos.y - u_terrain_seaLevel; // mild-climate fallbacks without a map
     float temperature = 12.5;
     float humidity = 0.5;
-    float waterLevel = u_terrainLive_seaLevel;
+    float waterLevel = u_terrain_seaLevel;
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(out_pos.xz);
@@ -131,7 +131,7 @@ void main()
     // bit-identical (GREATER_OR_EQUAL). Per vertex: it does not follow the ground's relief, only its water
     // level. The ground relief depth only (the rock's is a per-pixel coverage the VS does not have).
     out_meshLift = 0.0;
-    if (u_terrainTess_enabled > 0.5 && u_terrainLive_splatBase >= 0.0 && u_terrainLive_numGround >= 1.0)
+    if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
     {
         const vec3 N = normalize(out_normal);
         const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;

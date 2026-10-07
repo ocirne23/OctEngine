@@ -9,7 +9,7 @@
 // lights - even while the camera flies above them. Below the horizon: no cloud (the sky map's ground).
 // TWO LAYERS (z = the dispatch's z): 0 = from the ground under the camera, for the MIRROR sky (reflections show the
 // clouds really above). 1 = the GI sky: each march from a different observer in a disc around the camera ("GI sky
-// observer radius", u_clouds_giSkyObserverRadius), its history ("GI sky history", u_cloudsLive_giSkyHistory) the AVERAGE over them.
+// observer radius", u_clouds_giSkyObserverRadius), its history ("GI sky history", u_clouds_giSkyHistory) the AVERAGE over them.
 // From one observer, the cloud overhead and the cloud in front of the sun ARE that observer's cloud shadow, and
 // every GI-layer reader (sky SH -> fog / ocean / fallback ambient, far trees, GI misses) lit the whole world with
 // it: fog under a cloud brightened when the camera moved into the sun. Layer 1 is LOW-RES: a 64x32 grid in the
@@ -34,7 +34,7 @@ const int SKY_CLOUD_STEPS = 64;
 // there, and the ocean reflects mostly those directions), and its samples sit relative to the camera. So a moving
 // camera slid them through the noise field and the whole reflected sky changed colour every frame. Now each frame
 // marches with a new jitter and blends into the texel's history: the average of many jittered marches, which
-// changes smoothly with the camera. The history weight is frame-time based (u_cloudsLive_skyHistory = exp(-3 dt / T),
+// changes smoothly with the camera. The history weight is frame-time based (u_clouds_skyHistory = exp(-3 dt / T),
 // "Sky/Clouds/Quality/Sky map history (s)" = T): 95 % of a change after T seconds at any frame rate.
 // PROGRESSIVE: with a seconds-long history a texel need not march every frame. Each frame marches ONE texel of
 // every 2x2 block (the phase rotates with the frame, the shadow map's order), and the CPU's weight counts the 4
@@ -83,7 +83,7 @@ void main()
         return;
     const ivec3 texel = ivec3(xy, layer);
     const vec3 dir = skyMapDir((vec2(xy) + 0.5) / vec2(size));
-    if (dir.y <= 0.0 || u_cloudsLive_enabled < 0.5)
+    if (dir.y <= 0.0 || u_clouds_enabled < 0.5)
     {
         imageStore(u_outSkyClouds, texel, vec4(0.0, 0.0, 0.0, 1.0));
         return;
@@ -97,5 +97,5 @@ void main()
     // One texel spans PI / height radians: the mip level from that footprint.
     const CloudMarchResult r = cloudRaymarch(origin, dir, seg0, seg1, SKY_CLOUD_STEPS, skyCloudJitter(xy + layer * 7919), PI / float(size.y), false);
     const vec4 history = imageLoad(u_outSkyClouds, texel);
-    imageStore(u_outSkyClouds, texel, mix(vec4(r.inScatter, r.transmittance), history, layer == 1 ? u_cloudsLive_giSkyHistory : u_cloudsLive_skyHistory));
+    imageStore(u_outSkyClouds, texel, mix(vec4(r.inScatter, r.transmittance), history, layer == 1 ? u_clouds_giSkyHistory : u_clouds_skyHistory));
 }

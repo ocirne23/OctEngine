@@ -186,7 +186,7 @@ void main()
     f.height = stemHead.x * scale * mix(0.75, 1.15, grassUnit(grassHash(h + 11u)));
     f.headSize = stemHead.y * scale;
     const float dist = distance(f.root, u_viewPos);
-    f.stemHalfWidth = 0.5 * max(0.05 * f.headSize, dist * u_grassLive_minWidthPerMetre * 0.5);
+    f.stemHalfWidth = 0.5 * max(0.05 * f.headSize, dist * u_grass_minWidthPerMetre * 0.5);
     const float leanAngle = grassUnit(grassHash(h + 12u)) * GRASS_TWO_PI;
     f.lean = vec2(cos(leanAngle), sin(leanAngle)) * (f.height * 0.2 * grassUnit(grassHash(h + 13u)));
     f.phase = grassUnit(grassHash(h + 14u)) * GRASS_TWO_PI;
@@ -208,18 +208,18 @@ void main()
     const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, dist);
     vec3 ctrl, ctrlPrev;
     const vec3 tip = grassTip(f.root, f.lean, grassWind(f.root.xz, u_timeSeconds, f.phase) * windFade, f.height, ctrl);
-    const vec3 tipPrev = grassTip(f.root, f.lean, grassWind(f.root.xz, u_grassLive_prevTime, f.phase) * windFade, f.height, ctrlPrev);
+    const vec3 tipPrev = grassTip(f.root, f.lean, grassWind(f.root.xz, u_grass_prevTime, f.phase) * windFade, f.height, ctrlPrev);
 
     vec3 normal;
     float part, along;
     const vec3 pos = flowerVertex(f, uint(gl_VertexIndex), lod, ctrl, tip, normal, part, along);
 #ifdef CLUTTER_NEAR_SHADOW
-    if (distance(f.root.xz, u_grassLive_nearCentre) > u_grassLive_nearRange * 1.5 + 2.0)
+    if (distance(f.root.xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
-    gl_Position = u_grassLive_shadowViewProj * vec4(pos, 1.0);
+    gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
     vec3 prevNormal;
     float prevPart, prevAlong;

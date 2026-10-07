@@ -11,7 +11,6 @@ import Threading;
 
 import :Layout;
 import :UboBlock;
-import :UboRoot;
 import :PushBlock;
 import :Instance;
 import :Device;
@@ -529,24 +528,61 @@ private:
     void checkFrameCapacities();
     void snapshotLodStats(PerFrameData& frameData);
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
+    // The FRAME STATE the live UBO values read (buildFrameUbo runs these, then evaluates the block): what has a side
+    // effect, carries over from the last frame, or comes out of one calculation with several results.
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
     void buildUboWeather(const Camera& camera);
     void buildUboRayTracing();
-    void buildUboSky();
     void buildUboClouds(const Camera& camera);
     void buildUboSunShadow(const Camera& camera);
-    void buildUboFog();
-    void buildUboOcean();
     void buildUboForce();
     void buildUboTerrain();
     void buildUboGrass(const Camera& camera);
-    void buildUboFoliage();
 
-    // ---- THE FRAME UBO (UboBlock): the root values (m_u, bound at construction in UboRoot's declaration order), then
-    // the lockable values (registerUboFields) and the tweak locks that bake them (RendererUboBake.cpp) ----
-    // The block's bytes persist across frames: buildUboViews reprojects from last frame's mvps before overwriting them.
+    struct ViewMatrices // one camera view: m_views (VIEW_CENTER, then the VR eyes)
+    {
+        glm::mat4 mvp{ 1.0f };
+        glm::mat4 invMvp{ 1.0f };
+        glm::mat4 prevMvp{ 1.0f };    // last frame's (the reprojection)
+        glm::mat4 prevInvMvp{ 1.0f };
+        glm::mat4 reprojClip{ 1.0f }; // prevMvp * inverse(mvp), fused in double
+        glm::vec4 viewPos{ 0.0f };
+    };
+    oc::array<ViewMatrices, RendererVKLayout::NUM_UBO_VIEWS> m_views;
+    glm::vec4 m_taaJitter{ 0.0f };          // xy = this frame's TAA jitter (NDC), zw = last frame's
+    uint32 m_uboFrameIndex = 0;             // u_frameIndex: the frame counter at the build (the instance stamps read it)
+    float m_frameTime = 0.0f;               // u_timeSeconds (sim)
+    float m_prevFrameTime = 0.0f;           // last frame's (the grass and tree wind motion vectors)
+    glm::vec3 m_cameraVelocity{ 0.0f };
+    float m_giFullBake = 0.0f;              // takeVisibilityParams' one-frame request
+    glm::vec3 m_giUboPrevFocus{ 0.0f };     // the focus GI traced from last
+    glm::vec4 m_cascadeSunSizeTexels{ 0.0f };
+    glm::dvec2 m_cloudWindStep{ 0.0 };      // this frame's cloud field displacement
+    glm::vec3 m_cloudShadowAxis0{ 1.0f, 0.0f, 0.0f };
+    glm::vec3 m_cloudShadowAxis1{ 0.0f, 0.0f, 1.0f };
+    bool m_cloudShadowRendered = false;
+    struct GrassNearCascade
+    {
+        glm::mat4 viewProj{ 1.0f };
+        glm::vec2 centre{ 0.0f };
+        float range = 0.0f;                 // its half size (m; 0 = off)
+    } m_grassNear;
+    glm::vec3 m_forceBakeMin{ 0.0f };
+    glm::vec3 m_forceBakeInvSize{ 0.0f };
+    TerrainResources::WetnessTick m_wetTick{};
+    // The rain occlusion map's top-down view, this frame's (m_rainOcclusion: the UBO, the map's switch and its trace).
+    struct RainOcclusionView
+    {
+        glm::mat4 viewProj{ 1.0f };
+        float invRange = 0.0f;
+        bool present = false;
+    };
+    RainOcclusionView rainOcclusionView() const;
+    RainOcclusionView m_rainOcclusion;
+
+    // ---- THE FRAME UBO (UboBlock): every value one line with its sources, by subject (registerUboValues), and the tweak
+    // locks that bake the lockable ones (RendererUboBake.cpp) ----
     UboBlock m_ubo;
-    UboRoot m_u{ m_ubo };
     oc::vector<uint8> m_uboBakedValues;        // the values the compiled shaders hold (the block's layout)
     oc::vector<uint8> m_uboLocked;             // parallel to the entries: every source locked (resolveUboLocks)
     oc::vector<uint8> m_uboBaked;              // parallel: a const in the compiled shaders
@@ -555,7 +591,7 @@ private:
     bool m_uboLocksDirty = false;   // ... or a baked value may have changed: re-bake (applyUboLocks)
     float m_terrainCragScale = 1.0f; // setTerrainCragScale
     void registerUboLocks();   // + the bake every pipeline is first built with
-    void registerUboFields(UboBlock& block); // every lockable value, RendererUbo.cpp
+    void registerUboValues(UboBlock& block); // every UBO value (live and lockable) by subject, RendererUbo.cpp
     void resolveUboLocks();
     bool bakeUboValues();      // true when a const changed
     void applyUboLocks();      // main, before the begin-frame build: only after a lock click or a bakeable change
@@ -772,7 +808,11 @@ private:
     Buffer& treeCullPieces();
     Buffer& treeCullTypes();
     Buffer& treeCullList(uint32 frameIdx);
-    void fillTreeCullUbo(); // m_u.present's tree range (present() uploads the group)
+    // The present-time values (u_present_*, UboPresent): the culls' thread count, the far-tree volume's start, the TLAS
+    // writer's live count. RendererTrees.cpp / Renderer.cpp.
+    uint32 treeCullThreads() const;
+    float treeCullVolumeStart() const;
+    uint32 giTlasLiveCount() const;
     TreeVolumePipeline m_treeVolume;
     TreeRecordPool m_treeRecords;
     float m_treeRecordChunkSize = 256.0f;
@@ -797,8 +837,6 @@ private:
     RockParams& m_rockParams = Globals::settings.rock; // the rock material (EPipelineIndex::LitRock): UBO-driven, "Rocks/Material"
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
-    float m_grassPrevTime = 0.0f; // last frame's timeSeconds (the blades' motion vectors)
-    float m_treeWindPrevTime = 0.0f; // last frame's timeSeconds (the tree wind's motion vectors)
     float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
     bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
     float grassPatchSize() const; // the patch grid (uploadGrassFrame) and u_grass_patchSize

@@ -124,21 +124,24 @@ void main()
 	const bool wood = in_wood.w > 0.5;
 	TerrainSample surf = wood ? woodSurface(geoN) : TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
-	if (u_terrainLive_splatBase >= 0.0 && u_terrainLive_numRock >= 1.0)
+	if (u_terrain_splatBase >= 0.0 && u_terrain_numRock >= 1.0)
 	{
-		const int baseMat = int(u_terrainLive_splatBase);
-		const int numGround = int(u_terrainLive_numGround);
-		const int numRock = int(u_terrainLive_numRock);
+		const int baseMat = int(u_terrain_splatBase);
+		const int numGround = int(u_terrain_numGround);
+		const int numRock = int(u_terrain_numRock);
 		const float16_t opaque = float16_t(TERRAIN_LAYER_OPAQUE);
 		const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 		// The splat's climate space (terrainLayers): the temperature already carries the lapse to this height.
 		const vec2 climate = vec2(clamp((in_rockFields.y + 25.0) / 75.0, 0.0, 1.0), in_rockFields.z);
 		const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
+		// The terrain's macro variation at this point (uniform flow), so a boulder keeps the tone of the ground around it.
+		const bool macroOn = terrainMacroEnabled();
+		const f16vec2 macro = macroOn ? terrainMacroAt(in_pos.xz) : f16vec2(0.0);
 
 		// --- The coverages first (cheap), so a buried layer never samples ---
 		// SNOW: the terrain's rule (cold x holds x humid) with this face's own slope - an underside holds none.
 		float16_t snowW = float16_t(0.0);
-		if (u_terrainLive_hasSnow > 0.5)
+		if (u_terrain_hasSnow > 0.5)
 		{
 			const float cold = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, in_rockFields.y);
 			const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, 1.0 - clamp(geoN.y, 0.0, 1.0));
@@ -186,10 +189,14 @@ void main()
 				terrainMixInto(surf, ground, groundW);
 		}
 
+		// The macro variation, under the snow as on the terrain (not on dead wood: its bark is no splat material).
+		if (macroOn && !wood)
+			terrainApplyMacro(surf, macro);
+
 		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough).
 		if (snowW > blendEps)
 		{
-			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrainLive_hasBeach > 0.5 ? 1u : 0u);
+			const uint snowMat = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
 			const TerrainSample snow = sampleTerrainXZ(snowMat, in_pos.xz * u_terrainTex_uvScaleSnow, geoNh);
 			if (snowW >= opaque)
 				surf = snow;

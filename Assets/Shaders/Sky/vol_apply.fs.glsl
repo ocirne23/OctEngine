@@ -17,7 +17,7 @@
 //   out = T * F.rgb + C.a * S + (1 - T) * C.rgb  +  scene * (T * F.a)
 // exact for a cloud at one distance (fog in front of it over it, the rest behind it), and linear in the
 // scene, so the blend state stays the same.
-// THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliageLive_farMarched = it marched this frame), at
+// THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliage_farMarched = it marched this frame), at
 // its weighted mean distance - not in the scene depth, so fogged at the terrain BEHIND it the trees read twice as
 // hazy as the billboards next to them. Two layers compose front to back by distance: with each layer's part
 // P = (1 - T) F_layer.rgb + F_layer.a S and transmittance T, the nearer one's P + T x the farther one's.
@@ -64,7 +64,7 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 vec2 volFarFieldGround(vec2 worldXZ, float follow)
 {
     const vec4 d = terrainDataAt(worldXZ);
-    return vec2(u_fog_heightBase + u_fog_terrainFollow * (u_terrainLive_mapSeaLevel + max(d.w, 0.0) * follow), d.x);
+    return vec2(u_fog_heightBase + u_fog_terrainFollow * (u_terrain_mapSeaLevel + max(d.w, 0.0) * follow), d.x);
 }
 
 // Height fog over the ray segment [t0, t1] (t0 = the froxel volume's far plane), in the same
@@ -86,7 +86,7 @@ vec2 volFarFieldGround(vec2 worldXZ, float follow)
 float volFarSunVis(vec3 dir, float a, float b, float jitter)
 {
 #ifdef CLOUD_SHADOWS
-    if (u_cloudsLive_shadowRendered < 0.5)
+    if (u_clouds_shadowRendered < 0.5)
         return 1.0;
     float v = 0.0;
     for (int j = 0; j < VOL_FAR_VIS_TAPS; ++j)
@@ -159,7 +159,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
         // Only march where the cascades hold ground data; beyond that the map clamps to its edge, so the
         // remainder is constant-ground and solves in one step (this is also what keeps sky rays, t1 =
         // VOL_FAR_INFINITY, from spreading their steps across 10,000 km).
-        const float reach = (u_terrainLive_mapInvFarSize > 0.0) ? 0.5 / u_terrainLive_mapInvFarSize : 0.5 / u_terrainLive_mapInvNearSize;
+        const float reach = (u_terrain_mapInvFarSize > 0.0) ? 0.5 / u_terrain_mapInvFarSize : 0.5 / u_terrain_mapInvNearSize;
         const float tEnd = min(t1, t0 + reach);
         const int steps = max(int(u_fog_farFieldSteps), 1);
 
@@ -340,13 +340,13 @@ void main()
 
     // The cloud part FIRST, folded into (partial in-scatter, cloud transmittance) = 4 live values across the
     // scene's fog evaluation below; the other order kept the scene fog AND the cloud (8) live across the
-    // second fogTo (+12 registers). CLOUDS is baked ("Sky/Clouds/Enabled"); u_cloudsLive_enabled = the cloud
+    // second fogTo (+12 registers). CLOUDS is baked ("Sky/Clouds/Enabled"); u_clouds_enabled = the cloud
     // march ran this frame (the game suppresses it at runtime).
     vec4 cloudPart = vec4(0.0, 0.0, 0.0, 1.0); // rgb = C.a * S + (1 - T) * C.rgb, a = T
     bool sameFog = false; // the cloud sees the scene's own fog: cloudPart.rgb still holds S, folded below
     float tCloud = 1e30;  // the cloud layer's distance (orders it against the far trees)
 #ifdef CLOUDS
-    if (u_cloudsLive_enabled > 0.5)
+    if (u_clouds_enabled > 0.5)
     {
         const float logScene = depth > 0.0
             ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
@@ -377,7 +377,7 @@ void main()
     if (depth > 0.0)
         fog = withAerial(fog, scenePos);
     vec4 layers = cloudPart;
-    if (u_foliageLive_farMarched > 0.5)
+    if (u_foliage_farMarched > 0.5)
     {
         const vec4 trees = texelFetch(u_farTreesColor, ivec2(gl_FragCoord.xy), 0);
         if (trees.a < 0.999)

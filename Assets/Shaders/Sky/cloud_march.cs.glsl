@@ -84,7 +84,7 @@ void main()
     const ivec2 full = px * 2;
     const vec2 uv = (vec2(full) + 1.0) * u_screenSize.zw; // the 2x2 block's centre, full-target UV
     const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
-    if (u_cloudsLive_enabled < 0.5 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
+    if (u_clouds_enabled < 0.5 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
         writeEmpty(px, logMax);
         return;

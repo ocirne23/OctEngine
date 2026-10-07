@@ -86,7 +86,7 @@ namespace RendererVKLayout
         const oc::vector<UboBlock::Entry>& entries = block.entries();
         oc::string out;
         out.reserve(64 * 1024);
-        out += "// GENERATED from UboRoot + Renderer::registerUboFields (UboBlock, buildUboDeclaration).\n";
+        out += "// GENERATED from Renderer::registerUboValues (UboBlock, buildUboDeclaration).\n";
         out += "// The shader includer serves it as ubo.generated.glsl; this copy is for reading only.\n";
         out += "\nlayout (binding = UBO_BINDING, std140) uniform UBO\n{\n";
         for (size_t i = 0; i < entries.size(); ++i)
@@ -103,7 +103,7 @@ namespace RendererVKLayout
         // baked (UBO_LIVE_rt_giStrength), where a baked value costs more than it saves.
         out += "\n";
         for (size_t i = 0; i < entries.size(); ++i)
-            if (entries[i].eval)
+            if (!entries[i].live)
                 out += oc::format("#define UBO_LIVE_{} u_{}{}\n", entries[i].name, entries[i].name, baked[i] != 0 ? "Baked" : "");
 
         out += "\n// LOCKED: every tweak these values come from is locked - their values as constants.\n";

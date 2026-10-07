@@ -19,7 +19,7 @@
 // (ocean_wave.inc.glsl), and the long-range sun shadow march below (terrainSunVisibility - shared by the
 // fog and every lit surface, which is why it lives here rather than in either consumer).
 //
-// UBO (requires ubo.inc.glsl): u_terrainLive_mapCentre = world center XZ, mapInvNearSize = 1 / near cascade
+// UBO (requires ubo.inc.glsl): u_terrain_mapCentre = world center XZ, mapInvNearSize = 1 / near cascade
 //   world size (0 = no map), mapInvFarSize = 1 / far cascade world size (0 = near only), mapSeaLevel = baked
 //   terrain sea level
 //
@@ -30,20 +30,20 @@
 
 layout (binding = TERRAIN_HEIGHT_BINDING) uniform sampler2DArray u_terrainHeight;
 
-bool terrainHeightMapPresent() { return u_terrainLive_mapInvNearSize > 0.0; }
+bool terrainHeightMapPresent() { return u_terrain_mapInvNearSize > 0.0; }
 
 // Full texel (height, water level, fog thickness, spare) at worldXZ; fades to the far cascade over the
 // near map's outer band so the handover never shows a seam. Beyond the far cascade, clamp-to-edge extends
 // the edge values. Only meaningful while terrainHeightMapPresent().
 vec4 terrainDataAt(vec2 worldXZ)
 {
-    const vec2 rel = worldXZ - u_terrainLive_mapCentre;
-    const vec2 uv0 = rel * u_terrainLive_mapInvNearSize + 0.5;
+    const vec2 rel = worldXZ - u_terrain_mapCentre;
+    const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
     const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const float nearW = u_terrainLive_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+    const float nearW = u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
     vec4 d = vec4(0.0);
     if (nearW < 1.0)
-        d = textureLod(u_terrainHeight, vec3(rel * u_terrainLive_mapInvFarSize + 0.5, 1.0), 0.0);
+        d = textureLod(u_terrainHeight, vec3(rel * u_terrain_mapInvFarSize + 0.5, 1.0), 0.0);
     if (nearW > 0.0)
         d = mix(d, textureLod(u_terrainHeight, vec3(uv0, 0.0), 0.0), nearW);
     return d;
@@ -117,13 +117,13 @@ vec4 terrainClimateTexel(ivec2 t, int layer, ivec2 res)
 // Every consumer passes the height IT shades - the terrain shader its vertex, the fog the ground under a
 // froxel - so the two cascades cannot disagree: they carry the same baseline and slope, and the height
 // comes from the caller, not from whatever each cascade happened to bake.
-// The rate is the generator's own, published once as u_terrainLive_lapseRate (C per WORLD metre) rather than
+// The rate is the generator's own, published once as u_terrain_lapseRate (C per WORLD metre) rather than
 // baked per texel: measured, a per-texel rate bought no near/far agreement at all - both cascades regress
 // the same data, so their rates agreed and the disagreement was entirely in the baselines. Clamped at sea
 // level because that is where the generator stops applying it (it does not warm the seabed).
 float terrainTemperatureAt(vec4 climate, float worldY)
 {
-    return climate.z + u_terrainLive_lapseRate * max(worldY - u_terrainLive_seaLevel, 0.0);
+    return climate.z + u_terrain_lapseRate * max(worldY - u_terrain_seaLevel, 0.0);
 }
 
 // Manual bilinear of one cascade's climate: hardware filtering would blend the PACKED bits into
@@ -145,14 +145,14 @@ vec4 terrainClimateBilinear(vec2 uv, int layer, ivec2 res)
 // coloring showed the raw texels as visible pixels at climate borders otherwise).
 vec4 terrainClimateAt(vec2 worldXZ)
 {
-    const vec2 rel = worldXZ - u_terrainLive_mapCentre;
+    const vec2 rel = worldXZ - u_terrain_mapCentre;
     const ivec2 res = textureSize(u_terrainHeight, 0).xy;
-    const vec2 uv0 = rel * u_terrainLive_mapInvNearSize + 0.5;
+    const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
     const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const float nearW = u_terrainLive_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
+    const float nearW = u_terrain_mapInvFarSize > 0.0 ? 1.0 - smoothstep(0.42, 0.48, edge) : 1.0;
     vec4 c = vec4(0.0);
     if (nearW < 1.0)
-        c = terrainClimateBilinear(rel * u_terrainLive_mapInvFarSize + 0.5, 1, res);
+        c = terrainClimateBilinear(rel * u_terrain_mapInvFarSize + 0.5, 1, res);
     if (nearW > 0.0)
         c = mix(c, terrainClimateBilinear(uv0, 0, res), nearW);
     return c;
@@ -163,11 +163,11 @@ vec4 terrainClimateAt(vec2 worldXZ)
 // texel, near cascade preferred: encoded angles wrap, so no form of bilinear may ever touch them.
 uint terrainFlowEncAt(vec2 worldXZ)
 {
-    const vec2 rel = worldXZ - u_terrainLive_mapCentre;
-    const vec2 uv0 = rel * u_terrainLive_mapInvNearSize + 0.5;
+    const vec2 rel = worldXZ - u_terrain_mapCentre;
+    const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
     const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const bool useFar = u_terrainLive_mapInvFarSize > 0.0 && edge > 0.45;
-    const vec2 uv = useFar ? rel * u_terrainLive_mapInvFarSize + 0.5 : uv0;
+    const bool useFar = u_terrain_mapInvFarSize > 0.0 && edge > 0.45;
+    const vec2 uv = useFar ? rel * u_terrain_mapInvFarSize + 0.5 : uv0;
     const ivec2 res = textureSize(u_terrainHeight, 0).xy;
     const ivec2 t = clamp(ivec2(uv * vec2(res)), ivec2(0), res - 1);
     return (floatBitsToUint(texelFetch(u_terrainHeight, ivec3(t, useFar ? 1 : 0), 0).z) >> 8) & 255u;
@@ -178,11 +178,11 @@ uint terrainFlowEncAt(vec2 worldXZ)
 // granularity never shows there, and the froxel grid samples this a million times a frame.
 vec4 terrainClimateNearestAt(vec2 worldXZ)
 {
-    const vec2 rel = worldXZ - u_terrainLive_mapCentre;
-    const vec2 uv0 = rel * u_terrainLive_mapInvNearSize + 0.5;
+    const vec2 rel = worldXZ - u_terrain_mapCentre;
+    const vec2 uv0 = rel * u_terrain_mapInvNearSize + 0.5;
     const float edge = max(abs(uv0.x - 0.5), abs(uv0.y - 0.5));
-    const bool useFar = u_terrainLive_mapInvFarSize > 0.0 && edge > 0.45;
-    const vec2 uv = useFar ? rel * u_terrainLive_mapInvFarSize + 0.5 : uv0;
+    const bool useFar = u_terrain_mapInvFarSize > 0.0 && edge > 0.45;
+    const vec2 uv = useFar ? rel * u_terrain_mapInvFarSize + 0.5 : uv0;
     const ivec2 res = textureSize(u_terrainHeight, 0).xy;
     return terrainClimateTexel(ivec2(uv * vec2(res)), useFar ? 1 : 0, res);
 }

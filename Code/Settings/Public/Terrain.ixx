@@ -57,16 +57,15 @@ export struct TerrainSettings
 	bool  v3LoadModels = false; // off = the terrain runs on the existing .tile cache only (no weights loaded)
 	int   seed = 516121;
 	// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z).
-	float originX = 0.0f;
-	float originZ = 0.0f;
+	float originX = -29590.0f;
+	float originZ = -11530.0f;
 	int   chunkSize = 256;
 	int   lod0Res = 128;
-	// IN CHUNKS (256 m since 2026-10-03). The ring is 24 km, not the old 32: 128 chunks would be ~51 k chunk meshes
-	// against the 16-bit mesh index (Renderer addMeshInfos).
+	// IN CHUNKS (256 m since 2026-10-03): 128 chunks would be ~51 k chunk meshes against the 16-bit mesh index (Renderer addMeshInfos).
 	int   ringRadius = 96;     // max generation range from the camera chunk, in chunks
-	float lodStep = 1.2f;      // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
-	float fullResDist = 1.2f;  // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
-	int   maxLod = 4;
+	float lodStep = 1.1f;      // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
+	float fullResDist = 0.7f;  // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
+	int   maxLod = 6;
 	int   maxUploadsPerFrame = 16;
 	// Byte cap on one frame's upload batch, below the 100 MB staging ring. The first chunk always goes.
 	float maxUploadMBPerFrame = 48.0f;
@@ -148,6 +147,13 @@ export struct TerrainSettings
 	// true scale, like the crag thresholds it modulates.
 	float texCragWanderAmp = 66.0f;
 	float texCragWanderWavelength = 400.0f;
+	// Macro variation: the splat textures repeat every few metres, and at a distance the eye finds that grid in their
+	// low-frequency content. A world noise at two unrelated scales varies the brightness, a warm/cool hue and the
+	// roughness of the ground, beach and rock layers (not the snow).
+	float texMacroStrength = 0.18f;  // albedo brightness +- (0 = off)
+	float texMacroHue = 0.06f;       // warm/cool shift +-
+	float texMacroRoughness = 0.15f; // roughness +-
+	float texMacroSize = 40.0f;      // m: the noise's largest feature (the second tap's: 3.71x)
 	float texCragStart = 34.0f;      // crag relief start (m above macro altitude)
 	float texCragFull = 400.0f;
 	float texBeachBand = 2.5f;       // beach band height (m above water level)
@@ -179,7 +185,7 @@ export struct TerrainSettings
 	float texTessDepthRock = 0.7f;        // m
 
 	// --- "Terrain/V3": the Terrain Diffusion generator (every change marks the streamer config-dirty) ---
-	float v3MetersPerPixel = 2.0f;   // 30 = the model's true training scale; lower compresses the world
+	float v3MetersPerPixel = 5.0f;   // 30 = the model's true training scale; lower compresses the world
 	float v3HeightScale = 1.0f;
 	float v3TemperatureOffset = 0.0f; // C, shifts the whole planet
 	float v3LapseRate = -0.008f;      // C per MODEL metre: THE snow-line dial

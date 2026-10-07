@@ -64,10 +64,10 @@ void main()
     // probe's wave this frame (the trace's OWN stamp - no second evaluation of the schedule) or the probe is
     // fresh (giProbeFresh, the trace's own test: the stencil's two corners cover all 8 probes). Otherwise the
     // voxel keeps last frame's value. A voxel that scrolled in always has a fresh probe (its base probe is
-    // outside the previous window), so the scroll needs no test of its own. u_giLive_fullBake > 0.5 = bake
+    // outside the previous window), so the scroll needs no test of its own. u_gi_fullBake > 0.5 = bake
     // everything (the CPU sets it for one frame when the images are new or the Chebyshev knobs moved: the
     // baked value depends on them, and a far probe may not be visited for hundreds of frames).
-    if (u_giLive_fullBake < 0.5)
+    if (u_gi_fullBake < 0.5)
     {
         bool changed = giProbeFresh(cascade, base) || giProbeFresh(cascade, base + 1);
         // The stencil spans base..base+1: per axis one wave, or two where it crosses a 4-probe block edge.

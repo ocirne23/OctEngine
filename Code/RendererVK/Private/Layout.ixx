@@ -29,7 +29,7 @@ export namespace RendererVKLayout
     constexpr uint32 INITIAL_UNIQUE_MESHES = USHRT_MAX - 1; // MESH_MATERIAL_INDEX_LIMIT: the uint16 mesh index's whole range
     constexpr uint32 INITIAL_UNIQUE_MATERIALS = 8;
     constexpr uint32 INITIAL_INSTANCE_OFFSETS = 64;
-    constexpr uint32 INITIAL_INSTANCE_DATA = 512 * 1024; // the world's load does not grow it
+    constexpr uint32 INITIAL_INSTANCE_DATA = 1024 * 1024; // the world's load does not grow it
     constexpr uint32 INITIAL_TEXTURES = 64; // TextureManager grows this, clamped to the device limit
     constexpr size_t INITIAL_LIGHT_GRID_BUFFER_SIZE = 10 * 1024 * 1024;
 	constexpr size_t INITIAL_LIGHT_TABLE_NUM_ENTRIES = 4096; // power of 2 (doubling preserves this); 4x the CPU build's initial 1024-grid claim capacity, so a normal scene never grows
@@ -189,7 +189,7 @@ export namespace RendererVKLayout
     // actual bubble radius, not the authored Reach. CPU mirror of the shader's forceVisibleRadius
     // (forceVisibleBounds + the teamFlags.w pack, force_field.inc.glsl - keep in sync). THE
     // sampled-tier metric: the upload partition and the bake-volume fit classify with it, matching
-    // the shell FS / union ownership tests against u_forceLive_bakeThreshold.
+    // the shell FS / union ownership tests against u_force_bakeThreshold.
     inline float forceEmitterVisibleRadius(const ForceEmitterGpu& e)
     {
         const float R = e.posReach.w;
@@ -279,7 +279,7 @@ export namespace RendererVKLayout
 
     // SAMPLED SHELL TIER: a device-local 3D bake of EVERY team's field (two RGBA16F volumes =
     // phi[0..3]/phi[4..7]), refit each frame over the union of the LARGE drawable emitters'
-    // support boxes (Ubo::forceLive's bakeMin / bakeInvSize carry the mapping, so the FIXED texel grid's resolution
+    // support boxes (u_force_bakeMin / bakeInvSize carry the mapping, so the FIXED texel grid's resolution
     // self-adjusts to the active spread). Shell proxies whose reach exceeds the threshold march
     // these textures (two trilinear taps per sample) instead of the analytic candidate loop -
     // hits, normals and shading stay analytic. Written by force_shellbake.cs each frame.
@@ -382,7 +382,7 @@ export namespace RendererVKLayout
     };
     inline CloudShaderConfig g_cloudShaders;
 
-    constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 16 * 1024; // grown when the instance count exceeds it; the world's load does not
+    constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 32 * 1024; // grown when the instance count exceeds it; the world's load does not
     constexpr size_t GI_TLAS_INSTANCE_SIZE = 64;                                         // sizeof(VkAccelerationStructureInstanceKHR)
 
     // FFT ocean simulation (OceanSimulationPipeline / ocean_*.cs.glsl). Injected into every shader compile.
@@ -462,7 +462,7 @@ export namespace RendererVKLayout
     constexpr uint32 SKINNING_THREADS_PER_GROUP = 64;
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
-    // load does not grow them: 1.5 GiB of vertices, 512 MiB of indices.
+    // load does not grow them: 1.5 GiB of vertices, 0.5 GiB of indices.
     constexpr size_t INITIAL_VERTEX_DATA = 32 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
     constexpr size_t INITIAL_INDEX_DATA = 128 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
@@ -471,8 +471,8 @@ export namespace RendererVKLayout
 
     // ---- THE FRAME UBO ------------------------------------------------------------------------------------------
     // ONE uniform buffer per frame slot, built by Renderer::buildFrameUbo (RendererUbo.cpp), read by every pass at
-    // its UBO_BINDING. Its layout is REGISTERED, no C++ struct mirrors it (UboBlock.ixx): the root values first
-    // (UboRoot.ixx - the handles the build writes through), then the lockable values (Renderer::registerUboFields).
+    // its UBO_BINDING. Its layout is REGISTERED, no C++ struct mirrors it (UboBlock.ixx): every value one line with its
+    // sources, live or lockable, grouped by subject (Renderer::registerUboValues).
     // buildUboDeclaration makes the flat GLSL block from the same entries (the shader includer serves it as
     // "ubo.generated.glsl", which ubo.inc.glsl includes).
     constexpr uint32 VIEW_CENTER = 0;  // shared passes + desktop; the eyes are 1 (left) and 2 (right)

@@ -31,7 +31,7 @@ layout (location = 0) out vec4 out_color;
 #include "force_shell_shade.inc.glsl"
 
 // The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every LIVE team's phi, baked
-// over the fitted u_forceLive_bakeMin / bakeInvSize box, TEAM-SIZED (one texture holds up to 4 teams - RG16F at <= 2,
+// over the fitted u_force_bakeMin / bakeInvSize box, TEAM-SIZED (one texture holds up to 4 teams - RG16F at <= 2,
 // RGBA16F above; the second exists only for 5+). Only channels < NUM_FORCE_TEAMS are read, so an
 // RG16F volume's filled-in b/a never matter. Clamp-to-border transparent black = zero field outside.
 layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
@@ -48,7 +48,7 @@ layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
 // per-emitter identity and shell alpha, which the volume does not carry.
 void forceReadBakedPhi(vec3 x, out float phi[NUM_FORCE_TEAMS])
 {
-    const vec3 uvw = (x - u_forceLive_bakeMin) * u_forceLive_bakeInvSize;
+    const vec3 uvw = (x - u_force_bakeMin) * u_force_bakeInvSize;
     const vec4 a = texture(u_shellVolumeA, uvw);
 #if NUM_FORCE_TEAMS > 4
     const vec4 b = texture(u_shellVolumeB, uvw);
@@ -224,16 +224,16 @@ void main()
     // SAMPLED TIER: large emitters march the baked field volume - two trilinear taps per sample
     // instead of the analytic candidate loop, so their cost stops scaling with emitter density.
     // Refinement/normals/shading below remain analytic (crisp rims, exact ownership).
-    const bool sampledTier = u_forceLive_bakeEnabled > 0.5 && forceVisibleRadius(e) >= u_forceLive_bakeThreshold;
+    const bool sampledTier = u_force_bakeEnabled > 0.5 && forceVisibleRadius(e) >= u_force_bakeThreshold;
 
     // March compositing up to two crossings of F (front shell + the surface behind it). The step
-    // COUNT tapers with the proxy's projected size (u_forceLive_shellLodScale - see buildUboForce): a small
+    // COUNT tapers with the proxy's projected size (u_force_shellLodScale - see buildUboForce): a small
     // or distant bubble pays a handful of steps instead of the full budget; the floor of 8 keeps
     // thin shells from being stepped over entirely.
     int steps = int(u_force_marchSteps);
-    if (u_forceLive_shellLodScale > 0.0)
+    if (u_force_shellLodScale > 0.0)
     {
-        const float lod = halfExtents.x / max(distance(rayOrigin, center), 1e-3) * u_forceLive_shellLodScale;
+        const float lod = halfExtents.x / max(distance(rayOrigin, center), 1e-3) * u_force_shellLodScale;
         steps = clamp(int(float(steps) * min(lod, 1.0)), 8, steps);
     }
     const float dt = (t1 - t0) / float(steps);
@@ -243,7 +243,7 @@ void main()
     // "Inside a bubble" is a property of the CAMERA, not of this box's entry point: a proxy whose
     // box begins inside the merged field must style the exit it finds as a backface, not a dome.
     // The camera is ONE point per frame, evaluated on the CPU (buildUboForce) - never re-sampled here.
-    const bool cameraInsideField = t0 > 0.0 ? u_forceLive_cameraInside > 0.5 : F > 0.0;
+    const bool cameraInsideField = t0 > 0.0 ? u_force_cameraInside > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
     float fPrev = F;

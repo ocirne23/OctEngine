@@ -161,7 +161,7 @@ void CloudPipeline::buildSkyLayout(ComputePipelineLayout& layout)
 }
 
 // The sky clouds, cleared to "no cloud" (transmittance 1): valid before the first render and while the
-// clouds are off (the sky map also gates on the CLOUDS define and u_cloudsLive_enabled).
+// clouds are off (the sky map also gates on the CLOUDS define and u_clouds_enabled).
 void CloudPipeline::createSkyClouds()
 {
     vk::ImageCreateInfo info{

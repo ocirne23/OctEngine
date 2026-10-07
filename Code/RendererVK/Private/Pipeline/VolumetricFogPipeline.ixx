@@ -65,14 +65,14 @@ public:
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   sceneDepthSampler;
         // The accumulated clouds of this eye / slot (GENERAL; CloudPipeline): composited inside the fog. Read
-        // only while u_cloudsLive_enabled says the cloud march ran; always bound (the images exist from init).
+        // only while u_clouds_enabled says the cloud march ran; always bound (the images exist from init).
         vk::ImageView cloudColorView;
         vk::ImageView cloudDepthView;
         vk::Sampler   cloudSampler;
         vk::ImageView cloudShadowView;    // the cloud Beer shadow map (GENERAL): the far field's sun term (light shafts)
         vk::Sampler   cloudShadowSampler;
         // The far-tree volume's march of this slot (GENERAL; TreeVolumePipeline): composited inside the fog like the
-        // clouds. Read only while u_foliageLive_farMarched says it ran; always bound (the images exist from init).
+        // clouds. Read only while u_foliage_farMarched says it ran; always bound (the images exist from init).
         vk::ImageView farTreesColorView;
         vk::ImageView farTreesDepthView;
         vk::Sampler   farTreesSampler;

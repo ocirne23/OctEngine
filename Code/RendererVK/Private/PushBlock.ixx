@@ -177,7 +177,7 @@ private:
     uint32 m_size;
 };
 
-// Binds push values in DECLARATION order (UboGroup's pattern): `PushValue<float> radius = g("radius");`, an address
+// Binds push values in DECLARATION order: `PushValue<float> radius = g("radius");`, an address
 // `PushValue<uint64> pieces = g("pieces", "PieceList");`.
 export struct PushGroup
 {

@@ -319,6 +319,7 @@ void Renderer::initSharedBuffers()
 	assert(diffuseIdx == RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
+	m_terrain.createNoiseTexture(); // before the first record: the grass cull binds it directly
 }
 
 void Renderer::recreateVrEyeTargets()
@@ -903,9 +904,8 @@ void Renderer::present()
     // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
     // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
     m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
-    m_ubo.set(m_u.present.giTlasNumInstances, oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances()));
-    fillTreeCullUbo(); // the same: renderTreeInstanceSet claims its range after beginFrame
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_u.present.size(), m_ubo.data() + m_u.present.begin(), m_u.present.begin());
+    m_ubo.evaluatePresent(); // + the tree range: renderTreeInstanceSet claims it after beginFrame
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
@@ -998,7 +998,7 @@ void Renderer::present()
 
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
-        m_indirectCullComputePipeline.update(frameIdx, m_ubo.get(m_u.present.treeThreads)); // the cull threads (fillTreeCullUbo)
+        m_indirectCullComputePipeline.update(frameIdx, treeCullThreads()); // the cull threads (u_present_treeThreads)
         m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
         m_skinned.markJobsUploaded();
     }
@@ -1030,7 +1030,7 @@ void Renderer::present()
     // The rain occlusion map exists only while this frame's UBO asks for it (a rain / snow volume with
     // `Occlude true`, the tweak on, RT on): switching allocates or frees its images (and builds its pipeline
     // once) with the GPU idle, and re-records the particle sim's set that names the image.
-    const bool rainOcclusion = m_particles.isEnabled() && m_ubo.get(m_u.weather.rainOcclusionPresent) > 0.5f;
+    const bool rainOcclusion = m_particles.isEnabled() && m_rainOcclusion.present;
     if (rainOcclusion != m_rainOcclusionPipeline.isActive())
     {
         ProfileScope profileScope("Rain occlusion switch", EProfileCategory::Wait);

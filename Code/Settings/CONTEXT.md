@@ -87,8 +87,10 @@ a Saved / Synced block (`registerVar` only checks for Saved | Synced).
 `Game/Sim LOD` (per-process performance tuning, Settings.World).
 
 **`Runtime`** marks a var that a lock never covers (below): a value its owner keeps live inside a locked section
-(the renderer's sun direction / colour, ambient, up axis, the wind). It does not count as an explicit flag, so a
-`ScopedFlags` default still applies to it.
+(the renderer's sun direction / colour, ambient, up axis, the wind, the cloud coverage). It does not count as an
+explicit flag, so a `ScopedFlags` default still applies to it. **To make a tweak live** (editable while its section is
+locked): flag it `Runtime`. Its own UBO value being `UboLive` is not enough - any LOCKABLE value that also reads it
+keeps the row under the lock (`clouds_coverage` was live, but `clouds_upperCoverage` read the row too).
 
 ## Locks
 

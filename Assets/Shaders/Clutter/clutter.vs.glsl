@@ -33,6 +33,10 @@ layout (location = 3) out vec4 out_fields;           // x ao, y height above the
 layout (location = 4) flat out uvec4 out_look;       // x albedo0, y albedo1, z kind, w part
 layout (location = 5) out vec4 out_uv;               // the mesh's pattern coordinates (ClutterVertexGpu::uv; a branch's x the scale: metres)
 layout (location = 6) flat out float out_height;     // the object's height (m): the contact band's scale
+// The position RELATIVE TO THE CAMERA, built so that it stays exact near it: the mesh's own small offset + (instance -
+// camera), the second part one value per object. The bump's screen derivatives read it - the world position's own
+// steps (~2 mm at 20 km from the origin, rounded per vertex) turned a twig's derivatives into noise: sparkles.
+layout (location = 7) out vec3 out_relPos;
 #endif
 
 void main()
@@ -42,14 +46,15 @@ void main()
     const vec3 pos = clutterQuatRotate(q, in_posAo.xyz * scale) + in_instPosScale.xyz;
 #ifdef CLUTTER_NEAR_SHADOW
     // THE NEAR GRASS CASCADE's casters: the objects around its box only (as the blades).
-    if (distance(in_instPosScale.xz, u_grassLive_nearCentre) > u_grassLive_nearRange * 1.5 + 2.0)
+    if (distance(in_instPosScale.xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
-    gl_Position = u_grassLive_shadowViewProj * vec4(pos, 1.0);
+    gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
     out_pos = pos;
+    out_relPos = clutterQuatRotate(q, in_posAo.xyz * scale) + (in_instPosScale.xyz - u_viewPos);
     out_normal = clutterQuatRotate(q, in_normalPart.xyz);
     out_local = in_posAo.xyz;
     float temperature = 12.5;

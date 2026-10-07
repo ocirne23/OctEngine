@@ -8,7 +8,7 @@
 // breaking rolls a hashed dice at "Spray rate" x cell area x dt x breaking. A hit appends spawn
 // requests at the displaced surface with the crest's forward motion (along the wind) plus an upward
 // kick; the particle chain later this frame turns them into particles of the ONE emitter slot the CPU
-// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_oceanLive_sprayEmitter).
+// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_ocean_sprayEmitter).
 //
 // Land is skipped through the shore data (depth <= 0), and the grid ORIGIN is snapped to whole cells so
 // the sample lattice does not swim with the focus.
@@ -56,7 +56,7 @@ void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out 
 
 void main()
 {
-    const uint slot = u_oceanLive_sprayEmitter;
+    const uint slot = u_ocean_sprayEmitter;
     const float rate = u_ocean_sprayRate;
     if (slot == 0xFFFFFFFFu || rate <= 0.0)
         return;
@@ -88,7 +88,7 @@ void main()
     if (breaking <= 0.0)
         return;
 
-    const float expected = rate * cell * cell * u_oceanLive_sprayDt * breaking * edgeFade;
+    const float expected = rate * cell * cell * u_ocean_sprayDt * breaking * edgeFade;
     uint count = uint(expected);
     if (particleRand(seed) < fract(expected))
         ++count;
@@ -97,9 +97,9 @@ void main()
         return;
 
     const vec3 disp = oceanSampleDisplacement(worldXZ, cell, 0.0, shoreHW);
-    // The simulated field TRAVELS AGAINST u_oceanLive_windDirection (see oceanFlowRotation's note), so the
+    // The simulated field TRAVELS AGAINST u_ocean_windDirection (see oceanFlowRotation's note), so the
     // crests move along -wind: throw the spray with them.
-    const vec2 wind = -u_oceanLive_windDirection; // unit
+    const vec2 wind = -u_ocean_windDirection; // unit
     // Spawn AHEAD of the crest: the lip breaks forward, so the spray leaves from the front face, not
     // from the top or the back. "Spray forward offset" m of lead along the travel direction, and
     // "Spray height offset" m above the surface (so a fresh particle is not depth-cut by the wave).

@@ -167,13 +167,13 @@ void resolveLiveDepth(vec3 worldPos)
 	// Gate against the LIVE displaced surface, not the calm level - a receded wave leaves sand below
 	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
 	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
-	// the surface's max EXCURSION - the larger of the swash reach (u_oceanLive_swashReach) and the open-water
-	// trough (u_fogLive_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
+	// the surface's max EXCURSION - the larger of the swash reach (u_ocean_swashReach) and the open-water
+	// trough (u_fog_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
 	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
 	// the contribution fades out over a half-excursion band instead of cutting. A hard cut at the swash
 	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
 	// wave height across it. Both terms are 0 with the ocean off, so this is free without water.
-	const float excursion = max(u_oceanLive_swashReach, 0.5 * (u_fogLive_waveBand - 0.5));
+	const float excursion = max(u_ocean_swashReach, 0.5 * (u_fog_waveBand - 0.5));
 	if (excursion > 0.0)
 	{
 		const float fadeEnd = excursion + max(0.5 * excursion, 0.5);

@@ -128,7 +128,7 @@ export void installFileHooks()
 export class Session
 {
     // The free-fly camera's start; the sandbox's skysphere spawns there too.
-    static inline const glm::vec3 START_POS{ -11837.2f, 78.3f, -4612.1f };
+    static inline const glm::vec3 START_POS{ 0.0f, 200.0f, 0.0f };
 
 public:
     Session(const LaunchOptions& options)

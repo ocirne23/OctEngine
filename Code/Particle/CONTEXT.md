@@ -165,7 +165,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
 * `Underwater true` — the volume lives BELOW the live ocean surface: the sim puts a particle that is
   above the surface (same FFT + shore sampling as `WaterFloor`) back at a random depth under it, so
   a bubble reaching the surface pops and re-forms below; the draw hides the whole volume while the
-  camera is above SEA LEVEL (`u_oceanLive_seaLevel`, the coarse gate). `Effects/underwater.pfx` (silt +
+  camera is above SEA LEVEL (`u_ocean_seaLevel`, the coarse gate). `Effects/underwater.pfx` (silt +
   bubbles). `AboveWater true` is the inverse (a particle under the surface goes back up over it, hidden
   while the camera is under sea level): `Effects/dust.pfx`. On a non-volume emitter only the draw
   gate applies: the ocean spray carries it so the spray hides while the camera is under the sea.
@@ -173,7 +173,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   the water is drawn with) is a floor. On a VOLUME emitter a particle that reaches it restarts at the
   box top at a fresh random XZ, exactly like the bottom exit - a volume has no life to end - so rain
   never sinks through a wave; on a finite-life emitter (the spray) it lands and fades out there. A
-  cheap reject on the calm level plus the crest band (`u_fogLive_waveBand`) keeps the cascade taps to the
+  cheap reject on the calm level plus the crest band (`u_fog_waveBand`) keeps the cascade taps to the
   particles near the water.
 * `HeightFalloff <m>` — alpha falls off as exp(-height above the ground / m), the ground being the
   terrain or the local water level (the draw binds the terrain-data cascades at 6, refreshed per

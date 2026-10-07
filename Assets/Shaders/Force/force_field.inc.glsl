@@ -132,7 +132,7 @@ void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, o
 // The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box - the actual
 // bubble radius, not the authored Reach (a drained or narrow emitter is much smaller than its
 // support; a merged group sphere's reach is ~2x its bubble). THE sampled-tier metric: the shell FS
-// and the union ownership test compare this against u_forceLive_bakeThreshold, and the CPU mirrors it
+// and the union ownership test compare this against u_force_bakeThreshold, and the CPU mirrors it
 // (RendererVKLayout::forceEmitterVisibleRadius) for the upload partition + the bake-volume fit.
 float forceVisibleRadius(ForceEmitterData e)
 {

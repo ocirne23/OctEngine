@@ -161,7 +161,7 @@ void main()
     if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
     {
         const float waterAtCamera = u_weather_cameraWaterValid > 0.5 ? u_weather_cameraWaterY
-            : (terrainHeightMapPresent() ? terrainDataAt(u_viewPos.xz).y : u_oceanLive_seaLevel);
+            : (terrainHeightMapPresent() ? terrainDataAt(u_viewPos.xz).y : u_ocean_seaLevel);
         const bool cameraUnder = u_viewPos.y < waterAtCamera;
         if (((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u) != cameraUnder)
             envelope = 0.0;

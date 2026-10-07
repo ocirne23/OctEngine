@@ -31,7 +31,7 @@ bool forceSampledTierOwns(vec3 hitPos, uint team, out uint ownerIdx)
     ownerIdx = forceDominantEmitter(hitPos, team);
     if (ownerIdx == 0xFFFFFFFFu)
         return true; // no contributor (numerical fringe): draw nothing either way
-    return u_forceLive_bakeEnabled > 0.5 && forceVisibleRadius(fe_emitters[ownerIdx]) >= u_forceLive_bakeThreshold;
+    return u_force_bakeEnabled > 0.5 && forceVisibleRadius(fe_emitters[ownerIdx]) >= u_force_bakeThreshold;
 }
 
 void main()
@@ -64,18 +64,18 @@ void main()
         discard;
 
     // World-space step size (u_force_unionStepSize), growing with DISTANCE so a far pixel never marches
-    // finer than ~2 px of world size (u_forceLive_unionPxScale = px per radius/dist), hard-capped
+    // finer than ~2 px of world size (u_force_unionPxScale = px per radius/dist), hard-capped
     // (u_force_unionMaxSteps): the union interval can span several disjoint bubbles, so the step count
     // follows its LENGTH instead of being a fixed budget squeezed over it.
-    const float stepSize = max(u_force_unionStepSize, 2.0 * t0 / max(u_forceLive_unionPxScale, 1.0));
+    const float stepSize = max(u_force_unionStepSize, 2.0 * t0 / max(u_force_unionPxScale, 1.0));
     const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_force_unionMaxSteps));
     const float dt = (t1 - t0) / float(steps);
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce, u_forceLive_cameraInside) -
+    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce, u_force_cameraInside) -
     // never re-sampled per fragment.
-    const bool cameraInsideField = t0 > 0.0 ? u_forceLive_cameraInside > 0.5 : F > 0.0;
+    const bool cameraInsideField = t0 > 0.0 ? u_force_cameraInside > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
     float fPrev = F;

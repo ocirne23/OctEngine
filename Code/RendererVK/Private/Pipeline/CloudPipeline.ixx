@@ -64,7 +64,7 @@ public:
         Buffer& ubo;
         vk::ImageView sceneDepthView;
         vk::Sampler   sceneDepthSampler;
-        // The far-tree volume's result (GENERAL; read only while it marched - u_foliageLive_farMarched): composited with the
+        // The far-tree volume's result (GENERAL; read only while it marched - u_foliage_farMarched): composited with the
         // clouds by distance, as the fog apply does.
         vk::ImageView farTreesColorView;
         vk::ImageView farTreesDepthView;
