@@ -46,10 +46,10 @@ layout (location = 2) out vec4 out_terrainFields[];
 // the distance is held at it, so the subdivision stops changing near the camera (with the TES's mip
 // footprint, which holds the same way).
 // na / nb = the end points' normal y. 1 (no subdivision) where the TES displaces nothing along the edge: both
-// end points past the slope gate, or a VERTICAL edge (the chunk's skirt walls: the same xz).
+// end points past the slope gate.
 float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 {
-	if (max(na, nb) < TERRAIN_TESS_MIN_NORMAL_Y || distance(a.xz, b.xz) < 1e-3)
+	if (max(na, nb) < TERRAIN_TESS_MIN_NORMAL_Y)
 		return 1.0;
 	const float maxFactor = u_terrainTess_maxFactor;
 	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
@@ -117,11 +117,7 @@ void main()
 		gl_TessLevelOuter[0] = e0;
 		gl_TessLevelOuter[1] = e1;
 		gl_TessLevelOuter[2] = e2;
-		// The inner level is the patch's own (no shared edge). A SKIRT patch (a vertical face: the chunk's border
-		// walls, TerrainGenerator) gets no interior subdivision: nothing there needs relief. Its edges keep their
-		// factors - the top edge is shared with the surface.
-		const vec3 faceN = cross(in_pos[1] - in_pos[0], in_pos[2] - in_pos[0]);
-		const bool skirt = abs(faceN.y) < 0.05 * length(faceN);
-		gl_TessLevelInner[0] = skirt ? 1.0 : max(e0, max(e1, e2));
+		// The inner level is the patch's own (no shared edge).
+		gl_TessLevelInner[0] = max(e0, max(e1, e2));
 	}
 }

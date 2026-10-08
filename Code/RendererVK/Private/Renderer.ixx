@@ -187,6 +187,13 @@ public:
 	// -- Terrain parameters --
     void setTerrainParams(float meshRadius, float seaLevel, float temperatureLapseRate = 0.0f) { m_terrain.setParams(meshRadius, temperatureLapseRate, seaLevel); }
     float getTerrainMeshRadius() const { return m_terrain.getMeshRadius(); }
+    // The terrain VS's EDGE STITCHING (Procedural TerrainStreamer: its draw camera and ring bands; chunkSize 0 = off).
+    // Main thread, read by the next frame's UBO.
+    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod)
+    {
+        m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, 0.0f);
+        m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, 0.0f);
+    }
     using TerrainSplatMaterial = ::TerrainSplatMaterial;
     using TerrainSplatCounts = ::TerrainSplatCounts;
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
@@ -884,6 +891,8 @@ private:
     oc::array<uint32, CloudPipeline::SHADOW_CASCADES> m_cloudShadowPhase{};  // THIS frame's texel of the 2x2 / 4x4 pattern
     uint32 m_cloudShadowMask = 0; // the cascades the primary renders this frame (bit per cascade)
     TerrainResources m_terrain;
+    glm::vec4 m_terrainStitch{ 0.0f };      // setTerrainStitch: x = chunk size (0 = off), yz = the draw camera in chunks
+    glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks)
     PostParams& m_postParams = Globals::settings.post;
     RTParams& m_rtParams = Globals::settings.rt;
     RTAOParams& m_rtaoParams = Globals::settings.rtao;

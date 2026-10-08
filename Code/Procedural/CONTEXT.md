@@ -262,7 +262,7 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
 * A bounded LOD ring around the camera: `ringRadius` 96 chunks (24 km), `chunkSize` 256, `lod0Res` 128, `maxLod`
   6, `lodStep` 1.1 chunks for the LOD0 band (each next band twice as wide, geometric), `fullResDist` 0.7,
-  `skirtDepth` 5, `maxUploadsPerFrame` 16. (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32, `lodStep` /
+  `maxUploadsPerFrame` 16. No skirts: edge stitching (below). (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32, `lodStep` /
   `fullResDist` 0.3 - the same 2 m LOD0 texel and LOD band metres; the ring stays below the old 32 km because 128
   chunks would be ~51 k chunk meshes against the 16-bit mesh index.)
 * Generated on up to "Gen jobs" **self-continuing Low-priority pump jobs** (`kickPump` CAS-claim +
@@ -373,24 +373,65 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
 ## Chunk memory
 
-A chunk at LOD `l` is a `res = lod0Res >> l` quad grid: `(res+1)²` surface vertices + `8·res` skirt vertices (two per
-perimeter edge), `6·res²` + `48·res` indices (the skirt is double-sided). 48-byte `MeshVertex`, 4-byte index. At the
-defaults (camera mid-chunk, ring 96, `lodStep` 1.1, `fullResDist` 0.7):
+A chunk at LOD `l` is a `res = lod0Res >> l` quad grid: `(res+1)²` vertices, `6·res²` indices, no skirt (edge
+stitching, below). 48-byte `MeshVertex`, 4-byte index. At the defaults (camera mid-chunk, ring 96, `lodStep` 1.1,
+`fullResDist` 0.7):
 
 | LOD | res | chunks | KB / chunk | MB total |
 |---|---|---|---|---|
-| 0 | 128 | 25 | 1236 | 32 |
-| 1 | 64 | 56 | 330 | 19 |
-| 2 | 32 | 208 | 93 | 20 |
-| 3 | 16 | 936 | 29 | 27 |
-| 4 | 8 | 3816 | 10 | 38 |
-| 5 | 4 | 14840 | 3.8 | 58 |
-| 6 | 2 | 17368 | 1.6 | 29 |
+| 0 | 128 | 25 | 1164 | 30 |
+| 1 | 64 | 56 | 294 | 17 |
+| 2 | 32 | 208 | 75 | 16 |
+| 3 | 16 | 936 | 20 | 19 |
+| 4 | 8 | 3816 | 5.3 | 21 |
+| 5 | 4 | 14840 | 1.5 | 24 |
+| 6 | 2 | 17368 | 0.5 | 9 |
 
-~37 k chunks, ~3.2 M vertices, ~220 MB of mega-buffer (plus the briefly doubled hand-over pairs). **The far LODs are
-mostly skirt**: at LOD 6 a chunk has 9 surface vertices and 16 skirt vertices, at LOD 5 25 and 32. A chunk whose wanted
-LOD changes is replaced, and the old one's ranges free at once (`retireResident` -> `RenderMesh::destroy`), so
-residency follows the camera; the mega-buffers never shrink - the freed ranges are holes for later uploads.
+~37 k chunks, ~135 MB of mega-buffer (plus the briefly doubled hand-over pairs; ~220 MB with the old skirts, which were
+most of every far chunk). A chunk whose wanted LOD changes is replaced, and the old one's ranges free at once
+(`retireResident` -> `RenderMesh::destroy`), so residency follows the camera; the mega-buffers never shrink - the freed
+ranges are holes for later uploads. **The chunk COUNT is the larger far cost now** (a mesh, node and spatial entry each;
+the 16-bit MeshInfo index caps everything at 65534 meshes).
+
+## Edge stitching (no skirts)
+
+Two neighbouring chunks can be different LODs; the finer one has extra vertices along the shared edge that the coarser
+one does not (T-junctions: cracks). Instead of a skirt, **the terrain VS snaps the finer side's edge onto the coarser
+side's straight edge**:
+
+* **The data** (`generateChunk`, `TerrainChunkMesh::stitch`, uploaded in `MeshVertex::tangent` - the terrain shades
+  without tangents): per vertex, xyz = its height on the straight edge of a neighbour 1 / 2 / 3 LODs coarser
+  (`TERRAIN_STITCH_LEVELS`; the own height off the edges and on the coarse lattice), w = the chunk's LOD. Shared edge
+  points are sampled at the same world points by both chunks, so they match exactly.
+* **The shader** (`instanced_indirect_terrain.vs.glsl`, `terrainStitchedHeight`): a vertex on one edge (found by its
+  local x / z = 0 or chunkSize; a corner is on every lattice) computes BOTH chunks' ring LOD (`terrainRingLod`, from the
+  chunk origin) and takes `stitch[edgeLod - ownLod - 1]` when the edge's LOD (the coarser of the two) is above its own.
+  `terrainRingLod` mirrors `ringLodAt` + `chunkEdgeDist` **bit for bit** (the same float operations in the same order -
+  `ringLodAt` is a threshold loop, no log2): both chunks of an edge must agree. UBO `terrain_stitch` (chunk size, 0 = off;
+  the draw camera) and `terrain_stitchBands` (`Renderer::setTerrainStitch`, every enabled update). Tweak
+  `Terrain/Edge stitching` (off = the cracks, a debug view).
+* **The DRAW CAMERA - why the shader cannot use the ring camera.** A chunk's drawn LOD differs from its wanted LOD until
+  its replacement lands (seconds on a cold tile). Both sides compute the same edge LOD only if no drawn chunk is
+  COARSER than the LOD its LODs are computed for (a finer one has every vertex it needs). So the streamer keeps
+  `m_drawCam` with the **invariant: a resident is registered (drawn) only while its LOD <= `drawLod(coord)`**:
+  * an adopted chunk too coarse for it (a coarsening behind the camera) waits unregistered in `m_held`; refinements
+    always register;
+  * an eviction needs a REGISTERED replacement (a held one cannot take over, on screen or off);
+  * the draw camera FOLLOWS the ring camera as far as the registered residents allow: the `"terrainEvictScan"` job
+    (kicked when the ring moved, a chunk uploaded, or the draw camera still trails) also tests `DRAW_CAM_STEPS` (8)
+    points from the draw camera to the ring camera (quarter-chunk lattice, the ring's bands) against every registered
+    resident in the same walk, and returns the farthest that keeps the invariant (`m_drawCamOut`). Main applies it
+    after checking the residents registered since that kick (`m_registeredSinceScan`), then registers the held chunks
+    it allows; the finer ones they replace evict as usual. So refinement ahead is never delayed, and in fast flight
+    the draw camera trails only by the generation lag (the pending refinements nearest the ring camera block the last
+    steps) - the extra fine chunks behind are bounded by that lag, not by the flight length.
+  * **The UBO lags one frame** (the begin-frame job builds it before `terrain.update`), and a chunk registered in an
+    update draws in the main pass only from the next frame (its first stamp) - so this frame's drawn set always keeps the
+    invariant for the camera the UBO carries. Culling `Off`'s walk skips held chunks.
+* **Not stitched:** the shadow pass (`shadow_depth.vs`), the ray-tracing BLAS, the grass and clutter (they read the
+  unsnapped vertices) - all off by the tiny T-junction error at a LOD edge. **Tessellation:** every edge to a coarser
+  chunk is >= `fullResDist + lodStep` chunks (~460 m) away, past the tessellation fade end (75 m), so the displaced
+  relief only meets LOD0 against LOD0.
 
 ## It owns THE world datum
 

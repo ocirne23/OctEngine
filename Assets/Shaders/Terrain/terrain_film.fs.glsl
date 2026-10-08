@@ -538,13 +538,6 @@ void main()
 	const float16_t wetFootprint = float16_t(length(fwidth(in_pos.xz)));
 	// The film coverage's relief taps (below): derivatives, so taken before any discard.
 	const vec2 filmDx = dFdx(TERRAIN_LIT_POS.xz), filmDy = dFdy(TERRAIN_LIT_POS.xz);
-	// The chunk's SKIRT (TerrainGenerator: vertical walls dropped from the border, hiding LOD cracks): the
-	// ground needs it, the film does not - drawn with it, the film showed as a translucent wall at chunk
-	// edges. The skirt's faces are exactly vertical in the undisplaced mesh; the terrain surface's never are.
-	// After the derivatives above (a discard ends the quad's helpers).
-	const vec3 meshFaceN = cross(dFdx(TERRAIN_LIT_POS), dFdy(TERRAIN_LIT_POS));
-	if (abs(meshFaceN.y) < 0.05 * length(meshFaceN))
-		discard;
 	// DRY: no film can stand here - an EXACT early-out before the costly part (the layer walk, the relief taps): most
 	// film pixels are dry ground. The pool: the level from the RAW wetness bounds the real one (the slope drain only
 	// lowers it, terrainPoolLevel rises with it), and a level of 0 leaves no pool over any relief. The live ocean: the

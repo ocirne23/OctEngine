@@ -232,7 +232,7 @@ float grassKeep(float dist)
 }
 
 // A terrain chunk's mesh in the vertex mega-buffer: a (res + 1)^2 vertex grid, row-major, local XZ (0 .. chunk size)
-// with world Y; the skirt follows the grid and is never read.
+// with world Y (unstitched: the terrain VS snaps the edge vertices, these are the generated heights).
 struct GrassGround
 {
     vec2 chunkOrigin;

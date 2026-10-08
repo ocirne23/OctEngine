@@ -288,6 +288,27 @@ export namespace Procedural
 		oc::vector<uint64>                  m_evictScanOut;
 		JobCounter                          m_evictScanCounter;
 		bool                                m_evictScanReady = false; // kicked: m_evictScanOut replaces the candidates
+		// EDGE STITCHING (no skirts; see "Edge stitching" in the CONTEXT): the terrain VS snaps each chunk edge onto the
+		// coarser side, with BOTH sides' LODs computed from the DRAW CAMERA - not the ring camera. Invariant: a resident
+		// is registered (drawn) only while its LOD <= drawLod(its coord), so the two chunks of an edge always agree on
+		// it. The draw camera FOLLOWS the ring camera as far as the registered residents allow: the eviction scan job
+		// tests DRAW_CAM_STEPS points on the way and returns the farthest the invariant holds at (m_drawCamOut); a
+		// resident adopted too coarse for the draw camera (a coarsening behind the camera) waits in m_held.
+		struct DrawCam
+		{
+			glm::vec2 cam{ 0.0f }; // chunk units, on the ring camera's quarter-chunk lattice
+			float fullRes = 0.0f, lodStep = 1.0f;
+			uint32 maxLod = 0;
+			bool valid = false;    // false: the next enabled update takes the ring camera (no residents)
+			bool operator==(const DrawCam&) const = default;
+		};
+		static constexpr uint32 DRAW_CAM_STEPS = 8;
+		DrawCam                             m_drawCam;
+		DrawCam                             m_drawCamOut;             // the eviction scan's pick (valid = it found a move)
+		oc::vector<uint64>                  m_held;                   // adopted, NOT registered: too coarse for the draw camera
+		oc::vector<uint64>                  m_registeredSinceScan;    // registered after the last scan kick: checked on main
+		uint32 drawLod(glm::ivec2 coord) const;
+		void registerResident(uint64 key, Resident& resident); // its culling entry: from now on it draws
 		// The render push runs on workers (see render / joinRender): the hand-over walk fans out over a
 		// parallelFor, the sphere query runs beside it as a job of its own.
 		JobCounter                          m_renderCounter;
@@ -317,8 +338,9 @@ export namespace Procedural
 		{
 			int camCX = 0, camCZ = 0, R = 0;
 			glm::vec2 camChunks = glm::vec2(0.0f);
-			float chunkSize = 0.0f, fullRes = 0.0f, lodStep = 0.0f, skirtDepth = 0.0f;
+			float chunkSize = 0.0f, fullRes = 0.0f, lodStep = 0.0f;
 			uint32 maxLod = 0, lod0Res = 1, generation = 0;
+			DrawCam drawCam; // the current draw camera (the eviction scan's search starts here)
 			bool bounded = false;
 			glm::vec2 boundsMin = glm::vec2(0.0f), boundsMax = glm::vec2(0.0f);
 			oc::shared_ptr<const ITerrainSampler> maps;

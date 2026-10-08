@@ -29,7 +29,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// (inference itself still serializes on the pipeline lock).
 	Tweak::intVar("Terrain", "Gen jobs", &s.maxGenJobs, 1, 16, 1.0f);
 	Tweak::floatVar("Terrain", "Sea level (m)", &s.seaLevel, -200.0f, 200.0f, 0.5f);
-	Tweak::floatVar("Terrain", "Skirt depth (m)", &s.skirtDepth, 0.0f, 64.0f, 0.5f);
+	Tweak::boolean("Terrain", "Edge stitching", &s.edgeStitch);
 	// ONE shared baked terrain-data map (height, water level, fog|falloff|temp|hum, altitude): the volumetric
 	// fog's terrain follow + regional thickness, the ocean's far shore fallback, and the terrain
 	// coloring all read these cascades. Disabling it degrades all three.

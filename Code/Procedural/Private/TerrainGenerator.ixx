@@ -13,12 +13,12 @@ export namespace Procedural
 		uint32 lod = 0;           // 0 = finest; each level halves the grid resolution
 		float  chunkSize = 128.0f;
 		uint32 lod0Res = 64;      // quads per side at LOD0 (must be a power of two for clean LOD subsetting)
-		float  skirtDepth = 8.0f; // how far border skirt walls drop below the surface
 	};
 
 	// Generates one chunk's surface mesh (geometry only) from any generator's fields. Pure and thread-safe
 	// given a shared sampler. The height field is sampled in world space (so heights agree across chunk/LOD
 	// boundaries) and includes the seabed below sea level - the OceanGenerator draws the water over it and
-	// bakes its shore-depth map from the same field.
+	// bakes its shore-depth map from the same field. No skirt: the terrain VS stitches every edge to the
+	// coarser side from TerrainChunkMesh::stitch (see "Edge stitching" in the Procedural CONTEXT).
 	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out);
 }

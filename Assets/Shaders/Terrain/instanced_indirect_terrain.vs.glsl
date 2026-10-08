@@ -39,6 +39,9 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal;
+// NOT a tangent on the terrain: the EDGE STITCH (Procedural TerrainChunkMesh) - xyz = this vertex's height on the
+// straight edge of a neighbour 1 / 2 / 3 LODs coarser, w = the chunk's LOD.
+layout (location = 2) in vec4 in_stitch;
 layout (location = 4) in uint inst_idx;
 
 // INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) are two
@@ -89,6 +92,46 @@ vec3 quat_transform(vec3 v, vec4 q)
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
+// The streamer's ring LOD of a chunk at its DRAW camera (u_terrain_stitch.yz). MIRRORS Procedural ringLodAt +
+// chunkEdgeDist (TerrainStreamer.cpp) BIT FOR BIT - the same float operations in the same order: both chunks of an
+// edge must get the same answer, and the streamer draws a chunk only while its LOD is at most this.
+uint terrainRingLod(vec2 coord)
+{
+    const vec2 cam = u_terrain_stitch.yz;
+    const vec2 d = max(max(coord - cam, cam - (coord + 1.0)), vec2(0.0));
+    const float k = max(max(d.x, d.y) - u_terrain_stitchBands.x, 0.0);
+    const float lodStep = u_terrain_stitchBands.y;
+    const uint maxLod = uint(u_terrain_stitchBands.z);
+    float threshold = lodStep;
+    uint lod = 0u;
+    while (lod < maxLod && k >= threshold)
+    {
+        ++lod;
+        threshold = threshold * 2.0 + lodStep;
+    }
+    return lod;
+}
+
+// EDGE STITCHING (the terrain has no skirts): an edge vertex takes its height on the edge's COARSER side, so the two
+// chunks of every edge draw the same line. The edge's LOD = the coarser of the two chunks' ring LODs at the draw
+// camera; this chunk is never coarser than its own (the streamer's invariant), so it has every vertex it needs.
+// A corner sits on every lattice; an interior vertex never moves.
+float terrainStitchedHeight(vec3 localPos, vec2 chunkOrigin)
+{
+    const float chunkSize = u_terrain_stitch.x;
+    if (chunkSize <= 0.0)
+        return localPos.y; // stitching off
+    const bvec2 lo = equal(localPos.xz, vec2(0.0));
+    const bvec2 hi = equal(localPos.xz, vec2(chunkSize));
+    const bool onX = lo.x || hi.x, onZ = lo.y || hi.y; // on the west / east edge, the north / south edge
+    if (onX == onZ)
+        return localPos.y;
+    const vec2 coord = round(chunkOrigin / chunkSize);
+    const vec2 neighbour = coord + (onX ? vec2(hi.x ? 1.0 : -1.0, 0.0) : vec2(0.0, hi.y ? 1.0 : -1.0));
+    const int delta = min(int(max(terrainRingLod(coord), terrainRingLod(neighbour))) - int(in_stitch.w + 0.5), 3);
+    return delta > 0 ? in_stitch[delta - 1] : localPos.y;
+}
+
 void main()
 {
 #ifdef STEREO
@@ -97,7 +140,8 @@ void main()
     const InMeshInstancesData inst = in_instances[inst_idx];
 
     out_normal = quat_transform(in_normal, inst.quat);
-    out_pos    = quat_transform(in_pos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
+    const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz), in_pos.z);
+    out_pos    = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
 
     // Baked terrain fields, evaluated PER VERTEX and interpolated (the FS used to fetch these per pixel:
     // 2 cascade taps + a 4-8 texel-decode climate bilinear). Interpolation loses nothing: every field is

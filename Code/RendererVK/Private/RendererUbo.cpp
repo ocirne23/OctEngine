@@ -962,6 +962,10 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrain_seaLevel", [this] { return m_terrain.getParams().z; }, UboLive);   // world Y, live from the streamer
         list.add("terrain_meshRadius", [this] { return m_terrain.getParams().x; }, UboLive); // the streamed mesh's coverage radius (0 = none)
         list.add("terrain_lapseRate", [this] { return m_terrain.getParams().y; }, UboLive);  // C per world metre above sea level (<= 0)
+        // The terrain VS's edge stitching (setTerrainStitch): x = chunk size (0 = off), yz = the streamer's DRAW camera in
+        // chunks; the bands: x = full-res distance, y = LOD step, z = max LOD. terrainRingLod mirrors ringLodAt with them.
+        list.add("terrain_stitch", [this] { return m_terrainStitch; }, UboLive);
+        list.add("terrain_stitchBands", [this] { return m_terrainStitchBands; }, UboLive);
         list.add("terrain_splatBase", [this] { return m_terrain.getSplatBaseMaterial() < 0 ? -1.0f : (float)m_terrain.getSplatBaseMaterial(); }, UboLive);
         list.add("terrain_numGround", [this] { return (float)m_terrain.getSplatCounts().numGround; }, UboLive);
         list.add("terrain_numRock", [this] { return (float)m_terrain.getSplatCounts().numRock; }, UboLive);

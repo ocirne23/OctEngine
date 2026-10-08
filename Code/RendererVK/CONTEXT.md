@@ -2794,10 +2794,9 @@ the sand, so the two can never disagree.
   its surface meets the terrain, per pixel and shaped by the texture relief - the geometry's own outline is
   the film surface crossing the ground (a per-triangle, stepped edge) over the clipmap's 0.5 m texel contour,
   which pops in blocky on its own.
-* **No SKIRT:** the film re-draws the chunk's whole index range, the border skirt walls included. The FS
-  discards a pixel whose UNDISPLACED face (derivatives of `TERRAIN_LIT_POS`) is vertical (|n.y| < 0.05):
-  the skirt is exactly vertical there, the terrain surface never is. Without this, the film showed as a
-  translucent wall along chunk edges.
+* The film re-draws the chunk's whole index range. The chunks have no skirts any more (the terrain VS stitches the
+  edges - "Edge stitching" in [`Code/Procedural/CONTEXT.md`](../Procedural/CONTEXT.md)), so the film's old discard of
+  vertical faces is gone.
 * **The GROUND** under it: albedo x "Wet darkening" and the wet gloss, each with its own wetness
   threshold ("Darkening threshold", "Roughness threshold", `u_terrainWater_darkeningThreshold` / `roughnessThreshold`, both 0.35 by
   default). Each amount is `smoothstep(0, threshold, wet)`: a plateau while the ground is soaked, and a
@@ -3009,9 +3008,7 @@ the sand, so the two can never disagree.
     `gl_Position` projects with the eye.
   * **The TCS skips work the TES would not use** (2026-09-28, for the ISBE launch stall):
     * edge factor 1 where both end points are past the slope gate (normal y < 0.35: the TES displaces
-      nothing there), and on VERTICAL edges (the same xz: the skirt walls). Both are per-edge and symmetric,
-      so still crack-free;
-    * a SKIRT patch (a vertical face) gets inner level 1 (its top edge keeps the surface's factor);
+      nothing there). Per-edge and symmetric, so still crack-free (the skirt special cases went with the skirts);
     * a patch whose three smooth corner normals all face away from the camera (dot(N, V) < -0.3, a margin
       for the relief's tilt) is culled with the frustum cull.
   * **No `precise`**: the engine's glslang crashes (access violation in

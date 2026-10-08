@@ -71,7 +71,7 @@ export struct TerrainSettings
 	float maxUploadMBPerFrame = 48.0f;
 	int   maxGenJobs = 12;     // concurrent chunk generations
 	float seaLevel = 0.0f;     // THE sea level datum for the world (the ocean floats on it)
-	float skirtDepth = 5.0f;
+	bool  edgeStitch = true;   // the terrain VS snaps chunk edges onto the coarser neighbour (no skirts); off = debug, shows the cracks
 
 	// --- Shared terrain-data map (fog terrain-following + regional thickness, ocean shore fallback, terrain coloring) ---
 	bool  terrainMapEnabled = true;
