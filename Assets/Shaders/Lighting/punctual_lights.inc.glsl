@@ -7,7 +7,7 @@
 // Requires the includer to have declared/included, with these names:
 //   - struct LightInfo + in_lightInfos[] (only for callers passing LightInfo; the core functions take it)
 //   - rtShadowVisibility (rt_shadow.inc.glsl) + its geometry/texture requirements
-//   - UBO (ubo.inc.glsl via shared.inc.glsl) + PI
+//   - UBO (ubo.inc.glsl via shared.inc.glsl) + PI + hashU (mathutils.inc.glsl via shared.inc.glsl)
 //   - fragment stage (gl_FragCoord-based shadow jitter)
 //   - GL_EXT_shader_explicit_arithmetic_types (the light types evaluate through the fp16 BRDF, see D_GGX_H)
 
@@ -20,11 +20,6 @@ float traceLightVisibility(vec3 pos, vec3 N, vec3 target)
 	vec3 toLight = target - pos;
 	float dist = length(toLight);
 	return rtShadowVisibility(pos + N * 0.02, toLight / dist, 0.01, dist - 0.02);
-}
-uint hashU(uint x)
-{
-	x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
-	return x;
 }
 // Spatiotemporal blue-noise-style jitter. The per-pixel seed is *static* across frames (white noise,
 // spatially decorrelated between neighbours); each pixel's offset is then advanced along a low-discrepancy

@@ -117,12 +117,6 @@ layout (binding = 13) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
 #endif
 #include "gi_probe.inc.glsl"
 
-uint hashU(uint x)
-{
-    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
-    return x;
-}
-
 // jitter = the two per-probe random offsets (loop-invariant; computed once by the caller).
 vec3 sampleSphere(uint i, uint n, vec2 jitter)
 {

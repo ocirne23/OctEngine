@@ -69,19 +69,20 @@ void ShadowMapGraphicsPipeline::buildIndirectState(uint32 maxUniqueMeshes)
     m_indirectCommandsLayout.initialize("Shadow.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, /*useExecutionSet*/ false);
 
-    createPreprocessBuffers(maxUniqueMeshes);
+    queryPreprocessSize(maxUniqueMeshes);
 }
 
 void ShadowMapGraphicsPipeline::resizeMeshCapacity(uint32 maxUniqueMeshes)
 {
-    createPreprocessBuffers(maxUniqueMeshes);
+    queryPreprocessSize(maxUniqueMeshes);
 }
 
-void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
+void ShadowMapGraphicsPipeline::queryPreprocessSize(uint32 maxUniqueMeshes)
 {
     // The requirement depends on the PIPELINE too, so reloadShaders asks again for its new one (the static mesh
     // pipeline's stale size failed VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071 after a wireframe toggle).
-    // GROW-ONLY: a requirement the buffers already cover keeps them. GPU idle; the caller re-records.
+    // GROW-ONLY. The scratch itself is the static mesh pass's opaque one: the Renderer hands this to
+    // StaticMeshGraphicsPipeline::reserveOpaquePreprocess after every call.
     m_maxUniqueMeshes = maxUniqueMeshes;
     // With no execution set, DGC needs the pipeline it will generate draws for supplied via pNext.
     vk::GeneratedCommandsPipelineInfoEXT pipelineInfo{ .pipeline = m_graphicsPipeline.getPipeline() };
@@ -94,13 +95,7 @@ void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
     };
     vk::MemoryRequirements2 memReq;
     Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
-    if (memReq.memoryRequirements.size <= m_preprocessSize)
-        return;
-    m_preprocessSize = memReq.memoryRequirements.size;
-    for (Buffer& preprocess : m_preprocessBuffers)
-        preprocess.initialize(m_preprocessSize,
-            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Shadow.dgcPreprocess");
+    m_preprocessSize = oc::max(m_preprocessSize, memReq.memoryRequirements.size);
 }
 
 void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures)
@@ -125,10 +120,10 @@ void ShadowMapGraphicsPipeline::reloadShaders(uint32 maxTextures)
         return;
     }
     // No execution set to rebuild: the multiview shadow pass binds its single pipeline directly.
-    createPreprocessBuffers(m_maxUniqueMeshes); // the new pipeline can need more scratch
+    queryPreprocessSize(m_maxUniqueMeshes); // the new pipeline can need more scratch
 }
 
-void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params)
+void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, RecordParams& params)
 {
     oc::array<DescriptorSetUpdateInfo, 3> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
@@ -167,8 +162,8 @@ void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fram
         .indirectCommandsLayout = m_indirectCommandsLayout.getHandle(),
         .indirectAddress = params.indirectCommandBuffer.getDeviceAddress(),
         .indirectAddressSize = params.indirectCommandBuffer.getSize(),
-        .preprocessAddress = m_preprocessSize > 0 ? m_preprocessBuffers[frameIdx].getDeviceAddress() : 0,
-        .preprocessSize = m_preprocessSize,
+        .preprocessAddress = params.preprocessBuffer.getSize() > 0 ? params.preprocessBuffer.getDeviceAddress() : 0,
+        .preprocessSize = params.preprocessBuffer.getSize(),
         .maxSequenceCount = maxSequences,
         .sequenceCountAddress = params.drawCountBuffer.getDeviceAddress(),
         .maxDrawCount = maxSequences,

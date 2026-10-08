@@ -202,6 +202,9 @@ void Renderer::recordShadowCull(uint32 frameIdx)
         .inMeshInstanceOffsetsBuffer = m_instanceOffsets.getBuffer(),
         .inMeshInfoBuffer = m_meshInfos.getBuffer(),
         .inFirstInstancesBuffer = instances.firstInstances,
+        .outMeshInstancesBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .outMeshInstanceIndexesBuffer = m_indirectCullComputePipeline.getInstanceIdxBuffer(frameIdx),
+        .outIndirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .inMaterialInfoBuffer = m_materials.getBuffer(),
         .inNodePassMasksBuffer = instances.passMasks,
         .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
@@ -234,14 +237,16 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
     ShadowMapGraphicsPipeline::RecordParams params{
         .descriptorSet = frameData.shadowDrawDescriptorSet,
         .ubo = frameData.ubo,
-        .meshInstanceBuffer = m_shadowCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        // The main cull's buffers, written by the shadow cull (it runs first; see recordPrimaryPreScene).
+        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .instanceIdxBuffer = m_shadowCullComputePipeline.getInstanceIdxBuffer(frameIdx),
-        .indirectCommandBuffer = m_shadowCullComputePipeline.getIndirectCommandBuffer(frameIdx),
+        .instanceIdxBuffer = m_indirectCullComputePipeline.getInstanceIdxBuffer(frameIdx),
+        .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
         .drawCountBuffer = m_shadowCullComputePipeline.getDrawCountBuffer(frameIdx),
+        .preprocessBuffer = m_staticMeshGraphicsPipeline.getOpaquePreprocessBuffer(frameIdx),
     };
-    m_shadowMapGraphicsPipeline.record(cb, frameIdx, params);
+    m_shadowMapGraphicsPipeline.record(cb, params);
     cb.end();
 }
 
@@ -1449,6 +1454,42 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // rest in SHADER_READ_ONLY, so the samplers stay valid).
     if (m_oceanSimPipeline.isOceanEnabled())
         executeScoped(primary, "Ocean sim", frameData.oceanSimCommandBuffer.getCommandBuffer());
+    // The sun shadow cascades FIRST: the shadow cull writes the main cull's out buffers and the shadow draw borrows the
+    // static mesh pass's opaque DGC scratch, so both are free again before the main cull and the scene.
+    // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays).
+    const bool shadowCascades = !m_rtParams.effectiveSunShadow();
+    if (shadowCascades)
+    {
+        executeScoped(primary, "Shadow cull", frameData.shadowCullCommandBuffer.getCommandBuffer());
+        m_gpuProfiler.beginScope(primary, "Shadow draw");
+        vk::ClearValue shadowClear;
+        shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
+        const vk::RenderPassBeginInfo shadowRpBegin{
+            .renderPass = frameData.shadowMap.getRenderPass(),
+            .framebuffer = frameData.shadowMap.getFramebuffer(),
+            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ frameData.shadowMap.getResolution(), frameData.shadowMap.getResolution() } },
+            .clearValueCount = 1,
+            .pClearValues = &shadowClear,
+        };
+        vk::CommandBuffer vkShadowDrawCommandBuffer = frameData.shadowDrawCommandBuffer.getCommandBuffer();
+        primary.beginRenderPass(shadowRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
+        primary.executeCommands(1, &vkShadowDrawCommandBuffer);
+        primary.endRenderPass();
+        m_gpuProfiler.endScope(primary);
+        // The shadow draw's reads of the shared buffers (the commands, the instance indices, the instances, the DGC
+        // scratch) before the main cull's clear + writes and the scene execute's preprocess writes.
+        const vk::MemoryBarrier2 sharedBuffersBarrier{
+            .srcStageMask = vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eCommandPreprocessEXT
+                | vk::PipelineStageFlagBits2::eVertexAttributeInput | vk::PipelineStageFlagBits2::eVertexShader,
+            .srcAccessMask = vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eCommandPreprocessReadEXT
+                | vk::AccessFlagBits2::eCommandPreprocessWriteEXT | vk::AccessFlagBits2::eVertexAttributeRead | vk::AccessFlagBits2::eShaderStorageRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eClear | vk::PipelineStageFlagBits2::eComputeShader
+                | vk::PipelineStageFlagBits2::eDrawIndirect | vk::PipelineStageFlagBits2::eCommandPreprocessEXT,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eShaderStorageWrite
+                | vk::AccessFlagBits2::eIndirectCommandRead | vk::AccessFlagBits2::eCommandPreprocessReadEXT | vk::AccessFlagBits2::eCommandPreprocessWriteEXT,
+        };
+        primary.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &sharedBuffersBarrier });
+    }
     executeScoped(primary, "Indirect cull", frameData.indirectCullCommandBuffer.getCommandBuffer());
     // The cull has read last frame's node transforms: replace them with this frame's for next frame's cull
     // (the motion vectors; see InstanceStream). A primary command: the live node count changes per frame.
@@ -1477,45 +1518,26 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         else
             m_clutterPipeline.recordClear(primary, frameIdx);
     }
-    // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
-    // so skip the shadow cull + cascade render.
-    if (!m_rtParams.effectiveSunShadow())
+    // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition covers this
+    // layer too) and the grass cull. Off, the receivers do not read it (u_grass_nearRange = 0).
+    if (shadowCascades && m_sceneViewCount == 1 && grassNearShadowActive())
     {
-        executeScoped(primary, "Shadow cull", frameData.shadowCullCommandBuffer.getCommandBuffer());
-        m_gpuProfiler.beginScope(primary, "Shadow draw");
+        m_gpuProfiler.beginScope(primary, "Grass near shadow");
         ShadowMap& shadowMap = frameData.shadowMap;
         vk::ClearValue shadowClear;
         shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
-        const vk::RenderPassBeginInfo shadowRpBegin{
-            .renderPass = shadowMap.getRenderPass(),
-            .framebuffer = shadowMap.getFramebuffer(),
-            .renderArea = vk::Rect2D{.offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } },
+        const vk::RenderPassBeginInfo nearRpBegin{
+            .renderPass = shadowMap.getExtraRenderPass(),
+            .framebuffer = shadowMap.getExtraFramebuffer(),
+            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } },
             .clearValueCount = 1,
             .pClearValues = &shadowClear,
         };
-        vk::CommandBuffer vkShadowDrawCommandBuffer = frameData.shadowDrawCommandBuffer.getCommandBuffer();
-        primary.beginRenderPass(shadowRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        primary.executeCommands(1, &vkShadowDrawCommandBuffer);
+        vk::CommandBuffer vkGrassNearShadow = frameData.grassNearShadowCommandBuffer.getCommandBuffer();
+        primary.beginRenderPass(nearRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
+        primary.executeCommands(1, &vkGrassNearShadow);
         primary.endRenderPass();
         m_gpuProfiler.endScope(primary);
-        // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition
-        // covers this layer too). Off, the receivers do not read it (u_grass_nearRange = 0).
-        if (m_sceneViewCount == 1 && grassNearShadowActive())
-        {
-            m_gpuProfiler.beginScope(primary, "Grass near shadow");
-            const vk::RenderPassBeginInfo nearRpBegin{
-                .renderPass = shadowMap.getExtraRenderPass(),
-                .framebuffer = shadowMap.getExtraFramebuffer(),
-                .renderArea = shadowRpBegin.renderArea,
-                .clearValueCount = 1,
-                .pClearValues = &shadowClear,
-            };
-            vk::CommandBuffer vkGrassNearShadow = frameData.grassNearShadowCommandBuffer.getCommandBuffer();
-            primary.beginRenderPass(nearRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-            primary.executeCommands(1, &vkGrassNearShadow);
-            primary.endRenderPass();
-            m_gpuProfiler.endScope(primary);
-        }
     }
 }
 

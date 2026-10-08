@@ -13,14 +13,11 @@ const float PI = 3.14159265359;
 const float INV_PI = 0.31830988618; // multiply by this instead of dividing by PI (a division is not folded by every compiler)
 
 #include "ubo.inc.glsl"
+#include "mathutils.inc.glsl"
 
-vec3 randomColor(uint seed) 
+vec3 randomColor(uint seed)
 {
-    seed ^= seed >> 16;
-    seed *= 0x7feb352du;
-    seed ^= seed >> 15;
-    seed *= 0x846ca68bu;
-    seed ^= seed >> 16;
+    seed = hashU(seed);
     vec3 bits = vec3(float(seed & 255u), float((seed >> 8) & 255u), float((seed >> 16) & 255u));
     return bits / 255.0;
 }

@@ -455,10 +455,10 @@ void Renderer::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
     m_instances.onUniqueMeshCapacityGrown(maxUniqueMeshes);
     m_meshLods.onUniqueMeshCapacityGrown(maxUniqueMeshes);
     m_rt.accel().resizeBlasAddressBuffer(maxUniqueMeshes);
-    m_indirectCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes);
-    m_shadowCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes);
+    m_indirectCullComputePipeline.resizeCommandBuffers(maxUniqueMeshes); // the shadow cull's too
     m_staticMeshGraphicsPipeline.resizeMeshCapacity(maxUniqueMeshes);
     m_shadowMapGraphicsPipeline.resizeMeshCapacity(maxUniqueMeshes);
+    m_staticMeshGraphicsPipeline.reserveOpaquePreprocess(m_shadowMapGraphicsPipeline.getPreprocessRequirement());
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew unique mesh capacity to %u\n", maxUniqueMeshes);
 }

@@ -62,20 +62,6 @@ const uint RT_CUSTOM_TREE = 0x800000u; // custom index bit 23: a tree, the low 1
 
 layout (push_constant) uniform Push { uint treeRtPieces; } pc; // the tree list's RT section (Renderer m_treeCullRtPieces)
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-vec4 quat_multiply(vec4 q, vec4 p)
-{
-    vec4 c, r;
-    c.xyz = cross(q.xyz, p.xyz);
-    c.w = -dot(q.xyz, p.xyz);
-    r = p * q.w + c;
-    r.xyz = (q * p.w + r).xyz;
-    return r;
-}
-
 layout(local_size_x = 64) in;
 
 void main()

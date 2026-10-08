@@ -80,11 +80,6 @@ layout (binding = 12) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the
 #endif
 #include "gi_probe.inc.glsl"
 
-uint hashU(uint x)
-{
-    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
-    return x;
-}
 float hashToFloat(uint x) { return float(hashU(x) & 0x00FFFFFFu) / float(0x01000000u); }
 
 float vnLattice(ivec3 p)

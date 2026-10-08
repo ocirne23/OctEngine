@@ -51,11 +51,6 @@ layout (location = 0) out vec3 out_pos;
 layout (location = 4) out vec2 out_uv;
 layout (location = 5) out flat uint out_meshIdxMaterialIdx;
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
 void main()
 {
 #ifdef STEREO

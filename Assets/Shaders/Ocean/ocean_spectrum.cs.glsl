@@ -31,14 +31,7 @@ const float PI = 3.14159265359;
 const float G = 9.81;
 
 // --- Deterministic gaussian pair per (signed lattice coord, cascade) --------------------------------
-uvec3 pcg3d(uvec3 v)
-{
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    return v;
-}
+#include "mathutils.inc.glsl"
 vec2 gaussianPair(ivec2 m, uint cascade, uint which)
 {
     uvec3 h = pcg3d(uvec3(uint(m.x + 0x8000), uint(m.y + 0x8000), cascade * 4u + which + 1u));

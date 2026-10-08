@@ -5,33 +5,8 @@
 //#extension GL_EXT_debug_printf : enable
 
 #include "shared.inc.glsl"
+#include "instance_cull.inc.glsl"
 
-struct RenderNodeTransform
-{
-    vec4 posScale;
-    vec4 quat;
-};
-struct InMeshInstance
-{
-    uint renderNodeIdx;
-    uint instanceOffsetIdx;
-    uint meshIdxMaterialIdx;
-    uint pipelineIdxAlphaMode;
-};
-struct InMeshInstanceOffset
-{
-    vec4 posScale;
-    vec4 quat;
-};
-struct InMeshInfo
-{
-    vec3 center;
-    float radius;
-    uint indexCount;
-    uint firstIndex;
-    int  vertexOffset;
-    uint prevVertexDelta; // skinned: offset to last frame's vertices (0 = not skinned)
-};
 // Matches RendererVKLayout::OutMeshInstance.
 struct OutMeshInstance
 {
@@ -42,70 +17,14 @@ struct OutMeshInstance
     uint prevVertexDelta;
     uvec2 prevQuat;        // packSnorm2x16 (x, y), (z, w)
 };
-// Matches RendererVKLayout::IndirectDrawSequence.
-struct OutIndirectCommand
-{
-    uint pipelineIndex;
-    uint indexCount;
-    uint instanceCount;
-    uint firstIndex;
-    int  vertexOffset;
-    uint firstInstance;
-};
 
-layout (binding = 1, std430) readonly buffer InRenderNodeTransformsBuffer
-{
-    RenderNodeTransform in_renderNodeTransforms[];
-};
-layout (binding = 2, std430) readonly buffer InMeshInstancesBuffer
-{
-    InMeshInstance in_instances[];
-};
-layout (binding = 3, std430) readonly buffer InMeshInstanceOffsetsBuffer
-{
-    InMeshInstanceOffset in_instanceOffsets[];
-};
-layout (binding = 4, std430) readonly buffer InMeshInfoBuffer
-{
-    InMeshInfo in_meshInfos[];
-};
-layout (binding = 5, std430) readonly buffer InFirstInstancesBuffer
-{
-    uint in_firstInstances[];
-};
 layout (binding = 6, std430) writeonly buffer OutMeshInstancesBuffer
 {
     OutMeshInstance out_meshInstances[];
 };
-layout (binding = 7, std430) writeonly buffer OutMeshInstanceIndexesBuffer
-{
-    uint out_meshInstanceIndexes[];
-};
-
-layout (binding = 8, std430) writeonly buffer OutIndirectCommandBuffer
-{
-    OutIndirectCommand out_indirectCommands[]; // opaque
-};
-
 layout (binding = 9, std430) writeonly buffer OutTransparentIndirectCommandBuffer
 {
     OutIndirectCommand out_transparentIndirectCommands[];
-};
-
-layout (binding = 10, std430) readonly buffer InNodePassMasksBuffer
-{
-    uint in_nodePassMasks[];
-};
-
-#include "mesh_lod.inc.glsl"
-
-layout (binding = 11, std430) readonly buffer InMeshLodGroupIdxBuffer
-{
-    uint in_meshLodGroupIdx[]; // 0xFFFFFFFF = no chain
-};
-layout (binding = 12, std430) readonly buffer InMeshLodGroupsBuffer
-{
-    MeshLodGroup in_meshLodGroups[];
 };
 // LOD hysteresis. Frames in flight may race on a slot; lodSelectLevel clamps stale values.
 layout (binding = 13, std430) buffer LodLevelStateBuffer
@@ -146,21 +65,6 @@ layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
 #define TREE_CULL_TYPES_BINDING 21
 #define TREE_CULL_LIST_BINDING 22
 #include "tree_cull.inc.glsl"
-
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
-vec4 quat_multiply(vec4 q, vec4 p)
-{
-    vec4 c, r;
-    c.xyz = cross(q.xyz, p.xyz);
-    c.w = -dot(q.xyz, p.xyz);
-    r = p * q.w + c;
-    r.xyz = (q * p.w + r).xyz;
-    return r;
-}
 
 // Sphere vs the wetness clipmap window.
 bool terrainOverlayCovers(vec3 pos, float radius)
@@ -232,17 +136,8 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
                 u_lod_maxErrorPx, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
             if (!isTree)
                 lodLevelState[stateSlot] = uint(level);
-            uint chosenMeshIdx = lodMeshAt(group, level);
-            if (in_meshInfos[chosenMeshIdx].indexCount == 0u)
-            {
-                // Streamed out: nearest resident level.
-                for (int d = 1; d < int(group.numLods); ++d)
-                {
-                    if (level - d >= 0 && in_meshInfos[lodMeshAt(group, level - d)].indexCount != 0u) { level -= d; break; }
-                    if (level + d < int(group.numLods) && in_meshInfos[lodMeshAt(group, level + d)].indexCount != 0u) { level += d; break; }
-                }
-                chosenMeshIdx = lodMeshAt(group, level);
-            }
+            level = lodResidentLevel(group, level);
+            const uint chosenMeshIdx = lodMeshAt(group, level);
 #ifdef SHADER_STATS
             atomicAdd(out_lodStats[level], 1);
 #endif
@@ -257,7 +152,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         const uint16_t pipelineIdx    = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
         // By pipeline family, not alpha mode: each DGC set has one fragment output interface.
         const bool isTransparent      = ((PIPELINE_TRANSPARENT_MASK >> uint(pipelineIdx)) & 1u) != 0u;
-        const bool isTerrain         = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
+        const bool isTerrain          = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
         // Only chunks reaching into the tess fade end; +1 covers the VR eye offset.
         const bool terrainTess        = TERRAIN_TESS_ROUTE != 0 && isTerrain
             && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
@@ -355,12 +250,8 @@ void main()
             return;
         pick.kBegin = 0u;
         pick.kEnd = 1u;
-        pick.quat                         = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
-        const vec4 renderNodePosScale     = in_renderNodeTransforms[instance.renderNodeIdx].posScale;
-        const vec4 instanceOffsetPosScale = in_instanceOffsets[instance.instanceOffsetIdx].posScale;
-        pick.posScale                     = vec4(renderNodePosScale.xyz + quat_transform(instanceOffsetPosScale.xyz * renderNodePosScale.w, in_renderNodeTransforms[instance.renderNodeIdx].quat),
-                                                renderNodePosScale.w * instanceOffsetPosScale.w);
-        pick.lodStateBase                 = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
+        instanceTransform(instance, pick.posScale, pick.quat);
+        pick.lodStateBase = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
     }
     for (uint k = pick.kBegin; k < pick.kEnd; ++k)
     {

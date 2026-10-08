@@ -31,9 +31,6 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky", "Ground Horizon", &s.groundHorizon, 0.0f, 0.5f, 0.01f);
     Tweak::floatVar("Sky/Sun", "Sun Angle Cos", &s.sunAngularCos, 0.9995f, 1.0f, 0.000001f);
     Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.0, 5.0f, 0.01f);
-    Tweak::floatVar("Sky/Sun", "Highlight Rolloff", &s.sunRolloff, 0.0f, 2.0f);
-    Tweak::floatVar("Sky/Sun", "Rolloff Knee", &s.sunRolloffKnee, 0.1f, 1.0f, 0.005f);
-    Tweak::floatVar("Sky/Sun", "Rolloff Headroom", &s.sunRolloffHeadroom, 0.5f, 32.0f, 0.05f);
 
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
     Tweak::floatVar("Sky/Atmosphere", "Rayleigh", &s.rayleighScatter, 0.0f, 8.0f, 0.01f);

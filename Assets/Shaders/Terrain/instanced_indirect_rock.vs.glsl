@@ -49,11 +49,6 @@ layout (location = 3) out float out_cavity;    // 1 = open, 0 = deep in a crevic
 layout (location = 4) out vec4 out_wood;       // x = along (base circumferences), yz = across (m), w = 0 a rock, 1 + the bark cover dead wood
 layout (location = 5) flat out uint out_material;
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
 void main()
 {
 #ifdef STEREO

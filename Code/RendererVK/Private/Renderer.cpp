@@ -154,11 +154,7 @@ void Renderer::initPipelines()
     // The per-frame instance stream and the three append-only scene tables, FIRST: every pipeline below is sized from their capacities.
     m_instances.initialize(RendererVKLayout::INITIAL_UNIQUE_MESHES,
         [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); },
-        [this](uint32 maxInstances)
-        {
-            m_indirectCullComputePipeline.resizeInstanceBuffers(maxInstances);
-            m_shadowCullComputePipeline.resizeInstanceBuffers(maxInstances);
-        });
+        [this](uint32 maxInstances) { m_indirectCullComputePipeline.resizeInstanceBuffers(maxInstances); }); // the shadow cull's too
 
     m_submission.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
@@ -222,11 +218,12 @@ void Renderer::initPipelines()
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_forceFieldPipeline.resizeIntervalTarget(renderExt.width, renderExt.height); // the union march's target
 
-    m_shadowCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
+    m_shadowCullComputePipeline.initialize(); // writes the main cull's out buffers (it runs first)
     // + the extra layer: the NEAR GRASS CASCADE (GrassPipeline; sampled through the same array binding).
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.shadowMap.initialize("ShadowMap", RendererVKLayout::SHADOW_MAP_RESOLUTION, RendererVKLayout::NUM_SHADOW_CASCADES, true);
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
+    m_staticMeshGraphicsPipeline.reserveOpaquePreprocess(m_shadowMapGraphicsPipeline.getPreprocessRequirement());
     m_grassPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
     m_clutterPipeline.initializeNearShadow(m_perFrameData[0].shadowMap.getExtraRenderPass());
     // The weather volume's top-down rain occlusion map: a ray-query pass over the TLAS (no cull, no instance buffers),
@@ -415,6 +412,7 @@ void Renderer::reloadShaders()
     m_lightGridComputePipeline.reloadShaders();
     m_shadowCullComputePipeline.reloadShaders();
     m_shadowMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
+    m_staticMeshGraphicsPipeline.reserveOpaquePreprocess(m_shadowMapGraphicsPipeline.getPreprocessRequirement());
     m_rainOcclusionPipeline.reloadShaders();
     m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getOpaqueRenderPass());

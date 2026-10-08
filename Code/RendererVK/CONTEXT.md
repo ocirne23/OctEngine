@@ -148,11 +148,13 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 
 ```
 GPU Frame
-  Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
+  Skinning → Ocean sim (+ its spray step: particle spawn requests)
+    → Shadow cull → Shadow draw            (both skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see below)
+    → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
     → Terrain wetness
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
-    → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
+    → Grass near shadow                    (desktop, the shadow array's extra layer; after the grass cull)
     → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
     → GI                                   (BLAS builds + THIS frame's TLAS, then the probe trace)
@@ -2276,7 +2278,10 @@ despawned containers and `Col_` proxies go cold.
 
 ## Selection is per-instance ON THE GPU
 
-`mesh_lod.inc.glsl` in the main and shadow cull; params live through the UBO.
+`mesh_lod.inc.glsl` in the main and shadow cull; params live through the UBO. Both culls include
+`instance_cull.inc.glsl`: their shared bindings (1-5, 7, 8, 10-12), the instance transform and `lodResidentLevel` (the
+nearest resident level while the picked one is streamed out). The shadow cull's cascade test reads `u_cascadePlanes`,
+normalized once per frame on the CPU (`buildUboSunShadow`).
 
 **Instances push LOD0 and the cull redirects the draw.** The CPU sizes every chain member's bucket to
 the chain's full count, **hysteresis lives in per-instance GPU slots (benign races)**, shadow cull
@@ -2335,6 +2340,20 @@ Scene opaque, nearly all with 0 instances.
   2026-10-05, and "Editor/Wireframe" (line pipelines: 1 MB more at 85 MB) failed
   VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071. Grow-only: a reload whose requirement the buffers already
   cover keeps them.
+* **THE SHADOW PASS BORROWS THE MAIN PASS'S MEMORY** (2026-10-08): the shadow cull + draw run BEFORE the main cull
+  (`recordPrimaryPreScene`), so everything they write is dead again before the main cull and the scene need it:
+  * the shadow cull writes the MAIN cull's out-instance buffer (`OutShadowMeshInstance` at index `instanceIdx`; its
+    48 B fit the main 64 B stride, static_assert in Layout.ixx), its instance-index buffer and its OPAQUE list (binding
+    8). Only the compacted count is the shadow cull's own. No shadow capacity of its own to resize.
+  * the shadow execute uses the static mesh pass's OPAQUE DGC scratch (`getOpaquePreprocessBuffer`), sized for both:
+    `ShadowMapGraphicsPipeline::getPreprocessRequirement` -> `StaticMeshGraphicsPipeline::reserveOpaquePreprocess`,
+    called by the Renderer after every shadow-pipeline initialize / reload / mesh-capacity growth. The transparent
+    scratch stays separate (that execute shares a render pass with the opaque one).
+  * ONE barrier after the shadow draw: its indirect / vertex / preprocess reads before the main cull's clear +
+    writes and the scene execute's preprocess. The main cull now waits for the shadow draw (it could overlap its tail
+    before); the cull is ~15 µs.
+  Saves the shadow's out instances + indices (~52 MB at 1M instances), its command list and its scratch, per frame in
+  flight.
 
 ---
 
@@ -3368,6 +3387,8 @@ calls `reloadShaders()`.
   from it, see "The frame UBO and the tweak locks"). So must the
   main cull's `OutMeshInstance` (64 B): it is declared in the cull and in the three scene vertex shaders
   (lit, terrain, ocean) - a shader that declares fewer fields reads with the wrong stride.
+* **`mathutils.inc.glsl`** (Common/, included by shared.inc.glsl; a shader without shared.inc.glsl includes it
+  itself): `quat_transform`, `quat_multiply`, the `hashU` and `pcg3d` integer hashes. Never redefine one locally.
 * `motion_vector.inc.glsl`: the fragment side of the motion vectors (`fragPrevClip`, `motionVector`);
   fragment shaders only (`gl_FragCoord`). The readers' side is in shared.inc.glsl (`prevScreenUVMotion`).
 * **THE SUN SHADOW FIRST** (`SUN_SHADOW_FIRST`: the lit FS, instanced_indirect.fs.glsl, and the terrain GROUND,

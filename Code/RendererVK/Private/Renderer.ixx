@@ -566,6 +566,7 @@ private:
     float m_giFullBake = 0.0f;              // takeVisibilityParams' one-frame request
     glm::vec3 m_giUboPrevFocus{ 0.0f };     // the focus GI traced from last
     glm::vec4 m_cascadeSunSizeTexels{ 0.0f };
+    glm::vec4 m_cascadePlanes[RendererVKLayout::NUM_SHADOW_CASCADES * 6] = {}; // normalized, cascade c at [c * 6]
     glm::dvec2 m_cloudWindStep{ 0.0 };      // this frame's cloud field displacement
     glm::vec3 m_cloudShadowAxis0{ 1.0f, 0.0f, 0.0f };
     glm::vec3 m_cloudShadowAxis1{ 0.0f, 0.0f, 1.0f };

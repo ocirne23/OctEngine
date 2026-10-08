@@ -585,6 +585,8 @@ export namespace RendererVKLayout
         uint32 _pad2;
     };
     static_assert(sizeof(OutShadowMeshInstance) == 48);
+    // The shadow cull writes into the main cull's out-instance buffer (the shadow pass is done before the main cull).
+    static_assert(sizeof(OutShadowMeshInstance) <= sizeof(OutMeshInstance));
 
     struct IndirectDrawSequence
     {

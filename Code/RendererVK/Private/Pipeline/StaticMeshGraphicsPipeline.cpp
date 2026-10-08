@@ -800,6 +800,7 @@ void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
     // to keep the old size, and the execute then failed VUID-VkGeneratedCommandsInfoEXT-preprocessSize-11071.
     // GROW-ONLY: a requirement the buffers already cover keeps them (a reload does not reallocate 4 x 85 MB).
     // The GPU is idle here (initialize, a mesh-capacity growth, a shader reload), and the caller re-records.
+    // The opaque scratch also holds the shadow pass's requirement (reserveOpaquePreprocess).
     m_maxUniqueMeshes = maxUniqueMeshes;
     vk::DeviceSize required = 0;
     for (const IndirectExecutionSet* executionSet : { &m_indirectExecutionSet, &m_transparentExecutionSet })
@@ -814,19 +815,27 @@ void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
         Globals::device.getDevice().getGeneratedCommandsMemoryRequirementsEXT(&memReqInfo, &memReq);
         required = oc::max(required, memReq.memoryRequirements.size);
     }
-    if (required <= m_preprocessSize)
-        return;
-    m_preprocessSize = required;
-    // Separate scratch per pass so the opaque and transparent executes don't alias preprocess memory.
-    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; i++)
+    // Separate scratch per pass so the opaque and transparent executes (one render pass) don't alias preprocess memory.
+    constexpr vk::BufferUsageFlags2 usage = vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress;
+    if (required > m_preprocessSize)
     {
-        m_preprocessBuffers[i].initialize(m_preprocessSize,
-            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocess");
-        m_transparentPreprocessBuffers[i].initialize(m_preprocessSize,
-            vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocessTransparent");
+        m_preprocessSize = required;
+        for (Buffer& buffer : m_transparentPreprocessBuffers)
+            buffer.initialize(m_preprocessSize, usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocessTransparent");
     }
+    const vk::DeviceSize opaqueRequired = oc::max(m_preprocessSize, m_sharedPreprocessSize);
+    if (opaqueRequired > m_opaquePreprocessSize)
+    {
+        m_opaquePreprocessSize = opaqueRequired;
+        for (Buffer& buffer : m_preprocessBuffers)
+            buffer.initialize(m_opaquePreprocessSize, usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocess");
+    }
+}
+
+void StaticMeshGraphicsPipeline::reserveOpaquePreprocess(vk::DeviceSize size)
+{
+    m_sharedPreprocessSize = oc::max(m_sharedPreprocessSize, size);
+    createPreprocessBuffers(m_maxUniqueMeshes);
 }
 
 void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32 maxTextures)
@@ -1117,8 +1126,8 @@ void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffe
         .indirectCommandsLayout = m_indirectCommandsLayout.getHandle(),
         .indirectAddress = indirectCommandBuffer.getDeviceAddress(),
         .indirectAddressSize = indirectCommandBuffer.getSize(),
-        .preprocessAddress = m_preprocessSize > 0 ? preprocessBuffer.getDeviceAddress() : 0,
-        .preprocessSize = m_preprocessSize,
+        .preprocessAddress = preprocessBuffer.getSize() > 0 ? preprocessBuffer.getDeviceAddress() : 0,
+        .preprocessSize = preprocessBuffer.getSize(),
         .maxSequenceCount = maxSequences,
         .sequenceCountAddress = drawCountBuffer.getDeviceAddress() + countIdx * sizeof(uint32),
         .maxDrawCount = maxSequences,

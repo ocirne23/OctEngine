@@ -29,21 +29,25 @@ public:
     {
         DescriptorSet& descriptorSet;
         Buffer& ubo;                   // 0 - main UBO (holds cascadeViewProj[]; cascade chosen by gl_ViewIndex)
-        Buffer& meshInstanceBuffer;    // 1 - shadow cull's transformed instances (carry the alpha-mask tex idx)
+        // The main cull's buffers, as the shadow cull wrote them this frame (it runs before the main cull).
+        Buffer& meshInstanceBuffer;    // 1 - OutShadowMeshInstance per instance (carries the alpha-mask tex idx)
         Buffer& vertexBuffer;
         Buffer& indexBuffer;
-        Buffer& instanceIdxBuffer;     // vertex binding 2 - shadow cull's compacted instance indices
-        Buffer& indirectCommandBuffer; // shadow cull's IndirectDrawSequence buffer (opaque region)
+        Buffer& instanceIdxBuffer;     // vertex binding 2 - the instance indices per draw
+        Buffer& indirectCommandBuffer; // the IndirectDrawSequence list (the opaque one)
         Buffer& drawCountBuffer;       // uint32 compacted sequence count (DGC sequenceCountAddress), GPU-written by the cull
+        Buffer& preprocessBuffer;      // the DGC scratch: the static mesh pass's opaque one, borrowed (sized for both)
     };
 
     void initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures);
     void reloadShaders(uint32 maxTextures);
-    void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
+    void record(CommandBuffer& commandBuffer, RecordParams& params);
     // Rewrites one slot of the texture array (binding 7) with a streamed texture's current view.
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
-    // Re-sizes the DGC preprocess scratch for a grown unique-mesh capacity (GPU must be idle).
+    // Asks the DGC preprocess requirement again for a grown unique-mesh capacity.
     void resizeMeshCapacity(uint32 maxUniqueMeshes);
+    // What the scratch it borrows must hold (StaticMeshGraphicsPipeline::reserveOpaquePreprocess). Grow-only.
+    vk::DeviceSize getPreprocessRequirement() const { return m_preprocessSize; }
 
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_graphicsPipeline.getDescriptorSetLayout(); }
 
@@ -51,7 +55,7 @@ private:
 
     void buildPipelineLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
     void buildIndirectState(uint32 maxUniqueMeshes);
-    void createPreprocessBuffers(uint32 maxUniqueMeshes);
+    void queryPreprocessSize(uint32 maxUniqueMeshes);
 
     GraphicsPipeline m_graphicsPipeline;
     IndirectCommandsLayout m_indirectCommandsLayout;
@@ -59,7 +63,5 @@ private:
     vk::RenderPass m_renderPass;
 
     vk::DeviceSize m_preprocessSize = 0;
-    uint32 m_maxUniqueMeshes = 0; // what the preprocess scratch was last sized for (a shader reload asks again)
-    // One preprocess scratch per frame in flight (a single multiview execute renders all cascades).
-    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;
+    uint32 m_maxUniqueMeshes = 0; // what the requirement was last asked for (a shader reload asks again)
 };

@@ -21,9 +21,8 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
 
+// Colour only: the motion target is write-masked for this variant (the sky reprojects through the camera).
 layout (location = 0) out vec4 out_color;
-// The motion target: write-masked here (the sky reprojects through the camera).
-layout (location = 1) out vec4 out_motion;
 
 // ---------------------------------------------------------------------------------------------
 // Atmosphere: single-scattering Rayleigh + Mie, shared with the indirect paths (atmosphere.inc.glsl,
@@ -56,8 +55,7 @@ float vnoise(vec2 p)
 	float d = hash12(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-// True 3D value noise: unlike stacked/offset 2D layers, consecutive march samples sit in one coherent
-// 3D field, so cloud shapes genuinely overhang and interpenetrate instead of reading as flat sheets.
+// 3D value noise over a direction (the moon's surface, the nebula).
 float vnoise3(vec3 p)
 {
 	vec3 i = floor(p);
@@ -71,21 +69,14 @@ float vnoise3(vec3 p)
 	float nx01 = mix(n001, n101, f.x), nx11 = mix(n011, n111, f.x);
 	return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
 }
-// FBM with a conservative early-out: after each octave the maximum the remaining octaves could still
-// add is known, so if even that cannot reach minNeeded the result is provably below the threshold and
-// the remaining (most expensive, high-frequency) octaves are skipped.
-float fbm3(vec3 p, int octaves, float minNeeded)
+float fbm3(vec3 p, int octaves)
 {
 	float norm = 1.0 - exp2(-float(octaves)); // sum of 0.5 + 0.25 + ...
 	float v = 0.0;
 	float a = 0.5;
-	float remaining = norm;
 	for (int i = 0; i < octaves; ++i)
 	{
 		v += a * vnoise3(p);
-		remaining -= a;
-		if (v + remaining < minNeeded * norm)
-			return 0.0;
 		p = p * 2.13 + vec3(17.7, 9.2, 31.4); // offset octaves instead of rotating (cheap in 3D)
 		a *= 0.5;
 	}
@@ -124,7 +115,6 @@ void main()
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex); // per-eye ray reconstruction below
 #endif
-	out_motion = vec4(0.0);
 	// View ray from the screen position, not from the interpolated world position (in_pos - u_viewPos
 	// cancels two large float32 values per pixel and jitters away from the origin). Derived from u_mvp's
 	// x/y/w ROWS only: for a world direction d, ndc.xy = (r0.d, r1.d) / (rw.d), so solving the 3x3 system
@@ -189,8 +179,7 @@ void main()
 		if (sunLit && u_sky_sunAngularCos < 1.0 && moonCovered) // 1.0 disables the disc
 		{
 			// Sun disc: analytically anti-aliased rim (pixel-footprint smoothstep, TAA-stable) and a mild
-			// limb darkening. The gradient through the overexposed sun region is recovered by the highlight
-			// roll-off at the end of main() (u_sky_sunRolloff), not by darkening the disc itself.
+			// limb darkening.
 			vec3 sT = normalize(cross(L, abs(L.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 sB = cross(L, sT);
 			float discSin = sqrt(max(1.0 - u_sky_sunAngularCos * u_sky_sunAngularCos, 1e-12));
@@ -226,7 +215,7 @@ void main()
 			float rimlight = clamp(1.0 - distance(moonDir, L) * discSin, 0.0, 1.0);
 			lambert += planetlit * smoothstep(0.0, 0.2, distance(L, moonDir) * u_sky_moonCos) * length(color);
 			lambert += smoothstep(0.15, 0.0, dot(n, -L)) * rimlight * clamp(0.1 * sunMagnitude * u_sky_moonCos - distance(L, moonDir), 0.0, 1.0);
-			float albedo = 0.7 + 0.6 * (fbm3(n * 7.0, 3, 0.0) - 0.5); // maria/crater mottling
+			float albedo = 0.7 + 0.6 * (fbm3(n * 7.0, 3) - 0.5); // maria/crater mottling
 			color += vec3(0.93, 0.95, 1.0) * ((lambert * albedo * u_sky_moonBrightness) * transmittance);
 		}
 
@@ -264,9 +253,9 @@ void main()
 						float filD = pow(fil, 3.0) * smoothstep(0.14, 0.70, gas);
 						float coreLine = exp(-(hgt * hgt) / (bw * bw * 0.52)); // narrow hot line along the band center
 						float dustCut = 1.0 - u_sky_nebulaDust * smoothstep(0.36, 0.72, dust) * mix(0.5, 1.0, coreLine) * bandFade;
-						float vary = smoothstep(0.88, 0.72, fbm3(q * 0.35 + vec3(1.2, 1.3, 2.9), 5, 0.0));
+						float vary = smoothstep(0.88, 0.72, fbm3(q * 0.35 + vec3(1.2, 1.3, 2.9), 5));
 						float dens = (gasD * 0.25 + filD * 0.4 + coreLine * gasD * 0.4) * dustCut * bandFade * (0.5 + 5.4 * vary);
-						float hueT = fbm3(q * 0.5 + vec3(3.0, 29.0, 3.0), 3, 0.0);
+						float hueT = fbm3(q * 0.5 + vec3(3.0, 29.0, 3.0), 3);
 						float t = hueT * 2.2 + dust * 0.6;
 						vec3 hue = vec3(0.5) + vec3(0.5) * cos(6.2831853 * (t + vec3(0.00, 0.30, 0.60)));
 						hue = mix(vec3(dot(hue, vec3(0.333))), hue, 0.65); // saturation push for vibrancy
@@ -357,27 +346,5 @@ void main()
 		color = airColor + transmittance * (groundLit + u_ambientColor);
 	}
 
-	/*
-	// Highlight roll-off (u_sky_sunRolloff): there is no tonemapper, so everything over 1.0 hard-clips
-	// to flat white - the sun disc, its halo and the Mie forward peak all merge into one featureless
-	// circle. Soft-clip the max channel above a knee with an exponential shoulder that asymptotes at 1:
-	// the overexposed region keeps a smooth gradient (disc > halo core > halo tail) instead of a hard
-	// silhouette. Max-channel (not per-channel) so saturated sunset hues roll off without shifting hue.
-	// 0 = off (raw clip); higher = lower knee + longer shoulder = more of the brightness range mapped
-	// into the visible gradient.
-	const float rolloff = clamp(u_sky_sunRolloff, 0.0, 2.0);
-	if (rolloff > 0.0)
-	{
-		// Knee saturates at rolloff = 1; past that only the headroom keeps growing (gentler shoulder).
-		const float knee = mix(1.0, min(u_sky_rolloffKnee, 0.99), min(rolloff, 1.0)); // where compression starts
-		const float headroom = mix(0.35, u_sky_rolloffHeadroom, rolloff);             // brightness range the shoulder absorbs
-		float lum = max(color.r, max(color.g, color.b));
-		if (lum > knee)
-		{
-			float compressed = knee + (1.0 - knee) * (1.0 - exp(-(lum - knee) / ((1.0 - knee) * headroom)));
-			color *= compressed / lum;
-		}
-	}
-	*/
 	out_color = vec4(color, 1.0);
 }

@@ -54,11 +54,6 @@ layout (location = 4) out vec3 out_prevWorldDelta;
 layout (location = 5) out flat vec3 out_instanceOrigin;
 #endif
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
 // Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before
 // they meet the rotated offsets), so the result keeps its precision far from the world origin.
 vec3 prevWorldDelta(InMeshInstancesData inst)

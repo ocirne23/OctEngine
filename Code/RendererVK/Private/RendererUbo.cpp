@@ -422,6 +422,17 @@ void Renderer::buildUboSunShadow(const Camera& camera)
         const float texelWorldSize = m_sunCascadeViewProj[c][1][3];
         const float depthRange = m_sunCascadeViewProj[c][2][3];
         m_cascadeSunSizeTexels[c] = tanT * depthRange / glm::max(texelWorldSize, 1e-6f);
+
+        // The shadow cull's caster test: Gribb-Hartmann planes of the cascade's clip volume (zero-to-one depth). The
+        // bottom row is structurally [0 0 0 1]; its slots hold the packed scalars above.
+        const glm::mat4& m = m_sunCascadeViewProj[c];
+        const glm::vec4 rx(m[0][0], m[1][0], m[2][0], m[3][0]);
+        const glm::vec4 ry(m[0][1], m[1][1], m[2][1], m[3][1]);
+        const glm::vec4 rz(m[0][2], m[1][2], m[2][2], m[3][2]);
+        const glm::vec4 rw(0.0f, 0.0f, 0.0f, 1.0f);
+        const glm::vec4 planes[6] = { rw + rx, rw - rx, rw + ry, rw - ry, rz, rw - rz };
+        for (uint32 p = 0; p < 6; ++p)
+            m_cascadePlanes[c * 6 + p] = planes[p] / glm::max(glm::length(glm::vec3(planes[p])), 1e-6f);
     }
 }
 
@@ -591,9 +602,6 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("sky_moonCos", [&] { return skyMoonCos(s); }, s.moonSizeDeg);
         list.add("sky_nebulaAxis", [&] { return glm::normalize(s.nebulaAxis); }, s.nebulaAxis);
         list.add("sky_sunGlow", s.sunGlow);
-        list.add("sky_rolloffKnee", s.sunRolloffKnee);
-        list.add("sky_rolloffHeadroom", s.sunRolloffHeadroom);
-        list.add("sky_sunRolloff", s.sunRolloff);
         list.add("sky_scatterBoost", s.scatterBoost);
         list.add("sky_mieG", s.mieG);
         list.add("sky_moonBrightness", s.moonBrightness);
@@ -732,6 +740,7 @@ void Renderer::registerUboValues(UboBlock& list)
         // radius (texels) per unit of depth gap.
         list.addArray("cascadeViewProj", NUM_SHADOW_CASCADES, [this](uint32 i) { return m_sunCascadeViewProj[i]; }, UboLive);
         list.add("cascadeSunSizeTexels", [this] { return m_cascadeSunSizeTexels; }, UboLive);
+        list.addArray("cascadePlanes", NUM_SHADOW_CASCADES * 6, [this](uint32 i) { return m_cascadePlanes[i]; }, UboLive);
         list.add("shadow_depthBias", sh.depthBias);
         list.add("shadow_normalBias", sh.normalBias);
         list.add("shadow_invResolution", [] { return 1.0f / (float)RendererVKLayout::SHADOW_MAP_RESOLUTION; });

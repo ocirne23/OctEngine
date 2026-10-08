@@ -31,11 +31,6 @@ layout (location = 4) in uint inst_idx;
 layout (location = 0) out vec2 out_uv;
 layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragment skips the mask test)
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
 void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];

@@ -72,6 +72,10 @@ public:
     void initialize(vk::RenderPass renderPass, uint32 maxUniqueMeshes, uint32 maxTextures, bool stereo = false);
     void reloadShaders(vk::RenderPass renderPass, uint32 maxTextures);
     void resizeMeshCapacity(uint32 maxUniqueMeshes);
+    // The opaque DGC scratch is SHARED with the shadow pass: its execute is done long before the scene's (a barrier
+    // after the shadow draw, Renderer::recordPrimaryPreScene). Grows the scratch to hold `size` too. GPU idle.
+    void reserveOpaquePreprocess(vk::DeviceSize size);
+    Buffer& getOpaquePreprocessBuffer(uint32 frameIdx) { return m_preprocessBuffers[frameIdx]; }
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors = true);
     void updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler);
     void updateTlasDescriptor(vk::DescriptorSet descriptorSet, vk::AccelerationStructureKHR tlas);
@@ -169,9 +173,11 @@ private:
     bool m_terrainTess = true;     // m_terrainTessPipeline built + its draws recorded
     bool m_terrainTessBuilt = false; // m_terrainTessPipeline initialized (later changes reload it)
 
-    vk::DeviceSize m_preprocessSize = 0;
+    vk::DeviceSize m_preprocessSize = 0;         // this pipeline's own requirement (both sets)
+    vk::DeviceSize m_sharedPreprocessSize = 0;   // the shadow pass's requirement (reserveOpaquePreprocess)
+    vk::DeviceSize m_opaquePreprocessSize = 0;   // the opaque scratch: the larger of the two
     uint32 m_maxUniqueMeshes = 0; // what the preprocess scratch was last sized for (a shader reload asks again)
-    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass + the shadow pass
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
 
     // Grow-only: (re)creates the scratch buffers when the execution sets need more than they hold. GPU idle.

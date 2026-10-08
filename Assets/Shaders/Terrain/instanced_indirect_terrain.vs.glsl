@@ -87,11 +87,6 @@ float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reli
 }
 #endif
 
-vec3 quat_transform(vec3 v, vec4 q)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
-}
-
 // THE QUADTREE at the streamer's DRAW camera (u_terrain_stitch.yz; base-chunk units). MIRRORS Procedural nodeEdgeDist,
 // ringLodAt and Ring::leafLodAt (TerrainStreamer.cpp) BIT FOR BIT - the same float operations in the same order: both
 // nodes of an edge must get the same answer, and the streamer draws a node only while it lies inside a leaf of this.

@@ -8,43 +8,17 @@ import :Layout;
 ShadowCullComputePipeline::ShadowCullComputePipeline() {}
 ShadowCullComputePipeline::~ShadowCullComputePipeline() {}
 
-void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes)
+void ShadowCullComputePipeline::initialize()
 {
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.drawCountBuffer.initialize(sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullDrawCount");
-    resizeInstanceBuffers(maxMeshInstances);
-    resizeCommandBuffers(maxUniqueMeshes);
 
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
     m_computePipeline.initialize(computePipelineLayout);
     m_compact.initialize(1);
-}
-
-void ShadowCullComputePipeline::resizeInstanceBuffers(uint32 maxMeshInstances)
-{
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        perFrame.outMeshInstancesBuffer.initialize(maxMeshInstances * sizeof(RendererVKLayout::OutShadowMeshInstance), // 6
-            vk::BufferUsageFlagBits2::eVertexBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullOutInstances");
-
-        perFrame.outMeshInstanceIndexesBuffer.initialize(maxMeshInstances * sizeof(uint32), // 7
-            vk::BufferUsageFlagBits2::eVertexBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullOutIndices");
-    }
-}
-
-void ShadowCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
-{
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        perFrame.outIndirectCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 8 (single opaque region)
-            vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullOutCommands");
-    }
 }
 
 void ShadowCullComputePipeline::reloadShaders()
@@ -91,11 +65,11 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inFirstInstancesBuffer.getBuffer(), .range = params.inFirstInstancesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = frameData.outMeshInstancesBuffer.getBuffer(), .range = frameData.outMeshInstancesBuffer.getSize() } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outMeshInstancesBuffer.getBuffer(), .range = params.outMeshInstancesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = frameData.outMeshInstanceIndexesBuffer.getBuffer(), .range = frameData.outMeshInstanceIndexesBuffer.getSize() } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outMeshInstanceIndexesBuffer.getBuffer(), .range = params.outMeshInstanceIndexesBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = frameData.outIndirectCommandBuffer.getBuffer(), .range = frameData.outIndirectCommandBuffer.getSize() } } },
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.outIndirectCommandBuffer.getBuffer(), .range = params.outIndirectCommandBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.inMaterialInfoBuffer.getBuffer(), .range = params.inMaterialInfoBuffer.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eStorageBuffer,
@@ -119,7 +93,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_computePipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
 
     // Full-capacity clear so the recorded size never depends on the live mesh count (see IndirectCull).
-    vkCommandBuffer.fillBuffer(frameData.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // clear per-mesh instance counts
+    vkCommandBuffer.fillBuffer(params.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // clear per-mesh instance counts
     {
         vk::MemoryBarrier2 memoryBarrier{
             .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -132,7 +106,7 @@ void ShadowCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fram
 
     vkCommandBuffer.dispatchIndirect(params.dispatchIndirectBuffer.getBuffer(), 0);
 
-    Buffer* const lists[] = { &frameData.outIndirectCommandBuffer };
+    Buffer* const lists[] = { &params.outIndirectCommandBuffer };
     m_compact.record(vkCommandBuffer, params.meshCountBuffer, lists, frameData.drawCountBuffer);
 
     {
