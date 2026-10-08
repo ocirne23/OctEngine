@@ -1008,8 +1008,15 @@ bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsa
                 continue;
             }
             const stbi_uc* pSrc = source(channels[c].path) + (channels[c].srcChannel & 3);
+            const float scale = channels[c].scale;
+            if (scale == 1.0f)
+            {
+                for (size_t i = 0; i < numPixels; ++i, pDst += 4, pSrc += 4)
+                    *pDst = *pSrc;
+                continue;
+            }
             for (size_t i = 0; i < numPixels; ++i, pDst += 4, pSrc += 4)
-                *pDst = *pSrc;
+                *pDst = (uint8)oc::clamp(128.0f + ((float)*pSrc - 128.0f) * scale + 0.5f, 0.0f, 255.0f);
         }
         ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath);
     }

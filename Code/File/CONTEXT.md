@@ -219,7 +219,8 @@ loose textures that no `ISceneData` references — the procedural terrain's biom
   (`r` required, missing channels = 0) and compresses it as Data/BC1. For packing separate AO,
   roughness and metalness maps into one ARM-style texture. All present sources must share dimensions.
 * `convertChannelsToDds(PackChannel[4], EUsage, out)` — the general packer: output channel i = channel
-  `srcChannel` of image `path`, or the constant `fill` without a path. Each distinct source is decoded once;
+  `srcChannel` of image `path`, or the constant `fill` without a path; `scale` scales its contrast about 128 (the
+  terrain's per-set height scale). Each distinct source is decoded once;
   all must share dimensions. The terrain splat bake uses it for its packed set (albedo + roughness as
   ColorAlpha, height + AO as TwoChannel).
 

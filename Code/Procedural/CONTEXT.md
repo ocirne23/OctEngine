@@ -459,7 +459,9 @@ It also bakes the splat textures, PACKED into THREE per set (one texture fetch f
 four sources; since 2026-09-28): `diffr` = albedo + ROUGHNESS in the alpha (the ARM's G; BC3), `nor` (BC5),
 `hao` = HEIGHT (the `disp` source's R, 0.5 = flat without one - the terrain relief's input: the parallax +
 height blend in "Terrain/Textures", the displacement in "Terrain/Tessellation"; see the RendererVK CONTEXT) +
-AO (the ARM's R; BC5). The ARM's metalness is dropped (terrain is never metallic). A packed output is stale
+AO (the ARM's R; BC5). A set's `heightScale` (`TerrainTexSource`, default 1) scales its baked height about 0.5 - the
+relief of that set alone (Moss002: 0.5); the scale is part of the file name (`<stem>_hao_h50.dds`), so a change
+re-bakes. The ARM's metalness is dropped (terrain is never metallic). A packed output is stale
 when EITHER of its sources is newer. Compressed to `Assets/Local/TerrainTex` (old `_diff` / `_arm` / `_disp`
 files there are leftovers of the unpacked set) — a background job
 kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextures` when it is
