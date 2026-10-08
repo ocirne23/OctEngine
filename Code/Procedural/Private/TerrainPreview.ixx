@@ -5,8 +5,11 @@ import Core.Log;
 import Core.glm;
 import Threading;
 import File;
+import Settings;
 import :TerrainSampler;
 import :GeneratorV3;
+import :RiverRouting;
+import :RiverNetwork;
 
 export namespace Procedural
 {
@@ -21,6 +24,10 @@ export namespace Procedural
 	// nothing an entity destructor reaches, and its dtor cancels + joins before the job system goes.
 	// Main thread: request() / update() / the accessors. The bake itself is ONE Low job that fills the
 	// grid in row bands (a cancel lands within one band's tile fetches) and colours it.
+	//
+	// RIVERS (Docs/RiverPlan.md V0): the bake also routes the coarse river network over the tiles the map covers
+	// ("Terrain/Rivers") and draws it on top - rivers by discharge, lakes, terminal lakes, salt pans, dry beds. A
+	// river tweak changed while the map is up re-colours it from the stored samples (no re-sampling).
 	//
 	// SHARED RUNTIME: the diffusion runtime holds ONE seed for the process, and constructing a
 	// TerrainGenV3 reseeds it. So a preview of a different seed than the streamer's live world would
@@ -65,6 +72,7 @@ export namespace Procedural
 			m_generator = nullptr; // rebuilt for the new seed once the old bake has drained (see update)
 			m_state = EState::LoadingModels;
 			m_image = nullptr;
+			m_points = nullptr;
 			m_statusText.clear();
 		}
 
@@ -75,6 +83,7 @@ export namespace Procedural
 			m_requestPending = false;
 			m_state = EState::Idle;
 			m_image = nullptr;
+			m_points = nullptr;
 			m_statusText.clear();
 		}
 
@@ -88,8 +97,15 @@ export namespace Procedural
 				if (!bake->cancel.load(oc::memory_order_relaxed) && bake->result)
 				{
 					m_image = oc::move(bake->result);
+					m_points = bake->points;
 					m_state = EState::Ready;
 				}
+			}
+			if (!m_requestPending && !m_bake && m_state == EState::Ready && m_points && m_generator
+				&& currentRiverParams() != m_riverParams)
+			{
+				kick(/*sample*/ false);
+				return;
 			}
 			if (!m_requestPending || m_bake)
 				return;
@@ -116,7 +132,7 @@ export namespace Procedural
 				return;
 			}
 			m_requestPending = false;
-			kick();
+			kick(/*sample*/ true);
 		}
 
 		EState state() const { return m_state; }
@@ -144,6 +160,27 @@ export namespace Procedural
 		}
 
 	private:
+		// What the river overlay was drawn with: a change re-colours the map.
+		struct RiverParams
+		{
+			bool show = false;
+			RiverConfig cfg;
+			float minQ = 0.0f;
+			float dryCells = 0.0f;
+			bool operator==(const RiverParams&) const = default;
+		};
+
+		static RiverParams currentRiverParams()
+		{
+			const TerrainSettings& s = Globals::settings.terrain;
+			RiverParams p;
+			p.show = s.riverPreview;
+			p.cfg = riverConfigFromSettings(s);
+			p.minQ = s.riverMapMinQ;
+			p.dryCells = s.riverMapDryCells;
+			return p;
+		}
+
 		struct Bake
 		{
 			oc::shared_ptr<const TerrainGenV3> generator;
@@ -151,9 +188,11 @@ export namespace Procedural
 			uint32 generation = 0;
 			double step = 0.0;   // world metres per texel
 			double origin = 0.0; // world coordinate of texel 0 on both axes
+			bool sample = true;  // false: a re-colour of the stored samples (a river tweak changed)
+			RiverParams rivers;
 			oc::atomic<bool> cancel{ false };
 			oc::atomic<uint32> rowsDone{ 0 };
-			oc::vector<TerrainPoint> points;
+			oc::shared_ptr<oc::vector<TerrainPoint>> points;
 			oc::shared_ptr<Image> result;
 		};
 
@@ -163,7 +202,7 @@ export namespace Procedural
 				m_bake->cancel.store(true, oc::memory_order_relaxed);
 		}
 
-		void kick()
+		void kick(bool sample)
 		{
 			const int32 npc = TerrainGenV3::nativePerCoarsePixel();
 			const float mpp = m_generator->config().metersPerPixel; // the generator's clamped value
@@ -173,25 +212,38 @@ export namespace Procedural
 			bake->generation = ++m_generation;
 			bake->step = (double)npc * (double)mpp;
 			bake->origin = -0.5 * bake->step * (double)c_resolution + 0.5 * bake->step;
-			bake->points.resize((size_t)c_resolution * c_resolution);
+			bake->sample = sample;
+			bake->rivers = currentRiverParams();
+			m_riverParams = bake->rivers;
+			if (sample)
+			{
+				bake->points = oc::make_shared<oc::vector<TerrainPoint>>();
+				bake->points->resize((size_t)c_resolution * c_resolution);
+				m_state = EState::Generating;
+				m_statusText.clear();
+			}
+			else
+				bake->points = m_points; // the map stays Ready (and up) while it re-colours
 			m_bake = bake;
-			m_state = EState::Generating;
-			m_statusText.clear();
 
 			Globals::jobSystem.submit([bake]()
 			{
 				const uint32 res = c_resolution;
-				const uint32 band = 32; // rows per sampleGrid call: a band touches at most two coarse tile rows
 				const TerrainGenV3& gen = *bake->generator;
-				for (uint32 r0 = 0; r0 < res; r0 += band)
+				oc::vector<TerrainPoint>& points = *bake->points;
+				if (bake->sample)
 				{
-					if (bake->cancel.load(oc::memory_order_relaxed))
-						return;
-					const uint32 rows = oc::min(band, res - r0);
-					gen.sampleGrid(bake->origin, bake->origin + bake->step * (double)r0, bake->step, res, rows,
-						oc::span<TerrainPoint>(bake->points.data() + (size_t)r0 * res, (size_t)rows * res),
-						ESampleDetail::Coarse);
-					bake->rowsDone.store(r0 + rows, oc::memory_order_relaxed);
+					const uint32 band = 32; // rows per sampleGrid call: a band touches at most two coarse tile rows
+					for (uint32 r0 = 0; r0 < res; r0 += band)
+					{
+						if (bake->cancel.load(oc::memory_order_relaxed))
+							return;
+						const uint32 rows = oc::min(band, res - r0);
+						gen.sampleGrid(bake->origin, bake->origin + bake->step * (double)r0, bake->step, res, rows,
+							oc::span<TerrainPoint>(points.data() + (size_t)r0 * res, (size_t)rows * res),
+							ESampleDetail::Coarse);
+						bake->rowsDone.store(r0 + rows, oc::memory_order_relaxed);
+					}
 				}
 				if (bake->cancel.load(oc::memory_order_relaxed))
 					return;
@@ -202,9 +254,73 @@ export namespace Procedural
 				image->texelWorldSize = bake->step;
 				image->tileWorldSize = (double)TerrainGenV3::fullTilePixels() * (double)gen.config().metersPerPixel;
 				image->seed = bake->seed;
-				colourise(gen, bake->points, res, image->rgba);
+				colourise(gen, points, res, image->rgba);
+				if (bake->rivers.show && !drawRivers(*bake, res, image->rgba))
+					return; // cancelled
 				bake->result = oc::move(image);
 			}, { "TerrainPreview::bake", EProfileCategory::Procedural }, EJobPriority::Low, &m_counter);
+		}
+
+		static int32 floorDivI(int32 a, int32 b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+		// The coarse river network over the map's coarse tiles, drawn on top. Texel (x, y) IS coarse pixel
+		// (y - res/2, x - res/2): the texel centres sit at (i - res/2 + 0.5) coarse pixels, which the pixel-centred
+		// coarse lattice reads as pixel i - res/2 (+ 0.5/npc). False when cancelled.
+		static bool drawRivers(const Bake& bake, uint32 res, oc::vector<uint32>& out)
+		{
+			const CoarseRiverNetwork net(bake.generator, bake.rivers.cfg);
+			const int32 S = TerrainGenV3::coarseTilePixels();
+			const int32 c0 = -(int32)res / 2;
+			const int32 t0 = floorDivI(c0, S), t1 = floorDivI(c0 + (int32)res - 1, S);
+			const int32 tw = t1 - t0 + 1;
+			oc::vector<oc::shared_ptr<const CoarseRiverTile>> tiles((size_t)tw * tw);
+			for (int32 ti = t0; ti <= t1; ti++)
+				for (int32 tj = t0; tj <= t1; tj++)
+				{
+					if (bake.cancel.load(oc::memory_order_relaxed))
+						return false;
+					tiles[(size_t)(ti - t0) * tw + (tj - t0)] = net.tile(ti, tj);
+				}
+
+			const auto pack = [](glm::vec3 c) -> uint32
+			{
+				c = glm::clamp(c, glm::vec3(0.0f), glm::vec3(1.0f));
+				const uint32 r = (uint32)(c.x * 255.0f + 0.5f), g = (uint32)(c.y * 255.0f + 0.5f), b = (uint32)(c.z * 255.0f + 0.5f);
+				return r | (g << 8) | (b << 16) | 0xFF000000u;
+			};
+			const auto unpack = [](uint32 v) -> glm::vec3
+			{
+				return glm::vec3((float)(v & 0xFF), (float)((v >> 8) & 0xFF), (float)((v >> 16) & 0xFF)) / 255.0f;
+			};
+			const float minQ = glm::max(bake.rivers.minQ, 1e-3f);
+			for (uint32 y = 0; y < res; ++y)
+				for (uint32 x = 0; x < res; ++x)
+				{
+					const int32 ci = (int32)y + c0, cj = (int32)x + c0;
+					const int32 ti = floorDivI(ci, S), tj = floorDivI(cj, S);
+					const CoarseRiverTile* t = tiles[(size_t)(ti - t0) * tw + (tj - t0)].get();
+					if (!t)
+						continue;
+					const size_t i = (size_t)(ci - ti * S) * S + (size_t)(cj - tj * S);
+					uint32& texel = out[(size_t)y * res + x];
+					switch (t->water[i])
+					{
+					case ERiverWater::Lake:         texel = pack(glm::vec3(0.16f, 0.40f, 0.80f)); break;
+					case ERiverWater::TerminalLake: texel = pack(glm::vec3(0.28f, 0.64f, 0.66f)); break; // brackish
+					case ERiverWater::Pan:          texel = pack(glm::vec3(0.93f, 0.91f, 0.84f)); break; // salt
+					case ERiverWater::Land:
+						if (t->q[i] >= minQ)
+						{
+							const float s = glm::clamp(std::log10(t->q[i] / minQ) * 0.5f, 0.0f, 1.0f);
+							texel = pack(glm::mix(glm::vec3(0.35f, 0.62f, 1.0f), glm::vec3(0.04f, 0.16f, 0.70f), s));
+						}
+						else if (t->area[i] >= bake.rivers.dryCells)
+							texel = pack(glm::mix(unpack(texel), glm::vec3(0.50f, 0.36f, 0.22f), 0.75f)); // a dry bed
+						break;
+					default: break; // the sea keeps its depth colour
+					}
+				}
+			return true;
 		}
 
 		// Height tints by climate, sea by depth, a hillshade from the coarse elevation gradient, and a
@@ -279,6 +395,8 @@ export namespace Procedural
 		oc::shared_ptr<Bake> m_bake;
 		JobCounter m_counter;
 		oc::shared_ptr<const Image> m_image;
+		oc::shared_ptr<oc::vector<TerrainPoint>> m_points; // the published map's samples (read-only once published)
+		RiverParams m_riverParams;                          // what the last kick drew the rivers with
 	};
 
 	// The lobby's "Seed world": PRE-GENERATES the full-detail diffusion tiles of the playable area

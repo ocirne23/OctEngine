@@ -258,6 +258,40 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// "Load models" (registered above): off = never load the 2.28 GB of diffusion weights: the terrain runs on the
 	// .tile files already in Local/Diffusion/<seed>/ (a missing tile falls back to the coarse stage, else sea level).
 	// Turning it off with the models up unloads them.
+
+	// Rivers (Docs/RiverPlan.md): the coarse drainage network. Runoff = rain - evaporation (the Budyko curve over the
+	// model's precipitation and temperature), routed downhill over the conditioned coarse field; lakes balance their
+	// inflow against open-water evaporation (full lakes spill, terminal ones and salt pans do not). The lobby preview
+	// re-applies a change at once, from its stored samples.
+	Tweak::boolean("Terrain/Rivers", "Show on preview", &s.riverPreview);
+	Tweak::intVar("Terrain/Rivers", "Coarse domain (tiles)", &s.riverCoarseDomain, 0, 4, 1.0f); // 2 = 982 km model margin
+	Tweak::floatVar("Terrain/Rivers", "Sea depth (m)", &s.riverSeaDepth, 0.0f, 500.0f, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Evaporation per C (mm/yr)", &s.riverPetPerC, 0.0f, 150.0f, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Budyko w", &s.riverBudykoW, 1.1f, 6.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Lake evaporation", &s.riverLakeEvap, 0.0f, 3.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Dry channel loss", &s.riverLoss, 0.0f, 0.05f, 0.0005f);
+	Tweak::floatVar("Terrain/Rivers", "Breach depth (m)", &s.riverBreachDepth, 0.0f, 1000.0f, 5.0f);
+	Tweak::intVar("Terrain/Rivers", "Lake min cells", &s.riverLakeMinCells, 1, 64, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Preview min Q (m3/s)", &s.riverMapMinQ, 1.0f, 5000.0f, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Preview dry bed cells", &s.riverMapDryCells, 1.0f, 1000.0f, 1.0f);
+	// The units: N x N full tiles routed at native resolution; the coarse network decides how much water crosses
+	// between units and through which tile edge (a crossing, at the edge's low point near its middle). Any change
+	// rebuilds the units (their disk cache is keyed by every river setting).
+	Tweak::intVar("Terrain/Rivers", "Unit tiles", &s.riverUnitTiles, 1, 8, 1.0f);
+	Tweak::intVar("Terrain/Rivers", "Crossing window (px)", &s.riverCrossWindow, 0, 127, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Unit breach depth (m)", &s.riverUnitBreachDepth, 0.0f, 500.0f, 0.5f);
+	Tweak::intVar("Terrain/Rivers", "Unit lake min cells", &s.riverUnitLakeMinCells, 1, 100000, 10.0f);
+	Tweak::floatVar("Terrain/Rivers", "Channel min Q (m3/s)", &s.riverChannelMinQ, 0.01f, 100.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers", "Perennial Q (m3/s)", &s.riverPerennialQ, 0.0f, 100.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Width a", &s.riverWidthA, 0.5f, 20.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Depth c", &s.riverDepthC, 0.05f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers", "Rapids slope", &s.riverRapidsSlope, 0.0f, 1.0f, 0.005f);
+	Tweak::floatVar("Terrain/Rivers", "Fall slope", &s.riverFallSlope, 0.0f, 5.0f, 0.01f);
+	// A unit's edge away from its crossings is a SOFT wall: higher = more water forced to a crossing (and deeper filled
+	// basins on the way), lower = more streams that end at the unit edge.
+	Tweak::floatVar("Terrain/Rivers", "Edge wall (m)", &s.riverEdgeWall, 0.0f, 500.0f, 1.0f);
+	Tweak::boolean("Terrain/Rivers", "Debug lines", &s.riverDebugLines);
+	Tweak::floatVar("Terrain/Rivers", "Debug radius (m)", &s.riverDebugRadius, 100.0f, 50000.0f, 100.0f);
 }
 
 // "Tile size", "Spacing" and "Friction" rebuild every collider tile: TerrainCollider::initialize attaches that listener.

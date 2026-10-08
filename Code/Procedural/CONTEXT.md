@@ -183,6 +183,70 @@ depth, land by humidity / altitude / temperature, a hillshade, a one-texel coast
 immutable RGBA8 `Image` shared by pointer. `worldOffsetAt(u, v)` maps a pick on the image to the
 origin offset that puts the spot at (0, 0).
 
+## Rivers: the coarse network (`:RiverNetwork`)
+
+`Private/Rivers/`, the plan is `Docs/RiverPlan.md` (V0 built 2026-10-08: the coarse level, drawn on the preview
+only - nothing in the sampler yet). **One coarse pixel IS one full tile** (256 native px each), so a coarse flow
+direction is the direction water leaves a full tile.
+
+`CoarseRiverNetwork(generator, RiverConfig)` → `tile(ti, tj)`: per coarse tile a `CoarseRiverTile` (D4 receiver,
+outflow Q in m3/s, catchment in coarse pixels, filled height, `ERiverWater` Land / Sea / Lake / TerminalLake / Pan,
+lake level). **Each tile is routed over its OWN domain** (the `(2R+1)^2` coarse tiles centred on it, "Coarse domain"),
+so the result never depends on the order tiles were asked for; neighbours can disagree only on rivers whose catchment
+is bigger than the margin. Steps (`RiverNetwork.cpp`):
+
+* **Sea** = deeper than "Sea depth", plus below-zero ground connected to it - V3's -0.05 m film is land.
+* **Priority-flood** (Barnes, with the FIFO pit queue for flats) from the coast and the domain edge: a D4 receiver and
+  a filled height per pixel; the pop order is downstream-first.
+* **Runoff** = rain - Budyko (Fu) evaporation, from the tile planes (`fetchCoarseTilePlanes`: raw precip mm/yr,
+  tempSea + the config's lapse and temperature offset, the humidity offset as a precip offset - the climate the
+  biomes show).
+* **Depressions** deeper than "Breach depth" and at least "Lake min cells" are lakes; the rest pass water through
+  (no carve yet). A lake gathers its inflow and releases at its exits when the last one is in: full (spills inflow +
+  own rain - open-water evaporation), terminal (the lowest cells that evaporate exactly the inflow, no outflow) or a
+  salt pan (under one cell). Dry land loses channel water by aridity (`loss x (PET/P - 1) x km x sqrt(Q)`).
+
+Not disk-cached: the input coarse tiles are, and a domain routes in milliseconds. The planes are cached per network
+object. **`TerrainPreview` draws it** (rivers by Q, lakes, brackish terminal lakes, pans, dry beds), and a
+"Terrain/Rivers" change re-colours the published map from its stored samples, with the map kept up.
+
+**`:RiverRouting` is the router both levels run** (`routeDrainage` over a `DrainageGrid`: optional mask, D4 or D8,
+caller seeds, inlet injections; `markSea`; `riverPixelClimate`). A masked region no seed reaches drains to its own
+lowest pixel. The coarse level runs it D4 (a coarse link is a tile edge); the units D8.
+
+## Rivers: the units (`:RiverUnits`, `:RiverSystem`)
+
+V1 built 2026-10-08 (debug lines only; the sampler does not read them yet). **A unit = N x N full tiles** ("Unit
+tiles", default 4) on a fixed model-space lattice, routed at native resolution by `buildRiverUnit`
+(`RiverUnits.cpp`, Docs/RiverPlan.md 4.2-4.7):
+
+* **Crossings** = the coarse links across the unit's edge (or into one of its missing tiles). The point is the low
+  point of `min(this tile's border, the neighbour's border)` (box-smoothed, inside "Crossing window" of the edge's
+  middle) - **both units read the same two tiles, so they pick the same point**. Q = the coarse link's, water level
+  = bed + depth(Q). Outlets are flood seeds, inlets inject their Q. A tile whose coarse water ends in it (dir None)
+  with no native sea drains to its lowest pixel.
+* **Every other edge pixel is a SOFT wall**: a seed ordered "Edge wall" model m above its ground
+  (`DrainageSeed::priority`), so water leaves there only when every way to an outlet climbs more, and its segment ends
+  `ERiverEnd::Edge` (the neighbour does not continue it). **A basin that spills through a soft seed is never a lake**
+  (`DrainageResult::root`). With hard walls, valleys whose fine watershed crossed a unit edge filled up to the lowest
+  pass toward an outlet: lakes far above the hillside, cut off at the unit edge (seen 2026-10-08).
+* **Each tile's land runoff is rescaled to its coarse pixel's own** (`CoarseRiverTile::runoff`), so the levels agree on
+  the budget.
+* **Channels** (Q >= "Channel min Q", outside lake basins) become segments from heads / junctions / inlets to a
+  junction, an outlet, the sea, a lake basin's rim, a sink or dry (losses took the water). Segments are profiled
+  downstream-first: walking up from the pinned end, W = max(W below, bed + depth); an inlet pins the start at its
+  crossing level and caps the rest. Then Chaikin x2 + Douglas-Peucker (0.2 px). Points carry W, half-width, depth, Q
+  and rapids / fall flags (by the W slope); a segment never above "Perennial Q" is ephemeral.
+* **Lakes** are stored as wet-pixel row runs plus a level and kind per lake.
+* **Disk cache** `Local/Diffusion/<seed>/river_x<j>_z<i>_n<N>.rvu`, keyed by a hash of every river setting and the
+  generator's climate shaping. **Only a unit whose tiles and edge neighbours all lie inside the generated bounds is
+  cached** - past them the result depends on which tiles exist.
+
+`RiverSystem` is a TerrainStreamer MEMBER (no global): `rebuildMaps` hands it the live generator, `update` runs after
+`updateTerrainTextures`. One Low job builds the nearest missing unit inside "Debug radius" (a cold unit fetches its
+tiles - the fiber parks); units past 1.5 x the radius go. **In V1 units build only while "Debug lines" is on.** Lines:
+channels blue by Q, ephemeral tan, rapids orange, falls red, outlet / inlet ticks magenta / green, lake row hatching.
+
 ## Generated bounds and the cache-only state
 
 `TerrainConfigV3::bounded` + `boundsMin/Max` (engine metres; the streamer's `setGeneratedBounds`, set
@@ -232,8 +296,9 @@ just smaller and quicker to fly across.
 | Value | Meaning |
 |---|---|
 | **30** | The model's true training scale; continents are continent-sized and peaks ~10 km. A tile is then 7.68 km. |
+| **5 (the default)** | A 6× compressed world; a tile is 1.28 km. |
 | 3 | A 10× compressed world; a tile is 768 m. |
-| **0.3 (the default)** | A 100× compressed world; a tile is 76.8 m. |
+| 0.3 | A 100× compressed world; a tile is 76.8 m. |
 
 **Lowering it is quadratically more expensive** — the same view distance spans more model pixels, so
 more tiles must be generated. `heightScale` is a pure vertical exaggeration ON TOP (1 = real

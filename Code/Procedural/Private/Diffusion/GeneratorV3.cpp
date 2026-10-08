@@ -453,6 +453,8 @@ namespace Procedural
 			float nativeResolution() const { return m_nativeResolution.load(oc::memory_order_relaxed); }
 			// Native pixels per coarse pixel (256 in the shipped config).
 			int32 nativePerCoarsePixel() const { return m_nativePerCoarse.load(oc::memory_order_relaxed); }
+			// The precision the disk cache folder is named for (the request-side mirror).
+			bool activeFp16() const { return m_activeFp16.load(oc::memory_order_relaxed); }
 
 			oc::string statusText() const
 			{
@@ -1365,6 +1367,90 @@ namespace Procedural
 		if (rt.isReady())
 			(void)rt.fetchTile(ti, tj);
 	}
+	int32 TerrainGenV3::coarseTilePixels() { return CTILE; }
+	float TerrainGenV3::nativeResolution()
+	{
+		const float nr = DiffusionRuntime::get().nativeResolution();
+		return nr > 0.0f ? nr : 30.0f;
+	}
+
+	bool TerrainGenV3::fetchCoarseTilePlanes(int32 ti, int32 tj, CoarseFieldPlanes& out) const
+	{
+		DiffusionRuntime& rt = DiffusionRuntime::get();
+		if (!rt.canSample())
+			return false;
+		const FieldTilePtr t = rt.fetchCoarseTile(ti, tj);
+		if (!t)
+			return false;
+		const size_t n = (size_t)CTILE * CTILE;
+		out.elev.resize(n);
+		out.tempSea.resize(n);
+		out.precip.resize(n);
+		for (int32 r = 0; r < CTILE; r++)
+			for (int32 c = 0; c < CTILE; c++)
+			{
+				const size_t dst = (size_t)r * CTILE + c;
+				const size_t src = (size_t)(r + CHALO) * CTILE_W + (c + CHALO);
+				out.elev[dst] = t->elev[src];
+				out.tempSea[dst] = t->tempSea[src];
+				out.precip[dst] = t->precip[src];
+			}
+		return true;
+	}
+
+	bool TerrainGenV3::fetchFullTilePlanes(int32 ti, int32 tj, FullFieldPlanes& out) const
+	{
+		DiffusionRuntime& rt = DiffusionRuntime::get();
+		if (!rt.canSample() || !fullTileInBounds(ti, tj))
+			return false;
+		const FieldTilePtr t = rt.fetchTile(ti, tj);
+		if (!t)
+			return false;
+		const size_t n = (size_t)TILE * TILE;
+		out.elev.resize(n);
+		out.tempSea.resize(n);
+		out.precip.resize(n);
+		for (int32 r = 0; r < TILE; r++)
+			for (int32 c = 0; c < TILE; c++)
+			{
+				const size_t dst = (size_t)r * TILE + c;
+				const size_t src = (size_t)(r + HALO) * TILE_W + (c + HALO);
+				out.elev[dst] = t->elev[src];
+				out.tempSea[dst] = t->tempSea[src];
+				out.precip[dst] = t->precip[src];
+			}
+		return true;
+	}
+
+	bool TerrainGenV3::fullTileInBounds(int32 ti, int32 tj) const
+	{
+		if (!m_cfg.bounded)
+			return true;
+		double x0, z0, x1, z1;
+		fullTileWorldRect(ti, tj, x0, z0, x1, z1);
+		// The same rule as resolveBlock.
+		return !(x1 <= (double)m_cfg.boundsMinX || x0 >= (double)m_cfg.boundsMaxX
+			|| z1 <= (double)m_cfg.boundsMinZ || z0 >= (double)m_cfg.boundsMaxZ);
+	}
+
+	oc::string TerrainGenV3::tileCacheFolder() const
+	{
+		const oc::string path = tileCachePath((uint64)m_cfg.seed, DiffusionRuntime::get().activeFp16(), false, 0, 0);
+		return FileSystem::parentPath(path);
+	}
+
+	// TileBlock's coarse mapping is lattice = (world + origin) / mpp / npc + 0.5 / npc - 0.5; pixel c is lattice c.
+	double TerrainGenV3::coarsePixelWorldX(int32 cj) const
+	{
+		const double npc = (double)DiffusionRuntime::get().nativePerCoarsePixel();
+		return (((double)cj + 0.5) * npc - 0.5) * (double)m_cfg.metersPerPixel - (double)m_cfg.originX;
+	}
+	double TerrainGenV3::coarsePixelWorldZ(int32 ci) const
+	{
+		const double npc = (double)DiffusionRuntime::get().nativePerCoarsePixel();
+		return (((double)ci + 0.5) * npc - 0.5) * (double)m_cfg.metersPerPixel - (double)m_cfg.originZ;
+	}
+
 	void TerrainGenV3::setPrecision(bool useFp16)
 	{
 		DiffusionRuntime::get().setPrecision(useFp16 ? EPrecision::Fp16 : EPrecision::Fp32);

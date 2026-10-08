@@ -209,6 +209,33 @@ export struct TerrainSettings
 	// Half-precision inference: buys VRAM and load time, NOT generation speed. Reloads the models and changes the
 	// terrain for a given seed.
 	bool  v3Fp16 = false;
+
+	// --- "Terrain/Rivers": the drainage network (Docs/RiverPlan.md). MODEL-frame units: model metres, real m3/s.
+	bool  riverPreview = true;       // draw the coarse network on the lobby's world preview
+	int   riverCoarseDomain = 2;     // coarse tiles of margin each coarse tile's network is routed with
+	float riverSeaDepth = 20.0f;     // model m below sea level that seeds the sea (V3's sea-level film is not sea)
+	float riverPetPerC = 45.0f;      // potential evaporation, mm/yr per C above -5 C
+	float riverBudykoW = 2.6f;       // the Budyko (Fu) curve's shape: higher = more of the rain evaporates
+	float riverLakeEvap = 1.1f;      // open-water evaporation, x the potential evaporation
+	float riverLoss = 0.002f;        // channel loss in dry land, m3/s per km per sqrt(m3/s) per unit of aridity past 1
+	float riverBreachDepth = 30.0f;  // model m: a shallower depression is cut through, not a lake
+	int   riverLakeMinCells = 1;     // coarse pixels: a smaller depression is cut through, not a lake
+	float riverMapMinQ = 30.0f;      // m3/s: a coarse link the preview draws as a river
+	float riverMapDryCells = 40.0f;  // catchment in coarse pixels: a link this big under the min Q draws as a dry bed
+	// The river UNITS (N x N full tiles, routed at native resolution, joined to their neighbours by crossings).
+	int   riverUnitTiles = 4;          // full tiles per unit side
+	int   riverCrossWindow = 96;       // native px either side of a tile edge's middle that a crossing may move to
+	float riverUnitBreachDepth = 8.0f; // model m: a shallower depression in a unit is cut through, not a lake
+	int   riverUnitLakeMinCells = 200; // native px
+	float riverChannelMinQ = 0.3f;     // m3/s: a channel starts here
+	float riverPerennialQ = 1.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
+	float riverWidthA = 4.0f;          // hydraulic geometry: width = a * Q^0.5 (model m)
+	float riverDepthC = 0.3f;          //                     depth = c * Q^0.4 (model m)
+	float riverRapidsSlope = 0.05f;    // water surface slope that marks rapids
+	float riverFallSlope = 0.3f;       // ... and a fall
+	float riverEdgeWall = 15.0f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
+	bool  riverDebugLines = false;     // draw the units around the camera as debug lines
+	float riverDebugRadius = 3000.0f;  // engine m
 };
 
 // "Terrain/Collision": the focus-centered ring of static collider tiles (Procedural TerrainCollider).

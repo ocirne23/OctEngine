@@ -16,6 +16,7 @@ import :TerrainGenerator;
 import :TerrainChunk;
 import :HeightMapBaker;
 import :OceanGenerator;
+import :RiverSystem;
 
 export namespace Procedural
 {
@@ -281,6 +282,8 @@ export namespace Procedural
 		JobCounter             m_uploadCounter;
 		oc::shared_ptr<const ITerrainSampler> m_maps;
 		uint32                  m_generation = 0;
+		// The river units around the camera (Docs/RiverPlan.md): handed the live generator by rebuildMaps.
+		RiverSystem             m_rivers;
 
 		// --- Main-thread residency state ---
 		oc::unordered_map<uint64, oc::unique_ptr<Resident>> m_residents;

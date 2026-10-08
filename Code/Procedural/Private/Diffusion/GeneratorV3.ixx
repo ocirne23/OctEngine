@@ -131,6 +131,25 @@ export namespace Procedural
 		bool useFp16 = false;
 	};
 
+	// One coarse tile's raw field, for the river network (Procedural:RiverNetwork): the INTERIOR
+	// coarseTilePixels()^2 coarse pixels, row-major (row = z, column = x), in the MODEL frame. The shaping layer
+	// (offsets, the lapse, the wander) is NOT applied: the caller applies what it needs from config().
+	struct CoarseFieldPlanes
+	{
+		oc::vector<float> elev;    // model metres, SIGNED
+		oc::vector<float> tempSea; // C at sea level (temperature at height = this + lapse * max(0, elev))
+		oc::vector<float> precip;  // mm/yr
+	};
+
+	// One FULL tile's raw field, for the river units (Procedural:RiverUnits): the INTERIOR fullTilePixels()^2 native
+	// pixels, row-major (row = z), model frame, no shaping layer - like CoarseFieldPlanes.
+	struct FullFieldPlanes
+	{
+		oc::vector<float> elev;
+		oc::vector<float> tempSea;
+		oc::vector<float> precip;
+	};
+
 	class TerrainGenV3 final : public ITerrainSampler
 	{
 	public:
@@ -198,6 +217,28 @@ export namespace Procedural
 		// Generates (or loads) the tile into the runtime's cache and drops the handle. Blocking - on a
 		// job the wait parks the fiber. A no-op while the models are not ready.
 		void prefetchFullTile(int32 ti, int32 tj) const;
+
+		// --- The COARSE lattice, for the river network. Coarse tile (ti = z row, tj = x column) holds coarse
+		// pixels [ti * coarseTilePixels(), +coarseTilePixels()) on each axis; one coarse pixel is
+		// nativePerCoarsePixel() native pixels (one full tile in the shipped config).
+		static int32 coarseTilePixels(); // 64
+		// The model's native resolution, MODEL metres per native pixel (30 in the shipped config).
+		static float nativeResolution();
+		// The coarse tile's raw planes. Blocking: a disk read, or a few model calls (on a job the wait parks the
+		// fiber). False when the models are not ready, or in the cache-only state with the tile not on disk.
+		bool fetchCoarseTilePlanes(int32 ti, int32 tj, CoarseFieldPlanes& out) const;
+		// The ENGINE-space centre of coarse pixel (row ci, column cj) - the exact inverse of the coarse lattice
+		// mapping every coarse sample goes through (TileBlock, pixel-centred), the origin applied.
+		double coarsePixelWorldX(int32 cj) const;
+		double coarsePixelWorldZ(int32 ci) const;
+		// The full tile's raw planes. Blocking like a sample miss (~1.5 s cold inference). False outside the
+		// generated bounds (no full tile is ever fetched there), or when the tile cannot be served.
+		bool fetchFullTilePlanes(int32 ti, int32 tj, FullFieldPlanes& out) const;
+		// The tile may be fetched at all: true unbounded, else whether it touches the generated bounds. Arithmetic only.
+		bool fullTileInBounds(int32 ti, int32 tj) const;
+		// The disk cache folder of this generator's seed and the active precision ("Local/Diffusion/<seed>[_fp16]"):
+		// derived caches (the river units) live beside the tiles they were built from.
+		oc::string tileCacheFolder() const;
 
 		float sampleHeight(double worldX, double worldZ) const override;
 		float sampleWaterHeight(double worldX, double worldZ) const override;

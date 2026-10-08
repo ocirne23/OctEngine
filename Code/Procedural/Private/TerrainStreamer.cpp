@@ -506,6 +506,7 @@ namespace Procedural
 		if (!m_settings.enabled)
 		{
 			m_v3AwaitingModels = false;
+			m_rivers.setGenerator(nullptr);
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_maps = nullptr;
 			++m_generation;
@@ -556,9 +557,11 @@ namespace Procedural
 		TerrainGenV3::setPrecision(m_settings.v3Fp16);
 
 		oc::shared_ptr<const ITerrainSampler> maps;
+		oc::shared_ptr<const TerrainGenV3> v3;
 		if (TerrainGenV3::isReady())
 		{
-			maps = oc::make_shared<const TerrainGenV3>(cfg);
+			v3 = oc::make_shared<const TerrainGenV3>(cfg);
+			maps = v3;
 			m_v3AwaitingModels = false;
 		}
 		else
@@ -569,6 +572,7 @@ namespace Procedural
 			if (TerrainGenV3::hasFailed())
 				Log::error("[Terrain] unavailable (model load failed) - staying on an empty world");
 		}
+		m_rivers.setGenerator(v3);
 
 		std::lock_guard<std::mutex> lk(m_mutex);
 		m_maps = oc::move(maps);
@@ -1241,6 +1245,7 @@ namespace Procedural
 		}
 
 		updateTerrainTextures(renderer);
+		m_rivers.update(renderer, camera);
 
 		const float chunkSize = (float)m_settings.chunkSize;
 		const int camCX = (int)std::floor(camera.position.x / chunkSize);
