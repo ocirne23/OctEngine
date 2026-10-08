@@ -662,6 +662,7 @@ bool Device::supportsExtensions(oc::vector<const char*> extensions)
         }
         if (!found)
         {
+            printf("Unsupported extension: %s\n", deviceExtension);
             return false;
         }
     }
