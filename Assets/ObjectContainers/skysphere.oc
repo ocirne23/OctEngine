@@ -1,7 +1,0 @@
-ObjectContainer skysphere
-	Loader Procedural
-	Path "skysphere"
-	MaterialOverrides
-		PipelineIdx Sky
-		ExcludeFromRayTracing true
-		UseSceneTextures true

@@ -193,8 +193,8 @@ adds a second column, **the WORLD block** (`LobbyView::local` + `LobbyWorldView`
 The multiplayer lobby has no world block: a client would not get the seed or the origin (they would
 have to ride the game's GMp event), so the seeded world is single-player only for now.
 
-**The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): sponza + the skysphere
-prefab, plus the procedural world — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through
+**The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): the procedural world (the sky
+is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through
 tweak OVERRIDES (applied at once) and switched off again in
 `exitToMenu`, so every other mode keeps its own default of off.
 

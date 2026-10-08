@@ -3,7 +3,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// Sky variant of the static-mesh pipeline (EPipelineIndex::Sky), shading the inside of the sky sphere:
+// Sky variant of the static-mesh pipeline (EPipelineIndex::Sky), a fullscreen triangle on the far plane (sky.vs.glsl):
 //  - single-scattering Rayleigh + Mie atmosphere, raymarched per pixel (VIEW_STEPS x SUN_STEPS, ALU only)
 //  - sun disc attenuated by the same atmospheric transmittance (reddens and flattens at the horizon),
 //    plus a Henyey-Greenstein forward-scatter halo (u_sky_sunGlow = strength)
@@ -22,8 +22,7 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-
 #endif
 
 layout (location = 0) out vec4 out_color;
-// The motion target: write-masked here (the sky reprojects through the camera), but the opaque family's DGC set
-// needs one fragment output interface (RendererVKLayout::PIPELINE_TRANSPARENT_MASK).
+// The motion target: write-masked here (the sky reprojects through the camera).
 layout (location = 1) out vec4 out_motion;
 
 // ---------------------------------------------------------------------------------------------

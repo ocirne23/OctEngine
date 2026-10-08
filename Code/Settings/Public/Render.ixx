@@ -29,6 +29,7 @@ export struct WindParams
 // Sky/Stars / Sky/Nebula / Sky/Moon; Sky/Wind is WindParams).
 export struct SkyParams
 {
+    bool enabled = true; // draw the sky (a fullscreen triangle behind the scene)
     glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f); // sky "up" axis; also the sky radiance light direction
 
     // Sun

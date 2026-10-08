@@ -22,6 +22,7 @@ namespace
 void Settings::registerSky(SkyParams& s)
 {
     SkyParams* p = &s;
+    Tweak::boolean("Sky", "Enabled", &s.enabled);
     Tweak::float3("Sky", "Sun Direction", &s.sunDirection, 0.01f, [p]() { p->sunDirection = glm::normalize(p->sunDirection); }, ETweakFlags::Runtime);
     Tweak::color3("Sky", "Sun Color", &s.sunColor, &s.sunIntensity, 0.0f, FLT_MAX, 0.05f, {}, ETweakFlags::Runtime);
     Tweak::color3("Sky", "Ambient", &s.ambientColor, &s.ambientIntensity, 0.0f, 0.2f, 0.001f, {}, ETweakFlags::Runtime);

@@ -72,18 +72,24 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.blendEnable = true,
 		.depthWrite = false,
 	});
-	// Variant 4 (EPipelineIndex::Sky): analytic sky + sun disc, for the inside of the sky sphere.
-	// NO DEPTH WRITE: a sky pixel's scene depth must stay at the cleared far plane (reversed-Z 0), which
-	// is how every depth reader tells "sky" - TAA reprojects it parallax-free, AO / decals / fog / the
-	// particle collision skip it. Depth-tested, so the draw order against the geometry does not matter.
+	// Variant 4 (EPipelineIndex::Sky): analytic sky + sun disc. Not in a DGC set: record() draws it directly, one
+	// fullscreen triangle on the far plane (reversed-Z 0, the depth clear value), after every depth writer. Depth test
+	// GREATER_OR_EQUAL: only the pixels nothing covered pass, and early depth rejects the rest. NO DEPTH WRITE: a sky
+	// pixel's depth stays at the far plane, which is how every depth reader tells "sky".
+	const oc::string skyVertexPath = "Shaders/Sky/sky.vs.glsl";
 	const oc::string skyVariantPath = "Shaders/Sky/sky.fs.glsl";
-	const oc::string skyVariantText = FileSystem::readFileStr(skyVariantPath);
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = FileSystem::readFileStr(skyVertexPath),
+			.debugFilePath = skyVertexPath,
+		},
 		.fragmentShader = ShaderSource{
-			.text = skyVariantText,
+			.text = FileSystem::readFileStr(skyVariantPath),
 			.debugFilePath = skyVariantPath,
 		},
 		.depthWrite = false,
+		.depthGreaterOrEqual = true,
+		.cullMode = vk::CullModeFlagBits::eNone,
 	});
 	// Variants 5-7 (Wireframe + gizmos) all shade by vertex position (debug color).
     const oc::string& gizmoVariantPath = unlitVariantPath;
@@ -775,7 +781,9 @@ void StaticMeshGraphicsPipeline::createExecutionSets()
 {
     m_indirectExecutionSet.destroy();
     m_transparentExecutionSet.destroy();
-    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet", ~RendererVKLayout::PIPELINE_TRANSPARENT_MASK);
+    // The sky is drawn directly (record), never by a sequence.
+    constexpr uint32 skyBit = 1u << (uint32)RendererVKLayout::EPipelineIndex::Sky;
+    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet", ~(RendererVKLayout::PIPELINE_TRANSPARENT_MASK | skyBit));
     m_transparentExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSetTransparent", RendererVKLayout::PIPELINE_TRANSPARENT_MASK);
 }
 
@@ -1086,12 +1094,12 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     }
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);
-    // The SKY after every depth writer of the scene (the opaque execute, the tessellated ground, the grass): early depth
-    // then rejects each pixel the scene covers. In the DGC sequence it drew in mesh-slot order - the scene's sky sphere
-    // FIRST - and its atmosphere march ran under the whole terrain.
-    bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
-    vkCommandBuffer.drawIndexedIndirectCount(params.skyCommandBuffer.getBuffer(), RendererVKLayout::SKY_DRAWS_OFFSET,
-        params.skyCommandBuffer.getBuffer(), 0, RendererVKLayout::MAX_SKY_DRAWS, RendererVKLayout::SKY_DRAW_STRIDE);
+    // The SKY after every depth writer of the scene: early depth rejects each pixel the scene covers.
+    if (params.drawSky)
+    {
+        bindForDraws(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::Sky), m_graphicsPipeline.getPipelineLayout());
+        vkCommandBuffer.draw(3, 1, 0, 0);
+    }
     // The generated commands left the graphics state undefined, and the transparent set's initial pipeline is
     // its own (the transparent family's lowest variant).
     bindForDraws(m_graphicsPipeline.getPipelineVariant(m_transparentExecutionSet.getInitialVariant()), m_graphicsPipeline.getPipelineLayout());

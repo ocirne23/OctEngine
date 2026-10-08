@@ -30,20 +30,19 @@ struct InMeshInfo
     uint indexCount;
     uint firstIndex;
     int  vertexOffset;
-    uint prevVertexDelta; // skinned output: last frame's positions sit this many vertices on (0 = not skinned)
+    uint prevVertexDelta; // skinned: offset to last frame's vertices (0 = not skinned)
 };
-// Matches RendererVKLayout::OutMeshInstance. prev* = the MOTION VECTORS' input (the scene vertex shaders).
+// Matches RendererVKLayout::OutMeshInstance.
 struct OutMeshInstance
 {
     vec4 posScale;
     vec4 quat;
-    vec4 prevPosScale;     // the instance transform last frame; w = 0: the node did not move
+    vec4 prevPosScale;     // w = 0: did not move
     uint meshIdxMaterialIdx;
-    uint prevVertexDelta;  // MeshInfo::prevVertexDelta of the instance's mesh
+    uint prevVertexDelta;
     uvec2 prevQuat;        // packSnorm2x16 (x, y), (z, w)
 };
-// Matches RendererVKLayout::IndirectDrawSequence: an EXECUTION_SET pipelineIndex followed by a
-// VkDrawIndexedIndirectCommand. Consumed by vkCmdExecuteGeneratedCommandsEXT.
+// Matches RendererVKLayout::IndirectDrawSequence.
 struct OutIndirectCommand
 {
     uint pipelineIndex;
@@ -95,79 +94,54 @@ layout (binding = 9, std430) writeonly buffer OutTransparentIndirectCommandBuffe
 
 layout (binding = 10, std430) readonly buffer InNodePassMasksBuffer
 {
-    uint in_nodePassMasks[]; // per render node, written at push time (PASS_* bits)
+    uint in_nodePassMasks[];
 };
 
 #include "mesh_lod.inc.glsl"
 
 layout (binding = 11, std430) readonly buffer InMeshLodGroupIdxBuffer
 {
-    uint in_meshLodGroupIdx[]; // per mesh: MeshLodGroup index, 0xFFFFFFFF = no chain
+    uint in_meshLodGroupIdx[]; // 0xFFFFFFFF = no chain
 };
 layout (binding = 12, std430) readonly buffer InMeshLodGroupsBuffer
 {
     MeshLodGroup in_meshLodGroups[];
 };
-// Per-instance LOD hysteresis state, addressed via the node's per-frame slot bias (below). Written by
-// this pass only; frames in flight may race on a slot, but stale/garbage values are clamped into the
-// current frame's valid band before use, so torn reads degrade to a fresh pick - never a wrong level.
+// LOD hysteresis. Frames in flight may race on a slot; lodSelectLevel clamps stale values.
 layout (binding = 13, std430) buffer LodLevelStateBuffer
 {
     uint lodLevelState[];
 };
 layout (binding = 14, std430) readonly buffer InNodeLodStateBiasBuffer
 {
-    int in_nodeLodStateBias[]; // per render node: stateSlot = instanceIdx + bias (nodes with LOD chains only)
+    int in_nodeLodStateBias[]; // stateSlot = instanceIdx + bias
 };
 layout (binding = 15, std430) buffer OutLodStatsBuffer
 {
-    uint out_lodStats[]; // per-level pick counts this frame (stats readback; written under SHADER_STATS only)
+    uint out_lodStats[];
 };
 #ifndef TERRAIN_TESS_ROUTE
 #define TERRAIN_TESS_ROUTE 0
 #endif
-// The TESSELLATED terrain ground (TERRAIN_TESS_ROUTE), same per-mesh-slot layout, consumed by plain
-// vkCmdDrawIndexedIndirectCount (the pipelineIndex word is skipped) - a tess pipeline cannot join the DGC
-// execution set, whose pipelines must all share the vertex + fragment stages. (The film is never tessellated.)
+// Tess pipelines cannot join the DGC execution set: plain indirect draws.
 layout (binding = 16, std430) buffer OutTerrainTessCommandBuffer
 {
     OutIndirectCommand out_terrainTessCommands[];
 };
-// The terrain FILM (EPipelineIndex::TerrainOverlay), same layout: its own list, drawn with plain indirect draws
-// BEFORE the transparent execute, so the ocean always blends over it.
+// Drawn before the transparent execute, so the ocean blends over it.
 layout (binding = 17, std430) buffer OutTerrainFilmCommandBuffer
 {
     OutIndirectCommand out_terrainFilmCommands[];
 };
-// The SKY list (RendererVKLayout::MAX_SKY_DRAWS): one plain indexed indirect draw per Sky-variant instance, drawn after
-// the opaque execute and the tessellated ground - so early depth rejects every sky pixel the scene covers. (In the
-// DGC sequence the sky draws in mesh-slot order: the scene's sky sphere came first, and its atmosphere march ran
-// under the whole terrain.) The count is cleared to 0 before the cull.
-struct SkyDraw
-{
-    uint indexCount;
-    uint instanceCount;
-    uint firstIndex;
-    int vertexOffset;
-    uint firstInstance;
-};
-layout (binding = 23, std430) buffer OutSkyCommandBuffer
-{
-    uint out_skyCount;
-    SkyDraw out_skyDraws[];
-};
-// LAST frame's node transforms + stamped pass masks (InstanceStream::recordPrevCopy): the motion vectors.
 layout (binding = 18, std430) readonly buffer InPrevRenderNodeTransformsBuffer
 {
     RenderNodeTransform in_prevRenderNodeTransforms[];
 };
 layout (binding = 19, std430) readonly buffer InPrevNodePassMasksBuffer
 {
-    uint in_prevNodePassMasks[]; // PASS_* byte + the push frame above it (InstanceStream::stampedPassMask)
+    uint in_prevNodePassMasks[]; // PASS_* byte + push frame << 8
 };
 
-// 20 + 21: the baked tree records' static data (tree_cull.inc.glsl): this frame's tree range of the stream is
-// built from them instead of read. 22: this frame's list of the trees to cull.
 #define TREE_CULL_PIECES_BINDING 20
 #define TREE_CULL_TYPES_BINDING 21
 #define TREE_CULL_LIST_BINDING 22
@@ -188,8 +162,7 @@ vec4 quat_multiply(vec4 q, vec4 p)
     return r;
 }
 
-// The terrain overlay's reach: the wetness clipmap window (terrain_wetness.inc.glsl - origin lattice
-// coord u_terrain_wetOrigin, texel size u_terrainWater_texelSize, present flag u_terrainWater_enabled).
+// Sphere vs the wetness clipmap window.
 bool terrainOverlayCovers(vec3 pos, float radius)
 {
     if (u_terrainWater_enabled < 0.5)
@@ -200,11 +173,7 @@ bool terrainOverlayCovers(vec3 pos, float radius)
     return dot(d, d) <= radius * radius;
 }
 
-// The MOTION VECTORS' instance transform LAST frame, only for a node that moved since: its previous
-// transform composed with the same instance offset. prevPosScale.w = 0 = no node motion - also when the
-// node was not pushed last frame (the push stamp above the PASS_* byte), so a slot recycled by a spawn or
-// a node back on screen never reads a stale transform. A still node keeps its exact current transform in
-// the vertex shader: the snorm quaternion is for moving nodes only.
+// Last frame's transform, only for a node pushed last frame that moved since; else prevPosScale.w = 0.
 void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out uvec2 prevQuat)
 {
     prevPosScale = vec4(0.0);
@@ -224,8 +193,7 @@ void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out u
 
 bool frustumCheck(vec3 pos, float radius)
 {
-    // Check sphere against frustum planes
-    for (int i = 0; i < 6; i++) 
+    for (int i = 0; i < 6; i++)
     {
         if (dot(vec4(pos, 1.0), u_frustumPlanes[i]) + radius < 0.0)
         {
@@ -235,39 +203,26 @@ bool frustumCheck(vec3 pos, float radius)
     return true;
 }
 
-// One instance (or one tree record) through the frustum test, the LOD pick and the draw-list emit.
 void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree)
 {
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
     const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
-    // A ROCK of the tree set (its records draw on LitRock - Procedural's world rocks): a regular mesh with an LOD
-    // chain, and no wind.
+    // Tree-set rocks: LOD chain, no wind.
     const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
-    // A tree sways in the wind (tree_wind.inc.glsl): its bound grows by the sway's reach.
     const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliage_windReach : 0.0);
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
-    // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by
-    // the wave height and by the CHOPPY horizontal displacement, which scales with the "Choppiness"
-    // tweak. A sector's own bounding sphere absorbs some of that incidentally (the XZ half-diagonal
-    // exceeds the half-width), and that spare slack is what choppiness eventually runs out of - sectors
-    // then get culled with their crests still on screen, showing as gaps along the screen edges. Pad by
-    // the live extent the CPU measures off the displacement readback. Frustum test only: the LOD
-    // selection below wants the real bounds (and the ocean has no LOD chain anyway).
+    // The ocean mesh is undisplaced: pad by the measured wave displacement. Frustum test only.
     float cullRadius = radius;
     if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_OCEAN)
         cullRadius += u_ocean_displacementExtent;
 
     if (frustumCheck(centerPos, cullRadius))
     {
-        // GPU LOD selection: instances always arrive referencing LOD0 (whose bounds culled above);
-        // redirect to the selected level's mesh. Buckets have room because the CPU sizes every chain
-        // member's bucket to the chain's full instance count.
+        // Instances arrive as LOD0; the CPU sizes every chain member's bucket for the whole chain.
         InMeshInfo drawMeshInfo = meshInfo;
-        // Trees have no mesh LOD chains (their own tiers instead; Procedural TreeSystem): no lookup for their records.
-        // The tree set's ROCKS have one. A tree-set record has no hysteresis slot, so a rock picks STATELESS (the
-        // conservative pick, as the shadow cull's).
+        // Tree records have no hysteresis slot: stateless pick.
         const uint lodGroupIdx = isTree && !isRock ? 0xFFFFFFFFu : in_meshLodGroupIdx[meshIdx];
         if (lodGroupIdx != 0xFFFFFFFFu && u_lod_enabled > 0.5)
         {
@@ -280,7 +235,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             uint chosenMeshIdx = lodMeshAt(group, level);
             if (in_meshInfos[chosenMeshIdx].indexCount == 0u)
             {
-                // Selected level streamed out (re-stream in flight): nearest resident level meanwhile.
+                // Streamed out: nearest resident level.
                 for (int d = 1; d < int(group.numLods); ++d)
                 {
                     if (level - d >= 0 && in_meshInfos[lodMeshAt(group, level - d)].indexCount != 0u) { level -= d; break; }
@@ -300,14 +255,13 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
 
         const uint firstInstance      = in_firstInstances[meshIdx];
         const uint16_t pipelineIdx    = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
-        const uint16_t alphaMode      = uint16_t((instance.pipelineIdxAlphaMode & 0xFFFF0000) >> 16);
-        // Routed by the pipeline's FAMILY (PIPELINE_TRANSPARENT_MASK, Layout.ixx), not the alpha mode: each
-        // sequence executes with its own DGC set, and a set has ONE fragment output interface (the opaque family
-        // writes the motion target too). The OCEAN is of the transparent family: it blends its edge over the ground
-        // (ocean.fs.glsl), so it must come after every terrain draw - the tessellated ground and film run between
-        // the two executes. (A Blend material always gets a transparent-family pipeline, see ObjectContainer; an
-        // override that puts it on an opaque one draws unblended either way.)
+        // By pipeline family, not alpha mode: each DGC set has one fragment output interface.
         const bool isTransparent      = ((PIPELINE_TRANSPARENT_MASK >> uint(pipelineIdx)) & 1u) != 0u;
+        const bool isTerrain         = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
+        // Only chunks reaching into the tess fade end; +1 covers the VR eye offset.
+        const bool terrainTess        = TERRAIN_TESS_ROUTE != 0 && isTerrain
+            && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
+        const bool terrainFilm        = isTerrain && terrainOverlayCovers(centerPos, radius);
 
         uint idx;
         if (isTransparent)
@@ -324,55 +278,37 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         }
         else
         {
-            // Tessellated terrain: the DGC sequence still allocates the instance slots (atomicAdd below) but
-            // draws NO indices; the draw itself goes to the tess sequence, its count raised to cover this slot
-            // (as the overlay's), every writer storing the same other fields.
-            // TERRAIN_TESS_ROUTE: baked by IndirectCullComputePipeline ("Terrain/Tessellation/Enabled").
-            // Only chunks REACHING INTO the fade end: past it the edge factor is 1 and nothing is displaced, so
-            // a chunk wholly beyond it is the same surface through the plain DGC path, without the control /
-            // evaluation stages (their ISBE storage was the pass's second launch limiter). The margin covers
-            // the VR eyes' offset from the centre view.
-            const bool terrainTess = TERRAIN_TESS_ROUTE != 0 && pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT)
-                && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
-            // The SKY: its own list (binding 23), drawn late; its DGC entry draws nothing, as the tessellated ground's.
-            const bool sky = pipelineIdx == uint16_t(PIPELINE_IDX_SKY);            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
-            if (sky)
-            {
-                const uint s = atomicAdd(out_skyCount, 1u);
-                if (s < MAX_SKY_DRAWS)
-                    out_skyDraws[s] = SkyDraw(drawMeshInfo.indexCount, 1u, drawMeshInfo.firstIndex, drawMeshInfo.vertexOffset, firstInstance + idx);
-            }
+            idx = atomicAdd(out_indirectCommands[meshIdx].instanceCount, 1);
             if (idx == 0)
             {
                 out_indirectCommands[meshIdx].pipelineIndex = pipelineIdx;
-                out_indirectCommands[meshIdx].indexCount    = terrainTess || sky ? 0u : drawMeshInfo.indexCount;
+                // Tess still allocates DGC instance slots, but draws from its own list.
+                out_indirectCommands[meshIdx].indexCount    = terrainTess ? 0u : drawMeshInfo.indexCount;
                 out_indirectCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
                 out_indirectCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
                 out_indirectCommands[meshIdx].firstInstance = firstInstance;
             }
-            if (terrainTess)
+
+            if (isTerrain)
             {
-                atomicMax(out_terrainTessCommands[meshIdx].instanceCount, idx + 1u);
-                out_terrainTessCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
-                out_terrainTessCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
-                out_terrainTessCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
-                out_terrainTessCommands[meshIdx].firstInstance = firstInstance;
-            }
-            // The TERRAIN OVERLAY (EPipelineIndex::TerrainOverlay: the surface-water film, later more terrain
-            // surface layers): the same chunk drawn again over the ground, from its OWN list (binding 17, drawn
-            // after the tessellated ground and before the transparent execute - so the ocean blends over it)
-            // over the SAME instance list. Only for chunks overlapping the wetness clipmap. The count is
-            // raised to this instance's slot + 1, so every overlapping instance lies inside the drawn range
-            // (a non-overlapping instance drawn along with it discards every pixel); the other fields are the
-            // same values from every writer. NEVER tessellated: also over a tessellated chunk, the film is this
-            // untessellated draw (lifted to its water level in the terrain VS, depth test GREATER_OR_EQUAL).
-            if (pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT) && terrainOverlayCovers(centerPos, radius))
-            {
-                atomicMax(out_terrainFilmCommands[meshIdx].instanceCount, idx + 1u);
-                out_terrainFilmCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
-                out_terrainFilmCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
-                out_terrainFilmCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
-                out_terrainFilmCommands[meshIdx].firstInstance = firstInstance;
+                // Not exclusive: tess draws the ground, the film draws the (untessellated) water on top.
+                // Count raised to cover this slot; instances in range outside the film discard their pixels.
+                if (terrainTess)
+                {
+                    atomicMax(out_terrainTessCommands[meshIdx].instanceCount, idx + 1u);
+                    out_terrainTessCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                    out_terrainTessCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                    out_terrainTessCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                    out_terrainTessCommands[meshIdx].firstInstance = firstInstance;
+                }
+                if (terrainFilm)
+                {
+                    atomicMax(out_terrainFilmCommands[meshIdx].instanceCount, idx + 1u);
+                    out_terrainFilmCommands[meshIdx].indexCount    = drawMeshInfo.indexCount;
+                    out_terrainFilmCommands[meshIdx].firstIndex    = drawMeshInfo.firstIndex;
+                    out_terrainFilmCommands[meshIdx].vertexOffset  = drawMeshInfo.vertexOffset;
+                    out_terrainFilmCommands[meshIdx].firstInstance = firstInstance;
+                }
             }
         }
 
@@ -385,12 +321,12 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         out_meshInstances[instanceIdx].quat               = quat;
         out_meshInstances[instanceIdx].prevPosScale       = prevPosScale;
         out_meshInstances[instanceIdx].meshIdxMaterialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) | meshIdx;
-        out_meshInstances[instanceIdx].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: every level shares its region
+        out_meshInstances[instanceIdx].prevVertexDelta    = meshInfo.prevVertexDelta; // LOD0's: all levels share it
         out_meshInstances[instanceIdx].prevQuat           = prevQuat;
     }
 }
 
-layout (local_size_x = 64) in; // one thread per stream instance, and one per TREE in the tree range (tree_cull.inc.glsl)
+layout (local_size_x = 64) in; // one thread per stream instance, and one per tree
 
 void main()
 {
@@ -400,26 +336,23 @@ void main()
     bool isTree;
     uint pieceIdx, passBits;
     const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx, passBits);
-    // A BAKED TREE (tree_cull.inc.glsl): its records built from the static tree data, their stream entries never
-    // written. Decided once for the piece; each record it draws then culls on its own mesh bounds. The loop serves
-    // the plain instance too (one pass, k = 0), so cullInstance has ONE call site - each is a full inlined copy.
+    // One loop for trees and plain instances (k = 0), so cullInstance is inlined once.
     TreeCullPiecePick pick;
     InMeshInstance instance;
     if (isTree)
     {
         if ((passBits & PASS_MAIN) == 0u)
-            return; // its terrain chunk is listed for shadows/GI only
-        // The whole tree's sphere (its far representation's, around every mesh) off screen: nothing of it can draw.
+            return;
         if (!frustumCheck(in_treePieces[pieceIdx].centre, in_treePieces[pieceIdx].radius))
             return;
         if (!treeCullMainPiece(pieceIdx, pick))
-            return; // nothing of this tree draws this frame
+            return;
     }
     else
     {
         instance = in_instances[instanceIdx];
         if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_MAIN) == 0u)
-            return; // pushed for shadows/GI only
+            return;
         pick.kBegin = 0u;
         pick.kEnd = 1u;
         pick.quat                         = quat_multiply(in_renderNodeTransforms[instance.renderNodeIdx].quat, in_instanceOffsets[instance.instanceOffsetIdx].quat);
@@ -429,7 +362,6 @@ void main()
                                                 renderNodePosScale.w * instanceOffsetPosScale.w);
         pick.lodStateBase                 = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
     }
-    // A tree's FIXED record slots (tree_cull.inc.glsl's layouts); a plain instance runs k = 0 only.
     for (uint k = pick.kBegin; k < pick.kEnd; ++k)
     {
         if (isTree)

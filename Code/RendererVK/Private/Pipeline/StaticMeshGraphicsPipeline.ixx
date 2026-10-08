@@ -38,8 +38,8 @@ public:
         Buffer& transparentIndirectCommandBuffer; // transparent draw sequences
         Buffer& terrainTessCommandBuffer;         // tessellated terrain ground sequences (plain indirect draws)
         Buffer& terrainFilmCommandBuffer;         // terrain film sequences (plain indirect draws)
-        Buffer& skyCommandBuffer;                 // the sky list: count + draws (RendererVKLayout::SKY_*)
         Buffer& drawCountBuffer;                  // the cull's compacted counts: [0] opaque, [1] transparent, [2] tess ground, [3] film
+        bool drawSky;                             // "Sky/Enabled": one fullscreen triangle on the far plane
 
         Buffer& lightInfosBuffer;
 		Buffer& lightGridsBuffer;

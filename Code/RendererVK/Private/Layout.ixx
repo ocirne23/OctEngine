@@ -635,7 +635,7 @@ export namespace RendererVKLayout
         LitTransparent = 1,
         UnlitOpaque    = 2,
         UnlitTransparent = 3,
-        Sky            = 4, // analytic sky + sun disc (sky sphere interior)
+        Sky            = 4, // analytic sky + sun disc: drawn directly ("Sky/Enabled"), never on a material
         WireframeTransparent = 5, // tangent-debug color, line polygon mode, alpha-blended, no depth write (debug overlay)
         GizmoUI        = 6, // tangent-debug color, vertex shader forces NDC z=0 (nearest) so it draws on top of everything and nothing draws over it (world UI)
         GizmoWorld     = 7, // tangent-debug color, depth tested, alpha-blended, no depth write (world-space gizmo occluded by geometry)
@@ -661,13 +661,6 @@ export namespace RendererVKLayout
         | (1u << (uint32)EPipelineIndex::UnlitTransparent)
         | (1u << (uint32)EPipelineIndex::Ocean) | (1u << (uint32)EPipelineIndex::TerrainOverlay);
     constexpr bool isTransparentPipeline(uint32 pipelineIdx) { return ((PIPELINE_TRANSPARENT_MASK >> pipelineIdx) & 1u) != 0; }
-    // The SKY list (the main cull's binding 23): the Sky variant's instances are drawn AFTER the opaque execute and the
-    // tessellated ground, so early depth rejects every sky pixel the scene covers (in mesh-slot order the scene's sky
-    // sphere drew first, and its atmosphere march ran under the whole terrain). One draw per sky instance; past this
-    // many the rest are dropped.
-    constexpr uint32 MAX_SKY_DRAWS = 8;
-    constexpr uint32 SKY_DRAWS_OFFSET = sizeof(uint32);    // the buffer: the draw count, then the draws
-    constexpr uint32 SKY_DRAW_STRIDE = 5 * sizeof(uint32); // VkDrawIndexedIndirectCommand (the cull's SkyDraw)
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays

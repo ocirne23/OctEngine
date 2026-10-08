@@ -4,10 +4,6 @@ Prefab SponzaScene
 	Rotation 0 -0 0
 	Scale 1
 	Component Scene
-		Prefab skysphere
-			Position 0 0 0
-			Rotation 0 -0 0
-			Scale 1
 		Prefab sponza
 			Position 0 0 0
 			Rotation 0 -0 0

@@ -22,10 +22,6 @@ void IndirectCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 max
         perFrame.drawCountBuffer.initialize(4 * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullDrawCounts");
-        // The sky list (23): the count, then MAX_SKY_DRAWS VkDrawIndexedIndirectCommands (the cull's SkyDraw).
-        perFrame.outSkyCommandBuffer.initialize(RendererVKLayout::SKY_DRAWS_OFFSET + RendererVKLayout::MAX_SKY_DRAWS * RendererVKLayout::SKY_DRAW_STRIDE,
-            vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "CullOutDrawsSky");
     }
     resizeInstanceBuffers(maxMeshInstances);
     resizeCommandBuffers(maxUniqueMeshes);
@@ -154,9 +150,8 @@ void IndirectCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comp
     });
     // 11..15 LOD selection: group idx / groups / state / node bias / stats; 16 the tessellated terrain's ground
     // sequences, 17 the terrain film's; 18, 19 last frame's node transforms + pass masks (the motion vectors);
-    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl);
-    // 23 the sky list.
-    for (uint32 binding = 11; binding <= 23; ++binding)
+    // 20, 21, 22 the baked tree records' static pieces + types + this frame's visible-tree list (tree_cull.inc.glsl).
+    for (uint32 binding = 11; binding <= 22; ++binding)
     {
         descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = binding,
@@ -182,7 +177,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    oc::array<DescriptorSetUpdateInfo, 24> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 23> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,
@@ -400,11 +395,6 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = recordParams.treeListBuffer.getBuffer(), .range = recordParams.treeListBuffer.getSize() } }
         },
-        DescriptorSetUpdateInfo { // OutSkyCommandBuffer
-            .binding = 23,
-            .type = vk::DescriptorType::eStorageBuffer,
-            .bufferInfos = { vk::DescriptorBufferInfo { .buffer = frameData.outSkyCommandBuffer.getBuffer(), .range = frameData.outSkyCommandBuffer.getSize() } }
-        },
     };
 
     // Compute shader frustum cull and indirect command buffer generation
@@ -420,7 +410,6 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
         vkCommandBuffer.fillBuffer(frameData.outTerrainTessCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
         vkCommandBuffer.fillBuffer(frameData.outTerrainFilmCommandBuffer.getBuffer(), 0, vk::WholeSize, 0);
-        vkCommandBuffer.fillBuffer(frameData.outSkyCommandBuffer.getBuffer(), 0, sizeof(uint32), 0); // the sky count
         {
             vk::MemoryBarrier2 memoryBarrier{
                 .srcStageMask = vk::PipelineStageFlagBits2::eClear,

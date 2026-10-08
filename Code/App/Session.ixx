@@ -127,7 +127,7 @@ export void installFileHooks()
 
 export class Session
 {
-    // The free-fly camera's start; the sandbox's skysphere spawns there too.
+    // The free-fly camera's start.
     static inline const glm::vec3 START_POS{ 20.3f, 695.4f, 34.1f };
     static inline const glm::vec3 START_DIR{ 0.6f, -0.1f, -0.8f };
 
@@ -220,7 +220,6 @@ public:
             TweakRegistry::get().setOverride("Terrain/Enabled=1");
             TweakRegistry::get().setOverride("Ocean/Enabled=1");
             //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
-            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(START_POS), true));
             if (Globals::networkManager.role() == ENetRole::Server)
                 Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
         }

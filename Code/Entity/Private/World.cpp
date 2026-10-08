@@ -715,7 +715,6 @@ static RendererVKLayout::EPipelineIndex parsePipeline(const oc::string& name)
     if (name == "LitTransparent")   return P::LitTransparent;
     if (name == "UnlitOpaque")      return P::UnlitOpaque;
     if (name == "UnlitTransparent") return P::UnlitTransparent;
-    if (name == "Sky")              return P::Sky;
     if (name == "WireframeTransparent") return P::WireframeTransparent;
     if (name == "GizmoUI")          return P::GizmoUI;
     if (name == "GizmoWorld")       return P::GizmoWorld;

@@ -202,8 +202,7 @@ GPU Frame
 >   its edge over the ground, so it composites the flag itself (see "Terrain surface water"). **A new pipeline that draws into scene colour after the opaque
 >   stages sets `colorWriteAlpha = false`.**
 > * **The Sky variant does not write depth** (`depthWrite = false`): a sky pixel's depth stays at the
->   cleared far plane, which is how every reader tells "sky". (The prepass did this by skipping the
->   sky sphere; `MATERIAL_FLAG_SKY` and `MATERIAL_FLAG_GIZMO_UI` are gone with it.)
+>   cleared far plane, which is how every reader tells "sky". See THE SKY DRAW.
 
 The scene renders as **one render-pass INSTANCE per enabled stage** (separate secondaries, explicit
 attachment barriers between instances — `sceneInstanceBarrier`, RendererRecord.cpp), in two groups:
@@ -2322,14 +2321,14 @@ Scene opaque, nearly all with 0 instances.
   registered mesh count) is the slot count it walks.
 * Measured (sandbox, RelWithDebInfo): Static meshes 1.621 → 1.569 ms, GPU frame 3.075 → 3.019 ms (3-4 runs
   each, no overlap); the main cull + compaction 15 µs (17 µs before). Shadow draw unchanged (~0.36 ms).
-* **THE SKY LIST** (2026-10-05; main cull binding 23, `IndirectCullComputePipeline::getSkyCommandBuffer`): a Sky-variant
-  instance takes its DGC slot with `indexCount` 0 (as the tessellated ground) and appends ONE plain draw (count + up to
-  `RendererVKLayout::MAX_SKY_DRAWS` VkDrawIndexedIndirectCommands, not compacted; the count is cleared before the
-  cull). `StaticMeshGraphicsPipeline::record` draws it after the opaque execute, the tessellated ground, the grass and
-  the film - after every depth writer - so early depth rejects each sky pixel the scene covers. In mesh-slot order the
-  scene's sky sphere could draw first and run its atmosphere march under the whole terrain; in the sandbox it did not
-  (no measurable change, 2026-10-05: the sky shader costs ~0.17 ms at 1440p on its own pixels), but slot order is
-  arbitrary (slot reuse), so the order is now fixed.
+* **THE SKY DRAW** (2026-10-08): no entity, no mesh, no cull. The `Sky/Enabled` tweak (`SkyParams::enabled`, default
+  on; a change re-records) gates ONE `draw(3)` in `StaticMeshGraphicsPipeline::record` on the Sky variant: a fullscreen
+  triangle (`sky.vs.glsl`) at z = 0, the reversed-Z far plane and the depth clear value, depth test GREATER_OR_EQUAL,
+  no depth write. It draws after the opaque execute, the tessellated ground, the grass, the clutter and the film -
+  after every depth writer - so early depth rejects each pixel the scene covers. `sky.fs.glsl` reads no interpolant
+  (the ray comes from `gl_FragCoord`), so the geometry is irrelevant. The Sky variant is kept OUT of the opaque DGC
+  execution set (`createExecutionSets`), and no material can select it (`parsePipeline` has no "Sky"). Replaced the
+  skysphere prefab + its camera-following script and the cull's sky list (binding 23).
 * **THE DGC PREPROCESS SCRATCH** (`createPreprocessBuffers` in the static mesh and the shadow pipelines) is sized
   by `vkGetGeneratedCommandsMemoryRequirementsEXT`, and that requirement depends on the execution set's PIPELINES,
   not only on the mesh capacity: `reloadShaders` asks again after it rebuilds them. It kept the old size until
