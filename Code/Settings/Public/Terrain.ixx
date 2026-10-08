@@ -61,8 +61,7 @@ export struct TerrainSettings
 	float originZ = 63673.0f;
 	int   chunkSize = 256;
 	int   lod0Res = 128;
-	// IN CHUNKS (256 m since 2026-10-03): 128 chunks would be ~51 k chunk meshes against the 16-bit mesh index (Renderer addMeshInfos).
-	int   ringRadius = 96;     // max generation range from the camera chunk, in chunks
+	int   ringRadius = 128;    // max generation range from the camera chunk, in chunks
 	float lodStep = 1.1f;      // LOD0 band width in chunks (fractional ok); each next LOD band is twice as wide (geometric)
 	float fullResDist = 0.7f;  // chunks whose nearest edge is within this many chunks are always LOD0; bands start beyond it
 	int   maxLod = 6;
