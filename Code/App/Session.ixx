@@ -128,7 +128,8 @@ export void installFileHooks()
 export class Session
 {
     // The free-fly camera's start; the sandbox's skysphere spawns there too.
-    static inline const glm::vec3 START_POS{ 0.0f, 200.0f, 0.0f };
+    static inline const glm::vec3 START_POS{ 0.0f, 694.0f, 0.0f };
+    static inline const glm::vec3 START_DIR{ 0.7f, -0.1f, -0.7f };
 
 public:
     Session(const LaunchOptions& options)
@@ -136,7 +137,7 @@ public:
     {
         if (options.headlessServer())
             return;
-        m_cameraController.initialize(START_POS, START_POS + glm::vec3(-1.0f, 0.0f, 0.0f));
+        m_cameraController.initialize(START_POS, START_POS + START_DIR);
         if (Globals::rendererVK.isVrEnabled()) // the renderer is up before the session exists
             m_vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
     }

@@ -231,8 +231,9 @@ float grassKeep(float dist)
     return f * (1.0 - smoothstep(u_grass_range - u_grass_rangeFade, u_grass_range, dist));
 }
 
-// A terrain chunk's mesh in the vertex mega-buffer: a (res + 1)^2 vertex grid, row-major, local XZ (0 .. chunk size)
-// with world Y (unstitched: the terrain VS snaps the edge vertices, these are the generated heights).
+// A BASE terrain chunk's ground in the vertex mega-buffer: a res x res cell grid, row-major, local XZ (0 .. chunk size)
+// with world Y, its rows u_present_groundStride vertices apart - a sub-grid of a bigger quadtree node's mesh (Procedural
+// TerrainStreamer; unstitched: the terrain VS snaps the edge vertices, these are the generated heights).
 struct GrassGround
 {
     vec2 chunkOrigin;
@@ -249,7 +250,7 @@ float grassGroundHeight(GrassGround g, vec2 xz, out vec3 normal)
     const vec2 local = clamp((xz - g.chunkOrigin) / g.step, vec2(0.0), vec2(res - 1e-3));
     const uvec2 cell = uvec2(local);
     const vec2 f = local - vec2(cell);
-    const uint vpr = g.res + 1u;
+    const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
     const float ha = in_vertices[a].positionU.y;
     const float hb = in_vertices[a + 1u].positionU.y;
@@ -280,7 +281,7 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     const vec2 local = clamp((xz - g.chunkOrigin) / g.step, vec2(0.0), vec2(res - 1e-3));
     const uvec2 cell = uvec2(local);
     const vec2 f = local - vec2(cell);
-    const uint vpr = g.res + 1u;
+    const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
     const vec3 nb = in_vertices[a + 1u].normalV.xyz;
     const vec3 nc = in_vertices[a + vpr].normalV.xyz;

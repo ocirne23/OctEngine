@@ -13,11 +13,11 @@ namespace Procedural
 	{
 		out.clear();
 
-		const uint32 res = glm::max(1u, params.lod0Res >> params.lod);
+		const uint32 res = glm::max(1u, params.lod0Res); // every node: the same grid, over 2^lod base chunks
 		const uint32 vpr = res + 1; // vertices per row
-		const float  step = params.chunkSize / (float)res;
-		const double ox = (double)params.coord.x * (double)params.chunkSize;
-		const double oz = (double)params.coord.y * (double)params.chunkSize;
+		const float  step = params.nodeSize() / (float)res;
+		const double ox = (double)params.coord.x * (double)params.nodeSize();
+		const double oz = (double)params.coord.y * (double)params.nodeSize();
 
 		// Sample the field ONCE per point, into a grid with a one-vertex halo, and take the normals from
 		// neighbouring grid entries. The obvious version - sampleHeight at the vertex plus four more for a

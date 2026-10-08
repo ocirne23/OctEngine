@@ -190,7 +190,7 @@ by the session to the seeder's tile-aligned coverage): **inside a bounded genera
 only fetched inside the rect** — `resolveBlock` leaves the slot null past it — **and every sample that
 lands on a null slot falls back to the COARSE stage** (`sampleField`, and `sampleGrid` resolves the
 coarse block once per grid). So the terrain-data bake's 4 km Full near cascade, the collider and the
-tree records cost nothing past the playable area, and the streamer's ring scan skips chunks that do not
+tree records cost nothing past the playable area, and the streamer's wanted set skips nodes that do not
 touch it. Without bounds a 512 m area still pulled ~800 tiles: the 3×3 chunk ring (~600 at 128 m
 tiles) plus the near cascade (~1000).
 
@@ -258,13 +258,20 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
 # `TerrainStreamer`
 
-"Terrain*" tweaks. Render-only chunk streaming.
+"Terrain*" tweaks. Render-only streaming of a **QUADTREE** of terrain nodes.
 
-* A bounded LOD ring around the camera: `ringRadius` 96 chunks (24 km), `chunkSize` 256, `lod0Res` 128, `maxLod`
-  6, `lodStep` 1.1 chunks for the LOD0 band (each next band twice as wide, geometric), `fullResDist` 0.7,
-  `maxUploadsPerFrame` 16. No skirts: edge stitching (below). (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32, `lodStep` /
-  `fullResDist` 0.3 - the same 2 m LOD0 texel and LOD band metres; the ring stays below the old 32 km because 128
-  chunks would be ~51 k chunk meshes against the 16-bit mesh index.)
+* **Quadtree nodes** (2026-10-08; before: one 256 m chunk per coordinate, ~37 k of them, every one regenerated when its
+  distance band moved - ~1500 regenerations per chunk the camera crossed, which fast flight could not keep up with). A
+  node `(lod, coord at that lod)` covers 2^lod x 2^lod BASE chunks (`chunkSize` 256 m) with the SAME `lod0Res` (128)
+  grid, so each level doubles the quad size exactly as the old per-chunk LODs did. **The leaf rule** (`Ring::leafLodAt`,
+  mirrored by the terrain VS): descend from `maxLod` and stop at the first node whose band
+  (`ringLodAt(nodeEdgeDist)`: `lodStep` 1.1 chunks for the LOD0 band, each next band twice as wide, `fullResDist` 0.7)
+  reaches its lod. **The wanted set** (`rebuildWanted`, on main when the ring moves): the leaves touching the
+  (2R+1)^2 base chunks around the camera's chunk (`ringRadius` 96 = 24 km) and the generated bounds - **~100-200
+  nodes**, so every per-frame decision walks them directly on main (no scan jobs). A far node only changes when the
+  camera crosses its own grid (8 km for LOD 5). A big node sticks out of the ring by up to its own size: the far
+  terrain-data cascade grows to cover it (`m_wantedHalfExtent`). `maxUploadsPerFrame` 16. No skirts: edge stitching
+  (below). (Until 2026-10-03: 1024 m chunks, `lod0Res` 512, ring 32.)
 * Generated on up to "Gen jobs" **self-continuing Low-priority pump jobs** (`kickPump` CAS-claim +
   exit-recheck protocol, nearest-first). **The upload layout is built IN the pump**
   (`RenderMeshData::build`, pure) and `Renderer::createMesh` runs on the upload job (below),
@@ -274,10 +281,10 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   **All of them sit OUTSIDE the V3 pipeline `JobMutex`** — the Normal collider job samples terrain
   and would park on that lock behind the very job holding it, so a point under the lock deadlocks.
   A cold-tile inference itself is never interrupted; it parks the fiber anyway.
-* **A chunk is ONE `RenderMesh` + its `RenderNode`, no `ObjectContainer`** (see RendererVK "Single
-  meshes"): no per-chunk material (every chunk shares `m_material`, `createMeshMaterial(TerrainLit)`),
-  names or node tables, and no LOD chain (the ring IS the LOD). A `Resident` declares its `mesh`
-  FIRST so it is destroyed AFTER the `node` that draws it; a chunk leaving the ring frees its mega-buffer
+* **A node is ONE `RenderMesh` + its `RenderNode`, no `ObjectContainer`** (see RendererVK "Single
+  meshes"): no per-node material (every node shares `m_material`, `createMeshMaterial(TerrainLit)`),
+  names or node tables, and no LOD chain (the quadtree IS the LOD). A `Resident` declares its `mesh`
+  FIRST so it is destroyed AFTER the `node` that draws it; a retired node frees its mega-buffer
   ranges and MeshInfo slot, **so residency stays bounded across a session.**
 * Each resident registers a `SpatialEntry` on `SpatialLayer_Terrain` with **`spawnVisible = false`** —
   chunks stream in off-screen constantly, and the guard would pin each one in the main pass until it
@@ -315,43 +322,44 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   job of its own (`"terrainRenderPushSphere"`), then merges the vegetation. **The two sets are disjoint** (the
   query skips main-stamped entries, and the list holds each entry once), which `renderNode` needs: it writes
   the node's transform upload state. Culling `Off`'s walk over `m_residents` stays serial (a debug mode).
-* **THE VEGETATION IS STORED IN THE CHUNKS** (`setVegetation(lookup, sink, numChunks)`, TreeSystem's GPU
-  tree set): every resident holds the index of its coordinate's vegetation chunk (`lookup`, -1 = none;
-  re-stamped on every resident by `setVegetation`, which joins the walk first). The walk notes it with the
-  chunk's pass mask (main-stamped `PASS_ALL`, the shadow/GI sphere `PASS_SHADOW | PASS_GI`), merges a
-  coordinate drawn twice (a LOD hand-over's old + new resident: the masks OR'ed), and hands the frame's
+* **THE VEGETATION IS STORED IN THE NODES** (`setVegetation(lookup, sink, numChunks)`, TreeSystem's GPU
+  tree set; its chunks are the BASE chunks): every resident holds, per base chunk it covers (4^lod atomics + a count the
+  walk skips empty nodes by; only nodes near the camera carry any - `Trees/Near radius`), the index of that chunk's
+  vegetation (`lookup`, -1 = none; re-stamped on every resident by `setVegetation`, which joins the walk first). The
+  walk notes them with the node's pass mask (main-stamped `PASS_ALL`, the shadow/GI sphere `PASS_SHADOW | PASS_GI`),
+  merges a chunk drawn twice (a swap's old + new node: the masks OR'ed), and hands the frame's
   list to `sink` at its end, on the walk's worker. The pushes note it from several workers: each mask is
   OR'ed through an `atomic_ref`, and the push that first sets a chunk's mask lists it in `m_vegTouched`
   (one slot per vegetation chunk, `m_vegTouchedCount`); the list order does not matter to the tree culls.
   `vegetationRouted()` = this frame's walk carries it
   (the chunks draw and a sink is set); otherwise the owner submits its vegetation itself.
-  **`restampVegetation(coord)`** (TreeSystem's world mode adds / removes one coordinate): re-stamps that coordinate's
-  residents (every LOD; retired ones to -1) from `lookup` WITHOUT joining the walk - the stamp is an atomic, the walk
-  sees the old or the new index, and the owner keeps a removed index unused until the next frame.
-* **THE GRASS STANDS ON THE CHUNK MESHES** (RendererVK "Procedural grass"): at the end of every enabled `update`, the
-  residents of the columns within `renderer.grassRange()` (a few `m_residents` lookups per LOD, no walk) go to
-  `Renderer::setGrassGround` (coord, first vertex in the mega-buffer, grid cells per side); the GPU reads their vertices.
-  The renderer keeps the list ONE frame, so a disabled terrain simply sends none.
-* **Eviction does not walk the ring either.** The unwanted residents (column outside the ring, or
-  wanting another LOD) are a function of the ring and the resident set only, so `m_evictCandidates`
-  is rebuilt by one walk when `ringMoved` or a chunk uploaded; every frame checks only the candidates
-  against the stamps for the hole-free handover. **The walk is a job** (`"terrainEvictScan"`, Normal,
-  `m_evictScanCounter`), kicked with the ring scan at the end of `update` over the same snapshot
-  (`m_ringScanIn`) and swapped in after the join at the top of the next one. Its list is one ring old,
-  so the per-frame check judges each candidate by the CURRENT ring (a candidate wanted again is dropped).
-  The check and the retire stay on main: `getPassMask` would race the spatial pool growth and the cull
-  job's stamps in that window, and an unregister is not allowed inside the cull job's kick/join window.
-* **The ring scan is a job too** (`"terrainRingScan"`, Normal, `m_ringScanCounter`), kicked LAST in
-  `update` — after the drain and the eviction, the frame's last writers of `m_residents` /
-  `m_pending`, which the scan only reads — from a by-value snapshot (`m_ringScanIn`; the job
-  captures `this` only, inline job storage is small). The NEXT `update` joins it first and applies
-  `m_ringScanOut`: keys that became pending or resident meanwhile are skipped, the rest go pending,
-  get published and kick the pump. One frame of request latency against seconds of generation; a
-  request the ring moved away from is stale like any other and dropped by the pump.
+  **`restampVegetation(coord)`** (TreeSystem's world mode adds / removes one base chunk): re-stamps that chunk's entry
+  in every resident node over it (retired ones to -1) from `lookup` WITHOUT joining the walk - the stamp is an atomic,
+  the walk sees the old or the new index, and the owner keeps a removed index unused until the next frame.
+* **THE GRASS STANDS ON THE NODE MESHES** (RendererVK "Procedural grass"): at the end of every enabled `update`, every
+  BASE chunk within `renderer.groundRange()` (a lookup per LOD each, no walk) goes to `Renderer::setGrassGround` with
+  the finest DRAWN node over it: the chunk's first vertex in that node's mesh and its cells per side (`lod0Res >> lod`),
+  plus the node row stride (`lod0Res + 1`, UBO `present_groundStride`) - a base chunk inside a bigger node is a sub-grid
+  of it. The GPU reads their vertices. The renderer keeps the list ONE frame, so a disabled terrain simply sends none.
+* **Requests:** when the ring moved (or a request ended without a resident: `m_wantedDirty`), every wanted leaf
+  neither resident nor pending is appended to the pump pool, after publishing the ring the pump judges staleness by
+  (`m_pumpRing`: no longer a wanted leaf = dropped at dequeue; nearest = smallest node edge distance).
+* **Residency** (`updateResidency`, every frame on main, after the adopt):
+  1. **Retire** a resident that is no longer a wanted leaf once its area is DRAWN by wanted ones - its wanted ancestor
+     (a coarsening) or every wanted leaf under it (a refinement, down several levels if the bands say so), each
+     registered and, with the culling gate, main-visible OR culled by a Main stamp since its registration
+     (`registeredAt` vs `visibleCollectGeneration`: it is off screen, no hole can show there - one old node is replaced
+     by many leaves, and requiring every one main-visible kept a big on-screen node forever, which pinned the draw
+     camera and mis-stitched every edge) - or when the old node is not on screen either; or at once when it left the
+     ring or never drew (held). While the culling is FROZEN no stamp comes and the old node just stays.
+  2. **Move the draw camera** (edge stitching, below).
+  3. **Register** (draw) the wanted leaves the draw camera allows. A refinement's leaves wait for their whole group -
+     every wanted leaf under the drawn node they replace resident - and register together, so an old node and its
+     replacements overlap no longer than the one-frame stamp latency. Adoption itself never registers.
 
 * **The mesh upload is a job too** (`"terrainUpload"`, Normal, `m_uploadCounter`).
-  `Renderer::createMesh` copies the chunk into the staging ring. A LOD0 chunk is ~1.3 MB at the current
-  128-quad LOD0 (~19 MB at the old 512; see "Chunk memory" below), a wrap of the 100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
+  `Renderer::createMesh` copies the node into the staging ring. Every node is ~1.2 MB (the same 128-quad grid at any
+  lod; see "Node memory" below), a wrap of the 100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
   uploads on main were ~45 ms. `update` only PICKS the batch into `m_uploads` (cap "Uploads/frame"
   AND "Upload MB/frame", 48 MB default; the first chunk always goes; the picks stay in `m_pending`).
   **main.cpp kicks it right AFTER `present`** (`kickUploads`), so it runs through the frame-pacing
@@ -363,74 +371,60 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   and a fan-out would block one worker per chunk behind it — then a grain-1 `parallelFor`
   (`"terrainUploadMesh"`) uploads the rest. That only pays because the staging memcpy runs OUTSIDE the
   staging mutex (RendererVK, `StagingManager`). The next `update` adopts the batch (`"adoptUploads"`:
-  re-validate, `spawnMeshNode`, the spatial registration — all cheap, all on main). One more frame of
-  latency. `clearResidents` joins it and drops the batch.
+  re-validate, `spawnMeshNode`, the vegetation stamp — all cheap, all on main; `updateResidency` registers). One more
+  frame of latency. `clearResidents` joins it and drops the batch.
 
-  What stays on main: the config/model polling, the terrain/texture/wet param setters, the fog
-  height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the
-  upload pick + adopt, and the candidate check + retire (the retire releases GPU residency into the
-  renderer and unregisters the culling entry; the candidate walk is the `"terrainEvictScan"` job).
+  Everything else runs on main: the config/model polling, the terrain/texture/wet param setters, the fog
+  height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the wanted set, the
+  requests, the upload pick + adopt, and `updateResidency` (the retire releases GPU residency into the renderer and
+  unregisters the culling entry - not allowed inside the cull job's kick/join window anyway).
 
-## Chunk memory
+## Node memory
 
-A chunk at LOD `l` is a `res = lod0Res >> l` quad grid: `(res+1)²` vertices, `6·res²` indices, no skirt (edge
-stitching, below). 48-byte `MeshVertex`, 4-byte index. At the defaults (camera mid-chunk, ring 96, `lodStep` 1.1,
-`fullResDist` 0.7):
-
-| LOD | res | chunks | KB / chunk | MB total |
-|---|---|---|---|---|
-| 0 | 128 | 25 | 1164 | 30 |
-| 1 | 64 | 56 | 294 | 17 |
-| 2 | 32 | 208 | 75 | 16 |
-| 3 | 16 | 936 | 20 | 19 |
-| 4 | 8 | 3816 | 5.3 | 21 |
-| 5 | 4 | 14840 | 1.5 | 24 |
-| 6 | 2 | 17368 | 0.5 | 9 |
-
-~37 k chunks, ~135 MB of mega-buffer (plus the briefly doubled hand-over pairs; ~220 MB with the old skirts, which were
-most of every far chunk). A chunk whose wanted LOD changes is replaced, and the old one's ranges free at once
-(`retireResident` -> `RenderMesh::destroy`), so residency follows the camera; the mega-buffers never shrink - the freed
-ranges are holes for later uploads. **The chunk COUNT is the larger far cost now** (a mesh, node and spatial entry each;
-the 16-bit MeshInfo index caps everything at 65534 meshes).
+Every node is the same `lod0Res` grid: `(lod0Res+1)²` vertices and `6·lod0Res²` indices, no skirt (edge stitching,
+below) - ~1.2 MB (48-byte `MeshVertex`, 4-byte index). At the defaults (ring 96, `lodStep` 1.1, `fullResDist` 0.7) the
+wanted set is roughly 25 LOD0 nodes, then ~15 per coarser level (each band is about one node wide in its own node
+size), **~100-150 nodes, ~130-180 MB** - the same triangle density as the old 37 k chunks, ~250x fewer meshes, nodes
+and spatial entries. A retired node's ranges free at once (`retireResident` -> `RenderMesh::destroy`), so residency
+follows the camera; the mega-buffers never shrink - the freed ranges are holes for later uploads.
 
 ## Edge stitching (no skirts)
 
-Two neighbouring chunks can be different LODs; the finer one has extra vertices along the shared edge that the coarser
+Two neighbouring nodes can be different LODs; the finer one has extra vertices along the shared edge that the coarser
 one does not (T-junctions: cracks). Instead of a skirt, **the terrain VS snaps the finer side's edge onto the coarser
-side's straight edge**:
+side's straight edge**. Every node has the same grid, so a node one level coarser has a vertex on every 2nd vertex of
+the finer one's edge (aligned: a node's edge starts on its coarser neighbour's lattice).
 
 * **The data** (`generateChunk`, `TerrainChunkMesh::stitch`, uploaded in `MeshVertex::tangent` - the terrain shades
   without tangents): per vertex, xyz = its height on the straight edge of a neighbour 1 / 2 / 3 LODs coarser
-  (`TERRAIN_STITCH_LEVELS`; the own height off the edges and on the coarse lattice), w = the chunk's LOD. Shared edge
-  points are sampled at the same world points by both chunks, so they match exactly.
+  (`TERRAIN_STITCH_LEVELS`; the own height off the edges and on the coarse lattice), w = the node's LOD. Shared edge
+  points are sampled at the same world points by both nodes, so they match exactly.
 * **The shader** (`instanced_indirect_terrain.vs.glsl`, `terrainStitchedHeight`): a vertex on one edge (found by its
-  local x / z = 0 or chunkSize; a corner is on every lattice) computes BOTH chunks' ring LOD (`terrainRingLod`, from the
-  chunk origin) and takes `stitch[edgeLod - ownLod - 1]` when the edge's LOD (the coarser of the two) is above its own.
-  `terrainRingLod` mirrors `ringLodAt` + `chunkEdgeDist` **bit for bit** (the same float operations in the same order -
-  `ringLodAt` is a threshold loop, no log2): both chunks of an edge must agree. UBO `terrain_stitch` (chunk size, 0 = off;
-  the draw camera) and `terrain_stitchBands` (`Renderer::setTerrainStitch`, every enabled update). Tweak
-  `Terrain/Edge stitching` (off = the cracks, a debug view).
-* **The DRAW CAMERA - why the shader cannot use the ring camera.** A chunk's drawn LOD differs from its wanted LOD until
-  its replacement lands (seconds on a cold tile). Both sides compute the same edge LOD only if no drawn chunk is
-  COARSER than the LOD its LODs are computed for (a finer one has every vertex it needs). So the streamer keeps
-  `m_drawCam` with the **invariant: a resident is registered (drawn) only while its LOD <= `drawLod(coord)`**:
-  * an adopted chunk too coarse for it (a coarsening behind the camera) waits unregistered in `m_held`; refinements
-    always register;
-  * an eviction needs a REGISTERED replacement (a held one cannot take over, on screen or off);
-  * the draw camera FOLLOWS the ring camera as far as the registered residents allow: the `"terrainEvictScan"` job
-    (kicked when the ring moved, a chunk uploaded, or the draw camera still trails) also tests `DRAW_CAM_STEPS` (8)
-    points from the draw camera to the ring camera (quarter-chunk lattice, the ring's bands) against every registered
-    resident in the same walk, and returns the farthest that keeps the invariant (`m_drawCamOut`). Main applies it
-    after checking the residents registered since that kick (`m_registeredSinceScan`), then registers the held chunks
-    it allows; the finer ones they replace evict as usual. So refinement ahead is never delayed, and in fast flight
-    the draw camera trails only by the generation lag (the pending refinements nearest the ring camera block the last
-    steps) - the extra fine chunks behind are bounded by that lag, not by the flight length.
-  * **The UBO lags one frame** (the begin-frame job builds it before `terrain.update`), and a chunk registered in an
+  local x / z = 0 or the node size; a corner is on every lattice) takes the two BASE chunks on either side of it (the
+  same pair from both nodes), computes the quadtree leaf LOD over each (`terrainLeafLod`, at the draw camera), and takes
+  `stitch[edgeLod - ownLod - 1]` when the coarser of the two is above its own. `terrainLeafLod` / `terrainRingLod` /
+  `terrainNodeEdgeDist` mirror `Ring::leafLodAt` / `ringLodAt` / `nodeEdgeDist` **bit for bit** (the same float
+  operations in the same order - `ringLodAt` is a threshold loop, no log2): both nodes of an edge must agree. UBO
+  `terrain_stitch` (base chunk size, 0 = off; the draw camera) and `terrain_stitchBands` (`Renderer::setTerrainStitch`,
+  every enabled update). Tweak `Terrain/Edge stitching` (off = the cracks, a debug view).
+* **The DRAW CAMERA - why the shader cannot use the ring camera.** A node's drawn LOD differs from the wanted tree until
+  its replacement lands (seconds on a cold tile). Both sides compute the same edge LOD only if no drawn node is
+  COARSER than the leaf the shader computes over it (a finer one has every vertex it needs). So the streamer keeps
+  `m_drawCam` (a `Ring`: camera + bands) with the **invariant: a resident is registered (drawn) only while it lies
+  inside a leaf of the draw camera's tree** (`lod <= m_drawCam.leafLodAt(firstBase)`):
+  * a wanted leaf too coarse for it (a coarsening behind the camera) waits unregistered (held); refinements always fit;
+  * a retire needs REGISTERED replacements (a held one cannot take over, on screen or off);
+  * the draw camera FOLLOWS the ring camera as far as the registered residents allow: `updateResidency` tries
+    `DRAW_CAM_STEPS` (8) points from it to the ring camera (quarter-chunk lattice, the ring's bands) against every
+    registered resident and takes the farthest that keeps the invariant, before registering. So refinement ahead is
+    never delayed, and in fast flight the draw camera trails only by the generation lag (the pending refinements
+    nearest the ring camera block the last steps) - not by the flight length.
+  * **The UBO lags one frame** (the begin-frame job builds it before `terrain.update`), and a node registered in an
     update draws in the main pass only from the next frame (its first stamp) - so this frame's drawn set always keeps the
-    invariant for the camera the UBO carries. Culling `Off`'s walk skips held chunks.
+    invariant for the camera the UBO carries. Culling `Off`'s walk skips held nodes.
 * **Not stitched:** the shadow pass (`shadow_depth.vs`), the ray-tracing BLAS, the grass and clutter (they read the
   unsnapped vertices) - all off by the tiny T-junction error at a LOD edge. **Tessellation:** every edge to a coarser
-  chunk is >= `fullResDist + lodStep` chunks (~460 m) away, past the tessellation fade end (75 m), so the displaced
+  node is >= `fullResDist + lodStep` chunks (~460 m) away, past the tessellation fade end (75 m), so the displaced
   relief only meets LOD0 against LOD0.
 
 ## It owns THE world datum

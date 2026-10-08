@@ -829,9 +829,10 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
 
 // ---- Procedural grass: the ground the blades stand on ----
 
-void Renderer::setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> chunks)
+void Renderer::setGrassGround(float chunkSize, uint32 vertexStride, oc::span<const GrassGroundChunk> chunks)
 {
     m_grassChunkSize = chunkSize;
+    m_grassGroundStride = glm::max(vertexStride, 1u);
     m_grassGround.assign(chunks.begin(), chunks.end());
 }
 

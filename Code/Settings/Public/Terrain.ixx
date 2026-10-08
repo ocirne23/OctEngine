@@ -57,8 +57,8 @@ export struct TerrainSettings
 	bool  v3LoadModels = false; // off = the terrain runs on the existing .tile cache only (no weights loaded)
 	int   seed = 516121;
 	// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z).
-	float originX = -29590.0f;
-	float originZ = -11530.0f;
+	float originX = -21064.0f;
+	float originZ = 63673.0f;
 	int   chunkSize = 256;
 	int   lod0Res = 128;
 	// IN CHUNKS (256 m since 2026-10-03): 128 chunks would be ~51 k chunk meshes against the 16-bit mesh index (Renderer addMeshInfos).

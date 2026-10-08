@@ -20,26 +20,32 @@ import :OceanGenerator;
 
 namespace
 {
-	// Chebyshev distance (in chunk units) from the camera to the NEAREST EDGE of a chunk's footprint -
-	// 0 while the camera stands inside/on it. Distance to the edge, not to the center ring: a neighbor's
-	// near boundary can be a whole chunk away when the camera sits centered, or right underfoot at the
-	// boundary, and the LOD should follow that continuously instead of stepping per camera-chunk crossing.
-	// camChunks must be the SNAPPED camera position (see update()) so every caller sees the same value.
-	float chunkEdgeDist(glm::vec2 camChunks, glm::ivec2 coord)
+	// Chebyshev distance (in BASE chunk units) from the camera to the NEAREST EDGE of a quadtree node's footprint -
+	// 0 while the camera stands inside/on it. Distance to the edge, not to the center: a neighbour's near boundary
+	// can be a whole chunk away when the camera sits centered, or right underfoot at the boundary, and the LOD
+	// should follow that continuously instead of stepping per camera-chunk crossing. `cam` is the SNAPPED camera
+	// (see update()) so every caller sees the same value.
+	//
+	// MIRRORED BIT FOR BIT by terrainNodeEdgeDist in instanced_indirect_terrain.vs.glsl (edge stitching), like
+	// ringLodAt and Ring::leafLodAt: the same float operations in the same order (every int -> float exact).
+	float nodeEdgeDist(glm::vec2 cam, glm::ivec2 coord, uint32 lod)
 	{
-		const float dx = glm::max(glm::max((float)coord.x - camChunks.x, camChunks.x - (float)(coord.x + 1)), 0.0f);
-		const float dz = glm::max(glm::max((float)coord.y - camChunks.y, camChunks.y - (float)(coord.y + 1)), 0.0f);
+		const int span = 1 << lod;
+		const float size = (float)span;
+		const float x0 = (float)(coord.x * span), z0 = (float)(coord.y * span);
+		const float dx = glm::max(glm::max(x0 - cam.x, cam.x - (x0 + size)), 0.0f);
+		const float dz = glm::max(glm::max(z0 - cam.y, cam.y - (z0 + size)), 0.0f);
 		return glm::max(dx, dz);
 	}
 
 	// GEOMETRIC LOD bands over edge distance: lod = floor(log2(1 + d/lodStep)) - lodStep chunks of LOD0,
 	// then 2*lodStep of LOD1, 4*lodStep of LOD2, ... capped at maxLod. Each LOD halves mesh density while
 	// a feature's screen size halves per distance DOUBLING, so doubling band widths keeps the on-screen
-	// triangle density roughly constant (linear bands over-detailed the mid rings). This is THE ring-LOD
-	// function: enqueue, queue staleness, result validation and eviction all derive from it.
+	// triangle density roughly constant (linear bands over-detailed the mid rings). The quadtree splits a node
+	// while this is below its lod (Ring::leafLodAt).
 	//
 	// MIRRORED BIT FOR BIT by terrainRingLod in instanced_indirect_terrain.vs.glsl (edge stitching): the same float
-	// operations in the same order - so no log2 - since both sides of every chunk edge must agree on its LOD.
+	// operations in the same order - so no log2 - since both sides of every node edge must agree on its LOD.
 	// lod >= l + 1 exactly when k >= (2^(l+1) - 1) * lodStep; the threshold doubles plus lodStep per level (the * 2
 	// is exact, so an FMA contraction cannot change it).
 	uint32 ringLodAt(float edgeDist, float fullRes, float lodStep, uint32 maxLod)
@@ -58,13 +64,21 @@ namespace
 		return lod;
 	}
 
-	// Pack a chunk coordinate + LOD into a stable 64-bit key. 28 bits each for X/Z covers +-134M chunks.
+	// Pack a node coordinate (at its lod) + the LOD into a stable 64-bit key. 28 bits each for X/Z covers +-134M nodes.
 	uint64 chunkKey(glm::ivec2 coord, uint32 lod)
 	{
 		const uint64 x = (uint64)(uint32)coord.x & 0xFFFFFFFull;
 		const uint64 z = (uint64)(uint32)coord.y & 0xFFFFFFFull;
 		return (x << 36) | (z << 8) | (uint64)(lod & 0xFFu);
 	}
+	glm::ivec2 keyCoord(uint64 key)
+	{
+		// Sign-extend the 28-bit fields.
+		const int32 x = (int32)((uint32)(key >> 36) << 4) >> 4;
+		const int32 z = (int32)((uint32)((key >> 8) & 0xFFFFFFFull) << 4) >> 4;
+		return glm::ivec2(x, z);
+	}
+	uint32 keyLod(uint64 key) { return (uint32)(key & 0xFFu); }
 
 	// --- Terrain splat texture sources -----------------------------------------------------------------
 	// THERE ARE NO BIOMES HERE. Climate picks textures directly: every Ground and Rock entry declares the
@@ -579,14 +593,74 @@ namespace Procedural
 		Globals::jobSystem.wait(m_renderCounter); // main helps; a no-op once the job is done
 	}
 
-	void TerrainStreamer::joinRingScan()
+	// ---- The quadtree (see Ring in the header) ----
+
+	// The LOD of the quadtree leaf over a base chunk: from maxLod down, the first node over it whose band reaches its
+	// lod. MIRRORED BIT FOR BIT by terrainLeafLod in instanced_indirect_terrain.vs.glsl (edge stitching).
+	uint32 TerrainStreamer::Ring::leafLodAt(glm::ivec2 base) const
 	{
-		Globals::jobSystem.wait(m_ringScanCounter);
+		for (uint32 lod = maxLod; lod > 0; --lod)
+		{
+			const glm::ivec2 node(base.x >> lod, base.y >> lod); // arithmetic shift: floor, also for negatives
+			if (ringLodAt(nodeEdgeDist(cam, node, lod), fullRes, lodStep, maxLod) >= lod)
+				return lod;
+		}
+		return 0;
 	}
 
-	void TerrainStreamer::joinEvictScan()
+	bool TerrainStreamer::Ring::touches(glm::ivec2 coord, uint32 lod) const
 	{
-		Globals::jobSystem.wait(m_evictScanCounter);
+		const int span = 1 << lod;
+		const glm::ivec2 lo = coord * span, hi = lo + span - 1;
+		return hi.x >= camChunk.x - R && lo.x <= camChunk.x + R && hi.y >= camChunk.y - R && lo.y <= camChunk.y + R;
+	}
+
+	float TerrainStreamer::Ring::edgeDist(glm::ivec2 coord, uint32 lod) const
+	{
+		return nodeEdgeDist(cam, coord, lod);
+	}
+
+	bool TerrainStreamer::insideBounds(glm::ivec2 coord, uint32 lod, float chunkSize) const
+	{
+		if (!m_bounded)
+			return true;
+		const float size = chunkSize * (float)(1 << lod);
+		const float x0 = (float)coord.x * size, z0 = (float)coord.y * size;
+		return x0 + size > m_boundsMin.x && x0 < m_boundsMax.x && z0 + size > m_boundsMin.y && z0 < m_boundsMax.y;
+	}
+
+	// The wanted leaves of m_ring: from the maxLod nodes over the ring, split while the band asks for finer (the same
+	// descent as leafLodAt), keeping the leaves that touch the ring and the generated bounds.
+	void TerrainStreamer::rebuildWanted()
+	{
+		m_wanted.clear();
+		m_wantedList.clear();
+		m_wantedHalfExtent = 0.0f;
+		const Ring& ring = m_ring;
+		const float chunkSize = (float)m_settings.chunkSize;
+		const auto visit = [&](auto&& self, glm::ivec2 coord, uint32 lod) -> void
+		{
+			if (!ring.touches(coord, lod) || !insideBounds(coord, lod, chunkSize))
+				return;
+			if (lod > 0 && ringLodAt(ring.edgeDist(coord, lod), ring.fullRes, ring.lodStep, ring.maxLod) < lod)
+			{
+				for (int dz = 0; dz < 2; ++dz)
+					for (int dx = 0; dx < 2; ++dx)
+						self(self, coord * 2 + glm::ivec2(dx, dz), lod - 1);
+				return;
+			}
+			const uint64 key = chunkKey(coord, lod);
+			m_wanted.insert(key);
+			m_wantedList.push_back(key);
+			const int span = 1 << lod;
+			const glm::ivec2 lo = coord * span - ring.camChunk, hi = lo + span;
+			m_wantedHalfExtent = glm::max(m_wantedHalfExtent, (float)glm::max(glm::max(-lo.x, hi.x), glm::max(-lo.y, hi.y)) * chunkSize);
+		};
+		const glm::ivec2 rootLo((ring.camChunk.x - ring.R) >> ring.maxLod, (ring.camChunk.y - ring.R) >> ring.maxLod);
+		const glm::ivec2 rootHi((ring.camChunk.x + ring.R) >> ring.maxLod, (ring.camChunk.y + ring.R) >> ring.maxLod);
+		for (int z = rootLo.y; z <= rootHi.y; ++z)
+			for (int x = rootLo.x; x <= rootHi.x; ++x)
+				visit(visit, glm::ivec2(x, z), ring.maxLod);
 	}
 
 	void TerrainStreamer::kickUploads(Renderer& renderer)
@@ -623,51 +697,37 @@ namespace Procedural
 	void TerrainStreamer::clearResidents()
 	{
 		joinRender();   // the render job reads m_residents
-		joinRingScan(); // so does the ring scan; its output is against the residents being cleared
-		joinEvictScan(); // and the eviction walk
 		joinUploads();  // writes m_uploads
 		m_uploads.clear();
-		m_ringScanOut.clear();
-		m_evictScanOut.clear();
-		m_evictScanReady = false;
 		for (auto& entry : m_residents)
 			retireResident(oc::move(entry.second));
 		m_residents.clear();
-		m_evictCandidates.clear();
-		m_held.clear();
-		m_registeredSinceScan.clear();
 		m_drawCam.valid = false; // nothing drawn: the next update takes the ring camera
-		m_drawCamOut.valid = false;
+		m_ring.valid = false;    // the next update rebuilds the wanted set and re-requests it
 		m_pending.clear();
 		m_readyBacklog.clear();
-		m_ringScanNeeded = true;
 	}
 
-	// Everything that draws is released NOW (the node - which the hand-over push then skips -, the
-	// mesh, the culling entry); only the Resident's memory waits for the next real stamp, because the
-	// current hand-over list may still hold &node.
-	uint32 TerrainStreamer::drawLod(glm::ivec2 coord) const
-	{
-		return ringLodAt(chunkEdgeDist(m_drawCam.cam, coord), m_drawCam.fullRes, m_drawCam.lodStep, m_drawCam.maxLod);
-	}
-
-	// Culling registration: chunks live in the SpatialIndex like entity render components, but on their own layer (the
-	// userData is the chunk's Resident*, NOT an Entity* - gameplay queries must not see them - so the hand-over push
-	// needs no lookup and reaches the chunk's node AND its vegetation; the Resident is heap-held and retired, never
-	// freed, while a list may still name it), registered ONCE (chunks never move), and WITHOUT the spawn-visibility
-	// guard (chunks stream in off-screen constantly; the guard would pin each one in the main pass until it first
-	// enters the frustum). The sphere also holds the chunk's vegetation: a plant stands up to VEG_HEIGHT above the
-	// ground and its crown reaches up to VEG_OVERHANG past the chunk's edge (its piece sorts by its centre).
-	void TerrainStreamer::registerResident(uint64 key, Resident& resident)
+	// Culling registration: nodes live in the SpatialIndex like entity render components, but on their own layer (the
+	// userData is the node's Resident*, NOT an Entity* - gameplay queries must not see them - so the hand-over push
+	// needs no lookup and reaches the node AND its vegetation; the Resident is heap-held and retired, never freed,
+	// while a list may still name it), registered ONCE (nodes never move), and WITHOUT the spawn-visibility guard
+	// (nodes stream in off-screen constantly; the guard would pin each one in the main pass until it first enters the
+	// frustum). The sphere also holds the node's vegetation: a plant stands up to VEG_HEIGHT above the ground and its
+	// crown reaches up to VEG_OVERHANG past the node's edge (its piece sorts by its centre).
+	void TerrainStreamer::registerResident(Resident& resident)
 	{
 		constexpr float VEG_HEIGHT = 64.0f, VEG_OVERHANG = 16.0f;
 		const Sphere bounds = resident.node.getWorldBounds();
 		const float radius = std::sqrt(bounds.radius * bounds.radius + VEG_HEIGHT * VEG_HEIGHT) + VEG_OVERHANG;
 		resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
 			glm::dvec3(bounds.pos), radius, (uint64)&resident, SpatialLayer_Terrain, false));
-		m_registeredSinceScan.push_back(key); // the running eviction scan did not see it: its draw-camera pick is checked against it
+		resident.registeredAt = Globals::spatialIndex.visibleCollectGeneration();
 	}
 
+	// Everything that draws is released NOW (the node - which the hand-over push then skips -, the
+	// mesh, the culling entry); only the Resident's memory waits for the next real stamp, because the
+	// current hand-over list may still hold &node.
 	void TerrainStreamer::retireResident(oc::unique_ptr<Resident> resident)
 	{
 		resident->spatialEntry.reset();
@@ -725,14 +785,12 @@ namespace Procedural
 				// O(queue) per generated chunk. The queue is a few hundred entries and a chunk costs
 				// milliseconds to seconds, so the scan does not register.
 				size_t best = SIZE_MAX;
-				int64 bestDist2 = INT64_MAX;
+				float bestDist = FLT_MAX;
 				size_t keep = 0;
 				for (size_t i = 0; i < m_requests.size(); ++i)
 				{
 					Request& r = m_requests[i];
-					const glm::ivec2 d = r.params.coord - m_ringCam;
-					const int cheb = glm::max(glm::abs(d.x), glm::abs(d.y));
-					if (cheb > m_ringR || r.params.lod != ringLodAt(chunkEdgeDist(m_ringCamPos, r.params.coord), m_ringFullRes, m_ringLodStep, m_ringMaxLod))
+					if (!m_pumpRing.valid || !m_pumpRing.touches(r.params.coord, r.params.lod) || !m_pumpRing.isLeaf(r.params.coord, r.params.lod))
 					{
 						Result drop;
 						drop.key = r.key;
@@ -742,11 +800,11 @@ namespace Procedural
 						m_results.push_back(oc::move(drop)); // empty mesh = dropped
 						continue;                             // not carried into the kept prefix
 					}
-					// Euclidean, not the ring's Chebyshev: "nearest" should mean nearest, not same-ring.
-					const int64 dist2 = (int64)d.x * d.x + (int64)d.y * d.y;
-					if (dist2 < bestDist2)
+					// The node's nearest edge: the ground under the camera first, a far node (a big one) by its near side.
+					const float dist = m_pumpRing.edgeDist(r.params.coord, r.params.lod);
+					if (dist < bestDist)
 					{
-						bestDist2 = dist2;
+						bestDist = dist;
 						best = keep;
 					}
 					if (keep != i)
@@ -943,12 +1001,10 @@ namespace Procedural
 	//
 	// The walk and the pushes run on WORKERS (renderNode is lock-free from any job between
 	// beginFrame and present, for different nodes): the list fans out over a parallelFor and the sphere
-	// query runs beside it, the two sets disjoint. The list holds VALUES (it reads no pool row a registration on main
-	// could reallocate) and holds until the next spatial kick. main.cpp joins m_renderCounter
-	// right before present, and update/clearResidents join it before touching m_residents (nothing
-	// mutates it until then; this frame's ring scan only reads it). The ocean's sectors, their pass
-	// masks and transforms hold until its next update, which follows that same join. The sphere query
-	// locks the index itself.
+	// query runs beside it, the two sets disjoint. The list holds VALUES and holds until the next spatial kick.
+	// main.cpp joins m_renderCounter right before present, and update/clearResidents join it before touching
+	// m_residents (nothing mutates it until then). The ocean's sectors, their pass masks and transforms hold until its
+	// next update, which follows that same join.
 	void TerrainStreamer::render(Renderer& renderer, OceanGenerator& ocean)
 	{
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
@@ -1025,19 +1081,43 @@ namespace Procedural
 		}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
 	}
 
-	// The walk's pushes (on several workers): a chunk's vegetation, merged per vegetation chunk (a LOD handover pushes
+	// The walk's pushes (on several workers): a node's vegetation, merged per vegetation chunk (a swap pushes
 	// the old and the new resident of one coordinate - the trees must not draw twice).
 	void TerrainStreamer::noteVegetation(const Resident& resident, uint32 passMask)
 	{
-		const int32 vegetation = resident.vegetation.load(oc::memory_order_relaxed);
-		if (!m_vegRouted || vegetation < 0 || (size_t)vegetation >= m_vegMasks.size())
+		if (!m_vegRouted || !resident.vegetation || resident.vegetationCount.load(oc::memory_order_relaxed) == 0)
 			return;
 		const uint8 bits = (uint8)passMask;
-		const oc::atomic_ref<uint8> mask(m_vegMasks[(size_t)vegetation]);
-		if ((mask.load(oc::memory_order_relaxed) & bits) == bits)
-			return;
-		if (mask.fetch_or(bits, oc::memory_order_relaxed) == 0) // the first push of this chunk lists it
-			m_vegTouched[m_vegTouchedCount.fetch_add(1, oc::memory_order_relaxed)] = (uint32)vegetation;
+		const uint32 numBase = 1u << (2 * resident.lod);
+		for (uint32 i = 0; i < numBase; ++i)
+		{
+			const int32 vegetation = resident.vegetation[i].load(oc::memory_order_relaxed);
+			if (vegetation < 0 || (size_t)vegetation >= m_vegMasks.size())
+				continue;
+			const oc::atomic_ref<uint8> mask(m_vegMasks[(size_t)vegetation]);
+			if ((mask.load(oc::memory_order_relaxed) & bits) == bits)
+				continue;
+			if (mask.fetch_or(bits, oc::memory_order_relaxed) == 0) // the first push of this chunk lists it
+				m_vegTouched[m_vegTouchedCount.fetch_add(1, oc::memory_order_relaxed)] = (uint32)vegetation;
+		}
+	}
+
+	// Every base chunk the node covers, from the owner's lookup (main thread). The vegetation's chunks ARE the base chunks.
+	void TerrainStreamer::stampVegetation(Resident& resident)
+	{
+		const uint32 span = 1u << resident.lod;
+		if (!resident.vegetation)
+			resident.vegetation = oc::make_unique<oc::atomic<int32>[]>(span * span);
+		const glm::ivec2 base = resident.firstBase();
+		uint32 count = 0;
+		for (uint32 z = 0; z < span; ++z)
+			for (uint32 x = 0; x < span; ++x)
+			{
+				const int32 vegetation = m_vegLookup ? m_vegLookup(base + glm::ivec2(x, z)) : -1;
+				resident.vegetation[z * span + x].store(vegetation, oc::memory_order_relaxed);
+				count += vegetation >= 0 ? 1u : 0u;
+			}
+		resident.vegetationCount.store(count, oc::memory_order_relaxed);
 	}
 
 	// The walk's end, after its pushes joined.
@@ -1067,27 +1147,39 @@ namespace Procedural
 		m_vegTouched.assign(m_vegMasks.size(), 0u); // a chunk is listed at most once per walk
 		m_vegTouchedCount.store(0, oc::memory_order_relaxed);
 		for (auto& entry : m_residents)
-			entry.second->vegetation.store(m_vegLookup ? m_vegLookup(entry.second->coord) : -1, oc::memory_order_relaxed);
+			stampVegetation(*entry.second);
 		for (RetiredResident& retired : m_retired) // a hand-over list may still name them: no stale index
-			retired.resident->vegetation.store(-1, oc::memory_order_relaxed);
+			retired.resident->vegetationCount.store(0, oc::memory_order_relaxed);
 	}
 
+	// `coord` is a BASE chunk: one entry of every resident node over it changes.
 	void TerrainStreamer::restampVegetation(glm::ivec2 coord)
 	{
 		const int32 vegetation = m_vegLookup ? m_vegLookup(coord) : -1;
-		for (uint32 lod = 0; lod < 16; ++lod) // every LOD a resident can have (the ring's max is the scan job's)
-			if (const auto it = m_residents.find(chunkKey(coord, lod)); it != m_residents.end())
-				it->second->vegetation.store(vegetation, oc::memory_order_relaxed);
+		const auto stamp = [&](Resident& resident, int32 value)
+		{
+			if (!resident.vegetation)
+				return;
+			const uint32 span = 1u << resident.lod;
+			const glm::ivec2 local = coord - resident.firstBase();
+			const int32 old = resident.vegetation[(uint32)local.y * span + (uint32)local.x].exchange(value, oc::memory_order_relaxed);
+			if ((old >= 0) != (value >= 0))
+				resident.vegetationCount.fetch_add(value >= 0 ? 1u : ~0u, oc::memory_order_relaxed);
+		};
+		for (uint32 lod = 0; lod < 16; ++lod) // every LOD a node can have
+			if (const auto it = m_residents.find(chunkKey(glm::ivec2(coord.x >> lod, coord.y >> lod), lod)); it != m_residents.end())
+				stamp(*it->second, vegetation);
 		for (RetiredResident& retired : m_retired)
-			if (retired.resident->coord == coord)
-				retired.resident->vegetation.store(-1, oc::memory_order_relaxed);
+		{
+			const uint32 lod = retired.resident->lod;
+			if (retired.resident->coord == glm::ivec2(coord.x >> lod, coord.y >> lod))
+				stamp(*retired.resident, -1);
+		}
 	}
 
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
 	{
 		joinRender();   // last frame's render job (already joined before present; a cheap no-op)
-		joinRingScan(); // last frame's ring scan: applied below (enabled) or dropped here
-		joinEvictScan(); // last frame's eviction walk: the same
 		joinUploads();  // already joined before the frame kicks; a cheap no-op
 		m_renderReady = false;
 		{
@@ -1101,8 +1193,6 @@ namespace Procedural
 		}
 		if (!m_settings.enabled)
 		{
-			m_ringScanOut.clear();
-			m_evictScanReady = false;
 			// Disabled: no profile scope, no per-frame work. The transition (and any tweak that
 			// re-dirties the config while parked, e.g. sea level) drains through updateDisabled
 			// until nothing is left in flight.
@@ -1190,72 +1280,61 @@ namespace Procedural
 			renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
 		}
 
+		// --- THE RING (the quadtree's wanted leaves around the camera; see Ring). Rebuilt when it moves: ~100-200 nodes,
+		// so on main, no job.
+		const Ring ring{ camChunks, glm::ivec2(camCX, camCZ), R, fullRes, lodStep, maxLod, true };
+		const bool ringMoved = !(ring == m_ring);
+		if (ringMoved)
+		{
+			m_ring = ring;
+			rebuildWanted();
+			m_wantedDirty = true;
+		}
+		if (!m_drawCam.valid)
+			m_drawCam = ring; // nothing drawn (start, or after a clear): no invariant to keep
+
 		// The far cascade must cover the whole resident mesh, else terrain past its edge reads clamp-to-edge
 		// (frozen altitude/temperature -> distant inland looks uniformly cold/snowy, ignoring the inland
-		// rise). The mesh reaches ~(R+1)*chunkSize from the camera on each axis; the map is a centered
-		// square of side = range, so range must be at least twice that. Keep the tweak as a floor.
-		const float meshHalfExtent = (float)(R + 1) * chunkSize;
+		// rise). The wanted nodes reach m_wantedHalfExtent past the camera's chunk (a far node can stick out of the ring
+		// by up to its own size); the map is a centered square of side = range, so range must be at least twice that
+		// (+ a chunk: the camera stands anywhere in its chunk). Keep the tweak as a floor.
+		const float meshHalfExtent = glm::max(m_wantedHalfExtent, (float)R * chunkSize) + chunkSize;
 		const float farRange = glm::max(m_settings.terrainMapFarRange, 2.0f * meshHalfExtent);
 		updateFogHeightMap(renderer, camera, maps, farRange);
 
-		// Ring membership is CLOSED FORM: the column at Chebyshev distance cheb from the camera chunk
-		// wants ringLodAt(cheb) (geometric bands), nothing outside R. Every "is this still wanted"
-		// question below (result validation, eviction) is this arithmetic - no desired-key sets.
-		const auto ringLod = [&](glm::ivec2 coord) -> int
+		// --- Request every wanted leaf neither resident nor in flight (when the ring moved, or a request ended without a
+		// resident). The queue is an unordered POOL, not a queue: the worker rescans it on every dequeue and takes the
+		// node nearest the camera at that moment, and drops the ones no longer wanted in the same pass. What it DOES
+		// owe the worker is the ring to judge against, published under the same lock before any of its requests.
+		if (m_wantedDirty)
 		{
-			const int cheb = glm::max(glm::abs(coord.x - camCX), glm::abs(coord.y - camCZ));
-			return cheb <= R ? (int)ringLodAt(chunkEdgeDist(camChunks, coord), fullRes, lodStep, maxLod) : -1;
-		};
-
-		const bool ringMoved = camChunks != m_lastRingCamPos || camCX != m_lastRingCX || camCZ != m_lastRingCZ
-			|| R != m_lastRingR || lodStep != m_lastRingLodStep || fullRes != m_lastRingFullRes || maxLod != m_lastRingMaxLod;
-		const auto setDrawCamToRing = [&] { m_drawCam = DrawCam{ camChunks, fullRes, lodStep, maxLod, true }; };
-		if (!m_drawCam.valid)
-			setDrawCamToRing(); // nothing drawn (start, or after a clear): no invariant to keep
-
-		// --- Apply LAST frame's ring scan (the job kicked at the end of update, joined above): enqueue
-		// every ring chunk it found neither resident nor in flight. The scan is a pure function of
-		// (ring, residents, pending), so it only re-runs when one of them changed - and it ran against
-		// last frame's ring, so a key that became pending or resident since is skipped here and a
-		// request the ring has since moved away from is dropped by the pump like any stale one.
-		oc::vector<Request> newRequests = oc::move(m_ringScanOut);
-		m_ringScanOut.clear();
-		for (size_t i = 0; i < newRequests.size(); )
-		{
-			const uint64 key = newRequests[i].key;
-			if (m_residents.count(key) || m_pending.count(key))
+			m_wantedDirty = false;
+			oc::vector<Request> newRequests;
+			for (const uint64 key : m_wantedList)
 			{
-				newRequests[i] = oc::move(newRequests.back());
-				newRequests.pop_back();
-				continue;
+				if (m_residents.count(key) || m_pending.count(key))
+					continue;
+				m_pending.insert(key);
+				Request req;
+				req.key = key;
+				req.generation = generation;
+				req.maps = maps;
+				req.params.coord = keyCoord(key);
+				req.params.lod = keyLod(key);
+				req.params.chunkSize = chunkSize;
+				req.params.lod0Res = (uint32)glm::max(1, m_settings.lod0Res);
+				newRequests.push_back(oc::move(req));
 			}
-			m_pending.insert(key);
-			++i;
+			{
+				std::lock_guard<std::mutex> lk(m_mutex);
+				m_pumpRing = m_ring;
+				for (Request& r : newRequests)
+					m_requests.push_back(oc::move(r));
+			}
+			if (!newRequests.empty())
+				kickPump(newRequests.size());
 		}
-
-		// The queue is an unordered POOL, not a queue: the worker rescans it on every dequeue and takes the
-		// chunk nearest the camera at that moment (see workerLoop), and drops out-of-range entries in the
-		// same pass. So the main thread neither sorts nor prunes - appending in any order is correct, and
-		// sorting here would only be re-deciding, one camera position out of date, something the worker
-		// decides properly a moment later.
-		// What it DOES owe the worker is the ring state to judge against, published under the same lock.
-		m_lastRingCX = camCX; m_lastRingCZ = camCZ;
-		m_lastRingR = R; m_lastRingLodStep = lodStep; m_lastRingFullRes = fullRes; m_lastRingMaxLod = maxLod;
-		m_lastRingCamPos = camChunks;
-		if (ringMoved || !newRequests.empty())
-		{
-			std::lock_guard<std::mutex> lk(m_mutex);
-			m_ringCam = glm::ivec2(camCX, camCZ);
-			m_ringCamPos = camChunks;
-			m_ringR = R;
-			m_ringLodStep = lodStep;
-			m_ringFullRes = fullRes;
-			m_ringMaxLod = maxLod;
-			for (Request& r : newRequests)
-				m_requests.push_back(oc::move(r));
-		}
-		if (!newRequests.empty())
-			kickPump(newRequests.size());
+		const auto wantedLeaf = [&](uint64 key) { return m_wanted.count(key) != 0; };
 
 		// --- Drain generated chunks (backlog first, then whatever the worker finished), budget-limited.
 		oc::vector<Result> ready = oc::move(m_readyBacklog);
@@ -1267,7 +1346,6 @@ namespace Procedural
 			m_results.clear();
 		}
 
-		int uploads = 0;
         {
             // --- Adopt LAST frame's upload batch (the job ran through present and the frame-pacing wait
             // and was joined before this frame's kicks): only the node spawn and the culling
@@ -1285,40 +1363,37 @@ namespace Procedural
                     continue;
                 }
                 m_pending.erase(res.key);
-                m_ringScanNeeded = true;
                 const bool valid = upload.mesh.isValid() && res.generation == generation
-                    && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
+                    && wantedLeaf(res.key) && !m_residents.count(res.key);
                 if (!valid)
-                    continue; // failed / stale / no longer wanted: the mesh frees here, on main
+                {
+                    m_wantedDirty = true; // a still-wanted node (a failed upload, an old generation) is requested again
+                    continue;             // failed / stale / no longer wanted: the mesh frees here, on main
+                }
 
-                // ONE mesh per chunk (no ObjectContainer: no per-chunk material, names or node tables) on the
-                // terrain pipeline variant (procedural height/slope albedo), with the material every chunk
-                // shares. No LOD chain: the streamer already LODs by ring distance.
+                // ONE mesh per node (no ObjectContainer: no per-node material, names or node tables) on the
+                // terrain pipeline variant (procedural height/slope albedo), with the material every node
+                // shares. No LOD chain: the quadtree IS the LOD.
                 if (m_material == UINT16_MAX)
                     m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::TerrainLit, true);
                 auto resident = oc::make_unique<Resident>();
                 resident->mesh = oc::move(upload.mesh);
+                const float nodeSize = chunkSize * (float)(1 << res.lod);
                 const Transform transform(
-                    glm::vec3((float)res.coord.x * chunkSize, 0.0f, (float)res.coord.y * chunkSize),
+                    glm::vec3((float)res.coord.x * nodeSize, 0.0f, (float)res.coord.y * nodeSize),
                     1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
                 resident->node = renderer.spawnMeshNode(resident->mesh, m_material, RendererVKLayout::EPipelineIndex::TerrainLit, transform);
                 resident->coord = res.coord;
                 resident->lod = res.lod;
-                resident->vegetation.store(m_vegLookup ? m_vegLookup(res.coord) : -1, oc::memory_order_relaxed);
-                // Edge stitching: drawn now only if the draw camera allows its LOD (a refinement always does); a
-                // chunk too coarse for it (a coarsening behind the camera) waits unregistered until it moves.
-                if (res.lod <= drawLod(res.coord))
-                    registerResident(res.key, *resident);
-                else
-                    m_held.push_back(res.key);
+                stampVegetation(*resident);
+                // NOT registered (drawn) here: updateResidency decides that (the draw camera, the swap group).
                 m_residents.emplace(res.key, oc::move(resident));
-                ++uploads;
             }
             m_uploads.resize(kept);
         }
         {
             // --- Pick THIS frame's upload batch (kickUploads, after present). The picks stay "pending"
-            // until they are adopted, so the ring scan does not re-request them.
+            // until they are adopted, so they are not requested again.
             ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
             const size_t maxBytes = (size_t)(glm::max(m_settings.maxUploadMBPerFrame, 1.0f) * 1024.0f * 1024.0f);
             size_t batchBytes = 0;
@@ -1327,14 +1402,14 @@ namespace Procedural
                 if (res.mesh.indices.empty()) // pump-dropped (stale at dequeue) or generation failed: just release the key
                 {
                     m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
-                    m_ringScanNeeded = true;
+                    m_wantedDirty = true;
                     continue;
                 }
-                const bool valid = (res.generation == generation) && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
+                const bool valid = (res.generation == generation) && wantedLeaf(res.key) && !m_residents.count(res.key);
                 if (!valid)
                 {
                     m_pending.erase(res.key); // stale / no longer wanted / duplicate: done with it
-                    m_ringScanNeeded = true;
+                    m_wantedDirty = true;
                     continue;
                 }
                 const size_t bytes = res.mesh.vertices.size() * sizeof(res.mesh.vertices[0])
@@ -1352,238 +1427,211 @@ namespace Procedural
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
 
-		// --- Evict residents, but keep a column's current chunk until its replacement is ready (no hole
-		// while a new LOD streams in). Evict a resident only if its column left the ring entirely, or its
-		// column now wants a different LOD AND that replacement chunk is resident AND can take over ON
-		// SCREEN: a freshly registered replacement isn't main-stamped until the next markVisibleSet, so
-		// evicting on residency alone opened a one-frame hole on every in-view LOD change (and while the
-		// culling is FROZEN the replacement never gets stamped - the old chunk just stays).
-		//
-		// No per-frame walk of the ring: which residents are unwanted (want < 0 or want != lod) depends
-		// on the ring and the resident set only, so that list is rebuilt by one walk when the ring moved
-		// or a chunk uploaded (m_evictCandidates; the handover replacement can only appear through an
-		// upload, and an eviction never creates a candidate). The walk is the "terrainEvictScan" job,
-		// kicked at the end of the previous update: its list is one ring old, so every frame judges each
-		// candidate by THIS frame's ring and checks it against the stamps.
-		DrawCam drawCamPick; // the same job's draw-camera pick (edge stitching), applied below
-        {
-            ProfileScope profileScope2("evictResidents", EProfileCategory::Procedural);
-            if (m_evictScanReady)
-            {
-                m_evictScanReady = false;
-                m_evictCandidates.swap(m_evictScanOut);
-                drawCamPick = m_drawCamOut;
-            }
-
-            for (size_t i = 0; i < m_evictCandidates.size(); )
-            {
-                const auto it = m_residents.find(m_evictCandidates[i]);
-                bool drop = it == m_residents.end(); // already gone: drop the candidate
-                if (!drop)
-                {
-                    const Resident& res = *it->second;
-                    const int want = ringLod(res.coord);
-                    bool evict = false;
-                    if (want < 0)
-                        evict = true; // column outside the ring
-                    else if ((uint32)want == res.lod)
-                        drop = true;  // wanted again (the ring moved back since the walk)
-                    else
-                    {
-                        // The replacement must be DRAWN (registered): a held one (too coarse for the draw camera)
-                        // cannot take over yet, on screen or off.
-                        const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)want));
-                        evict = repIt != m_residents.end() && repIt->second->spatialEntry.isValid();
-                        if (evict && gate)
-                        {
-                            // Hole-free handover: the replacement is main-visible, or the old chunk isn't
-                            // on screen either (an off-screen swap can't show a hole).
-                            const bool newVis = repIt->second->spatialEntry.isValid()
-                                && (Globals::spatialIndex.getPassMask(repIt->second->spatialEntry.handle()) & SpatialPassBit_Main);
-                            const bool oldVis = res.spatialEntry.isValid()
-                                && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
-                            evict = newVis || !oldVis;
-                        }
-                    }
-                    if (evict)
-                    {
-                        retireResident(oc::move(it->second)); // this frame's hand-over may still hold &node
-                        m_residents.erase(it);
-                        drop = true;
-                    }
-                }
-
-                if (drop)
-                {
-                    m_evictCandidates[i] = m_evictCandidates.back();
-                    m_evictCandidates.pop_back();
-                }
-                else
-                    ++i;
-            }
-        }
-
-		// --- Edge stitching: move the DRAW CAMERA to the eviction scan's pick - the farthest point toward the ring camera
-		// at which every resident registered at its kick keeps the invariant. The ones registered since (this update's
-		// adoptions, against the old camera) are checked here; one that fails skips the move (the next scan sees it).
-		// Then the held residents the new camera allows register: they draw in the main pass from next frame on, when
-		// the UBO carries this camera too (the begin-frame job that builds it runs before this update). The finer
-		// residents they replace go through the eviction above.
-		if (drawCamPick.valid && !(drawCamPick == m_drawCam))
-		{
-			bool allowed = true;
-			for (const uint64 key : m_registeredSinceScan)
-			{
-				const auto it = m_residents.find(key);
-				if (it != m_residents.end() && it->second->spatialEntry.isValid()
-					&& it->second->lod > ringLodAt(chunkEdgeDist(drawCamPick.cam, it->second->coord), drawCamPick.fullRes, drawCamPick.lodStep, drawCamPick.maxLod))
-				{
-					allowed = false;
-					break;
-				}
-			}
-			if (allowed)
-			{
-				m_drawCam = drawCamPick;
-				size_t kept = 0;
-				for (const uint64 key : m_held)
-				{
-					const auto it = m_residents.find(key);
-					if (it == m_residents.end() || it->second->spatialEntry.isValid())
-						continue; // evicted, or registered already
-					if (it->second->lod <= drawLod(it->second->coord))
-						registerResident(key, *it->second);
-					else
-						m_held[kept++] = key;
-				}
-				m_held.resize(kept);
-			}
-		}
+		updateResidency(gate);
 		renderer.setTerrainStitch(m_settings.edgeStitch ? chunkSize : 0.0f, m_drawCam.cam,
 			m_drawCam.fullRes, glm::max(m_drawCam.lodStep, 0.01f), m_drawCam.maxLod);
 
 		m_renderReady = true; // the chunk push is render()'s (after the ocean's update)
 
-		// The GRASS and the GROUND CLUTTER stand on these chunks (Renderer::setGrassGround): they read the mesh vertices.
-		// Only the columns within their range - a handful of lookups per LOD, not a walk of the ring. The finest resident
-		// per column wins in the renderer (a LOD hand-over keeps two).
+		// The GRASS and the GROUND CLUTTER stand on these nodes (Renderer::setGrassGround): they read the mesh vertices, per
+		// BASE chunk. Only the base chunks within their range - a lookup per LOD each, not a walk. A base chunk inside a
+		// bigger node is that node's sub-grid (lod0Res >> lod cells, the node's row stride); the finest drawn node wins.
 		{
 			const float groundRange = renderer.groundRange();
 			const float grassRange = groundRange + 16.0f; // + the largest patch
+			const uint32 lod0Res = (uint32)glm::max(1, m_settings.lod0Res);
 			m_grassGround.clear();
 			if (groundRange > 0.0f)
 			{
 				const glm::ivec2 c0(std::floor((camera.position.x - grassRange) / chunkSize), std::floor((camera.position.z - grassRange) / chunkSize));
 				const glm::ivec2 c1(std::floor((camera.position.x + grassRange) / chunkSize), std::floor((camera.position.z + grassRange) / chunkSize));
-				const uint32 lod0Res = (uint32)glm::max(1, m_settings.lod0Res);
 				for (int z = c0.y; z <= c1.y; ++z)
 					for (int x = c0.x; x <= c1.x; ++x)
 						for (uint32 lod = 0; lod <= maxLod; ++lod)
 						{
-							const auto it = m_residents.find(chunkKey(glm::ivec2(x, z), lod));
-							if (it != m_residents.end() && it->second->mesh.isValid())
-								m_grassGround.push_back({ glm::ivec2(x, z), it->second->mesh.getFirstVertex(), glm::max(1u, lod0Res >> lod) });
+							const glm::ivec2 base(x, z);
+							const auto it = m_residents.find(chunkKey(glm::ivec2(x >> lod, z >> lod), lod));
+							if (it == m_residents.end() || !it->second->mesh.isValid() || !it->second->spatialEntry.isValid())
+								continue;
+							const uint32 cells = glm::max(1u, lod0Res >> lod);
+							const glm::ivec2 sub = base - it->second->firstBase();
+							m_grassGround.push_back({ base,
+								it->second->mesh.getFirstVertex() + (uint32)sub.y * cells * (lod0Res + 1) + (uint32)sub.x * cells, cells });
+							break;
 						}
 			}
-			renderer.setGrassGround(chunkSize, oc::span<const Renderer::GrassGroundChunk>(m_grassGround.data(), m_grassGround.size()));
+			renderer.setGrassGround(chunkSize, lod0Res + 1, oc::span<const Renderer::GrassGroundChunk>(m_grassGround.data(), m_grassGround.size()));
+		}
+	}
+
+	// ---- Residency: what draws, per frame, on main (the node counts are small) ----
+
+	// `key` (a wanted leaf) is drawn and can take over from a node being replaced: registered, and - with the culling
+	// gate - main-visible, or CULLED by a Main stamp since its registration (it is off screen: no hole can show there;
+	// one old node is replaced by many leaves, and the off-screen ones are never main-visible), or the old node is not
+	// on screen either. A freshly registered node is not stamped until the next markVisibleSet, so swapping on
+	// residency alone opened a one-frame hole on every in-view swap (and while the culling is FROZEN no stamp comes -
+	// the old node just stays).
+	bool TerrainStreamer::drawnReady(uint64 key, bool oldVisible, bool gate) const
+	{
+		const auto it = m_residents.find(key);
+		if (it == m_residents.end() || !it->second->spatialEntry.isValid())
+			return false;
+		if (!gate || !oldVisible)
+			return true;
+		const Resident& leaf = *it->second;
+		return (Globals::spatialIndex.getPassMask(leaf.spatialEntry.handle()) & SpatialPassBit_Main) != 0
+			|| Globals::spatialIndex.visibleCollectGeneration() != leaf.registeredAt;
+	}
+
+	// A resident that is no longer a wanted leaf can go once its whole area is drawn by wanted ones: its wanted
+	// ANCESTOR (a coarsening), or every wanted leaf under it (a refinement, down several levels if the bands say so).
+	// Parts of it outside the ring or the generated bounds need no cover.
+	bool TerrainStreamer::coveredFor(const Resident& old, bool oldVisible, bool gate) const
+	{
+		const Ring& ring = m_ring;
+		for (uint32 lod = old.lod + 1; lod <= ring.maxLod; ++lod)
+		{
+			const uint64 ancestor = chunkKey(glm::ivec2(old.coord.x >> (lod - old.lod), old.coord.y >> (lod - old.lod)), lod);
+			if (m_wanted.count(ancestor))
+				return drawnReady(ancestor, oldVisible, gate);
+		}
+		const float chunkSize = (float)m_settings.chunkSize;
+		const auto below = [&](auto&& self, glm::ivec2 coord, uint32 lod) -> bool
+		{
+			if (!ring.touches(coord, lod) || !insideBounds(coord, lod, chunkSize))
+				return true;
+			const uint64 key = chunkKey(coord, lod);
+			if (m_wanted.count(key))
+				return drawnReady(key, oldVisible, gate);
+			if (lod == 0)
+				return false;
+			for (int dz = 0; dz < 2; ++dz)
+				for (int dx = 0; dx < 2; ++dx)
+					if (!self(self, coord * 2 + glm::ivec2(dx, dz), lod - 1))
+						return false;
+			return true;
+		};
+		if (old.lod == 0)
+			return !ring.touches(old.coord, 0);
+		for (int dz = 0; dz < 2; ++dz)
+			for (int dx = 0; dx < 2; ++dx)
+				if (!below(below, old.coord * 2 + glm::ivec2(dx, dz), old.lod - 1))
+					return false;
+		return true;
+	}
+
+	// Per frame: (1) retire the residents whose area wanted ones draw; (2) move the draw camera (edge stitching) as far
+	// toward the ring camera as the drawn residents allow; (3) register (draw) the wanted residents the draw camera
+	// allows - a refinement's leaves all at once, when the last of them landed, so the old node and its replacements
+	// never overlap for longer than the one-frame stamp latency. Registrations go LAST: they draw in the main pass from
+	// next frame on, when the UBO carries this draw camera too (the begin-frame job that builds it runs before update).
+	void TerrainStreamer::updateResidency(bool gate)
+	{
+		ProfileScope profileScope("Terrain residency", EProfileCategory::Procedural);
+		const auto mainVisible = [](const Resident& r)
+		{
+			return r.spatialEntry.isValid() && (Globals::spatialIndex.getPassMask(r.spatialEntry.handle()) & SpatialPassBit_Main) != 0;
+		};
+
+		// (1) Retire.
+		m_scratchKeys.clear();
+		for (const auto& entry : m_residents)
+			if (!m_wanted.count(entry.first))
+				m_scratchKeys.push_back(entry.first);
+		for (const uint64 key : m_scratchKeys)
+		{
+			const auto it = m_residents.find(key);
+			const Resident& old = *it->second;
+			// A held one never drew: nothing to cover.
+			if (!old.spatialEntry.isValid() || !m_ring.touches(old.coord, old.lod) || coveredFor(old, mainVisible(old), gate))
+			{
+				retireResident(oc::move(it->second)); // this frame's hand-over may still hold &node
+				m_residents.erase(it);
+			}
 		}
 
-		// --- Kick THIS frame's ring scan for the next update to apply. Last in update on purpose: the
-		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and
-		// the job only reads them (its output goes to m_ringScanOut, consumed after the join at the
-		// top). Every input is SNAPSHOT into m_ringScanIn, which only main writes and only after the
-		// joins, so a tweak or setGeneratedBounds edit on main cannot race it. The eviction walk reads the
-		// same snapshot, in a job of its own.
-		const bool ringScan = ringMoved || m_ringScanNeeded;
-		const DrawCam ringDrawCam{ camChunks, fullRes, lodStep, maxLod, true };
-		const bool evictScan = ringMoved || uploads > 0 || !(m_drawCam == ringDrawCam); // the last: the draw camera still trails
-		if (ringScan || evictScan)
+		// (2) The draw camera: DRAW_CAM_STEPS points from it to the ring camera (the last IS it), on the quarter-chunk
+		// lattice, with the ring's bands; the farthest at which every drawn resident lies inside a leaf of that tree.
+		if (!(m_drawCam == m_ring))
 		{
-			RingScanInput& in = m_ringScanIn;
-			in.camCX = camCX; in.camCZ = camCZ; in.R = R;
-			in.camChunks = camChunks;
-			in.chunkSize = chunkSize; in.fullRes = fullRes; in.lodStep = lodStep;
-			in.maxLod = maxLod; in.lod0Res = (uint32)glm::max(1, m_settings.lod0Res); in.generation = generation;
-			in.bounded = m_bounded; in.boundsMin = m_boundsMin; in.boundsMax = m_boundsMax;
-			in.maps = maps;
-			in.drawCam = m_drawCam;
-		}
-		if (evictScan)
-		{
-			m_evictScanReady = true;
-			m_registeredSinceScan.clear(); // this scan sees every registration so far
-			Globals::jobSystem.submit([this]
+			Ring cams[DRAW_CAM_STEPS];
+			for (uint32 i = 0; i < DRAW_CAM_STEPS; ++i)
 			{
-				const RingScanInput& s = m_ringScanIn;
-				m_evictScanOut.clear();
-				// The draw camera's candidates (edge stitching): DRAW_CAM_STEPS points from the current one to the ring
-				// camera (the last IS it), on the quarter-chunk lattice, with the ring's bands. Bit i = point i + 1 keeps
-				// the invariant for every registered resident walked so far.
-				glm::vec2 cams[DRAW_CAM_STEPS];
-				for (uint32 i = 0; i < DRAW_CAM_STEPS; ++i)
-				{
-					const float t = (float)(i + 1) / (float)DRAW_CAM_STEPS;
-					cams[i] = i + 1 == DRAW_CAM_STEPS ? s.camChunks
-						: glm::round(glm::mix(s.drawCam.cam, s.camChunks, t) * 4.0f) * 0.25f;
-				}
-				uint32 feasible = (1u << DRAW_CAM_STEPS) - 1u;
-				for (const auto& entry : m_residents)
-				{
-					const Resident& res = *entry.second;
-					const int cheb = glm::max(glm::abs(res.coord.x - s.camCX), glm::abs(res.coord.y - s.camCZ));
-					if (cheb > s.R || ringLodAt(chunkEdgeDist(s.camChunks, res.coord), s.fullRes, s.lodStep, s.maxLod) != res.lod)
-						m_evictScanOut.push_back(entry.first);
-					if (res.lod == 0 || !res.spatialEntry.isValid())
-						continue; // LOD0 fits any camera; a held resident is not drawn
-					for (uint32 bits = feasible; bits != 0; bits &= bits - 1)
-					{
-						const uint32 i = oc::tzcnt(bits);
-						if (res.lod > ringLodAt(chunkEdgeDist(cams[i], res.coord), s.fullRes, s.lodStep, s.maxLod))
-							feasible &= ~(1u << i);
-					}
-				}
-				m_drawCamOut = feasible != 0
-					? DrawCam{ cams[31 - oc::lzcnt(feasible)], s.fullRes, s.lodStep, s.maxLod, true } // the farthest
-					: DrawCam{};
-			}, { "terrainEvictScan", EProfileCategory::Procedural }, EJobPriority::Normal, &m_evictScanCounter);
-		}
-		if (ringScan)
-		{
-			m_ringScanNeeded = false;
-			Globals::jobSystem.submit([this]
+				cams[i] = m_ring;
+				if (i + 1 < DRAW_CAM_STEPS)
+					cams[i].cam = glm::round(glm::mix(m_drawCam.cam, m_ring.cam, (float)(i + 1) / (float)DRAW_CAM_STEPS) * 4.0f) * 0.25f;
+			}
+			uint32 feasible = (1u << DRAW_CAM_STEPS) - 1u;
+			for (const auto& entry : m_residents)
 			{
-				const RingScanInput& s = m_ringScanIn;
-				for (int dz = -s.R; dz <= s.R; ++dz)
+				const Resident& r = *entry.second;
+				if (r.lod == 0 || !r.spatialEntry.isValid())
+					continue; // LOD0 fits any camera; a held resident is not drawn
+				for (uint32 bits = feasible; bits != 0; bits &= bits - 1)
 				{
-					for (int dx = -s.R; dx <= s.R; ++dx)
-					{
-						const glm::ivec2 coord(s.camCX + dx, s.camCZ + dz);
-						// Generated bounds: a chunk that does not touch the seeded area is never requested
-						// (its tiles were never generated; see setGeneratedBounds).
-						if (s.bounded)
-						{
-							const float x0 = (float)coord.x * s.chunkSize, z0 = (float)coord.y * s.chunkSize;
-							if (x0 + s.chunkSize <= s.boundsMin.x || x0 >= s.boundsMax.x
-								|| z0 + s.chunkSize <= s.boundsMin.y || z0 >= s.boundsMax.y)
-								continue;
-						}
-						const uint32 lod = ringLodAt(chunkEdgeDist(s.camChunks, coord), s.fullRes, s.lodStep, s.maxLod);
-						const uint64 key = chunkKey(coord, lod);
-						if (m_residents.count(key) || m_pending.count(key))
-							continue;
+					const uint32 i = oc::tzcnt(bits);
+					if (r.lod > cams[i].leafLodAt(r.firstBase()))
+						feasible &= ~(1u << i);
+				}
+				if (feasible == 0)
+					break;
+			}
+			if (feasible != 0)
+				m_drawCam = cams[31 - oc::lzcnt(feasible)];
+		}
 
-						Request req;
-						req.key = key;
-						req.generation = s.generation;
-						req.maps = s.maps;
-						req.params.coord = coord;
-						req.params.lod = lod;
-						req.params.chunkSize = s.chunkSize;
-						req.params.lod0Res = s.lod0Res;
-						m_ringScanOut.push_back(oc::move(req));
-					}
+		// (3) Register. A held wanted leaf under a drawn, unwanted ancestor (a refinement) waits for its whole group: every
+		// wanted leaf under that ancestor resident and allowed by the draw camera.
+		const auto allowed = [&](const Resident& r) { return r.lod <= m_drawCam.leafLodAt(r.firstBase()); };
+		const float chunkSize = (float)m_settings.chunkSize;
+		for (const uint64 key : m_wantedList)
+		{
+			const auto it = m_residents.find(key);
+			if (it == m_residents.end() || it->second->spatialEntry.isValid() || !allowed(*it->second))
+				continue;
+			const Resident& leaf = *it->second;
+			const Resident* group = nullptr; // the drawn ancestor this leaf replaces
+			for (uint32 lod = leaf.lod + 1; lod <= m_ring.maxLod && !group; ++lod)
+			{
+				const auto a = m_residents.find(chunkKey(glm::ivec2(leaf.coord.x >> (lod - leaf.lod), leaf.coord.y >> (lod - leaf.lod)), lod));
+				if (a != m_residents.end() && a->second->spatialEntry.isValid())
+					group = a->second.get();
+			}
+			if (!group)
+			{
+				registerResident(*it->second);
+				continue;
+			}
+			// Every wanted leaf under the group's node: resident and allowed? Then all of them register now.
+			bool complete = true;
+			m_scratchKeys.clear();
+			const auto collect = [&](auto&& self, glm::ivec2 coord, uint32 lod) -> void
+			{
+				if (!complete || !m_ring.touches(coord, lod) || !insideBounds(coord, lod, chunkSize))
+					return;
+				const uint64 k = chunkKey(coord, lod);
+				if (m_wanted.count(k))
+				{
+					const auto r = m_residents.find(k);
+					if (r == m_residents.end() || !allowed(*r->second))
+						complete = false;
+					else if (!r->second->spatialEntry.isValid())
+						m_scratchKeys.push_back(k);
+					return;
 				}
-			}, { "terrainRingScan", EProfileCategory::Procedural }, EJobPriority::Normal, &m_ringScanCounter);
+				if (lod == 0)
+					return;
+				for (int dz = 0; dz < 2; ++dz)
+					for (int dx = 0; dx < 2; ++dx)
+						self(self, coord * 2 + glm::ivec2(dx, dz), lod - 1);
+			};
+			for (int dz = 0; dz < 2; ++dz)
+				for (int dx = 0; dx < 2; ++dx)
+					collect(collect, group->coord * 2 + glm::ivec2(dx, dz), group->lod - 1);
+			if (complete)
+				for (const uint64 k : m_scratchKeys)
+					registerResident(*m_residents.find(k)->second);
 		}
 	}
 }

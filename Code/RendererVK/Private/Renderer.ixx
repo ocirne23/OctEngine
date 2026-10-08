@@ -378,12 +378,14 @@ public:
     TreeRecordStats treeRecordStats() const { return m_treeRecords.stats(); }
 
     // -- Procedural grass (GrassPipeline, grass.inc.glsl; "Grass" tweaks) --
-    // The blades stand on the terrain MESH: their roots are read from the chunks' own vertices. One resident chunk per
-    // coordinate (the finest), all within grassRange() of the camera.
+    // The blades stand on the terrain MESH: their roots are read from the chunks' own vertices. One entry per BASE chunk
+    // coordinate (the finest drawn terrain node over it), all within grassRange() of the camera: its first vertex and
+    // its cells per side, inside a node mesh whose rows are `vertexStride` vertices apart (a base chunk inside a
+    // bigger quadtree node is a sub-grid of it).
     struct GrassGroundChunk { glm::ivec2 coord; uint32 firstVertex = 0; uint32 res = 0; };
     // MAIN THREAD, every frame before present (Procedural TerrainStreamer::update). Valid for ONE frame: a frame
     // without a call draws no grass (a disabled terrain, or freed chunks, can never be read).
-    void setGrassGround(float chunkSize, oc::span<const GrassGroundChunk> chunks);
+    void setGrassGround(float chunkSize, uint32 vertexStride, oc::span<const GrassGroundChunk> chunks);
     // The terrain height right under the camera (world Y; NaN = unknown), per frame (Procedural TerrainStreamer::update):
     // the near grass cascade's placement (where the bottom of the view meets the ground).
     void setCameraGround(float groundY) { m_cameraGround = groundY; }
@@ -844,6 +846,7 @@ private:
     RockParams& m_rockParams = Globals::settings.rock; // the rock material (EPipelineIndex::LitRock): UBO-driven, "Rocks/Material"
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
+    uint32 m_grassGroundStride = 1; // setGrassGround: the terrain node meshes' row stride (vertices)
     float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
     bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
     float grassPatchSize() const; // the patch grid (uploadGrassFrame) and u_grass_patchSize

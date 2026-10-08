@@ -1375,6 +1375,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("present_treeRangeLength", [this] { return m_treeCullCount; }, UboPresent);  // its length (0 = no trees)
         list.add("present_treeThreads", [this] { return treeCullThreads(); }, UboPresent);    // the culls' thread count (their dispatch)
         list.add("present_treeCount", [this] { return m_treeCullPieces; }, UboPresent);       // the listed pieces
+        // The grass / clutter ground table's row stride (setGrassGround, from the terrain update after the build).
+        list.add("present_groundStride", [this] { return m_grassGroundStride; }, UboPresent);
         list.add("present_treeFarScale", [this] { return m_treeCullDistanceScale; }, UboPresent);
         list.add("present_treeForceFar", [this] { return m_treeCullForceFar; }, UboPresent);
         list.add("present_treeVolumeStart", [this] { return treeCullVolumeStart(); }, UboPresent); // the far-tree volume's start (m; 0 = no volume)

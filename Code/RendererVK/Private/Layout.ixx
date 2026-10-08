@@ -26,7 +26,7 @@ export namespace RendererVKLayout
     // Initial capacities only: the Renderer tracks the live capacities and grows the backing buffers
     // at runtime when they are exceeded (GPU idle + buffer recreate + command buffer re-record).
     constexpr uint32 INITIAL_RENDER_NODES = 64 * 1024;
-    constexpr uint32 INITIAL_UNIQUE_MESHES = USHRT_MAX - 1; // MESH_MATERIAL_INDEX_LIMIT: the uint16 mesh index's whole range
+    constexpr uint32 INITIAL_UNIQUE_MESHES = 2 * 1024; // MESH_MATERIAL_INDEX_LIMIT: the uint16 mesh index's whole range
     constexpr uint32 INITIAL_UNIQUE_MATERIALS = 8;
     constexpr uint32 INITIAL_INSTANCE_OFFSETS = 64;
     constexpr uint32 INITIAL_INSTANCE_DATA = 1024 * 1024; // the world's load does not grow it
@@ -463,8 +463,8 @@ export namespace RendererVKLayout
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
     // load does not grow them: 1.5 GiB of vertices, 0.5 GiB of indices.
-    constexpr size_t INITIAL_VERTEX_DATA = 32 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
-    constexpr size_t INITIAL_INDEX_DATA = 128 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+    constexpr size_t INITIAL_VERTEX_DATA = 16 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_INDEX_DATA = 64 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)

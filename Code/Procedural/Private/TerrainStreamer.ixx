@@ -19,14 +19,13 @@ import :OceanGenerator;
 
 export namespace Procedural
 {
-	// Render-only procedural terrain. Maintains a bounded ring of chunks around the camera, each generated
-	// on a worker thread and turned into an ObjectContainer + RenderNode on the main thread, and pushes them
-	// to the renderer every frame. LOD is chosen per chunk by ring distance; the world-continuous height
-	// field keeps chunk and LOD boundaries consistent.
+	// Render-only procedural terrain. Maintains a QUADTREE of terrain nodes around the camera (see Ring), each
+	// generated on a worker thread and turned into a RenderMesh + RenderNode on the main thread, and pushes them
+	// to the renderer every frame. The world-continuous height field keeps node and LOD boundaries consistent, and the
+	// terrain VS stitches the edges between LODs (no skirts).
 	//
-	// A chunk that leaves the ring (or changes LOD) destroys its RenderNode then its ObjectContainer, which
-	// frees the container's GPU mesh/texture/material allocations back to the renderer's free lists
-	// (~ObjectContainer -> Renderer::removeObjectContainer), so residency stays bounded across a session.
+	// A node that is replaced (or leaves the ring) destroys its RenderNode then its RenderMesh, which frees its
+	// mega-buffer ranges and MeshInfo slot, so residency stays bounded across a session.
 	class TerrainStreamer
 	{
 	public:
@@ -140,6 +139,24 @@ export namespace Procedural
 		}
 
 	private:
+		// THE QUADTREE (see "Quadtree nodes" in the CONTEXT): a node (lod, coord at that lod) covers 2^lod x 2^lod BASE
+		// chunks with the same lod0Res grid. Its LOD is a function of a camera and the bands: descend from maxLod and stop
+		// at the first node with ringLodAt(its edge distance) >= its lod (leafLodAt). The ring adds the wanted area: the
+		// leaves that touch the (2R + 1)^2 base chunks around the camera's chunk.
+		struct Ring
+		{
+			glm::vec2 cam{ 0.0f };     // snapped camera, base-chunk units (a quarter-chunk lattice)
+			glm::ivec2 camChunk{ 0 };  // the camera's base chunk
+			int R = -1;                // the ring's Chebyshev radius in base chunks (-1: none yet)
+			float fullRes = 0.0f, lodStep = 1.0f;
+			uint32 maxLod = 0;
+			bool valid = false;
+			bool operator==(const Ring&) const = default;
+			uint32 leafLodAt(glm::ivec2 base) const;               // MIRRORED by the terrain VS (terrainLeafLod)
+			bool touches(glm::ivec2 coord, uint32 lod) const;      // the node overlaps the ring's base chunks
+			bool isLeaf(glm::ivec2 coord, uint32 lod) const { return leafLodAt(coord * (1 << lod)) == lod; }
+			float edgeDist(glm::ivec2 coord, uint32 lod) const;    // camera -> the node's footprint (Chebyshev, base chunks)
+		};
 		struct Request
 		{
 			uint64 key = 0;
@@ -155,8 +172,8 @@ export namespace Procedural
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
 			// Built IN the pump job (the final vertex layout, pure): the main thread only uploads it
-			// (Renderer::createMesh). Empty = dropped/failed; the key is released and the ring scan
-			// re-requests it if still wanted.
+			// (Renderer::createMesh). Empty = dropped/failed; the key is released and update re-requests it
+			// if still wanted (m_wantedDirty).
 			RenderMeshData mesh;
 		};
 
@@ -165,13 +182,17 @@ export namespace Procedural
 		struct Resident
 		{
 			RenderMesh mesh;           // declared first -> destroyed AFTER the node that draws it
-			glm::ivec2 coord{ 0, 0 };
+			glm::ivec2 coord{ 0, 0 };  // at its lod
 			uint32 lod = 0;
-			// The VEGETATION stored in this chunk: its index in the owner's table (-1 = none). Atomic: restampVegetation
-			// writes it on main while the walk reads it.
-			oc::atomic<int32> vegetation{ -1 };
+			// The VEGETATION stored in this node: per BASE chunk it covers (4^lod, row-major), the index in the owner's
+			// table (-1 = none), and how many are set (the walk skips a node without any). Atomic: restampVegetation
+			// writes them on main while the walk reads them.
+			oc::unique_ptr<oc::atomic<int32>[]> vegetation;
+			oc::atomic<uint32> vegetationCount{ 0 };
 			RenderNode node;
-			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static; userData = this)
+			SpatialEntry spatialEntry; // culling registration (SpatialLayer_Terrain, static; userData = this). Invalid = HELD
+			uint32 registeredAt = 0;   // Spatial visibleCollectGeneration at registration: a Main stamp since = it was culled
+			glm::ivec2 firstBase() const { return coord * (1 << lod); }
 		};
 
 		void pumpJob();                 // self-continuing Low-priority generation job
@@ -242,16 +263,10 @@ export namespace Procedural
 		// worker decides correctly at pick time - and FIFO is what made distant chunks generate before the
 		// ground underfoot.
 		oc::deque<Request>     m_requests;
-		// Ring state the worker judges queued requests against at DEQUEUE time (guarded by m_mutex): both
-		// which are stale (dropped lazily, in the same pass) and which is nearest. m_ringR = -1 until the
-		// first publish (everything queued before that would drop, but the first publish precedes the
-		// first append under the same lock).
-		glm::ivec2 m_ringCam{ 0, 0 };
-		glm::vec2  m_ringCamPos{ 0.0f, 0.0f }; // snapped camera position in chunk units (edge-distance LOD)
-		int    m_ringR = -1;
-		float  m_ringLodStep = 1.0f;
-		float  m_ringFullRes = 0.5f;
-		uint32 m_ringMaxLod = 0;
+		// The ring the worker judges queued requests against at DEQUEUE time (guarded by m_mutex): both which are stale
+		// (no longer a wanted leaf: dropped lazily, in the same pass) and which is nearest. Published by update when the
+		// ring moved, before any request of it is appended.
+		Ring m_pumpRing;
 		oc::vector<Result>     m_results;      // filled by worker, drained on the main thread
 		oc::vector<Result>     m_readyBacklog; // main-thread only: generated chunks over the per-frame upload cap
 		// The upload batch (see kickUploads): update() appends the picked results (they stay in m_pending),
@@ -277,38 +292,26 @@ export namespace Procedural
 		oc::vector<RetiredResident>         m_retired;
 		void retireResident(oc::unique_ptr<Resident> resident);
 		uint16                              m_material = UINT16_MAX; // shared by every chunk (created at first upload)
-		// Eviction candidates (resident keys): the residents whose column left the ring or wants another
-		// LOD. A pure function of (ring, residents), so the list is rebuilt by ONE walk only when the
-		// ring moved or a chunk uploaded; the per-frame eviction pass checks just these against the
-		// current ring and the culling stamps (the hole-free handover) instead of walking every resident.
-		// The walk is a job ("terrainEvictScan"): kicked at the END of update with the ring scan, over the
-		// same snapshot (m_ringScanIn), into m_evictScanOut; the next update joins it and swaps it in.
-		void joinEvictScan();
-		oc::vector<uint64>                  m_evictCandidates;
-		oc::vector<uint64>                  m_evictScanOut;
-		JobCounter                          m_evictScanCounter;
-		bool                                m_evictScanReady = false; // kicked: m_evictScanOut replaces the candidates
-		// EDGE STITCHING (no skirts; see "Edge stitching" in the CONTEXT): the terrain VS snaps each chunk edge onto the
-		// coarser side, with BOTH sides' LODs computed from the DRAW CAMERA - not the ring camera. Invariant: a resident
-		// is registered (drawn) only while its LOD <= drawLod(its coord), so the two chunks of an edge always agree on
-		// it. The draw camera FOLLOWS the ring camera as far as the registered residents allow: the eviction scan job
-		// tests DRAW_CAM_STEPS points on the way and returns the farthest the invariant holds at (m_drawCamOut); a
-		// resident adopted too coarse for the draw camera (a coarsening behind the camera) waits in m_held.
-		struct DrawCam
-		{
-			glm::vec2 cam{ 0.0f }; // chunk units, on the ring camera's quarter-chunk lattice
-			float fullRes = 0.0f, lodStep = 1.0f;
-			uint32 maxLod = 0;
-			bool valid = false;    // false: the next enabled update takes the ring camera (no residents)
-			bool operator==(const DrawCam&) const = default;
-		};
+		// The wanted leaves of m_ring (rebuilt when it moves; ~100-200 nodes) and the ring itself. Every per-frame decision
+		// below walks these and the residents directly, on main: the node counts are small.
+		Ring                                m_ring;
+		oc::unordered_set<uint64>           m_wanted;
+		oc::vector<uint64>                  m_wantedList;
+		float                               m_wantedHalfExtent = 0.0f; // m: the farthest wanted node edge from the camera chunk
+		bool                                m_wantedDirty = true;      // a request finished without a resident: re-request
+		void rebuildWanted();
+		bool insideBounds(glm::ivec2 coord, uint32 lod, float chunkSize) const; // the generated bounds (setGeneratedBounds)
+		// EDGE STITCHING (no skirts; see "Edge stitching" in the CONTEXT): the terrain VS snaps each node edge onto the
+		// coarser side, with BOTH sides' LODs computed from the DRAW CAMERA (a Ring: cam + bands), not the ring camera.
+		// Invariant: a resident is registered (drawn) only while it lies inside a leaf of the draw camera's tree
+		// (lod <= m_drawCam.leafLodAt(firstBase)), so the two nodes of an edge always agree on it. The draw camera
+		// follows the ring camera as far as the registered residents allow (DRAW_CAM_STEPS points tried per frame).
 		static constexpr uint32 DRAW_CAM_STEPS = 8;
-		DrawCam                             m_drawCam;
-		DrawCam                             m_drawCamOut;             // the eviction scan's pick (valid = it found a move)
-		oc::vector<uint64>                  m_held;                   // adopted, NOT registered: too coarse for the draw camera
-		oc::vector<uint64>                  m_registeredSinceScan;    // registered after the last scan kick: checked on main
-		uint32 drawLod(glm::ivec2 coord) const;
-		void registerResident(uint64 key, Resident& resident); // its culling entry: from now on it draws
+		Ring                                m_drawCam;
+		void updateResidency(bool gate);         // evict covered residents, move the draw camera, register the held
+		bool coveredFor(const Resident& old, bool oldVisible, bool gate) const; // its area is drawn by wanted residents
+		bool drawnReady(uint64 key, bool oldVisible, bool gate) const;
+		void registerResident(Resident& resident); // its culling entry: from now on it draws
 		// The render push runs on workers (see render / joinRender): the hand-over walk fans out over a
 		// parallelFor, the sphere query runs beside it as a job of its own.
 		JobCounter                          m_renderCounter;
@@ -328,38 +331,8 @@ export namespace Procedural
 		oc::vector<Renderer::GrassGroundChunk> m_grassGround; // update's per-frame list for Renderer::setGrassGround (kept memory)
 		void noteVegetation(const Resident& resident, uint32 passMask); // the walk job
 		void flushVegetation();                                          // the walk job's end
-		// The ring scan runs on a worker too: kicked at the END of update (after the drain and the
-		// eviction, the frame's last writers of m_residents / m_pending, which it only reads) and
-		// applied at the START of the next one (m_pending inserts, the publish, kickPump). One frame
-		// of request latency against seconds of chunk generation; a scan against a ring that moved
-		// again meanwhile is judged stale by the pump like any other request.
-		void joinRingScan();
-		struct RingScanInput // snapshot taken at kick (the job captures only `this`: inline job storage)
-		{
-			int camCX = 0, camCZ = 0, R = 0;
-			glm::vec2 camChunks = glm::vec2(0.0f);
-			float chunkSize = 0.0f, fullRes = 0.0f, lodStep = 0.0f;
-			uint32 maxLod = 0, lod0Res = 1, generation = 0;
-			DrawCam drawCam; // the current draw camera (the eviction scan's search starts here)
-			bool bounded = false;
-			glm::vec2 boundsMin = glm::vec2(0.0f), boundsMax = glm::vec2(0.0f);
-			oc::shared_ptr<const ITerrainSampler> maps;
-		};
-		JobCounter                          m_ringScanCounter;
-		RingScanInput                       m_ringScanIn;
-		oc::vector<Request>                 m_ringScanOut;
-		// Last ring parameters published to the worker (main-thread copies: the publish is skipped -
-		// no lock taken - while none of them changed and there is nothing new to append).
-		int    m_lastRingCX = INT_MIN;
-		int    m_lastRingCZ = INT_MIN;
-		int    m_lastRingR = -1;
-		float  m_lastRingLodStep = 0.0f;
-		float  m_lastRingFullRes = -1.0f;
-		glm::vec2 m_lastRingCamPos{ 1e30f, 1e30f };
-		uint32 m_lastRingMaxLod = 0xFFFFFFFFu;
-		// The enqueue scan re-runs only when the ring moved or a key left pending/residency (its
-		// result is identical otherwise) - skips (2R+1)^2 hash probes per idle frame.
-		bool   m_ringScanNeeded = true;
+		void stampVegetation(Resident& resident);                        // every base chunk's index from m_vegLookup
+		oc::vector<uint64>                  m_scratchKeys; // updateResidency's resident walk (kept memory)
 	};
 }
 

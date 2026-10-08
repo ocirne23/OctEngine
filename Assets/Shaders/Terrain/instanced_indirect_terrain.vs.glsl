@@ -92,14 +92,22 @@ vec3 quat_transform(vec3 v, vec4 q)
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
-// The streamer's ring LOD of a chunk at its DRAW camera (u_terrain_stitch.yz). MIRRORS Procedural ringLodAt +
-// chunkEdgeDist (TerrainStreamer.cpp) BIT FOR BIT - the same float operations in the same order: both chunks of an
-// edge must get the same answer, and the streamer draws a chunk only while its LOD is at most this.
-uint terrainRingLod(vec2 coord)
+// THE QUADTREE at the streamer's DRAW camera (u_terrain_stitch.yz; base-chunk units). MIRRORS Procedural nodeEdgeDist,
+// ringLodAt and Ring::leafLodAt (TerrainStreamer.cpp) BIT FOR BIT - the same float operations in the same order: both
+// nodes of an edge must get the same answer, and the streamer draws a node only while it lies inside a leaf of this.
+float terrainNodeEdgeDist(ivec2 coord, uint lod)
 {
+    const int span = 1 << lod;
+    const float size = float(span);
+    const vec2 lo = vec2(coord * span);
     const vec2 cam = u_terrain_stitch.yz;
-    const vec2 d = max(max(coord - cam, cam - (coord + 1.0)), vec2(0.0));
-    const float k = max(max(d.x, d.y) - u_terrain_stitchBands.x, 0.0);
+    const vec2 d = max(max(lo - cam, cam - (lo + size)), vec2(0.0));
+    return max(d.x, d.y);
+}
+
+uint terrainRingLod(float edgeDist)
+{
+    const float k = max(edgeDist - u_terrain_stitchBands.x, 0.0);
     const float lodStep = u_terrain_stitchBands.y;
     const uint maxLod = uint(u_terrain_stitchBands.z);
     float threshold = lodStep;
@@ -112,23 +120,37 @@ uint terrainRingLod(vec2 coord)
     return lod;
 }
 
+// The LOD of the leaf over a base chunk: from maxLod down, the first node over it whose band reaches its lod.
+uint terrainLeafLod(ivec2 base)
+{
+    for (uint lod = uint(u_terrain_stitchBands.z); lod > 0u; --lod)
+        if (terrainRingLod(terrainNodeEdgeDist(base >> lod, lod)) >= lod)
+            return lod;
+    return 0u;
+}
+
 // EDGE STITCHING (the terrain has no skirts): an edge vertex takes its height on the edge's COARSER side, so the two
-// chunks of every edge draw the same line. The edge's LOD = the coarser of the two chunks' ring LODs at the draw
-// camera; this chunk is never coarser than its own (the streamer's invariant), so it has every vertex it needs.
-// A corner sits on every lattice; an interior vertex never moves.
-float terrainStitchedHeight(vec3 localPos, vec2 chunkOrigin)
+// nodes of every edge draw the same line. The edge's LOD here = the coarser of the leaves over the two base chunks on
+// either side of this vertex (the same pair from both nodes); this node is never coarser than its own leaf (the
+// streamer's invariant), so it has every vertex it needs. A corner sits on every lattice; an interior vertex never
+// moves. Every node has the same grid, so a level coarser is always every 2nd vertex along the edge.
+float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin)
 {
     const float chunkSize = u_terrain_stitch.x;
     if (chunkSize <= 0.0)
         return localPos.y; // stitching off
+    const uint ownLod = uint(in_stitch.w + 0.5);
+    const int span = 1 << ownLod;
     const bvec2 lo = equal(localPos.xz, vec2(0.0));
-    const bvec2 hi = equal(localPos.xz, vec2(chunkSize));
+    const bvec2 hi = equal(localPos.xz, vec2(chunkSize * float(span)));
     const bool onX = lo.x || hi.x, onZ = lo.y || hi.y; // on the west / east edge, the north / south edge
     if (onX == onZ)
         return localPos.y;
-    const vec2 coord = round(chunkOrigin / chunkSize);
-    const vec2 neighbour = coord + (onX ? vec2(hi.x ? 1.0 : -1.0, 0.0) : vec2(0.0, hi.y ? 1.0 : -1.0));
-    const int delta = min(int(max(terrainRingLod(coord), terrainRingLod(neighbour))) - int(in_stitch.w + 0.5), 3);
+    const ivec2 nodeBase = ivec2(round(nodeOrigin / chunkSize));
+    const int along = int(floor((onX ? localPos.z : localPos.x) / chunkSize)); // exact: a power-of-two step
+    const ivec2 inside = nodeBase + (onX ? ivec2(hi.x ? span - 1 : 0, along) : ivec2(along, hi.y ? span - 1 : 0));
+    const ivec2 outside = inside + (onX ? ivec2(hi.x ? 1 : -1, 0) : ivec2(0, hi.y ? 1 : -1));
+    const int delta = min(int(max(terrainLeafLod(inside), terrainLeafLod(outside))) - int(ownLod), 3);
     return delta > 0 ? in_stitch[delta - 1] : localPos.y;
 }
 

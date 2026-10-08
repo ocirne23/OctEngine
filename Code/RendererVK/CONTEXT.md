@@ -1160,10 +1160,11 @@ the far tiers (the terrain shading taking over the grass look) are not built yet
   (not the lean) eases out between `Wind/Fade start` and `Fade end` (100 / 200 m): far blades moving read as grain.
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
   interpolate the cell's two triangles exactly as `TerrainGenerator.cpp` splits them (`grassGroundHeight`) - the baked
-  height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the chunks within
+  height map (8 m texels) is far too coarse. Procedural's `TerrainStreamer::update` hands the BASE chunks within
   `groundRange()` (+ 16 m: the grass's AND the ground clutter's range) to `Renderer::setGrassGround` EVERY frame (coord,
-  `RenderMesh::getFirstVertex`, grid cells); the list lives ONE frame (a frame without it draws no grass: a disabled
-  terrain or freed chunks are never read). `present` writes it into the slot's host-visible GROUND TABLE
+  the chunk's first vertex in the finest drawn quadtree node over it, its cells per side, and the node meshes' row
+  stride - UBO `present_groundStride`: a base chunk inside a bigger node is a sub-grid of it); the list lives ONE frame
+  (a frame without it draws no grass: a disabled terrain or freed nodes are never read). `present` writes it into the slot's host-visible GROUND TABLE
   (`GrassFrameGpu`: the patch grid + a `GRASS_TABLE_DIM`^2 chunk table around the camera, the finest resident per cell;
   `uploadGrassFrame`) - also with the grass off while the clutter is on (no patch grid then): the clutter cull reads the
   same table (`m_groundTableValid`). The tessellated relief (`terrain_tess.tes.glsl`) is not sampled:
