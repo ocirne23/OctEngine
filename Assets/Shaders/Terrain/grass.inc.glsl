@@ -299,4 +299,25 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     return normalize(n);
 }
 
+// The mesh's RIVER influence at xz (TerrainFields::river: the terrain vertex's u, positionU.w), over the same triangle
+// - what the ground's beach layer sees, so the grass and the clutter leave the same river bed.
+float grassGroundRiver(GrassGround g, vec2 xz)
+{
+    const float res = float(g.res);
+    const vec2 local = clamp((xz - g.chunkOrigin) / g.step, vec2(0.0), vec2(res - 1e-3));
+    const uvec2 cell = uvec2(local);
+    const vec2 f = local - vec2(cell);
+    const uint vpr = u_present_groundStride;
+    const uint a = g.firstVertex + cell.y * vpr + cell.x;
+    const float rb = in_vertices[a + 1u].positionU.w;
+    const float rc = in_vertices[a + vpr].positionU.w;
+    if (f.x + f.y <= 1.0)
+    {
+        const float ra = in_vertices[a].positionU.w;
+        return ra + (rb - ra) * f.x + (rc - ra) * f.y;
+    }
+    const float rd = in_vertices[a + vpr + 1u].positionU.w;
+    return rd - (rd - rc) * (1.0 - f.x) - (rd - rb) * (1.0 - f.y);
+}
+
 #endif

@@ -923,6 +923,33 @@ void Renderer::setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu>
     setHaveToRecordCommandBuffers(); // the draws bind the new buffers
 }
 
+void Renderer::setRiverWaterMap(glm::vec2 origin, oc::span<const float> heights)
+{
+    using namespace RendererVKLayout;
+    m_riverWaterOrigin = origin;
+    if (heights.size() == (size_t)RIVER_WATER_MAP_DIM * RIVER_WATER_MAP_DIM)
+        m_riverWater.assign(heights.begin(), heights.end());
+    else
+        m_riverWater.clear();
+    m_riverWaterDirty.fill(true);
+}
+
+// This slot's inland water map (its fence was waited), when this slot has not taken the current one.
+void Renderer::uploadRiverWaterMap(uint32 frameIdx)
+{
+    using namespace RendererVKLayout;
+    if (!m_riverWaterDirty[frameIdx] || !m_mappedRiverWaterMaps[frameIdx])
+        return;
+    m_riverWaterDirty[frameIdx] = false;
+    RiverWaterMapGpu& map = *m_mappedRiverWaterMaps[frameIdx];
+    map.origin = m_riverWaterOrigin;
+    map.invTexel = 1.0f / RIVER_WATER_MAP_TEXEL;
+    map.dim = m_riverWater.empty() ? 0u : RIVER_WATER_MAP_DIM;
+    if (!m_riverWater.empty())
+        memcpy(map.height, m_riverWater.data(), m_riverWater.size() * sizeof(float));
+    m_riverWaterMaps[frameIdx].flushMappedMemory(m_riverWater.empty() ? offsetof(RiverWaterMapGpu, height) : sizeof(RiverWaterMapGpu));
+}
+
 void Renderer::setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels)
 {
     constexpr size_t TEXELS = (size_t)RendererVKLayout::CLUTTER_FLOOR_DIM * RendererVKLayout::CLUTTER_FLOOR_DIM;

@@ -25,12 +25,12 @@ export namespace Procedural
 	{
 		int32 coarseDomain = 2;     // coarse tiles of margin around the tile
 		float seaDepth = 20.0f;     // model m below sea level that seeds the sea
-		float petPerC = 45.0f;      // mm/yr of potential evaporation per C above -5 C
-		float budykoW = 2.6f;
-		float lakeEvap = 1.1f;      // x the potential evaporation
-		float loss = 0.002f;        // m3/s per km per sqrt(m3/s) per unit of aridity past 1
-		float breachDepth = 30.0f;  // model m
-		int32 lakeMinCells = 1;
+		float petPerC = 64.0f;      // mm/yr of potential evaporation per C above -5 C
+		float budykoW = 5.0f;
+		float lakeEvap = 2.5f;      // x the potential evaporation
+		float loss = 0.001f;        // m3/s per km per sqrt(m3/s) per unit of aridity past 1
+		float breachDepth = 110.0f; // model m
+		int32 lakeMinCells = 30;
 		bool operator==(const RiverConfig&) const = default;
 	};
 

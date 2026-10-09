@@ -35,6 +35,7 @@ TerrainFields terrainFields()
 	f.temperature = in_terrainFields.y;
 	f.humidity = in_terrainFields.z;
 	f.waterLevel = in_terrainFields.w;
+	f.river = in_river; // the mesh vertex's u, interpolated
 	return f;
 }
 

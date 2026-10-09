@@ -52,6 +52,7 @@ public:
         vk::AccelerationStructureKHR tlas;
         vk::ImageView cloudShadowView;  // the cloud Beer shadow map (GENERAL): the sun in-scatter under / in clouds
         vk::Sampler   cloudShadowSampler;
+        Buffer& riverWaterMap;          // this slot's inland water map (RiverWaterMapGpu): the underwater boundary over rivers / lakes
     };
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
 

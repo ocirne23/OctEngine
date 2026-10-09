@@ -33,6 +33,7 @@ namespace
 	// outside (3 cells), plus the talus probe's TALUS_PROBE uphill of it and the rugged measure's RUGGED_CELLS around it.
 	constexpr float GRID_STEP = 8.0f;
 	constexpr uint32 GRID_HALO = 5;
+	constexpr float RIVER_GRID_STEP = 1.0f; // m: the river influence's own grid (channels are ~1-3 m wide at mpp 5)
 	constexpr float ROCK_REACH = 0.5f * ROCK_MAX_SIZE; // m: the largest rock radius (the halo allows up to 15)
 	constexpr float TALUS_PROBE = 6.0f; // m
 	constexpr uint32 RUGGED_CELLS = 2;  // RUGGED ground = the steepest grid cell within this many cells (16-24 m)
@@ -282,6 +283,7 @@ namespace Procedural
 		config->sharpness = glm::max(m_settings.climateSharpness, 0.0f);
 		config->fadeStart = glm::clamp(m_settings.climateFadeStart, 0.0f, 1.0f);
 		config->fadeEnd = glm::clamp(glm::max(m_settings.climateFadeEnd, config->fadeStart + 1e-3f), 0.0f, 1.0f);
+		config->riverClear = Globals::settings.terrain.riverVegetationClear;
 		m_config = config;
 		std::lock_guard<std::mutex> lk(m_mutex);
 		m_pumpConfig = m_config;
@@ -597,12 +599,28 @@ namespace Procedural
 		config.maps->sampleGrid(ox - step * (float)halo, oz - step * (float)halo, step, gpr, gpr, field, ESampleDetail::Full);
 		Globals::jobSystem.preemptionPoint();
 
+		// The river influence on its OWN fine grid over the same extent: most channels are narrower than GRID_STEP, so
+		// the field's points miss them. Cheap - it reads only the river units, not the terrain.
+		const float riverPad = step * (float)halo;
+		const uint32 rpr = (uint32)std::ceil((cs + 2.0f * riverPad) / RIVER_GRID_STEP) + 1;
+		oc::vector<float> riverField((size_t)rpr * rpr);
+		config.maps->sampleRiverGrid(ox - riverPad, oz - riverPad, RIVER_GRID_STEP, rpr, rpr, riverField);
+		const auto riverAt = [&](glm::vec2 local)
+		{
+			// The MAX of the cell's corners: a bed a little narrower than the step still counts across its cell.
+			const glm::vec2 g = glm::clamp((local + riverPad) / RIVER_GRID_STEP, glm::vec2(0.0f), glm::vec2((float)(rpr - 1)));
+			const glm::uvec2 i0 = glm::min(glm::uvec2(g), glm::uvec2(rpr - 2));
+			const size_t a = (size_t)i0.y * rpr + i0.x;
+			return glm::max(glm::max(riverField[a], riverField[a + 1]), glm::max(riverField[a + rpr], riverField[a + rpr + 1]));
+		};
+
 		// The field at a chunk-local point: bilinear in the grid (point (i, j) sits at local (i - halo, j - halo) x
 		// step), clamped to it, with the bilinear patch's gradient.
 		struct FieldSample
 		{
 			float height, water, altitude, temperature, humidity;
 			float dx, dz; // the height's gradient (rise / run)
+			float river;  // the river influence, from the fine river grid (riverAt)
 		};
 		auto fieldAt = [&](glm::vec2 local)
 		{
@@ -616,12 +634,20 @@ namespace Procedural
 			auto lerp2 = [&](float a, float b, float c, float d) { return glm::mix(glm::mix(a, b, f.x), glm::mix(c, d, f.x), f.y); };
 			FieldSample s;
 			s.height = lerp2(p00.height, p10.height, p01.height, p11.height);
-			s.water = lerp2(p00.waterLevel, p10.waterLevel, p01.waterLevel, p11.waterLevel);
+			// The water the ground is measured from: the sea, or a river / lake surface above it - so nothing places in
+			// inland water (its altitude goes negative there).
+			const auto water = [](const TerrainPoint& p)
+			{
+				const bool inland = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake;
+				return inland ? glm::max(p.waterLevel, p.inlandWater) : p.waterLevel;
+			};
+			s.water = lerp2(water(p00), water(p10), water(p01), water(p11));
 			s.altitude = lerp2(p00.altitude, p10.altitude, p01.altitude, p11.altitude);
 			s.temperature = lerp2(p00.temperature, p10.temperature, p01.temperature, p11.temperature);
 			s.humidity = lerp2(p00.humidity, p10.humidity, p01.humidity, p11.humidity);
 			s.dx = glm::mix(p10.height - p00.height, p11.height - p01.height, f.y) / step;
 			s.dz = glm::mix(p01.height - p00.height, p11.height - p10.height, f.x) / step;
+			s.river = riverAt(local);
 			return s;
 		};
 
@@ -666,6 +692,8 @@ namespace Procedural
 		const auto speciesWeights = [&](const FieldSample& at, glm::vec2 world) -> float
 		{
 			const float slope2 = at.dx * at.dx + at.dz * at.dz;
+			if (at.river > config.riverClear)
+				return 0.0f; // a river's bed (Terrain/Rivers/Vegetation clear)
 			const float altitude = at.height - at.water;
 			const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
 			float best = 0.0f;
@@ -805,6 +833,8 @@ namespace Procedural
 						continue; // a neighbour's rock that does not reach this chunk
 
 					const FieldSample s = fieldAt(local);
+					if (s.river > config.riverClear)
+						continue; // a river's bed (Terrain/Rivers/Vegetation clear)
 					const float altitude = s.height - s.water;
 					const float slope = std::sqrt(s.dx * s.dx + s.dz * s.dz);
 					const glm::vec2 climate(glm::clamp((s.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(s.humidity, 0.0f, 1.0f));

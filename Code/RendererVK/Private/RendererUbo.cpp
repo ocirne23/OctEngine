@@ -1097,6 +1097,31 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainWater_glintRoughness", [&] { return glm::clamp(w.wetGlintRoughness, 0.01f, 1.0f); }, w.wetGlintRoughness);
     }
     {
+        // ---- Rivers ("Terrain/Rivers/Surface"): the river / lake water (EPipelineIndex::River, River/river.fs.glsl). Its
+        // RT ranges and toggles are the ocean's ("Ocean/RT").
+        const TerrainSettings& r = Globals::settings.terrain;
+        list.add("river_absorption", [&] { return glm::max(r.riverAbsorption, glm::vec3(0.0f)); }, r.riverAbsorption);
+        list.add("river_scatterColor", [&] { return glm::max(r.riverScatterColor, glm::vec3(0.0f)); }, r.riverScatterColor);
+        list.add("river_roughness", [&] { return glm::clamp(r.riverRoughness, 0.02f, 1.0f); }, r.riverRoughness);
+        list.add("river_invRippleSize", [&] { return 1.0f / glm::max(r.riverRippleSize, 0.05f); }, r.riverRippleSize);
+        list.add("river_rippleStrength", [&] { return glm::max(r.riverRippleStrength, 0.0f); }, r.riverRippleStrength);
+        list.add("river_flowSpeed", [&] { return glm::max(r.riverFlowSpeed, 0.0f); }, r.riverFlowSpeed);
+        list.add("river_lakeRipple", [&] { return glm::max(r.riverLakeRipple, 0.0f); }, r.riverLakeRipple);
+        list.add("river_foamStrength", [&] { return glm::max(r.riverFoamStrength, 0.0f); }, r.riverFoamStrength);
+        list.add("river_foamColor", [&] { return glm::max(r.riverFoamColor, glm::vec3(0.0f)); }, r.riverFoamColor);
+        list.add("river_edgeSoftness", [&] { return glm::clamp(r.riverEdgeSoftness, 0.01f, 1.0f); }, r.riverEdgeSoftness);
+        list.add("river_lakeEdgeFade", [&] { return glm::max(r.riverLakeEdgeFade, 1e-3f); }, r.riverLakeEdgeFade);
+        list.add("river_waveHeight", [&] { return glm::max(r.riverWaveHeight, 0.0f); }, r.riverWaveHeight);
+        list.add("river_waveTiling", [&] { return glm::max(r.riverWaveTiling, 0.01f); }, r.riverWaveTiling);
+        list.add("river_waveRapids", [&] { return glm::max(r.riverWaveRapids, 0.0f); }, r.riverWaveRapids);
+        list.add("river_nearRadius", [&] { return glm::max(r.riverNearRadius, 0.0f); }, r.riverNearRadius);
+        list.add("river_nearDrop", [&] { return glm::max(r.riverNearDrop, 0.0f); }, r.riverNearDrop);
+        list.add("river_fullSizeDepth", [&] { return glm::max(r.riverFullSizeDepth, 1e-3f); }, r.riverFullSizeDepth);
+        list.add("river_smallFlow", [&] { return glm::clamp(r.riverSmallFlow, 0.0f, 1.0f); }, r.riverSmallFlow);
+        list.add("river_wetness", [&] { return glm::clamp(r.riverWetness, 0.0f, 1.0f); }, r.riverWetness);
+        list.add("river_nearCovered", [this] { return m_riverNearCovered; }, UboLive); // RiverSystem, per frame
+    }
+    {
         // ---- Grass ("Grass")
         const GrassParams& g = Globals::settings.grass;
         // Live: THE NEAR GRASS CASCADE (m_grassNear: an ortho box ahead of the camera, standard Z) and the per-frame values.

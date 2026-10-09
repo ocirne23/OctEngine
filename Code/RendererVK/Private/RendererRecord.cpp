@@ -132,6 +132,7 @@ void Renderer::recordTerrainWetness(uint32 frameIdx)
         .terrainSampler = m_terrain.getHeightMap().getSampler(),
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
+        .riverWaterMap = &m_riverWaterMaps[frameIdx],
     };
     m_terrainWetnessPipeline.record(cb, frameIdx, params);
     cb.end();
@@ -749,6 +750,7 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
             .tlas = tlas,
             .cloudShadowView = m_cloudPipeline.getShadowView(),
             .cloudShadowSampler = m_cloudPipeline.getShadowSampler(),
+            .riverWaterMap = m_riverWaterMaps[frameIdx],
         };
         m_volumetricFogPipeline.record(cb, frameIdx, params);
     }

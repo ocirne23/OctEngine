@@ -109,6 +109,10 @@ public:
 
     void kickGridBuilds(); // Call after the frame's LAST light add and the force update.
     void present();
+    // Main thread. The NEXT presented frame is written to `path` (PNG, the whole swapchain image: scene + UI) before it
+    // is presented - independent of the window being in front, covered or on another monitor. Stalls that frame (a
+    // queue idle). See "Screenshots" in the CONTEXT.
+    void requestScreenshot(oc::string path) { m_screenshotPath = oc::move(path); }
 
     void reloadShaders();
     void setWindowMinimized(bool minimized);
@@ -194,6 +198,15 @@ public:
         m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, 0.0f);
         m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, 0.0f);
     }
+    // The river water's NEAR COVERAGE (Procedural RiverSystem): engine m around the centre view inside which every dense
+    // near cell is built - the light ribbons discard their fragments there (river.fs.glsl), so the dense waves are the
+    // only surface. 0 = none. Main thread, read by the next frame's UBO.
+    void setRiverNearCovered(float distance) { m_riverNearCovered = distance; }
+    // THE INLAND WATER MAP (RendererVKLayout::RiverWaterMapGpu; Procedural RiverSystem): RIVER_WATER_MAP_DIM^2 water
+    // surface heights (world Y, RIVER_WATER_NONE = no inland water) of RIVER_WATER_MAP_TEXEL m from `origin` (texel
+    // (0, 0)'s min corner); empty = none. The volumetric fog's underwater boundary over rivers and lakes. Main thread;
+    // each frame slot takes it in present.
+    void setRiverWaterMap(glm::vec2 origin, oc::span<const float> heights);
     using TerrainSplatMaterial = ::TerrainSplatMaterial;
     using TerrainSplatCounts = ::TerrainSplatCounts;
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
@@ -713,6 +726,8 @@ private:
     Rect m_frameRect;                  // change while no job is in flight.
     JobCounter m_beginFrameJobCounter;
     bool m_frameViewSet = false;       // setFrameView ran for this frame (cleared by present)
+    oc::string m_screenshotPath;       // requestScreenshot: written by the next present
+    void captureScreenshot(const oc::string& path);
     bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
     JobCounter m_gridJobCounter;       // Both grid jobs share it; what each measured lives in the object that owns that grid.
     bool m_gridBuildsKicked = false;
@@ -865,6 +880,13 @@ private:
     oc::vector<uint32> m_clutterFloor;                 // the floor map's texels (setClutterFloorMap)
     glm::vec2 m_clutterFloorCentre{ 0.0f };
     oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_clutterFloorDirty{}; // the slot has not taken the map yet
+    // The inland water map (setRiverWaterMap): the CPU copy, and per frame slot its host-visible buffer (fog binding 14).
+    oc::vector<float> m_riverWater;
+    glm::vec2 m_riverWaterOrigin{ 0.0f };
+    oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_riverWaterDirty{};
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_riverWaterMaps;
+    oc::array<RendererVKLayout::RiverWaterMapGpu*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedRiverWaterMaps{};
+    void uploadRiverWaterMap(uint32 frameIdx);
     bool clutterActive() const { return m_clutterParams.enabled && m_sceneViewCount == 1 && m_clutterPipeline.numTypes() > 0; } // desktop only
     float clutterPatchSize() const { return glm::clamp(m_clutterParams.patchSize, 1.0f, 16.0f); }
     void uploadClutterFrame(uint32 frameIdx);
@@ -897,6 +919,7 @@ private:
     TerrainResources m_terrain;
     glm::vec4 m_terrainStitch{ 0.0f };      // setTerrainStitch: x = chunk size (0 = off), yz = the draw camera in chunks
     glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks)
+    float m_riverNearCovered = 0.0f;        // setRiverNearCovered
     PostParams& m_postParams = Globals::settings.post;
     RTParams& m_rtParams = Globals::settings.rt;
     RTAOParams& m_rtaoParams = Globals::settings.rtao;

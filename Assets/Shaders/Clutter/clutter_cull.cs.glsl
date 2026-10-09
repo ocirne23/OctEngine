@@ -105,7 +105,8 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_humidity[i] = climate.w;
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
         return;
-    const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz), TerrainFields(td.w, temperature, climate.w, td.y));
+    const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz),
+        TerrainFields(td.w, temperature, climate.w, td.y, grassGroundRiver(g, xz)));
     s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowW));
 }
 
@@ -114,7 +115,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
 // object on the mesh floats over the relief's hollows and sinks into its bumps. The offset to add to a mesh point:
 // over a footprint (m, 0 = the point alone) the height is between the mean and the lowest of 5 taps - a branch over a
 // bump buries a little rather than float at its ends.
-vec3 clutterRelief(vec3 meshPos, vec3 smoothN, float footprint)
+vec3 clutterRelief(vec3 meshPos, vec3 smoothN, float river, float footprint)
 {
     if (u_terrainTess_enabled < 0.5 || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
         return vec3(0.0);
@@ -123,7 +124,7 @@ vec3 clutterRelief(vec3 meshPos, vec3 smoothN, float footprint)
         return vec3(0.0);
     const vec4 td = terrainDataAt(meshPos.xz);
     const vec4 climate = terrainClimateAt(meshPos.xz);
-    const TerrainLayers L = terrainLayers(meshPos, smoothN, TerrainFields(td.w, terrainTemperatureAt(climate, meshPos.y), climate.w, td.y));
+    const TerrainLayers L = terrainLayers(meshPos, smoothN, TerrainFields(td.w, terrainTemperatureAt(climate, meshPos.y), climate.w, td.y, river));
     const float t = clamp((dist - u_terrainTess_fadeStart) / max(u_terrainTess_fadeEnd - u_terrainTess_fadeStart, 1e-3), 0.0, 1.0);
     const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, smoothN.y);
     const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
@@ -335,7 +336,7 @@ void main()
         const vec3 up = clutterQuatRotate(q, vec3(0.0, 1.0, 0.0));
         // On the DRAWN ground: the mesh point + the tessellated relief there (over the object's footprint).
         const vec3 groundPos = vec3(xz.x, groundY, xz.y);
-        const vec3 relief = clutterRelief(groundPos, grassGroundSmoothNormal(g, xz), kind == CLUTTER_KIND_FLOWER ? 0.0 : 0.35 * radius);
+        const vec3 relief = clutterRelief(groundPos, grassGroundSmoothNormal(g, xz), grassGroundRiver(g, xz), kind == CLUTTER_KIND_FLOWER ? 0.0 : 0.35 * radius);
         const vec3 base = groundPos + relief - up * (type.shape.w * height);
         const vec3 centre = base + up * (0.5 * height);
         bool visible = patchVisible;

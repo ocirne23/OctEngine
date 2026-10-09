@@ -224,6 +224,7 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     f.temperature = 12.5;
     f.humidity = 0.5;
     f.waterLevel = u_terrain_seaLevel;
+    f.river = 0.0; // the seabed has no river bed (the mesh's river value is not read here)
     if (terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(worldPos.xz);

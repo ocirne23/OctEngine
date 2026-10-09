@@ -18,25 +18,36 @@ import :RiverNetwork;
 //     ground, cut off at the unit edge). Inlets inject the coarse Q. The fine runoff of each tile is rescaled to the
 //     coarse pixel's own, so the levels agree on the water budget;
 //   * channels (Q >= the minimum) become segments between heads, junctions, inlets and their ends; each gets a water
-//     profile that never rises downstream (pinned at outlets / the sea / lakes / junctions, and at an inlet's level),
-//     then the paths are smoothed.
+//     profile, upstream segments first, that never rises downstream: it starts at the lowest of its own bed + depth,
+//     its tributaries' water and an inlet's crossing level, follows bed + depth and cuts through a rim in its way (the
+//     carve's gorge). Only the sea and a lake floor it. Then the paths are smoothed: resampled at 1 px, a Gaussian along
+//     the path ("Path smoothing" px, the ends kept), MEANDERED (a sideways swing scaled by the channel width, kept on the
+//     valley floor), Chaikin, Douglas-Peucker.
 // Model frame: model metres, real m3/s. Points are in UNIT-LOCAL native pixels: unit pixel (row z, column x) is global
 // native pixel (ui * tiles * 256 + z, uj * tiles * 256 + x), at engine (global * mpp - origin).
 export namespace Procedural
 {
 	struct RiverUnitConfig
 	{
-		int32 unitTiles = 4;
-		int32 crossWindow = 96;
-		float breachDepth = 8.0f;
-		int32 lakeMinCells = 200;
-		float channelMinQ = 0.3f;
-		float perennialQ = 1.0f;
-		float widthA = 4.0f;
-		float depthC = 0.3f;
+		int32 unitTiles = 8;
+		int32 crossWindow = 64;
+		float breachDepth = 75.0f;
+		int32 lakeMinCells = 8334;
+		float channelMinQ = 1.0f;
+		float fadeQ = 2.0f;     // m3/s past the minimum over which a channel grows to its full width and depth
+		float perennialQ = 0.0f;
+		float widthA = 20.0f;
+		float depthC = 2.0f;
 		float rapidsSlope = 0.05f;
 		float fallSlope = 0.3f;
-		float edgeWall = 15.0f; // model m: water leaves through a non-crossing edge when every outlet climbs more
+		float edgeWall = 12.3f; // model m: water leaves through a non-crossing edge when every outlet climbs more
+		float pathSmoothing = 10.0f; // native px: the Gaussian sigma the D8 path is smoothed with along its length
+		float meanderAmplitude = 1.5f;   // x the channel width
+		float meanderWavelength = 12.0f; // x the channel width
+		float meanderSlope = 0.02f;      // m/m
+		float meanderSmallAmplitude = 2.0f;  // the swing on the smallest stream, x the above (1 at meanderFullQ)
+		float meanderSmallWavelength = 0.5f; // the wavelength on the smallest stream, x the above (1 at meanderFullQ)
+		float meanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set
 		bool operator==(const RiverUnitConfig&) const = default;
 	};
 
@@ -49,12 +60,20 @@ export namespace Procedural
 		c.breachDepth = s.riverUnitBreachDepth;
 		c.lakeMinCells = s.riverUnitLakeMinCells;
 		c.channelMinQ = s.riverChannelMinQ;
+		c.fadeQ = s.riverChannelFadeQ;
 		c.perennialQ = s.riverPerennialQ;
 		c.widthA = s.riverWidthA;
 		c.depthC = s.riverDepthC;
 		c.rapidsSlope = s.riverRapidsSlope;
 		c.fallSlope = s.riverFallSlope;
 		c.edgeWall = s.riverEdgeWall;
+		c.pathSmoothing = s.riverPathSmoothing;
+		c.meanderAmplitude = s.riverMeanderAmplitude;
+		c.meanderWavelength = s.riverMeanderWavelength;
+		c.meanderSlope = s.riverMeanderSlope;
+		c.meanderSmallAmplitude = s.riverMeanderSmallAmplitude;
+		c.meanderSmallWavelength = s.riverMeanderSmallWavelength;
+		c.meanderFullQ = s.riverMeanderFullQ;
 		return c;
 	}
 

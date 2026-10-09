@@ -19,6 +19,7 @@
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal; // geometric (interpolated vertex) normal; terrain builds its own tangent bases
 layout (location = 2) in vec4 in_terrainFields; // VS-evaluated baked fields: x = macro altitude, y = temperature C, z = humidity, w = water level
+layout (location = 4) in float in_river;        // the river influence (TerrainFields::river)
 #ifdef TERRAIN_TESS
 // The tessellated terrain: in_pos is DISPLACED, this is the flat mesh under it - what the shadow map and the TLAS
 // hold. Every shadow / light evaluation uses it (terrain_tess.tes.glsl has why); the splat samples in_pos.

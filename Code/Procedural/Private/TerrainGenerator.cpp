@@ -72,7 +72,12 @@ namespace Procedural
 
 				out.positions.push_back({ lx, y, lz });
 				out.normals.push_back(normal);
-				out.texCoords.push_back({ (float)col / (float)res, (float)row / (float)res, 0.0f });
+				// The UV carries the RIVER, not a texture coordinate (the terrain shades in world space): u = the
+				// river influence (TerrainPoint::river), v = 1 under inland water / on a dry bed. The terrain VS, the
+				// grass and clutter culls read it (terrain_splat.inc.glsl: the bed takes the beach layer).
+				const TerrainPoint& p = at(col, row);
+				const bool inland = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake || p.dryBed;
+				out.texCoords.push_back({ p.river, inland ? 1.0f : 0.0f, 0.0f });
 			}
 			Globals::jobSystem.preemptionPoint(); // nothing half-done between rows
 		}

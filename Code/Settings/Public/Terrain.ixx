@@ -112,7 +112,7 @@ export struct TerrainSettings
 	float wetNormalScale = 2.0f;      // film wave normal strength, x the ocean's "Normal strength"
 	float wetRippleStrength = 0.1f;   // inland wind ripples (0 = off)
 	float wetRoughness = 0.08f;       // the water film's perceptual roughness
-	float wetGroundRoughness = 0.3f;  // ground roughness at full wetness
+	float wetGroundRoughness = 0.48f;  // ground roughness at full wetness
 	float wetDryingPattern = 1.0f;    // 0..1: uniform drying (0) to dry islands (1)
 	float wetDarkeningEdge = 0.5f;    // soft band around the darkening's drying level: wide = smoother fade
 	float wetRoughnessEdge = 0.5f;    // soft band around the gloss's drying level: small = crisp islands
@@ -211,31 +211,82 @@ export struct TerrainSettings
 	bool  v3Fp16 = false;
 
 	// --- "Terrain/Rivers": the drainage network (Docs/RiverPlan.md). MODEL-frame units: model metres, real m3/s.
+	bool  riverEnabled = true;       // the terrain sampler carves the rivers and reports their water (RiverTerrain)
 	bool  riverPreview = true;       // draw the coarse network on the lobby's world preview
 	int   riverCoarseDomain = 2;     // coarse tiles of margin each coarse tile's network is routed with
 	float riverSeaDepth = 20.0f;     // model m below sea level that seeds the sea (V3's sea-level film is not sea)
-	float riverPetPerC = 45.0f;      // potential evaporation, mm/yr per C above -5 C
-	float riverBudykoW = 2.6f;       // the Budyko (Fu) curve's shape: higher = more of the rain evaporates
-	float riverLakeEvap = 1.1f;      // open-water evaporation, x the potential evaporation
-	float riverLoss = 0.002f;        // channel loss in dry land, m3/s per km per sqrt(m3/s) per unit of aridity past 1
-	float riverBreachDepth = 30.0f;  // model m: a shallower depression is cut through, not a lake
-	int   riverLakeMinCells = 1;     // coarse pixels: a smaller depression is cut through, not a lake
+	float riverPetPerC = 64.0f;      // potential evaporation, mm/yr per C above -5 C
+	float riverBudykoW = 5.0f;       // the Budyko (Fu) curve's shape: higher = more of the rain evaporates
+	float riverLakeEvap = 2.5f;      // open-water evaporation, x the potential evaporation
+	float riverLoss = 0.001f;        // channel loss in dry land, m3/s per km per sqrt(m3/s) per unit of aridity past 1
+	float riverBreachDepth = 110.0f; // model m: a shallower depression is cut through, not a lake
+	int   riverLakeMinCells = 30;    // coarse pixels: a smaller depression is cut through, not a lake
 	float riverMapMinQ = 30.0f;      // m3/s: a coarse link the preview draws as a river
 	float riverMapDryCells = 40.0f;  // catchment in coarse pixels: a link this big under the min Q draws as a dry bed
 	// The river UNITS (N x N full tiles, routed at native resolution, joined to their neighbours by crossings).
-	int   riverUnitTiles = 4;          // full tiles per unit side
-	int   riverCrossWindow = 96;       // native px either side of a tile edge's middle that a crossing may move to
-	float riverUnitBreachDepth = 8.0f; // model m: a shallower depression in a unit is cut through, not a lake
-	int   riverUnitLakeMinCells = 200; // native px
-	float riverChannelMinQ = 0.3f;     // m3/s: a channel starts here
-	float riverPerennialQ = 1.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
-	float riverWidthA = 4.0f;          // hydraulic geometry: width = a * Q^0.5 (model m)
-	float riverDepthC = 0.3f;          //                     depth = c * Q^0.4 (model m)
+	int   riverUnitTiles = 8;          // full tiles per unit side
+	int   riverCrossWindow = 64;       // native px either side of a tile edge's middle that a crossing may move to
+	float riverUnitBreachDepth = 75.0f; // model m: a shallower depression in a unit is cut through, not a lake
+	int   riverUnitLakeMinCells = 8334; // native px
+	float riverChannelMinQ = 1.0f;     // m3/s: a channel starts here
+	float riverChannelFadeQ = 2.0f;    // m3/s past the minimum over which a channel grows from nothing to its full size
+	float riverPerennialQ = 0.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
+	float riverWidthA = 20.0f;         // hydraulic geometry: width = a * Q^0.5 (model m)
+	float riverDepthC = 2.0f;          //                     depth = c * Q^0.4 (model m)
 	float riverRapidsSlope = 0.05f;    // water surface slope that marks rapids
 	float riverFallSlope = 0.3f;       // ... and a fall
-	float riverEdgeWall = 15.0f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
+	float riverEdgeWall = 12.3f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
+	float riverPathSmoothing = 10.0f;  // native px: the Gaussian sigma a river's D8 path is smoothed with (0 = the raw staircase)
+	float riverMeanderAmplitude = 0.33f;   // the meanders' sideways swing, x the channel width (0 = off)
+	float riverMeanderWavelength = 12.0f; // their wavelength along the river, x the channel width
+	float riverMeanderSlope = 0.02f;      // water-surface slope (m/m) by which a reach swings at the 30 % floor
+	float riverMeanderSmallAmplitude = 2.0f;  // the swing on the smallest stream, x the amplitude (1 from the full Q up)
+	float riverMeanderSmallWavelength = 0.5f; // the wavelength on the smallest stream, x the wavelength (1 from the full Q up)
+	float riverMeanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set (log Q blend from the min Q)
+	// The CARVE (RiverTerrain): channel -> a curve over the bank and the floodplain -> valley wall, only ever lowering the
+	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
+	float riverChannelDepthScale = 1.0f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
+	float riverChannelMinDepth = 0.2f;    // ... but at least this
+	float riverChannelShape = 3.0f;       // cross-section exponent: 1 = V, 2 = U, higher = flat bottom and steep sides
+	float riverBankHeight = 2.16f;        // the floodplain's outer edge above the water, x the channel depth
+	float riverFloodplainCurve = 1.0f;    // the rise over the bank + floodplain: 1 = straight, 2 = a bowl, higher = flatter near the channel
+	float riverValleyDepth = 0.0f;        // the river and its floodplain sunk this far below the original ground
+	float riverValleyDepthPerQ = 0.5f;    // ... plus this x Q^0.4 (bigger rivers cut deeper valleys)
+	float riverBankFactor = 0.5f;       // bank width, x the channel half-width
+	float riverFloodplainFactor = 0.15f; // floodplain width, x the channel half-width
+	float riverValleySlope = 0.28f;     // the valley wall's slope past the floodplain (m/m)
+	float riverCarveReach = 1500.0f;    // model m: how far the valley wall may run past the floodplain's edge (fades out over it)
+	float riverCarveReachQ = 10.0f;     // m3/s: a river this big gets the whole reach; a smaller one sqrt(Q / this) of it
+	float riverVegetationClear = 0.8f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
 	bool  riverDebugLines = false;     // draw the units around the camera as debug lines
 	float riverDebugRadius = 3000.0f;  // engine m
+	// "Terrain/Rivers/Surface": the water the RiverSurface pipeline draws (RendererVK EPipelineIndex::River,
+	// River/river.fs.glsl) - river ribbons and lake surfaces. World units.
+	bool  riverSurface = true;                                     // draw river and lake water
+	float riverSurfaceRadius = 8000.0f;                            // engine m: units this close get water meshes
+	glm::vec3 riverAbsorption = glm::vec3(0.30f, 0.10f, 0.08f);    // 1/m: Beer-Lambert through the water (red goes first)
+	glm::vec3 riverScatterColor = glm::vec3(0.05f, 0.11f, 0.10f);  // the body's colour where the bed is out of reach
+	float riverRoughness = 0.05f;
+	float riverRippleSize = 4.0f;       // m: the flow ripples' pattern size
+	float riverRippleStrength = 0.12f;  // the noise ripples' slope (fine detail over the FFT waves)
+	float riverFlowSpeed = 1.0f;        // x the river's hydraulic speed: how fast the ripples drift downstream
+	float riverLakeRipple = 0.3f;       // the wind ripples on still lakes, x the ripple strength
+	float riverFoamStrength = 1.0f;     // whitewater on rapids and falls
+	glm::vec3 riverFoamColor = glm::vec3(0.85f, 0.88f, 0.88f);
+	float riverEdgeSoftness = 0.25f;    // a river ribbon fades out over this share of its half-width at each side
+	float riverLakeEdgeFade = 1.0f;     // m of water column a lake fades in over at its shore
+	// The WAVES: the ocean's FFT field (the ocean always runs with the rivers), at "Wave tiling" x its frequency, dragged
+	// downstream. Geometry near the camera (dense cells within "Near radius"), shading everywhere.
+	float riverWaveHeight = 0.15f;      // x the ocean's wave height
+	float riverWaveTiling = 3.0f;       // x the ocean's wave frequency (shorter river waves)
+	float riverWaveRapids = 4.0f;
+	float riverFullSizeDepth = 2.0f;    // engine m of channel depth from which a river has its full waves and flow
+	float riverSmallFlow = 0.3f;        // the flow's speed on the smallest river, x its own (rises to 1 at the full-size depth)       // the waves x (1 + this x the whitewater amount) on rapids and falls
+	float riverNearRadius = 250.0f;     // engine m: the dense wave geometry around the camera (fades out toward it)
+	float riverNearSpacing = 1.0f;      // engine m between the dense mesh's rows
+	int   riverNearAcross = 12;         // vertices across a dense ribbon
+	float riverNearDrop = 0.0f;        // engine m the light ribbon sinks inside the near radius, under the dense waves
+	float riverWetness = 0.6f;         // the terrain wetness under and beside rivers / lakes (0 = none, 1 = soaked)
 };
 
 // "Terrain/Collision": the focus-centered ring of static collider tiles (Procedural TerrainCollider).

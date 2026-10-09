@@ -88,7 +88,7 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
 // Fed like the terrain VS feeds the splat (instanced_indirect_terrain.vs.glsl): the baked fields at the point, the
 // temperature at its height, the smooth mesh normal. No texture set registered yet (the startup bake): no grass.
 // `temperature`: C at the point's height (the blades' cold tint), 12.5 without a map (the terrain VS's fallback).
-float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
+float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temperature)
 {
     temperature = 12.5;
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
@@ -96,7 +96,7 @@ float grassDensityAt(vec2 xz, float h, vec3 smoothN, out float temperature)
     const vec4 td = terrainDataAt(xz);
     const vec4 climate = terrainClimateAt(xz);
     temperature = terrainTemperatureAt(climate, h);
-    const TerrainFields fields = TerrainFields(td.w, temperature, climate.w, td.y);
+    const TerrainFields fields = TerrainFields(td.w, temperature, climate.w, td.y, river);
     // Under a closed canopy a forest floor holds little grass: x (1 - "Canopy thinning" x the crown cover).
     return grassTerrainCover(terrainLayers(vec3(xz.x, h, xz.y), smoothN, fields)) // grass.inc.glsl
         * (1.0 - u_grass_canopyThinning * clutterFloorAt(xz).x);
@@ -133,7 +133,7 @@ void main()
         hMin = min(hMin, h);
         hMax = max(hMax, h);
         float temperature;
-        density[i] = grassDensityAt(corner, h, grassGroundSmoothNormal(g, corner), temperature);
+        density[i] = grassDensityAt(corner, h, grassGroundSmoothNormal(g, corner), grassGroundRiver(g, corner), temperature);
         temperatureSum += temperature;
     }
     const float maxDensity = max(max(density.x, density.y), max(density.z, density.w));

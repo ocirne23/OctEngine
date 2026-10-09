@@ -39,6 +39,7 @@ public:
         vk::Sampler terrainSampler;
         vk::ImageView oceanMapsView;          // FFT displacement maps (the live wave surface)
         vk::Sampler oceanMapsSampler;
+        Buffer* riverWaterMap = nullptr;      // that frame slot's inland water map (RiverWaterMapGpu)
     };
     // Records the per-frame decay + injection dispatch. Runs after the ocean sim (this frame's maps) and
     // before the scene forward pass (which samples the result).

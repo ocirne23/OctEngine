@@ -504,6 +504,7 @@ export namespace RendererVKLayout
         constexpr oc::string_view c_terrainTex[] = { "Terrain/Textures" };
         constexpr oc::string_view c_terrainTess[] = { "Terrain/Tessellation" };
         constexpr oc::string_view c_terrainWater[] = { "Terrain/Water" };
+        constexpr oc::string_view c_rivers[] = { "Terrain/Rivers/Surface" };
         constexpr oc::string_view c_grass[] = { "Grass" };
         constexpr oc::string_view c_clutter[] = { "Clutter" };
         constexpr oc::string_view c_foliage[] = { "Trees" };
@@ -523,6 +524,7 @@ export namespace RendererVKLayout
         { "Terrain textures", UboLockSections::c_terrainTex },
         { "Terrain tessellation", UboLockSections::c_terrainTess },
         { "Terrain water", UboLockSections::c_terrainWater },
+        { "Rivers", UboLockSections::c_rivers },
         { "Grass", UboLockSections::c_grass },
         { "Clutter", UboLockSections::c_clutter },
         { "Trees", UboLockSections::c_foliage },
@@ -652,6 +654,8 @@ export namespace RendererVKLayout
         LitRock        = 13, // the procedural rocks (instanced_indirect_rock.vs/.fs.glsl): lit opaque, no textures
                              // of its own - the CLIMATE's terrain bedrock material, world-space biplanar, plus
                              // the terrain's snow, a ground cover and a contact band. The material is not read.
+        River          = 14, // river and lake water (River/river.vs/.fs.glsl; Procedural RiverSystem's meshes):
+                             // the ocean's shading without its waves, dual-source composited like the ocean
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs
@@ -661,7 +665,8 @@ export namespace RendererVKLayout
     // PIPELINE_TRANSPARENT_MASK (one bit per EPipelineIndex).
     constexpr uint32 PIPELINE_TRANSPARENT_MASK = (1u << (uint32)EPipelineIndex::LitTransparent)
         | (1u << (uint32)EPipelineIndex::UnlitTransparent)
-        | (1u << (uint32)EPipelineIndex::Ocean) | (1u << (uint32)EPipelineIndex::TerrainOverlay);
+        | (1u << (uint32)EPipelineIndex::Ocean) | (1u << (uint32)EPipelineIndex::TerrainOverlay)
+        | (1u << (uint32)EPipelineIndex::River);
     constexpr bool isTransparentPipeline(uint32 pipelineIdx) { return ((PIPELINE_TRANSPARENT_MASK >> pipelineIdx) & 1u) != 0; }
 
     // MaterialInfo::flags bits.
@@ -855,6 +860,21 @@ export namespace RendererVKLayout
         uint32 pad0;
         glm::uvec4 flowerLods[CLUTTER_FLOWER_LODS]; // x first index, y index count (the flower index buffer)
         uint32 floor[CLUTTER_FLOOR_DIM * CLUTTER_FLOOR_DIM];
+    };
+
+    // THE INLAND WATER MAP (host-visible per frame slot, written when it changes; Renderer::setRiverWaterMap): around the
+    // camera, the river / lake water surface Y per texel (or RIVER_WATER_NONE) - the volumetric fog's underwater boundary
+    // for the water the baked terrain map leaves out (it carries the sea only). Procedural RiverSystem bakes it. Its
+    // span covers the fog's underwater near field (vol_scatter.cs.glsl fades that out by 300 m).
+    constexpr uint32 RIVER_WATER_MAP_DIM = 512;
+    constexpr float RIVER_WATER_MAP_TEXEL = 1.25f; // m: 640 m across
+    constexpr float RIVER_WATER_NONE = -1.0e9f;
+    struct RiverWaterMapGpu
+    {
+        glm::vec2 origin; // world XZ of texel (0, 0)'s min corner
+        float invTexel;   // 1 / the texel (m)
+        uint32 dim;       // texels per axis (0 = no map)
+        float height[RIVER_WATER_MAP_DIM * RIVER_WATER_MAP_DIM];
     };
 
     // Local participating-media box, submitted per frame like lights (Renderer::addFogVolume). Density adds

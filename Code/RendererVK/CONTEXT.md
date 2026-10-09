@@ -88,6 +88,16 @@ registration, before the swapchain exists.**
 
 ---
 
+# Screenshots
+
+`Renderer::requestScreenshot(path)` (main thread; App's `--screenshot-after`): the NEXT `present()` writes the
+swapchain image - scene and UI, exactly what is shown - as a PNG, before it presents it (after `vkQueuePresentKHR` the
+image belongs to the presentation engine). `captureScreenshot`: after the frame's submit, a one-shot command buffer on
+the graphics queue (PRESENT_SRC -> TRANSFER_SRC, `copyImageToBuffer` into a host-visible buffer, back to PRESENT_SRC;
+the barrier's first scope covers the frame's submission on the same queue), a queue idle, then BGRA -> RGBA with alpha
+forced to 255 (the scene writes TAA flags there) and `ImageIO::writePngRgba8`. 8-bit RGBA / BGRA swapchains only.
+It stalls that one frame. Independent of the window's focus or occlusion, unlike a screen grab.
+
 # The frame slot fence
 
 `waitFrameSlot(timeoutNs = UINT64_MAX)` blocks until this frame slot's previous GPU submission has
@@ -2378,6 +2388,7 @@ Scene opaque, nearly all with 0 instances.
 | `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes - every value one `add` / `addArray` line with its sources (tweaks = lockable, `UboLive`, `UboPresent`). |
 | `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
 | `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks". |
+| `RendererUbo.cpp` note | compiled with `/bigobj` (RendererVK CMakeLists): one lambda per UBO value passed the COFF section limit in Debug. |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and `Stats`; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
 | `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
@@ -2651,7 +2662,14 @@ Both push params in every frame; the renderer owns none of the tweaks.
   but **that is slot order, not draw order: the shader composites ground → beach → rock → snow**, so
   rock covers the beach. **Beach and snow are OVERLAYS, not materials the climate blend can pick** —
   beach paints over the waterline whatever the climate, and snow paints over everything else, ground
-  AND rock. **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than
+  AND rock. **The beach also paints a river's BED**: `TerrainFields::river` (the river influence, 1 in a channel, 0
+  past its floodplain) over `TERRAIN_RIVER_BED_START..FULL` (0.35..0.75), max'd with the shore band. It comes from
+  the TERRAIN VERTEX's u (`positionU.w`; Procedural writes the river there, the terrain shades in world space and
+  had no use for a UV): the terrain VS reads location 0 as a vec4 and passes `out_river` (location 4) through the
+  tessellation stages to both FSs; the grass and clutter culls read it from the mesh with `grassGroundRiver`, over
+  the same triangle as the height - so the bed's grass and clutter follow the ground's layers. The ocean's seabed
+  splat sets it 0. The RT / GI hit shaders still read that u as a UV for the terrain material's diffuse texture,
+  which the terrain does not have. **Per material THREE textures, packed** (Procedural's bake; one fetch fewer per layer than
   the old four - L1TEX long scoreboard was the top stall of Static meshes, 16.8%, Nsight 2026-09-28):
   diffuse = sRGB albedo + linear ROUGHNESS in the alpha (BC3); normal (BC5 sets
   `MATERIAL_FLAG_BC5_NORMAL`); height = HEIGHT (R, 0.5 = flat) + AO (G) (BC5). **Metalness is always 0**
@@ -2725,6 +2743,73 @@ Both push params in every frame; the renderer owns none of the tweaks.
     the lit core's register peak. **Measure it (pipeline stats + profile) before you extend it.**
   * The ocean's seabed splat has no relief (no derivatives at a ray hit): its layer borders stay linear.
   * The relief also carries the SURFACE WATER: see "Terrain surface water" below.
+
+# River and lake water (`EPipelineIndex::River`, variant 14; "Terrain/Rivers/Surface")
+
+Procedural's `RiverSystem` (Procedural CONTEXT "Rivers") builds ONE `RenderMesh` per river unit - a ribbon per perennial
+segment at the carved water surface and a quad per lake row run at the lake's level - on the River pipeline's one
+material (`createMeshMaterial(River, false)`: not in the TLAS), main pass only (`PASS_MAIN`), pushed every frame like
+the ocean sectors. **The ocean is NOT extended for inland water** (the user, 2026-10-08): the river has its own
+shaders, `River/river.vs.glsl` + `river.fs.glsl`, whose shading is COPIED from `ocean.fs.glsl` without the waves -
+Fresnel (F0 0.02), the RT refraction to the bed (Beer-Lambert both ways, `u_river_absorption`; the bed is the terrain
+splat with the river bed's beach layer, the baked height map where the TLAS cannot answer), the RT mirror (sky fallback,
+reflection fog), the GGX glint, whitewater, the light-grid lights. **Its RT toggles and ranges are the ocean's**: the
+variant gets the ocean's `OCEAN_RT_REFLECTIONS` / `OCEAN_HIT_LIGHTS` defines (not its debug mode) and reads
+`u_ocean_rt*`.
+
+* **The vertex** (river.vs.glsl): `positionU.w` = across the ribbon (-1..1; **2 = a lake**), `normalV.w` = the distance
+  along the river (m), `tangent` = (flow x speed (m/s) in x / z, the whitewater amount in y). No displacement.
+* **THE WAVES are the OCEAN's FFT field** (`River/river_wave.inc.glsl`; the ocean always runs with the rivers - its
+  maps, binding 7, are never stale while a river draws): per cascade the height (layer c) and slope (layer
+  OCEAN_CASCADES + c) at "Wave tiling" x the ocean's frequency and "Wave height" x its height (x (1 + "Wave rapids" x the
+  whitewater)), DRAGGED DOWNSTREAM by the vertex flow with a two-phase flow map (period 2 s, the second phase elsewhere
+  in the field). The FS normal is that slope everywhere (far ribbons and lakes too, lakes x "Lake ripple") plus the noise
+  ripples (below) as finer detail. **Geometry**: the DENSE near-cell ribbons (the vertex normal's x = 1; Procedural
+  RiverSystem, within "Near radius") are displaced by the same height in the VS, faded out over the last 30 % of the
+  radius and the outer 40 % of the width to each bank, a TROUGH soft-limited to 70 % of the water column under the
+  vertex (the normal's z: the channel's cross-section depth, 1e4 on a lake) so a shallow stream never shows its bed
+  through the troughs; the dense LAKE grids take the same waves with the lakes' slow
+  drift x "Lake ripple", to the shore. The LIGHT ribbons and flat lake quads sink "Near drop" out to the radius + 2 near
+  cells (`RIVER_NEAR_CELL` 64 m = RiverSystem's `c_nearCell`, keep in step) and rise back over one more; and **inside
+  `u_river_nearCovered` they DISCARD** (`Renderer::setRiverNearCovered`, live: RiverSystem's distance around the
+  camera within which every near cell is built). Only sunk, a camera inside a deep channel saw the flat ribbon below as a
+  second water layer (2026-10-09); where a cell is not built yet the sunk light surface still shows (no hole). The VS
+  passes the dense mark as `out_dense` (location 3).
+* **SMALL RIVERS** (the user, 2026-10-09): the vertex normal's y carries the channel's centre depth (engine m, lakes
+  1e4); size = it / "Full size depth" (at most 1). The waves scale by size (the VS height and the FS slope,
+  `out_waveSize`, location 4: a fading stream head has none) and the flow by mix("Small river flow", 1, size) (the
+  ripples' drift and the waves' drag). From the full-size depth up a river behaves as set.
+* **The ripples**: a two-phase FLOW MAP over the terrain noise texture's R / G gradient fBms (`u_terrain_noiseTex`),
+  dragged downstream by the vertex flow ("Flow speed"), two scales, "Ripple size" / "Ripple strength"; a lake drifts
+  slowly in one direction and ripples at "Lake ripple".
+* **TURBULENCE is a smooth gradient from calm water, not a kind of water** (the user, 2026-10-09): turb = the vertex
+  whitewater amount (Procedural: a smooth function of the water's slope, blurred along the river) x "Foam strength". As
+  it rises: rougher (+0.12 x turb in alpha^2), a milkier body (aeration 0.6 x turb mixes the in-scatter toward the foam
+  colour and the traced bed toward that in-scatter) and higher waves ("Wave rapids"). **No foam layer on top** (the
+  noise-threshold foam streaks were removed, the user 2026-10-09).
+* **In the transparent family** (`PIPELINE_TRANSPARENT_MASK`), composited DUAL-SOURCE like the ocean (`dualSourceAlpha`,
+  depth write on, no back-face cull): a ribbon fades out over its last "Edge softness" of half-width, a lake over its
+  last "Lake edge fade" of water column (the baked height map) - **inside the NEAR data cascade only**
+  (`nearMapWeight`): the far cascade is the generator's coarse stage, uncarved and smoothed, standing above most lakes,
+  so a lake read against it vanished past "Data map range"; out there it is opaque and the terrain mesh cuts its shore
+  (the body trace's height-map fallback is near-only too). **Writes alpha 0** - TAA's animated-surface flag, as the
+  ocean (the ripples move without motion vectors).
+* **The body trace starts 1 m BACK along the refracted ray** (`traceRiverBody`; the water path counts from the surface):
+  in a shallow stream the TLAS bed (a coarser terrain LOD) can lie at or just above the drawn surface, and a ray from the
+  surface began under it, missed, and showed the flat in-scatter - a bright band along the banks (2026-10-09).
+* UBO section "Rivers" (`river_*`, RendererUbo.cpp), lock section "Rivers" (`c_uboLockSections`: the
+  "Terrain/Rivers/Surface" rows; `river_nearCovered` is `UboLive`).
+* **THE INLAND WATER MAP** (`Renderer::setRiverWaterMap`, `RiverWaterMapGpu`: `RIVER_WATER_MAP_DIM`² texels of
+  `RIVER_WATER_MAP_TEXEL` m around the camera, the river / lake surface Y per texel, `RIVER_WATER_NONE` elsewhere; dim 0
+  = no map). Baked by Procedural's RiverSystem, copied into a per-frame-slot host-visible SSBO (`m_riverWaterMaps`).
+  The terrain-data map's water channel is the sea's only, so the two consumers that need inland water read this:
+  * **the underwater fog** (`vol_scatter.cs.glsl`, binding 14, `riverWaterAt`, nearest texel): where the inland surface
+    lies above the sea's, it is the froxel's underwater boundary (no ocean wave taps there), with `u_river_scatterColor`
+    as the albedo and the calm surface for the light shafts;
+  * **the terrain wetness** (`terrain_wetness.cs.glsl`, binding 4): a wetness texel under inland water OR one map texel
+    from it (the bank band) targets "Terrain/Rivers/Surface/Wetness" (`u_river_wetness`, 0..1, default 0.6), at the base
+    decay; the pass's sideways diffusion carries the wet fringe up the
+    banks, so the terrain film forms there with no river-specific film code.
 
 # The rock material (`EPipelineIndex::LitRock`, variant 13; `RockParams`, "Rocks/Material")
 
@@ -3205,7 +3290,7 @@ ubo.addArray("views_mvp", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].mv
 and its place stay: neither says live or lockable.
 
 * **ONE function, by subject:** `Renderer::registerUboValues` (the end of `RendererUbo.cpp`) has a section per subject
-  (the frame, Sky, Clouds, Shadows, Ray tracing, Fog, Ocean, Terrain, Terrain textures / tessellation / water, Grass,
+  (the frame, Sky, Clouds, Shadows, Ray tracing, Fog, Ocean, Terrain, Terrain textures / tessellation / water, Rivers, Grass,
   Clutter, Trees, Rocks, LOD, Force, Particles, Weather, Post, present), and each section holds its subject's live and
   lockable values side by side, all named `<subject>_<field>` (`fog_density` lockable, `fog_waveBand` live).
 * **LIVE** = everything that also reads the camera, the clock, the sun, the wind, a readback or a value the outside

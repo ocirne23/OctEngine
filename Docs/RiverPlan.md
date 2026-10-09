@@ -1,14 +1,41 @@
 # Rivers and lakes: generation and rendering plan
 
-Status (2026-10-08): **V0 and V1 built** (V0: the coarse network + the lake balance, drawn on the lobby preview; V1:
-the units as debug lines; Procedural CONTEXT "Rivers"). Differences from the plan:
+Status (2026-10-08): **V0, V1, V2 and V3 built** (V0: the coarse network + the lake balance, drawn on the lobby preview;
+V1: the units as debug lines; V2: `RiverTerrain`, the carving sampler; V3: the `River` pipeline - ribbons and lake quads,
+the ocean's shading copied without its waves; Procedural CONTEXT "Rivers", RendererVK CONTEXT "River and lake water").
+Differences from the plan:
+
+* 7.4: no river MAP - the river influence rides the terrain VERTEX (its unused u) instead, read by the terrain splat (the
+  bed takes the beach layer), the grass and the clutter;
+* 7.2: lake surfaces are quads per row run (one pixel wider) with the ground cutting the shoreline, not shoreline
+  polygons; no fall geometry yet (whitewater only); the RT settings are the ocean's;
+* 7.2 (2026-10-09, the user): rivers get REAL WAVES near the camera - dense near-cell meshes displaced by the ocean's FFT
+  field (scaled, dragged downstream); the ocean always runs with the rivers;
+* 5 (2026-10-09): a segment carves with a distance blend of its pieces (not a min over all pieces: a steep reach cut under
+  its own upstream water), and a unit's rivers are sunk under each other's carves on load (`sinkUnderCarves`);
+* 7.3 / 7.4 (2026-10-09): the underwater fog and the bank wetness come from an INLAND WATER MAP (the surface Y on a
+  1.25 m grid around the camera, baked by RiverSystem), not from a river map term: the fog takes it as the underwater
+  boundary; the wetness pass wets everything under it plus one texel past its edge, and its diffusion wets the banks;
+
+* 5 / 7.1: the inland water is a SEPARATE field (`TerrainPoint::inlandWater` + `waterKind`); `waterLevel` stays the sea's,
+  so the bake needs no gate - the ocean never sees rivers or lakes by construction;
+* 4.6.4: the profile has pure BREACH semantics, profiled upstream first (never rises downstream, cuts rims; only the sea
+  and lakes floor it) instead of the fill walk - pinning ends made rivers stand at basin-rim height above the ground;
+  so the two sides of a crossing are not forced to one level;
+* 5.3: Coarse queries pass straight through (no coarse lakes in the far cascade yet);
+* 5 step 4: no explicit detail mask - inside the channel the carve replaces the ground; the banks keep the crags;
+* a lake's water is per nearest native pixel (5 m steps at mpp 5) - the V3 lake meshes take the shoreline;
+* trees and rocks already keep out of inland water (TreeWorld's water term), ahead of V5;
 
 * the coarse network is NOT disk-cached (its inputs are; a domain routes in milliseconds);
 * a depression under the breach limits passes its water through without a carve (carving is V2);
 * units are a fixed N everywhere - "the bounded area as one unit" (11.1) is not built;
-* no meanders yet (4.6.3, decision 11.5 open): the paths are the smoothed D8 paths;
-* the outlet agreement blend (4.3.6) is not built: a crossing keeps the coarse Q, the upstream unit its fine Q;
-* the per-unit segment GRID (4.7) is not built - V2 builds it for the sampler's lookups;
+* meanders (4.6.3, decision 11.5: procedural, 2026-10-09) swing EVERY reach, not only flats - weaker on steep water and
+  pulled back where they would climb out of the valley floor;
+* rapids are not a reach type: the whitewater is a smooth gradient of the water's slope (the user, 2026-10-09);
+* the outlet agreement (4.3.6) blends Q only (the last 24 px of the upstream segment into the crossing's coarse Q), and
+  both segments end / start on the shared tile-boundary point;
+* the per-unit segment GRID (4.7) is not stored on disk: `RiverTerrain` builds it when it loads a unit;
 * a unit is disk-cached only when all the tiles it reads lie inside the generated bounds;
 * 4.4 / decision 11.3: the unit edge away from the crossings is a SOFT wall ("Edge wall" m), not a wall - a stream
   whose basin really drains across it ends at the edge, and a basin spilling through it is never a lake. Hard walls

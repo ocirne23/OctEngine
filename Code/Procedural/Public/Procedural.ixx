@@ -12,6 +12,7 @@ export import :TerrainStreamer;
 export import :RiverRouting;
 export import :RiverNetwork;
 export import :RiverUnits;
+export import :RiverTerrain;
 export import :RiverSystem;
 export import :TerrainPreview;
 export import :TerrainCollider;

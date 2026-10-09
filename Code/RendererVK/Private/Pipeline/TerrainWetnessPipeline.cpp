@@ -37,6 +37,7 @@ void TerrainWetnessPipeline::buildLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // the inland water map
     // Binding 2 (terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags[2] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
@@ -146,7 +147,7 @@ void TerrainWetnessPipeline::record(CommandBuffer& commandBuffer, uint32 frameId
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
 
-    oc::array<DescriptorSetUpdateInfo, 4> updates{
+    oc::array<DescriptorSetUpdateInfo, 5> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo->getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage,
@@ -155,6 +156,8 @@ void TerrainWetnessPipeline::record(CommandBuffer& commandBuffer, uint32 frameId
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.terrainSampler, .imageView = params.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.oceanMapsSampler, .imageView = params.oceanMapsView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer,
+            .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.riverWaterMap->getBuffer(), .range = vk::WholeSize } } },
     };
     vk::DescriptorSet set = m_sets[frameIdx].getDescriptorSet();
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_pipeline.getPipeline());

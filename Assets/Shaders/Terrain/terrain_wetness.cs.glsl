@@ -38,6 +38,26 @@ layout (binding = 1, r16f) uniform image2DArray u_wet;
 #define UNDERWATER_OCEAN_BINDING 3
 #include "underwater_light.inc.glsl"
 
+// The inland water map (RiverSystem's bake, Renderer::setRiverWaterMap): the river / lake surface Y per texel,
+// RIVER_WATER_NONE elsewhere. The terrain-data map's water channel is the sea's only, so rivers and lakes wet the
+// ground through this instead.
+layout (binding = 4, std430) readonly buffer InRiverWaterMap
+{
+    vec2 rw_origin;
+    float rw_invTexel;
+    uint rw_dim;
+    float rw_height[];
+};
+bool riverWaterAt(vec2 worldXZ)
+{
+    if (rw_dim == 0u)
+        return false;
+    const ivec2 t = ivec2(floor((worldXZ - rw_origin) * rw_invTexel));
+    if (any(lessThan(t, ivec2(0))) || any(greaterThanEqual(t, ivec2(int(rw_dim)))))
+        return false;
+    return rw_height[uint(t.y) * rw_dim + uint(t.x)] > -1.0e8;
+}
+
 const int WET_MASK = TERRAIN_WET_RES - 1;
 
 // Last frame's wetness of an absolute lattice coord; `fallback` where the coord was outside last frame's
@@ -120,6 +140,20 @@ void main()
             const float gz = (terrainHeightAt(worldXZ + vec2(0.0, h)) - terrainHeightAt(worldXZ - vec2(0.0, h))) * (0.5 / h);
             const float ny = inversesqrt(1.0 + gx * gx + gz * gz); // the surface normal's Y
             soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWater_slopeDrain);
+        }
+    }
+    // Rivers and lakes: under their water, plus a bank band one map texel wide past the water's edge, wets up to
+    // "Terrain/Rivers/Surface/Wetness"; the diffusion above spreads the fringe up the banks. Independent of the
+    // terrain-data map.
+    if (target < u_river_wetness)
+    {
+        const float r = 1.0 / max(rw_invTexel, 1e-6);
+        if (riverWaterAt(worldXZ) || riverWaterAt(worldXZ + vec2(r, 0.0)) || riverWaterAt(worldXZ - vec2(r, 0.0)) ||
+            riverWaterAt(worldXZ + vec2(0.0, r)) || riverWaterAt(worldXZ - vec2(0.0, r)))
+        {
+            target = u_river_wetness;
+            dryMul = 1.0;
+            decay = u_terrain_wetDecay;
         }
     }
     // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt =

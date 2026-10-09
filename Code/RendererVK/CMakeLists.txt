@@ -13,6 +13,9 @@ target_sources(${PROJECT_NAME} PRIVATE FILE_SET headers BASE_DIRS "${ROOT_DIR}/A
 source_group(TREE "${ROOT_DIR}/Assets/Shaders" PREFIX "Private/Shaders" FILES ${PROJECT_SHADER_FILES})
 source_group("Private/Util" FILES ${EXTRA_MODULE_FILES})
 
+# registerUboValues: one lambda per UBO value (~600) passes the COFF 65k-section limit in Debug (/ZI /JMC).
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/Private/RendererUbo.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/Public")
 

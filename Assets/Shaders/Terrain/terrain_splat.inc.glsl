@@ -53,12 +53,19 @@
 #define TERRAIN_POM 0
 #endif
 
+// The river influence over which a river's bed takes the beach layer (0 = past the floodplain, 1 = the channel): the
+// beach in the channel, blending into the terrain texture across the WHOLE floodplain band (the user, 2026-10-09).
+#define TERRAIN_RIVER_BED_START 0.0
+#define TERRAIN_RIVER_BED_FULL 1.0
+
 struct TerrainFields
 {
 	float altitude;    // macro altitude (m above sea level)
 	float temperature; // Celsius
 	float humidity;    // [0,1]
 	float waterLevel;  // world Y of the local water surface
+	float river;       // the river influence: 1 in a channel, 0 past its floodplain (the terrain vertex's u - Procedural
+	                   // TerrainGenerator; the culls read it from the mesh like the height: grassGroundRiver)
 };
 
 struct TerrainSample
@@ -411,10 +418,15 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	const vec2 climate = vec2(clamp((f.temperature + 25.0) / 75.0, 0.0, 1.0), f.humidity);
 	const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
 
-	// Beach: the band just above the local waterline.
+	// Beach: the band just above the local waterline - and a river's BED (the channel, fading out over the whole
+	// floodplain), so the sand takes the bed and the grass that grows on the ground layer thins toward it.
 	float16_t beachW = float16_t(0.0);
 	if (u_terrain_hasBeach > 0.5)
-		beachW = float16_t(1.0 - smoothstep(0.3, max(u_terrainTex_beachBand, 0.31), worldPos.y - f.waterLevel));
+	{
+		const float shore = 1.0 - smoothstep(0.3, max(u_terrainTex_beachBand, 0.31), worldPos.y - f.waterLevel);
+		const float bed = smoothstep(TERRAIN_RIVER_BED_START, TERRAIN_RIVER_BED_FULL, f.river);
+		beachW = float16_t(max(shore, bed));
+	}
 
 	// Rock: too steep OR standing too far above the macro altitude (crag). max(), not a sum -
 	// the two coincide on a cliff. On V3 terrain crag is what puts rock on mountains (the 30 m/px field

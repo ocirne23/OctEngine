@@ -46,6 +46,17 @@ export namespace Procedural
 		return f < 0.0f ? 0.0f : (f > FOG_FALLOFF_MUL_MAX ? FOG_FALLOFF_MUL_MAX : f);
 	}
 
+	// What water a point is under. `waterLevel` is ALWAYS the sea's (the ocean, its swash, its buoyancy and the bake's
+	// water channel ride it); inland water - a river, a lake - is `TerrainPoint::inlandWater` instead, drawn by its
+	// own pipeline (Docs/RiverPlan.md 7.1).
+	enum class ETerrainWater : uint8
+	{
+		None,
+		Sea,
+		Lake,
+		River,
+	};
+
 	// Every field the terrain-data bake needs, from ONE evaluation. Sampling these one at a time is fine
 	// for a noise field but not for a generator with a per-point cost (V3 does a tile lookup + bilinear per
 	// call, so the six separate calls were six times the work).
@@ -75,6 +86,12 @@ export namespace Procedural
 		// evaluating at any height then returns it unchanged, so the two agree by construction.
 		float temperatureSeaLevel = 15.0f;
 		float flowAngle01 = -1.0f;   // angle/2pi in [0,1), or < 0 for no direction
+		// Rivers and lakes (a generator with no inland water leaves these at their defaults).
+		float inlandWater = 0.0f;    // the river / lake surface Y (m), valid when waterKind is Lake or River
+		float river = 0.0f;          // 0..1: 1 in a channel, fading out over its banks and floodplain
+		float riverQ = 0.0f;         // the nearest channel's discharge, m3/s
+		ETerrainWater waterKind = ETerrainWater::None;
+		uint8 dryBed = 0;            // 1 in the channel of a dry (ephemeral) river, or on a salt pan
 	};
 
 	// How much fidelity a query needs.
@@ -121,6 +138,13 @@ export namespace Procedural
 		// a point-at-a-time loop means a quarter-million lock/unlock pairs contending with the mesh worker.
 		virtual void sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
 		                        oc::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const = 0;
+
+		// The river influence ALONE (TerrainPoint::river: 1 in a channel, 0 past its floodplain) on the same grid layout as
+		// sampleGrid, without the terrain - cheap enough for a grid far finer than the terrain one. Channels are often
+		// narrower than a placement grid's step, so placement asks for this at its own resolution. A generator with no
+		// rivers writes 0.
+		virtual void sampleRiverGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
+		                             oc::span<float> outInfluence) const = 0;
 
 		// Terrain surface height in world meters (Y).
 		virtual float sampleHeight(double worldX, double worldZ) const = 0;

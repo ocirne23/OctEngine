@@ -70,8 +70,11 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
 `shared_ptr<const ITerrainSampler>`, **so workers finish against old maps across rebuilds.**
 
 * **`samplePoint`** fills a `TerrainPoint` — height, waterLevel, altitude, temperature (°C), humidity,
-  fogThickness, fogFalloffMul, `temperatureSeaLevel`, flowAngle01 — **from ONE evaluation.** Sampling
+  fogThickness, fogFalloffMul, `temperatureSeaLevel`, flowAngle01, and the inland water (`inlandWater`, `river`,
+  `riverQ`, `waterKind`, `dryBed` - "Rivers: the sampler"; `waterLevel` is always the SEA's) — **from ONE evaluation.** Sampling
   these one at a time is fine for a noise field but not for a generator with a per-point cost.
+* **`sampleRiverGrid`** fills the river influence ALONE on a grid (no terrain): placement asks for it at a resolution
+  finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
   consumers should always prefer it.** For V3 it is the difference between a shared-cache lock per
   point and one per tile: *a terrain-data cascade is 512² texels resolving to a couple of dozen tiles,
@@ -216,8 +219,8 @@ lowest pixel. The coarse level runs it D4 (a coarse link is a tile edge); the un
 
 ## Rivers: the units (`:RiverUnits`, `:RiverSystem`)
 
-V1 built 2026-10-08 (debug lines only; the sampler does not read them yet). **A unit = N x N full tiles** ("Unit
-tiles", default 4) on a fixed model-space lattice, routed at native resolution by `buildRiverUnit`
+V1 built 2026-10-08, carved into the sampler since V2 (below). **A unit = N x N full tiles** ("Unit
+tiles", default 8) on a fixed model-space lattice, routed at native resolution by `buildRiverUnit`
 (`RiverUnits.cpp`, Docs/RiverPlan.md 4.2-4.7):
 
 * **Crossings** = the coarse links across the unit's edge (or into one of its missing tiles). The point is the low
@@ -225,6 +228,11 @@ tiles", default 4) on a fixed model-space lattice, routed at native resolution b
   middle) - **both units read the same two tiles, so they pick the same point**. Q = the coarse link's, water level
   = bed + depth(Q). Outlets are flood seeds, inlets inject their Q. A tile whose coarse water ends in it (dir None)
   with no native sea drains to its lowest pixel.
+* **The two sides of a crossing MEET**: the inlet's segment starts and the outlet's segment ends on the shared point
+  on the tile boundary between the two border pixels (both units compute it), with the crossing's Q; the outlet side
+  blends its own fine Q into the crossing's over its last 24 px (width, depth and valley follow Q) and ends at or
+  below the crossing's level. Before, the river stopped a pixel short on each side and changed width and height at
+  the unit edge.
 * **Every other edge pixel is a SOFT wall**: a seed ordered "Edge wall" model m above its ground
   (`DrainageSeed::priority`), so water leaves there only when every way to an outlet climbs more, and its segment ends
   `ERiverEnd::Edge` (the neighbour does not continue it). **A basin that spills through a soft seed is never a lake**
@@ -234,18 +242,124 @@ tiles", default 4) on a fixed model-space lattice, routed at native resolution b
   the budget.
 * **Channels** (Q >= "Channel min Q", outside lake basins) become segments from heads / junctions / inlets to a
   junction, an outlet, the sea, a lake basin's rim, a sink or dry (losses took the water). Segments are profiled
-  downstream-first: walking up from the pinned end, W = max(W below, bed + depth); an inlet pins the start at its
-  crossing level and caps the rest. Then Chaikin x2 + Douglas-Peucker (0.2 px). Points carry W, half-width, depth, Q
-  and rapids / fall flags (by the W slope); a segment never above "Perennial Q" is ephemeral.
+  **UPSTREAM first with pure breach semantics**: a segment starts at the lowest of its own bed + depth, the water its
+  tributaries bring and (an inlet) its crossing's level, then W = min(W above, bed + depth) - it never rises, so a rim
+  in its way is CUT (the carve's gorge), never filled. Only the sea (0) and a lake (its level) floor it. (The first
+  version floored each segment at the level its downstream segment STARTED at - in a filled basin that is the rim, so
+  whole rivers stood at rim height over the basin floor. An outlet crossing's level no longer floors the upstream side
+  either, so the two units can meet at slightly different levels at a crossing.) Then the PATH SMOOTHING: the D8 path (straight runs at 0 / 45 / 90 degrees with sharp kinks - the first
+  version only rounded each kink inside a pixel and the rivers looked angular) is resampled at 1 px of arc length and
+  Gaussian-averaged along its length ("Path smoothing (px)", sigma, default 10 = 50 world m at mpp 5); the window shrinks
+  symmetrically toward the ends, so junctions and crossings stay put. Then the MEANDERS (`meander`; the user: "rivers
+  are basically never straight for long"): a sideways swing, two sines over an ACCUMULATED phase - wavelength "Meander
+  wavelength" x the channel width (it follows the width as it changes; at least 4 px, the width at least 0.2 px), swing
+  "Meander amplitude" x the width - SMALL STREAMS wind tighter and wider in widths: x "Meander small wavelength" / x
+  "Meander small amplitude" at "Channel min Q", blending (log Q) to x 1 at "Meander full Q" - phase from
+  the segment's start in global pixels - faded to 0 within half a wavelength of each end, shrunk toward 30 % as the water
+  steepens past "Meander slope", and KEPT ON THE VALLEY FLOOR: where the swung point's ground stands more than the
+  channel's depth above its own, the swing halves (up to three times, else none), box-smoothed along the path. Then
+  Chaikin x2, then THE GROUND CLAMP (`clampToGround`): W was walked along the raw D8 pixels and the shaping moved the
+  path with W tied to its arc position, so where the final path lies over LOWER ground W stood in the air (seen
+  2026-10-09; the carve only lowers). On the final path W <= the ground under it + the channel's depth, then a running
+  min downstream again. Then Douglas-Peucker that keeps a
+  point when EITHER its plan offset passes 0.1 px OR its W passes 0.25 model m from the interpolation - W is linear
+  between the kept points, and the plan-only version kept just the ends of a reach that was straight in plan but
+  dropped into a canyon partway, so the water sloped through the air over the drop. Points carry W, half-width, depth, Q and rapids / fall flags (by
+  the W slope); a segment never above "Perennial Q" is ephemeral.
 * **Lakes** are stored as wet-pixel row runs plus a level and kind per lake.
 * **Disk cache** `Local/Diffusion/<seed>/river_x<j>_z<i>_n<N>.rvu`, keyed by a hash of every river setting and the
   generator's climate shaping. **Only a unit whose tiles and edge neighbours all lie inside the generated bounds is
   cached** - past them the result depends on which tiles exist.
 
-`RiverSystem` is a TerrainStreamer MEMBER (no global): `rebuildMaps` hands it the live generator, `update` runs after
-`updateTerrainTextures`. One Low job builds the nearest missing unit inside "Debug radius" (a cold unit fetches its
-tiles - the fiber parks); units past 1.5 x the radius go. **In V1 units build only while "Debug lines" is on.** Lines:
-channels blue by Q, ephemeral tan, rapids orange, falls red, outlet / inlet ticks magenta / green, lake row hatching.
+`RiverSystem` (the WATER and the debug view) is a TerrainStreamer MEMBER (no global): `rebuildMaps` hands it the live
+`RiverTerrain`, `update` runs after `updateTerrainTextures` (after beginFrame: it pushes nodes). One Low job pulls the
+nearest missing unit inside max("Surface/Radius" while the water is on, "Debug radius" while the lines are) from the
+sampler's store (built there if not resident); units past 1.5 x the radius go. **The water** (V3, "Terrain/Rivers/
+Surface"): the pull job also builds the unit's water mesh (`buildSurfaceMesh`, pure): a RIBBON per perennial segment at
+the carved water surface (`RiverCarveConfig::surface`), 1.2 x the channel's half-width (the carved bank hides the rest),
+with the Manning-like flow speed and the WHITEWATER per vertex - a smooth measure of how steep the carved water runs
+(0 below half "Rapids slope", 1 at "Fall slope", eased; blurred along the river - `segmentWater`), not the rapids / fall
+flags, which only colour the debug lines; a QUAD per lake row run at the lake's level,
+one pixel wider all round (the ground cuts the shoreline; pans have none). Main uploads it (`createMesh`, no BLAS) and
+spawns ONE node at the unit's origin at sea level, `PASS_MAIN`, pushed every frame inside the radius. Drawn by RendererVK's
+River variant (RendererVK CONTEXT "River and lake water"). Toggling "Surface/Enabled" re-pulls the units.
+**The near cells** (the waves' geometry): 64 m squares (`c_nearCell`, = the shader's `RIVER_NEAR_CELL`) whose centre is
+within "Near radius" + one cell, each ONE dense mesh of every perennial river crossing it (`buildNearCellMesh`: each
+segment's water - `segmentWater`, shared with the light ribbons so the two lie on one another - resampled every "Near
+spacing" m, "Near across" vertices wide; a row pair belongs to the cell its first row lies in), built nearest first on
+their own Low job from the resident units near the cell, one node per cell at its origin, `PASS_MAIN`. A cell also
+holds a dense LAKE grid: every `spacing` m a vertex where a wet lake pixel lies within one pixel (the flat quads' margin),
+at that lake's level, a quad where all four corners are in - the VS gives it the lakes' waves. Each frame RiverSystem
+reports the NEAR COVERAGE (`Renderer::setRiverNearCovered`: the nearest missing cell's centre less half its diagonal,
+at most the radius); the light ribbons and flat lake quads discard inside it. A unit adopted or
+evicted bumps the unit generation: every cell goes STALE and keeps its mesh until its rebuild lands; a near-mesh setting
+change drops them. Lines: channels blue by Q, ephemeral tan, rapids orange, falls red, the channel's edges white and the
+carved bed's outer edge (half-width x (1 + bank + floodplain)) dim green, outlet / inlet ticks magenta / green,
+lake row hatching.
+**The inland water map** (`updateWaterMap`): `RIVER_WATER_MAP_DIM`² texels of `RIVER_WATER_MAP_TEXEL` m around the
+camera, each the inland surface Y at its centre (`RiverTerrain::sampleInlandWaterGrid`: the river's calm carved surface
+inside its channel, else a lake's level; units only, no terrain), baked on a Low job when the camera has moved
+`c_waterMapMove` from the last bake's centre or the unit generation changed, handed to `Renderer::setRiverWaterMap`.
+RendererVK's underwater fog and terrain wetness read it (RendererVK CONTEXT "River and lake water").
+
+## Rivers: the sampler (`:RiverTerrain`)
+
+V2 built 2026-10-08. **`RiverTerrain` is an `ITerrainSampler` that WRAPS the `TerrainGenV3`** - a wrapper, not a part
+of the generator, because the units are built from the generator's tiles. `rebuildMaps` publishes it as THE maps when
+"Terrain/Rivers/Enabled" (default on), so the chunks, the collider, both bakes and the tree / rock records sample the
+carved terrain with no change of their own. Every river row except the preview / debug ones is a streamer
+config-dirty listener (a rebuild; the units then reload from disk).
+
+* **The unit store**: `unit(ui, uj)` builds (or loads) on first touch, BLOCKING like a tile miss; concurrent requesters
+  park on the unit's `JobEvent`, one builds; FIFO-evicted past 256. `resolve` takes every unit within the carve reach
+  of the query rect ONCE (sampleGrid: per unit, not per point), skipping units with no tile in the generated bounds.
+  On load a unit is PREPARED: a 16 px grid over the unit grown by the reach, listing the pieces (point k -> k+1) whose
+  reach touches each cell - so a query also finds a NEIGHBOUR unit's river near the edge - and per-row lake-run offsets.
+  **A cell lists its pieces segment by segment** (the carve relies on it). Then its water is SUNK UNDER THE OTHER RIVERS'
+  CARVES (`sinkUnderCarves`, on a copy - the store's unit and the disk cache stay as built): the profile walked the
+  UNCARVED ground, but another river's valley wall cuts the hillside down to "Valley slope", so a steep stream on a big
+  river's valley side stood tens of metres above the carved ground (2026-10-09). Each point's surface is held at or
+  below the ground the other segments' carves leave there (never below that river's own surface), non-rising
+  downstream, two passes; the rapids / fall marks are re-derived. Only the unit's own rivers: a neighbour unit's wall
+  across the boundary is not seen.
+* **The carve** (model frame, per piece, d = distance from the centre line; the unit's W, half-width w, depth and Q
+  interpolated). **The water surface S is the unit's W minus its depth** (the profile puts W a hydraulic depth ABOVE the
+  ground under it - carving to W left the channel centre uncut and the water floating, 2026-10-08) **minus the valley
+  incision** "Valley depth" + "Valley depth per Q" x Q^0.4 (`RiverCarveConfig::surface`). The channel depth
+  D = max(depth x "Channel depth scale", "Channel min depth"). Cross-section: bed S - D rising as |d/w|^"Channel shape"
+  (1 V, 2 U, more = box) to S at d = w, then ONE CURVE over the bank and the floodplain (w x ("Bank factor" +
+  "Floodplain factor") wide) rising "Bank height" x D as (x / width)^"Floodplain curve" (1 straight, 2 a bowl), then the
+  valley wall at "Valley slope". **The floodplain is always carved whole**: "Carve reach" is how far the WALL may run
+  past the floodplain's edge (fading out over its last 30 %), **scaled with the water**: the whole reach from "Carve
+  reach Q" up, sqrt(Q / it) of it below, x the channel's growth (below) - a small stream cuts a small valley, a head
+  none (`RiverTerrain::wallReach`); a piece's reach = its floodplain edge (capped at 1500 model m, the lookups' bounded
+  margin) + that. **THE GROWTH** (unit build, `RiverUnits.cpp`): a channel's width and depth rise smoothly from 0 at
+  "Channel min Q" to the hydraulic geometry at min Q + "Fade Q", so a stream fades in at its head and out where its
+  water drains away - the ribbon, the carve and the influence all follow. Depths are MODEL m (/ 6 in the world at mpp 5); all
+  of these are carve-time only (no unit rebuild, a maps rebuild). Near the coast the incision can sink the valley floor
+  below sea level, and the sea then floods it (an estuary). **It only ever lowers** (soft min with the ground),
+  the wall fades out as above (`pieceCarve`). **A SEGMENT carves with the 1 / d^6 blend of its pieces' carves**
+  (`segmentWeight`, d model m: its own piece alone on the river line, a continuous ramp where two parts of one river
+  meet), and the segments compose by min. A min over every piece let a reach steeper than "Valley slope" cut under its
+  OWN upstream water (the downstream pieces' lower walls reached back up the river line); the nearest piece alone left
+  cliffs where it switched. **A pure function of (x, z), never of the
+  grid step** - the terrain's edge stitch interpolates the finer node's own samples, so a step-dependent carve would
+  crack. Inside the channel the carve replaces the ground, so the crag detail is gone there without a mask.
+* **Water**: inside a perennial channel `waterKind = River`, `inlandWater` = S (world; the debug lines draw S too), `flowAngle01` = the piece's
+  direction, `riverQ`; an ephemeral channel or a pan sets `dryBed`; a lake's wet pixel (nearest native pixel) sets
+  `waterKind = Lake` + its level where above the ground, and `river` = 1 over a lake's wet pixels fading to 0 within
+  1.5 px of them (the beach on the bed and the shoreline, no grass / clutter under the water). `river` = 1 in the channel fading to 0 at the floodplain's
+  edge. **`waterLevel` stays the sea's** (TerrainPoint, `ETerrainWater`), so the ocean, its swash, its buoyancy and the
+  bake's water channel never see inland water - no gate in the bake. Coarse queries pass straight through.
+* **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river` into the vertex's u
+  and 1 (inland water / dry bed) into its v - not a texture coordinate any more. The splat paints the bed with the
+  beach layer and the grass / clutter culls read the same value (RendererVK CONTEXT "Terrain and ocean integration").
+  Its resolution is the drawn node's vertex spacing (2 m at LOD0).
+* TreeWorld's water term (trees AND rocks) takes `max(sea, inlandWater)` where there is inland water, so nothing places
+  in a lake. **A river's bed is kept clear by its INFLUENCE instead** ("Vegetation clear": no tree or rock where
+  `river` is above it), read from its OWN 1 m grid (`ITerrainSampler::sampleRiverGrid`: the influence alone, from the
+  river units, no terrain - cheap), the MAX of the cell's corners. At mpp 5 most beds are 1-3 m wide: the 8 m terrain
+  field's points (and even its corner max) missed them, and trees stood in them.
 
 ## Generated bounds and the cache-only state
 

@@ -22,6 +22,7 @@ layout (location = 2) in vec4 in_terrainFields; // VS-evaluated baked fields: x 
 // point under it - what the shadow map and the TLAS hold, and what the relief is measured from - is rebuilt at
 // each use from the interpolants (a macro: nothing holds it live).
 layout (location = 3) in float in_meshLift;
+layout (location = 4) in float in_river; // the river influence (TerrainFields::river)
 #define TERRAIN_LIT_POS (in_pos - normalize(in_normal) * in_meshLift)
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };

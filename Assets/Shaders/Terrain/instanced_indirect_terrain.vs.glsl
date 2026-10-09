@@ -37,7 +37,9 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-layout (location = 0) in vec3 in_pos;
+// The texCoord rides positionU.w / normalV.w (MeshVertex). On the terrain it carries the RIVER, not a UV (the terrain
+// shades in world space): u = the river influence (Procedural TerrainGenerator).
+layout (location = 0) in vec4 in_posRiver;
 layout (location = 1) in vec3 in_normal;
 // NOT a tangent on the terrain: the EDGE STITCH (Procedural TerrainChunkMesh) - xyz = this vertex's height on the
 // straight edge of a neighbour 1 / 2 / 3 LODs coarser, w = the chunk's LOD.
@@ -52,6 +54,7 @@ invariant gl_Position;
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = temperature C, z = humidity, w = water level
+layout (location = 4) out float out_river;        // the river influence (TerrainFields::river)
 
 #ifdef TERRAIN_OVERLAY_PASS
 // The film: out_pos is LIFTED to its water level, this is the lift along the normal (m). The film FS rebuilds
@@ -156,6 +159,8 @@ void main()
 #endif
     const InMeshInstancesData inst = in_instances[inst_idx];
 
+    const vec3 in_pos = in_posRiver.xyz;
+    out_river = in_posRiver.w;
     out_normal = quat_transform(in_normal, inst.quat);
     const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz), in_pos.z);
     out_pos    = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;

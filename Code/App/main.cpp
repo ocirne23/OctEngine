@@ -208,6 +208,12 @@ int main(int argc, char* argv[])
                 Globals::profiler.writeReport(options.profileOutPath, options.profileOptions);
                 return Timer::DONE;
             });
+    oc::optional<Timer> screenshotTimer;
+    if (options.screenshotAfterSec > 0.0 && !headlessServer)
+        screenshotTimer.emplace(timerDelay(options.screenshotAfterSec), [&](Timer&) {
+                Globals::rendererVK.requestScreenshot(options.screenshotOutPath);
+                return Timer::DONE;
+            });
     oc::optional<Timer> quitTimer;
     if (options.quitAfterSec > 0.0)
         quitTimer.emplace(timerDelay(options.quitAfterSec), [](Timer&) {

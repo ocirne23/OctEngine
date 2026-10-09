@@ -1311,6 +1311,7 @@ namespace Procedural
 		out.fogThickness = fogThicknessOf(s);
 		out.fogFalloffMul = fogFalloffOf(out.temperature);
 		out.flowAngle01 = -1.0f;
+		out.waterKind = out.height < m_cfg.seaLevel ? ETerrainWater::Sea : ETerrainWater::None;
 	}
 
 	TerrainGenV3::TerrainGenV3(const TerrainConfigV3& cfg)
@@ -1543,6 +1544,12 @@ namespace Procedural
 		const bool coarse = (detail == ESampleDetail::Coarse);
 		const Sample s = sampleField(worldX, worldZ, coarse);
 		fill(worldX, worldZ, s, /*withDetail*/ !coarse, out);
+	}
+
+	void TerrainGenV3::sampleRiverGrid(double, double, double, uint32 resX, uint32 resZ, oc::span<float> outInfluence) const
+	{
+		for (size_t i = 0; i < (size_t)resX * resZ; i++)
+			outInfluence[i] = 0.0f;
 	}
 
 	void TerrainGenV3::sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,

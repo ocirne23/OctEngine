@@ -160,6 +160,7 @@ export namespace Procedural
 			float sharpness = 4.0f;      // a species' density x (its fit / the best fit) ^ this
 			float fadeStart = 0.10f;     // a species' fit fades to 0 between these fractions of its peak
 			float fadeEnd = 0.25f;
+			float riverClear = 0.1f;     // no tree or rock where the river influence (TerrainPoint::river) is above this
 		};
 		struct Request
 		{

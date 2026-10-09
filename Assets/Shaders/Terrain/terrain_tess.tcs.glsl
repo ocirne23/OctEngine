@@ -27,10 +27,12 @@ layout (vertices = 3) out;
 layout (location = 0) in vec3 in_pos[];
 layout (location = 1) in vec3 in_normal[];
 layout (location = 2) in vec4 in_terrainFields[];
+layout (location = 4) in float in_river[];
 
 layout (location = 0) out vec3 out_pos[];
 layout (location = 1) out vec3 out_normal[];
 layout (location = 2) out vec4 out_terrainFields[];
+layout (location = 4) out float out_river[];
 
 // The TES displaces nothing below this normal y (its slope gate, smoothstep(0.35, 0.6, N.y)).
 #define TERRAIN_TESS_MIN_NORMAL_Y 0.35
@@ -78,6 +80,7 @@ void main()
 	out_pos[gl_InvocationID] = in_pos[gl_InvocationID];
 	out_normal[gl_InvocationID] = in_normal[gl_InvocationID];
 	out_terrainFields[gl_InvocationID] = in_terrainFields[gl_InvocationID];
+	out_river[gl_InvocationID] = in_river[gl_InvocationID];
 
 	if (gl_InvocationID == 0)
 	{

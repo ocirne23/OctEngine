@@ -44,6 +44,7 @@ void VolumetricFogPipeline::buildScatterLayout(ComputePipelineLayout& layout)
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 13, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // cloud shadow map
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // the inland water map
     layout.descriptorBindingFlags.resize(b.size());
 }
 
@@ -284,7 +285,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     { // -------- Pass 1: scatter (write scatter[cur], read scatter[prev] as history) --------
         DescriptorSet& set = m_scatterSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        oc::array<DescriptorSetUpdateInfo, 13> updates{
+        oc::array<DescriptorSetUpdateInfo, 14> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightInfosBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightGridsBuffer) } },
@@ -296,13 +297,14 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
             DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.oceanMapsSampler, params.oceanMapsView) } },
             DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(params.cloudShadowSampler, params.cloudShadowView) } },
-            DescriptorSetUpdateInfo{}, // [11] + [12] the GI volume cascades + sky: written only while it exists
+            DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.riverWaterMap) } },
+            DescriptorSetUpdateInfo{}, // [12] + [13] the GI volume cascades + sky: written only while it exists
             DescriptorSetUpdateInfo{},
         };
         if (!params.giVolume.empty())
-            params.giVolume.fillUpdates(12, updates[11], updates[12]);
+            params.giVolume.fillUpdates(12, updates[12], updates[13]);
         commandBuffer.cmdUpdateDescriptorSets(m_scatterPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet,
-            oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 11 : 13));
+            oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 12 : 14));
         vk::WriteDescriptorSetAccelerationStructureKHR asInfo{ .accelerationStructureCount = 1, .pAccelerationStructures = &params.tlas };
         vk::WriteDescriptorSet asWrite{ .pNext = &asInfo, .dstSet = vkSet, .dstBinding = 4, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eAccelerationStructureKHR };
         Globals::device.getDevice().updateDescriptorSets(1, &asWrite, 0, nullptr);

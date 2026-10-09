@@ -317,6 +317,16 @@ void Renderer::initSharedBuffers()
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
 	m_terrain.createNoiseTexture(); // before the first record: the grass cull binds it directly
+
+    // The inland water map per frame slot (the fog binds it): host-visible, written in present when it changes.
+    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+    {
+        m_riverWaterMaps[i].initialize(sizeof(RendererVKLayout::RiverWaterMapGpu), vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "RiverWaterMap", BufferHostAccess::eSequentialWrite);
+        m_mappedRiverWaterMaps[i] = (RendererVKLayout::RiverWaterMapGpu*)m_riverWaterMaps[i].mapMemory().data();
+        memset(m_mappedRiverWaterMaps[i], 0, offsetof(RendererVKLayout::RiverWaterMapGpu, height)); // dim 0: no map
+        m_riverWaterMaps[i].flushMappedMemory(offsetof(RendererVKLayout::RiverWaterMapGpu, height));
+    }
 }
 
 void Renderer::recreateVrEyeTargets()
@@ -906,6 +916,7 @@ void Renderer::present()
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
+    uploadRiverWaterMap(frameIdx); // the inland water map, when it changed
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the
@@ -1109,6 +1120,13 @@ void Renderer::present()
     // buffers; any upload into them from here on needs a fresh drain. See StagingManager::ensureDrainedForSharedWrite.
     Globals::stagingManager.resetSharedWriteGate();
 
+    if (!m_screenshotPath.empty())
+    {
+        const oc::string path = oc::move(m_screenshotPath);
+        m_screenshotPath.clear();
+        captureScreenshot(path);
+    }
+
     Globals::openXR.endFrame(m_vrEyes.getColorImage(0), m_vrEyes.getColorImage(1), m_swapChain.getLayout().extent, vk::ImageLayout::ePresentSrcKHR);
 
     {
@@ -1122,6 +1140,88 @@ void Renderer::present()
         }
     }
     m_frameSlotWaited = false; // the slot advanced: next frame must wait its own fence first
+}
+
+// THE SCREENSHOT: the frame is submitted but not yet presented, so the swapchain image is still ours. A one-shot copy on
+// the graphics queue (after the frame's submission: the barrier's first scope covers it) into a host buffer, a queue
+// idle, then a PNG. Alpha is forced opaque (the scene writes TAA flags there).
+void Renderer::captureScreenshot(const oc::string& path)
+{
+    ProfileScope profileScope("Screenshot", EProfileCategory::Renderer);
+    const vk::Extent2D extent = m_swapChain.getLayout().extent;
+    const vk::Format format = m_swapChain.getLayout().surfaceFormat.format;
+    const bool bgra = format == vk::Format::eB8G8R8A8Unorm || format == vk::Format::eB8G8R8A8Srgb;
+    const bool rgba = format == vk::Format::eR8G8B8A8Unorm || format == vk::Format::eR8G8B8A8Srgb;
+    if ((!bgra && !rgba) || extent.width == 0 || extent.height == 0)
+    {
+        Log::warning(oc::format("Screenshot: unsupported swapchain format {} or empty extent, not written", (int)format));
+        return;
+    }
+    const size_t bytes = (size_t)extent.width * extent.height * 4;
+    Buffer readback;
+    if (!readback.initialize(bytes, vk::BufferUsageFlagBits2::eTransferDst,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "ScreenshotReadback"))
+    {
+        Log::warning("Screenshot: readback buffer allocation failed");
+        return;
+    }
+
+    const vk::Image image = m_swapChain.getCurrentImage();
+    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+    CommandBuffer copy;
+    copy.initialize(vk::CommandBufferLevel::ePrimary, "Screenshot");
+    vk::CommandBuffer cmd = copy.begin(true);
+    const vk::ImageMemoryBarrier2 toSrc{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .oldLayout = vk::ImageLayout::ePresentSrcKHR,
+        .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+        .image = image,
+        .subresourceRange = range,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSrc });
+    const vk::BufferImageCopy region{
+        .imageSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+        .imageExtent = { extent.width, extent.height, 1 },
+    };
+    cmd.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, readback.getBuffer(), 1, &region);
+    const vk::ImageMemoryBarrier2 toPresent{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eNone,
+        .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
+        .newLayout = vk::ImageLayout::ePresentSrcKHR,
+        .image = image,
+        .subresourceRange = range,
+    };
+    const vk::MemoryBarrier2 toHost{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllTransfer,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+        .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &toHost,
+        .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toPresent });
+    copy.end();
+    copy.submitGraphics();
+    (void)Globals::device.graphicsQueueWaitIdle();
+
+    oc::vector<uint8> pixels(bytes);
+    const oc::span<uint8> mapped = readback.mapMemory();
+    memcpy(pixels.data(), mapped.data(), bytes);
+    for (size_t i = 0; i < bytes; i += 4)
+    {
+        if (bgra)
+            oc::swap(pixels[i], pixels[i + 2]);
+        pixels[i + 3] = 255;
+    }
+    if (ImageIO::writePngRgba8(path, extent.width, extent.height, pixels, /*allowMainThread*/ true))
+        Log::info(oc::format("Screenshot written to {} ({}x{})", path, extent.width, extent.height));
+    else
+        Log::warning("Screenshot: could not write " + path);
 }
 
 void Renderer::initImgui(Window& window)

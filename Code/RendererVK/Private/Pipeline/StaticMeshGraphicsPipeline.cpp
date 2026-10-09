@@ -189,7 +189,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.fragmentShader = ShaderSource{
 			.text = oceanVariantText,
 			.debugFilePath = oceanVariantPath,
-			.defines = oc::move(oceanFragDefines),
+			.defines = oceanFragDefines,
 		},
 		.blendEnable = true,
 		.dualSourceBlend = true,
@@ -272,7 +272,33 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.debugFilePath = rockVariantPath,
 		},
 	});
-	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitRock);
+	// Variant 14 (EPipelineIndex::River): river ribbons and lake surfaces (Procedural RiverSystem). Its own shaders,
+	// the ocean's shading without the waves (Fresnel, the RT mirror + RT refraction under the ocean's "RT" toggles - the
+	// same defines, minus its debug views - Beer-Lambert to the bed, flow-mapped ripples). Composited DUAL-SOURCE like
+	// the ocean (it fades out at its edges over the ground), so the cull routes it into the transparent sequence after
+	// the ground; depth write on. No back-face cull: a ribbon is one-sided.
+	const oc::string riverVertexPath = "Shaders/River/river.vs.glsl";
+	const oc::string riverVariantPath = "Shaders/River/river.fs.glsl";
+	oc::vector<ShaderDefine> riverFragDefines;
+	for (const ShaderDefine& define : oceanFragDefines)
+		if (define.name != "OCEAN_DEBUG_MODE")
+			riverFragDefines.push_back(define);
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = FileSystem::readFileStr(riverVertexPath),
+			.debugFilePath = riverVertexPath,
+		},
+		.fragmentShader = ShaderSource{
+			.text = FileSystem::readFileStr(riverVariantPath),
+			.debugFilePath = riverVariantPath,
+			.defines = oc::move(riverFragDefines),
+		},
+		.blendEnable = true,
+		.dualSourceBlend = true,
+		.dualSourceAlpha = true,
+		.cullMode = vk::CullModeFlagBits::eNone,
+	});
+	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::River);
 	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
 	const auto isLitCoreFragment = [&](const PipelineVariant& variant) {
 		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath;

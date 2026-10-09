@@ -89,10 +89,12 @@ and `physics.setWaterSurface`.
 | `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
 | `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. **Either unattended flag also installs `App.UnattendedRun`'s failure handling**: no modal dialogs (assert / abort / OS fault box — the run FAILS instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the debugger break. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
+| `--camera x y z dx dy dz` | The free-fly camera's start position and look direction (the HUD's `pos` / `dir`), instead of `Session::START_POS` / `START_DIR`. With `Tools/screenshot.ps1` it is Claude's visual repro loop for a view the user reports. |
+| `--screenshot-after <sec>` / `--screenshot-out path` | The frame presented after `<sec>` is written as a PNG (default `Local/screenshot.png`, relative to `Assets/`) by `Renderer::requestScreenshot`: read back from the swapchain image itself, so the window may be covered, unfocused or on another monitor. An unattended flag (no main menu, the failure handling). `Tools/screenshot.ps1` runs it (sandbox, fullscreen, ~10 s is enough) and copies the PNG out. |
 | `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Parsed in `main` itself, before the window exists. |
 
 **The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
-`--game`, not `--sandbox`, not an unattended run (`--profile-after` or `--quit-after`), and no `--scenario`.
+`--game`, not `--sandbox`, not an unattended run (`--profile-after`, `--quit-after` or `--screenshot-after`), and no `--scenario`.
 
 ## One-shot tools (`App.Tools`)
 

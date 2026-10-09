@@ -36,14 +36,17 @@ export struct LaunchOptions
 
     double profileAfterSec = 0.0;
     double quitAfterSec = 0.0;
+    double screenshotAfterSec = 0.0;
+    oc::string screenshotOutPath = "Local/screenshot.png";
     oc::string profileOutPath = "Local/profile.txt";
     ProfileReportOptions profileOptions;
     bool scenario = false;
     oc::string scenarioSave;
     double scenarioAtSec = 1.0;
+    oc::optional<oc::pair<glm::vec3, glm::vec3>> cameraStart; // --camera: the free-fly camera's start (position, direction)
 
     bool headlessServer() const { return headless && launchMode == ELaunchMode::Server; }
-    bool unattendedRun() const { return profileAfterSec > 0.0 || quitAfterSec > 0.0; }
+    bool unattendedRun() const { return profileAfterSec > 0.0 || quitAfterSec > 0.0 || screenshotAfterSec > 0.0; }
     bool mainMenu() const { return !headlessServer() && launchMode == ELaunchMode::Single && !gameMode && !unattendedRun() && !scenario && !sandbox; }
 };
 
@@ -58,10 +61,19 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
         else if (arg == "--profile-out" && i + 1 < argc)  o.profileOutPath = argv[++i];
         else if (arg == "--profile-workers")              o.profileOptions.perWorkerTrees = true;
         else if (arg == "--quit-after" && i + 1 < argc)   o.quitAfterSec = oc::max(std::atof(argv[++i]), 0.01);
-        else if (arg == "--no-vsync")                     TweakRegistry::get().setOverride("Time/VSync=0");
+        else if (arg == "--screenshot-after" && i + 1 < argc) o.screenshotAfterSec = oc::max(std::atof(argv[++i]), 0.01);
+        else if (arg == "--screenshot-out" && i + 1 < argc) o.screenshotOutPath = argv[++i];
+        else if (arg == "--no-vsync")                    TweakRegistry::get().setOverride("Time/VSync=0");
         else if (arg == "--scenario" && i + 1 < argc)     { o.scenarioSave = argv[++i]; o.scenario = true; }
         else if (arg == "--scenario-at" && i + 1 < argc)  o.scenarioAtSec = oc::max(std::atof(argv[++i]), 0.0);
-        else if (arg == "--tweak" && i + 1 < argc)        { if (!TweakRegistry::get().setOverride(argv[++i])) Log::warning("--tweak: cannot parse " + oc::string(argv[i])); }
+        else if (arg == "--camera" && i + 6 < argc)
+        {
+            float v[6];
+            for (float& f : v)
+                f = (float)std::atof(argv[++i]);
+            o.cameraStart = oc::make_pair(glm::vec3(v[0], v[1], v[2]), glm::vec3(v[3], v[4], v[5]));
+        }
+        else if (arg == "--tweak" && i + 1 < argc)       { if (!TweakRegistry::get().setOverride(argv[++i])) Log::warning("--tweak: cannot parse " + oc::string(argv[i])); }
         else if (arg == "--tweaks" && i + 1 < argc)
         {
             const oc::string path = argv[++i];
@@ -137,7 +149,9 @@ public:
     {
         if (options.headlessServer())
             return;
-        m_cameraController.initialize(START_POS, START_POS + START_DIR);
+        const glm::vec3 pos = options.cameraStart ? options.cameraStart->first : START_POS;
+        const glm::vec3 dir = options.cameraStart ? options.cameraStart->second : START_DIR;
+        m_cameraController.initialize(pos, pos + dir);
         if (Globals::rendererVK.isVrEnabled()) // the renderer is up before the session exists
             m_vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
     }

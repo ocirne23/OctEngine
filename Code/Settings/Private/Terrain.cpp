@@ -263,6 +263,9 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// model's precipitation and temperature), routed downhill over the conditioned coarse field; lakes balance their
 	// inflow against open-water evaporation (full lakes spill, terminal ones and salt pans do not). The lobby preview
 	// re-applies a change at once, from its stored samples.
+	// Enabled: the terrain sampler is wrapped by the rivers (carved channels, river / lake water in the terrain points).
+	// Every row here but the preview and debug ones rebuilds the terrain (TerrainStreamer's listeners).
+	Tweak::boolean("Terrain/Rivers", "Enabled", &s.riverEnabled);
 	Tweak::boolean("Terrain/Rivers", "Show on preview", &s.riverPreview);
 	Tweak::intVar("Terrain/Rivers", "Coarse domain (tiles)", &s.riverCoarseDomain, 0, 4, 1.0f); // 2 = 982 km model margin
 	Tweak::floatVar("Terrain/Rivers", "Sea depth (m)", &s.riverSeaDepth, 0.0f, 500.0f, 1.0f);
@@ -282,16 +285,88 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Rivers", "Unit breach depth (m)", &s.riverUnitBreachDepth, 0.0f, 500.0f, 0.5f);
 	Tweak::intVar("Terrain/Rivers", "Unit lake min cells", &s.riverUnitLakeMinCells, 1, 100000, 10.0f);
 	Tweak::floatVar("Terrain/Rivers", "Channel min Q (m3/s)", &s.riverChannelMinQ, 0.01f, 100.0f, 0.01f);
+	// A channel's width and depth grow from 0 at the min Q to full size at min Q + this: streams fade in at their head
+	// and out where their water drains away.
+	Tweak::floatVar("Terrain/Rivers", "Fade Q (m3/s)", &s.riverChannelFadeQ, 0.0f, 100.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Perennial Q (m3/s)", &s.riverPerennialQ, 0.0f, 100.0f, 0.05f);
-	Tweak::floatVar("Terrain/Rivers", "Width a", &s.riverWidthA, 0.5f, 20.0f, 0.1f);
-	Tweak::floatVar("Terrain/Rivers", "Depth c", &s.riverDepthC, 0.05f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers", "Width a", &s.riverWidthA, 0.5f, 60.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Depth c", &s.riverDepthC, 0.05f, 10.0f, 0.01f);
 	Tweak::floatVar("Terrain/Rivers", "Rapids slope", &s.riverRapidsSlope, 0.0f, 1.0f, 0.005f);
 	Tweak::floatVar("Terrain/Rivers", "Fall slope", &s.riverFallSlope, 0.0f, 5.0f, 0.01f);
 	// A unit's edge away from its crossings is a SOFT wall: higher = more water forced to a crossing (and deeper filled
 	// basins on the way), lower = more streams that end at the unit edge.
 	Tweak::floatVar("Terrain/Rivers", "Edge wall (m)", &s.riverEdgeWall, 0.0f, 500.0f, 1.0f);
+	// The D8 flow path is straight runs at 0 / 45 / 90 degrees with sharp kinks: a Gaussian along the path, sigma in
+	// native px (5 world m at mpp 5), rounds them into curves. The ends (junctions, crossings) stay put.
+	Tweak::floatVar("Terrain/Rivers", "Path smoothing (px)", &s.riverPathSmoothing, 0.0f, 40.0f, 0.5f);
+	// MEANDERS: a sideways swing along the smoothed path - two sines, the wavelength and the swing in multiples of the
+	// channel width (rivers meander at ~10-14 widths), the phase from the segment's start. Fades out at junctions and
+	// crossings, shrinks to 30 % on a steep reach, and is pulled back wherever it would climb out of the valley floor.
+	Tweak::floatVar("Terrain/Rivers", "Meander amplitude", &s.riverMeanderAmplitude, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Meander wavelength", &s.riverMeanderWavelength, 2.0f, 60.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Meander slope", &s.riverMeanderSlope, 0.001f, 0.5f, 0.001f);
+	// Small streams wind tighter and wider (in widths): on the smallest the swing is x "small amplitude" and the
+	// wavelength x "small wavelength", blending (log Q) to x 1 at "Meander full Q".
+	Tweak::floatVar("Terrain/Rivers", "Meander small amplitude", &s.riverMeanderSmallAmplitude, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Meander small wavelength", &s.riverMeanderSmallWavelength, 0.05f, 4.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers", "Meander full Q (m3/s)", &s.riverMeanderFullQ, 0.01f, 1000.0f, 0.5f);
+	// The carve, in MODEL metres (/ 6 in the world at mpp 5) / multiples of the channel half-width (hydraulic geometry:
+	// width = a * Q^0.5). The water sits at the original ground minus the valley depth; the channel is cut below it.
+	Tweak::floatVar("Terrain/Rivers", "Channel depth scale", &s.riverChannelDepthScale, 0.0f, 20.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Channel min depth (m)", &s.riverChannelMinDepth, 0.0f, 50.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Channel shape", &s.riverChannelShape, 0.5f, 8.0f, 0.1f); // 1 V, 2 U, more = box
+	Tweak::floatVar("Terrain/Rivers", "Bank height", &s.riverBankHeight, 0.0f, 20.0f, 0.05f);
+	// The rise from the water to the floodplain's outer edge (bank + floodplain widths): ((x / width) ^ this) x the bank
+	// height. 1 = a straight slope, 2 = a bowl (flat by the channel, steepening outward), higher = a flatter floor.
+	Tweak::floatVar("Terrain/Rivers", "Floodplain curve", &s.riverFloodplainCurve, 0.5f, 8.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Valley depth (m)", &s.riverValleyDepth, 0.0f, 300.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Valley depth per Q", &s.riverValleyDepthPerQ, 0.0f, 50.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Bank factor", &s.riverBankFactor, 0.05f, 5.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Floodplain factor", &s.riverFloodplainFactor, 0.0f, 20.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers", "Valley slope", &s.riverValleySlope, 0.02f, 2.0f, 0.01f);
+	// How far the valley wall may run PAST the floodplain's edge (the curve itself is always carved whole); it fades
+	// out over its last 30 %.
+	Tweak::floatVar("Terrain/Rivers", "Carve reach (m)", &s.riverCarveReach, 0.0f, 3000.0f, 10.0f);
+	// The valley SCALES WITH THE WATER: a river of this Q or more gets the whole carve reach, a smaller one sqrt(Q / this)
+	// of it - a small stream cuts a small valley (0 = every channel the whole reach).
+	Tweak::floatVar("Terrain/Rivers", "Carve reach Q (m3/s)", &s.riverCarveReachQ, 0.0f, 1000.0f, 0.5f);
+	// The river influence is 1 in the channel and falls to 0 at the floodplain's edge: trees and rocks keep out above
+	// this (1 = only the channel's wet core, 0 = the whole carved bed and floodplain). Re-places the records.
+	Tweak::floatVar("Terrain/Rivers", "Vegetation clear", &s.riverVegetationClear, 0.0f, 1.0f, 0.01f);
 	Tweak::boolean("Terrain/Rivers", "Debug lines", &s.riverDebugLines);
 	Tweak::floatVar("Terrain/Rivers", "Debug radius (m)", &s.riverDebugRadius, 100.0f, 50000.0f, 100.0f);
+
+	// The water (RendererVK EPipelineIndex::River): a ribbon per river and a flat surface per lake, built per unit by
+	// Procedural's RiverSystem, shaded like the ocean without its waves - Fresnel, the RT mirror and the RT refraction to
+	// the bed under the ocean's "RT" tweaks, flow-mapped ripples drifting downstream, whitewater on rapids and falls.
+	Tweak::boolean("Terrain/Rivers/Surface", "Enabled", &s.riverSurface);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Radius (m)", &s.riverSurfaceRadius, 500.0f, 50000.0f, 100.0f);
+	Tweak::color3("Terrain/Rivers/Surface", "Absorption (1/m)", &s.riverAbsorption);
+	Tweak::color3("Terrain/Rivers/Surface", "Scatter colour", &s.riverScatterColor);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Roughness", &s.riverRoughness, 0.02f, 1.0f, 0.005f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Ripple size (m)", &s.riverRippleSize, 0.1f, 50.0f, 0.1f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Ripple strength", &s.riverRippleStrength, 0.0f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Flow speed", &s.riverFlowSpeed, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Lake ripple", &s.riverLakeRipple, 0.0f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Foam strength", &s.riverFoamStrength, 0.0f, 4.0f, 0.05f);
+	Tweak::color3("Terrain/Rivers/Surface", "Foam colour", &s.riverFoamColor);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Edge softness", &s.riverEdgeSoftness, 0.01f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Lake edge fade (m)", &s.riverLakeEdgeFade, 0.01f, 5.0f, 0.01f);
+	// The waves: the OCEAN's FFT field (the ocean always runs with the rivers) at "Wave tiling" x its frequency and
+	// "Wave height" x its height, dragged downstream by the flow. Real geometry inside "Near radius" (RiverSystem's dense
+	// cells; the light ribbon sinks "Near drop" under them there), the shading normal everywhere.
+	Tweak::floatVar("Terrain/Rivers/Surface", "Wave height", &s.riverWaveHeight, 0.0f, 2.0f, 0.005f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Wave tiling", &s.riverWaveTiling, 0.25f, 20.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Wave rapids", &s.riverWaveRapids, 0.0f, 20.0f, 0.1f);
+	// SMALL RIVERS: from this channel depth (engine m) up a river behaves as set; below it its waves shrink in proportion
+	// (a stream's fading head has none) and its flow slows toward "Small river flow" x its speed. Lakes are full size.
+	Tweak::floatVar("Terrain/Rivers/Surface", "Full size depth (m)", &s.riverFullSizeDepth, 0.01f, 20.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Small river flow", &s.riverSmallFlow, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Near radius (m)", &s.riverNearRadius, 0.0f, 2000.0f, 10.0f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Near spacing (m)", &s.riverNearSpacing, 0.1f, 5.0f, 0.05f);
+	Tweak::intVar("Terrain/Rivers/Surface", "Near across", &s.riverNearAcross, 2, 64, 1.0f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Near drop (m)", &s.riverNearDrop, 0.0f, 5.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Wetness", &s.riverWetness, 0.0f, 1.0f, 0.01f);
 }
 
 // "Tile size", "Spacing" and "Friction" rebuild every collider tile: TerrainCollider::initialize attaches that listener.

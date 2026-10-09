@@ -17,6 +17,10 @@ import :TerrainSampler;
 import :TerrainGenerator;
 import :TerrainChunk;
 import :OceanGenerator;
+import :GeneratorV3;
+import :RiverNetwork;
+import :RiverUnits;
+import :RiverTerrain;
 
 namespace
 {
@@ -333,6 +337,49 @@ namespace Procedural
 		Tweak::onChange(s.v3HumidFog, this, dirty);
 		Tweak::onChange(s.v3ValleyFog, this, dirty);
 		Tweak::onChange(s.v3MaxTiles, this, dirty);
+		// The rivers are part of the sampler (RiverTerrain): every row that shapes them rebuilds. Not the preview /
+		// debug rows.
+		Tweak::onChange(s.riverEnabled, this, dirty);
+		Tweak::onChange(s.riverCoarseDomain, this, dirty);
+		Tweak::onChange(s.riverSeaDepth, this, dirty);
+		Tweak::onChange(s.riverPetPerC, this, dirty);
+		Tweak::onChange(s.riverBudykoW, this, dirty);
+		Tweak::onChange(s.riverLakeEvap, this, dirty);
+		Tweak::onChange(s.riverLoss, this, dirty);
+		Tweak::onChange(s.riverBreachDepth, this, dirty);
+		Tweak::onChange(s.riverLakeMinCells, this, dirty);
+		Tweak::onChange(s.riverUnitTiles, this, dirty);
+		Tweak::onChange(s.riverCrossWindow, this, dirty);
+		Tweak::onChange(s.riverUnitBreachDepth, this, dirty);
+		Tweak::onChange(s.riverUnitLakeMinCells, this, dirty);
+		Tweak::onChange(s.riverChannelMinQ, this, dirty);
+		Tweak::onChange(s.riverChannelFadeQ, this, dirty);
+		Tweak::onChange(s.riverPerennialQ, this, dirty);
+		Tweak::onChange(s.riverWidthA, this, dirty);
+		Tweak::onChange(s.riverDepthC, this, dirty);
+		Tweak::onChange(s.riverRapidsSlope, this, dirty);
+		Tweak::onChange(s.riverFallSlope, this, dirty);
+		Tweak::onChange(s.riverEdgeWall, this, dirty);
+		Tweak::onChange(s.riverPathSmoothing, this, dirty);
+		Tweak::onChange(s.riverMeanderAmplitude, this, dirty);
+		Tweak::onChange(s.riverMeanderWavelength, this, dirty);
+		Tweak::onChange(s.riverMeanderSlope, this, dirty);
+		Tweak::onChange(s.riverMeanderSmallAmplitude, this, dirty);
+		Tweak::onChange(s.riverMeanderSmallWavelength, this, dirty);
+		Tweak::onChange(s.riverMeanderFullQ, this, dirty);
+		Tweak::onChange(s.riverChannelDepthScale, this, dirty);
+		Tweak::onChange(s.riverChannelMinDepth, this, dirty);
+		Tweak::onChange(s.riverChannelShape, this, dirty);
+		Tweak::onChange(s.riverBankHeight, this, dirty);
+		Tweak::onChange(s.riverFloodplainCurve, this, dirty);
+		Tweak::onChange(s.riverValleyDepth, this, dirty);
+		Tweak::onChange(s.riverValleyDepthPerQ, this, dirty);
+		Tweak::onChange(s.riverBankFactor, this, dirty);
+		Tweak::onChange(s.riverFloodplainFactor, this, dirty);
+		Tweak::onChange(s.riverValleySlope, this, dirty);
+		Tweak::onChange(s.riverCarveReach, this, dirty);
+		Tweak::onChange(s.riverCarveReachQ, this, dirty);
+		Tweak::onChange(s.riverVegetationClear, this, dirty); // the records re-place against the new maps
 		Tweak::onChange(s.v3Fp16, this, dirty);
 
 		rebuildMaps();  // (a no-op while disabled: no generator, no model load)
@@ -506,7 +553,7 @@ namespace Procedural
 		if (!m_settings.enabled)
 		{
 			m_v3AwaitingModels = false;
-			m_rivers.setGenerator(nullptr);
+			m_rivers.setTerrain(nullptr);
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_maps = nullptr;
 			++m_generation;
@@ -557,11 +604,18 @@ namespace Procedural
 		TerrainGenV3::setPrecision(m_settings.v3Fp16);
 
 		oc::shared_ptr<const ITerrainSampler> maps;
-		oc::shared_ptr<const TerrainGenV3> v3;
+		oc::shared_ptr<const RiverTerrain> rivers;
 		if (TerrainGenV3::isReady())
 		{
-			v3 = oc::make_shared<const TerrainGenV3>(cfg);
+			auto v3 = oc::make_shared<const TerrainGenV3>(cfg);
 			maps = v3;
+			// The rivers WRAP the generator: every consumer of the maps samples the carved terrain.
+			if (m_settings.riverEnabled)
+			{
+				rivers = oc::make_shared<const RiverTerrain>(v3, riverConfigFromSettings(m_settings),
+					riverUnitConfigFromSettings(m_settings), riverCarveConfigFromSettings(m_settings));
+				maps = rivers;
+			}
 			m_v3AwaitingModels = false;
 		}
 		else
@@ -572,7 +626,7 @@ namespace Procedural
 			if (TerrainGenV3::hasFailed())
 				Log::error("[Terrain] unavailable (model load failed) - staying on an empty world");
 		}
-		m_rivers.setGenerator(v3);
+		m_rivers.setTerrain(rivers);
 
 		std::lock_guard<std::mutex> lk(m_mutex);
 		m_maps = oc::move(maps);

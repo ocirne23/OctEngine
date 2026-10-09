@@ -258,6 +258,9 @@ export namespace Procedural
 		// lock per tile versus one per point.
 		void sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
 		                oc::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const override;
+		// No rivers here (RiverTerrain wraps this generator for them): zeros.
+		void sampleRiverGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
+		                     oc::span<float> outInfluence) const override;
 		// The smooth 30 m/px diffusion surface WITHOUT the procedural detail layer - the terrain shader uses
 		// this to tell "a mountain" from "high flatland".
 		float sampleAltitude(double worldX, double worldZ) const override;

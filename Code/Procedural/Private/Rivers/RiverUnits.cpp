@@ -14,7 +14,10 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 2; // 2: soft unit walls, ERiverEnd::Edge
+	constexpr uint32 RIVER_UNIT_VERSION = 9; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	                                         // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
+	                                         // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
+	                                         // 9: the W ground clamp on the final path
 
 	struct UnitHeader
 	{
@@ -30,6 +33,12 @@ namespace
 	constexpr int32 c_dz4[4] = { 0, 1, 0, -1 };
 
 	int32 floorDivI(int32 a, int32 b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+
+	float smoothstep01(float t)
+	{
+		t = oc::clamp(t, 0.0f, 1.0f);
+		return t * t * (3.0f - 2.0f * t);
+	}
 
 	uint64 tileKey(int32 ti, int32 tj) { return ((uint64)(uint32)ti << 32) | (uint64)(uint32)tj; }
 
@@ -64,12 +73,20 @@ namespace
 		hashValue(h, uc.breachDepth);
 		hashValue(h, uc.lakeMinCells);
 		hashValue(h, uc.channelMinQ);
+		hashValue(h, uc.fadeQ);
 		hashValue(h, uc.perennialQ);
 		hashValue(h, uc.widthA);
 		hashValue(h, uc.depthC);
 		hashValue(h, uc.rapidsSlope);
 		hashValue(h, uc.fallSlope);
 		hashValue(h, uc.edgeWall);
+		hashValue(h, uc.pathSmoothing);
+		hashValue(h, uc.meanderAmplitude);
+		hashValue(h, uc.meanderWavelength);
+		hashValue(h, uc.meanderSlope);
+		hashValue(h, uc.meanderSmallAmplitude);
+		hashValue(h, uc.meanderSmallWavelength);
+		hashValue(h, uc.meanderFullQ);
 		return h;
 	}
 
@@ -198,6 +215,190 @@ namespace
 		float x, z, w, q;
 	};
 
+	// THE PATH SMOOTHING: a D8 path is long straight runs at 0 / 45 / 90 degrees with sharp kinks, which no corner cutting
+	// inside a pixel hides. Resampled at 1 px of arc length, then a Gaussian average of the plan position along it
+	// (sigma in px). The window shrinks SYMMETRICALLY toward the ends, so the end points (junctions, crossings, mouths)
+	// stay exactly where they are and the smoothing ramps in from them. W and Q stay with their arc position.
+	void smoothPath(oc::vector<ChainPoint>& pts, float sigma)
+	{
+		if (sigma <= 0.0f || pts.size() < 3)
+			return;
+		oc::vector<ChainPoint> even;
+		even.push_back(pts.front());
+		float carry = 0.0f; // arc length since the last emitted point
+		for (size_t i = 0; i + 1 < pts.size(); i++)
+		{
+			const ChainPoint& a = pts[i];
+			const ChainPoint& b = pts[i + 1];
+			const float len = std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
+			float s = 1.0f - carry; // the next sample's distance along this piece
+			while (s < len)
+			{
+				const float t = s / len;
+				even.push_back(ChainPoint{ a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t, a.q + (b.q - a.q) * t });
+				s += 1.0f;
+			}
+			carry = len - (s - 1.0f);
+		}
+		even.push_back(pts.back());
+
+		const int32 n = (int32)even.size();
+		const int32 radius = (int32)std::ceil(3.0f * sigma);
+		const float inv2s2 = 1.0f / (2.0f * sigma * sigma);
+		pts.resize((size_t)n);
+		for (int32 i = 0; i < n; i++)
+		{
+			const int32 r = oc::min(radius, oc::min(i, n - 1 - i));
+			float sx = 0.0f, sz = 0.0f, sw = 0.0f;
+			for (int32 k = -r; k <= r; k++)
+			{
+				const float wgt = std::exp(-(float)(k * k) * inv2s2);
+				sx += even[i + k].x * wgt;
+				sz += even[i + k].z * wgt;
+				sw += wgt;
+			}
+			pts[i] = ChainPoint{ sx / sw, sz / sw, even[i].w, even[i].q };
+		}
+	}
+
+	uint32 hashU32(uint32 x)
+	{
+		x ^= x >> 16;
+		x *= 0x7FEB352Du;
+		x ^= x >> 15;
+		x *= 0x846CA68Bu;
+		x ^= x >> 16;
+		return x;
+	}
+
+	// THE MEANDERS: a smoothed D8 path still runs straight wherever the flow did, and real rivers almost never do. A
+	// sideways swing along the 1 px resampled path: two sines over an ACCUMULATED phase (the wavelength follows the
+	// channel width as it changes, so the phase never jumps), "Meander wavelength" x the width apart, "Meander
+	// amplitude" x the width wide, the phase from `seed`. It fades to 0 within half a wavelength of each end (junctions,
+	// crossings and mouths stay put) and shrinks toward 30 % as the water surface steepens past "Meander slope" (a
+	// mountain stream is straighter). Small streams wind tighter and wider in widths ("Meander small amplitude" /
+	// "small wavelength" up to "Meander full Q", log Q). Then it is KEPT ON THE VALLEY FLOOR: where the swung point's ground stands more
+	// than the channel's depth above the point's own, the swing there halves (up to three times, else none), and that
+	// scale is box-smoothed along the path so a pull-back does not kink. W and Q stay with their arc position.
+	void meander(oc::vector<ChainPoint>& pts, const RiverUnitConfig& cfg, const oc::vector<float>& elev,
+	             const oc::vector<uint8>& mask, int32 W, uint32 seed, float nr)
+	{
+		const size_t n = pts.size();
+		if (n < 4 || cfg.meanderAmplitude <= 0.0f)
+			return;
+		const auto elevAt = [&](float x, float z) -> float
+		{
+			const int32 x0 = (int32)std::floor(x), z0 = (int32)std::floor(z);
+			if (x0 < 0 || z0 < 0 || x0 + 1 >= W || z0 + 1 >= W)
+				return FLT_MAX; // off the unit: never swing there
+			const size_t i = (size_t)z0 * W + x0;
+			if (!mask[i] || !mask[i + 1] || !mask[i + W] || !mask[i + W + 1])
+				return FLT_MAX;
+			const float fx = x - (float)x0, fz = z - (float)z0;
+			return glm::mix(glm::mix(elev[i], elev[i + 1], fx), glm::mix(elev[i + W], elev[i + W + 1], fx), fz);
+		};
+
+		oc::vector<float> s(n, 0.0f), off(n, 0.0f), scale(n, 1.0f);
+		oc::vector<glm::vec2> normal(n);
+		for (size_t k = 1; k < n; k++)
+			s[k] = s[k - 1] + glm::length(glm::vec2(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z));
+		const float total = s[n - 1];
+		const float ph1 = (float)(hashU32(seed) & 0xFFFF) / 65535.0f * 6.2831853f;
+		const float ph2 = (float)(hashU32(seed ^ 0x5BD1E995u) & 0xFFFF) / 65535.0f * 6.2831853f;
+		float phase = 0.0f;
+		float slope = 0.0f;
+		// SMALL STREAMS wind tighter and wider (in widths): from "Channel min Q" up to "Meander full Q" (log Q) the swing
+		// goes from x "Meander small amplitude" to x 1 and the wavelength from x "Meander small wavelength" to x 1.
+		const float logMin = std::log(glm::max(cfg.channelMinQ, 1e-4f));
+		const float logSpan = glm::max(std::log(glm::max(cfg.meanderFullQ, 1e-4f)) - logMin, 1e-3f);
+		for (size_t k = 0; k < n; k++)
+		{
+			const ChainPoint& p = pts[k];
+			const float size = glm::clamp((std::log(glm::max(p.q, 1e-4f)) - logMin) / logSpan, 0.0f, 1.0f);
+			const float widthPx = glm::max(cfg.widthA * std::sqrt(glm::max(p.q, 0.0f)) / nr, 0.2f);
+			const float lambda = glm::max(cfg.meanderWavelength * glm::mix(cfg.meanderSmallWavelength, 1.0f, size) * widthPx, 4.0f);
+			if (k > 0)
+				phase += 6.2831853f * (s[k] - s[k - 1]) / lambda;
+			if (k + 1 < n)
+				slope = (p.w - pts[k + 1].w) / glm::max((s[k + 1] - s[k]) * nr, 1e-3f);
+			const float steep = glm::mix(1.0f, 0.3f, glm::smoothstep(0.0f, glm::max(cfg.meanderSlope, 1e-4f), slope));
+			const float ends = glm::smoothstep(0.0f, 0.5f * lambda, s[k]) * glm::smoothstep(0.0f, 0.5f * lambda, total - s[k]);
+			off[k] = cfg.meanderAmplitude * glm::mix(cfg.meanderSmallAmplitude, 1.0f, size) * widthPx * steep * ends
+				* (0.75f * std::sin(phase + ph1) + 0.25f * std::sin(0.43f * phase + ph2));
+
+			const ChainPoint& a = pts[k > 0 ? k - 1 : k];
+			const ChainPoint& b = pts[k + 1 < n ? k + 1 : k];
+			glm::vec2 dir(b.x - a.x, b.z - a.z);
+			const float len = glm::length(dir);
+			dir = len > 1e-6f ? dir / len : glm::vec2(1.0f, 0.0f);
+			normal[k] = glm::vec2(-dir.y, dir.x);
+		}
+
+		// Keep it on the valley floor.
+		for (size_t k = 0; k < n; k++)
+		{
+			if (off[k] == 0.0f)
+				continue;
+			const ChainPoint& p = pts[k];
+			const float base = elevAt(p.x, p.z);
+			const float tolerance = cfg.depthC * std::pow(glm::max(p.q, 0.0f), 0.4f); // the channel's own depth
+			float f = 1.0f;
+			for (int32 t = 0; t < 4; t++, f *= 0.5f)
+				if (elevAt(p.x + normal[k].x * off[k] * f, p.z + normal[k].y * off[k] * f) <= base + tolerance)
+					break;
+			scale[k] = f < 0.1f ? 0.0f : f;
+		}
+		oc::vector<float> smoothScale(n);
+		constexpr int32 c_scaleRadius = 8;
+		for (size_t k = 0; k < n; k++)
+		{
+			float sum = 0.0f;
+			int32 count = 0;
+			for (int32 o = -c_scaleRadius; o <= c_scaleRadius; o++)
+			{
+				const int64 j = (int64)k + o;
+				if (j >= 0 && j < (int64)n)
+				{
+					sum += scale[(size_t)j];
+					count++;
+				}
+			}
+			smoothScale[k] = glm::min(sum / (float)count, scale[k] + 0.25f); // smoothed, but never far past its own limit
+		}
+		for (size_t k = 0; k < n; k++)
+		{
+			pts[k].x += normal[k].x * off[k] * smoothScale[k];
+			pts[k].z += normal[k].y * off[k] * smoothScale[k];
+		}
+	}
+
+	// THE GROUND CLAMP, after all the path shaping: the profile's W was walked along the raw D8 pixels, and the smoothing
+	// and the meanders then move the path sideways with W tied to its arc position. Where the moved path lies over LOWER
+	// ground (the downhill side of a slope, across a bend) W stood above it - water in the air, which the carve cannot
+	// fix (it only lowers). So on the FINAL path W may stand at most the channel's depth above the ground under it, and
+	// it never rises downstream again (a running min). Off the unit's tiles the ground is unknown: no clamp there.
+	void clampToGround(oc::vector<ChainPoint>& pts, const RiverUnitConfig& cfg, const oc::vector<float>& elev,
+	                   const oc::vector<uint8>& mask, int32 W)
+	{
+		for (size_t k = 0; k < pts.size(); k++)
+		{
+			ChainPoint& p = pts[k];
+			const int32 x0 = (int32)std::floor(p.x), z0 = (int32)std::floor(p.z);
+			if (x0 >= 0 && z0 >= 0 && x0 + 1 < W && z0 + 1 < W)
+			{
+				const size_t i = (size_t)z0 * W + x0;
+				if (mask[i] && mask[i + 1] && mask[i + W] && mask[i + W + 1])
+				{
+					const float fx = p.x - (float)x0, fz = p.z - (float)z0;
+					const float ground = glm::mix(glm::mix(elev[i], elev[i + 1], fx), glm::mix(elev[i + W], elev[i + W + 1], fx), fz);
+					p.w = glm::min(p.w, ground + cfg.depthC * std::pow(glm::max(p.q, 0.0f), 0.4f));
+				}
+			}
+			if (k > 0)
+				p.w = glm::min(p.w, pts[k - 1].w);
+		}
+	}
+
 	// Chaikin corner cutting with the end points kept: the D8 staircase becomes a curve inside its own pixels.
 	void chaikin(oc::vector<ChainPoint>& pts, int32 iterations)
 	{
@@ -224,8 +425,11 @@ namespace
 		}
 	}
 
-	// Douglas-Peucker on the plan view: drops the points a straight reach does not need.
-	void simplify(const oc::vector<ChainPoint>& in, float tolerancePx, oc::vector<ChainPoint>& out)
+	// Douglas-Peucker: drops the points a straight reach does not need - straight in plan AND in its water level. W is
+	// linear between the kept points (the carve and the lines read it so), so a point is kept when either its plan offset
+	// passes tolerancePx or its W passes toleranceW (model m) from the interpolation. Plan-only, a reach straight in
+	// plan that drops into a canyon partway kept just its ends, and the water sloped evenly through the air over the drop.
+	void simplify(const oc::vector<ChainPoint>& in, float tolerancePx, float toleranceW, oc::vector<ChainPoint>& out)
 	{
 		out.clear();
 		if (in.size() <= 2)
@@ -237,33 +441,40 @@ namespace
 		keep.front() = keep.back() = 1;
 		oc::vector<oc::pair<size_t, size_t>> stack;
 		stack.push_back({ 0, in.size() - 1 });
-		const float tol2 = tolerancePx * tolerancePx;
+		const float invTol2 = 1.0f / oc::max(tolerancePx * tolerancePx, 1e-12f);
+		const float invTolW2 = 1.0f / oc::max(toleranceW * toleranceW, 1e-12f);
 		while (!stack.empty())
 		{
 			const size_t a = stack.back().first, b = stack.back().second;
 			stack.pop_back();
 			const float dx = in[b].x - in[a].x, dz = in[b].z - in[a].z;
 			const float len2 = dx * dx + dz * dz;
-			float worst = -1.0f;
+			float worst = -1.0f; // the larger of the plan and the W error, each over its tolerance (squared)
 			size_t worstAt = a;
 			for (size_t i = a + 1; i < b; i++)
 			{
 				const float px = in[i].x - in[a].x, pz = in[i].z - in[a].z;
-				float d2;
+				float d2, t;
 				if (len2 > 1e-12f)
 				{
 					const float cr = px * dz - pz * dx;
 					d2 = cr * cr / len2;
+					t = oc::clamp((px * dx + pz * dz) / len2, 0.0f, 1.0f);
 				}
 				else
-					d2 = px * px + pz * pz;
-				if (d2 > worst)
 				{
-					worst = d2;
+					d2 = px * px + pz * pz;
+					t = 0.0f;
+				}
+				const float dw = in[i].w - (in[a].w + (in[b].w - in[a].w) * t);
+				const float err = oc::max(d2 * invTol2, dw * dw * invTolW2);
+				if (err > worst)
+				{
+					worst = err;
 					worstAt = i;
 				}
 			}
-			if (worst > tol2)
+			if (worst > 1.0f)
 			{
 				keep[worstAt] = 1;
 				stack.push_back({ a, worstAt });
@@ -398,12 +609,24 @@ namespace Procedural
 						g.runoff[(size_t)(lt * TP + r) * W + (size_t)(lc * TP + c)] *= scale;
 			}
 
-		const auto depthOf = [&cfg](float q) { return cfg.depthC * std::pow(oc::max(q, 0.0f), 0.4f); };
-		const auto halfWidthOf = [&cfg](float q) { return 0.5f * cfg.widthA * std::sqrt(oc::max(q, 0.0f)); };
+		// THE GROWTH: a channel's width and depth rise from 0 at "Channel min Q" to the hydraulic geometry at min Q + "Fade
+		// Q", so a stream fades in at its head and out where its water drains away (dry land, a sink) instead of starting
+		// and stopping at full size.
+		const auto growth = [&cfg](float q) { return smoothstep01((q - cfg.channelMinQ) / oc::max(cfg.fadeQ, 1e-4f)); };
+		const auto depthOf = [&cfg, &growth](float q) { return cfg.depthC * std::pow(oc::max(q, 0.0f), 0.4f) * growth(q); };
+		const auto halfWidthOf = [&cfg, &growth](float q) { return 0.5f * cfg.widthA * std::sqrt(oc::max(q, 0.0f)) * growth(q); };
 
 		// --- Crossings: every coarse link across the unit's edge (or into one of its missing tiles).
 		oc::vector<DrainageSeed> seeds;
-		oc::unordered_map<int32, float> outletWater, inletWater;
+		// A crossing as its segment needs it: the shared level and Q, and the point ON the tile boundary between the two
+		// border pixels - both units compute the same one, so their segments meet there.
+		struct CrossingEnd
+		{
+			float water = 0.0f;
+			float q = 0.0f;
+			float edgeX = 0.0f, edgeZ = 0.0f; // unit px
+		};
+		oc::unordered_map<int32, CrossingEnd> outlets, inlets;
 		oc::unordered_map<uint64, oc::shared_ptr<const FullFieldPlanes>> outside;
 		const auto outsidePlanes = [&](int32 ti, int32 tj) -> const FullFieldPlanes*
 		{
@@ -509,15 +732,16 @@ namespace Procedural
 					x.water = edge[best] + depthOf(q);
 					x.inlet = inlet ? 1 : 0;
 					unit->crossings.push_back(x);
+					const CrossingEnd ce{ x.water, q, x.x + 0.5f * (float)c_dx4[k], x.z + 0.5f * (float)c_dz4[k] };
 					if (outlet)
 					{
 						seeds.push_back(DrainageSeed{ idx, g.elev[idx], 0 });
-						outletWater[idx] = x.water;
+						outlets[idx] = ce;
 					}
 					else
 					{
 						g.inject[idx] += q;
-						inletWater[idx] = x.water;
+						inlets[idx] = ce;
 					}
 				}
 
@@ -553,7 +777,7 @@ namespace Procedural
 			for (int32 x = 0; x < W; x++)
 			{
 				const int32 i = z * W + x;
-				if (!g.mask[i] || g.sea[i] || hardSeeds.count(i) || inletWater.count(i))
+				if (!g.mask[i] || g.sea[i] || hardSeeds.count(i) || inlets.count(i))
 					continue;
 				bool border = false;
 				for (int32 dz = -1; dz <= 1 && !border; dz++)
@@ -590,17 +814,18 @@ namespace Procedural
 		oc::vector<int32> starts;
 		oc::vector<uint8> isStart(NP, 0);
 		for (size_t i = 0; i < NP; i++)
-			if (inC[i] && (donors[i] != 1 || inletWater.count((int32)i)))
+			if (inC[i] && (donors[i] != 1 || inlets.count((int32)i)))
 			{
 				isStart[i] = 1;
 				starts.push_back((int32)i);
 			}
-		// Downstream first: a junction's lower segment is profiled before the segments that end on it.
-		oc::sort(starts.begin(), starts.end(), [&d](int32 a, int32 b) { return d.rank[a] < d.rank[b]; });
+		// UPSTREAM first (the flood pops downstream first, so the highest rank is the farthest up): every segment that
+		// ends on a start is profiled before the segment that starts there.
+		oc::sort(starts.begin(), starts.end(), [&d](int32 a, int32 b) { return d.rank[a] > d.rank[b]; });
 
-		oc::unordered_map<int32, float> startWater; // segment start pixel -> its water level
+		oc::unordered_map<int32, float> arriving; // a start pixel -> the lowest water level the segments ending on it bring
 		oc::vector<int32> chain;
-		oc::vector<float> wUp;
+		oc::vector<float> wUp, qChain;
 		oc::vector<ChainPoint> pts, simplified;
 		for (const int32 s : starts)
 		{
@@ -615,7 +840,7 @@ namespace Procedural
 				const int32 r = d.receiver[c];
 				if (r < 0)
 				{
-					end = outletWater.count(c) ? ERiverEnd::Outlet : softSeeds.count(c) ? ERiverEnd::Edge : ERiverEnd::Sink;
+					end = outlets.count(c) ? ERiverEnd::Outlet : softSeeds.count(c) ? ERiverEnd::Edge : ERiverEnd::Sink;
 					break;
 				}
 				if (g.sea[r])
@@ -644,40 +869,67 @@ namespace Procedural
 				c = r;
 			}
 
-			// The profile: walking up from the pinned end, the water never drops below bed + depth and never rises
-			// downstream. An inlet then pins the start at the crossing's level.
+			// The profile, pure BREACH semantics, profiled upstream first: the water starts at the lowest of its own
+			// bed + depth, the water its tributaries bring and (an inlet) its crossing's level, then follows bed + depth
+			// downstream but NEVER rises - a rim in its way is cut through (the carve's gorge), never filled up to. Only
+			// the sea (level 0) and a lake (its level) floor it. The first version floored every segment at the level
+			// its downstream segment STARTED at: in a filled basin that start is the rim, so whole rivers stood at rim
+			// height over the basin floor (seen 2026-10-08).
 			const size_t n = chain.size();
-			const auto qAt = [&](size_t k) { return inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]]; };
 			const int32 last = chain.back();
-			float endW = 0.0f;
-			switch (end)
+			const CrossingEnd* inlet = nullptr;
+			if (auto it = inlets.find(s); it != inlets.end())
+				inlet = &it->second;
+			const CrossingEnd* outlet = nullptr;
+			if (end == ERiverEnd::Outlet)
+				outlet = &outlets[last];
+
+			// OUTLET AGREEMENT: the downstream unit's inlet carries the coarse link's Q, this side its own fine Q - and
+			// width, depth and the valley follow Q, so the bed jumped at the unit edge. The last stretch blends into
+			// the crossing's Q, so both sides reach the boundary with the same one.
+			constexpr float c_crossBlendPx = 24.0f;
+			qChain.resize(n);
+			for (size_t k = 0; k < n; k++)
 			{
-			case ERiverEnd::Junction:
-			{
-				auto it = startWater.find(last);
-				endW = it != startWater.end() ? it->second : g.elev[last] + depthOf(qAt(n - 1));
-				break;
+				qChain[k] = inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
+				if (outlet)
+				{
+					const float t = 1.0f - smoothstep01((float)(n - 1 - k) / c_crossBlendPx);
+					qChain[k] += (outlet->q - qChain[k]) * t;
+				}
 			}
-			case ERiverEnd::Outlet: endW = outletWater[last]; break;
-			case ERiverEnd::Sea:    endW = 0.0f; break;
-			case ERiverEnd::Lake:   endW = d.lakes[d.lakeOf[last]].level; break;
-			default:                endW = g.elev[last] + depthOf(qAt(n - 1)); break;
-			}
+			const auto qAt = [&](size_t k) { return qChain[k]; };
 			wUp.resize(n);
-			wUp[n - 1] = endW;
-			for (size_t k = n - 1; k-- > 0;)
-				wUp[k] = oc::max(wUp[k + 1], g.elev[chain[k]] + depthOf(qAt(k)));
-			auto inletIt = inletWater.find(s);
-			if (inletIt != inletWater.end())
+			wUp[0] = g.elev[chain[0]] + depthOf(qAt(0));
+			if (inlet)
+				wUp[0] = oc::min(wUp[0], inlet->water);
+			if (auto it = arriving.find(s); it != arriving.end())
+				wUp[0] = oc::min(wUp[0], it->second);
+			for (size_t k = 1; k < n; k++)
+				wUp[k] = oc::min(wUp[k - 1], g.elev[chain[k]] + depthOf(qAt(k)));
+			if (outlet)
+				wUp[n - 1] = oc::min(wUp[n - 1], outlet->water); // not above the crossing's level (only ever lowers)
+			if (end == ERiverEnd::Sea || end == ERiverEnd::Lake)
 			{
-				wUp[0] = inletIt->second;
-				for (size_t k = 1; k < n; k++)
-					wUp[k] = oc::min(wUp[k], wUp[k - 1]);
+				const float floor = end == ERiverEnd::Sea ? 0.0f : d.lakes[d.lakeOf[last]].level;
+				for (size_t k = 0; k < n; k++)
+					wUp[k] = oc::max(wUp[k], floor);
 			}
-			startWater[s] = wUp[0];
+			if (end == ERiverEnd::Junction)
+			{
+				auto it = arriving.find(last);
+				if (it == arriving.end())
+					arriving[last] = wUp[n - 1];
+				else
+					it->second = oc::min(it->second, wUp[n - 1]);
+			}
 
 			pts.clear();
 			float maxQ = 0.0f;
+			// A crossing's segment starts / ends ON the tile boundary (the shared point both units compute), so the two
+			// sides meet there instead of a pixel apart, with the crossing's Q.
+			if (inlet)
+				pts.push_back(ChainPoint{ inlet->edgeX, inlet->edgeZ, wUp[0], inlet->q });
 			for (size_t k = 0; k < n; k++)
 			{
 				const int32 p = chain[k];
@@ -685,8 +937,18 @@ namespace Procedural
 				maxQ = oc::max(maxQ, q);
 				pts.push_back(ChainPoint{ (float)(p % W), (float)(p / W), wUp[k], q });
 			}
+			if (outlet)
+				pts.push_back(ChainPoint{ outlet->edgeX, outlet->edgeZ, wUp[n - 1], outlet->q });
+			smoothPath(pts, cfg.pathSmoothing);
+			{
+				// The phase from the segment's start in GLOBAL native pixels: the same river meanders the same way in
+				// every build.
+				const uint32 gx = (uint32)(uj * W + chain[0] % W), gz = (uint32)(ui * W + chain[0] / W);
+				meander(pts, cfg, g.elev, g.mask, W, gx * 0x9E3779B1u ^ gz * 0x85EBCA77u, nr);
+			}
 			chaikin(pts, 2);
-			simplify(pts, 0.2f, simplified);
+			clampToGround(pts, cfg, g.elev, g.mask, W);
+			simplify(pts, 0.1f, 0.25f, simplified); // 0.1 px in plan, 0.25 model m in W
 
 			RiverSegment seg;
 			seg.first = (uint32)unit->points.size();

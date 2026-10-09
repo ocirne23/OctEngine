@@ -27,10 +27,12 @@ layout (triangles, fractional_odd_spacing, ccw) in;
 layout (location = 0) in vec3 in_pos[];
 layout (location = 1) in vec3 in_normal[];
 layout (location = 2) in vec4 in_terrainFields[];
+layout (location = 4) in float in_river[];
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_terrainFields;
+layout (location = 4) out float out_river;
 // The UNDISPLACED position: the terrain FS lights (sun shadow map, RT shadow rays, lights) from here. The
 // shadow map and the TLAS hold the flat mesh, and the centred relief puts half the surface BELOW it - lit
 // from the displaced point, that half sat inside its own caster (acne bands on the slopes away from the sun).
@@ -60,6 +62,7 @@ void main()
 	vec3 pos;
 	vec3 Ni;
 	vec4 fieldsV;
+	float riverV;
 	// CRACK-FREE edges: the two patches sharing an edge list its corners in opposite order, and the 3-term sum
 	// rounds differently from each side (single-pixel sparkles along the mesh edges). A vertex on an edge (one
 	// weight exactly 0) interpolates its two corners in a FIXED order, from the second corner's own weight;
@@ -72,6 +75,7 @@ void main()
 		pos = in_pos[corner];
 		Ni = in_normal[corner];
 		fieldsV = in_terrainFields[corner];
+		riverV = in_river[corner];
 	}
 	else if (zero >= 0)
 	{
@@ -84,12 +88,14 @@ void main()
 		pos = in_pos[i] + (in_pos[j] - in_pos[i]) * wj;
 		Ni = in_normal[i] + (in_normal[j] - in_normal[i]) * wj;
 		fieldsV = in_terrainFields[i] + (in_terrainFields[j] - in_terrainFields[i]) * wj;
+		riverV = in_river[i] + (in_river[j] - in_river[i]) * wj;
 	}
 	else
 	{
 		pos = in_pos[0] * bary.x + in_pos[1] * bary.y + in_pos[2] * bary.z;
 		Ni = in_normal[0] * bary.x + in_normal[1] * bary.y + in_normal[2] * bary.z;
 		fieldsV = in_terrainFields[0] * bary.x + in_terrainFields[1] * bary.y + in_terrainFields[2] * bary.z;
+		riverV = in_river[0] * bary.x + in_river[1] * bary.y + in_river[2] * bary.z;
 	}
 	const vec3 N = normalize(Ni);
 	out_meshPos = pos;
@@ -100,7 +106,7 @@ void main()
 	const float dist = distance(pos, u_views_viewPos[VIEW_CENTER].xyz);
 	if (dist < fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
 	{
-		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w);
+		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w, riverV);
 		const TerrainLayers L = terrainLayers(pos, N, f);
 		// Falloff across the fade band: 1 - t^p ("Falloff exponent"; the TCS eases its factor the same way).
 		const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
@@ -124,6 +130,7 @@ void main()
 	out_pos = pos;
 	out_normal = Ni; // the SMOOTH mesh normal: the coverages read it, the FS adds the relief's facet tilt to it
 	out_terrainFields = fieldsV;
+	out_river = riverV;
 	gl_Position = u_mvp * vec4(pos, 1.0);
 	gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 }

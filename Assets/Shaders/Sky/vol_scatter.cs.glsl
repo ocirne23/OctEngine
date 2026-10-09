@@ -61,6 +61,26 @@ layout (binding = 9, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 // the same surface (light shafts: caustic focus + Beer-Lambert; see underwater_light.inc.glsl).
 #define UNDERWATER_OCEAN_BINDING 11
 #include "underwater_light.inc.glsl"
+
+// THE INLAND WATER MAP (RendererVKLayout::RiverWaterMapGpu; Procedural RiverSystem bakes it around the camera): the river /
+// lake surface Y per texel, RIVER_WATER_NONE elsewhere - the underwater boundary over the water the baked terrain map
+// leaves out (its water channel is the sea's only). Nearest texel: a bilinear would mix in the "none" texels at a bank.
+layout (binding = 14, std430) readonly buffer InRiverWaterMap
+{
+    vec2 rw_origin;
+    float rw_invTexel;
+    uint rw_dim;
+    float rw_height[];
+};
+float riverWaterAt(vec2 worldXZ)
+{
+    if (rw_dim == 0u)
+        return -1.0e9;
+    const ivec2 t = ivec2(floor((worldXZ - rw_origin) * rw_invTexel));
+    if (any(lessThan(t, ivec2(0))) || any(greaterThanEqual(t, ivec2(int(rw_dim)))))
+        return -1.0e9;
+    return rw_height[uint(t.y) * rw_dim + uint(t.x)];
+}
 // The cloud shadow map: fog under a cloud is in shadow, fog inside one too - the gaps cast the shafts.
 #define CLOUD_SHADOW_BINDING 13
 #include "cloud_shadow.inc.glsl"
@@ -295,7 +315,13 @@ void main()
     // Analytic per-slice fraction (mean of the step profile over the segment), like heightFogMean.
     const float y0 = min(yA, yB), y1 = max(yA, yB);
     float surfY = waterY;
-    if (u_fog_waveBand > 0.0 && y0 < waterY + u_fog_waveBand && y1 > waterY - u_fog_waveBand)
+    // A river or lake standing above the sea's level here (the inland water map) is the boundary instead: its calm
+    // surface (the river's waves are small; no ocean wave taps), and its own colour below.
+    const float inlandY = riverWaterAt(worldPos.xz);
+    const bool inland = inlandY > waterY;
+    if (inland)
+        surfY = inlandY;
+    else if (u_fog_waveBand > 0.0 && y0 < waterY + u_fog_waveBand && y1 > waterY - u_fog_waveBand)
         surfY += oceanWaveHeightAt(worldPos.xz, waterDepth, viewZ * (2.0 / float(VOL_FROXEL_Y)));
     // Underwater fog is a NEAR-FIELD effect: water absorbs everything within tens of meters, so distant
     // underwater froxels can never be legitimately seen - but the froxel grid integrates THROUGH the
@@ -318,7 +344,7 @@ void main()
     float density = max(heightDensity, underDensity) * noiseMul;
     // Underwater the medium is water, not air: blend the fog albedo toward the ocean's in-scatter color
     // by how submerged the slice is, so the murk reads blue-green instead of atmospheric gray.
-    vec3 albedoWeighted = mix(u_fog_albedo, u_ocean_scatterColor, underFrac) * density;
+    vec3 albedoWeighted = mix(u_fog_albedo, inland ? u_river_scatterColor : u_ocean_scatterColor, underFrac) * density;
     vec3 emissive = vec3(0.0);
 
     for (uint v = 0u; v < in_numFogVolumes; ++v)
@@ -401,11 +427,14 @@ void main()
             // "Fog/Shaft boost" (u_fog_shaftBoost): non-physical gain on the underwater sun in-scatter -
             // at fog-scale densities the physically correct shaft radiance is too faint to read. Its
             // sqrt also feeds the helper's REACH, so boosting brightness stretches shaft length too.
+            // The calm level the column hangs from: the river / lake's under inland water, else the sea's (waterY carries
+            // the fog boundary offset).
+            const float calmY = inland ? inlandY : waterY - u_fog_boundaryOffset;
             sunTrans = mix(vec3(1.0),
                 underwaterSunTransmittance(worldPos.xz, depthMid, viewZ * (2.0 / float(VOL_FROXEL_Y)),
                     u_fog_shaftBoost,
-                    (waterY - u_fog_boundaryOffset) - (surfY - depthMid), // calm column depth at the submerged midpoint
-                    waterY - u_fog_boundaryOffset                          // the calm level itself (waterY carries the fog boundary offset)
+                    calmY - (surfY - depthMid), // calm column depth at the submerged midpoint
+                    calmY
                     ), underFrac);
             gSun = mix(g, 0.78, underFrac); // strong forward lobe: ~8x gain toward the sun
         }
