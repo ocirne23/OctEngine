@@ -94,6 +94,103 @@ namespace
 				prev = cur;
 			}
 		}
+
+		// THE JUNCTION: the river it flows into stands LOWER at the junction (its bigger Q: a deeper channel and valley
+		// sink under the same unit level), and this ribbon ran on into it, to its centre line - a second sheet a little
+		// above the main water (2026-10-09). So the last stretch (3 x the main half-width, at least 20 m) EASES DOWN to the
+		// main surface at the junction, and a clearly smaller river (a tributary: under 0.6 x the main half-width) STOPS
+		// 0.85 x the main half-width before it - just inside the main water - instead of lying over it. The main river's
+		// own upstream branch is not cut (its ribbon would leave a gap), only eased.
+		if (seg.end != ERiverEnd::Junction || out.size() < 2)
+			return;
+		const RiverPoint& pe = u.points[seg.first + seg.count - 1];
+		const RiverPoint* down = nullptr;
+		const RiverSegment* downSeg = nullptr;
+		bool largestArriving = true; // no other segment ending here is wider (ties: the first in the unit's order)
+		for (const RiverSegment& t : u.segments)
+		{
+			if (&t == &seg || t.count == 0 || t.ephemeral)
+				continue;
+			const RiverPoint& p0 = u.points[t.first];
+			if (std::abs(p0.x - pe.x) < 0.75f && std::abs(p0.z - pe.z) < 0.75f && (!down || p0.halfWidth > down->halfWidth))
+			{
+				down = &p0;
+				downSeg = &t;
+			}
+			const RiverPoint& tl = u.points[t.first + t.count - 1];
+			if (t.end == ERiverEnd::Junction && std::abs(tl.x - pe.x) < 0.75f && std::abs(tl.z - pe.z) < 0.75f
+				&& (tl.halfWidth > pe.halfWidth || (tl.halfWidth == pe.halfWidth && &t < &seg)))
+				largestArriving = false;
+		}
+		if (!down)
+			return;
+		const float downY = carve.surface(down->water, down->depth, down->q) * vs;
+		const float downHalf = down->halfWidth / nr * mpp; // engine m
+		// ITS FLOW at the junction, as the loop above computes it: the first piece's direction, the Manning speed and the
+		// whitewater from that piece's drop.
+		glm::vec2 downDir = out.back().dir;
+		float downSpeed = out.back().speed, downFoam = out.back().foam;
+		if (downSeg->count >= 2)
+		{
+			const RiverPoint& d1 = u.points[downSeg->first + 1];
+			const glm::vec2 dd(d1.x - down->x, d1.z - down->z);
+			const float dl = glm::length(dd);
+			if (dl > 1e-6f)
+			{
+				downDir = dd / dl;
+				const float S0 = carve.surface(down->water, down->depth, down->q), S1 = carve.surface(d1.water, d1.depth, d1.q);
+				const float drop = (S0 - S1) / (dl * nr);
+				downSpeed = glm::clamp(std::pow(glm::max(down->depth, 0.05f), 0.6667f) * std::sqrt(glm::max(drop, 1e-5f)) / 0.035f, 0.1f, 6.0f);
+				const RiverUnitConfig& uc = terrain.unitConfig();
+				downFoam = glm::smoothstep(0.5f * uc.rapidsSlope, glm::max(uc.fallSlope, uc.rapidsSlope + 1e-3f), drop);
+			}
+		}
+		const float total = out.back().along;
+		// The largest arriving branch is the main river's continuation: never cut, or two similar streams joining (each under
+		// 0.6 x the wider river they make) both stopped short and left the junction's upstream side without water.
+		const bool tributary = !largestArriving && pe.halfWidth < 0.6f * down->halfWidth;
+		const float cutAlong = tributary ? glm::max(total - 0.85f * downHalf, 0.0f) : total;
+		if (tributary && cutAlong > 0.0f)
+		{
+			// The last point at exactly cutAlong (interpolated), the rest dropped.
+			size_t k = 1;
+			while (k < out.size() && out[k].along < cutAlong)
+				k++;
+			if (k < out.size())
+			{
+				const WaterPoint& a = out[k - 1];
+				const WaterPoint& b = out[k];
+				const float t = b.along > a.along ? (cutAlong - a.along) / (b.along - a.along) : 0.0f;
+				WaterPoint w = b;
+				w.pos = glm::mix(a.pos, b.pos, t);
+				w.y = glm::mix(a.y, b.y, t);
+				w.half = glm::mix(a.half, b.half, t);
+				w.depth = glm::mix(a.depth, b.depth, t);
+				w.speed = glm::mix(a.speed, b.speed, t);
+				w.foam = glm::mix(a.foam, b.foam, t);
+				w.along = cutAlong;
+				out.resize(k);
+				out.push_back(w);
+			}
+		}
+		// Over the same stretch the FLOW (direction and speed) and the WHITEWATER blend into the main river's too: a slow
+		// stream joining a fast river showed a sheet of slow (or calm) water where its ribbon met the main one; now both
+		// move alike there. The direction matters as much: a tributary at an angle dragged its ripples across the current.
+		const float easeLen = glm::max(3.0f * downHalf, 20.0f);
+		for (WaterPoint& w : out)
+		{
+			const float s = glm::clamp(1.0f - (cutAlong - w.along) / easeLen, 0.0f, 1.0f);
+			const float ease = s * s * (3.0f - 2.0f * s);
+			w.y = glm::min(w.y, glm::mix(w.y, downY, ease));
+			w.speed = glm::mix(w.speed, downSpeed, ease);
+			w.foam = glm::mix(w.foam, downFoam, ease);
+			const glm::vec2 dir = glm::mix(w.dir, downDir, ease);
+			const float dl = glm::length(dir);
+			if (dl > 1e-3f)
+				w.dir = dir / dl;
+			else
+				w.dir = ease > 0.5f ? downDir : w.dir; // head-on: no blend, the nearer one
+		}
 	}
 
 	struct MeshArrays
@@ -135,7 +232,7 @@ namespace
 	{
 		MeshArrays m;
 		oc::vector<WaterPoint> pts;
-		const float channelShape = terrain.carveConfig().channelShape;
+		const float wallSlope = glm::max(terrain.carveConfig().wallSlope, 0.01f);
 		spacing = glm::max(spacing, 0.05f);
 		across = glm::max(across, 2);
 		for (const auto& ref : units)
@@ -197,10 +294,11 @@ namespace
 						{
 							const float u01 = -1.0f + 2.0f * (float)j / (float)(across - 1);
 							const glm::vec2 p = row.pos + n * (row.half * u01);
-							// The carve's channel cross-section (RiverTerrain::pieceCarve): the bed rises to the surface at
-							// the channel's edge, 1 / c_ribbonWiden of the ribbon's half-width.
-							const float x = glm::min(std::abs(u01) * c_ribbonWiden, 1.0f);
-							const float column = row.depth * (1.0f - std::pow(x, glm::max(channelShape, 0.1f)));
+							// The carve's channel cross-section (RiverCarveConfig::channelCut, engine m): the sides rise to
+							// the surface at the channel's edge, 1 / c_ribbonWiden of the ribbon's half-width.
+							const float channelHalf = row.half / c_ribbonWiden;
+							const float edgeIn = channelHalf - row.half * std::abs(u01);
+							const float column = RiverCarveConfig::channelCut(edgeIn, row.depth, channelHalf, wallSlope);
 							m.push(glm::vec3(p.x, row.y, p.y), tangent, glm::vec2(u01, row.along), true, row.depth, column);
 						}
 						return base;

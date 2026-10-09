@@ -1,0 +1,25 @@
+# River stones: water-worn, rounded cobbles and small boulders in a river's bed and on its banks - many where the water
+# runs FAST (rapids, a steep stream), few in slow water. The colour is the climate's bedrock (Color tints it). Format:
+# Code/Procedural/CONTEXT.md, "Ground clutter".
+ClutterType RiverStone
+	Kind Pebble
+	Seed 227
+	Variants 6
+	Scale 0.12 0.65
+	Range 110
+	Sink 0.35
+	Align 0.8
+	Color 0.95 0.95 0.95
+	Lod 240
+	Aspect 1 0.6 0.8
+	AspectVar 0.2 0.2 0.2
+	Erosion 0.28
+	Noise 0.02 2.0 3
+	Placement
+		Density 0.15
+		# in the channel and on its banks, scaled up hard by the speed of the water
+		River 0 1
+		Flow 0.05 0.5
+		Cluster 9 0.6
+		Slope 1.2
+		Altitude -1000

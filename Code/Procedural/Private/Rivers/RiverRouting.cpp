@@ -257,7 +257,12 @@ namespace Procedural
 		out.lakeOf.assign(N, -1);
 		for (Depression& dep : deps)
 		{
-			if (!(dep.maxDepth > g.breachDepth && (int32)dep.cells.size() >= oc::max(g.lakeMinCells, 1)))
+			// A lake: deeper than the breach depth AND big enough - or, whatever its size, deeper than TWICE the breach
+			// depth (a pond). Cut through, a deep small basin left the river a gorge tens of metres under its rim, reaching
+			// a unit edge far below the crossing's level: the neighbour floated, or carried the gorge on as a canyon
+			// (the user, 2026-10-09).
+			const bool deepPond = dep.maxDepth > 2.0f * g.breachDepth;
+			if (!(dep.maxDepth > g.breachDepth && ((int32)dep.cells.size() >= oc::max(g.lakeMinCells, 1) || deepPond)))
 				continue;
 			// Spilling through a soft wall: the grid's edge cut the basin off, so its level is not the ground's.
 			if (softSeed[out.root[dep.cells.front()]])

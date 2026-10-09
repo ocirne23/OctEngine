@@ -45,6 +45,8 @@ namespace
 		t.terms1 = glm::vec4(p.beach, p.canopy);
 		t.terms2 = glm::vec4(p.trunk, p.rock);
 		t.terms3 = glm::vec4(p.wet, p.maxSlope, p.minAltitude);
+		t.terms4 = glm::vec4(p.river, p.flow);
+		t.terms5 = glm::vec4(p.riverCurve, 0.0f, 0.0f, 0.0f);
 		t.ring = p.ring;
 		t.shape = glm::vec4(desc.scale, desc.range, desc.sink);
 		t.albedo0 = glm::vec4(srgbToLinear(desc.color), desc.roughness);
@@ -52,8 +54,8 @@ namespace
 		t.flower = glm::vec4(desc.stemHeight, desc.headSize, desc.petalWidth, glm::radians(desc.open));
 		// The most this block can place anywhere (every term at its largest): the ranks the cull evaluates.
 		const float maxDensity = p.density * termMax(p.grass) * termMax(p.crag) * termMax(p.beach) * termMax(p.canopy)
-			* termMax(p.trunk) * termMax(p.rock) * termMax(p.wet);
-		t.bound = glm::vec4(maxDensity, desc.spots, 0.0f, 0.0f);
+			* termMax(p.trunk) * termMax(p.rock) * termMax(p.wet) * termMax(p.river) * termMax(p.flow) * termMax(p.water);
+		t.bound = glm::vec4(maxDensity, desc.spots, p.water);
 		t.info = glm::uvec4(firstMesh, numMeshes, (uint32)desc.kind, (uint32)desc.head | ((uint32)glm::min(desc.petals, 255) << 8));
 		return t;
 	}

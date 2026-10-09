@@ -2778,7 +2778,8 @@ variant gets the ocean's `OCEAN_RT_REFLECTIONS` / `OCEAN_HIT_LIGHTS` defines (no
 * **SMALL RIVERS** (the user, 2026-10-09): the vertex normal's y carries the channel's centre depth (engine m, lakes
   1e4); size = it / "Full size depth" (at most 1). The waves scale by size (the VS height and the FS slope,
   `out_waveSize`, location 4: a fading stream head has none) and the flow by mix("Small river flow", 1, size) (the
-  ripples' drift and the waves' drag). From the full-size depth up a river behaves as set.
+  ripples' drift and the waves' drag), and the TURBULENCE by size too (river.fs.glsl: a trickle has too little water to
+  churn, whatever its slope). From the full-size depth up a river behaves as set.
 * **The ripples**: a two-phase FLOW MAP over the terrain noise texture's R / G gradient fBms (`u_terrain_noiseTex`),
   dragged downstream by the vertex flow ("Flow speed"), two scales, "Ripple size" / "Ripple strength"; a lake drifts
   slowly in one direction and ripples at "Lake ripple".

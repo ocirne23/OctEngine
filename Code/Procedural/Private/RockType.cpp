@@ -108,6 +108,8 @@ namespace Procedural
 			readRange(*placement, "Rugged", p.rugged); // low end, high end (one value: both)
 			readFloat(*placement, "Valley", p.valley);
 			readRange(*placement, "Forest", p.forest); // open, forest (one value: both)
+			readRange(*placement, "River", p.river);   // none, full (one value: both)
+			readRange(*placement, "Flow", p.flow);     // slow, fast (one value: both)
 			if (p.density <= 0.0f)
 				continue;
 			p.climateWidth = glm::max(p.climateWidth, 0.01f);
@@ -117,6 +119,8 @@ namespace Procedural
 			p.plains = glm::max(p.plains, 0.0f);
 			p.rugged = glm::max(p.rugged, glm::vec2(0.0f));
 			p.forest = glm::max(p.forest, glm::vec2(0.0f));
+			p.river = glm::max(p.river, glm::vec2(0.0f));
+			p.flow = glm::max(p.flow, glm::vec2(0.0f));
 			out.placements.push_back(p);
 		}
 

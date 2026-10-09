@@ -19,6 +19,8 @@ ClutterType Pebble
 		Grass 1.5 0.3
 		Crag 1 4
 		Beach 1 6
+		# a river's bed takes the beach layer too: there RiverStone places the stones (scaled by the water's speed)
+		River 1 0.1
 		Rock 1 10
 		Canopy 1 0.6
 		Slope 1.2

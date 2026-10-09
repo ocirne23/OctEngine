@@ -16,12 +16,14 @@ struct ClutterType // RendererVKLayout::ClutterTypeGpu
     vec4 terms1;    // Beach (none .. full), Canopy (open .. shaded)
     vec4 terms2;    // Trunk (far .. near), RockNear (far .. near)
     vec4 terms3;    // Wet (dry .. wet), z max slope, w min altitude above water (m)
+    vec4 terms4;    // River (none .. full), Flow (slow .. fast)
+    vec4 terms5;    // x the River term's curve (its measure ^ this)
     vec4 ring;      // x radius (0 = none), y width, z cell (m), w chance
     vec4 shape;     // x..y scale range, z range (m), w sink (fraction of the height)
     vec4 albedo0;   // rgb main (linear), w roughness
     vec4 albedo1;   // rgb second (linear), w ground align
     vec4 flower;    // x stem height, y head size, z petal width, w petal open angle (rad)
-    vec4 bound;     // x max density (per m^2), y spots
+    vec4 bound;     // x max density (per m^2), y spots, zw Water (dry .. under a river's / lake's water)
     uvec4 info;     // x first mesh, y variants, z kind, w head | petals << 8
 };
 

@@ -115,7 +115,8 @@ namespace Procedural
 		{
 			const oc::string head = n->asString();
 			out.head = iequals(head, "Spike") ? EFlowerHead::Spike : iequals(head, "Umbel") ? EFlowerHead::Umbel
-				: iequals(head, "Bell") ? EFlowerHead::Bell : EFlowerHead::Radial;
+				: iequals(head, "Bell") ? EFlowerHead::Bell : iequals(head, "Reed") ? EFlowerHead::Reed
+				: iequals(head, "Tuft") ? EFlowerHead::Tuft : EFlowerHead::Radial;
 		}
 		readInt(*type, "Petals", out.petals);
 		readFloat(*type, "Open", out.open);
@@ -144,6 +145,11 @@ namespace Procedural
 			readPair(*placement, "Trunk", p.trunk);
 			readPair(*placement, "Rock", p.rock);
 			readPair(*placement, "Wet", p.wet);
+			readPair(*placement, "River", p.river);
+			if (const AssetNode* n = placement->find("River"))
+				p.riverCurve = glm::clamp(n->asFloat(2, 1.0f), 0.1f, 16.0f); // River none full [curve]
+			readPair(*placement, "Flow", p.flow);
+			readPair(*placement, "Water", p.water);
 			if (const AssetNode* n = placement->find("Ring"))
 				p.ring = glm::vec4(n->asFloat(0, p.ring.x), n->asFloat(1, p.ring.y), n->asFloat(2, p.ring.z), n->asFloat(3, p.ring.w));
 			if (p.density <= 0.0f)
@@ -151,7 +157,7 @@ namespace Procedural
 			p.climateWidth = glm::max(p.climateWidth, 0.01f);
 			p.clusterCoverage = glm::clamp(p.clusterCoverage, 0.0f, 1.0f);
 			p.maxSlope = glm::max(p.maxSlope, 0.0f);
-			for (glm::vec2* term : { &p.grass, &p.crag, &p.beach, &p.canopy, &p.trunk, &p.rock, &p.wet })
+			for (glm::vec2* term : { &p.grass, &p.crag, &p.beach, &p.canopy, &p.trunk, &p.rock, &p.wet, &p.river, &p.flow, &p.water })
 				*term = glm::max(*term, glm::vec2(0.0f));
 			p.ring = glm::vec4(glm::max(p.ring.x, 0.0f), glm::max(p.ring.y, 0.05f), glm::max(p.ring.z, 2.0f * p.ring.x + 1.0f), glm::clamp(p.ring.w, 0.0f, 1.0f));
 			out.placements.push_back(p);

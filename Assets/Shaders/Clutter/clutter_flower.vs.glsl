@@ -16,7 +16,12 @@
 //              swept back like a coneflower), + the centre disc;
 //     SPIKE  - florets in a spiral up the top of the stem (lupine, lavender, foxglove);
 //     UMBEL  - small flat florets spread over a disc (yarrow, Queen Anne's lace);
-//     BELL   - florets hanging from the arching top of the stem (bluebell).
+//     BELL   - florets hanging from the arching top of the stem (bluebell);
+//     REED   - the petals are long, nearly pointed LEAVES (leaning out by `open`, their tips swaying with the stalk; the
+//              stem's colours) in REED_TUFTS tufts side by side - the first around the stalk - and the centre a CATTAIL
+//              spike along the stalk's top (the second colour);
+//     TUFT   - no stalk: fine leaves of 3 slots each near (2 further out: the bend) rising out of the root as a bundle, then arching
+//              out and drooping toward the tip (a sedge), in the petal colour.
 //   A petal slot past the flower's petal count collapses to a point (no area). At a coarser LOD with fewer slots than
 //   petals the petals get wider, so the head keeps its coverage.
 
@@ -39,6 +44,9 @@ layout (location = 2) out vec4 out_flower;          // x part (0 stem, 1 petal, 
 layout (location = 3) out vec3 out_prevWorldDelta;
 layout (location = 4) flat out uvec2 out_look;      // x albedo0 (petals), y albedo1 (centre)
 #endif
+
+// A reed's leaves form this many tufts side by side (flowerVertex).
+#define REED_TUFTS 3u
 
 uint flowerStemSegments(uint lod) { return lod == 0u ? CLUTTER_FLOWER_STEM0 : lod == 1u ? CLUTTER_FLOWER_STEM1 : CLUTTER_FLOWER_STEM2; }
 uint flowerPetalSlots(uint lod) { return lod == 0u ? CLUTTER_FLOWER_PETALS0 : lod == 1u ? CLUTTER_FLOWER_PETALS1 : CLUTTER_FLOWER_PETALS2; }
@@ -83,6 +91,101 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         part = 0.0;
         along = t;
         return flowerStemPoint(f, ctrl, tip, t, sideSign);
+    }
+    if (f.head == FLOWER_HEAD_TUFT)
+    {
+        // A TUFT (sedge): no stalk (zero width, main) and no centre; a leaf takes `segs` slots (3 near, 2 further out: its
+        // bend), leaf j / segs of petals / segs: an arc out of the root, leaning out by `open`, its tip drooping, swaying
+        // with the wind.
+        const uint pv = v - stemVerts;
+        const uint j = pv >> 2u;
+        const uint corner = pv & 3u;
+        part = 1.0;
+        const uint segs = lod == 0u ? 3u : 2u;
+        const uint leaf = j / segs;
+        if (j >= flowerPetalSlots(lod) || leaf >= max(f.petals / segs, 1u))
+        {
+            normal = up;
+            along = 0.0;
+            return f.root; // the centre / an unused slot: no area
+        }
+        const float fl = float(leaf);
+        const float psi = fl * 2.39996323 + f.rotation;
+        const vec3 o = vec3(cos(psi), 0.0, sin(psi));
+        const float lean = f.open * mix(0.55, 1.35, fract(fl * 0.618034 + f.phase));
+        const float len = f.height * mix(0.65, 1.0, fract(fl * 0.754878 + f.rotation));
+        const vec2 wind = (tip.xz - f.root.xz - f.lean) * (len / max(f.height, 1e-3));
+        // The leaf is a quadratic Bezier whose control stands STRAIGHT UP from the root: it rises out of the ground as a
+        // bundle and only then arches out to its tip - out by sin(lean), drooping, but never under 15 % of its length
+        // (leaning straight out from the root, the low leaves lay in the ground's relief).
+        const vec3 c0 = f.root;
+        const vec3 c1 = f.root + up * (0.55 * len);
+        const vec3 c2 = f.root + o * (sin(lean) * len) + up * (len * max(cos(lean) - 0.35 * sin(lean), 0.15))
+            + vec3(wind.x, 0.0, wind.y);
+        // The arc at s (0 root .. 1 tip) and its width (full at the root, a point at the tip).
+        const float s = (float(j % segs) + (corner < 2u ? 0.0 : 1.0)) / float(segs);
+        const vec3 p = grassBezier(c0, c1, c2, s);
+        const vec3 tangent = 2.0 * (1.0 - s) * (c1 - c0) + 2.0 * s * (c2 - c1);
+        const vec3 across = vec3(-o.z, 0.0, o.x);
+        normal = normalize(cross(tangent, across));
+        if (dot(normal, up) < 0.0)
+            normal = -normal;
+        along = s;
+        const float width = f.petalWidth * f.headSize * f.petalScale * mix(1.0, 0.08, s * s);
+        return p + across * (((corner == 1u || corner == 2u) ? 0.5 : -0.5) * width);
+    }
+    if (f.head == FLOWER_HEAD_REED)
+    {
+        const uint slots = flowerPetalSlots(lod);
+        const uint pv = v - stemVerts;
+        const uint j = pv >> 2u;
+        const uint corner = pv & 3u;
+        const float s = (corner == 1u || corner == 2u) ? 0.5 : -0.5;
+        along = corner < 2u ? 0.0 : 1.0;
+        if (j >= slots)
+        {
+            // THE CATTAIL: a spike along the stalk's top (HeadSize long), facing the viewer as the stalk does.
+            part = 2.0;
+            const float tt = corner < 2u ? clamp(1.0 - 1.05 * f.headSize / max(f.height, 1e-3), 0.3, 0.95) : 0.97;
+            const vec3 tangent = 2.0 * (1.0 - tt) * (ctrl - f.root) + 2.0 * tt * (tip - ctrl);
+            normal = normalize(cross(f.side, tangent) + 1e-4 * up);
+            return grassBezier(f.root, ctrl, tip, tt) + f.side * (s * 0.1 * f.headSize); // a tenth as wide as long
+        }
+        part = 0.0;
+        if (j >= f.petals)
+        {
+            normal = up;
+            return f.root; // an unused slot: no area
+        }
+        // A LEAF: long and nearly pointed, leaning out by `open`, its tip swaying with the stalk. The leaves form
+        // REED_TUFTS TUFTS side by side (leaf j in tuft j % REED_TUFTS): the first around the cattail's stalk, the others
+        // 0.15 .. 0.25 x the height beside it, a little shorter.
+        const float fj = float(j);
+        const uint tuft = j % REED_TUFTS;
+        vec3 tuftCentre = f.root;
+        float tuftHeight = 1.0;
+        if (tuft > 0u)
+        {
+            const float ta = f.rotation + float(tuft) * 2.2 + 0.6 * fract(f.phase * 1.7 + float(tuft) * 0.37);
+            tuftCentre += vec3(cos(ta), 0.0, sin(ta)) * (f.height * mix(0.15, 0.25, fract(f.phase * 3.1 + float(tuft) * 0.61)));
+            tuftHeight = mix(0.7, 0.9, fract(f.rotation * 2.3 + float(tuft) * 0.29));
+        }
+        const float psi = fj * 2.39996323 + f.rotation;
+        const vec3 o = vec3(cos(psi), 0.0, sin(psi));
+        const float lean = f.open * mix(0.5, 1.4, fract(fj * 0.618034 + f.phase));
+        const vec3 dir = normalize(o * sin(lean) + up * cos(lean));
+        const float len = f.height * tuftHeight * mix(0.6, 1.0, fract(fj * 0.754878 + f.rotation));
+        const vec3 across = vec3(-o.z, 0.0, o.x);
+        const float width = f.petalWidth * f.headSize * f.petalScale;
+        normal = normalize(cross(dir, across));
+        if (dot(normal, o) < 0.0)
+            normal = -normal;
+        normal = normalize(mix(normal, up, 0.3));
+        const vec3 base = tuftCentre + o * (0.3 * width);
+        if (corner < 2u)
+            return base + across * (s * width);
+        const vec2 sway = (tip.xz - f.root.xz - f.lean) * (len / max(f.height, 1e-3));
+        return base + dir * len + vec3(sway.x, 0.0, sway.y) + across * (s * 0.15 * width);
     }
     // The head's frame: along the stem's upper chord (it always rises - the tangent at the tip is the horizontal
     // lean), a random turn about it.
@@ -203,6 +306,10 @@ void main()
     f.side = dot(across, across) > 1e-8 ? vec3(normalize(across).x, 0.0, normalize(across).y) : vec3(1.0, 0.0, 0.0);
     if (f.head == FLOWER_HEAD_BELL)
         f.lean *= 2.5; // an arching stem
+    else if (f.head == FLOWER_HEAD_REED)
+        f.lean *= 0.3; // a reed's stalk stands up
+    else if (f.head == FLOWER_HEAD_TUFT)
+        f.stemHalfWidth = 0.0; // a tuft has no stalk: only its sway drives the leaves
 
     // The wind: the grass's (the same blade), easing out with the distance as the grass's does.
     const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, dist);

@@ -291,6 +291,8 @@ static oc::string buildLayoutPreamble()
     def("FLOWER_HEAD_SPIKE", (uint32)EFlowerHead::Spike, "u");
     def("FLOWER_HEAD_UMBEL", (uint32)EFlowerHead::Umbel, "u");
     def("FLOWER_HEAD_BELL", (uint32)EFlowerHead::Bell, "u");
+    def("FLOWER_HEAD_REED", (uint32)EFlowerHead::Reed, "u");
+    def("FLOWER_HEAD_TUFT", (uint32)EFlowerHead::Tuft, "u");
     def("PASS_MAIN", PASS_MAIN, "u");
     def("PASS_SHADOW", PASS_SHADOW, "u");
     def("PASS_GI", PASS_GI, "u");

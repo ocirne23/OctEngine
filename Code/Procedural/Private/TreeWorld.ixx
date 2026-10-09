@@ -140,6 +140,7 @@ export namespace Procedural
 			oc::string name;
 			uint8 type = 0;
 			oc::vector<RockRule> rules;   // the type's Placement blocks: their densities add
+			bool riverRules = false;      // a rule has a River term: it may place in a river's bed
 			glm::vec2 scale{ 1.0f };      // m, the type's Scale range (rockRecordScale)
 			float cell = 8.0f;            // its WORLD lattice (m): at most one rock of the type per cell
 			RockFootprint footprint;      // the ground it covers (the trees keep out of it)

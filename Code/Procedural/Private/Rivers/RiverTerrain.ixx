@@ -18,8 +18,9 @@ import :RiverUnits;
 // rect once (sampleGrid: one store lookup per unit, not per point).
 //
 // The carve per channel piece, in the model frame (d = distance from the centre line, S = the water surface there,
-// w = half-width, D = the channel depth): the channel from the bed (S - D) up to S at d = w, ONE CURVE over the bank and
-// the floodplain (w x ("Bank factor" + "Floodplain factor") wide) rising "Bank height" x D as (x / width)^"Floodplain
+// w = half-width, D = the channel depth): the channel - its sides at "Channel wall slope" from S at d = w down to a flat
+// bed at S - D (RiverCarveConfig::channelCut) -, ONE CURVE over the bank and
+// the floodplain (w x ("Bank factor" + "Floodplain factor") wide) rising "Bank height" x the hydraulic depth (not D) as (x / width)^"Floodplain
 // curve", then the valley wall at "Valley slope" for "Carve reach" past the floodplain's edge, fading out over its last
 // 30 %. The floodplain is always carved whole. It only ever LOWERS the ground (a soft min) and the pieces compose by
 // min. A pure function of (x, z) - never of the query's grid step: the terrain's edge stitch needs that.
@@ -31,9 +32,9 @@ export namespace Procedural
 {
 	struct RiverCarveConfig
 	{
-		float channelDepthScale = 1.0f;
+		float channelDepthScale = 2.5f;
 		float channelMinDepth = 0.2f;  // model m
-		float channelShape = 3.0f;
+		float wallSlope = 0.1f;        // the channel's sides, rise / run
 		float bankHeight = 2.16f;
 		float floodplainCurve = 1.0f;
 		float valleyDepth = 0.0f;      // model m
@@ -67,6 +68,23 @@ export namespace Procedural
 			const float d = unitDepth * channelDepthScale;
 			return d > channelMinDepth ? d : channelMinDepth;
 		}
+		// THE CHANNEL'S CROSS-SECTION: how far below the surface the bed lies `e` in from the channel's edge, for a channel
+		// of half-width hw (e, hw and the result in any one unit; the slope is the same in the model frame and the world):
+		// the sides at "Channel wall slope" down to a FLAT bed at the channel depth D, rounded at the foot (a smooth min over
+		// 0.15 D). The depth does not steepen the sides - a deeper channel's are only longer - and the slope never makes
+		// the channel shallower: where the sides would not reach D within 80 % of the half-width (a narrow, deep channel)
+		// they steepen just enough to, so at least the middle 20 % is bed at the full depth.
+		static float channelCut(float e, float D, float hw, float slope)
+		{
+			const float minSlope = D / (0.8f * (hw > 1e-4f ? hw : 1e-4f));
+			const float wall = (e > 0.0f ? e : 0.0f) * (slope > minSlope ? slope : minSlope);
+			const float k = 0.15f * D;
+			if (k <= 1e-6f)
+				return wall < D ? wall : D;
+			const float diff = wall > D ? wall - D : D - wall;
+			const float h = (k - diff > 0.0f ? k - diff : 0.0f) / k;
+			return (wall < D ? wall : D) - h * h * k * 0.25f;
+		}
 	};
 
 	inline RiverCarveConfig riverCarveConfigFromSettings(const TerrainSettings& s)
@@ -74,7 +92,7 @@ export namespace Procedural
 		RiverCarveConfig c;
 		c.channelDepthScale = s.riverChannelDepthScale;
 		c.channelMinDepth = s.riverChannelMinDepth;
-		c.channelShape = s.riverChannelShape;
+		c.wallSlope = s.riverChannelWallSlope;
 		c.bankHeight = s.riverBankHeight;
 		c.floodplainCurve = s.riverFloodplainCurve;
 		c.valleyDepth = s.riverValleyDepth;
@@ -149,7 +167,11 @@ export namespace Procedural
 		// (its floodplain edge + the carve reach) touches. Then the unit's water is SUNK under the other rivers' carves
 		// (sinkUnderCarves).
 		oc::shared_ptr<const PreparedRiverUnit> prepare(oc::shared_ptr<const RiverUnit> unit) const;
+		void matchInlets(RiverUnit& u) const;
+		void fadeOpenEnds(RiverUnit& u) const;
 		void sinkUnderCarves(PreparedRiverUnit& p, RiverUnit& u) const;
+		// The unit as built, never prepared: what a neighbour's preparation reads (blocking on a miss, like `unit`).
+		oc::shared_ptr<const RiverUnit> rawUnit(int32 ui, int32 uj) const;
 		float pieceReach(float halfWidth, float q) const; // model m: the floodplain's edge (capped) + the wall's reach at q
 		float wallReach(float q) const;                   // model m: the valley wall's reach past the floodplain at q
 		// The ground (model m) piece a -> c leaves at distance d (model m) from its point at t, over the ground hg; its
@@ -172,5 +194,13 @@ export namespace Procedural
 		mutable oc::unordered_map<uint64, oc::shared_ptr<const PreparedRiverUnit>> m_units;
 		mutable oc::deque<uint64> m_unitOrder; // insertion order, for the eviction
 		mutable oc::unordered_map<uint64, oc::shared_ptr<Pending>> m_pending;
+		struct RawPending
+		{
+			JobEvent done;
+			oc::shared_ptr<const RiverUnit> result;
+		};
+		mutable oc::unordered_map<uint64, oc::shared_ptr<const RiverUnit>> m_raw; // the units as built
+		mutable oc::deque<uint64> m_rawOrder;
+		mutable oc::unordered_map<uint64, oc::shared_ptr<RawPending>> m_rawPending;
 	};
 }

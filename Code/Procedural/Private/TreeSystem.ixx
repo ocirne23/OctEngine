@@ -176,6 +176,7 @@ export namespace Procedural
 			float sizeVariation = 0.0f;
 			float bushesPerTree = 0.0f;
 			float bushRadius = 1.5f;    // bushes out to this from their tree (m)
+			float riverClear = 1.0f;    // "Terrain/Rivers/Vegetation clear": no bush where the river influence is above it
 		};
 		struct ExpandResult
 		{

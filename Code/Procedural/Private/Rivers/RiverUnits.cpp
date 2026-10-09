@@ -14,10 +14,15 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 9; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
-	                                         // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
-	                                         // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
-	                                         // 9: the W ground clamp on the final path
+	constexpr uint32 RIVER_UNIT_VERSION = 15; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
+	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
+	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
+	                                          // 11: deep small basins are ponds, not cut (RiverRouting).
+	                                          // 12: crossing segments aligned to the edge's normal at the crossing.
+	                                          // 13: the meander pull-back smoothed over half a wavelength, no cap.
+	                                          // 14: the meander's steepness factor smoothed the same way.
+	                                          // 15: the outlet Q blend only where the fine Q is at least half the coarse
 
 	struct UnitHeader
 	{
@@ -298,7 +303,7 @@ namespace
 			return glm::mix(glm::mix(elev[i], elev[i + 1], fx), glm::mix(elev[i + W], elev[i + W + 1], fx), fz);
 		};
 
-		oc::vector<float> s(n, 0.0f), off(n, 0.0f), scale(n, 1.0f);
+		oc::vector<float> s(n, 0.0f), off(n, 0.0f), scale(n, 1.0f), halfLambda(n, 8.0f), steepness(n, 1.0f);
 		oc::vector<glm::vec2> normal(n);
 		for (size_t k = 1; k < n; k++)
 			s[k] = s[k - 1] + glm::length(glm::vec2(pts[k].x - pts[k - 1].x, pts[k].z - pts[k - 1].z));
@@ -317,13 +322,14 @@ namespace
 			const float size = glm::clamp((std::log(glm::max(p.q, 1e-4f)) - logMin) / logSpan, 0.0f, 1.0f);
 			const float widthPx = glm::max(cfg.widthA * std::sqrt(glm::max(p.q, 0.0f)) / nr, 0.2f);
 			const float lambda = glm::max(cfg.meanderWavelength * glm::mix(cfg.meanderSmallWavelength, 1.0f, size) * widthPx, 4.0f);
+			halfLambda[k] = 0.5f * lambda;
 			if (k > 0)
 				phase += 6.2831853f * (s[k] - s[k - 1]) / lambda;
 			if (k + 1 < n)
 				slope = (p.w - pts[k + 1].w) / glm::max((s[k + 1] - s[k]) * nr, 1e-3f);
-			const float steep = glm::mix(1.0f, 0.3f, glm::smoothstep(0.0f, glm::max(cfg.meanderSlope, 1e-4f), slope));
+			steepness[k] = glm::mix(1.0f, 0.3f, glm::smoothstep(0.0f, glm::max(cfg.meanderSlope, 1e-4f), slope));
 			const float ends = glm::smoothstep(0.0f, 0.5f * lambda, s[k]) * glm::smoothstep(0.0f, 0.5f * lambda, total - s[k]);
-			off[k] = cfg.meanderAmplitude * glm::mix(cfg.meanderSmallAmplitude, 1.0f, size) * widthPx * steep * ends
+			off[k] = cfg.meanderAmplitude * glm::mix(cfg.meanderSmallAmplitude, 1.0f, size) * widthPx * ends
 				* (0.75f * std::sin(phase + ph1) + 0.25f * std::sin(0.43f * phase + ph2));
 
 			const ChainPoint& a = pts[k > 0 ? k - 1 : k];
@@ -334,7 +340,8 @@ namespace
 			normal[k] = glm::vec2(-dir.y, dir.x);
 		}
 
-		// Keep it on the valley floor.
+		// Keep it on the valley floor: the largest of 1, 3/4, 1/2, 1/4 of the swing whose ground stands at most the channel's
+		// depth above the point's own (else none) ...
 		for (size_t k = 0; k < n; k++)
 		{
 			if (off[k] == 0.0f)
@@ -342,28 +349,39 @@ namespace
 			const ChainPoint& p = pts[k];
 			const float base = elevAt(p.x, p.z);
 			const float tolerance = cfg.depthC * std::pow(glm::max(p.q, 0.0f), 0.4f); // the channel's own depth
-			float f = 1.0f;
-			for (int32 t = 0; t < 4; t++, f *= 0.5f)
+			scale[k] = 0.0f;
+			for (int32 t = 4; t >= 1; t--)
+			{
+				const float f = 0.25f * (float)t;
 				if (elevAt(p.x + normal[k].x * off[k] * f, p.z + normal[k].y * off[k] * f) <= base + tolerance)
+				{
+					scale[k] = f;
 					break;
-			scale[k] = f < 0.1f ? 0.0f : f;
+				}
+			}
 		}
+		// ... and the steepness factor too - BOTH SMOOTHED over half a meander wavelength (the samples are 1 px apart): a
+		// pull-back eases in over a bend. Both jumped between neighbouring samples - the steepness with the breach
+		// profile's staircase of flats and drops (0.3 / 1 per sample), the pull-back by halves, kept by a cap at each
+		// sample's own limit - and every jump moved the swing sideways at once: Z-shaped jogs wherever it was large (seen
+		// 2026-10-09). A swing smoothed a little past its limit only climbs the bank; the ground clamp after keeps its water down.
 		oc::vector<float> smoothScale(n);
-		constexpr int32 c_scaleRadius = 8;
 		for (size_t k = 0; k < n; k++)
 		{
-			float sum = 0.0f;
+			const int32 radius = glm::clamp((int32)halfLambda[k], 8, 64);
+			float sumScale = 0.0f, sumSteep = 0.0f;
 			int32 count = 0;
-			for (int32 o = -c_scaleRadius; o <= c_scaleRadius; o++)
+			for (int32 o = -radius; o <= radius; o++)
 			{
 				const int64 j = (int64)k + o;
 				if (j >= 0 && j < (int64)n)
 				{
-					sum += scale[(size_t)j];
+					sumScale += scale[(size_t)j];
+					sumSteep += steepness[(size_t)j];
 					count++;
 				}
 			}
-			smoothScale[k] = glm::min(sum / (float)count, scale[k] + 0.25f); // smoothed, but never far past its own limit
+			smoothScale[k] = sumScale * sumSteep / (float)(count * count);
 		}
 		for (size_t k = 0; k < n; k++)
 		{
@@ -803,6 +821,142 @@ namespace Procedural
 		DrainageResult d;
 		routeDrainage(g, seeds, d);
 
+		// THE EDGE REROUTE (the user, 2026-10-09): the coarse network decides where water crosses a unit's edge, the fine
+		// routing where it really goes - over a ridge higher than "Edge wall" a big river left through the SOFT wall (it
+		// ended at the border) while the coarse crossing a few tiles along the same edge got almost nothing, and the
+		// NEIGHBOUR, which injects the coarse Q there, started a full-size river from nothing. So an outlet whose fine water
+		// falls short (under half its coarse Q) takes the largest soft exit on the SAME unit edge within c_rerouteAlong px
+		// carrying at least c_rerouteShare of it: the exit's water runs on to the outlet along the least-climb path inside
+		// the unit (within c_rerouteBand px of the edge; the profile's breach cuts the rim, the outlet's Q blend matches the
+		// Q). The path's pixels take the exit's rank, so whatever joins them is profiled first. The water keeps the exit's
+		// level through the rim (a gorge); the NEIGHBOUR carries that lower level on from its inlet (RiverTerrain's inlet
+		// match), so the two meet without a step.
+		{
+			constexpr int32 c_rerouteAlong = 3 * 256;
+			constexpr int32 c_rerouteBand = 48;
+			constexpr float c_rerouteShare = 0.3f;
+			constexpr float c_climbCost = 0.5f; // extra cost per step, per model m above the exit's ground
+			// The highest rim a reroute may breach (model m): a basin any deeper is a pond (RiverRouting), never cut.
+			const float c_rerouteMaxRim = 2.0f * cfg.breachDepth;
+			oc::unordered_set<int32> usedExits;
+			oc::vector<float> dist;
+			oc::vector<int32> prev;
+			oc::vector<int32> route;
+			for (const auto& [oidx, oce] : outlets)
+			{
+				if (oce.q < cfg.channelMinQ || d.outflow[oidx] >= 0.5f * oce.q)
+					continue;
+				const int32 ox = oidx % W, oz = oidx / W;
+				const int32 side = ox == 0 ? 0 : ox == W - 1 ? 1 : oz == 0 ? 2 : oz == W - 1 ? 3 : -1;
+				if (side < 0)
+					continue; // beside a missing tile, not the unit's edge
+				const auto alongOf = [&](int32 i) { return side < 2 ? i / W : i % W; };
+				const auto inwardOf = [&](int32 i) { const int32 x = i % W, z = i / W; return side == 0 ? x : side == 1 ? W - 1 - x : side == 2 ? z : W - 1 - z; };
+				int32 exitIdx = -1;
+				float exitQ = oc::max(cfg.channelMinQ, c_rerouteShare * oce.q);
+				for (const int32 s : softSeeds)
+				{
+					if (inwardOf(s) != 0 || usedExits.count(s) || std::abs(alongOf(s) - alongOf(oidx)) > c_rerouteAlong)
+						continue;
+					if (d.outflow[s] > exitQ)
+					{
+						exitQ = d.outflow[s];
+						exitIdx = s;
+					}
+				}
+				if (exitIdx < 0)
+					continue;
+				usedExits.insert(exitIdx);
+
+				// Dijkstra over the band between the two along the edge (+ the band's width each way).
+				const int32 a0 = oc::max(oc::min(alongOf(exitIdx), alongOf(oidx)) - c_rerouteBand, 0);
+				const int32 a1 = oc::min(oc::max(alongOf(exitIdx), alongOf(oidx)) + c_rerouteBand, W - 1);
+				const int32 la = a1 - a0 + 1, lb = c_rerouteBand + 1;
+				const auto toPixel = [&](int32 along, int32 inward)
+				{
+					switch (side)
+					{
+					case 0: return along * W + inward;
+					case 1: return along * W + (W - 1 - inward);
+					case 2: return inward * W + along;
+					default: return (W - 1 - inward) * W + along;
+					}
+				};
+				const auto local = [&](int32 i) { return (alongOf(i) - a0) * lb + inwardOf(i); };
+				dist.assign((size_t)la * lb, FLT_MAX);
+				prev.assign((size_t)la * lb, -1);
+				const float baseElev = g.elev[exitIdx];
+				using Entry = oc::pair<float, int32>;
+				oc::priority_queue<Entry, oc::vector<Entry>, oc::greater<Entry>> open;
+				dist[(size_t)local(exitIdx)] = 0.0f;
+				open.push({ 0.0f, exitIdx });
+				bool reached = false;
+				while (!open.empty())
+				{
+					const Entry top = open.top();
+					open.pop();
+					const int32 p = top.second;
+					if (top.first > dist[(size_t)local(p)])
+						continue;
+					if (p == oidx)
+					{
+						reached = true;
+						break;
+					}
+					const int32 pa = alongOf(p), pb = inwardOf(p);
+					for (int32 da = -1; da <= 1; da++)
+						for (int32 db = -1; db <= 1; db++)
+						{
+							if (da == 0 && db == 0)
+								continue;
+							const int32 na = pa + da, nb = pb + db;
+							if (na < a0 || na > a1 || nb < 0 || nb > c_rerouteBand)
+								continue;
+							const int32 n = toPixel(na, nb);
+							// Off the border itself (the soft walls) but for the two ends; never through the sea or a lake.
+							if (n != oidx && nb == 0)
+								continue;
+							if (!g.mask[n] || g.sea[n] || d.lakeOf[n] >= 0)
+								continue;
+							const float step = (da != 0 && db != 0) ? 1.41421356f : 1.0f;
+							const float cost = top.first + step * (1.0f + c_climbCost * oc::max(g.elev[n] - baseElev, 0.0f));
+							const size_t ln = (size_t)local(n);
+							if (cost < dist[ln])
+							{
+								dist[ln] = cost;
+								prev[ln] = p;
+								open.push({ cost, n });
+							}
+						}
+				}
+				if (!reached)
+					continue;
+				route.clear();
+				float rim = baseElev;
+				for (int32 p = oidx; p >= 0; p = prev[(size_t)local(p)])
+				{
+					route.push_back(p);
+					rim = oc::max(rim, g.elev[p]);
+					if (p == exitIdx)
+						break;
+				}
+				// The breach keeps the exit's level through the rim: past c_rerouteMaxRim the gorge (and the neighbour's
+				// matched gorge downstream) would be a canyon - the fine and coarse drainage really disagree there; leave it.
+				if (rim - baseElev > c_rerouteMaxRim)
+					continue;
+				oc::reverse(route.begin(), route.end());
+				const int32 exitRank = oc::max(d.rank[exitIdx], 0);
+				for (size_t k = 0; k + 1 < route.size(); k++)
+					d.receiver[route[k]] = route[k + 1];
+				for (size_t k = 1; k < route.size(); k++)
+				{
+					d.outflow[route[k]] += exitQ;
+					if (route[k] != oidx)
+						d.rank[route[k]] = exitRank;
+				}
+			}
+		}
+
 		// --- Channels.
 		oc::vector<uint8> inC(NP, 0);
 		for (size_t i = 0; i < NP; i++)
@@ -886,13 +1040,17 @@ namespace Procedural
 
 			// OUTLET AGREEMENT: the downstream unit's inlet carries the coarse link's Q, this side its own fine Q - and
 			// width, depth and the valley follow Q, so the bed jumped at the unit edge. The last stretch blends into
-			// the crossing's Q, so both sides reach the boundary with the same one.
+			// the crossing's Q, so both sides reach the boundary with the same one. ONLY where the two are close (the fine
+			// Q at the outlet at least half the coarse one): blended from far below, a small stream swelled into a big river
+			// in 24 px at the unit edge (2026-10-09) - it keeps its own size instead, and the neighbour's inlet grows from
+			// it (RiverTerrain's inlet match).
 			constexpr float c_crossBlendPx = 24.0f;
+			const bool blendQ = outlet && d.outflow[last] >= 0.5f * outlet->q;
 			qChain.resize(n);
 			for (size_t k = 0; k < n; k++)
 			{
 				qChain[k] = inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
-				if (outlet)
+				if (blendQ)
 				{
 					const float t = 1.0f - smoothstep01((float)(n - 1 - k) / c_crossBlendPx);
 					qChain[k] += (outlet->q - qChain[k]) * t;
@@ -938,7 +1096,7 @@ namespace Procedural
 				pts.push_back(ChainPoint{ (float)(p % W), (float)(p / W), wUp[k], q });
 			}
 			if (outlet)
-				pts.push_back(ChainPoint{ outlet->edgeX, outlet->edgeZ, wUp[n - 1], outlet->q });
+				pts.push_back(ChainPoint{ outlet->edgeX, outlet->edgeZ, wUp[n - 1], blendQ ? outlet->q : qChain[n - 1] });
 			smoothPath(pts, cfg.pathSmoothing);
 			{
 				// The phase from the segment's start in GLOBAL native pixels: the same river meanders the same way in
@@ -947,6 +1105,36 @@ namespace Procedural
 				meander(pts, cfg, g.elev, g.mask, W, gx * 0x9E3779B1u ^ gz * 0x85EBCA77u, nr);
 			}
 			chaikin(pts, 2);
+			// THE CROSSING'S DIRECTION: both units put a crossing segment's end on the same boundary point, but each came
+			// in at its own angle - the channel kinked there. Both can agree on the EDGE'S NORMAL there, so the stretch
+			// within c_alignPx of the crossing is pulled onto the line through the boundary point along it (fully at the
+			// point, fading out with the distance): the two sides meet in one direction.
+			{
+				constexpr float c_alignPx = 16.0f;
+				const auto align = [&](bool atStart, int32 borderPixel, float edgeX, float edgeZ)
+				{
+					const glm::vec2 boundary(edgeX, edgeZ);
+					// Inward: from the boundary point (half a pixel outside) to the border pixel's centre.
+					const glm::vec2 inward = glm::normalize(glm::vec2((float)(borderPixel % W), (float)(borderPixel / W)) - boundary);
+					const size_t n = pts.size();
+					for (size_t i = 0; i < n; i++)
+					{
+						ChainPoint& p = pts[atStart ? i : n - 1 - i];
+						const glm::vec2 rel = glm::vec2(p.x, p.z) - boundary;
+						const float d = glm::length(rel);
+						if (d >= c_alignPx)
+							break;
+						const glm::vec2 onLine = boundary + inward * glm::max(glm::dot(rel, inward), 0.0f);
+						const float w = 1.0f - smoothstep01(d / c_alignPx);
+						p.x += (onLine.x - p.x) * w;
+						p.z += (onLine.y - p.z) * w;
+					}
+				};
+				if (inlet)
+					align(true, chain.front(), inlet->edgeX, inlet->edgeZ);
+				if (outlet)
+					align(false, last, outlet->edgeX, outlet->edgeZ);
+			}
 			clampToGround(pts, cfg, g.elev, g.mask, W);
 			simplify(pts, 0.1f, 0.25f, simplified); // 0.1 px in plan, 0.25 model m in W
 

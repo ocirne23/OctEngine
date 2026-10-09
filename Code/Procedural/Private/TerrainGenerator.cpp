@@ -73,11 +73,13 @@ namespace Procedural
 				out.positions.push_back({ lx, y, lz });
 				out.normals.push_back(normal);
 				// The UV carries the RIVER, not a texture coordinate (the terrain shades in world space): u = the
-				// river influence (TerrainPoint::river), v = 1 under inland water / on a dry bed. The terrain VS, the
-				// grass and clutter culls read it (terrain_splat.inc.glsl: the bed takes the beach layer).
+				// river influence (TerrainPoint::river), v = its flow speed (m/s, TerrainPoint::riverSpeed; 0 off rivers
+				// and on lakes), NEGATIVE under river or lake water: -(speed + 0.01). The terrain VS and the grass /
+				// clutter culls read u (terrain_splat.inc.glsl: the bed takes the beach layer), the clutter cull v (its
+				// `Flow` and `Water` terms: reeds by slow water at its edge, stones in fast; grassGroundRiverData).
 				const TerrainPoint& p = at(col, row);
-				const bool inland = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake || p.dryBed;
-				out.texCoords.push_back({ p.river, inland ? 1.0f : 0.0f, 0.0f });
+				const bool underWater = p.waterKind == ETerrainWater::River || p.waterKind == ETerrainWater::Lake;
+				out.texCoords.push_back({ p.river, underWater ? -(p.riverSpeed + 0.01f) : p.riverSpeed, 0.0f });
 			}
 			Globals::jobSystem.preemptionPoint(); // nothing half-done between rows
 		}

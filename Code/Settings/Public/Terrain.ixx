@@ -224,30 +224,30 @@ export struct TerrainSettings
 	float riverMapMinQ = 30.0f;      // m3/s: a coarse link the preview draws as a river
 	float riverMapDryCells = 40.0f;  // catchment in coarse pixels: a link this big under the min Q draws as a dry bed
 	// The river UNITS (N x N full tiles, routed at native resolution, joined to their neighbours by crossings).
-	int   riverUnitTiles = 8;          // full tiles per unit side
+	int   riverUnitTiles = 6;          // full tiles per unit side
 	int   riverCrossWindow = 64;       // native px either side of a tile edge's middle that a crossing may move to
 	float riverUnitBreachDepth = 75.0f; // model m: a shallower depression in a unit is cut through, not a lake
 	int   riverUnitLakeMinCells = 8334; // native px
 	float riverChannelMinQ = 1.0f;     // m3/s: a channel starts here
 	float riverChannelFadeQ = 2.0f;    // m3/s past the minimum over which a channel grows from nothing to its full size
 	float riverPerennialQ = 0.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
-	float riverWidthA = 20.0f;         // hydraulic geometry: width = a * Q^0.5 (model m)
-	float riverDepthC = 2.0f;          //                     depth = c * Q^0.4 (model m)
+	float riverWidthA = 25.0f;         // hydraulic geometry: width = a * Q^0.5 (model m)
+	float riverDepthC = 1.5f;          //                     depth = c * Q^0.4 (model m)
 	float riverRapidsSlope = 0.05f;    // water surface slope that marks rapids
 	float riverFallSlope = 0.3f;       // ... and a fall
 	float riverEdgeWall = 12.3f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
 	float riverPathSmoothing = 10.0f;  // native px: the Gaussian sigma a river's D8 path is smoothed with (0 = the raw staircase)
 	float riverMeanderAmplitude = 0.33f;   // the meanders' sideways swing, x the channel width (0 = off)
-	float riverMeanderWavelength = 12.0f; // their wavelength along the river, x the channel width
+	float riverMeanderWavelength = 15.0f; // their wavelength along the river, x the channel width
 	float riverMeanderSlope = 0.02f;      // water-surface slope (m/m) by which a reach swings at the 30 % floor
-	float riverMeanderSmallAmplitude = 2.0f;  // the swing on the smallest stream, x the amplitude (1 from the full Q up)
-	float riverMeanderSmallWavelength = 0.5f; // the wavelength on the smallest stream, x the wavelength (1 from the full Q up)
+	float riverMeanderSmallAmplitude = 5.0f;  // the swing on the smallest stream, x the amplitude (1 from the full Q up)
+	float riverMeanderSmallWavelength = 1.0f; // the wavelength on the smallest stream, x the wavelength (1 from the full Q up)
 	float riverMeanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set (log Q blend from the min Q)
 	// The CARVE (RiverTerrain): channel -> a curve over the bank and the floodplain -> valley wall, only ever lowering the
 	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
-	float riverChannelDepthScale = 1.0f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
+	float riverChannelDepthScale = 2.5f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
 	float riverChannelMinDepth = 0.2f;    // ... but at least this
-	float riverChannelShape = 3.0f;       // cross-section exponent: 1 = V, 2 = U, higher = flat bottom and steep sides
+	float riverChannelWallSlope = 0.1f;   // the channel's sides (rise / run) down to a flat bed, whatever its depth
 	float riverBankHeight = 2.16f;        // the floodplain's outer edge above the water, x the channel depth
 	float riverFloodplainCurve = 1.0f;    // the rise over the bank + floodplain: 1 = straight, 2 = a bowl, higher = flatter near the channel
 	float riverValleyDepth = 0.0f;        // the river and its floodplain sunk this far below the original ground
@@ -257,7 +257,7 @@ export struct TerrainSettings
 	float riverValleySlope = 0.28f;     // the valley wall's slope past the floodplain (m/m)
 	float riverCarveReach = 1500.0f;    // model m: how far the valley wall may run past the floodplain's edge (fades out over it)
 	float riverCarveReachQ = 10.0f;     // m3/s: a river this big gets the whole reach; a smaller one sqrt(Q / this) of it
-	float riverVegetationClear = 0.8f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
+	float riverVegetationClear = 0.97f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
 	bool  riverDebugLines = false;     // draw the units around the camera as debug lines
 	float riverDebugRadius = 3000.0f;  // engine m
 	// "Terrain/Rivers/Surface": the water the RiverSurface pipeline draws (RendererVK EPipelineIndex::River,

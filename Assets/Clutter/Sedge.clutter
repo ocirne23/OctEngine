@@ -1,0 +1,26 @@
+# Sedges: low fountains of fine, arching leaves drooping at their tips, yellow-olive, along a river's banks and a lake's
+# shore - most in slow water, a few beside faster water too. No stalk (Head Tuft: 8 leaves of two slots each). Format:
+# Code/Procedural/CONTEXT.md, "Ground clutter".
+ClutterType Sedge
+	Kind Flower
+	Seed 223
+	Scale 0.7 1.2
+	Range 90
+	Color 0.52 0.55 0.25
+	Color2 0.22 0.17 0.10
+	Head Tuft
+	Petals 10
+	Open 40
+	PetalWidth 0.7
+	Stem 1
+	HeadSize 0.05
+	Placement
+		Density 62
+		Temperature 2 35
+		River 0 1 3
+		Flow 1 0.25
+		# on the banks, hardly any under the water
+		Water 1 0.00
+		Cluster 5 0.6
+		Slope 0.8
+		Altitude -1000

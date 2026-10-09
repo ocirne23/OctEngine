@@ -794,7 +794,7 @@ export namespace RendererVKLayout
     // The kinds of clutter (ClutterTypeGpu::info.z): how the cull places it and which draw and material it takes.
     enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3 };
     // A flower's head (clutter_flower.vs.glsl).
-    enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3 };
+    enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3, Reed = 4, Tuft = 5 };
 
     // One clutter TYPE (Procedural's .clutter file): where it grows and what it looks like. The density is the product
     // of the type's terms; each two-value term is mix(.x, .y, its measure 0..1). Colours are LINEAR.
@@ -806,15 +806,17 @@ export namespace RendererVKLayout
         glm::vec4 terms1;    // xy Beach (none .. full), zw Canopy (open .. under a full crown)
         glm::vec4 terms2;    // xy Trunk (far .. at a trunk), zw RockNear (far .. at a rock's foot)
         glm::vec4 terms3;    // xy Wet (dry .. wet: the climate's humidity), z max slope (rise / run), w min altitude above water (m)
+        glm::vec4 terms4;    // xy River (none .. full: the terrain vertex's u), zw Flow (slow .. fast: its v, the river's speed)
+        glm::vec4 terms5;    // x the River term's curve (its measure ^ this: > 1 = close to the water), yzw unused
         glm::vec4 ring;      // x ring radius (m, 0 = none), y ring width (m), z ring cell (m), w the chance a cell holds a ring
         glm::vec4 shape;     // x..y scale range, z range (m), w sink (fraction of the mesh height below the ground)
         glm::vec4 albedo0;   // rgb main colour (pebble: a tint on the climate's bedrock; flower: the petals), w roughness
         glm::vec4 albedo1;   // rgb second colour (end grain / the stem & gills / the flower's centre), w ground align 0..1
         glm::vec4 flower;    // x stem height (m at scale 1), y head size (m), z petal width (x the head size), w petal open angle (rad)
-        glm::vec4 bound;     // x max density (per m^2, every term at its largest: the candidates evaluated), y spots (mushroom), zw unused
+        glm::vec4 bound;     // x max density (per m^2, every term at its largest: the candidates evaluated), y spots (mushroom), zw Water (dry .. under the water)
         glm::uvec4 info;     // x first mesh, y variant meshes, z kind (EClutterKind), w flower head (EFlowerHead) | petals << 8
     };
-    static_assert(sizeof(ClutterTypeGpu) == 13 * 16);
+    static_assert(sizeof(ClutterTypeGpu) == 15 * 16);
 
     // One rigid variant mesh: its levels in the clutter index / vertex buffers, and its bounds at scale 1.
     struct ClutterMeshGpu

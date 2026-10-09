@@ -232,9 +232,12 @@ namespace Procedural
 			rock.type = type;
 			rock.footprint = floor.footprint;
 			for (const RockPlacementDesc& placement : desc.placements)
+			{
 				rock.rules.push_back({ placement,
 					glm::vec2(temperatureTo01(placement.temperature.x), precipTo01(placement.precipitation.x)),
 					glm::vec2(temperatureTo01(placement.temperature.y), precipTo01(placement.precipitation.y)) });
+				rock.riverRules |= placement.riverRule();
+			}
 			rock.scale = desc.scale;
 			// One rock of the type per cell at most: a cell holds its largest rock with room to spare.
 			rock.cell = glm::max(desc.scale.y * 1.5f, 6.0f);
@@ -621,6 +624,7 @@ namespace Procedural
 			float height, water, altitude, temperature, humidity;
 			float dx, dz; // the height's gradient (rise / run)
 			float river;  // the river influence, from the fine river grid (riverAt)
+			float riverSpeed; // that river's flow speed (m/s), from the field
 		};
 		auto fieldAt = [&](glm::vec2 local)
 		{
@@ -648,6 +652,7 @@ namespace Procedural
 			s.dx = glm::mix(p10.height - p00.height, p11.height - p01.height, f.y) / step;
 			s.dz = glm::mix(p01.height - p00.height, p11.height - p10.height, f.x) / step;
 			s.river = riverAt(local);
+			s.riverSpeed = lerp2(p00.riverSpeed, p10.riverSpeed, p01.riverSpeed, p11.riverSpeed);
 			return s;
 		};
 
@@ -833,8 +838,10 @@ namespace Procedural
 						continue; // a neighbour's rock that does not reach this chunk
 
 					const FieldSample s = fieldAt(local);
-					if (s.river > config.riverClear)
-						continue; // a river's bed (Terrain/Rivers/Vegetation clear)
+					// A river's bed (Terrain/Rivers/Vegetation clear) takes only the rules with a River term.
+					const bool inBed = s.river > config.riverClear;
+					if (inBed && !rock.riverRules)
+						continue;
 					const float altitude = s.height - s.water;
 					const float slope = std::sqrt(s.dx * s.dx + s.dz * s.dz);
 					const glm::vec2 climate(glm::clamp((s.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(s.humidity, 0.0f, 1.0f));
@@ -845,7 +852,7 @@ namespace Procedural
 					{
 						const RockRule& rule = rock.rules[k];
 						const RockPlacementDesc& p = rule.placement;
-						if (altitude < p.altitude.x || altitude > p.altitude.y)
+						if ((inBed && !p.riverRule()) || altitude < p.altitude.x || altitude > p.altitude.y)
 							continue;
 						const glm::vec2 d = glm::max(rule.climateMin - climate, glm::vec2(0.0f)) + glm::max(climate - rule.climateMax, glm::vec2(0.0f));
 						float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
@@ -909,6 +916,9 @@ namespace Procedural
 								forest = glm::clamp(speciesWeights(s, glm::vec2((float)wx, (float)wz)) * config.densityScale / ROCK_FOREST_FULL, 0.0f, 1.0f);
 							ground *= glm::mix(p.forest.x, p.forest.y, forest);
 						}
+						// RIVERS: the influence (the channel .. the floodplain's edge) and the flow speed (slow .. fast).
+						ground *= glm::mix(p.river.x, p.river.y, s.river)
+							* glm::mix(p.flow.x, p.flow.y, glm::smoothstep(ROCK_FLOW_SLOW, ROCK_FLOW_FAST, s.riverSpeed));
 						fit *= ground;
 						float ruleDensity = p.density * fit;
 						if (ruleDensity > 0.0f && p.clusterSize > 1.0f)

@@ -90,6 +90,7 @@ export namespace Procedural
 		float inlandWater = 0.0f;    // the river / lake surface Y (m), valid when waterKind is Lake or River
 		float river = 0.0f;          // 0..1: 1 in a channel, fading out over its banks and floodplain
 		float riverQ = 0.0f;         // the nearest channel's discharge, m3/s
+		float riverSpeed = 0.0f;     // that channel's flow speed (m/s, the water ribbons' Manning speed); 0 off rivers and on lakes
 		ETerrainWater waterKind = ETerrainWater::None;
 		uint8 dryBed = 0;            // 1 in the channel of a dry (ephemeral) river, or on a salt pan
 	};

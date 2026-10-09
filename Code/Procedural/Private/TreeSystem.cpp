@@ -1107,6 +1107,7 @@ namespace Procedural
 		context->sizeVariation = m_settings.sizeVariation;
 		context->bushesPerTree = m_settings.bushesPerTree;
 		context->bushRadius = glm::max(0.75f * m_settings.spacing, 1.5f);
+		context->riverClear = Globals::settings.terrain.riverVegetationClear;
 		// Every loaded species (its baked variants), then per TREE species the bushes of its climate (as the preview:
 		// case-insensitive; a tree whose climate no bush shares takes every bush).
 		oc::vector<uint32> bushes;
@@ -1456,6 +1457,16 @@ namespace Procedural
 			const float h01 = field[(size_t)(i0.y + 1) * res + i0.x].height, h11 = field[(size_t)(i0.y + 1) * res + i0.x + 1].height;
 			return glm::mix(glm::mix(h00, h10, f.x), glm::mix(h01, h11, f.x), f.y);
 		};
+		// A bush lands anywhere around its tree: not in WATER - under a river's / lake's surface or the sea, or in a river's
+		// bed past "Vegetation clear" (the trees' own rule, TreeWorld) - at the nearest grid point. The far volume's GPU
+		// mirror has no water data and keeps them (kilometres away).
+		auto inWater = [&](glm::vec2 p)
+		{
+			const glm::uvec2 i = glm::uvec2(glm::clamp((p - origin) / STEP + 0.5f, glm::vec2(0.0f), glm::vec2((float)(res - 1))));
+			const TerrainPoint& t = field[(size_t)i.y * res + i.x];
+			return t.waterKind == ETerrainWater::River || t.waterKind == ETerrainWater::Lake || t.height < t.waterLevel
+				|| t.river > context.riverClear;
+		};
 		auto placeVariant = [&](const ExpandSpecies& species, uint32 seed, glm::vec2 p)
 		{
 			if (species.variants.empty())
@@ -1519,7 +1530,9 @@ namespace Procedural
 				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
 				const float radius = glm::mix(1.5f, context.bushRadius, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
 				const ExpandSpecies& bush = context.species[tree.bushes[treeHash(bushSeed, 113u) % (uint32)tree.bushes.size()]];
-				placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
+				const glm::vec2 at = p + glm::vec2(std::cos(angle), std::sin(angle)) * radius;
+				if (!inWater(at))
+					placeVariant(bush, bushSeed, at);
 			}
 		}
 	}

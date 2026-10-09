@@ -29,24 +29,24 @@ export namespace Procedural
 {
 	struct RiverUnitConfig
 	{
-		int32 unitTiles = 8;
+		int32 unitTiles = 6;
 		int32 crossWindow = 64;
 		float breachDepth = 75.0f;
 		int32 lakeMinCells = 8334;
 		float channelMinQ = 1.0f;
 		float fadeQ = 2.0f;     // m3/s past the minimum over which a channel grows to its full width and depth
 		float perennialQ = 0.0f;
-		float widthA = 20.0f;
-		float depthC = 2.0f;
+		float widthA = 25.0f;
+		float depthC = 1.5f;
 		float rapidsSlope = 0.05f;
 		float fallSlope = 0.3f;
 		float edgeWall = 12.3f; // model m: water leaves through a non-crossing edge when every outlet climbs more
 		float pathSmoothing = 10.0f; // native px: the Gaussian sigma the D8 path is smoothed with along its length
-		float meanderAmplitude = 1.5f;   // x the channel width
-		float meanderWavelength = 12.0f; // x the channel width
+		float meanderAmplitude = 0.33f;  // x the channel width
+		float meanderWavelength = 15.0f; // x the channel width
 		float meanderSlope = 0.02f;      // m/m
-		float meanderSmallAmplitude = 2.0f;  // the swing on the smallest stream, x the above (1 at meanderFullQ)
-		float meanderSmallWavelength = 0.5f; // the wavelength on the smallest stream, x the above (1 at meanderFullQ)
+		float meanderSmallAmplitude = 5.0f;  // the swing on the smallest stream, x the above (1 at meanderFullQ)
+		float meanderSmallWavelength = 1.0f; // the wavelength on the smallest stream, x the above (1 at meanderFullQ)
 		float meanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set
 		bool operator==(const RiverUnitConfig&) const = default;
 	};

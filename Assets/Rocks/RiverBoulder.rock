@@ -1,0 +1,25 @@
+# River boulders: rounded, water-worn boulders standing in a river's bed and on its banks - where the water runs FAST
+# (rapids, a steep stream), almost none in slow water. A River rule: it may place inside the bed (Terrain/Rivers/
+# Vegetation clear keeps every other rule out) and, with the negative Altitude, under the water. Format:
+# Code/Procedural/CONTEXT.md, "Rocks".
+RockType RiverBoulder
+	Seed 31
+	Scale 0.8 2.6
+	Variants 6
+	Sink 0.25
+	Shape Boulder
+	Aspect 1 0.65 0.8
+	AspectVar 0.15 0.2 0.15
+	Round 0.1
+	Erosion 0.25
+	Warp 0.04 1.2
+	Fracture 2 0.15
+	Noise 0.02 2.0 4
+	Lod 1600
+	Placement
+		Density 120
+		River 0 1
+		Flow 0.03 1
+		Altitude -4 100000
+		Slope 0 0 0.6 1.2
+		Cluster 25 0.6

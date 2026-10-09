@@ -369,7 +369,7 @@ namespace Procedural
 		Tweak::onChange(s.riverMeanderFullQ, this, dirty);
 		Tweak::onChange(s.riverChannelDepthScale, this, dirty);
 		Tweak::onChange(s.riverChannelMinDepth, this, dirty);
-		Tweak::onChange(s.riverChannelShape, this, dirty);
+		Tweak::onChange(s.riverChannelWallSlope, this, dirty);
 		Tweak::onChange(s.riverBankHeight, this, dirty);
 		Tweak::onChange(s.riverFloodplainCurve, this, dirty);
 		Tweak::onChange(s.riverValleyDepth, this, dirty);

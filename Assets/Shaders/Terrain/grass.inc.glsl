@@ -17,6 +17,8 @@
 #ifndef GRASS_INC_GLSL
 #define GRASS_INC_GLSL
 
+#include "mesh_vertex.inc.glsl" // meshVertexUV (the ground's river data)
+
 uint grassLodSegments(uint lod)
 {
     return lod == 0u ? GRASS_LOD0_SEGMENTS : lod == 1u ? GRASS_LOD1_SEGMENTS : lod == 2u ? GRASS_LOD2_SEGMENTS : GRASS_LOD3_SEGMENTS;
@@ -299,9 +301,18 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     return normalize(n);
 }
 
-// The mesh's RIVER influence at xz (TerrainFields::river: the terrain vertex's u, positionU.w), over the same triangle
-// - what the ground's beach layer sees, so the grass and the clutter leave the same river bed.
-float grassGroundRiver(GrassGround g, vec2 xz)
+// One ground vertex's river data (Procedural TerrainGenerator: the vertex's UV): the influence, the speed (m/s), 1 under
+// river or lake water (v < 0: -(speed + 0.01)).
+vec3 grassGroundRiverVertex(uint i)
+{
+    const vec2 uv = meshVertexUV(in_vertices[i]);
+    return uv.y < 0.0 ? vec3(uv.x, -uv.y - 0.01, 1.0) : vec3(uv.x, uv.y, 0.0);
+}
+
+// The mesh's RIVER data at xz, over the same triangle as the height: x = the river influence (TerrainFields::river) -
+// what the ground's beach layer sees, so the grass and the clutter leave the same river bed -, y = the river's flow speed
+// (m/s; 0 off rivers and on lakes), z = under the water 0..1 (the river's channel or a lake, soft over a cell).
+vec3 grassGroundRiverData(GrassGround g, vec2 xz)
 {
     const float res = float(g.res);
     const vec2 local = clamp((xz - g.chunkOrigin) / g.step, vec2(0.0), vec2(res - 1e-3));
@@ -309,15 +320,18 @@ float grassGroundRiver(GrassGround g, vec2 xz)
     const vec2 f = local - vec2(cell);
     const uint vpr = u_present_groundStride;
     const uint a = g.firstVertex + cell.y * vpr + cell.x;
-    const float rb = in_vertices[a + 1u].positionU.w;
-    const float rc = in_vertices[a + vpr].positionU.w;
+    const vec3 rb = grassGroundRiverVertex(a + 1u);
+    const vec3 rc = grassGroundRiverVertex(a + vpr);
     if (f.x + f.y <= 1.0)
     {
-        const float ra = in_vertices[a].positionU.w;
+        const vec3 ra = grassGroundRiverVertex(a);
         return ra + (rb - ra) * f.x + (rc - ra) * f.y;
     }
-    const float rd = in_vertices[a + vpr + 1u].positionU.w;
+    const vec3 rd = grassGroundRiverVertex(a + vpr + 1u);
     return rd - (rd - rc) * (1.0 - f.x) - (rd - rb) * (1.0 - f.y);
 }
+
+// The river influence alone (grassGroundRiverData's x).
+float grassGroundRiver(GrassGround g, vec2 xz) { return grassGroundRiverData(g, xz).x; }
 
 #endif

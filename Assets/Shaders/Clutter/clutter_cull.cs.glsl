@@ -16,7 +16,8 @@
 //
 // A type's density = its Density x its climate fit x the product of its terms, each mix(a, b, measure):
 //   the TERRAIN (the patch corners, as the grass cull reads them - terrain_splat.inc.glsl terrainLayers): grass cover,
-//   bedrock (crag), beach; the climate's humidity (wet); snow removes everything;
+//   bedrock (crag), beach; the climate's humidity (wet); the RIVER influence, its FLOW speed and being under the WATER
+//   (the terrain vertex's u / v: reeds at the edge of slow water, stones in fast); snow removes everything;
 //   the FOREST FLOOR MAP (ClutterSystem: the trees' and rocks' records): canopy, trunk and rock proximity; nothing
 //   inside a trunk or a rock;
 //   the slope under the object, its height above the water, its cluster noise and its fairy rings.
@@ -67,6 +68,12 @@ shared float s_water[CLUTTER_GRID_SAMPLES];
 shared float s_temperature[CLUTTER_GRID_SAMPLES];
 shared float s_humidity[CLUTTER_GRID_SAMPLES];
 shared vec4 s_cover[CLUTTER_GRID_SAMPLES]; // x grass, y crag (bedrock), z beach, w snow
+shared vec3 s_river[CLUTTER_GRID_SAMPLES]; // x the river influence, y the FLOW measure (the river's speed, slow 0 .. fast 1), z under the water
+
+// The `Flow` term's measure: the river's speed (the terrain vertex's v, m/s) from slow (a lake, a meander's pool) to fast
+// (rapids). The Manning speeds run ~0.3 m/s in flat water to ~3 m/s in a steep stream.
+#define CLUTTER_FLOW_SLOW 0.5
+#define CLUTTER_FLOW_FAST 2.5
 
 bool clutterGroundAt(vec2 xz, out GrassGround g)
 {
@@ -95,6 +102,8 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_temperature[i] = 12.5;
     s_humidity[i] = 0.5;
     s_cover[i] = vec4(0.0);
+    const vec3 river = grassGroundRiverData(g, xz);
+    s_river[i] = vec3(river.x, smoothstep(CLUTTER_FLOW_SLOW, CLUTTER_FLOW_FAST, river.y), river.z);
     if (!terrainHeightMapPresent())
         return;
     const vec4 td = terrainDataAt(xz);
@@ -106,7 +115,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
         return;
     const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz),
-        TerrainFields(td.w, temperature, climate.w, td.y, grassGroundRiver(g, xz)));
+        TerrainFields(td.w, temperature, climate.w, td.y, river.x));
     s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowW));
 }
 
@@ -263,6 +272,7 @@ void main()
         const float temperature = dot(vec4(s_temperature[i00], s_temperature[i10], s_temperature[i01], s_temperature[i11]), w);
         const float humidity = dot(vec4(s_humidity[i00], s_humidity[i10], s_humidity[i01], s_humidity[i11]), w);
         const float water = dot(vec4(s_water[i00], s_water[i10], s_water[i01], s_water[i11]), w);
+        const vec3 river = s_river[i00] * w.x + s_river[i10] * w.y + s_river[i01] * w.z + s_river[i11] * w.w;
         const vec4 floorMap = clutterFloorAt(xz);
         // THE GRASS AS DRAWN (the `Grass` term's measure): the blades' own density - the terrain's cover x their clumps
         // and bare spots (grassClump) x the canopy thinning, as grass_cull / grass.vs keep them. The cover alone put
@@ -277,7 +287,9 @@ void main()
         density *= mix(type.terms0.x, type.terms0.y, grass) * mix(type.terms0.z, type.terms0.w, cover.y)
                  * mix(type.terms1.x, type.terms1.y, cover.z) * mix(type.terms1.z, type.terms1.w, floorMap.x)
                  * mix(type.terms2.x, type.terms2.y, floorMap.y) * mix(type.terms2.z, type.terms2.w, floorMap.z)
-                 * mix(type.terms3.x, type.terms3.y, humidity);
+                 * mix(type.terms3.x, type.terms3.y, humidity)
+                 * mix(type.terms4.x, type.terms4.y, pow(clamp(river.x, 0.0, 1.0), type.terms5.x)) * mix(type.terms4.z, type.terms4.w, river.y)
+                 * mix(type.bound.z, type.bound.w, river.z);
         density *= (1.0 - cover.w) * (1.0 - smoothstep(0.3, 0.7, floorMap.w));
         if (type.placement.z > 0.0)
         {
@@ -308,8 +320,10 @@ void main()
         const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % variants;
         // A FLOWER shrinks with the grass's cover as the blades do ("Grass/Cover/Size by cover", grassCoverSize): where
         // the cover fades (the beach band at the shore, a dry edge) the few blades left are tiny and the ground reads
-        // bare - full-size flowers stood out there.
-        const float coverSize = kind == CLUTTER_KIND_FLOWER ? grassCoverSize(cover.x) : 1.0;
+        // bare - full-size flowers stood out there. Not REEDS or TUFTS: they grow on the bare bank (the river bed's beach).
+        const uint head = type.info.w & 0xFFu;
+        const bool reed = kind == CLUTTER_KIND_FLOWER && (head == FLOWER_HEAD_REED || head == FLOWER_HEAD_TUFT);
+        const float coverSize = kind == CLUTTER_KIND_FLOWER && !reed ? grassCoverSize(cover.x) : 1.0;
         const float scale = mix(type.shape.x, type.shape.y, grassUnit(grassHash(h + 1u))) * grow * coverSize;
         if (scale <= 0.0)
             continue;

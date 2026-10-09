@@ -314,7 +314,9 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// width = a * Q^0.5). The water sits at the original ground minus the valley depth; the channel is cut below it.
 	Tweak::floatVar("Terrain/Rivers", "Channel depth scale", &s.riverChannelDepthScale, 0.0f, 20.0f, 0.1f);
 	Tweak::floatVar("Terrain/Rivers", "Channel min depth (m)", &s.riverChannelMinDepth, 0.0f, 50.0f, 0.1f);
-	Tweak::floatVar("Terrain/Rivers", "Channel shape", &s.riverChannelShape, 0.5f, 8.0f, 0.1f); // 1 V, 2 U, more = box
+	// The channel's sides slope this steeply (rise / run) from the water's edge down to a FLAT bed, rounded at the foot:
+	// a deeper channel has the same sides, only longer (a narrow, deep one becomes a V of that slope).
+	Tweak::floatVar("Terrain/Rivers", "Channel wall slope", &s.riverChannelWallSlope, 0.1f, 10.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Bank height", &s.riverBankHeight, 0.0f, 20.0f, 0.05f);
 	// The rise from the water to the floodplain's outer edge (bank + floodplain widths): ((x / width) ^ this) x the bank
 	// height. 1 = a straight slope, 2 = a bowl (flat by the channel, steepening outward), higher = a flatter floor.

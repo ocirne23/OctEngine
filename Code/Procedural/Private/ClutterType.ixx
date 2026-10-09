@@ -42,6 +42,10 @@ export namespace Procedural
 		glm::vec2 trunk{ 1.0f };                    // a trunk's foot: far .. at it
 		glm::vec2 rock{ 1.0f };                     // a rock's foot: far .. at it
 		glm::vec2 wet{ 1.0f };                      // the climate's humidity: dry .. wet
+		glm::vec2 river{ 1.0f };                    // the river influence: none .. full (the channel; lakes and their shore too)
+		float riverCurve = 1.0f;                    // the influence ^ this first (> 1: close to the water, not across the floodplain)
+		glm::vec2 flow{ 1.0f };                     // the river's flow speed there: slow (still, a lake) .. fast
+		glm::vec2 water{ 1.0f };                    // dry ground .. under a river's or a lake's water (a bank vs its middle)
 		glm::vec4 ring{ 0.0f, 0.5f, 30.0f, 0.3f };  // fairy rings: radius (0 = none), width, cell (m), chance per cell
 	};
 
@@ -73,7 +77,9 @@ export namespace Procedural
 		float stemRadius = 0.09f;
 		int group = 1;                 // 1..5 mushrooms per variant, each smaller, around the first
 		float spots = 0.0f;            // 0..1: white spots on the cap
-		// Flower (no mesh: built in the vertex shader).
+		// Flower (no mesh: built in the vertex shader). A REED head: the petals are long pointed leaves from the root
+		// (PetalWidth x HeadSize wide, Open = their lean out from upright), the head a cattail spike (Color2). A TUFT head:
+		// no stalk, Petals / 2 fine leaves (two slots each: a bend) arching out from one point and drooping (Color).
 		EFlowerHead head = EFlowerHead::Radial;
 		int petals = 6;
 		float open = 10.0f;            // degrees: the petals' tilt up from the head's plane (negative: swept back)

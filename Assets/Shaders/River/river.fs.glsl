@@ -405,7 +405,8 @@ void main()
     // smooth function of how steep the water runs, blurred along the river) x "Foam strength". As it rises the water gets
     // rougher, its body milkier (entrained air: below) and its waves higher (the VS / river_wave.inc.glsl). No foam layer
     // on top (removed, the user 2026-10-09).
-    const float turb = lake ? 0.0 : clamp(in_flow.y * u_river_foamStrength, 0.0, 1.0);
+    // x the river's SIZE (in_waveSize: its depth / "Full size depth"): a trickle has too little water to churn.
+    const float turb = lake ? 0.0 : clamp(in_flow.y * u_river_foamStrength * in_waveSize, 0.0, 1.0);
 
     // The edge fade: a ribbon over its last "Edge softness" of half-width, a lake over its last "Lake edge fade" of
     // water column (the baked height map; 1 without one).

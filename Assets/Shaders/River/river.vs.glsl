@@ -14,7 +14,8 @@
 //               a dense vertex (m); v = the distance along the river (m))
 // SMALL RIVERS: size = the centre depth over "Full size depth" (at most 1). The waves scale by it (a small stream carries
 // small waves, a fading head none; the VS height and the FS slope alike, out_waveSize) and the flow by
-// mix("Small river flow", 1, size) - the ripples' drift and the waves' drag downstream (out_flow).
+// mix("Small river flow", 1, size) - the ripples' drift and the waves' drag downstream (out_flow); river.fs.glsl scales
+// the turbulence by it too.
 //   tangent   = (flow x speed (m/s) in x / z, the whitewater amount in y, the handedness)
 // THE WAVES: a dense ribbon or lake grid (RiverSystem's near cells) is displaced by the river's wave height
 // (river_wave.inc.glsl), faded out toward "Near radius" (a ribbon also across its last 40 % to each bank); a LIGHT ribbon

@@ -61,8 +61,19 @@ export namespace Procedural
 		// FOREST (.x open ground .. .y a full forest): the density x mix(x, y, the tree density the trees' own Placement
 		// blocks give there / ROCK_FOREST_FULL) - dead wood lies where trees grow. Default 1 1: no matter.
 		glm::vec2 forest{ 1.0f };
+		// RIVERS (.x none .. .y full): the density x mix(x, y, the river influence - 1 in a channel, 0 past its floodplain)
+		// x mix(flow.x, flow.y, its speed slow .. fast). A rule with a River term other than 1 1 may place IN the river's bed
+		// ("Terrain/Rivers/Vegetation clear" keeps every other rule out of it); give it an Altitude min below 0 to reach
+		// under the water. Default 1 1: no matter.
+		glm::vec2 river{ 1.0f };
+		glm::vec2 flow{ 1.0f };
+		bool riverRule() const { return river != glm::vec2(1.0f); }
 	};
 	constexpr float ROCK_FOREST_FULL = 60.0f; // trees per ha that count as a full forest (the Forest term)
+	// The Flow term's measure: a river's speed (TerrainPoint::riverSpeed, m/s) from slow to fast - the clutter cull's
+	// CLUTTER_FLOW_SLOW / FAST (clutter_cull.cs.glsl), keep in step.
+	constexpr float ROCK_FLOW_SLOW = 0.5f;
+	constexpr float ROCK_FLOW_FAST = 2.5f;
 
 	// RockWorldDesc (the WORLD's rules over every rock type, "Rocks/World" tweaks) lives in Settings.Rocks.
 
