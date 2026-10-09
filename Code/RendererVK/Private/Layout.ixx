@@ -884,6 +884,23 @@ export namespace RendererVKLayout
         float height[RIVER_WATER_MAP_DIM * RIVER_WATER_MAP_DIM];
     };
 
+    // THE RIVER MIST SOURCES (host-visible per frame slot, written when they change; Renderer::setRiverMistSources):
+    // stretches of whitewater (rapids, falls) near the camera from Procedural's RiverSystem. river_mist.cs.glsl, the
+    // particle GPU spawn path's second producer (the head of the particle sim pass), rolls one thread per stretch.
+    constexpr uint32 MAX_RIVER_MIST_SOURCES = 4096;
+    struct alignas(16) RiverMistSourceGpu
+    {
+        glm::vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m)
+        glm::vec4 flowFoam; // xy = the flow's velocity in XZ (m/s), z = the whitewater 0..1 (x the river's size), w = the stretch's length (m)
+    };
+    static_assert(sizeof(RiverMistSourceGpu) == 32);
+    struct RiverMistSourcesGpu
+    {
+        uint32 count;
+        uint32 pad[3];
+        RiverMistSourceGpu sources[MAX_RIVER_MIST_SOURCES];
+    };
+
     // Local participating-media box, submitted per frame like lights (Renderer::addFogVolume). Density adds
     // to the global fog inside the box, fading out over the outer edgeSoftness fraction of each half extent.
     struct alignas(16) FogVolumeInfo

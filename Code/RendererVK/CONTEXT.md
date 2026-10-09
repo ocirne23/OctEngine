@@ -3243,6 +3243,17 @@ the sand, so the two can never disagree.
   system's `Effects/ocean_spray.pfx` instance) in `u_ocean_sprayEmitter`; `UINT32_MAX` switches the step off
   in-shader, so the cached CB records once. Tweaks `Ocean/Spray rate / radius / threshold / kick /
   speed / forward offset / height offset`.
+* **THE RIVER MIST PRODUCER** (`River/river_mist.cs.glsl`): the GPU spawn path's second producer, recorded by
+  `ParticlePipeline::recordSim` at its HEAD (before the begin pass, which latches the spawn count; a compute barrier
+  between). Its input is `setRiverMistSources` (Procedural RiverSystem: up to `MAX_RIVER_MIST_SOURCES` whitewater
+  stretches near the camera, `RiverMistSourceGpu` = surface point + half-width, flow velocity + whitewater x the river's
+  size + the stretch's length), copied in present into a per-frame-slot host-visible SSBO (`m_riverMistBuffers`, like
+  the inland water map). One thread per source slot: a hashed dice at `u_river_mistRate` x the stretch's area x dt x
+  pow(smoothstep(threshold, 1, whitewater), `u_river_mistCurve`); hits spawn over the stretch (across it at
+  |u|^(1 + `u_river_mistCentering`) x the half-width: gathered toward the centre line), drifting downstream
+  (`Mist speed` x the flow) and kicked up (`Mist kick` x the strength). UBO-gated by `u_river_mistEmitter`
+  (`setRiverMistEmitter`, the Particle system's `Effects/river_mist.pfx`; `UINT32_MAX` = off), so the cached CB records
+  once. Its tweaks are "Terrain/Rivers/Surface/Mist *" (the "Rivers" lock section).
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
   (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic view (`u_weather_rainOcclusionViewProj`, a
   plain matrix), **RAY-TRACED** (`RainOcclusionPipeline`, `rain_occlusion.cs.glsl`) into ONE `R32_UINT` image

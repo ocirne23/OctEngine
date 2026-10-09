@@ -385,6 +385,23 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::intVar("Terrain/Rivers/Surface", "Near across", &s.riverNearAcross, 2, 64, 1.0f);
 	Tweak::floatVar("Terrain/Rivers/Surface", "Near drop (m)", &s.riverNearDrop, 0.0f, 5.0f, 0.01f);
 	Tweak::floatVar("Terrain/Rivers/Surface", "Wetness", &s.riverWetness, 0.0f, 1.0f, 0.01f);
+	// THE MIST off rapids and falls: RiverSystem hands the whitewater stretches within "Mist radius" up to the renderer,
+	// whose producer (river_mist.cs.glsl) spawns Effects/river_mist.pfx particles over them at "Mist rate" per m2 per s x
+	// the whitewater past "Mist threshold" (the whitewater is scaled by the river's size, so a stream's riffle barely
+	// mists). "Particles/River mist" switches it.
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist radius (m)", &s.riverMistRadius, 10.0f, 2000.0f, 5.0f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist rate", &s.riverMistRate, 0.0f, 20.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist threshold", &s.riverMistThreshold, 0.0f, 0.99f, 0.01f);
+	// The rate's shape: an exponent on the whitewater past the threshold (higher = falls far over rapids), and how much
+	// a small river's mist shrinks with its size (0 = not at all, 1 = x depth / "Full size depth").
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist curve", &s.riverMistCurve, 0.1f, 8.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist size weight", &s.riverMistSizeWeight, 0.0f, 1.0f, 0.01f);
+	// Where across the channel it spawns: 0 = evenly over the whole width, higher = gathered toward the centre line (the
+	// offset is |u|^(1 + this) x the half-width).
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist centering", &s.riverMistCentering, 0.0f, 8.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist speed", &s.riverMistSpeed, 0.0f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist kick (m/s)", &s.riverMistKick, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist height (m)", &s.riverMistHeight, -2.0f, 5.0f, 0.05f);
 }
 
 // "Tile size", "Spacing" and "Friction" rebuild every collider tile: TerrainCollider::initialize attaches that listener.

@@ -72,6 +72,16 @@ void ParticlePipeline::buildSimLayout(ComputePipelineLayout& layout)
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
+void ParticlePipeline::buildMistLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/River/river_mist.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    for (uint32 binding = 1; binding <= 3; ++binding) // the counters, the spawn requests, the mist sources
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+}
+
 void ParticlePipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler)
 {
     // The sim (binding 12) and every eye's draw set (binding 6, the ground fade).
@@ -131,6 +141,7 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
     m_viewCount = viewCount;
     m_textureSampler.initialize();
 
+    { ComputePipelineLayout layout; buildMistLayout(layout);  m_mistPipeline.initialize(layout); }
     { ComputePipelineLayout layout; buildBeginLayout(layout); m_beginPipeline.initialize(layout); }
     { ComputePipelineLayout layout; buildEmitLayout(layout, false); m_emitPipeline.initialize(layout); }
     { ComputePipelineLayout layout; buildEmitLayout(layout, true);  m_emitGpuPipeline.initialize(layout); }
@@ -177,6 +188,7 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
         m_mappedReadback[i] = m_readbackBuffers[i].mapMemory<uint32>();
         memset(m_mappedReadback[i].data(), 0, COUNTERS_SIZE);
 
+        m_mistSets[i].initialize(m_mistPipeline.getDescriptorSetLayout(), "Particles.riverMist");
         m_beginSets[i].initialize(m_beginPipeline.getDescriptorSetLayout(), "Particles.begin");
         m_emitSets[i].initialize(m_emitPipeline.getDescriptorSetLayout(), "Particles.emit");
         m_emitGpuSets[i].initialize(m_emitGpuPipeline.getDescriptorSetLayout(), "Particles.emitGpu");
@@ -188,12 +200,14 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
 
 void ParticlePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 {
+    ComputePipelineLayout mistLayout;  buildMistLayout(mistLayout);
     ComputePipelineLayout beginLayout; buildBeginLayout(beginLayout);
     ComputePipelineLayout emitLayout;  buildEmitLayout(emitLayout, false);
     ComputePipelineLayout emitGpuLayout; buildEmitLayout(emitGpuLayout, true);
     ComputePipelineLayout simLayout;   buildSimLayout(simLayout);
     GraphicsPipelineLayout drawLayout; buildDrawLayout(drawLayout, Globals::textureManager.getDescriptorCap());
-    bool ok = m_beginPipeline.reloadShaders(beginLayout);
+    bool ok = m_mistPipeline.reloadShaders(mistLayout);
+    ok = m_beginPipeline.reloadShaders(beginLayout) && ok;
     ok = m_emitPipeline.reloadShaders(emitLayout) && ok;
     ok = m_emitGpuPipeline.reloadShaders(emitGpuLayout) && ok;
     ok = m_simPipeline.reloadShaders(simLayout) && ok;
@@ -284,6 +298,24 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
         vk::AccessFlagBits2::eShaderStorageWrite,
         vk::PipelineStageFlagBits2::eComputeShader,
         vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+
+    if (params.riverMistSources)
+    { // THE RIVER MIST PRODUCER: appends GPU spawn requests before begin latches their count.
+        DescriptorSet& set = m_mistSets[frameIdx];
+        oc::array<DescriptorSetUpdateInfo, 4> updates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_countersBuffer) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_spawnRequestBuffer) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.riverMistSources) } },
+        };
+        commandBuffer.cmdUpdateDescriptorSets(m_mistPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set.getDescriptorSet(), updates);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_mistPipeline.getPipeline());
+        vk::DescriptorSet vkSet = set.getDescriptorSet();
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_mistPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+        cmd.dispatch((MAX_RIVER_MIST_SOURCES + 63) / 64, 1, 1);
+        fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+            vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+    }
 
     { // begin: pool reset or per-frame prepare
         DescriptorSet& set = m_beginSets[frameIdx];

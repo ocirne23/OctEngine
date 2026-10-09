@@ -950,6 +950,27 @@ void Renderer::uploadRiverWaterMap(uint32 frameIdx)
     m_riverWaterMaps[frameIdx].flushMappedMemory(m_riverWater.empty() ? offsetof(RiverWaterMapGpu, height) : sizeof(RiverWaterMapGpu));
 }
 
+void Renderer::setRiverMistSources(oc::span<const RendererVKLayout::RiverMistSourceGpu> sources)
+{
+    const size_t n = oc::min(sources.size(), (size_t)RendererVKLayout::MAX_RIVER_MIST_SOURCES);
+    m_riverMist.assign(sources.begin(), sources.begin() + (ptrdiff_t)n);
+    m_riverMistDirty.fill(true);
+}
+
+// This slot's river mist sources (its fence was waited), when this slot has not taken the current ones.
+void Renderer::uploadRiverMist(uint32 frameIdx)
+{
+    using namespace RendererVKLayout;
+    if (!m_riverMistDirty[frameIdx] || !m_mappedRiverMist[frameIdx])
+        return;
+    m_riverMistDirty[frameIdx] = false;
+    RiverMistSourcesGpu& gpu = *m_mappedRiverMist[frameIdx];
+    gpu.count = (uint32)m_riverMist.size();
+    if (!m_riverMist.empty())
+        memcpy(gpu.sources, m_riverMist.data(), m_riverMist.size() * sizeof(RiverMistSourceGpu));
+    m_riverMistBuffers[frameIdx].flushMappedMemory(offsetof(RiverMistSourcesGpu, sources) + m_riverMist.size() * sizeof(RiverMistSourceGpu));
+}
+
 void Renderer::setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels)
 {
     constexpr size_t TEXELS = (size_t)RendererVKLayout::CLUTTER_FLOOR_DIM * RendererVKLayout::CLUTTER_FLOOR_DIM;

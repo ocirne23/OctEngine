@@ -548,6 +548,7 @@ void Renderer::recordParticleSim(uint32 frameIdx)
         .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
         .terrainView = m_terrain.getHeightMap().getView(),
         .terrainSampler = m_terrain.getHeightMap().getSampler(),
+        .riverMistSources = &m_riverMistBuffers[frameIdx],
     };
     m_particlePipeline.recordSim(cb, frameIdx, simParams);
     cb.end();

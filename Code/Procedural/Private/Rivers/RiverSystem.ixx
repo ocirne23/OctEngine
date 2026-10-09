@@ -39,6 +39,17 @@ export namespace Procedural
 		// Main thread, every enabled terrain frame (after beginFrame: it pushes the water nodes).
 		void update(Renderer& renderer, const Camera& camera);
 
+		// A WHITEWATER point for the mist (Renderer::setRiverMistSources), unit-local engine m like the water mesh.
+		struct MistPoint
+		{
+			glm::vec3 pos;      // on the water surface (y above sea level)
+			float half = 0.0f;  // the channel's half-width
+			glm::vec2 flow;     // the flow's velocity in XZ (m/s)
+			float foam = 0.0f;  // the whitewater 0..1
+			float depth = 0.0f; // the channel's depth (the river's size: "Full size depth")
+			float len = 0.0f;   // the stretch of river it stands for
+		};
+
 	private:
 		struct Line
 		{
@@ -50,6 +61,7 @@ export namespace Procedural
 			oc::shared_ptr<const PreparedRiverUnit> unit;
 			oc::vector<Line> lines; // engine space, built when the debug lines first need them
 			bool linesBuilt = false;
+			oc::vector<MistPoint> mist; // built with the water mesh
 			RenderMesh mesh;        // declared BEFORE the node: the node is destroyed first
 			RenderNode node;
 		};
@@ -61,6 +73,7 @@ export namespace Procedural
 			oc::shared_ptr<const PreparedRiverUnit> result;
 			bool hasMesh = false;
 			RenderMeshData mesh; // unit-local engine m; the node sits at the unit's origin, at sea level
+			oc::vector<MistPoint> mist;
 		};
 
 		struct NearCell
@@ -115,6 +128,16 @@ export namespace Procedural
 			oc::vector<float> heights;
 		};
 		void updateWaterMap(Renderer& renderer, glm::vec2 camera);
+
+		// THE MIST SOURCES (Renderer::setRiverMistSources): the resident units' whitewater points within "Mist radius",
+		// nearest first, re-sent when the camera has moved c_mistMove from the last send or the units changed.
+		void updateMist(Renderer& renderer, glm::vec2 camera, bool clear);
+		glm::vec2 m_mistCentre{ 1.0e30f };
+		uint32 m_mistGeneration = 0;
+		float m_mistRadiusWas = 0.0f;
+		float m_mistFullSizeWas = 0.0f;
+		float m_mistSizeWeightWas = 0.0f;
+		bool m_mistSet = false;
 		oc::shared_ptr<WaterMapJob> m_waterJob;
 		JobCounter m_waterCounter;
 		glm::vec2 m_waterCentre{ 1.0e30f };

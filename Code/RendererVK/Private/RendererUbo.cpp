@@ -1121,6 +1121,15 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("river_smallFlow", [&] { return glm::clamp(r.riverSmallFlow, 0.0f, 1.0f); }, r.riverSmallFlow);
         list.add("river_wetness", [&] { return glm::clamp(r.riverWetness, 0.0f, 1.0f); }, r.riverWetness);
         list.add("river_nearCovered", [this] { return m_riverNearCovered; }, UboLive); // RiverSystem, per frame
+        // The mist producer (river_mist.cs.glsl): the emitter slot (UINT32_MAX = off) and its look.
+        list.add("river_mistEmitter", [this] { return m_particles.isEnabled() ? m_riverMistEmitter : UINT32_MAX; }, UboLive);
+        list.add("river_mistRate", [&] { return glm::max(r.riverMistRate, 0.0f); }, r.riverMistRate);
+        list.add("river_mistThreshold", [&] { return glm::clamp(r.riverMistThreshold, 0.0f, 0.99f); }, r.riverMistThreshold);
+        list.add("river_mistCurve", [&] { return glm::max(r.riverMistCurve, 0.1f); }, r.riverMistCurve);
+        list.add("river_mistCentering", [&] { return glm::max(r.riverMistCentering, 0.0f); }, r.riverMistCentering);
+        list.add("river_mistSpeed", [&] { return glm::max(r.riverMistSpeed, 0.0f); }, r.riverMistSpeed);
+        list.add("river_mistKick", [&] { return glm::max(r.riverMistKick, 0.0f); }, r.riverMistKick);
+        list.add("river_mistHeight", [&] { return r.riverMistHeight; }, r.riverMistHeight);
     }
     {
         // ---- Grass ("Grass")

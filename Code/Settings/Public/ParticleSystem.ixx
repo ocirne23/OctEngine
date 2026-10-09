@@ -21,6 +21,7 @@ export struct ParticleSystemSettings
     ParticleBuiltinSettings dust{ true, 1.0f, 0.5f, 0.2f, 2.0f };
     ParticleBuiltinSettings underwater{ true, 2.0f, 1.0f, 0.05f };
     bool oceanSpray = true; // one Effects/ocean_spray.pfx instance the renderer's spray producer spawns into
+    bool riverMist = true;  // one Effects/river_mist.pfx instance the renderer's river mist producer spawns into
 };
 
 export namespace Settings

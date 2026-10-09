@@ -72,8 +72,11 @@ public:
         vk::Sampler   oceanMapsSampler;
         vk::ImageView terrainView;          // terrain-data cascades (the shore weighting of that surface)
         vk::Sampler   terrainSampler;
+        Buffer* riverMistSources = nullptr; // THIS frame slot's RiverMistSourcesGpu (the head producer; nullptr = none)
     };
-    // Records begin/emit/sim into a begun secondary command buffer (outside any render pass).
+    // Records [the river mist producer,] begin/emit/sim into a begun secondary command buffer (outside any render pass).
+    // THE RIVER MIST PRODUCER (river_mist.cs.glsl) runs first: the begin pass latches the GPU spawn count it appends to.
+    // UBO-gated (u_river_mistEmitter), one thread per source slot, so the cached CB records once.
     void recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, const SimParams& params);
     // Points the sim's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image; refreshed
     // per frame by the Renderer so a CPU re-bake swaps images without re-recording the cached CB.
@@ -134,8 +137,10 @@ private:
     void buildBeginLayout(ComputePipelineLayout& layout);
     void buildEmitLayout(ComputePipelineLayout& layout, bool gpuSpawn);
     void buildSimLayout(ComputePipelineLayout& layout);
+    void buildMistLayout(ComputePipelineLayout& layout);
     void buildDrawLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
 
+    ComputePipeline m_mistPipeline;    // the river mist producer (GPU spawn path)
     ComputePipeline m_beginPipeline;
     ComputePipeline m_emitPipeline;    // the CPU spawn map
     ComputePipeline m_emitGpuPipeline; // the GPU request buffer (PARTICLE_GPU_SPAWN variant)
@@ -163,6 +168,7 @@ private:
     oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBeginDispatch;
     oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitDispatch;
 
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mistSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitGpuSets;

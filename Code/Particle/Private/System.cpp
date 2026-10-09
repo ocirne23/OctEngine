@@ -238,6 +238,15 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
                 slot = inst->emitters[0].rendererSlot;
         renderer.setOceanSprayEmitter(slot);
     }
+    // River mist: the same, for the renderer's river mist producer.
+    syncWeather(Globals::settings.particleSystem.riverMist, m_riverMistEffect, "Effects/river_mist.pfx");
+    {
+        uint32 slot = UINT32_MAX;
+        if (const EffectInstance* inst = findEffect(m_riverMistEffect.m_id))
+            if (!inst->emitters.empty())
+                slot = inst->emitters[0].rendererSlot;
+        renderer.setRiverMistEmitter(slot);
+    }
 
     // Weather volumes fill over frames: MAX_PARTICLE_SPAWNS_PER_FRAME caps the whole frame's spawn
     // map, so one volume takes at most half of it and leaves room for everything else.

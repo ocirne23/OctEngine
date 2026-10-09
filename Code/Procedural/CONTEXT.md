@@ -369,6 +369,14 @@ evicted bumps the unit generation: every cell goes STALE and keeps its mesh unti
 change drops them. Lines: channels blue by Q, ephemeral tan, rapids orange, falls red, the channel's edges white and the
 carved bed's outer edge (half-width x (1 + bank + floodplain)) dim green, outlet / inlet ticks magenta / green,
 lake row hatching.
+**The mist sources** (`updateMist`, V6): the unit pull job collects, with the water mesh, every water point with any
+whitewater (`MistPoint`: surface point, channel half-width, flow, whitewater, channel depth, the stretch it stands for -
+half the river to each neighbour). Each frame the resident units' points within "Mist radius" go to
+`Renderer::setRiverMistSources` (nearest first past `MAX_RIVER_MIST_SOURCES`; re-sent after 10 m of camera motion or a
+unit change), their whitewater x the river's size (depth / "Full size depth", weighted by "Mist size weight"). The
+renderer's producer spawns `Effects/river_mist.pfx` over them (see RendererVK): Procedural cannot link Particle, so the
+mist goes the ocean spray's way.
+
 **The inland water map** (`updateWaterMap`): `RIVER_WATER_MAP_DIM`² texels of `RIVER_WATER_MAP_TEXEL` m around the
 camera, each the inland surface Y at its centre (`RiverTerrain::sampleInlandWaterGrid`: the river's calm carved surface
 inside its channel, else a lake's level; units only, no terrain), baked on a Low job when the camera has moved

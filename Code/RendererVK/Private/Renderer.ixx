@@ -149,6 +149,8 @@ public:
     void resetParticles() { m_particles.requestReset(); }
     void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
     void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
+    // The river mist producer's emitter slot (the Particle system's Effects/river_mist.pfx; UINT32_MAX = off).
+    void setRiverMistEmitter(uint32 slot) { m_riverMistEmitter = slot; }
     // "Ocean/World scale" (s): the spray emitter's lengths / speeds / accelerations ride it.
     // From the "Ocean" settings (the same values the pushed OceanParams carry): the UBO's lockable ocean values and the
     // live work both read these.
@@ -207,6 +209,10 @@ public:
     // (0, 0)'s min corner); empty = none. The volumetric fog's underwater boundary over rivers and lakes. Main thread;
     // each frame slot takes it in present.
     void setRiverWaterMap(glm::vec2 origin, oc::span<const float> heights);
+    // THE RIVER MIST SOURCES (RendererVKLayout::RiverMistSourceGpu; Procedural RiverSystem): the whitewater stretches near
+    // the camera, at most MAX_RIVER_MIST_SOURCES (the rest are dropped). The particle sim pass's head producer
+    // (river_mist.cs.glsl) spawns mist over them. Main thread; each frame slot takes them in present.
+    void setRiverMistSources(oc::span<const RendererVKLayout::RiverMistSourceGpu> sources);
     using TerrainSplatMaterial = ::TerrainSplatMaterial;
     using TerrainSplatCounts = ::TerrainSplatCounts;
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
@@ -887,6 +893,14 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_riverWaterMaps;
     oc::array<RendererVKLayout::RiverWaterMapGpu*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedRiverWaterMaps{};
     void uploadRiverWaterMap(uint32 frameIdx);
+    // The river mist sources (setRiverMistSources): the CPU copy, and per frame slot its host-visible buffer (the
+    // particle sim pass's mist producer).
+    oc::vector<RendererVKLayout::RiverMistSourceGpu> m_riverMist;
+    oc::array<bool, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_riverMistDirty{};
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_riverMistBuffers;
+    oc::array<RendererVKLayout::RiverMistSourcesGpu*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedRiverMist{};
+    uint32 m_riverMistEmitter = UINT32_MAX;
+    void uploadRiverMist(uint32 frameIdx);
     bool clutterActive() const { return m_clutterParams.enabled && m_sceneViewCount == 1 && m_clutterPipeline.numTypes() > 0; } // desktop only
     float clutterPatchSize() const { return glm::clamp(m_clutterParams.patchSize, 1.0f, 16.0f); }
     void uploadClutterFrame(uint32 frameIdx);

@@ -30,4 +30,5 @@ void Settings::registerParticleSystem(ParticleSystemSettings& s)
         Tweak::floatVar("Particles", b.sizeVarName, &b.settings->sizeVarScale, 0.0f, 4.0f, 0.01f);
     }
     Tweak::boolean("Particles", "Ocean spray", &s.oceanSpray);
+    Tweak::boolean("Particles", "River mist", &s.riverMist);
 }

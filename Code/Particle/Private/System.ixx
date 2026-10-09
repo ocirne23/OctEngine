@@ -55,6 +55,7 @@ public:
         for (BuiltinEffect& b : m_builtins)
             b.effect.m_id = 0;
         m_oceanSprayEffect.m_id = 0;
+        m_riverMistEffect.m_id = 0;
     }
 
     void initialize() {}
@@ -148,6 +149,8 @@ private:
     // "Particles/Ocean spray": one Effects/ocean_spray.pfx instance (no CPU spawns) whose emitter slot the
     // renderer's ocean spray producer spawns into over the particle GPU spawn path.
     ParticleEffect m_oceanSprayEffect;
+    // "Particles/River mist": the same for the renderer's river mist producer (rapids and falls; world scale).
+    ParticleEffect m_riverMistEffect;
 };
 
 export namespace Globals

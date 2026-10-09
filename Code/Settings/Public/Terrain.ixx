@@ -286,14 +286,24 @@ export struct TerrainSettings
 	// downstream. Geometry near the camera (dense cells within "Near radius"), shading everywhere.
 	float riverWaveHeight = 0.15f;      // x the ocean's wave height
 	float riverWaveTiling = 3.0f;       // x the ocean's wave frequency (shorter river waves)
-	float riverWaveRapids = 4.0f;
+	float riverWaveRapids = 4.0f;       // the waves x (1 + this x the whitewater amount) on rapids and falls
 	float riverFullSizeDepth = 2.0f;    // engine m of channel depth from which a river has its full waves and flow
-	float riverSmallFlow = 0.3f;        // the flow's speed on the smallest river, x its own (rises to 1 at the full-size depth)       // the waves x (1 + this x the whitewater amount) on rapids and falls
+	float riverSmallFlow = 0.3f;        // the flow's speed on the smallest river, x its own (rises to 1 at the full-size depth)
 	float riverNearRadius = 250.0f;     // engine m: the dense wave geometry around the camera (fades out toward it)
 	float riverNearSpacing = 1.0f;      // engine m between the dense mesh's rows
 	int   riverNearAcross = 12;         // vertices across a dense ribbon
 	float riverNearDrop = 0.0f;        // engine m the light ribbon sinks inside the near radius, under the dense waves
 	float riverWetness = 0.6f;         // the terrain wetness under and beside rivers / lakes (0 = none, 1 = soaked)
+	// THE MIST off rapids and falls (river_mist.cs.glsl into Effects/river_mist.pfx; "Particles/River mist" switches it).
+	float riverMistRadius = 300.0f;    // engine m: whitewater this close to the camera mists
+	float riverMistRate = 10.0f;       // spawns per m2 of whitewater per s at full whitewater
+	float riverMistThreshold = 0.25f;  // the whitewater (x the river's size) where the mist starts
+	float riverMistCurve = 1.0f;       // the exponent on the whitewater past the threshold: higher = falls mist far more than rapids
+	float riverMistCentering = 2.0f;   // 0 = mist over the whole width evenly; higher = gathered toward the channel's centre
+	float riverMistSizeWeight = 0.5f;  // 0 = every river mists by its whitewater alone, 1 = x its size ("Full size depth")
+	float riverMistSpeed = 0.5f;       // x the flow's speed: how fast the mist drifts downstream
+	float riverMistKick = 0.0f;        // m/s upward
+	float riverMistHeight = -0.5f;     // m above the water it spawns at
 };
 
 // "Terrain/Collision": the focus-centered ring of static collider tiles (Procedural TerrainCollider).

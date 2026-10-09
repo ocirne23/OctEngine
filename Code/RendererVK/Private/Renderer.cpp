@@ -326,6 +326,13 @@ void Renderer::initSharedBuffers()
         m_mappedRiverWaterMaps[i] = (RendererVKLayout::RiverWaterMapGpu*)m_riverWaterMaps[i].mapMemory().data();
         memset(m_mappedRiverWaterMaps[i], 0, offsetof(RendererVKLayout::RiverWaterMapGpu, height)); // dim 0: no map
         m_riverWaterMaps[i].flushMappedMemory(offsetof(RendererVKLayout::RiverWaterMapGpu, height));
+
+        // The river mist sources, the same way (the particle sim's mist producer binds them).
+        m_riverMistBuffers[i].initialize(sizeof(RendererVKLayout::RiverMistSourcesGpu), vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "RiverMistSources", BufferHostAccess::eSequentialWrite);
+        m_mappedRiverMist[i] = (RendererVKLayout::RiverMistSourcesGpu*)m_riverMistBuffers[i].mapMemory().data();
+        memset(m_mappedRiverMist[i], 0, offsetof(RendererVKLayout::RiverMistSourcesGpu, sources)); // count 0
+        m_riverMistBuffers[i].flushMappedMemory(offsetof(RendererVKLayout::RiverMistSourcesGpu, sources));
     }
 }
 
@@ -917,6 +924,7 @@ void Renderer::present()
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
     uploadRiverWaterMap(frameIdx); // the inland water map, when it changed
+    uploadRiverMist(frameIdx);     // the river mist sources, when they changed
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the

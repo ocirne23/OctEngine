@@ -123,6 +123,11 @@ spray`, `Rate 0`) and publishes its FIRST emitter's slot through `Renderer::setO
 frame; the producer spawns mist on breaking crests at `Ocean/Spray *` rates. **One emitter**: the
 producer has no look selection, so further emitters in the asset would never be reached.
 
+**Second producer: river mist** (`River/river_mist.cs.glsl`, the head of the particle sim pass - see RendererVK).
+The same pattern: one `Effects/river_mist.pfx` instance (`Particles/River mist`, `Rate 0`, ONE emitter, world scale,
+no `WaterFloor` / `AboveWater` - those are the sea's surface), its first emitter's slot published through
+`Renderer::setRiverMistEmitter` every frame.
+
 **The spray is authored at the MODEL sea's scale** and rides "Ocean/World scale" (s, read through
 `Renderer::getOceanWorldScale`): `update` multiplies the spray instance's size, gravity, turbulence
 accel and scroll by s and divides the turbulence frequency by s; the renderer does the same to the

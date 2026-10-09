@@ -388,9 +388,13 @@ namespace
 	}
 
 	// THE WATER MESH of a unit, pure (the pull job builds it). Unit-local ENGINE metres, y relative to sea level (the
-	// node sits at the unit's origin at sea level). Vertex layout: see river.vs.glsl.
-	bool buildSurfaceMesh(const RiverTerrain& terrain, const RiverUnit& u, RenderMeshData& out)
+	// node sits at the unit's origin at sea level). Vertex layout: see river.vs.glsl. Also its WHITEWATER points for the
+	// mist: every water point with any whitewater (past c_mistMinFoam - the tweak's threshold cuts later), standing for
+	// half the river to each neighbour.
+	bool buildSurfaceMesh(const RiverTerrain& terrain, const RiverUnit& u, RenderMeshData& out, oc::vector<RiverSystem::MistPoint>& mist)
 	{
+		constexpr float c_mistMinFoam = 0.02f;
+		mist.clear();
 		const TerrainConfigV3& gc = terrain.base().config();
 		const float mpp = gc.metersPerPixel;
 		const float vs = TerrainGenV3::worldScale(gc.metersPerPixel) * gc.heightScale;
@@ -407,6 +411,13 @@ namespace
 			for (size_t k = 0; k < pts.size(); k++)
 			{
 				const WaterPoint& w = pts[k];
+				if (w.foam > c_mistMinFoam)
+				{
+					const float prev = k > 0 ? glm::length(w.pos - pts[k - 1].pos) : 0.0f;
+					const float next = k + 1 < pts.size() ? glm::length(pts[k + 1].pos - w.pos) : 0.0f;
+					mist.push_back(RiverSystem::MistPoint{ glm::vec3(w.pos.x, w.y, w.pos.y), w.half / c_ribbonWiden,
+						w.dir * w.speed, w.foam, w.depth, 0.5f * (prev + next) });
+				}
 				const glm::vec2 n(-w.dir.y, w.dir.x);
 				const glm::vec3 tangent(w.dir.x * w.speed, w.foam, w.dir.y * w.speed);
 				m.push(glm::vec3(w.pos.x + n.x * w.half, w.y, w.pos.y + n.y * w.half), tangent, glm::vec2(-1.0f, w.along), false, w.depth);
@@ -649,6 +660,71 @@ namespace Procedural
 		renderer.setRiverNearCovered(glm::max(covered, 0.0f));
 	}
 
+	void RiverSystem::updateMist(Renderer& renderer, glm::vec2 camera, bool clear)
+	{
+		using namespace RendererVKLayout;
+		if (clear)
+		{
+			if (m_mistSet)
+			{
+				renderer.setRiverMistSources({});
+				m_mistSet = false;
+			}
+			m_mistCentre = glm::vec2(1.0e30f);
+			return;
+		}
+		const TerrainSettings& s = Globals::settings.terrain;
+		constexpr float c_mistMove = 10.0f; // engine m
+		const float R = glm::max(s.riverMistRadius, 1.0f);
+		if (glm::length(camera - m_mistCentre) < c_mistMove && m_mistGeneration == m_unitGeneration
+			&& R == m_mistRadiusWas && s.riverFullSizeDepth == m_mistFullSizeWas && s.riverMistSizeWeight == m_mistSizeWeightWas)
+			return;
+		m_mistCentre = camera;
+		m_mistGeneration = m_unitGeneration;
+		m_mistRadiusWas = R;
+		m_mistFullSizeWas = s.riverFullSizeDepth;
+		m_mistSizeWeightWas = s.riverMistSizeWeight;
+
+		// The whitewater x the river's size ("Full size depth", as the waves) by "Mist size weight": a stream's riffle
+		// barely mists.
+		const float fullSize = glm::max(s.riverFullSizeDepth, 1e-3f);
+		const float sizeWeight = glm::clamp(s.riverMistSizeWeight, 0.0f, 1.0f);
+		oc::vector<oc::pair<float, RiverMistSourceGpu>> found;
+		for (const auto& [key, r] : m_units)
+		{
+			if (r.mist.empty())
+				continue;
+			const int32 ui = (int32)(key >> 32), uj = (int32)(uint32)(key & 0xFFFFFFFFu);
+			if (unitDistance(ui, uj, camera) > R)
+				continue;
+			const glm::vec3 origin = unitOrigin(ui, uj);
+			for (const MistPoint& p : r.mist)
+			{
+				const glm::vec3 world = origin + p.pos;
+				const glm::vec2 d(world.x - camera.x, world.z - camera.y);
+				const float d2 = glm::dot(d, d);
+				if (d2 > R * R)
+					continue;
+				RiverMistSourceGpu g;
+				g.posHalf = glm::vec4(world, p.half);
+				const float size = glm::mix(1.0f, glm::clamp(p.depth / fullSize, 0.0f, 1.0f), sizeWeight);
+				g.flowFoam = glm::vec4(p.flow, p.foam * size, p.len);
+				found.push_back({ d2, g });
+			}
+		}
+		if (found.size() > MAX_RIVER_MIST_SOURCES)
+		{
+			oc::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			found.resize(MAX_RIVER_MIST_SOURCES);
+		}
+		oc::vector<RiverMistSourceGpu> sources;
+		sources.reserve(found.size());
+		for (const auto& [d2, g] : found)
+			sources.push_back(g);
+		renderer.setRiverMistSources(sources);
+		m_mistSet = true;
+	}
+
 	float RiverSystem::unitDistance(int32 ui, int32 uj, glm::vec2 camera) const
 	{
 		const TerrainConfigV3& gc = m_terrain->base().config();
@@ -686,6 +762,7 @@ namespace Procedural
 				Resident& r = m_units[unitKey(job->ui, job->uj)];
 				r.unit = job->result;
 				r.linesBuilt = false;
+				r.mist = oc::move(job->mist);
 				++m_unitGeneration; // the near cells may cross its rivers: rebuild them
 				if (job->hasMesh)
 				{
@@ -708,6 +785,8 @@ namespace Procedural
 			renderer.setRiverWaterMap(glm::vec2(0.0f), {});
 			m_waterMapSet = false;
 		}
+		if (!m_terrain || !surface)
+			updateMist(renderer, glm::vec2(0.0f), true);
 		if (!m_terrain || (!lines && !surface))
 			return;
 
@@ -766,7 +845,7 @@ namespace Procedural
 				{
 					job->result = job->terrain->unit(job->ui, job->uj);
 					if (job->buildSurface && job->result && !job->result->unit->empty)
-						job->hasMesh = buildSurfaceMesh(*job->terrain, *job->result->unit, job->mesh);
+						job->hasMesh = buildSurfaceMesh(*job->terrain, *job->result->unit, job->mesh, job->mist);
 				}, { "RiverSystem::pullUnit", EProfileCategory::Procedural }, EJobPriority::Low, &m_counter);
 			}
 		}
@@ -794,6 +873,7 @@ namespace Procedural
 		{
 			updateNearCells(renderer, cam);
 			updateWaterMap(renderer, cam);
+			updateMist(renderer, cam, false);
 		}
 		else
 		{
