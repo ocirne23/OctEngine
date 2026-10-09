@@ -70,11 +70,6 @@ shared float s_humidity[CLUTTER_GRID_SAMPLES];
 shared vec4 s_cover[CLUTTER_GRID_SAMPLES]; // x grass, y crag (bedrock), z beach, w snow
 shared vec3 s_river[CLUTTER_GRID_SAMPLES]; // x the river influence, y the FLOW measure (the river's speed, slow 0 .. fast 1), z under the water
 
-// The `Flow` term's measure: the river's speed (the terrain vertex's v, m/s) from slow (a lake, a meander's pool) to fast
-// (rapids). The Manning speeds run ~0.3 m/s in flat water to ~3 m/s in a steep stream.
-#define CLUTTER_FLOW_SLOW 0.5
-#define CLUTTER_FLOW_FAST 2.5
-
 bool clutterGroundAt(vec2 xz, out GrassGround g)
 {
     const ivec2 cell = ivec2(floor(xz / gf_chunkSize)) - gf_tableMin;
@@ -103,7 +98,8 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_humidity[i] = 0.5;
     s_cover[i] = vec4(0.0);
     const vec3 river = grassGroundRiverData(g, xz);
-    s_river[i] = vec3(river.x, smoothstep(CLUTTER_FLOW_SLOW, CLUTTER_FLOW_FAST, river.y), river.z);
+    // The `Flow` measure: the river's speed (the terrain vertex's v) from slow to fast (RendererVKLayout RIVER_FLOW_*).
+    s_river[i] = vec3(river.x, smoothstep(RIVER_FLOW_SLOW, RIVER_FLOW_FAST, river.y), river.z);
     if (!terrainHeightMapPresent())
         return;
     const vec4 td = terrainDataAt(xz);

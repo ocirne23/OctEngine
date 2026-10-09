@@ -71,7 +71,7 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
 
 * **`samplePoint`** fills a `TerrainPoint` — height, waterLevel, altitude, temperature (°C), humidity,
   fogThickness, fogFalloffMul, `temperatureSeaLevel`, flowAngle01, and the inland water (`inlandWater`, `river`,
-  `riverQ`, `waterKind`, `dryBed` - "Rivers: the sampler"; `waterLevel` is always the SEA's) — **from ONE evaluation.** Sampling
+  `riverSpeed`, `waterKind`, `dryBed` - "Rivers: the sampler"; `waterLevel` is always the SEA's) — **from ONE evaluation.** Sampling
   these one at a time is fine for a noise field but not for a generator with a per-point cost.
 * **`sampleRiverGrid`** fills the river influence ALONE on a grid (no terrain): placement asks for it at a resolution
   finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
@@ -208,7 +208,17 @@ is bigger than the margin. Steps (`RiverNetwork.cpp`):
   than 2 x "Breach depth", however small (a pond; the same rule in the units with their "Unit" values: cut through, a
   deep small basin left a river a gorge tens of metres deep, which floated or canyoned across the unit edge,
   2026-10-09); the rest pass water through
-  (no carve yet). A lake gathers its inflow and releases at its exits when the last one is in: full (spills inflow +
+  (no carve yet). **THE SIZE LIMIT** (units only, "Unit lake max cells", default 20000, 0 = none; the user, 2026-10-09:
+  a deep valley basin filled to its spill was a 292000 px lake): the level goes between the basin's LOWEST that many
+  pixels and the next (a terminal lake's hypsometry), and of the pools under it the LARGEST is the lake (the one
+  around the lowest pixel was a thin strip in the outflow's gorge); the other pools and everything above are land
+  again - the water runs over them as channels, and the outflow's breach profile cuts down through the rim to the lower
+  level (a gorge, at most the basin's depth). **The basin's drain tree is rebuilt** (`capDepression`): the flood's
+  tree ran from the spill through the whole basin, so its paths left the smaller lake over a dry stretch and came back,
+  or ran from a pool into the lake - rivers that started and ended in the same lake. Now ONE path leaves (the old one
+  from the lake's lowest pixel, from where it last leaves the lake) and every other basin pixel drains into the lake or
+  onto it: a priority flood from the path, lowest first, so the whole lake fills from its exit before any dry pixel. The
+  basin keeps its rank slots, reassigned in the new tree's order. A lake gathers its inflow and releases at its exits when the last one is in: full (spills inflow +
   own rain - open-water evaporation), terminal (the lowest cells that evaporate exactly the inflow, no outflow) or a
   salt pan (under one cell). Dry land loses channel water by aridity (`loss x (PET/P - 1) x km x sqrt(Q)`).
 
@@ -240,7 +250,10 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   (`DrainageSeed::priority`), so water leaves there only when every way to an outlet climbs more, and its segment ends
   `ERiverEnd::Edge` (the neighbour does not continue it). **A basin that spills through a soft seed is never a lake**
   (`DrainageResult::root`). With hard walls, valleys whose fine watershed crossed a unit edge filled up to the lowest
-  pass toward an outlet: lakes far above the hillside, cut off at the unit edge (seen 2026-10-08).
+  pass toward an outlet: lakes far above the hillside, cut off at the unit edge (seen 2026-10-08). **No soft wall
+  within 32 px of an inlet** (`c_inletGuardPx`): the border pixels beside it were soft seeds too, and where the ground
+  just inside rose more than the wall the arriving river ran straight back out beside where it came in - one pixel
+  long, then faded to nothing at the edge (2026-10-09).
 * **A crossing's DIRECTION** (2026-10-09): both units end a crossing segment on the same boundary point, but each came
   in at its own angle and the channel kinked. Both agree on the edge's NORMAL: after the path shaping (Chaikin), the
   stretch within 16 px of the crossing is pulled onto the line through the boundary point along it - fully at the point,
@@ -257,6 +270,33 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   routing never cuts deeper (a deeper basin is a pond, below), so there the fine and coarse drainage really disagree. The breach keeps the exit's level through the rim
   (a gorge - 23 m in the case seen), so the water reaches the crossing LOWER than the crossing's own level (the edge
   ground + depth), where the neighbour starts: the sampler's INLET MATCH (below) carries it on.
+* **THE END LAKES** (2026-10-09, the user: rivers should end in the sea or a lake): a perennial segment ending in a
+  `Sink`, running `Dry`, or reaching a soft wall floods a TERMINAL LAKE at its end. An `Edge` end is first pulled back
+  8 px from the border (`c_edgeBackPx`) and becomes `Dry`: the neighbour does not see it (seen: a big river ran into
+  the border of a flat valley, the neighbour's stream into the same point from the other side). The flood starts at the
+  last pixel and takes the LOWEST GROUND FIRST, so the lake has the terrain's own shape (up the river's own valley,
+  into side hollows). It grows to "End lake size" px per m3/s arriving (at most 20000 px). It never goes into the edge
+  band (2 px), the sea or another lake; those are only its shore. **HELD**: the flood rose over a rim with every shore
+  pixel above its level. The lake fills to there, and a held size of at least half the target counts. **Else CARVED**
+  (the user's pick: the flood ran down a slope or out into the edge band / the sea). Its SHAPE comes from a second
+  flood: lowest ground alone gave the pixels under one contour - on an even slope a straight shore that moved with "End
+  lake size" - so the cost is the ground + 1 model m per px from a CENTRE + an 8 model m value noise over 8 px cells (in
+  global pixels): a compact, uneven lake, still along the low ground where the ground has a shape. The centre is the
+  end moved off the unit's edges by 1.5 x the round radius + 12 px: from an Edge end (8 px in) the blob grew round the
+  end and the edge band cut half of it off straight. Its pixels sit at 0.1 model m under their lowest shore pixel, `RiverLake::carved`, and RiverTerrain digs their ground to 3 model m under the level
+  (`c_carvedLakeBedM`). **Never above the arriving river's water**: the breach profile can run the river in a gorge
+  far under the ground the flood saw (a lake at that ground stood 138 model m over the river, 2026-10-09), so a level
+  over the end's water drops to it, carved. Not when the digging is deeper than "End lake max depth" under the highest
+  pixel (then the river fades out). **Another river's
+  channel ENDS the flood** (only channel pixels that drain to this end, or its own cut-off tail, join; the lake is then
+  held or carved at what it has): covered, that river ended in the lake and the river after it started from nothing
+  past the shore; only skipped, the lake grew round it on both sides and the river ran through the lake on a strip of
+  shore. At least 16 px, or
+  no lake (the fade-out stays). **Every segment ends where it first enters an end lake** (end `Lake`; sampled along
+  its pieces every half pixel and the end point moved there - the simplified points are sparse, and a straight reach
+  crossed a whole lake with no point inside it; its water stays its own; a segment that starts in one is gone): the valley-first flood covers the river's last
+  stretch, whose surface stood over the lake's in near-cell rectangles. **A lake cannot cross a unit edge**: two units
+  that both end rivers at the same border point make two lakes, with a ground strip and two levels between them.
 * **Each tile's land runoff is rescaled to its coarse pixel's own** (`CoarseRiverTile::runoff`), so the levels agree on
   the budget.
 * **Channels** (Q >= "Channel min Q", outside lake basins) become segments from heads / junctions / inlets to a
@@ -283,7 +323,8 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   Chaikin x2, then THE GROUND CLAMP (`clampToGround`): W was walked along the raw D8 pixels and the shaping moved the
   path with W tied to its arc position, so where the final path lies over LOWER ground W stood in the air (seen
   2026-10-09; the carve only lowers). On the final path W <= the ground under it + the channel's depth, then a running
-  min downstream again. Then Douglas-Peucker that keeps a
+  min downstream again - **never under the profile's floor** (a `Lake` end's lake level, a `Sea` end's 0): over the
+  lake's bed the clamp pulled a river 38 model m under its lake's surface, and the lake's sheet stood over it. Then Douglas-Peucker that keeps a
   point when EITHER its plan offset passes 0.1 px OR its W passes 0.25 model m from the interpolation - W is linear
   between the kept points, and the plan-only version kept just the ends of a reach that was straight in plan but
   dropped into a canyon partway, so the water sloped through the air over the drop. Points carry W, half-width, depth, Q and rapids / fall flags (by
@@ -345,8 +386,10 @@ config-dirty listener (a rebuild; the units then reload from disk).
   reach touches each cell - so a query also finds a NEIGHBOUR unit's river near the edge - and per-row lake-run offsets.
   **A cell lists its pieces segment by segment** (the carve relies on it). Then **THE INLET MATCH** (`matchInlets`): a
   segment starting on the unit's border looks up the upstream unit's segment ending at the same boundary point - in its
-  RAW unit (`rawUnit`: the units as built, their own deduplicated store; units build independently, so this never
-  chains) - and holds its water at or below that level, and so the segments it flows on into: where the upstream water
+  EDGE SUMMARY (`unitEdges`: per unit only its outlet ends - position, level, half-width - taken from its raw unit as
+  built, a deduplicated store of a few floats each; units build independently, so this never chains. Building a
+  summary builds the raw unit, which waits in a small HAND-OFF (16 units) for that unit's own `unit` call, so it is
+  built once; the store keeps no raw units, a prepared unit only its own modified copy) - and holds its water at or below that level, and so the segments it flows on into: where the upstream water
   arrives lower than the crossing's level (the edge reroute's gorge), the gorge continues downstream and the carve cuts
   it out until the ground falls under it - no step at the unit edge, no water climbing. At most 2 x "Unit breach depth"
   lower (no breach is deeper - a deeper basin is a pond; carried on for kilometres a deeper one carved a canyon). An
@@ -357,7 +400,8 @@ config-dirty listener (a rebuild; the units then reload from disk).
   fine Q is at least half the coarse one: blended from far below, a small stream swelled into a big river in 24 px at
   the edge - so the two sides cross at the stream's real size and the inlet grows from it. **THE OPEN ENDS** (`fadeOpenEnds`): a segment
   ending neither in water nor in another river - `Edge` (a soft wall; the neighbour does not continue it), `Sink`, `Dry`
-  - FADES OUT the same way over its last 200 px (at most half the segment); it stopped as a full-width cut. Then its water is SUNK UNDER THE OTHER RIVERS'
+  - FADES OUT the same way over its last 200 px (at most half the segment); it stopped as a full-width cut. Only where
+  no end lake formed (`RiverUnits` sets the end to `Lake` for one). Then its water is SUNK UNDER THE OTHER RIVERS'
   CARVES (`sinkUnderCarves`, on a copy - the store's unit and the disk cache stay as built): the profile walked the
   UNCARVED ground, but another river's valley wall cuts the hillside down to "Valley slope", so a steep stream on a big
   river's valley side stood tens of metres above the carved ground (2026-10-09). Each point's surface is held at or
@@ -377,7 +421,8 @@ config-dirty listener (a rebuild; the units then reload from disk).
   under the water only - scaling the bank too steepened it) as (x / width)^"Floodplain curve" (1 straight, 2 a bowl), then the
   valley wall at "Valley slope". **The floodplain is always carved whole**: "Carve reach" is how far the WALL may run
   past the floodplain's edge (fading out over its last 30 %), **scaled with the water**: the whole reach from "Carve
-  reach Q" up, sqrt(Q / it) of it below, x the channel's growth (below) - a small stream cuts a small valley, a head
+  reach Q" up, (Q / it)^"Carve reach Q exponent" of it below (default 0.1; 0.5 = the square root; higher narrows
+  the small streams' valleys faster), x the channel's growth (below) - a small stream cuts a small valley, a head
   none (`RiverTerrain::wallReach`); a piece's reach = its floodplain edge (capped at 1500 model m, the lookups' bounded
   margin) + that. **THE GROWTH** (unit build, `RiverUnits.cpp`): a channel's width and depth rise smoothly from 0 at
   "Channel min Q" to the hydraulic geometry at min Q + "Fade Q", so a stream fades in at its head and out where its
@@ -392,10 +437,18 @@ config-dirty listener (a rebuild; the units then reload from disk).
   grid step** - the terrain's edge stitch interpolates the finer node's own samples, so a step-dependent carve would
   crack. Inside the channel the carve replaces the ground, so the crag detail is gone there without a mask.
 * **Water**: inside a perennial channel `waterKind = River`, `inlandWater` = S (world; the debug lines draw S too), `flowAngle01` = the piece's
-  direction, `riverQ`; an ephemeral channel or a pan sets `dryBed`; a lake's wet pixel (nearest native pixel) sets
-  `waterKind = Lake` + its level where above the ground; `riverSpeed` = the most influential piece's Manning speed
+  direction; an ephemeral channel or a pan sets `dryBed`; a lake's wet pixel (nearest native pixel) sets
+  `waterKind = Lake` + its level where above the ground. **The lake bed** (on that pixel's ground, before the level
+  test): a carved end lake's dug to 3 model m under its level; then any lake's lowered by "Lake bed deepen (m)",
+  growing in from the shore over "Lake bed deepen reach (px)" as a SMOOTHSTEP - flat at the waterline, so the shore
+  keeps its own slope (the shore = the nearest pixel no wet run covers, touching runs of two lakes are one water, a
+  pan is shore, past the unit is not). **THE RIM GUARD**: the carve knows nothing of lakes - an outlet's floodplain and
+  valley wall cut the rim away and the lake's sheet stood in the air. Beside a lake (within 3 px; not on its wet
+  pixels, not inside a river's channel, which must cut through) the ground is kept at the nearest lake's level + 0.1
+  model m at the shore pixel, that floor falling at "Valley slope" farther out, never above the uncarved ground (only
+  the unit the point lies in is searched). `riverSpeed` = the most influential piece's Manning speed
   (as RiverSystem's `segmentWater`; 0 on a dry bed); and `river` = 1 over a lake's wet pixels fading to 0 within
-  1.5 px of them (the beach on the bed and the shoreline, no grass / clutter under the water). `river` = 1 in the channel fading to 0 at the floodplain's
+  "Lake shore (px)" of them (default 0.75) (the beach on the bed and the shoreline, no grass / clutter under the water). `river` = 1 in the channel fading to 0 at the floodplain's
   edge. **`waterLevel` stays the sea's** (TerrainPoint, `ETerrainWater`), so the ocean, its swash, its buoyancy and the
   bake's water channel never see inland water - no gate in the bake. Coarse queries pass straight through.
 * **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river` into the vertex's u
@@ -1688,7 +1741,7 @@ RockType <name>
 		        Rugged say. Default: no valley rule)
 		Forest open forest (x mix(open, forest, the trees' own density there / 60 per ha): dead wood lies under trees.
 		        One value: both; default 1 1)
-		River none full · Flow slow fast (the river influence and its speed, as the clutter's terms; `ROCK_FLOW_SLOW /
+		River none full · Flow slow fast (the river influence and its speed, as the clutter's terms; `RendererVKLayout::RIVER_FLOW_SLOW /
 		        FAST`). A rule with a River term other than 1 1 may place IN a river's bed ("Terrain/Rivers/Vegetation
 		        clear" keeps every other rule out); with an Altitude min below 0 under its water. `RiverBoulder`: fast water
 		Cluster size coverage (m, 0..1: patches)

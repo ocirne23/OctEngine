@@ -918,7 +918,7 @@ namespace Procedural
 						}
 						// RIVERS: the influence (the channel .. the floodplain's edge) and the flow speed (slow .. fast).
 						ground *= glm::mix(p.river.x, p.river.y, s.river)
-							* glm::mix(p.flow.x, p.flow.y, glm::smoothstep(ROCK_FLOW_SLOW, ROCK_FLOW_FAST, s.riverSpeed));
+							* glm::mix(p.flow.x, p.flow.y, glm::smoothstep(RendererVKLayout::RIVER_FLOW_SLOW, RendererVKLayout::RIVER_FLOW_FAST, s.riverSpeed));
 						fit *= ground;
 						float ruleDensity = p.density * fit;
 						if (ruleDensity > 0.0f && p.clusterSize > 1.0f)

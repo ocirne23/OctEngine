@@ -26,6 +26,7 @@ export namespace Procedural
 		float seaDepth = 20.0f;
 		float breachDepth = 30.0f;
 		int32 lakeMinCells = 1;
+		int32 lakeMaxCells = 0;    // a bigger basin holds water in only its lowest this many pixels (0 = no limit)
 	};
 
 	// A pixel that drains OFF the grid. `priority` orders it in the flood (its own height for a real outlet; higher for

@@ -33,6 +33,7 @@ export namespace Procedural
 		int32 crossWindow = 64;
 		float breachDepth = 75.0f;
 		int32 lakeMinCells = 8334;
+		int32 lakeMaxCells = 20000; // native px: a bigger basin's lake is only its lowest this many (0 = no limit)
 		float channelMinQ = 1.0f;
 		float fadeQ = 2.0f;     // m3/s past the minimum over which a channel grows to its full width and depth
 		float perennialQ = 0.0f;
@@ -48,6 +49,8 @@ export namespace Procedural
 		float meanderSmallAmplitude = 5.0f;  // the swing on the smallest stream, x the above (1 at meanderFullQ)
 		float meanderSmallWavelength = 1.0f; // the wavelength on the smallest stream, x the above (1 at meanderFullQ)
 		float meanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set
+		float endLakeArea = 300.0f;          // native px per m3/s: a river ending in a sink / running dry floods a lake there (0 = off)
+		float endLakeMaxDepth = 20.0f;      // model m: the most a carved end lake digs under its highest pixel
 		bool operator==(const RiverUnitConfig&) const = default;
 	};
 
@@ -59,6 +62,7 @@ export namespace Procedural
 		c.crossWindow = s.riverCrossWindow;
 		c.breachDepth = s.riverUnitBreachDepth;
 		c.lakeMinCells = s.riverUnitLakeMinCells;
+		c.lakeMaxCells = s.riverUnitLakeMaxCells;
 		c.channelMinQ = s.riverChannelMinQ;
 		c.fadeQ = s.riverChannelFadeQ;
 		c.perennialQ = s.riverPerennialQ;
@@ -74,6 +78,8 @@ export namespace Procedural
 		c.meanderSmallAmplitude = s.riverMeanderSmallAmplitude;
 		c.meanderSmallWavelength = s.riverMeanderSmallWavelength;
 		c.meanderFullQ = s.riverMeanderFullQ;
+		c.endLakeArea = s.riverEndLakeArea;
+		c.endLakeMaxDepth = s.riverEndLakeMaxDepth;
 		return c;
 	}
 
@@ -121,7 +127,8 @@ export namespace Procedural
 	{
 		float level = 0.0f; // model m
 		ERiverWater kind = ERiverWater::Lake; // Lake / TerminalLake / Pan
-		uint8 pad[3] = {};
+		uint8 carved = 0; // an end lake the ground does not hold: RiverTerrain digs its pixels under the level
+		uint8 pad[2] = {};
 	};
 
 	// The wet pixels of a lake (a pan's salt pixels), run-length per unit row.

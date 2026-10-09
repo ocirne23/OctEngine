@@ -28,17 +28,18 @@ namespace
 		return t * t * (3.0f - 2.0f * t);
 	}
 
-	// A segment's first `lenPx` GROWS IN: its width and depth from x `start` to x 1 (smoothstep), the surface kept
-	// (water - depth - the valley sink).
-	void growSegmentIn(RiverUnit& u, const RiverSegment& s, float start, float lenPx)
+	// A segment's first (or, atEnd, last) `lenPx` GROWS IN (fades out): its width and depth from x `start` at that end to
+	// x 1 (smoothstep), the surface kept (water - depth - the valley sink).
+	void growSegmentEnd(RiverUnit& u, const RiverSegment& s, bool atEnd, float start, float lenPx)
 	{
 		float along = 0.0f;
-		for (uint32 k = 0; k < s.count; k++)
+		for (uint32 i = 0; i < s.count; i++)
 		{
+			const uint32 k = atEnd ? s.count - 1 - i : i;
 			RiverPoint& p = u.points[s.first + k];
-			if (k > 0)
+			if (i > 0)
 			{
-				const RiverPoint& a = u.points[s.first + k - 1];
+				const RiverPoint& a = u.points[s.first + (atEnd ? k + 1 : k - 1)];
 				along += std::sqrt((p.x - a.x) * (p.x - a.x) + (p.z - a.z) * (p.z - a.z));
 			}
 			if (along >= lenPx)
@@ -232,26 +233,8 @@ namespace Procedural
 				total += std::sqrt((b.x - a.x) * (b.x - a.x) + (b.z - a.z) * (b.z - a.z));
 			}
 			const float len = oc::min(c_fadePx, 0.5f * total);
-			if (len <= 1e-3f)
-				continue;
-			float fromEnd = 0.0f;
-			for (uint32 i = 0; i < s.count; i++)
-			{
-				const uint32 k = s.count - 1 - i;
-				RiverPoint& p = u.points[s.first + k];
-				if (i > 0)
-				{
-					const RiverPoint& b = u.points[s.first + k + 1];
-					fromEnd += std::sqrt((b.x - p.x) * (b.x - p.x) + (b.z - p.z) * (b.z - p.z));
-				}
-				if (fromEnd >= len)
-					break;
-				const float t = fromEnd / len;
-				const float grow = t * t * (3.0f - 2.0f * t);
-				p.halfWidth *= grow;
-				p.water -= p.depth * (1.0f - grow); // the surface (water - depth - the valley sink) stays put
-				p.depth *= grow;
-			}
+			if (len > 1e-3f)
+				growSegmentEnd(u, s, /*atEnd*/ true, 0.0f, len);
 		}
 	}
 
@@ -259,7 +242,7 @@ namespace Procedural
 	// starts there - but the upstream unit's water can reach that point LOWER: the edge reroute (RiverUnits) breaches a
 	// rim on the way and keeps the exit's level through its gorge, tens of metres under the crossing's ground - a step at
 	// the unit edge. So a segment starting on the unit's border looks up the upstream unit's segment ending at the same
-	// boundary point (its RAW unit: units build independently, so this never chains) and carries that lower level on: its
+	// boundary point (its EDGE SUMMARY, `unitEdges`: from its raw unit; units build independently, so this never chains) and carries that lower level on: its
 	// water is held at or below it - the gorge continues and the carve cuts it out of the rim until the ground falls under
 	// it - and so are the segments it flows on into (a junction's next one). Only ever lowers.
 	void RiverTerrain::matchInlets(RiverUnit& u) const
@@ -280,23 +263,18 @@ namespace Procedural
 			else if (p0.z >= edgeHi) ni++;
 			else
 				continue; // not on the unit's border
-			const oc::shared_ptr<const RiverUnit> nb = rawUnit(ni, nj);
+			const oc::shared_ptr<const UnitEdges> nb = unitEdges(ni, nj);
 			if (!nb || nb->empty)
 				continue;
 			const float bx = p0.x + (float)((u.uj - nj) * W), bz = p0.z + (float)((u.ui - ni) * W);
 			float level = FLT_MAX;
 			float upHalf = 0.0f; // the arriving river's half-width at the boundary
-			for (const RiverSegment& t : nb->segments)
-			{
-				if (t.end != ERiverEnd::Outlet || t.count == 0)
-					continue;
-				const RiverPoint& pe = nb->points[t.first + t.count - 1];
+			for (const UnitEdges::End& pe : nb->outlets)
 				if (std::abs(pe.x - bx) < 0.75f && std::abs(pe.z - bz) < 0.75f)
 				{
 					level = oc::min(level, pe.water);
 					upHalf = oc::max(upHalf, pe.halfWidth);
 				}
-			}
 			// UNBACKED or UNDERSIZED: no river of the upstream unit reaches this inlet - its water drained elsewhere (a pond,
 			// another edge) where the coarse network did not see it - or one far smaller than the coarse Q the inlet injects
 			// (the outlet's Q blend only matches sizes that are close: RiverUnits). Rather than start a full-size river
@@ -304,11 +282,11 @@ namespace Procedural
 			constexpr float c_growInPx = 200.0f; // native px (1 km at mpp 5)
 			if (level == FLT_MAX)
 			{
-				growSegmentIn(u, s, 0.0f, c_growInPx);
+				growSegmentEnd(u, s, /*atEnd*/ false, 0.0f, c_growInPx);
 				continue;
 			}
 			if (upHalf < 0.5f * p0.halfWidth && p0.halfWidth > 1e-4f)
-				growSegmentIn(u, s, upHalf / p0.halfWidth, c_growInPx);
+				growSegmentEnd(u, s, /*atEnd*/ false, upHalf / p0.halfWidth, c_growInPx);
 			// At most 2 x "Unit breach depth": no breach is deeper (a deeper basin is a pond, RiverRouting), so a bigger
 			// mismatch is no gorge to continue but a disagreement - carried on for kilometres it carved a canyon.
 			const float maxDrop = 2.0f * m_unitCfg.breachDepth;
@@ -444,32 +422,20 @@ namespace Procedural
 			}
 	}
 
-	// The unit AS BUILT (buildRiverUnit, or loaded from its disk cache): independent of every other unit, so a unit's
-	// preparation may read its neighbours' (the inlet match) without any chain. Its own store, deduplicated like `unit`.
-	oc::shared_ptr<const RiverUnit> RiverTerrain::rawUnit(int32 ui, int32 uj) const
+	// The unit AS BUILT (buildRiverUnit - from its disk cache when it has one - or an empty unit): taken from the hand-off
+	// when its edge summary was just built from it, else built. Units build independently, so nothing here chains.
+	oc::shared_ptr<const RiverUnit> RiverTerrain::buildRaw(int32 ui, int32 uj) const
 	{
 		const uint64 key = unitKey(ui, uj);
-		oc::shared_ptr<RawPending> pending;
-		bool owner = false;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
-			auto it = m_raw.find(key);
-			if (it != m_raw.end())
-				return it->second;
-			auto pit = m_rawPending.find(key);
-			if (pit != m_rawPending.end())
-				pending = pit->second;
-			else
+			auto it = m_handoff.find(key);
+			if (it != m_handoff.end())
 			{
-				pending = oc::make_shared<RawPending>();
-				m_rawPending[key] = pending;
-				owner = true;
+				oc::shared_ptr<const RiverUnit> raw = oc::move(it->second);
+				m_handoff.erase(it); // its key stays in the order queue: a later pop finds nothing to erase
+				return raw;
 			}
-		}
-		if (!owner)
-		{
-			pending->done.wait();
-			return pending->result;
 		}
 		oc::shared_ptr<const RiverUnit> built = buildRiverUnit(*m_base, *m_network, m_unitCfg, ui, uj, nullptr);
 		if (!built)
@@ -481,17 +447,65 @@ namespace Procedural
 			empty->empty = true;
 			built = empty;
 		}
-		pending->result = built;
+		return built;
+	}
+
+	// The unit's EDGE SUMMARY - what a neighbour's inlet match reads - deduplicated like `unit`. Building it builds the
+	// raw unit, which then waits in the hand-off for this unit's own preparation (at most c_handoffUnits of them).
+	oc::shared_ptr<const RiverTerrain::UnitEdges> RiverTerrain::unitEdges(int32 ui, int32 uj) const
+	{
+		constexpr size_t c_maxEdges = 4096;   // tiny each
+		constexpr size_t c_handoffUnits = 16;
+		const uint64 key = unitKey(ui, uj);
+		oc::shared_ptr<EdgesPending> pending;
+		bool owner = false;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
-			m_raw[key] = built;
-			m_rawOrder.push_back(key);
-			while (m_rawOrder.size() > c_maxUnits)
+			auto it = m_edges.find(key);
+			if (it != m_edges.end())
+				return it->second;
+			auto pit = m_edgesPending.find(key);
+			if (pit != m_edgesPending.end())
+				pending = pit->second;
+			else
 			{
-				m_raw.erase(m_rawOrder.front());
-				m_rawOrder.pop_front();
+				pending = oc::make_shared<EdgesPending>();
+				m_edgesPending[key] = pending;
+				owner = true;
 			}
-			m_rawPending.erase(key);
+		}
+		if (!owner)
+		{
+			pending->done.wait();
+			return pending->result;
+		}
+		oc::shared_ptr<const RiverUnit> raw = buildRaw(ui, uj);
+		auto edges = oc::make_shared<UnitEdges>();
+		edges->empty = raw->empty;
+		for (const RiverSegment& s : raw->segments)
+			if (s.end == ERiverEnd::Outlet && s.count > 0)
+			{
+				const RiverPoint& pe = raw->points[s.first + s.count - 1];
+				edges->outlets.push_back({ pe.x, pe.z, pe.water, pe.halfWidth });
+			}
+		pending->result = edges;
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			m_edges[key] = edges;
+			m_edgesOrder.push_back(key);
+			while (m_edgesOrder.size() > c_maxEdges)
+			{
+				m_edges.erase(m_edgesOrder.front());
+				m_edgesOrder.pop_front();
+			}
+			m_handoff[key] = oc::move(raw);
+			m_handoffOrder.push_back(key);
+			while (m_handoffOrder.size() > c_handoffUnits)
+			{
+				m_handoff.erase(m_handoffOrder.front());
+				m_handoffOrder.pop_front();
+			}
+			m_edgesPending.erase(key);
 		}
 		pending->done.signal();
 		return pending->result;
@@ -524,7 +538,10 @@ namespace Procedural
 			return pending->result;
 		}
 
-		pending->result = prepare(rawUnit(ui, uj));
+		// Its edge summary first (a neighbour may already have it built, or will want it): that builds the raw unit and
+		// hands it on, so buildRaw only takes it - built once either way.
+		(void)unitEdges(ui, uj);
+		pending->result = prepare(buildRaw(ui, uj));
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_units[key] = pending->result;
@@ -579,9 +596,9 @@ namespace Procedural
 
 		const float hModel = (p.height - gc.seaLevel) / vs;
 		float carved = hModel;
-		float influence = 0.0f, influenceQ = 0.0f, speed = 0.0f;
+		float influence = 0.0f, speed = 0.0f;
 		float bestRatio = 2.0f; // inside a channel when < 1
-		float bestW = 0.0f, bestAngle = -1.0f, bestQ = 0.0f;
+		float bestW = 0.0f, bestAngle = -1.0f;
 		bool bestDry = false;
 
 		const int32 ui0 = floorDivI((int32)std::floor(gz - (double)m_reachPx), m_unitPx);
@@ -644,7 +661,6 @@ namespace Procedural
 					if (inf > influence)
 					{
 						influence = inf;
-						influenceQ = q;
 						// Its FLOW SPEED, as the water ribbons' (RiverSystem segmentWater): Manning, v = depth^(2/3)
 						// sqrt(slope) / 0.035, the slope the carved surface's drop over the piece. A dry bed has none.
 						speed = 0.0f;
@@ -662,7 +678,6 @@ namespace Procedural
 					{
 						bestRatio = ratio;
 						bestW = m_carve.surface(a.water + (c.water - a.water) * t, oc::max(a.depth + (c.depth - a.depth) * t, 0.02f), q);
-						bestQ = q;
 						bestDry = u.segments[pu->pointSegment[k]].ephemeral != 0;
 						float ang = std::atan2(abz, abx) * (0.5f / 3.14159265f);
 						bestAngle = ang < 0.0f ? ang + 1.0f : ang;
@@ -674,7 +689,6 @@ namespace Procedural
 
 		p.height = gc.seaLevel + carved * vs;
 		p.river = influence;
-		p.riverQ = influenceQ;
 		p.riverSpeed = speed;
 		if (bestRatio < 1.0f)
 		{
@@ -685,7 +699,6 @@ namespace Procedural
 			{
 				p.waterKind = ETerrainWater::River;
 				p.inlandWater = gc.seaLevel + bestW * vs;
-				p.riverQ = bestQ;
 			}
 		}
 
@@ -696,6 +709,7 @@ namespace Procedural
 			const RiverUnit& u = *pu->unit;
 			const int32 row = (int32)std::floor(gz - (double)ui * (double)m_unitPx + 0.5);
 			const int32 col = (int32)std::floor(gx - (double)uj * (double)m_unitPx + 0.5);
+			bool inLake = false;
 			if (row >= 0 && col >= 0 && row < m_unitPx && col < m_unitPx)
 				for (uint32 n = pu->rowRuns[row]; n < pu->rowRuns[row + 1]; n++)
 				{
@@ -707,7 +721,62 @@ namespace Procedural
 						p.dryBed = 1;
 					else
 					{
+						inLake = true;
 						const float level = gc.seaLevel + lake.level * vs;
+						// A CARVED end lake (RiverUnits): the ground it does not hold dug c_carvedLakeBedM under its level.
+						constexpr float c_carvedLakeBedM = 3.0f; // model m
+						if (lake.carved)
+							p.height = oc::min(p.height, level - c_carvedLakeBedM * vs);
+						// THE BED DEEPENING: "Lake bed deepen" lower, growing in from the shore over "Lake bed deepen reach" px
+						// as a smoothstep - flat at the waterline, so the shore keeps its own slope. The shore = the nearest
+						// pixel centre no lake (a pan counts as shore) covers, half a pixel in; past the unit is not one.
+						if (m_carve.lakeBedDeepen > 0.0f)
+						{
+							const float reachPx = oc::max(m_carve.lakeBedDeepenReach, 1.0f);
+							const float fx = (float)(gx - (double)uj * (double)m_unitPx), fz = (float)(gz - (double)ui * (double)m_unitPx);
+							const int32 R = (int32)std::ceil(reachPx + 0.5f);
+							const auto wet = [&](uint32 k) { return u.lakes[u.lakeRuns[k].lake].kind != ERiverWater::Pan; };
+							float best2 = (reachPx + 0.5f) * (reachPx + 0.5f);
+							for (int32 r = oc::max(row - R, 0); r <= oc::min(row + R, m_unitPx - 1); r++)
+							{
+								const float dz = (float)r - fz;
+								if (dz * dz >= best2)
+									continue;
+								const uint32 r0 = pu->rowRuns[r], r1 = pu->rowRuns[r + 1];
+								uint32 at = r1;
+								for (uint32 k = r0; k < r1; k++)
+								{
+									const RiverLakeRun& rr = u.lakeRuns[k];
+									if (col >= (int32)rr.x0 && col < (int32)rr.x0 + (int32)rr.len && wet(k))
+									{
+										at = k;
+										break;
+									}
+								}
+								float dx;
+								if (at == r1)
+									dx = std::abs(fx - (float)col);
+								else
+								{
+									// The water around col, across touching runs (two lakes side by side are one water).
+									int32 w0 = u.lakeRuns[at].x0, w1 = w0 + u.lakeRuns[at].len - 1;
+									for (uint32 k = at; k > r0 && wet(k - 1) && (int32)u.lakeRuns[k - 1].x0 + (int32)u.lakeRuns[k - 1].len == w0; k--)
+										w0 = u.lakeRuns[k - 1].x0;
+									for (uint32 k = at + 1; k < r1 && wet(k) && (int32)u.lakeRuns[k].x0 == w1 + 1; k++)
+										w1 = u.lakeRuns[k].x0 + u.lakeRuns[k].len - 1;
+									dx = FLT_MAX;
+									if (w0 > 0)
+										dx = fx - (float)(w0 - 1);
+									if (w1 < m_unitPx - 1)
+										dx = oc::min(dx, (float)(w1 + 1) - fx);
+									if (dx == FLT_MAX)
+										continue;
+								}
+								best2 = oc::min(best2, dx * dx + dz * dz);
+							}
+							const float t = oc::clamp((std::sqrt(best2) - 0.5f) / reachPx, 0.0f, 1.0f);
+							p.height -= m_carve.lakeBedDeepen * t * t * (3.0f - 2.0f * t) * vs;
+						}
 						if (level > p.height && p.waterKind != ETerrainWater::River)
 						{
 							p.waterKind = ETerrainWater::Lake;
@@ -717,12 +786,14 @@ namespace Procedural
 					break;
 				}
 
-			// The LAKE'S INFLUENCE (`river`): 1 over its wet pixels, fading to 0 within c_lakeShorePx of them - the bed's
-			// beach texture and the shoreline's, no grass or clutter under the water (they read `river` like a river's).
-			constexpr float c_lakeShorePx = 1.5f;
+			// The LAKE'S INFLUENCE (`river`): 1 over its wet pixels, fading to 0 within "Lake shore (px)" of them - the
+			// bed's beach texture and the shoreline's, no grass or clutter under the water (they read `river` like a river's).
+			// The same search finds the nearest lake for THE RIM GUARD (below).
+			constexpr int32 c_rimPx = 3;
+			const float shorePx = oc::max(m_carve.lakeShore, 0.1f);
 			const float fx = (float)(gx - (double)uj * (double)m_unitPx), fz = (float)(gz - (double)ui * (double)m_unitPx);
-			const int32 reach = (int32)std::ceil(c_lakeShorePx + 0.5f);
-			float best2 = FLT_MAX;
+			const int32 reach = oc::max((int32)std::ceil(shorePx + 0.5f), c_rimPx);
+			float best2 = FLT_MAX, nearLevel = 0.0f;
 			for (int32 r = oc::max(row - reach, 0); r <= oc::min(row + reach, m_unitPx - 1); r++)
 				for (uint32 n = pu->rowRuns[r]; n < pu->rowRuns[r + 1]; n++)
 				{
@@ -731,10 +802,27 @@ namespace Procedural
 						continue;
 					const float dx = oc::max(oc::max((float)run.x0 - fx, fx - (float)(run.x0 + run.len - 1)), 0.0f);
 					const float dz = (float)r - fz;
-					best2 = oc::min(best2, dx * dx + dz * dz);
+					if (dx * dx + dz * dz < best2)
+					{
+						best2 = dx * dx + dz * dz;
+						nearLevel = u.lakes[run.lake].level;
+					}
 				}
 			if (best2 < FLT_MAX)
-				p.river = oc::max(p.river, oc::clamp(1.0f - (std::sqrt(best2) - 0.5f) / c_lakeShorePx, 0.0f, 1.0f));
+				p.river = oc::max(p.river, oc::clamp(1.0f - (std::sqrt(best2) - 0.5f) / shorePx, 0.0f, 1.0f));
+
+			// THE RIM GUARD: the river carve knows nothing of lakes - an outlet's floodplain and valley wall cut the
+			// rim away, and the lake's sheet stood in the air past the ground (2026-10-09). Beside a lake (not on its
+			// wet pixels, not in a river's channel, which must cut through: the outlet) the carve keeps the ground at
+			// the lake's level + c_rimClearM at the shore pixel, that floor falling at "Valley slope" farther out -
+			// never above the uncarved ground.
+			constexpr float c_rimClearM = 0.1f; // model m
+			if (!inLake && bestRatio >= 1.0f && best2 < FLT_MAX)
+			{
+				const float distPx = oc::max(std::sqrt(best2) - 1.0f, 0.0f);
+				const float floorM = nearLevel + c_rimClearM - oc::max(m_carve.valleySlope, 0.0f) * distPx * nr;
+				p.height = oc::max(p.height, gc.seaLevel + oc::min(hModel, floorM) * vs);
+			}
 		}
 		if (p.waterKind == ETerrainWater::None && p.height < gc.seaLevel)
 			p.waterKind = ETerrainWater::Sea;

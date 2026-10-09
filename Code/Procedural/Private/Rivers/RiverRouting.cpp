@@ -36,6 +36,133 @@ namespace
 		float areaIn = 0.0f;
 	};
 
+	// THE SIZE LIMIT on one depression (`id` in depOf): the level goes between its lowest lakeMaxCells pixels and the
+	// next; of the pools under it the LARGEST is the lake (the others stay dry hollows - the one around the lowest pixel
+	// was a thin strip in the outflow's gorge, 2026-10-09). Then the basin's DRAIN TREE is rebuilt: the flood's tree ran from the
+	// spill through the whole basin, so its paths left the smaller lake over a dry stretch and came back into it, or ran
+	// from a pool into the lake - rivers that started and ended in the same lake (2026-10-09). Now ONE path leaves: the
+	// old one from the lowest pixel, from where it last leaves the lake; every other basin pixel drains into the lake or
+	// onto that path (a priority flood from the path, lowest first, so the whole lake fills from its exit before any dry
+	// pixel). The basin keeps its rank slots, reassigned in the new tree's order (a receiver always ranks lower).
+	void capDepression(const DrainageGrid& g, Depression& dep, int32 id, const oc::vector<int32>& depOf, DrainageResult& out)
+	{
+		const int32 W = g.w, H = g.h;
+		const int32 nDirs = g.d8 ? 8 : 4;
+		oc::vector<int32> region = dep.cells;
+		oc::sort(region.begin(), region.end(), [&g](int32 a, int32 b)
+		{
+			return g.elev[a] != g.elev[b] ? g.elev[a] < g.elev[b] : a < b;
+		});
+		const size_t keep = (size_t)g.lakeMaxCells;
+		dep.level = 0.5f * (g.elev[region[keep - 1]] + g.elev[region[keep]]);
+
+		// 0 = above the level, 1 = under it, 2 = the lake, 3 = placed in the new tree. The pools under the level are
+		// labelled (`pool`, from 4 up); the LARGEST is the lake.
+		oc::unordered_map<int32, uint8> state;
+		oc::unordered_map<int32, int32> pool;
+		state.reserve(region.size());
+		pool.reserve(keep);
+		for (size_t k = 0; k < region.size(); k++)
+			state[region[k]] = k < keep ? 1 : 0;
+		oc::vector<int32> stack;
+		int32 bestPool = -1, bestLowest = -1;
+		size_t bestSize = 0;
+		for (size_t k = 0; k < keep; k++)
+		{
+			if (pool.count(region[k]))
+				continue;
+			// region is sorted lowest first: region[k] is this pool's lowest pixel.
+			const int32 label = (int32)k;
+			size_t size = 0;
+			stack.push_back(region[k]);
+			pool[region[k]] = label;
+			while (!stack.empty())
+			{
+				const int32 c = stack.back();
+				stack.pop_back();
+				size++;
+				const int32 x = c % W, z = c / W;
+				for (int32 d = 0; d < nDirs; d++)
+				{
+					const int32 nx = x + c_dx[d], nz = z + c_dz[d];
+					if (nx < 0 || nz < 0 || nx >= W || nz >= H)
+						continue;
+					const int32 n = nz * W + nx;
+					const auto it = state.find(n);
+					if (it != state.end() && it->second == 1 && !pool.count(n))
+					{
+						pool[n] = label;
+						stack.push_back(n);
+					}
+				}
+			}
+			if (size > bestSize)
+			{
+				bestSize = size;
+				bestPool = label;
+				bestLowest = region[k];
+			}
+		}
+		dep.cells.clear();
+		for (size_t k = 0; k < keep; k++)
+			if (pool[region[k]] == bestPool)
+			{
+				state[region[k]] = 2;
+				dep.cells.push_back(region[k]);
+			}
+
+		// The way out: the old path from the lake's lowest pixel, from where it last leaves the lake.
+		oc::vector<int32> path;
+		for (int32 c = bestLowest; c >= 0 && depOf[c] == id; c = out.receiver[c])
+			path.push_back(c);
+		size_t lastWet = 0;
+		for (size_t k = 0; k < path.size(); k++)
+			if (state[path[k]] == 2)
+				lastWet = k;
+		path.erase(path.begin(), path.begin() + (ptrdiff_t)lastWet);
+
+		oc::vector<int32> slots;
+		slots.reserve(region.size());
+		for (const int32 c : region)
+			slots.push_back(out.rank[c]);
+		oc::sort(slots.begin(), slots.end());
+		oc::vector<int32> newOrder;
+		newOrder.reserve(region.size());
+		oc::priority_queue<FloodNode, oc::vector<FloodNode>, FloodGreater> open;
+		uint32 seq = 0;
+		for (size_t k = path.size(); k-- > 0;)
+		{
+			newOrder.push_back(path[k]); // the rim end first: down the path the ranks fall
+			state[path[k]] = 3;
+			open.push(FloodNode{ g.elev[path[k]], seq++, path[k] });
+		}
+		while (!open.empty())
+		{
+			const int32 c = open.top().idx;
+			open.pop();
+			const int32 x = c % W, z = c / W;
+			for (int32 d = 0; d < nDirs; d++)
+			{
+				const int32 nx = x + c_dx[d], nz = z + c_dz[d];
+				if (nx < 0 || nz < 0 || nx >= W || nz >= H)
+					continue;
+				const auto it = state.find(nz * W + nx);
+				if (it == state.end() || it->second == 3)
+					continue;
+				it->second = 3;
+				out.receiver[it->first] = c;
+				newOrder.push_back(it->first);
+				open.push(FloodNode{ g.elev[it->first], seq++, it->first });
+			}
+		}
+		assert(newOrder.size() == region.size());
+		for (size_t k = 0; k < newOrder.size() && k < slots.size(); k++)
+		{
+			out.rank[newOrder[k]] = slots[k];
+			out.order[(size_t)slots[k]] = newOrder[k];
+		}
+	}
+
 	// Annual runoff, mm/yr: the rain minus the Budyko (Fu) evaporation. phi = PET / P is the aridity;
 	// ET / P = 1 + phi - (1 + phi^w)^(1/w) runs from 0 (phi = 0: all rain runs off) to 1 (phi large: all evaporates).
 	float budykoRunoff(float precip, float pet, float w)
@@ -267,6 +394,12 @@ namespace Procedural
 			// Spilling through a soft wall: the grid's edge cut the basin off, so its level is not the ground's.
 			if (softSeed[out.root[dep.cells.front()]])
 				continue;
+			// THE SIZE LIMIT (the user, 2026-10-09: a deep valley basin filled to its spill was a 7 km2 lake): over
+			// lakeMaxCells only the lowest that many pixels are the lake, its level between the last of them and the next
+			// (a terminal lake's hypsometry); the pixels above it are land again - the water runs over them as channels,
+			// and the outflow's profile cuts down through the rim to the lower level (a gorge, at most the basin's depth).
+			if (g.lakeMaxCells > 0 && (int32)dep.cells.size() > g.lakeMaxCells)
+				capDepression(g, dep, depOf[dep.cells.front()], depOf, out);
 			dep.lake = (int32)out.lakes.size();
 			DrainageLake lake;
 			lake.spill = dep.level;

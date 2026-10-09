@@ -167,7 +167,7 @@ int main(int argc, char* argv[])
             const glm::vec3 dir = session.cameraController().getDirection();
             const oc::string netStatus = Globals::networkManager.getStatusText();
             char windowTitleBuf[320];
-            sprintf_s(windowTitleBuf, sizeof(windowTitleBuf), "%s%sFPS: %i mem: %.2fmb instances: %i meshtypes: %i materials: %i, pos: %.1f, %.1f, %.1f, dir: %.1f, %.1f, %.1f",
+            sprintf_s(windowTitleBuf, sizeof(windowTitleBuf), "%s%sFPS: %i mem: %.2fmb instances: %i meshtypes: %i materials: %i, pos: %.1f, %.1f, %.1f, dir: %.2f, %.2f, %.2f",
                 netStatus.c_str(), netStatus.empty() ? "" : " | ",
                 fps, (double)Globals::allocator.getUsedSize() / 1024.0 / 1024.0,
                 Globals::rendererVK.getNumMeshInstances(), Globals::rendererVK.getNumMeshTypes(), Globals::rendererVK.getNumMaterials(), pos.x, pos.y, pos.z, dir.x, dir.y, dir.z);

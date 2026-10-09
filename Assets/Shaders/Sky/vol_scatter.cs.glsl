@@ -331,7 +331,8 @@ void main()
     // fade the water column just carries the plain (continuous) height fog, as it did before.
     const float uwFade = 1.0 - smoothstep(100.0, 300.0, viewZ);
     const float underFrac = uwFade * clamp((surfY - y0) / max(y1 - y0, 1e-3), 0.0, 1.0);
-    const float underDensity = u_fog_density * u_fog_underwaterDensity * underFrac;
+    // A lake's or river's murk has its own "Fog/Lake underwater density".
+    const float underDensity = u_fog_density * (inland ? u_fog_inlandUnderwaterDensity : u_fog_underwaterDensity) * underFrac;
 
     // Density noise fades out where one noise wavelength drops under the froxel footprint (sub-froxel
     // noise is pure aliasing the temporal blend turns into shimmer; its mean is 1) and is skipped

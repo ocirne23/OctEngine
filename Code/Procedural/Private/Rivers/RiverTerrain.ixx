@@ -43,14 +43,18 @@ export namespace Procedural
 		float floodplainFactor = 0.15f;
 		float valleySlope = 0.28f;
 		float reach = 1500.0f; // model m PAST the floodplain's edge
-		float reachQ = 10.0f;  // m3/s: the whole reach from this Q up, sqrt(Q / this) of it below (0 = always whole)
+		float reachQ = 50.0f; // m3/s: the whole reach from this Q up, (Q / this)^reachQExponent of it below (0 = always whole)
+		float reachQExponent = 0.1f; // higher = a small stream's valley narrower
+		float lakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
+		float lakeBedDeepenReach = 8.0f; // native px from the shore over which that grows in (smoothstep: the shore keeps its slope)
+		float lakeShore = 0.75f;         // native px past a lake's wet pixels its influence (the shore's sand, no grass) fades over
 		bool operator==(const RiverCarveConfig&) const = default;
 
 		// The valley wall's reach past the floodplain's edge for a channel of discharge q (model m).
 		float wallReach(float q) const
 		{
 			const float r = reach > 0.0f ? reach : 0.0f;
-			return reachQ > 0.0f && q < reachQ ? r * std::sqrt((q > 0.0f ? q : 0.0f) / reachQ) : r;
+			return reachQ > 0.0f && q < reachQ ? r * std::pow((q > 0.0f ? q : 0.0f) / reachQ, reachQExponent > 0.0f ? reachQExponent : 0.0f) : r;
 		}
 
 		// The floodplain's outer edge from the centre line (model m), for a channel of half-width hw.
@@ -102,6 +106,10 @@ export namespace Procedural
 		c.valleySlope = s.riverValleySlope;
 		c.reach = s.riverCarveReach;
 		c.reachQ = s.riverCarveReachQ;
+		c.reachQExponent = s.riverCarveReachQExponent;
+		c.lakeBedDeepen = s.riverLakeBedDeepen;
+		c.lakeBedDeepenReach = s.riverLakeBedDeepenReach;
+		c.lakeShore = s.riverLakeShore;
 		return c;
 	}
 
@@ -170,8 +178,11 @@ export namespace Procedural
 		void matchInlets(RiverUnit& u) const;
 		void fadeOpenEnds(RiverUnit& u) const;
 		void sinkUnderCarves(PreparedRiverUnit& p, RiverUnit& u) const;
-		// The unit as built, never prepared: what a neighbour's preparation reads (blocking on a miss, like `unit`).
-		oc::shared_ptr<const RiverUnit> rawUnit(int32 ui, int32 uj) const;
+		// The unit's edge summary (blocking on a miss, like `unit`: it builds the raw unit then, and hands it on).
+		struct UnitEdges;
+		oc::shared_ptr<const UnitEdges> unitEdges(int32 ui, int32 uj) const;
+		// The unit as built (buildRiverUnit, or an empty one): from the hand-off when its summary was just built, else built.
+		oc::shared_ptr<const RiverUnit> buildRaw(int32 ui, int32 uj) const;
 		float pieceReach(float halfWidth, float q) const; // model m: the floodplain's edge (capped) + the wall's reach at q
 		float wallReach(float q) const;                   // model m: the valley wall's reach past the floodplain at q
 		// The ground (model m) piece a -> c leaves at distance d (model m) from its point at t, over the ground hg; its
@@ -194,13 +205,30 @@ export namespace Procedural
 		mutable oc::unordered_map<uint64, oc::shared_ptr<const PreparedRiverUnit>> m_units;
 		mutable oc::deque<uint64> m_unitOrder; // insertion order, for the eviction
 		mutable oc::unordered_map<uint64, oc::shared_ptr<Pending>> m_pending;
-		struct RawPending
+		// A unit's EDGE SUMMARY: the ends of its segments that leave through an outlet crossing, as built (all a
+		// neighbour's inlet match reads) - a few floats per unit, so every unit touched keeps one, not its raw unit.
+		struct UnitEdges
+		{
+			struct End
+			{
+				float x = 0.0f, z = 0.0f; // unit-local native px (the boundary point)
+				float water = 0.0f;       // model m
+				float halfWidth = 0.0f;   // model m
+			};
+			oc::vector<End> outlets;
+			bool empty = true;
+		};
+		struct EdgesPending
 		{
 			JobEvent done;
-			oc::shared_ptr<const RiverUnit> result;
+			oc::shared_ptr<const UnitEdges> result;
 		};
-		mutable oc::unordered_map<uint64, oc::shared_ptr<const RiverUnit>> m_raw; // the units as built
-		mutable oc::deque<uint64> m_rawOrder;
-		mutable oc::unordered_map<uint64, oc::shared_ptr<RawPending>> m_rawPending;
+		mutable oc::unordered_map<uint64, oc::shared_ptr<const UnitEdges>> m_edges;
+		mutable oc::deque<uint64> m_edgesOrder;
+		mutable oc::unordered_map<uint64, oc::shared_ptr<EdgesPending>> m_edgesPending;
+		// THE HAND-OFF: a raw unit built for its edge summary waits here for its own `unit` call (which takes it out
+		// instead of building it again); a few at most - one never asked for is dropped.
+		mutable oc::unordered_map<uint64, oc::shared_ptr<const RiverUnit>> m_handoff;
+		mutable oc::deque<uint64> m_handoffOrder;
 	};
 }

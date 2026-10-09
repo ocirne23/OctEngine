@@ -228,6 +228,7 @@ export struct TerrainSettings
 	int   riverCrossWindow = 64;       // native px either side of a tile edge's middle that a crossing may move to
 	float riverUnitBreachDepth = 75.0f; // model m: a shallower depression in a unit is cut through, not a lake
 	int   riverUnitLakeMinCells = 8334; // native px
+	int   riverUnitLakeMaxCells = 20000; // native px: a bigger basin's lake is only its lowest this many (0 = no limit)
 	float riverChannelMinQ = 1.0f;     // m3/s: a channel starts here
 	float riverChannelFadeQ = 2.0f;    // m3/s past the minimum over which a channel grows from nothing to its full size
 	float riverPerennialQ = 0.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
@@ -242,12 +243,17 @@ export struct TerrainSettings
 	float riverMeanderSlope = 0.02f;      // water-surface slope (m/m) by which a reach swings at the 30 % floor
 	float riverMeanderSmallAmplitude = 5.0f;  // the swing on the smallest stream, x the amplitude (1 from the full Q up)
 	float riverMeanderSmallWavelength = 1.0f; // the wavelength on the smallest stream, x the wavelength (1 from the full Q up)
+	float riverEndLakeArea = 300.0f;      // native px per m3/s: a river ending in a sink / running dry floods a lake there (0 = off)
+	float riverEndLakeMaxDepth = 20.0f;   // model m: the most a carved end lake digs under its highest pixel
 	float riverMeanderFullQ = 20.0f;          // m3/s: from here up a river meanders as set (log Q blend from the min Q)
 	// The CARVE (RiverTerrain): channel -> a curve over the bank and the floodplain -> valley wall, only ever lowering the
 	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
 	float riverChannelDepthScale = 2.5f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
 	float riverChannelMinDepth = 0.2f;    // ... but at least this
 	float riverChannelWallSlope = 0.1f;   // the channel's sides (rise / run) down to a flat bed, whatever its depth
+	float riverLakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
+	float riverLakeBedDeepenReach = 8.0f; // native px from the shore over which the deepening grows in
+	float riverLakeShore = 0.75f;         // native px past a lake's wet pixels its sand (and no grass) fades out over
 	float riverBankHeight = 2.16f;        // the floodplain's outer edge above the water, x the channel depth
 	float riverFloodplainCurve = 1.0f;    // the rise over the bank + floodplain: 1 = straight, 2 = a bowl, higher = flatter near the channel
 	float riverValleyDepth = 0.0f;        // the river and its floodplain sunk this far below the original ground
@@ -255,8 +261,9 @@ export struct TerrainSettings
 	float riverBankFactor = 0.5f;       // bank width, x the channel half-width
 	float riverFloodplainFactor = 0.15f; // floodplain width, x the channel half-width
 	float riverValleySlope = 0.28f;     // the valley wall's slope past the floodplain (m/m)
-	float riverCarveReach = 1500.0f;    // model m: how far the valley wall may run past the floodplain's edge (fades out over it)
-	float riverCarveReachQ = 10.0f;     // m3/s: a river this big gets the whole reach; a smaller one sqrt(Q / this) of it
+	float riverCarveReach = 1500.0f;  // model m: how far the valley wall may run past the floodplain's edge (fades out over it)
+	float riverCarveReachQ = 50.0f;    // m3/s: a river this big gets the whole reach; a smaller one (Q / this)^exponent of it
+	float riverCarveReachQExponent = 0.1f; // higher = a small stream's valley narrower
 	float riverVegetationClear = 0.97f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
 	bool  riverDebugLines = false;     // draw the units around the camera as debug lines
 	float riverDebugRadius = 3000.0f;  // engine m

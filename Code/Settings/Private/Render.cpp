@@ -254,6 +254,7 @@ void Settings::registerFog(FogParams& s)
     Tweak::floatVar("Fog", "Temporal Blend", &s.temporalBlend, 0.0f, 0.97f, 0.01f);
     Tweak::floatVar("Fog", "Region strength", &s.regionStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Underwater density", &s.underwaterDensity, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Fog", "Lake underwater density", &s.inlandUnderwaterDensity, 0.0f, 20.0f, 0.1f); // lakes and rivers
     Tweak::floatVar("Fog", "Underwater wave offset", &s.underwaterWaveOffset, 0.0f, 2.0f, 0.01f); // x the live wave trough, lowers the boundary
     Tweak::floatVar("Fog", "Shaft boost", &s.shaftBoost, 0.0f, 100.0f, 0.1f);
     Tweak::floatVar("Fog", "Caustic strength", &s.causticStrength, 0.0f, 2.0f, 0.05f);

@@ -352,6 +352,7 @@ namespace Procedural
 		Tweak::onChange(s.riverCrossWindow, this, dirty);
 		Tweak::onChange(s.riverUnitBreachDepth, this, dirty);
 		Tweak::onChange(s.riverUnitLakeMinCells, this, dirty);
+		Tweak::onChange(s.riverUnitLakeMaxCells, this, dirty);
 		Tweak::onChange(s.riverChannelMinQ, this, dirty);
 		Tweak::onChange(s.riverChannelFadeQ, this, dirty);
 		Tweak::onChange(s.riverPerennialQ, this, dirty);
@@ -367,9 +368,14 @@ namespace Procedural
 		Tweak::onChange(s.riverMeanderSmallAmplitude, this, dirty);
 		Tweak::onChange(s.riverMeanderSmallWavelength, this, dirty);
 		Tweak::onChange(s.riverMeanderFullQ, this, dirty);
+		Tweak::onChange(s.riverEndLakeArea, this, dirty);
+		Tweak::onChange(s.riverEndLakeMaxDepth, this, dirty);
 		Tweak::onChange(s.riverChannelDepthScale, this, dirty);
 		Tweak::onChange(s.riverChannelMinDepth, this, dirty);
 		Tweak::onChange(s.riverChannelWallSlope, this, dirty);
+		Tweak::onChange(s.riverLakeBedDeepen, this, dirty);
+		Tweak::onChange(s.riverLakeBedDeepenReach, this, dirty);
+		Tweak::onChange(s.riverLakeShore, this, dirty);
 		Tweak::onChange(s.riverBankHeight, this, dirty);
 		Tweak::onChange(s.riverFloodplainCurve, this, dirty);
 		Tweak::onChange(s.riverValleyDepth, this, dirty);
@@ -379,6 +385,7 @@ namespace Procedural
 		Tweak::onChange(s.riverValleySlope, this, dirty);
 		Tweak::onChange(s.riverCarveReach, this, dirty);
 		Tweak::onChange(s.riverCarveReachQ, this, dirty);
+		Tweak::onChange(s.riverCarveReachQExponent, this, dirty);
 		Tweak::onChange(s.riverVegetationClear, this, dirty); // the records re-place against the new maps
 		Tweak::onChange(s.v3Fp16, this, dirty);
 

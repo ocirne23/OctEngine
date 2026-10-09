@@ -70,10 +70,6 @@ export namespace Procedural
 		bool riverRule() const { return river != glm::vec2(1.0f); }
 	};
 	constexpr float ROCK_FOREST_FULL = 60.0f; // trees per ha that count as a full forest (the Forest term)
-	// The Flow term's measure: a river's speed (TerrainPoint::riverSpeed, m/s) from slow to fast - the clutter cull's
-	// CLUTTER_FLOW_SLOW / FAST (clutter_cull.cs.glsl), keep in step.
-	constexpr float ROCK_FLOW_SLOW = 0.5f;
-	constexpr float ROCK_FLOW_FAST = 2.5f;
 
 	// RockWorldDesc (the WORLD's rules over every rock type, "Rocks/World" tweaks) lives in Settings.Rocks.
 

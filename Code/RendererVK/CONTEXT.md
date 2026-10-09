@@ -2806,7 +2806,8 @@ variant gets the ocean's `OCEAN_RT_REFLECTIONS` / `OCEAN_HIT_LIGHTS` defines (no
   The terrain-data map's water channel is the sea's only, so the two consumers that need inland water read this:
   * **the underwater fog** (`vol_scatter.cs.glsl`, binding 14, `riverWaterAt`, nearest texel): where the inland surface
     lies above the sea's, it is the froxel's underwater boundary (no ocean wave taps there), with `u_river_scatterColor`
-    as the albedo and the calm surface for the light shafts;
+    as the albedo, "Fog/Lake underwater density" in place of "Underwater density" (lakes and rivers: the map does not
+    tell them apart) and the calm surface for the light shafts;
   * **the terrain wetness** (`terrain_wetness.cs.glsl`, binding 4): a wetness texel under inland water OR one map texel
     from it (the bank band) targets "Terrain/Rivers/Surface/Wetness" (`u_river_wetness`, 0..1, default 0.6), at the base
     decay; the pass's sideways diffusion carries the wet fringe up the

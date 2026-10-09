@@ -790,6 +790,11 @@ export namespace RendererVKLayout
     // Flower geometry (clutter_flower.vs.glsl): per LOD the stem's segments and the petal slots (a quad each).
     constexpr uint32 CLUTTER_FLOWER_STEM_SEGMENTS[CLUTTER_FLOWER_LODS] = { 4, 2, 1 };
     constexpr uint32 CLUTTER_FLOWER_PETALS[CLUTTER_FLOWER_LODS] = { 16, 8, 4 };
+    // The `Flow` placement term's measure (the clutter cull - RIVER_FLOW_SLOW / FAST defines - and Procedural's rock
+    // rules): a river's speed (m/s, TerrainPoint::riverSpeed) from slow to fast. The Manning speeds run ~0.3 m/s in flat
+    // water to ~3 m/s in a steep stream.
+    constexpr float RIVER_FLOW_SLOW = 0.5f;
+    constexpr float RIVER_FLOW_FAST = 2.5f;
 
     // The kinds of clutter (ClutterTypeGpu::info.z): how the cull places it and which draw and material it takes.
     enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3 };

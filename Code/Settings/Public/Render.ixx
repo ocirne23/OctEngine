@@ -286,7 +286,7 @@ export struct FoliageParams
     float shadowCascadeMargin = 64.0f;
     // A tree farther than this (m) from the scene focus is not in the TLAS (no GI / RT shadow / RTAO / reflection hits;
     // 0 = only the general "RT/TLAS Range"): every tree there is an overlapping box every ray has to traverse.
-    float rtRange = 500.0f;
+    float rtRange = 600.0f;
     // TREE WIND ("Trees/Wind", tree_wind.inc.glsl): vertex-shader sway of the mesh trees, branch cards and billboards in the
     // shared wind (u_weather: "Sky/Wind"). Three layers: the TRUNK bend (every representation, from the
     // height alone), the BRANCH sway and the LEAF flutter (meshes only, from the bake's per-vertex payload).
@@ -540,6 +540,7 @@ export struct FogParams
     float underwaterDensity = 1.0f; // multiplier on the global density at/below the LOCAL water surface
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
+    float inlandUnderwaterDensity = 1.0f; // the same under a lake's or river's surface (the inland water map)
     float underwaterWaveOffset = 0.25f; // lowers the underwater fog boundary (the local water surface, the live
                                     // wave displacement on top) by this x the deepest live wave trough (m per
                                     // m): the fog's coarse froxels miss steep waves' troughs, and the murk

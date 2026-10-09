@@ -14,7 +14,7 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 15; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	constexpr uint32 RIVER_UNIT_VERSION = 29; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
 	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
 	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
 	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
@@ -22,7 +22,21 @@ namespace
 	                                          // 12: crossing segments aligned to the edge's normal at the crossing.
 	                                          // 13: the meander pull-back smoothed over half a wavelength, no cap.
 	                                          // 14: the meander's steepness factor smoothed the same way.
-	                                          // 15: the outlet Q blend only where the fine Q is at least half the coarse
+	                                          // 15: the outlet Q blend only where the fine Q is at least half the coarse.
+	                                          // 16: no soft wall within 32 px of an inlet.
+	                                          // 17: end lakes (a river ending in a sink / running dry floods one)
+	                                          // 18: end lakes only where held, else carved; Edge ends pulled back to one
+	                                          // 19: segments end at their first point in an end lake
+	                                          // 20: the lake size limit (RiverRouting)
+	                                          // 21: a capped basin's drain tree rebuilt; end lakes stop at other channels
+	                                          // 22: a capped basin's lake is its largest pool
+	                                          // 23: another river's channel ends an end lake's flood
+	                                          // 24: the end-lake cut samples the pieces, not only the points
+	                                          // 25: an end lake never stands above its river's water; the cut keeps the water
+	                                          // 26: the ground clamp keeps the lake / sea floor
+	                                          // 27: a carved end lake's own compact, noisy flood
+	                                          // 28: its centre moved off the unit's edges
+	                                          // 29: farther
 
 	struct UnitHeader
 	{
@@ -77,6 +91,7 @@ namespace
 		hashValue(h, uc.crossWindow);
 		hashValue(h, uc.breachDepth);
 		hashValue(h, uc.lakeMinCells);
+		hashValue(h, uc.lakeMaxCells);
 		hashValue(h, uc.channelMinQ);
 		hashValue(h, uc.fadeQ);
 		hashValue(h, uc.perennialQ);
@@ -92,6 +107,8 @@ namespace
 		hashValue(h, uc.meanderSmallAmplitude);
 		hashValue(h, uc.meanderSmallWavelength);
 		hashValue(h, uc.meanderFullQ);
+		hashValue(h, uc.endLakeArea);
+		hashValue(h, uc.endLakeMaxDepth);
 		return h;
 	}
 
@@ -394,9 +411,11 @@ namespace
 	// and the meanders then move the path sideways with W tied to its arc position. Where the moved path lies over LOWER
 	// ground (the downhill side of a slope, across a bend) W stood above it - water in the air, which the carve cannot
 	// fix (it only lowers). So on the FINAL path W may stand at most the channel's depth above the ground under it, and
-	// it never rises downstream again (a running min). Off the unit's tiles the ground is unknown: no clamp there.
+	// it never rises downstream again (a running min). Off the unit's tiles the ground is unknown: no clamp there. Never
+	// under `floor` (the lake's level / the sea's, as the profile): over a lake's bed the clamp pulled a river ending in
+	// it 38 model m under the lake's surface, and the lake's sheet stood over it (2026-10-09).
 	void clampToGround(oc::vector<ChainPoint>& pts, const RiverUnitConfig& cfg, const oc::vector<float>& elev,
-	                   const oc::vector<uint8>& mask, int32 W)
+	                   const oc::vector<uint8>& mask, int32 W, float floor)
 	{
 		for (size_t k = 0; k < pts.size(); k++)
 		{
@@ -414,6 +433,7 @@ namespace
 			}
 			if (k > 0)
 				p.w = glm::min(p.w, pts[k - 1].w);
+			p.w = glm::max(p.w, floor);
 		}
 	}
 
@@ -581,6 +601,7 @@ namespace Procedural
 		g.seaDepth = rc.seaDepth;
 		g.breachDepth = cfg.breachDepth;
 		g.lakeMinCells = cfg.lakeMinCells;
+		g.lakeMaxCells = cfg.lakeMaxCells;
 		for (int32 lt = 0; lt < N; lt++)
 			for (int32 lc = 0; lc < N; lc++)
 			{
@@ -787,10 +808,20 @@ namespace Procedural
 			}
 
 		// The soft walls: every edge pixel of the present region (the unit's edge, or beside a missing tile) that is
-		// not a crossing, ordered "Edge wall" metres higher than its ground.
+		// not a crossing, ordered "Edge wall" metres higher than its ground - but NONE within c_inletGuardPx of an inlet:
+		// the border pixels beside it were soft seeds too, and where the ground just inside rose more than the wall the
+		// arriving river ran straight back out beside where it came in - one pixel long, ending at the edge (2026-10-09).
+		constexpr int32 c_inletGuardPx = 32;
 		oc::unordered_set<int32> hardSeeds;
 		for (const DrainageSeed& s : seeds)
 			hardSeeds.insert(s.idx);
+		const auto nearInlet = [&](int32 x, int32 z)
+		{
+			for (const auto& [ii, ice] : inlets)
+				if (std::abs(ii % W - x) <= c_inletGuardPx && std::abs(ii / W - z) <= c_inletGuardPx)
+					return true;
+			return false;
+		};
 		for (int32 z = 0; z < W; z++)
 			for (int32 x = 0; x < W; x++)
 			{
@@ -808,7 +839,7 @@ namespace Procedural
 							break;
 						}
 					}
-				if (border)
+				if (border && !nearInlet(x, z))
 					seeds.push_back(DrainageSeed{ i, g.elev[i] + cfg.edgeWall, 1 });
 			}
 		oc::unordered_set<int32> softSeeds;
@@ -978,6 +1009,14 @@ namespace Procedural
 		oc::sort(starts.begin(), starts.end(), [&d](int32 a, int32 b) { return d.rank[a] > d.rank[b]; });
 
 		oc::unordered_map<int32, float> arriving; // a start pixel -> the lowest water level the segments ending on it bring
+		struct OpenEnd
+		{
+			uint32 seg;   // index in unit->segments
+			int32 pixel;  // its last pixel
+			float q;      // the water arriving there (m3/s)
+			float water;  // its profile's level there (model m) - in a breach gorge far under the ground
+		};
+		oc::vector<OpenEnd> openEnds; // perennial segments ending in a sink or running dry: the end lakes' candidates
 		oc::vector<int32> chain;
 		oc::vector<float> wUp, qChain;
 		oc::vector<ChainPoint> pts, simplified;
@@ -1021,6 +1060,27 @@ namespace Procedural
 					break;
 				}
 				c = r;
+			}
+			// AN EDGE END (the fine water left through a soft wall, where the coarse network has no crossing): the neighbour
+			// knows nothing of it, so it cannot run on. It ends c_edgeBackPx inside instead, as an open end - an end lake's
+			// candidate, else a fade-out (2026-10-09: a big river ran into the border of a flat valley, the neighbour's
+			// stream into the same point from the other side).
+			if (end == ERiverEnd::Edge)
+			{
+				constexpr int32 c_edgeBackPx = 8;
+				const auto nearEdge = [W](int32 p)
+				{
+					const int32 x = p % W, z = p / W;
+					return x < c_edgeBackPx || z < c_edgeBackPx || x >= W - c_edgeBackPx || z >= W - c_edgeBackPx;
+				};
+				size_t keep = chain.size();
+				while (keep > 2 && nearEdge(chain[keep - 1]))
+					keep--;
+				if (keep < chain.size() && !nearEdge(chain[keep - 1]))
+				{
+					chain.resize(keep);
+					end = ERiverEnd::Dry;
+				}
 			}
 
 			// The profile, pure BREACH semantics, profiled upstream first: the water starts at the lowest of its own
@@ -1135,7 +1195,7 @@ namespace Procedural
 				if (outlet)
 					align(false, last, outlet->edgeX, outlet->edgeZ);
 			}
-			clampToGround(pts, cfg, g.elev, g.mask, W);
+			clampToGround(pts, cfg, g.elev, g.mask, W, end == ERiverEnd::Sea ? 0.0f : end == ERiverEnd::Lake ? d.lakes[d.lakeOf[last]].level : -FLT_MAX);
 			simplify(pts, 0.1f, 0.25f, simplified); // 0.1 px in plan, 0.25 model m in W
 
 			RiverSegment seg;
@@ -1165,9 +1225,342 @@ namespace Procedural
 				}
 				unit->points.push_back(rp);
 			}
+			if (!seg.ephemeral && (end == ERiverEnd::Sink || end == ERiverEnd::Dry))
+				openEnds.push_back({ (uint32)unit->segments.size(), last, qChain[n - 1], wUp[n - 1] });
 			unit->segments.push_back(seg);
 		}
 
+		// THE END LAKES (the user, 2026-10-09: rivers should end in the sea or a lake): a perennial river ending in a sink
+		// (its coarse tile drains nowhere), running dry or pulled back from a soft edge floods a TERMINAL LAKE at its end -
+		// a priority flood from its last pixel, lowest ground first, so the lake takes the terrain's own shape, up to
+		// "End lake size" px per m3/s arriving (at most c_endLakeMaxPx). Never into the unit's edge band, the sea or another
+		// lake (a lake cut off at the edge would end at a wall the neighbour cannot see): those are only its shore.
+		// HELD: the flood rose over a rim with every shore pixel above its level - the lake fills to there. Where the
+		// ground holds none of at least half the size (the flood ran down a slope, or out into the edge band / the sea)
+		// the lake is CARVED: the flood's pixels at the level just under their lowest shore pixel, and RiverTerrain digs
+		// the ground under that level - never deeper than "End lake max depth". Its pixels become an ordinary lake (the
+		// lake runs below: the water, the carve's lake water, the fog, the wetness, the debug hatching) and the segment
+		// ends in it - not fading out. Where none forms the river keeps its fade-out (RiverTerrain).
+		oc::vector<uint8> carvedLakes; // per d.lakes index
+		const size_t firstEndLake = d.lakes.size();
+		if (cfg.endLakeArea > 0.0f && !openEnds.empty())
+		{
+			constexpr float c_endLakeMaxPx = 20000.0f;
+			constexpr size_t c_endLakeMinPx = 16;
+			constexpr int32 c_edgeMarginPx = 2;
+			constexpr float c_shoreClearM = 0.1f; // a carved lake's level under its lowest shore pixel (model m)
+			oc::vector<uint8> visited(NP, 0);
+			oc::vector<uint8> member(NP, 0);
+			oc::vector<int32> touched, members;
+			// ANOTHER RIVER'S CHANNEL is shore, never lake: covered, it ended in the lake and the river after it started
+			// from nothing past the shore. A channel pixel joins only when it drains to this end (memo: 1 = yes, 2 = no).
+			oc::vector<uint8> drains(NP, 0);
+			oc::vector<int32> drainsTouched, walk;
+			int32 endPixel = -1;
+			const auto drainsToEnd = [&](int32 p)
+			{
+				walk.clear();
+				uint8 result = 2;
+				for (int32 c = p; c >= 0; c = d.receiver[c])
+				{
+					if (c == endPixel)
+					{
+						result = 1;
+						break;
+					}
+					if (drains[c] != 0)
+					{
+						result = drains[c];
+						break;
+					}
+					walk.push_back(c);
+					if (walk.size() > NP)
+						break;
+				}
+				for (const int32 c : walk)
+				{
+					drains[c] = result;
+					drainsTouched.push_back(c);
+				}
+				return result == 1;
+			};
+			using Entry = oc::pair<float, int32>;
+			for (const OpenEnd& e : openEnds)
+			{
+				const float target = oc::min(cfg.endLakeArea * oc::max(e.q, 0.0f), c_endLakeMaxPx);
+				if (target < (float)c_endLakeMinPx || d.lakeOf[e.pixel] >= 0)
+					continue;
+				for (const int32 t : drainsTouched)
+					drains[t] = 0;
+				drainsTouched.clear();
+				endPixel = e.pixel;
+				// Its own channel on below the end (an Edge end's cut-off tail) is its own too.
+				for (int32 c = d.receiver[e.pixel], n = 0; c >= 0 && n < W; c = d.receiver[c], n++)
+				{
+					drains[c] = 1;
+					drainsTouched.push_back(c);
+				}
+				for (const int32 t : touched)
+					visited[t] = 0;
+				touched.clear();
+				members.clear();
+				oc::priority_queue<Entry, oc::vector<Entry>, oc::greater<Entry>> open;
+				open.push({ g.elev[e.pixel], e.pixel });
+				visited[e.pixel] = 1;
+				touched.push_back(e.pixel);
+				float level = g.elev[e.pixel];
+				bool spilled = false, held = false;
+				size_t heldCount = 0;
+				float heldLevel = level;
+				while (!open.empty())
+				{
+					const Entry top = open.top();
+					const int32 p = top.second;
+					const int32 px = p % W, pz = p / W;
+					// Every member under the level, every shore pixel above it: held at this size.
+					if (!spilled && !members.empty() && top.first > level)
+					{
+						heldCount = members.size();
+						heldLevel = level;
+						if ((float)heldCount >= target)
+						{
+							held = true;
+							break;
+						}
+					}
+					if ((float)members.size() >= target)
+						break;
+					open.pop();
+					// Another river's channel ENDS the flood: only skipped, the lake grew round it on both sides and the
+					// river ran through the lake on a strip of shore (2026-10-09).
+					if (inC[p] && !drainsToEnd(p))
+					{
+						if (top.first <= level)
+							spilled = true;
+						break;
+					}
+					if (px < c_edgeMarginPx || pz < c_edgeMarginPx || px >= W - c_edgeMarginPx || pz >= W - c_edgeMarginPx
+						|| !g.mask[p] || g.sea[p] || d.lakeOf[p] >= 0)
+					{
+						if (top.first <= level)
+							spilled = true; // the water would run out there: no held lake past this size
+						continue;
+					}
+					level = oc::max(level, top.first);
+					members.push_back(p);
+					for (int32 dz = -1; dz <= 1; dz++)
+						for (int32 dx = -1; dx <= 1; dx++)
+						{
+							const int32 nx = px + dx, nz = pz + dz;
+							if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= W || nz >= W)
+								continue;
+							const int32 n = nz * W + nx;
+							if (visited[n])
+								continue;
+							visited[n] = 1;
+							touched.push_back(n);
+							open.push({ g.elev[n], n });
+						}
+				}
+				bool carved = false;
+				if (!held && heldCount >= c_endLakeMinPx && (float)heldCount >= 0.5f * target)
+				{
+					members.resize(heldCount);
+					level = heldLevel;
+					held = true;
+				}
+				if (members.size() < c_endLakeMinPx)
+					continue;
+				if (held)
+					level += 0.05f; // just over its highest pixel: every member under water
+				else
+				{
+					// THE CARVED SHAPE: the ground holds no lake here, so the lowest ground alone was the pixels under one
+					// contour - on an even slope a straight shore, moving with "End lake size" (2026-10-09). The flood runs
+					// again with a cost for the distance from the end (c_compactM per px) and a fixed value noise
+					// (c_shapeNoiseM over c_shapeNoisePx cells, in global pixels): a compact, uneven lake round the end,
+					// still along the low ground where the ground has any shape.
+					constexpr float c_compactM = 1.0f;
+					constexpr float c_shapeNoiseM = 8.0f;
+					constexpr float c_shapeNoisePx = 8.0f;
+					const auto hash01 = [](int32 a, int32 b)
+					{
+						uint32 h = (uint32)a * 0x8DA6B343u ^ (uint32)b * 0xD8163841u;
+						h ^= h >> 13;
+						h *= 0x5BD1E995u;
+						h ^= h >> 15;
+						return (float)(h & 0xFFFFFFu) / 16777215.0f;
+					};
+					const auto shapeNoise = [&](int32 x, int32 z)
+					{
+						const float fx = (float)(uj * W + x) / c_shapeNoisePx, fz = (float)(ui * W + z) / c_shapeNoisePx;
+						const float cx = std::floor(fx), cz = std::floor(fz);
+						const int32 ix = (int32)cx, iz = (int32)cz;
+						const float tx = smoothstep01(fx - cx), tz = smoothstep01(fz - cz);
+						const float a = hash01(ix, iz) + (hash01(ix + 1, iz) - hash01(ix, iz)) * tx;
+						const float b = hash01(ix, iz + 1) + (hash01(ix + 1, iz + 1) - hash01(ix, iz + 1)) * tx;
+						return a + (b - a) * tz;
+					};
+					// The distance is from a CENTRE moved off the unit's edges by the lake's radius: from an Edge end (8 px in)
+					// the blob grew round the end and the unit's edge cut half of it off straight.
+					// 1.5 x the round radius + 10 px: the noise and the slope push the blob out past the round one.
+					const float radius = 1.5f * std::sqrt(target / 3.14159265f) + (float)c_edgeMarginPx + 10.0f;
+					const auto inward = [&](int32 v)
+					{
+						return 2.0f * radius < (float)W ? oc::clamp((float)v, radius, (float)(W - 1) - radius) : (float)v;
+					};
+					const float ex = inward(e.pixel % W), ez = inward(e.pixel / W);
+					const auto cost = [&](int32 n)
+					{
+						const float dxp = (float)(n % W) - ex, dzp = (float)(n / W) - ez;
+						return g.elev[n] + c_compactM * std::sqrt(dxp * dxp + dzp * dzp) + c_shapeNoiseM * shapeNoise(n % W, n / W);
+					};
+					for (const int32 t : touched)
+						visited[t] = 0;
+					touched.clear();
+					members.clear();
+					while (!open.empty())
+						open.pop();
+					open.push({ cost(e.pixel), e.pixel });
+					visited[e.pixel] = 1;
+					touched.push_back(e.pixel);
+					while (!open.empty() && (float)members.size() < target)
+					{
+						const int32 p = open.top().second;
+						open.pop();
+						const int32 px = p % W, pz = p / W;
+						if (inC[p] && !drainsToEnd(p))
+							break;
+						if (px < c_edgeMarginPx || pz < c_edgeMarginPx || px >= W - c_edgeMarginPx || pz >= W - c_edgeMarginPx
+							|| !g.mask[p] || g.sea[p] || d.lakeOf[p] >= 0)
+							continue;
+						members.push_back(p);
+						for (int32 dz = -1; dz <= 1; dz++)
+							for (int32 dx = -1; dx <= 1; dx++)
+							{
+								const int32 nx = px + dx, nz = pz + dz;
+								if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= W || nz >= W)
+									continue;
+								const int32 n = nz * W + nx;
+								if (visited[n])
+									continue;
+								visited[n] = 1;
+								touched.push_back(n);
+								open.push({ cost(n), n });
+							}
+					}
+					if (members.size() < c_endLakeMinPx)
+						continue;
+
+					// Carved: just under the lowest shore pixel; the members above it are dug down by at most the max depth.
+					for (const int32 m : members)
+						member[m] = 1;
+					float shore = FLT_MAX;
+					for (const int32 m : members)
+					{
+						const int32 mx = m % W, mz = m / W;
+						for (int32 dz = -1; dz <= 1; dz++)
+							for (int32 dx = -1; dx <= 1; dx++)
+							{
+								const int32 nx = mx + dx, nz = mz + dz;
+								if (nx < 0 || nz < 0 || nx >= W || nz >= W)
+									continue;
+								const int32 n = nz * W + nx;
+								if (!member[n])
+									shore = oc::min(shore, g.elev[n]);
+							}
+					}
+					for (const int32 m : members)
+						member[m] = 0;
+					level = shore - c_shoreClearM;
+					if (shore == FLT_MAX)
+						continue;
+					carved = true;
+				}
+				// NEVER ABOVE THE ARRIVING WATER: the river's profile breaches rims, so at its end it can run in a gorge
+				// far under the ground the flood saw - a lake at that ground stood 138 model m over the river (2026-10-09).
+				// Lower, the pixels over the level are dug (carved); past "End lake max depth" of digging, no lake.
+				if (level > e.water)
+				{
+					level = e.water;
+					carved = true;
+				}
+				if (carved)
+				{
+					float top = -FLT_MAX;
+					for (const int32 m : members)
+						top = oc::max(top, g.elev[m]);
+					if (top - level > cfg.endLakeMaxDepth)
+						continue;
+				}
+				const int32 lakeIdx = (int32)d.lakes.size();
+				DrainageLake lake;
+				lake.spill = level;
+				lake.level = level;
+				lake.kind = ERiverWater::TerminalLake;
+				d.lakes.push_back(lake);
+				if (carved)
+				{
+					if (carvedLakes.size() < d.lakes.size())
+						carvedLakes.resize(d.lakes.size(), 0);
+					carvedLakes[(size_t)lakeIdx] = 1;
+				}
+				for (const int32 m : members)
+				{
+					d.lakeOf[m] = lakeIdx;
+					d.water[m] = ERiverWater::TerminalLake;
+				}
+				unit->segments[e.seg].end = ERiverEnd::Lake;
+			}
+		}
+		// The lowest ground first fills up the river's own valley: the end lake covers its last stretch (and whatever
+		// joined it there), whose surface stood over the lake's. Every segment ends where it first enters an end lake -
+		// sampled along its pieces every half pixel, the end point moved there: the simplified points are sparse, and a
+		// straight reach crossed a whole lake with no point inside it (2026-10-09); one starting in one is gone. Its water
+		// stays its own (raised to the lake's level, a river in a breach gorge stood far over its ground).
+		if (d.lakes.size() > firstEndLake)
+			for (RiverSegment& s : unit->segments)
+			{
+				const auto endLakeAt = [&](float x, float z)
+				{
+					const int32 px = oc::clamp((int32)std::lround(x), 0, W - 1), pz = oc::clamp((int32)std::lround(z), 0, W - 1);
+					const int32 l = d.lakeOf[(size_t)pz * W + px];
+					return l >= (int32)firstEndLake ? l : -1;
+				};
+				int32 lake = s.count > 0 ? endLakeAt(unit->points[s.first].x, unit->points[s.first].z) : -1;
+				uint32 cut = 1;
+				for (uint32 k = 0; lake < 0 && k + 1 < s.count; k++)
+				{
+					RiverPoint& a = unit->points[s.first + k];
+					RiverPoint& c = unit->points[s.first + k + 1];
+					const float len = std::sqrt((c.x - a.x) * (c.x - a.x) + (c.z - a.z) * (c.z - a.z));
+					const int32 steps = oc::max((int32)std::ceil(len / 0.5f), 1);
+					for (int32 i = 1; i <= steps; i++)
+					{
+						const float t = (float)i / (float)steps;
+						lake = endLakeAt(a.x + (c.x - a.x) * t, a.z + (c.z - a.z) * t);
+						if (lake < 0)
+							continue;
+						if (i < steps)
+						{
+							// The piece's end point moves to where it enters (the rest of the segment is cut).
+							c.x = a.x + (c.x - a.x) * t;
+							c.z = a.z + (c.z - a.z) * t;
+							c.water = a.water + (c.water - a.water) * t;
+							c.q = a.q + (c.q - a.q) * t;
+							c.halfWidth = a.halfWidth + (c.halfWidth - a.halfWidth) * t;
+							c.depth = a.depth + (c.depth - a.depth) * t;
+							c.flags = 0;
+						}
+						cut = k + 2;
+						break;
+					}
+				}
+				if (lake < 0)
+					continue;
+				s.count = cut < 2 ? 0 : cut;
+				s.end = ERiverEnd::Lake;
+			}
 		// --- Lakes: the wet pixels (a pan's salt) as row runs, the lakes renumbered to the ones that have any.
 		oc::vector<int32> lakeIndex(d.lakes.size(), -1);
 		for (int32 r = 0; r < W; r++)
@@ -1192,6 +1585,7 @@ namespace Procedural
 					RiverLake l;
 					l.level = d.lakes[lake].level;
 					l.kind = d.lakes[lake].kind;
+					l.carved = (size_t)lake < carvedLakes.size() ? carvedLakes[(size_t)lake] : 0;
 					unit->lakes.push_back(l);
 				}
 				RiverLakeRun run;

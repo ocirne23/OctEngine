@@ -283,6 +283,8 @@ static oc::string buildLayoutPreamble()
     def("CLUTTER_FLOWER_PETALS0", CLUTTER_FLOWER_PETALS[0], "u");
     def("CLUTTER_FLOWER_PETALS1", CLUTTER_FLOWER_PETALS[1], "u");
     def("CLUTTER_FLOWER_PETALS2", CLUTTER_FLOWER_PETALS[2], "u");
+    def("RIVER_FLOW_SLOW", RIVER_FLOW_SLOW); // float literals (to_string keeps the decimal point)
+    def("RIVER_FLOW_FAST", RIVER_FLOW_FAST);
     def("CLUTTER_KIND_PEBBLE", (uint32)EClutterKind::Pebble, "u");
     def("CLUTTER_KIND_BRANCH", (uint32)EClutterKind::Branch, "u");
     def("CLUTTER_KIND_MUSHROOM", (uint32)EClutterKind::Mushroom, "u");

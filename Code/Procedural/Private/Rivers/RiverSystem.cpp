@@ -37,7 +37,7 @@ namespace
 		float half = 0.0f;   // the ribbon's half-width
 		glm::vec2 dir;       // downstream, unit length
 		float speed = 0.0f;  // m/s
-		float foam = 0.0f;   // whitewater: 0.5 rapids, 1 falls
+		float foam = 0.0f;   // whitewater 0..1: a smooth measure of how steep the water runs (not the rapids / fall flags)
 		float along = 0.0f;  // the distance from the segment's start
 		float depth = 0.0f;  // the channel's depth below the surface at its centre (engine m)
 	};

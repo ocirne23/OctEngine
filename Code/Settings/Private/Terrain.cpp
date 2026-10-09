@@ -284,6 +284,9 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::intVar("Terrain/Rivers", "Crossing window (px)", &s.riverCrossWindow, 0, 127, 1.0f);
 	Tweak::floatVar("Terrain/Rivers", "Unit breach depth (m)", &s.riverUnitBreachDepth, 0.0f, 500.0f, 0.5f);
 	Tweak::intVar("Terrain/Rivers", "Unit lake min cells", &s.riverUnitLakeMinCells, 1, 100000, 10.0f);
+	// A basin bigger than this holds water in only its lowest this many pixels; the rest is land, the outflow cuts down
+	// through the rim to the lower level. 0 = no limit.
+	Tweak::intVar("Terrain/Rivers", "Unit lake max cells", &s.riverUnitLakeMaxCells, 0, 1000000, 100.0f);
 	Tweak::floatVar("Terrain/Rivers", "Channel min Q (m3/s)", &s.riverChannelMinQ, 0.01f, 100.0f, 0.01f);
 	// A channel's width and depth grow from 0 at the min Q to full size at min Q + this: streams fade in at their head
 	// and out where their water drains away.
@@ -310,6 +313,11 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Rivers", "Meander small amplitude", &s.riverMeanderSmallAmplitude, 0.0f, 10.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Meander small wavelength", &s.riverMeanderSmallWavelength, 0.05f, 4.0f, 0.01f);
 	Tweak::floatVar("Terrain/Rivers", "Meander full Q (m3/s)", &s.riverMeanderFullQ, 0.01f, 1000.0f, 0.5f);
+	// END LAKES: a river that ends in a sink or runs dry (not in the sea, a lake, another river or over a unit edge)
+	// floods a terminal lake at its end - "size" native px per m3/s arriving (0 = off: it fades out), at most "max
+	// depth" model m above the end's ground; one that would reach the unit's edge stops there.
+	Tweak::floatVar("Terrain/Rivers", "End lake size (px per m3/s)", &s.riverEndLakeArea, 0.0f, 5000.0f, 10.0f);
+	Tweak::floatVar("Terrain/Rivers", "End lake max depth (m)", &s.riverEndLakeMaxDepth, 0.0f, 300.0f, 1.0f);
 	// The carve, in MODEL metres (/ 6 in the world at mpp 5) / multiples of the channel half-width (hydraulic geometry:
 	// width = a * Q^0.5). The water sits at the original ground minus the valley depth; the channel is cut below it.
 	Tweak::floatVar("Terrain/Rivers", "Channel depth scale", &s.riverChannelDepthScale, 0.0f, 20.0f, 0.1f);
@@ -317,6 +325,12 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// The channel's sides slope this steeply (rise / run) from the water's edge down to a FLAT bed, rounded at the foot:
 	// a deeper channel has the same sides, only longer (a narrow, deep one becomes a V of that slope).
 	Tweak::floatVar("Terrain/Rivers", "Channel wall slope", &s.riverChannelWallSlope, 0.1f, 10.0f, 0.05f);
+	// A lake's bed lowered by this much (model m) away from its shore, growing in over the reach (native px) as a
+	// smoothstep, so the ground at the waterline keeps its own slope.
+	Tweak::floatVar("Terrain/Rivers", "Lake bed deepen (m)", &s.riverLakeBedDeepen, 0.0f, 200.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Lake bed deepen reach (px)", &s.riverLakeBedDeepenReach, 1.0f, 32.0f, 0.25f);
+	// How far (native px) past a lake's wet pixels its shore sand reaches, fading out (no grass or clutter there either).
+	Tweak::floatVar("Terrain/Rivers", "Lake shore (px)", &s.riverLakeShore, 0.1f, 16.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Bank height", &s.riverBankHeight, 0.0f, 20.0f, 0.05f);
 	// The rise from the water to the floodplain's outer edge (bank + floodplain widths): ((x / width) ^ this) x the bank
 	// height. 1 = a straight slope, 2 = a bowl (flat by the channel, steepening outward), higher = a flatter floor.
@@ -329,9 +343,11 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// How far the valley wall may run PAST the floodplain's edge (the curve itself is always carved whole); it fades
 	// out over its last 30 %.
 	Tweak::floatVar("Terrain/Rivers", "Carve reach (m)", &s.riverCarveReach, 0.0f, 3000.0f, 10.0f);
-	// The valley SCALES WITH THE WATER: a river of this Q or more gets the whole carve reach, a smaller one sqrt(Q / this)
-	// of it - a small stream cuts a small valley (0 = every channel the whole reach).
+	// The valley SCALES WITH THE WATER: a river of this Q or more gets the whole carve reach, a smaller one
+	// (Q / this)^exponent of it - a small stream cuts a small valley (0 = every channel the whole reach). Exponent 0.5 =
+	// the square root; higher narrows the small streams' valleys faster.
 	Tweak::floatVar("Terrain/Rivers", "Carve reach Q (m3/s)", &s.riverCarveReachQ, 0.0f, 1000.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Carve reach Q exponent", &s.riverCarveReachQExponent, 0.0f, 4.0f, 0.05f);
 	// The river influence is 1 in the channel and falls to 0 at the floodplain's edge: trees and rocks keep out above
 	// this (1 = only the channel's wet core, 0 = the whole carved bed and floodplain). Re-places the records.
 	Tweak::floatVar("Terrain/Rivers", "Vegetation clear", &s.riverVegetationClear, 0.0f, 1.0f, 0.01f);
