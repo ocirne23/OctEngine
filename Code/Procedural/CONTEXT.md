@@ -218,7 +218,11 @@ is bigger than the margin. Steps (`RiverNetwork.cpp`):
   or ran from a pool into the lake - rivers that started and ended in the same lake. Now ONE path leaves (the old one
   from the lake's lowest pixel, from where it last leaves the lake) and every other basin pixel drains into the lake or
   onto it: a priority flood from the path, lowest first, so the whole lake fills from its exit before any dry pixel. The
-  basin keeps its rank slots, reassigned in the new tree's order. A lake gathers its inflow and releases at its exits when the last one is in: full (spills inflow +
+  basin keeps its rank slots, reassigned in the new tree's order. **THE EDGE CAP** (units, `edgeHoldsNoLake`): the
+  neighbour unit cannot see a unit's lake, so a lake over or beside a grid-edge pixel (the unit's edge or a missing
+  tile's; near an inlet no soft wall holds the border) stood in the air where the neighbour's ground fell away - a lake
+  on a clifftop at a unit edge (2026-10-09). Its level stays 0.1 model m under the lowest such pixel; only the pixels
+  under that stay lake, through the same `capDepression` (and none left = no lake, the river runs through the basin). A lake gathers its inflow and releases at its exits when the last one is in: full (spills inflow +
   own rain - open-water evaporation), terminal (the lowest cells that evaporate exactly the inflow, no outflow) or a
   salt pan (under one cell). Dry land loses channel water by aridity (`loss x (PET/P - 1) x km x sqrt(Q)`).
 
@@ -401,7 +405,11 @@ config-dirty listener (a rebuild; the units then reload from disk).
   the edge - so the two sides cross at the stream's real size and the inlet grows from it. **THE OPEN ENDS** (`fadeOpenEnds`): a segment
   ending neither in water nor in another river - `Edge` (a soft wall; the neighbour does not continue it), `Sink`, `Dry`
   - FADES OUT the same way over its last 200 px (at most half the segment); it stopped as a full-width cut. Only where
-  no end lake formed (`RiverUnits` sets the end to `Lake` for one). Then its water is SUNK UNDER THE OTHER RIVERS'
+  no end lake formed (`RiverUnits` sets the end to `Lake` for one). **An UNMATCHED OUTLET fades too**: its river
+  reaches the crossing more than 2 x "Unit breach depth" under the crossing's level (the edge reroute measures its rim
+  from the exit's GROUND, but the water can already run under it: a 164 model m gorge to the crossing, 2026-10-09) -
+  past what the inlet match lowers, so the neighbour's inlet counts as UNBACKED and grows in from nothing; before, the
+  river ended full-width in its gorge and the next one started full-size 164 m higher. Then its water is SUNK UNDER THE OTHER RIVERS'
   CARVES (`sinkUnderCarves`, on a copy - the store's unit and the disk cache stay as built): the profile walked the
   UNCARVED ground, but another river's valley wall cuts the hillside down to "Valley slope", so a steep stream on a big
   river's valley side stood tens of metres above the carved ground (2026-10-09). Each point's surface is held at or

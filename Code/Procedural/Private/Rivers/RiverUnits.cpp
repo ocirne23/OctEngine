@@ -14,7 +14,7 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 29; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	constexpr uint32 RIVER_UNIT_VERSION = 30; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
 	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
 	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
 	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
@@ -37,6 +37,7 @@ namespace
 	                                          // 27: a carved end lake's own compact, noisy flood
 	                                          // 28: its centre moved off the unit's edges
 	                                          // 29: farther
+	                                          // 30: the edge cap (a lake stays under the unit-edge pixels it touches)
 
 	struct UnitHeader
 	{
@@ -602,6 +603,7 @@ namespace Procedural
 		g.breachDepth = cfg.breachDepth;
 		g.lakeMinCells = cfg.lakeMinCells;
 		g.lakeMaxCells = cfg.lakeMaxCells;
+		g.edgeHoldsNoLake = true;
 		for (int32 lt = 0; lt < N; lt++)
 			for (int32 lc = 0; lc < N; lc++)
 			{

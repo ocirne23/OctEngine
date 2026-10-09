@@ -36,25 +36,30 @@ namespace
 		float areaIn = 0.0f;
 	};
 
-	// THE SIZE LIMIT on one depression (`id` in depOf): the level goes between its lowest lakeMaxCells pixels and the
-	// next; of the pools under it the LARGEST is the lake (the others stay dry hollows - the one around the lowest pixel
+	// THE SIZE LIMIT / EDGE CAP on one depression (`id` in depOf): the level goes between its lowest `keep` pixels and the
+	// next (never over maxLevel); of the pools under it the LARGEST is the lake (the others stay dry hollows - the one around the lowest pixel
 	// was a thin strip in the outflow's gorge, 2026-10-09). Then the basin's DRAIN TREE is rebuilt: the flood's tree ran from the
 	// spill through the whole basin, so its paths left the smaller lake over a dry stretch and came back into it, or ran
 	// from a pool into the lake - rivers that started and ended in the same lake (2026-10-09). Now ONE path leaves: the
 	// old one from the lowest pixel, from where it last leaves the lake; every other basin pixel drains into the lake or
 	// onto that path (a priority flood from the path, lowest first, so the whole lake fills from its exit before any dry
 	// pixel). The basin keeps its rank slots, reassigned in the new tree's order (a receiver always ranks lower).
-	void capDepression(const DrainageGrid& g, Depression& dep, int32 id, const oc::vector<int32>& depOf, DrainageResult& out)
+	void capDepression(const DrainageGrid& g, Depression& dep, int32 id, const oc::vector<int32>& depOf, DrainageResult& out,
+	                   size_t keep, float maxLevel)
 	{
 		const int32 W = g.w, H = g.h;
 		const int32 nDirs = g.d8 ? 8 : 4;
+		if (keep >= dep.cells.size())
+		{
+			dep.level = oc::min(dep.level, maxLevel); // every pixel stays under: only the level drops
+			return;
+		}
 		oc::vector<int32> region = dep.cells;
 		oc::sort(region.begin(), region.end(), [&g](int32 a, int32 b)
 		{
 			return g.elev[a] != g.elev[b] ? g.elev[a] < g.elev[b] : a < b;
 		});
-		const size_t keep = (size_t)g.lakeMaxCells;
-		dep.level = 0.5f * (g.elev[region[keep - 1]] + g.elev[region[keep]]);
+		dep.level = oc::min(0.5f * (g.elev[region[keep - 1]] + g.elev[region[keep]]), maxLevel);
 
 		// 0 = above the level, 1 = under it, 2 = the lake, 3 = placed in the new tree. The pools under the level are
 		// labelled (`pool`, from 4 up); the LARGEST is the lake.
@@ -398,8 +403,59 @@ namespace Procedural
 			// lakeMaxCells only the lowest that many pixels are the lake, its level between the last of them and the next
 			// (a terminal lake's hypsometry); the pixels above it are land again - the water runs over them as channels,
 			// and the outflow's profile cuts down through the rim to the lower level (a gorge, at most the basin's depth).
-			if (g.lakeMaxCells > 0 && (int32)dep.cells.size() > g.lakeMaxCells)
-				capDepression(g, dep, depOf[dep.cells.front()], depOf, out);
+			// THE EDGE CAP (units): the neighbour unit cannot see this lake, so a lake over or beside a grid-edge pixel
+			// stood in the air where the neighbour's ground fell away (a lake on a clifftop at a unit edge, beside an
+			// inlet where no soft wall holds the border, 2026-10-09). Its level stays 0.1 model m under the lowest such
+			// pixel - only the pixels under that stay lake, as with the size limit.
+			const int32 id = depOf[dep.cells.front()];
+			size_t keep = dep.cells.size();
+			float maxLevel = dep.level;
+			if (g.edgeHoldsNoLake)
+			{
+				const auto edgePixel = [&](int32 i)
+				{
+					const int32 x = i % W, z = i / W;
+					if (x == 0 || z == 0 || x == W - 1 || z == H - 1)
+						return true;
+					for (int32 d = 0; d < nDirs; d++)
+					{
+						const int32 nx = x + c_dx[d], nz = z + c_dz[d];
+						if (!inGrid(nz * W + nx))
+							return true;
+					}
+					return false;
+				};
+				float wall = FLT_MAX;
+				for (const int32 c : dep.cells)
+				{
+					if (edgePixel(c))
+						wall = oc::min(wall, g.elev[c]);
+					const int32 x = c % W, z = c / W;
+					for (int32 d = 0; d < nDirs; d++)
+					{
+						const int32 nx = x + c_dx[d], nz = z + c_dz[d];
+						if (nx < 0 || nz < 0 || nx >= W || nz >= H)
+							continue;
+						const int32 n = nz * W + nx;
+						if (depOf[n] != id && inGrid(n) && edgePixel(n))
+							wall = oc::min(wall, g.elev[n]);
+					}
+				}
+				if (wall - 0.1f < dep.level)
+				{
+					maxLevel = wall - 0.1f;
+					keep = 0;
+					for (const int32 c : dep.cells)
+						if (g.elev[c] < maxLevel)
+							keep++;
+				}
+			}
+			if (g.lakeMaxCells > 0)
+				keep = oc::min(keep, (size_t)g.lakeMaxCells);
+			if (keep == 0)
+				continue;
+			if (keep < dep.cells.size() || maxLevel < dep.level)
+				capDepression(g, dep, id, depOf, out, keep, maxLevel);
 			dep.lake = (int32)out.lakes.size();
 			DrainageLake lake;
 			lake.spill = dep.level;

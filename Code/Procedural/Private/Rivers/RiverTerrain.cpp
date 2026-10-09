@@ -218,12 +218,28 @@ namespace Procedural
 	// neighbour does not continue it), in a sink (its coarse tile drains nowhere), or where its water runs dry - kept
 	// its full width and depth to the end and stopped as a cut (seen 2026-10-09). It FADES OUT instead: its width and
 	// depth to 0 over its last c_fadePx (at most half the segment), the surface kept.
+	// An OUTLET the downstream unit cannot carry on counts too: the river reaches its crossing more than 2 x "Unit breach
+	// depth" under the crossing's level (the edge reroute's gorge from water already under its exit's ground: 164 model m,
+	// 2026-10-09), past what the inlet match lowers - the neighbour's inlet grows in from nothing instead (matchInlets).
 	void RiverTerrain::fadeOpenEnds(RiverUnit& u) const
 	{
 		constexpr float c_fadePx = 200.0f; // native px (1 km at mpp 5)
+		const float maxDrop = 2.0f * m_unitCfg.breachDepth;
+		const auto unmatchedOutlet = [&](const RiverSegment& s)
+		{
+			if (s.end != ERiverEnd::Outlet)
+				return false;
+			const RiverPoint& pe = u.points[s.first + s.count - 1];
+			for (const RiverCrossing& c : u.crossings)
+				if (!c.inlet && std::abs(c.x - pe.x) <= 1.5f && std::abs(c.z - pe.z) <= 1.5f)
+					return pe.water <= c.water - maxDrop;
+			return false;
+		};
 		for (const RiverSegment& s : u.segments)
 		{
-			if (s.count < 2 || (s.end != ERiverEnd::Edge && s.end != ERiverEnd::Sink && s.end != ERiverEnd::Dry))
+			if (s.count < 2)
+				continue;
+			if (s.end != ERiverEnd::Edge && s.end != ERiverEnd::Sink && s.end != ERiverEnd::Dry && !unmatchedOutlet(s))
 				continue;
 			float total = 0.0f;
 			for (uint32 k = 1; k < s.count; k++)
@@ -279,17 +295,18 @@ namespace Procedural
 			// another edge) where the coarse network did not see it - or one far smaller than the coarse Q the inlet injects
 			// (the outlet's Q blend only matches sizes that are close: RiverUnits). Rather than start a full-size river
 			// there, it GROWS IN: its width and depth from the arriving river's (0 when none) to its own over c_growInPx.
+			// At most 2 x "Unit breach depth": no breach is deeper (a deeper basin is a pond, RiverRouting), so a bigger
+			// mismatch is no gorge to continue but a disagreement - carried on for kilometres it carved a canyon. Such an
+			// inlet is UNBACKED too (the upstream river fades out before the edge: fadeOpenEnds).
+			const float maxDrop = 2.0f * m_unitCfg.breachDepth;
 			constexpr float c_growInPx = 200.0f; // native px (1 km at mpp 5)
-			if (level == FLT_MAX)
+			if (level == FLT_MAX || level <= p0.water - maxDrop)
 			{
 				growSegmentEnd(u, s, /*atEnd*/ false, 0.0f, c_growInPx);
 				continue;
 			}
 			if (upHalf < 0.5f * p0.halfWidth && p0.halfWidth > 1e-4f)
 				growSegmentEnd(u, s, /*atEnd*/ false, upHalf / p0.halfWidth, c_growInPx);
-			// At most 2 x "Unit breach depth": no breach is deeper (a deeper basin is a pond, RiverRouting), so a bigger
-			// mismatch is no gorge to continue but a disagreement - carried on for kilometres it carved a canyon.
-			const float maxDrop = 2.0f * m_unitCfg.breachDepth;
 			if (level < p0.water - 0.01f && level > p0.water - maxDrop)
 				lowered.push_back({ si, level });
 		}
