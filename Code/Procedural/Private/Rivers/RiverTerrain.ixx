@@ -47,7 +47,10 @@ export namespace Procedural
 		float reachQExponent = 0.1f; // higher = a small stream's valley narrower
 		float lakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
 		float lakeBedDeepenReach = 8.0f; // native px from the shore over which that grows in (smoothstep: the shore keeps its slope)
-		float lakeShore = 0.75f;         // native px past a lake's wet pixels its influence (the shore's sand, no grass) fades over
+		float gorgeWallSlope = 0.75f;
+		float whitewaterDepth = 3.0f;   // the channel's depth x up to this on rapids and falls (the steepness; 1 = none)
+		float whitewaterWiden = 2.0f;  // the channel's half-width x up to this there (the ribbon is 1.2 x the channel)    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+		float lakeShore = 0.75f;        // native px past a lake's wet pixels its influence (the shore's sand, no grass) fades over
 		bool operator==(const RiverCarveConfig&) const = default;
 
 		// The valley wall's reach past the floodplain's edge for a channel of discharge q (model m).
@@ -110,6 +113,9 @@ export namespace Procedural
 		c.lakeBedDeepen = s.riverLakeBedDeepen;
 		c.lakeBedDeepenReach = s.riverLakeBedDeepenReach;
 		c.lakeShore = s.riverLakeShore;
+		c.gorgeWallSlope = s.riverGorgeWallSlope;
+		c.whitewaterDepth = s.riverWhitewaterDepth;
+		c.whitewaterWiden = s.riverWhitewaterWiden;
 		return c;
 	}
 
@@ -124,6 +130,7 @@ export namespace Procedural
 		oc::vector<uint32> cellStart; // cells^2 + 1
 		oc::vector<uint32> cellPieces;
 		oc::vector<uint32> pointSegment; // per point: its segment
+		oc::vector<uint16> pointSection; // per point: the waterfall lips before it in its segment (apply never blends across one)
 		oc::vector<uint32> rowRuns;      // per unit row + 1: offsets into unit->lakeRuns
 	};
 

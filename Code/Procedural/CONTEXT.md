@@ -328,7 +328,24 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   path with W tied to its arc position, so where the final path lies over LOWER ground W stood in the air (seen
   2026-10-09; the carve only lowers). On the final path W <= the ground under it + the channel's depth, then a running
   min downstream again - **never under the profile's floor** (a `Lake` end's lake level, a `Sea` end's 0): over the
-  lake's bed the clamp pulled a river 38 model m under its lake's surface, and the lake's sheet stood over it. Then Douglas-Peucker that keeps a
+  lake's bed the clamp pulled a river 38 model m under its lake's surface, and the lake's sheet stood over it. **THE
+  WATERFALLS** (`shapeFalls`, V6, on the FINAL points after the simplify - the shaping would spread a step again): a run
+  of pieces steeper than "Fall slope", at most "Fall max length" px x clamp(Q at the lip / "Fall full Q") - the water
+  cuts the gorge, a small stream none (its steep run must be all but a step) - dropping at least "Fall min height" model m becomes
+  a straight drop at its TOP - the water keeps its level to the lip, drops over 0.6 px (a second point) to the run's
+  lowest level and runs on at it to the run's end (the lip's top point carries `RiverPoint_Lip`; the foot and the run's
+  points but its last `RiverPoint_Gorge`), so the carve cuts a plunge gorge back into the slope - a NARROW one: in
+  `pieceCarve`, the gorge mark interpolated along the piece, past the channel's edge the walls rise at "Gorge wall
+  slope" (default 0.75) with no floodplain, fading back to the valley profile at the gorge's end (the valley carve cut a
+  trench far wider than the river down to the lowered water). **THE WHITEWATER CHANNEL** (the user: the terrain makes
+  room, the water stays): on rapids and falls `pieceCarve` deepens the channel up to "Whitewater channel depth" x and
+  widens it up to "Whitewater channel widen" x (defaults 3 and 2; the ribbon is 1.2 x the channel, so past 1.2 the channel holds its edges) by the piece's
+  steepness - its own drop eased from half "Rapids slope" to "Fall slope", a plunge gorge in full - else the falling
+  sheet and the rapids' waves dipped into the bed and the banks' tips poked through the sheet's edges (at the bottom
+  the water would stand over the falling ground above it). A longer steep run stays sloped rapids - WHOLE (stepping one
+  point on, a long run's tail came under the max length and fell halfway down the slope: its gorge cut into the hillside,
+  the fall buried in it, the water above standing over the gorge's wall). RiverTerrain's
+  carve does not blend across a lip (SECTIONS, below). Then Douglas-Peucker that keeps a
   point when EITHER its plan offset passes 0.1 px OR its W passes 0.25 model m from the interpolation - W is linear
   between the kept points, and the plan-only version kept just the ends of a reach that was straight in plan but
   dropped into a canyon partway, so the water sloped through the air over the drop. Points carry W, half-width, depth, Q and rapids / fall flags (by
@@ -449,7 +466,18 @@ config-dirty listener (a rebuild; the units then reload from disk).
   (`segmentWeight`, d model m: its own piece alone on the river line, a continuous ramp where two parts of one river
   meet), and the segments compose by min. A min over every piece let a reach steeper than "Valley slope" cut under its
   OWN upstream water (the downstream pieces' lower walls reached back up the river line); the nearest piece alone left
-  cliffs where it switched. **A pure function of (x, z), never of the
+  cliffs where it switched. **A waterfall's lip splits a segment into SECTIONS** (`pointSection`, prepare: the `RiverPoint_Lip`
+  flag `shapeFalls` sets - a guess from a short, steep piece took ordinary rapids for lips): a point blends only the
+  pieces of its NEAREST piece's section - beside the channel the pieces above and below a lip stood at about the same
+  distance and blended the drop into a rounded ramp metres long; now the ground breaks at the lip. **Only near the
+  channel**: fully within the nearest piece's floodplain edge, fading (smoothstep) to the blend of every piece at twice
+  it - across the whole gorge the break drew long straight cliffs far wider than the river. Where the section has no
+  carve, the blend of every piece stands (never the raw ground). That wide blend leaves the plunge gorges out (their
+  `RiverPoint_Gorge` weight): their water stands the whole drop lower and dug the bank beside the reach above a lip. **UNDER THE DROP**: a point whose nearest piece is the lip's own piece takes the section BELOW
+  it, so the step stands at the lip's top; the lip runs 0.6 px (`shapeFalls`), more than the terrain mesh's ~2 m vertex
+  spacing, so the mesh's face from that top is steeper than the sheet and lies behind it. (Carved from the lip's piece,
+  the face leaned through the sheet and cut it in a V; an undercut 3 m upstream of the lip left the water running
+  through the air before it fell - 2026-10-10.) **A pure function of (x, z), never of the
   grid step** - the terrain's edge stitch interpolates the finer node's own samples, so a step-dependent carve would
   crack. Inside the channel the carve replaces the ground, so the crag detail is gone there without a mask.
 * **Water**: inside a perennial channel `waterKind = River`, `inlandWater` = S (world; the debug lines draw S too), `flowAngle01` = the piece's

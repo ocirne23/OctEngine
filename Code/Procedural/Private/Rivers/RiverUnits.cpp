@@ -14,7 +14,7 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 30; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	constexpr uint32 RIVER_UNIT_VERSION = 36; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
 	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
 	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
 	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
@@ -38,6 +38,12 @@ namespace
 	                                          // 28: its centre moved off the unit's edges
 	                                          // 29: farther
 	                                          // 30: the edge cap (a lake stays under the unit-edge pixels it touches)
+	                                          // 31: waterfalls (shapeFalls)
+	                                          // 32: RiverPoint_Lip marks a waterfall's lip
+	                                          // 33: RiverPoint_Gorge marks its plunge gorge
+	                                          // 34: the fall's max length scales with Q
+	                                          // 35: the lip's run 0.6 px (the sheet leans forward)
+	                                          // 36: a steep run too long to fall is skipped whole
 
 	struct UnitHeader
 	{
@@ -100,6 +106,9 @@ namespace
 		hashValue(h, uc.depthC);
 		hashValue(h, uc.rapidsSlope);
 		hashValue(h, uc.fallSlope);
+		hashValue(h, uc.fallMinHeight);
+		hashValue(h, uc.fallMaxLength);
+		hashValue(h, uc.fallFullQ);
 		hashValue(h, uc.edgeWall);
 		hashValue(h, uc.pathSmoothing);
 		hashValue(h, uc.meanderAmplitude);
@@ -236,6 +245,8 @@ namespace
 	struct ChainPoint
 	{
 		float x, z, w, q;
+		uint8 lip = 0;   // a waterfall's lip (shapeFalls): the piece from here is the straight drop
+		uint8 gorge = 0; // in its plunge gorge (shapeFalls): the water lowered below the lip
 	};
 
 	// THE PATH SMOOTHING: a D8 path is long straight runs at 0 / 45 / 90 degrees with sharp kinks, which no corner cutting
@@ -435,6 +446,74 @@ namespace
 			if (k > 0)
 				p.w = glm::min(p.w, pts[k - 1].w);
 			p.w = glm::max(p.w, floor);
+		}
+	}
+
+	// THE WATERFALLS (the user, 2026-10-10: a straight drop, not a smooth slope), on the FINAL points (after the shaping and
+	// the simplify, which would spread a step again): a run of pieces steeper than "Fall slope", at most "Fall max length"
+	// px long, that drops at least "Fall min height" becomes a FALL at its TOP - the water keeps its level to the lip,
+	// drops there over c_fallLipPx to the run's lowest level and runs on at that level to the run's end. The carve cuts the
+	// stretch below the lip down to it: a plunge gorge cut back into the slope, as a real fall's. (At the BOTTOM the water
+	// would stand over the falling ground above it - the carve only lowers.) The lip's piece is that short, so the carve's
+	// per-piece blend steps down inside it and the water ribbon stands near vertical; the flags see its slope as a fall. A
+	// longer steep run stays sloped rapids: a fall there would carve a long canyon.
+	void shapeFalls(const oc::vector<ChainPoint>& in, const RiverUnitConfig& cfg, float nr, oc::vector<ChainPoint>& out)
+	{
+		// The lip's run (native px): more than the terrain mesh's vertex spacing (~2 m), so the ground's face under the
+		// drop - steeper, from the same top - stays behind the sheet (RiverTerrain::apply).
+		constexpr float c_fallLipPx = 0.6f;
+		out.clear();
+		const size_t n = in.size();
+		if (n == 0)
+			return;
+		const auto plan = [&](size_t a, size_t b) { return std::sqrt((in[b].x - in[a].x) * (in[b].x - in[a].x) + (in[b].z - in[a].z) * (in[b].z - in[a].z)); };
+		const auto steep = [&](size_t a)
+		{
+			const float d = plan(a, a + 1) * nr;
+			return d > 1e-3f && (in[a].w - in[a + 1].w) / d >= cfg.fallSlope;
+		};
+		out.push_back(in[0]);
+		size_t k = 0;
+		while (k + 1 < n)
+		{
+			size_t j = k;
+			float runPx = 0.0f;
+			while (j + 1 < n && steep(j))
+			{
+				runPx += plan(j, j + 1);
+				j++;
+			}
+			// The water cuts the gorge: its longest length scales with the discharge at the lip (a stream cuts none - its
+			// steep run must be all but a step already).
+			const float maxLen = cfg.fallMaxLength * oc::clamp(in[k].q / oc::max(cfg.fallFullQ, 1e-3f), 0.0f, 1.0f);
+			if (j > k && runPx <= maxLen && in[k].w - in[j].w >= cfg.fallMinHeight)
+			{
+				const ChainPoint& a = in[k];
+				const ChainPoint& b = in[k + 1];
+				const float len = plan(k, k + 1);
+				const float t = oc::min(c_fallLipPx, 0.5f * len) / oc::max(len, 1e-6f);
+				out.back().lip = 1;
+				// The gorge: the foot and the run's points, not its last (where the water is its own again).
+				out.push_back(ChainPoint{ a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t, in[j].w, a.q, 0, 1 });
+				for (size_t m = k + 1; m <= j; m++)
+				{
+					ChainPoint p = in[m];
+					p.w = in[j].w;
+					p.gorge = m < j ? 1 : 0;
+					out.push_back(p);
+				}
+				k = j;
+			}
+			else
+			{
+				// Not a fall: the WHOLE run stays sloped. (Stepping one point on, a long steep run's tail came under the
+				// max length and fell halfway down the slope - its gorge cut into the hillside, the fall buried in it and
+				// the water above it standing over the gorge's wall, 2026-10-10.)
+				const size_t to = oc::max(j, k + 1);
+				for (size_t m = k + 1; m <= to; m++)
+					out.push_back(in[m]);
+				k = to;
+			}
 		}
 	}
 
@@ -1021,7 +1100,7 @@ namespace Procedural
 		oc::vector<OpenEnd> openEnds; // perennial segments ending in a sink or running dry: the end lakes' candidates
 		oc::vector<int32> chain;
 		oc::vector<float> wUp, qChain;
-		oc::vector<ChainPoint> pts, simplified;
+		oc::vector<ChainPoint> pts, simplified, falls;
 		for (const int32 s : starts)
 		{
 			if (cancelled())
@@ -1199,6 +1278,11 @@ namespace Procedural
 			}
 			clampToGround(pts, cfg, g.elev, g.mask, W, end == ERiverEnd::Sea ? 0.0f : end == ERiverEnd::Lake ? d.lakes[d.lakeOf[last]].level : -FLT_MAX);
 			simplify(pts, 0.1f, 0.25f, simplified); // 0.1 px in plan, 0.25 model m in W
+			if (cfg.fallMinHeight > 0.0f && cfg.fallMaxLength > 0.0f)
+			{
+				shapeFalls(simplified, cfg, nr, falls);
+				simplified.swap(falls);
+			}
 
 			RiverSegment seg;
 			seg.first = (uint32)unit->points.size();
@@ -1215,6 +1299,10 @@ namespace Procedural
 				rp.q = cp.q;
 				rp.halfWidth = halfWidthOf(cp.q);
 				rp.depth = depthOf(cp.q);
+				if (cp.lip)
+					rp.flags |= RiverPoint_Lip;
+				if (cp.gorge)
+					rp.flags |= RiverPoint_Gorge;
 				if (k + 1 < simplified.size())
 				{
 					const ChainPoint& nx = simplified[k + 1];

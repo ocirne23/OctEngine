@@ -236,6 +236,9 @@ export struct TerrainSettings
 	float riverDepthC = 1.5f;          //                     depth = c * Q^0.4 (model m)
 	float riverRapidsSlope = 0.05f;    // water surface slope that marks rapids
 	float riverFallSlope = 0.3f;       // ... and a fall
+	float riverFallMinHeight = 12.0f;  // model m: a short steep run dropping this much becomes a waterfall at its top (0 = none)
+	float riverFallMaxLength = 15.0f;  // native px: the longest steep run that does (longer stays sloped rapids)
+	float riverFallFullQ = 10.0f;     // m3/s: from here up a river cuts the whole max length; below, x Q / this
 	float riverEdgeWall = 12.3f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
 	float riverPathSmoothing = 10.0f;  // native px: the Gaussian sigma a river's D8 path is smoothed with (0 = the raw staircase)
 	float riverMeanderAmplitude = 0.33f;   // the meanders' sideways swing, x the channel width (0 = off)
@@ -250,7 +253,10 @@ export struct TerrainSettings
 	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
 	float riverChannelDepthScale = 2.5f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
 	float riverChannelMinDepth = 0.2f;    // ... but at least this
-	float riverChannelWallSlope = 0.1f;   // the channel's sides (rise / run) down to a flat bed, whatever its depth
+	float riverGorgeWallSlope = 0.75f;
+	float riverWhitewaterDepth = 3.0f;   // the channel's depth x up to this on rapids and falls (1 = none)
+	float riverWhitewaterWiden = 2.0f;  // the channel's half-width x up to this there (the water ribbon is 1.2 x the channel)    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+	float riverChannelWallSlope = 0.1f;  // the channel's sides (rise / run) down to a flat bed, whatever its depth
 	float riverLakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
 	float riverLakeBedDeepenReach = 8.0f; // native px from the shore over which the deepening grows in
 	float riverLakeShore = 0.75f;         // native px past a lake's wet pixels its sand (and no grass) fades out over

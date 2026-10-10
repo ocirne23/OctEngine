@@ -41,6 +41,9 @@ export namespace Procedural
 		float depthC = 1.5f;
 		float rapidsSlope = 0.05f;
 		float fallSlope = 0.3f;
+		float fallMinHeight = 12.0f; // model m: a short steep run dropping this much becomes a waterfall at its top (0 = none)
+		float fallMaxLength = 15.0f; // native px: the longest steep run that does (longer stays sloped rapids)
+		float fallFullQ = 10.0f;    // m3/s: from here up the whole max length; below x Q / this (a stream cuts no gorge)
 		float edgeWall = 12.3f; // model m: water leaves through a non-crossing edge when every outlet climbs more
 		float pathSmoothing = 10.0f; // native px: the Gaussian sigma the D8 path is smoothed with along its length
 		float meanderAmplitude = 0.33f;  // x the channel width
@@ -70,6 +73,9 @@ export namespace Procedural
 		c.depthC = s.riverDepthC;
 		c.rapidsSlope = s.riverRapidsSlope;
 		c.fallSlope = s.riverFallSlope;
+		c.fallMinHeight = s.riverFallMinHeight;
+		c.fallMaxLength = s.riverFallMaxLength;
+		c.fallFullQ = s.riverFallFullQ;
 		c.edgeWall = s.riverEdgeWall;
 		c.pathSmoothing = s.riverPathSmoothing;
 		c.meanderAmplitude = s.riverMeanderAmplitude;
@@ -92,6 +98,8 @@ export namespace Procedural
 	{
 		RiverPoint_Rapids = 1 << 0,
 		RiverPoint_Fall = 1 << 1,
+		RiverPoint_Lip = 1 << 2, // a waterfall's lip (RiverUnits shapeFalls): its piece is the straight drop
+		RiverPoint_Gorge = 1 << 3, // in a waterfall's plunge gorge (the water lowered below the lip): narrow, steep walls
 	};
 
 	struct RiverPoint

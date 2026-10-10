@@ -296,6 +296,13 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Rivers", "Depth c", &s.riverDepthC, 0.05f, 10.0f, 0.01f);
 	Tweak::floatVar("Terrain/Rivers", "Rapids slope", &s.riverRapidsSlope, 0.0f, 1.0f, 0.005f);
 	Tweak::floatVar("Terrain/Rivers", "Fall slope", &s.riverFallSlope, 0.0f, 5.0f, 0.01f);
+	// WATERFALLS: a run steeper than "Fall slope", at most "Fall max length" native px long, dropping at least "Fall min
+	// height" model m, becomes a straight drop at its top; the carve cuts a plunge gorge below it. 0 = no waterfalls.
+	Tweak::floatVar("Terrain/Rivers", "Fall min height (m)", &s.riverFallMinHeight, 0.0f, 500.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Fall max length (px)", &s.riverFallMaxLength, 0.0f, 64.0f, 0.25f);
+	// The gorge scales with the water: a river of this Q or more cuts the whole max length, a smaller one Q / this of it
+	// (a small stream cuts no gorge).
+	Tweak::floatVar("Terrain/Rivers", "Fall full Q (m3/s)", &s.riverFallFullQ, 0.01f, 1000.0f, 0.5f);
 	// A unit's edge away from its crossings is a SOFT wall: higher = more water forced to a crossing (and deeper filled
 	// basins on the way), lower = more streams that end at the unit edge.
 	Tweak::floatVar("Terrain/Rivers", "Edge wall (m)", &s.riverEdgeWall, 0.0f, 500.0f, 1.0f);
@@ -325,6 +332,13 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// The channel's sides slope this steeply (rise / run) from the water's edge down to a FLAT bed, rounded at the foot:
 	// a deeper channel has the same sides, only longer (a narrow, deep one becomes a V of that slope).
 	Tweak::floatVar("Terrain/Rivers", "Channel wall slope", &s.riverChannelWallSlope, 0.1f, 10.0f, 0.05f);
+	// A waterfall's plunge gorge (RiverPoint_Gorge): past the channel's edge its walls rise at this (rise / run), with no
+	// floodplain - a narrow slot, not the wide valley carve; it fades back to the valley at the gorge's end.
+	Tweak::floatVar("Terrain/Rivers", "Gorge wall slope", &s.riverGorgeWallSlope, 0.1f, 20.0f, 0.05f);
+	// On rapids and falls (the piece's steepness, half "Rapids slope" to "Fall slope"; a plunge gorge in full) the channel
+	// is up to this much deeper / wider: room for the falling sheet and the waves (the water itself is unchanged).
+	Tweak::floatVar("Terrain/Rivers", "Whitewater channel depth", &s.riverWhitewaterDepth, 1.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Whitewater channel widen", &s.riverWhitewaterWiden, 1.0f, 3.0f, 0.01f);
 	// A lake's bed lowered by this much (model m) away from its shore, growing in over the reach (native px) as a
 	// smoothstep, so the ground at the waterline keeps its own slope.
 	Tweak::floatVar("Terrain/Rivers", "Lake bed deepen (m)", &s.riverLakeBedDeepen, 0.0f, 200.0f, 0.5f);
