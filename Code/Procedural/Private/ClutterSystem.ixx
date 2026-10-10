@@ -44,6 +44,7 @@ export namespace Procedural
 		struct Type
 		{
 			ClutterTypeDesc desc;
+			uint64 meshHash = 0; // the .clutter file's text (MeshCache's key, with the mesh resolution)
 			oc::vector<Renderer::ClutterMesh> meshes;
 		};
 		// What a floor map bake reads: a copy of the records under the map and what their types mean.

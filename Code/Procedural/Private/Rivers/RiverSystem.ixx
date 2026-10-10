@@ -39,6 +39,13 @@ export namespace Procedural
 		// Main thread, every enabled terrain frame (after beginFrame: it pushes the water nodes).
 		void update(Renderer& renderer, const Camera& camera);
 
+		// THE BUOYANCY'S WATER (the App folds it into PhysicsWorld::setWaterSurface with the ocean's): the river / lake
+		// surface world Y at (x, z) without waves - the inland water map's CPU copy (nearest texel, the calm carved surface in
+		// a channel, a lake's level), RIVER_WATER_MAP_DIM^2 texels round the camera; -FLT_MAX where there is none. A const
+		// read for the entity pass's workers: the copy is swapped on main in update, after that pass has joined.
+		float sampleWaterHeight(float x, float z) const;
+		bool hasWater() const { return !m_waterHeights.empty(); }
+
 		// A WHITEWATER point for the mist (Renderer::setRiverMistSources), unit-local engine m like the water mesh.
 		struct MistPoint
 		{
@@ -143,5 +150,7 @@ export namespace Procedural
 		glm::vec2 m_waterCentre{ 1.0e30f };
 		uint32 m_waterGeneration = 0;
 		bool m_waterMapSet = false;
+		oc::vector<float> m_waterHeights; // the last bake's heights (sampleWaterHeight; empty = none)
+		glm::vec2 m_waterOrigin{ 0.0f };
 	};
 }

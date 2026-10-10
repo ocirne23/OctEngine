@@ -92,6 +92,7 @@ export namespace Procedural
 		struct Type
 		{
 			RockTypeDesc desc;
+			uint64 meshHash = 0; // the .rock file's text (MeshCache's key, with the resolution and the variant seed)
 			oc::vector<Variant> variants;
 			// A WOOD type's material: its `Bark` species' bark texture x its tint (BC1 albedo + BC5 normal map), which the
 			// rock shader maps around the wood (RendererVK "The rock material", WOOD). Its job (kickGeneration) fills the

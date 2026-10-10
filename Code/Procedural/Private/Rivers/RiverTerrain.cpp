@@ -131,16 +131,24 @@ namespace Procedural
 			const float lo = 0.5f * m_unitCfg.rapidsSlope, hi = oc::max(m_unitCfg.fallSlope, lo + 1e-3f);
 			steep = oc::max(steep, smoothstep01((drop - lo) / (hi - lo)));
 		}
-		const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f) * (1.0f + (oc::max(m_carve.whitewaterWiden, 1.0f) - 1.0f) * steep);
+		// The widened part is a SHELF just under the waterline, not channel: cut at the channel's slope it lay BELOW the
+		// water and the ribbon's edge (1.2 x the river's own half-width) hung over it - the surface stood above the banks
+		// on every slope (2026-10-10). The deep cut keeps the river's own half-width; the bank starts past the shelf.
+		const float hwRiver = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
+		const float hw = hwRiver * (1.0f + (oc::max(m_carve.whitewaterWiden, 1.0f) - 1.0f) * steep);
 		const float D = oc::max(m_carve.channelDepth(unitD), 0.02f) * (1.0f + (oc::max(m_carve.whitewaterDepth, 1.0f) - 1.0f) * steep);
 		// The bank's rise is the HYDRAULIC depth's, not the channel's: "Channel depth scale" deepens the channel under the
 		// water only - scaling the bank too, over its fixed width, steepened it with every step.
 		const float floodH = m_carve.bankHeight * unitD;
 		const float edge = oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM);
 		const float floodW = oc::max(edge - hw, 1e-3f);
+		constexpr float c_shelfDepth = 0.05f; // x the hydraulic depth under the waterline (x the steepness: a calm reach has none)
+		const float shelf = c_shelfDepth * unitD * steep;
 		float target;
-		if (d < hw)
-			target = W - RiverCarveConfig::channelCut(hw - d, D, hw, oc::max(m_carve.wallSlope, 0.01f));
+		if (d < hwRiver)
+			target = W - oc::max(RiverCarveConfig::channelCut(hwRiver - d, D, hwRiver, oc::max(m_carve.wallSlope, 0.01f)), shelf);
+		else if (d < hw)
+			target = W - shelf;
 		else
 		{
 			if (d < edge)
@@ -650,8 +658,15 @@ namespace Procedural
 		const float hModel = (p.height - gc.seaLevel) / vs;
 		float carved = hModel;
 		float influence = 0.0f, speed = 0.0f;
+		// THE WATER HUMIDITY (V4's riparian boost; the user, 2026-10-10): the air is wetter near water - "Water humidity" at
+		// a perennial river's channel edge (x its size, up to "Water humidity full Q") or a lake's shore, fading out over
+		// "Water humidity spread" (engine m). Applied to the sampled climate only, after the rivers are built from the raw
+		// tiles: no cycle into their generation.
+		const float humiditySpreadM = oc::max(m_carve.waterHumiditySpread, 1.0f) * nr / gc.metersPerPixel; // model m
+		float waterHumidity = 0.0f;
 		float bestRatio = 2.0f; // inside a channel when < 1
 		float bestW = 0.0f, bestAngle = -1.0f;
+		float bestUnitW = 0.0f; // the nearest channel's unit level (model m): under the sea's in the sea channel
 		bool bestDry = false;
 
 		const int32 ui0 = floorDivI((int32)std::floor(gz - (double)m_reachPx), m_unitPx);
@@ -729,6 +744,11 @@ namespace Procedural
 					const float d = std::sqrt(px * px + pz * pz) * nr; // model m
 					const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
 					const float q = a.q + (c.q - a.q) * t;
+					if (!u.segments[ks].ephemeral && m_carve.waterHumidity > 0.0f)
+					{
+						const float size = smoothstep01(q / oc::max(m_carve.waterHumidityFullQ, 1e-3f));
+						waterHumidity = oc::max(waterHumidity, size * (1.0f - smoothstep01(oc::max(d - hw, 0.0f) / humiditySpreadM)));
+					}
 					if (d >= pieceReach(hw, q))
 						continue;
 					{
@@ -793,6 +813,7 @@ namespace Procedural
 					if (ratio < bestRatio)
 					{
 						bestRatio = ratio;
+						bestUnitW = a.water + (c.water - a.water) * t;
 						bestW = m_carve.surface(a.water + (c.water - a.water) * t, oc::max(a.depth + (c.depth - a.depth) * t, 0.02f), q);
 						bestDry = u.segments[pu->pointSegment[k]].ephemeral != 0;
 						float ang = std::atan2(abz, abx) * (0.5f / 3.14159265f);
@@ -810,7 +831,7 @@ namespace Procedural
 			p.flowAngle01 = bestAngle;
 			if (bestDry)
 				p.dryBed = 1;
-			else
+			else if (bestUnitW >= 0.0f) // the sea channel (RiverUnits) is the ocean's water, not the river's
 			{
 				p.waterKind = ETerrainWater::River;
 				p.inlandWater = gc.seaLevel + bestW * vs;
@@ -904,10 +925,12 @@ namespace Procedural
 			// The LAKE'S INFLUENCE (`river`): 1 over its wet pixels, fading to 0 within "Lake shore (px)" of them - the
 			// bed's beach texture and the shoreline's, no grass or clutter under the water (they read `river` like a river's).
 			// The same search finds the nearest lake for THE RIM GUARD (below).
+			// The same search finds the shore for THE WATER HUMIDITY (out to "Water humidity spread").
 			constexpr int32 c_rimPx = 3;
 			const float shorePx = oc::max(m_carve.lakeShore, 0.1f);
+			const float humiditySpreadPx = m_carve.waterHumidity > 0.0f ? humiditySpreadM / nr : 0.0f;
 			const float fx = (float)(gx - (double)uj * (double)m_unitPx), fz = (float)(gz - (double)ui * (double)m_unitPx);
-			const int32 reach = oc::max((int32)std::ceil(shorePx + 0.5f), c_rimPx);
+			const int32 reach = oc::max(oc::max((int32)std::ceil(shorePx + 0.5f), c_rimPx), (int32)std::ceil(humiditySpreadPx));
 			float best2 = FLT_MAX, nearLevel = 0.0f;
 			for (int32 r = oc::max(row - reach, 0); r <= oc::min(row + reach, m_unitPx - 1); r++)
 				for (uint32 n = pu->rowRuns[r]; n < pu->rowRuns[r + 1]; n++)
@@ -924,7 +947,11 @@ namespace Procedural
 					}
 				}
 			if (best2 < FLT_MAX)
+			{
 				p.river = oc::max(p.river, oc::clamp(1.0f - (std::sqrt(best2) - 0.5f) / shorePx, 0.0f, 1.0f));
+				if (humiditySpreadPx > 0.0f)
+					waterHumidity = oc::max(waterHumidity, 1.0f - smoothstep01(oc::max(std::sqrt(best2) - 0.5f, 0.0f) / humiditySpreadPx));
+			}
 
 			// THE RIM GUARD: the river carve knows nothing of lakes - an outlet's floodplain and valley wall cut the
 			// rim away, and the lake's sheet stood in the air past the ground (2026-10-09). Beside a lake (not on its
@@ -932,7 +959,7 @@ namespace Procedural
 			// the lake's level + c_rimClearM at the shore pixel, that floor falling at "Valley slope" farther out -
 			// never above the uncarved ground.
 			constexpr float c_rimClearM = 0.1f; // model m
-			if (!inLake && bestRatio >= 1.0f && best2 < FLT_MAX)
+			if (!inLake && bestRatio >= 1.0f && best2 <= (float)(c_rimPx * c_rimPx))
 			{
 				const float distPx = oc::max(std::sqrt(best2) - 1.0f, 0.0f);
 				const float floorM = nearLevel + c_rimClearM - oc::max(m_carve.valleySlope, 0.0f) * distPx * nr;
@@ -941,6 +968,8 @@ namespace Procedural
 		}
 		if (p.waterKind == ETerrainWater::None && p.height < gc.seaLevel)
 			p.waterKind = ETerrainWater::Sea;
+		if (waterHumidity > 0.0f)
+			p.humidity += (1.0f - p.humidity) * oc::clamp(m_carve.waterHumidity, 0.0f, 1.0f) * waterHumidity;
 	}
 
 	float RiverTerrain::influence(const Block& b, double worldX, double worldZ) const
@@ -990,8 +1019,10 @@ namespace Procedural
 		return best;
 	}
 
-	float RiverTerrain::inlandWater(const Block& b, double worldX, double worldZ, float none) const
+	float RiverTerrain::inlandWater(const Block& b, double worldX, double worldZ, float none, bool* river) const
 	{
+		if (river)
+			*river = false;
 		const TerrainConfigV3& gc = m_base->config();
 		const double inv = 1.0 / (double)gc.metersPerPixel;
 		const double gx = (worldX + (double)gc.originX) * inv;
@@ -1041,7 +1072,11 @@ namespace Procedural
 				}
 			}
 		if (bestRatio < 1.0f)
+		{
+			if (river)
+				*river = true;
 			return water;
+		}
 
 		// A lake's wet pixel under the point (nearest native pixel), as apply's.
 		const int32 ui = floorDivI((int32)std::floor(gz), m_unitPx), uj = floorDivI((int32)std::floor(gx), m_unitPx);
@@ -1076,7 +1111,20 @@ namespace Procedural
 		{
 			const double wz = originZ + step * (double)j;
 			for (uint32 i = 0; i < resX; i++)
-				out[(size_t)j * resX + i] = inlandWater(b, originX + step * (double)i, wz, none);
+			{
+				// THE KIND in the height's lowest mantissa bit (1 = a river channel, 0 = a lake; one float step - the
+				// fog's "River underwater scale" reads it, vol_scatter.cs.glsl).
+				bool river = false;
+				float h = inlandWater(b, originX + step * (double)i, wz, none, &river);
+				if (h != none)
+				{
+					uint32 bits;
+					memcpy(&bits, &h, sizeof(bits));
+					bits = (bits & ~1u) | (river ? 1u : 0u);
+					memcpy(&h, &bits, sizeof(bits));
+				}
+				out[(size_t)j * resX + i] = h;
+			}
 			Globals::jobSystem.preemptionPoint();
 		}
 	}

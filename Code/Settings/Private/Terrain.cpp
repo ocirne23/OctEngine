@@ -270,7 +270,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::intVar("Terrain/Rivers", "Coarse domain (tiles)", &s.riverCoarseDomain, 0, 4, 1.0f); // 2 = 982 km model margin
 	Tweak::floatVar("Terrain/Rivers", "Sea depth (m)", &s.riverSeaDepth, 0.0f, 500.0f, 1.0f);
 	Tweak::floatVar("Terrain/Rivers", "Evaporation per C (mm/yr)", &s.riverPetPerC, 0.0f, 150.0f, 1.0f);
-	Tweak::floatVar("Terrain/Rivers", "Budyko w", &s.riverBudykoW, 1.1f, 6.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers", "Evaporation curve", &s.riverBudykoW, 1.1f, 6.0f, 0.05f); // higher = more of the rain evaporates
 	Tweak::floatVar("Terrain/Rivers", "Lake evaporation", &s.riverLakeEvap, 0.0f, 3.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Dry channel loss", &s.riverLoss, 0.0f, 0.05f, 0.0005f);
 	Tweak::floatVar("Terrain/Rivers", "Breach depth (m)", &s.riverBreachDepth, 0.0f, 1000.0f, 5.0f);
@@ -303,6 +303,11 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// The gorge scales with the water: a river of this Q or more cuts the whole max length, a smaller one Q / this of it
 	// (a small stream cuts no gorge).
 	Tweak::floatVar("Terrain/Rivers", "Fall full Q (m3/s)", &s.riverFallFullQ, 0.01f, 1000.0f, 0.5f);
+	// THE SEA CHANNEL: a river reaching the sea runs on down the steepest way until the sea floor is "Sea channel depth"
+	// model m deep (at most "Sea channel max length" native px), its channel carved out to deep water - on a coastal flat
+	// at about 0 it stopped at the waterline. 0 = off.
+	Tweak::floatVar("Terrain/Rivers", "Sea channel depth (m)", &s.riverSeaChannelDepth, 0.0f, 500.0f, 1.0f);
+	Tweak::floatVar("Terrain/Rivers", "Sea channel max length (px)", &s.riverSeaChannelMaxLength, 0.0f, 1000.0f, 5.0f);
 	// A unit's edge away from its crossings is a SOFT wall: higher = more water forced to a crossing (and deeper filled
 	// basins on the way), lower = more streams that end at the unit edge.
 	Tweak::floatVar("Terrain/Rivers", "Edge wall (m)", &s.riverEdgeWall, 0.0f, 500.0f, 1.0f);
@@ -339,6 +344,13 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// is up to this much deeper / wider: room for the falling sheet and the waves (the water itself is unchanged).
 	Tweak::floatVar("Terrain/Rivers", "Whitewater channel depth", &s.riverWhitewaterDepth, 1.0f, 10.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers", "Whitewater channel widen", &s.riverWhitewaterWiden, 1.0f, 3.0f, 0.01f);
+	// THE WATER HUMIDITY: near a perennial river (x its size up to "Water humidity full Q") or a lake the humidity is
+	// pulled toward 1 by "Water humidity", fading out over "Water humidity spread" (engine m) from the water's edge.
+	// Sampled climate only (biomes, textures, trees, rocks, clutter, grass) - the rivers are built from the raw tiles, so
+	// no cycle.
+	Tweak::floatVar("Terrain/Rivers", "Water humidity", &s.riverWaterHumidity, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers", "Water humidity spread (m)", &s.riverWaterHumiditySpread, 1.0f, 1000.0f, 5.0f);
+	Tweak::floatVar("Terrain/Rivers", "Water humidity full Q (m3/s)", &s.riverWaterHumidityFullQ, 0.01f, 1000.0f, 0.5f);
 	// A lake's bed lowered by this much (model m) away from its shore, growing in over the reach (native px) as a
 	// smoothstep, so the ground at the waterline keeps its own slope.
 	Tweak::floatVar("Terrain/Rivers", "Lake bed deepen (m)", &s.riverLakeBedDeepen, 0.0f, 200.0f, 0.5f);

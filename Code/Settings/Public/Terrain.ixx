@@ -57,8 +57,8 @@ export struct TerrainSettings
 	bool  v3LoadModels = false; // off = the terrain runs on the existing .tile cache only (no weights loaded)
 	int   seed = 516121;
 	// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z).
-	float originX = -21064.0f;
-	float originZ = 63673.0f;
+	float originX = -132221.9f;
+	float originZ = 64346.4f;
 	int   chunkSize = 256;
 	int   lod0Res = 128;
 	int   ringRadius = 128;    // max generation range from the camera chunk, in chunks
@@ -238,7 +238,9 @@ export struct TerrainSettings
 	float riverFallSlope = 0.3f;       // ... and a fall
 	float riverFallMinHeight = 12.0f;  // model m: a short steep run dropping this much becomes a waterfall at its top (0 = none)
 	float riverFallMaxLength = 15.0f;  // native px: the longest steep run that does (longer stays sloped rapids)
-	float riverFallFullQ = 10.0f;     // m3/s: from here up a river cuts the whole max length; below, x Q / this
+	float riverSeaChannelDepth = 60.0f;     // model m (~10 engine m at mpp 5): a river runs on into the sea until the floor is this deep (0 = off)
+	float riverSeaChannelMaxLength = 200.0f; // native px: ... at most this far past its mouth
+	float riverFallFullQ = 10.0f;    // m3/s: from here up a river cuts the whole max length; below, x Q / this
 	float riverEdgeWall = 12.3f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
 	float riverPathSmoothing = 10.0f;  // native px: the Gaussian sigma a river's D8 path is smoothed with (0 = the raw staircase)
 	float riverMeanderAmplitude = 0.33f;   // the meanders' sideways swing, x the channel width (0 = off)
@@ -253,9 +255,12 @@ export struct TerrainSettings
 	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
 	float riverChannelDepthScale = 2.5f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
 	float riverChannelMinDepth = 0.2f;    // ... but at least this
-	float riverGorgeWallSlope = 0.75f;
-	float riverWhitewaterDepth = 3.0f;   // the channel's depth x up to this on rapids and falls (1 = none)
-	float riverWhitewaterWiden = 2.0f;  // the channel's half-width x up to this there (the water ribbon is 1.2 x the channel)    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+	float riverGorgeWallSlope = 0.75f;    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+	float riverWhitewaterDepth = 3.0f;    // the channel's depth x up to this on rapids and falls (1 = none)
+	float riverWhitewaterWiden = 2.0f;    // the channel's half-width x up to this there (a shelf at the waterline; the water ribbon is 1.2 x the channel)
+	float riverWaterHumidity = 0.35f;     // the humidity pulled toward 1 by this at a river's edge / a lake's shore (0 = off)
+	float riverWaterHumiditySpread = 150.0f; // engine m it fades out over
+	float riverWaterHumidityFullQ = 5.0f; // m3/s: a river this big gets it whole, a smaller one less
 	float riverChannelWallSlope = 0.1f;  // the channel's sides (rise / run) down to a flat bed, whatever its depth
 	float riverLakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
 	float riverLakeBedDeepenReach = 8.0f; // native px from the shore over which the deepening grows in

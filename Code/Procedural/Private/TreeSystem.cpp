@@ -22,6 +22,7 @@ import :TerrainSampler;
 import :TerrainStreamer;
 import :RockSystem;
 import :RockGenerator; // ROCK_DENSITY_RES
+import :MeshCache;
 
 namespace
 {
@@ -223,7 +224,10 @@ namespace Procedural
 		m_expandContext = nullptr;
 		// Without world mode the far volume has no record types (it ignores the records).
 		if (m_recordTypesSet)
+		{
+			m_world.joinPool(); // the pool job writes the same record pool
 			Globals::rendererVK.setTreeRecordTypes({}, 256.0f, 1, UINT32_MAX);
+		}
 		m_recordTypesSet = false;
 		// Unhook from the terrain first: setVegetation joins its walk, the last caller of the sink.
 		if (m_vegHooked)
@@ -458,7 +462,36 @@ namespace Procedural
 
 			Species& species = m_species.emplace_back();
 			species.desc = oc::move(desc);
-			generateTreeLibrary(species.desc, species.library);
+			const oc::string& name = species.desc.name.empty() ? entry.name : species.desc.name;
+
+			// THE MESH CACHE (MeshCache): the library, the baked variants and their far-volume grids, keyed by the species
+			// file's text. A miss generates them and writes the file.
+			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f; // cluster cards ~half opaque
+			oc::vector<TreeDensityGrid> density;
+			{
+				const FileSystem::AllowMainThreadIO allowIo; // explicit user action: enable / reload
+				const uint64 meshHash = meshCacheMix(meshCacheHash(FileSystem::readFileStr(entry.path)), TREE_DENSITY_RES);
+				const oc::string meshPath = oc::format("{}/{}.treemesh", TREE_MESH_DIR, name);
+				if (!loadTreeMeshes(meshPath, meshHash, species.library, species.variants, density))
+				{
+					species.library = {};
+					generateTreeLibrary(species.desc, species.library);
+					species.variants.clear();
+					species.variants.resize((size_t)species.desc.variantCount);
+					for (int v = 0; v < species.desc.variantCount; ++v)
+						bakeTreeVariant(species.desc, species.library, treeHash(species.desc.seed, 5000u + (uint32)v), species.variants[(size_t)v]);
+					// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline).
+					density.resize(species.variants.size());
+					for (size_t v = 0; v < species.variants.size(); ++v)
+					{
+						TreeBillboardBox box;
+						bakeTreeDensity(species.variants[v], TREE_DENSITY_RES, leafCoverage, density[v].values, box);
+						density[v].min = box.min;
+						density[v].max = box.max;
+					}
+					saveTreeMeshes(meshPath, meshHash, species.library, species.variants, density);
+				}
+			}
 
 			size_t barkTris[TREE_PIECE_LODS] = {}, leafTris[TREE_PIECE_LODS] = {};
 			// RT sees the MESHES only without billboards (Far mode None: the meshes stand in for the tree in
@@ -486,22 +519,14 @@ namespace Procedural
 			uploadPieces(species.library.trunks, species.trunkMeshes);
 			uploadPieces(species.library.modules, species.moduleMeshes);
 			// The baked whole trees the grove places (counted into the same triangle totals).
-			species.variants.resize((size_t)species.desc.variantCount);
-			for (int v = 0; v < species.desc.variantCount; ++v)
-				bakeTreeVariant(species.desc, species.library, treeHash(species.desc.seed, 5000u + (uint32)v), species.variants[(size_t)v]);
 			uploadPieces(species.variants, species.variantMeshes);
-			// The far-tree volume's view of every baked tree (RendererVK TreeVolumePipeline). Cluster cards are about
-			// half opaque; a single leaf diamond fully.
-			const float leafCoverage = species.desc.leafType == ETreeLeafType::Cluster ? 0.5f : 1.0f;
 			for (size_t v = 0; v < species.variants.size(); ++v)
 			{
 				PieceMeshes& meshes = species.variantMeshes[v];
-				TreeBillboardBox box;
-				bakeTreeDensity(species.variants[v], TREE_DENSITY_RES, leafCoverage, meshes.density, box);
-				meshes.densityMin = box.min;
-				meshes.densityMax = box.max;
+				meshes.density = oc::move(density[v].values);
+				meshes.densityMin = density[v].min;
+				meshes.densityMax = density[v].max;
 			}
-			const oc::string& name = species.desc.name.empty() ? entry.name : species.desc.name;
 			// Level-0 images, kept for the billboard bake.
 			oc::vector<uint8> barkAlbedo, leafImage;
 			uint32 barkSize = 0, leafSize = 0;
@@ -1326,6 +1351,7 @@ namespace Procedural
 		if (clipped)
 			Log::warning(oc::format("Trees: a species has more than {} variants or a tree more than {} bush species - the far volume's "
 				"records then pick differently from the meshes", TREE_RECORD_MAX_VARIANTS, TREE_RECORD_MAX_BUSHES));
+		m_world.joinPool(); // the pool job writes the same record pool
 		renderer.setTreeRecordTypes(recordTypes, context->chunkSize, context->worldSeed, m_treeSet);
 		m_recordTypesSet = true;
 		renderer.bindTreeInstanceSet(m_treeSet);

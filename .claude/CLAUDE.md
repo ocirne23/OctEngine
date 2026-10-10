@@ -263,6 +263,8 @@ any boundary that meets an `oc::` type, not just a convention. Crossing delibera
 
 * No new/delete, only memory-safe types. Raw pointers are non-owning.
 * Minimal comments — only where intent is genuinely hard to communicate.
+* **Tweak names say what the knob does, never whose name the model carries** ("Evaporation curve", not "Budyko w";
+  "Haze scattering", not "Mie"). The scientist's name may go in a code comment. Exception: "Fresnel".
 * Prioritize performance.
 * `int8` / `uint64`-style typedefs from `Core`; glm through `Core.glm`; `assert` compiled out in
   non-debug through `forceinclude.h`.
@@ -511,6 +513,7 @@ Checked-in inputs for repeatable runs:
 
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
-generated tree textures and far bakes), `TerrainTex/`
+generated tree textures and far bakes), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/` (the generated meshes -
+"The generated-mesh cache" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)), `TerrainTex/`
 splats, the `Diffusion/<seed>/` tile cache, `imgui.ini` (the editor layout),
 `gamesave.txt` and `profile.txt`.

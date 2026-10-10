@@ -96,6 +96,10 @@ export namespace Procedural
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
 		// consumers holding the old shared_ptr keep a coherent snapshot.
 		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
+		// The rivers' and lakes' calm water surface world Y round the camera, -FLT_MAX where none (RiverSystem's
+		// sampleWaterHeight): the App folds it into the buoyancy with the ocean's. Worker-safe on the entity pass.
+		float sampleInlandWaterHeight(float x, float z) const { return m_rivers.sampleWaterHeight(x, z); }
+		bool hasInlandWater() const { return m_rivers.hasWater(); }
 
 		// How far the ring around the camera has streamed in - the lobby's "seeding the world" bar. Main
 		// thread (it reads the residency sets). `settled` is the whole ring resident, the terrain-data map

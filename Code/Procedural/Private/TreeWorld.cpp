@@ -104,6 +104,7 @@ namespace Procedural
 {
 	TreeWorld::~TreeWorld()
 	{
+		joinUpdate();
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_requests.clear(); // starve the pumps: they exit once the queue is empty
@@ -258,6 +259,8 @@ namespace Procedural
 		m_chunks.clear();
 		m_inFlight.clear();
 		m_uploadQueue.clear();
+		m_pendingRemoves.clear(); // the reset dropped every handle
+		m_pendingUploads.clear();
 		m_numRecords = 0;
 		m_cpuRecords = 0;
 		m_poolRefusedLogged = 0;
@@ -294,6 +297,9 @@ namespace Procedural
 
 	void TreeWorld::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
+		joinUpdate(); // last frame's bookkeeping job: from here to kickUpdate main owns the chunks
+		joinPool();   // normally joined before last frame's present already
+		m_updateReady = false;
 		if (m_settings.logStats)
 		{
 			m_settings.logStats = false;
@@ -309,11 +315,10 @@ namespace Procedural
 			m_lastMaps = nullptr;
 			return;
 		}
-		ProfileScope profileScope("TreeWorld", EProfileCategory::Procedural);
-
-		// Anything the records are a function of: a new generation.
+		// Anything the records are a function of: a new generation (rare: on main, it resets the pool).
 		if (!m_speciesLoaded || m_settings.reloadSpecies)
 		{
+			ProfileScope profileScope("TreeWorld load species", EProfileCategory::Procedural);
 			m_settings.reloadSpecies = false;
 			loadSpecies();
 			m_configDirty = true;
@@ -325,6 +330,7 @@ namespace Procedural
 		if (m_configDirty || !m_config || maps.get() != m_lastMaps || chunkSize != m_chunkSize || ringR != m_configRingR
 			|| bounded != m_bounded || (bounded && (boundsMin != m_boundsMin || boundsMax != m_boundsMax)))
 		{
+			ProfileScope profileScope("TreeWorld restart", EProfileCategory::Procedural);
 			m_configDirty = false;
 			m_configRingR = ringR;
 			m_lastMaps = maps.get();
@@ -335,8 +341,55 @@ namespace Procedural
 			restart(renderer, maps);
 		}
 
-		// The finished chunks (a dropped or old-generation one only releases its key). A chunk that exists already came
-		// back for its CPU records (it re-entered the keep radius): the same records, nothing to upload.
+		// The record pool's side of what the last bookkeeping job decided, on the POOL JOB (joined before present), then
+		// this frame's bookkeeping inputs.
+		m_renderer = &renderer;
+		Globals::jobSystem.submit([this]
+		{
+			applyGpu(*m_renderer);
+			m_renderer->updateTreeRecords();
+		}, { "TreeWorld pool", EProfileCategory::Procedural }, EJobPriority::Normal, &m_poolCounter);
+		m_jobCam = glm::ivec2((int32)std::floor(camera.position.x / chunkSize), (int32)std::floor(camera.position.z / chunkSize));
+		m_jobRingR = ringR;
+		m_jobKeepRadius = glm::max(m_settings.keepRadius, m_minKeepRadius);
+		m_jobUploadBudget = (size_t)glm::max(m_settings.uploadKB, 1) * 1024;
+		m_updateReady = true;
+	}
+
+	void TreeWorld::kickUpdate()
+	{
+		if (!m_updateReady)
+			return;
+		m_updateReady = false;
+		joinPool(); // it reads the chunks this job changes (normally long done: kicked at update)
+		Globals::jobSystem.submit([this]
+		{
+			finishUploads();
+			mergeResults();
+			if (m_jobCam != m_ringCam || m_jobRingR != m_ringR)
+			{
+				m_ringCam = m_jobCam;
+				m_ringR = m_jobRingR;
+				rescanRing();
+			}
+			pickUploads();
+		}, { "TreeWorld update", EProfileCategory::Procedural }, EJobPriority::Normal, &m_updateCounter);
+	}
+
+	void TreeWorld::joinUpdate()
+	{
+		Globals::jobSystem.wait(m_updateCounter); // main helps; a no-op once the job is done
+	}
+
+	void TreeWorld::joinPool()
+	{
+		Globals::jobSystem.wait(m_poolCounter);
+	}
+
+	// The finished chunks (a dropped or old-generation one only releases its key). A chunk that exists already came
+	// back for its CPU records (it re-entered the keep radius): the same records, nothing to upload. The job.
+	void TreeWorld::mergeResults()
+	{
 		oc::vector<Result> results;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
@@ -369,21 +422,11 @@ namespace Procedural
 			m_cpuRecords += chunk.count;
 			m_uploadQueue.push_back(key);
 		}
-
-		const glm::ivec2 cam((int32)std::floor(camera.position.x / chunkSize), (int32)std::floor(camera.position.z / chunkSize));
-		if (cam != m_ringCam || ringR != m_ringR)
-		{
-			m_ringCam = cam;
-			m_ringR = ringR;
-			rescanRing(renderer);
-		}
-		uploadChunks(renderer);
-		renderer.updateTreeRecords();
 	}
 
 	bool TreeWorld::insideKeepRadius(glm::ivec2 coord) const
 	{
-		return chebyshev(coord, m_ringCam) <= glm::max(m_settings.keepRadius, m_minKeepRadius);
+		return chebyshev(coord, m_ringCam) <= m_jobKeepRadius;
 	}
 
 	const oc::vector<TreeRecord>* TreeWorld::cpuRecords(glm::ivec2 coord) const
@@ -399,11 +442,26 @@ namespace Procedural
 		chunk.hasCpu = false;
 	}
 
-	// The generated chunks to the GPU pool, within "Upload KB per frame". Uploaded chunks outside the keep radius drop
-	// their CPU records.
-	void TreeWorld::uploadChunks(Renderer& renderer)
+	// The bookkeeping job, first: the chunks the pool job added since drop their ground; outside the keep radius their CPU
+	// records too.
+	void TreeWorld::finishUploads()
 	{
-		size_t budget = (size_t)glm::max(m_settings.uploadKB, 1) * 1024;
+		for (const uint64 key : m_pendingUploads)
+		{
+			const auto it = m_chunks.find(key);
+			if (it == m_chunks.end())
+				continue;
+			it->second.ground = {};
+			if (!insideKeepRadius(chunkCoord(key)))
+				dropCpu(it->second);
+		}
+		m_pendingUploads.clear();
+	}
+
+	// The job: the next generated chunks for the GPU pool, within "Upload KB per frame" (the pool job adds them next frame).
+	void TreeWorld::pickUploads()
+	{
+		size_t budget = m_jobUploadBudget;
 		while (!m_uploadQueue.empty() && budget > 0)
 		{
 			const uint64 key = m_uploadQueue.front();
@@ -413,13 +471,28 @@ namespace Procedural
 				continue;
 			Chunk& chunk = it->second;
 			chunk.uploaded = true;
+			m_pendingUploads.push_back(key);
+			budget -= glm::min(budget, chunk.records.size() * sizeof(TreeRecord) + chunk.ground.size() * sizeof(uint32));
+		}
+	}
+
+	// The POOL JOB: the record pool's side of the last bookkeeping job - the chunks that left the ring out, the picked
+	// ones in. It writes Chunk::gpu ONLY (the records stay readable beside it: TreeSystem's and the clutter's
+	// cpuRecords); the next bookkeeping job drops the uploaded chunks' ground (finishUploads).
+	void TreeWorld::applyGpu(Renderer& renderer)
+	{
+		for (const uint32 handle : m_pendingRemoves)
+			renderer.removeTreeRecordChunk(handle);
+		m_pendingRemoves.clear();
+		for (const uint64 key : m_pendingUploads)
+		{
+			const auto it = m_chunks.find(key);
+			if (it == m_chunks.end() || it->second.gpu != UINT32_MAX)
+				continue; // left the ring since the pick, or added already (finishUploads has not run yet)
+			Chunk& chunk = it->second;
 			// Every chunk, also without trees: its ground serves its neighbours' trees and columns.
 			chunk.gpu = renderer.addTreeRecordChunk(chunkCoord(key), chunk.ground,
 				oc::span<const uint32>((const uint32*)chunk.records.data(), chunk.records.size()));
-			budget -= glm::min(budget, chunk.records.size() * sizeof(TreeRecord) + chunk.ground.size() * sizeof(uint32));
-			chunk.ground = {};
-			if (!insideKeepRadius(chunkCoord(key)))
-				dropCpu(chunk);
 		}
 		const uint32 refused = renderer.treeRecordStats().refused;
 		if (refused > m_poolRefusedLogged)
@@ -432,8 +505,8 @@ namespace Procedural
 
 	// The ring moved: drop the chunks that left it (one chunk of hysteresis), keep CPU records inside the keep radius only
 	// (re-requesting the uploaded chunks that come back into it), request the missing chunks, and re-sort the whole queue
-	// nearest first (the pumps take from the front).
-	void TreeWorld::rescanRing(Renderer& renderer)
+	// nearest first (the pumps take from the front). The job: the pool removes go to main (m_pendingRemoves).
+	void TreeWorld::rescanRing()
 	{
 		const int R = m_ringR;
 		oc::vector<Request> missing;
@@ -444,7 +517,7 @@ namespace Procedural
 			if (chebyshev(coord, m_ringCam) > R + 1)
 			{
 				if (chunk.gpu != UINT32_MAX)
-					renderer.removeTreeRecordChunk(chunk.gpu);
+					m_pendingRemoves.push_back(chunk.gpu);
 				m_numRecords -= chunk.count;
 				m_cpuRecords -= chunk.records.size();
 				it = m_chunks.erase(it);

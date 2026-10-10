@@ -29,6 +29,9 @@ namespace
 	// out to where a resident cell can reach.
 	constexpr float c_nearCell = 64.0f;
 
+	// The unit level (model m) under which a river point is the sea channel's (RiverUnits): no ribbon there.
+	constexpr float c_seaChannelCut = -0.5f;
+
 	// One point of a segment's water, in ENGINE metres relative to its unit's origin (y above sea level).
 	struct WaterPoint
 	{
@@ -56,6 +59,9 @@ namespace
 		for (uint32 k = 0; k < seg.count; k++)
 		{
 			const RiverPoint& p = u.points[seg.first + k];
+			// THE SEA CHANNEL (RiverUnits): past the mouth the level falls below the sea's - the ocean is the water there.
+			if (k > 1 && p.water < c_seaChannelCut)
+				break;
 			const RiverPoint& a = u.points[seg.first + (k > 0 ? k - 1 : k)];
 			const RiverPoint& b = u.points[seg.first + (k + 1 < seg.count ? k + 1 : k)];
 			WaterPoint w;
@@ -471,6 +477,19 @@ namespace Procedural
 		Globals::jobSystem.wait(m_waterCounter);
 	}
 
+	float RiverSystem::sampleWaterHeight(float x, float z) const
+	{
+		using namespace RendererVKLayout;
+		if (m_waterHeights.empty())
+			return -FLT_MAX;
+		const int32 tx = (int32)std::floor((x - m_waterOrigin.x) / RIVER_WATER_MAP_TEXEL);
+		const int32 tz = (int32)std::floor((z - m_waterOrigin.y) / RIVER_WATER_MAP_TEXEL);
+		if (tx < 0 || tz < 0 || tx >= (int32)RIVER_WATER_MAP_DIM || tz >= (int32)RIVER_WATER_MAP_DIM)
+			return -FLT_MAX;
+		const float h = m_waterHeights[(size_t)tz * RIVER_WATER_MAP_DIM + (size_t)tx];
+		return h > 0.5f * RIVER_WATER_NONE ? h : -FLT_MAX;
+	}
+
 	void RiverSystem::updateWaterMap(Renderer& renderer, glm::vec2 camera)
 	{
 		using namespace RendererVKLayout;
@@ -485,6 +504,9 @@ namespace Procedural
 				m_waterMapSet = true;
 				m_waterCentre = job->centre;
 				m_waterGeneration = job->generation;
+				// The buoyancy's copy (sampleWaterHeight): swapped here on main, after the entity pass has joined.
+				m_waterHeights = oc::move(job->heights);
+				m_waterOrigin = job->origin;
 			}
 		}
 		const glm::vec2 centre = glm::floor(camera / c_waterMapMove) * c_waterMapMove;
@@ -784,6 +806,7 @@ namespace Procedural
 		{
 			renderer.setRiverWaterMap(glm::vec2(0.0f), {});
 			m_waterMapSet = false;
+			m_waterHeights.clear();
 		}
 		if (!m_terrain || !surface)
 			updateMist(renderer, glm::vec2(0.0f), true);
@@ -884,6 +907,7 @@ namespace Procedural
 			{
 				renderer.setRiverWaterMap(glm::vec2(0.0f), {});
 				m_waterMapSet = false;
+				m_waterHeights.clear();
 				m_waterCentre = glm::vec2(1.0e30f);
 			}
 		}

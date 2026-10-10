@@ -73,8 +73,19 @@ export namespace Procedural
 		TreeWorld& operator=(const TreeWorld&) = delete;
 
 		void initialize(); // attaches the "Trees/World" listeners
-		// Main thread, every frame (also with the tree preview off): the ring, the requests, the finished chunks.
+		// Main thread, every frame (also with the tree preview off): joins the last BOOKKEEPING JOB, then the config, the
+		// restart and the renderer side (the record pool's adds / removes the job queued, updateTreeRecords).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
+		// Kicks the bookkeeping job (the finished chunks, the ring rescan, the next upload batch): main.cpp calls it after
+		// the LAST reader of the records this frame (the clutter), and the next update joins it - so nothing reads the
+		// chunks while it runs.
+		void kickUpdate();
+		void joinUpdate();
+		// The POOL JOB ("TreeWorld pool": the record pool's removes / adds the bookkeeping job queued, then
+		// updateTreeRecords), kicked by update. The pool is read by Renderer::present (the far volume) and written by
+		// setTreeRecordTypes: main.cpp joins it before present, TreeSystem before setTreeRecordTypes, kickUpdate before
+		// its job.
+		void joinPool();
 
 		bool enabled() const { return m_settings.enabled; }
 		uint32 seed() const { return (uint32)m_settings.seed; }
@@ -192,8 +203,11 @@ export namespace Procedural
 		void loadSpecies();
 		void restart(Renderer& renderer, const oc::shared_ptr<const ITerrainSampler>& maps); // a new generation: drops every chunk
 		void clear(Renderer& renderer, uint64 poolBytes);
-		void rescanRing(Renderer& renderer);
-		void uploadChunks(Renderer& renderer);
+		void mergeResults();     // the job
+		void rescanRing();       // the job
+		void pickUploads();      // the job
+		void finishUploads();    // the job: the chunks the pool job added drop their ground (and their CPU records outside the keep radius)
+		void applyGpu(Renderer& renderer); // the pool job: the record pool's removes and adds the bookkeeping job queued
 		bool insideKeepRadius(glm::ivec2 coord) const;
 		void dropCpu(Chunk& chunk);
 		void kickPump(size_t numNew);
@@ -230,6 +244,21 @@ export namespace Procedural
 		size_t m_numRecords = 0;              // every chunk's trees
 		size_t m_cpuRecords = 0;              // the ones the CPU holds
 		uint32 m_poolRefusedLogged = 0;
+
+		// THE BOOKKEEPING JOB ("TreeWorld update": kickUpdate -> the next update's joinUpdate). It owns every member above
+		// while it runs; main touches them only between the join and the kick. Its inputs, set by update; its outputs, the
+		// record pool calls the POOL JOB makes next frame (kicked by update, joined before present / setTreeRecordTypes /
+		// the next kickUpdate). The pool job writes only Chunk::gpu, so the records stay readable beside it (cpuRecords).
+		JobCounter m_updateCounter;
+		JobCounter m_poolCounter;
+		Renderer* m_renderer = nullptr;       // the pool job's
+		bool m_updateReady = false;           // update ran enabled this frame: kickUpdate has work
+		glm::ivec2 m_jobCam{ INT32_MAX };     // the camera's chunk
+		int m_jobRingR = 0;
+		int m_jobKeepRadius = 0;
+		size_t m_jobUploadBudget = 0;         // bytes
+		oc::vector<uint32> m_pendingRemoves;  // record pool handles of the chunks that left the ring
+		oc::vector<uint64> m_pendingUploads;  // chunk keys to add to the pool
 
 		// Shared with the pumps (m_mutex).
 		mutable std::mutex m_mutex;

@@ -33,12 +33,13 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.0, 5.0f, 0.01f);
 
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
-    Tweak::floatVar("Sky/Atmosphere", "Rayleigh", &s.rayleighScatter, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Sky/Atmosphere", "Mie", &s.mieScatter, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Sky/Atmosphere", "Mie Anisotropy", &s.mieG, 0.0f, 0.99f);
-    Tweak::floatVar("Sky/Atmosphere", "Rayleigh Height", &s.rayleighHeight, 1000.0f, 20000.0f, 10.0f);
-    Tweak::floatVar("Sky/Atmosphere", "Mie Height", &s.mieHeight, 200.0f, 5000.0f, 5.0f);
-    Tweak::floatVar("Sky/Atmosphere", "Mie Extinction", &s.mieExtinction, 1.0f, 2.0f, 0.005f);
+    // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
+    Tweak::floatVar("Sky/Atmosphere", "Air scattering", &s.rayleighScatter, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze scattering", &s.mieScatter, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze forward scatter", &s.mieG, 0.0f, 0.99f);
+    Tweak::floatVar("Sky/Atmosphere", "Air height", &s.rayleighHeight, 1000.0f, 20000.0f, 10.0f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze height", &s.mieHeight, 200.0f, 5000.0f, 5.0f);
+    Tweak::floatVar("Sky/Atmosphere", "Haze extinction", &s.mieExtinction, 1.0f, 2.0f, 0.005f);
     Tweak::floatVar("Sky/Atmosphere", "Ozone", &s.ozone, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Sky/Stars", "Density", &s.starDensity, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Stars", "Size", &s.starSize, 0.2f, 3.0f, 0.01f);
@@ -255,6 +256,7 @@ void Settings::registerFog(FogParams& s)
     Tweak::floatVar("Fog", "Region strength", &s.regionStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Underwater density", &s.underwaterDensity, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Fog", "Lake underwater density", &s.inlandUnderwaterDensity, 0.0f, 20.0f, 0.1f); // lakes and rivers
+    Tweak::floatVar("Fog", "River underwater scale", &s.riverUnderwaterScale, 0.0f, 50.0f, 0.1f); // x the above in rivers
     Tweak::floatVar("Fog", "Underwater wave offset", &s.underwaterWaveOffset, 0.0f, 2.0f, 0.01f); // x the live wave trough, lowers the boundary
     Tweak::floatVar("Fog", "Shaft boost", &s.shaftBoost, 0.0f, 100.0f, 0.1f);
     Tweak::floatVar("Fog", "Caustic strength", &s.causticStrength, 0.0f, 2.0f, 0.05f);

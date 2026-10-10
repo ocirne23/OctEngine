@@ -814,6 +814,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("fog_regionStrength", [&] { return glm::clamp(f.regionStrength, 0.0f, 1.0f); }, f.regionStrength); // the baked regional thickness modulation
         list.add("fog_underwaterDensity", [&] { return glm::max(f.underwaterDensity, 0.0f); }, f.underwaterDensity);
         list.add("fog_inlandUnderwaterDensity", [&] { return glm::max(f.inlandUnderwaterDensity, 0.0f); }, f.inlandUnderwaterDensity);
+        list.add("fog_riverUnderwaterScale", [&] { return glm::max(f.riverUnderwaterScale, 0.0f); }, f.riverUnderwaterScale);
         list.add("fog_shaftBoost", [&] { return glm::max(f.shaftBoost, 0.0f); }, f.shaftBoost);
         list.add("fog_causticStrength", [&] { return glm::max(f.causticStrength, 0.0f); }, f.causticStrength);
         list.add("fog_farFieldMaxDistance", [&] { return f.farFieldMaxDistanceKm > 0.0f ? f.farFieldMaxDistanceKm * 1000.0f : 1e30f; }, f.farFieldMaxDistanceKm);

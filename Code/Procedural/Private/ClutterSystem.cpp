@@ -18,6 +18,7 @@ import :TreeSystem;
 import :TreeWorld;
 import :TreeGenerator; // treeHash
 import :TerrainSampler;
+import :MeshCache;
 
 namespace
 {
@@ -157,6 +158,7 @@ namespace Procedural
 				continue;
 			ClutterTypeDesc desc;
 			oc::string error;
+			uint64 meshHash = 0;
 			{
 				const FileSystem::AllowMainThreadIO allowIo;
 				if (!loadClutterType(entry.path, desc, error))
@@ -164,6 +166,7 @@ namespace Procedural
 					Log::warning(oc::format("Clutter: failed to load '{}': {}", entry.path, error));
 					continue;
 				}
+				meshHash = meshCacheHash(FileSystem::readFileStr(entry.path));
 			}
 			if (desc.name.empty())
 				desc.name = entry.name;
@@ -172,7 +175,9 @@ namespace Procedural
 				Log::warning(oc::format("Clutter: '{}' has no Placement block with a Density - never placed", desc.name));
 				continue;
 			}
-			m_types.emplace_back().desc = oc::move(desc);
+			Type& type = m_types.emplace_back();
+			type.desc = oc::move(desc);
+			type.meshHash = meshHash;
 		}
 	}
 
@@ -186,8 +191,16 @@ namespace Procedural
 			m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
 			Globals::jobSystem.submit([this, t, resolution]
 			{
+				// THE MESH CACHE (MeshCache): keyed by the .clutter file's text and the mesh resolution.
 				Type& type = m_types[t];
-				generateClutterMeshes(type.desc, resolution, type.meshes);
+				const uint64 hash = meshCacheMix(type.meshHash, resolution);
+				const oc::string path = oc::format("{}/{}.cluttermesh", CLUTTER_MESH_DIR, type.desc.name);
+				if (!loadClutterMeshes(path, hash, type.meshes))
+				{
+					type.meshes.clear();
+					generateClutterMeshes(type.desc, resolution, type.meshes);
+					saveClutterMeshes(path, hash, type.meshes);
+				}
 				m_genInFlight.fetch_sub(1, oc::memory_order_release);
 			}, { "Clutter generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 		}

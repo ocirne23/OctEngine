@@ -35,6 +35,11 @@ export namespace Procedural
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 		// Every tree and rock of the terrain ring as records (the ground clutter's forest floor reads them; main thread).
 		const TreeWorld& world() const { return m_world; }
+		// TreeWorld's bookkeeping job: main.cpp kicks it after the last reader of the records this frame (the clutter);
+		// the next update joins it.
+		void kickWorldUpdate() { m_world.kickUpdate(); }
+		// TreeWorld's pool job (kicked by update): main.cpp joins it before Renderer::present, which reads the record pool.
+		void joinWorldPool() { m_world.joinPool(); }
 
 	private:
 		// Every LOD level uploaded; nodes spawn on level 0 and the GPU picks the level per instance through

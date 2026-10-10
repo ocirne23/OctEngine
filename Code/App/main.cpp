@@ -103,8 +103,14 @@ int main(int argc, char* argv[])
         Globals::clutter.initialize();
         Globals::ocean.initialize();
         Globals::terrain.setFlowWindAngle(Globals::ocean.swellTravelAngle());
-        Globals::physics.setWaterSurface([](float x, float z) { return Globals::ocean.sampleWaterHeight(x, z); },
-            [] { return Globals::ocean.hasWater(); });
+        // The buoyancy's water: the ocean's wave surface, or the rivers' / lakes' calm one above it (no waves).
+        Globals::physics.setWaterSurface(
+            [](float x, float z)
+            {
+                const float sea = Globals::ocean.hasWater() ? Globals::ocean.sampleWaterHeight(x, z) : -FLT_MAX;
+                return oc::max(sea, Globals::terrain.sampleInlandWaterHeight(x, z));
+            },
+            [] { return Globals::ocean.hasWater() || Globals::terrain.hasInlandWater(); });
         if (Globals::rendererVK.isVrEnabled())
             Globals::vrInput.initialize(Globals::rendererVK.getVrSession());
     }
@@ -326,6 +332,7 @@ int main(int argc, char* argv[])
             Globals::trees.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::rocks.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::clutter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps()); // after trees: it reads their records
+            Globals::trees.kickWorldUpdate(); // after the clutter, the last reader of the tree records; the next trees.update joins it
             Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::rendererVK.kickGridBuilds(); // the force update is the frame's last light source and the emitters' last writer
@@ -340,6 +347,7 @@ int main(int argc, char* argv[])
             Globals::jobSystem.kickPostUpdateJobs();
             Globals::terrain.joinRender();
             Globals::ocean.joinRender();
+            Globals::trees.joinWorldPool(); // present reads the tree record pool (normally joined by kickWorldUpdate already)
             Globals::rendererVK.present();
             Globals::terrain.kickUploads(Globals::rendererVK); // overlaps the frame-pacing wait; joined before the next kicks
         }

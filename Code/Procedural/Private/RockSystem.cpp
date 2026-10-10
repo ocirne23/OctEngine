@@ -19,6 +19,7 @@ import :TreeGenerator; // treeHash
 import :TreeSpecies;
 import :TreeBarkTexture;
 import :TerrainSampler;
+import :MeshCache;
 
 namespace
 {
@@ -245,6 +246,7 @@ namespace Procedural
 				continue;
 			RockTypeDesc desc;
 			oc::string error;
+			uint64 meshHash = 0;
 			{
 				const FileSystem::AllowMainThreadIO allowIo;
 				if (!loadRockType(entry.path, desc, error))
@@ -252,11 +254,13 @@ namespace Procedural
 					Log::warning(oc::format("Rocks: failed to load '{}': {}", entry.path, error));
 					continue;
 				}
+				meshHash = meshCacheHash(FileSystem::readFileStr(entry.path));
 			}
 			if (desc.name.empty())
 				desc.name = entry.name;
 			Type& type = m_types.emplace_back();
 			type.desc = oc::move(desc);
+			type.meshHash = meshHash;
 			type.variants.resize((size_t)type.desc.variantCount);
 		}
 		kickGeneration();
@@ -276,8 +280,17 @@ namespace Procedural
 				m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
 				Globals::jobSystem.submit([this, t, v, resolution]
 				{
+					// THE MESH CACHE (MeshCache): keyed by the .rock file's text, the grid resolution and the variant's seed.
 					Type& type = m_types[t];
-					generateRockVariant(type.desc, treeHash(5000u, v), resolution, type.variants[v].data);
+					const uint32 seed = treeHash(5000u, v);
+					const uint64 hash = meshCacheMix(meshCacheMix(type.meshHash, resolution), seed);
+					const oc::string path = oc::format("{}/{}_v{}.rockmesh", ROCK_MESH_DIR, type.desc.name, v);
+					if (!loadRockVariant(path, hash, type.variants[v].data))
+					{
+						type.variants[v].data = {};
+						generateRockVariant(type.desc, seed, resolution, type.variants[v].data);
+						saveRockVariant(path, hash, type.variants[v].data);
+					}
 					m_genInFlight.fetch_sub(1, oc::memory_order_release);
 				}, { "Rock generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 			}

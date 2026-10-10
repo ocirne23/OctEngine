@@ -14,7 +14,7 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 36; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	constexpr uint32 RIVER_UNIT_VERSION = 37; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
 	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
 	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
 	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
@@ -44,6 +44,7 @@ namespace
 	                                          // 34: the fall's max length scales with Q
 	                                          // 35: the lip's run 0.6 px (the sheet leans forward)
 	                                          // 36: a steep run too long to fall is skipped whole
+	                                          // 37: the sea channel
 
 	struct UnitHeader
 	{
@@ -109,6 +110,8 @@ namespace
 		hashValue(h, uc.fallMinHeight);
 		hashValue(h, uc.fallMaxLength);
 		hashValue(h, uc.fallFullQ);
+		hashValue(h, uc.seaChannelDepth);
+		hashValue(h, uc.seaChannelMaxLength);
 		hashValue(h, uc.edgeWall);
 		hashValue(h, uc.pathSmoothing);
 		hashValue(h, uc.meanderAmplitude);
@@ -1101,6 +1104,7 @@ namespace Procedural
 		oc::vector<int32> chain;
 		oc::vector<float> wUp, qChain;
 		oc::vector<ChainPoint> pts, simplified, falls;
+		oc::unordered_set<int32> seaChannel; // the sea channel's pixels (no step back)
 		for (const int32 s : starts)
 		{
 			if (cancelled())
@@ -1142,6 +1146,43 @@ namespace Procedural
 				}
 				c = r;
 			}
+			// THE SEA CHANNEL (the user, 2026-10-10): the chain stopped at the FIRST sea pixel - on a wide coastal flat at about
+			// 0 the water met an ocean almost 0 deep there and the river seemed to stop. It runs on into the sea down the
+			// steepest way until the sea floor is "Sea channel depth" deep (at most "Sea channel max length" px), its level
+			// falling from 0 to minus that (below), so the carve cuts a channel out to deep water and the ocean fills it.
+			size_t seaFrom = SIZE_MAX; // the first index of that run past the mouth
+			if (end == ERiverEnd::Sea && cfg.seaChannelDepth > 0.0f && cfg.seaChannelMaxLength > 0.0f)
+			{
+				seaChannel.clear();
+				int32 at = chain.back();
+				seaChannel.insert(at);
+				seaFrom = chain.size();
+				for (int32 step = 0; step < (int32)cfg.seaChannelMaxLength && g.elev[at] > -cfg.seaChannelDepth; step++)
+				{
+					const int32 ax = at % W, az = at / W;
+					int32 best = -1;
+					for (int32 dz = -1; dz <= 1; dz++)
+						for (int32 dx = -1; dx <= 1; dx++)
+						{
+							const int32 nx = ax + dx, nz = az + dz;
+							if ((dx == 0 && dz == 0) || nx < 1 || nz < 1 || nx >= W - 1 || nz >= W - 1)
+								continue;
+							const int32 nb = nz * W + nx;
+							if (!g.mask[nb] || !g.sea[nb] || seaChannel.count(nb))
+								continue;
+							if (best < 0 || g.elev[nb] < g.elev[best])
+								best = nb;
+						}
+					if (best < 0)
+						break;
+					seaChannel.insert(best);
+					chain.push_back(best);
+					at = best;
+				}
+				if (chain.size() == seaFrom)
+					seaFrom = SIZE_MAX;
+			}
+
 			// AN EDGE END (the fine water left through a soft wall, where the coarse network has no crossing): the neighbour
 			// knows nothing of it, so it cannot run on. It ends c_edgeBackPx inside instead, as an open end - an end lake's
 			// candidate, else a fade-out (2026-10-09: a big river ran into the border of a flat valley, the neighbour's
@@ -1190,7 +1231,7 @@ namespace Procedural
 			qChain.resize(n);
 			for (size_t k = 0; k < n; k++)
 			{
-				qChain[k] = inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
+				qChain[k] = k >= seaFrom ? qChain[k - 1] : inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
 				if (blendQ)
 				{
 					const float t = 1.0f - smoothstep01((float)(n - 1 - k) / c_crossBlendPx);
@@ -1214,6 +1255,10 @@ namespace Procedural
 				for (size_t k = 0; k < n; k++)
 					wUp[k] = oc::max(wUp[k], floor);
 			}
+			// The sea channel's level: from 0 at the mouth down to minus "Sea channel depth" at its end (never rising).
+			if (seaFrom != SIZE_MAX)
+				for (size_t k = seaFrom; k < n; k++)
+					wUp[k] = oc::min(wUp[k - 1], -cfg.seaChannelDepth * (float)(k - seaFrom + 1) / (float)(n - seaFrom));
 			if (end == ERiverEnd::Junction)
 			{
 				auto it = arriving.find(last);
@@ -1276,7 +1321,8 @@ namespace Procedural
 				if (outlet)
 					align(false, last, outlet->edgeX, outlet->edgeZ);
 			}
-			clampToGround(pts, cfg, g.elev, g.mask, W, end == ERiverEnd::Sea ? 0.0f : end == ERiverEnd::Lake ? d.lakes[d.lakeOf[last]].level : -FLT_MAX);
+			clampToGround(pts, cfg, g.elev, g.mask, W, end == ERiverEnd::Sea ? (seaFrom != SIZE_MAX ? -cfg.seaChannelDepth : 0.0f)
+				: end == ERiverEnd::Lake ? d.lakes[d.lakeOf[last]].level : -FLT_MAX);
 			simplify(pts, 0.1f, 0.25f, simplified); // 0.1 px in plan, 0.25 model m in W
 			if (cfg.fallMinHeight > 0.0f && cfg.fallMaxLength > 0.0f)
 			{

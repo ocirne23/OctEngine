@@ -19,7 +19,8 @@ import :MeshLodRegistry; // IndexRangeFreeList
 // * The table: host-visible per frame slot, rewritten for the CURRENT slot (after beginFrame's fence wait) when it
 //   changed since that slot was last written.
 //
-// Main thread only.
+// ONE thread at a time, after beginFrame and before present (which reads it): Procedural TreeWorld drives it from its
+// "TreeWorld pool" job, which main.cpp joins before present (and TreeSystem before setTypes).
 export struct TreeRecordChunkGpu // MIRRORED in tree_volume_splat.cs.glsl / tree_volume_records.cs.glsl
 {
     glm::ivec2 coord{ 0 };

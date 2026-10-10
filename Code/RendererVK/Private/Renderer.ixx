@@ -362,7 +362,8 @@ public:
     // camera's height above it. Unset (NaN): the baked sea level.
     void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
 
-    // -- WORLD TREE RECORDS (TreeRecordPool; Procedural TreeWorld). MAIN THREAD, after beginFrame. --
+    // -- WORLD TREE RECORDS (TreeRecordPool; Procedural TreeWorld). One thread at a time, after beginFrame and before
+    // present: TreeWorld's "TreeWorld pool" job (joined before present), or main. --
     // (Re)sizes the pool and drops every chunk (a size change drains the GPU). ringRadius (chunks) sizes the chunk map.
     void resetTreeRecords(uint64 poolBytes, uint32 ringRadius)
     {

@@ -43,7 +43,9 @@ export namespace Procedural
 		float fallSlope = 0.3f;
 		float fallMinHeight = 12.0f; // model m: a short steep run dropping this much becomes a waterfall at its top (0 = none)
 		float fallMaxLength = 15.0f; // native px: the longest steep run that does (longer stays sloped rapids)
-		float fallFullQ = 10.0f;    // m3/s: from here up the whole max length; below x Q / this (a stream cuts no gorge)
+		float seaChannelDepth = 60.0f;      // model m (~10 engine m at mpp 5): a river runs on into the sea until the floor is this deep (0 = off)
+		float seaChannelMaxLength = 200.0f; // native px: ... at most this far past its mouth
+		float fallFullQ = 10.0f;   // m3/s: from here up the whole max length; below x Q / this (a stream cuts no gorge)
 		float edgeWall = 12.3f; // model m: water leaves through a non-crossing edge when every outlet climbs more
 		float pathSmoothing = 10.0f; // native px: the Gaussian sigma the D8 path is smoothed with along its length
 		float meanderAmplitude = 0.33f;  // x the channel width
@@ -76,6 +78,8 @@ export namespace Procedural
 		c.fallMinHeight = s.riverFallMinHeight;
 		c.fallMaxLength = s.riverFallMaxLength;
 		c.fallFullQ = s.riverFallFullQ;
+		c.seaChannelDepth = s.riverSeaChannelDepth;
+		c.seaChannelMaxLength = s.riverSeaChannelMaxLength;
 		c.edgeWall = s.riverEdgeWall;
 		c.pathSmoothing = s.riverPathSmoothing;
 		c.meanderAmplitude = s.riverMeanderAmplitude;

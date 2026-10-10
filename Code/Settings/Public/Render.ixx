@@ -537,10 +537,11 @@ export struct FogParams
                                     // higher = the pattern washes out closer to the surface
     float causticShoreFade = 1.0f;  // caustic contrast ramps in over this much water depth (m), so the
                                     // pattern dissolves at the terrain-waterline intersection; 0 = off
-    float underwaterDensity = 1.0f; // multiplier on the global density at/below the LOCAL water surface
+    float underwaterDensity = 1.5f; // multiplier on the global density at/below the LOCAL water surface
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
-    float inlandUnderwaterDensity = 1.0f; // the same under a lake's or river's surface (the inland water map)
+    float inlandUnderwaterDensity = 5.0f;
+    float riverUnderwaterScale = 5.0f; // x the above under a river's surface (shallow: the froxels hold little of it) // the same under a lake's or river's surface (the inland water map)
     float underwaterWaveOffset = 0.25f; // lowers the underwater fog boundary (the local water surface, the live
                                     // wave displacement on top) by this x the deepest live wave trough (m per
                                     // m): the fog's coarse froxels miss steep waves' troughs, and the murk

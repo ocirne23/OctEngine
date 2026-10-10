@@ -140,8 +140,8 @@ export void installFileHooks()
 export class Session
 {
     // The free-fly camera's start.
-    static inline const glm::vec3 START_POS{ 20.3f, 695.4f, 34.1f };
-    static inline const glm::vec3 START_DIR{ 0.6f, -0.1f, -0.8f };
+    static inline const glm::vec3 START_POS{ 0.0f, 782.7f, 0.0f };
+    static inline const glm::vec3 START_DIR{ -0.60f, -0.33f, 0.73f };
 
 public:
     Session(const LaunchOptions& options)

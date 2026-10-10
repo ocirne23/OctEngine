@@ -301,6 +301,13 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   crossed a whole lake with no point inside it; its water stays its own; a segment that starts in one is gone): the valley-first flood covers the river's last
   stretch, whose surface stood over the lake's in near-cell rectangles. **A lake cannot cross a unit edge**: two units
   that both end rivers at the same border point make two lakes, with a ground strip and two levels between them.
+* **THE SEA CHANNEL** (the user, 2026-10-10): a chain stopped at the FIRST sea pixel, and on a wide coastal flat at about
+  0 the river met an ocean almost 0 deep there and seemed to stop. A `Sea` end now runs on into the sea down the
+  steepest way (8 neighbours, sea pixels only, never back) until the floor is "Sea channel depth" model m deep (default
+  60, ~10 engine m) or "Sea channel max length" px; its Q is the mouth's, its level falls from 0 at the mouth to minus
+  that depth at the end (the ground clamp's floor follows), so the carve cuts a channel out to deep water and the ocean
+  fills it. RiverSystem's ribbon stops where the level drops under -0.5 model m (`c_seaChannelCut`): the ocean is the
+  water there; `apply` does not mark such channel points River (they stay sea below sea level).
 * **Each tile's land runoff is rescaled to its coarse pixel's own** (`CoarseRiverTile::runoff`), so the levels agree on
   the budget.
 * **Channels** (Q >= "Channel min Q", outside lake basins) become segments from heads / junctions / inlets to a
@@ -341,7 +348,10 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   room, the water stays): on rapids and falls `pieceCarve` deepens the channel up to "Whitewater channel depth" x and
   widens it up to "Whitewater channel widen" x (defaults 3 and 2; the ribbon is 1.2 x the channel, so past 1.2 the channel holds its edges) by the piece's
   steepness - its own drop eased from half "Rapids slope" to "Fall slope", a plunge gorge in full - else the falling
-  sheet and the rapids' waves dipped into the bed and the banks' tips poked through the sheet's edges (at the bottom
+  sheet and the rapids' waves dipped into the bed and the banks' tips poked through the sheet's edges. The widened part
+  is a SHELF just under the waterline (5 % of the hydraulic depth x the steepness), not channel: the deep cut keeps the
+  river's own half-width, the bank starts past the shelf - cut at the channel's slope the widening lay below the water,
+  the ribbon's edge hung over it and the surface stood above the banks on every slope (at the bottom
   the water would stand over the falling ground above it). A longer steep run stays sloped rapids - WHOLE (stepping one
   point on, a long run's tail came under the max length and fell halfway down the slope: its gorge cut into the hillside,
   the fall buried in it, the water above standing over the gorge's wall). RiverTerrain's
@@ -396,9 +406,14 @@ mist goes the ocean spray's way.
 
 **The inland water map** (`updateWaterMap`): `RIVER_WATER_MAP_DIM`² texels of `RIVER_WATER_MAP_TEXEL` m around the
 camera, each the inland surface Y at its centre (`RiverTerrain::sampleInlandWaterGrid`: the river's calm carved surface
-inside its channel, else a lake's level; units only, no terrain), baked on a Low job when the camera has moved
+inside its channel, else a lake's level; units only, no terrain; the KIND in the height's lowest mantissa bit, 1 = a
+river channel, for the fog's "River underwater scale"), baked on a Low job when the camera has moved
 `c_waterMapMove` from the last bake's centre or the unit generation changed, handed to `Renderer::setRiverWaterMap`.
-RendererVK's underwater fog and terrain wetness read it (RendererVK CONTEXT "River and lake water").
+RendererVK's underwater fog and terrain wetness read it (RendererVK CONTEXT "River and lake water"). **The buoyancy
+reads it too**: RiverSystem keeps the last bake's heights (`sampleWaterHeight`, nearest texel, -FLT_MAX off the map or
+on dry land; `TerrainStreamer::sampleInlandWaterHeight` / `hasInlandWater` forward it), swapped on main in `update`
+after the entity pass has joined, so the workers' reads on the next pass are const. The App takes the higher of it and
+the ocean's surface. No waves - the calm carved surface / the lake's level.
 
 ## Rivers: the sampler (`:RiverTerrain`)
 
@@ -495,6 +510,14 @@ config-dirty listener (a rebuild; the units then reload from disk).
   "Lake shore (px)" of them (default 0.75) (the beach on the bed and the shoreline, no grass / clutter under the water). `river` = 1 in the channel fading to 0 at the floodplain's
   edge. **`waterLevel` stays the sea's** (TerrainPoint, `ETerrainWater`), so the ocean, its swash, its buoyancy and the
   bake's water channel never see inland water - no gate in the bake. Coarse queries pass straight through.
+* **THE WATER HUMIDITY** (V4's riparian boost, the user 2026-10-10): `apply` pulls `TerrainPoint::humidity` toward 1 by
+  "Water humidity" x a factor that is 1 at a perennial river's channel edge (x smoothstep(Q / "Water humidity full Q"))
+  or a lake's shore, fading (smoothstep) to 0 over "Water humidity spread" (engine m) - the max over the rivers and lakes near the point.
+  The sampled climate only: the units are routed from the raw tile planes, so it never feeds back into the rivers.
+  Everything reading the wrapped sampler at Full detail sees it (the data map's near cascade - terrain textures, grass,
+  clutter - trees, rocks); the far cascade samples Coarse (no rivers), so it fades out where that takes over. A river
+  only reaches as far as its pieces are listed in the cell (its carve reach); the lake search runs out to the spread (the
+  rim guard keeps its own 3 px).
 * **The terrain mesh carries the river to the GPU**: `generateChunk` writes `TerrainPoint::river` into the vertex's u
   and 1 (inland water / dry bed) into its v - not a texture coordinate any more. The splat paints the bed with the
   beach layer and the grass / clutter culls read the same value (RendererVK CONTEXT "Terrain and ocean integration").
@@ -1512,8 +1535,21 @@ in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A mem
 `Enabled` check: it runs with the preview off.
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.
-  On a camera chunk change the main thread requests the missing chunks and re-sorts the queue nearest first; Low pump
-  jobs (`Gen jobs`, 2) take the front, with lazy staleness as the terrain pumps.
+  On a camera chunk change the missing chunks are requested and the queue re-sorted nearest first; Low pump jobs
+  (`Gen jobs`, 2) take the front, with lazy staleness as the terrain pumps.
+* **THE BOOKKEEPING JOB** (`"TreeWorld update"`, Normal, `m_updateCounter`): merging the pumps' results, the ring
+  rescan (a walk of every chunk + the (2R+1)² ring) and the next upload pick run OFF main. main.cpp kicks it
+  (`TreeSystem::kickWorldUpdate`) right after `clutter.update` - the LAST reader of the records this frame
+  (`cpuRecords`) - and the next `TreeWorld::update` joins it first, so nothing reads the chunks while it runs. It
+  queues `m_pendingRemoves` (handles of the chunks that left the ring) and `m_pendingUploads` (picked chunk keys).
+* **THE POOL JOB** (`"TreeWorld pool"`, Normal, `m_poolCounter`): the next `update` kicks it - the record POOL's removes
+  and adds (`applyGpu`), then `updateTreeRecords`. The pool takes one thread at a time between beginFrame and
+  `present`, which reads it: main.cpp joins it before `present` (`TreeSystem::joinWorldPool`), TreeSystem before
+  `setTreeRecordTypes`, and `kickUpdate` before the next bookkeeping job. It writes `Chunk::gpu` ONLY, so TreeSystem and
+  the clutter read the records beside it; the bookkeeping job drops the uploaded chunks' ground (and their CPU records
+  outside the keep radius) first thing (`finishUploads`). One frame between a pick and its upload.
+* **Main keeps** only the rare parts: the config check, a restart (it resets the pool), `loadSpecies` (IO), and the
+  job inputs (camera chunk, ring radius, keep radius, upload budget) `update` snapshots.
 * **Pure function** (`placeChunk`): one `sampleGrid` at Full detail, ~8 m step + halo, then one candidate per cell of
   a `Candidate cell (m)` (5) lattice, jittered over the cell. Per species (`Placement`) its CLIMATE FIT: 1 inside its
   IDEAL box (`Temperature` / `Precipitation` min max, normalized by `temperatureTo01` / `precipTo01`), outside a Gaussian of the distance
@@ -2002,6 +2038,27 @@ Nominal size 1, y up, the lowest point at y = 0, `CLUTTER_LODS` = 3 levels each 
   (part 1; the cap shape's profile, its rim curled down) and the gills underneath (part 2).
 
 ---
+
+# The generated-mesh cache (`:MeshCache`)
+
+The tree, rock and clutter generators' OUTPUT is saved under `Assets/Local` and loaded instead of generating again:
+
+| What | File | Key (hashed into the file's header) |
+|---|---|---|
+| A tree species: its piece library, its baked variants, their far-volume density grids | `Local/Trees/Meshes/<species>.treemesh` | the `.tree` file's text, `TREE_DENSITY_RES` |
+| A rock variant: its `RockShape`, LOD meshes, density grid | `Local/Rocks/Meshes/<type>_v<i>.rockmesh` | the `.rock` file's text, the grid resolution, the variant seed |
+| A clutter type's meshes (every LOD) | `Local/Clutter/Meshes/<type>.cluttermesh` | the `.clutter` file's text, `Clutter/Mesh resolution` |
+
+* **One file per unit, the key INSIDE**: a changed input is a miss that regenerates and overwrites the file - no stale
+  files pile up. A damaged or truncated file is a miss too. Format: a header (magic, kind, version, hash, raw size),
+  then the zstd payload (level 3); vectors of trivially copyable types are written raw.
+* **The key does not cover the generator CODE.** A change that moves a generator's output for the same inputs must
+  bump `TREE_MESH_CACHE_VERSION` / `ROCK_MESH_CACHE_VERSION` / `CLUTTER_MESH_CACHE_VERSION` (MeshCache.ixx), or the
+  `Meshes` folder must be deleted. The clutter's pebbles come from `generateRockVariant` too: a rock generator change
+  bumps both.
+* Trees load on main (`TreeSystem::reload`, under its `AllowMainThreadIO`); the rocks and the clutter load / save in
+  their generation jobs. A cache hit also makes Debug and the optimized builds draw the same floats (the generators'
+  `/fp:fast` last bits).
 
 # Build note
 

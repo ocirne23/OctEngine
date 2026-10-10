@@ -258,7 +258,9 @@ In a `.pre`: `Layer Debris` + `CollidesWith Default, Player` (or `All` / `None`)
 ## Buoyancy
 
 `setWaterSurface(fn, activeFn)`. `fn(x, z)` returns the water surface world Y at that column, or
-`-FLT_MAX` where there is no water; the App wires in the ocean's `sampleWaterHeight`.
+`-FLT_MAX` where there is no water; the App wires in the higher of the ocean's `sampleWaterHeight` (with its waves)
+and the rivers' / lakes' calm surface (`TerrainStreamer::sampleInlandWaterHeight`, no waves, the inland water map
+round the camera), gated by either having water.
 
 **The PhysicsWorld applies NO buoyancy itself.** It only holds the sampler plus the
 `Physics/Buoyancy` tweaks and exposes them as thread-safe reads: `isWaterActive()`,

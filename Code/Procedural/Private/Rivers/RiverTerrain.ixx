@@ -47,9 +47,12 @@ export namespace Procedural
 		float reachQExponent = 0.1f; // higher = a small stream's valley narrower
 		float lakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
 		float lakeBedDeepenReach = 8.0f; // native px from the shore over which that grows in (smoothstep: the shore keeps its slope)
-		float gorgeWallSlope = 0.75f;
-		float whitewaterDepth = 3.0f;   // the channel's depth x up to this on rapids and falls (the steepness; 1 = none)
-		float whitewaterWiden = 2.0f;  // the channel's half-width x up to this there (the ribbon is 1.2 x the channel)    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+		float gorgeWallSlope = 0.75f;    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+		float whitewaterDepth = 3.0f;    // the channel's depth x up to this on rapids and falls (the steepness; 1 = none)
+		float whitewaterWiden = 2.0f;    // the channel's half-width x up to this there (a shelf at the waterline; the ribbon is 1.2 x the channel)
+		float waterHumidity = 0.35f;     // the humidity pulled toward 1 by this at a river's edge / a lake's shore (0 = off)
+		float waterHumiditySpread = 150.0f; // engine m it fades out over
+		float waterHumidityFullQ = 5.0f; // m3/s: a river this big gets it whole, a smaller one less (smoothstep)
 		float lakeShore = 0.75f;        // native px past a lake's wet pixels its influence (the shore's sand, no grass) fades over
 		bool operator==(const RiverCarveConfig&) const = default;
 
@@ -116,6 +119,9 @@ export namespace Procedural
 		c.gorgeWallSlope = s.riverGorgeWallSlope;
 		c.whitewaterDepth = s.riverWhitewaterDepth;
 		c.whitewaterWiden = s.riverWhitewaterWiden;
+		c.waterHumidity = s.riverWaterHumidity;
+		c.waterHumiditySpread = s.riverWaterHumiditySpread;
+		c.waterHumidityFullQ = s.riverWaterHumidityFullQ;
 		return c;
 	}
 
@@ -177,7 +183,8 @@ export namespace Procedural
 		void resolve(double x0, double z0, double x1, double z1, Block& out) const;
 		void apply(const Block& b, double worldX, double worldZ, TerrainPoint& p) const;
 		float influence(const Block& b, double worldX, double worldZ) const; // apply's `river`, nothing else
-		float inlandWater(const Block& b, double worldX, double worldZ, float none) const; // apply's water, nothing else
+		// apply's water, nothing else; `river` (optional) = the water is a river channel's, not a lake's
+		float inlandWater(const Block& b, double worldX, double worldZ, float none, bool* river = nullptr) const;
 		// The grid grows past the unit by m_reachPx (the largest piece reach); each piece is listed in the cells its own reach
 		// (its floodplain edge + the carve reach) touches. Then the unit's water is SUNK under the other rivers' carves
 		// (sinkUnderCarves).
