@@ -295,6 +295,17 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
         const glm::dmat4 invMvpD = glm::inverse(glm::dmat4(mvp));
         view.invMvp = glm::mat4(invMvpD);
         view.reprojClip = glm::mat4(glm::dmat4(view.prevMvp) * invMvpD);
+        // THE VIEW RAY (u_rayFromNdc, ubo.inc.glsl): for a world direction d, ndc.xy = (r0.d, r1.d) / (rw.d) with r0, r1, rw
+        // mvp's x / y / w ROWS, so the inverse of the 3x3 with those rows as COLUMNS maps (ndc, 1) to the ray as
+        // `vec3(ndc, 1) * rayFromNdc` - no translation, O(1)-magnitude terms (the 4x4 invMvp re-rolls its float error
+        // every frame: jitter). Built from the very FLOATS the UBO stores in mvp, inverted in double: every shader used to
+        // invert it per pixel in float. Column 3: the view's forward, the ray through NDC (0, 0).
+        const glm::dmat3 rows(glm::dvec3(mvp[0][0], mvp[1][0], mvp[2][0]), glm::dvec3(mvp[0][1], mvp[1][1], mvp[2][1]),
+            glm::dvec3(mvp[0][3], mvp[1][3], mvp[2][3]));
+        const glm::dmat3 rayD = glm::inverse(rows);
+        const glm::dvec3 forward = glm::normalize(glm::dvec3(rayD[0].z, rayD[1].z, rayD[2].z)); // vec3(0, 0, 1) * rayD
+        view.rayFromNdc = glm::mat4(glm::vec4(glm::vec3(rayD[0]), 0.0f), glm::vec4(glm::vec3(rayD[1]), 0.0f),
+            glm::vec4(glm::vec3(rayD[2]), 0.0f), glm::vec4(glm::vec3(forward), 0.0f));
         view.viewPos = glm::vec4(position, 1.0f);
     };
     const glm::mat4 centerMvp = computeCenterViewProj(camera);
@@ -571,6 +582,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.addArray("views_prevMvp", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].prevMvp; }, UboLive);       // last frame's mvp: a world position to last frame's screen
         list.addArray("views_prevInvMvp", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].prevInvMvp; }, UboLive); // last frame's inverse(mvp)
         list.addArray("views_reprojClip", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].reprojClip; }, UboLive); // prevMvp * inverse(mvp), fused in double
+        list.addArray("views_rayFromNdc", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].rayFromNdc; }, UboLive); // the view ray from NDC + forward (writeView)
         list.addArray("views_viewPos", NUM_UBO_VIEWS, [this](uint32 v) { return m_views[v].viewPos; }, UboLive);       // xyz = world position
         list.addArray("frustumPlanes", 6, [this](uint32 i) { return glm::vec4(m_centerFrustum.planes[i]); }, UboLive); // the centre view's frustum
         // The render target (px) and 1 / it; the render rect's min and size in [0,1] of the target.

@@ -103,6 +103,9 @@ void main()
     vec4 lo, hi;
     // The neighbourhood's range of weighted cloud distance (log2): the history test (below).
     float dLo = 1e30, dHi = -1e30;
+    // A checkerboard fill pixel whose limit matches NO side neighbour (a thin occluder or a gap in one, e.g. a leaf
+    // against the clouds): its current value is a guess from the wrong surface, so the history is taken unclamped.
+    bool isolated = false;
     if (TT_CHECKER && ((px.x + px.y + int(u_frameIndex)) & 1) == 0)
     {
         cur = texelFetch(u_curColor, px, 0);
@@ -144,7 +147,9 @@ void main()
         cur = vec4(0.0);
         float wSum = 0.0;
         float front = 1e30;
+        float frontAny = 1e30;
         float weighted = 0.0;
+        int matched = 0;
         for (int i = 0; i < 4; ++i)
         {
             const ivec2 o = i < 2 ? ivec2(i * 2 - 1, 0) : ivec2(0, i * 2 - 5);
@@ -155,11 +160,21 @@ void main()
             cur += n * w;
             weighted += d.y * w;
             wSum += w;
-            if (n.a < 0.999 && abs(d.z - logLimit) < LIMIT_MATCH)
-                front = min(front, d.x);
+            const bool match = abs(d.z - logLimit) < LIMIT_MATCH;
+            matched += match ? 1 : 0;
+            if (n.a < 0.999)
+            {
+                frontAny = min(frontAny, d.x);
+                if (match)
+                    front = min(front, d.x);
+            }
         }
         cur /= wSum;
-        curDepth = vec4(min(front, logLimit), min(weighted / wSum, logLimit), logLimit, 0.0);
+        isolated = matched == 0;
+        // Isolated: the neighbours' cloud keeps its OWN front, unclamped - behind this pixel's surface it stays
+        // behind it, and the upsample drops it there (clamped to the limit, it was drawn ON the leaf: flicker).
+        const float curFront = isolated ? (frontAny < 1e29 ? frontAny : logLimit) : min(front, logLimit);
+        curDepth = vec4(curFront, min(weighted / wSum, logLimit), logLimit, 0.0);
         // The clamp range: the matching neighbours only (the same leak through the history clamp), always
         // holding the current value.
         lo = cur;
@@ -235,9 +250,14 @@ void main()
         // surface - whose first-cloud distance is that surface's own, so the upsample kept it: a cloud-coloured
         // outline on every edge against clouds, thicker the higher the blend. The sky keeps its history (both
         // limits are the max distance there).
-        valid = ((histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995))
+        valid = (isolated || (histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995))
              && abs(histDepth.z - curDepth.z) < LIMIT_MATCH;
-        if (valid)
+        if (valid && isolated)
+        {
+            // Last frame MARCHED this pixel (the parity flips): its history is the only value from this surface.
+            result = hist;
+        }
+        else if (valid)
         {
             const vec4 pad = (hi - lo) * 0.1 + vec4(0.002);
             hist = clamp(hist, lo - pad, hi + pad);

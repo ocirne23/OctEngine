@@ -116,18 +116,12 @@ void main()
 	g_viewIndex = int(u_viewIndex); // per-eye ray reconstruction below
 #endif
 	// View ray from the screen position, not from the interpolated world position (in_pos - u_viewPos
-	// cancels two large float32 values per pixel and jitters away from the origin). Derived from u_mvp's
-	// x/y/w ROWS only: for a world direction d, ndc.xy = (r0.d, r1.d) / (rw.d), so solving the 3x3 system
-	// {r0.d = ndc.x, r1.d = ndc.y, rw.d = 1} gives the exact ray from O(1)-magnitude rotation/projection
-	// terms - no camera translation and no ill-conditioned 4x4 inverse (u_invMvp is a float32 CPU inverse
-	// whose error grows with the camera's distance from the origin and re-rolls every frame = jitter).
-	// The raster ran TAA-jittered while u_mvp is unjittered, so back the jitter out of the NDC first.
+	// cancels two large float32 values per pixel and jitters away from the origin): u_rayFromNdc (ubo.inc.glsl),
+	// exact and translation-free. The raster ran TAA-jittered while it is unjittered, so back the jitter out
+	// of the NDC first.
 	vec2 vpUv = (gl_FragCoord.xy * u_screenSize.zw - u_viewportRect.xy) / u_viewportRect.zw;
 	vec2 ndc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0) - u_taaJitter.xy;
-	const vec3 rayR0 = vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]);
-	const vec3 rayR1 = vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]);
-	const vec3 rayRw = vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3]);
-	const vec3 dir = normalize(vec3(ndc, 1.0) * inverse(mat3(rayR0, rayR1, rayRw)));
+	const vec3 dir = normalize(vec3(ndc, 1.0) * u_rayFromNdc);
 	// Direction-space size of one screen pixel, computed here in uniform control flow (derivatives are
 	// undefined inside non-uniform branches). Scaled by each star grid's frequency to clamp star
 	// footprints to >= a pixel so the TAA jitter samples them consistently.

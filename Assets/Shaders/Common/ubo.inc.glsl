@@ -33,5 +33,11 @@ int g_viewIndex = 0;
 #define u_prevInvMvp u_views_prevInvMvp[g_viewIndex]
 #define u_reprojClip u_views_reprojClip[g_viewIndex]
 #define u_viewPos    (u_views_viewPos[g_viewIndex].xyz)
+// THE VIEW RAY through an NDC position: normalize(vec3(ndc, 1.0) * u_rayFromNdc) (Renderer writeView: the inverse of
+// u_mvp's x / y / w rows, in double on the CPU - exact, translation-free, steady from frame to frame, unlike a
+// reconstruction through u_invMvp). Unjittered: subtract u_taaJitter.xy from the NDC to match a rasterized pixel.
+// u_viewForward = the ray through NDC (0, 0), normalized.
+#define u_rayFromNdc  (mat3(u_views_rayFromNdc[g_viewIndex]))
+#define u_viewForward (u_views_rayFromNdc[g_viewIndex][3].xyz)
 
 #endif

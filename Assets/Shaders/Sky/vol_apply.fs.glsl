@@ -237,23 +237,17 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     return vec4(u_fog_albedo * (sunLight * (sunW + hazeW) + ambient), T);
 }
 
-// The ray for this pixel from u_mvp's x/y/w ROWS, not from a reconstructed position: u_invMvp is a float32 CPU
-// inverse whose error re-rolls every frame, and a sky pixel's far field is a pure function of this ray, so that
-// wobble would be unfilterable flicker. Same derivation as sky.fs.glsl / vol_scatter.cs.glsl. u_mvp is
-// unjittered while the depth image was rasterized jittered, hence -u_taaJitter (the NDC form of
-// shared.inc.glsl's taaJitterUv subtraction). invCos: the volume is bounded by view-Z, the far field
-// integrates along the ray.
+// The ray for this pixel from u_rayFromNdc (ubo.inc.glsl), not from a reconstructed position: u_invMvp is a float32
+// CPU inverse whose error re-rolls every frame, and a sky pixel's far field is a pure function of this ray, so that
+// wobble would be unfilterable flicker. Same ray as sky.fs.glsl / vol_scatter.cs.glsl. It is unjittered while the
+// depth image was rasterized jittered, hence -u_taaJitter (the NDC form of shared.inc.glsl's taaJitterUv
+// subtraction). invCos: the volume is bounded by view-Z, the far field integrates along the ray.
 void fogRay(out vec3 dir, out float invCos)
 {
     const vec2 rayVpUv = (v_uv - u_viewportRect.xy) / u_viewportRect.zw;
     const vec2 rayNdc = vec2(rayVpUv.x * 2.0 - 1.0, 1.0 - rayVpUv.y * 2.0) - u_taaJitter.xy;
-    const mat3 rayFromNdc = inverse(mat3(
-        vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
-        vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
-        vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
-    dir = normalize(vec3(rayNdc, 1.0) * rayFromNdc);
-    const vec3 camFwd = normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc);
-    invCos = 1.0 / max(dot(dir, camFwd), 1e-3);
+    dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
+    invCos = 1.0 / max(dot(dir, u_viewForward), 1e-3);
 }
 
 // Fog (in-scatter, transmittance) from the camera to worldPos: the froxel volume, then the far field out to

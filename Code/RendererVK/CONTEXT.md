@@ -950,6 +950,12 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     into the SKY texels beside it: a clear-sky-coloured outline around every object against clouds. So the fill
     weights its neighbours by how well their march limit matches its own (`1 / (1 + 16·Δ)`, as the upsample), and
     the clamp range takes only neighbours within `LIMIT_MATCH` (0.15 in log2) of the pixel's limit.
+    **An ISOLATED fill pixel** (no side neighbour within `LIMIT_MATCH`: a thin leaf against the clouds, or a gap
+    in one; 2026-10-12): its 4-neighbour value comes from the wrong surface, and with no matching neighbour the
+    clamp range was that value alone - the history was thrown away, and the front was clamped to the leaf's limit,
+    so the upsample drew the sky neighbours' cloud ON the leaf every other frame (flicker). Now it takes the
+    history whole (last frame marched this pixel), no clamp and no range test (the limit test stays), and its
+    front is the neighbours' own cloud front, NOT clamped to its limit: a cloud behind the leaf stays behind it.
   * **Apply** — the depth-aware 4-tap upsample is `cloud_upsample.inc.glsl` (a texel whose first cloud
     lies behind this pixel's surface counts as "no cloud"), used by TWO passes:
     * **Fog ON: the fog apply composites the clouds** (`vol_apply.fs.glsl`, bindings 6/7). Fog laid over
@@ -1566,7 +1572,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   with no volume there. Tried and dropped the same day: shrinking the RING with the height instead —
   `sqrt(start² − h²)` — which spread the log mapping's radial texels from ~10 m to the far end and smeared the
   crowns into stripes, also with an asinh mapping.)
-* **The ray** is `vol_apply`'s `fogRay`: from `u_mvp`'s x / y / w rows (not `u_invMvp`, whose float32 error re-rolls
+* **The ray** is `vol_apply`'s `fogRay`: `u_rayFromNdc`, from `u_mvp`'s x / y / w rows (not `u_invMvp`, whose float32 error re-rolls
   every frame — kilometres out it moved the blobs) through this frame's TAA-JITTERED sub-pixel position, as every
   raster pass samples (an unjittered ray had TAA un-jitter content that never was jittered); the scene distance
   from `viewRelFromDepth` at the jittered uv. The `u_invMvp` ray was the visible "position jitter" (independent
@@ -3346,7 +3352,10 @@ and its place stay: neither says live or lockable.
   lockable values side by side, all named `<subject>_<field>` (`fog_density` lockable, `fog_waveBand` live).
 * **LIVE** = everything that also reads the camera, the clock, the sun, the wind, a readback or a value the outside
   pushes per frame: the frame section (the views `u_views_mvp[3]` ... `u_views_viewPos[3]`, one array per view matrix,
-  read through `ubo.inc.glsl`'s `u_mvp` / `u_viewPos` macros or `u_views_*[VIEW_CENTER]`; the frustum, the screen, the
+  read through `ubo.inc.glsl`'s `u_mvp` / `u_viewPos` macros or `u_views_*[VIEW_CENTER]` - among them
+  `u_views_rayFromNdc`, THE VIEW RAY: the inverse of `mvp`'s x / y / w rows, from the stored floats, in double
+  (`writeView`), read as `normalize(vec3(ndc, 1) * u_rayFromNdc)`, plus `u_viewForward` in its column 3; the sky, the
+  fog, the aerial LUT and the far-tree march each inverted it per pixel until 2026-10-12; the frustum, the screen, the
   time), the sun, the sun cascades, the terrain's streamer / splat / wetness state, the weather, and the per-frame
   values in the other sections.
 * **LOCKABLE** = computed from tweaks alone, sources = EVERY settings variable the lambda reads.

@@ -237,23 +237,16 @@ void main()
     const vec2 vpUv = (vec2(cell.xy) + vec2(jx, jy)) / vec2(VOL_FROXEL_X, VOL_FROXEL_Y);
     const float viewZ = volSliceToViewZ((float(cell.z) + jz) / float(VOL_FROXEL_Z));
 
-    // View rays from u_mvp's x/y/w ROWS (the sky.fs pattern): for a world direction d, ndc.xy =
-    // (r0.d, r1.d) / (rw.d), so solving the 3x3 system {r0.d = ndc.x, r1.d = ndc.y, rw.d = 1} gives the
-    // exact ray through a pixel from O(1)-magnitude rotation/projection terms - no camera translation,
-    // no depth-convention dependence, and no float32 invMvp (whose error grows with the camera's
-    // distance from the origin and RE-ROLLS EVERY FRAME: the previous two-point unprojection through it
-    // wobbled the ray directions per frame, de-syncing the temporal reprojection into fog shimmer -
-    // reversed-Z shrank the unproject baseline and amplified it). mvp is unjittered (the TAA jitter only
-    // applies at rasterization). The UNJITTERED froxel-center ray feeds the temporal reprojection below -
-    // reprojecting the jittered sample point would smear the per-frame jitter into the history lookup.
-    const mat3 rayFromNdc = inverse(mat3(
-        vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
-        vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
-        vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
+    // View rays from u_rayFromNdc (ubo.inc.glsl): the exact ray through a pixel - no camera translation, no
+    // depth-convention dependence, and no float32 invMvp (whose error grows with the camera's distance from the
+    // origin and RE-ROLLS EVERY FRAME: the previous two-point unprojection through it wobbled the ray directions
+    // per frame, de-syncing the temporal reprojection into fog shimmer - reversed-Z shrank the unproject baseline
+    // and amplified it). It is unjittered (the TAA jitter only applies at rasterization). The UNJITTERED
+    // froxel-center ray feeds the temporal reprojection below - reprojecting the jittered sample point would smear
+    // the per-frame jitter into the history lookup.
     const vec2 ndc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0);
-    const vec3 dir = normalize(vec3(ndc, 1.0) * rayFromNdc);
-    const vec3 camFwd = normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc);
-    const vec3 worldPos = u_viewPos + dir * (viewZ / max(dot(dir, camFwd), 1e-3));
+    const vec3 dir = normalize(vec3(ndc, 1.0) * u_rayFromNdc);
+    const vec3 worldPos = u_viewPos + dir * (viewZ / max(dot(dir, u_viewForward), 1e-3));
 
     // ---- Media density + scattering albedo ------------------------------------------------------------
     // Terrain-following height fog: raise the base by a fraction of the local terrain height, so fog pools
@@ -295,7 +288,7 @@ void main()
     }
     // Height density = the analytic mean over this slice's segment of the sample ray (see heightFogMean),
     // not a point sample at worldPos.
-    const float tScale = 1.0 / max(dot(dir, camFwd), 1e-3);
+    const float tScale = 1.0 / max(dot(dir, u_viewForward), 1e-3);
     const float yA = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z) / float(VOL_FROXEL_Z)) * tScale);
     const float yB = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z + 1) / float(VOL_FROXEL_Z)) * tScale);
     const float heightDensity = u_fog_density * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
@@ -502,9 +495,9 @@ void main()
     const ivec3 cellOut = ivec3(gl_GlobalInvocationID); // re-read, not kept live
     const vec2 centerUv = (vec2(cellOut.xy) + 0.5) / vec2(VOL_FROXEL_X, VOL_FROXEL_Y);
     const vec2 centerNdc = vec2(centerUv.x * 2.0 - 1.0, 1.0 - centerUv.y * 2.0);
-    const vec3 centerDir = normalize(vec3(centerNdc, 1.0) * rayFromNdc);
+    const vec3 centerDir = normalize(vec3(centerNdc, 1.0) * u_rayFromNdc);
     const float centerViewZ = volSliceToViewZ((float(cellOut.z) + 0.5) / float(VOL_FROXEL_Z));
-    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc)), 1e-3));
+    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, u_viewForward), 1e-3));
     float prevW;
     const vec2 prevFullUv = prevScreenUV(centerPos, prevW);
     const vec2 prevVpUv = (prevFullUv - u_viewportRect.xy) / u_viewportRect.zw;

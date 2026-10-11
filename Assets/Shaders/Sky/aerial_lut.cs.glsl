@@ -38,13 +38,9 @@ void main()
     const float strength = u_fog_aerialStrength;
     const float maxDist = u_fog_aerialMaxDistance;
 
-    // The view ray from u_mvp's x/y/w rows (vol_scatter.cs.glsl has why).
+    // The view ray (ubo.inc.glsl's u_rayFromNdc has why).
     const vec2 uv = (vec2(cell) + 0.5) / vec2(AERIAL_LUT_X, AERIAL_LUT_Y);
-    const mat3 rayFromNdc = inverse(mat3(
-        vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
-        vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
-        vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
-    const vec3 dir = normalize(vec3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0) * rayFromNdc);
+    const vec3 dir = normalize(vec3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0) * u_rayFromNdc);
 
     const vec3 up = normalize(u_skyUp);
     const vec3 L = normalize(u_sunDirection.xyz);

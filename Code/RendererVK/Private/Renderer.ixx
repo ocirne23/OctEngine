@@ -575,6 +575,7 @@ private:
         glm::mat4 prevMvp{ 1.0f };    // last frame's (the reprojection)
         glm::mat4 prevInvMvp{ 1.0f };
         glm::mat4 reprojClip{ 1.0f }; // prevMvp * inverse(mvp), fused in double
+        glm::mat4 rayFromNdc{ 1.0f }; // the view ray from NDC (writeView): columns 0-2 the 3x3, column 3 xyz the view's forward
         glm::vec4 viewPos{ 0.0f };
     };
     oc::array<ViewMatrices, RendererVKLayout::NUM_UBO_VIEWS> m_views;

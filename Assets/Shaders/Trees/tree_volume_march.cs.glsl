@@ -257,16 +257,12 @@ void marchAt(ivec2 px)
         depth = min(min(depth, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), last), 0).r),
                     min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), last), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), last), 0).r));
     }
-    // THE RAY as vol_apply.fs.glsl's fogRay: from u_mvp's x / y / w rows, NOT a reconstructed position - u_invMvp is
-    // a float32 CPU inverse whose error re-rolls every frame, and kilometres out that wobble moved the blobs - and
-    // through this frame's TAA-JITTERED sub-pixel position (-u_taaJitter in NDC), as every raster pass samples: an
-    // unjittered ray had TAA un-jitter content that never was jittered, a pixel's wobble per frame.
+    // THE RAY as vol_apply.fs.glsl's fogRay: u_rayFromNdc, NOT a reconstructed position - u_invMvp is a float32 CPU
+    // inverse whose error re-rolls every frame, and kilometres out that wobble moved the blobs - and through this
+    // frame's TAA-JITTERED sub-pixel position (-u_taaJitter in NDC), as every raster pass samples: an unjittered ray
+    // had TAA un-jitter content that never was jittered, a pixel's wobble per frame.
     const vec2 rayNdc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0) - u_taaJitter.xy;
-    const mat3 rayFromNdc = inverse(mat3(
-        vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
-        vec3(u_mvp[0][1], u_mvp[1][1], u_mvp[2][1]),
-        vec3(u_mvp[0][3], u_mvp[1][3], u_mvp[2][3])));
-    const vec3 dir = normalize(vec3(rayNdc, 1.0) * rayFromNdc);
+    const vec3 dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
     // Reversed Z: 0 = sky. Camera-relative (shared.inc.glsl), at the jittered position the depth was rasterized at.
     const float sceneT = depth > 0.0 ? length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)) : 1e30;
     // The volume is the ring rMin..rMax around the BAKE centre (rMin lies a rebake distance + 30 m inside the
