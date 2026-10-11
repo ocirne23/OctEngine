@@ -51,7 +51,7 @@ void Settings::registerTreeWorld(TreeWorldSettings& s)
 	Tweak::floatVar("Trees/World", "Climate sharpness", &s.climateSharpness, 0.0f, 16.0f, 0.1f);
 	Tweak::floatVar("Trees/World", "Climate fade start", &s.climateFadeStart, 0.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Trees/World", "Climate fade end", &s.climateFadeEnd, 0.0f, 1.0f, 0.01f);
-	Tweak::intVar("Trees/World", "Gen jobs", &s.maxGenJobs, 1, 8, 1.0f);
+	Tweak::intVar("Trees/World", "Gen jobs", &s.maxGenJobs, 0, 64, 1.0f); // 0 = one per job worker
 	Tweak::intVar("Trees/World", "GPU pool (MB)", &s.poolMB, 1, 1024, 1.0f);
 	Tweak::intVar("Trees/World", "Upload KB per frame", &s.uploadKB, 16, 65536, 16.0f);
 	Tweak::intVar("Trees/World", "CPU keep radius (chunks)", &s.keepRadius, 0, 128, 1.0f);

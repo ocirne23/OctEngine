@@ -26,10 +26,15 @@ void TreeRecordPool::reset(uint64 bytes, uint64 frame, uint32 ringRadius)
         }
         m_records.destroy();
         m_numBlocks = numBlocks;
+        // HOST-VISIBLE, sequential write (VMA puts it in device-local ReBAR memory): add() memcpys straight into its blocks.
+        // Through the staging ring it could stall for a whole GPU frame - a full ring submits and waits a fence under the
+        // staging mutex - and the pool's job ran on main whenever main helped at a join (61 ms spikes). Safe without a
+        // copy: a chunk is written only into blocks no frame in flight reads (the deferred free; a running bake holds
+        // them longer).
         if (numBlocks > 0)
             m_records.initialize((vk::DeviceSize)numBlocks * BLOCK_RECORDS * sizeof(uint32),
-                vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "TreeRecords");
+                vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+                vk::MemoryPropertyFlagBits::eHostVisible, false, "TreeRecords", BufferHostAccess::eSequentialWrite);
         m_topBlock = 0;
         m_freeBlocks = {};
         m_pending.clear();

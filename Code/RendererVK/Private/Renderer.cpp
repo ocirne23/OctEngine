@@ -246,6 +246,7 @@ void Renderer::initPerFrameResources()
         perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), "ShadowDraw", m_textures.getDescriptorCount());
 
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.primary");
+        perFrame.presentCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.present");
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMesh");
         perFrame.aoCommandBuffers[0].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTrace");
         perFrame.aoCommandBuffers[1].initialize(vk::CommandBufferLevel::eSecondary, "CB.rtaoTemporal");
@@ -1082,16 +1083,29 @@ void Renderer::present()
         ProfileScope profileScope("Staging", EProfileCategory::Renderer);
         waitSemaphore = Globals::stagingManager.update();
     }
+    // TWO BATCHES (2026-10-11; recordPresentCommandBuffer): the frame's work goes to the GPU BEFORE the acquire, with no
+    // wait on the image, so it starts the moment the queue frees - one primary waited for the image's release (the
+    // previous frame's present) before any of it ran. Only the swapchain pass, recorded after the acquire, waits for it.
+    // No fence on the work batch: the present batch's fence signal covers every batch submitted before it on the queue.
+    if (waitSemaphore != VK_NULL_HANDLE)
+        frameData.primaryCommandBuffer.addWaitSemaphore(waitSemaphore, vk::PipelineStageFlagBits::eAllCommands); // eAllCommands (not just transfer) for GI BLAS
+    waitFrameSlot(UINT64_MAX); // the slot's command buffers are re-recorded below, before the acquire (a no-op: the loop top waited it)
+    {
+        ProfileScope profileScope("Record command buffers", EProfileCategory::Renderer);
+        recordCommandBuffers();
+    }
+    {
+        ProfileScope profileScope("Submit work", EProfileCategory::Renderer);
+        frameData.primaryCommandBuffer.submitGraphics();
+    }
     {
         // Can block on the presentation engine (vsync backpressure lands here or in the fence wait).
         ProfileScope profileScope("Acquire image", EProfileCategory::Wait);
         if (!m_swapChain.acquireNextImage())
         {
-            // The primary CB will not be submitted this frame, so registering the staging semaphore on
-            // it would leave the signal without a waiter - and the next flush that cycles back to that
-            // semaphore would re-signal it while still signaled (invalid for a binary semaphore). Hand
-            // it back to the chain instead: the next flush waits it.
-            Globals::stagingManager.restoreChainSemaphore(waitSemaphore);
+            // The work batch is on the GPU with no fence, and the slot does not advance: the next frame's slot writes
+            // must not land under it. A rare path (a resize, a lost surface): drain.
+            (void)Globals::device.graphicsQueueWaitIdle();
             Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
             // Held (a resize drag in progress, setResizeHold): no rebuild per frame of the drag - this frame is
             // skipped (the OS stretches the last image) and the swapchain rebuilds once the hold ends.
@@ -1102,17 +1116,15 @@ void Renderer::present()
             return;
         }
     }
-    if (waitSemaphore != VK_NULL_HANDLE)
-        frameData.primaryCommandBuffer.addWaitSemaphore(waitSemaphore, vk::PipelineStageFlagBits::eAllCommands); // eAllCommands (not just transfer) for GI BLAS
     {
-        ProfileScope profileScope("Record command buffers", EProfileCategory::Renderer);
-        recordCommandBuffers();
+        ProfileScope profileScope("Record present", EProfileCategory::Renderer);
+        recordPresentCommandBuffer();
     }
 
     m_gpuProfiler.onSubmit(frameIdx); // CPU-time anchor for the GPU timeline fallback
     {
         ProfileScope profileScope("Submit", EProfileCategory::Renderer);
-        m_swapChain.submitCommandBuffer(getCurrentCommandBuffer());
+        m_swapChain.submitCommandBuffer(frameData.presentCommandBuffer);
     }
     // Submitted: a grow may replace the buffers now (it drains the GPU first; the next frame re-records).
     meshBuffersHeld.release();
@@ -1124,9 +1136,6 @@ void Renderer::present()
     // main-thread state written between the join and here); a frame with no request switches it off.
     m_particles.latchRainVolume();
     m_frameViewSet = false; // the next frame must publish its own view
-    // This frame's submission is now new GPU work that could read the shared mesh/material/instance-offset
-    // buffers; any upload into them from here on needs a fresh drain. See StagingManager::ensureDrainedForSharedWrite.
-    Globals::stagingManager.resetSharedWriteGate();
 
     if (!m_screenshotPath.empty())
     {

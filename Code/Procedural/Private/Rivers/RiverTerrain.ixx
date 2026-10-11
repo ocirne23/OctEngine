@@ -186,7 +186,6 @@ export namespace Procedural
 		struct Block; // the units a query rect touches, resolved up front
 		void resolve(double x0, double z0, double x1, double z1, Block& out) const;
 		void apply(const Block& b, double worldX, double worldZ, TerrainPoint& p) const;
-		float influence(const Block& b, double worldX, double worldZ) const; // apply's `river`, nothing else
 		// apply's water, nothing else; `river` (optional) = the water is a river channel's, not a lake's
 		float inlandWater(const Block& b, double worldX, double worldZ, float none, bool* river = nullptr) const;
 		// The grid grows past the unit by m_reachPx (the largest piece reach); each piece is listed in the cells its own reach

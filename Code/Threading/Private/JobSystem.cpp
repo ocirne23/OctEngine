@@ -141,6 +141,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     m_fibers = oc::make_unique<Fiber[]>(m_numFibers);
     m_freeFibers.initialize(m_numFibers);
     m_resumeQueue.initialize(m_numFibers * 2); // 2x: a ring "full" can be transient, keep it unreachable
+    m_yieldQueue.initialize(m_numFibers * 2);
     for (uint32 i = 0; i < m_numFibers; ++i)
     {
         m_fibers[i].handle = CreateFiberEx(desc.fiberStackCommit, desc.fiberStackReserve, FiberFlagFloatSwitch, &JobSystem::fiberEntry, &m_fibers[i]);
@@ -277,7 +278,7 @@ void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
     // Profile scopes ride the fiber: a resumed park replays the scopes it suspended (possibly onto
     // a different thread's track), a fresh job starts with none. profileBase remembers THIS
     // thread's open depth so a later park strips only the fiber's own scopes.
-    if (fiber->state == Fiber::EState::Parked)
+    if (fiber->state == Fiber::EState::Parked || fiber->state == Fiber::EState::Yielded)
     {
         fiber->profileBase = Globals::profiler.resumeScopes(fiber->profileScopes);
     }
@@ -297,6 +298,12 @@ void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
     if (state == Fiber::EState::Parked)
     {
         fiber->switchDone.store(1, oc::memory_order_release);
+    }
+    else if (state == Fiber::EState::Yielded)
+    {
+        // Fully switched out: resumable at once, by this worker after its resume pops or by any other.
+        pushMust(m_yieldQueue, fiber);
+        wakeOne();
     }
     else
     {
@@ -327,6 +334,12 @@ void JobSystem::workerMain(uint32 contextIndex)
         if (m_resumeQueue.pop(fiber)) // resumed waits first: they hold fibers and gate dependents
         {
             ctx.numResumed++;
+            ctx.idleStreak = 0;
+            runFiber(ctx, fiber);
+            continue;
+        }
+        if (m_yieldQueue.pop(fiber)) // a started job that stepped aside: finish it before starting new ones
+        {
             ctx.idleStreak = 0;
             runFiber(ctx, fiber);
             continue;
@@ -643,7 +656,7 @@ bool JobSystem::anyWorkForWorker() const
 {
     if (!m_running.load(oc::memory_order_relaxed))
         return true; // wake to exit
-    if (!m_resumeQueue.wasEmpty())
+    if (!m_resumeQueue.wasEmpty() || !m_yieldQueue.wasEmpty())
         return true;
     bool anyJobs = false;
     for (uint32 p = 0; p < NumJobPriorities && !anyJobs; ++p)
@@ -796,7 +809,10 @@ bool JobSystem::preemptionPoint()
 bool JobSystem::hasHigherPriorityReady(EJobPriority mine) const
 {
     // the shared rings only: the deques hold continuations of mixed priority, and a job sitting
-    // in some other worker's deque is that worker's next pop anyway
+    // in some other worker's deque is that worker's next pop anyway. Plus a RESUMED fiber: only a
+    // worker's scheduler loop runs those (see yieldToResumed).
+    if (!m_resumeQueue.wasEmpty())
+        return true;
     for (uint32 p = 0; p < uint32(mine); ++p)
         if (!m_readyQueues[p].wasEmpty())
             return true;
@@ -815,6 +831,13 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
     if (!onFiber && t_helpDepth >= MaxHelpDepth)
         return false;
     assertNotThreadLocalPinned(); // the nested bodies would run on this thread's pinned TLS
+    bool yielded = false;
+    if (onFiber && !m_resumeQueue.wasEmpty())
+    {
+        yieldToResumed(*ctx);
+        yielded = true;
+        ctx = t_worker; // resumed, possibly on another worker
+    }
     const auto popHigher = [this, mine]() -> Job*
     {
         Job* job = nullptr;
@@ -823,12 +846,13 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
     };
     Job* job = popHigher();
     if (!job)
-        return false;
+        return yielded;
     // The marker: one "Pre-emption" span per point that ran something, nested inside the
     // interrupted job's own scope, with the jobs it ran as its children - so the profiler shows
-    // WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope.
-    ProfileScope scope("Pre-emption", EProfileCategory::Threading);
-    bool ran = false;
+    // WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope. Opened at
+    // the first job that RUNS: a point that only bounces a ForeignWait job back leaves no record.
+    oc::optional<ProfileScope> scope;
+    bool ran = yielded;
     do
     {
         if (job->flags & EJobFlag_ForeignWait)
@@ -849,6 +873,8 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
             }
             return ran;
         }
+        if (!scope)
+            scope.emplace("Pre-emption", EProfileCategory::Threading);
         ctx->numPreempted++;
         if (!onFiber)
             ++t_helpDepth;
@@ -859,6 +885,22 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
         ctx = t_worker; // re-read: the nested job may have parked and migrated this fiber
     } while ((job = popHigher()) != nullptr);
     return ran;
+}
+
+// A RESUMED fiber runs only from a worker's scheduler loop - never at a pre-emption point (a fiber cannot be nested
+// inside another) and never on main's helping wait (no fiber). So with every worker deep in a long Low job, a High
+// job that parked on its own fan-out - typically after a point ran it nested inside a Low job - stayed parked until one
+// of those jobs ENDED, while main waited on it: terrainRenderPush, 23 ms. At a point, the running fiber therefore steps
+// aside instead: it parks itself as Yielded, its worker's scheduler pops the resume queue first, and the yielded fiber
+// waits in m_yieldQueue (after the resumes, before new work - it holds a fiber). Only real resumes trigger a yield, never
+// a yielded fiber, so two Low jobs never ping-pong. The same rules as any park: no ThreadLocalScope, no JobMutex held.
+void JobSystem::yieldToResumed(WorkerContext& ctx)
+{
+    Fiber* fiber = ctx.currentFiber;
+    fiber->state = Fiber::EState::Yielded;
+    // Carry the open scopes with the fiber, as a park does; runFiber queues it once it has fully switched out.
+    Globals::profiler.suspendScopes(fiber->profileScopes, fiber->profileBase);
+    SwitchToFiber(fiber->returnFiber);
 }
 
 void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)

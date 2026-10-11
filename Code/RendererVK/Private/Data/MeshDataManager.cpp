@@ -123,11 +123,9 @@ size_t MeshDataManager::allocate(Pool& pool, size_t bucketBytes, vk::BufferUsage
         const size_t offset = (size_t)bucketStart * bucketBytes;
         if (pData)
         {
-            // Shared (not per-frame-in-flight), read full-range every frame by GI probe trace / RTAO / BLAS builds.
-            // See StagingManager::ensureDrainedForSharedWrite: without this, upload()'s ring buffer can implicitly
-            // submit the copy the moment it overflows, racing an in-flight frame's read with no synchronization.
-            Globals::stagingManager.ensureDrainedForSharedWrite();
-            Globals::stagingManager.upload(pool.buffer.getBuffer(), size, pData, offset);
+            // Shared (not per-frame-in-flight), read every frame by GI probe trace / RTAO / BLAS builds: see
+            // StagingManager::uploadShared.
+            Globals::stagingManager.uploadShared(pool.buffer.getBuffer(), size, pData, offset);
         }
         return offset;
     };

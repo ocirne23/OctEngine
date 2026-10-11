@@ -18,8 +18,10 @@ namespace
 
 void MeshLodRegistry::uploadShared(Buffer& buffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
 {
-    Globals::stagingManager.ensureDrainedForSharedWrite();
-    buffer.upload(dataSize, data, dstOffset);
+    if (dataSize == 0)
+        return;
+    // Its buffers are device-local, so always staged: see StagingManager::uploadShared.
+    Globals::stagingManager.uploadShared(buffer.getBuffer(), dataSize, data, dstOffset);
 }
 
 uint32 MeshLodRegistry::addGroup(const MeshLodGroup& group)

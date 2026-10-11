@@ -28,6 +28,13 @@ public:
     bool initialize();
 
     vk::Semaphore upload(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
+    // upload() into a buffer that is SHARED (not per-frame-in-flight) and read every frame by the draw passes, GI / RTAO
+    // or the BLAS builds (the mesh mega-buffers, MeshInfos, MaterialInfos, InstanceOffsets, the LOD tables): a copy may
+    // rewrite bytes a frame in flight still reads, and a ring overflow can submit the batch the moment it fills, long
+    // before the frame's own flush. So the batch it lands in opens with a barrier against EVERYTHING submitted before it
+    // on the queue - the GPU orders the copy after those reads, the CPU never waits. (Until 2026-10-11 the first such
+    // upload of a frame drained the queue on the CPU: graphicsQueueWaitIdle, 11 ms on main in a terrain upload.)
+    vk::Semaphore uploadShared(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
     vk::Semaphore uploadImage(vk::Image dstImage, uint32 imageWidth, uint32 imageHeight, vk::DeviceSize dataSize, const void* data, uint32 mipLevel, vk::DeviceSize dstOffset = 0);
     vk::Semaphore uploadImageAndGenerateMipMaps(vk::Image image, uint32 imageWidth, uint32 imageHeight, uint32 numMipLevels, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
     // GPU image->image mip copies (texture streaming residency swaps): src is a retired streamed image
@@ -39,22 +46,6 @@ public:
     // Submits any queued copies now so their destination buffers can be destroyed (capacity growth).
     // The signal semaphore is kept as m_nextUpdateSemaphore so the next update() consumes it.
     void flushPending();
-    // present()'s acquire failed AFTER update(): the returned semaphore's waiter (the primary CB) will
-    // never be submitted, and a signaled binary semaphore must not be re-signaled - hand it back so the
-    // next flush waits it, consuming the signal and preserving the chain's ordering.
-    void restoreChainSemaphore(vk::Semaphore semaphore);
-
-    // Call before queuing an upload() into a buffer that is shared (not per-frame-in-flight) and read
-    // full-range every frame by GI/RTAO compute or the draw passes (mesh mega-buffers, MeshInfos,
-    // MaterialInfos, InstanceOffsets). upload()'s ring buffer can implicitly submit (via update()) the
-    // moment it overflows, regardless of caller - so a copy into one of these buffers can go to the GPU
-    // far earlier than whatever call site eventually flushes it, racing an in-flight frame's read with no
-    // synchronization. Draining here, once per frame (cheap no-op on every later call this frame - nothing
-    // new can have been submitted since, until the next resetSharedWriteGate), closes that window
-    // regardless of when the eventual flush happens. Reset once per frame right after that frame's
-    // primary command buffer is submitted (Renderer::present()).
-    void ensureDrainedForSharedWrite();
-    void resetSharedWriteGate() { m_drainedForSharedWrite.store(false, oc::memory_order_release); }
 
 private:
 
@@ -96,7 +87,7 @@ private:
 
     std::mutex m_mutex;
     oc::atomic<uint32> m_numWriters[NUM_STAGING_BUFFERS]{}; // copies in flight outside m_mutex, per buffer
-    oc::atomic<bool> m_drainedForSharedWrite = false;
+    bool m_sharedWrite = false; // the current batch holds an uploadShared copy (under m_mutex)
 };
 
 export namespace Globals

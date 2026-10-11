@@ -46,7 +46,7 @@ export struct TreeWorldSettings
 	float climateSharpness = 4.0f;  // the species pick by climate fit ^ this (0 = every fitting species alike)
 	float climateFadeStart = 0.10f; // a species' climate fit fades to 0 between these (fractions of its peak): no tail
 	float climateFadeEnd = 0.25f;
-	int maxGenJobs = 2;
+	int maxGenJobs = 0;             // concurrent chunk placements (Low pump jobs, preemptible); 0 = one per job worker
 	int poolMB = 128;               // the GPU record pool (MB; fixed - a change drains the GPU and regenerates)
 	int uploadKB = 1024;            // record bytes uploaded per frame
 	int keepRadius = 4;             // chunks (Chebyshev) whose records the CPU keeps

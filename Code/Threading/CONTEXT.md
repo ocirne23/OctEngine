@@ -143,9 +143,19 @@ The rules are those of any inline job:
   and a High "Begin frame job" parked in the deque of a worker mid-way through a seconds-long Low
   job would wait out that job. The next point pops it again; two ring ops per chunk.
 
+**A point also YIELDS to a resumed fiber** (`yieldToResumed`). A resumed fiber runs only from a worker's
+scheduler loop: never nested at a point, never on main's helping wait (no fiber). So with every worker deep in a long
+Low job, a High job that parked on its own fan-out - typically one a point had run nested inside a Low job - stayed
+parked until one of those jobs ENDED, while main waited on it (`terrainRenderPush`, 23 ms, seen live). Now a fiber at
+a point that sees the resume queue non-empty parks itself as `Yielded`; its worker's scheduler pops the resume queue
+first, and the yielded fiber waits in `m_yieldQueue` - after the resumes, before any new job (it holds a fiber). Only
+REAL resumes trigger a yield, never a yielded fiber, so Low jobs never ping-pong. A yield migrates the job like a
+park: the point rules above already cover it.
+
 **Profiler marker.** A point that runs something opens one `"Pre-emption"` scope (Threading
 category) nested inside the interrupted job's own scope, with the jobs it ran as children — so the
-timeline shows WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope.
+timeline shows WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope. It
+opens at the first job that RUNS: a point that only puts a ForeignWait job back records nothing.
 `getStats().numPreempted` (Threading/Stats "Pre-empted/s") counts jobs run at points, and the self
 test pins a Low spinner on every worker, fires 256 High jobs and requires at least one to have run at
 a point (main and the window helper legitimately take some).
@@ -279,7 +289,8 @@ to land on the first step-free frame after a step (or every frame below the step
 * **A worker's own continuations go to its LOCAL deque regardless of priority** — that fork/join
   locality is the point. `submitReadyBatch` is the exception: fan-out goes straight to the shared
   queues, because a local deque would serialize the start behind one steal per job.
-* **Resumed fibers come first** in `workerMain` — they hold fibers and gate dependents.
+* **Resumed fibers come first** in `workerMain` — they hold fibers and gate dependents. Then the
+  yielded fibers (`m_yieldQueue`, see Pre-emption), then new work.
 * **Idle** = a short `_mm_pause` spin (~1 µs), then sleep on an eventcount (`oc::atomic::wait` →
   `WaitOnAddress`) with a Dekker announce-and-recheck against `wakeMany`. `anyWorkForWorker` also
   requires a free fiber: jobs cannot start without one, and the fiber release wakes sleepers.

@@ -449,11 +449,11 @@ private:
     Renderer& operator=(const Renderer&&) = delete;
 
     uint32 getCurrentFrameIndex() const { return m_swapChain.getCurrentFrameIndex(); }
-    CommandBuffer& getCurrentCommandBuffer() { return m_perFrameData[m_swapChain.getCurrentFrameIndex()].primaryCommandBuffer; }
 
 	void beginFrame(); // through kickBeginFrameJob() and joinBeginFrameJob(): sets up the frame's per-frame data, cull, and UBOs.
 
-    void recordCommandBuffers();
+    void recordCommandBuffers();       // the frame's work batch (everything but the swapchain pass); before the acquire
+    void recordPresentCommandBuffer(); // the swapchain pass (composite + ImGui): the batch that waits for the image
     void recordSceneSecondaries(uint32 frameIdx);
     void recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary);
     void recordPrimaryVR(uint32 frameIdx, CommandBuffer& primary);
@@ -1026,7 +1026,8 @@ private:
         DescriptorSet shadowCullDescriptorSet;
         DescriptorSet shadowDrawDescriptorSet;
 
-        CommandBuffer primaryCommandBuffer;
+        CommandBuffer primaryCommandBuffer; // the frame's work: its own batch, submitted before the acquire
+        CommandBuffer presentCommandBuffer; // the swapchain pass alone: the batch that waits for the acquired image
         CommandBuffer staticMeshCommandBuffer;
         // One cached secondary per PHASE (desktop): the post-scene compute group interleaves them with the other passes'
         // (recordPostSceneCompute). RTAO: the trace, the temporal pass, the blur; the clouds: the march, the temporal pass.

@@ -462,7 +462,7 @@ export struct FarTreeParams
     float recordDetail = 4000.0f;
     // A bake runs over about this many frames (the record splat's three passes spread evenly, plus a few steps of their
     // own); the march reads the previous bake until the last one. 1 = as fast as it goes.
-    int bakeFrames = 8;
+    int bakeFrames = 12;
     // THE HAND-OVER: a finished bake CROSS-FADES into the shown one (a dithered per-ray pick, averaged by the temporal
     // pass / TAA) over this many seconds of real time - no GPU work, so a time, not frames: the same at any frame rate
     // (0 = at once; the swap then still takes the copy's frames).

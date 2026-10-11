@@ -62,7 +62,7 @@ export namespace Procedural
 		// they touch m_residents, so a caller never sees the map change under the job.
 		void joinRender();
 		// The chunk mesh upload (Renderer::createMesh: the staging copy into the mesh mega-buffers, which
-		// can wait on staging fences and the per-frame shared-write GPU drain) runs on a job. update()
+		// can wait on a staging fence when the ring wraps) runs on a job. update()
 		// picks the chunks; main.cpp kicks the job right AFTER Renderer::present, so it overlaps the
 		// frame-pacing wait, and joins it before the next frame's kicks (the begin-frame job and the
 		// entity pass read the mesh tables it grows). The next update() spawns the nodes.

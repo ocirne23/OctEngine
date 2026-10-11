@@ -571,9 +571,16 @@ namespace Procedural
 		kickPump(missing.size());
 	}
 
+	// The pump cap ("Gen jobs"; 0 = one per job worker). The pumps are Low and yield at every preemption point, so a pump
+	// per worker only fills the idle ones: higher-priority work still goes first.
+	int32 TreeWorld::pumpCap() const
+	{
+		return m_settings.maxGenJobs <= 0 ? (int32)glm::max(Globals::jobSystem.getNumWorkers(), 1u) : glm::clamp(m_settings.maxGenJobs, 1, 64);
+	}
+
 	void TreeWorld::kickPump(size_t numNew)
 	{
-		const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 8);
+		const int32 cap = pumpCap();
 		for (size_t spawned = 0; spawned < numNew; )
 		{
 			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
@@ -625,7 +632,7 @@ namespace Procedural
 					if (m_requests.empty())
 						return;
 				}
-				const int32 cap = glm::clamp(m_settings.maxGenJobs, 1, 8);
+				const int32 cap = pumpCap();
 				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{
@@ -677,7 +684,10 @@ namespace Procedural
 
 		// The river influence on its OWN fine grid over the same extent: most channels are narrower than GRID_STEP, so
 		// the field's points miss them. Cheap - it reads only the river units, not the terrain.
-		const float riverPad = step * (float)halo;
+		// Its extent: what is READ - the trees inside the chunk, the neighbours' rocks up to their reach + 2 m outside it (the
+		// terrain halo is wider for the talus probe and the rugged measure, which read no river). At 1 m it is the largest
+		// grid here: 284^2 points instead of the halo's 337^2.
+		const float riverPad = (config.rocks.empty() ? 0.0f : ROCK_REACH + 2.0f) + RIVER_GRID_STEP;
 		const uint32 rpr = (uint32)std::ceil((cs + 2.0f * riverPad) / RIVER_GRID_STEP) + 1;
 		oc::vector<float> riverField((size_t)rpr * rpr);
 		config.maps->sampleRiverGrid(ox - riverPad, oz - riverPad, RIVER_GRID_STEP, rpr, rpr, riverField);
@@ -890,10 +900,28 @@ namespace Procedural
 			const int32 cx0 = (int32)std::floor((ox - ROCK_REACH) / c), cx1 = (int32)std::floor((ox + cs + ROCK_REACH) / c);
 			const int32 cz0 = (int32)std::floor((oz - ROCK_REACH) / c), cz1 = (int32)std::floor((oz + cs + ROCK_REACH) / c);
 			const uint32 typeSeed = treeHash(config.seed, 7000u + rock.type);
+			// The most the rules' density can add up to: every fit term (climate, slope, crag, talus, cluster) is at most 1,
+			// a ground term at most its largest multiplier (absolute values: a bound whatever the signs). A cell whose roll is
+			// above it has no rock, whatever its ground - decided before anything is sampled, and rocks are sparse: most cells.
+			const auto maxAbs = [](glm::vec2 v) { return glm::max(glm::abs(v.x), glm::abs(v.y)); };
+			float maxDensity = 0.0f;
+			for (const RockRule& rule : rock.rules)
+			{
+				const RockPlacementDesc& p = rule.placement;
+				float ground = glm::max(glm::abs(p.plains), maxAbs(p.rugged));
+				if (p.valley >= 0.0f)
+					ground = glm::max(ground, p.valley);
+				maxDensity += glm::abs(p.density) * glm::max(1.0f, glm::abs(1.0f - p.crag)) * glm::max(1.0f, glm::abs(1.0f - p.talus))
+					* ground * maxAbs(p.forest) * maxAbs(p.river) * maxAbs(p.flow);
+			}
+			const float maxChance = maxDensity * cellArea;
 			for (int32 cz = cz0; cz <= cz1; ++cz)
 				for (int32 cx = cx0; cx <= cx1; ++cx)
 				{
 					const uint32 h = treeHash(treeHash(typeSeed, (uint32)cx), (uint32)cz);
+					if (treeHash01(treeHash(h, 3u)) >= maxChance)
+						continue; // the same roll as the test below: no rock here at any density
+
 					// The rock's world position in its cell, then its OWNER chunk and its record there.
 					const double wx = ((double)cx + (double)treeHash01(treeHash(h, 1u))) * c;
 					const double wz = ((double)cz + (double)treeHash01(treeHash(h, 2u))) * c;
@@ -1020,11 +1048,19 @@ namespace Procedural
 		const float cell = cs / (float)n;
 		const float cellArea = cell * cell * (1.0f / 10000.0f) * config.densityScale; // hectares x the scale
 		const uint32 chunkSeed = treeHash(treeHash(config.seed, (uint32)coord.x), (uint32)coord.y);
+		// The most the species' densities can add up to (fit, its sharpening and the cluster noise are each at most 1): a
+		// candidate whose roll is above it has no tree - decided before its field sample and the per-species fits.
+		float maxTotal = 0.0f;
+		for (const Species& species : config.species)
+			maxTotal += glm::abs(species.placement.density);
+		const float maxChance = maxTotal * cellArea;
 		for (uint32 cj = 0; cj < n; ++cj)
 		{
 			for (uint32 ci = 0; ci < n; ++ci)
 			{
 				const uint32 h = treeHash(chunkSeed, cj * n + ci);
+				if (treeHash01(treeHash(h, 3u)) >= maxChance)
+					continue; // the same roll as the existence test below
 				const float lx = ((float)ci + treeHash01(treeHash(h, 1u))) * cell;
 				const float lz = ((float)cj + treeHash01(treeHash(h, 2u))) * cell;
 				const uint32 qx = glm::min((uint32)(lx / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);

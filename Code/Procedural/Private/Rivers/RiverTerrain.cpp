@@ -1299,53 +1299,6 @@ namespace Procedural
 			p.humidity += (1.0f - p.humidity) * oc::clamp(m_carve.waterHumidity, 0.0f, 1.0f) * waterHumidity;
 	}
 
-	float RiverTerrain::influence(const Block& b, double worldX, double worldZ) const
-	{
-		const TerrainConfigV3& gc = m_base->config();
-		const double inv = 1.0 / (double)gc.metersPerPixel;
-		const double gx = (worldX + (double)gc.originX) * inv;
-		const double gz = (worldZ + (double)gc.originZ) * inv;
-		const float nr = TerrainGenV3::nativeResolution();
-		float best = 0.0f;
-		const int32 ui0 = floorDivI((int32)std::floor(gz - (double)m_reachPx), m_unitPx);
-		const int32 ui1 = floorDivI((int32)std::floor(gz + (double)m_reachPx), m_unitPx);
-		const int32 uj0 = floorDivI((int32)std::floor(gx - (double)m_reachPx), m_unitPx);
-		const int32 uj1 = floorDivI((int32)std::floor(gx + (double)m_reachPx), m_unitPx);
-		for (int32 ui = ui0; ui <= ui1; ui++)
-			for (int32 uj = uj0; uj <= uj1; uj++)
-			{
-				const PreparedRiverUnit* pu = b.at(ui, uj);
-				if (!pu || pu->unit->empty || pu->cells == 0)
-					continue;
-				const RiverUnit& u = *pu->unit;
-				const float lx = (float)(gx - (double)uj * (double)m_unitPx);
-				const float lz = (float)(gz - (double)ui * (double)m_unitPx);
-				const int32 pad = (int32)std::ceil(m_reachPx);
-				const int32 cx = (int32)std::floor((lx + (float)pad) / (float)pu->cellPx);
-				const int32 cz = (int32)std::floor((lz + (float)pad) / (float)pu->cellPx);
-				if (cx < 0 || cz < 0 || cx >= pu->cells || cz >= pu->cells)
-					continue;
-				const size_t cell = (size_t)cz * pu->cells + cx;
-				for (uint32 n = pu->cellStart[cell]; n < pu->cellStart[cell + 1]; n++)
-				{
-					const uint32 k = pu->cellPieces[n];
-					const RiverPoint& a = u.points[k];
-					const RiverPoint& c = u.points[k + 1];
-					const float abx = c.x - a.x, abz = c.z - a.z;
-					const float len2 = abx * abx + abz * abz;
-					const float t = len2 > 1e-12f ? oc::clamp(((lx - a.x) * abx + (lz - a.z) * abz) / len2, 0.0f, 1.0f) : 0.0f;
-					const float px = a.x + abx * t - lx, pz = a.z + abz * t - lz;
-					const float d = std::sqrt(px * px + pz * pz) * nr;
-					const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
-					// The same falloff as apply: 1 in the channel, 0 at the floodplain's edge.
-					const float band = hw * (m_carve.bankFactor + m_carve.floodplainFactor);
-					const float inf = d < hw ? 1.0f : oc::clamp(1.0f - (d - hw) / oc::max(band, 1e-3f), 0.0f, 1.0f);
-					best = oc::max(best, inf);
-				}
-			}
-		return best;
-	}
-
 	float RiverTerrain::inlandWater(const Block& b, double worldX, double worldZ, float none, bool* river) const
 	{
 		if (river)
@@ -1463,13 +1416,72 @@ namespace Procedural
 			return;
 		Block b;
 		resolve(originX, originZ, originX + step * (double)(resX - 1), originZ + step * (double)(resZ - 1), b);
+		// PER PIECE, not per point (2026-10-11): a point used to search every piece listed in its 16 px cell - TreeWorld's 1 m
+		// grid over a chunk is ~80k points, almost all of them far from any river. Now each piece writes only the points
+		// within its reach, with apply's falloff (1 in the channel, 0 at the floodplain's edge; the same unit-local
+		// coordinates and arithmetic as the point search), and a point keeps the max: the cost follows the river length in
+		// the rect, not its area. The reach: the piece's cell-list reach (prepare), grown to its falloff's end where that is
+		// larger, within the grid pad. The one difference: past the pad (a floodplain wider than c_maxFloodplainM) the point
+		// search kept a piece up to its 16 px cell's edge; this cuts it at the pad.
+		const TerrainConfigV3& gc = m_base->config();
+		const double inv = 1.0 / (double)gc.metersPerPixel;
+		const float nr = TerrainGenV3::nativeResolution();
+		const float pad = std::ceil(m_reachPx);
+		oc::fill(outInfluence.begin(), outInfluence.begin() + (size_t)resX * resZ, 0.0f);
+		oc::vector<double> gxs(resX), gzs(resZ); // global native px of every column / row
+		for (uint32 i = 0; i < resX; i++)
+			gxs[i] = (originX + step * (double)i + (double)gc.originX) * inv;
 		for (uint32 j = 0; j < resZ; j++)
+			gzs[j] = (originZ + step * (double)j + (double)gc.originZ) * inv;
+		const double gx0 = gxs[0], gz0 = gzs[0], sx = step * inv;
+		const auto indexRange = [&](double lo, double hi, double first, uint32 count, int32& i0, int32& i1)
 		{
-			const double wz = originZ + step * (double)j;
-			for (uint32 i = 0; i < resX; i++)
-				outInfluence[(size_t)j * resX + i] = influence(b, originX + step * (double)i, wz);
-			Globals::jobSystem.preemptionPoint();
-		}
+			i0 = oc::max((int32)std::floor((lo - first) / sx), 0);
+			i1 = oc::min((int32)std::ceil((hi - first) / sx), (int32)count - 1);
+		};
+		for (int32 i = 0; i < b.uh; i++)
+			for (int32 j = 0; j < b.uw; j++)
+			{
+				const PreparedRiverUnit* pu = b.units[(size_t)i * b.uw + j].get();
+				if (!pu || pu->unit->empty || pu->cells == 0)
+					continue;
+				const RiverUnit& u = *pu->unit;
+				const double unitX = (double)(b.uj0 + j) * (double)m_unitPx, unitZ = (double)(b.ui0 + i) * (double)m_unitPx;
+				for (const RiverSegment& seg : u.segments)
+				{
+					for (uint32 k = 0; k + 1 < seg.count; k++)
+					{
+						const RiverPoint& a = u.points[seg.first + k];
+						const RiverPoint& c = u.points[seg.first + k + 1];
+						const float hwMax = oc::max(a.halfWidth, c.halfWidth);
+						const float reachPx = oc::min(oc::max(pieceReach(hwMax, oc::max(a.q, c.q)), m_carve.floodplainEdge(oc::max(hwMax, 0.05f))) / nr, pad);
+						int32 x0, x1, z0, z1;
+						indexRange(unitX + (double)(oc::min(a.x, c.x) - reachPx), unitX + (double)(oc::max(a.x, c.x) + reachPx), gx0, resX, x0, x1);
+						indexRange(unitZ + (double)(oc::min(a.z, c.z) - reachPx), unitZ + (double)(oc::max(a.z, c.z) + reachPx), gz0, resZ, z0, z1);
+						if (x0 > x1 || z0 > z1)
+							continue;
+						const float abx = c.x - a.x, abz = c.z - a.z;
+						const float len2 = abx * abx + abz * abz;
+						for (int32 gzI = z0; gzI <= z1; gzI++)
+						{
+							const float lz = (float)(gzs[gzI] - unitZ);
+							float* row = outInfluence.data() + (size_t)gzI * resX;
+							for (int32 gxI = x0; gxI <= x1; gxI++)
+							{
+								const float lx = (float)(gxs[gxI] - unitX);
+								const float t = len2 > 1e-12f ? oc::clamp(((lx - a.x) * abx + (lz - a.z) * abz) / len2, 0.0f, 1.0f) : 0.0f;
+								const float px = a.x + abx * t - lx, pz = a.z + abz * t - lz;
+								const float d = std::sqrt(px * px + pz * pz) * nr;
+								const float hw = oc::max(a.halfWidth + (c.halfWidth - a.halfWidth) * t, 0.05f);
+								const float band = hw * (m_carve.bankFactor + m_carve.floodplainFactor);
+								const float inf = d < hw ? 1.0f : oc::clamp(1.0f - (d - hw) / oc::max(band, 1e-3f), 0.0f, 1.0f);
+								row[gxI] = oc::max(row[gxI], inf);
+							}
+						}
+					}
+					Globals::jobSystem.preemptionPoint();
+				}
+			}
 	}
 
 	void RiverTerrain::samplePoint(double worldX, double worldZ, TerrainPoint& out, ESampleDetail detail) const

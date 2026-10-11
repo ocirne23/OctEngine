@@ -1809,7 +1809,7 @@ void Renderer::recordCommandBuffers()
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
     // Streamed textures: refresh swapped bindless slots in this frame slot's sets before anything
-    // records against them (safe here: acquireNextImage waited this slot's fence, and the texture
+    // records against them (safe here: present() waited this slot's fence, and the texture
     // arrays are UPDATE_AFTER_BIND for the cached CBs).
     ProfileScope descriptorScope("Bindless descriptor writes", EProfileCategory::Renderer);
     m_textures.applyPendingWrites(frameIdx);
@@ -1939,6 +1939,22 @@ void Renderer::recordCommandBuffers()
         else
             recordPrimaryDesktop(frameIdx, vkCommandBuffer);
     }
+    commandBuffer.end(); // "GPU Frame" stays open: recordPresentCommandBuffer closes it
+}
+
+// THE SWAPCHAIN PASS, in a primary of its own (2026-10-11): the only batch that waits for the acquired image. With the
+// whole frame in one primary, its batch waited on the acquire semaphore before ANY of it ran - the driver starts a batch
+// only once its wait semaphores signal, whatever the stage mask - and the image is released only after the previous
+// frame's present: a gap after every GPU frame. Now the work batch is submitted before the acquire (present()) and
+// starts at once; this one, recorded after the acquire (it names the image's framebuffer), waits alone. The composite
+// reads what the work batch wrote through the work batch's own barriers: a barrier's second scope reaches every command
+// later in submission order, the next batch included.
+void Renderer::recordPresentCommandBuffer()
+{
+    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& commandBuffer = frameData.presentCommandBuffer;
+    vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
 
     // Swapchain render pass: composite the resolved scene into the swapchain, then ImGui on top.
     constexpr oc::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
@@ -1956,10 +1972,11 @@ void Renderer::recordCommandBuffers()
         vk::CommandBuffer vkCompositeCommandBuffer = frameData.compositeCommandBuffer.getCommandBuffer();
         vkCommandBuffer.executeCommands(1, &vkCompositeCommandBuffer);
     }
+    vk::CommandBuffer vkImguiCommandBuffer = frameData.imguiCommandBuffer.getCommandBuffer();
     vkCommandBuffer.executeCommands(1, &vkImguiCommandBuffer);
     vkCommandBuffer.endRenderPass();
     m_gpuProfiler.endScope(vkCommandBuffer);
-    m_gpuProfiler.endScope(vkCommandBuffer); // GPU Frame
+    m_gpuProfiler.endScope(vkCommandBuffer); // GPU Frame (opened in recordCommandBuffers)
     commandBuffer.end();
 }
 

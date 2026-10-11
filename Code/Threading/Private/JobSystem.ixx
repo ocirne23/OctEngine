@@ -15,7 +15,7 @@ export class JobMutex;
 // TLS in the root CMakeLists; job code must not cache thread_local addresses across a wait).
 struct Fiber
 {
-    enum class EState : uint32 { Idle, Running, Parked, Finished };
+    enum class EState : uint32 { Idle, Running, Parked, Yielded, Finished }; // Yielded: see JobSystem::yieldToResumed
 
     void* handle = nullptr;      // Win32 fiber
     void* returnFiber = nullptr; // scheduler fiber of the worker currently running us
@@ -392,6 +392,7 @@ private:
     // can use the loop's priority on the calling thread too, where no job may be current.
     bool hasHigherPriorityReady(EJobPriority mine) const;
     bool runHigherPriorityJobs(EJobPriority mine);
+    void yieldToResumed(WorkerContext& ctx);
     Job* getWork(WorkerContext& ctx);
     Job* getHelpWork(WorkerContext& ctx); // helpWait's pick: never a Low job
     Job* trySteal(WorkerContext& ctx);
@@ -424,6 +425,7 @@ private:
     TaggedIndexStack m_freeJobs;
     TaggedIndexStack m_freeFibers;
     MPMCQueue<Fiber*> m_resumeQueue;
+    MPMCQueue<Fiber*> m_yieldQueue; // fibers that stepped aside at a pre-emption point; after the resumes, before new work
     MPMCQueue<Job*> m_readyQueues[NumJobPriorities];
     struct PostUpdateBatch
     {

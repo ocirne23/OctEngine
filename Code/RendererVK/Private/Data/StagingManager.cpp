@@ -107,6 +107,15 @@ vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSi
     return copyAndUnlock(lock, offset, dataSize, data);
 }
 
+vk::Semaphore StagingManager::uploadShared(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
+{
+    std::unique_lock<std::mutex> lock(m_mutex);
+    const vk::DeviceSize offset = claimNoLock(dataSize, 1); // may submit the previous batch: the flag is this one's
+    m_sharedWrite = true;
+    m_bufferCopyRegions.emplace_back(oc::pair<vk::Buffer, vk::BufferCopy>{ dstBuffer, vk::BufferCopy{ .srcOffset = offset, .dstOffset = dstOffset, .size = dataSize } });
+    return copyAndUnlock(lock, offset, dataSize, data);
+}
+
 vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth, uint32 imageHeight, vk::DeviceSize dataSize, const void* data, uint32 mipLevel, vk::DeviceSize dstOffset)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
@@ -153,18 +162,6 @@ vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstIma
     return m_semaphores[m_currentBuffer];
 }
 
-void StagingManager::ensureDrainedForSharedWrite()
-{
-    if (m_drainedForSharedWrite.load(oc::memory_order_acquire))
-        return;
-    std::lock_guard<std::mutex> lock(m_mutex); // serialize concurrent first-drains; staging -> queue lock order
-    if (m_drainedForSharedWrite.load(oc::memory_order_relaxed))
-        return;
-    auto waitResult = Globals::device.graphicsQueueWaitIdle();
-    assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before shared buffer write");
-    m_drainedForSharedWrite.store(true, oc::memory_order_release); // only after the idle completed
-}
-
 vk::Semaphore StagingManager::update()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -175,15 +172,6 @@ void StagingManager::flushPending()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_nextUpdateSemaphore = updateNoLock();
-}
-
-void StagingManager::restoreChainSemaphore(vk::Semaphore semaphore)
-{
-    if (semaphore == VK_NULL_HANDLE)
-        return;
-    std::lock_guard<std::mutex> lock(m_mutex);
-    assert(m_nextUpdateSemaphore == VK_NULL_HANDLE && "a flush slipped in between present()'s update and the acquire failure");
-    m_nextUpdateSemaphore = semaphore;
 }
 
 vk::Semaphore StagingManager::updateNoLock()
@@ -215,6 +203,21 @@ vk::Semaphore StagingManager::updateNoLock()
 		commandBuffer.addWaitSemaphore(m_nextUpdateSemaphore, vk::PipelineStageFlagBits::eTransfer);
     commandBuffer.addSignalSemaphore(m_semaphores[m_currentBuffer]);
     vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
+
+    // A shared buffer's copy (uploadShared) waits for everything submitted to the queue before this batch - a barrier's
+    // first scope is every command earlier in submission order, earlier submissions included - so it cannot overwrite
+    // bytes a frame in flight still reads. A batch without one (the per-frame uploads, fresh buffers) keeps its overlap.
+    if (m_sharedWrite)
+    {
+        const vk::MemoryBarrier2 afterEarlierWork{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        };
+        vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &afterEarlierWork });
+        m_sharedWrite = false;
+    }
 
     // Copies into the SAME bytes must land in submission order - a capacity growth re-uploads a whole buffer, a later
     // update in the same batch one entry of it (MeshLodRegistry) - but the copies of one batch are unordered. A copy

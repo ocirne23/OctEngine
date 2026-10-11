@@ -211,6 +211,7 @@ export namespace Procedural
 		bool insideKeepRadius(glm::ivec2 coord) const;
 		void dropCpu(Chunk& chunk);
 		void kickPump(size_t numNew);
+		int32 pumpCap() const;
 		void pumpJob();
 		void logStats(const Renderer& renderer) const;
 

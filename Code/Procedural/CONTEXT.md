@@ -75,6 +75,9 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
   these one at a time is fine for a noise field but not for a generator with a per-point cost.
 * **`sampleRiverGrid`** fills the river influence ALONE on a grid (no terrain): placement asks for it at a resolution
   finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
+  RiverTerrain's goes PER PIECE: each river piece writes the points within its reach (the max wins), so the cost
+  follows the river length in the rect, not its area (a per-point search of each 16 px cell's pieces was half of
+  TreeWorld's `placeChunk`, 2026-10-11).
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
   consumers should always prefer it.** For V3 it is the difference between a shared-cache lock per
   point and one per tile: *a terrain-data cascade is 512² texels resolving to a couple of dozen tiles,
@@ -785,17 +788,15 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
 
 * **The mesh upload is a job too** (`"terrainUpload"`, Normal, `m_uploadCounter`).
   `Renderer::createMesh` copies the node into the staging ring. Every node is ~1.2 MB (the same 128-quad grid at any
-  lod; see "Node memory" below), a wrap of the 100 MB ring waits a staging fence, and the frame's first shared-buffer write drains the GPU. So 16
-  uploads on main were ~45 ms. `update` only PICKS the batch into `m_uploads` (cap "Uploads/frame"
+  lod; see "Node memory" below), and a wrap of the 100 MB ring waits a staging fence. So 16 uploads on main were
+  ~45 ms (then with a GPU drain per frame's first shared-buffer write, gone since 2026-10-11 - `uploadShared`). `update` only PICKS the batch into `m_uploads` (cap "Uploads/frame"
   AND "Upload MB/frame", 48 MB default; the first chunk always goes; the picks stay in `m_pending`).
   **main.cpp kicks it right AFTER `present`** (`kickUploads`), so it runs through the frame-pacing
   wait, and **joins it before the next frame's "Frame kicks"** (`joinUploads`): `createMesh` grows the
   MeshInfo / per-mesh tables that the begin-frame job and the entity pass's `renderNode` read.
   Everything it calls is thread-safe (the MeshDataManager alloc mutex, the staging mutex, the renderer
-  `m_spawnMutex`), like parallel entity spawning. **The batch fans out across workers**: the job uploads
-  the FIRST chunk alone — the frame's first shared-buffer write drains the GPU under the staging mutex,
-  and a fan-out would block one worker per chunk behind it — then a grain-1 `parallelFor`
-  (`"terrainUploadMesh"`) uploads the rest. That only pays because the staging memcpy runs OUTSIDE the
+  `m_spawnMutex`), like parallel entity spawning. **The batch fans out across workers**: a grain-1
+  `parallelFor` (`"terrainUploadMesh"`), a chunk per task. That only pays because the staging memcpy runs OUTSIDE the
   staging mutex (RendererVK, `StagingManager`). The next `update` adopts the batch (`"adoptUploads"`:
   re-validate, `spawnMeshNode`, the vegetation stamp — all cheap, all on main; `updateResidency` registers). One more
   frame of latency. `clearResidents` joins it and drops the batch.
@@ -1616,7 +1617,9 @@ in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A mem
 
 * **Ring:** the terrain's (`ringRadius()`, `chunkSize()`, `generatedBounds()`), one chunk of hysteresis on eviction.
   On a camera chunk change the missing chunks are requested and the queue re-sorted nearest first; Low pump jobs
-  (`Gen jobs`, 2) take the front, with lazy staleness as the terrain pumps.
+  (`Gen jobs`; 0, the default = one per job worker - `pumpCap`; they yield at every preemption point, so they only fill
+  idle workers. It was 2: one or two busy workers while a fast camera's queue piled up) take the front, with lazy
+  staleness as the terrain pumps.
 * **THE BOOKKEEPING JOB** (`"TreeWorld update"`, Normal, `m_updateCounter`): merging the pumps' results, the ring
   rescan (a walk of every chunk + the (2R+1)² ring) and the next upload pick run OFF main. main.cpp kicks it
   (`TreeSystem::kickWorldUpdate`) right after `clutter.update` - the LAST reader of the records this frame
@@ -1643,6 +1646,10 @@ in `Assets/Shaders/Trees/tree_record.inc.glsl` (not read by a shader yet). A mem
   (History: until 2026-10-04 the pick was by Density x fit with the Gaussian cut at 2 % - a dense species' tail
   outnumbered a sparse one's core, pines among the acacias, and lone trees far from any forest; until 2026-10-05 by
   fit ^ sharpness normalized by the SUM - an equal-fit species halved the other's density.) Bushes are not stored.
+  **The existence roll goes FIRST** (exact, the same result): a tree candidate whose roll is above the species' summed
+  `Density` x the cell's hectares, or a rock cell whose roll is above its type's bound (every rule's `Density` x its
+  largest ground / forest / river / flow multipliers - every fit term is at most 1), skips its field sample and fits.
+  The river grid (1 m) covers only what is read: the chunk plus the neighbours' rock reach + 2 m, not the terrain halo.
 * **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density tweaks,
   `Reload species`, a new sampler, a chunk size or bounds change. The generation counter is monotonic, so a late pump
   result of an old config never merges.

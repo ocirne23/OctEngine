@@ -64,9 +64,11 @@ public:
     oc::span<T> items() { return m_buffer.template getBackingStoreAs<T>(); }
     void upload(uint32 base, uint32 count)
     {
-        Globals::stagingManager.ensureDrainedForSharedWrite();
-        m_buffer.upload((vk::DeviceSize)count * sizeof(T), m_buffer.template getBackingStoreAs<T>().data() + base,
-            (vk::DeviceSize)base * sizeof(T));
+        if (count == 0)
+            return;
+        // Device-local (initialize), so always staged: see StagingManager::uploadShared.
+        Globals::stagingManager.uploadShared(m_buffer.getBuffer(), (vk::DeviceSize)count * sizeof(T),
+            m_buffer.template getBackingStoreAs<T>().data() + base, (vk::DeviceSize)base * sizeof(T));
     }
 
     Buffer& getBuffer() { return m_buffer; }

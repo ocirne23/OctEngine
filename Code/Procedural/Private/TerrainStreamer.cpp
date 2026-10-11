@@ -765,11 +765,8 @@ namespace Procedural
 				upload.mesh = renderer.createMesh(upload.result.mesh);
 				upload.result.mesh = RenderMeshData{}; // the copy is in the staging ring now
 			};
-			// The batch's first shared-buffer write drains the GPU under the staging mutex, so the first chunk goes
-			// alone: a fan-out would block one worker per chunk behind that wait. The rest copy in parallel, one
-			// chunk per task (the staging memcpy runs outside its mutex).
-			uploadOne(m_uploads[0]);
-			Globals::jobSystem.parallelFor(1, (uint32)m_uploads.size(), 1, { "terrainUploadMesh", EProfileCategory::Procedural },
+			// One chunk per task: the staging memcpy runs outside its mutex, so they copy in parallel.
+			Globals::jobSystem.parallelFor(0, (uint32)m_uploads.size(), 1, { "terrainUploadMesh", EProfileCategory::Procedural },
 				[&](uint32 begin, uint32 end)
 				{
 					for (uint32 i = begin; i < end; ++i)

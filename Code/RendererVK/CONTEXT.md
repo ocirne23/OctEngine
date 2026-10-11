@@ -252,12 +252,23 @@ effect immediately.**
   and the skinning dispatch (CPU-written dims per frame), so instances spawned later run without a
   re-record.
 * **Bindless descriptor writes** for streamed textures happen first, before anything records against
-  them — safe because `acquireNextImage` waited this slot's fence and the arrays are
+  them — safe because `present()` waited this slot's fence (`waitFrameSlot`) and the arrays are
   UPDATE_AFTER_BIND.
 * The baked terrain-data cascades, the RTAO view and the TLAS are all UPDATE_AFTER_BIND too, rewritten
   only when this slot re-records or the underlying handle changed.
 
 **Call `setHaveToRecordCommandBuffers()` after invalidating changes.**
+
+**TWO BATCHES PER FRAME** (2026-10-11). `CB.primary` (`recordCommandBuffers`) holds ALL the frame's work but the
+swapchain pass and is submitted BEFORE `acquireNextImage`, with no image wait and no fence; `CB.present`
+(`recordPresentCommandBuffer`: the composite + ImGui render pass into the acquired image's framebuffer) is recorded
+after the acquire and submitted through `SwapChain::submitCommandBuffer` - the only batch that waits `presentComplete`,
+signalling `renderComplete` and the slot's fence (a fence signal covers every batch submitted before it on the queue).
+**Why:** with one primary the whole frame waited for the image's release - the driver starts a batch only once its wait
+semaphores signal, whatever the stage mask - and the image is released only after the previous frame's present: a gap
+after EVERY GPU frame, VSync off too. The composite reads the work batch's results through that batch's own barriers
+(a barrier's second scope reaches later batches). The "GPU Frame" profiler scope opens in `CB.primary` and closes in
+`CB.present`. An acquire failure after the work batch drains the queue (the slot does not advance).
 
 ## Per-frame CPU -> GPU buffers live in ReBAR, not system memory (2026-10-07)
 
@@ -1485,7 +1496,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   (`Far forward scatter`: a surface does not glow backlit), takes the full N.L (`Far normal strength` toward 1, only
   while it is > 0), and the interior darkening drops to a quarter. The march is 64 registers with it (2026-10-06).
   The hand-over: see "Hand-over" below - a rock mesh leaves the main pass at the same distance as a billboard.
-* **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 8; 2026-10-04 - in one frame the world records cost 6-7 ms
+* **THE BAKE IS SPREAD OVER FRAMES** (`Far bake frames`, 12; 2026-10-04 - in one frame the world records cost 6-7 ms
   of GPU per bake, after the per-record dispatch took it down from 31): `startBake` SNAPSHOTS what it reads that can
   change before it ends - the static sets' list, the record table and the chunk map (copied into the bake's own
   host-visible buffers), the detail chunks - and the record pool keeps every chunk it saw alive until NUM_FRAMES_IN_FLIGHT
@@ -1998,11 +2009,13 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   `updateTreeRecords`, main thread after beginFrame; Procedural TreeWorld, Docs/TreeRenderingPlan.md 3.5 W2): every
   terrain chunk's 4-byte tree records - right after its GROUND (`TREE_RECORD_HEIGHT_RES`² = 17² heights over the chunk,
   16-bit above its minimum, `TREE_RECORD_HEIGHT_WORDS`; every chunk has one, trees or not) - in ONE fixed-size
-  device-local pool (`Trees/World/GPU pool (MB)`, 128; 64-record
+  HOST-VISIBLE sequential-write pool (ReBAR when the device has it; `Trees/World/GPU pool (MB)`, 128; 64-record
   blocks, best-fit `IndexRangeFreeList` + a bump top) and a TABLE of the resident chunks (`TreeRecordChunkGpu`: coord,
   first, count; host-visible per frame slot, rewritten for the current slot when changed). **The pool never grows**: a
   chunk that does not fit is refused (`stats().refused`); only a size change drains the GPU. A chunk's range is
-  written once through the staging ring into blocks no frame reads - a removed chunk's blocks are reused
+  written once by a direct memcpy into blocks no frame reads (**NOT the staging ring**: a full ring submits and waits
+  a fence under the staging mutex, and the TreeWorld pool job ran on main whenever main helped at a join - 61 ms
+  spikes) - a removed chunk's blocks are reused
   NUM_FRAMES_IN_FLIGHT frames later, when every frame whose table listed it is done. The far-tree volume's bake reads
   them (W4, "Far-tree volume" / WORLD TREE RECORDS), and the pool holds the record types (`setTreeRecordTypes`,
   drains the GPU - a world spawn). The CHUNK MAP (`TreeRecordMapGpu`, per frame slot with the table): a toroidal
@@ -2612,8 +2625,8 @@ its flush and submit (a writer takes no lock to finish, so the wait under the mu
 > Lock order: staging mutex → queue mutex.
 
 **`MeshDataManager` allocates LOCK-FREE** (`BitRangeAllocator<true>` per pool) under a `std::shared_mutex` that only
-fences a GROW: every allocate / `upload*` / `free*` holds it SHARED - over the drain and the staging copy too, which
-name the buffer by handle - and `growBuffer`, which replaces the buffer AND the allocator's bit array, holds it
+fences a GROW: every allocate / `upload*` / `free*` holds it SHARED - over the staging copy too, which names the
+buffer by handle - and `growBuffer`, which replaces the buffer AND the allocator's bit array, holds it
 EXCLUSIVE (a full allocator re-tries under the exclusive lock before growing: another thread may have grown it).
 Before 2026-10-05 a plain mutex covered the allocation alone, and a grow on another thread could replace the buffer
 between an upload's allocation and its staging copy. Lock order: grow → staging → queue.
@@ -2631,6 +2644,15 @@ submits in the post-join window) and OpenXR (`xrEndFrame`; VR stays synchronous 
 
 `update()` fence-waits under the staging mutex, so concurrent uploads block for that long — **keep bulk
 uploads off latency-critical threads.**
+
+**`uploadShared`** is the upload into a SHARED buffer (not per-frame-in-flight) that the draws, GI / RTAO or the BLAS
+builds read every frame: the mesh mega-buffers (MeshDataManager), the `SharedTable`s (MeshInfos, materials, instance
+offsets) and the MeshLodRegistry tables. Such a copy can rewrite bytes a frame in flight reads, and a ring overflow
+submits a batch the moment it fills. The batch that holds one (`m_sharedWrite`) therefore opens with a barrier from
+`eAllCommands` to the copy: a barrier's first scope is every command earlier in submission order on the queue,
+earlier submissions included, so the GPU orders the copies after those frames and the CPU never waits. A batch
+without one keeps its overlap. **Until 2026-10-11 the first such upload of a frame drained the queue ON THE CPU**
+(`ensureDrainedForSharedWrite` → `graphicsQueueWaitIdle`): 11 ms on main through a terrain upload's join.
 
 ## VR
 
