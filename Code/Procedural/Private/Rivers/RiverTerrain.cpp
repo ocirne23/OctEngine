@@ -1481,6 +1481,33 @@ namespace Procedural
 					}
 					Globals::jobSystem.preemptionPoint();
 				}
+				// THE LAKES too (apply's lake influence; trees stood in the lakes' edges, 2026-10-11 - only the rivers wrote
+				// here): 1 out to c_lakeClearPx from a wet pixel (the drawn sheet reaches a pixel past its runs, RiverSystem),
+				// fading to 0 over "Lake shore (px)".
+				constexpr float c_lakeClearPx = 1.0f;
+				const float shorePx = oc::max(m_carve.lakeShore, 0.1f);
+				const float lakeReach = c_lakeClearPx + shorePx;
+				for (const RiverLakeRun& run : u.lakeRuns)
+				{
+					if (u.lakes[run.lake].kind == ERiverWater::Pan)
+						continue;
+					const float rx0 = (float)run.x0, rx1 = (float)(run.x0 + run.len - 1), rz = (float)run.row;
+					int32 x0, x1, z0, z1;
+					indexRange(unitX + (double)(rx0 - lakeReach), unitX + (double)(rx1 + lakeReach), gx0, resX, x0, x1);
+					indexRange(unitZ + (double)(rz - lakeReach), unitZ + (double)(rz + lakeReach), gz0, resZ, z0, z1);
+					for (int32 gzI = z0; gzI <= z1; gzI++)
+					{
+						const float dz = (float)(gzs[gzI] - unitZ) - rz;
+						float* row = outInfluence.data() + (size_t)gzI * resX;
+						for (int32 gxI = x0; gxI <= x1; gxI++)
+						{
+							const float fx = (float)(gxs[gxI] - unitX);
+							const float dx = oc::max(oc::max(rx0 - fx, fx - rx1), 0.0f);
+							const float inf = oc::clamp(1.0f - (std::sqrt(dx * dx + dz * dz) - c_lakeClearPx) / shorePx, 0.0f, 1.0f);
+							row[gxI] = oc::max(row[gxI], inf);
+						}
+					}
+				}
 			}
 	}
 

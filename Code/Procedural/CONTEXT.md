@@ -77,7 +77,9 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
   finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
   RiverTerrain's goes PER PIECE: each river piece writes the points within its reach (the max wins), so the cost
   follows the river length in the rect, not its area (a per-point search of each 16 px cell's pieces was half of
-  TreeWorld's `placeChunk`, 2026-10-11).
+  TreeWorld's `placeChunk`, 2026-10-11). Each LAKE run writes too (not pans): 1 out to 1 px from a wet pixel (the
+  drawn sheet reaches a pixel past its runs), fading to 0 over "Lake shore (px)" - without it trees stood in the lakes'
+  edges ("Vegetation clear" saw only the rivers).
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
   consumers should always prefer it.** For V3 it is the difference between a shared-cache lock per
   point and one per tile: *a terrain-data cascade is 512² texels resolving to a couple of dozen tiles,
