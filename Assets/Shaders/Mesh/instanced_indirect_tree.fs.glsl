@@ -1,0 +1,138 @@
+#version 460
+
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+#extension GL_EXT_shader_16bit_storage : enable
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : enable
+
+// EPipelineIndex::LitTree: the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the bark / leaf
+// crossfade copies) - instanced_indirect.fs.glsl's LitMasked path plus the tree-only terms: the DISTANCE FADE
+// (tree_fade.inc.glsl, the mesh -> card mesh -> billboard crossfades) and the LEAF terms (MATERIAL_FLAG_LEAF: the
+// sun-side shadow, the edge-on N.V bend, the transmission). Its own shader so the tree code never sets the register
+// count of the other lit meshes. The VS is instanced_indirect.vs.glsl (ALPHA_MASK).
+
+#include "shared.inc.glsl"
+
+layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
+layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
+layout (location = 3) in flat uint in_meshIdxMaterialIdx;
+layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
+#ifdef STEREO
+layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
+#endif
+
+layout (location = 0) out vec4 out_color;
+layout (location = 1) out vec4 out_motion; // the scene's motion target
+
+// The lit core's AO read follows this point to where it was last frame (read where it is used, so the
+// interpolant is not live across the sun's shadow search).
+#define MOTION_WORLD_DELTA in_prevWorldDelta
+// The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
+#define SUN_SHADOW_FIRST
+#include "instanced_indirect_lit.inc.glsl"
+#include "tree_fade.inc.glsl"
+
+// THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES (MATERIAL_FLAG_LEAF) looked up from
+// their sun side: thin and two-sided, so a leaf facing AWAY from the sun is still lit through - its transmission needs
+// its real shadow. The facing reject gave every such leaf 0, the very leaves the transmission's back term lights, so
+// "Foliage transmission shadow" scaled them all as one. The bias follows the geometric normal flipped toward the sun;
+// doSunLight's facing test on the shading normal still keeps the front light off a back-facing leaf. Any other surface
+// keeps the facing reject. ONE call of sunShadowVisibility for both: each call site inlines the whole shadow search
+// (two cost ~20 KB of code).
+void sunShadowFirstTree(vec3 pos, bool leaf)
+{
+	const vec3 geoN = normalize(in_normalV.xyz);
+	const bool facing = dot(geoN, u_sunDirection.xyz) > 0.0;
+	g_sunShadowFirst = leaf || facing ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0;
+}
+
+void main()
+{
+#ifdef STEREO
+	g_viewIndex = int(u_viewIndex); // per-eye reconstruction (AO upsample) + view pos
+#endif
+	const vec3 pos = in_posU.xyz;
+	const vec3 V = normalize(u_viewPos - pos);
+
+	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
+	const MaterialInfo material  = in_materialInfos[materialIdx];
+	const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
+	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
+	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
+	const vec2 texUv = vec2(in_posU.w, in_normalV.w);
+
+	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], texUv);
+	// The alpha-mode test stays, because a material override can put an opaque material here.
+	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
+	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
+		discard;
+	if (treeDistanceFaded(material.flags, pos)) // the crossfades (tree_fade.inc.glsl)
+		discard;
+	// After the discards: a cut-out pixel pays no shadow.
+	sunShadowFirstTree(pos, (material.flags & MATERIAL_FLAG_LEAF) != 0u);
+
+	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
+	// metalness and the normal-map decode + TBN.
+	float16_t roughness = float16_t(0.65);
+	float16_t metalness = float16_t(0.0);
+	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
+	{
+		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
+		metalness = metalRoughness.x;
+		roughness = max(metalRoughness.y, float16_t(0.01));
+	}
+
+	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
+	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
+	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], texUv).xyz);
+	f16vec3 tangentNormal;
+	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
+	{
+		const f16vec2 normalXY = normalSample.xy * float16_t(2.0) - float16_t(1.0);
+		tangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
+	}
+	else
+	{
+		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
+	}
+	const f16vec3 geoN = f16vec3(in_normalV.xyz);
+	const f16vec3 T = f16vec3(in_tangent.xyz);
+	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
+	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+
+	// The LEAF terms (MATERIAL_FLAG_LEAF). Formed BEFORE computeLitColor: its light loop is the shader's register peak,
+	// and only the half transmission colour is live across it - not the shadow and the surface colour it is made of.
+	f16vec3 transmit = f16vec3(0.0);
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+	{
+		// Seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliage_minNoV). The
+		// cards' normals are bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing (Fresnel -> 1, the
+		// Smith term growing) lit one leaf near the sun hundreds of times brighter than its diffuse: a blinding spot with
+		// bloom. Adding V x (min - N.V) gives N.V = min / |N'| (just under min) - and N.L barely moves.
+		const float noV = dot(vec3(N), V);
+		if (noV < u_foliage_minNoV)
+			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
+		// TRANSMISSION: thin leaves let the sun through, tinted by their own colour - a diffuse back term saturate(-N.L)
+		// (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking toward the sun: the backlit rim).
+		// x "Trees/Foliage transmission" (u_foliage_transmission). Its visibility leans on the sun shadow by "Foliage
+		// transmission shadow" (u_foliage_transmissionShadow) only - a leaf seen from the shaded side sits in its own
+		// crown's shadow, which would leave the backlit view no glow.
+		if (u_foliage_transmission > 0.0)
+		{
+			const vec3 L = u_sunDirection.xyz;
+			const float back = max(-dot(vec3(N), L), 0.0);
+			const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
+			const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow);
+			transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
+		}
+	}
+
+	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
+	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+	out_color = vec4(color, min(diffuseSample.a, material.opacity));
+	out_motion = motionVector(in_prevWorldDelta);
+}

@@ -573,12 +573,12 @@ namespace Procedural
 				oc::vector<oc::span<uint8>> mips;
 				for (oc::vector<uint8>& level : texture.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				// LEAF: the sun shines through the cluster cards (the lit FS's transmission).
+				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms).
 				species.leafMaterial = createTreeMaterial(renderer, m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
 					nullptr, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
 					RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
-				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitMasked;
+				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;
 			}
 			else
 			{
@@ -706,7 +706,7 @@ namespace Procedural
 			// (the modules' chains still feed the card atlas below).
 			if (set == 2 || m_settings.showLibrary)
 			{
-				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect.fs.glsl).
+				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
 				// "TreeBillboard/<piece>": one box per billboard in the VRAM view. BC3 normal: RGB the full normal (sign
 				// kept), A the baked interior - no two-channel format holds both.
 				meshes.billboardMaterial = createTreeMaterial(renderer, m_settings.compressTextures, size, size, albedoMips, TextureConvert::EBlockFormat::BC3,
@@ -802,12 +802,12 @@ namespace Procedural
 			piece.farDistance = species.desc.billboardDistance;
 			piece.fadeWidth = species.desc.billboardFadeWidth;
 			piece.radius = meshes.farRadius * transform.scale;
-			// The crossfade copies: the same LOD-chain meshes on LitMasked (the dither discards) with the fade-out
+			// The crossfade copies: the same LOD-chain meshes on LitTree (the dither discards) with the fade-out
 			// materials. Drawn only inside the band, so the bark keeps LitOpaque's early depth elsewhere.
 			if (meshes.bark[0].isValid())
-				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked, transform);
+				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree, transform);
 			if (meshes.leaves[0].isValid())
-				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked, transform);
+				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree, transform);
 		}
 		piece.centre = transform.transformPoint(meshes.farCentre);
 	}
@@ -834,8 +834,8 @@ namespace Procedural
 					if (meshes.billboard.isValid())
 					{
 						type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-						type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-						type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+						type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
+						type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
 						type.farDistance = species.desc.billboardDistance;
 						type.fadeWidth = species.desc.billboardFadeWidth;
 						// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
@@ -846,10 +846,10 @@ namespace Procedural
 						{
 							const RenderMesh* branches = meshes.branchBark[0].isValid() ? &meshes.branchBark[0] : nullptr;
 							type.trunk = { &meshes.trunkBark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
 							type.bark = { branches, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.barkFade = { branches, species.branchMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
-							type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitMasked };
+							type.barkFade = { branches, species.branchMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
+							type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
 							type.cardsIn = { &meshes.cards, species.cardInMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.cardsOut = { &meshes.cards, species.cardOutMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.midDistance = midDistance(species);

@@ -1,0 +1,344 @@
+#version 460
+
+#extension GL_EXT_shader_explicit_arithmetic_types : enable
+#extension GL_EXT_shader_16bit_storage : enable
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : enable
+
+// EPipelineIndex::LitFoliage: the tree billboard cards (MATERIAL_FLAG_BILLBOARD) only - instanced_indirect_tree.fs.glsl's
+// path (the alpha + distance-fade discards, the leaf terms) plus the cards' own: the billboard waves,
+// the card frame, the edge fade, the foliage shadow, the crown normal and the interior. Its own shader so the card code
+// never sets the register count of the other lit meshes. The VS is instanced_indirect.vs.glsl with FOLIAGE (the
+// instance origin at location 5).
+
+#include "shared.inc.glsl"
+
+layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
+layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign (x the card strip / axis code)
+layout (location = 3) in flat uint in_meshIdxMaterialIdx;
+layout (location = 4) in vec3 in_prevWorldDelta; // the motion vectors (instanced_indirect.vs.glsl)
+layout (location = 5) in flat vec3 in_instanceOrigin; // a point on the card's axis (foliageCrownNormal)
+#ifdef STEREO
+layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
+#endif
+
+layout (location = 0) out vec4 out_color;
+layout (location = 1) out vec4 out_motion; // the scene's motion target
+
+// The lit core's AO read follows this point to where it was last frame (read where it is used, so the
+// interpolant is not live across the sun's shadow search).
+#define MOTION_WORLD_DELTA in_prevWorldDelta
+// The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
+#define SUN_SHADOW_FIRST
+#define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage cards' own bias (sunShadowFirstFoliage)
+#define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
+#include "instanced_indirect_lit.inc.glsl"
+#include "tree_wind.inc.glsl" // the billboard waves (treeWindBillboardUv)
+#include "tree_fade.inc.glsl"
+
+// One flat geometric normal stands for a whole clump, and rejecting by it darkened the entire card whenever the sun
+// was behind it. Shadow it from the card's sun side instead (the bias still follows the geometric normal, just flipped
+// toward the sun) and let doSunLight's facing test on the normal-mapped normal decide. The lookup stays on the card
+// plane, as the flat caster (shadow_depth.fs.glsl writes no depth).
+void sunShadowFirstFoliage(vec3 pos)
+{
+	const vec3 geoN = normalize(in_normalV.xyz);
+	g_shadowFoliage = true; // the constant depth bias only (shadows.inc.glsl)
+	g_sunShadowFirst = sunShadowVisibility(pos, dot(geoN, u_sunDirection.xyz) >= 0.0 ? geoN : -geoN);
+	g_shadowFoliage = false;
+}
+
+// The CROWN normal of a foliage card: where the VIEW RAY hits an ELLIPSOID around the card's centre. Each crossed
+// card's baked normals shade the crown side its own bake view saw, so where card A gives way to card B on screen
+// (their crossing axis) the shading split hard; this normal depends on the ray only, so both cards agree. The
+// ellipsoid is foliageCrownFrame's (below): the card's own proportions - half its u length along the axis, half its
+// v length across - so a round crown's card gives about a sphere and a tall narrow one (a pine) a tall narrow
+// ellipsoid. (A sphere of half the HEIGHT made a pine's normals point up at its top and down at its bottom: a
+// top-to-bottom gradient under a high sun.) Outside the ellipsoid (leaf tips) the normal turns to the rim. w = the
+// pixel's distance from the axis / the lateral radius (the blend reaches 1 at the axis, where the cards cross and
+// their baked normals disagree most).
+// (The crown INTERIOR darkening is BAKED - the billboard normal map's B, from the piece's own crown field; see main.)
+// The crown frame: the axis, the centre on it and the two radii. A vertical card (or a module's): the axis from the
+// instance origin along +u, the centre at the card's u centre. The whole tree's HORIZONTAL card (TreeImpostor
+// billboardHorizontalView): it lies across the axis at mid height, so the axis is its normal and the centre its own
+// point on it; its u spans at least the tree's height (the axis radius), its v the crown width. False on a
+// degenerate card frame.
+// The horizontal card: a MATERIAL_FLAG_BILLBOARD_TOP_CARD material's card whose normal points up (whole trees stand
+// upright - yaw only - so their vertical cards' normals are horizontal). Found by geometry, not by its strip.
+bool foliageTopCard(vec3 cardDu, vec3 cardDv, uint flags)
+{
+	const vec3 n = cross(cardDv, cardDu);
+	return (flags & MATERIAL_FLAG_BILLBOARD_TOP_CARD) != 0u && n.y * n.y > 0.5 * dot(n, n);
+}
+
+bool foliageCrownFrame(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, out vec3 axis, out vec3 centre, out vec2 radii)
+{
+	const float uLen = length(cardDu);
+	// The card's real WIDTH: d(pos)/dv spans one unit of texture v, but the card spans only its STRIP of the texture -
+	// the strip height rides the tangent's w magnitude as 2 + strip (Procedural billboardMesh, TREE_CARD_STRIP_CODE).
+	// Taken raw it made the ellipsoid ~3x too wide: flat normals facing the viewer everywhere and every pixel "at the
+	// axis" (the crown normal replacing the baked one - a uniformly lit circle). Without the code (the merged branch
+	// cards): a sphere of half the u length, as before.
+	const float stripCode = abs(in_tangent.w);
+	const float vLen = stripCode >= 2.0 && stripCode < 3.0 ? length(cardDv) * (stripCode - 2.0) : uLen;
+	radii = vec2(0.5 * uLen, 0.5 * vLen); // x = along the axis, y = across it
+	axis = vec3(0.0, 1.0, 0.0);
+	centre = pos;
+	if (uLen <= 0.0 || vLen <= 0.0)
+		return false;
+	if (foliageTopCard(cardDu, cardDv, flags))
+	{
+		axis = normalize(cross(cardDv, cardDu));
+		centre = in_instanceOrigin + axis * dot(pos - in_instanceOrigin, axis);
+		return true;
+	}
+	axis = cardDu / uLen;
+	// The MERGED branch cards (one mesh of many modules' cards per tree): the instance origin is the tree's, not the
+	// card's module, so the card carries its axis instead - |tangent.w| = 3 + the texture v of its module's axis line
+	// (Procedural billboardMesh, RenderMeshData). The crown centre is the card's u centre moved along v onto that line.
+	const float axisCode = stripCode;
+	if (axisCode >= 3.0) // the axis code (>= 3), not the strip code (2 .. 3)
+		centre = pos + cardDu * (0.5 - uv.x) + cardDv * (axisCode - 3.0 - uv.y);
+	else
+		centre = in_instanceOrigin + axis * dot(pos + cardDu * (0.5 - uv.x) - in_instanceOrigin, axis);
+	return true;
+}
+
+// A vector into the ellipsoid's UNIT-SPHERE space: along the axis / its radius, across it / the lateral radius.
+vec3 foliageToUnit(vec3 v, vec3 axis, vec2 radii)
+{
+	const float along = dot(v, axis);
+	return axis * (along / radii.x) + (v - axis * along) / radii.y;
+}
+
+// `sunChord` = the CROWN SELF-SHADOW's path: from the visible LEAF along the sun direction to where the ellipsoid ends, in
+// lateral radii (0 where the leaf lies outside it). The leaf: between the view ray's ENTRY point on the ellipsoid (the
+// crown's surface facing the viewer) and the card point (on the plane through the crown's centre), at `leafDepth` (0 =
+// the entry, 1 = the card point; the caller: the baked interior). From the entry alone, a sun straight above left the
+// whole upper half unshadowed (the chord exits at once) and the core turned bright. Looking toward the sun the whole
+// crown, from the side the far side's: the flat cards cannot shade themselves in the shadow map.
+vec4 foliageCrownNormal(vec3 pos, vec3 V, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, float leafDepth, out float sunChord)
+{
+	sunChord = 0.0;
+	vec3 axis, centre;
+	vec2 radii;
+	if (!foliageCrownFrame(pos, cardDu, cardDv, uv, flags, axis, centre, radii))
+		return vec4(V, 1.0);
+	// The ray's closest approach to the centre in unit-sphere space, then its entry point there; the world normal is
+	// that point back through the inverse transpose (the same per-axis division once more).
+	const vec3 D = -V;
+	const vec3 w = foliageToUnit((centre - pos) + D * distance(u_viewPos, pos), axis, radii); // centre - camera, kept small-valued
+	const vec3 Du = foliageToUnit(D, axis, radii);
+	const float DuLen2 = max(dot(Du, Du), 1e-12);
+	const vec3 offset = Du * (dot(w, Du) / DuLen2) - w;
+	const float r2 = dot(offset, offset);
+	const vec3 hit = offset - Du * (inversesqrt(DuLen2) * sqrt(max(1.0 - r2, 0.0)));
+	{
+		// The leaf (unit-sphere space: the map is linear, so the blend holds there), then its exit along L (the parameter is
+		// the world distance, both scale alike). A leaf outside the ellipsoid (c >= 0): no chord.
+		const vec3 leaf = mix(hit, foliageToUnit(pos - centre, axis, radii), clamp(leafDepth, 0.0, 1.0));
+		const vec3 Ls = foliageToUnit(u_sunDirection.xyz, axis, radii);
+		const float a = max(dot(Ls, Ls), 1e-12), b = dot(leaf, Ls), c = dot(leaf, leaf) - 1.0;
+		if (c < 0.0)
+			sunChord = max((-b + sqrt(max(b * b - a * c, 0.0))) / a, 0.0) / radii.y;
+	}
+	const vec3 toPos = pos - centre;
+	return vec4(normalize(foliageToUnit(hit, axis, radii)), length(toPos - axis * dot(toPos, axis)) / radii.y);
+}
+
+// The pixel's distance from a foliage card's axis / the crown's lateral radius (the ellipsoid of foliageCrownNormal).
+float foliageAxisDistance(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags)
+{
+	vec3 axis, centre;
+	vec2 radii;
+	if (!foliageCrownFrame(pos, cardDu, cardDv, uv, flags, axis, centre, radii))
+		return 1.0;
+	const vec3 toPos = pos - centre;
+	return length(toPos - axis * dot(toPos, axis)) / radii.y;
+}
+
+void main()
+{
+#ifdef STEREO
+	g_viewIndex = int(u_viewIndex); // per-eye reconstruction (AO upsample) + view pos
+#endif
+	const vec3 pos = in_posU.xyz;
+	const vec3 V = normalize(u_viewPos - pos);
+
+	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
+	const MaterialInfo material  = in_materialInfos[materialIdx];
+	const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
+	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
+	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
+	const vec2 uv = vec2(in_posU.w, in_normalV.w);
+	// The texture taps' coordinate: a whole-tree billboard's moves with the wind (tree_wind.inc.glsl - the card frame and
+	// the crown keep `uv`).
+	const vec2 texUv = treeWindBillboardUv(uv, in_tangent.w, in_instanceOrigin, in_normalV.xyz);
+
+	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], texUv);
+	// The card frame from the screen derivatives (taken before any discard): d(pos)/du and d(pos)/dv.
+	const vec2 uvDx = dFdx(uv), uvDy = dFdy(uv);
+	const float uvDet = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+	vec3 cardDu = vec3(0.0), cardDv = vec3(0.0);
+	if (abs(uvDet) > 1e-20)
+	{
+		const vec3 pdx = dFdx(pos), pdy = dFdy(pos);
+		cardDu = (pdx * uvDy.y - pdy * uvDx.y) / uvDet;
+		cardDv = (pdy * uvDx.x - pdx * uvDy.x) / uvDet;
+	}
+	// The alpha-mode test stays, because a material override can put an opaque material here.
+	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
+	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
+		discard;
+	if (treeDistanceFaded(material.flags, pos)) // the crossfades (tree_fade.inc.glsl)
+		discard;
+	// The cards fade out as they turn EDGE-ON: a near-grazing card smears its texture into bright streaks, and the
+	// crossed card faces the view right then. A dither of its own (a decorrelated pattern), so it composes with the
+	// distance fade instead of cancelling it. Over |N.V| from "Trees/Foliage edge fade start" to "end"
+	// (u_foliage_edgeFadeStart / End), both x "Foliage edge fade centre scale" (.edgeFadeCentreScale) at the crossing
+	// axis, back to x1 at half the crown radius; on a whole tree's horizontal card also x "Foliage edge fade top card
+	// scale" (u_foliage_edgeFadeTopCardScale). Not on MATERIAL_FLAG_NO_EDGE_FADE (the mid tier's branch cards).
+	if ((material.flags & MATERIAL_FLAG_NO_EDGE_FADE) == 0u)
+	{
+		const float facing = abs(dot(normalize(in_normalV.xyz), V));
+		const bool topCard = foliageTopCard(cardDu, cardDv, material.flags);
+		const float centreScale = mix(u_foliage_edgeFadeCentreScale, 1.0, smoothstep(0.0, 0.5, foliageAxisDistance(pos, cardDu, cardDv, uv, material.flags)))
+			* (topCard ? u_foliage_edgeFadeTopCardScale : 1.0);
+		const float fadeStart = u_foliage_edgeFadeStart * centreScale;
+		// Not from BELOW: looking up into a crown, the edge-on cards are what fills it - fading them left it see-through.
+		// The fade blends out as the view turns upward, over the first ~11 degrees below the pixel (V.y = 0 .. -0.2).
+		const float fromBelow = smoothstep(0.0, 0.2, -V.y);
+		const float visibility = mix(smoothstep(fadeStart, max(u_foliage_edgeFadeEnd * centreScale, fadeStart + 1e-3), facing), 1.0, fromBelow);
+		if (visibility < 1.0)
+		{
+			const vec2 pixel = gl_FragCoord.xy + vec2(17.0, 31.0) + 5.588238 * float((u_frameIndex + 3u) & 7u);
+			const float dither = fract(52.9829189 * fract(dot(pixel, vec2(0.00583715, 0.06711056))));
+			if (dither >= visibility)
+				discard;
+		}
+	}
+	// After the discard: a cut-out pixel pays no shadow.
+	sunShadowFirstFoliage(pos);
+
+	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
+	// metalness and the normal-map decode + TBN.
+	float16_t roughness = float16_t(0.65);
+	float16_t metalness = float16_t(0.0);
+	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
+	{
+		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
+		metalness = metalRoughness.x;
+		roughness = max(metalRoughness.y, float16_t(0.01));
+	}
+
+	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
+	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
+	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+	// The billboards' CROWN layout (TreeImpostor bakeBillboards): A = the baked crown interior.
+	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
+	const f16vec3 normalSample = normalTap.xyz;
+	f16vec3 tangentNormal;
+	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
+	{
+		const f16vec2 normalXY = normalSample.xy * float16_t(2.0) - float16_t(1.0);
+		tangentNormal = f16vec3(normalXY, sqrt(max(float16_t(1.0) - dot(normalXY, normalXY), float16_t(0.0))));
+	}
+	else
+	{
+		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
+	}
+	const f16vec3 geoN = f16vec3(in_normalV.xyz);
+	const f16vec3 T = f16vec3(in_tangent.xyz);
+	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
+	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+	const float sunVisibility = g_sunShadowFirst; // before the interior term (the leaf transmission's shadow)
+	float crownSun = 1.0;      // the crown's own darkening of the direct sun (interior + self-shadow)
+	float crownTransmit = 1.0; // ... and of the transmitted sun (the self-shadow at its own share)
+	// Rotated into the crown normal's frame - fully at the crossing axis, by "Trees/Foliage crown normal"
+	// (u_foliage_crownNormal) from half the lateral radius out - and the crown INTERIOR darkening on both the sun and the
+	// ambient (in place of the RTAO a card does not read): the BAKED interior (the normal map's A, from the piece's own
+	// crown field - any crown shape: 0 = the crown's surface, 1 = about its core depth), remapped by "Trees/Foliage
+	// interior depth start / end" (u_foliage_interiorStart / u_foliage_interiorEnd), x "Trees/Foliage interior shadow"
+	// (u_foliage_interiorShadow). An AO-like term (no sun direction - the transmitted sun shadow is the directional part), so
+	// a fully lit crown is not flat.
+	float16_t surfaceAO;
+	{
+		float interior = 1.0 - u_foliage_interiorShadow
+			* smoothstep(u_foliage_interiorStart, max(u_foliage_interiorEnd, u_foliage_interiorStart + 1e-3), float(normalTap.w));
+		// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliage_interiorTopCardScale): an EXPONENT, so > 1
+		// darkens it at any strength (a multiplier on the strength saturated at 1). x |V.y|, the view's steepness: from
+		// BELOW V.y is negative - a negative factor on the AO and the sun turned the card black (from level: 0).
+		if (foliageTopCard(cardDu, cardDv, material.flags))
+			interior = pow(max(interior, 0.0), max(u_foliage_interiorTopCardScale, 0.01)) * abs(V.y); // pow(0, 0) is undefined
+		// The visible leaf's depth into the crown for the self-shadow: the baked interior, faded out as the view lines up
+		// with the sun (from the front the leaves seen through the gaps are lit through those same gaps).
+		const float leafDepth = float(normalTap.w) * (1.0 - max(dot(V, u_sunDirection.xyz), 0.0));
+		float sunChord;
+		const vec4 crown = foliageCrownNormal(pos, V, cardDu, cardDv, uv, material.flags, leafDepth, sunChord);
+		// ROTATED, not replaced: the baked normal turns by the rotation that takes the card's facing normal to the crown
+		// normal (x the weight, as an angle), so both crossed cards agree on the MEAN direction - the seam at their crossing
+		// axis - while the leaf normals keep their scatter. Replacing them with the one smooth crown normal lit the axis
+		// strip brighter than the rest of the card under almost any light (a smooth normal facing the light side outshines
+		// the mean of scattered ones): a bright vertical band through every whole-tree billboard (2026-10-04).
+		const float crownWeight = mix(1.0, u_foliage_crownNormal, smoothstep(0.0, 0.5, crown.w));
+		const vec3 faceN = dot(vec3(geoN), V) >= 0.0 ? vec3(geoN) : -vec3(geoN);
+		const vec3 turn = cross(faceN, crown.xyz);
+		const float sinTurn = length(turn);
+		if (sinTurn > 1e-4 && crownWeight > 0.0)
+		{
+			const vec3 k = turn / sinTurn;
+			const float angle = atan(sinTurn, dot(faceN, crown.xyz)) * crownWeight;
+			const float c = cos(angle), s = sin(angle);
+			const vec3 n = vec3(N);
+			N = f16vec3(normalize(n * c + cross(k, n) * s + k * (dot(k, n) * (1.0 - c))));
+		}
+		g_noRtao = true;
+		// THE SUN through the crown: the interior fades out of it as the view lines up with the sun (x "Foliage interior
+		// view fade" (u_foliage_interiorViewFade) x |V.L|) - from the front the leaves seen through the gaps are lit through those
+		// same gaps, from the back the whole crown is in its own shadow (the self-shadow below) - and the CROWN
+		// SELF-SHADOW exp(-"Foliage self shadow" (u_foliage_selfShadow) x the chord along the sun in lateral radii). On the
+		// direct sun; the TRANSMISSION - light scattered forward through the leaves, which loses less - takes the
+		// self-shadow x "Foliage transmission self shadow" (u_foliage_transmissionSelfShadow; at the full share a crown seen toward the
+		// sun hid "Foliage transmission" entirely). The ambient keeps the full interior (AO).
+		const float sunInterior = mix(interior, 1.0, clamp(u_foliage_interiorViewFade * abs(dot(V, u_sunDirection.xyz)), 0.0, 1.0));
+		crownSun = sunInterior * exp(-u_foliage_selfShadow * sunChord);
+		crownTransmit = sunInterior * exp(-u_foliage_selfShadow * u_foliage_transmissionSelfShadow * sunChord);
+		g_sunShadowFirst *= crownSun;
+		surfaceAO = float16_t(interior);
+	}
+	// LEAVES seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliage_minNoV).
+	// The cards' normals are bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing (Fresnel -> 1,
+	// the Smith term growing) lit one leaf near the sun hundreds of times brighter than its diffuse: a blinding
+	// spot with bloom. Adding V x (min - N.V) gives N.V = min / |N'| (just under min) - and N.L barely moves.
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+	{
+		const float noV = dot(vec3(N), V);
+		if (noV < u_foliage_minNoV)
+			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
+	}
+	// LEAF TRANSMISSION (MATERIAL_FLAG_LEAF): thin leaves let the sun through, tinted by their own colour - a diffuse back
+	// term saturate(-N.L) (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking toward the sun: the
+	// backlit rim). x "Trees/Foliage transmission" (u_foliage_transmission). Its visibility leans on the sun shadow by
+	// "Foliage transmission shadow" (u_foliage_transmissionShadow) only - a leaf seen from the shaded side sits in its own
+	// crown's shadow, which would leave the backlit view no glow - then x the crown's own darkening of the sun (the
+	// interior faded by the view, and the crown self-shadow), so the crown's depths stay dark and a crown seen toward the
+	// sun dark as a whole. Formed BEFORE computeLitColor: its light loop is the shader's register peak, and only this half
+	// colour is live across it - not the shadow, the interior term and the surface colour it is made of.
+	f16vec3 transmit = f16vec3(0.0);
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliage_transmission > 0.0)
+	{
+		const vec3 L = u_sunDirection.xyz;
+		const float back = max(-dot(vec3(N), L), 0.0);
+		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
+		const float visibility = mix(1.0, sunVisibility, u_foliage_transmissionShadow) * crownTransmit;
+		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
+	}
+
+	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
+	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+	out_color = vec4(color, min(diffuseSample.a, material.opacity));
+	out_motion = motionVector(in_prevWorldDelta);
+}

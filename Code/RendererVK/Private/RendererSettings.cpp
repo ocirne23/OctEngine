@@ -30,12 +30,6 @@ void Renderer::attachSettingsListeners()
         m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
         reloadLitShaders();
     });
-    // "Trees/Debug view" is the TREE_DEBUG define on the lit mesh fragments.
-    m_staticMeshGraphicsPipeline.setTreeDebugMode(s.foliage.debugView);
-    Tweak::onChange(s.foliage.debugView, this, [this, reloadLitShaders]() {
-        m_staticMeshGraphicsPipeline.setTreeDebugMode(m_foliageParams.debugView);
-        reloadLitShaders();
-    });
     // "Blades per patch" is the blade index buffer's size: GPU idle, rebuild, re-record (the draw binds it).
     Tweak::onChange(s.grass.bladesPerPatch, this, [this]() {
         if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)

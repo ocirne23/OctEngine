@@ -72,7 +72,7 @@ export namespace Procedural
 		// real geometry and casts its own shadow, so the mesh nodes then stop drawing.
 		//
 		// Billboards CROSSFADE instead of switching: over a band of `Billboard FadeWidth` around the switch
-		// distance the module draws as barkFade / leavesFade (the same meshes on LitMasked with the species'
+		// distance the module draws as barkFade / leavesFade (the same meshes on LitTree with the species'
 		// fade-OUT materials) plus the billboard (its material fades IN over the same band): a dither in the
 		// lit FS hands every pixel to exactly one of them. Outside the band only one side draws, the mesh on its
 		// normal (early-depth) materials.

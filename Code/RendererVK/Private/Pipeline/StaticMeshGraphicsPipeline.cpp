@@ -238,10 +238,11 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.depthWrite = false,
 		.depthGreaterOrEqual = true,
 	});
-	// Variant 12 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (FOLIAGE: card
-	// frame, edge fade, foliage shadow, crown normal + interior). Its VS adds the instance origin (the crown normal).
-	// Split out of LitMasked: a shader's register count is the maximum over all its paths, so every alpha-tested
-	// mesh paid for the cards'.
+	// Variant 12 (EPipelineIndex::LitFoliage): LitMasked plus the tree billboard cards' own paths (card frame, edge
+	// fade, foliage shadow, crown normal + interior) - its own fragment shader, instanced_indirect_foliage.fs.glsl. Its
+	// VS (FOLIAGE) adds the instance origin (the crown normal). Split out of LitMasked: a shader's register count is the
+	// maximum over all its paths, so every alpha-tested mesh paid for the cards'.
+	const oc::string foliageVariantPath = "Shaders/Mesh/instanced_indirect_foliage.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = graphicsPipelineLayout.vertexShader.text,
@@ -249,9 +250,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.defines = { { "ALPHA_MASK", "1" }, { "FOLIAGE", "1" } },
 		},
 		.fragmentShader = ShaderSource{
-			.text = graphicsPipelineLayout.fragmentShader.text,
-			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
-			.defines = { { "ALPHA_MASK", "1" }, { "FOLIAGE", "1" } },
+			.text = FileSystem::readFileStr(foliageVariantPath),
+			.debugFilePath = foliageVariantPath,
 		},
 		.writeMotion = true,
 	});
@@ -298,10 +298,27 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.dualSourceAlpha = true,
 		.cullMode = vk::CullModeFlagBits::eNone,
 	});
-	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::River);
+	// Variant 15 (EPipelineIndex::LitTree): the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the
+	// bark / leaf crossfade copies) - LitMasked plus the tree terms (the distance fade, the leaf shadow / N.V bend /
+	// transmission), in its own fragment shader so they never set LitMasked's register count. The VS is LitMasked's.
+	const oc::string treeVariantPath = "Shaders/Mesh/instanced_indirect_tree.fs.glsl";
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.vertexShader = ShaderSource{
+			.text = graphicsPipelineLayout.vertexShader.text,
+			.debugFilePath = graphicsPipelineLayout.vertexShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" } },
+		},
+		.fragmentShader = ShaderSource{
+			.text = FileSystem::readFileStr(treeVariantPath),
+			.debugFilePath = treeVariantPath,
+		},
+		.writeMotion = true,
+	});
+	assert(graphicsPipelineLayout.additionalVariants.size() == (size_t)RendererVKLayout::EPipelineIndex::LitTree);
 	// Every fragment shader that includes the lit core beside the base one (the lit core's defines below).
 	const auto isLitCoreFragment = [&](const PipelineVariant& variant) {
-		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath;
+		return isTerrainFragment(variant) || variant.fragmentShader.debugFilePath == rockVariantPath
+			|| variant.fragmentShader.debugFilePath == foliageVariantPath || variant.fragmentShader.debugFilePath == treeVariantPath;
 	};
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
@@ -368,15 +385,6 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
                 variant.fragmentShader.defines.push_back({ "TERRAIN_FILM_RT_MIRROR", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
-    // TREE_DEBUG ("Trees/Debug view"): the lit mesh fragment only (instanced_indirect.fs.glsl; the terrain has no trees).
-    if (m_treeDebugMode != 0)
-    {
-        const ShaderDefine define{ "TREE_DEBUG", oc::to_string(m_treeDebugMode) };
-        graphicsPipelineLayout.fragmentShader.defines.push_back(define);
-        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
-            if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath)
-                variant.fragmentShader.defines.push_back(define);
-    }
     // The RT shadow toggles, always defined (0/1) on the lit-core fragments: only the active sun-shadow
     // path and (when off) no light ray query is compiled, so the register allocation covers less code.
     const auto defineLit = [&](const char* name, bool on)

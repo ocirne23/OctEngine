@@ -12,7 +12,6 @@ namespace
     constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame", "1/64 per frame" };
     constexpr oc::string_view s_dlssModeNames[] = { "Off", "DLAA", "Quality", "Balanced", "Performance", "Ultra Performance" };
     constexpr oc::string_view s_dlssPresetNames[] = { "Default", "J", "K", "L", "M" };
-    constexpr oc::string_view s_treeDebugViews[] = { "Off", "Material", "Mesh (LOD)", "Fade side" };
     constexpr oc::string_view s_farTreePixelSkip[] = { "Off", "1 of 2 (checkerboard)", "1 of 4" };
     constexpr oc::string_view s_anisotropyNames[] = { "Off", "2x", "4x", "8x", "16x" };
     constexpr oc::string_view s_giDebugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface", "Visibility" };
@@ -81,7 +80,6 @@ void Settings::registerShadow(ShadowParams& s)
 
 void Settings::registerFoliage(FoliageParams& s)
 {
-    Tweak::enumVar("Trees", "Debug view", &s.debugView, s_treeDebugViews); // TREE_DEBUG define
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
     Tweak::floatVar("Trees", "Foliage crown normal", &s.crownNormal, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.0f, 20.0f, 0.05f);

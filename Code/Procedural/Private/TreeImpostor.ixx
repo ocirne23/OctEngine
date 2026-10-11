@@ -72,7 +72,7 @@ export namespace Procedural
 	// it where the instance origin is not the card's piece. `topCardHeight`: the horizontal card's height (billboardHorizontalView).
 	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false,
 		float topCardHeight = 0.5f);
-	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect.fs.glsl's foliageCrownFrame
+	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect_foliage.fs.glsl's foliageCrownFrame
 	// Every other card: this + its strip height in texture v (< 1): the FS's crown ellipsoid needs the card's width.
 	constexpr float TREE_CARD_STRIP_CODE = 2.0f;
 

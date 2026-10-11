@@ -1365,7 +1365,7 @@ texCoords.z in (1, 2) = a tree mesh vertex's payload; >= 2 = the billboard / car
 * **Branch** - meshes only, faded out by `Branch fade end` (70 m, before the mid tier): the module bends with the
   placement's phase, the level-1 sub-branch on top with its own (both weights 0 at their root: continuous joints).
 * **Leaf** - the leaf cards' tip vertices along the card normal, a phase per card, faded out by `Leaf fade end`.
-* **Billboard waves** (the lit FS, `FOLIAGE`, `treeWindBillboardUv`) - a whole-tree billboard (strip code: |tangent w|
+* **Billboard waves** (instanced_indirect_foliage.fs.glsl, `treeWindBillboardUv`) - a whole-tree billboard (strip code: |tangent w|
   in [2, 3)) cannot bend its branches, so its TEXTURE lookup moves: two crossing waves over the card, growing toward
   the card's top (on the horizontal card toward its rim) from a still base, x the wind and `Billboard waves` (0.012 of
   the card), clamped into the card's own strip. Albedo, alpha (the outline ripples too) and normal use the moved
@@ -2076,9 +2076,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   and an overflowing tree drew its meshes undithered (a "popping" mid tier); fixed slots per card would have been
   millions. A merged card's crown frame cannot come from the instance origin (the tree's): its axis rides the
   tangent's w (RenderMeshData, foliageCrownFrame in the lit FS). A tree whose whole sphere is off screen returns
-  before its records. **`Trees/Debug view`** (`FoliageParams::debugView`, baked as `TREE_DEBUG` on the lit mesh
-  fragment; a change reloads it): a colour per MATERIAL (a representation / fade switch), per MESH (an LOD step),
-  or the distance-fade side (red out, green in, white none). **Far trees out of the near
+  before its records. **Far trees out of the near
   cascades:** the shadow cull keeps a tree record in cascade c only while `distance(centre, u_sceneFocus) − radius
   ≤ split(c) + Foliage shadow cascade margin` (`Trees/...`, default 64 m, `u_present_treeShadowMargin`): a cascade's box runs
   far up-sun and took in thousands of distant grove trees; the margin keeps the long shadows of trees just up-sun of
@@ -2128,9 +2126,14 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   MATERIAL_FLAG_BC5_NORMAL. `alphaCutoff > 0` → `EAlphaMode::Mask` with the cutoff in
   `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain uploads
   a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
-  **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, variant 12 = the LitMasked shaders + `FOLIAGE`,
-  whose card paths assume it - LitMasked no longer compiles them, so the card code stopped setting the register
-  count of every alpha-tested mesh): the FS's early sun shadow is NOT rejected by the
+  **THE TREE VARIANTS** (2026-10-11): the tree code lives in its own fragment shaders, so it never sets the register
+  count of LitOpaque / LitMasked (instanced_indirect.fs.glsl, which has no tree code at all). **`LitTree`** (variant 15,
+  `instanced_indirect_tree.fs.glsl`, the lit VS with `ALPHA_MASK`): the procedural tree MESHES (TreeSystem: the leaf
+  clusters and every bark / leaf crossfade copy) - LitMasked's path + the distance fade + the leaf terms (below).
+  **`LitFoliage`** (variant 12, `instanced_indirect_foliage.fs.glsl`, the lit VS with `FOLIAGE`): LitTree's path + the
+  billboard card paths. The distance fade is shared (`tree_fade.inc.glsl`); **keep the rest of the three `main()`s in
+  step.**
+  **`MATERIAL_FLAG_BILLBOARD`** (bit 26; drawn on **`LitFoliage`**, whose card paths assume the flag): the FS's early sun shadow is NOT rejected by the
   geometric normal's facing (`sunShadowFirstFoliage`: sampled from the sun side, the normal-mapped normal's
   facing test in `doSunLight` decides) — for flat cards standing for a foliage clump. Its shadow lookup uses
   the CONSTANT depth bias only (`SHADOW_FOLIAGE_BIAS` / `g_shadowFoliage` in shadows.inc.glsl: no slope scaling,
@@ -2196,21 +2199,22 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   `foliageTopCard`; whole trees stand upright) `foliageCrownFrame` takes the card normal as the axis and the card's
   own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS (defined
   `FOLIAGE`) adds the instance origin as flat location 5. **Leaf transmission**
-  (`MATERIAL_FLAG_LEAF`, bit 30, LitMasked: the tree leaf cluster material and the billboards — not FOLIAGE,
-  which carries the billboard-only terms): after `computeLitColor` the FS adds the sun THROUGH the leaf, tinted
+  (`MATERIAL_FLAG_LEAF`, bit 30, **LitTree / LitFoliage only**; LitMasked ignores the flag): after `computeLitColor`
+  the FS adds the sun THROUGH the leaf, tinted
   by its colour — `saturate(-N·L)` (lit from behind) + `saturate(V·-L)^focus × glow` (the backlit rim looking
   toward the sun), × `Trees/Foliage transmission`. Its visibility = `mix(1, sun shadow, Foliage transmission
-  shadow)` × the interior term: a leaf seen from the shaded side is in its own crown's shadow, which would
+  shadow)` × (LitFoliage) the interior term: a leaf seen from the shaded side is in its own crown's shadow, which would
   leave no glow. **Leaves seen edge-on:** their N is bent toward the viewer until N·V reaches `Trees/Foliage min
   N.V` (default 0.25, `u_foliage_minNoV`, 0 = off) - the cards' bent normals let N·V approach 0 with N·L > 0,
   and the sun's GGX at grazing (Fresnel → 1, the Smith term growing) lit one leaf near the sun hundreds of times
   brighter than its diffuse: a blinding spot with bloom (2026-10-03). **Formed BEFORE `computeLitColor`** as one half colour: the light loop is the lit FS's register
   peak (all lit variants sit at LitOpaque's 72 / 32 B because of it), and afterwards the shadow, the interior
-  term and the surface colour were live across it - LitFoliage 72 / 48 → 72 / 32 (2026-10-02). LitMasked's leaf
-  and plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstMasked`): two call sites inlined the
-  shadow search twice (+20 KB of code). A LEAF mesh pixel's shadow is looked up from its SUN side (`sunShadowFirstLeaf`: the bias normal
-  flipped toward the sun) - `sunShadowFirst`'s facing reject gave every leaf facing away from the sun 0, exactly
-  the ones the back term lights, so the shadow weight moved the whole tree as one (fixed 2026-10-02). `u_foliage_transmission` / `transmissionFocus` / `transmissionGlow` / `transmissionShadow`. **No RTAO either way**: a
+  term and the surface colour were live across it - LitFoliage 72 / 48 → 72 / 32 (2026-10-02). LitTree's leaf and
+  plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstTree`): two call sites inlined the shadow search
+  twice (+20 KB of code). A LEAF pixel's shadow is looked up from its SUN side (the bias normal flipped toward the sun) -
+  the facing reject gave every leaf facing away from the sun 0, exactly the ones the back term lights, so the shadow
+  weight moved the whole tree as one (fixed 2026-10-02). LitMasked uses the plain `sunShadowFirst` (after its
+  discard). `u_foliage_transmission` / `transmissionFocus` / `transmissionGlow` / `transmissionShadow`. **No RTAO either way**: a
   FOLIAGE instance gets TLAS mask 0x02 (`gi_tlas_instances.cs`) and RTAO traces with cull mask 0x01, so its
   opaque rays no longer hit whole card rectangles (every other ray uses 0xFF and still hits them); and the lit
   FS skips the AO read on a card (`FOLIAGE_NO_RTAO` / `g_noRtao`) — traced from depth, it was the flat card's
@@ -2223,7 +2227,7 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   fade top card scale` (`u_foliage_edgeFadeTopCardScale`, default 1). **Not from below:** the fade blends out as the view
   turns upward (`smoothstep(0, 0.2, -V.y)`, the first ~11° below the pixel) - looking up into a crown, the
   edge-on cards are what fills it, and fading them left it see-through.
-  **`MATERIAL_FLAG_DISTANCE_FADE`** (bit 25, LitMasked only; + `MATERIAL_FLAG_FADE_IN`, bit 24): a dithered fade
+  **`MATERIAL_FLAG_DISTANCE_FADE`** (bit 25, LitTree / LitFoliage only - `tree_fade.inc.glsl`; + `MATERIAL_FLAG_FADE_IN`, bit 24): a dithered fade
   over a camera-distance band packed into the LOW flag bits (start m in bits 0..11, width m in 12..21;
   `makeDistanceFadeFlags`). Fade-out keeps `dither < 1 − f`, fade-in `dither ≥ 1 − f`, so an out/in pair over
   the same band shares no pixel; interleaved gradient noise shifted per frame for TAA. `MaterialInfo` stays 16 B
@@ -3552,7 +3556,8 @@ calls `reloadShaders()`.
   `[[dont_unroll]]`** (terrain_splat.inc.glsl; its includers enable GL_EXT_control_flow_attributes): unrolled,
   the 12 corner hashes overlapped - the tessellated terrain's TES dropped 70 -> 49 registers with it (the
   then tessellated film FS 64/16 -> 56/48; everything else unchanged. The film is no longer tessellated).
-* **Only `EPipelineIndex::LitMasked` / `LitFoliage` discard** (the lit fragment compiled with `ALPHA_MASK`). A
+* **Only `EPipelineIndex::LitMasked` / `LitTree` / `LitFoliage` discard** (the lit fragment compiled with `ALPHA_MASK`,
+  instanced_indirect_tree.fs.glsl and instanced_indirect_foliage.fs.glsl). A
   `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is
   every opaque pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque`
   (after the `.oc` overrides) to `LitMasked`. Keep `discard` out of `LitOpaque`.

@@ -1397,7 +1397,6 @@ Every piece has `TREE_PIECE_LODS` (4) mesh levels, all from ONE skeleton: genera
 LOD steps underneath popped visibly (fewer, larger leaf cards per level, no crossfade). The generator meshes level 0
 only (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table below stays for a return of mesh LODs); `lodError` / `Lod
 ErrorScale` are unused, and RendererVK allocates no hysteresis slots for tree records.
-Debug: `Trees/Debug view` (RendererVK) colours the lit meshes per material / mesh / fade side.
 
 ## Far representations (`Trees/Far mode`)
 
@@ -1448,17 +1447,17 @@ must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenerate textur
   both, a whole card went dark whenever the sun was behind it. (The normal map's ALPHA was the texel's depth off the
   card until 2026-10-04 - read by no shader since the shadow pass's pixel depth offset was removed on 2026-10-02; the
   bake still computes it per texel, for the leaf's 3D point in the crown field.) The billboard materials and the leaf cluster material also carry
-  `MATERIAL_FLAG_LEAF`: the sun shines through them (RendererVK leaf transmission, `Trees/Foliage
-  transmission*` tweaks). The lit FS also blends their normals toward a view-ray CROWN normal (an ellipsoid of the
+  `MATERIAL_FLAG_LEAF`: the sun shines through them (RendererVK leaf transmission on `LitTree` / `LitFoliage`,
+  `Trees/Foliage transmission*` tweaks). The lit FS also blends their normals toward a view-ray CROWN normal (an ellipsoid of the
   card's proportions; `Trees/Foliage crown normal`), so the two cards stop shading differently at their crossing axis. This
   needs the card's +u axis to run from the instance origin (`billboardViews`: right = piece +Y). Real geometry on
-  `LitFoliage` (RendererVK: LitMasked + the card paths; a billboard material must use it): **they cast
+  `LitFoliage` (RendererVK: LitTree + the card paths; a billboard material must use it): **they cast
   their own alpha-tested shadows**, so the mesh nodes stop drawing entirely.
 * **Crossfade** (billboards only): a band `FadeWidth` wide, centred on the billboard distance × `Far distance
   scale`. Inside it (centre distance ± the module radius) the module draws its mesh as `barkFade` / `leavesFade`
-  — the same LOD-chain meshes on `LitMasked` with species materials DERIVED with a distance fade-OUT
+  — the same LOD-chain meshes on `LitTree` with species materials DERIVED with a distance fade-OUT
   (`Renderer::deriveMaterial`, shared textures) — plus the billboard, whose material fades IN over the same
-  band. The lit FS's dither (RendererVK `MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to exactly one of them;
+  band. The tree FSs' dither (tree_fade.inc.glsl) (RendererVK `MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to exactly one of them;
   TAA blends the per-frame dither. Outside the band only one side draws, the mesh on its normal (early-depth)
   materials. `applyFadeBands` writes the bands into the material flags (at reload and when the distance scale
   changes — no reload). Not dithered in the shadow pass: inside the band both cast. `Force far` keeps the
@@ -1535,7 +1534,7 @@ bitangent), each with a CPU box-filtered mip chain (normals renormalized). Uploa
 ## Leaf types
 
 * **`Single`** — one double-sided diamond per leaf, the species' solid leaf colour, `LitOpaque`.
-* **`Cluster`** — alpha-tested CARDS (`LitMasked`), each showing a twig with `ClusterLeaves` leaves. `Size` /
+* **`Cluster`** — alpha-tested CARDS (`LitTree`), each showing a twig with `ClusterLeaves` leaves. `Size` /
   `Aspect` are then the card's, `PerBranch` counts cards, and a card's stem starts at the branch centre (the
   texture's twig grows out of the wood). `Cross true` adds a second card at 90° about the stem axis.
   The texture is PROCEDURAL until authored textures exist (`TreeLeafTexture.cpp`): per species a 1024² 2×2

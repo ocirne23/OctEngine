@@ -265,7 +265,8 @@ export struct FoliageParams
     float edgeFadeStart = 0.1f;
     float edgeFadeEnd = 0.6f;
     float edgeFadeCentreScale = 1.33f;
-    // TRANSMISSION (MATERIAL_FLAG_LEAF: leaf clusters + billboards): the sun through the leaves - a diffuse back
+    // TRANSMISSION (MATERIAL_FLAG_LEAF on LitFoliage: the billboards and card atlases; the LitMasked leaf clusters have
+    // none): the sun through the leaves - a diffuse back
     // term saturate(-N.L) plus a forward glow saturate(V.-L)^focus x glow, both x the leaf colour x strength.
     // Its sun visibility leans on the shadow by transmissionShadow only (0 = ignore it): a leaf seen from the
     // shaded side sits in its own crown's shadow, which would leave it no glow. The interior term still applies.
@@ -304,11 +305,6 @@ export struct FoliageParams
     float windLeafFadeEnd = 40.0f;
     float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (0 = no limit); a 100 m band fades it out
     float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (0 = off)
-    // "Trees/Debug view" - baked as TREE_DEBUG on the lit mesh fragments (a change reloads them; 0 = no define):
-    // 1 = a colour per MATERIAL (each representation and fade copy has its own: a switch shows as a colour change),
-    // 2 = a colour per MESH (the LOD level the cull picked: an LOD step shows), 3 = the distance FADE side (red = a
-    // fade-out material, green = fade-in, white = none).
-    int debugView = 0;
 };
 
 // PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but

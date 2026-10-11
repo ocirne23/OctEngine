@@ -656,6 +656,8 @@ export namespace RendererVKLayout
                              // the terrain's snow, a ground cover and a contact band. The material is not read.
         River          = 14, // river and lake water (River/river.vs/.fs.glsl; Procedural RiverSystem's meshes):
                              // the ocean's shading without its waves, dual-source composited like the ocean
+        LitTree        = 15, // LitMasked + the tree terms (instanced_indirect_tree.fs.glsl): the distance fade and
+                             // the leaf terms - the procedural tree MESHES (TreeSystem), kept out of LitMasked
     };
     // The TRANSPARENT FAMILY: the variants whose fragment shaders write colour location 0 only. The rest write
     // location 1 too (the motion target, masked where the variant does not use it). A DGC execution set needs
@@ -671,16 +673,17 @@ export namespace RendererVKLayout
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays
-    constexpr uint32 MATERIAL_FLAG_LEAF = 1u << 30; // LitMasked: thin, light-transmitting leaves (the tree leaf
-                                                    // clusters + billboards): the sun shines THROUGH them - a
-                                                    // diffuse back term + a forward glow ("Trees/Foliage transmission")
+    constexpr uint32 MATERIAL_FLAG_LEAF = 1u << 30; // LitTree / LitFoliage: thin leaves (the leaf clusters, billboards,
+                                                    // card atlases): the sun-side shadow, the N.V bend ("Trees/Foliage
+                                                    // min N.V") and the sun THROUGH them - a diffuse back term + a
+                                                    // forward glow ("Trees/Foliage transmission"). LitMasked ignores it.
     constexpr uint32 MATERIAL_FLAG_BC5_NORMAL = 1u << 29; // normal map is a two-channel BC5 texture (X/Y only):
                                                           // the shader reconstructs Z instead of reading .z
     constexpr uint32 MATERIAL_FLAG_OCEAN = 1u << 28; // ocean water (the Ocean variant's materials)
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
                                                        // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
-    // DISTANCE FADE (LitMasked only): a dithered fade over a camera-distance band, packed into the low flag bits -
+    // DISTANCE FADE (LitTree / LitFoliage only, tree_fade.inc.glsl): a dithered fade over a camera-distance band, packed into the low flag bits -
     // start in metres (bits 0..11), width in metres (bits 12..21). Without FADE_IN the surface fades OUT across
     // the band, with it IN; an out and an in material over the same band keep complementary pixels (the tree
     // mesh -> billboard crossfade). makeDistanceFadeFlags packs it.
