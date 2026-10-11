@@ -315,7 +315,7 @@ export struct TerrainSettings
 	// THE MIST off rapids and falls (river_mist.cs.glsl into Effects/river_mist.pfx; "Particles/River mist" switches it).
 	float riverMistRadius = 300.0f;    // engine m: whitewater this close to the camera mists
 	float riverMistRate = 15.0f;       // spawns per m2 of whitewater per s at full whitewater
-	float riverMistThreshold = 0.25f;  // the whitewater (x the river's size) where the mist starts
+	float riverMistThreshold = 0.40f;  // the whitewater (x the river's size) where the mist starts
 	float riverMistCurve = 1.0f;       // the exponent on the whitewater past the threshold: higher = falls mist far more than rapids
 	float riverMistCentering = 0.5f;   // 0 = mist over the whole width evenly; higher = gathered toward the channel's centre
 	float riverMistSizeWeight = 0.1f;  // 0 = every river mists by its whitewater alone, 1 = x its size ("Full size depth")
