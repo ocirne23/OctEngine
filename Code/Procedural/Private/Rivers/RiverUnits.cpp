@@ -14,7 +14,7 @@ namespace
 
 	// Bump when the file layout or ANYTHING that shapes a unit's content changes (the settings are in the hash).
 	constexpr uint32 RIVER_UNIT_MAGIC = 0x55525652; // 'RVRU'
-	constexpr uint32 RIVER_UNIT_VERSION = 37; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
+	constexpr uint32 RIVER_UNIT_VERSION = 46; // 2: soft unit walls, ERiverEnd::Edge. 3: breach profile. 4: path smoothing.
 	                                          // 5: upstream-first profile, no backwater floor. 6: W-aware simplify.
 	                                          // 7: crossing segments meet on the tile boundary, outlet Q blend. 8: meanders.
 	                                          // 9: the W ground clamp on the final path. 10: the edge reroute.
@@ -45,6 +45,14 @@ namespace
 	                                          // 35: the lip's run 0.6 px (the sheet leans forward)
 	                                          // 36: a steep run too long to fall is skipped whole
 	                                          // 37: the sea channel
+	                                          // 38: the coarse sea tiles' coast, the sea rescue
+	                                          // 39: the sea rescue's minimax path
+	                                          // 40: ... in the coarse route's corridor, a max length
+	                                          // 41: ... from the river's main stem (the branch point), not the exit
+	                                          // 42: ... the path wanders (noise in the length cost)
+	                                          // 43: the lake channel, the lake outlet channel
+	                                          // 44: an inlet on a sea pixel starts a segment (the sea channel)
+	                                          // 46: every inlet's drain path is a channel (needsUpstream), two-sided Q blend
 
 	struct UnitHeader
 	{
@@ -112,6 +120,11 @@ namespace
 		hashValue(h, uc.fallFullQ);
 		hashValue(h, uc.seaChannelDepth);
 		hashValue(h, uc.seaChannelMaxLength);
+		hashValue(h, uc.lakeChannelDepth);
+		hashValue(h, uc.lakeChannelMaxLength);
+		hashValue(h, uc.seaRescueMinQ);
+		hashValue(h, uc.seaRescueMaxRim);
+		hashValue(h, uc.seaRescueMaxLength);
 		hashValue(h, uc.edgeWall);
 		hashValue(h, uc.pathSmoothing);
 		hashValue(h, uc.meanderAmplitude);
@@ -704,9 +717,30 @@ namespace Procedural
 					}
 			}
 		markSea(g);
+		CoarseLookup coarse{ net, TerrainGenV3::coarseTilePixels() };
+
+		// THE COAST the coarse network sees: in a tile whose coarse pixel is SEA, every pixel under 0 is sea too. markSea
+		// seeds only below "Sea depth" (V3's sea-level film is not sea), and a shallow coastal tile then had no sea at all:
+		// the coarse river ended in it, the fine one found no water and ran back out through a soft wall (2026-10-10).
+		for (int32 lt = 0; lt < N; lt++)
+			for (int32 lc = 0; lc < N; lc++)
+			{
+				if (!planes[(size_t)lt * N + lc])
+					continue;
+				size_t ci = 0;
+				const CoarseRiverTile* ct = coarse.at(ti0 + lt, tj0 + lc, ci);
+				if (!ct || ct->water[ci] != ERiverWater::Sea)
+					continue;
+				for (int32 r = 0; r < TP; r++)
+					for (int32 c = 0; c < TP; c++)
+					{
+						const size_t idx = (size_t)(lt * TP + r) * W + (size_t)(lc * TP + c);
+						if (g.elev[idx] < 0.0f)
+							g.sea[idx] = 1;
+					}
+			}
 
 		// --- Each tile's land runoff rescaled to its coarse pixel's own, so the two levels agree on the budget.
-		CoarseLookup coarse{ net, TerrainGenV3::coarseTilePixels() };
 		for (int32 lt = 0; lt < N; lt++)
 			for (int32 lc = 0; lc < N; lc++)
 			{
@@ -1072,10 +1106,244 @@ namespace Procedural
 			}
 		}
 
+		// THE SEA RESCUE (the user, 2026-10-10: rivers should end in the sea or a lake, carving if they must): a soft exit
+		// still carrying at least "Sea rescue min Q" - a river leaving where the coarse network has no crossing, so the
+		// neighbour never carries it on and it ended at the unit's edge - is sent along the LOWEST-RIM path inside the unit
+		// to a sea or lake pixel (a minimax search: the key is the highest ground on the way, then the length; never over
+		// the border or a missing tile - a least-climb search took a 325 model m ridge where a way round was lower), when
+		// that rim stands at most "Sea rescue max rim" over the exit's ground: the breach profile cuts it, and the river
+		// ends in the sea (its sea channel) or the lake. As the edge reroute, the receivers and outflows along the path
+		// are rewritten and its pixels take the exit's rank.
+		if (cfg.seaRescueMinQ > 0.0f)
+		{
+			bool anyTarget = false;
+			for (size_t i = 0; i < NP && !anyTarget; i++)
+				anyTarget = g.sea[i] || d.lakeOf[i] >= 0;
+			constexpr double c_unreached = 1.0e300;
+			oc::vector<double> dist;
+			oc::vector<float> rescueLength;
+			oc::vector<uint8> corridor; // per tile of the unit: in the exit's coarse route's corridor
+			oc::vector<int32> prev, sourceOf, stem;
+			oc::vector<int32> route;
+			for (const int32 exitIdx : softSeeds)
+			{
+				if (!anyTarget || d.receiver[exitIdx] >= 0 || d.outflow[exitIdx] < cfg.seaRescueMinQ)
+					continue;
+				// THE DIRECTION from the coarse network: from the exit's tile, its flow directions tile by tile to a coarse
+				// sea / lake tile in the unit. The fine search keeps to those tiles and the ones round them (a CORRIDOR:
+				// room to go round a hill, not the whole unit). A coarse route that leaves the unit or ends dry sends the
+				// water elsewhere: no rescue.
+				corridor.assign((size_t)N * N, 0);
+				{
+					int32 lt = (exitIdx / W) / TP, lc = (exitIdx % W) / TP;
+					bool reachesWater = false;
+					for (int32 step = 0; step < 4 * N && lt >= 0 && lc >= 0 && lt < N && lc < N; step++)
+					{
+						for (int32 a = oc::max(lt - 1, 0); a <= oc::min(lt + 1, N - 1); a++)
+							for (int32 c = oc::max(lc - 1, 0); c <= oc::min(lc + 1, N - 1); c++)
+								corridor[(size_t)a * N + c] = 1;
+						size_t ci = 0;
+						const CoarseRiverTile* ct = coarse.at(ti0 + lt, tj0 + lc, ci);
+						if (!ct)
+							break;
+						const ERiverWater w = ct->water[ci];
+						if (w == ERiverWater::Sea || w == ERiverWater::Lake || w == ERiverWater::TerminalLake)
+						{
+							reachesWater = true;
+							break;
+						}
+						switch (ct->dir[ci])
+						{
+						case ECoarseDir::PosX: lc++; break;
+						case ECoarseDir::NegX: lc--; break;
+						case ECoarseDir::PosZ: lt++; break;
+						case ECoarseDir::NegZ: lt--; break;
+						default: step = 4 * N; break; // a coarse sink without water
+						}
+					}
+					if (!reachesWater)
+						continue;
+				}
+				const auto inCorridor = [&](int32 i) { return corridor[(size_t)((i / W) / TP) * N + (size_t)((i % W) / TP)] != 0; };
+				if (dist.empty())
+				{
+					dist.assign(NP, c_unreached);
+					prev.assign(NP, -1);
+				}
+				oc::vector<int32> touched;
+				// THE BRANCH POINT: started from the exit itself, the river ran on to the border and turned back along the
+				// rescue path - a wide dead end at the edge (2026-10-10). Every pixel of its MAIN STEM (upstream from the exit
+				// along the largest inflow, while it carries at least half the exit's water, to the max length) is a start;
+				// the search keys on the highest ABSOLUTE ground on the way, so the branch is wherever the lowest ridge is
+				// reached soonest, and the stem below it loses the water (falls under "Channel min Q": no dead end).
+				const float exitQ = d.outflow[exitIdx];
+				stem.clear();
+				stem.push_back(exitIdx);
+				for (float stemPx = 0.0f; stemPx < cfg.seaRescueMaxLength;)
+				{
+					const int32 cur = stem.back();
+					const int32 cx = cur % W, cz = cur / W;
+					int32 up = -1;
+					for (int32 dz = -1; dz <= 1; dz++)
+						for (int32 dx = -1; dx <= 1; dx++)
+						{
+							const int32 nx = cx + dx, nz = cz + dz;
+							if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= W || nz >= W)
+								continue;
+							const int32 nb = nz * W + nx;
+							if (d.receiver[nb] == cur && d.outflow[nb] >= 0.5f * exitQ && (up < 0 || d.outflow[nb] > d.outflow[up]))
+								up = nb;
+						}
+					if (up < 0)
+						break;
+					stemPx += (up % W != cx && up / W != cz) ? 1.41421356f : 1.0f;
+					stem.push_back(up);
+				}
+				// The key: the highest ground on the way (whole model m, offset positive) x c_lengthScale + the length, so a
+				// lower ridge always wins and the length breaks ties among equal ones.
+				constexpr double c_lengthScale = 1.0e4;
+				constexpr double c_rimOffset = 10000.0;
+				const auto rimKey = [&](float elev) { return std::ceil((double)elev + c_rimOffset); };
+				// THE WANDER: past the ridge every way has the same key, so the plain shortest one won - long straight D8 runs
+				// the path smoothing only rounded, and over the steep ground of a cut the meander stays small (2026-10-10). A
+				// step's length costs x (1 + c_wanderAmount x a value noise over c_wanderPx cells, in global pixels): the
+				// cheapest way curves round the noise's highs, a natural line.
+				constexpr float c_wanderPx = 24.0f;
+				constexpr float c_wanderAmount = 1.5f;
+				const auto wander = [&](int32 i)
+				{
+					const auto hash01 = [](int32 a, int32 b)
+					{
+						uint32 h = (uint32)a * 0x8DA6B343u ^ (uint32)b * 0xD8163841u ^ 0x5F356495u;
+						h ^= h >> 13;
+						h *= 0x5BD1E995u;
+						h ^= h >> 15;
+						return (float)(h & 0xFFFFFFu) / 16777215.0f;
+					};
+					const float fx = (float)(uj * W + i % W) / c_wanderPx, fz = (float)(ui * W + i / W) / c_wanderPx;
+					const float cx = std::floor(fx), cz = std::floor(fz);
+					const int32 ix = (int32)cx, iz = (int32)cz;
+					const float tx = smoothstep01(fx - cx), tz = smoothstep01(fz - cz);
+					const float a = hash01(ix, iz) + (hash01(ix + 1, iz) - hash01(ix, iz)) * tx;
+					const float b = hash01(ix, iz + 1) + (hash01(ix + 1, iz + 1) - hash01(ix, iz + 1)) * tx;
+					return 1.0f + c_wanderAmount * (a + (b - a) * tz);
+				};
+				oc::vector<float>& lengthOf = rescueLength;
+				if (lengthOf.empty())
+					lengthOf.assign(NP, 0.0f);
+				if (sourceOf.empty())
+					sourceOf.assign(NP, -1);
+				using Entry = oc::pair<double, int32>;
+				oc::priority_queue<Entry, oc::vector<Entry>, oc::greater<Entry>> open;
+				for (const int32 s : stem)
+				{
+					const double key = rimKey(g.elev[s]) * c_lengthScale;
+					dist[(size_t)s] = key;
+					lengthOf[(size_t)s] = 0.0f;
+					sourceOf[(size_t)s] = s;
+					touched.push_back(s);
+					open.push({ key, s });
+				}
+				int32 target = -1;
+				while (!open.empty())
+				{
+					const Entry top = open.top();
+					open.pop();
+					const int32 p = top.second;
+					if (top.first > dist[(size_t)p])
+						continue;
+					if (g.sea[p] || d.lakeOf[p] >= 0)
+					{
+						target = p;
+						break;
+					}
+					const int32 px = p % W, pz = p / W;
+					for (int32 dz = -1; dz <= 1; dz++)
+						for (int32 dx = -1; dx <= 1; dx++)
+						{
+							const int32 nx = px + dx, nz = pz + dz;
+							if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= W || nz >= W)
+								continue;
+							const int32 n = nz * W + nx;
+							// Not along the border (the other soft walls), off the present tiles or out of the corridor.
+							if (!g.mask[n] || (softSeeds.count(n) && n != exitIdx) || !inCorridor(n))
+								continue;
+							const float step = (dx != 0 && dz != 0) ? 1.41421356f : 1.0f;
+							const float length = lengthOf[(size_t)p] + step;
+							if (length > cfg.seaRescueMaxLength)
+								continue;
+							// The key's tie-break: the wandering cost so far (the true length caps the path above).
+							const double rimP = std::floor(top.first / c_lengthScale);
+							const double rimN = oc::max(rimP, rimKey(g.elev[n]));
+							const double wanderSoFar = top.first - rimP * c_lengthScale;
+							const double cost = rimN * c_lengthScale + wanderSoFar + (double)(step * wander(n));
+							if (cost < dist[(size_t)n])
+							{
+								if (dist[(size_t)n] == c_unreached)
+									touched.push_back(n);
+								dist[(size_t)n] = cost;
+								lengthOf[(size_t)n] = length;
+								sourceOf[(size_t)n] = sourceOf[(size_t)p];
+								prev[(size_t)n] = p;
+								open.push({ cost, n });
+							}
+						}
+				}
+				route.clear();
+				const int32 source = target >= 0 ? sourceOf[(size_t)target] : -1;
+				float rim = source >= 0 ? g.elev[source] : 0.0f;
+				if (target >= 0)
+					for (int32 p = target; p >= 0; p = prev[(size_t)p])
+					{
+						route.push_back(p);
+						if (p != target)
+							rim = oc::max(rim, g.elev[p]);
+						if (p == source)
+							break;
+					}
+				for (const int32 t : touched)
+				{
+					dist[(size_t)t] = c_unreached;
+					prev[(size_t)t] = -1;
+					sourceOf[(size_t)t] = -1;
+				}
+				if (target < 0 || source < 0 || route.size() < 2 || rim - g.elev[source] > cfg.seaRescueMaxRim)
+					continue;
+				oc::reverse(route.begin(), route.end()); // the branch point ... target
+				// The stem below the branch loses its water; the path carries it on, at the branch's rank.
+				const float branchQ = d.outflow[source];
+				for (int32 p = d.receiver[source]; p >= 0; p = d.receiver[p])
+				{
+					d.outflow[p] = oc::max(d.outflow[p] - branchQ, 0.0f);
+					if (p == exitIdx)
+						break;
+				}
+				const int32 branchRank = oc::max(d.rank[source], 0);
+				for (size_t k = 0; k + 1 < route.size(); k++)
+					d.receiver[route[k]] = route[k + 1];
+				for (size_t k = 1; k + 1 < route.size(); k++)
+				{
+					d.outflow[route[k]] += branchQ;
+					d.rank[route[k]] = branchRank;
+				}
+			}
+		}
+
 		// --- Channels.
 		oc::vector<uint8> inC(NP, 0);
 		for (size_t i = 0; i < NP; i++)
 			inC[i] = g.mask[i] && !g.sea[i] && d.lakeOf[i] < 0 && d.rank[i] >= 0 && d.outflow[i] >= cfg.channelMinQ;
+		// EVERY INLET'S DRAIN PATH is a channel (to the sea, a lake or the first channel): the upstream unit's fine routing
+		// can bring a big river to a crossing whose coarse link carries under "Channel min Q" (26 m3/s at a 0.8 link,
+		// 2026-10-10) - no channel started there and the river stopped at the unit edge. Such a segment is `needsUpstream`:
+		// RiverTerrain's inlet match keeps it (at the arriving river's size) only where an upstream river reaches it.
+		for (const auto& [ii, ice] : inlets)
+			for (int32 p = ii, step = 0; p >= 0 && step < (int32)NP; p = d.receiver[p], step++)
+			{
+				if (!g.mask[p] || g.sea[p] || d.lakeOf[p] >= 0 || d.rank[p] < 0 || (inC[p] && p != ii))
+					break;
+				inC[p] = 1;
+			}
 		oc::vector<uint8> donors(NP, 0);
 		for (size_t i = 0; i < NP; i++)
 			if (inC[i] && d.receiver[i] >= 0 && inC[d.receiver[i]] && donors[d.receiver[i]] < 255)
@@ -1083,7 +1351,10 @@ namespace Procedural
 		oc::vector<int32> starts;
 		oc::vector<uint8> isStart(NP, 0);
 		for (size_t i = 0; i < NP; i++)
-			if (inC[i] && (donors[i] != 1 || inlets.count((int32)i)))
+			// An inlet ON A SEA PIXEL starts a segment too (it ends in the sea at once, the sea channel carries it out): the
+			// sea is marked per unit (the spread below 0 sees only this unit), so on a coastal flat just under 0 the same
+			// crossing was land upstream and sea here - the river ran to the unit edge and stopped (2026-10-10).
+			if ((inC[i] && (donors[i] != 1 || inlets.count((int32)i))) || (g.mask[i] && g.sea[i] && inlets.count((int32)i)))
 			{
 				isStart[i] = 1;
 				starts.push_back((int32)i);
@@ -1113,7 +1384,9 @@ namespace Procedural
 			chain.push_back(s);
 			ERiverEnd end = ERiverEnd::Dry;
 			int32 c = s;
-			for (;;)
+			if (g.sea[s])
+				end = ERiverEnd::Sea;
+			while (end != ERiverEnd::Sea)
 			{
 				const int32 r = d.receiver[c];
 				if (r < 0)
@@ -1182,6 +1455,45 @@ namespace Procedural
 				if (chain.size() == seaFrom)
 					seaFrom = SIZE_MAX;
 			}
+			// THE LAKE CHANNEL (the user, 2026-10-10): the chain stopped at a lake's FIRST pixel, and the drawn ground (the
+			// tiles' detail over the routing's raw pixels) stood a little above the level at the shore - land with trees
+			// between the river's end and the open water. It runs on into the SAME lake down the steepest way until the raw
+			// ground is "Lake channel depth" under the level (at most "Lake channel max length" px), at the lake's level
+			// (the segment's floor), so the carve cuts a channel through the shore into the lake bed.
+			size_t lakeFrom = SIZE_MAX; // the first index of that run past the shore
+			if (end == ERiverEnd::Lake && cfg.lakeChannelDepth > 0.0f && cfg.lakeChannelMaxLength > 0.0f)
+			{
+				const int32 lake = d.lakeOf[chain.back()];
+				const float stopElev = d.lakes[lake].level - cfg.lakeChannelDepth;
+				seaChannel.clear();
+				int32 at = chain.back();
+				seaChannel.insert(at);
+				lakeFrom = chain.size();
+				for (int32 step = 0; step < (int32)cfg.lakeChannelMaxLength && g.elev[at] > stopElev; step++)
+				{
+					const int32 ax = at % W, az = at / W;
+					int32 best = -1;
+					for (int32 dz = -1; dz <= 1; dz++)
+						for (int32 dx = -1; dx <= 1; dx++)
+						{
+							const int32 nx = ax + dx, nz = az + dz;
+							if ((dx == 0 && dz == 0) || nx < 1 || nz < 1 || nx >= W - 1 || nz >= W - 1)
+								continue;
+							const int32 nb = nz * W + nx;
+							if (!g.mask[nb] || d.lakeOf[nb] != lake || seaChannel.count(nb))
+								continue;
+							if (best < 0 || g.elev[nb] < g.elev[best])
+								best = nb;
+						}
+					if (best < 0)
+						break;
+					seaChannel.insert(best);
+					chain.push_back(best);
+					at = best;
+				}
+				if (chain.size() == lakeFrom)
+					lakeFrom = SIZE_MAX;
+			}
 
 			// AN EDGE END (the fine water left through a soft wall, where the coarse network has no crossing): the neighbour
 			// knows nothing of it, so it cannot run on. It ends c_edgeBackPx inside instead, as an open end - an end lake's
@@ -1205,6 +1517,67 @@ namespace Procedural
 				}
 			}
 
+			// THE LAKE OUTLET CHANNEL (the user, 2026-10-10): a river LEAVING a lake started at the first pixel past the
+			// lake's exit, the shore's drawn ground left standing between the open water and it. When its start takes a
+			// lake pixel's water, the chain runs BACK into that lake down the steepest way (as the lake channel, under the
+			// same limits), at the lake's level, so the carve cuts the outlet through the shore.
+			size_t lakeHead = 0;   // the chain's first pixels, in the lake it leaves
+			float headLevel = 0.0f;
+			if (cfg.lakeChannelDepth > 0.0f && cfg.lakeChannelMaxLength > 0.0f)
+			{
+				int32 from = -1;
+				const int32 sx = s % W, sz = s / W;
+				for (int32 dz = -1; dz <= 1; dz++)
+					for (int32 dx = -1; dx <= 1; dx++)
+					{
+						const int32 nx = sx + dx, nz = sz + dz;
+						if ((dx == 0 && dz == 0) || nx < 0 || nz < 0 || nx >= W || nz >= W)
+							continue;
+						const int32 nb = nz * W + nx;
+						if (d.receiver[nb] == s && d.lakeOf[nb] >= 0 && (from < 0 || g.elev[nb] < g.elev[from]))
+							from = nb;
+					}
+				if (from >= 0)
+				{
+					const int32 lake = d.lakeOf[from];
+					headLevel = d.lakes[lake].level;
+					const float stopElev = headLevel - cfg.lakeChannelDepth;
+					seaChannel.clear();
+					seaChannel.insert(s);
+					oc::vector<int32> head{ from };
+					seaChannel.insert(from);
+					for (int32 at = from, step = 0; step < (int32)cfg.lakeChannelMaxLength && g.elev[at] > stopElev; step++)
+					{
+						const int32 ax = at % W, az = at / W;
+						int32 best = -1;
+						for (int32 dz = -1; dz <= 1; dz++)
+							for (int32 dx = -1; dx <= 1; dx++)
+							{
+								const int32 nx = ax + dx, nz = az + dz;
+								if ((dx == 0 && dz == 0) || nx < 1 || nz < 1 || nx >= W - 1 || nz >= W - 1)
+									continue;
+								const int32 nb = nz * W + nx;
+								if (!g.mask[nb] || d.lakeOf[nb] != lake || seaChannel.count(nb))
+									continue;
+								if (best < 0 || g.elev[nb] < g.elev[best])
+									best = nb;
+							}
+						if (best < 0)
+							break;
+						seaChannel.insert(best);
+						head.push_back(best);
+						at = best;
+					}
+					oc::reverse(head.begin(), head.end()); // deep in the lake ... its exit
+					chain.insert(chain.begin(), head.begin(), head.end());
+					lakeHead = head.size();
+					if (seaFrom != SIZE_MAX)
+						seaFrom += lakeHead;
+					if (lakeFrom != SIZE_MAX)
+						lakeFrom += lakeHead;
+				}
+			}
+
 			// The profile, pure BREACH semantics, profiled upstream first: the water starts at the lowest of its own
 			// bed + depth, the water its tributaries bring and (an inlet) its crossing's level, then follows bed + depth
 			// downstream but NEVER rises - a rim in its way is cut through (the carve's gorge), never filled up to. Only
@@ -1225,13 +1598,16 @@ namespace Procedural
 			// the crossing's Q, so both sides reach the boundary with the same one. ONLY where the two are close (the fine
 			// Q at the outlet at least half the coarse one): blended from far below, a small stream swelled into a big river
 			// in 24 px at the unit edge (2026-10-09) - it keeps its own size instead, and the neighbour's inlet grows from
-			// it (RiverTerrain's inlet match).
+			// it (RiverTerrain's inlet match). Nor from far ABOVE (at most twice the coarse one): a big river shrank to the
+			// crossing's small Q at the edge - the neighbour's inlet takes its size instead (2026-10-10).
 			constexpr float c_crossBlendPx = 24.0f;
-			const bool blendQ = outlet && d.outflow[last] >= 0.5f * outlet->q;
+			const bool blendQ = outlet && d.outflow[last] >= 0.5f * outlet->q && d.outflow[last] <= 2.0f * outlet->q;
 			qChain.resize(n);
 			for (size_t k = 0; k < n; k++)
 			{
-				qChain[k] = k >= seaFrom ? qChain[k - 1] : inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
+				qChain[k] = k < lakeHead ? d.outflow[s]
+					: k == 0 && !inC[s] ? (inlet ? inlet->q : d.outflow[s]) // an inlet on a sea pixel
+					: (k >= seaFrom || k >= lakeFrom) ? qChain[k - 1] : inC[chain[k]] ? d.outflow[chain[k]] : d.outflow[chain[k - 1]];
 				if (blendQ)
 				{
 					const float t = 1.0f - smoothstep01((float)(n - 1 - k) / c_crossBlendPx);
@@ -1240,13 +1616,14 @@ namespace Procedural
 			}
 			const auto qAt = [&](size_t k) { return qChain[k]; };
 			wUp.resize(n);
-			wUp[0] = g.elev[chain[0]] + depthOf(qAt(0));
+			// (A lake outlet channel's pixels stand at the lake's level; the river falls from there.)
+			wUp[0] = lakeHead > 0 ? headLevel : g.elev[chain[0]] + depthOf(qAt(0));
 			if (inlet)
 				wUp[0] = oc::min(wUp[0], inlet->water);
 			if (auto it = arriving.find(s); it != arriving.end())
 				wUp[0] = oc::min(wUp[0], it->second);
 			for (size_t k = 1; k < n; k++)
-				wUp[k] = oc::min(wUp[k - 1], g.elev[chain[k]] + depthOf(qAt(k)));
+				wUp[k] = k < lakeHead ? wUp[k - 1] : oc::min(wUp[k - 1], g.elev[chain[k]] + depthOf(qAt(k)));
 			if (outlet)
 				wUp[n - 1] = oc::min(wUp[n - 1], outlet->water); // not above the crossing's level (only ever lowers)
 			if (end == ERiverEnd::Sea || end == ERiverEnd::Lake)
@@ -1335,6 +1712,7 @@ namespace Procedural
 			seg.count = (uint32)simplified.size();
 			seg.end = end;
 			seg.ephemeral = maxQ < cfg.perennialQ ? 1 : 0;
+			seg.needsUpstream = inlet && inlet->q < cfg.channelMinQ ? 1 : 0;
 			for (size_t k = 0; k < simplified.size(); k++)
 			{
 				const ChainPoint& cp = simplified[k];
@@ -1361,7 +1739,7 @@ namespace Procedural
 				}
 				unit->points.push_back(rp);
 			}
-			if (!seg.ephemeral && (end == ERiverEnd::Sink || end == ERiverEnd::Dry))
+			if (!seg.ephemeral && !seg.needsUpstream && (end == ERiverEnd::Sink || end == ERiverEnd::Dry))
 				openEnds.push_back({ (uint32)unit->segments.size(), last, qChain[n - 1], wUp[n - 1] });
 			unit->segments.push_back(seg);
 		}

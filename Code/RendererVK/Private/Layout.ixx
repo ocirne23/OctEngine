@@ -890,7 +890,7 @@ export namespace RendererVKLayout
     constexpr uint32 MAX_RIVER_MIST_SOURCES = 4096;
     struct alignas(16) RiverMistSourceGpu
     {
-        glm::vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m)
+        glm::vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m; negative = a fall's plunge pool)
         glm::vec4 flowFoam; // xy = the flow's velocity in XZ (m/s), z = the whitewater 0..1 (x the river's size), w = the stretch's length (m)
     };
     static_assert(sizeof(RiverMistSourceGpu) == 32);

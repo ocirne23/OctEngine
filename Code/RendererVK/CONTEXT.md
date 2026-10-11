@@ -3254,7 +3254,9 @@ the sand, so the two can never disagree.
   |u|^(1 + `u_river_mistCentering`) x the half-width: gathered toward the centre line), drifting downstream
   (`Mist speed` x the flow) and kicked up (`Mist kick` x the strength). UBO-gated by `u_river_mistEmitter`
   (`setRiverMistEmitter`, the Particle system's `Effects/river_mist.pfx`; `UINT32_MAX` = off), so the cached CB records
-  once. Its tweaks are "Terrain/Rivers/Surface/Mist *" (the "Rivers" lock section).
+  once. Its tweaks are "Terrain/Rivers/Surface/Mist *" (the "Rivers" lock section). A NEGATIVE half-width marks a
+  fall's plunge pool (Procedural's plunge sources): it takes `u_river_plunge{Centering,Speed,Kick,Height}` ("Plunge
+  mist *") in place of the whitewater's four.
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
   (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic view (`u_weather_rainOcclusionViewProj`, a
   plain matrix), **RAY-TRACED** (`RainOcclusionPipeline`, `rain_occlusion.cs.glsl`) into ONE `R32_UINT` image

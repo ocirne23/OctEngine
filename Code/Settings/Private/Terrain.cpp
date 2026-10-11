@@ -308,6 +308,18 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// at about 0 it stopped at the waterline. 0 = off.
 	Tweak::floatVar("Terrain/Rivers", "Sea channel depth (m)", &s.riverSeaChannelDepth, 0.0f, 500.0f, 1.0f);
 	Tweak::floatVar("Terrain/Rivers", "Sea channel max length (px)", &s.riverSeaChannelMaxLength, 0.0f, 1000.0f, 5.0f);
+	// THE LAKE CHANNEL: a river reaching a lake runs on into it down the steepest way until the floor is "Lake channel
+	// depth" model m under the level (at most "Lake channel max length" native px), cutting through the shore - it
+	// stopped at the lake's first pixel, with dry ground and trees left before the open water. 0 = off.
+	Tweak::floatVar("Terrain/Rivers", "Lake channel depth (m)", &s.riverLakeChannelDepth, 0.0f, 200.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Lake channel max length (px)", &s.riverLakeChannelMaxLength, 0.0f, 500.0f, 1.0f);
+	// THE SEA RESCUE: a river of at least "Sea rescue min Q" leaving a unit where the coarse network has no crossing (it
+	// ended at the unit's edge) is sent toward the sea or lake its coarse route reaches in the unit, on the lowest-rim
+	// way through that route's tiles, cutting a rim of at most "Sea rescue max rim" model m over a path of at most "Sea
+	// rescue max length" native px. 0 min Q = off.
+	Tweak::floatVar("Terrain/Rivers", "Sea rescue min Q (m3/s)", &s.riverSeaRescueMinQ, 0.0f, 1000.0f, 0.5f);
+	Tweak::floatVar("Terrain/Rivers", "Sea rescue max rim (m)", &s.riverSeaRescueMaxRim, 0.0f, 1000.0f, 5.0f);
+	Tweak::floatVar("Terrain/Rivers", "Sea rescue max length (px)", &s.riverSeaRescueMaxLength, 0.0f, 5000.0f, 10.0f);
 	// A unit's edge away from its crossings is a SOFT wall: higher = more water forced to a crossing (and deeper filled
 	// basins on the way), lower = more streams that end at the unit edge.
 	Tweak::floatVar("Terrain/Rivers", "Edge wall (m)", &s.riverEdgeWall, 0.0f, 500.0f, 1.0f);
@@ -340,6 +352,13 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// A waterfall's plunge gorge (RiverPoint_Gorge): past the channel's edge its walls rise at this (rise / run), with no
 	// floodplain - a narrow slot, not the wide valley carve; it fades back to the valley at the gorge's end.
 	Tweak::floatVar("Terrain/Rivers", "Gorge wall slope", &s.riverGorgeWallSlope, 0.1f, 20.0f, 0.05f);
+	// A waterfall's drop face: within this x the river's half-width of the channel the ground breaks sharply at the lip
+	// (the falling sheet's room - the rock clipped its sides); past it the face leans at about "Gorge wall slope".
+	Tweak::floatVar("Terrain/Rivers", "Fall clearance", &s.riverFallClearance, 1.0f, 6.0f, 0.05f);
+	// The ground under a falling sheet within that clearance rises at most this (rise / run): the sheet falls near-
+	// vertically, and a face that steep drew as a comb on the terrain mesh, so the face starts before the lip (under the
+	// upper water) as far as it needs. Higher = a shorter undercut, a steeper face.
+	Tweak::floatVar("Terrain/Rivers", "Fall face slope", &s.riverFallFaceSlope, 0.5f, 20.0f, 0.1f);
 	// On rapids and falls (the piece's steepness, half "Rapids slope" to "Fall slope"; a plunge gorge in full) the channel
 	// is up to this much deeper / wider: room for the falling sheet and the waves (the water itself is unchanged).
 	Tweak::floatVar("Terrain/Rivers", "Whitewater channel depth", &s.riverWhitewaterDepth, 1.0f, 10.0f, 0.05f);
@@ -428,6 +447,14 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Rivers/Surface", "Mist speed", &s.riverMistSpeed, 0.0f, 2.0f, 0.01f);
 	Tweak::floatVar("Terrain/Rivers/Surface", "Mist kick (m/s)", &s.riverMistKick, 0.0f, 10.0f, 0.05f);
 	Tweak::floatVar("Terrain/Rivers/Surface", "Mist height (m)", &s.riverMistHeight, -2.0f, 5.0f, 0.05f);
+	// A waterfall's foot mists at full whitewater over this many metres of river (mostly downstream) per metre the water
+	// falls: a taller fall throws more. 0 = no plunge mist.
+	Tweak::floatVar("Terrain/Rivers/Surface", "Mist plunge", &s.riverMistPlunge, 0.0f, 10.0f, 0.05f);
+	// The plunge pool's mist has its own centering, speed, kick and height (the same meaning as the "Mist ..." ones).
+	Tweak::floatVar("Terrain/Rivers/Surface", "Plunge mist centering", &s.riverPlungeMistCentering, 0.0f, 8.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Plunge mist speed", &s.riverPlungeMistSpeed, 0.0f, 2.0f, 0.01f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Plunge mist kick (m/s)", &s.riverPlungeMistKick, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Rivers/Surface", "Plunge mist height (m)", &s.riverPlungeMistHeight, -2.0f, 5.0f, 0.05f);
 }
 
 // "Tile size", "Spacing" and "Friction" rebuild every collider tile: TerrainCollider::initialize attaches that listener.

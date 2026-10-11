@@ -365,6 +365,11 @@ namespace Procedural
 		Tweak::onChange(s.riverFallFullQ, this, dirty);
 		Tweak::onChange(s.riverSeaChannelDepth, this, dirty);
 		Tweak::onChange(s.riverSeaChannelMaxLength, this, dirty);
+		Tweak::onChange(s.riverLakeChannelDepth, this, dirty);
+		Tweak::onChange(s.riverLakeChannelMaxLength, this, dirty);
+		Tweak::onChange(s.riverSeaRescueMinQ, this, dirty);
+		Tweak::onChange(s.riverSeaRescueMaxRim, this, dirty);
+		Tweak::onChange(s.riverSeaRescueMaxLength, this, dirty);
 		Tweak::onChange(s.riverEdgeWall, this, dirty);
 		Tweak::onChange(s.riverPathSmoothing, this, dirty);
 		Tweak::onChange(s.riverMeanderAmplitude, this, dirty);
@@ -379,6 +384,8 @@ namespace Procedural
 		Tweak::onChange(s.riverChannelMinDepth, this, dirty);
 		Tweak::onChange(s.riverChannelWallSlope, this, dirty);
 		Tweak::onChange(s.riverGorgeWallSlope, this, dirty);
+		Tweak::onChange(s.riverFallClearance, this, dirty);
+		Tweak::onChange(s.riverFallFaceSlope, this, dirty);
 		Tweak::onChange(s.riverWhitewaterDepth, this, dirty);
 		Tweak::onChange(s.riverWhitewaterWiden, this, dirty);
 		Tweak::onChange(s.riverWaterHumidity, this, dirty);

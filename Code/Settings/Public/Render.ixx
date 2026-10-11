@@ -541,7 +541,7 @@ export struct FogParams
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
     float inlandUnderwaterDensity = 5.0f;
-    float riverUnderwaterScale = 5.0f; // x the above under a river's surface (shallow: the froxels hold little of it) // the same under a lake's or river's surface (the inland water map)
+    float riverUnderwaterScale = 2.0f; // x the above under a river's surface (shallow: the froxels hold little of it) // the same under a lake's or river's surface (the inland water map)
     float underwaterWaveOffset = 0.25f; // lowers the underwater fog boundary (the local water surface, the live
                                     // wave displacement on top) by this x the deepest live wave trough (m per
                                     // m): the fog's coarse froxels miss steep waves' troughs, and the murk

@@ -32,6 +32,9 @@ namespace
 	// The unit level (model m) under which a river point is the sea channel's (RiverUnits): no ribbon there.
 	constexpr float c_seaChannelCut = -0.5f;
 
+	constexpr float c_maxFlowSpeed = 9.0f;  // m/s: a fall's sheet (Manning alone stops at 6)
+	constexpr float c_fallSpeedScale = 0.7f; // x the free-fall speed (in full it looked too fast)
+
 	// One point of a segment's water, in ENGINE metres relative to its unit's origin (y above sea level).
 	struct WaterPoint
 	{
@@ -81,15 +84,59 @@ namespace
 			// surface's drop to the next point.
 			const float dist = glm::length(glm::vec2(b.x - p.x, b.z - p.z)) * nr;
 			const float drop = dist > 1e-3f ? (S - carve.surface(b.water, b.depth, b.q)) / dist : 0.0f;
-			w.speed = glm::clamp(std::pow(glm::max(p.depth, 0.05f), 0.6667f) * std::sqrt(glm::max(drop, 1e-5f)) / 0.035f, 0.1f, 6.0f);
+			const float manning = glm::clamp(std::pow(glm::max(p.depth, 0.05f), 0.6667f) * std::sqrt(glm::max(drop, 1e-5f)) / 0.035f, 0.1f, 6.0f);
 			// The WHITEWATER is a smooth measure of how steep the water runs, not a kind of reach: 0 below half the
 			// rapids slope, 1 at the fall slope, eased between (the shader turns it into rougher, milkier, higher water,
 			// with foam streaks only as it rises).
 			const RiverUnitConfig& uc = terrain.unitConfig();
 			w.foam = glm::smoothstep(0.5f * uc.rapidsSlope, glm::max(uc.fallSlope, uc.rapidsSlope + 1e-3f), drop);
+			// A FALL'S SHEET falls: toward the free-fall speed over the piece's drop, sqrt(2 g h), as steep as a fall (Manning
+			// capped it at 6 m/s - the sheet crept down, 2026-10-11).
+			const float fallDropM = glm::max(S - carve.surface(b.water, b.depth, b.q), 0.0f) * vs;
+			const float fallW = glm::smoothstep(uc.rapidsSlope, glm::max(uc.fallSlope, uc.rapidsSlope + 1e-3f), drop);
+			w.speed = glm::mix(manning, glm::clamp(c_fallSpeedScale * std::sqrt(2.0f * 9.81f * fallDropM), manning, c_maxFlowSpeed), fallW);
 			out.push_back(w);
 		}
-		// ... and blurred along the river, so it rises and falls over tens of metres instead of per point.
+		// THE SPEED, smoothed along the river by DISTANCE (a Gaussian, sigma c_speedSigmaM): per point it jumped from a
+		// plunge pool's still water (~0.1 m/s) to the next reach's full speed between two points far apart, and the flow
+		// texture stretched across the change (2026-10-11). By distance, not per point: the points are sparse where the
+		// water runs straight.
+		{
+			// THE APPROACH: water speeds up toward a lip - the calm reach above a fall crept to its edge and the sheet
+			// sped off it (2026-10-11). Each point rises toward any faster water downstream, fading over c_approachM.
+			constexpr float c_approachM = 30.0f;
+			for (size_t k = 0; k + 1 < out.size(); k++)
+				for (size_t j = k + 1; j < out.size(); j++)
+				{
+					const float d = out[j].along - out[k].along;
+					if (d >= c_approachM)
+						break;
+					const float s = 1.0f - d / c_approachM;
+					out[k].speed = glm::max(out[k].speed, out[j].speed * s * s * (3.0f - 2.0f * s));
+				}
+			constexpr float c_speedSigmaM = 20.0f;
+			oc::vector<float> speed(out.size());
+			for (size_t k = 0; k < out.size(); k++)
+			{
+				float sw = 0.0f, sv = 0.0f;
+				for (size_t j = 0; j < out.size(); j++)
+				{
+					const float d = (out[j].along - out[k].along) / c_speedSigmaM;
+					if (d < -3.0f || d > 3.0f)
+						continue;
+					// Each point stands for the river halfway to its neighbours.
+					const float span = 0.5f * ((j + 1 < out.size() ? out[j + 1].along : out[j].along) - (j > 0 ? out[j - 1].along : out[j].along));
+					const float w = std::exp(-0.5f * d * d) * glm::max(span, 0.01f);
+					sw += w;
+					sv += w * out[j].speed;
+				}
+				// Only ever raised: averaged, a fall's few metres of sheet took the calm water's speed round it.
+				speed[k] = sw > 0.0f ? glm::max(sv / sw, out[k].speed) : out[k].speed;
+			}
+			for (size_t k = 0; k < out.size(); k++)
+				out[k].speed = speed[k];
+		}
+		// ... and the whitewater blurred along the river, so it rises and falls over tens of metres instead of per point.
 		for (int32 pass = 0; pass < 4 && out.size() > 2; pass++)
 		{
 			float prev = out[0].foam;
@@ -424,6 +471,18 @@ namespace
 					mist.push_back(RiverSystem::MistPoint{ glm::vec3(w.pos.x, w.y, w.pos.y), w.half / c_ribbonWiden,
 						w.dir * w.speed, w.foam, w.depth, 0.5f * (prev + next) });
 				}
+				// A FALL'S FOOT: the whitewater stretches mist at their own (top) level over the lip's few metres, so the
+				// plunge pool had none (2026-10-11). The point under a drop of at least c_plungeMinDropM, steeper than 45
+				// degrees, is a plunge source - its stretch scales with the drop ("Mist plunge", updateMist).
+				if (k > 0)
+				{
+					constexpr float c_plungeMinDropM = 2.0f;
+					const WaterPoint& a = pts[k - 1];
+					const float dropM = a.y - w.y;
+					if (dropM >= c_plungeMinDropM && dropM >= glm::length(w.pos - a.pos))
+						mist.push_back(RiverSystem::MistPoint{ glm::vec3(w.pos.x, w.y, w.pos.y), w.half / c_ribbonWiden,
+							w.dir * w.speed, 1.0f, w.depth, 0.0f, dropM });
+				}
 				const glm::vec2 n(-w.dir.y, w.dir.x);
 				const glm::vec3 tangent(w.dir.x * w.speed, w.foam, w.dir.y * w.speed);
 				m.push(glm::vec3(w.pos.x + n.x * w.half, w.y, w.pos.y + n.y * w.half), tangent, glm::vec2(-1.0f, w.along), false, w.depth);
@@ -699,8 +758,10 @@ namespace Procedural
 		constexpr float c_mistMove = 10.0f; // engine m
 		const float R = glm::max(s.riverMistRadius, 1.0f);
 		if (glm::length(camera - m_mistCentre) < c_mistMove && m_mistGeneration == m_unitGeneration
-			&& R == m_mistRadiusWas && s.riverFullSizeDepth == m_mistFullSizeWas && s.riverMistSizeWeight == m_mistSizeWeightWas)
+			&& R == m_mistRadiusWas && s.riverFullSizeDepth == m_mistFullSizeWas && s.riverMistSizeWeight == m_mistSizeWeightWas
+			&& s.riverMistPlunge == m_mistPlungeWas)
 			return;
+		m_mistPlungeWas = s.riverMistPlunge;
 		m_mistCentre = camera;
 		m_mistGeneration = m_unitGeneration;
 		m_mistRadiusWas = R;
@@ -722,15 +783,28 @@ namespace Procedural
 			const glm::vec3 origin = unitOrigin(ui, uj);
 			for (const MistPoint& p : r.mist)
 			{
-				const glm::vec3 world = origin + p.pos;
+				glm::vec3 world = origin + p.pos;
+				float len = p.len;
+				if (p.plunge > 0.0f)
+				{
+					// The plunge pool's stretch: "Mist plunge" m per m of drop, centred a third of it downstream (the
+					// sheet and the cliff stand upstream).
+					len = p.plunge * s.riverMistPlunge;
+					if (len <= 0.0f)
+						continue;
+					const float speed = glm::length(p.flow);
+					if (speed > 1e-4f)
+						world += glm::vec3(p.flow.x, 0.0f, p.flow.y) / speed * (len / 3.0f);
+				}
 				const glm::vec2 d(world.x - camera.x, world.z - camera.y);
 				const float d2 = glm::dot(d, d);
 				if (d2 > R * R)
 					continue;
 				RiverMistSourceGpu g;
-				g.posHalf = glm::vec4(world, p.half);
+				// A plunge source's half-width goes NEGATIVE: the shader's mark for the plunge mist's own look.
+				g.posHalf = glm::vec4(world, p.plunge > 0.0f ? -glm::max(p.half, 0.1f) : p.half);
 				const float size = glm::mix(1.0f, glm::clamp(p.depth / fullSize, 0.0f, 1.0f), sizeWeight);
-				g.flowFoam = glm::vec4(p.flow, p.foam * size, p.len);
+				g.flowFoam = glm::vec4(p.flow, p.foam * size, len);
 				found.push_back({ d2, g });
 			}
 		}

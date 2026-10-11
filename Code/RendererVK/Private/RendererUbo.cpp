@@ -1131,6 +1131,11 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("river_mistSpeed", [&] { return glm::max(r.riverMistSpeed, 0.0f); }, r.riverMistSpeed);
         list.add("river_mistKick", [&] { return glm::max(r.riverMistKick, 0.0f); }, r.riverMistKick);
         list.add("river_mistHeight", [&] { return r.riverMistHeight; }, r.riverMistHeight);
+        // A fall's plunge pool's mist (a source with a negative half-width): its own look.
+        list.add("river_plungeCentering", [&] { return glm::max(r.riverPlungeMistCentering, 0.0f); }, r.riverPlungeMistCentering);
+        list.add("river_plungeSpeed", [&] { return glm::max(r.riverPlungeMistSpeed, 0.0f); }, r.riverPlungeMistSpeed);
+        list.add("river_plungeKick", [&] { return glm::max(r.riverPlungeMistKick, 0.0f); }, r.riverPlungeMistKick);
+        list.add("river_plungeHeight", [&] { return r.riverPlungeMistHeight; }, r.riverPlungeMistHeight);
     }
     {
         // ---- Grass ("Grass")

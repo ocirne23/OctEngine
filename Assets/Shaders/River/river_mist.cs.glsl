@@ -15,7 +15,7 @@
 
 struct RiverMistSource
 {
-    vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m)
+    vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m; negative = a plunge pool)
     vec4 flowFoam; // xy = the flow's velocity in XZ (m/s), z = the whitewater 0..1, w = the stretch's length (m)
 };
 layout (binding = 3, std430) readonly buffer RiverMistSources
@@ -41,7 +41,13 @@ void main()
     if (strength <= 0.0)
         return;
 
-    const float halfWidth = max(src.posHalf.w, 0.1);
+    // A NEGATIVE half-width marks a fall's plunge pool (RiverSystem::updateMist): its own centering, speed, kick, height.
+    const bool plunge = src.posHalf.w < 0.0;
+    const float centering = plunge ? u_river_plungeCentering : u_river_mistCentering;
+    const float mistSpeed = plunge ? u_river_plungeSpeed : u_river_mistSpeed;
+    const float kick = plunge ? u_river_plungeKick : u_river_mistKick;
+    const float height = plunge ? u_river_plungeHeight : u_river_mistHeight;
+    const float halfWidth = max(abs(src.posHalf.w), 0.1);
     const float len = max(src.flowFoam.w, 0.1);
     const float expected = rate * (2.0 * halfWidth * len) * u_ocean_sprayDt * strength;
     uint seed = particlePcg(u_frameIndex * 0x9E3779B9u + i * 0x85EBCA6Bu + 0x27D4EB2Fu);
@@ -63,13 +69,13 @@ void main()
         const float a = (particleRand(seed) - 0.5) * len;
         // Across the channel: |u|^(1 + "Mist centering"), so it gathers toward the centre line (0 = evenly).
         const float u = particleRand(seed) * 2.0 - 1.0;
-        const float c = sign(u) * pow(abs(u), 1.0 + u_river_mistCentering) * halfWidth;
+        const float c = sign(u) * pow(abs(u), 1.0 + centering) * halfWidth;
         const vec3 pos = vec3(src.posHalf.x + dir.x * a + side.x * c,
-                              src.posHalf.y + u_river_mistHeight,
+                              src.posHalf.y + height,
                               src.posHalf.z + dir.y * a + side.y * c);
-        const vec2 drift = flow * u_river_mistSpeed * (0.6 + 0.6 * particleRand(seed))
+        const vec2 drift = flow * mistSpeed * (0.6 + 0.6 * particleRand(seed))
                          + side * ((particleRand(seed) * 2.0 - 1.0) * 0.3 * speed);
-        const float up = u_river_mistKick * energy * (0.4 + 0.8 * particleRand(seed));
+        const float up = kick * energy * (0.4 + 0.8 * particleRand(seed));
         if (!particleRequestSpawn(pos, vec3(drift.x, up, drift.y), slot))
             return; // this frame's request buffer is full
     }

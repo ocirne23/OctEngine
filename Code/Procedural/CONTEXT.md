@@ -301,6 +301,39 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   crossed a whole lake with no point inside it; its water stays its own; a segment that starts in one is gone): the valley-first flood covers the river's last
   stretch, whose surface stood over the lake's in near-cell rectangles. **A lake cannot cross a unit edge**: two units
   that both end rivers at the same border point make two lakes, with a ground strip and two levels between them.
+* **THE LAKE CHANNELS** (the user, 2026-10-10): a chain stopped at a lake's FIRST pixel, and the drawn ground (the
+  tiles' detail over the routing's raw pixels) stood a little above the level at the shore - land with trees between
+  the river's end and the open water. A `Lake` end now runs on into the SAME lake down the steepest way (8 neighbours,
+  never back) until the raw ground is "Lake channel depth" model m under the level (default 12) or "Lake channel max
+  length" px (40), at the lake's level (the segment's floor) and the arriving Q: the carve cuts through the shore into
+  the bed. **The same for a river LEAVING a lake**: when a segment's start takes a lake pixel's water (a donor in a
+  lake), the chain runs BACK into that lake the same way, prepended (`lakeHead`), at the lake's level with the start's Q,
+  and the river falls from there - the outlet is cut through the shore. The ribbon on those stretches lies under the
+  lake's surface (the carve's surface sinks below the unit level).
+* **THE COAST the coarse network sees** (2026-10-10): in a tile whose COARSE pixel is sea, every pixel under 0 is sea
+  too. `markSea` seeds only below "Sea depth" (V3's sea-level film is not sea), so a shallow coastal tile had no sea at
+  all: the coarse river ended in it, the fine one found no water there.
+* **THE SEA RESCUE** (the user: rivers should end in the sea or a lake, carving if they must): a soft exit still
+  carrying at least "Sea rescue min Q" (5 m3/s) - a river leaving where the coarse network has no crossing, which the
+  neighbour never carries on - is sent along the LOWEST-RIM path inside the unit to a sea or lake pixel (minimax: the key
+  is the highest ground on the way in whole model m x 1e4 + the length; never along the border or off the present
+  tiles), when that rim is at most "Sea rescue max rim" (150 model m) over the exit's ground: the breach profile cuts
+  it, and the river ends in the sea (its sea channel) or the lake. **The direction comes from the coarse network**:
+  from the exit's tile its flow directions are followed tile by tile to a coarse Sea / Lake / TerminalLake tile in the
+  unit, and the fine search keeps to that route's tiles and their 8 neighbours (a CORRIDOR); a route that leaves the
+  unit or ends in a dry coarse sink means no rescue (the coarse network sends the water elsewhere). Paths longer than
+  "Sea rescue max length" (1500 px) are not followed. **From the river's MAIN STEM, not its exit**: started at the
+  exit, the river ran on to the border and turned back along the path - a wide dead end at the edge. Every pixel
+  upstream from the exit along the largest inflow (while it carries at least half the exit's water, to the max length)
+  is a start; the key is the highest ABSOLUTE ground on the way (whole model m + an offset, x 1e4, + the length, in
+  doubles), so the branch is wherever the lowest ridge is reached soonest. The rim is checked against the branch's own
+  ground ("Sea rescue max rim", 300 model m), and the stem below the branch loses the branch's water (it falls under
+  "Channel min Q": no dead end). **The path wanders**: past the ridge every way had the same key and the plain shortest
+  one won - long straight D8 runs, and over a cut's steep ground the meander stays small - so a step's length costs x
+  (1 + 1.5 x a value noise over 24 px cells in global pixels); the true length still caps the path at the max length. Receivers / outflows / ranks rewritten as the edge
+  reroute. Seen at (9,-20): a 224 m3/s river entered from the east and left through the same edge's soft wall - the
+  lowest way to its sea climbed 264 model m (the coarse network breaches it at 1.28 km a pixel), and the neighbour's
+  stream drains to the same border point: a basin across the unit edge (a cross-edge lake, not built).
 * **THE SEA CHANNEL** (the user, 2026-10-10): a chain stopped at the FIRST sea pixel, and on a wide coastal flat at about
   0 the river met an ocean almost 0 deep there and seemed to stop. A `Sea` end now runs on into the sea down the
   steepest way (8 neighbours, sea pixels only, never back) until the floor is "Sea channel depth" model m deep (default
@@ -308,6 +341,9 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
   that depth at the end (the ground clamp's floor follows), so the carve cuts a channel out to deep water and the ocean
   fills it. RiverSystem's ribbon stops where the level drops under -0.5 model m (`c_seaChannelCut`): the ocean is the
   water there; `apply` does not mark such channel points River (they stay sea below sea level).
+  **An inlet on a sea pixel starts a segment too** (`Sea` at once, with the inlet's Q, then the sea channel): the sea is
+  marked per unit, so on a flat just under 0 one crossing can be land upstream and sea downstream - the river ran to
+  the unit edge and stopped.
 * **Each tile's land runoff is rescaled to its coarse pixel's own** (`CoarseRiverTile::runoff`), so the levels agree on
   the budget.
 * **Channels** (Q >= "Channel min Q", outside lake basins) become segments from heads / junctions / inlets to a
@@ -371,7 +407,12 @@ nearest missing unit inside max("Surface/Radius" while the water is on, "Debug r
 sampler's store (built there if not resident); units past 1.5 x the radius go. **The water** (V3, "Terrain/Rivers/
 Surface"): the pull job also builds the unit's water mesh (`buildSurfaceMesh`, pure): a RIBBON per perennial segment at
 the carved water surface (`RiverCarveConfig::surface`), 1.2 x the channel's half-width (the carved bank hides the rest),
-with the Manning-like flow speed and the WHITEWATER per vertex - a smooth measure of how steep the carved water runs
+with the Manning-like flow speed (capped at 6 m/s; on a fall-steep piece blended toward 0.7 x the free-fall speed sqrt(2 g h)
+over its drop, up to 9 m/s - the sheet crept down; each point then raised toward any faster water downstream, fading
+over 30 m - the calm reach above a fall crept to its lip - then smoothed along the river by DISTANCE, only ever raising
+(averaged, a fall's few metres of sheet took the calm water's speed), a Gaussian of sigma 20 m: per point it jumped
+from a plunge pool's still water to the next reach's full speed between two far-apart points, and the flow texture
+stretched across the change) and the WHITEWATER per vertex - a smooth measure of how steep the carved water runs
 (0 below half "Rapids slope", 1 at "Fall slope", eased; blurred along the river - `segmentWater`), not the rapids / fall
 flags, which only colour the debug lines. **At a JUNCTION** (`segmentWater`): the river flowed into stands lower (its
 bigger Q: a deeper channel and valley sink), so a segment ending there EASES DOWN to that river's surface over its last
@@ -402,7 +443,12 @@ half the river to each neighbour). Each frame the resident units' points within 
 `Renderer::setRiverMistSources` (nearest first past `MAX_RIVER_MIST_SOURCES`; re-sent after 10 m of camera motion or a
 unit change), their whitewater x the river's size (depth / "Full size depth", weighted by "Mist size weight"). The
 renderer's producer spawns `Effects/river_mist.pfx` over them (see RendererVK): Procedural cannot link Particle, so the
-mist goes the ocean spray's way.
+mist goes the ocean spray's way. **A FALL'S FOOT** mists too (2026-10-11: the whitewater stretches mist at their own,
+top level over the lip's few metres, so the plunge pool had none): the water point under a drop of at least 2 m,
+steeper than 45 degrees, is a plunge source (`MistPoint::plunge` = the drop) at full whitewater, its stretch "Mist
+plunge" m per m of drop (default 0.1, 0 = none), centred a third of it downstream - applied in `updateMist`, so the
+tweak works live. Its half-width goes up NEGATIVE: the shader then takes "Plunge mist centering / speed / kick /
+height" (defaults 0.18 / 0.2 / 1 m/s / 0 m - the pool's mist rises) in place of the whitewater's four.
 
 **The inland water map** (`updateWaterMap`): `RIVER_WATER_MAP_DIM`² texels of `RIVER_WATER_MAP_TEXEL` m around the
 camera, each the inland surface Y at its centre (`RiverTerrain::sampleInlandWaterGrid`: the river's calm carved surface
@@ -430,7 +476,7 @@ config-dirty listener (a rebuild; the units then reload from disk).
   reach touches each cell - so a query also finds a NEIGHBOUR unit's river near the edge - and per-row lake-run offsets.
   **A cell lists its pieces segment by segment** (the carve relies on it). Then **THE INLET MATCH** (`matchInlets`): a
   segment starting on the unit's border looks up the upstream unit's segment ending at the same boundary point - in its
-  EDGE SUMMARY (`unitEdges`: per unit only its outlet ends - position, level, half-width - taken from its raw unit as
+  EDGE SUMMARY (`unitEdges`: per unit only its outlet ends - position, level, half-width, depth, q - taken from its raw unit as
   built, a deduplicated store of a few floats each; units build independently, so this never chains. Building a
   summary builds the raw unit, which waits in a small HAND-OFF (16 units) for that unit's own `unit` call, so it is
   built once; the store keeps no raw units, a prepared unit only its own modified copy) - and holds its water at or below that level, and so the segments it flows on into: where the upstream water
@@ -440,9 +486,15 @@ config-dirty listener (a rebuild; the units then reload from disk).
   UNBACKED inlet - the upstream unit present, but none of its rivers ends at that point (its water went to a pond or
   another edge where the coarse network did not see it) - GROWS IN: its width and depth from 0 over its first 200 px
   (1 km), the surface kept, instead of a full-size river from nothing; an UNDERSIZED one (the arriving river under half
-  its width at the boundary) grows from that width. Upstream, the outlet's Q blend (`RiverUnits`) runs only where the
-  fine Q is at least half the coarse one: blended from far below, a small stream swelled into a big river in 24 px at
-  the edge - so the two sides cross at the stream's real size and the inlet grows from it. **THE OPEN ENDS** (`fadeOpenEnds`): a segment
+  its width at the boundary) grows from that width. An OVERSIZED one (the arriving river wider: the upstream fine
+  routing gathered water the coarse network sent elsewhere - 26 m3/s at a 0.8 m3/s link, 2026-10-10) is WIDENED to the
+  arriving q / half-width / depth, and so the segments it flows on into (the summary carries q and depth too). Every
+  inlet starts a channel along its drain path, even under "Channel min Q"; such a segment is `needsUpstream` and is
+  dropped (count 0) unless an upstream river arrives there - before, the big river stopped at the unit edge. The match
+  and the open ends run on the copy BEFORE the piece grid is built, so the grid sees the widths. Upstream, the outlet's
+  Q blend (`RiverUnits`) runs only where the fine Q is within half to twice the coarse one: blended from far below, a
+  small stream swelled into a big river in 24 px at the edge; from far above, a big river shrank to a creek - so the
+  two sides cross at the river's real size and the inlet grows or widens to it. **THE OPEN ENDS** (`fadeOpenEnds`): a segment
   ending neither in water nor in another river - `Edge` (a soft wall; the neighbour does not continue it), `Sink`, `Dry`
   - FADES OUT the same way over its last 200 px (at most half the segment); it stopped as a full-width cut. Only where
   no end lake formed (`RiverUnits` sets the end to `Lake` for one). **An UNMATCHED OUTLET fades too**: its river
@@ -488,11 +540,39 @@ config-dirty listener (a rebuild; the units then reload from disk).
   channel**: fully within the nearest piece's floodplain edge, fading (smoothstep) to the blend of every piece at twice
   it - across the whole gorge the break drew long straight cliffs far wider than the river. Where the section has no
   carve, the blend of every piece stands (never the raw ground). That wide blend leaves the plunge gorges out (their
-  `RiverPoint_Gorge` weight): their water stands the whole drop lower and dug the bank beside the reach above a lip. **UNDER THE DROP**: a point whose nearest piece is the lip's own piece takes the section BELOW
+  `RiverPoint_Gorge` weight, all but 0.1 %): their water stands the whole drop lower and dug the bank beside the reach above a lip.
+  **Every piece's blend weight fades to 0 over the last 30 % of its wall reach** (as its carve fades to the ground): cut
+  off at full weight, the blend jumped where a piece left it - on a plunge gorge's walls only the far pieces counted, and
+  the walls showed a comb of steps (2026-10-10). The 0.1 % keeps the hand-over to the gorge pieces continuous where
+  those far pieces fade out. **THE LAKE LEVELS** (`meetLakeLevels`, prepare, 2026-10-11): a lake is drawn at its level, a
+  river at `surface()` (its water less the hydraulic depth and the valley sink), so a river leaving a lake at the level
+  stood that much under the lake's water. A segment starting in a lake keeps its surface at the level (less 0.2 model m:
+  no z-fight) to its last point in the lake, then eases down by that shift over 16 px of DISTANCE FROM THE LAKE (not
+  along the river: one leaving along the shore stood metres under the lake beside it, behind a thin bank), held
+  non-rising by a running minimum. The ease blends from the level to each point's OWN surface (toward "level less the
+  exit's shift", a river leaving at about the level flew at it down a hillside), and carries on through junctions until
+  done. One ending in a lake has its surface floored at the level, and the segments flowing into it are floored at its
+  start, through junctions (only the last one raised left a step). Only raises. It runs
+  AFTER `sinkUnderCarves`: in a lake the other rivers' carves leave the lake bed, and held under it the outlet's head
+  stood under the lake again. **UNDER THE DROP**: a point whose nearest piece is the lip's own piece takes the section BELOW
   it, so the step stands at the lip's top; the lip runs 0.6 px (`shapeFalls`), more than the terrain mesh's ~2 m vertex
   spacing, so the mesh's face from that top is steeper than the sheet and lies behind it. (Carved from the lip's piece,
   the face leaned through the sheet and cut it in a V; an undercut 3 m upstream of the lip left the water running
-  through the air before it fell - 2026-10-10.) **A pure function of (x, z), never of the
+  through the air before it fell - 2026-10-10.) **THE DROP'S FACE RAMPS** (2026-10-11): the hard switch between the
+  sections stood the whole drop up as a cliff across the near zone, and the terrain mesh drew a cliff oblique to its
+  grid as a comb of spikes. Below the lip the ground goes from the section above to its own along the river, measured
+  from the lip's line as sqrt(dAbove^2 - dBelow^2) (the nearest distances of the two sections, the lip's piece counted
+  below; x is negative above the lip line). Within **"Fall clearance"** (default 1) x the half-width of the channel the
+  face under the sheet is a smoothstep to the lip piece's foot that starts BEFORE the lip, under the upper water, as far
+  as **"Fall face slope"** (default 6, rise / run, peak 1.5 x) needs: the sheet falls near-vertically, and a face that
+  steep (or a sharp break) drew as a comb under the water (2026-10-11). There the ground is also held a channel depth
+  under the sheet of THIS drop's lip (the nearest lip piece of the section above - another fall's sheet pulled the ground
+  down), and before the lip under a line rising upstream at the face slope: the upper banks stood in the sheet's sides.
+  From the clearance out to the floodplain edge the face grows from the lip to the length that keeps it at about "Gorge
+  wall slope" (1.5 x drop / slope). The face's top and bottom edges still show some teeth (accepted). The lip's OWN piece keeps 0.001
+  of its blend weight: its water falls the whole drop over the 0.6 px run, and its carve stood that drop up sideways to
+  its full reach. The fade to the wide blend runs over max(floodplain edge, 1.5 x |section - wide| / "Gorge wall
+  slope"), so it never stands as a step either. **A pure function of (x, z), never of the
   grid step** - the terrain's edge stitch interpolates the finer node's own samples, so a step-dependent carve would
   crack. Inside the channel the carve replaces the ground, so the crag detail is gone there without a mask.
 * **Water**: inside a perennial channel `waterKind = River`, `inlandWater` = S (world; the debug lines draw S too), `flowAngle01` = the piece's

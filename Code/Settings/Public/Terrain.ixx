@@ -240,6 +240,11 @@ export struct TerrainSettings
 	float riverFallMaxLength = 15.0f;  // native px: the longest steep run that does (longer stays sloped rapids)
 	float riverSeaChannelDepth = 60.0f;     // model m (~10 engine m at mpp 5): a river runs on into the sea until the floor is this deep (0 = off)
 	float riverSeaChannelMaxLength = 200.0f; // native px: ... at most this far past its mouth
+	float riverLakeChannelDepth = 12.0f;     // model m: a river runs on into its lake until the floor is this far under the level (0 = off)
+	float riverLakeChannelMaxLength = 40.0f; // native px: ... at most this far past the shore
+	float riverSeaRescueMinQ = 5.0f;        // m3/s: a river leaving a unit where no crossing is gets sent on to its sea or a lake (0 = off)
+	float riverSeaRescueMaxRim = 300.0f;    // model m: the highest rim over the exit it may cut through to get there
+	float riverSeaRescueMaxLength = 1500.0f; // native px: the longest path it may take
 	float riverFallFullQ = 10.0f;    // m3/s: from here up a river cuts the whole max length; below, x Q / this
 	float riverEdgeWall = 12.3f;       // model m: water leaves a unit through a non-crossing edge when every outlet climbs more
 	float riverPathSmoothing = 10.0f;  // native px: the Gaussian sigma a river's D8 path is smoothed with (0 = the raw staircase)
@@ -255,7 +260,9 @@ export struct TerrainSettings
 	// ground. Depths in MODEL m (x metersPerPixel / 30 in the world: / 6 at mpp 5).
 	float riverChannelDepthScale = 2.5f;  // the channel's depth below the water, x the hydraulic depth (c * Q^0.4)
 	float riverChannelMinDepth = 0.2f;    // ... but at least this
-	float riverGorgeWallSlope = 0.75f;    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+	float riverGorgeWallSlope = 2.0f;   // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+	float riverFallFaceSlope = 6.0f;     // rise / run of the ground under a falling sheet (its face starts before the lip as needed)
+	float riverFallClearance = 1.0f;    // x the river's half-width: the drop stays a sharp break at the lip within it (room for the sheet)
 	float riverWhitewaterDepth = 3.0f;    // the channel's depth x up to this on rapids and falls (1 = none)
 	float riverWhitewaterWiden = 2.0f;    // the channel's half-width x up to this there (a shelf at the waterline; the water ribbon is 1.2 x the channel)
 	float riverWaterHumidity = 0.35f;     // the humidity pulled toward 1 by this at a river's edge / a lake's shore (0 = off)
@@ -307,14 +314,20 @@ export struct TerrainSettings
 	float riverWetness = 0.6f;         // the terrain wetness under and beside rivers / lakes (0 = none, 1 = soaked)
 	// THE MIST off rapids and falls (river_mist.cs.glsl into Effects/river_mist.pfx; "Particles/River mist" switches it).
 	float riverMistRadius = 300.0f;    // engine m: whitewater this close to the camera mists
-	float riverMistRate = 10.0f;       // spawns per m2 of whitewater per s at full whitewater
+	float riverMistRate = 15.0f;       // spawns per m2 of whitewater per s at full whitewater
 	float riverMistThreshold = 0.25f;  // the whitewater (x the river's size) where the mist starts
 	float riverMistCurve = 1.0f;       // the exponent on the whitewater past the threshold: higher = falls mist far more than rapids
-	float riverMistCentering = 2.0f;   // 0 = mist over the whole width evenly; higher = gathered toward the channel's centre
-	float riverMistSizeWeight = 0.5f;  // 0 = every river mists by its whitewater alone, 1 = x its size ("Full size depth")
+	float riverMistCentering = 0.5f;   // 0 = mist over the whole width evenly; higher = gathered toward the channel's centre
+	float riverMistSizeWeight = 0.1f;  // 0 = every river mists by its whitewater alone, 1 = x its size ("Full size depth")
 	float riverMistSpeed = 0.5f;       // x the flow's speed: how fast the mist drifts downstream
 	float riverMistKick = 0.0f;        // m/s upward
-	float riverMistHeight = -0.5f;     // m above the water it spawns at
+	float riverMistHeight = -0.1f;     // m above the water it spawns at
+	float riverMistPlunge = 0.1f;      // a fall's plunge pool mists over this many m of river per m of drop (0 = none)
+	// The plunge pool's mist on its own look (the four "Mist ..." above are the whitewater's):
+	float riverPlungeMistCentering = 0.18f;
+	float riverPlungeMistSpeed = 0.2f;
+	float riverPlungeMistKick = 1.0f;   // m/s upward: the pool's mist rises
+	float riverPlungeMistHeight = 0.0f;
 };
 
 // "Terrain/Collision": the focus-centered ring of static collider tiles (Procedural TerrainCollider).

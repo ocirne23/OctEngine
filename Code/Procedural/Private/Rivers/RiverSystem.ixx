@@ -55,6 +55,7 @@ export namespace Procedural
 			float foam = 0.0f;  // the whitewater 0..1
 			float depth = 0.0f; // the channel's depth (the river's size: "Full size depth")
 			float len = 0.0f;   // the stretch of river it stands for
+			float plunge = 0.0f; // m: a fall's drop ending here (its plunge pool's mist: len and foam set in updateMist), 0 = whitewater
 		};
 
 	private:
@@ -144,6 +145,7 @@ export namespace Procedural
 		float m_mistRadiusWas = 0.0f;
 		float m_mistFullSizeWas = 0.0f;
 		float m_mistSizeWeightWas = 0.0f;
+		float m_mistPlungeWas = 0.0f;
 		bool m_mistSet = false;
 		oc::shared_ptr<WaterMapJob> m_waterJob;
 		JobCounter m_waterCounter;

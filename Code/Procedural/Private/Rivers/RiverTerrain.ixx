@@ -47,7 +47,9 @@ export namespace Procedural
 		float reachQExponent = 0.1f; // higher = a small stream's valley narrower
 		float lakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
 		float lakeBedDeepenReach = 8.0f; // native px from the shore over which that grows in (smoothstep: the shore keeps its slope)
-		float gorgeWallSlope = 0.75f;    // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+		float gorgeWallSlope = 2.0f;   // rise / run of a waterfall's plunge gorge walls past the channel (no floodplain)
+		float fallFaceSlope = 6.0f;     // rise / run of the ground under a falling sheet (its face starts before the lip as needed)
+		float fallClearance = 1.0f;    // x the half-width: the drop stays a sharp break at the lip within it
 		float whitewaterDepth = 3.0f;    // the channel's depth x up to this on rapids and falls (the steepness; 1 = none)
 		float whitewaterWiden = 2.0f;    // the channel's half-width x up to this there (a shelf at the waterline; the ribbon is 1.2 x the channel)
 		float waterHumidity = 0.35f;     // the humidity pulled toward 1 by this at a river's edge / a lake's shore (0 = off)
@@ -117,6 +119,8 @@ export namespace Procedural
 		c.lakeBedDeepenReach = s.riverLakeBedDeepenReach;
 		c.lakeShore = s.riverLakeShore;
 		c.gorgeWallSlope = s.riverGorgeWallSlope;
+		c.fallClearance = s.riverFallClearance;
+		c.fallFaceSlope = s.riverFallFaceSlope;
 		c.whitewaterDepth = s.riverWhitewaterDepth;
 		c.whitewaterWiden = s.riverWhitewaterWiden;
 		c.waterHumidity = s.riverWaterHumidity;
@@ -191,6 +195,7 @@ export namespace Procedural
 		oc::shared_ptr<const PreparedRiverUnit> prepare(oc::shared_ptr<const RiverUnit> unit) const;
 		void matchInlets(RiverUnit& u) const;
 		void fadeOpenEnds(RiverUnit& u) const;
+		void meetLakeLevels(RiverUnit& u) const;
 		void sinkUnderCarves(PreparedRiverUnit& p, RiverUnit& u) const;
 		// The unit's edge summary (blocking on a miss, like `unit`: it builds the raw unit then, and hands it on).
 		struct UnitEdges;
@@ -228,6 +233,8 @@ export namespace Procedural
 				float x = 0.0f, z = 0.0f; // unit-local native px (the boundary point)
 				float water = 0.0f;       // model m
 				float halfWidth = 0.0f;   // model m
+				float depth = 0.0f;       // model m
+				float q = 0.0f;           // m3/s
 			};
 			oc::vector<End> outlets;
 			bool empty = true;

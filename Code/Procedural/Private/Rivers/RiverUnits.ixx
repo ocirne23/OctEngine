@@ -45,6 +45,11 @@ export namespace Procedural
 		float fallMaxLength = 15.0f; // native px: the longest steep run that does (longer stays sloped rapids)
 		float seaChannelDepth = 60.0f;      // model m (~10 engine m at mpp 5): a river runs on into the sea until the floor is this deep (0 = off)
 		float seaChannelMaxLength = 200.0f; // native px: ... at most this far past its mouth
+		float lakeChannelDepth = 12.0f;     // model m: a river runs on into its lake until the floor is this far under the level (0 = off)
+		float lakeChannelMaxLength = 40.0f; // native px: ... at most this far past the shore
+		float seaRescueMinQ = 5.0f;        // m3/s: a soft exit this big is sent on to the unit's sea or a lake (0 = off)
+		float seaRescueMaxRim = 300.0f;    // model m: the highest rim over the exit's ground it may cut through to get there
+		float seaRescueMaxLength = 1500.0f; // native px: the longest path it may take
 		float fallFullQ = 10.0f;   // m3/s: from here up the whole max length; below x Q / this (a stream cuts no gorge)
 		float edgeWall = 12.3f; // model m: water leaves through a non-crossing edge when every outlet climbs more
 		float pathSmoothing = 10.0f; // native px: the Gaussian sigma the D8 path is smoothed with along its length
@@ -80,6 +85,11 @@ export namespace Procedural
 		c.fallFullQ = s.riverFallFullQ;
 		c.seaChannelDepth = s.riverSeaChannelDepth;
 		c.seaChannelMaxLength = s.riverSeaChannelMaxLength;
+		c.lakeChannelDepth = s.riverLakeChannelDepth;
+		c.lakeChannelMaxLength = s.riverLakeChannelMaxLength;
+		c.seaRescueMinQ = s.riverSeaRescueMinQ;
+		c.seaRescueMaxRim = s.riverSeaRescueMaxRim;
+		c.seaRescueMaxLength = s.riverSeaRescueMaxLength;
 		c.edgeWall = s.riverEdgeWall;
 		c.pathSmoothing = s.riverPathSmoothing;
 		c.meanderAmplitude = s.riverMeanderAmplitude;
@@ -123,7 +133,8 @@ export namespace Procedural
 		uint32 count = 0;
 		ERiverEnd end = ERiverEnd::Dry;
 		uint8 ephemeral = 0; // its water never reaches the perennial Q: a dry bed
-		uint8 pad[2] = {};
+		uint8 needsUpstream = 0; // from an inlet whose coarse Q is under "Channel min Q": kept only where the upstream river arrives
+		uint8 pad = 0;
 	};
 
 	struct RiverCrossing

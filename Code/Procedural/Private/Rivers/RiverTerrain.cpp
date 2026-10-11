@@ -173,7 +173,16 @@ namespace Procedural
 	oc::shared_ptr<const PreparedRiverUnit> RiverTerrain::prepare(oc::shared_ptr<const RiverUnit> unit) const
 	{
 		auto p = oc::make_shared<PreparedRiverUnit>();
-		const RiverUnit& u = *unit;
+		// The inlet match and the open ends change the widths, so the piece grid below is built from the matched copy (the
+		// store's unit stays as built, and as cached on disk).
+		oc::shared_ptr<RiverUnit> matched;
+		if (!unit->empty && !unit->points.empty())
+		{
+			matched = oc::make_shared<RiverUnit>(*unit);
+			matchInlets(*matched);
+			fadeOpenEnds(*matched);
+		}
+		const RiverUnit& u = matched ? *matched : *unit;
 		const int32 W = u.tiles * TerrainGenV3::fullTilePixels();
 		const int32 pad = (int32)std::ceil(m_reachPx);
 		const float nr = TerrainGenV3::nativeResolution();
@@ -245,16 +254,16 @@ namespace Procedural
 			p->rowRuns[(size_t)r.row + 1]++;
 		for (size_t r = 1; r < p->rowRuns.size(); r++)
 			p->rowRuns[r] += p->rowRuns[r - 1];
-		if (u.empty || u.points.empty())
+		if (!matched)
 		{
 			p->unit = oc::move(unit);
 			return p;
 		}
-		auto sunk = oc::make_shared<RiverUnit>(u); // the store's unit stays as built (and as cached on disk)
-		matchInlets(*sunk);
-		fadeOpenEnds(*sunk);
-		sinkUnderCarves(*p, *sunk);
-		p->unit = oc::move(sunk);
+		sinkUnderCarves(*p, *matched);
+		// After the sinking: in a lake the other rivers' carves leave the lake BED, and held under it the outlet's head
+		// stood 6 model m under the lake's surface again (2026-10-11).
+		meetLakeLevels(*matched);
+		p->unit = oc::move(matched);
 		return p;
 	}
 
@@ -298,6 +307,146 @@ namespace Procedural
 		}
 	}
 
+	// THE LAKE LEVELS: a lake's surface is drawn at its level, a river's at `surface()` - its water less the hydraulic
+	// depth and the valley sink. A river leaving a lake started AT the level (RiverUnits' outlet channel), so its drawn
+	// surface stood that much under the lake's: a step between the two waters (2026-10-11). So a segment starting in a
+	// lake keeps its surface at the level to its last point in the lake, then eases down by that shift over
+	// c_exitBlendPx; one ending in a lake is floored at the level (RiverUnits floors the water, this the surface). Only
+	// ever raises, never makes the water rise downstream.
+	void RiverTerrain::meetLakeLevels(RiverUnit& u) const
+	{
+		constexpr float c_exitBlendPx = 16.0f; // native px
+		constexpr float c_underLake = 0.2f;    // model m: the river's surface a hair under the lake's (no z-fight where they overlap)
+		const auto lakeLevelAt = [&](const RiverPoint& p, float& level)
+		{
+			constexpr int32 c_searchPx = 1;
+			const int32 cx = (int32)std::lround(p.x), cz = (int32)std::lround(p.z);
+			bool found = false;
+			for (const RiverLakeRun& r : u.lakeRuns)
+			{
+				if (std::abs((int32)r.row - cz) > c_searchPx || cx + c_searchPx < (int32)r.x0 || cx - c_searchPx >= (int32)r.x0 + (int32)r.len)
+					continue;
+				const RiverLake& lake = u.lakes[r.lake];
+				if (lake.kind == ERiverWater::Pan)
+					continue;
+				level = found ? oc::max(level, lake.level) : lake.level;
+				found = true;
+			}
+			return found;
+		};
+		const auto S = [&](const RiverPoint& p) { return m_carve.surface(p.water, p.depth, p.q); };
+		// Native px from p to the nearest wet pixel of a lake at `level` (maxPx when none is nearer).
+		const auto distanceToLake = [](const RiverUnit& u, const RiverPoint& p, float level, float maxPx)
+		{
+			float best = maxPx;
+			for (const RiverLakeRun& r : u.lakeRuns)
+			{
+				const float dz = std::abs((float)r.row - p.z);
+				if (dz >= best || u.lakes[r.lake].level != level)
+					continue;
+				const float dx = oc::max(oc::max((float)r.x0 - p.x, p.x - (float)(r.x0 + r.len - 1)), 0.0f);
+				best = oc::min(best, std::sqrt(dx * dx + dz * dz));
+			}
+			return best;
+		};
+		const auto same = [](const RiverPoint& a, const RiverPoint& b) { return std::abs(a.x - b.x) < 0.75f && std::abs(a.z - b.z) < 0.75f; };
+		const uint32 numSegs = (uint32)u.segments.size();
+		constexpr size_t c_maxChain = 4096;
+		for (uint32 si0 = 0; si0 < numSegs; si0++)
+		{
+			const RiverSegment& s0 = u.segments[si0];
+			if (s0.count < 2 || s0.ephemeral)
+				continue;
+			float level = 0.0f;
+			if (!lakeLevelAt(u.points[s0.first], level))
+				continue;
+			// The ease is by the distance FROM THE LAKE, not along the river: a river leaving along the shore stood
+			// metres under the lake beside it, behind a thin bank (2026-10-11). A running minimum keeps it non-rising.
+			// The target blends from the level to the point's OWN surface, so past the ease it adds nothing (eased toward
+			// the level less the exit's shift, a river whose water left at about the level stood at it in the air down the
+			// whole hillside to its first fall). It carries on through a junction into the next segment until done (the
+			// next one started at its own, lower surface: a step).
+			const float lakeLevel = level;
+			level -= c_underLake;
+			int64 exit = 0;
+			{
+				float l = 0.0f;
+				while (exit + 1 < (int64)s0.count && lakeLevelAt(u.points[s0.first + (uint32)exit + 1], l))
+					exit++;
+			}
+			float prevS = FLT_MAX;
+			uint32 si = si0;
+			for (size_t chain = 0; chain < c_maxChain; chain++)
+			{
+				const RiverSegment& s = u.segments[si];
+				bool done = false;
+				for (uint32 k = 0; k < s.count; k++)
+				{
+					RiverPoint& p = u.points[s.first + k];
+					const float fromLake = (int64)k <= exit ? 0.0f : distanceToLake(u, p, lakeLevel, c_exitBlendPx);
+					const float now = S(p);
+					const float target = oc::min(level + (now - level) * smoothstep01(fromLake / c_exitBlendPx), prevS);
+					if (now < target)
+						p.water += target - now; // surface() is the water less a fixed sink: the same shift
+					prevS = oc::max(now, target);
+					if (fromLake >= c_exitBlendPx && now >= target)
+					{
+						done = true;
+						break;
+					}
+				}
+				if (done || s.end != ERiverEnd::Junction || s.count == 0)
+					break;
+				const RiverPoint& pe = u.points[s.first + s.count - 1];
+				uint32 next = UINT32_MAX;
+				for (uint32 ti = 0; ti < numSegs && next == UINT32_MAX; ti++)
+					if (ti != si && u.segments[ti].count > 0 && same(u.points[u.segments[ti].first], pe))
+						next = ti;
+				if (next == UINT32_MAX)
+					break;
+				si = next;
+				exit = -1;
+			}
+		}
+		// One ending in a lake: its surface floored at the level - and so the segments flowing into it, floored at its
+		// start (only the new one was raised: a step at the junction, 2026-10-11).
+		oc::vector<oc::pair<uint32, float>> floors; // segment -> its surface's floor
+		for (uint32 si = 0; si < numSegs; si++)
+		{
+			const RiverSegment& s = u.segments[si];
+			float level = 0.0f;
+			if (s.count >= 2 && !s.ephemeral && s.end == ERiverEnd::Lake && lakeLevelAt(u.points[s.first + s.count - 1], level))
+				floors.push_back({ si, level - c_underLake });
+		}
+		for (size_t n = 0; n < floors.size() && n < c_maxChain; n++)
+		{
+			const auto [si, floor] = floors[n];
+			const RiverSegment& s = u.segments[si];
+			bool raised = false;
+			for (uint32 k = 0; k < s.count; k++)
+			{
+				RiverPoint& p = u.points[s.first + k];
+				const float now = S(p);
+				if (now < floor)
+				{
+					p.water += floor - now;
+					raised = true;
+				}
+			}
+			if (!raised)
+				continue;
+			const RiverPoint& p0 = u.points[s.first];
+			const float startS = S(p0);
+			for (uint32 ti = 0; ti < numSegs; ti++)
+			{
+				const RiverSegment& t = u.segments[ti];
+				if (ti != si && t.count > 0 && t.end == ERiverEnd::Junction && same(u.points[t.first + t.count - 1], p0)
+					&& S(u.points[t.first + t.count - 1]) < startS - 0.01f)
+					floors.push_back({ ti, startS });
+			}
+		}
+	}
+
 	// THE INLET MATCH: a crossing's level is the shared tile edge's ground + depth, and a segment starting at an inlet
 	// starts there - but the upstream unit's water can reach that point LOWER: the edge reroute (RiverUnits) breaches a
 	// rim on the way and keeps the exit's level through its gorge, tens of metres under the crossing's ground - a step at
@@ -310,9 +459,15 @@ namespace Procedural
 		const int32 W = u.tiles * TerrainGenV3::fullTilePixels();
 		const float edgeLo = -0.25f, edgeHi = (float)W - 0.75f; // the boundary points sit half a pixel outside the unit
 		oc::vector<oc::pair<uint32, float>> lowered; // segment -> the level it must stay under
+		struct Widen
+		{
+			uint32 seg;
+			float q, halfWidth, depth; // the arriving river's
+		};
+		oc::vector<Widen> widened;
 		for (uint32 si = 0; si < (uint32)u.segments.size(); si++)
 		{
-			const RiverSegment& s = u.segments[si];
+			RiverSegment& s = u.segments[si];
 			if (s.count == 0)
 				continue;
 			const RiverPoint& p0 = u.points[s.first];
@@ -325,15 +480,22 @@ namespace Procedural
 				continue; // not on the unit's border
 			const oc::shared_ptr<const UnitEdges> nb = unitEdges(ni, nj);
 			if (!nb || nb->empty)
+			{
+				if (s.needsUpstream)
+					s.count = 0;
 				continue;
+			}
 			const float bx = p0.x + (float)((u.uj - nj) * W), bz = p0.z + (float)((u.ui - ni) * W);
 			float level = FLT_MAX;
 			float upHalf = 0.0f; // the arriving river's half-width at the boundary
+			float upDepth = 0.0f, upQ = 0.0f;
 			for (const UnitEdges::End& pe : nb->outlets)
 				if (std::abs(pe.x - bx) < 0.75f && std::abs(pe.z - bz) < 0.75f)
 				{
 					level = oc::min(level, pe.water);
 					upHalf = oc::max(upHalf, pe.halfWidth);
+					upDepth = oc::max(upDepth, pe.depth);
+					upQ = oc::max(upQ, pe.q);
 				}
 			// UNBACKED or UNDERSIZED: no river of the upstream unit reaches this inlet - its water drained elsewhere (a pond,
 			// another edge) where the coarse network did not see it - or one far smaller than the coarse Q the inlet injects
@@ -344,6 +506,12 @@ namespace Procedural
 			// inlet is UNBACKED too (the upstream river fades out before the edge: fadeOpenEnds).
 			const float maxDrop = 2.0f * m_unitCfg.breachDepth;
 			constexpr float c_growInPx = 200.0f; // native px (1 km at mpp 5)
+			// A `needsUpstream` segment (RiverUnits: its coarse Q alone makes no channel) lives only on the arriving river.
+			if (s.needsUpstream && (level == FLT_MAX || level <= p0.water - maxDrop || upHalf < 1e-3f))
+			{
+				s.count = 0;
+				continue;
+			}
 			if (level == FLT_MAX || level <= p0.water - maxDrop)
 			{
 				growSegmentEnd(u, s, /*atEnd*/ false, 0.0f, c_growInPx);
@@ -351,6 +519,11 @@ namespace Procedural
 			}
 			if (upHalf < 0.5f * p0.halfWidth && p0.halfWidth > 1e-4f)
 				growSegmentEnd(u, s, /*atEnd*/ false, upHalf / p0.halfWidth, c_growInPx);
+			// OVERSIZED: the upstream river is bigger than the inlet's coarse Q made this one (its fine routing gathered
+			// water the coarse network sent elsewhere) - it carries on at the arriving size, on into the segments it
+			// flows into, so the river does not shrink or stop at the unit edge (2026-10-10).
+			if (upHalf > p0.halfWidth + 1e-3f)
+				widened.push_back({ si, upQ, upHalf, upDepth });
 			if (level < p0.water - 0.01f && level > p0.water - maxDrop)
 				lowered.push_back({ si, level });
 		}
@@ -377,6 +550,35 @@ namespace Procedural
 				const RiverPoint& tp = u.points[t.first];
 				if (std::abs(tp.x - pe.x) < 0.75f && std::abs(tp.z - pe.z) < 0.75f && last < tp.water - 0.01f && lowered.size() < 4096)
 					lowered.push_back({ ti, last });
+			}
+		}
+		// Widen each one to the arriving river's size, then the segments it flows on into (only ever widens).
+		for (size_t n = 0; n < widened.size(); n++)
+		{
+			const Widen w = widened[n];
+			RiverSegment& s = u.segments[w.seg];
+			bool grew = false;
+			for (uint32 k = 0; k < s.count; k++)
+			{
+				RiverPoint& p = u.points[s.first + k];
+				grew |= p.halfWidth < w.halfWidth;
+				p.q = oc::max(p.q, w.q);
+				p.halfWidth = oc::max(p.halfWidth, w.halfWidth);
+				p.depth = oc::max(p.depth, w.depth);
+			}
+			if (w.q >= m_unitCfg.perennialQ)
+				s.ephemeral = 0;
+			if (!grew || s.end != ERiverEnd::Junction || s.count == 0)
+				continue;
+			const RiverPoint& pe = u.points[s.first + s.count - 1];
+			for (uint32 ti = 0; ti < (uint32)u.segments.size(); ti++)
+			{
+				const RiverSegment& t = u.segments[ti];
+				if (ti == w.seg || t.count == 0)
+					continue;
+				const RiverPoint& tp = u.points[t.first];
+				if (std::abs(tp.x - pe.x) < 0.75f && std::abs(tp.z - pe.z) < 0.75f && tp.halfWidth < w.halfWidth && widened.size() < 4096)
+					widened.push_back({ ti, w.q, w.halfWidth, w.depth });
 			}
 		}
 	}
@@ -547,7 +749,7 @@ namespace Procedural
 			if (s.end == ERiverEnd::Outlet && s.count > 0)
 			{
 				const RiverPoint& pe = raw->points[s.first + s.count - 1];
-				edges->outlets.push_back({ pe.x, pe.z, pe.water, pe.halfWidth });
+				edges->outlets.push_back({ pe.x, pe.z, pe.water, pe.halfWidth, pe.depth, pe.q });
 			}
 		pending->result = edges;
 		{
@@ -706,18 +908,106 @@ namespace Procedural
 				int32 numSec = 0;
 				float allW = 0.0f, allC = 0.0f;
 				uint16 nearSec = 0;
-				float nearD = FLT_MAX, nearEdge = 1.0f;
+				float nearD = FLT_MAX, nearEdge = 1.0f, nearHw = 1.0f;
+				// The segment's lip pieces in reach, the nearest per section (its run, model m; its surface at the top and the
+				// foot; the channel depth).
+				struct LipInfo
+				{
+					uint16 sec;
+					float d, len, top, bot, depth;
+				};
+				LipInfo lips[c_maxSections];
+				int32 numLips = 0;
+				// The nearest distance per section as the point's section is chosen (the lip's piece counted BELOW it).
+				uint16 effId[c_maxSections];
+				float effD[c_maxSections];
+				int32 numEff = 0;
+				const auto secCarve = [&](uint16 id)
+				{
+					for (int32 s = 0; s < numSec; s++)
+						if (secId[s] == id && secW[s] > 0.0f)
+							return secC[s] / secW[s];
+					return FLT_MAX;
+				};
 				const auto flushSegment = [&]()
 				{
-					float sec = FLT_MAX;
-					for (int32 s = 0; s < numSec; s++)
-						if (secId[s] == nearSec && secW[s] > 0.0f)
-							sec = secC[s] / secW[s];
+					float sec = secCarve(nearSec);
+					// THE DROP'S FACE: a hard switch between the sections stood the whole drop up as a cliff across the near
+					// zone (out to twice the floodplain edge), and the terrain mesh drew a cliff oblique to its grid as a comb
+					// of spikes (2026-10-10). Below the lip the ground ramps from the section above to its own along the river
+					// (x from the lip's line: sqrt(dOther^2 - dNear^2), negative above it). Within "Fall clearance" x the
+					// half-width of the channel the face under the sheet runs LINEARLY to the lip piece's foot, starting
+					// before the lip (under the upper water) as far as "Fall face slope" needs - the sheet itself falls
+					// near-vertically, and a face that steep (or a sharp break) drew as a comb under the water
+					// (2026-10-11); the ground there also stays a channel depth under the sheet (the upper section's banks
+					// stood in its sides). From there out to the floodplain edge the face grows from the lip to the length
+					// that keeps it at about "Gorge wall slope" (smoothstep): beside the fall it leans like the plunge
+					// gorge's walls.
+					constexpr float c_dropRampPx = 0.05f; // without a lip piece in reach
+					if (sec != FLT_MAX)
+					{
+						float up = FLT_MAX, low = FLT_MAX, x = 0.0f;
+						uint16 upId = nearSec;
+						for (int32 e = 0; e < numEff; e++)
+						{
+							const float off = std::sqrt(oc::max(effD[e] * effD[e] - nearD * nearD, 0.0f));
+							if (nearSec > 0 && effId[e] == nearSec - 1)
+							{
+								up = secCarve((uint16)(nearSec - 1));
+								low = sec;
+								x = off;
+								upId = (uint16)(nearSec - 1);
+							}
+							else if (effId[e] == nearSec + 1 && up == FLT_MAX)
+							{
+								up = sec;
+								low = secCarve((uint16)(nearSec + 1));
+								x = -off;
+							}
+						}
+						if (up != FLT_MAX && low != FLT_MAX)
+						{
+							const float drop = oc::max(up - low, 0.0f);
+							// This drop's own lip (the one of the section above): another fall's sheet pulled the ground down.
+							const LipInfo* lip = nullptr;
+							for (int32 li = 0; li < numLips; li++)
+								if (lips[li].sec == upId)
+									lip = &lips[li];
+							const float steepLen = lip ? lip->len : c_dropRampPx * nr;
+							// Before the lip (a smoothstep: its peak slope 1.5 x the mean - no crease at the face's ends,
+							// which the mesh and its slope-based rock drew as teeth).
+							const float under = oc::max(1.5f * drop / oc::max(m_carve.fallFaceSlope, 0.1f) - steepLen, 0.0f);
+							const float faceLen = oc::max(1.5f * drop / oc::max(m_carve.gorgeWallSlope, 0.1f), steepLen);
+							const float clear = oc::max(m_carve.fallClearance, 1.0f) * nearHw;
+							const float outer = smoothstep01((nearD - clear) / oc::max(nearEdge - clear, nearHw));
+							const float inner = smoothstep01((x + under) / (under + steepLen));
+							const float wide = smoothstep01(oc::clamp(x / (steepLen + (faceLen - steepLen) * outer), 0.0f, 1.0f));
+							float g = up + (low - up) * (inner + (wide - inner) * outer);
+							if (lip)
+							{
+								// The sheet, a channel depth down; before the lip rising upstream at the face's slope (the
+								// banks there stand as they were, the undercut's sides follow the face).
+								const float sheet = (x > 0.0f ? lip->top + (lip->bot - lip->top) * oc::clamp(x / lip->len, 0.0f, 1.0f)
+									: lip->top - x * oc::max(m_carve.fallFaceSlope, 0.1f)) - lip->depth;
+								g += (oc::min(g, sheet) - g) * (1.0f - outer);
+							}
+							sec = g;
+						}
+					}
+					numEff = 0;
+					numLips = 0;
 					if (allW > 0.0f)
 					{
 						float c = allC / allW;
+						// The fade to the wide blend runs over at least the floodplain edge, and longer where the two stand far
+						// apart: over the edge alone a plunge gorge's section carve (its walls not yet up to the ground) met the
+						// wide blend (which leaves the gorges out: the high ground) in a near-vertical step along the river -
+						// drawn as a comb of spikes by the terrain mesh (2026-10-10). Its slope stays about "Gorge wall slope".
 						if (sec != FLT_MAX)
-							c += (sec - c) * (1.0f - smoothstep01((nearD - nearEdge) / nearEdge));
+						{
+							const float span = oc::max(nearEdge, 1.5f * std::abs(sec - c) / oc::max(m_carve.gorgeWallSlope, 0.1f));
+							c += (sec - c) * (1.0f - smoothstep01((nearD - nearEdge) / span));
+						}
 						carved = oc::min(carved, c);
 					}
 					else if (sec != FLT_MAX)
@@ -749,11 +1039,32 @@ namespace Procedural
 						const float size = smoothstep01(q / oc::max(m_carve.waterHumidityFullQ, 1e-3f));
 						waterHumidity = oc::max(waterHumidity, size * (1.0f - smoothstep01(oc::max(d - hw, 0.0f) / humiditySpreadM)));
 					}
-					if (d >= pieceReach(hw, q))
+					const float reachEnd = pieceReach(hw, q);
+					if (d >= reachEnd)
 						continue;
 					{
 						float W;
-						const float w = segmentWeight(d);
+						// The weight fades out with the wall (its last 30 %), so a piece leaves the blend smoothly: cut off
+						// at full weight, the blend jumped where it left - beside a plunge gorge (out of the wide blend
+						// below) the far pieces alone remained, and the gorge walls showed a comb of steps (2026-10-10).
+						const float fadeLen = oc::max(0.3f * wallReach(q), 0.5f);
+						// A LIP'S OWN PIECE keeps only a trace: its water falls the whole drop over its 0.6 px run, and its
+						// carve stood that drop up sideways as a near-vertical face out to its full reach (2026-10-10). The
+						// drop ramp (flushSegment) shapes the face between the sections instead.
+						const bool lipOwn = (u.points[k].flags & RiverPoint_Lip) != 0;
+						if (lipOwn)
+						{
+							const uint16 ls = pu->pointSection[k];
+							int32 li = 0;
+							while (li < numLips && lips[li].sec != ls)
+								li++;
+							if (li == numLips && numLips < c_maxSections)
+								lips[numLips++].d = FLT_MAX;
+							if (li < numLips && d < lips[li].d)
+								lips[li] = { ls, d, std::sqrt(len2) * nr, m_carve.surface(a.water, a.depth, a.q), m_carve.surface(c.water, c.depth, c.q),
+									m_carve.channelDepth(oc::max(a.depth, 0.02f)) };
+						}
+						const float w = segmentWeight(d) * (1.0f - smoothstep01((d - (reachEnd - fadeLen)) / fadeLen)) * (lipOwn ? 0.001f : 1.0f);
 						const float carve = pieceCarve(a, c, t, d, hModel, W);
 						const uint16 sec = pu->pointSection[k];
 						int32 s = 0;
@@ -773,14 +1084,30 @@ namespace Procedural
 						secW[s] += w;
 						secC[s] += w * carve;
 						// The wide blend leaves the plunge gorges out: their water stands the whole drop lower, and beside
-						// the reach ABOVE a lip they dug the bank away under the water's edge (2026-10-10).
-						const float gorge = ((a.flags & RiverPoint_Gorge) ? 1.0f - t : 0.0f) + ((c.flags & RiverPoint_Gorge) ? t : 0.0f);
+						// the reach ABOVE a lip they dug the bank away under the water's edge (2026-10-10). A trace of weight
+						// stays, so where the other pieces fade out the blend hands over to them continuously, never in a step.
+						const float gorge = 0.999f * (((a.flags & RiverPoint_Gorge) ? 1.0f - t : 0.0f) + ((c.flags & RiverPoint_Gorge) ? t : 0.0f));
 						allW += w * (1.0f - gorge);
 						allC += w * (1.0f - gorge) * carve;
+						{
+							const uint16 eff = lipOwn && sec < UINT16_MAX ? (uint16)(sec + 1) : sec;
+							int32 e = 0;
+							while (e < numEff && effId[e] != eff)
+								e++;
+							if (e == numEff && numEff < c_maxSections)
+							{
+								effId[e] = eff;
+								effD[e] = FLT_MAX;
+								numEff++;
+							}
+							if (e < numEff)
+								effD[e] = oc::min(effD[e], d);
+						}
 						if (d < nearD)
 						{
 							nearD = d;
-							nearEdge = oc::max(oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM), 1.0f);
+							nearHw = hw;
+							nearEdge =oc::max(oc::min(m_carve.floodplainEdge(hw), c_maxFloodplainM), 1.0f);
 							// UNDER THE DROP: the ground under a lip's piece takes the section BELOW it, so the step stands
 							// at the lip's top. The terrain mesh (vertices ~2 m apart) draws it as one face from there,
 							// steeper than the sheet (the lip runs 0.6 px - RiverUnits shapeFalls), so the face lies behind
