@@ -255,10 +255,6 @@ void main()
     const vec3 camFwd = normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc);
     const vec3 worldPos = u_viewPos + dir * (viewZ / max(dot(dir, camFwd), 1e-3));
 
-    const vec2 centerUv = (vec2(cell.xy) + 0.5) / vec2(VOL_FROXEL_X, VOL_FROXEL_Y);
-    const vec2 centerNdc = vec2(centerUv.x * 2.0 - 1.0, 1.0 - centerUv.y * 2.0);
-    const vec3 centerDir = normalize(vec3(centerNdc, 1.0) * rayFromNdc);
-
     // ---- Media density + scattering albedo ------------------------------------------------------------
     // Terrain-following height fog: raise the base by a fraction of the local terrain height, so fog pools
     // in valleys, reaches partway up mountainsides and clears the peaks (follow < 1 keeps the fog top
@@ -367,11 +363,23 @@ void main()
         emissive += fv.albedo * (fv.emissive * dv);
     }
 
+    // THE SHAFT HAZE ("Fog/Shaft haze", u_fog_hazeDensity / hazeInvHeight): a thin medium for the god rays alone. The fog above is a
+    // HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds down showed only after cranking the
+    // base density - fogging the world. The haze reaches up to the clouds (its own scale height) and adds SUNLIT
+    // in-scatter only: no extinction, no ambient, so shadowed air stays clear and the lit / shadowed contrast is the
+    // shaft. Non-physical on purpose (it scatters without absorbing). Its sun visibility is the fog's where the fog
+    // computed one; above the fog, the clouds' alone (terrain shadows skipped - the shafts are the clouds').
+    // Its density is taken HERE and its radiance joins `emissive` once the sun visibility is known, so the slice bounds
+    // and the submerged fraction are not live across the shadow rays and the light loop.
+    const float hazeSigma = u_fog_hazeDensity > 0.0 && underFrac < 1.0
+        ? u_fog_hazeDensity * heightFogMean(yA, yB, u_fog_heightBase, u_fog_hazeInvHeight) * (1.0 - underFrac) : 0.0;
+    const vec3 sunDir = normalize(u_sunDirection.xyz);
+    const vec3 hazeRadiance = u_fog_albedo * u_sunTransmittance * u_sunColor.rgb
+        * (volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * u_sunVisible * u_fog_sunScatter); // x hazeSigma x the sun visibility
+
     vec4 result = vec4(0.0);
-    float fogSunVis = -1.0; // the fog's full sun visibility, when it computed one (the shaft haze reuses it)
     if (density > 1e-6)
     {
-        const vec3 albedo = albedoWeighted / density;
         const float g = u_fog_anisotropy;
 
         // Sun, with either TLAS shadow rays or a single cascade tap (matching the surface shadow mode).
@@ -380,7 +388,6 @@ void main()
         // Beyond the terrain shadow distance both sources run out of data (TLAS range bound / cascade
         // extent) - distant froxels march the terrain height cascades instead: cheaper than the ray,
         // and mountains actually shadow far fog.
-        const vec3 sunDir = normalize(u_sunDirection.xyz);
         float sunVis;
         if (viewZ > u_fog_terrainShadowDistance && terrainHeightMapPresent())
         {
@@ -413,7 +420,7 @@ void main()
             sunVis = giSunShadow(worldPos, vec3(0.0));
         const float cloudVis = cloudSunTransmittanceBilinear(worldPos);
         sunVis *= cloudVis;
-        fogSunVis = sunVis;
+        emissive += hazeRadiance * (hazeSigma * sunVis);
 
         // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
         // + Beer-Lambert absorption (underwater_light.inc.glsl) - weighted by the slice's SUBMERGED
@@ -456,6 +463,9 @@ void main()
         inLight += u_ambientColor;
         if (u_rt_giStrength > 0.0)
             inLight += (u_fog_giAmbient > 0.5 ? giIrradiance(worldPos, -dir) : giEvalSkySHCloud(-dir, cloudVis)) * (u_rt_giStrength / PI);
+        // rgb = in-scattered radiance per meter (albedoWeighted = albedo x density), a = extinction (1/m); integrated
+        // analytically per slice. Folded BEFORE the light loop: only one accumulator is live across its shadow rays.
+        result = vec4(albedoWeighted * inLight + emissive, density);
 
         // Local lights from the world-space hash grid cell containing this froxel.
         const bool lightShadows = u_fog_lightShadows > 0.5;
@@ -469,45 +479,32 @@ void main()
             const ivec3 gridMin = getGridMin(gridIdx);
             if (gridMin == gridPos)
             {
-                const uint numLargeLights = getLargeLightCount(gridIdx);
-                for (uint i = 0u; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-                    inLight += volLightScatter(in_lightInfos[getLargeLightId(gridIdx, i)], worldPos, dir, g, lightShadows);
-
-                const uint cellOffset = calcCellOffset(gridIdx, gridMin, worldPos);
-                const uint numLights  = getNumLightsForCell(cellOffset);
-                for (uint i = 0u; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                    inLight += volLightScatter(in_lightInfos[getLightId(cellOffset, i)], worldPos, dir, g, lightShadows);
+                // ONE loop over the large lights and the cell's: each volLightScatter inlines a shadow ray query.
+                const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+                const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
+                const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+                for (uint i = 0u; i < numLights; ++i)
+                {
+                    const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
+                    result.rgb += albedoWeighted * volLightScatter(in_lightInfos[lightId], worldPos, dir, g, lightShadows);
+                }
                 break;
             }
             tableIdx = getNextTableIdx(tableIdx);
         }
-
-        // rgb = in-scattered radiance per meter, a = extinction (1/m); integrated analytically per slice.
-        result = vec4(albedo * density * inLight + emissive, density);
     }
-
-    // THE SHAFT HAZE ("Fog/Shaft haze", u_fog_hazeDensity / hazeInvHeight): a thin medium for the god rays alone. The fog above is a
-    // HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds down showed only after cranking the
-    // base density - fogging the world. The haze reaches up to the clouds (its own scale height) and adds SUNLIT
-    // in-scatter only: no extinction, no ambient, so shadowed air stays clear and the lit / shadowed contrast is the
-    // shaft. Non-physical on purpose (it scatters without absorbing). Its sun visibility is the fog's where the fog
-    // computed one; above the fog, the clouds' alone (terrain shadows skipped - the shafts are the clouds').
-    if (u_fog_hazeDensity > 0.0 && underFrac < 1.0)
-    {
-        const float hazeSigma = u_fog_hazeDensity * heightFogMean(yA, yB, u_fog_heightBase, u_fog_hazeInvHeight) * (1.0 - underFrac);
-        const float hazeVis = fogSunVis >= 0.0 ? fogSunVis : cloudSunTransmittanceBilinear(worldPos);
-        if (hazeVis > 0.0)
-        {
-            const vec3 sunDir = normalize(u_sunDirection.xyz);
-            result.rgb += u_fog_albedo * u_sunTransmittance * u_sunColor.rgb
-                * (hazeSigma * volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * hazeVis * u_sunVisible * u_fog_sunScatter);
-        }
-    }
+    else if (hazeSigma > 0.0)
+        result.rgb = hazeRadiance * (hazeSigma * cloudSunTransmittanceBilinear(worldPos));
 
     // ---- Temporal blend against last frame's reprojected froxel ---------------------------------------
-    // Reproject from the UNJITTERED froxel center (centerDir, not the jittered sample ray).
-    const float centerViewZ = volSliceToViewZ((float(cell.z) + 0.5) / float(VOL_FROXEL_Z));
-    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, camFwd), 1e-3));
+    // Reproject from the UNJITTERED froxel center (centerDir, not the jittered sample ray). Built here, not with the
+    // sample ray: nothing of it is live across the shadow rays.
+    const ivec3 cellOut = ivec3(gl_GlobalInvocationID); // re-read, not kept live
+    const vec2 centerUv = (vec2(cellOut.xy) + 0.5) / vec2(VOL_FROXEL_X, VOL_FROXEL_Y);
+    const vec2 centerNdc = vec2(centerUv.x * 2.0 - 1.0, 1.0 - centerUv.y * 2.0);
+    const vec3 centerDir = normalize(vec3(centerNdc, 1.0) * rayFromNdc);
+    const float centerViewZ = volSliceToViewZ((float(cellOut.z) + 0.5) / float(VOL_FROXEL_Z));
+    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, normalize(vec3(0.0, 0.0, 1.0) * rayFromNdc)), 1e-3));
     float prevW;
     const vec2 prevFullUv = prevScreenUV(centerPos, prevW);
     const vec2 prevVpUv = (prevFullUv - u_viewportRect.xy) / u_viewportRect.zw;
@@ -526,5 +523,5 @@ void main()
         }
     }
 
-    imageStore(u_outScatter, cell, result);
+    imageStore(u_outScatter, cellOut, result);
 }

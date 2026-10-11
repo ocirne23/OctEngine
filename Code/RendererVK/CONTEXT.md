@@ -2597,6 +2597,15 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   Then `u_sunTransmittance` for the six per-pixel / per-ray `atmosTransmittanceToLight(0, sun, up)` left (fog scatter
   x2, fog far field, decal, particle VS, `skyGroundSun` - per GI miss ray and in the sky-map bake) and the GI-off
   skip of the fog / decal / particle GI lookups: no register change.
+* **Measured 2026-10-11** (RelWithDebInfo; regs/local): **vol_scatter 70/0 -> 62/0**, **river FS 72/64 -> 64/32**.
+  * vol_scatter: ONE light loop over the large + cell lights (each `volLightScatter` inlines a ray query: 70 -> 66,
+    code 50.7 -> 43.4 KB, with the next item); the shaft haze's density taken before the sun term and its radiance added
+    into `emissive` (yA / yB / underFrac dead across the rays); then the scatter folded into `result` BEFORE the light loop
+    (the loop adds `albedoWeighted x light`: one accumulator live, not inLight + emissive), and the reprojection ray,
+    the camera forward and the cell index rebuilt at the end (66 -> 62).
+  * river FS: the body trace FIRST, the glint and the sky share after it (`color` not live across its ray query), and
+    the in-scatter + the aeration mix built INSIDE `traceRiverBody` after the trace (`riverInscatter`). Tried and
+    reverted: the lights before the mirror trace (72/16), the sun tint as one scalar rebuilt from the UBO per use (64/48).
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a

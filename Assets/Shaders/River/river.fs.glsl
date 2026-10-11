@@ -309,10 +309,17 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     return radiance;
 }
 
+// The body's in-scatter: entrained air whitens it with the turbulence - it takes the foam colour's share (aeration).
+vec3 riverInscatter(float aeration, vec3 ambientSky, vec3 sunTint, vec3 L)
+{
+    return mix(u_river_scatterColor, 0.35 * u_river_foamColor, aeration) * (ambientSky + sunTint * (max(L.y, 0.0) * INV_PI));
+}
+
 // The water body along `dir` (refracted) from `origin`: the traced bed (TLAS; the baked height map only where the
-// TLAS cannot answer), shaded, Beer-Lambert absorbed over the path and blended into the in-scatter. As the ocean's
-// traceWaterBody, the column measured from this pixel's water surface `surfaceY`.
-vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sunVis, vec3 L, vec3 inscatter, bool rtInRange)
+// TLAS cannot answer), shaded, Beer-Lambert absorbed over the path and blended into the in-scatter, then the traced bed
+// fades behind the aeration. As the ocean's traceWaterBody, the column measured from this pixel's water surface
+// `surfaceY`. The in-scatter is built AFTER the trace from values live anyway: no vec3 of it across the ray query.
+vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sunVis, vec3 L, float aeration, vec3 ambientSky, bool rtInRange)
 {
     const vec3 sigmaT = u_river_absorption;
     const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
@@ -341,11 +348,12 @@ vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sun
         }
     }
     if (!haveHit)
-        return inscatter;
+        return riverInscatter(aeration, ambientSky, sunTint, L);
     const float sunPath = max(hit.waterLevel - hit.pos.y, 0.0) / max(L.y, 0.25); // the column above the hit
     const vec3 hitRadiance = shadeHit(hit, dir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
-    const vec3 T = exp(-sigmaT * hit.t) * (1.0 - smoothstep(0.75 * range, range, hit.t));
-    return hitRadiance * T + inscatter * (1.0 - T);
+    // mix(hit x T + inscatter x (1 - T), inscatter, aeration)
+    const vec3 T = exp(-sigmaT * hit.t) * ((1.0 - smoothstep(0.75 * range, range, hit.t)) * (1.0 - aeration));
+    return hitRadiance * T + riverInscatter(aeration, ambientSky, sunTint, L) * (1.0 - T);
 }
 
 // THE RIPPLES: the terrain noise texture's two gradient fBms (R, G: a slope pair) dragged downstream with the flow -
@@ -378,7 +386,7 @@ void main()
     g_viewIndex = int(u_viewIndex);
 #endif
     const vec3 up = normalize(u_skyUp);
-    const vec3 L  = normalize(u_sunDirection.xyz);
+    const vec3 L  = u_sunDirection.xyz; // normalized on the CPU: read from the UBO at each use, never held in registers
     const vec3 toCam = u_viewPos - in_pos;
     const float viewDist = length(toCam);
     const vec3 V = toCam / max(viewDist, 1e-4);
@@ -435,37 +443,35 @@ void main()
     const float perceptualRough = u_river_roughness;
     const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough + variance + turb * 0.12;
     const float alpha = clamp(sqrt(alphaSq), 0.02, 1.0);
-    const vec3 H = normalize(L + V);
     const float NoV = clamp(dot(N, V), 1e-3, 1.0);
-    const float NoL = max(dot(N, L), 0.0);
-    const float NoH = max(dot(N, H), 0.0);
-    const float LoH = max(dot(L, H), 0.0);
 
     const float sunVis = L.y <= 0.0 ? 0.0
         : (u_rt_sunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadowHard(in_pos, N));
     const vec3 ambientSky = skyAmbientUp(up);
     const float skyVis = giSkyVisibility(in_pos, up);
-    // Entrained air whitens the body with the turbulence: the in-scatter takes the foam colour's share, and (below) the
-    // traced bed fades behind it - a riffle goes pale green, a cascade milky.
+    // Entrained air whitens the body with the turbulence: the in-scatter takes the foam colour's share, and the traced
+    // bed fades behind it (riverInscatter, traceRiverBody) - a riffle goes pale green, a cascade milky.
     const float aeration = 0.6 * turb;
-    const vec3 inscatter = mix(u_river_scatterColor, 0.35 * u_river_foamColor, aeration) * (ambientSky + sunTint * (max(L.y, 0.0) * INV_PI));
     const float F = F_Schlick(NoV, 0.02);
-    const float reflBlur = clamp(alpha * 2.0 - 0.05, 0.0, 0.6);
 
-    // Glint + the blur's sky share, then the two traced radiances (the ocean's split).
-    const float glint = min(D_GGX(NoH, alpha) * V_SmithGGX(NoV, NoL, alpha) * NoL, MEDIUMP_FLT_MAX) * (sunVis * F_Schlick(LoH, 0.02));
-    vec3 color = F * reflBlur * skyVis * ambientSky + sunTint * glint;
-
-    // Refracted body: the traced bed through the water column.
+    // Refracted body FIRST: the traced bed through the water column. Nothing else of the colour is live across its ray
+    // query yet - the glint and the sky share are added after it.
     const float bodyWeight = 1.0 - F;
-    vec3 body = inscatter;
-    if (bodyWeight > 0.02)
-    {
-        const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
-        if (dot(refrDir, refrDir) > 1e-6)
-            body = traceRiverBody(in_pos + N * 0.05, refrDir, in_pos, sunTint, sunVis, L, inscatter, rtInRange);
-    }
-    color += mix(body, inscatter, aeration) * bodyWeight;
+    vec3 body;
+    const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
+    if (bodyWeight > 0.02 && dot(refrDir, refrDir) > 1e-6)
+        body = traceRiverBody(in_pos + N * 0.05, refrDir, in_pos, sunTint, sunVis, L, aeration, ambientSky, rtInRange);
+    else
+        body = riverInscatter(aeration, ambientSky, sunTint, L);
+
+    // Glint + the blur's sky share (the ocean's split).
+    const float reflBlur = clamp(alpha * 2.0 - 0.05, 0.0, 0.6);
+    const vec3 H = normalize(L + V);
+    const float NoL = max(dot(N, L), 0.0);
+    const float NoH = max(dot(N, H), 0.0);
+    const float LoH = max(dot(L, H), 0.0);
+    const float glint = min(D_GGX(NoH, alpha) * V_SmithGGX(NoV, NoL, alpha) * NoL, MEDIUMP_FLT_MAX) * (sunVis * F_Schlick(LoH, 0.02));
+    vec3 color = body * bodyWeight + F * reflBlur * skyVis * ambientSky + sunTint * glint;
 
     // Reflection: the ray-traced mirror (the ocean's toggle and ranges), sky fallback.
     const float mirrorWeight = F * (1.0 - reflBlur);
