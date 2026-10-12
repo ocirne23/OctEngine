@@ -410,7 +410,9 @@ tiles", default 8) on a fixed model-space lattice, routed at native resolution b
 `RiverTerrain`, `update` runs after `updateTerrainTextures` (after beginFrame: it pushes nodes). One Low job pulls the
 nearest missing unit inside max("Surface/Radius" while the water is on, "Debug radius" while the lines are) from the
 sampler's store (built there if not resident); units past 1.5 x the radius go. **The water** (V3, "Terrain/Rivers/
-Surface"): the pull job also builds the unit's water mesh (`buildSurfaceMesh`, pure): a RIBBON per perennial segment at
+Surface"): the pull job also builds the unit's water meshes (`buildSurfaceMeshes`, pure): one WATER TILE per terrain
+BASE CHUNK it has water in ("Chunk size"; a ribbon quad goes to its midpoint's chunk, a lake run is cut at the chunk
+columns) - a RIBBON per perennial segment at
 the carved water surface (`RiverCarveConfig::surface`), 1.2 x the channel's half-width (the carved bank hides the rest),
 with the Manning-like flow speed (capped at 6 m/s; on a fall-steep piece blended toward 0.7 x the free-fall speed sqrt(2 g h)
 over its drop, up to 9 m/s - the sheet crept down; each point then raised toward any faster water downstream, fading
@@ -426,14 +428,21 @@ river's first piece's over the same stretch (a slow stream joining a fast river 
 0.85 x the main half-width before the junction, just inside the main water, instead of lying over it as a second sheet;
 the LARGEST arriving branch is only eased, never cut (it is the main river's continuation; with both of two similar
 streams cut, the junction's upstream side had no water). A QUAD per lake row run at the lake's level,
-one pixel wider all round (the ground cuts the shoreline; pans have none). Main uploads it (`createMesh`, no BLAS) and
-spawns ONE node at the unit's origin at sea level, `PASS_MAIN`, pushed every frame inside the radius. Drawn by RendererVK's
+one pixel wider all round (the ground cuts the shoreline; pans have none). Main uploads each (`createMesh`, no BLAS) and
+spawns its node at the unit's origin at sea level, `PASS_MAIN` (0 while the tile is past "Radius"). **IT RIDES THE
+TERRAIN'S CULLING** (2026-10-12: one ~7.7 km mesh per unit was never culled): no spatial entry of its own - the tiles
+are listed per base chunk (`m_tilesByChunk`, a near cell under the chunk below its centre too), TerrainStreamer's
+hand-over walk lists every chunk it drew in the main pass (live: entry valid; `firstBase` + span 2^lod) and at its end
+calls `RiverSystem::drawChunks` ON ITS WORKER, which pushes the tiles over them (once each: a LOD handover's two
+residents). Water is drawn exactly where its ground is. The tiles only change in `update`, which TerrainStreamer calls
+after joining the walk, so nothing is retired. With culling off `update` pushes every tile itself. A "Chunk size"
+change re-pulls the units. Drawn by RendererVK's
 River variant (RendererVK CONTEXT "River and lake water"). Toggling "Surface/Enabled" re-pulls the units.
 **The near cells** (the waves' geometry): 64 m squares (`c_nearCell`, = the shader's `RIVER_NEAR_CELL`) whose centre is
 within "Near radius" + one cell, each ONE dense mesh of every perennial river crossing it (`buildNearCellMesh`: each
 segment's water - `segmentWater`, shared with the light ribbons so the two lie on one another - resampled every "Near
 spacing" m, "Near across" vertices wide; a row pair belongs to the cell its first row lies in), built nearest first on
-their own Low job from the resident units near the cell, one node per cell at its origin, `PASS_MAIN`. A cell also
+their own Low job from the resident units near the cell, one node per cell at its origin, `PASS_MAIN`, drawn with its chunk as a tile. A cell also
 holds a dense LAKE grid: every `spacing` m a vertex where a wet lake pixel lies within one pixel (the flat quads' margin),
 at that lake's level, a quad where all four corners are in - the VS gives it the lakes' waves. Each frame RiverSystem
 reports the NEAR COVERAGE (`Renderer::setRiverNearCovered`: the nearest missing cell's centre less half its diagonal,

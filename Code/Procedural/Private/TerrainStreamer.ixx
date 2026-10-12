@@ -40,7 +40,8 @@ export namespace Procedural
 		// Per-frame, after update() AND ocean.update(): kicks ocean.render, then this render job, whose
 		// ONE walk of the Spatial visible hand-over (slot 1: RenderNode pointers, an ocean sector's
 		// tagged SpatialTerrainTag_Ocean) pushes every node with its own pass mask - chunks and sectors
-		// alike. Runs with the terrain disabled too (the walk still pushes the ocean's sectors).
+		// alike, and at its end the rivers' water over the chunks it drew in the main pass (RiverSystem::drawChunks). Runs
+		// with the terrain disabled too (the walk still pushes the ocean's sectors).
 		void render(Renderer& renderer, OceanGenerator& ocean);
 
 		// THE VEGETATION STORED IN THE CHUNKS (Procedural TreeSystem's trees and bushes): a chunk holds the index of
@@ -337,6 +338,9 @@ export namespace Procedural
 		bool                                m_vegRouted = false;
 		oc::vector<Renderer::GrassGroundChunk> m_grassGround; // update's per-frame list for Renderer::setGrassGround (kept memory)
 		void noteVegetation(const Resident& resident, uint32 passMask); // the walk job
+		// The walk's main-drawn chunks for the rivers' water (RiverSystem::drawChunks at its end; a slot per hand-over entry).
+		oc::vector<RiverSystem::ChunkDraw>  m_riverChunks;
+		oc::atomic<uint32>                  m_riverChunkCount{ 0 };
 		void flushVegetation();                                          // the walk job's end
 		void stampVegetation(Resident& resident);                        // every base chunk's index from m_vegLookup
 		oc::vector<uint64>                  m_scratchKeys; // updateResidency's resident walk (kept memory)

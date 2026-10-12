@@ -1129,7 +1129,7 @@ namespace Procedural
 		const ShadowParams& shadow = renderer.shadowParams();
 		const float reach = glm::max(shadow.maxDistance + shadow.casterPad, renderer.giTlasRange());
 		const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
-		Globals::jobSystem.submit([this, &renderer, sphere, reach, focus]
+		Globals::jobSystem.submit([this, &renderer, chunks, sphere, reach, focus]
 		{
 			// The shadow/GI sphere runs BESIDE the hand-over fan-out: it skips every main-stamped entry, so the two
 			// never push the same node (renderNode writes the node's upload state).
@@ -1154,6 +1154,11 @@ namespace Procedural
 			// tagged RenderNode*, or a chunk's Resident* (its node and its vegetation). Every entry is a
 			// different node, so the list fans out.
 			const oc::vector<uint64>& visible = Globals::spatialIndex.visibleUserData(1);
+			// THE RIVERS' WATER rides the same culling: every main-drawn chunk (a live one: a destroyed node is skipped by
+			// renderNode, and its rivers with it) is listed, and RiverSystem pushes the water tiles over them at the end.
+			const bool rivers = chunks; // update ran enabled: the rivers are current
+			m_riverChunks.resize(visible.size());
+			m_riverChunkCount.store(0, oc::memory_order_relaxed);
 			Globals::jobSystem.parallelFor(0, (uint32)visible.size(), m_renderPushCost, { "terrainRenderPushChunk", EProfileCategory::Procedural },
 				[&](uint32 begin, uint32 end)
 				{
@@ -1167,11 +1172,15 @@ namespace Procedural
 							const Resident& resident = *reinterpret_cast<const Resident*>(userData);
 							renderer.renderNode(resident.node);
 							noteVegetation(resident, RendererVKLayout::PASS_ALL);
+							if (rivers && resident.node.getPassMask() != 0 && resident.spatialEntry.isValid())
+								m_riverChunks[m_riverChunkCount.fetch_add(1, oc::memory_order_relaxed)] = { resident.firstBase(), 1u << resident.lod };
 						}
 					}
 				}, EJobPriority::High);
 			Globals::jobSystem.wait(sphereCounter);
 			flushVegetation();
+			if (rivers)
+				m_rivers.drawChunks(renderer, oc::span<const RiverSystem::ChunkDraw>(m_riverChunks.data(), m_riverChunkCount.load(oc::memory_order_relaxed)));
 		}, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
 	}
 
@@ -1329,7 +1338,7 @@ namespace Procedural
 		}
 
 		updateTerrainTextures(renderer);
-		m_rivers.update(renderer, camera);
+		m_rivers.update(renderer, camera, (float)m_settings.chunkSize);
 
 		const float chunkSize = (float)m_settings.chunkSize;
 		const int camCX = (int)std::floor(camera.position.x / chunkSize);

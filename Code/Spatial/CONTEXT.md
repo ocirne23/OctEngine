@@ -156,7 +156,8 @@ sectors both pass false.
 | `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
 
 > **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is its
-> streamer `Resident*` (its node AND its vegetation), an ocean sector's is its `RenderNode*` **with
+> streamer `Resident*` (its node AND its vegetation, AND the river water over it: Procedural RiverSystem's tiles ride
+> the chunks), an ocean sector's is its `RenderNode*` **with
 > `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set** (a 0 userData is still dropped:
 > the removed scatter's groups carried it). The streamer and the ocean share ONE hand-over list (collect slot 1), walked ONCE by
 > `TerrainStreamer::render`'s job, which tells the two apart by the tag and pushes every node with its own

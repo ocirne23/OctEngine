@@ -441,27 +441,56 @@ namespace
 		return m.build(out, "RiverNear");
 	}
 
-	// THE WATER MESH of a unit, pure (the pull job builds it). Unit-local ENGINE metres, y relative to sea level (the
-	// node sits at the unit's origin at sea level). Vertex layout: see river.vs.glsl. Also its WHITEWATER points for the
-	// mist: every water point with any whitewater (past c_mistMinFoam - the tweak's threshold cuts later), standing for
-	// half the river to each neighbour.
-	bool buildSurfaceMesh(const RiverTerrain& terrain, const RiverUnit& u, RenderMeshData& out, oc::vector<RiverSystem::MistPoint>& mist)
+	// THE WATER MESHES of a unit, pure (the pull job builds them): one per terrain BASE CHUNK it has water in (the unit
+	// is ~7.7 km across - one mesh was never culled, 2026-10-12; a tile rides its chunk's culling). Unit-local ENGINE
+	// metres, y relative to sea level (the nodes sit at the unit's origin at sea level; `origin` = that origin's world XZ,
+	// for the chunk grid). Vertex layout: see river.vs.glsl. A ribbon quad goes to the chunk of its midpoint (its two
+	// point pairs repeated in each tile it visits); a lake run is cut at the chunk columns. Also its WHITEWATER points
+	// for the mist: every water point with any whitewater (past c_mistMinFoam - the tweak's threshold cuts later),
+	// standing for half the river to each neighbour.
+	void buildSurfaceMeshes(const RiverTerrain& terrain, const RiverUnit& u, glm::vec2 origin, float chunkSize,
+	                        oc::vector<RiverSystem::TileMesh>& out, oc::vector<RiverSystem::MistPoint>& mist)
 	{
 		constexpr float c_mistMinFoam = 0.02f;
 		mist.clear();
+		out.clear();
 		const TerrainConfigV3& gc = terrain.base().config();
 		const float mpp = gc.metersPerPixel;
 		const float vs = TerrainGenV3::worldScale(gc.metersPerPixel) * gc.heightScale;
 
-		MeshArrays m;
-		oc::vector<WaterPoint> pts;
-		// A RIBBON per perennial segment, at the carved water surface: two vertices per point across the channel.
-		for (const RiverSegment& seg : u.segments)
+		struct TileBuild
 		{
+			MeshArrays m;
+			size_t seg = SIZE_MAX, k = 0; // the last point pair pushed (segment, point) and its first vertex
+			uint32 vertex = 0;
+		};
+		oc::unordered_map<uint64, TileBuild> tiles;
+		const auto chunkOf = [&](float x, float z)
+		{
+			return glm::ivec2((int32)std::floor((origin.x + x) / chunkSize), (int32)std::floor((origin.y + z) / chunkSize));
+		};
+		const auto tileAt = [&](float x, float z) -> TileBuild&
+		{
+			const glm::ivec2 c = chunkOf(x, z);
+			return tiles[((uint64)(uint32)c.y << 32) | (uint64)(uint32)c.x];
+		};
+		oc::vector<WaterPoint> pts;
+		const auto pushPair = [](MeshArrays& m, const WaterPoint& w)
+		{
+			const glm::vec2 n(-w.dir.y, w.dir.x);
+			const glm::vec3 tangent(w.dir.x * w.speed, w.foam, w.dir.y * w.speed);
+			const uint32 first = (uint32)m.positions.size();
+			m.push(glm::vec3(w.pos.x + n.x * w.half, w.y, w.pos.y + n.y * w.half), tangent, glm::vec2(-1.0f, w.along), false, w.depth);
+			m.push(glm::vec3(w.pos.x - n.x * w.half, w.y, w.pos.y - n.y * w.half), tangent, glm::vec2(1.0f, w.along), false, w.depth);
+			return first;
+		};
+		// A RIBBON per perennial segment, at the carved water surface: two vertices per point across the channel.
+		for (size_t si = 0; si < u.segments.size(); si++)
+		{
+			const RiverSegment& seg = u.segments[si];
 			if (seg.ephemeral || seg.count < 2)
 				continue;
 			segmentWater(terrain, u, seg, pts);
-			const uint32 base = (uint32)m.positions.size();
 			for (size_t k = 0; k < pts.size(); k++)
 			{
 				const WaterPoint& w = pts[k];
@@ -484,20 +513,21 @@ namespace
 						mist.push_back(RiverSystem::MistPoint{ glm::vec3(w.pos.x, w.y, w.pos.y), w.half / c_ribbonWiden,
 							w.dir * w.speed, 1.0f, w.depth, 0.0f, dropM });
 				}
-				const glm::vec2 n(-w.dir.y, w.dir.x);
-				const glm::vec3 tangent(w.dir.x * w.speed, w.foam, w.dir.y * w.speed);
-				m.push(glm::vec3(w.pos.x + n.x * w.half, w.y, w.pos.y + n.y * w.half), tangent, glm::vec2(-1.0f, w.along), false, w.depth);
-				m.push(glm::vec3(w.pos.x - n.x * w.half, w.y, w.pos.y - n.y * w.half), tangent, glm::vec2(1.0f, w.along), false, w.depth);
-				if (k > 0)
-				{
-					const uint32 i = base + 2 * (uint32)(k - 1);
-					m.indices.insert(m.indices.end(), { i, i + 2, i + 1, i + 1, i + 2, i + 3 });
-				}
+				if (k == 0)
+					continue;
+				const WaterPoint& a = pts[k - 1];
+				TileBuild& t = tileAt(0.5f * (a.pos.x + w.pos.x), 0.5f * (a.pos.y + w.pos.y));
+				const uint32 i = t.seg == si && t.k == k - 1 ? t.vertex : pushPair(t.m, a);
+				const uint32 j = pushPair(t.m, w);
+				t.m.indices.insert(t.m.indices.end(), { i, j, i + 1, i + 1, j, j + 1 });
+				t.seg = si;
+				t.k = k;
+				t.vertex = j;
 			}
 		}
 
 		// A QUAD per lake row run at the lake's level, one pixel wider all round (they overlap where opaque; the ground
-		// cuts the shoreline where it rises above the level). No pans: a salt flat has no water.
+		// cuts the shoreline where it rises above the level), cut at the tile columns. No pans: a salt flat has no water.
 		for (const RiverLakeRun& run : u.lakeRuns)
 		{
 			const RiverLake& lake = u.lakes[run.lake];
@@ -506,15 +536,27 @@ namespace
 			const float y = lake.level * vs;
 			const float x0 = ((float)run.x0 - 1.0f) * mpp, x1 = ((float)(run.x0 + run.len)) * mpp;
 			const float z0 = ((float)run.row - 1.0f) * mpp, z1 = ((float)run.row + 1.0f) * mpp;
-			const uint32 i = (uint32)m.positions.size();
 			const glm::vec3 still(0.0f);
-			m.push(glm::vec3(x0, y, z0), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
-			m.push(glm::vec3(x1, y, z0), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
-			m.push(glm::vec3(x0, y, z1), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
-			m.push(glm::vec3(x1, y, z1), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
-			m.indices.insert(m.indices.end(), { i, i + 2, i + 1, i + 1, i + 2, i + 3 });
+			for (float a = x0; a < x1;)
+			{
+				const float b = glm::min((std::floor((origin.x + a) / chunkSize) + 1.0f) * chunkSize - origin.x, x1);
+				MeshArrays& m = tileAt(0.5f * (a + b), 0.5f * (z0 + z1)).m;
+				const uint32 i = (uint32)m.positions.size();
+				m.push(glm::vec3(a, y, z0), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
+				m.push(glm::vec3(b, y, z0), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
+				m.push(glm::vec3(a, y, z1), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
+				m.push(glm::vec3(b, y, z1), still, glm::vec2(2.0f, 0.0f), false, 1.0e4f);
+				m.indices.insert(m.indices.end(), { i, i + 2, i + 1, i + 1, i + 2, i + 3 });
+				a = b;
+			}
 		}
-		return m.build(out, "RiverWater");
+		for (auto& [key, t] : tiles)
+		{
+			RiverSystem::TileMesh tile;
+			tile.chunk = glm::ivec2((int32)(uint32)(key & 0xFFFFFFFFu), (int32)(uint32)(key >> 32));
+			if (t.m.build(tile.mesh, "RiverWater"))
+				out.push_back(oc::move(tile));
+		}
 	}
 
 	uint64 cellKey(int32 cx, int32 cz) { return ((uint64)(uint32)cz << 32) | (uint64)(uint32)cx; }
@@ -593,15 +635,104 @@ namespace Procedural
 		if (terrain == m_terrain)
 			return;
 		m_terrain = oc::move(terrain);
-		m_units.clear(); // a job in flight finishes against its own terrain; its result is dropped (see update)
+		dropUnits(); // a job in flight finishes against its own terrain; its result is dropped (see update)
 		dropNearCells();
 		m_waterCentre = glm::vec2(1.0e30f); // re-bake the inland water map against the new terrain
 	}
 
 	void RiverSystem::dropNearCells()
 	{
+		for (auto& [key, cell] : m_nearCells)
+			dropTile(oc::move(cell.tile));
 		m_nearCells.clear(); // a near job in flight lands against an older generation and is dropped
 		++m_unitGeneration;
+	}
+
+	oc::unique_ptr<RiverSystem::WaterTile> RiverSystem::spawnTile(Renderer& renderer, const RenderMeshData& data, glm::vec3 origin, glm::ivec2 chunk)
+	{
+		auto tile = oc::make_unique<WaterTile>();
+		tile->mesh = renderer.createMesh(data, false);
+		if (!tile->mesh.isValid())
+			return nullptr;
+		tile->node = renderer.spawnMeshNode(tile->mesh, m_material, RendererVKLayout::EPipelineIndex::River,
+			Transform(origin, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
+		tile->node.setPassMask(RendererVKLayout::PASS_MAIN); // no shadow, no GI: a thin surface
+		tile->chunk = chunk;
+		m_tilesByChunk[cellKey(chunk.x, chunk.y)].push_back(tile.get());
+		return tile;
+	}
+
+	// Main, in update (TerrainStreamer joined its walk first): no walk can be reading the lists or pushing the node.
+	void RiverSystem::dropTile(oc::unique_ptr<WaterTile> tile)
+	{
+		if (!tile)
+			return;
+		if (auto it = m_tilesByChunk.find(cellKey(tile->chunk.x, tile->chunk.y)); it != m_tilesByChunk.end())
+		{
+			auto& list = it->second;
+			for (size_t i = 0; i < list.size(); i++)
+				if (list[i] == tile.get())
+				{
+					list.erase(list.begin() + (ptrdiff_t)i);
+					break;
+				}
+			if (list.empty())
+				m_tilesByChunk.erase(it);
+		}
+		// The node, then the mesh (the members' order).
+	}
+
+	void RiverSystem::dropUnit(Resident& r)
+	{
+		for (oc::unique_ptr<WaterTile>& tile : r.tiles)
+			dropTile(oc::move(tile));
+		r.tiles.clear();
+	}
+
+	void RiverSystem::dropUnits()
+	{
+		for (auto& [key, r] : m_units)
+			dropUnit(r);
+		m_units.clear();
+	}
+
+	bool RiverSystem::cullingGate()
+	{
+		return Globals::spatialIndex.getCullingConfig().mode >= int(ESpatialCullMode::Cull);
+	}
+
+	void RiverSystem::drawChunks(Renderer& renderer, oc::span<const ChunkDraw> chunks)
+	{
+		if (m_tilesByChunk.empty())
+			return;
+		++m_walk;
+		const auto push = [&](oc::small_vector<WaterTile*, 2>& list)
+		{
+			for (WaterTile* tile : list)
+				if (tile->drawnWalk != m_walk)
+				{
+					tile->drawnWalk = m_walk;
+					renderer.renderNode(tile->node); // its own mask: 0 past "Radius"
+				}
+		};
+		for (const ChunkDraw& c : chunks)
+		{
+			// A coarse chunk covers span^2 base chunks: look each up, or walk the (fewer) listed ones.
+			if ((size_t)c.span * c.span <= m_tilesByChunk.size())
+			{
+				for (uint32 z = 0; z < c.span; z++)
+					for (uint32 x = 0; x < c.span; x++)
+						if (auto it = m_tilesByChunk.find(cellKey(c.firstBase.x + (int32)x, c.firstBase.y + (int32)z)); it != m_tilesByChunk.end())
+							push(it->second);
+			}
+			else
+				for (auto& [key, list] : m_tilesByChunk)
+				{
+					const glm::ivec2 b = list.front()->chunk;
+					if (b.x >= c.firstBase.x && b.y >= c.firstBase.y && b.x < c.firstBase.x + (int32)c.span && b.y < c.firstBase.y + (int32)c.span)
+						push(list);
+				}
+		}
 	}
 
 	void RiverSystem::updateNearCells(Renderer& renderer, glm::vec2 camera)
@@ -623,26 +754,22 @@ namespace Procedural
 			if (job->terrain == m_terrain && job->generation == m_unitGeneration)
 			{
 				NearCell& cell = m_nearCells[cellKey(job->cx, job->cz)];
-				cell.node = RenderNode();
-				cell.mesh = RenderMesh();
+				dropTile(oc::move(cell.tile));
 				cell.generation = job->generation;
-				if (job->hasMesh)
+				if (job->hasMesh && m_material != UINT16_MAX)
 				{
-					cell.mesh = renderer.createMesh(job->mesh, false);
-					if (cell.mesh.isValid())
-					{
-						const glm::vec3 origin((float)job->cx * c_nearCell, m_terrain->base().config().seaLevel, (float)job->cz * c_nearCell);
-						cell.node = renderer.spawnMeshNode(cell.mesh, m_material, RendererVKLayout::EPipelineIndex::River,
-							Transform(origin, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
-						cell.node.setPassMask(RendererVKLayout::PASS_MAIN);
-					}
+					const glm::vec3 origin((float)job->cx * c_nearCell, m_terrain->base().config().seaLevel, (float)job->cz * c_nearCell);
+					// Its base chunk: the one under its centre (a cell never crosses one while "Chunk size" is a multiple of it).
+					const glm::ivec2 chunk((int32)std::floor((origin.x + 0.5f * c_nearCell) / m_chunkSizeWas),
+					                       (int32)std::floor((origin.z + 0.5f * c_nearCell) / m_chunkSizeWas));
+					cell.tile = spawnTile(renderer, job->mesh, origin, chunk);
 				}
 			}
 		}
 		if (R <= 0.0f)
 		{
 			if (!m_nearCells.empty())
-				m_nearCells.clear();
+				dropNearCells();
 			renderer.setRiverNearCovered(0.0f);
 			return;
 		}
@@ -657,7 +784,10 @@ namespace Procedural
 		{
 			const int32 cz = (int32)(it->first >> 32), cx = (int32)(uint32)(it->first & 0xFFFFFFFFu);
 			if (centreDist(cx, cz) > keep)
+			{
+				dropTile(oc::move(it->second.tile));
 				it = m_nearCells.erase(it);
+			}
 			else
 				++it;
 		}
@@ -722,9 +852,11 @@ namespace Procedural
 			}
 		}
 
-		for (auto& [key, cell] : m_nearCells)
-			if (cell.node.isValid())
-				renderer.renderNode(cell.node);
+		// Culling on: the terrain's walk pushes the cells over the chunks it drew (drawChunks). Off: every one here.
+		if (!cullingGate())
+			for (auto& [key, cell] : m_nearCells)
+				if (cell.tile)
+					renderer.renderNode(cell.tile->node);
 
 		// THE NEAR COVERAGE: how far around the camera every cell is built (a stale one still has its mesh) - the
 		// nearest missing cell's centre less half its diagonal, at most the radius. The light ribbons discard their
@@ -845,14 +977,16 @@ namespace Procedural
 		                 (float)((double)ui * size - (double)gc.originZ));
 	}
 
-	void RiverSystem::update(Renderer& renderer, const Camera& camera)
+	void RiverSystem::update(Renderer& renderer, const Camera& camera, float chunkSize)
 	{
 		const TerrainSettings& s = Globals::settings.terrain;
 		const bool surface = s.riverSurface && renderer.isInitialized();
-		if (surface != m_surfaceWas)
+		if (surface != m_surfaceWas || chunkSize != m_chunkSizeWas)
 		{
+			// Re-pulled with (or without) their water meshes, cut to the chunks; the store keeps the units.
 			m_surfaceWas = surface;
-			m_units.clear(); // re-pulled with (or without) their water meshes; the store keeps the units
+			m_chunkSizeWas = chunkSize;
+			dropUnits();
 			dropNearCells();
 		}
 
@@ -860,24 +994,22 @@ namespace Procedural
 		{
 			oc::shared_ptr<Job> job = oc::move(m_job);
 			m_job = nullptr;
-			if (job->terrain == m_terrain && job->result && job->buildSurface == surface)
+			if (job->terrain == m_terrain && job->result && job->buildSurface == surface && job->chunkSize == m_chunkSizeWas)
 			{
 				Resident& r = m_units[unitKey(job->ui, job->uj)];
+				dropUnit(r);
 				r.unit = job->result;
 				r.linesBuilt = false;
 				r.mist = oc::move(job->mist);
 				++m_unitGeneration; // the near cells may cross its rivers: rebuild them
-				if (job->hasMesh)
+				if (!job->meshes.empty())
 				{
 					if (m_material == UINT16_MAX)
 						m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::River, false); // not in the TLAS
-					r.mesh = renderer.createMesh(job->mesh, false);
-					if (r.mesh.isValid())
-					{
-						r.node = renderer.spawnMeshNode(r.mesh, m_material, RendererVKLayout::EPipelineIndex::River,
-							Transform(unitOrigin(job->ui, job->uj), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
-						r.node.setPassMask(RendererVKLayout::PASS_MAIN); // no shadow, no GI: a thin surface
-					}
+					const glm::vec3 origin = unitOrigin(job->ui, job->uj);
+					for (const TileMesh& t : job->meshes)
+						if (oc::unique_ptr<WaterTile> tile = spawnTile(renderer, t.mesh, origin, t.chunk))
+							r.tiles.push_back(oc::move(tile));
 				}
 			}
 		}
@@ -910,6 +1042,7 @@ namespace Procedural
 			const int32 ui = (int32)(it->first >> 32), uj = (int32)(uint32)(it->first & 0xFFFFFFFFu);
 			if (unitDistance(ui, uj, cam) > radius * 1.5f + unitM)
 			{
+				dropUnit(it->second);
 				it = m_units.erase(it);
 				++m_unitGeneration; // its rivers leave the near cells
 			}
@@ -944,24 +1077,37 @@ namespace Procedural
 				job->ui = bestI;
 				job->uj = bestJ;
 				job->buildSurface = surface;
+				const glm::vec3 o = unitOrigin(bestI, bestJ);
+				job->origin = glm::vec2(o.x, o.z);
+				job->chunkSize = m_chunkSizeWas;
 				m_job = job;
 				Globals::jobSystem.submit([job]()
 				{
 					job->result = job->terrain->unit(job->ui, job->uj);
 					if (job->buildSurface && job->result && !job->result->unit->empty)
-						job->hasMesh = buildSurfaceMesh(*job->terrain, *job->result->unit, job->mesh, job->mist);
+						buildSurfaceMeshes(*job->terrain, *job->result->unit, job->origin, job->chunkSize, job->meshes, job->mist);
 				}, { "RiverSystem::pullUnit", EProfileCategory::Procedural }, EJobPriority::Low, &m_counter);
 			}
 		}
 
 		if (!renderer.isInitialized())
 			return;
+		const bool gate = cullingGate();
 		for (auto& [key, r] : m_units)
 		{
 			const int32 ui = (int32)(key >> 32), uj = (int32)(uint32)(key & 0xFFFFFFFFu);
 			const float dist = unitDistance(ui, uj, cam);
-			if (surface && r.node.isValid() && dist <= surfaceRadius)
-				renderer.renderNode(r.node);
+			// "Radius" per tile, by its pass mask (0 = the hand-over push skips it). Culling off: pushed here.
+			for (const oc::unique_ptr<WaterTile>& tile : r.tiles)
+			{
+				const Sphere bounds = tile->node.getWorldBounds();
+				const bool inside = surface && glm::length(glm::vec2(bounds.pos.x, bounds.pos.z) - cam) - bounds.radius <= surfaceRadius;
+				const uint32 mask = inside ? RendererVKLayout::PASS_MAIN : 0u;
+				if (tile->node.getPassMask() != mask)
+					tile->node.setPassMask(mask);
+				if (!gate && inside)
+					renderer.renderNode(tile->node);
+			}
 			if (lines && dist <= lineRadius)
 			{
 				if (!r.linesBuilt)
