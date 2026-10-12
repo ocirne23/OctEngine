@@ -3,16 +3,14 @@
 #extension GL_GOOGLE_include_directive : enable
 
 // DLSS (DlssPipeline): the per-pixel inputs DLSS reads beyond colour and depth.
-//  * The full motion. The scene's motion target holds object motion only (w = 0 = the camera alone), so a
-//    pixel without it reprojects through the camera from its depth, exactly like TAA (prevScreenUVMotion).
-//    Out: RG16F, render px, current -> previous (DLSS: prev = cur + mv), unjittered.
-//  * The bias-current-colour mask (DLSS: lerp(history, current, bias)). The ocean writes no motion vectors
-//    (dual-source blend: one fragment output), so its waves reproject camera-only and history lands on the
-//    wrong wave: bias toward the current frame there - TAA's ocean feedback cap. Ocean = scene colour ALPHA 0
-//    on a non-sky pixel (the TAA ocean flag, see taa.cs.glsl).
-//  * pc.mbEnabled (DLAA only - no motion blur while upscaling): the motion blur velocity + 8 x 8 sub-tiles, the
-//    side product TAA otherwise writes (motion_blur.inc.glsl). The sub-tile grid starts at pixel 0, so the
-//    dispatch then covers the WHOLE target (pc.base = 0), not just the render rect.
+//  * The full motion. The motion target holds object motion only (w = 0 = camera alone), so such a pixel reprojects
+//    through the camera from its depth, like TAA (prevScreenUVMotion). Out: RG16F, render px, current -> previous
+//    (DLSS: prev = cur + mv), unjittered.
+//  * The bias-current-colour mask (DLSS: lerp(history, current, bias)). The ocean writes no motion vectors (dual-source
+//    blend: one output), so its history lands on the wrong wave: bias toward the current frame there, like TAA's
+//    ocean feedback cap. Ocean = scene colour ALPHA 0 on a non-sky pixel (see taa.cs.glsl).
+//  * pc.mbEnabled (DLAA only): the motion blur velocity + 8 x 8 sub-tiles that TAA otherwise writes. The sub-tile grid
+//    starts at pixel 0, so the dispatch then covers the WHOLE target (pc.base = 0), not just the render rect.
 
 layout (local_size_x = MOTION_BLUR_SUBTILE, local_size_y = MOTION_BLUR_SUBTILE, local_size_z = 1) in;
 
@@ -56,6 +54,7 @@ void main()
         }
         motionBlurReduceTile(vel);
     }
+
     if (any(lessThan(px, pc.origin)) || any(greaterThanEqual(px, pc.origin + pc.size)))
         return;
 

@@ -1,7 +1,5 @@
-// Alpha-masked-aware shadow ray (ray query). Only alpha-masked instances are non-opaque in the TLAS
-// (everything else is ForceOpaque, see gi_tlas_instances.cs.glsl), so the candidate loop only ever runs
-// the alpha test for masked geometry; rays through opaque scenes commit in hardware as before.
-//
+// Shadow ray (ray query) with the alpha test. Only alpha-masked instances are non-opaque in the TLAS (everything else
+// is ForceOpaque, gi_tlas_instances.cs.glsl), so the candidate loop runs for masked geometry only.
 // Requires the includer to have declared, with these names:
 //   - u_tlas (accelerationStructureEXT)
 //   - in_instances[]    (InMeshInstance: meshIdxMaterialIdx in .z)
@@ -18,8 +16,8 @@
 
 vec2 rtsVertexUV(uint vi) { return meshVertexUV(in_vertices[vi]); }
 
-// Alpha test for a non-opaque candidate triangle. Returns true if the hit blocks the ray. Any
-// out-of-range index is treated as blocking (same bounded-access policy as the GI trace).
+// Alpha test for a non-opaque candidate triangle: true = the hit blocks the ray. An out-of-range index blocks (the
+// GI trace's bounded-access policy).
 bool rtsCandidateBlocks(rayQueryEXT rq)
 {
 	const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false);
@@ -27,12 +25,13 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 	const bool tree = (instanceIdx & 0x800000) != 0;
 	if (!tree && uint(instanceIdx) >= in_instances.length())
 		return true;
-	// Geometry from the RT meshIdx in the instance's sbtOffset (LOD chains trace one shared BLAS, which
-	// may differ from the raster-selected level the instance references); material from the instance.
+
+	// Geometry from the RT meshIdx in the sbtOffset (a LOD chain traces one shared BLAS, not the raster-selected level).
 	const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, false);
 	const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
 	if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
 		return true;
+
 	const InMeshInfo mi = in_meshInfos[meshIdx];
 	const uint triBase = mi.firstIndex + uint(rayQueryGetIntersectionPrimitiveIndexEXT(rq, false)) * 3u;
 	if (triBase + 2u >= in_indices.length())
@@ -42,6 +41,7 @@ bool rtsCandidateBlocks(rayQueryEXT rq)
 	const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
 	if (max(max(v0, v1), v2) >= in_vertices.length())
 		return true;
+
 	const vec2 bc = rayQueryGetIntersectionBarycentricsEXT(rq, false);
 	const vec2 uv = (1.0 - bc.x - bc.y) * rtsVertexUV(v0) + bc.x * rtsVertexUV(v1) + bc.y * rtsVertexUV(v2);
 	const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
@@ -56,8 +56,7 @@ float rtShadowVisibility(vec3 origin, vec3 dir, float tMin, float tMax)
 	rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0xFFu, origin, tMin, dir, tMax);
 	while (rayQueryProceedEXT(rq))
 	{
-		if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
-			&& rtsCandidateBlocks(rq))
+		if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))
 			rayQueryConfirmIntersectionEXT(rq);
 	}
 	return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? 0.0 : 1.0;

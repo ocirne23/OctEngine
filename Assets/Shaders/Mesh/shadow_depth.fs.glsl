@@ -4,10 +4,9 @@
 
 #include "shared.inc.glsl"
 
-// Fragment stage for the sun shadow depth pass. Writes no color (depth-only); it discards fragments of
-// alpha-masked (foliage/cutout) materials so their holes cast correct shadows.
-// The cull pass already resolved the mask: out_alphaTexIdx == 0xFFFF means opaque (no test).
-// No gl_FragDepth write (a per-leaf baked depth cost ~15 % of the shadow draw with the 350² grove).
+// Fragment stage for the sun shadow depth pass: depth-only, it discards the holes of alpha-masked (foliage/cutout)
+// materials. The cull resolved the mask: in_alphaTexIdx == 0xFFFF = opaque (no test). No gl_FragDepth write: a
+// per-leaf baked depth cost ~15 % of the shadow draw.
 #define SHADOW_ALPHA_CUTOFF 0.5
 
 layout (binding = 7) uniform sampler2D u_textures[];

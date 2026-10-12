@@ -1,13 +1,10 @@
 #version 460
 
-// The ANALYTIC tier's UNION MARCH: one fullscreen march per covered pixel over the interval the
-// small-emitter proxies rasterized (force_interval.fs.glsl) - where N small bubbles stack on a
-// pixel, the field is marched ONCE instead of once per proxy, killing the overdraw term of the
-// old per-proxy path. Marching and shading match force_shell.fs.glsl exactly (same crossing/wall
-// machinery, same analytic refinement, shared shading include); the ownership discard is gone
-// because ONE march owns every crossing - the only skip is a crossing whose dominant contributor
-// is a SAMPLED-tier (large) emitter, which that emitter's own proxy draws. Premultiplied blend,
-// manual reversed-Z depth clamp, no depth write.
+// The ANALYTIC tier's UNION MARCH: one fullscreen march per covered pixel over the interval the small-emitter proxies
+// rasterized (force_interval.fs.glsl) - where N small bubbles stack on a pixel, the field is marched ONCE instead of once
+// per proxy. Marching and shading match force_shell.fs.glsl (same crossing / wall logic, shared shading include). No
+// ownership discard: ONE march owns every crossing, except a crossing whose dominant contributor is a SAMPLED-tier
+// (large) emitter, which that emitter's own proxy draws. Premultiplied blend, manual reversed-Z depth clamp, no depth write.
 
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
@@ -45,9 +42,8 @@ void main()
     if (t0 > 6.0e4 || t1 <= t0)
         discard; // cleared (no analytic shell covers this pixel)
 
-    // FORCE_UNION_UV_SCALE (injected, 2.0 in the half-res mode; absent = full res): maps this
-    // pass's gl_FragCoord back to full-res uv (the interval texelFetch below stays in this pass's
-    // own texels - its target always matches this resolution).
+    // FORCE_UNION_UV_SCALE maps this pass's gl_FragCoord back to full-res uv (the interval target always matches this
+    // pass's resolution, so its texelFetch above needs no scale).
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw * FORCE_UNION_UV_SCALE;
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
@@ -63,18 +59,17 @@ void main()
     if (t1 <= t0)
         discard;
 
-    // World-space step size (u_force_unionStepSize), growing with DISTANCE so a far pixel never marches
-    // finer than ~2 px of world size (u_force_unionStepPerDist = 2 / px per radius/dist), hard-capped
-    // (u_force_unionMaxSteps): the union interval can span several disjoint bubbles, so the step count
-    // follows its LENGTH instead of being a fixed budget squeezed over it.
+    // World-space step size, growing with DISTANCE so a far pixel never marches finer than ~2 px of world size
+    // (u_force_unionStepPerDist), hard-capped: the union interval can span several disjoint bubbles, so the step count
+    // follows its LENGTH instead of a fixed budget squeezed over it.
     const float stepSize = max(u_force_unionStepSize, t0 * u_force_unionStepPerDist);
     const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_force_unionMaxSteps));
     const float dt = (t1 - t0) / float(steps);
+
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce, u_force_cameraInside) -
-    // never re-sampled per fragment.
+    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce) - see force_shell.fs.
     const bool cameraInsideField = t0 > 0.0 ? u_force_cameraInside > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
@@ -83,28 +78,25 @@ void main()
     float accumAlpha = 0.0;
     int numShaded = 0;
 #ifdef FORCE_GRID
-    // Per-fragment hoist: the current cell's hash probe re-runs only when a step crosses a 16 m
-    // cell boundary.
+    // The cell's hash probe re-runs only when a step crosses a cell boundary.
     ivec3 cachedGridPos = ivec3(0x7FFFFFFF);
     uint cachedCell = FORCE_INVALID_CELL;
 #endif
-    // Static per-pixel phase jitter (FORCE_UNION_JITTER - "Force/Shell/Union jitter", compiled
-    // out when off) breaks the march's step-count banding into spatial noise - larger "Union
-    // step (m)" settings stay presentable. Purely spatial (no frame term), so shells never
-    // shimmer with TAA off; crossings still bisect to the exact surface either way.
+    // Static per-pixel phase jitter ("Force/Shell/Union jitter") breaks the step-count banding into spatial noise, so
+    // larger "Union step (m)" settings stay presentable. No frame term: shells never shimmer with TAA off.
 #ifdef FORCE_UNION_JITTER
     const float stepJitter = forceHash(vec3(gl_FragCoord.xy, 0.0));
 #else
     const float stepJitter = 0.0; // constant-folds out of the loop below
 #endif
+
     for (int i = 1; i <= steps && numShaded < 3 && accumAlpha < 0.98; ++i) // saturated: nothing behind shows
     {
         const float t = t0 + dt * (float(i) - stepJitter);
         bool sampledEmpty = false;
 #ifdef FORCE_GRID
-        // EMPTY-CELL FAST PATH: a cell with NO candidates holds no emitters at all (the grid
-        // insert covers every support) - provable, not heuristic - so the field there is exactly
-        // zero. After the crossing logic below the index also JUMPS past the empty stretch.
+        // EMPTY-CELL FAST PATH: a cell with NO candidates provably has zero field (the grid insert covers every support).
+        // After the crossing logic the index also JUMPS past the empty stretch.
         const vec3 samplePos = rayOrigin + rayDir * t;
         const ivec3 gridPos = forceGridPos(samplePos);
         if (any(notEqual(gridPos, cachedGridPos)))
@@ -125,6 +117,7 @@ void main()
 #else
         forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
 #endif
+
         const bool entryCrossing = F > 0.0;
         const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
         const bool teamFlip = bestTeam != prevTeam && (entryCrossing || fPrev > 0.0);
@@ -136,9 +129,8 @@ void main()
             {
                 hitTeam = entryCrossing ? bestTeam : prevTeam;
                 float lo = tPrev, hi = t;
-                // 5 refinements (not the shell FS's 6): this is the pixel's ONLY march, so there
-                // is no cross-proxy hit-error matching to satisfy - bracket/32 stays under the
-                // normal's finite-difference step at the union tier's step sizes.
+                // 5 refinements (not the shell FS's 6): the pixel's ONLY march has no cross-proxy hit error to match -
+                // bracket/32 stays under the normal's finite-difference step at the union tier's step sizes.
                 for (int b = 0; b < 5; ++b)
                 {
                     const float mid = (lo + hi) * 0.5;
@@ -147,6 +139,7 @@ void main()
                 }
                 tHit = (lo + hi) * 0.5;
             }
+
             float tWall = -1.0;
             float wallFade = 0.0;
             uint wallSkinTeam = MAX_FORCE_TEAMS; // < MAX: wall shades as this team's SKIN, not a pane
@@ -159,6 +152,7 @@ void main()
                     if (forceTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam) > 0.0) lo = mid; else hi = mid;
                 }
                 tWall = (lo + hi) * 0.5;
+
                 float wallOwn, wallOpposing;
                 forceTeamSample(rayOrigin + rayDir * tWall, prevTeam, wallOwn, wallOpposing);
                 wallFade = smoothstep(iso, iso * 1.3, min(wallOwn, wallOpposing));
@@ -166,8 +160,7 @@ void main()
                     tWall = -1.0;
                 if (tWall >= 0.0)
                 {
-                    // Same invisible-field reclassification as the shell FS: a wall against a
-                    // shell-alpha-0 field IS the visible side's pressed-flat surface.
+                    // Same invisible-field reclassification as the shell FS.
                     float phiW[NUM_FORCE_TEAMS];
                     float phiVisW[NUM_FORCE_TEAMS];
                     forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
@@ -181,9 +174,8 @@ void main()
                     }
                 }
             }
-            // Composite the step's events in ray order. The only skip: a crossing owned by a
-            // sampled-tier emitter (its own proxy draws it) - everything else is ours, exactly
-            // once, because this is the pixel's ONLY analytic march.
+
+            // Composite the step's events in ray order, skipping crossings owned by a sampled-tier emitter.
             for (int ev = 0; ev < 2 && numShaded < 3; ++ev)
             {
                 const bool wallFirst = tWall >= 0.0 && (tHit < 0.0 || tWall < tHit);
@@ -227,16 +219,15 @@ void main()
         prevTeam = bestTeam;
         tPrev = t;
         fPrev = F;
+
 #ifdef FORCE_GRID
-        // JUMP the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
-        // brackets stay one step wide), and move the bracket's start to the exit - the skipped
-        // stretch is provably zero, and a bracket spanning it would cost the bisection its
-        // accuracy at the next bubble's entry.
+        // JUMP the INDEX past the empty cell's exit (uniform dt kept, so refinement brackets stay one step wide), and move
+        // the bracket's start to the exit: a bracket spanning the zero stretch would cost the bisection its accuracy at
+        // the next bubble's entry.
         if (sampledEmpty)
         {
             const vec3 p = rayOrigin + rayDir * t;
-            const vec3 farBound = (floor(p / FORCE_GRID_CELL_SIZE)
-                + step(vec3(0.0), rayDir)) * FORCE_GRID_CELL_SIZE;
+            const vec3 farBound = (floor(p / FORCE_GRID_CELL_SIZE) + step(vec3(0.0), rayDir)) * FORCE_GRID_CELL_SIZE;
             const vec3 safeDir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-8;
             const vec3 tBounds = (farBound - rayOrigin) / safeDir;
             const float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
@@ -249,6 +240,7 @@ void main()
         }
 #endif
     }
+
     if (accumAlpha <= 0.002 && dot(accumColor, accumColor) < 1e-6)
         discard;
 

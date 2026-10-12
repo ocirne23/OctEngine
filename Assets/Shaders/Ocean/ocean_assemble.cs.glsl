@@ -1,19 +1,16 @@
 #version 460
 
-// FFT ocean, pass 3/4: assemble the output maps from the transformed spectra.
-//
-// The spectrum was laid out centered (k = 0 mid-texture), which by the DFT shift theorem multiplies the
-// spatial output by (-1)^(x+z) - undone here. Each cascade's two complex layers unpack into the 8 real
-// signals, written as:
+// FFT ocean, step 3 (OceanSimulationPipeline::record): assemble the output maps from the transformed spectra.
+// The spectrum is centered (k = 0 mid-texture), which multiplies the spatial output by (-1)^(x+z) - undone here.
+// Each cascade's two complex layers unpack into the 8 real signals:
 //   layer c                  : displacement (Dx, h, Dz, dDx/dz)   [choppy lambda applied at sample time]
 //   layer   OCEAN_CASCADES+c : gradients    (dh/dx, dh/dz, dDx/dx, dDz/dz)
-//   layer 2*OCEAN_CASCADES+c : (dhx^2, dhz^2, d2h/dt2, foam) - xy are slope second moments: the mip chain
-//                              averages them, so at mip m the shader recovers the slope variance the
-//                              filtering removed (E[s^2]_m - E[s]_m^2) and turns it into microfacet
-//                              roughness (LEAN mapping, Olano & Baker 2010; Bruneton et al. 2010).
-//                              z is the surface's vertical acceleration (Longuet-Higgins breaking-crest
-//                              foam source). w is the accumulated foam (ocean_foam.cs.glsl, cascade 0).
-// The mip chain is blitted afterwards by OceanSimulationPipeline.
+//   layer 2*OCEAN_CASCADES+c : (dhx^2, dhz^2, d2h/dt2, 0) - xy are slope second moments: the mip chain averages them, so
+//                              at mip m the shader recovers the filtered-out slope variance (E[s^2]_m - E[s]_m^2) as
+//                              microfacet roughness (LEAN mapping, Olano & Baker 2010; Bruneton et al. 2010). z is the
+//                              vertical acceleration (the breaking-crest foam source). The foam field has layers of its
+//                              own (OCEAN_FOAM_LAYER + level, ocean_foam.cs.glsl).
+// OceanSimulationPipeline blits the mip chain afterwards.
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 

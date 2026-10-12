@@ -91,8 +91,7 @@ void instanceTransform(InMeshInstance instance, out vec4 posScale, out vec4 quat
     const RenderNodeTransform node = in_renderNodeTransforms[instance.renderNodeIdx];
     const InMeshInstanceOffset offset = in_instanceOffsets[instance.instanceOffsetIdx];
     quat = quat_multiply(node.quat, offset.quat);
-    posScale = vec4(node.posScale.xyz + quat_transform(offset.posScale.xyz * node.posScale.w, node.quat),
-                    node.posScale.w * offset.posScale.w);
+    posScale = vec4(node.posScale.xyz + quat_transform(offset.posScale.xyz * node.posScale.w, node.quat), node.posScale.w * offset.posScale.w);
 }
 
 // The level to draw: the picked one, or while it is streamed out the nearest resident level.

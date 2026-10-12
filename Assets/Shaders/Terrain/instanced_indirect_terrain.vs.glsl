@@ -5,13 +5,8 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// Terrain variant of instanced_indirect.vs.glsl. The terrain fragment shader needs only world position and
-// the geometric normal (it builds its own tangent bases for XZ/triplanar splatting), so this VS skips the
-// tangent/bitangent (no full TBN) and the UV entirely. The shared vertex input layout still describes
-// tangent (loc 2) and uv (loc 3); leaving them unconsumed is valid.
-//
-// It ALSO evaluates the baked terrain fields (altitude/temperature/humidity/water level) here, per vertex,
-// and hands them to the FS as one interpolant - see the comment at the evaluation below.
+// Terrain variant of instanced_indirect.vs.glsl: world position + geometric normal only (the FS builds its own
+// tangent bases), plus the baked terrain fields per vertex as one interpolant (see main).
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
@@ -21,8 +16,7 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-// The main cull's OutMeshInstance (instanced_indirect.cs.glsl; the prev* fields are the motion vectors' - the
-// terrain is static and writes none, but the stride must match).
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl; the terrain writes no motion, but the stride must match).
 struct InMeshInstancesData
 {
     vec4 posScale;
@@ -37,18 +31,16 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
     InMeshInstancesData in_instances[];
 };
 
-// The texCoord rides positionU.w / normalV.w (MeshVertex). On the terrain it carries the RIVER, not a UV (the terrain
-// shades in world space): u = the river influence (Procedural TerrainGenerator).
+// positionU.w (MeshVertex's texCoord u) carries the RIVER influence on the terrain, not a UV.
 layout (location = 0) in vec4 in_posRiver;
 layout (location = 1) in vec3 in_normal;
-// NOT a tangent on the terrain: the EDGE STITCH (Procedural TerrainChunkMesh) - xyz = this vertex's height on the
-// straight edge of a neighbour 1 / 2 / 3 LODs coarser, w = the chunk's LOD.
+// NOT a tangent on the terrain: the EDGE STITCH (TerrainChunkMesh) - xyz = this vertex's height on the straight edge
+// of a neighbour 1 / 2 / 3 LODs coarser, w = the chunk's LOD.
 layout (location = 2) in vec4 in_stitch;
 layout (location = 4) in uint inst_idx;
 
-// INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) are two
-// pipelines computing the same position from the same inputs where the film has no lift - their depth must
-// match bit for bit there.
+// INVARIANT: the ground and the terrain film (TERRAIN_OVERLAY_PASS, depth test GREATER_OR_EQUAL) compute the same
+// position from the same inputs where the film has no lift - their depth must match bit for bit there.
 invariant gl_Position;
 
 layout (location = 0) out vec3 out_pos;
@@ -57,9 +49,8 @@ layout (location = 2) out vec4 out_terrainFields; // x = macro altitude, y = tem
 layout (location = 4) out float out_river;        // the river influence (TerrainFields::river)
 
 #ifdef TERRAIN_OVERLAY_PASS
-// The film: out_pos is LIFTED to its water level, this is the lift along the normal (m). The film FS rebuilds
-// the mesh point under it, out_pos - normalize(out_normal) * this, and lights and measures the relief from it
-// (the shadow map and the TLAS hold the flat mesh). One component, not the vec3 mesh point: 2 fewer in TRAM.
+// The film: out_pos is LIFTED to its water level, this is the lift along the normal (m). The film FS rebuilds the mesh
+// point under it (out_pos - normalize(out_normal) * this) to light from. One component, not a vec3: 2 fewer in TRAM.
 layout (location = 3) out float out_meshLift;
 
 #define TERRAIN_WET_BINDING 18
@@ -67,20 +58,17 @@ layout (location = 3) out float out_meshLift;
 #define UNDERWATER_OCEAN_BINDING 7
 #include "underwater_light.inc.glsl" // underwaterLiveWaveY: the live displaced ocean surface
 
-// The film's surface, as a height in the relief band (0 = its low points, 0.5 = the mesh, 1 = its top): the
-// WATER LEVEL the local wetness fills the relief to (rain puddles), or the LIVE OCEAN surface where that
-// stands higher - the waterline then continues onto the sand instead of ending at the ocean mesh's
-// intersection with it. Capped at the relief top: past that the ocean's own surface is what is drawn, and a
-// film lifted to the same height would z-fight it.
-// normalY = the smooth mesh normal's y (the FS's coverN: the pool level sinks on slopes).
+// The film's surface as a height in the relief band (0 = its low points, 0.5 = the mesh, 1 = its top): the pool level
+// of the local wetness, or the LIVE OCEAN surface where that stands higher (the waterline continues onto the sand).
+// Capped at the relief top: past that the ocean's own surface draws, and a film at the same height would z-fight it.
+// normalY = the smooth mesh normal's y (the FS's coverN).
 float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reliefDepth)
 {
     float level = terrainPoolLevel(terrainWetnessAt(meshPos.xz), normalY);
     if (terrainHeightMapPresent())
     {
         float depthBelow = waterLevel - meshPos.y; // calm column over this point (negative on dry land)
-        // The swash band rides the live displaced surface (the lit core's gate; underwater_light.inc.glsl).
-        // Ground deeper than the reach is under water at any wave phase and skips the wave taps.
+        // The swash band rides the live displaced surface (the lit core's gate); deeper ground skips the wave taps.
         const float reach = u_ocean_swashReach;
         if (abs(depthBelow) < reach)
             depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
@@ -127,11 +115,10 @@ uint terrainLeafLod(ivec2 base)
     return 0u;
 }
 
-// EDGE STITCHING (the terrain has no skirts): an edge vertex takes its height on the edge's COARSER side, so the two
-// nodes of every edge draw the same line. The edge's LOD here = the coarser of the leaves over the two base chunks on
-// either side of this vertex (the same pair from both nodes); this node is never coarser than its own leaf (the
-// streamer's invariant), so it has every vertex it needs. A corner sits on every lattice; an interior vertex never
-// moves. Every node has the same grid, so a level coarser is always every 2nd vertex along the edge.
+// EDGE STITCHING (no skirts): an edge vertex takes its height on the edge's COARSER side, so both nodes of every edge
+// draw the same line. The edge's LOD = the coarser of the leaves over the two base chunks either side of this vertex
+// (the same pair from both nodes); this node is never coarser than its own leaf (the streamer's invariant). A corner
+// sits on every lattice; an interior vertex never moves.
 float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin)
 {
     const float chunkSize = u_terrain_stitch.x;
@@ -144,6 +131,7 @@ float terrainStitchedHeight(vec3 localPos, vec2 nodeOrigin)
     const bool onX = lo.x || hi.x, onZ = lo.y || hi.y; // on the west / east edge, the north / south edge
     if (onX == onZ)
         return localPos.y;
+
     const ivec2 nodeBase = ivec2(round(nodeOrigin / chunkSize));
     const int along = int(floor((onX ? localPos.z : localPos.x) / chunkSize)); // exact: a power-of-two step
     const ivec2 inside = nodeBase + (onX ? ivec2(hi.x ? span - 1 : 0, along) : ivec2(along, hi.y ? span - 1 : 0));
@@ -165,13 +153,10 @@ void main()
     const vec3 localPos = vec3(in_pos.x, terrainStitchedHeight(in_pos, inst.posScale.xz), in_pos.z);
     out_pos    = quat_transform(localPos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
 
-    // Baked terrain fields, evaluated PER VERTEX and interpolated (the FS used to fetch these per pixel:
-    // 2 cascade taps + a 4-8 texel-decode climate bilinear). Interpolation loses nothing: every field is
-    // band-limited far below any LOD's vertex lattice (climate is 30 m/px generator output, altitude is
-    // the macro band, water level is sea/lake surfaces), and temperature = baseline + lapse * height is
-    // LINEAR in height, so interpolating the evaluated value equals evaluating at the interpolated height.
-    // Climate must stay BILINEAR here (terrainClimateAt, not the nearest variant): the splat blend weights
-    // derive from it, and nearest sampling quantizes the blending to the data map's texel grid.
+    // Baked terrain fields, evaluated PER VERTEX and interpolated. Interpolation loses nothing: every field is
+    // band-limited far below any LOD's vertex lattice (30 m/px climate, the macro altitude band, sea/lake surfaces),
+    // and temperature = baseline + lapse * height is LINEAR in height. Climate must stay BILINEAR (not the nearest
+    // variant): the splat blend weights derive from it, and nearest quantizes the blending to the map's texel grid.
     float altitude = out_pos.y - u_terrain_seaLevel; // mild-climate fallbacks without a map
     float temperature = 12.5;
     float humidity = 0.5;
@@ -183,19 +168,15 @@ void main()
         waterLevel = td.y;
         const vec4 climate = terrainClimateAt(out_pos.xz);
         humidity = climate.w;
-        // The map stores a SEA-LEVEL baseline + one lapse rate, evaluated at the shaded height - never
-        // bake a temperature sample (only valid at the height it was taken; the cascades' heights differ).
         temperature = terrainTemperatureAt(climate, out_pos.y);
     }
     out_terrainFields = vec4(altitude, temperature, humidity, waterLevel);
 
 #ifdef TERRAIN_OVERLAY_PASS
-    // THE FILM (never tessellated): inside the tessellation range, where the ground is displaced by the relief
-    // (terrain_tess.tes.glsl: the same distance fade and slope gate), lifted along the normal to its water
-    // level in the relief band - a pool's surface over the crevices, the rock standing out of it (the ground's
-    // depth hides the film there). Elsewhere, and with tessellation off, no lift: it lies on the flat ground,
-    // bit-identical (GREATER_OR_EQUAL). Per vertex: it does not follow the ground's relief, only its water
-    // level. The ground relief depth only (the rock's is a per-pixel coverage the VS does not have).
+    // THE FILM (never tessellated): inside the tessellation range (the TES's distance fade and slope gate), lifted
+    // along the normal to its water level in the relief band - a pool's surface over the crevices, the displaced rock
+    // standing out of it. Elsewhere, and with tessellation off, no lift: bit-identical to the flat ground
+    // (GREATER_OR_EQUAL). The ground relief depth only (the rock's is a per-pixel coverage the VS does not have).
     out_meshLift = 0.0;
     if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
     {
@@ -213,11 +194,10 @@ void main()
         }
     }
 #endif
+
+    // TERRAIN_TESS: these outputs are control points; the TES interpolates, displaces and projects.
 #ifndef TERRAIN_TESS
     gl_Position = u_mvp * vec4(out_pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #endif
-    // TERRAIN_TESS (the tessellated terrain, terrain_tess.tcs/.tes.glsl): these outputs are control points; the
-    // evaluation shader interpolates them (the fields are band-limited far below the lattice, as above),
-    // displaces and projects.
 }

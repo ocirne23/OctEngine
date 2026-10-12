@@ -1,10 +1,10 @@
 #version 450
 
-// GPU vertex skinning. Reads a base mesh's vertices + per-vertex bone influences and a bone-matrix
-// palette, writes the deformed vertices (same MeshVertex format, model space) into a per-instance output
-// region of the shared vertex buffer, and moves the positions they replace into the region's second half. One indirect dispatch covers every skinned instance: the job list
-// lives in a per-frame SSBO and gl_WorkGroupID.y selects the job, so adding/removing skinned instances
-// never re-records the command buffer (dispatch dims come from a CPU-written indirect buffer).
+// GPU vertex skinning. Reads a base mesh's vertices + per-vertex bone influences and a bone-matrix palette, writes the
+// deformed vertices (same MeshVertex format, model space) into a per-instance output region of the shared vertex
+// buffer, and moves the positions they replace into the region's second half. One indirect dispatch covers every
+// skinned instance: the job list lives in a per-frame SSBO and gl_WorkGroupID.y selects the job, so adding/removing
+// skinned instances never re-records the command buffer (dispatch dims come from a CPU-written indirect buffer).
 
 #include "mesh_vertex.inc.glsl"
 
@@ -52,6 +52,7 @@ void main()
     o.positionU = vec4((skin * vec4(v.positionU.xyz, 1.0)).xyz, v.positionU.w); // .w = uv.x, carried
     o.normalV   = vec4(normalize(skRot * v.normalV.xyz), v.normalV.w);          // .w = uv.y, carried
     o.tangent   = vec4(skRot * v.tangent.xyz, v.tangent.w);
+
     // The MOTION VECTORS: the region's second half keeps LAST frame's positions (MeshInfo::prevVertexDelta =
     // vertexCount), copied out before this frame's overwrite. Position only: nothing reads the rest.
     const uint outIdx = job.outVertexOffset + i;

@@ -1,20 +1,15 @@
 #version 460
 
-// Forcefield shell fragment shader: ray-marches the analytic team field through this instance's
-// oriented reach box and composites up to TWO surface crossings of F = phi[best] - max(iso,
-// phi[second]) front-to-back - the front shell plus the far/inner shell behind it (its visibility
-// is the "Backface alpha" tweak; from inside a bubble the exit dome uses "Interior alpha" instead).
-// Each crossing is shaded as a fresnel-rimmed energy shell (team color, world-anchored hex/noise
-// pattern, contact glow where an opposing bubble presses in, soft glow where the shell meets scene
-// geometry). Ownership discard keeps merged same-team bubbles single-shaded: a crossing is only
-// shaded by the fragment whose instance is the DOMINANT contributor there; unowned crossings still
-// advance the march (their owner's fragment draws them). Premultiplied blend over the lit scene,
-// manual depth test against the scene depth (reversed-Z), no depth write - particles and fog
-// layer on top.
+// Forcefield shell fragment shader: ray-marches the team field through this instance's oriented box and composites up to
+// three crossings of F = phi[best] - max(iso, phi[second]) front-to-back - the front shell plus the surfaces behind it
+// ("Backface alpha"; from inside a bubble the exit dome uses "Interior alpha"). Each crossing is a fresnel-rimmed energy
+// shell (team color, world-anchored pattern, contact glow where an opposing bubble presses in, glow where it meets scene
+// geometry). Ownership: a crossing is shaded only by the fragment whose instance is the DOMINANT contributor there, so
+// merged same-team bubbles shade once; unowned crossings still advance the march. Premultiplied blend over the lit scene,
+// manual depth test against the scene depth (reversed-Z), no depth write - particles and fog layer on top.
 
 #include "shared.inc.glsl"
-// Plain run-time index for the per-team reads here: the unrolled select (forcePhiAt) measured no clear
-// win in this shader, unlike the union march - see forcePhiAt.
+// Plain run-time index for the per-team reads here: the unrolled select gave no clear win in this shader (see forcePhiAt).
 #define FORCE_PHI_DYNAMIC_READ
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
@@ -26,26 +21,20 @@ layout (location = 0) in flat uint v_emitterIdx;
 
 layout (location = 0) out vec4 out_color;
 
-// The shading helpers (pattern, forceShadeHit/Wall, heat gradient) are SHARED with the union-march
-// FS (force_union.fs.glsl) - everything the instance identity provided rides their ownerIdx param.
 #include "force_shell_shade.inc.glsl"
 
-// The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every LIVE team's phi, baked
-// over the fitted u_force_bakeMin / bakeInvSize box, TEAM-SIZED (one texture holds up to 4 teams - RG16F at <= 2,
-// RGBA16F above; the second exists only for 5+). Only channels < NUM_FORCE_TEAMS are read, so an
-// RG16F volume's filled-in b/a never matter. Clamp-to-border transparent black = zero field outside.
+// The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl), TEAM-SIZED: one texture holds up to 4 teams (RG16F at
+// <= 2, RGBA16F above); the second exists only for 5+. Only channels < NUM_FORCE_TEAMS are read, so an RG16F volume's
+// filled-in b/a never matter. Clamp-to-border transparent black = zero field outside.
 layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
 #if NUM_FORCE_TEAMS > 4
 layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
 #endif
 
-// forceSampleField's semantics from the BAKED volume: one or two trilinear taps instead of the
-// analytic candidate loop - the sampled tier's per-step cost is flat no matter how many emitters
-// overlap. Only large emitters march this (their surfaces are far larger than a texel, so the
-// trilinear reconstruction error is centimetres). The sampled tier's crossing REFINEMENT and
-// NORMALS read the volume too (the surface being refined IS the trilinear field, so the baked
-// gradient matches it exactly); only shading's color/ownership stay analytic - they need
-// per-emitter identity and shell alpha, which the volume does not carry.
+// forceSampleField's semantics from the BAKED volume: one or two trilinear taps instead of the analytic candidate loop,
+// so the per-step cost is flat no matter how many emitters overlap. Only large emitters march this (their surfaces are
+// far larger than a texel: centimetre error). Crossing REFINEMENT and NORMALS read the volume too (the refined surface IS
+// the trilinear field); only shading's color / ownership stay analytic - they need per-emitter identity and shell alpha.
 void forceReadBakedPhi(vec3 x, out float phi[NUM_FORCE_TEAMS])
 {
     const vec3 uvw = (x - u_force_bakeMin) * u_force_bakeInvSize;
@@ -69,6 +58,7 @@ void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestP
     bestPhi = phi[0];
     for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
         if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
+
     secondPhi = 0.0;
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != bestTeam)
@@ -76,8 +66,8 @@ void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestP
     F = bestPhi - forceOpposingBound(iso, secondPhi);
 }
 
-// The tier-dispatched primitives the crossing logic runs on: bisection F, wall diff, the wall-fade
-// team sample, and the two finite-difference normals. Baked = 1-2 texture taps per evaluation.
+// The tier-dispatched primitives of the crossing logic: bisection F, wall diff, the wall-fade team sample and the two
+// finite-difference normals.
 float shellSurfaceF(vec3 x, uint team, float iso, bool sampledTier)
 {
     if (!sampledTier)
@@ -136,8 +126,7 @@ vec3 shellWallNormal(vec3 x, uint teamA, uint teamB, float h, bool sampledTier)
     return normalize(grad + vec3(0.0, 1e-6, 0.0));
 }
 
-// The march's field sample: the sampled tier reads the baked volume, everything else accumulates
-// analytically. Per-instance uniform branch (the whole fragment wave takes one side).
+// The march's field sample. Per-instance uniform branch (the whole fragment wave takes one side).
 void forceMarchSample(bool sampledTier, vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
 {
     if (sampledTier)
@@ -146,19 +135,17 @@ void forceMarchSample(bool sampledTier, vec3 x, float iso, out uint bestTeam, ou
         forceSampleField(x, iso, bestTeam, bestPhi, secondPhi, F);
 }
 
-
 void main()
 {
     g_viewIndex = int(u_viewIndex);
     const ForceEmitterData e = fe_emitters[v_emitterIdx];
     const float iso = u_force_isoThreshold;
 
-    // View ray through this fragment (far-plane reconstruction; reversed-Z far = 0).
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
-    // Intersect the same oriented (visible-extent) box the VS rasterized.
+    // Intersect the same box the VS rasterized.
     float side, forward, back;
     forceVisibleBounds(e, side, forward, back);
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz);
@@ -184,11 +171,8 @@ void main()
     if (t1 <= t0)
         discard;
 
-    // DEBUG density view: heatmap of the STRONGEST team field along the ray instead of the shell -
-    // tip concentration, lobe merging and the budget fold read directly; a white contour marks the
-    // iso threshold (the bubble boundary). Overlapping proxies dedup via dominance at the peak.
-    // BAKED by the FORCE_DENSITY_VIEW define ("Force/Debug/Density view" reloads the force pipelines),
-    // so the release shader carries none of this march.
+    // DEBUG density view ("Force/Debug/Density view" reloads the pipelines with FORCE_DENSITY_VIEW): a heatmap of the
+    // STRONGEST team field along the ray, with a white contour at the iso threshold. Proxies dedup via dominance at the peak.
 #ifdef FORCE_DENSITY_VIEW
     {
         const int densitySteps = int(u_force_marchSteps);
@@ -213,6 +197,7 @@ void main()
             discard;
         if (forceDominantEmitter(rayOrigin + rayDir * tMax, maxTeam) != v_emitterIdx)
             discard;
+
         vec3 heat = forceHeatColor(clamp(maxPhi / u_force_densityRange, 0.0, 1.0));
         const float contour = 1.0 - smoothstep(0.0, 0.08, abs(maxPhi - iso) / iso);
         heat = mix(heat, vec3(1.0), contour * 0.8);
@@ -221,15 +206,12 @@ void main()
     }
 #endif
 
-    // SAMPLED TIER: large emitters march the baked field volume - two trilinear taps per sample
-    // instead of the analytic candidate loop, so their cost stops scaling with emitter density.
-    // Refinement/normals/shading below remain analytic (crisp rims, exact ownership).
+    // SAMPLED TIER: large emitters march the baked field volume, so their cost stops scaling with emitter density.
+    // Ownership and shading colour stay analytic.
     const bool sampledTier = u_force_bakeEnabled > 0.5 && forceVisibleRadius(e) >= u_force_bakeThreshold;
 
-    // March compositing up to two crossings of F (front shell + the surface behind it). The step
-    // COUNT tapers with the proxy's projected size (u_force_shellLodScale - see buildUboForce): a small
-    // or distant bubble pays a handful of steps instead of the full budget; the floor of 8 keeps
-    // thin shells from being stepped over entirely.
+    // The step COUNT tapers with the proxy's projected size (u_force_shellLodScale, see buildUboForce); the floor of 8
+    // keeps thin shells from being stepped over.
     int steps = int(u_force_marchSteps);
     if (u_force_shellLodScale > 0.0)
     {
@@ -237,12 +219,12 @@ void main()
         steps = clamp(int(float(steps) * min(lod, 1.0)), 8, steps);
     }
     const float dt = (t1 - t0) / float(steps);
+
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceMarchSample(sampledTier, rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    // "Inside a bubble" is a property of the CAMERA, not of this box's entry point: a proxy whose
-    // box begins inside the merged field must style the exit it finds as a backface, not a dome.
-    // The camera is ONE point per frame, evaluated on the CPU (buildUboForce) - never re-sampled here.
+    // "Inside a bubble" is a property of the CAMERA, not of this box's entry point: a box that begins inside the merged
+    // field must style its exit as a backface, not a dome. The CPU evaluates the camera point once (buildUboForce).
     const bool cameraInsideField = t0 > 0.0 ? u_force_cameraInside > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
@@ -256,11 +238,9 @@ void main()
         forceMarchSample(sampledTier, rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
         const bool entryCrossing = F > 0.0;
         const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
-        // Winning team flipped with at least one endpoint inside: the ray crossed the equilibrium
-        // WALL between two pressed bubbles. F never changes sign there (it dips to 0 as best/second
-        // swap), so the wall refines on the team difference, which does. One-endpoint-inside counts
-        // because near the pane's RIM the skin crossing and the wall sit inside a single step -
-        // requiring both endpoints inside made the pane's edge stair-step with the sampling.
+        // Winning team flipped with at least one endpoint inside: the ray crossed the equilibrium WALL. F never changes
+        // sign there, so the wall refines on the team difference. One endpoint inside is enough: near the pane's RIM the
+        // skin crossing and the wall share one step (requiring both made the pane's edge stair-step).
         const bool teamFlip = bestTeam != prevTeam && (entryCrossing || fPrev > 0.0);
         if (surfaceCrossing || teamFlip)
         {
@@ -268,10 +248,9 @@ void main()
             uint hitTeam = 0u;
             if (surfaceCrossing)
             {
-                // The bubble's team is the INSIDE end's strongest team; bisect on [tPrev, t] holding
-                // it fixed. 6 refinements: neighbouring pixels can be shaded by DIFFERENT proxies
-                // whose march intervals differ - the residual hit error must stay below the normal's
-                // finite-difference step or the fresnel steps at merged shells' ownership boundary.
+                // The bubble's team is the INSIDE end's strongest team; bisect holding it fixed. 6 refinements:
+                // neighbouring pixels can be shaded by DIFFERENT proxies with different march intervals - the hit error
+                // must stay below the normal's finite-difference step or the fresnel steps at the ownership boundary.
                 hitTeam = entryCrossing ? bestTeam : prevTeam;
                 float lo = tPrev, hi = t;
                 for (int b = 0; b < 6; ++b)
@@ -282,6 +261,7 @@ void main()
                 }
                 tHit = (lo + hi) * 0.5;
             }
+
             float tWall = -1.0;
             float wallFade = 0.0;
             uint wallSkinTeam = MAX_FORCE_TEAMS; // < MAX: wall shades as this team's SKIN, not a pane
@@ -294,8 +274,9 @@ void main()
                     if (shellTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam, sampledTier) > 0.0) lo = mid; else hi = mid;
                 }
                 tWall = (lo + hi) * 0.5;
-                // The pane exists where BOTH pressed fields are above iso; fade it out toward the
-                // rim analytically (also rejects spurious flips between weak far-apart fields).
+
+                // The pane exists where BOTH pressed fields are above iso; fade it out toward the rim (also rejects
+                // spurious flips between weak far-apart fields).
                 float wallOwn, wallOpposing;
                 shellTeamSample(rayOrigin + rayDir * tWall, prevTeam, sampledTier, wallOwn, wallOpposing);
                 wallFade = smoothstep(iso, iso * 1.3, min(wallOwn, wallOpposing));
@@ -303,12 +284,10 @@ void main()
                     tWall = -1.0;
                 if (tWall >= 0.0)
                 {
-                    // A wall against an INVISIBLE field (shell alpha ~0, e.g. a map-scale gameplay
-                    // emitter) is not a contested pane - it IS the visible side's surface, pressed
-                    // flat. Reclassify it as that team's skin: it then shades with the normal team
-                    // look (phiVis already keeps the color pure) and, critically, is OWNED by the
-                    // visible team's dominant emitter - the invisible side's proxy never
-                    // rasterizes, which silently dropped the entry-side wall entirely.
+                    // A wall against an INVISIBLE field (shell alpha ~0, e.g. a map-scale gameplay emitter) is not a
+                    // contested pane - it IS the visible side's surface, pressed flat. Shade it as that team's skin,
+                    // OWNED by the visible team's dominant emitter: the invisible side's proxy never rasterizes, so
+                    // otherwise the entry-side wall is dropped.
                     float phiW[NUM_FORCE_TEAMS];
                     float phiVisW[NUM_FORCE_TEAMS];
                     forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
@@ -317,15 +296,14 @@ void main()
                     if (min(visPrev, visBest) < 0.05)
                     {
                         wallSkinTeam = visPrev > visBest ? prevTeam : bestTeam;
-                        // A rim step can hold this wall AND the true skin crossing of the same
-                        // visible surface - shading both would double the shell there.
+                        // A rim step can hold this wall AND the true skin crossing of the same surface: shade it once.
                         if (tHit >= 0.0)
                             tWall = -1.0;
                     }
                 }
             }
-            // Composite this step's events in ray order (a rim step can hold skin AND wall), each
-            // ownership-checked so exactly one proxy shades it; unowned events still advance the march.
+
+            // Composite this step's events in ray order (a rim step can hold skin AND wall), each ownership-checked.
             for (int ev = 0; ev < 2 && numShaded < 3; ++ev)
             {
                 const bool wallFirst = tWall >= 0.0 && (tHit < 0.0 || tWall < tHit);
@@ -368,6 +346,7 @@ void main()
         tPrev = t;
         fPrev = F;
     }
+
     if (accumAlpha <= 0.002 && dot(accumColor, accumColor) < 1e-6)
         discard;
 

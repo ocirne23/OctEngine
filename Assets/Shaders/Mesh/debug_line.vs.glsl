@@ -1,8 +1,7 @@
 #version 450
 
-// Debug line overlay: pulls world-space line vertices from a storage buffer (no vertex attributes),
-// two consecutive entries per line (LINE_LIST). Matches DebugLinePipeline::LineVertex: xyz = position,
-// w = packed RGBA8 color (R low byte).
+// Debug line overlay: pulls world-space line vertices from a storage buffer (no vertex attributes), two consecutive
+// entries per line (LINE_LIST). Matches DebugLinePipeline::LineVertex: xyz = position, w = packed RGBA8 color (R low byte).
 
 #include "shared.inc.glsl"
 

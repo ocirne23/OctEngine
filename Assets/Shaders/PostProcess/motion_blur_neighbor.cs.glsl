@@ -2,11 +2,10 @@
 
 #extension GL_GOOGLE_include_directive : enable
 
-// Motion blur (MotionBlurPipeline): per MOTION_BLUR_TILE tile, the longest velocity of its 3 x 3 tile
-// neighbourhood, straight from the 8 x 8 sub-tile maxima (TAA or motion_blur_tiles wrote them): a 3 x 3 tile
-// block is (3 x TILE / SUBTILE)^2 sub-tiles. A blur can reach at most the max radius, which is at most one
-// tile (MotionBlurPipeline clamps it), so a pixel whose own tile is still sees a moving object in the next
-// tile - that is how the blur crosses a silhouette. The composite reads this to pick gather or copy.
+// Motion blur (MotionBlurPipeline): per MOTION_BLUR_TILE tile, the longest velocity of its 3 x 3 tile neighbourhood,
+// straight from the 8 x 8 sub-tile maxima ((3 x TILE / SUBTILE)^2 sub-tiles). The max radius is at most one tile
+// (MotionBlurPipeline clamps it), so a pixel in a still tile still sees a moving object in the next tile: that is how
+// the blur crosses a silhouette. The composite reads this to pick gather or copy.
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -26,6 +25,7 @@ void main()
     const ivec2 t = ivec2(gl_GlobalInvocationID.xy);
     if (t.x >= int(pc.tilesX) || t.y >= int(pc.tilesY))
         return;
+
     const int per = MOTION_BLUR_TILE / MOTION_BLUR_SUBTILE;
     const ivec2 lo = max((t - 1) * per, ivec2(0));
     const ivec2 hi = min((t + 2) * per, ivec2(pc.subTilesX, pc.subTilesY)) - 1;

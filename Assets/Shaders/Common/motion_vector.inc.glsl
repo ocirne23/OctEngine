@@ -1,12 +1,9 @@
-// MOTION VECTORS, the fragment side (the scene's motion target: see shared.inc.glsl prevScreenUVMotion for
-// the value, SceneColor for the attachment). The vertex shader of a surface that can move passes the
-// WORLD offset of the shaded point from where it was last frame (prevWorld - world: the instance's previous
-// transform, a skinned vertex's previous position; instanced_indirect.vs.glsl). A world offset, not a
-// clip position: exactly 0 on a surface that did not move, and small - so the camera's part stays in
-// u_reprojClip (current NDC + depth -> last frame's clip, fused in double precision on the CPU), whose
-// precision does not depend on the distance from the world origin, and the object's part goes through
-// prevMvp's LINEAR part only (no translation).
-// Needs shared.inc.glsl (the UBO) first; fragment shaders only (gl_FragCoord).
+// MOTION VECTORS, the fragment side (the value: shared.inc.glsl prevScreenUVMotion). The vertex shader of a surface that
+// can move passes prevWorld - world of the shaded point (instanced_indirect.vs.glsl). A world OFFSET, not a clip
+// position: exactly 0 on a surface that did not move, and small - so the camera's part stays in u_reprojClip (fused in
+// double on the CPU, precise at any distance from the world origin) and the offset goes through prevMvp's LINEAR part only.
+// Needs shared.inc.glsl first; fragment shaders only (gl_FragCoord).
+
 #ifndef MOTION_VECTOR_INC_GLSL
 #define MOTION_VECTOR_INC_GLSL
 
@@ -19,6 +16,7 @@ vec4 fragPrevClipCamera()
     const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     return u_reprojClip * vec4(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0, gl_FragCoord.z, 1.0);
 }
+
 vec4 fragPrevClip(vec3 prevWorldDelta)
 {
     return fragPrevClipCamera() + (u_prevMvp * vec4(prevWorldDelta, 0.0)) * gl_FragCoord.w;

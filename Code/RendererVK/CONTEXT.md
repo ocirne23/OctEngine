@@ -326,7 +326,9 @@ own legacy `vkCmdPipelineBarrier` on the depth in the DLSS evaluate (a WAW again
 `Renderer::setSceneFocus(worldPos)` / `clearSceneFocus()` set the world point every DISTANCE-BASED
 QUALITY FALLOFF measures from; it reaches the shaders as `u_sceneFocus` (the camera position when
 cleared, so the sandbox behaves as before). The game sets its PLAYER every windowed frame, so the
-top-down camera hanging in empty sky shapes none of these:
+top-down camera hanging in empty sky shapes none of these. **"Editor/Freeze scene focus"** holds the
+focus it had when switched on (captured in `beginFrame` next to `m_cameraPos`), so the camera can fly
+away and look at the falloffs from outside:
 
 * **Sun cascades** (`computeSunCascades`). Focused: cascade c is the SPHERE of radius `splits[c + 1]`
   around the focus (nested), and `getSunCascade` (PCSS), `giSunShadow` (GI) and the debug overlay pick

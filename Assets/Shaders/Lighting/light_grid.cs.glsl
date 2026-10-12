@@ -5,35 +5,36 @@
 
 #include "shared.inc.glsl"
 
-// GATHER pass of the light grid build. The CPU (LightGridComputePipeline::build) already decided
-// which GRID_SIZE^3 grids exist, their cell size, their data offset, the hash table, and the list of
-// lights that touch each grid (split into per-cell candidates and LARGE lights). One workgroup covers
-// LIGHT_GRID_GATHER_GROUP consecutive cells of one grid; every thread owns ONE cell, loops the grid's
-// candidate list, and writes the cell's count + packed ids in one go - no atomics, no spin, full
-// occupancy, and a deterministic light order (the CPU's light index order).
+// GATHER pass of the light grid build. The CPU (LightGridComputePipeline::build) decides the grids, their cell size,
+// data offset, the hash table and each grid's light list (per-cell candidates and LARGE lights). One workgroup covers
+// LIGHT_GRID_GATHER_GROUP consecutive cells of one grid; each thread owns ONE cell and writes its count + packed ids
+// in one go: no atomics, and a deterministic light order (the CPU's).
 
-// Per light, written by the CPU: [0] = box min.xyz, sphere radius (0 = box test only);
-// [1] = box max.xyz, unused; [2] = sphere centre.xyz, unused.
+// Per light: [0] = box min.xyz, sphere radius (0 = box test only); [1] = box max.xyz; [2] = sphere centre.xyz.
 layout (binding = 1, std430) readonly buffer InLightCull
 {
     vec4 in_lightCull[];
 };
-// Per grid, LIGHT_GRID_JOB_STRIDE uints: gridMin.xyz, cellSize, dataOffset, lightBegin, lightCount,
-// largeBegin, largeCount (LightGridComputePipeline::GridJob).
+
+// Per grid, LIGHT_GRID_JOB_STRIDE uints: gridMin.xyz, cellSize, dataOffset, lightBegin, lightCount, largeBegin,
+// largeCount (LightGridComputePipeline::GridJob).
 layout (binding = 2, std430) readonly buffer InGridJobs
 {
     uint in_gridJobs[];
 };
+
 // Per workgroup: grid slot, first cell.
 layout (binding = 3, std430) readonly buffer InWorkgroups
 {
     uint in_workgroups[];
 };
+
 // The concatenated per-grid light id lists (cell candidates, then large lights, per grid).
 layout (binding = 4, std430) readonly buffer InLightList
 {
     uint in_lightList[];
 };
+
 layout (binding = 5, std430) buffer OutLightGrids
 {
     uint out_gridData[];
@@ -115,7 +116,7 @@ void main()
         ++count;
     }
 
-    // Capped: the readers loop over the count raw; the debug heat view shows the cap as saturation.
+    // Capped here: the readers loop over the count raw; the debug heat view shows the cap as saturation.
     const uint cellOffset = getCellOffset(gridIdx, cellIdx);
     out_gridData[cellOffset] = min(count, MAX_LIGHTCELL_LIGHTS);
     for (uint i = 0u; i < MAX_LIGHTCELL_LIGHTS / 2; ++i)

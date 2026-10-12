@@ -4,17 +4,12 @@
 #extension GL_EXT_shader_16bit_storage : enable
 #extension GL_ARB_separate_shader_objects : enable
 
-// The tessellated terrain's control stage (StaticMeshGraphicsPipeline::buildTerrainTessLayout): one patch per
-// mesh triangle, subdivided near the camera for terrain_tess.tes.glsl to displace. The ground only: the
-// surface-water film is never tessellated.
-//
-// CRACK-FREE: an edge's factor is a function of its two END POINTS only (positions and normals), symmetric in
-// them, so the two triangles sharing an edge agree on it bit for bit. Everything per PATCH (the culls, the inner
-// level) touches no shared edge.
-//
-// Every level-of-detail decision reads the CENTRE view (VIEW_CENTER), never the eye's: in VR both eyes then
-// tessellate and displace the same geometry (per-eye decisions made the eyes disagree - shimmer). Only
-// gl_Position (the TES) projects with the eye.
+// The tessellated terrain's control stage (buildTerrainTessLayout): one patch per mesh triangle, subdivided near the
+// camera for terrain_tess.tes.glsl to displace. The ground only: the water film is never tessellated.
+// CRACK-FREE: an edge's factor is a function of its two END POINTS only, symmetric in them, so the two triangles
+// sharing an edge agree on it bit for bit. Everything per PATCH (the culls, the inner level) touches no shared edge.
+// Every LOD decision reads the CENTRE view, never the eye's: in VR both eyes then tessellate and displace the same
+// geometry (per-eye decisions shimmer). Only gl_Position (the TES) projects with the eye.
 
 #include "shared.inc.glsl"
 
@@ -40,19 +35,16 @@ layout (location = 4) out float out_river[];
 // can tilt a displaced face back toward the camera, so a mesh-normal back face is not dropped at once.
 #define TERRAIN_TESS_BACKFACE_MARGIN -0.3
 
-// The edge's screen length over the target length, 1 past the fade end (no subdivision where nothing is
-// displaced), up to the max factor. The screen length is estimated from the DISTANCE (length x projection
-// scale / distance), not by projecting the end points: a projected length changes when the camera only
-// rotates (perspective stretches edges toward the screen border), and every factor change slides the
-// fractional vertices along the edge onto other heights - the terrain swam. Closer than the freeze distance
-// the distance is held at it, so the subdivision stops changing near the camera (with the TES's mip
-// footprint, which holds the same way).
-// na / nb = the end points' normal y. 1 (no subdivision) where the TES displaces nothing along the edge: both
-// end points past the slope gate.
+// The edge's screen length over the target length, 1 past the fade end, up to the max factor. The screen length is
+// estimated from the DISTANCE, not by projecting the end points: a projected length changes when the camera only
+// rotates, and every factor change slides the fractional vertices onto other heights - the terrain swam. Closer than
+// the freeze distance the distance is held at it, so the subdivision stops changing near the camera (as the TES's
+// mip footprint). na / nb = the end points' normal y: 1 where both are past the TES's slope gate.
 float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 {
 	if (max(na, nb) < TERRAIN_TESS_MIN_NORMAL_Y)
 		return 1.0;
+
 	const float maxFactor = u_terrainTess_maxFactor;
 	const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
 	const float dist = distance(0.5 * (a + b), viewPos);
@@ -60,9 +52,8 @@ float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 		return 1.0;
 	// factorPerMetre = the centre view's pixels per metre at 1 m over the target edge length (the CPU's).
 	float factor = distance(a, b) * u_terrainTess_factorPerMetre / max(dist, u_terrainTess_freezeDistance);
-	// Eased down to 1 over the fade band with its OWN falloff ("Factor falloff exponent"); the TES's height
-	// fades by "Height falloff exponent". Equal = they agree; a factor dropping before the height leaves the
-	// still-displaced relief on coarser triangles (facets).
+	// Eased down to 1 over the fade band with its OWN falloff ("Factor falloff exponent", the TES's height: "Height
+	// falloff exponent"); a factor dropping before the height leaves still-displaced relief on coarse triangles.
 	const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 	factor = mix(1.0, factor, 1.0 - pow(t, u_terrainTess_factorFalloff));
 	return clamp(factor, 1.0, maxFactor);
@@ -80,8 +71,8 @@ void main()
 
 	if (gl_InvocationID == 0)
 	{
-		// Patch cull: all three corners outside one frustum plane (the centre view's), by more than the relief
-		// can move them.
+		// Patch cull: all three corners outside one frustum plane (the centre view's), by more than the relief can
+		// move them.
 		const float margin = 0.5 * max(u_terrainTess_depthGround, u_terrainTess_depthRock);
 		bool outside = false;
 		for (int i = 0; i < 6 && !outside; ++i)
@@ -91,10 +82,10 @@ void main()
 				&& dot(vec4(in_pos[1], 1.0), plane) < -margin
 				&& dot(vec4(in_pos[2], 1.0), plane) < -margin;
 		}
-		// Back-face cull: all three corners' smooth normals turned away from the camera by the margin. Such a
-		// patch is behind the terrain facing the camera (a heightfield's back slopes are occluded), and its
-		// silhouette corners sit near dot 0, inside the margin. The rasterizer would cull its flat triangle
-		// anyway; this saves its tessellation and displacement.
+
+		// Back-face cull: all three corners' smooth normals turned away from the camera by the margin (a heightfield's
+		// back slopes are occluded; silhouette corners sit near dot 0, inside the margin). Saves the tessellation and
+		// displacement of a triangle the rasterizer would cull anyway.
 		const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
 		const vec3 n0 = in_normal[0], n1 = in_normal[1], n2 = in_normal[2]; // per vertex (not interpolated): unit
 		if (!outside)
@@ -109,6 +100,7 @@ void main()
 			gl_TessLevelInner[0] = 0.0;
 			return;
 		}
+
 		// Outer level i is the edge OPPOSITE corner i.
 		const float e0 = terrainEdgeFactor(in_pos[1], in_pos[2], n1.y, n2.y);
 		const float e1 = terrainEdgeFactor(in_pos[2], in_pos[0], n2.y, n0.y);

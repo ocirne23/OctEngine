@@ -1,4 +1,4 @@
-// Shadow mapping and PCSS functions
+// Shadow mapping and PCSS.
 
 // Fraction of a cascade's far range over which it cross-fades into the next cascade. Not read here: the band is
 // u_cascadeBlendStart / u_cascadeBlendInvWidth, from the CPU's CASCADE_BLEND in RendererUbo.cpp - keep both in sync.
@@ -6,9 +6,8 @@
 #define GOLDEN_RATIO_FRACT 0.6180339887
 #define PCSS_MAX_PENUMBRA_TEXELS 15.0  // cap so the kernel never gets too sparse/noisy
 #define PCSS_MIN_PENUMBRA_TEXELS 1.0   // floor so contact shadows stay crisp
-// The blocker search GATHERS: each tap is one textureGather = the 2x2 depth texels around it, so 6 taps read
-// 24 texels in half the fetches of the former 12 single-texel taps (L1TEX latency, the Static meshes range's
-// top stall). The taps stay spread over the Vogel disk; the texels within a tap are neighbours.
+// The blocker search GATHERS: each tap is one textureGather (2x2 neighbour texels), so 6 taps read 24 texels with
+// few fetches (L1TEX latency is the Static meshes range's top stall). The taps stay spread over the Vogel disk.
 #define PCSS_BLOCKER_GATHERS 6
 #define PCSS_BLOCKER_TEXELS (PCSS_BLOCKER_GATHERS * 4)
 #define PCSS_FILTER_SAMPLES 12
@@ -19,24 +18,20 @@ float cascadeSplit(int c) { return u_cascadeViewProj[c][0][3]; }
 float cascadeTexelWorldSize(int c) { return u_cascadeViewProj[c][1][3]; }
 float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 
-// PCF disk radius (texels) per unit of normalized depth gap, derived from the sun's angular size so
-// PCSS softness matches the ray-traced sun (tan(sunRadius) * depthRange / texelWorldSize - the
-// derivation sits at Renderer::buildUboSunShadow, which computes it per cascade once per frame).
+// PCF disk radius (texels) per unit of normalized depth gap, from the sun's angular size so the PCSS softness matches
+// the ray-traced sun (Renderer::buildUboSunShadow, per cascade).
 float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 
 #ifdef SHADOW_FOLIAGE_BIAS
-// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD; set by the lit FS around its lookup): no slope scaling and no normal
-// offset, the constant depth bias only. A crossed billboard's back half sits in the crossing card's shadow by a
-// small depth step - the slope-scaled bias (up to 4x at a grazing sun) and the push along the card normal erased
-// it, and that strip lit up through the tree. Alpha-tested foliage hides the bit of acne this allows.
+// FOLIAGE cards (MATERIAL_FLAG_BILLBOARD; set by the lit FS around its lookup): the constant depth bias only. A crossed
+// billboard's back half sits in the crossing card's shadow by a small depth step, which the slope-scaled bias and the
+// normal offset would erase (a strip lit through the tree). Alpha-tested foliage hides the bit of acne this allows.
 bool g_shadowFoliage = false;
 #endif
 
-// FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers -
-// 1 - exp(-gap / "Trees/Foliage shadow length") of it (u_foliage_shadowLength, metres). The crossed cards' own
-// shadow then starts at nothing on their crossing axis (where the gap is ~0) instead of as a hard edge there,
-// and deepens into the crown; a blocker far up-sun (another tree, terrain) still shadows fully.
-// `gap` = the normalized depth gap to the average blocker.
+// FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers, 1 - exp(-gap /
+// u_foliage_shadowLength (m)). The crossed cards' own shadow then starts at nothing on their crossing axis and deepens
+// into the crown; a blocker far up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker.
 float foliageTransmit(float visibility, float gap, int cascade)
 {
 #ifdef SHADOW_FOLIAGE_BIAS
@@ -48,6 +43,7 @@ float foliageTransmit(float visibility, float gap, int cascade)
 #endif
 	return visibility;
 }
+
 mat4 cascadeMatrix(int c)
 {
 	mat4 m = u_cascadeViewProj[c];
@@ -69,13 +65,11 @@ float interleavedGradientNoise(vec2 p)
 	return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
 }
 
-// Evenly distributed disk sample (golden-angle spiral), rotated per pixel. Far better coverage than a
-// fixed 12-point Poisson set when the kernel radius is large, which keeps PCSS smooth at low tap counts.
-// rotSC = (cos, sin) of the per-pixel rotation, computed ONCE in sampleSunShadow: the tap's own angle
-// i * GOLDEN_ANGLE is a compile-time constant once the fixed-count loops unroll, so the rotation is a
-// 2x2 multiply per tap instead of a sincos per tap (32 sincos per pixel before).
-// Keep the loops FULLY unrolled: batching them (a [[dont_unroll]] outer loop over 4-tap groups, the
-// offsets from a run-time-indexed table) was measured at 93 registers against 83.
+// Golden-angle spiral disk sample, rotated per pixel: even coverage at a large radius and few taps. rotSC = (cos, sin)
+// of the per-pixel rotation, computed ONCE in sampleSunShadow: the tap's own angle is a compile-time constant once the
+// loops unroll, so the rotation is a 2x2 multiply per tap, not a sincos.
+// Keep the loops FULLY unrolled: batching them (a [[dont_unroll]] loop over 4-tap groups, offsets from a table) costs
+// 93 registers against 83.
 vec2 vogelDisk(int i, int count, vec2 rotSC)
 {
 	float r = sqrt((float(i) + 0.5) / float(count));
@@ -84,8 +78,8 @@ vec2 vogelDisk(int i, int count, vec2 rotSC)
 	return r * vec2(ca.x * rotSC.x - ca.y * rotSC.y, ca.y * rotSC.x + ca.x * rotSC.y);
 }
 
-// PCSS blocker search: average the depths of texels closer to the light than the receiver. Returns the
-// blocker count in TEXELS, of PCSS_BLOCKER_TEXELS (0 => no occluders => fully lit).
+// PCSS blocker search: the average depth of the texels nearer the light than the receiver. Returns the blocker count in
+// TEXELS, of PCSS_BLOCKER_TEXELS (0 = fully lit).
 float blockerSearch(vec2 uv, int cascade, float receiverDepth, float radiusUV, vec2 rotSC, out float avgBlocker)
 {
 	float sum = 0.0;
@@ -98,13 +92,13 @@ float blockerSearch(vec2 uv, int cascade, float receiverDepth, float radiusUV, v
 		sum += dot(d, isBlocker);
 		count += isBlocker.x + isBlocker.y + isBlocker.z + isBlocker.w;
 	}
+
 	avgBlocker = (count > 0.0) ? sum / count : 0.0;
 	return count;
 }
 
-// Projects a world position into one cascade's shadow space. Returns (uv, biased depth, valid flag).
-// The receiver is offset along its normal by normalOffset (world units) and the compare depth is
-// nudged by depthBias; both are scaled per-cascade and by surface slope at the call site.
+// A world position in one cascade's shadow space: (uv, biased depth, valid). normalOffset (world units) moves the
+// receiver along its normal; the caller scales both biases per cascade and by slope.
 vec4 projectCascade(vec3 worldPos, vec3 N, int cascade, float normalOffset, float depthBias)
 {
 	vec4 lightPos = cascadeMatrix(cascade) * vec4(worldPos + N * normalOffset, 1.0);
@@ -126,34 +120,31 @@ float pcfVogelSingle(vec4 p, int cascade, float radiusUV, vec2 rotSC)
 	return sum / float(PCSS_FILTER_SAMPLES);
 }
 
-// Full PCSS for one cascade: blocker search -> penumbra estimate -> variable-radius PCF. Returns
-// visibility in [0,1]; fragments outside the cascade or with no occluders read as fully lit.
+// Full PCSS for one cascade: blocker search -> penumbra estimate -> variable-radius PCF. Visibility in [0, 1].
 float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 {
 	if (p.w < 0.5)
 		return 1.0; // outside this cascade's coverage
+
 	float searchRadiusUV = PCSS_MAX_PENUMBRA_TEXELS * texelUV;
 	float avgBlocker;
 	float blockers = blockerSearch(p.xy, cascade, p.z, searchRadiusUV, rotSC, avgBlocker);
 	if (blockers <= 0.0)
-		return 1.0; // no occluders found
-	// Umbra: every search tap (the whole max-penumbra disk) is occluded, and so is the hardware-PCF tap at the
-	// centre - fully shadowed, skip the filter. The filter disk lies inside the search disk and uses the
-	// same compare (LEQUAL is the complement of the search's d < ref), so it would find ~0 too. The centre
-	// tap guards the one case the sparse search can miss: a small hole straight over the pixel (a gap in a
-	// grate or canopy with the caster close by, where the filter's small disk would see the light).
+		return 1.0;
+
+	// Umbra: every search texel is occluded, and so is the hardware-PCF tap at the centre: skip the filter (its disk
+	// lies inside the search disk, with the complementary compare). The centre tap catches what the sparse search can
+	// miss: a small hole straight over the pixel (a gap in a grate or canopy with the caster close by).
 	if (blockers >= float(PCSS_BLOCKER_TEXELS) && texture(u_shadowMap, vec4(p.xy, float(cascade), p.z)) <= 0.0)
 		return foliageTransmit(0.0, p.z - avgBlocker, cascade);
-	// Directional penumbra: width grows with the world gap to the blocker (constant across cascades
-	// once expressed in texels). Caster touching the surface => ~MIN texels (sharp); far => up to MAX.
+
+	// The penumbra grows with the gap to the blocker: a caster touching the surface = ~MIN texels, far = up to MAX.
 	float penumbraTexels = clamp((p.z - avgBlocker) * pcssSunSizeTexels(cascade), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS);
 	return foliageTransmit(pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC), p.z - avgBlocker, cascade);
 }
 
-// Border PCSS: the fixed tap budget (blocker + filter) is split between the two cascades by t, so a
-// border pixel costs the same as a normal one. Each tap is routed to a cascade by a deterministic
-// low-discrepancy key, keeping both subsets spatially uniform; each cascade's visibility is averaged
-// over its own taps, then blended by the continuous factor t.
+// Border PCSS: the fixed tap budget is split between the two cascades by t (a low-discrepancy key per tap), so a border
+// pixel costs the same as a normal one. Each cascade averages its own taps; the results blend by t.
 float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, float t)
 {
 	float searchRadiusUV = PCSS_MAX_PENUMBRA_TEXELS * texelUV;
@@ -179,10 +170,9 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 		if (useB) { sumDB += s; nDB += n; }
 		else      { sumDA += s; nDA += n; }
 	}
-	// The blocker search only SIZES the penumbra; it never decides lit vs shadowed (the PCF does). With
-	// the tap budget split, a cascade can easily find zero blockers even in shadow, so fall back to the
-	// minimum (sharp) radius rather than declaring it lit -- otherwise the PCF is skipped and a bright
-	// line appears between two fully-shadowed cascades.
+
+	// Here the blocker search only SIZES the penumbra; the PCF decides lit vs shadowed. With the split budget a cascade
+	// can find no blocker even in shadow: take the minimum radius, not "lit" (a bright line between shadowed cascades).
 	float radA = (nDA > 0.0) ? clamp((pa.z - sumDA / nDA) * pcssSunSizeTexels(ca), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS) * texelUV : minRadiusUV;
 	float radB = (nDB > 0.0) ? clamp((pb.z - sumDB / nDB) * pcssSunSizeTexels(cb), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS) * texelUV : minRadiusUV;
 
@@ -199,11 +189,13 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 		if (useB) { sumB += vis; nB += 1.0; }
 		else      { sumA += vis; nA += 1.0; }
 	}
+
 	// FOLIAGE: each cascade's shadow fades in with its own blocker gap; no blocker found keeps the PCF result.
 	float visA = (nA > 0.0) ? sumA / nA : 1.0;
 	float visB = (nB > 0.0) ? sumB / nB : 1.0;
 	if (nDA > 0.0) visA = foliageTransmit(visA, pa.z - sumDA / nDA, ca);
 	if (nDB > 0.0) visB = foliageTransmit(visB, pb.z - sumDB / nDB, cb);
+
 	// If one cascade is invalid (or got no taps), use the other's visibility instead of injecting light.
 	if (!validA || nA == 0.0) return visB;
 	if (!validB || nB == 0.0) return visA;
@@ -221,12 +213,9 @@ float sunCascadeBlend(vec3 worldPos, out int cascade, out int nextCascade, out f
 	return dist;
 }
 
-// Slope factor (tan of the angle between N and the sun): widen bias at grazing angles where acne
-// and leaking appear, leaving flat-lit surfaces lightly biased. The normal offset is additionally
-// scaled by each cascade's world texel size (at the call) so near/far cascades get a matching offset.
-// Distant fragments get progressively larger biases: shadow map depth precision and texel density
-// drop with distance, so the near-tuned bias starts to acne/leak far out. Ramps 1 -> MAX across the
-// full cascade range.
+// The bias grows with the slope (tan of the angle between N and the sun: acne and leaks at grazing angles) and with
+// the distance (depth precision and texel density drop), across the full cascade range. The caller also scales the
+// normal offset by each cascade's world texel size.
 void sunShadowBias(vec3 N, float dist, out float depthBias, out float normalScale)
 {
 	vec3 L = u_sunDirection.xyz; // normalized on the CPU
@@ -246,9 +235,8 @@ void sunShadowBias(vec3 N, float dist, out float depthBias, out float normalScal
 	normalScale = u_shadow_normalBias * slope * distScale;
 }
 
-// ONE hardware-PCF tap (the comparison sampler's bilinear 2x2): no blocker search, no Vogel disk. For
-// surfaces whose motion hides a penumbra (the ocean). The cascade cross-fade is a per-pixel dither
-// between the two cascades (TAA resolves it) instead of two evaluations.
+// ONE hardware-PCF tap: no blocker search, no Vogel disk. For surfaces whose motion hides a penumbra (the ocean). The
+// cascade cross-fade is a per-pixel dither (TAA resolves it) instead of two evaluations.
 float sampleSunShadowHard(vec3 worldPos, vec3 N)
 {
 	int cascade, nextCascade;
@@ -256,6 +244,7 @@ float sampleSunShadowHard(vec3 worldPos, vec3 N)
 	float dist = sunCascadeBlend(worldPos, cascade, nextCascade, t);
 	if (t > interleavedGradientNoise(gl_FragCoord.xy))
 		cascade = nextCascade;
+
 	float depthBias, normalScale;
 	sunShadowBias(N, dist, depthBias, normalScale);
 	vec4 p = projectCascade(worldPos, N, cascade, normalScale * cascadeTexelWorldSize(cascade), depthBias);
@@ -264,7 +253,7 @@ float sampleSunShadowHard(vec3 worldPos, vec3 N)
 	return texture(u_shadowMap, vec4(p.xy, float(cascade), p.z));
 }
 
-// Selects the cascade, computes a cross-fade factor into the next one, and returns sun visibility.
+// The sun visibility, cross-faded into the next cascade near the cascade's end.
 float sampleSunShadow(vec3 worldPos, vec3 N)
 {
 	int cascade, nextCascade;
@@ -275,14 +264,14 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 
 	vec4 pa = projectCascade(worldPos, N, cascade, normalScale * cascadeTexelWorldSize(cascade), depthBias);
 	if (t <= 0.0 && pa.w < 0.5)
-		return 1.0; // outside the single cascade's coverage: skip the dither + sincos (pcssCascade would return 1 anyway)
-	float ditherBase = interleavedGradientNoise(gl_FragCoord.xy);
+		return 1.0; // outside the single cascade's coverage: skip the dither + sincos
 
-	float texelUV = u_shadow_invResolution; // 1 / resolution
+	float ditherBase = interleavedGradientNoise(gl_FragCoord.xy);
+	float texelUV = u_shadow_invResolution;
 	float rotation = ditherBase * 6.2831853;
 	vec2 rotSC = vec2(cos(rotation), sin(rotation)); // the ONE sincos per pixel every Vogel tap rotates by
-	// Outside the cross-fade band: one full-quality cascade evaluation. Inside it: split the same tap
-	// budget across both cascades (constant cost) and blend by t.
+
+	// Outside the cross-fade band: one cascade. Inside it: the same tap budget split across both.
 	if (t <= 0.0)
 		return pcssCascade(pa, cascade, texelUV, rotSC);
 	else
@@ -292,8 +281,7 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 	}
 }
 
-// Debug overlay, compiled in by the SHADOW_DEBUG define ("Shadows/Debug mode" - a pipeline reload, not a
-// uniform, so the release shader carries none of it). Applied to the final lit colour:
+// Debug overlay on the final lit colour, compiled in by SHADOW_DEBUG ("Shadows/Debug mode", a pipeline reload):
 //   1  cascade index tint (red / green / blue / magenta = cascade 0..3)
 //   2  the cross-fade band: the cascade tint, going WHITE across the SHADOW_CASCADE_BLEND band into the next
 //   3  the raw sun visibility term alone (what sampleSunShadow returns), greyscale

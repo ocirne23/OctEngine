@@ -16,6 +16,7 @@ layout (push_constant) uniform PC
     uint  aoHeight;
     uint  viewIndex;  // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
 } pc;
+
 // The kernel half-extent (texels): a constant while "Ray tracing" is locked, so the loops unroll.
 #define AO_BLUR_RADIUS int(u_rt_aoBlurRadius)
 
@@ -32,10 +33,8 @@ void main()
     const float depth = texture(u_depth, uv).r;
     if (depth <= 0.0) // background (reversed-Z: far/cleared = 0)
     {
-        // Dilate geometry AO into background texels. The trace writes background as (bentN=+Z, ao=1);
-        // the forward pass upsamples this image with plain bilinear, so background texels bleed into
-        // silhouette edge pixels and brighten their GI term (bright aliased rim). Averaging the nearby
-        // geometry samples instead makes the blend across the silhouette a no-op.
+        // Dilate geometry AO into background texels: the forward pass upsamples this image with plain bilinear, so the
+        // trace's background value (bentN = +Z, ao = 1) would bleed into silhouette pixels as a bright rim.
         vec4 sum = vec4(0.0);
         float wsum = 0.0;
         for (int dy = -AO_BLUR_RADIUS; dy <= AO_BLUR_RADIUS; ++dy)
@@ -47,6 +46,7 @@ void main()
             sum  += texture(u_accumAO, nuv) * ws;
             wsum += ws;
         }
+
         vec4 bg;
         if (wsum > 1e-4)
         {
@@ -59,9 +59,8 @@ void main()
         return;
     }
 
-    // The crease edge-stop is the neighbour's distance off the CENTRE's tangent plane: one depth-derived
-    // normal per pixel instead of a normal per tap (there is no normal target). Camera-relative
-    // positions throughout - see viewRelFromDepth.
+    // The crease edge-stop is the neighbour's distance off the CENTRE's tangent plane: one depth-derived normal per pixel
+    // (there is no normal target). Camera-relative positions throughout - see viewRelFromDepth.
     const vec3 centerPos = viewRelFromDepth(uv, depth);
     const vec3 centerN   = normalFromDepth(u_depth, ivec2(uv * vec2(textureSize(u_depth, 0))), depth, u_taaJitter.xy);
     const float viewDist = length(centerPos);
@@ -79,7 +78,6 @@ void main()
         if (nDepth <= 0.0) continue;
 
         const vec3 dPos = viewRelFromDepth(nuv, nDepth) - centerPos;
-
         const float dp = dot(dPos, centerN);
         const float wz = exp(-dot(dPos, dPos) / (2.0 * sigmaZ * sigmaZ));
         const float wn = exp(-(dp * dp) / (2.0 * sigmaP * sigmaP));

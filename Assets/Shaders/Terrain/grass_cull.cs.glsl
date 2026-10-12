@@ -5,14 +5,12 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE GRASS PATCH CULL (GrassPipeline): one thread per patch of the grid around the camera (the CPU's ground table,
-// GrassFrameGpu). A patch on a resident terrain chunk, inside the range and the frustum, with grass at any corner,
-// gets ONE indexed draw of the first K blades of its LOD's blade mesh (grass.inc.glsl) and its record - read by the
-// grass vertex shader as instance-rate attributes (firstInstance = the slot).
-// Density per corner: THE TERRAIN TEXTURES' OWN LOGIC (terrain_splat.inc.glsl terrainLayers, fed exactly as the
-// terrain VS feeds it): grass only where the GROUND layer shows - not under rock, beach or snow - times the grass
-// amount of the ground textures the climate picks there (TerrainSplatMaterial::grass: the grassland texture 1, sand
-// 0). Corners are shared by 4 patches, so the bilinear density the vertex shader reads is continuous across borders.
+// THE GRASS PATCH CULL (GrassPipeline): one thread per patch of the grid around the camera. A patch on a resident
+// terrain chunk, inside the range and the frustum, with grass at any corner, gets ONE indexed draw of the first K
+// blades of its LOD's blade mesh and its record (the VS's instance-rate attributes, firstInstance = the slot).
+// Density per corner: THE TERRAIN TEXTURES' OWN LOGIC (terrainLayers, fed as the terrain VS feeds it): grass only where
+// the GROUND layer shows, times the grass amount of the ground textures the climate picks there. Corners are shared by
+// 4 patches, so the bilinear density the VS reads is continuous across borders.
 
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
@@ -51,6 +49,7 @@ struct GrassPatch // RendererVKLayout::GrassPatchGpu
     uint cellTemperature; // packHalf2x16(the chunk's cell size (m), the patch's mean temperature (C))
 };
 layout (binding = 4, std430) writeonly buffer OutPatches { GrassPatch out_patches[]; };
+
 struct DrawIndexedIndirect // VkDrawIndexedIndirectCommand
 {
     uint indexCount;
@@ -85,14 +84,14 @@ bool grassGroundAt(vec2 xz, out GrassGround g)
 }
 
 // How much grass grows at a ground point [0, 1]: where the terrain draws its ground textures, by their grass amount.
-// Fed like the terrain VS feeds the splat (instanced_indirect_terrain.vs.glsl): the baked fields at the point, the
-// temperature at its height, the smooth mesh normal. No texture set registered yet (the startup bake): no grass.
+// Fed like the terrain VS feeds the splat. No texture set registered yet (the startup bake): no grass.
 // `temperature`: C at the point's height (the blades' cold tint), 12.5 without a map (the terrain VS's fallback).
 float grassDensityAt(vec2 xz, float h, vec3 smoothN, float river, out float temperature)
 {
     temperature = 12.5;
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent())
         return 0.0;
+
     const vec4 td = terrainDataAt(xz);
     const vec4 climate = terrainClimateAt(xz);
     temperature = terrainTemperatureAt(climate, h);
@@ -140,8 +139,8 @@ void main()
     if (maxDensity <= 0.0)
         return;
 
-    // Bounds: the ground between the corners can rise above them (a finer mesh than the patch), the blades stand
-    // on it and lean with the wind by up to their height.
+    // Bounds: the ground between the corners can rise above them (a finer mesh than the patch), the blades stand on it
+    // and lean with the wind by up to their height.
     const float bladeH = u_grass_bladeHeight + u_grass_rootSink;
     const float slack = 0.5 * P + bladeH;
     const vec3 boxMin = vec3(origin.x - bladeH, hMin - u_grass_rootSink - 1.0, origin.y - bladeH);
@@ -157,13 +156,15 @@ void main()
     // and no blade may be nearer than this (the LOD is picked from it, and the blades geomorph by their own distance).
     const vec3 nearest = clamp(u_viewPos, vec3(origin.x, boxMin.y, origin.y), vec3(origin.x + P, hMax + bladeH, origin.y + P));
     const float dist = distance(nearest, u_viewPos);
+
     // THE NEAR GRASS CASCADE's casters, in view or not (a blade just off screen still casts): within half size x 1.5 +
-    // 2 m of its box's centre (u_grass_nearCentre - ahead of the camera; as grass.vs.glsl's near caster).
+    // 2 m of its box's centre (as grass.vs.glsl's near caster).
     const vec2 nearCentre = u_grass_nearCentre;
     const bool nearCaster = u_grass_nearRange > 0.0
         && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= u_grass_nearRange * 1.5 + 2.0;
     if (!visible && !nearCaster)
         return;
+
     const float keep = grassKeep(dist);
     const uint N = uint(u_grass_bladesPerPatch);
     const uint blades = min(N, uint(ceil(maxDensity * keep * float(N))));
@@ -176,6 +177,7 @@ void main()
         return;
     out_patches[slot] = GrassPatch(origin, g.chunkOrigin, g.firstVertex, g.res | (lod << 16), packUnorm4x8(density),
         packHalf2x16(vec2(g.step, 0.25 * temperatureSum)));
+
     // The same draw in both lists (the same LOD: the caster is the blade the main pass shades).
     const DrawIndexedIndirect draw = DrawIndexedIndirect(blades * grassIndicesPerBlade(lod), 1u, grassLodFirstIndex(lod, N), 0, slot);
     if (visible)

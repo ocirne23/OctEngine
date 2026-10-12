@@ -29,8 +29,8 @@ void main()
     vec2 vel = vec2(0.0);
     if (px.x < int(pc.width) && px.y < int(pc.height))
     {
-        vel = motionBlurVelocity(px, vec2(pc.width, pc.height), texelFetch(u_sceneDepth, px, 0).r,
-            texelFetch(u_motion, px, 0), u_post_mbShutter, u_post_mbMaxRadius, u_post_mbCameraScale);
+        vel = motionBlurVelocity(px, vec2(pc.width, pc.height), texelFetch(u_sceneDepth, px, 0).r, texelFetch(u_motion, px, 0),
+                                 u_post_mbShutter, u_post_mbMaxRadius, u_post_mbCameraScale);
         imageStore(u_velocityOut, px, vec4(vel, 0.0, 0.0));
     }
     motionBlurReduceTile(vel); // every lane: barriers inside

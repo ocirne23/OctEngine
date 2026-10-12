@@ -2,17 +2,16 @@
 
 #extension GL_EXT_nonuniform_qualifier : enable
 
-// IRRADIANCE VOLUME BAKE (GIProbePipeline::recordVolumeBake). One invocation per voxel of every cascade: the
-// voxel lattice is the probe lattice refined GI_VOLUME_RES times per axis, stored toroidally exactly like the
-// probes (slot = fine lattice coord & (dims - 1)), so the forward shaders sample it with REPEAT addressing and
-// hardware trilinear filtering (evalProbeCoverage in gi_probe.inc.glsl).
+// IRRADIANCE VOLUME BAKE (GIProbePipeline::recordVolumeBake). One invocation per voxel of every cascade: the voxel
+// lattice is the probe lattice refined GI_VOLUME_RES times per axis, stored toroidally like the probes (slot = fine
+// lattice coord & (dims - 1)), so the forward shaders sample it with REPEAT addressing and hardware trilinear filtering
+// (giVolumeCascade in gi_probe.inc.glsl).
 //
-// A voxel holds the visibility-weighted blend of its 8 probes, evaluated AT THE VOXEL CENTRE: the trilinear
-// weight, the backface-dead fade and the Chebyshev depth test of giSampleCascade. The half-Lambert term toward
-// each probe needs the surface normal, so it is NOT baked - the price of the volume (more leaking through
-// geometry thinner than a voxel). L0 is stored PREMULTIPLIED by the summed weight W (and W itself), so the
-// trilinear fetch at a pixel is a weight-correct blend (sum A / sum W) in which a voxel whose probes are all
-// dead contributes nothing instead of black; L1 is stored as ratios to L0 (16 B per voxel, see the encode).
+// A voxel holds the visibility-weighted blend of its 8 probes AT THE VOXEL CENTRE: the trilinear weight, the
+// backface-dead fade and the Chebyshev test of giSampleCascade. The half-Lambert term toward each probe needs the
+// surface normal, so it is NOT baked - the price of the volume (more leaking through geometry thinner than a voxel). L0
+// is stored PREMULTIPLIED by the summed weight W (and W itself), so the trilinear fetch is a weight-correct blend
+// (sum A / sum W) in which an all-dead voxel contributes nothing instead of black; L1 is stored as ratios to L0.
 
 #include "shared.inc.glsl"
 
@@ -20,14 +19,14 @@ layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_GRID_DATA_NAME gi_gridData
 #include "gi_probe.inc.glsl"
 
-// Cascade c's images, 20 B per voxel (the layout is documented at RendererVKLayout::GI_VOLUME_FORMATS):
-//   L0 x W at u_volumeL0[c], the L1 ratios at u_volumeL1[2c], [2c + 1], the last ratio + W + the sun fraction
-//   x W + the sky visibility x W at u_volumeTail[c].
+// Cascade c's images, 20 B per voxel (layout documented at RendererVKLayout::GI_VOLUME_FORMATS): L0 x W at
+// u_volumeL0[c], the L1 ratios at u_volumeL1[2c], [2c + 1], the last ratio + W + sun fraction x W + sky visibility x W
+// at u_volumeTail[c].
 layout (binding = 2, r11f_g11f_b10f) uniform writeonly image3D u_volumeL0[GI_MAX_CASCADES];
 layout (binding = 3, rgba8_snorm)    uniform writeonly image3D u_volumeL1[GI_MAX_CASCADES * 2];
 layout (binding = 5, rgba16f)        uniform writeonly image3D u_volumeTail[GI_MAX_CASCADES];
-// The virtual sky probe's 3 SH vec4s (the out-of-field fallback, giEvalSkySH), copied every frame: the trace
-// re-projects the sky each frame, and the consumers in volume mode read nothing from the probe buffer.
+// The virtual sky probe's 3 SH vec4s (giEvalSkySH), copied every frame: the trace re-projects the sky each frame, and
+// volume-mode consumers read nothing from the probe buffer.
 layout (binding = 4, rgba16f) uniform writeonly image3D u_volumeSky;
 // The trace's per-wave visit stamps (gi_probe_trace.cs.glsl): u_frameIndex + 1 = the wave was traced this frame.
 layout (binding = 6, std430) readonly buffer GiWaveStamps { uint gi_waveStamp[]; };
@@ -38,16 +37,18 @@ layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 void main()
 {
-    // z runs over every cascade's voxel slabs; a volume dim is a multiple of 4, so a workgroup never spans two
-    // (so `cascade` is uniform across the workgroup - the image-array stores below rely on it).
+    // z runs over every cascade's voxel slabs; a volume dim is a multiple of 4, so a workgroup never spans two (so
+    // `cascade` is uniform across the workgroup - the image-array stores below rely on it).
     const ivec3 gid     = ivec3(gl_GlobalInvocationID);
     // Before any early-out: the sky SH changes every frame, whatever the partial bake skips.
     if (all(equal(gid, ivec3(0))))
         for (int k = 0; k < GI_VOLUME_SKY_TEXELS; ++k)
             imageStore(u_volumeSky, ivec3(k, 0, 0), GI_GRID_DATA_NAME[GI_SKY_SH_BASE + uint(k)]);
+
     const int   cascade = gid.z / GI_VOLUME_DIMS.z;
     if (cascade >= GI_NUM_CASCADES)
         return;
+
     const ivec3 vslot   = ivec3(gid.xy, gid.z - cascade * GI_VOLUME_DIMS.z);
     const int   s       = giCascadeSpacing(cascade);
     const ivec3 origin  = giCascadeOrigin(cascade, u_sceneFocus.xyz);
@@ -60,13 +61,11 @@ void main()
     const vec3  frac   = q - vec3(base);
     const vec3  center = q * float(s);
 
-    // PARTIAL BAKE: the voxel only changes when one of its 8 probes does, i.e. when the trace visited that
-    // probe's wave this frame (the trace's OWN stamp - no second evaluation of the schedule) or the probe is
-    // fresh (giProbeFresh, the trace's own test: the stencil's two corners cover all 8 probes). Otherwise the
-    // voxel keeps last frame's value. A voxel that scrolled in always has a fresh probe (its base probe is
-    // outside the previous window), so the scroll needs no test of its own. u_gi_fullBake > 0.5 = bake
-    // everything (the CPU sets it for one frame when the images are new or the Chebyshev knobs moved: the
-    // baked value depends on them, and a far probe may not be visited for hundreds of frames).
+    // PARTIAL BAKE: the voxel only changes when one of its 8 probes does, i.e. when the trace visited that probe's wave
+    // this frame (the trace's OWN stamp) or the probe is fresh (giProbeFresh; the stencil's two corners cover all 8
+    // probes). A voxel that scrolled in always has a fresh probe, so the scroll needs no test of its own.
+    // u_gi_fullBake > 0.5 = bake everything (the CPU sets it for one frame when the images are new or the Chebyshev knobs
+    // moved: a far probe may not be visited for hundreds of frames).
     if (u_gi_fullBake < 0.5)
     {
         bool changed = giProbeFresh(cascade, base) || giProbeFresh(cascade, base + 1);
@@ -90,8 +89,8 @@ void main()
         const vec3  w3  = mix(1.0 - frac, frac, vec3(off));
         float w = w3.x * w3.y * w3.z;
         const ivec3 lc = base + off;
-        // Voxels along the window's top faces reach one probe past it (its slot holds another probe). No
-        // lookup reads them - the fade box keeps every sample two cells inside the window - so skip, not guess.
+        // Voxels along the window's top faces reach one probe past it (its slot holds another probe). No lookup reads
+        // them - the fade box keeps every sample two cells inside the window - so skip, not guess.
         if (w <= 0.0 || any(lessThan(lc, origin)) || any(greaterThanEqual(lc, origin + GI_PROBE_DIMS)))
             continue;
         const uint cellBase = giProbeBase(cascade, lc);
@@ -116,22 +115,21 @@ void main()
         W += w;
     }
 
-    // Encode (RendererVKLayout::GI_VOLUME_FORMATS). L0 stays premultiplied (a0 = sum w c0). The L1 terms become
-    // ratios to L0 - the weights cancel (a_k / a0 = the normalized c_k / c0) - scaled by 1/sqrt(3) into SNORM
-    // range; a black channel stores 0 (no direction). The unsigned 11/10-bit floats hold no negative and top out
-    // at 65024: a0 >= 0 for a non-negative radiance, the clamps only guard numeric noise.
+    // Encode (RendererVKLayout::GI_VOLUME_FORMATS). L0 stays premultiplied (a0 = sum w c0). The L1 terms become ratios to
+    // L0 - the weights cancel - scaled by 1/sqrt(3) into SNORM range; a black channel stores 0 (no direction). The
+    // unsigned 11/10-bit floats hold no negative and top out at 65024: the clamps only guard numeric noise.
     const vec3 l0 = clamp(a0, vec3(0.0), vec3(65000.0));
     // The bvec mix is a select: the inf of a black lane is discarded. The SNORM stores clamp q to [-1, 1].
     const vec3 inv = mix(vec3(0.0), 1.0 / (a0 * GI_SQRT3), greaterThan(a0, vec3(1e-8)));
     const vec3 q1 = a1 * inv, q2 = a2 * inv, q3 = a3 * inv;
-    // `cascade` is uniform across the workgroup (see main's first comment), so these index the storage-image
-    // arrays DYNAMICALLY UNIFORM - no nonuniformEXT, which would need shaderStorageImageArrayNonUniformIndexing.
+    // `cascade` is workgroup-uniform, so these index the image arrays DYNAMICALLY UNIFORM - no nonuniformEXT, which would
+    // need shaderStorageImageArrayNonUniformIndexing.
     imageStore(u_volumeL0[cascade], vslot, vec4(l0, 0.0));
     imageStore(u_volumeL1[2 * cascade + 0], vslot, vec4(q1, q2.r));
     imageStore(u_volumeL1[2 * cascade + 1], vslot, vec4(q2.gb, q3.rg));
-    // The sun fraction s = aSun / luma(a0) (the weights cancel), stored premultiplied by W like L0, so the
-    // filtered fetch is weight-correct and a dead voxel adds nothing. The sky visibility is a plain weighted
-    // mean, so aVis already is it x W.
+
+    // The sun fraction aSun / luma(a0) (the weights cancel), stored premultiplied by W like L0, so the filtered fetch is
+    // weight-correct and a dead voxel adds nothing. The sky visibility is a plain weighted mean, so aVis already is it x W.
     const float lumaA0 = dot(a0, GI_LUMA_W);
     const float sunW   = lumaA0 > 1e-8 ? clamp(aSun / lumaA0, 0.0, 1.0) * W : 0.0;
     imageStore(u_volumeTail[cascade], vslot, vec4(q3.b, W, sunW, min(aVis, W)));

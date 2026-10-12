@@ -1,8 +1,6 @@
 #version 450
 
-// Fullscreen triangle (no vertex buffers). Emits a [0,1] UV that maps 1:1 to the full render target, so the
-// fragment can sample the TAA-resolved image at its own screen position. UV origin is top-left, matching the
-// compute pass that wrote the resolved image.
+// Fullscreen triangle. The [0,1] UV maps 1:1 to the full render target, origin top-left like the resolved image.
 
 layout (location = 0) out vec2 v_uv;
 

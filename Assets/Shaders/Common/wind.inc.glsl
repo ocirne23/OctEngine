@@ -1,14 +1,11 @@
 #ifndef WIND_INC_GLSL
 #define WIND_INC_GLSL
 
-// THE VEGETATION WIND, shared by the trees (tree_wind.inc.glsl) and the grass (grass.vs.glsl): THE wind ("Sky/Wind",
-// u_weather_windVelocity: the mean velocity, .gustStrength, .invGustSize: 1 / the gust size) - one direction, strength
-// and set of passing gusts for everything that bends. The mean + a 2D GUST VECTOR x the gust strength, as the
-// particles' weather wind: each component two waves travelling downwind (1.2 and 0.46 x the gust size long - 60 m
-// and 23 m at the default 50 m - the second skewed; the components apart in phase). A 2D vector, not a signed gust
-// along the mean: the flurries TURN the wind rather than cancel it (a signed gust stronger than the mean wind stopped
-// the trees dead, in bands drifting downwind). Analytic: no texture, a few ALU per call.
-// Requires the UBO.
+// THE VEGETATION WIND, shared by the trees (tree_wind.inc.glsl) and the grass (grass.vs.glsl): "Sky/Wind", one direction,
+// strength and set of passing gusts for everything that bends. The mean velocity + a 2D GUST VECTOR x the gust strength,
+// as the particles' weather wind: each component two waves travelling downwind (1.2 and 0.46 x the gust size long, the
+// second skewed). A 2D vector, not a signed gust along the mean, so the flurries TURN the wind rather than cancel it (a
+// gust stronger than the mean wind would stop the trees dead). Analytic, a few ALU per call. Requires the UBO.
 
 // The wind at `xz` at `time`: its speed (m/s) and direction (unit, XZ).
 float vegetationWind(vec2 xz, float time, out vec2 dir)

@@ -1,11 +1,9 @@
 #version 460
 
-// Gameplay point queries: one thread per registered query slot, evaluating the per-team fields at
-// the query position ("which team's bubble, after deformation, contains this point?"). Results are
-// written slot-indexed straight into the host-visible readback buffer, stamped with the frame index
-// so the CPU can tell a live result from a never-evaluated slot; the CPU reads them ~2 frames later.
-// (Field FORCE for shield-less bodies does not live here any more - that is the baked pressure
-// field, force_bake.cs.glsl.)
+// Gameplay point queries: one thread per registered query slot - "which team's bubble, after deformation, contains this
+// point?". Results go slot-indexed into the host-visible readback buffer, stamped with the frame index so the CPU can
+// tell a live result from a never-evaluated slot; the CPU reads them ~2 frames later. (The field FORCE on shield-less
+// bodies is the baked pressure field, force_bake.cs.glsl.)
 
 layout (local_size_x = FORCE_SIM_GROUP_SIZE) in;
 
@@ -41,6 +39,7 @@ void main()
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(q.posActive.xyz, u_force_isoThreshold, bestTeam, bestPhi, secondPhi, F);
+
     ForceQueryResult result;
     result.owningTeam = F > 0.0 ? bestTeam : MAX_FORCE_TEAMS;
     result.ownField = bestPhi;

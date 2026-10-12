@@ -4,19 +4,14 @@
 #extension GL_ARB_shading_language_420pack : enable
 
 // Sky variant of the static-mesh pipeline (EPipelineIndex::Sky), a fullscreen triangle on the far plane (sky.vs.glsl):
-//  - single-scattering Rayleigh + Mie atmosphere, raymarched per pixel (VIEW_STEPS x SUN_STEPS, ALU only)
-//  - sun disc attenuated by the same atmospheric transmittance (reddens and flattens at the horizon),
-//    plus a Henyey-Greenstein forward-scatter halo (u_sky_sunGlow = strength)
+//  - the atmosphere (atmosphere.inc.glsl) raymarched per pixel, VIEW_STEPS view steps, ALU only
+//  - the sun disc through the same transmittance (reddens at the horizon), plus a Henyey-Greenstein halo (u_sky_sunGlow)
 //  - hash stars, a nebula band and a moon that fade in when the sun sets
-// The clouds are NOT drawn here: the volumetric cloud pass (CloudPipeline) composites them over the
-// whole scene, sky included.
-// Everything is driven from the UBO sky params (Tweaks panel: Sky / Sky/Atmosphere / Sky/Sun). The
-// GI/fog/fallback paths use the low-step skyRadiance() (atmosphere.inc.glsl), the same scatter model
-// with the same UBO coefficients, so indirect sky light matches the visible sky.
+// The clouds are NOT drawn here: CloudPipeline composites them over the whole scene, sky included.
 
 #include "shared.inc.glsl"
 
-// Reads no interpolant: the view ray comes from gl_FragCoord (see main).
+// Reads no interpolant: the view ray comes from gl_FragCoord.
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -24,26 +19,23 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-
 // Colour only: the motion target is write-masked for this variant (the sky reprojects through the camera).
 layout (location = 0) out vec4 out_color;
 
-// ---------------------------------------------------------------------------------------------
-// Atmosphere: single-scattering Rayleigh + Mie, shared with the indirect paths (atmosphere.inc.glsl,
-// pulled in by shared.inc.glsl). Coefficients come from the UBO (u_sky_betaRayleigh / u_sky_betaMie).
-// ---------------------------------------------------------------------------------------------
 const int VIEW_STEPS = 12;
 
-// Integer hashes (iq-style). float fract(p * K) hashes correlate at large coordinates and draw long
-// straight diagonal seams through the noise field; integer mixing has no such structure.
+// Integer hashes (iq-style): float fract(p * K) hashes correlate at large coordinates and draw long diagonal seams.
 float hash12(vec2 p)
 {
 	uvec2 q = uvec2(ivec2(floor(p))) * uvec2(1597334673u, 3812015801u);
 	uint n = (q.x ^ q.y) * 1597334673u;
 	return float(n) * (1.0 / 4294967295.0);
 }
+
 float hash13(vec3 p)
 {
 	uvec3 q = uvec3(ivec3(floor(p))) * uvec3(1597334673u, 3812015801u, 2798796415u);
 	uint n = (q.x ^ q.y ^ q.z) * 1597334673u;
 	return float(n) * (1.0 / 4294967295.0);
 }
+
 float vnoise(vec2 p)
 {
 	vec2 i = floor(p);
@@ -55,6 +47,7 @@ float vnoise(vec2 p)
 	float d = hash12(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
+
 // 3D value noise over a direction (the moon's surface, the nebula).
 float vnoise3(vec3 p)
 {
@@ -69,6 +62,7 @@ float vnoise3(vec3 p)
 	float nx01 = mix(n001, n101, f.x), nx11 = mix(n011, n111, f.x);
 	return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
 }
+
 float fbm3(vec3 p, int octaves)
 {
 	float norm = 1.0 - exp2(-float(octaves)); // sum of 0.5 + 0.25 + ...
@@ -83,9 +77,8 @@ float fbm3(vec3 p, int octaves)
 	return v / norm;
 }
 
-// FBM with a per-octave domain ROTATION (orthonormal, no axis preserved). fbm3 only scales+offsets
-// between octaves, so every octave shares one axis-aligned cube lattice and the sum shows repeating
-// grid/cube shapes at low frequencies; rotating decorrelates the lattices. Used by the nebula.
+// FBM with a per-octave domain ROTATION: fbm3's octaves share one axis-aligned lattice, which shows repeating cube
+// shapes at low frequencies; rotating decorrelates them. Used by the nebula.
 float fbmR(vec3 p, int octaves)
 {
 	const mat3 rot = mat3( 0.00,  0.80,  0.60,
@@ -103,11 +96,11 @@ float fbmR(vec3 p, int octaves)
 	return v / norm;
 }
 
-vec3 adjustSaturation(vec3 color, float saturation) 
-{ // Standard luminosity weights for human perception
-    const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-    vec3 grayscale = vec3(dot(color, luminosity));
-    return mix(grayscale, color, saturation);
+vec3 adjustSaturation(vec3 color, float saturation)
+{
+	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
+	vec3 grayscale = vec3(dot(color, luminosity));
+	return mix(grayscale, color, saturation);
 }
 
 void main()
@@ -115,22 +108,17 @@ void main()
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex); // per-eye ray reconstruction below
 #endif
-	// View ray from the screen position, not from the interpolated world position (in_pos - u_viewPos
-	// cancels two large float32 values per pixel and jitters away from the origin): u_rayFromNdc (ubo.inc.glsl),
-	// exact and translation-free. The raster ran TAA-jittered while it is unjittered, so back the jitter out
-	// of the NDC first.
+	// View ray from the screen position via u_rayFromNdc (ubo.inc.glsl): exact and translation-free, unlike a world
+	// position minus u_viewPos. u_rayFromNdc is unjittered, so back the TAA jitter out of the NDC first.
 	vec2 vpUv = (gl_FragCoord.xy * u_screenSize.zw - u_viewportRect.xy) * u_viewportInvSize;
 	vec2 ndc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0) - u_taaJitter.xy;
 	const vec3 dir = normalize(vec3(ndc, 1.0) * u_rayFromNdc);
-	// Direction-space size of one screen pixel, computed here in uniform control flow (derivatives are
-	// undefined inside non-uniform branches). Scaled by each star grid's frequency to clamp star
-	// footprints to >= a pixel so the TAA jitter samples them consistently.
+	// Direction-space size of one pixel, here in uniform control flow (derivatives). The star grids clamp their
+	// footprints to >= a pixel with it, so the TAA jitter samples them consistently.
 	const float dirPx = length(fwidth(dir));
 	const vec3 up = u_skyUp;
 	const vec3 L = u_sunDirection.xyz;
 
-	// With the sun fully off (color/intensity zero) the entire scattering integral is a multiply by
-	// zero: skip the raymarch and keep only the cheap ground test for the branches below.
 	vec3 sunSurfaceColor = u_sunColor.rgb;
 	const float eclipseFactor = u_sunVisible;
 	const float sunMagnitude = (u_sunColor.r + u_sunColor.g + u_sunColor.b);
@@ -139,8 +127,9 @@ void main()
 	vec3 color = vec3(0.0);
 	vec3 airColor = vec3(0.0); // the atmosphere alone, before the sun disc / moon / stars (the ground below keeps only it)
 	const float sunElev = dot(L, up);
-	// The sky from the CAMERA's altitude (world Y 0 = sea level): the air above thins (a darker, deeper sky)
-	// and the horizon dips below the level - cos of the dip angle's complement: -sqrt(1 - (R / (R + h))^2).
+
+	// The sky from the CAMERA's altitude (world Y 0 = sea level): the air above thins and the horizon dips,
+	// cos of the dip angle's complement = -sqrt(1 - (R / (R + h))^2).
 	const float observerHeight = max(u_viewPos.y, ATMOS_OBSERVE_HEIGHT);
 	const float horizonRatio = ATMOS_R_PLANET / (ATMOS_R_PLANET + observerHeight);
 	const float cosHorizon = -sqrt(max(1.0 - horizonRatio * horizonRatio, 0.0));
@@ -153,11 +142,10 @@ void main()
 		const bool moonCovered = cosM < u_sky_moonCos * 2.00 - cosM;
 
 		color = atmosphereScatter(dir, L, up, VIEW_STEPS, observerHeight, transmittance) * sunSurfaceColor.rgb;
-		color = adjustSaturation(color, 2.0 * (2.0-eclipseFactor)) * eclipseFactor; // Saturate the sky as the sun goes into eclipse, to keep it from looking like a flat gray haze
+		color = adjustSaturation(color, 2.0 * (2.0-eclipseFactor)) * eclipseFactor; // saturate during an eclipse: no flat grey haze
 		sunSurfaceColor *= eclipseFactor;
 
-		// Sky radiance (moonlight / space light): a second in-scatter pass from the sky up axis, so it
-		// gives the night sky a faint glow consistent with what GI/fog receive from skyRadiance().
+		// Sky radiance (moonlight / space light) from the up axis: the night glow GI / fog get from skyRadiance().
 		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 		{
 			vec3 skyLTrans;
@@ -165,15 +153,13 @@ void main()
 		}
 		airColor = color;
 
-		// Sun halo: a tight Henyey-Greenstein forward lobe (smooth peak, long graceful tail) instead of a
-		// pow() spike. u_sky_sunGlow is the strength; the transmittance keeps it warm/dim near the horizon.
+		// Sun halo: a tight Henyey-Greenstein lobe (smooth peak, long tail); the transmittance keeps it warm near the horizon.
 		if (sunLit && moonCovered)
 			color += sunSurfaceColor * phaseHG(cosAngle, 0.985) * 0.015 * u_sky_sunGlow * transmittance;
 
 		if (sunLit && u_sky_sunAngularCos < 1.0 && moonCovered) // 1.0 disables the disc
 		{
-			// Sun disc: analytically anti-aliased rim (pixel-footprint smoothstep, TAA-stable) and a mild
-			// limb darkening.
+			// Sun disc: analytically anti-aliased rim (pixel-footprint smoothstep, TAA-stable), mild limb darkening.
 			vec3 sT = normalize(cross(L, abs(L.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 sB = cross(L, sT);
 			const float discSin = u_sky_sunDiscSin;
@@ -188,11 +174,8 @@ void main()
 			}
 		}
 
-		// Moon: a sun-lit sphere shaded into the disc around u_sky_moonDirection (independent of the sun's
-		// position; the phases still fall out of lighting the reconstructed sphere normals with the
-		// actual sun direction, so they react to where the sun is). Disc size comes from u_sky_moonCos.
-		// Drawn before the stars so its disc coverage can occlude them (even the unlit, new-moon part of
-		// the disc blocks the stars behind it). The cloud pass composites later, so clouds occlude it.
+		// Moon: a sphere in the disc around u_sky_moonDirection, lit by the real sun direction, so the phases follow the
+		// sun. Before the stars: the whole disc (the unlit part too) hides the stars behind it.
 		if (!moonCovered)
 		{
 			vec3 mT = normalize(cross(moonDir, abs(moonDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
@@ -213,20 +196,16 @@ void main()
 			color += vec3(0.93, 0.95, 1.0) * ((lambert * albedo * u_sky_moonBrightness) * transmittance);
 		}
 
-		// Night sky (stars + nebula). Visibility comes from the local sky luminance - daylight in-scatter
-		// washes them out, so they fade in automatically at dusk and in dark sky regions. The moon disc
-		// masks both out (it is a solid body, not additive light).
+		// Night sky (stars + nebula), faded by the local sky luminance: they appear at dusk and in dark sky regions.
 		if (moonCovered)
 		{
 			float skyLum = dot(color, vec3(0.2126, 0.7152, 0.0722));
 			float nightVis = clamp(1.0 - skyLum * 25.0, 0.0, 1.0);
 			if (nightVis > 0.0)
 			{
-				// Milky-way band: a gaussian falloff around the great circle perpendicular to u_sky_nebulaAxis.
-				// Raw value-noise FBM reads as soft low-res blobs, so the field is domain-warped by a vector
-				// FBM (turns the blobs into wisps and filaments) and squashed across the band so structure
-				// stretches lengthwise, like a galaxy seen edge-on. Composed from four layers: broad tinted
-				// gas, ridged bright filaments, a narrow hot core line, and dark dust lanes cutting through.
+				// Milky-way band: a gaussian around the great circle perpendicular to u_sky_nebulaAxis. The FBM is
+				// domain-warped (blobs -> wisps) and squashed across the band (stretched lengthwise, a galaxy edge-on).
+				// Four layers: tinted gas, ridged filaments, a narrow hot core line, dark dust lanes.
 				{
 					vec3 bandPole = u_sky_nebulaAxis;
 					float hgt = dot(dir, bandPole);
@@ -256,17 +235,13 @@ void main()
 						float grain = vnoise3(dir * u_sky_nebulaScale * 1.0);
 						vec3 neb = hue * dens * (0.08 + 0.14 * grain * grain);
 
-						// Micro-star grid scale: ~1.5 px per cell at 1080p, so each speck is resolvable and
-						// the footprint clamp below keeps it TAA-stable. (The old 155.753 * 100.0 scale put
-						// ~15 cells inside one pixel - sub-pixel stars that only showed up as aliasing noise.)
+						// Micro stars: ~1.5 px per cell at 1080p, so each speck resolves (sub-pixel cells only alias).
 						const float MICRO_STAR_SCALE = 650.0;
 						vec3 sd2 = dir * MICRO_STAR_SCALE + warp * 31.0;
 						float h2 = hash13(floor(sd2));
 						if (h2 > 1.0 - dens * 0.45)
 						{
-							// Footprint clamped to >= ~1.2 pixels with a pixel-wide edge, energy conserved by
-							// the area ratio: sub-pixel points land on a different TAA jitter sample every
-							// frame and get eaten by the variance clipping.
+							// Footprint >= ~1.2 px, energy kept by the area ratio (see the stars below).
 							float px2 = dirPx * MICRO_STAR_SCALE;
 							float r2 = max(0.14, px2 * 1.2);
 							vec3 ofs2 = fract(h2 * vec3(113.1, 42.7, 743.3)) * 5.8 + 0.25;
@@ -281,39 +256,28 @@ void main()
 				// Random stars
 				{
 					vec3 sd = dir * 220.0;
-					// Cell-space size of one screen pixel (derivatives are only defined in uniform control
-					// flow, so this sits before the per-cell branch). Keeps every star >= ~a pixel wide.
-					float pxr = length(fwidth(sd));
+					float pxr = length(fwidth(sd)); // cell-space pixel size; before the per-cell branch (derivatives)
 					vec3 cell = floor(sd);
 					float h = hash13(cell);
 					float gate = step(mix(0.9995, 0.995, u_sky_starDensity), h); // density: fraction of lit cells
 					if (gate > 0.0)
 					{
-						// Round point at a hashed position inside the cell; size/brightness vary per star,
-						// with a slow twinkle. Size variation skews small (most stars tiny, a few big), and
-						// color variation tints each star along a cool/warm "temperature" axis.
+						// A round point at a hashed position in the cell; size, brightness and tint vary per star.
 						vec3 ofs = fract(h * vec3(113.1, 412.7, 743.3)) * 0.5 + 0.25;
 						float radius = 0.52 * u_sky_starSize * mix(1.0, 0.3 + 1.3 * fract(h * 57.31), u_sky_starSizeVariation);
-						// Clamp the rendered footprint to >= ~1.2 pixels with a pixel-wide smooth edge and
-						// conserve the original energy via the area ratio. A sub-pixel point lands on a
-						// different jitter sample every frame (it pops in and out), so the TAA variance
-						// clipping eats it - dim smeared stars. A pixel-sized, analytically anti-aliased
-						// disc shades identically every frame and survives the accumulation intact.
+
+						// Footprint >= ~1.2 px with a pixel-wide edge, energy kept by the area ratio: a sub-pixel point
+						// lands on a different jitter sample every frame and the TAA variance clipping eats it.
 						float r = max(radius, pxr * 1.2);
 						float comp = (radius * radius) / (r * r);
 						float core = smoothstep(r, max(r - pxr * 1.5, 0.0), length(fract(sd) - ofs)) * comp;
-						// Twinkle = two octaves of value noise sampled along the time axis (per-star rate and
-						// row, so every star walks its own random curve instead of a periodic wave), then
-						// squared so it reads as mostly-steady with occasional brighter glints.
+
+						// Twinkle: two octaves of value noise along time (per-star rate and row: no periodic wave),
+						// squared: mostly steady with occasional glints.
 						float tt = u_timeSeconds * mix(0.5, 1.4, fract(h * 37.7));
 						float n = 0.75 * vnoise(vec2(tt, h * 797.0)) + 0.25 * vnoise(vec2(tt * 2.3 + 13.1, h * 311.0));
 						float twinkle = 0.65 + 0.7 * n * n;
-						vec3 tint = mix(vec3(1), 
-										mix(vec3(0.1, 0.52, 0.20), 
-											vec3(0.95, 0.40, 0.7), 
-											fract(h * 636)
-										), 
-									u_sky_starColorVariation);
+						vec3 tint = mix(vec3(1), mix(vec3(0.1, 0.52, 0.20), vec3(0.95, 0.40, 0.7), fract(h * 636)), u_sky_starColorVariation);
 						color += tint * (core * twinkle * (0.5 + h) * u_sky_starBrightness) * nightVis * transmittance.b;
 					}
 				}
@@ -321,11 +285,9 @@ void main()
 		}
 	}
 
-	// Ground plane (below the DIPPED horizon, cosHorizon): the march ends at the ground there, so the color
-	// already holds the air in front of it (the aerial haze, from any altitude); the ground behind it is a
-	// diffuse albedo (u_sky_groundAlbedo, Sky > Ground Albedo) lit by the direct sun (horizon-tinted) plus the
-	// grazing sky as ambient - the same fallback skyRadiance() gives downward GI/fog rays - seen through the
-	// march's transmittance. Continuous at the horizon line: the ground fades in with that transmittance.
+	// Ground (below the DIPPED horizon): the march ended at the ground, so the colour already holds the air in front.
+	// Behind it a diffuse u_sky_groundAlbedo lit by the horizon-tinted sun plus the grazing sky (skyRadiance()'s
+	// fallback for downward rays), seen through the march's transmittance: continuous at the horizon line.
 	const float cosUpDir = dot(dir, up);
 	if (cosUpDir < cosHorizon)
 	{
@@ -333,8 +295,7 @@ void main()
 		vec3 skyAmb = atmosphereScatterCheap(grazeDir, L, up, 4) * u_sunColor.rgb * eclipseFactor;
 		if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 			skyAmb += atmosphereScatterCheap(grazeDir, up, up, 2) * u_sky_radiance;
-		vec3 groundLit = u_sky_groundAlbedo *
-			(sunSurfaceColor * atmosTransmittanceToLight(0.0, L, up) * (max(sunElev, 0.0) / PI) + skyAmb);
+		vec3 groundLit = u_sky_groundAlbedo * (sunSurfaceColor * atmosTransmittanceToLight(0.0, L, up) * (max(sunElev, 0.0) / PI) + skyAmb);
 		color = airColor + transmittance * (groundLit + u_ambientColor);
 	}
 

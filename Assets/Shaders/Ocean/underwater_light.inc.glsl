@@ -1,44 +1,24 @@
-// Sunlight transmittance through the wavy water surface, for points BELOW the local water level.
-// Shared by the froxel fog (vol_scatter.cs.glsl - turns per-froxel sun light into volumetric light
-// shafts) and the lit surface pass (instanced_indirect.fs.glsl - caustics on underwater geometry).
-// Two physically-motivated terms, both from data that already exists:
-//   - CAUSTIC FOCUS: the fold Jacobian of the FFT wave field at the point where the sun ray crossed
-//     the surface (entryXZ = worldXZ + sunDir.xz/sunDir.y * depth). Converging wavefronts (J -> 0)
-//     focus light into the bright moving filaments; diverging ones dim it. Same Jacobian terms the
-//     whitecap foam uses, so the pattern matches the drawn surface exactly.
-//   - BEER-LAMBERT: exp(-u_ocean_absorption * pathLength) - the blue-green shift with depth that
-//     makes accumulated froxel light read as colored shafts.
-// Tweaks: u_fog_causticStrength (>= 0.05 on the CPU),
-// u_fog_causticDepthFade (1/m: contrast decay with depth, approximating defocus - paired with a mip
-// that coarsens with depth so deep caustics blur out instead of aliasing).
-//
-// The includer defines UNDERWATER_OCEAN_BINDING for the FFT maps (fog binds them at 11, the forward
-// set carries them at 7) before including. Requires ubo.inc.glsl (via shared.inc.glsl).
+// Sunlight transmittance through the wavy water surface, for points BELOW the local water level. Shared by the froxel fog
+// (vol_scatter.cs.glsl: volumetric light shafts) and the lit surface pass (instanced_indirect.fs.glsl: caustics on
+// underwater geometry). Two terms, both from existing data:
+//   - CAUSTIC FOCUS: the FFT field's fold Jacobian where the sun ray crossed the surface (entryXZ = worldXZ + sunDir.xz /
+//     sunDir.y * depth). Converging wavefronts (J -> 0) focus light into bright moving filaments; diverging ones dim it.
+//     The whitecap foam's Jacobian terms, so the pattern matches the drawn surface.
+//   - BEER-LAMBERT: exp(-u_ocean_absorption * pathLength) - the blue-green shift that makes froxel light read as shafts.
+// Tweaks: u_fog_causticStrength (>= 0.05 on the CPU), u_fog_causticDepthFade (1/m: contrast decay with depth, approximating
+// defocus - paired with a mip that coarsens with depth, so deep caustics blur out instead of aliasing).
+// The includer defines UNDERWATER_OCEAN_BINDING for the FFT maps first (fog: 11, the forward set: 7). Requires ubo.inc.glsl.
 
 #ifndef UNDERWATER_LIGHT_INC_GLSL
 #define UNDERWATER_LIGHT_INC_GLSL
 
 layout (binding = UNDERWATER_OCEAN_BINDING) uniform sampler2DArray u_uwOceanMaps;
 
-// worldXZ/depthBelow locate the shaded point below the CALM water level; footprint = world size of one
-// receiver sample (froxel width for fog, ~0 for surface pixels) - it floors the sampling mip so the
-// pattern never aliases against what the receiver can represent. reach (>= 1) divides the depth the
-// ATTENUATION terms see (absorption + contrast fade + defocus), stretching how far shafts survive
-// without moving the pattern (the geometric entry point uses the true depth); 1 = physical. The fog
-// passes sqrt of its shaft boost so brightness and length grow together; surfaces pass 1.
-// Live wave height (m, relative to the calm local water level): mirrors the vertex displacement's
-// VERTICAL logic - the raw cascade sum times the ocean's surface weight (no flow rotation / choppy
-// XZ, close enough for gating). Lets callers test "underwater" against the INSTANTANEOUS surface
-// instead of the calm level, so sand exposed by a receding swash reads as dry (no caustics/absorption)
-// and the run-up tongue reads as covered. columnDepth = calm water depth at the point.
-// THE shore weights, for every consumer that mirrors the ocean's vertex displacement outside the ocean
-// shader (mirror oceanSwashBase / oceanSwashFadeIn / oceanSwashWeight / oceanSurfaceWeight in
-// ocean_wave.inc.glsl): amplitude x sea-connection fade (landlocked water at an elevated level gets no
-// swell) x land-height fade, and the approach fade-in across the swash band. columnDepth = the CALM
-// water depth at the point (negative on dry land), waterLevel = the calm local level.
-//   swash   = amplitude x sea x land x fadeIn      (the tongue: what drives the backflow / flow offset)
-//   surface = 1 - fadeIn x (1 - amplitude x sea x land)  (the ONE depth weight on the raw cascade sum:
-//             1 in open water, easing to the swash base across the approach band)
+// THE shore weights for every consumer that mirrors the ocean's vertex displacement outside the ocean shader (MIRROR
+// oceanSwashBase / oceanSwashFadeIn / oceanSwashWeight / oceanSurfaceWeight in ocean_wave.inc.glsl). columnDepth = the CALM
+// water depth (negative on dry land), waterLevel = the calm local level.
+//   swash   = amplitude x sea x land x fadeIn                (the tongue: drives the backflow / flow offset)
+//   surface = 1 - fadeIn x (1 - amplitude x sea x land)      (the ONE depth weight on the raw cascade sum)
 void oceanShoreWeights(float columnDepth, float waterLevel, out float swash, out float surface)
 {
     const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_ocean_seaLevel));
@@ -49,15 +29,16 @@ void oceanShoreWeights(float columnDepth, float waterLevel, out float swash, out
     surface = 1.0 - fadeIn * (1.0 - base);
 }
 
+// Live wave height (m, relative to the calm local level): the vertex displacement's VERTICAL logic (no flow rotation /
+// choppy XZ, close enough for gating). Callers test "underwater" against the INSTANTANEOUS surface, so sand a receding
+// swash exposes reads dry (no caustics/absorption) and the run-up tongue reads covered. columnDepth = calm water depth.
 float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
 {
     float sw, surfaceW;
     oceanShoreWeights(columnDepth, waterLevel, sw, surfaceW);
 
-    // Swash backflow moves the water HORIZONTALLY (displaced = source + chop offset), so the surface
-    // above this ground point originates from x - offset: first-order inverse - evaluate the offset
-    // here, then sample the height field at the offset position. Without this the gate tests the wrong
-    // water column and paints caustics on dry sand just in front of a receding tongue.
+    // Swash backflow moves the water HORIZONTALLY, so the surface above this point comes from x - offset: a first-order
+    // inverse. Without it the gate tests the wrong column and paints caustics on dry sand in front of a receding tongue.
     vec2 sampleXZ = worldXZ;
     const float flow = u_ocean_choppiness * u_ocean_swashFlow * sw; // chop * backflow * swash weight
     if (flow > 0.0)
@@ -71,8 +52,7 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
             off += d.xz;
             rawY0 += d.y;
         }
-        // Same thickness gate + reach soft-cap as the displacement: a buried tongue doesn't slide, and
-        // the slide distance stays bounded.
+        // Same thickness gate + reach soft-cap as the displacement.
         vec2 flowOff = off * (flow * smoothstep(0.0, 0.35, rawY0 * sw + columnDepth));
         const float flowCap = u_ocean_swashFlowCap;
         sampleXZ -= flowOff * (flowCap / (flowCap + length(flowOff)));
@@ -85,11 +65,12 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
     return rawY * surfaceW;
 }
 
-// columnDepth / waterLevel = the CALM depth and level at the shaded point (oceanShoreWeights): the
-// caustic's wave field is scaled by the ocean's surface weight, the same damping the drawn surface
-// (ocean mesh, terrain film) applies. Without it the surf zone focused full open-water waves under a
-// damped surface, and the pattern read as distorted against the film above it. depthBelow stays the
-// LIVE depth (path length + entry point); the weight wants the calm column, hence the separate input.
+// worldXZ / depthBelow locate the point below the water; depthBelow is the LIVE depth (path length + entry point).
+// footprint = world size of one receiver sample (froxel width for fog, ~0 for surface pixels): it floors the mip so the
+// pattern never aliases. reach (>= 1) divides the depth the ATTENUATION terms see (absorption, contrast fade, defocus), so
+// shafts survive further without moving the pattern; 1 = physical (the fog passes sqrt of its shaft boost).
+// columnDepth / waterLevel = the CALM depth and level: the caustic's waves take the ocean's surface weight, the damping
+// the drawn surface applies (without it the surf zone focused full open-water waves under a damped surface).
 vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach, float columnDepth, float waterLevel)
 {
     // u_fog_causticSunStep: xy = sun.xz / sy, z = 1 / sy, sy = max(sun.y, 0.08) (grazing sun: caps the path-length blow-up)
@@ -112,23 +93,21 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
             szz += g.w;
             sxz += textureLod(u_uwOceanMaps, vec3(uv, float(c)), lod).w; // displacement layer w = dDx/dz
         }
-        // The shore's wave damping (see the header comment): the Jacobian terms are linear in the
-        // displacement, so the weight multiplies straight in. Column depth at the entry point is
-        // unknown; the shaded point's stands in (the entry lies within a few metres of it).
+
+        // The Jacobian terms are linear in the displacement, so the shore weight multiplies straight in. The entry
+        // point's column depth is unknown; the shaded point's stands in (within a few metres).
         float swashW, surfaceW;
         oceanShoreWeights(columnDepth, waterLevel, swashW, surfaceW);
         sxx *= surfaceW; szz *= surfaceW; sxz *= surfaceW;
-        // Fold Jacobian (Tessendorf): < 1 converging (bright), > 1 diverging (dim). Applied as a CONTRAST
-        // EXPONENT - "Caustic strength" steepens the response, so converging zones spike into hot
-        // filaments (up to 8x) instead of a gentle modulation, which is what makes fog columns read as
-        // distinct rays. The exponent decays with depth (defocus), flattening focus toward 1.
+
+        // Fold Jacobian (Tessendorf): < 1 converging (bright), > 1 diverging (dim), as a CONTRAST EXPONENT: "Caustic
+        // strength" steepens it so converging zones spike into hot filaments (up to 8x) - distinct rays in the fog. The
+        // exponent decays with depth (defocus).
         const float J = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
         const float depthFade = exp(-dEff * u_fog_causticDepthFade);
-        // Shoreline fade: contrast ramps in over the first meters of TRUE depth, so the pattern
-        // dissolves at the terrain-waterline intersection instead of cutting off there (a caustic
-        // needs a water column to focus through; at depth 0 there is none).
+        // Shoreline fade over the first metres of TRUE depth: no water column to focus through at depth 0.
         const float shoreFade = smoothstep(0.0, u_fog_causticShoreFade, depthBelow);
-        focus = pow(max(1.0 / max(J, 0.125), 0.02),1.5 * u_fog_causticStrength * depthFade * shoreFade);
+        focus = pow(max(1.0 / max(J, 0.125), 0.02), 1.5 * u_fog_causticStrength * depthFade * shoreFade);
     }
 
     return exp(-u_ocean_absorption * pathLen) * focus;

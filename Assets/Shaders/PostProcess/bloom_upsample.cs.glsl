@@ -1,11 +1,9 @@
 #version 460
 
-// Bloom (BloomPipeline): one UPSAMPLE step, level k + 1 -> k, from the smallest level up. Level k becomes
-// its own weight x itself + a 3 x 3 tent filter of the (already accumulated) level k + 1, in place (each texel
-// reads and writes only itself in level k). The first step also weighs the smallest level, which is never a
-// destination. After the last step level 0 holds the WEIGHTED sum of every level's blur (the "Radius" weights);
-// the composite divides by the weights' sum (BloomPipeline::getNormalize). Regions and clamping as in
-// bloom_downsample.
+// Bloom (BloomPipeline): one UPSAMPLE step, level k + 1 -> k, from the smallest level up. In place: level k = its own
+// weight x itself + a 3 x 3 tent of the accumulated level k + 1. The first step also weighs the smallest level (never
+// a destination). Level 0 ends as the WEIGHTED sum of every level ("Radius" weights); the composite divides by the
+// weights' sum (BloomPipeline::getNormalize). Regions and clamping as in bloom_downsample.
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -31,6 +29,7 @@ void main()
     const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= pc.dstRegion.x || p.y >= pc.dstRegion.y)
         return;
+
     const vec2 c = (vec2(p) + 0.5) * 0.5; // this texel's centre in level k + 1 texels
     vec3 sum = tap(c) * 4.0;
     sum += (tap(c + vec2(-1.0, 0.0)) + tap(c + vec2(1.0, 0.0)) + tap(c + vec2(0.0, -1.0)) + tap(c + vec2(0.0, 1.0))) * 2.0;

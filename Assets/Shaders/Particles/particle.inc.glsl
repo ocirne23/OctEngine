@@ -2,8 +2,8 @@
 #define PARTICLE_INC_GLSL
 
 // GPU particle system shared declarations (ParticlePipeline). MAX_PARTICLES, MAX_PARTICLE_EMITTERS,
-// PARTICLE_SIM_GROUP_SIZE, PARTICLE_FLAG_* and PARTICLE_TEX_NONE are injected by the engine from
-// RendererVKLayout (Layout.ixx). Structs must stay in sync with Layout.ixx.
+// PARTICLE_SIM_GROUP_SIZE, PARTICLE_FLAG_* and PARTICLE_TEX_NONE are injected by the engine from RendererVKLayout
+// (Layout.ixx). Structs must stay in sync with Layout.ixx.
 
 // One live particle in the persistent pool (48 bytes).
 struct Particle
@@ -32,14 +32,14 @@ struct ParticleEmitter
     vec4 cullParams;      // x = fraction of the live particles to recycle this frame (a lowered count tweak), yzw unused
 };
 
-// Weather volume helpers (PARTICLE_FLAG_VOLUME). The box is centred on the emitter position, which
-// follows the camera; a particle leaving one face re-enters through the opposite one, so the box
-// never drains and the count stays constant regardless of how far the camera travels.
+// Weather volume helpers (PARTICLE_FLAG_VOLUME). The box is centred on the emitter position, which follows the camera;
+// a particle leaving one face re-enters through the opposite one, so the box never drains.
 vec3 particleVolumeWrap(vec3 rel, vec3 halfExtents)
 {
     const vec3 size = 2.0 * halfExtents;
     return mod(rel + halfExtents, size) - halfExtents;
 }
+
 // Alpha fade over the outer band of the box's XZ footprint, so the wrap seam at the sides never pops.
 float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
 {
@@ -47,16 +47,14 @@ float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
     return 1.0 - smoothstep(0.8, 1.0, max(edge.x, edge.y));
 }
 
-// GPU counters block: sim dispatch args + per-parity draw args (instanceCount IS the alive count) +
-// the dead-stack top + the GPU spawn path's counter, latched count and emit dispatch args, plus the two
-// per-frame DIAGNOSTIC counters. Bound as one buffer that is also the indirect dispatch/draw source
-// (96 bytes; ParticlePipeline.cpp offsets).
-// c_draw[parity * 4 + 0..3] = vertexCount(6), instanceCount, firstVertex(0), firstInstance(0).
-// c_gpuSpawnCount: producers append here (unbounded; the begin pass clamps to MAX_PARTICLE_GPU_SPAWNS
-// into c_gpuSpawnConsume, which the GPU emit pass reads, then zeroes it for the next frame's producers).
-// c_dropSpawns / c_dropBroken are zeroed by the begin pass every frame and read back for the log: a
-// pool that has run out is otherwise INVISIBLE (the emit pass just returns), which is exactly the
-// failure that reads as "particles stopped appearing".
+// GPU counters block: sim dispatch args + per-parity draw args (instanceCount IS the alive count) + the dead-stack top
+// + the GPU spawn path's counter, latched count and emit dispatch args, plus the two per-frame DIAGNOSTIC counters.
+// One buffer that is also the indirect dispatch/draw source (96 bytes; ParticlePipeline.cpp offsets).
+//   c_draw[parity * 4 + 0..3] = vertexCount(6), instanceCount, firstVertex(0), firstInstance(0).
+//   c_gpuSpawnCount: producers append here (unbounded); the begin pass clamps it to MAX_PARTICLE_GPU_SPAWNS into
+//   c_gpuSpawnConsume, which the GPU emit pass reads, then zeroes it for the next frame's producers.
+//   c_dropSpawns / c_dropBroken: zeroed by the begin pass every frame and read back for the log - an exhausted pool is
+//   otherwise INVISIBLE (the emit pass just returns: "particles stopped appearing").
 #define PARTICLE_COUNTERS_BLOCK \
     uvec4 c_simGroups;          \
     uint  c_draw[8];            \
@@ -84,6 +82,7 @@ uint particlePcg(uint v)
     uint w = ((v >> ((v >> 28u) + 4u)) ^ v) * 277803737u;
     return (w >> 22u) ^ w;
 }
+
 float particleRand(inout uint state) // [0,1)
 {
     state = particlePcg(state);
@@ -102,6 +101,7 @@ float particleHash1(uvec3 v)
     h = particlePcg(h);
     return float(h) * (1.0 / 4294967296.0);
 }
+
 float particleNoise(vec3 p)
 {
     vec3 i = floor(p);
@@ -116,8 +116,9 @@ float particleNoise(vec3 p)
     float nx01 = mix(n001, n101, f.x), nx11 = mix(n011, n111, f.x);
     return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
 }
-// Pseudo-turbulence acceleration: three decorrelated value noises in [-1,1] (not divergence-free, but
-// visually adequate for smoke/ember wander at a fraction of a real curl evaluation's cost).
+
+// Pseudo-turbulence acceleration: three decorrelated value noises in [-1,1] (not divergence-free, but adequate for
+// smoke/ember wander at a fraction of a real curl evaluation's cost).
 vec3 particleTurbulence(vec3 p)
 {
     return vec3(particleNoise(p) * 2.0 - 1.0,
@@ -127,19 +128,18 @@ vec3 particleTurbulence(vec3 p)
 
 // ---- weather wind (the UBO's u_weather / u_particles; only for includers that have the UBO - the sim + draw) ----
 #ifdef UBO_INC_GLSL
-// A noise field that TRAVELS along the wind direction - at the sheet drift speed plus half the mean
-// wind, like a gust front, so it sweeps even in light wind - and evolves in time. Sampled in the
-// horizontal plane; returns [-1, 1].
+// A noise field that TRAVELS along the wind direction - at the sheet drift speed plus half the mean wind, like a gust
+// front, so it sweeps even in light wind - and evolves in time. Sampled in the horizontal plane; returns [-1, 1].
 float weatherTravellingNoise(vec2 worldXZ, float invSize, float time, float phase)
 {
     const vec2 travel = u_weather_windDirection * (u_particles_windSheetDrift * time) + u_weather_windVelocity.xz * (time * 0.5);
     const vec2 p = (worldXZ - travel) * invSize;
     return particleNoise(vec3(p.x, time * 0.35 + phase, p.y)) * 2.0 - 1.0;
 }
-// The local wind velocity at a point: the mean wind plus a 2D gust vector of the gust strength (two
-// decorrelated fields), so flurries swirl in calm air and lean with the wind in a storm. The fields
-// are large-scale and travelling, so a gust front moving through the volume packs the drops into a
-// band ahead of it - the density "waves" of a storm - before the wrap evens them out again.
+
+// The local wind velocity at a point: the mean wind plus a 2D gust vector of the gust strength (two decorrelated
+// fields), so flurries swirl in calm air and lean with the wind in a storm. The fields are large-scale and travelling,
+// so a gust front packs the drops into a band ahead of it (the density "waves" of a storm) until the wrap evens them out.
 vec3 weatherWindAt(vec3 pos, float time)
 {
     const float g = u_weather_gustStrength;
@@ -149,8 +149,9 @@ vec3 weatherWindAt(vec3 pos, float time)
                            weatherTravellingNoise(pos.xz, u_weather_invGustSize, time, 53.0));
     return u_weather_windVelocity + vec3(gust.x, 0.0, gust.y) * g;
 }
-// Alpha multiplier for the drawn drops: sheets of denser and thinner rain sweeping through. Contrast
-// 0 = uniform; at 1 the thinnest sheet is nearly empty and the densest twice as bright.
+
+// Alpha multiplier for the drawn drops: sheets of denser and thinner rain sweeping through. Contrast 0 = uniform; at 1
+// the thinnest sheet is nearly empty and the densest twice as bright.
 float weatherSheet(vec3 pos, float time)
 {
     const float c = u_particles_windSheetContrast;

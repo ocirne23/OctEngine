@@ -1,11 +1,9 @@
 #version 460
 
-// The ANALYTIC tier's interval rasterization: each small-emitter proxy box (same VS as the shell
-// draw) writes its ray interval as (tEntry, -tExit) with MIN blending into the RG16F interval
-// target - per pixel the target then holds the UNION interval (min entry, -min(-exit) = max exit)
-// of every analytic shell covering it, and force_union.fs.glsl marches that ONCE. No marching
-// here: just the ray-box intersection the shell FS also starts with. The scene-depth clamp happens
-// once in the union pass, not per proxy.
+// The ANALYTIC tier's interval rasterization: each small-emitter proxy box (the shell draw's VS) writes its ray interval
+// as (tEntry, -tExit) with MIN blending into the RG16F interval target - per pixel the target then holds the UNION
+// interval (min entry, max exit) of every analytic shell covering it, and force_union.fs.glsl marches that ONCE. No
+// march here; the scene-depth clamp happens once in the union pass.
 
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
@@ -30,7 +28,7 @@ void main()
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
     float side, forward, back;
-    forceVisibleBounds(e, side, forward, back); // matches the VS: the shrunk visible-extent box
+    forceVisibleBounds(e, side, forward, back); // matches the VS
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz);
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (forward - back) * 0.5;
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);

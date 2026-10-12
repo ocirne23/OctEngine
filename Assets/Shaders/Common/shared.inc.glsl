@@ -1,10 +1,8 @@
 #ifndef SHARED_CONSTANTS_INC_GLSL
 #define SHARED_CONSTANTS_INC_GLSL
 
-// ALPHA_MODE_* (RendererVKLayout::EAlphaMode) and MATERIAL_FLAG_* (RendererVKLayout::MATERIAL_FLAG_*)
-// are injected by the engine from Layout.ixx.
-// MATERIAL_FLAG_NO_RAYTRACING: debug/gizmo geometry that never blocks light - excluded from the TLAS
-// (mask 0) and from the sun cascade caster cull.
+// ALPHA_MODE_* and MATERIAL_FLAG_* are injected by the engine from Layout.ixx. MATERIAL_FLAG_NO_RAYTRACING: debug / gizmo
+// geometry that never blocks light - excluded from the TLAS (mask 0) and from the sun cascade caster cull.
 
 const uint EMPTY_ENTRY        = 0xFFFFFFFFu;
 const uint INITIALIZING_ENTRY = 0xEFFFFFFFu;
@@ -21,26 +19,27 @@ vec3 randomColor(uint seed)
     vec3 bits = vec3(float(seed & 255u), float((seed >> 8) & 255u), float((seed >> 16) & 255u));
     return bits / 255.0;
 }
-vec3 randomColor(ivec3 seed) 
+
+vec3 randomColor(ivec3 seed)
 {
     uvec3 u = uvec3(seed);
     uint hash = u.x * 1597334673u + u.y * 3812015801u + u.z * 2798796415u;
-	return randomColor(hash);
-}
-vec3 cascadeDebugColor(int cascade)
-{
-	if (cascade == 0) return vec3(1.0, 0.0, 0.0);
-	if (cascade == 1) return vec3(0.0, 1.0, 0.0);
-	if (cascade == 2) return vec3(0.0, 0.0, 1.0);
-    if (cascade == 3) return vec3(1.0, 0.0, 1.0);
-    if (cascade == 4) return vec3(0.0, 1.0, 1.0);
-	return vec3(1.0, 1.0, 0.0);
+    return randomColor(hash);
 }
 
-// Reconstruct world-space position from a hardware depth sample and a full-frame screen UV (origin top-left),
-// given an inverse view-proj. The scene renders through u_viewportRect (a sub-rect of the render target, e.g.
-// the editor viewport panel), so the full-frame UV is first remapped into viewport-local [0,1], then to NDC.
-// The viewport is y-flipped (negative height), so viewport-local v=0 (top) maps to ndc.y=+1.
+vec3 cascadeDebugColor(int cascade)
+{
+    if (cascade == 0) return vec3(1.0, 0.0, 0.0);
+    if (cascade == 1) return vec3(0.0, 1.0, 0.0);
+    if (cascade == 2) return vec3(0.0, 0.0, 1.0);
+    if (cascade == 3) return vec3(1.0, 0.0, 1.0);
+    if (cascade == 4) return vec3(0.0, 1.0, 1.0);
+    return vec3(1.0, 1.0, 0.0);
+}
+
+// World position from a hardware depth and a full-frame screen uv (origin top-left). The scene renders through
+// u_viewportRect (e.g. the editor viewport panel), so the uv is first remapped into the viewport; the viewport is
+// y-flipped, so its v = 0 (top) is ndc.y = +1.
 vec3 worldPosFromDepthMat(vec2 uv, float depth, mat4 invM)
 {
     vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
@@ -48,22 +47,17 @@ vec3 worldPosFromDepthMat(vec2 uv, float depth, mat4 invM)
     vec4 world = invM * clip;
     return world.xyz / world.w;
 }
-// Reconstruction for the current view (u_invMvp = u_views_invMvp[g_viewIndex]). Shared passes leave
-// g_viewIndex at VIEW_CENTER (centre view); per-eye passes set it to the eye they process.
+
 vec3 worldPosFromDepth(vec2 uv, float depth) { return worldPosFromDepthMat(uv, depth, u_invMvp); }
 
-// ALL raster passes apply the TAA sub-pixel jitter in clip space - the scene pass writes THE depth
-// every screen-space pass reads (there is no prepass) - so image content at pixel uv is the surface at
-// uv - taaJitterUv(u_taaJitter.xy). Geometric consumers of sampled depth (reprojection, world-pos
-// reconstruction: TAA, AO temporal, RTAO) subtract it for exact positions - mvp/invMvp/prevMvp stay
-// unjittered. Pass u_taaJitter.zw (LAST frame's jitter) when interpreting the previous depth image.
+// ALL raster passes apply the TAA sub-pixel jitter in clip space (there is no depth prepass), so the image content at
+// pixel uv is the surface at uv - taaJitterUv(u_taaJitter.xy). Geometric readers of sampled depth (TAA, AO temporal,
+// RTAO) subtract it; mvp / invMvp / prevMvp stay unjittered. Pass u_taaJitter.zw (LAST frame's) for the previous depth.
 vec2 taaJitterUv(vec2 jitterNdc) { return vec2(jitterNdc.x, -jitterNdc.y) * 0.5 * u_viewportRect.zw; }
 
-// CAMERA-RELATIVE position from depth (current view). worldPosFromDepth rounds at the scale of the
-// world coordinate (~0.3 mm at 5 km from the origin), which is the size of a pixel footprint near the
-// camera - fine for a position, noise for a DIFFERENCE of neighbouring positions. For a perspective
-// projection invMvp = T(eye) * R^-1 * P^-1: columns 0/1 are pure directions, column 2 is eye * w, so
-// the eye term cancels analytically and only the per-frame constant carries a (smooth) rounding bias.
+// CAMERA-RELATIVE position from depth (current view). worldPosFromDepth rounds at the scale of the world coordinate
+// (~0.3 mm at 5 km from the origin): fine for a position, noise for a DIFFERENCE of neighbouring positions. With
+// invMvp = T(eye) * R^-1 * P^-1 the eye term cancels analytically here.
 vec3 viewRelFromDepth(vec2 uv, float depth)
 {
     const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
@@ -85,6 +79,7 @@ vec3 normalFromDepth(sampler2D depthTex, ivec2 p, float depth, vec2 jitterNdc)
     const float du = texelFetch(depthTex, ivec2(p.x, max(p.y - 1, 0)), 0).r;
     const float dd = texelFetch(depthTex, ivec2(p.x, min(p.y + 1, last.y)), 0).r;
     const vec3 c = viewRelFromDepth(uv, depth);
+
     // A background neighbour (depth 0) that still wins the pick reads as the centre's depth.
     const vec3 dx = abs(dl - depth) < abs(dr - depth)
         ? c - viewRelFromDepth(uv - vec2(texel.x, 0.0), dl > 0.0 ? dl : depth)
@@ -92,6 +87,7 @@ vec3 normalFromDepth(sampler2D depthTex, ivec2 p, float depth, vec2 jitterNdc)
     const vec3 dy = abs(du - depth) < abs(dd - depth)
         ? c - viewRelFromDepth(uv - vec2(0.0, texel.y), du > 0.0 ? du : depth)
         : viewRelFromDepth(uv + vec2(0.0, texel.y), dd > 0.0 ? dd : depth) - c;
+
     const vec3 n = cross(dx, dy);
     const float len2 = dot(n, n);
     if (len2 < 1e-30)
@@ -99,8 +95,7 @@ vec3 normalFromDepth(sampler2D depthTex, ivec2 p, float depth, vec2 jitterNdc)
     return n * (dot(n, c) > 0.0 ? -inversesqrt(len2) : inversesqrt(len2));
 }
 
-// Project a world position to a previous-frame full-frame screen UV (inverse of the mapping above): NDC ->
-// viewport-local UV -> full-frame UV through u_viewportRect. Uses the current view's previous matrix.
+// A world position -> its previous-frame full-frame screen uv (the inverse of worldPosFromDepthMat).
 vec2 prevScreenUVMat(vec3 worldPos, mat4 prevM, out float clipW)
 {
     vec4 p = prevM * vec4(worldPos, 1.0);
@@ -109,19 +104,20 @@ vec2 prevScreenUVMat(vec3 worldPos, mat4 prevM, out float clipW)
     vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     return u_viewportRect.xy + vpUv * u_viewportRect.zw;
 }
+
 vec2 prevScreenUV(vec3 worldPos, out float clipW) { return prevScreenUVMat(worldPos, u_prevMvp, clipW); }
 
-// Reproject a full-frame screen UV + hardware depth to last frame's screen UV entirely in clip space via
-// u_reprojClip (prevMvp * inverse(mvp), fused in double precision on the CPU). Temporal passes must use
-// this instead of worldPosFromDepth + prevScreenUV: that world-space round trip loses precision with the
-// camera's distance from the world origin (pixel-scale history misses by ~500 units = temporal jitter).
-// clipW is the previous clip w scaled by 1/currentW - only its sign is meaningful (> 0 = in front).
-// Last frame's clip position -> its full-frame screen UV (the viewport mapping of prevScreenUVMat).
+// Last frame's clip position -> its full-frame screen uv.
 vec2 prevClipToScreenUV(vec4 prevClip)
 {
     vec2 vpPrev = vec2(prevClip.x / prevClip.w * 0.5 + 0.5, 0.5 - prevClip.y / prevClip.w * 0.5);
     return u_viewportRect.xy + vpPrev * u_viewportRect.zw;
 }
+
+// A full-frame screen uv + hardware depth -> last frame's screen uv, all in clip space through u_reprojClip (fused in
+// double on the CPU). Temporal passes must use this, not worldPosFromDepth + prevScreenUV: that world-space round trip
+// loses precision with the distance from the world origin (temporal jitter). clipW is the previous clip w / the current
+// one - only its sign is meaningful (> 0 = in front).
 vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
 {
     vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
@@ -130,13 +126,12 @@ vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
     return prevClipToScreenUV(prevClip);
 }
 
-// MOTION VECTORS - the scene's motion target (SceneColor::getMotionView, SHADER_READ_ONLY after the opaque
-// stages; motion_vector.inc.glsl writes it): xy = this frame's minus last frame's UNJITTERED full-frame uv,
-// z = the surface's hardware depth LAST frame (<= 0: it was behind last frame's camera), w = 1 where written.
-// w = 0 = no object motion: the pixel reprojects through the camera alone, exactly as without motion vectors.
+// MOTION VECTORS - the scene's motion target (SceneColor::getMotionView; motion_vector.inc.glsl writes it): xy = this
+// frame's minus last frame's UNJITTERED full-frame uv, z = the surface's hardware depth LAST frame (<= 0: behind last
+// frame's camera), w = 1 where written. w = 0 = no object motion: the pixel reprojects through the camera alone.
 bool motionIsObject(vec4 motion) { return motion.w > 0.5; }
-// Last frame's UNJITTERED uv of the surface at uvUnjit (this frame's depth `depth`). valid = false: no
-// history (behind last frame's camera).
+
+// Last frame's UNJITTERED uv of the surface at uvUnjit. valid = false: no history (behind last frame's camera).
 vec2 prevScreenUVMotion(vec2 uvUnjit, float depth, vec4 motion, out bool valid)
 {
     if (motionIsObject(motion))
@@ -144,14 +139,15 @@ vec2 prevScreenUVMotion(vec2 uvUnjit, float depth, vec4 motion, out bool valid)
         valid = motion.z > 0.0;
         return uvUnjit - motion.xy;
     }
+
     float clipW;
     const vec2 prevUv = prevScreenUVClip(uvUnjit, depth, clipW);
     valid = clipW > 0.0;
     return prevUv;
 }
 
-// Atmosphere scattering + skyRadiance() for GI miss rays / fog ambient / surface fallback: the same
-// Rayleigh+Mie model the sky renders with, so indirect sky light follows the atmosphere settings.
+// skyRadiance() for GI miss rays / fog ambient / surface fallback: the sky's own model, so indirect sky light follows
+// the atmosphere settings.
 #include "atmosphere.inc.glsl"
 
 #endif

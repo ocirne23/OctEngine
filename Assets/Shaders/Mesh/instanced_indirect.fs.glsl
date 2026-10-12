@@ -8,6 +8,11 @@
 #extension GL_EXT_ray_query : enable
 //#extension GL_EXT_debug_printf : enable
 
+// VARIANTS: ALPHA_MASK = LitMasked (the alpha discard). The trees have their own shaders, so their code never sets this
+// shader's register count: LitTree (instanced_indirect_tree.fs.glsl - this LitMasked path plus the distance fade and
+// the leaf terms) and LitFoliage (instanced_indirect_foliage.fs.glsl - LitTree's plus the billboard cards' frame, edge
+// fade, shadow, crown normal and interior). Keep the shared parts of the three main()s in step.
+
 #include "shared.inc.glsl"
 
 layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x
@@ -24,22 +29,16 @@ layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target
 #endif
 
-// The lit core's AO read follows this point to where it was last frame (read where it is used, so the
-// interpolant is not live across the sun's shadow search).
+// The lit core's AO read follows this point to where it was last frame (read where it is used, so the interpolant is
+// not live across the sun's shadow search).
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
-// VARIANTS: ALPHA_MASK = LitMasked (the alpha discard). The trees have their own shaders, so their code never sets
-// this shader's register count: LitTree (instanced_indirect_tree.fs.glsl - this LitMasked path plus the distance fade
-// and the leaf terms) and LitFoliage (instanced_indirect_foliage.fs.glsl - LitTree's plus the billboard cards' frame,
-// edge fade, shadow, crown normal and interior). Keep the shared parts of the three main()s in step.
 #include "instanced_indirect_lit.inc.glsl"
 
-// THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live. The geometric
-// normal also carries the shadow's normal offset (a normal map must not bend the bias). A surface facing away from
-// the sun gets none; doSunLight's facing test on the shading normal still applies.
-// Measured 2026-09-28: lit FS 72/16 -> 64/48 (regs / spill B); game mode (64 units) Static meshes 0.281/0.284 ->
-// 0.257/0.263 ms, GPU frame 1.553/1.562 -> 1.508/1.515.
+// THE SHADOW FIRST - the register peak - while only the position and the geometric normal are live (lit FS 72/16 ->
+// 64/48 regs / spill B). The geometric normal also carries the shadow's normal offset (a normal map must not bend the
+// bias). A surface facing away from the sun gets none; doSunLight's facing test on the shading normal still applies.
 void sunShadowFirst(vec3 pos)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
@@ -57,17 +56,17 @@ void main()
 #endif
 	const vec3 V = normalize(u_viewPos - pos);
 
-	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
-	const MaterialInfo material  = in_materialInfos[materialIdx];
-	const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
-	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
+	const uint16_t materialIdx          = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
+	const MaterialInfo material         = in_materialInfos[materialIdx];
+	const uint16_t diffuseTexIdx        = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
+	const uint16_t normalTexIdx         = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
 	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
-	const vec2 texUv = vec2(in_posU.w, in_normalV.w);
+	const vec2 texUv                    = vec2(in_posU.w, in_normalV.w);
 
-	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], texUv);
+	const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], texUv);
 #ifdef ALPHA_MASK
-	// Only the LitMasked variant (+ LitTree / LitFoliage) discards: a discard anywhere in the shader costs the pipeline its early
-	// depth write. The alpha-mode test stays, because a material override can put an opaque material here.
+	// Only the LitMasked variant discards: a discard anywhere in the shader costs the pipeline its early depth write.
+	// The alpha-mode test stays, because a material override can put an opaque material here.
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
@@ -75,8 +74,7 @@ void main()
 	sunShadowFirst(pos);
 #endif
 
-	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
-	// metalness and the normal-map decode + TBN.
+	// The surface is HALF from the texture taps on (computeLitColor takes it half).
 	float16_t roughness = float16_t(0.65);
 	float16_t metalness = float16_t(0.0);
 	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
@@ -87,8 +85,7 @@ void main()
 	}
 
 	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
-	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
-	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+	// BC5 normal maps store only X/Y, so .z reads 0 and would flip the normal into the surface: reconstruct Z.
 	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], texUv).xyz);
 	f16vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
@@ -104,6 +101,7 @@ void main()
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
 	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
+
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT

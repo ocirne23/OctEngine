@@ -452,6 +452,7 @@ void Settings::registerLightGrid(LightGridParams& s)
 void Settings::registerRenderer(RendererSettings& s)
 {
     Tweak::boolean("Editor", "Wireframe", &s.wireframe);
+    Tweak::boolean("Editor", "Freeze scene focus", &s.freezeSceneFocus);
     // The scene textures' max anisotropy (materials + terrain splat).
     Tweak::enumVar("Renderer/Textures", "Anisotropy", &s.anisotropyLevel, s_anisotropyNames, {}, ETweakFlags::Saved);
     Tweak::boolean("Decals", "Enabled", &s.decals);

@@ -127,7 +127,7 @@ public:
     // The world point every distance-based falloff measures from (u_sceneFocus). Sun cascades, RTAO fade, GI clipmap window, TLAS range. Cleared = camera pos.
     void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
     void clearSceneFocus() { m_sceneFocusEnabled = false; }
-    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
+    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusFrozen ? m_frozenSceneFocus : m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
     const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
     const glm::vec3& cameraPos() const { return m_cameraPos; } // Valid after joinBeginFrameJob().
 
@@ -951,6 +951,8 @@ private:
 
     glm::vec3 m_sceneFocus = glm::vec3(0.0f); // setSceneFocus
     bool m_sceneFocusEnabled = false;
+    glm::vec3 m_frozenSceneFocus = glm::vec3(0.0f); // "Editor/Freeze scene focus": the focus when it was switched on
+    bool m_sceneFocusFrozen = false;
     glm::vec3 m_cameraPos = glm::vec3(0.0f);
     glm::vec3 m_prevCameraPos = glm::vec3(0.0f);
     bool m_havePrevCameraPos = false;

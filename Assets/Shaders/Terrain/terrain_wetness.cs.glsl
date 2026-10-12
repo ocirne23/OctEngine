@@ -1,29 +1,21 @@
 #version 460
 
-// Terrain wetness clipmap - write side (TerrainWetnessPipeline; read side + addressing in
-// terrain_wetness.inc.glsl). One thread per storage slot of the toroidal window: decode the slot's
-// lattice coord for THIS frame's window, carry last frame's wetness if the coord was inside LAST frame's
-// window (a coord that scrolled in starts dry - its slot holds a stale coord's value), decay it, then
-// inject:
-//   - ocean: ground under the LIVE water surface wets up. Same predicate the lit core uses for
-//     underwater sunlight - calm depth from the terrain-data map, plus the swash run-up residual within
-//     the swash band (underwaterLiveWaveY) - so the wet tongue is where the water was drawn. The
-//     wetting TARGET ramps 0 -> 1 over the first film-depth metres of water (a thin tongue edge wets
-//     less than the body) and the texel RISES toward it at the wet-in rate rather than jumping, so an
-//     advancing front reads as a gradient in time and space instead of texels popping to 1. Permanently
-//     submerged ground reaches 1 and holds it, so a receding drawdown reveals a wet seabed that dries.
+// Terrain wetness clipmap - write side (TerrainWetnessPipeline; read side + addressing in terrain_wetness.inc.glsl).
+// One thread per storage slot of the toroidal window: decode the slot's lattice coord for THIS frame's window, carry
+// last frame's wetness if the coord was inside LAST frame's window (else it starts dry), decay it, then inject:
+//   - ocean: ground under the LIVE water surface (the lit core's underwater predicate: calm depth + the swash run-up
+//     in the swash band) wets up, so the wet tongue is where the water was drawn. The texel RISES toward the target
+//     at the wet-in rate rather than jumping, so an advancing front reads as a gradient instead of popping to 1.
+//     Submerged ground reaches 1 and holds it, so a receding drawdown reveals a wet seabed that dries.
+//   - rivers / lakes: under their water and one map texel past its edge, up to the river wetness.
 //   - rain: a uniform per-frame addition (u_terrain_wetRain; 0 = no rain).
-// Decay is exponential in sim time (factor precomputed per frame on the CPU), sharpened on warm ground
-// by the map's own climate (u_terrainWater_dryTempSensitivity). Two layers = ping/pong: read last frame's layer,
-// write the other (frame slots alternate strictly; u_terrain_wetLayer names the written layer).
+// Decay is exponential in sim time (factor from the CPU), sharpened on warm ground by the map's climate. Two layers =
+// ping/pong: read last frame's, write the other (u_terrain_wetLayer names the written layer).
 
-// --- Diffusion: reads last frame's value through a wrapped 3x3 tent so wetness spreads sideways as it
-// lives (the same trick the ocean foam mask uses), which also smooths the advancing front off the texel
-// grid. The toggle is BAKED from the "Terrain/Wetness" Diffusion tweak (TerrainWetnessPipeline::
-// buildLayout; a change reloads this shader - this is the fallback). The SPREAD is live and framerate
-// independent: u_terrain_wetSpread = 1 - exp(-rate * dt), the fraction of the tent replacing the
-// centre this frame, so the front advances ~rate * texel per second whatever the fps. It is a
-// one-way (max) spread: it wets the fringe without draining the body (see below).
+// Diffusion: last frame's value through a wrapped 3x3 tent, so wetness spreads sideways (as the ocean foam mask) and
+// the front smooths off the texel grid. BAKED from the "Terrain/Wetness" Diffusion tweak (this is the fallback). The
+// SPREAD is live and framerate independent: u_terrain_wetSpread = 1 - exp(-rate * dt). One-way (max): it wets the
+// fringe without draining the body.
 #ifndef WET_DIFFUSION
 #define WET_DIFFUSION 1
 #endif
@@ -38,9 +30,8 @@ layout (binding = 1, r16f) uniform image2DArray u_wet;
 #define UNDERWATER_OCEAN_BINDING 3
 #include "underwater_light.inc.glsl"
 
-// The inland water map (RiverSystem's bake, Renderer::setRiverWaterMap): the river / lake surface Y per texel,
-// RIVER_WATER_NONE elsewhere. The terrain-data map's water channel is the sea's only, so rivers and lakes wet the
-// ground through this instead.
+// The inland water map (RiverSystem's bake, setRiverWaterMap): the river / lake surface Y per texel, RIVER_WATER_NONE
+// elsewhere. The terrain-data map's water channel is the sea's only.
 layout (binding = 4, std430) readonly buffer InRiverWaterMap
 {
     vec2 rw_origin;
@@ -48,6 +39,7 @@ layout (binding = 4, std430) readonly buffer InRiverWaterMap
     uint rw_dim;
     float rw_height[];
 };
+
 bool riverWaterAt(vec2 worldXZ)
 {
     if (rw_dim == 0u)
@@ -60,8 +52,7 @@ bool riverWaterAt(vec2 worldXZ)
 
 const int WET_MASK = TERRAIN_WET_RES - 1;
 
-// Last frame's wetness of an absolute lattice coord; `fallback` where the coord was outside last frame's
-// window (its slot holds a stale coord's value).
+// Last frame's wetness of an absolute lattice coord; `fallback` where the coord was outside last frame's window.
 float prevWet(ivec2 lc, ivec2 prevOrigin, int prevLayer, float fallback)
 {
     const ivec2 rel = lc - prevOrigin;
@@ -79,6 +70,7 @@ void main()
         imageStore(u_wet, ivec3(slot, writeLayer), vec4(0.0)); // disabled: leave nothing behind for a later enable
         return;
     }
+
     const int prevLayer = 1 - writeLayer;
     const ivec2 origin = ivec2(u_terrain_wetOrigin);
     const ivec2 prevOrigin = ivec2(u_terrain_wetPrevOrigin);
@@ -88,8 +80,7 @@ void main()
     float wet = prevWet(lc, prevOrigin, prevLayer, 0.0);
 #if WET_DIFFUSION
     {
-        // 1-2-1 tent over the 8 neighbours; a neighbour outside last frame's window contributes the
-        // centre's own value so the window edge neither darkens nor brightens.
+        // 1-2-1 tent; a neighbour outside last frame's window contributes the centre's own value (no edge darkening).
         float tent = 0.0;
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx)
@@ -97,42 +88,39 @@ void main()
                 const float w = (dx == 0 ? 2.0 : 1.0) * (dz == 0 ? 2.0 : 1.0);
                 tent += w * ((dx == 0 && dz == 0) ? wet : prevWet(lc + ivec2(dx, dz), prevOrigin, prevLayer, wet));
             }
-        // ADDITIVE, not conserving: a texel only ever rises toward wetter neighbours, never falls toward
-        // drier ones - a plain blur would drain the wet body to feed its fringe, drying it faster than
-        // the decay says. Water that spreads is not lost here; the decay alone dries the ground.
+        // ADDITIVE, not conserving: a texel only rises toward wetter neighbours - a plain blur would drain the wet
+        // body to feed its fringe, drying it faster than the decay says.
         wet = max(wet, mix(wet, tent * (1.0 / 16.0), u_terrain_wetSpread));
     }
 #endif
 
     const vec2 worldXZ = (vec2(lc) + 0.5) * u_terrainWater_texelSize;
     float decay = u_terrain_wetDecay;
-    float dryMul = 1.0; // warm-ground multiplier on BOTH drain terms (see below)
+    float dryMul = 1.0;   // warm-ground multiplier on the decay exponent
     float target = 0.0;   // wetting target under water this frame
     float soak = 1.0;     // accumulation rate scale (slope drain: water runs off a face before it soaks in)
     if (terrainHeightMapPresent())
     {
         const vec4 d = terrainDataAt(worldXZ);
         float depth = d.y - d.x; // calm water level above ground (negative on dry land)
-        // Swash band: gate against the LIVE displaced surface (see doSunLight in the lit core). Ground
-        // deeper than the reach is under water at any wave phase and skips the wave taps (u_ocean_swashReach
-        // >= 0.01: "Swash amplitude" >= 0.04 on the CPU).
+        // Swash band: gate against the LIVE displaced surface (doSunLight). Deeper ground is under water at any wave
+        // phase and skips the wave taps (u_ocean_swashReach >= 0.01 on the CPU).
         const float reach = u_ocean_swashReach;
         if (abs(depth) < reach)
             depth += underwaterLiveWaveY(worldXZ, depth, d.y);
         target = depth > 0.0 ? 1.0 : 0.0; // under the live surface = fully wet
+
         if (target <= 0.0)
         {
-            // Warm ground dries faster: the decay exponent scales with the temperature above 15 C
-            // (colder than that = the base dry time). Evaluated at the map's own height.
+            // Warm ground dries faster: the decay exponent scales with the temperature above 15 C, at the map's height.
             const float tempC = terrainTemperatureAt(terrainClimateAt(worldXZ), d.x);
             dryMul = 1.0 + max(tempC - 15.0, 0.0) * u_terrainWater_dryTempSensitivity;
             decay = pow(decay, dryMul);
         }
-        // Slope drain on the ACCUMULATION side: the same drain factor the terrain shader applies to the
-        // decay (wetness^(1 + slope * drain)) divides the wet-in and rain rates here, so a cliff face
-        // takes that much longer to soak. The slope comes from the map's height gradient - its 8 m
-        // texels see cliffs and steep banks, not sub-metre ledges (those only drain faster, per pixel).
-        // Only paid where something is accumulating.
+
+        // Slope drain on the ACCUMULATION side: the terrain FS's drain factor (wetness^(1 + slope * drain)) divides
+        // the wet-in and rain rates, so a cliff takes that much longer to soak. The slope is the map's height
+        // gradient (8 m texels: cliffs and steep banks, not ledges). Only paid where something is accumulating.
         if (target > 0.0 || u_terrain_wetRain > 0.0)
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field
@@ -142,9 +130,9 @@ void main()
             soak = 1.0 / (1.0 + (1.0 - ny) * u_terrainWater_slopeDrain);
         }
     }
-    // Rivers and lakes: under their water, plus a bank band one map texel wide past the water's edge, wets up to
-    // "Terrain/Rivers/Surface/Wetness"; the diffusion above spreads the fringe up the banks. Independent of the
-    // terrain-data map.
+
+    // Rivers and lakes: under their water plus a one-texel bank band, up to "Terrain/Rivers/Surface/Wetness"; the
+    // diffusion spreads the fringe up the banks. Independent of the terrain-data map.
     if (target < u_river_wetness)
     {
         const float r = 1.0 / rw_invTexel; // the CPU writes it > 0, with or without a map
@@ -156,8 +144,9 @@ void main()
             decay = u_terrain_wetDecay;
         }
     }
-    // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt =
-    // rain - wet / dryTime, so rain settles the ground at rain x dryTime.
+
+    // Rise toward the target at the wet-in rate, never fall below the decayed carry: d(wet)/dt = rain - wet / dryTime,
+    // so rain settles the ground at rain x dryTime.
     wet = max(wet * decay, min(wet + u_terrain_wetIn * soak, target));
     wet += u_terrain_wetRain * soak; // rain
     imageStore(u_wet, ivec3(slot, writeLayer), vec4(clamp(wet, 0.0, 1.0)));

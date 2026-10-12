@@ -5,12 +5,11 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE GRASS BLADES (StaticMeshGraphicsPipeline's grass pipeline; the patch model is in grass.inc.glsl). No vertex
-// buffer: the index buffer holds vertex IDs (blade << GRASS_BLADE_VERTEX_SHIFT | vertex), the patch arrives as
-// instance-rate attributes (the cull's record, firstInstance = its slot), and everything else is hashed from the
-// patch cell and the blade rank. A blade is a quadratic Bezier from its root on the terrain mesh: the control point
-// straight above the root at the tip's height, the tip pushed sideways by its lean and the wind (the curve keeps
-// about its length). Its width narrows to the tip; the tip is one vertex.
+// THE GRASS BLADES (the patch model is in grass.inc.glsl). No vertex buffer: the index buffer holds vertex IDs (blade
+// << GRASS_BLADE_VERTEX_SHIFT | vertex), the patch arrives as instance-rate attributes (the cull's record), and
+// everything else is hashed from the patch cell and the blade rank. A blade is a quadratic Bezier from its root on the
+// terrain mesh: the control point above the root at the tip's height, the tip pushed sideways by its lean and the
+// wind. Its width narrows to the tip; the tip is one vertex.
 // MOTION VECTORS: the same blade at LAST frame's time (u_grass_prevTime) - the wind is the only motion.
 
 #include "shared.inc.glsl"
@@ -23,16 +22,14 @@ layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertice
 #include "grass_wind.inc.glsl" // grassBezier, grassWind, grassTip (shared with the flower stems)
 
 layout (location = 0) in vec4 in_patchOrigins; // xy = the patch's min corner (world XZ), zw = its terrain chunk's origin
-layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, y = its cells per side | LOD << 16,
-                                               // z = the corner densities (unorm8 x 4),
-                                               // w = packHalf2x16(the chunk's cell size (m), the patch's temperature (C))
+layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, y = its cells per side | LOD << 16, z = the corner
+                                               // densities (unorm8 x 4), w = packHalf2x16(cell size (m), the patch's temperature (C))
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;       // the blade's normal (one face; the FS flips it to the viewer)
 layout (location = 2) flat out vec3 out_groundNormal; // the terrain's facet normal under the root (unit, one per blade)
-layout (location = 3) out vec4 out_blade;        // x = along the blade (0 root .. 1 tip), y = colour variation [0, 1],
-                                                 // (with the cold darkening: an albedo factor), z = dryness,
-                                                 // w = blend toward the ground normal
+layout (location = 3) out vec4 out_blade;        // x = along the blade (0 root .. 1 tip), y = the albedo factor (colour
+                                                 // variation x cold darkening), z = dryness, w = blend toward the ground normal
 layout (location = 4) out vec3 out_prevWorldDelta;
 // THE CANOPY (grass.inc.glsl): x = the point's depth below the canopy top (m), y = the canopy's extinction (1/m). The
 // FS turns them into the sun reaching the point; the depth is linear along the blade, so it interpolates exactly.
@@ -49,6 +46,7 @@ struct GrassBlade
     float halfWidth;
     float linearBlend;
 };
+
 GrassBlade g_blade;
 
 // A point of the blade's edge (sideSign -1 / +1) or its middle (0) at t: the width narrows linearly to the tip.
@@ -71,10 +69,9 @@ vec3 grassBladeNormal(float t, float sideSign)
     const vec3 linearN = mix(rootN, tipN, t) + side * (sideSign * r * (1.0 - t));
     const vec3 tangent = 2.0 * (1.0 - t) * (g_blade.ctrl - g_blade.root) + 2.0 * t * (g_blade.tip - g_blade.ctrl);
     const vec3 across = cross(tangent, side);
-    // DEGENERATE at the tip: the tangent there is the horizontal lean + wind offset (2 (tip - ctrl)), so an upright blade
-    // (offset ~0) or one bending along its own width (offset || side) has across ~0 - the tip vertex's normal was noise,
-    // or NaN at exactly 0 (spread over the top triangle; NaN shading can blow up through the bloom). Where across is
-    // small against the tangent (the sine of their angle), blend to the root's normal, always defined.
+    // DEGENERATE at the tip: the tangent there is the horizontal lean + wind offset, so an upright blade or one bending
+    // along its own width has across ~0 - noise, or NaN (which can blow up through the bloom). Where across is small
+    // against the tangent, blend to the root's normal, always defined.
     const float acrossLen = length(across);
     const float acrossWeight = smoothstep(0.05, 0.25, acrossLen / max(length(tangent), 1e-6));
     const vec3 acrossN = mix(rootN, across / max(acrossLen, 1e-12), acrossWeight);
@@ -106,9 +103,9 @@ void main()
     const float groundY = grassGroundHeight(ground, xz, groundN);
     const float dist = distance(vec3(xz.x, groundY, xz.y), u_viewPos);
 
-    // Density (the corners, bilinear; the clumps) x thinning, against the blade's rank.
-    // The COVER (the corners: climate, slope, water, snow) and the clumps. Where the cover fades the blades get fewer
-    // AND smaller ("Size by cover"): fewer blades of full size read as sparse long stalks.
+    // Density (the COVER: the corners, bilinear - climate, slope, water, snow; x the clumps) x thinning, against the
+    // blade's rank. Where the cover fades the blades get fewer AND smaller ("Size by cover"): fewer blades of full size
+    // read as sparse long stalks.
     const vec4 corners = unpackUnorm4x8(in_patchData.z);
     const float cover = mix(mix(corners.x, corners.y, uv.x), mix(corners.z, corners.w, uv.x), uv.y);
     const float clump = grassClump(xz);
@@ -124,14 +121,15 @@ void main()
         return;
     }
 
-    // The root sinks below the mesh by "Root sink" plus half the tessellated relief (terrain_tess.tes.glsl: the same
-    // fade and slope gate), so no blade floats over a hollow of the displaced ground; the blade grows by as much.
+    // The root sinks below the mesh by "Root sink" plus half the tessellated relief (the TES's fade and slope gate), so
+    // no blade floats over a hollow of the displaced ground; the blade grows by as much.
     float sink = u_grass_rootSink;
     if (u_terrainTess_enabled > 0.5 && dist < u_terrainTess_fadeEnd)
     {
         const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
         sink += 0.5 * u_terrainTess_depthGround * (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, groundN.y);
     }
+
     const float heightVar = grassUnit(grassHash(bladeHash + 2u));
     const float height = (u_grass_bladeHeight * mix(1.0 - u_grass_heightVariation, 1.0, heightVar) * mix(0.6, 1.0, clump) * coverSize + sink) * grow;
     const vec3 root = vec3(xz.x, groundY - sink, xz.y);
@@ -141,8 +139,8 @@ void main()
     const float leanAngle = grassUnit(grassHash(bladeHash + 4u)) * GRASS_TWO_PI;
     const vec2 lean = vec2(cos(leanAngle), sin(leanAngle)) * (u_grass_curvature * height * grassUnit(grassHash(bladeHash + 5u)));
     const float phase = grassUnit(grassHash(bladeHash + 6u)) * GRASS_TWO_PI;
-    // The wind eases out with the distance ("Wind/Fade start / end"): far blades are a pixel or less wide, and their
-    // motion only reads as grain. Both frames take the same factor, so the motion vectors stay exact.
+    // The wind eases out with the distance ("Wind/Fade start / end"): far blades are a pixel wide, and their motion
+    // only reads as grain. Both frames take the same factor, so the motion vectors stay exact.
     const float windFade = 1.0 - smoothstep(u_grass_windFadeStart, u_grass_windFadeEnd, dist);
     vec3 ctrl, ctrlPrev;
     const vec3 tip = grassTip(root, lean, grassWind(xz, u_timeSeconds, phase) * windFade, height, ctrl);
@@ -159,15 +157,14 @@ void main()
     g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * coverSize, dist * u_grass_minWidthPerMetre);
     g_blade.ctrl = ctrl;
     g_blade.tip = tip;
-    // The normal: NEAR the curve's own (the bent top catches the light), easing per blade into one LINEAR in t from
-    // "LOD 2 distance" to "LOD 3 distance" - a LOD 3 blade is ONE triangle, and the curve's tip normal (horizontal tangent
-    // there) spread over it flipped it bright or dark at the switch.
+    // The normal: NEAR the curve's own (the bent top catches the light), easing into one LINEAR in t from "LOD 2
+    // distance" to "LOD 3 distance" - a LOD 3 blade is ONE triangle, and the curve's tip normal spread over it flipped
+    // it bright or dark at the switch.
     g_blade.linearBlend = smoothstep(u_grass_lod2Distance, u_grass_lod3Distance, dist);
 
-    // GEOMORPH (the LODs nest: 8 -> 4 -> 2 -> 1 segments): over the last "LOD morph band" before the next LOD's distance,
-    // the rows the coarser LOD drops (odd rows) move onto the line between their neighbours, normals included. At the
-    // switch the blade is the coarser one exactly; a blade of a finer patch past the distance draws it fully morphed.
-    // The patch's LOD comes from its NEAREST point, so its blades are never nearer than the switch.
+    // GEOMORPH (the LODs nest: 8 -> 4 -> 2 -> 1 segments): over the last "LOD morph band" before the next LOD's
+    // distance, the odd rows (the coarser LOD drops them) move onto the line between their neighbours, normals
+    // included. At the switch the blade is the coarser one exactly. The patch's LOD comes from its NEAREST point.
     const uint lod = in_patchData.y >> 16;
     const float nextLodDist = lod == 0u ? u_grass_lod1Distance : lod == 1u ? u_grass_lod2Distance : u_grass_lod3Distance;
     const float morph = lod < 3u && (row & 1u) != 0u
@@ -179,9 +176,8 @@ void main()
 
 #ifdef GRASS_NEAR_SHADOW
     // THE NEAR GRASS CASCADE's caster (GrassPipeline::recordNearShadow): the same blade into the extra shadow layer's
-    // box (ahead of the camera); past its half size x 1.5 + 2 m from the box's centre (the receivers' disc, and casters
-    // up-sun of it) nothing. (The blades never cast into the scene cascades: the "Cast shadows" path was removed
-    // 2026-10-03 - the canopy and this cascade replace it.)
+    // box; nothing past its half size x 1.5 + 2 m from the box's centre (the receivers' disc, and casters up-sun of
+    // it). The blades never cast into the scene cascades: the canopy and this cascade replace that.
     if (distance(xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
@@ -203,13 +199,14 @@ void main()
     const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
     const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
     const float groundBlend = clamp(dist / u_grass_groundBlendDistance, 0.0, 1.0) * u_grass_groundBlend;
-    // The albedo factor: the per-blade variation, x the COLD darkening (full at "Cold temperature", none from "Warm
-    // temperature"; the patch's mean temperature at its height - climate is km-scale, so no patch steps show).
+    // The albedo factor: the per-blade variation x the COLD darkening (full at "Cold temperature", none from "Warm
+    // temperature"; the patch's mean temperature - climate is km-scale, so no patch steps show).
     const float variation = 1.0 + u_grass_colorVariation * (grassUnit(grassHash(bladeHash + 7u)) * 2.0 - 1.0);
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, cellTemperature.y);
     out_blade = vec4(t, variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), dryness, groundBlend);
     out_pos = pos;
     out_prevWorldDelta = prevPos - pos;
+
     // The canopy at this blade: its mean height and extinction (the ground under it takes the same); the depth is
     // capped at the canopy height (the sunk root is below the ground).
     const float canopyHeight = grassCanopyHeight(clump, coverSize);

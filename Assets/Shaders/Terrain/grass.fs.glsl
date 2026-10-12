@@ -7,11 +7,10 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_ray_query : enable
 
-// THE GRASS BLADES' surface (grass.vs.glsl): the scene's lit core (instanced_indirect_lit.inc.glsl - sun + shadow,
-// GI, the light grid; NOT RTAO, see LIT_NO_RTAO) on a two-sided blade. Albedo from root to tip plus per-blade variation and dry patches;
-// the root occlusion stands in for the blades shadowing each other (they cast no shadow map); the sun through the
-// blade from behind (transmission, as the tree leaves). Toward the range the normal blends to the ground's, so the
-// far blades shade like the terrain they fade into. No discard: the blades keep early depth.
+// THE GRASS BLADES' surface (grass.vs.glsl): the scene's lit core (no RTAO, see LIT_NO_RTAO) on a two-sided blade.
+// Albedo from root to tip plus per-blade variation and dry patches; the root occlusion; the sun through the blade from
+// behind (transmission, as the tree leaves). Toward the range the normal blends to the ground's, so the far blades
+// shade like the terrain they fade into. No discard: the blades keep early depth.
 
 #include "shared.inc.glsl"
 
@@ -28,9 +27,8 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 #define SUN_SHADOW_FIRST
 // NO RTAO: the trace works from the depth image, and on a blade that is a near-random normal from a thin sliver of
-// depth with the ray origin a few centimetres over the ground (the blades are not in the TLAS) - the rays hit or miss
-// the terrain almost at random: heavy noise, worst in shadow where only the ambient shows. The root occlusion below
-// stands in.
+// depth a few centimetres over the ground (the blades are not in the TLAS): heavy noise, worst in shadow. The root
+// occlusion stands in.
 #define LIT_NO_RTAO
 #include "instanced_indirect_lit.inc.glsl"
 #include "grass.inc.glsl" // grassCanopySun (in_vertices: the lit core's binding 14)
@@ -43,17 +41,15 @@ void main()
     vec3 bladeN = normalize(in_normal);
     if (!gl_FrontFacing)
         bladeN = -bladeN;
-    // THE SHADOW FIRST (the register peak, nothing of the surface live yet), from the blade's SUN side: it is thin,
-    // and the side facing away from the sun still needs its real shadow for the transmission.
-    // The lookup moves TOWARD THE SUN by "Shadow bias (m)", full at the root and none at the tip: the root sinks below
-    // the terrain mesh (root sink + half the tessellated relief), into the ground's own shadow-map surface - a dark
-    // band at the bottom of every blade.
+
+    // THE SHADOW FIRST (the register peak, nothing of the surface live yet), from the blade's SUN side: the side facing
+    // away still needs its real shadow for the transmission. The lookup moves TOWARD THE SUN by "Shadow bias (m)", full
+    // at the root and none at the tip: the root sinks below the terrain mesh, into the ground's own shadow-map surface
+    // (a dark band at the bottom of every blade).
     const vec3 shadowPos = pos + L * (u_grass_shadowBias * (1.0 - in_blade.x));
     g_sunShadowFirst = sunShadowVisibility(shadowPos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN);
-    // THE CANOPY's shadow (grass.inc.glsl grassCanopySun): the blades above this point along the sun, as a volume with
-    // its clumps and sun flecks - the self-shadowing a shadow map cannot resolve. On the direct sun and the
-    // transmission alike.
-    // Near the camera the REAL blade shadows (the near grass cascade) take over from it.
+    // THE CANOPY's shadow: the blades above this point along the sun, as a volume - the self-shadowing a shadow map
+    // cannot resolve. On the direct sun and the transmission alike. Near the camera the near grass cascade takes over.
     float nearWeight;
     const float nearSun = grassNearShadow(pos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN, nearWeight);
     const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, in_canopy.x, in_canopy.y, distance(pos, u_viewPos)) : 1.0;

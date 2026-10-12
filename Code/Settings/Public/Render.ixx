@@ -932,6 +932,7 @@ export struct RendererSettings
     // is re-recorded every frame: takes effect at once). Off: each pass on its own, with its own GPU timing scope.
     bool overlapCompute = true;
     bool wireframe = false;          // "Editor/Wireframe": baked polygon mode of the scene variants (reload + re-record)
+    bool freezeSceneFocus = false;   // "Editor/Freeze scene focus": u_sceneFocus holds the point it had when switched on
     int  anisotropyLevel = 2;        // "Renderer/Textures/Anisotropy" index: 0 = off, else 2^level (2 = 4x); a change re-creates the scene sampler
     bool decals = true;              // "Decals/Enabled"
     bool terrainWetDiffusion = true; // "Terrain/Water/Diffusion on": the WET_DIFFUSION define of the wetness compute (reload + re-record)

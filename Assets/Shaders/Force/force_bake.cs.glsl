@@ -1,10 +1,9 @@
 #version 460
 
-// The BAKED PRESSURE FIELD: one workgroup per CPU-selected chunk (16x16 samples at 1 m, corner-
-// aligned to the world lattice - see RendererVKLayout's ForceBakeChunksGpu comment), each thread
-// accumulating EVERY team's field value at its sample point on the fixed gameplay height. The CPU
-// reads the whole thing back once (~2 frames latent) and serves any number of gameplay consumers
-// (shield-less swarm bodies' push/exposure) with plain bilinear taps - no per-consumer query slot.
+// The BAKED PRESSURE FIELD: one workgroup per CPU-selected chunk (16x16 samples at 1 m, corner-aligned to the world
+// lattice - see RendererVKLayout's ForceBakeChunksGpu), each thread accumulating EVERY team's field at its sample on the
+// fixed gameplay height. The CPU reads it back once (~2 frames latent) and serves every gameplay consumer (shield-less
+// swarm bodies' push / exposure) with bilinear taps - no per-consumer query slot.
 
 layout (local_size_x = FORCE_BAKE_CHUNK_SAMPLES, local_size_y = FORCE_BAKE_CHUNK_SAMPLES) in;
 
@@ -24,6 +23,7 @@ void main()
     const uint chunk = gl_WorkGroupID.x;
     if (chunk >= bk_count)
         return;
+
     const ivec2 bc = bk_chunks[chunk].xy;
     const float spacing = 1.0; // = FORCE_BAKE_SAMPLE_SPACING (Layout.ixx)
     const vec3 pos = vec3(
@@ -34,8 +34,8 @@ void main()
     float phi[NUM_FORCE_TEAMS];
     forceAccumulate(pos, phi);
 
-    // TEAM-SIZED stride: (NUM_FORCE_TEAMS + 3) / 4 vec4s per sample (one with <= 4 live teams -
-    // half the readback). The CPU sampler mirrors the stride (ForceSystem::sampleBakedField).
+    // TEAM-SIZED stride: (NUM_FORCE_TEAMS + 3) / 4 vec4s per sample. MIRRORED by the CPU sampler
+    // (ForceSystem::sampleBakedField).
     const uint vec4PerSample = (NUM_FORCE_TEAMS + 3u) / 4u;
     const uint idx = (chunk * FORCE_BAKE_CHUNK_SAMPLES * FORCE_BAKE_CHUNK_SAMPLES
         + gl_LocalInvocationID.y * FORCE_BAKE_CHUNK_SAMPLES + gl_LocalInvocationID.x) * vec4PerSample;

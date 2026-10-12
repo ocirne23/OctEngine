@@ -2,13 +2,11 @@
 
 #extension GL_EXT_nonuniform_qualifier : enable
 
-// Projected decal fragment shader: reconstructs the opaque surface under this fragment from the
-// scene depth, projects it into the decal's box space (discarding outside the volume), samples the
-// decal texture across local XY and blends it over the already-lit scene (premultiplied). Lit decals
-// approximate the forward shading with sun N.L (no shadow) + GI probe irradiance at the surface, so
-// they track the scene's lighting; unlit decals composite the tint as-is (blob shadows, projected
-// emissive markers). This runs in the scene-color pass right after the opaque forward draw, so
-// particles, fog and TAA all layer on top naturally.
+// Projected decal fragment shader: reconstructs the opaque surface under this fragment from the scene depth, projects
+// it into the decal's box space (discarding outside the volume), samples the decal texture across local XY and blends
+// it over the already-lit scene (premultiplied). Lit decals approximate the forward shading with sun N.L (no shadow) +
+// GI probe irradiance; unlit decals composite the tint as-is (blob shadows, emissive markers). Runs in the scene-color
+// pass right after the opaque forward draw, so particles, fog and TAA layer on top.
 
 #include "shared.inc.glsl"
 #include "decal.inc.glsl"
@@ -45,8 +43,7 @@ void main()
     const vec3 worldPos = worldPosFromDepth(uv, depth);
 
     // Into decal space; anything outside the unit box is not on the projected surface.
-    const vec3 local = decalQuatUnrotate(decal.rotation, worldPos - decal.posOpacity.xyz)
-        / decal.halfExtentsAngleFade.xyz;
+    const vec3 local = decalQuatUnrotate(decal.rotation, worldPos - decal.posOpacity.xyz) / decal.halfExtentsAngleFade.xyz;
     if (any(greaterThan(abs(local), vec3(1.0))))
         discard;
 
@@ -73,8 +70,7 @@ void main()
     vec3 color = texel.rgb;
     if ((decal.params.y & DECAL_FLAG_LIT) != 0u)
     {
-        // x "GI/Strength" (u_rt_giStrength, 0 with GI or RT off, where the probes and the sky SH are stale),
-        // like every other GI consumer.
+        // x "GI/Strength" (0 with GI or RT off, where the probes and the sky SH are stale), like every other GI consumer.
         const vec3 irr = u_rt_giStrength > 0.0 ? giIrradiance(worldPos, n) * u_rt_giStrength : vec3(0.0);
         const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittance(worldPos)) * max(dot(n, u_sunDirection), 0.0);
         color *= (irr + sun) * (1.0 / PI) + u_ambientColor;

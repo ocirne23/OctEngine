@@ -1,7 +1,7 @@
 #version 450
 
-// Debug line overlay fragment: flat color into the linear HDR scene target (sRGB-ish input squared
-// to approximate linearization; exposure/tonemap happen later in the composite).
+// Debug line overlay fragment: flat color into the linear HDR scene target (sRGB-ish input squared to approximate
+// linearization; exposure/tonemap happen later in the composite).
 
 layout (location = 0) in vec3 v_color;
 

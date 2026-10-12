@@ -5,13 +5,10 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// The procedural rocks' variant of instanced_indirect.vs.glsl (EPipelineIndex::LitRock). The rock fragment shader
-// takes its material from the climate and projects it in world space, so this VS passes only the world position, the
-// geometric normal (no tangent, no uv - as the terrain's) and the vertex's baked cavity, and evaluates the
-// terrain-data fields here, per vertex: the ground height under the vertex (the contact band) and the climate.
-// DEAD WOOD (Procedural `Surface Wood`): the mesh's v is 1 + the vertex's bark cover and its TANGENT holds the wood
-// coordinates (Procedural RockMesh) - both passed on, across in metres - with the instance's material (the bark
-// texture).
+// The procedural rocks' variant of instanced_indirect.vs.glsl (EPipelineIndex::LitRock): the world position, the
+// geometric normal and the baked cavity, plus the terrain-data fields per vertex (the ground height under the vertex
+// for the contact band, and the climate). DEAD WOOD (`Surface Wood`): the mesh's v is 1 + the bark cover and its
+// TANGENT holds the wood coordinates (RockMesh) - both passed on, across in metres - with the instance's material.
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
@@ -21,8 +18,7 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-// The main cull's OutMeshInstance (instanced_indirect.cs.glsl; the prev* fields are the motion vectors' - a rock is
-// static and writes none, but the stride must match).
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl; a rock writes no motion, but the stride must match).
 struct InMeshInstancesData
 {
     vec4 posScale;
@@ -62,10 +58,8 @@ void main()
     out_wood = in_normalV.w > 0.5 ? vec4(in_tangent.x, in_tangent.yz * inst.posScale.w, in_normalV.w) : vec4(0.0);
     out_material = inst.meshIdxMaterialIdx >> 16;
 
-    // The baked terrain fields PER VERTEX, interpolated - the terrain VS's reasoning: each is band-limited far
-    // below a rock's vertex spacing, and temperature = baseline + lapse x height is linear in height (the top of a
-    // tall boulder is colder than its foot, as the ground at that height would be). Without a map: the instance
-    // origin as the ground and a mild climate.
+    // The baked terrain fields PER VERTEX, interpolated (the terrain VS's reasoning; the top of a tall boulder is
+    // colder than its foot). Without a map: the instance origin as the ground and a mild climate.
     float groundHeight = inst.posScale.y;
     float temperature = 12.5;
     float humidity = 0.5;

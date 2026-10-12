@@ -8,21 +8,18 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
-// The procedural rocks (EPipelineIndex::LitRock; Procedural RockSystem, Docs/RockRenderingPlan.md 5): the lighting
-// core of instanced_indirect.fs.glsl with a surface that comes from the CLIMATE, never from the rock type or a
-// material. Bottom-up, the terrain splat's own materials (terrain_splat.inc.glsl) and rules:
-//   1. BEDROCK - the splat's rock entries, picked by the climate at the rock exactly as a cliff face there picks
-//                them, in world-space biplanar projection (a rock is static: world space does not swim, and every
-//                instance of a shape gets its own piece of the texture).
-//   2. GROUND  - the climate's ground material (moss, sand, leaf litter): a patchy COVER on the up-facing faces,
-//                and the CONTACT BAND at the foot (it hides the line where the rock enters the ground).
-//   3. SNOW    - the terrain's snow rule with this face's own slope: on the top, sliding off the sides.
-// Then the terrain's wetness (darker, glossier). A rock's material is not read.
-// DEAD WOOD (Procedural `Surface Wood`: in_wood.w = 1 + the bark cover) replaces 1 with WOOD - its material is a tree
-// species' bark texture (albedo + normal map, the type's tint baked in). On the outer skin, BARK, mapped as on a tree
-// branch: u once around the part, v along it in units of its base circumference. On the cut and broken faces (bark
-// cover 0), END GRAIN: the bark's colour paled and greyed, with growth rings around the part's axis. 2 and 3 lie on top
-// of it as on a rock (litter or moss on the top, the contact band, snow).
+// The procedural rocks (EPipelineIndex::LitRock; RockSystem, Docs/RockRenderingPlan.md 5): the lit core with a surface
+// from the CLIMATE, never from the rock type or a material. Bottom-up, the terrain splat's own materials and rules:
+//   1. BEDROCK - the splat's rock entries, picked by the climate as a cliff face there picks them, world-space
+//                biplanar (a rock is static: no swimming, and every instance gets its own piece of the texture).
+//   2. GROUND  - the climate's ground material: a patchy COVER on the up-facing faces, and the CONTACT BAND at the
+//                foot (it hides the line where the rock enters the ground).
+//   3. SNOW    - the terrain's snow rule with this face's own slope.
+// Then the terrain's wetness (darker, glossier).
+// DEAD WOOD (`Surface Wood`: in_wood.w = 1 + the bark cover) replaces 1 with WOOD, a tree species' bark texture (tint
+// baked in). On the outer skin, BARK, mapped as on a tree branch: u once around the part, v along it in base
+// circumferences. On the cut and broken faces (bark cover 0), END GRAIN: the bark's colour paled and greyed, with
+// growth rings around the part's axis. 2 and 3 lie on top of it as on a rock.
 
 #include "shared.inc.glsl"
 
@@ -32,6 +29,7 @@ layout (location = 2) in vec4 in_rockFields; // VS-evaluated: x = ground height 
 layout (location = 3) in float in_cavity;    // the vertex's baked cavity: 1 = open, 0 = deep in a crevice
 layout (location = 4) in vec4 in_wood;       // dead wood: x = along (base circumferences), yz = across (m), w = 1 + the bark cover; 0 = a rock
 layout (location = 5) flat in uint in_material;
+
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
@@ -46,12 +44,11 @@ layout (location = 1) out vec4 out_motion;
 #include "instanced_indirect_lit.inc.glsl"
 #define TERRAIN_WET_BINDING 18
 #include "terrain_wetness.inc.glsl"
-// No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax (R3's tessellation displaces by the height maps instead).
+// No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax.
 #include "terrain_splat.inc.glsl"
 
-// --- DEAD WOOD ---
-// The wood surface at this pixel (w = in_wood: x along the part in base circumferences, yz across it in metres - and
-// the bark cover).
+// The DEAD WOOD surface at this pixel (in_wood: x along the part in base circumferences, yz across it in metres, the
+// bark cover).
 TerrainSample woodSurface(vec3 geoN)
 {
 	const MaterialInfo material = in_materialInfos[in_material];
@@ -72,11 +69,11 @@ TerrainSample woodSurface(vec3 geoN)
 	dy.x = abs(wrappedDy) < abs(dy.x) ? wrappedDy : dy.x;
 	const vec3 albedo = textureGrad(u_textures[nonuniformEXT(albedoIdx)], uv, dx, dy).rgb;
 	const vec3 normalTap = textureGrad(u_textures[nonuniformEXT(normalIdx)], uv, dx, dy).xyz;
+
 	// Bark normals are always BC5.
 	const vec2 xy = normalTap.xy * 2.0 - 1.0;
 	const vec3 tangentNormal = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
-	// The bark's tangent frame from the screen derivatives of the position and the uv (Schueler 2013, the cotangent
-	// frame): the part's axis is not known here.
+	// The bark's tangent frame from the screen derivatives (the cotangent frame): the part's axis is not known here.
 	const vec3 dpx = dFdx(in_pos), dpy = dFdy(in_pos);
 	const vec3 perpY = cross(dpy, geoN), perpX = cross(geoN, dpx);
 	const vec3 T = perpY * dx.x + perpX * dy.x;
@@ -114,8 +111,7 @@ void main()
 	const float16_t one = float16_t(1.0);
 	const f16vec3 geoNh = f16vec3(geoN);
 	const float cavity = in_cavity; // in [0, 1]: the generator clamps it
-	// Before a splat texture set is registered (the terrain off, or its bake still running): plain grey stone. Dead wood
-	// is its own (no splat needed).
+	// Before a splat texture set is registered: plain grey stone. Dead wood needs no splat.
 	const bool wood = in_wood.w > 0.5;
 	TerrainSample surf = wood ? woodSurface(geoN) : TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
@@ -132,7 +128,7 @@ void main()
 		// The terrain's macro variation at this point (uniform flow), so a boulder keeps the tone of the ground around it.
 		const f16vec2 macro = terrainMacroAt(in_pos.xz);
 
-		// --- The coverages first (cheap), so a buried layer never samples ---
+		// The coverages first (cheap), so a buried layer never samples.
 		// SNOW: the terrain's rule (cold x holds x humid) with this face's own slope - an underside holds none.
 		float16_t snowW = float16_t(0.0);
 		if (u_terrain_hasSnow > 0.5)
@@ -142,22 +138,22 @@ void main()
 			const float humid = smoothstep(0.0, u_terrainTex_snowAridity, in_rockFields.z);
 			snowW = float16_t(cold * holds * humid);
 		}
-		// THE CONTACT BAND: 1 at the ground, 0 "Contact height" above it. The ground height is the terrain-data
-		// map's (per vertex): metres-wide texels near the camera, far coarser beyond - so the band fades out by
-		// "Contact fade distance".
+
+		// THE CONTACT BAND: 1 at the ground, 0 "Contact height" above it. The ground height is the terrain-data map's
+		// (metres-wide texels near the camera, far coarser beyond), so the band fades out by "Contact fade distance".
 		const float bandFade = 1.0 - smoothstep(0.5 * u_rock_contactFadeDistance, u_rock_contactFadeDistance, distance(in_pos, u_viewPos));
 		contact = float16_t((1.0 - smoothstep(0.0, u_rock_contactHeight, in_pos.y - in_rockFields.x)) * bandFade);
-		// THE GROUND COVER: "Ground cover" of the up-facing faces ("Cover start / full"), broken into patches by a
-		// world noise ("Cover patch size") - and of the CREVICES ("Cavity cover" x the baked cavity: moss and dust
-		// gather where the rock is occluded), on any face that does not look down.
+
+		// THE GROUND COVER: of the up-facing faces, broken into patches by a world noise ("Cover patch size"), and of the
+		// CREVICES ("Cavity cover" x the baked cavity: moss and dust gather where the rock is occluded), on any face
+		// that does not look down.
 		float cover = smoothstep(u_rock_coverStart, u_rock_coverFull, geoN.y);
 		if (cover > 0.0)
 			cover *= smoothstep(-0.25, 0.25, terrainFbm(in_pos.xz * u_rock_invCoverPatchSize));
 		cover = u_rock_coverAmount * max(cover, u_rock_cavityCover * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
 		const float16_t groundW = numGround > 0 ? max(float16_t(cover), contact * float16_t(u_rock_contactBlend)) : float16_t(0.0);
 
-		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below. Dead wood
-		// keeps its wood.
+		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below.
 		if (!wood && snowW < opaque && groundW < opaque)
 		{
 			const ClimatePick r = pickClimate(climate, numGround, numRock, invS2);
@@ -169,8 +165,8 @@ void main()
 				terrainMixInto(surf, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), in_pos, geoNh, uvScale), r.n2);
 		}
 
-		// 2. The ground material (the cover and the contact band share it): the climate's top two ground entries,
-		// biplanar too - the band runs up steep faces, where a world-XZ projection smears.
+		// 2. The ground material (the cover and the contact band share it): the climate's top two ground entries, biplanar
+		// too - the band runs up steep faces, where a world-XZ projection smears.
 		if (groundW > blendEps && snowW < opaque)
 		{
 			const ClimatePick g = pickClimate(climate, 0, numGround, invS2);
@@ -199,13 +195,13 @@ void main()
 		}
 		surf.normal = normalize(surf.normal);
 	}
-	// The foot of the rock sits in the corner it makes with the ground: "Contact darkening" on the ambient. And the
-	// shape's own crevices: the baked cavity x "Cavity AO".
+
+	// The foot of the rock sits in the corner it makes with the ground ("Contact darkening"); the shape's own crevices:
+	// the baked cavity x "Cavity AO". Ambient only.
 	surf.ao *= (one - contact * float16_t(u_rock_contactDarkening)) * float16_t(mix(1.0, cavity, u_rock_cavityAo));
 
-	// THE WET LOOK, from the terrain's wetness field (rain, the swash): the ground's darkening and gloss with its
-	// thresholds and its slope drain (a steep face dries faster), without the ground's drying pattern, glints and
-	// sky reflection.
+	// THE WET LOOK, from the terrain's wetness field: the ground's darkening and gloss with its thresholds and slope
+	// drain, without the ground's drying pattern, glints and sky reflection.
 	if (terrainWetPresent())
 	{
 		const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));

@@ -1,17 +1,17 @@
 #version 460
 
-// Particle simulate: one thread per IN-list entry (survivors of last frame + this frame's spawns; the
-// dispatch is GPU-sized by the begin pass). Integrates gravity/drag/turbulence, optionally collides
-// against last frame's scene depth (screen-space; particles outside the view just fly on), and
-// compacts survivors into the OUT alive list - whose count is directly this frame's draw instanceCount.
-// Expired particles return their pool index to the dead stack. Emitters whose slot was destroyed carry
-// PARTICLE_FLAG_KILL, which retires their particles on the next sim step.
+// Particle simulate: one thread per IN-list entry (survivors of last frame + this frame's spawns; the dispatch is
+// GPU-sized by the begin pass). Integrates gravity/drag/turbulence, optionally collides against last frame's scene
+// depth (screen-space; particles outside the view just fly on), and compacts survivors into the OUT alive list, whose
+// count is this frame's draw instanceCount. Expired particles return their pool index to the dead stack. Emitters whose
+// slot was destroyed carry PARTICLE_FLAG_KILL, which retires their particles on the next sim step.
 
 #define UBO_BINDING 1
 #include "shared.inc.glsl"
 #include "particle.inc.glsl"
-// The live ocean surface (PARTICLE_FLAG_WATER_FLOOR): the FFT maps + the terrain-data cascades for the
-// shore weighting, the same field the water is drawn with.
+
+// The live ocean surface (PARTICLE_FLAG_WATER_FLOOR): the FFT maps + the terrain-data cascades for the shore
+// weighting, the same field the water is drawn with.
 #define OCEAN_MAPS_BINDING 11
 #define TERRAIN_HEIGHT_BINDING 12
 #include "ocean_wave.inc.glsl"
@@ -29,7 +29,7 @@ layout (binding = 4, std430) buffer AliveOut { uint pa_aliveOut[]; };
 layout (binding = 5, std430) buffer DeadList { uint pd_deadList[]; };
 layout (binding = 6, std430) buffer Counters { PARTICLE_COUNTERS_BLOCK };
 layout (binding = 7, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
-layout (binding = 8) uniform sampler2D u_prevDepth;   // last frame's scene depth (centre/left view)
+layout (binding = 8) uniform sampler2D u_prevDepth;       // last frame's scene depth (centre/left view)
 layout (binding = 10) uniform usampler2D u_rainOcclusion; // THIS frame's top-down rain occlusion map (rain_occlusion.cs: packed uint)
 
 // Weather volume shelter test: true when the particle sits deeper than the map's SOLID surface at its XZ by more
@@ -65,19 +65,15 @@ void main()
     particle.posAge.w += p_dt;
     const bool killed = (e.texFlags.y & PARTICLE_FLAG_KILL) != 0u;
     const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u; // never ages out: it wraps instead
-    // Count-tweak reduction: recycle a random FRACTION of this emitter's live particles (cullParams.x,
-    // set by the CPU for one frame). A volume never ages out, so lowering its count has nothing else to
-    // remove; which particles go is arbitrary, and the draw's own uniform spread hides the thinning.
+    // Count-tweak reduction: recycle a random FRACTION of this emitter's live particles (cullParams.x, set by the CPU
+    // for one frame). A volume never ages out, so lowering its count has nothing else to remove; the draw's own
+    // uniform spread hides the thinning.
     const bool culled = e.cullParams.x > 0.0
         && float(particlePcg(particleIdx * 0x9E3779B9u + p_frameIndex)) * (1.0 / 4294967296.0) < e.cullParams.x;
-    // NaN / runaway guard. A non-finite particle can NEVER age out - every comparison against NaN is
-    // false, so the retire test below misses it - while its NaN clip position rasterizes to nothing: it
-    // holds its pool slot forever and draws nothing. One such event is one pool slot leaked
-    // PERMANENTLY, and enough of them exhaust the pool and stop every emitter. Retire it instead.
-    // Written as an inverted compare (true for NaN AND Inf) rather than isnan/isinf, which optimizers
-    // are free to fold away under fast math.
-    const bool broken = !(dot(particle.posAge.xyz, particle.posAge.xyz) < 1e30
-        && dot(particle.velLife.xyz, particle.velLife.xyz) < 1e30
+    // NaN / runaway guard. A non-finite particle can NEVER age out (every comparison against NaN is false) and draws
+    // nothing: one pool slot leaked PERMANENTLY, and enough of them stop every emitter. Retire it instead. An inverted
+    // compare (true for NaN AND Inf), not isnan/isinf, which optimizers may fold away under fast math.
+    const bool broken = !(dot(particle.posAge.xyz, particle.posAge.xyz) < 1e30 && dot(particle.velLife.xyz, particle.velLife.xyz) < 1e30
         && particle.posAge.w < 1e30);
     if ((particle.posAge.w >= particle.velLife.w && !volume) || killed || culled || broken)
     {
@@ -94,8 +90,7 @@ void main()
     vel *= max(0.0, 1.0 - e.lifeParams.w * p_dt);
     if (e.noiseParams.x > 0.0)
     {
-        const vec3 noisePos = particle.posAge.xyz * e.noiseParams.y
-            + vec3(0.0, -u_timeSeconds * e.noiseParams.z * e.noiseParams.y, 0.0)
+        const vec3 noisePos = particle.posAge.xyz * e.noiseParams.y + vec3(0.0, -u_timeSeconds * e.noiseParams.z * e.noiseParams.y, 0.0)
             + vec3(float(particle.misc.y & 1023u)); // per-particle field offset breaks up lockstep motion
         vel += particleTurbulence(noisePos) * (e.noiseParams.x * p_dt);
     }
@@ -120,8 +115,8 @@ void main()
                     const float thickness = max(0.5, e.sizeParams.x);
                     if (clip.w > sceneW && clip.w - sceneW < thickness)
                     {
-                        // Geometric normal off the depth image (no normal target), in the same
-                        // current-view approximation as scenePos above.
+                        // Geometric normal off the depth image (no normal target), in the same current-view
+                        // approximation as scenePos above.
                         const vec3 n = normalFromDepth(u_prevDepth, ivec2(uv * vec2(textureSize(u_prevDepth, 0))), depth, u_taaJitter.zw);
                         const float vn = dot(vel, n);
                         if (vn < 0.0)
@@ -135,20 +130,17 @@ void main()
         }
     }
 
-    // Water floor: the LIVE wave surface (the displaced FFT height at the particle's own XZ - the same
-    // field the water is drawn with, not the calm level), so nothing sinks through a wave.
-    //  - a finite-life particle (spray) LANDS on it: stopped, and pushed to its fade-out so it dissolves
-    //    there instead of sinking;
-    //  - a weather VOLUME particle has no life to end (it wraps forever), so it is only marked here and
-    //    the volume block below restarts it at the box top at a fresh random XZ - rain falling into the
-    //    sea, replaced by new rain from the cloud.
-    // The horizontal chop displacement is ignored (an error of a few cm at the crests).
+    // Water floor: the LIVE wave surface (the displaced FFT height at the particle's own XZ, not the calm level), so
+    // nothing sinks through a wave. The horizontal chop is ignored (a few cm at the crests).
+    //  - a finite-life particle (spray) LANDS on it: stopped, and pushed to its fade-out so it dissolves there;
+    //  - a weather VOLUME particle has no life to end, so it is only marked here and the volume block below restarts
+    //    it at the box top (rain falling into the sea, replaced by new rain from the cloud).
     bool hitWater = false;
     if ((e.texFlags.y & PARTICLE_FLAG_WATER_FLOOR) != 0u)
     {
         const vec2 shoreHW = oceanSampleShoreData(pos.xz); // (terrain height, local calm water level)
-        // Cheap reject first: no wave reaches above the calm level plus the crest band estimated from the
-        // ocean readback (u_fog_waveBand; 0 with the ocean off). Only drops near the water pay the taps.
+        // Cheap reject first: no wave reaches above the calm level plus the crest band from the ocean readback
+        // (u_fog_waveBand; 0 with the ocean off). Only drops near the water pay the taps.
         if (pos.y < shoreHW.y + u_fog_waveBand + 0.5)
         {
             const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
@@ -167,12 +159,10 @@ void main()
 
     if (volume)
     {
-        // Weather volume: the box rides the emitter (the camera). A drop under the occlusion map's
-        // surface restarts at the box top at a fresh random XZ - the same XZ would just drop it back
-        // onto the roof, and a box top that is itself indoors would pin it there. Then wrap.
+        // Weather volume: the box rides the emitter (the camera).
         const vec3 halfExt = e.volumeParams.xyz;
-        // Wind: the horizontal velocity relaxes onto the LOCAL wind (mean wind swung by the gust field) at
-        // the emitter's wind response rate - heavy drops lean slowly, flakes follow at once.
+        // Wind: the horizontal velocity relaxes onto the LOCAL wind (mean wind swung by the gust field) at the emitter's
+        // wind response rate - heavy drops lean slowly, flakes follow at once.
         if (e.volumeParams.w > 0.0)
         {
             const vec3 wind = weatherWindAt(pos, u_timeSeconds);
@@ -180,14 +170,12 @@ void main()
             vel.xz += (wind.xz - vel.xz) * k;
             pos.xz += (wind.xz - particle.velLife.xz) * k * p_dt * 0.5; // half-step: the relaxed part of this frame's motion
         }
+
+        // A drop restarts at the box top at a FRESH RANDOM XZ when it is sheltered (the same XZ would drop it back onto
+        // the roof, and an indoor box top would pin it there), when it reached the live wave surface (hitWater), and
+        // when it falls out through the bottom: the gust field has divergence, so a per-axis Y wrap would keep each drop
+        // in its convergence sink forever ("waterfalls"). Fresh XZ per fall bounds the clustering to one fall's worth.
         vec3 rel = pos - e.posSpawnRadius.xyz;
-        // A drop restarts at the box top at a FRESH RANDOM XZ when it is sheltered, and also when it
-        // falls out through the bottom: the gust field has divergence, so drops pile up where the wind
-        // converges, and a per-axis Y wrap would keep each one in its sink forever - the whole volume
-        // would drain into "waterfalls". Fresh XZ per fall = new rain from the cloud, uniformly spread,
-        // so clustering is bounded by what one fall through the box can do (as in reality).
-        // hitWater = it reached the live wave surface (the water floor above): the same restart, so a
-        // volume never draws a particle below the sea.
         const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_weather_rainOcclusionPresent > 0.5 && rainSheltered(pos, particle.misc.y);
         if (sheltered || hitWater || rel.y < -halfExt.y)
         {
@@ -198,10 +186,10 @@ void main()
             rel.y = halfExt.y * 0.999;
             particle.misc.y = seed;
         }
-        // Underwater volume (silt, bubbles): a particle above the live water surface is put back at a
-        // random depth under it (a bubble reaching the surface pops and re-forms below). When the whole
-        // box is above the water nothing fits; the draw hides the volume while the camera is above sea
-        // level anyway.
+
+        // Underwater volume (silt, bubbles): a particle above the live water surface is put back at a random depth
+        // under it (a bubble reaching the surface pops and re-forms below). When the whole box is above the water
+        // nothing fits; the draw hides the volume while the camera is above the water anyway.
         if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
         {
             const vec2 shoreHW = oceanSampleShoreData(pos.xz);
@@ -217,7 +205,8 @@ void main()
                 }
             }
             else
-            {   // above-water volume (dust): the inverse - a particle under the surface goes back up over it.
+            {
+                // Above-water volume (dust): the inverse - a particle under the surface goes back up over it.
                 const float bottomRel = max(surfaceY + 0.05 - e.posSpawnRadius.y, -halfExt.y * 0.999);
                 if (rel.y < bottomRel && bottomRel < halfExt.y)
                 {
@@ -227,6 +216,7 @@ void main()
                 }
             }
         }
+
         pos = e.posSpawnRadius.xyz + particleVolumeWrap(rel, halfExt);
     }
 

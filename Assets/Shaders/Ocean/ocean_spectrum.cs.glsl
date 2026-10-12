@@ -1,25 +1,18 @@
 #version 460
 
-// FFT ocean, pass 1/3: initial spectrum + time evolution (Tessendorf 2001; Horvath 2015).
+// FFT ocean, step 1: initial spectrum + time evolution (Tessendorf 2001; Horvath 2015). Per wavevector k of every cascade:
+// the TMA spectrum - JONSWAP S_j(w) (Hasselmann et al. 1973) x the Kitaigorodskii finite-depth attenuation PHI(w, D)
+// (Bouws et al. 1985) - with Hasselmann directional spreading D(theta, w), as an amplitude on the k-lattice, times a
+// deterministic per-texel complex gaussian (integer hash: the sea is stable across frames and parameter changes),
+// time-evolved with the FINITE-DEPTH dispersion w^2 = g k tanh(k D) (Horvath 2015, eq. 10). Re-evaluated every frame
+// (256^2 x cascades is trivial), so every parameter is live.
 //
-// For every wavevector k of every cascade this evaluates the TMA spectrum - JONSWAP S_j(w) (Hasselmann et
-// al. 1973) times the Kitaigorodskii finite-depth attenuation PHI(w, D) (Bouws et al. 1985) - with the
-// Hasselmann directional spreading D(theta, w), converts the variance to a wave amplitude on the k-lattice,
-// draws the deterministic per-texel complex gaussian (Box-Muller from an integer hash, so the sea is stable
-// across frames and parameter changes), and time-evolves it with the FINITE-DEPTH dispersion relation
-//   w^2 = g k tanh(k D)                                                     (Horvath 2015, eq. 10)
-// The whole spectrum is re-evaluated every frame (256^2 x cascades is trivial), so every parameter is live.
-//
-// Ten real signals are produced per texel: h, Dx, Dz (displacement), dh/dx, dh/dz, dDx/dx, dDz/dz,
-// dDx/dz (derivatives for normals + the fold Jacobian), plus the surface's vertical acceleration
-// d2h/dt2 = -w^2 h~ and velocity dh/dt (exact per-component time derivatives) for the Longuet-Higgins
-// breaking-crest foam criterion - a crest whose downward acceleration exceeds a fraction of g is
-// breaking, which is what makes LARGE waves foam (their Jacobian folding is choppiness-scaled and weak).
-// All spectra are Hermitian, so pairs pack as one complex signal each (IFFT(A + iB) = a + ib for real
-// a, b): 5 complex signals = 3 RGBA16F layers per cascade (rg = first complex, ba = second).
-//
-// Cascades band-split the wavenumber range (each keeps [kmin, kmax)) so summing them never duplicates
-// energy - the standard multi-patch setup used by e.g. the Atlas ocean (GDC 2019) and GodotOceanWaves.
+// Ten real signals per texel: h, Dx, Dz, dh/dx, dh/dz, dDx/dx, dDz/dz, dDx/dz (normals + the fold Jacobian), plus the
+// vertical acceleration d2h/dt2 = -w^2 h~ and velocity dh/dt for the breaking-crest foam (Longuet-Higgins): a crest that
+// accelerates down faster than a fraction of g breaks - that is what makes LARGE waves foam (their choppiness-scaled
+// folding is weak). All spectra are Hermitian, so pairs pack as one complex signal (IFFT(A + iB) = a + ib for real a, b):
+// 5 complex signals = 3 RGBA16F layers per cascade (rg = first, ba = second).
+// Cascades band-split the wavenumber range (each keeps [kmin, kmax)), so their sum never duplicates energy.
 
 #include "ubo.inc.glsl"
 
@@ -30,7 +23,7 @@ layout (binding = 1, rgba16f) uniform writeonly image2DArray out_spectrum;
 const float PI = 3.14159265359;
 const float G = 9.81;
 
-// --- Deterministic gaussian pair per (signed lattice coord, cascade) --------------------------------
+// Deterministic gaussian pair per (signed lattice coord, cascade).
 #include "mathutils.inc.glsl"
 vec2 gaussianPair(ivec2 m, uint cascade, uint which)
 {
@@ -41,11 +34,12 @@ vec2 gaussianPair(ivec2 m, uint cascade, uint which)
     return r * vec2(cos(a), sin(a));
 }
 
-// --- Finite-depth dispersion: w^2 = g k tanh(k D) ---------------------------------------------------
+// Finite-depth dispersion: w^2 = g k tanh(k D).
 float dispersion(float k, float depth)
 {
     return sqrt(G * k * tanh(min(k * depth, 20.0)));
 }
+
 float dispersionDeriv(float k, float depth) // dw/dk
 {
     float kd = min(k * depth, 20.0);
@@ -54,7 +48,7 @@ float dispersionDeriv(float k, float depth) // dw/dk
     return G * (th + kd / (ch * ch)) / (2.0 * dispersion(k, depth));
 }
 
-// --- TMA spectrum (JONSWAP x Kitaigorodskii) + Hasselmann directional spreading ---------------------
+// TMA spectrum (JONSWAP x Kitaigorodskii) + Hasselmann directional spreading.
 float jonswap(float w, float U, float F)
 {
     float alpha = 0.076 * pow(U * U / (F * G), 0.22);
@@ -63,6 +57,7 @@ float jonswap(float w, float U, float F)
     float r     = exp(-(w - wp) * (w - wp) / (2.0 * sigma * sigma * wp * wp));
     return (alpha * G * G / (w * w * w * w * w)) * exp(-1.25 * pow(wp / w, 4.0)) * pow(3.3, r);
 }
+
 float kitaigorodskii(float w, float depth) // PHI(w, D): shallow water drains the high-frequency energy
 {
     float wh = w * sqrt(depth / G);
@@ -70,6 +65,7 @@ float kitaigorodskii(float w, float depth) // PHI(w, D): shallow water drains th
     if (wh <  2.0) return 1.0 - 0.5 * (2.0 - wh) * (2.0 - wh);
     return 1.0;
 }
+
 float hasselmann(float theta, float w, float U, float F)
 {
     float wp = 22.0 * pow(G * G / (U * F), 1.0 / 3.0);
@@ -84,8 +80,8 @@ float hasselmann(float theta, float w, float U, float F)
     return norm * pow(abs(cos(theta * 0.5)), 2.0 * s);
 }
 
-// Complex amplitude h0(k) for one wavevector (Tessendorf eq. 43 with the directional spectrum of
-// Horvath eq. 20: variance in a lattice cell = S(w) D(theta) (dw/dk) / k * dk^2).
+// Complex amplitude h0(k) for one wavevector (Tessendorf eq. 43 with Horvath eq. 20's directional spectrum: variance in a
+// lattice cell = S(w) D(theta) (dw/dk) / k * dk^2).
 vec2 h0(ivec2 m, uint cascade, float L, float kMin, float kMax, uint which)
 {
     vec2 kv = 6.2831853 * vec2(m) / L;
@@ -103,11 +99,9 @@ vec2 h0(ivec2 m, uint cascade, float L, float kMin, float kMax, uint which)
     float dk = 6.2831853 / L;
     float amp = sqrt(2.0 * S * dispersionDeriv(k, depth) / k) * dk * u_ocean_amplitude;
 
-    // Wave-age generation limit: wind cannot generate waves whose phase speed much exceeds the wind
-    // itself, but JONSWAP extrapolated below its validity range (U < ~5 m/s) still assigns energy to
-    // fast long swells - leaving visible waves at near-zero wind. Softly suppress components with
-    // c = w/k beyond ~2.5 U: negligible for developed seas (the spectral peak sits inside the limit),
-    // and collapses the sea to glass as the wind dies.
+    // Wave-age limit: wind cannot raise waves much faster than itself, but JONSWAP below its range (U < ~5 m/s) still
+    // gives fast long swells energy - visible waves at near-zero wind. Softly suppress phase speeds c = w/k past ~2.5 U:
+    // a developed sea's peak sits inside the limit, and the sea goes to glass as the wind dies.
     const float phaseSpeed = w / k;
     const float ageRatio = phaseSpeed / (2.5 * U + 0.05);
     amp *= exp(-(ageRatio * ageRatio) * (ageRatio * ageRatio));
@@ -124,8 +118,8 @@ void main()
     const int N = OCEAN_FFT_SIZE;
     const float L = u_ocean_cascadeSizes[cascade];
 
-    // Band split: each cascade keeps a disjoint wavenumber range. Boundaries at half the coarser
-    // cascade's Nyquist keep well-resolved detail in the finest cascade that can represent it.
+    // Band split: each cascade keeps a disjoint wavenumber range. Boundaries at half the coarser cascade's Nyquist keep
+    // well-resolved detail in the finest cascade that can represent it.
     float kMin = cascade == 0u ? 0.0 : 0.5 * PI * float(N) / u_ocean_cascadeSizes[cascade - 1u];
     float kMax = 0.5 * PI * float(N) / L;
 
@@ -137,13 +131,12 @@ void main()
     const vec2 h0p = h0( m, cascade, L, kMin, kMax, 0u);
     const vec2 h0m = h0(-m, cascade, L, kMin, kMax, 0u);
     const float w = dispersion(k, u_ocean_depth); // dispersion(0) = 0
-    // The clock rate (u_ocean_timeScale) is sqrt(world scale): the Froude-scaled inputs shrink the sea
-    // but shorten its periods by the same sqrt(s), and this holds them at the model sea's. Only the
-    // evolution reads it - the accel/velocity signals below stay in spectrum time on purpose, so the
-    // breaking criterion (accel as a fraction of g) does not change with the scale.
+    // The clock rate (u_ocean_timeScale) is sqrt(world scale): the Froude-scaled inputs shrink the sea and its periods by
+    // sqrt(s); this holds them at the model sea's. Only the evolution reads it - accel/velocity below stay in spectrum
+    // time on purpose, so the breaking criterion (accel as a fraction of g) does not change with the scale.
     const float wt = w * u_timeSeconds * u_ocean_timeScale;
     const vec2 ep = vec2(cos(wt), sin(wt));
-    const vec2 termP = cmul(h0p, ep);                              // h0(k) e^{+iwt}
+    const vec2 termP = cmul(h0p, ep);                                // h0(k) e^{+iwt}
     const vec2 termM = cmul(vec2(h0m.x, -h0m.y), vec2(ep.x, -ep.y)); // h0*(-k) e^{-iwt}
     const vec2 ht = termP + termM;
 
@@ -153,9 +146,8 @@ void main()
     // The 8 real signals' spectra, packed as 4 complex (re = first signal, im = second):
     //   P0 = h        + i Dx        P1 = Dz       + i dh/dx
     //   P2 = dh/dz    + i dDx/dx    P3 = dDz/dz   + i dDx/dz
-    // Dx = i kx/k h~, Dz = i kz/k h~ (choppy displacement, Tessendorf eq. 44 NEGATED: under this e^{+ikx}
-    // transform the paper's -i sign converges water into the TROUGHS - sharp valleys, round crests; +i
-    // pinches the crests, and the dD derivatives flip with it so the fold Jacobian stays consistent);
+    // Dx = i kx/k h~, Dz = i kz/k h~: Tessendorf eq. 44 NEGATED - under this e^{+ikx} transform the paper's -i converges
+    // water into the TROUGHS; +i pinches the crests (the dD derivatives flip with it, so the fold Jacobian stays right).
     // dh/dx = i kx h~; dDx/dx = -kx^2/k h~; dDz/dz = -kz^2/k h~; dDx/dz = -kx kz / k h~.
     const vec2 Dx    = iht * kn.x;
     const vec2 Dz    = iht * kn.y;

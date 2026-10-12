@@ -1,37 +1,30 @@
-// Cheap fog for the water's scene rays (ocean.fs.glsl, the terrain water film). The screen-space fog pass
-// only knows the primary ray to the water, so what a ray shows beyond it would otherwise read crisp inside
-// a hazy scene.
+// Cheap fog for the water's scene rays (ocean.fs.glsl, the terrain water film). The screen-space fog pass only knows the
+// primary ray to the water, so what a ray shows beyond it would read crisp inside a hazy scene.
 //
-// MIRROR RULE (applyReflectionFog / applyReflectionFogSky): a reflection carries the fog its SOURCE carries
-// when seen directly - the viewer compares a reflected shore with that shore a few pixels up the screen:
+// MIRROR RULE (applyReflectionFog / applyReflectionFogSky): a reflection carries the fog its SOURCE carries when seen
+// directly (the viewer compares a reflected shore with that shore a few pixels up the screen):
 //     tau = tau(camera -> what the ray shows) - tau(camera -> the water point)
-// The second term is what the screen-space pass lays over the water pixel afterwards. Deliberately not the
-// literal path from the water point: height fog is densest at its base (sea level over water), so a grazing
-// mirror ray stays in the densest metre while the camera's ray to the same shore runs a camera height above
-// it. That buries every reflection, by a factor that changes with the fog settings.
+// The second term is what the screen-space pass lays over the water pixel afterwards. Not the literal path: height fog is
+// densest at its base (sea level), so a grazing mirror ray stays in the densest metre and buries every reflection.
 //
-// LITERAL PATH (applyRayFog / applyRayFogSky): the fog along the ray itself, for a ray whose source the
-// viewer cannot see directly - the ocean's underside looking up through Snell's window.
+// LITERAL PATH (applyRayFog / applyRayFogSky): the fog along the ray itself, for a source the viewer cannot see directly
+// (the ocean's underside looking up through Snell's window).
 //
-// Both: the far field's closed-form height fog (vol_fog.inc.glsl), near medium, each stretch capped at the
-// fog range. No march, no fetch - terrain follow is approximated from the heights the ray already knows
-// (reflectionFogBase), linear between two points, which is exactly what the closed form needs. No regional
-// climate, no noise, no shadowing. In-scatter is the far field's single-scatter collapse: lighting constant
-// over the path, so the integral is 1 - T.
+// Both: the far field's closed-form height fog (vol_fog.inc.glsl), each stretch capped at the fog range. No march, no
+// fetch: terrain follow is linear between the two heights the ray knows (reflectionFogBase), which is what the closed form
+// needs. No regional climate, noise or shadowing. In-scatter: lighting constant over the path, so the integral is 1 - T.
 //
-// Needs the UBO, PI (shared.inc.glsl) and gi_probe.inc.glsl WITH GI_PROBE_HALF (+ the fp16 extension): the
-// blend is half math, on the half sky SH read. The optical depths stay 32-bit (heights, distances).
-// sunRadiance = the caller's sun tint (transmittance x colour x eclipse), ambientSky = its skyRadiance(up)
-// fetch (the GI-off fallback).
+// Needs the UBO, PI (shared.inc.glsl) and gi_probe.inc.glsl WITH GI_PROBE_HALF (+ the fp16 extension): the blend is half
+// math on the half sky SH read; the optical depths stay 32-bit (heights, distances). sunRadiance = the caller's sun tint
+// (transmittance x colour x eclipse), ambientSky = its skyRadiance(up) fetch (the GI-off fallback).
 
 #ifndef REFLECTION_FOG_INC_GLSL
 #define REFLECTION_FOG_INC_GLSL
 
 #include "vol_fog.inc.glsl"
 
-// A point's height stands in for the macro altitude the real fog follows, and overshoots it (the macro band
-// is the smooth ground under the relief). At the full height the base rises as fast as the ray, and the
-// height falloff never acts.
+// A point's height stands in for the macro altitude the real fog follows, and overshoots it (the macro band is the smooth
+// ground under the relief). At the full height the base rises as fast as the ray and the height falloff never acts.
 const float REFLECTION_FOG_ALTITUDE_SHARE = 0.5;
 
 // The layer's base at a point of height pointY: 0 rise on the ocean, the followed ground under an inland film.
@@ -61,10 +54,10 @@ vec3 reflectionFogBlend(vec3 radiance, float tau, vec3 dir, vec3 sunRadiance, ve
     const float T = exp(-tau);
     if (T >= 0.9999)
         return radiance;
-    // The far field's light (vol_apply volFarField): HG-phased sun + the GI sky probe toward the viewer.
-    // Not skyRadiance(up) - the zenith is the darkest patch of a sunlit sky - except with GI off, where
-    // u_rt_giStrength is 0 and the SH is stale. Read LIVE even while "Ray tracing" is locked: baked, the film's
-    // spill grew (64/16 -> 64/32, 2026-10-06).
+
+    // The far field's light (vol_apply volFarField): HG-phased sun + the GI sky probe toward the viewer. Not
+    // skyRadiance(up) (the zenith is the darkest patch of a sunlit sky), except with GI off (strength 0, stale SH).
+    // Read LIVE even while "Ray tracing" is locked: baked, the film's spill grows (64/16 -> 64/32).
     const f16vec3 skyLight = UBO_LIVE_rt_giStrength > 0.0 ? giEvalSkySHH(f16vec3(-dir)) * float16_t(UBO_LIVE_rt_giStrength * INV_PI) : f16vec3(ambientSky);
     const f16vec3 inLight = f16vec3(sunRadiance * (volPhaseHG(dot(dir, L), u_fog_anisotropy) * u_fog_sunScatter)) + skyLight + f16vec3(u_ambientColor); // x "Sun scatter"
     const float16_t Th = float16_t(T);
@@ -91,8 +84,8 @@ vec3 applyReflectionFog(vec3 radiance, vec3 origin, vec3 dir, float t, vec3 sunR
     return reflectionFogMirror(radiance, origin, dir, hit, reflectionFogBase(hit.y), sunRadiance, L, ambientSky);
 }
 
-// Mirror rule, the reflected sky: the sky seen directly along the ray - a point past the fog range (the
-// stretch is capped there), over the origin's base.
+// Mirror rule, the reflected sky: the sky seen directly along the ray - a point past the fog range (the stretch is capped
+// there), over the origin's base.
 vec3 applyReflectionFogSky(vec3 radiance, vec3 origin, vec3 dir, vec3 sunRadiance, vec3 L, vec3 ambientSky)
 {
     const vec3 far = u_viewPos + dir * (2.0 * u_fog_range);

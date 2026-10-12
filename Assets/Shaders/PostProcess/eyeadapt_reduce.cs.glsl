@@ -1,10 +1,8 @@
 #version 450
 
-// Eye-adaptation pass 2: reduce the luminance histogram (eyeadapt_histogram) to a single adapted exposure.
-// A weighted average of the non-black bins gives the scene's average log-luminance; that target luminance is
-// approached over time (exponential smoothing with time constant u_tau, frame-rate independent via u_dt) and
-// stored persistently in u_adapt. The composite pass reads u_adapt.exposure as the auto-exposure multiplier.
-// Runs as a single workgroup of 256 threads (one per bin).
+// Eye-adaptation pass 2, one workgroup (a thread per bin): the histogram's average log-luminance over the non-black
+// bins, approached with time constant u_tau, stored persistently in Adapt. The composite reads u_exposure as the
+// auto-exposure multiplier.
 
 layout (local_size_x = 256) in;
 
@@ -48,14 +46,13 @@ void main()
 
     // Exclude the near-black bin (0) from the average so dark scenes don't pin to bin 0.
     float denom = max(float(u_pixelCount) - float(u_bins[0]), 1.0);
-    float weightedAvgBin = (s_weighted[0] / denom) - 1.0;           // 0..254
+    float weightedAvgBin = (s_weighted[0] / denom) - 1.0; // 0..254
     float avgLogLum = u_minLogLum + (weightedAvgBin / 254.0) * u_logLumRange;
     float targetLum = exp2(avgLogLum);
 
-    // Exponential adaptation toward the target luminance. On the first frame (u_avgLum == 0) snap.
+    // Snap on the first frame (u_avgLum == 0).
     float prev = u_avgLum > 0.0 ? u_avgLum : targetLum;
     float adapted = mix(targetLum, prev, exp(-u_dt / u_tau));
-
     u_avgLum = adapted;
-    u_exposure = clamp(u_key / adapted,u_minExposure, u_maxExposure);
+    u_exposure = clamp(u_key / adapted, u_minExposure, u_maxExposure);
 }

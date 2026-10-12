@@ -10,8 +10,8 @@
 #include "tree_wind.inc.glsl"
 
 #ifdef STEREO
-// VR renders one eye per pass (no multiview here: the forward pass's DGC execution set forbids it), so the
-// view index (1 = left eye, 2 = right eye) is a push constant selecting the per-eye matrices via g_viewIndex.
+// VR renders one eye per pass (no multiview here: the forward pass's DGC execution set forbids it), so the view index
+// (1 = left eye, 2 = right eye) is a push constant selecting the per-eye matrices via g_viewIndex.
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
@@ -37,25 +37,23 @@ layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
 layout (location = 2) in vec4 in_tangent;
 layout (location = 4) in uint inst_idx;
 
-// Packed into 4 locations (was 6: a full mat3 TBN + a separate uv): fewer ISBE / TRAM slots per vertex.
-// The fragment shader rebuilds the bitangent from N, T and the sign.
-// The world position stays INTERPOLATED: rebuilding it in the fragment shader from gl_FragCoord + the depth saved
-// 3 inputs (TRAM), but an interpolant costs no register until it is read, while the rebuilt position stayed live
-// across the whole lit core - at its 72-register ceiling the lit FS spill went 16 -> 64 B, and it measured slower.
+// Packed into 4 locations (fewer ISBE / TRAM slots per vertex); the fragment shader rebuilds the bitangent from N, T
+// and the sign. The world position stays INTERPOLATED: an interpolant costs no register until it is read, while a
+// position rebuilt from gl_FragCoord + the depth stays live across the whole lit core (lit FS spill 16 -> 64 B, slower).
 layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
 layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
 layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
 layout (location = 3) out flat uint out_meshIdxMaterialIdx;
-// The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0
-// for a still, unskinned instance - its fragments then write no motion.
+// The MOTION VECTORS: this point's world position last frame minus now (motion_vector.inc.glsl). Exactly 0 for a still,
+// unskinned instance - its fragments then write no motion.
 layout (location = 4) out vec3 out_prevWorldDelta;
 #ifdef FOLIAGE
 // The LitFoliage variant: the instance origin, a point on a FOLIAGE card's axis (the crown normal; the lit FS).
 layout (location = 5) out flat vec3 out_instanceOrigin;
 #endif
 
-// Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before
-// they meet the rotated offsets), so the result keeps its precision far from the world origin.
+// Last frame minus now, as a DIFFERENCE of the two transforms' terms (the instance translations cancel before they meet
+// the rotated offsets), so the result keeps its precision far from the world origin.
 vec3 prevWorldDelta(InMeshInstancesData inst)
 {
     const bool skinned = inst.prevVertexDelta != 0u;
@@ -83,12 +81,14 @@ void main()
 
     vec3 pos = quat_transform(in_posU.xyz * inst_scale, inst_quat) + inst_pos;
     const vec3 normal = quat_transform(in_normalV.xyz, inst_quat);
+
     // The procedural trees sway in the wind (tree_wind.inc.glsl; its payload rides the tangent's w magnitude).
     vec3 windPrevDelta = vec3(0.0);
     uint windPayload;
     if (treeWindPayload(in_tangent.w, windPayload))
         pos += treeWind(in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windPrevDelta);
-    out_posU    = vec4(pos, in_posU.w);
+
+    out_posU   = vec4(pos, in_posU.w);
     out_normalV = vec4(normal, in_normalV.w);
     out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
     out_prevWorldDelta = prevWorldDelta(inst) + windPrevDelta;
@@ -96,26 +96,12 @@ void main()
     out_instanceOrigin = inst_pos;
 #endif
 
-    // Per-eye projection in VR (g_viewIndex set above) / centre view on desktop, with the same TAA
-    // sub-pixel jitter both eyes (per-eye TAA accumulates it just like desktop).
+    // Per-eye projection in VR / centre view on desktop, with the same TAA sub-pixel jitter for both eyes.
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #ifdef FORCE_NEAR_DEPTH
-    // GizmoUI: stamp (nearly) the nearest depth - NDC z = 1 under REVERSED-Z, eGreater compare. Only z is
-    // touched, so x/y/w (and thus the on-screen shape) are unchanged; the gizmo just always wins depth.
-    // The residual 1% of the original z keeps the gizmo's own parts depth-sorted against each other.
+    // GizmoUI: stamp (nearly) the nearest depth - NDC z = 1 under REVERSED-Z, eGreater compare. Only z changes, so the
+    // gizmo always wins depth; the residual 1% of the original z keeps its own parts depth-sorted against each other.
     gl_Position.z = mix(gl_Position.w, gl_Position.z, 0.01);
 #endif
 }
-
-/*mat3 version
-void main()
-{
-    out_pos = in_instances[inst_idx].rotation * (in_pos * in_instances[inst_idx].scale) + in_instances[inst_idx].translation;
-    out_tbn = in_instances[inst_idx].rotation * mat3(in_tangent.xyz, cross(in_normal, in_tangent.xyz) * in_tangent.w, in_normal);
-    out_uv  = in_uv;
-    out_meshIdxMaterialIdx = in_instances[inst_idx].meshIdxMaterialIdx;
-
-    gl_Position = u_mvp * vec4(out_pos, 1.0);
-}
-*/

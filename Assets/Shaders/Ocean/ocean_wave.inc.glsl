@@ -6,9 +6,8 @@
 //   layer   OCEAN_CASCADES + c   : gradients    (dh/dx, dh/dz, dDx/dx, dDz/dz)
 //   layer 2*OCEAN_CASCADES + c   : slope second moments (dhx^2, dhz^2, accel, -)
 //   layer 3*OCEAN_CASCADES + l   : the world-space foam field's level l (ocean_foam_field.inc.glsl)
-// Shared by the displacement pass (instanced_indirect_ocean.vs.glsl) and the water shading
-// (ocean.fs.glsl) so the drawn geometry and the shaded normals read the same field.
-// Requires ubo.inc.glsl; includer may set OCEAN_MAPS_BINDING / TERRAIN_HEIGHT_BINDING first.
+// Shared by the displacement VS and ocean.fs.glsl, so the geometry and the shaded normals read the same field.
+// Requires ubo.inc.glsl; the includer may set OCEAN_MAPS_BINDING / TERRAIN_HEIGHT_BINDING first.
 
 #ifndef OCEAN_MAPS_BINDING
 #define OCEAN_MAPS_BINDING 7
@@ -19,14 +18,10 @@ layout (binding = OCEAN_MAPS_BINDING) uniform sampler2DArray u_oceanMaps;
 #include "terrain_height.inc.glsl"
 #endif
 
-// (terrain height, water surface level) at worldXZ; open-ocean bottom / sea level without terrain data.
-// Depth derives live as level - height; the clipmap lifts its vertices by level - sea level.
-//
-// Fades back to open ocean across the outermost cascade's border. The sampler is clamp-to-edge, so
-// past the map its border texel extends forever: where that texel is land, the surface weight drops
-// to the swash amplitude and the sea reads flat, with a DEAD-STRAIGHT seam running to the horizon (the
-// square map edge in perspective). Beyond the data the world model is open sea - which is what the
-// horizon band exists to draw - so blend to it rather than trusting the clamp.
+// (terrain height, water surface level) at worldXZ; open-ocean bottom / sea level without terrain data. Depth = level -
+// height; the clipmap lifts its vertices by level - sea level.
+// Fades back to open ocean across the outer cascade's border: the clamp-to-edge sampler extends the border texel forever,
+// so land there would flatten the sea along a DEAD-STRAIGHT seam to the horizon. Past the data the world is open sea.
 vec2 oceanSampleShoreData(vec2 worldXZ)
 {
     float height = u_ocean_seaLevel - u_ocean_depth; // open-ocean bottom: sea level - depth D
@@ -55,10 +50,10 @@ float oceanSampleShoreDepth(vec2 worldXZ)
     return hw.y - hw.x;
 }
 
-// Per-texel wave-travel rotation. DISABLED (identity): rotating the sample domain pivots on the world
-// origin, so the sea creases along every 8-bit angle contour - the baked flow steers the SIMULATION
-// wind instead (OceanGenerator::steeredWindAngle). If ever revived: every wave-sampling pass must
-// apply the identical rotation, and the field TRAVELS AGAINST u_ocean_windDirection.
+// Per-texel wave-travel rotation. DISABLED (identity): rotating the sample domain pivots on the world origin, so the sea
+// creases along every 8-bit angle contour - the baked flow steers the SIMULATION wind instead
+// (OceanGenerator::steeredWindAngle). If revived: every wave-sampling pass must apply the same rotation, and the field
+// TRAVELS AGAINST u_ocean_windDirection.
 vec2 oceanFlowRotation(vec2 worldXZ)
 {
     return vec2(1.0, 0.0);
@@ -68,12 +63,10 @@ vec2 oceanFlowRotation(vec2 worldXZ)
 vec2 oceanFlowSamplePos(vec2 worldXZ, vec2 fr) { return vec2(fr.x * worldXZ.x + fr.y * worldXZ.y, -fr.y * worldXZ.x + fr.x * worldXZ.y); }
 vec2 oceanFlowToWorld(vec2 v, vec2 fr) { return vec2(fr.x * v.x - fr.y * v.y, fr.y * v.x + fr.x * v.y); }
 
-// Land cull: true when the whole triangle footprint is buried under land - the VS then emits a NaN
-// position, discarding the primitives. Decided by the vertex's own shoreHW alone (no fetches): safety
-// comes from the burial requirement, not sampling density - near-cascade footprints must be buried
-// deeper than their own radius (a 45-degree slope bound: smoother terrain can't reach water anywhere a
-// co-triangle vertex sits), far/blend-band data uses the flat "Far cull error (m)" (0 = no far cull;
-// mistakes out there are sub-pixel). Cliffs steeper than 45 degrees can clip a sliver at their base.
+// Land cull: true when the whole triangle footprint is buried under land (the VS then emits a NaN position). Decided by
+// the vertex's own shoreHW alone: near-cascade footprints must be buried deeper than their own radius (a 45-degree slope
+// bound - smoother terrain can't reach water at any co-triangle vertex); far/blend-band data uses the flat "Far cull
+// error (m)" (0 = no far cull; mistakes out there are sub-pixel). Cliffs steeper than 45 degrees can clip a sliver.
 // Both displacement passes MUST apply the same test or their geometry diverges.
 bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
 {
@@ -82,8 +75,8 @@ bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
         return false;
     const float reach = 3.0 * cellSize; // after the CDLOD morph no co-triangle vertex lies further away
 
-    // Never cull past the streamed terrain mesh (u_terrain_meshRadius): the cull is only invisible while
-    // a rendered mesh stands above the water - the clamp-to-edge-extended bakes report "land" forever.
+    // Never cull past the streamed terrain mesh: the cull is only invisible while a rendered mesh stands above the water
+    // (the clamp-to-edge bakes report "land" forever).
     if (distance(worldXZ, u_viewPos.xz) + reach >= u_terrain_meshRadius)
         return false;
 
@@ -108,25 +101,16 @@ bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
     if (err < 0.0)
         return false; // no baked terrain data: open-ocean fallback, always water
 
-    // Swash reach (u_ocean_swashReach) keeps the wet band above the waterline alive.
+    // Swash reach keeps the wet band above the waterline alive.
     return shoreHW.y - shoreHW.x < -(margin + u_ocean_swashReach + err);
 }
 
-// The water depth the WAVES use: the baked depth, floored at "Ocean/Shore/Horizon depth" once past
-// "Horizon depth range" (0 = off, always take the map literally).
-//
-// At range the depth field cannot be trusted to be deep enough. The far cascade point-samples a
-// coarse surface, its texels average shore slopes into the water, TerrainGenV3 returns height ==
-// water level (depth EXACTLY 0) for any sample it could not resolve, and the vertical scale
-// compresses real shelves by metersPerPixel/30 - every one of those errs SHALLOW. That is the
-// dangerous direction: depth drives the shoal fade, which scales the wave slopes and (as fade^2) the
-// LEAN variance standing in for filtered-out slopes, so a shallow reading strips the surface of
-// microfacet roughness, collapses alpha to its 0.02 floor and mirror-reflects the sky - pixel for
-// pixel what wind 0 looks like. Reading too DEEP out there costs nothing visible.
-//
-// Only the assumed SEABED moves, never the surface, so this cannot put water over land. The land cull
-// deliberately keeps reading the RAW depth: culling is about what is buried, not about what the waves
-// should look like.
+// The depth the WAVES use: the baked depth, floored at "Ocean/Shore/Horizon depth" past "Horizon depth range" (0 = off).
+// At range the depth field errs SHALLOW (the far cascade's coarse texels average shore slopes into the water, TerrainGenV3
+// returns depth EXACTLY 0 where it could not resolve, the vertical scale compresses shelves). Shallow is the dangerous
+// direction: the shoal fade scales the slopes and (as fade^2) the LEAN variance, so the surface loses its roughness and
+// mirrors the sky like wind 0. Too DEEP out there costs nothing visible.
+// Only the assumed SEABED moves, never the surface, so no water over land. The land cull keeps reading the RAW depth.
 float oceanEffectiveDepth(vec2 worldXZ, float depth)
 {
     const float range = u_ocean_horizonDepthRange;
@@ -136,28 +120,26 @@ float oceanEffectiveDepth(vec2 worldXZ, float depth)
     return max(depth, u_ocean_horizonDepth * t);
 }
 
-// Vertex displacement mip: matches the ring's FIXED cell size (Nyquist band-limit, no camera-coupled
-// morphing); `morph` blends +1 across the CDLOD boundary so adjacent rings meet exactly.
-// Both displacement passes MUST use this same function.
+// Vertex displacement mip: matches the ring's FIXED cell size (Nyquist band-limit, no camera-coupled morphing); `morph`
+// blends +1 across the CDLOD boundary so adjacent rings meet exactly. Both displacement passes MUST use this function.
 float oceanVertexLod(float cellSize, float morph, float patchSize)
 {
     return max(log2(cellSize * float(OCEAN_FFT_SIZE) / patchSize) + morph + u_ocean_detailBias, 0.0);
 }
 
 // --- The shore, in three weights. depth = calm water level above the ground (negative = land height).
-// The CPU buoyancy mirror (OceanGenerator) and underwaterLiveWaveY (underwater_light.inc) repeat them;
-// the terrain's water film (instanced_indirect_terrain.fs) repeats the surface weight.
+// The CPU buoyancy mirror (OceanGenerator) and underwaterLiveWaveY (underwater_light.inc) repeat them; the terrain's water
+// film (instanced_indirect_terrain.fs) repeats the surface weight.
 
-// Approach fade: 0 offshore, 1 at the waterline, over the wider of two swash reaches and "Shoal depth
-// scale" x the mid cascade's patch size. The band across which open water becomes the shore.
+// Approach fade: 0 offshore, 1 at the waterline, over the wider of two swash reaches and "Shoal depth scale" x the mid
+// cascade's patch size.
 float oceanSwashFadeIn(float depth)
 {
     return 1.0 - smoothstep(0.0, u_ocean_swashFadeBand, depth);
 }
 
-// Swash base: the fraction of the raw wave field that runs up the beach - "Swash amplitude" x the
-// sea-connection fade (landlocked water, its baked level off sea level, gets none: no swell reaches it)
-// x the land-height fade (dies one reach above the level).
+// Swash base: the fraction of the raw wave field that runs up the beach - "Swash amplitude" x the sea-connection fade
+// (landlocked water, off sea level, gets no swell) x the land-height fade (dies one reach above the level).
 float oceanSwashBase(float depth, float waterLevel)
 {
     const float amp = u_ocean_swashAmp;
@@ -166,47 +148,42 @@ float oceanSwashBase(float depth, float waterLevel)
     return amp * seaFade * landFade;
 }
 
-// Swash weight: the base, faded in across the approach band - what gates the TONGUE behaviours (the
-// backflow), which belong to the shore alone.
+// Swash weight: the base faded in across the approach band - gates the shore-only TONGUE behaviours (the backflow).
 float oceanSwashWeight(float depth, float waterLevel)
 {
     return oceanSwashBase(depth, waterLevel) * oceanSwashFadeIn(depth);
 }
 
-// THE surface weight: what fraction of the RAW cascade sum stands at this depth,
-//     w = 1 - fadeIn * (1 - swashBase)
-// 1 in open water, easing to the swash base across the approach band. ONE weight for every cascade, so
-// the spectral detail is preserved all the way in (per-cascade fades stepped the chop down across a
-// band a few texels wide - a visible line at that depth). Used identically by the displacement, the
-// shading normal and the vertex normal.
+// THE surface weight: the fraction of the RAW cascade sum that stands at this depth, w = 1 - fadeIn * (1 - swashBase).
+// ONE weight for every cascade, so the spectral detail holds all the way in (per-cascade fades left a visible line). Used
+// identically by the displacement, the shading normal and the vertex normal.
 float oceanSurfaceWeight(float depth, float waterLevel)
 {
     return 1.0 - oceanSwashFadeIn(depth) * (1.0 - oceanSwashBase(depth, waterLevel));
 }
 
-// --- Sub-band detail --------------------------------------------------------------------------------
-// The FFT band stops at the finest cascade's Nyquist, and the clipmap band-limits the displacement well
-// above that, so near the camera the sea is a normal map on smooth geometry. This borrows the finest
-// cascade's own gradient field at a FRACTION of its patch size: the same wave statistics at a shorter
-// wavelength, for one fetch and no extra FFT work.
-//   - ROTATED domain: an unrotated copy is the same field scaled - its crests run parallel to the
-//     parent's and read as a fractal repeat. The slope comes back rotated into the sample domain.
-//   - SHADING ONLY: never in oceanSampleDisplacement, so the geometry, the depth prepass and the CPU
-//     buoyancy mirror (OceanGenerator::sampleDisplacement) are untouched.
-//   - Implicit LOD: the smaller patch scales the uv derivatives, so the mip chain filters this band like
-//     the cascades. It still fades out past "Detail fade (m)": its variance is not in the LEAN moments,
-//     so filtered-away detail would vanish instead of becoming roughness ("Micro roughness" covers it).
+// --- Sub-band detail. The FFT band stops at the finest cascade's Nyquist and the clipmap band-limits the displacement
+// well above that, so near the camera the sea is a normal map on smooth geometry. This borrows the finest cascade's
+// gradients at a FRACTION of its patch size: the same statistics at a shorter wavelength, for one fetch.
+//   - ROTATED domain: an unrotated copy's crests run parallel to the parent's (a fractal repeat). The slope comes back
+//     rotated into the sample domain.
+//   - SHADING ONLY: never in oceanSampleDisplacement, so the geometry, the depth prepass and the CPU buoyancy mirror are
+//     untouched.
+//   - Implicit LOD: the smaller patch scales the uv derivatives, so the mips filter it like the cascades. It still fades
+//     out past "Detail fade (m)": its variance is not in the LEAN moments ("Micro roughness" covers it).
 // The terrain water film carries an inlined copy (instanced_indirect_terrain.fs.glsl) - keep them in step.
 vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
 {
     const float strength = u_ocean_detailStrength;
     if (strength <= 0.0)
         return vec2(0.0);
+
     float fade = surfaceWeight; // dies into the beach with every other wave term
     const float fadeDist = u_ocean_detailFadeDistance;
     fade *= 1.0 - smoothstep(0.5 * fadeDist, fadeDist, distance(worldXZ, u_viewPos.xz));
     if (fade <= 0.0)
         return vec2(0.0);
+
     const int c = OCEAN_CASCADES - 1; // the finest cascade: the shortest waves there are to borrow
     const float L = u_ocean_cascadeSizes[c] * u_ocean_detailScale;
     const vec2 rot = vec2(cos(u_ocean_detailRotation), sin(u_ocean_detailRotation));
@@ -216,10 +193,9 @@ vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
     return vec2(rot.x * s.x - rot.y * s.y, rot.y * s.x + rot.x * s.y); // back into the sample domain
 }
 
-// Cascade displacement sum at an undisplaced (morphed) world XZ. Choppy lambda applied here so it
-// stays live (the maps store raw Dx/Dz). shoreHW = the vertex's (terrain height, water level),
-// fetched once by the caller. The CPU buoyancy mirror (OceanGenerator::sampleDisplacement) MUST
-// match this function change for change.
+// Cascade displacement sum at an undisplaced (morphed) world XZ. Choppy lambda applied here so it stays live (the maps
+// store raw Dx/Dz). shoreHW = the vertex's (terrain height, water level), fetched once by the caller.
+// The CPU buoyancy mirror (OceanGenerator::sampleDisplacement) MUST match this function change for change.
 vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 shoreHW)
 {
     const float chop = u_ocean_choppiness;
@@ -240,17 +216,16 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
             rawY += d.y;
             rawXZ += d.xz;
         }
-        // The whole raw field, scaled by ONE depth weight (oceanSurfaceWeight): 1 in open water, easing
-        // to the swash amplitude across the approach band. Every cascade is scaled alike, so the
-        // spectral detail is preserved all the way in.
-        // (oceanSurfaceWeight and oceanSwashWeight, with their shared base and fade-in evaluated once.)
+
+        // The raw field x ONE depth weight: oceanSurfaceWeight and oceanSwashWeight, their shared terms evaluated once.
         const float base = oceanSwashBase(depth, shoreHW.y);
         const float fadeIn = oceanSwashFadeIn(depth);
         disp = vec3(rawXZ.x * chop, rawY, rawXZ.y * chop) * (1.0 - fadeIn * (1.0 - base));
         sw = base * fadeIn;
-        // Swash backflow: the raw chop slides the tongue seaward as the wave recedes. Gated by the
-        // tongue's thickness above the sand (a buried surface must not keep sliding), soft-capped to
-        // ~the swash reach (the raw offset is unbounded and would shear triangles into streaks).
+
+        // Swash backflow: the raw chop slides the tongue seaward as the wave recedes. Gated by the tongue's thickness
+        // above the sand (a buried surface must not keep sliding), soft-capped to ~the swash reach (the raw offset is
+        // unbounded and would shear triangles into streaks).
         const float flowFade = smoothstep(0.0, 0.35, rawY * sw + depth);
         vec2 flowOff = rawXZ * (chop * u_ocean_swashFlow * sw * flowFade);
         const float flowCap = u_ocean_swashFlowCap;
@@ -258,24 +233,21 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
         disp.xz += flowOff;
         disp.xz = oceanFlowToWorld(disp.xz, fr);
     }
-    // No waterline floor: the surface is the wave, and the DEPTH BUFFER cuts it against the sand per
-    // pixel - a trough that dips under the seabed exposes (wet) sand, which is what a receding swash
-    // looks like.
+    // No waterline floor: the DEPTH BUFFER cuts the wave against the sand per pixel - a trough under the seabed exposes
+    // (wet) sand, which is what a receding swash looks like.
     return disp;
 }
 
-// Combined surface data for the water fragment shader (implicit-LOD: the mip chain prefilters
-// distant slopes):
-//   slope    : chop-corrected slope (Tessendorf: grad h / (1 + lambda dD))
-//   jacobian : horizontal fold J (< ~0.5 = folding crest)
-//   jacobianRaw : the same before the shore's depth weight (the surf band reads folds off it)
-//   slopeVar : LEAN term (Bruneton 2010) - slope variance lost to mip filtering, returned as
-//              microfacet roughness (the elongated sun glitter at distance)
-//   accel    : vertical acceleration (breaking-crest foam driver)
-//   shoreHW  : the (terrain height, water level) fetch, returned for the caller to reuse
-//   detail   : the sub-band detail slope's share of `slope` (world domain) - the foam lights on it
-//   foamJacobian : `jacobian` with the finest cascade scaled by "Foam fine waves" (u_ocean_foamFineWaves) -
-//              the stuck foam's density reads it, so the short, fast waves do not reshape it every frame
+// Combined surface data for the water FS (implicit LOD: the mip chain prefilters distant slopes):
+//   slope        : chop-corrected slope (Tessendorf: grad h / (1 + lambda dD))
+//   jacobian     : horizontal fold J (< ~0.5 = folding crest)
+//   jacobianRaw  : the same before the shore's depth weight (the surf band reads folds off it)
+//   slopeVar     : LEAN term (Bruneton 2010) - slope variance lost to mip filtering, as microfacet roughness
+//   accel        : vertical acceleration (breaking-crest foam driver)
+//   shoreHW      : the (terrain height, water level) fetch, returned for the caller to reuse
+//   detail       : the sub-band detail slope's share of `slope` (world domain) - the foam lights on it
+//   foamJacobian : `jacobian` with the finest cascade x "Foam fine waves" - the stuck foam's density reads it, so the
+//                  short, fast waves do not reshape it every frame
 void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out float jacobianRaw, out vec2 slopeVar, out float accel, out vec2 shoreHW, out vec2 detail, out float foamJacobian)
 {
     detail = vec2(0.0);
@@ -304,8 +276,8 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
             fine = vec3(g.z, g.w, d.w);
     }
     jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
-    // Buried under land past the swash band: flat calm surface (the run-up band still shades, and its
-    // surf lace still reads the raw folds).
+
+    // Buried under land past the swash band: flat calm surface (the run-up band still shades; its lace reads the raw folds).
     if (depth <= -u_ocean_swashReach)
     {
         slope = vec2(0.0);
@@ -314,8 +286,9 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
         accel = 0.0;
         return;
     }
-    // The one depth weight the displacement used (oceanSurfaceWeight), so shading tracks the geometry:
-    // slopes and the Jacobian scale with the height, the variance with its square.
+
+    // The displacement's one depth weight, so shading tracks the geometry: slopes and the Jacobian scale with the height,
+    // the variance with its square.
     const float w = oceanSurfaceWeight(depth, shoreHW.y);
     slopeSum *= w;
     varSum *= w * w;
@@ -330,9 +303,9 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
         const float fxx = jxx + f.x, fzz = jzz + f.y, fxz = jxz + f.z;
         foamJacobian = fxx * fzz - fxz * fxz;
     }
-    // Floor + rational soft limit: near folds the raw division explodes the slope into dark creases.
-    // "Crest slope limit" (u_ocean_crestSlopeLimit) is the limit's strength - it also compresses the steep
-    // crest faces, so lowering it sharpens crests at the risk of creases; 0 = off.
+
+    // Floor + rational soft limit: near folds the raw division explodes the slope into dark creases. "Crest slope limit"
+    // also compresses the steep crest faces: lower sharpens crests at the risk of creases; 0 = off.
     slope = slopeSum / max(vec2(jxx, jzz), vec2(0.6));
     slope /= 1.0 + u_ocean_crestSlopeLimit * length(slope);
     const vec2 detailSample = oceanDetailSlope(sampleXZ, worldXZ, w);
@@ -341,9 +314,8 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     slopeVar = varSum;
 }
 
-// Instant crest foam from the fold Jacobian + downward acceleration (Longuet-Higgins). ONE function
-// shared by the water shader (the crest foam it draws), ocean_foam.cs.glsl (what it injects into the foam
-// field) and the spray.
+// Instant crest foam from the fold Jacobian + downward acceleration (Longuet-Higgins). ONE function shared by the water
+// shader (the crest foam it draws), ocean_foam.cs.glsl (what it injects into the foam field) and the spray.
 float oceanInstantFoam(float jacobian, float accel)
 {
     const float softness = u_ocean_foamSoftness;

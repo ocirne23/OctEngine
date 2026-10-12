@@ -1,12 +1,10 @@
 #version 450
 
-// Composites the TAA-resolved scene colour into the swapchain: applies the scene exposure and the
-// selected tonemap operator (the only place HDR is mapped to display range - everything upstream is
-// linear radiance). The resolved image is full render-target sized; the area outside the editor
-// viewport panel holds the scene clear colour and is later covered by ImGui.
+// Composites the TAA-resolved scene colour into the swapchain: motion blur, bloom, exposure and the tonemapper (the
+// only place HDR is mapped to display range). Outside the editor viewport the image holds the clear colour, which
+// ImGui covers.
 
-// The frame UBO at binding 6 (viewport, frame index: the motion blur gather).
-#define UBO_BINDING 6
+#define UBO_BINDING 6 // the frame UBO: viewport, frame index for the motion blur gather
 #include "shared.inc.glsl"
 #include "motion_blur.inc.glsl"
 
@@ -14,15 +12,15 @@ layout (location = 0) in vec2 v_uv;
 layout (binding = 0) uniform sampler2D u_resolved;
 layout (binding = 1, std430) readonly buffer Adapt { float u_avgLum; float u_autoExposure; };
 layout (binding = 2) uniform sampler2D u_bloom; // BloomPipeline level 0: the sum of every level (half res, viewport-relative)
-// MOTION BLUR, gathered HERE (MotionBlurPipeline): no blurred full-res image is written or read. A pixel whose
-// tile neighbourhood holds no motion reads the resolved colour once, as without the blur.
+// MOTION BLUR is gathered HERE (MotionBlurPipeline): no blurred full-res image. A pixel with no motion in its tile
+// neighbourhood reads the resolved colour once.
 layout (binding = 3) uniform sampler2D u_mbVelocity;    // per pixel (px over the exposure; TAA writes it)
 layout (binding = 4) uniform sampler2D u_mbNeighborMax; // per MOTION_BLUR_TILE tile
 layout (binding = 5) uniform sampler2D u_mbDepth;       // this frame's scene depth (the gather's depth tests)
 layout (location = 0) out vec4 out_color;
 
-// The exposure, the tonemapper, the bloom mix and the gather's samples are u_post (the frame UBO): constants while
-// "Post" is locked, so one tonemapper path and a fixed sample count remain.
+// Exposure, tonemapper, bloom mix and gather samples are u_post: constants while "Post" is locked, so one tonemapper
+// path and a fixed sample count remain.
 layout (push_constant) uniform PostPC
 {
     vec4  u_bloomUv;    // bloom uv = v_uv * xy + zw (the viewport -> level 0's region)
@@ -54,9 +52,8 @@ vec3 tonemapACES(vec3 c)
     return clamp(outMat * (a / b), 0.0, 1.0);
 }
 
-// Minimal AgX (Benjamin Wrensch's approximation of Troy Sobotka's AgX): inset matrix, log2
-// encoding over ~17.5 stops, 6th-order sigmoid fit, outset matrix. Desaturates highlights
-// gracefully instead of skewing hue, which suits very bright skies/suns.
+// Minimal AgX (Benjamin Wrensch's approximation of Troy Sobotka's AgX): inset matrix, log2 encoding over ~17.5 stops,
+// 6th-order sigmoid fit, outset matrix. Desaturates highlights instead of skewing hue (bright skies / suns).
 vec3 agxContrast(vec3 x)
 {
     vec3 x2 = x * x;
@@ -69,6 +66,7 @@ vec3 agxContrast(vec3 x)
            + 0.1191   * x
            - 0.00232;
 }
+
 vec3 tonemapAgX(vec3 c)
 {
     const mat3 inset = mat3(
@@ -108,13 +106,15 @@ void main()
     }
     else
         color = texture(u_resolved, v_uv).rgb;
+
     // Bloom in HDR, before the exposure. With a threshold the blur holds only the light above it and is ADDED
-    // (u_post_bloomKeep 1); without one it is the energy-conserving mix - every pixel spreads a share of its light.
+    // (u_post_bloomKeep 1); without one it is the energy-conserving mix.
     if (u_post_bloomScale > 0.0)
         color = color * u_post_bloomKeep + textureLod(u_bloom, v_uv * u_bloomUv.xy + u_bloomUv.zw, 0.0).rgb * u_post_bloomScale;
     color *= exposure;
-    // The swapchain is UNORM (no hardware sRGB encode), so display encoding happens here too.
-    // "Off" keeps the legacy raw-linear passthrough; AgX's sigmoid already outputs display-encoded.
+
+    // The swapchain is UNORM (no hardware sRGB encode), so the display encoding is done here. "Off" = raw linear;
+    // AgX's sigmoid already outputs display-encoded.
     const int tonemapper = int(u_post_tonemapper);
     if      (tonemapper == 1) color = linearToSrgb(tonemapReinhard(color));
     else if (tonemapper == 2) color = linearToSrgb(tonemapACES(color));

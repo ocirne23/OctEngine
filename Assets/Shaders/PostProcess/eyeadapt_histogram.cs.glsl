@@ -1,19 +1,14 @@
 #version 450
 
-// Eye-adaptation pass 1: build a 256-bin luminance histogram of the TAA-resolved scene colour, restricted
-// to the editor viewport rect (the area outside it holds the scene clear colour, which would bias the
-// average). Luminance is binned in log2 space over [minLogLum, maxLogLum]; bin 0 collects near-black pixels
-// (excluded from the average). One workgroup accumulates into shared memory, then flushes to the global
-// histogram with atomics. The reduce pass (eyeadapt_reduce) turns this into an adapted exposure.
-// Every pixel still counts (the reduce divides by the viewport area), but each thread bins a
-// PIXELS_PER_THREAD^2 block: neighbours mostly share a bin, so a run of equal bins is ONE shared atomic,
-// and only the non-empty bins go to the global histogram. One pixel per thread measured 0.155 ms at
-// 1440p: ~3600 workgroups x 256 global atomics, and shared atomics serialized on the few busy bins.
+// Eye-adaptation pass 1: a 256-bin log2-luminance histogram of the resolved scene colour inside the editor viewport
+// (the clear colour outside would bias it); bin 0 = near-black, excluded from the average. eyeadapt_reduce turns it
+// into an exposure. Each thread bins a PIXELS_PER_THREAD^2 block: neighbours mostly share a bin, so a run of equal
+// bins is ONE shared atomic, and only non-empty bins go to the global histogram (one pixel per thread = ~3600 groups
+// x 256 global atomics, and shared atomics serialized on the few busy bins).
 //
-// BLOOM SHARES THIS READ (pc_bloom, BloomPipeline): the block is 2 x 2 QUADS of 2 x 2 pixels, and each quad is
-// also one texel of bloom level 0 (half res, viewport-relative) - so bloom never reads the full-res image
-// itself. The quad's texel is the Karis average (weights 1 / (1 + luma)): one very bright pixel cannot become
-// a flickering bloom blob.
+// BLOOM SHARES THIS READ (pc_bloom, BloomPipeline): the block is 2 x 2 QUADS of 2 x 2 pixels, and each quad is one
+// texel of bloom level 0 (half res, viewport-relative). The texel is the Karis average (weights 1 / (1 + luma)), so
+// one very bright pixel cannot become a flickering bloom blob.
 
 #define PIXELS_PER_THREAD 4 // keep in sync with EyeAdaptationPipeline's dispatch
 
@@ -22,8 +17,7 @@ layout (local_size_x = 16, local_size_y = 16) in;
 layout (binding = 0) uniform sampler2D u_resolved;
 layout (binding = 1, std430) buffer Histogram { uint u_bins[256]; };
 layout (binding = 3, r11f_g11f_b10f) uniform restrict writeonly image2D u_bloomOut; // bloom level 0
-// The persistent exposure the reduce pass writes AFTER this one: the bloom threshold reads LAST frame's (it
-// moves slowly, the adaptation is smoothed over seconds).
+// The reduce pass writes the exposure AFTER this one: the bloom threshold reads LAST frame's (smoothed over seconds).
 layout (binding = 4, std430) readonly buffer Adapt { float u_avgLum; float u_autoExposure; };
 layout (binding = 2, std140) uniform Params
 {
@@ -40,13 +34,13 @@ layout (binding = 2, std140) uniform Params
 // The push block: EyeAdaptationPipeline's HistogramPush (the bloom threshold / knee and the exposure rule: lockable).
 #include "push.generated.glsl"
 
-// The soft threshold on the quad's (Karis-averaged) colour: nothing below threshold - knee, the excess above
-// threshold + knee, a quadratic curve between (the Unity / Unreal knee). Measured on the brightest channel
-// after the exposure, so it tracks what the display will show.
+// Soft threshold (the Unity / Unreal knee): nothing below threshold - knee, the excess above threshold + knee, a
+// quadratic between. On the brightest channel after the exposure, so it tracks what the display shows.
 vec3 bloomThreshold(vec3 c)
 {
     if (pc_bloomThreshold <= 0.0)
         return c;
+
     const float exposure = pc_manualExposure * (pc_autoExposure != 0 ? u_autoExposure : 1.0);
     const float brightness = max(max(c.r, c.g), c.b) * exposure;
     const float knee = pc_bloomKnee;
@@ -84,6 +78,7 @@ void main()
             const ivec2 quad = groupBase + ivec2(gl_LocalInvocationID.xy) * 2 + ivec2(qx, qy) * 32;
             if (quad.x > last.x || quad.y > last.y)
                 continue;
+
             vec3 karisSum = vec3(0.0);
             float karisWeight = 0.0;
             for (int p = 0; p < 4; ++p)
@@ -100,6 +95,7 @@ void main()
                     karisSum += cs * w;
                     karisWeight += w;
                 }
+
                 if (!inside)
                     continue;
                 const uint bin = binIndex(lum);
@@ -112,10 +108,12 @@ void main()
                 }
                 ++runCount;
             }
+
             if (pc_bloom != 0)
                 imageStore(u_bloomOut, quad >> 1, vec4(bloomThreshold(karisSum / karisWeight), 0.0));
         }
     }
+
     if (runCount != 0u)
         atomicAdd(s_bins[runBin], runCount);
     barrier();

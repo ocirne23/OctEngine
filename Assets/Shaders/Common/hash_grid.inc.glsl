@@ -1,13 +1,7 @@
-// Shared world-space spatial hash-grid helpers.
-//
-// World space is partitioned into GRID_SIZE^3 cubes. Each occupied cube is keyed by its integer grid
-// position and inserted (open-addressed, linear probing) into a power-of-two-sized table. Both the light
-// grid (light_grid.inc.glsl) and the GI probe grid (gi_probe.inc.glsl) build on this so they share one
-// hashing + table-probing scheme.
-//
-// The core helpers take the table size as an argument (rather than a macro) so a single shader can use
-// two independently-sized grids at once. Each grid defines its own thin getTableIdx/getNextTableIdx
-// wrappers that bind their own table size. EMPTY_ENTRY / INITIALIZING_ENTRY come from shared.inc.glsl.
+// World-space spatial hash grid: GRID_SIZE^3 cubes, keyed by integer grid position, in a power-of-two table
+// (open addressing, linear probing). Shared by the light grid, the GI probe grid and the force grid.
+// The table size is an argument, not a macro, so one shader can use two grids of different size; each grid wraps
+// these in its own getTableIdx / getNextTableIdx. EMPTY_ENTRY / INITIALIZING_ENTRY come from shared.inc.glsl.
 
 #ifndef HASH_GRID_INC_GLSL
 #define HASH_GRID_INC_GLSL

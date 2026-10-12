@@ -1,18 +1,16 @@
 #ifndef MESH_LOD_INC_GLSL
 #define MESH_LOD_INC_GLSL
 
-// GPU mesh LOD selection, shared by the main indirect cull and the shadow cull. Matches
-// RendererVKLayout::GpuMeshLodGroup and the selection policy the CPU's selectMeshLods used:
-// screen-space error when the chain carries per-level simplify errors, projected-diameter
-// fallback otherwise. The instance's stored meshIdx is always level 0; the cull redirects.
-// u_lod and u_mipPixelScale come from ubo.inc.glsl.
+// GPU mesh LOD selection, shared by the main and the shadow cull: screen-space error when the chain carries per-level
+// simplify errors, the projected diameter otherwise. The instance's stored meshIdx is always level 0; the cull
+// redirects. Matches RendererVKLayout::GpuMeshLodGroup.
 
 struct MeshLodGroup
 {
     uint numLods;
-    uint mesh01; // level 1 << 16 | level 0
-    uint mesh23; // level 3 << 16 | level 2
-    uint mesh4;  // level 4 in the low half
+    uint mesh01;    // level 1 << 16 | level 0
+    uint mesh23;    // level 3 << 16 | level 2
+    uint mesh4;     // level 4 in the low half
     vec4 errors1_4; // per-level simplify error, mesh-local units (level 0 = 0); all-zero = authored chain
 };
 
@@ -36,11 +34,9 @@ int lodPickByError(MeshLodGroup group, float errScale, float threshold)
     return picked;
 }
 
-// Stateless selection core. dist = camera distance to the instance's bounds surface, radius = scaled
-// LOD0 bounds radius, errorThreshold/passBias carry the pass's coarseness (shadow: x4 / +2 levels).
-// lastLevel < 0 = no hysteresis state: take the conservative pick directly.
-int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceScale,
-                   float errorThreshold, float passBias, int lastLevel)
+// dist = camera distance to the instance's bounds surface, radius = scaled LOD0 bounds radius, errorThreshold /
+// passBias = the pass's coarseness (shadow: x4 / +2 levels). lastLevel < 0 = no hysteresis state: the conservative pick.
+int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceScale, float errorThreshold, float passBias, int lastLevel)
 {
     const float forceLod = u_lod_forceLod;
     if (forceLod >= 0.0)
@@ -54,19 +50,20 @@ int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceS
         const float errScale = instanceScale * pixelsPerUnit;
         if (lastLevel < 0)
             return lodPickByError(group, errScale, errorThreshold);
-        // Hysteresis band: hold the previous level while it sits between the conservative and
-        // permissive picks, so an instance parked near a boundary can't flip-flop.
+
+        // Hold the previous level while it sits between the conservative and permissive picks: no flip-flop.
         const int finest = lodPickByError(group, errScale, errorThreshold / (1.0 + hysteresis));
         const int coarsest = lodPickByError(group, errScale, errorThreshold * (1.0 + hysteresis));
         level = clamp(lastLevel, finest, coarsest);
     }
     else
     {
-        // No per-level error data (authored LodN_ chains): projected-size metric - each halving of
-        // the on-screen diameter below fullResPixels drops one level (density ~ area).
+        // No per-level errors (authored LodN_ chains): each halving of the on-screen diameter below fullResPixels drops
+        // one level.
         const float projPixels = max(1.0, radius * pixelsPerUnit);
         const float lodF = log2(max(1.0, u_lod_fullResPixels / projPixels)) + u_lod_bias + passBias;
         level = int(lodF);
+
         if (lastLevel >= 0)
         {
             if (level > lastLevel && lodF < float(lastLevel) + 1.0 + hysteresis)

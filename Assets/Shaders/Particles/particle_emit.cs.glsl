@@ -1,16 +1,14 @@
 #version 460
 
-// Particle emit: one thread per requested spawn. The spawn map (CPU-written per frame) holds the
-// emitter slot of each spawn; a thread pops a free index off the dead stack, initializes the particle
-// from its emitter's config and appends it to the IN alive list, where this frame's sim pass picks it
-// up (the begin pass sized the sim dispatch to cover survivors + spawns). Dead-stack exhaustion
-// (pool full) silently drops spawns.
+// Particle emit: one thread per requested spawn. The spawn map (CPU-written per frame) holds the emitter slot of each
+// spawn; a thread pops a free index off the dead stack, initializes the particle from its emitter's config and appends
+// it to the IN alive list, where this frame's sim pass picks it up (the begin pass sized the sim dispatch to cover
+// survivors + spawns). Dead-stack exhaustion (pool full) drops the spawn and counts it (c_dropSpawns).
 //
-// PARTICLE_GPU_SPAWN variant: the GPU spawn path (particle_spawn.inc.glsl). Binding 6 is the request
-// buffer other compute passes appended to; the count is the begin pass's latched c_gpuSpawnConsume and
-// the dispatch is GPU-sized (c_gpuEmitGroups). A request carries its own position and velocity, so the
-// emitter's spawn shape / cone / speed are skipped - everything else (life, size, colour, flags) still
-// comes from the named emitter slot.
+// PARTICLE_GPU_SPAWN variant: the GPU spawn path (particle_spawn.inc.glsl). Binding 6 is the request buffer other
+// compute passes appended to; the count is the begin pass's latched c_gpuSpawnConsume and the dispatch is GPU-sized
+// (c_gpuEmitGroups). A request carries its own position and velocity, so the emitter's spawn shape / cone / speed are
+// skipped; everything else (life, size, colour, flags) comes from the named emitter slot.
 
 #include "particle.inc.glsl"
 
@@ -50,9 +48,8 @@ void main()
     const uint emitterIdx = ps_spawnMap[gid];
 #endif
 
-    // Pop a free pool index; underflow = pool exhausted, drop the spawn. Counted (c_dropSpawns, zeroed
-    // per frame by the begin pass and read back for the log): an exhausted pool silently stops EVERY
-    // emitter, which is indistinguishable from the particle system being switched off.
+    // Pop a free pool index; underflow = pool exhausted, drop the spawn. Counted (c_dropSpawns): an exhausted pool
+    // silently stops EVERY emitter, which otherwise looks the same as the particle system switched off.
     const int deadSlot = atomicAdd(c_deadCount, -1);
     if (deadSlot <= 0)
     {
@@ -70,8 +67,8 @@ void main()
     uint seed = particlePcg(p_frameIndex * 0x9E3779B9u + gid * 0x85EBCA6Bu + particleIdx);
 #endif
 
-    // Spawn position: random point in (or on) the emitter's sphere - or, for a weather volume,
-    // uniformly inside its box (the box fills at once instead of raining in from a point).
+    // Spawn position: random point in (or on) the emitter's sphere - or, for a weather volume, uniformly inside its box
+    // (the box fills at once instead of raining in from a point).
     vec3 pos;
 #ifdef PARTICLE_GPU_SPAWN
     pos = req.posSize.xyz;

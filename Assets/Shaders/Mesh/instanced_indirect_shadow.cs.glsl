@@ -49,15 +49,14 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     const MaterialInfo material = in_materialInfos[materialIdx];
     if ((material.flags & MATERIAL_FLAG_NO_RAYTRACING) != 0u)
         return; // gizmos cast no shadow
-    uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
-    const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
 
-    const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
-    // Tree-set rocks: LOD chain, no wind.
-    const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
-    const bool sways                  = isTree && !isRock;
-    const float radius                = meshInfo.radius * instancePosScale.w + (sways ? u_foliage_windReach : 0.0);
-    const vec3 centerPos              = instancePosScale.xyz + centerOffset;
+    uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
+    const InMeshInfo meshInfo = in_meshInfos[meshIdx];
+    const vec3 centerOffset   = quat_transform(meshInfo.center * instancePosScale.w, quat);
+    const bool isRock         = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK; // tree-set rocks: LOD chain, no wind
+    const bool sways          = isTree && !isRock;
+    const float radius        = meshInfo.radius * instancePosScale.w + (sways ? u_foliage_windReach : 0.0);
+    const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     uint cascadeMask = cascadeOverlapMask(centerPos, radius);
     // A cascade's box reaches far up-sun and takes in distant trees: keep a tree only within the cascade's split
@@ -83,8 +82,7 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
     {
         const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
         const float dist = max(0.01, length(centerPos - u_views_viewPos[VIEW_CENTER].xyz) - radius);
-        const int level = lodResidentLevel(group, lodSelectLevel(group, dist, radius, instancePosScale.w,
-            u_lod_maxErrorPx * 4.0, 2.0, -1));
+        const int level = lodResidentLevel(group, lodSelectLevel(group, dist, radius, instancePosScale.w, u_lod_maxErrorPx * 4.0, 2.0, -1));
         const uint chosenMeshIdx = lodMeshAt(group, level);
         if (chosenMeshIdx != meshIdx)
         {
@@ -104,10 +102,10 @@ void cullCaster(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale
         out_indirectCommands[meshIdx].firstInstance = firstInstance;
     }
 
-    out_meshInstanceIndexes[firstInstance + idx]           = instanceIdx;
-    out_meshInstances[instanceIdx].posScale                = instancePosScale;
-    out_meshInstances[instanceIdx].quat                    = quat;
-    out_meshInstances[instanceIdx].alphaTexIdxCascadeMask  = packed;
+    out_meshInstanceIndexes[firstInstance + idx]          = instanceIdx;
+    out_meshInstances[instanceIdx].posScale               = instancePosScale;
+    out_meshInstances[instanceIdx].quat                   = quat;
+    out_meshInstances[instanceIdx].alphaTexIdxCascadeMask = packed;
 }
 
 layout (local_size_x = 64) in; // one thread per stream instance, and one per tree
@@ -120,6 +118,7 @@ void main()
     bool isTree;
     uint pieceIdx, passBits;
     const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx, passBits);
+
     // One loop for trees and plain instances (k = 0), so cullCaster is inlined once.
     TreeCullPiecePick pick;
     InMeshInstance instance;
@@ -129,8 +128,7 @@ void main()
             return;
         // The type's shadow distance (bushes): beyond it the piece covers a texel or less.
         const float shadowDistance = in_treeTypes[in_treePieces[pieceIdx].type].shadowDistance;
-        if (shadowDistance > 0.0
-            && distance(in_treePieces[pieceIdx].centre, u_sceneFocus.xyz) - in_treePieces[pieceIdx].radius > shadowDistance)
+        if (shadowDistance > 0.0 && distance(in_treePieces[pieceIdx].centre, u_sceneFocus.xyz) - in_treePieces[pieceIdx].radius > shadowDistance)
             return;
         treeCullShadowPiece(pieceIdx, pick);
     }
@@ -143,6 +141,7 @@ void main()
         pick.kEnd = 1u;
         instanceTransform(instance, pick.posScale, pick.quat);
     }
+
     for (uint k = pick.kBegin; k < pick.kEnd; ++k)
     {
         if (isTree)

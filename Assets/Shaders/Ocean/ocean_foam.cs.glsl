@@ -1,16 +1,12 @@
 #version 460
 
-// FFT ocean, pass 4/5: the WORLD-SPACE FOAM FIELD (ocean_foam_field.inc.glsl: the levels, the drifted
-// rest coordinates, and what the one amount draws). One invocation per texel per level (z = level):
+// FFT ocean, step 4: the WORLD-SPACE FOAM FIELD (ocean_foam_field.inc.glsl: the levels, the drifted rest coordinates, what
+// the amount draws). One invocation per texel per level (z = level):
 //   foam = max(foam_prev * "Foam decay", instant) - no spread: it keeps the crest's shape
-// Injected by the SAME instant-foam function the water shader draws its crest foam with (oceanInstantFoam:
-// Jacobian folding + Longuet-Higgins downward crest acceleration), evaluated at the texel's REST position
-// with every cascade mip-filtered to this level's texel footprint.
-//
-// Last frame's state is read from the ping/pong image at xy + shift (u_ocean_foamLevels[l].zw: whole
-// texels the level's origin moved since last frame as the camera travelled); texels that scrolled in
-// start from the next coarser level (see main). The result is written to the ping/pong layer AND to the maps' foam layer, whose mip chain
-// the blit then builds with everything else.
+// Injected by the SAME oceanInstantFoam the water shader draws its crest foam with, at the texel's REST position, with
+// every cascade mip-filtered to this level's texel footprint.
+// Last frame's state is read from the ping/pong image at xy + shift (u_ocean_foamLevels[l].zw: whole texels the level's
+// origin moved since last frame). Written to the ping/pong layer AND the maps' foam layer (the blit builds its mips).
 
 #include "ubo.inc.glsl"
 #define OCEAN_MAPS_BINDING 3
@@ -32,8 +28,7 @@ float loadPrev(int level, ivec2 xy)
     return imageLoad(u_foam, ivec3(xy, level * 2 + int(1u - u_writeLayer))).x;
 }
 
-// Last frame's amount of a level at drifted coordinate q, bilinear. Its last-frame origin is this frame's
-// minus the shift (whole texels).
+// Last frame's amount of a level at drifted coordinate q, bilinear. Its last-frame origin = this frame's - the shift.
 float samplePrev(int level, vec2 q)
 {
     const float texel = oceanFoamTexel(level);
@@ -72,11 +67,10 @@ void main()
     const float jxz = chop * sxz;
     const float instant = oceanInstantFoam(jxx * jzz - jxz * jxz, accel);
 
-    // Last frame's amount at this texel's drifted position. A texel that SCROLLED IN (outside last frame's
-    // grid) starts from the next coarser level's last-frame state there instead of empty: that level has
-    // covered this water for a while, so the new strip carries the right amount (softer, a 4x4 average) and
-    // no emptier band trails the moving camera. The outermost level has nothing coarser: it starts empty
-    // (and fades out anyway). Reading the other slot of any level is safe: this dispatch writes only its own.
+    // A texel that SCROLLED IN (outside last frame's grid) starts from the next coarser level's last-frame state there,
+    // not empty: that level has covered this water for a while, so no emptier band trails the moving camera (softer, a
+    // 4x4 average). The outermost level starts empty (it fades out anyway). Reading the other slot of any level is safe:
+    // this dispatch writes only its own.
     const ivec2 prevXY = xy + ivec2(u_ocean_foamLevels[level].zw);
     float prev;
     if (all(greaterThanEqual(prevXY, ivec2(0))) && all(lessThan(prevXY, ivec2(OCEAN_FFT_SIZE))))

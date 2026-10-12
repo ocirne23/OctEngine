@@ -1,10 +1,8 @@
 #version 460
 
-// Forcefield shell proxies: 36 vertices per instance (a unit cube, outward CCW winding), one
-// instance per compacted live emitter, oriented and sized to the emitter's directional reach bounds
-// (force_field.inc.glsl forceEmitterBounds - the FS intersects the same box for its march interval).
-// Front faces are culled and the fixed-function depth test is off (the camera can be inside a
-// bubble); the fragment shader ray-marches the analytic team field inside the box.
+// Forcefield shell proxies: 36 vertices per instance (a unit cube, outward CCW winding), one instance per compacted live
+// emitter, sized to its visible bounds (forceVisibleBounds - the FS intersects the same box for its march interval).
+// Front faces are culled and the depth test is off (the camera can be inside a bubble); the FS ray-marches the field.
 
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
@@ -29,7 +27,7 @@ void main()
     const vec3 local = vec3(float(corner & 1u), float((corner >> 1u) & 1u), float(corner >> 2u)) * 2.0 - 1.0;
 
     float side, forward, back;
-    forceVisibleBounds(e, side, forward, back); // the support box shrunk to the visible-surface extent
+    forceVisibleBounds(e, side, forward, back);
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz); // columns: right, up, dir
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (forward - back) * 0.5;
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);

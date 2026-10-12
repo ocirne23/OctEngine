@@ -2,29 +2,21 @@
 
 #extension GL_EXT_nonuniform_qualifier : enable // gi_probe.inc.glsl's volume lookup (only the sky SH is used here)
 
-// Volumetric fog apply: fullscreen pass in the scene-color render pass (after the forward + sky draws,
-// before TAA so the fog gets antialiased). Reconstructs each pixel's view depth from the scene depth
-// and samples the integrated fog volume.
-// Blended with (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + sceneColor * transmittance.
+// Volumetric fog apply: fullscreen, in the scene-colour pass after the forward + sky draws (before TAA, so the fog is
+// antialiased). Blend (src ONE, dst SRC_ALPHA): out = inScatter + sceneColor * transmittance. Past the froxel volume's
+// far plane volFarField adds the fog analytically, so Fog/Range is a near-field quality knob, not a view distance.
 //
-// Everything beyond the froxel volume's far plane is added analytically by volFarField instead of by more
-// slices, so Fog/Range is a near-field quality knob rather than a view distance.
-//
-// THE CLOUDS ARE COMPOSITED HERE while the fog is on (the separate cloud apply runs only with the fog off):
-// fog laid over the finished clouds would fog them as if they stood at the scene depth - over far terrain,
-// tens of km of fog in front of a cloud a few km away. With the cloud's in-scatter S and transmittance T at
-// distance tc, fog (in-scatter, transmittance) to the scene F and to the cloud C:
+// THE CLOUDS ARE COMPOSITED HERE while the fog is on (the cloud apply runs only with the fog off): fog over the
+// finished clouds would fog them as if at the scene depth. With the cloud's in-scatter S and transmittance T, fog to
+// the scene F and to the cloud C:
 //   out = T * F.rgb + C.a * S + (1 - T) * C.rgb  +  scene * (T * F.a)
-// exact for a cloud at one distance (fog in front of it over it, the rest behind it), and linear in the
-// scene, so the blend state stays the same.
-// THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliage_farMarched = it marched this frame), at
-// its weighted mean distance - not in the scene depth, so fogged at the terrain BEHIND it the trees read twice as
-// hazy as the billboards next to them. Two layers compose front to back by distance: with each layer's part
-// P = (1 - T) F_layer.rgb + F_layer.a S and transmittance T, the nearer one's P + T x the farther one's.
-// THE AERIAL PERSPECTIVE (aerial_lut.cs.glsl: the sky's atmosphere between the camera and the point) is a second
-// medium, laid BEHIND the fog: fog + fog.a x air. The height fog hugs the ground around the camera, the air fills
-// the distance; standing in thick fog, the air behind it must not shine through. Scene and far trees take it; the
-// clouds do not (their march has its own, cloudAerialScatter), and neither does the sky (it holds the whole ray).
+// exact for a cloud at one distance, and linear in the scene, so the blend state stays the same.
+// THE FAR-TREE VOLUME is a second such layer (TreeVolumePipeline; u_foliage_farMarched = it marched this frame) at its
+// weighted mean distance: fogged at the terrain BEHIND it, the trees read twice as hazy as the billboards next to them.
+// Two layers compose front to back: with P = (1 - T) F_layer.rgb + F_layer.a S, the nearer one's P + T x the farther's.
+// THE AERIAL PERSPECTIVE (aerial_lut.cs.glsl) is a second medium BEHIND the fog: fog + fog.a x air (in thick fog the
+// air behind must not shine through). Scene and far trees take it; the clouds do not (their march has its own,
+// cloudAerialScatter), nor does the sky (it holds the whole ray).
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
@@ -48,46 +40,34 @@ layout (binding = 5) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the 
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
 #include "gi_probe.inc.glsl"
-// The cloud shadow map: the far field's sun term is shadowed by the clouds - the light shafts past the froxel
-// volume (whose froxels shadow themselves, vol_scatter.cs.glsl).
+
+// The far field's sun is cloud-shadowed: the light shafts past the froxel volume.
 #define CLOUD_SHADOW_BINDING 8
 #include "cloud_shadow.inc.glsl"
 
 layout (location = 0) out vec4 out_color;
 
-// View index (0 = centre/desktop, 1 = left eye, 2 = right eye); selects the per-eye depth reconstruction.
-// The fog volume itself is built once for the centre view, sampled here at each eye's reconstructed world pos.
+// View index (0 = centre/desktop, 1 / 2 = eyes) for the per-eye depth reconstruction. The fog volume is built once for
+// the centre view and sampled at each eye's world pos.
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
-// (fog base world Y, terrain height) at worldXZ - the terrain-follow datum vol_scatter builds per froxel,
-// with the macro altitude weighted by `follow` (0 = the layer sits at sea level).
+// (fog base world Y, terrain height) at worldXZ: vol_scatter's terrain-follow datum, the macro altitude weighted by
+// `follow` (0 = the layer sits at sea level).
 vec2 volFarFieldGround(vec2 worldXZ, float follow)
 {
     const vec4 d = terrainDataAt(worldXZ);
     return vec2(u_fog_heightBase + u_fog_terrainFollow * (u_terrain_mapSeaLevel + max(d.w, 0.0) * follow), d.x);
 }
 
-// Height fog over the ray segment [t0, t1] (t0 = the froxel volume's far plane), in the same
-// (in-scatter, transmittance) form the integrated volume uses so the two compose.
-//
-// The ground is sampled at a few points and taken as linear between them, which keeps the optical depth
-// exactly closed-form per sub-segment (a linear ground just subtracts its slope from the ray's). Nothing
-// samples density, so there is no integration error: step count only sets how finely the km-scale ground
-// profile is tracked.
-//
-// Terrain follow and the regional fields both FADE OUT along the ray. They are local properties, while the
-// tail past the march is unbounded and inherits the last sub-segment - at full strength one sample governs
-// an infinite integral, so a zero-fog region erases the horizon along its azimuth and a high macro altitude
-// puts the base above the ray, filling the sky over that spot with a column of fog. Full weight at t0 keeps
-// the seam with the froxel volume exact; by `reach` both have settled to the global medium at sea level.
-// The clouds' mean sun transmittance over [a, b] along the ray: VOL_FAR_VIS_TAPS jittered taps of the cloud shadow
-// map (past its far cascade it returns the layer's mean). The jitter moves every frame; the TAA resolves it.
+// The clouds' mean sun transmittance over [a, b] along the ray: VOL_FAR_VIS_TAPS jittered taps of the cloud shadow map
+// (past its far cascade it returns the layer's mean). The jitter moves every frame; the TAA resolves it.
 #define VOL_FAR_VIS_TAPS 2
 float volFarSunVis(vec3 dir, float a, float b, float jitter)
 {
 #ifdef CLOUD_SHADOWS
     if (u_clouds_shadowRendered < 0.5)
         return 1.0;
+
     float v = 0.0;
     for (int j = 0; j < VOL_FAR_VIS_TAPS; ++j)
         v += cloudSunTransmittanceBilinear(u_viewPos + dir * mix(a, b, (float(j) + jitter) / float(VOL_FAR_VIS_TAPS)));
@@ -97,9 +77,9 @@ float volFarSunVis(vec3 dir, float a, float b, float jitter)
 #endif
 }
 
-// The SHAFT HAZE over [a, b] (vol_scatter.cs.glsl has why): its share of the sunlit in-scatter - behind the fog in
-// front of it (fogTau) and its own haze in front (hazeTau; its OWN extinction bounds a level ray to the horizon, it
-// does not dim the scene) - times the clouds' visibility over the piece. Flat-based, the fog's height base.
+// The SHAFT HAZE over [a, b] (vol_scatter.cs.glsl has why): its share of the sunlit in-scatter behind the fog in front
+// (fogTau) and its own haze in front (hazeTau: bounds a level ray to the horizon, does not dim the scene), times the
+// clouds' visibility. Flat-based, on the fog's height base.
 float volFarHazeStep(vec3 dir, float a, float b, float fogTau, inout float hazeTau, float vis)
 {
     const float seg = volAnalyticOpticalDepth(u_viewPos, dir, a, b, u_fog_heightBase, u_fog_hazeInvHeight, u_fog_hazeDensity);
@@ -108,16 +88,23 @@ float volFarHazeStep(vec3 dir, float a, float b, float fogTau, inout float hazeT
     return w;
 }
 
+// Height fog over the ray segment [t0, t1] (t0 = the froxel volume's far plane), in the integrated volume's
+// (in-scatter, transmittance) form. The ground is sampled at a few points, linear between them, which keeps each
+// sub-segment closed form (vol_fog.inc.glsl): no integration error, the step count only tracks the ground profile.
+// Terrain follow and the regional fields FADE OUT along the ray: the unbounded tail inherits the last sub-segment, so
+// at full strength one sample would govern an infinite integral (a zero-fog region erases the horizon; a high macro
+// altitude fills the sky with a column of fog). Full weight at t0 keeps the seam with the froxels exact.
 vec4 volFarField(vec3 dir, float t0, float t1)
 {
     const float density = u_fog_density * u_fog_farFieldDensity;
     if (t1 <= t0) // the shaft haze (>= 1e-5 on the CPU) is always there, so a fog density of 0 still marches
         return vec4(0.0, 0.0, 0.0, 1.0);
+
     const float falloff = u_fog_heightFalloff * u_fog_farFieldFalloffScale;
     const float tauOpaque = 12.0; // transmittance < 1e-5
     const bool followsTerrain = terrainHeightMapPresent();
-    // THE SUN IS SHADOWED BY THE CLOUDS per sub-segment (the light shafts): each adds its share of the in-scatter,
-    // T before it x (1 - its own T), times the clouds' sun visibility over it. The ambient stays one constant.
+    // THE SUN IS CLOUD-SHADOWED per sub-segment (the light shafts): each adds T before it x (1 - its own T) x the
+    // clouds' sun visibility over it. The ambient stays one constant.
     const float visJitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 63u), vec2(0.06711056, 0.00583715))));
     const float visTail = 20000.0; // the tail's taps span this much past the march (the shadow map covers far less)
     float sunW = 0.0;
@@ -143,6 +130,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
                 break;
             tPrev = tNext;
         }
+
         if (t1 > tEnd && tau <= tauOpaque)
         {
             const float seg = volAnalyticOpticalDepth(u_viewPos, dir, tEnd, t1, u_fog_heightBase, falloff, density);
@@ -154,9 +142,8 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     }
     else
     {
-        // Only march where the cascades hold ground data; beyond that the map clamps to its edge, so the
-        // remainder is constant-ground and solves in one step (this is also what keeps sky rays, t1 =
-        // VOL_FAR_INFINITY, from spreading their steps across 10,000 km).
+        // March only where the cascades hold ground data; beyond, the map clamps to its edge, so the rest is one step
+        // (this also keeps sky rays, t1 = VOL_FAR_INFINITY, from spreading their steps across 10,000 km).
         const float reach = (u_terrain_mapInvFarSize > 0.0) ? 0.5 / u_terrain_mapInvFarSize : 0.5 / u_terrain_mapInvNearSize;
         const float tEnd = min(t1, t0 + reach);
         const int steps = int(u_fog_farFieldSteps);
@@ -170,8 +157,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
         for (int i = 1; i <= steps; ++i)
         {
             const float tNext = mix(t0, tEnd, float(i) / float(steps));
-            const vec2 gNext = volFarFieldGround(u_viewPos.xz + dir.xz * tNext,
-                                                 1.0 - smoothstep(0.25 * reach, reach, tNext - t0));
+            const vec2 gNext = volFarFieldGround(u_viewPos.xz + dir.xz * tNext, 1.0 - smoothstep(0.25 * reach, reach, tNext - t0));
             const float len = tNext - tPrev;
 
             const float midT = 0.5 * (tPrev + tNext);
@@ -185,8 +171,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
                 k *= mix(1.0, fogFalloffFromTemperature(terrainTemperatureAt(climate, 0.5 * (gPrev.y + gNext.y))), wRegion);
             }
 
-            const float seg = volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tPrev - gPrev.x,
-                                                            dir.y - (gNext.x - gPrev.x) / max(len, 1e-3),
+            const float seg = volAnalyticOpticalDepthLinear(u_viewPos.y + dir.y * tPrev - gPrev.x, dir.y - (gNext.x - gPrev.x) / max(len, 1e-3),
                                                             len, k, dens);
             const float vis = volFarSunVis(dir, tPrev, tNext, visJitter);
             sunW += exp(-tau) * (1.0 - exp(-seg)) * vis;
@@ -213,17 +198,15 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     if (T >= 0.9999 && hazeW <= 1e-5)
         return vec4(0.0, 0.0, 0.0, 1.0);
 
-    // The ambient is constant over the segment, so its single-scatter integral collapses: d(tau)/dt is the
-    // extinction, hence integral(rho * exp(-tau)) == 1 - T. The sun's is sunW (above): shadowed by the CLOUDS
-    // only - the froxel volume's terrain shadow march is a sparse min() that only holds up filtered and
+    // The ambient is constant over the segment, so its single-scatter integral collapses to 1 - T. The sun's is sunW,
+    // shadowed by the CLOUDS only: the froxels' terrain shadow march is a sparse min() that only holds up filtered and
     // temporally blended.
     const vec3 sunDir = u_sunDirection.xyz;
     const vec3 sunLight = u_sunTransmittance * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * u_sunVisible * u_fog_sunScatter); // x "Sun scatter", as the froxels
-    // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
-    // would report zero coverage out here and hand over to exactly this. Its sunlit-ground part
-    // (giSkySunIrradiance) is cloud-shadowed like the sun: weighted by sunW, which equals 1 - T unshadowed.
-    // GI off (u_rt_giStrength 0): no sky SH lookup.
+
+    // Virtual sky probe only: the GI probe field ends well inside the froxel volume (zero coverage out here). Its
+    // sunlit-ground part (giSkySunIrradiance) is cloud-shadowed like the sun: weighted by sunW (= 1 - T unshadowed).
     vec3 ambient = u_ambientColor * (1.0 - T);
     if (u_rt_giStrength > 0.0)
     {
@@ -235,11 +218,10 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     return vec4(u_fog_albedo * (sunLight * (sunW + hazeW) + ambient), T);
 }
 
-// The ray for this pixel from u_rayFromNdc (ubo.inc.glsl), not from a reconstructed position: u_invMvp is a float32
-// CPU inverse whose error re-rolls every frame, and a sky pixel's far field is a pure function of this ray, so that
-// wobble would be unfilterable flicker. Same ray as sky.fs.glsl / vol_scatter.cs.glsl. It is unjittered while the
-// depth image was rasterized jittered, hence -u_taaJitter (the NDC form of shared.inc.glsl's taaJitterUv
-// subtraction). invCos: the volume is bounded by view-Z, the far field integrates along the ray.
+// The ray for this pixel from u_rayFromNdc (ubo.inc.glsl), not from a reconstructed position: u_invMvp's float32 error
+// re-rolls every frame, and a sky pixel's far field is a pure function of this ray (unfilterable flicker). Same ray as
+// sky.fs.glsl / vol_scatter.cs.glsl; -u_taaJitter because the depth was rasterized jittered. invCos: the volume is
+// bounded by view-Z, the far field integrates along the ray.
 void fogRay(out vec3 dir, out float invCos)
 {
     const vec2 rayVpUv = (v_uv - u_viewportRect.xy) * u_viewportInvSize;
@@ -252,39 +234,33 @@ void fogRay(out vec3 dir, out float invCos)
 // t1 along dir (VOL_FAR_INFINITY for the sky; < 0 = worldPos itself, from its view-Z).
 vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
 {
-    // Reproject through the shared CENTRE view that the froxel volume was built in, so the lookup lands at the
-    // correct froxel regardless of which eye is sampling (on desktop the centre view IS this view). Sampling
-    // the centre-built volume at the eye's own screen UV would offset the fog by the eye/head parallax.
+    // Reproject through the CENTRE view the froxel volume was built in, so every eye lands at the correct froxel (on
+    // desktop the centre view IS this view); the eye's own screen UV would offset the fog by the eye parallax.
     const vec4 centerClip = u_views_mvp[VIEW_CENTER] * vec4(worldPos, 1.0);
     const float viewZ = centerClip.w;
     const vec2 ndc = centerClip.xy / centerClip.w;
     const vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    // Outside the centre view (a sliver an eye can see past the volume's coverage): emit no fog rather than
-    // letting the clamp sampler smear the edge froxels across the screen.
+    // Outside the centre view (a sliver an eye sees past the volume): no fog, instead of smeared edge froxels.
     if (centerClip.w <= 0.0 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
         return vec4(0.0, 0.0, 0.0, 1.0); // inScatter 0, transmittance 1 -> scene unchanged
-    // Texel z of the integrated volume stores the fog state at slice z's FAR edge, so the matching
-    // texture coordinate sits half a slice below the continuous slice coordinate (texel centers are at
-    // +0.5). Sampling without that shift read fog from half a slice too deep and anchored the linear
-    // reconstruction between slices wrong - one source of view-aligned fog banding.
+
+    // Texel z holds the fog at slice z's FAR edge, so the texture coordinate sits half a slice below the continuous
+    // slice coordinate (else view-aligned banding). A per-pixel interleaved-gradient dither (+-half a slice, per frame)
+    // breaks the residual Mach banding of the linear reconstruction into noise below TAA's threshold.
     const float s = volViewZToSlice(viewZ) * float(VOL_FROXEL_Z); // continuous slice index
-    // Per-pixel interleaved-gradient dither (+-half a slice, rotated per frame): breaks the residual
-    // Mach banding of the piecewise-linear reconstruction into noise below TAA's threshold.
     const vec2 px = gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 63u);
     const float ign = fract(52.9829189 * fract(0.06711056 * px.x + 0.00583715 * px.y));
     const float w = clamp((s - 0.5 + (ign - 0.5)) / float(VOL_FROXEL_Z), 0.0, 1.0);
     vec4 fog = texture(u_integrated, vec3(vpUv, w));
-    // Inside the first slice there is no "before fog" texel to lerp from: fade the fog in linearly so
-    // very near geometry isn't over-fogged by the first slice's full accumulation.
+    // Inside the first slice there is no "before" texel to lerp from: fade in, so near geometry is not over-fogged.
     if (s < 1.0)
         fog = mix(vec4(0.0, 0.0, 0.0, 1.0), fog, s);
 
     if (u_fog_farFieldEnabled > 0.5) // far field: picks up exactly where the volume's last slice ends
     {
         const float t0 = volFogFar() * invCos;
-        // t1 < 0: the point itself (the scene surface). Sky runs to infinity, which the closed form handles:
-        // a level ray saturates at the horizon, an upward one converges on a finite optical depth.
-        // "Far Field/Max distance" (u_fog_farFieldMaxDistance) bounds it: past it no fog is added.
+        // t1 < 0: the scene surface. The sky runs to infinity (the closed form handles it), bounded by "Far Field/Max
+        // distance" (u_fog_farFieldMaxDistance): past it no fog is added.
         const float tEnd = min(t1 < 0.0 ? viewZ * invCos : t1, u_fog_farFieldMaxDistance);
         if (tEnd > t0)
         {
@@ -295,16 +271,16 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
     return fog;
 }
 
-// The atmosphere (in-scatter, transmittance) from the centre view's camera to worldPos (aerial_lut.cs.glsl). Its
-// texel z holds the value at slice z's FAR edge, t = maxDist * ((z + 1) / Z)^2: the continuous slice coordinate
-// s = Z * sqrt(t / maxDist) samples at (s - 0.5) / Z, and inside the first slice it fades in from nothing (fogTo's
-// rules). Past the LUT's max distance it keeps the last slice. An eye's sliver past the centre view clamps to the
-// edge: the haze is smooth, unlike the froxels.
+// The atmosphere (in-scatter, transmittance) from the centre view's camera to worldPos (aerial_lut.cs.glsl). Texel z
+// holds slice z's FAR edge, t = maxDist * ((z + 1) / Z)^2: s = Z * sqrt(t / maxDist) samples at (s - 0.5) / Z, with
+// fogTo's first-slice fade. Past the max distance it keeps the last slice. An eye's sliver past the centre view clamps
+// to the edge: the haze is smooth, unlike the froxels.
 vec4 aerialTo(vec3 worldPos)
 {
     const vec4 centerClip = u_views_mvp[VIEW_CENTER] * vec4(worldPos, 1.0);
     if (centerClip.w <= 0.0)
         return vec4(0.0, 0.0, 0.0, 1.0);
+
     const vec2 ndc = centerClip.xy / centerClip.w;
     const vec2 vpUv = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     const float dist = length(worldPos - u_views_viewPos[VIEW_CENTER].xyz);
@@ -328,27 +304,23 @@ void main()
     float invCos;
     fogRay(dir, invCos);
 
-    // The cloud part FIRST, folded into (partial in-scatter, cloud transmittance) = 4 live values across the
-    // scene's fog evaluation below; the other order kept the scene fog AND the cloud (8) live across the
-    // second fogTo (+12 registers). CLOUDS is baked ("Sky/Clouds/Enabled"); u_clouds_enabled = the cloud
-    // march ran this frame (the game suppresses it at runtime).
+    // REGISTERS: the cloud part FIRST, folded into (partial in-scatter, cloud transmittance) = 4 live values across the
+    // scene's fog below; the other order keeps the scene fog AND the cloud (8) live across the second fogTo (+12
+    // registers). CLOUDS is baked ("Sky/Clouds/Enabled"); u_clouds_enabled = the cloud march ran this frame.
     vec4 cloudPart = vec4(0.0, 0.0, 0.0, 1.0); // rgb = C.a * S + (1 - T) * C.rgb, a = T
     bool sameFog = false; // the cloud sees the scene's own fog: cloudPart.rgb still holds S, folded below
     float tCloud = 1e30;  // the cloud layer's distance (orders it against the far trees)
 #ifdef CLOUDS
     if (u_clouds_enabled > 0.5)
     {
-        const float logScene = depth > 0.0
-            ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
-            : 1e30;
+        const float logScene = depth > 0.0 ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0)) : 1e30;
         float logCloudDist;
         const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
         cloudPart = cloud;
         if (cloud.a < 0.999)
         {
-            // The fog in front of the cloud: the same two parts, to the cloud's weighted distance - unless the
-            // cloud AND the scene lie past both the froxel volume and the far field's max distance: then both
-            // see the same (whole) fog, and the scene's evaluation below serves the cloud too.
+            // The fog in front of the cloud, to its weighted distance - unless cloud AND scene lie past the froxel volume
+            // and the far field's max distance: then both see the whole fog, and the scene's evaluation serves both.
             tCloud = exp2(logCloudDist);
             const float fogEnd = max(u_fog_farFieldMaxDistance, u_fog_range * invCos);
             sameFog = min(logCloudDist, logScene) >= log2(fogEnd);
@@ -360,12 +332,14 @@ void main()
         }
     }
 #endif
+
     const vec3 scenePos = worldPosFromDepth(v_uv, depth);
     vec4 fog = fogTo(scenePos, depth <= 0.0 ? VOL_FAR_INFINITY : -1.0, dir, invCos);
     if (sameFog) // the cloud's fog WITHOUT the scene's air: the cloud carries its own
         cloudPart.rgb = fog.a * cloudPart.rgb + (1.0 - cloudPart.a) * fog.rgb;
     if (depth > 0.0)
         fog = withAerial(fog, scenePos);
+
     vec4 layers = cloudPart;
     if (u_foliage_farMarched > 0.5)
     {
@@ -376,10 +350,10 @@ void main()
             const vec3 treesPos = u_viewPos + dir * tTrees;
             const vec4 fogTrees = withAerial(fogTo(treesPos, tTrees, dir, invCos), treesPos);
             const vec3 treePart = fogTrees.a * trees.rgb + (1.0 - trees.a) * fogTrees.rgb;
-            layers = tTrees <= tCloud
-                ? vec4(treePart + trees.a * cloudPart.rgb, trees.a * cloudPart.a)
-                : vec4(cloudPart.rgb + cloudPart.a * treePart, cloudPart.a * trees.a);
+            layers = tTrees <= tCloud ? vec4(treePart + trees.a * cloudPart.rgb, trees.a * cloudPart.a)
+                                      : vec4(cloudPart.rgb + cloudPart.a * treePart, cloudPart.a * trees.a);
         }
     }
+
     out_color = vec4(layers.a * fog.rgb + layers.rgb, layers.a * fog.a);
 }

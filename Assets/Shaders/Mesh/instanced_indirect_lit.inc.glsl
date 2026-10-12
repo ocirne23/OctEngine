@@ -1,22 +1,22 @@
 // Shared lighting core for the lit instanced_indirect fragment variants (instanced_indirect.fs.glsl,
-// instanced_indirect_terrain.fs.glsl): the material/light/GI/RT bindings and computeLitColor()
-// (screen-space AO + GI probes + sun with underwater caustics + the clustered light grid).
-// The includer provides #version, the extensions and shared.inc.glsl first.
+// instanced_indirect_terrain.fs.glsl): the material/light/GI/RT bindings and computeLitColor() (screen-space AO + GI
+// probes + sun with underwater caustics + the clustered light grid). The includer provides #version, the extensions
+// and shared.inc.glsl first.
 #ifndef INSTANCED_INDIRECT_LIT_INC_GLSL
 #define INSTANCED_INDIRECT_LIT_INC_GLSL
 
 #include "mesh_vertex.inc.glsl"
 #include "motion_vector.inc.glsl"
 
-// MOTION_WORLD_DELTA: this point's world offset from where it was last frame (motion_vector.inc.glsl). The
-// includer that draws moving meshes defines it as its interpolant; without it (the terrain: static) the AO
-// read compiles the camera-only reprojection.
+// MOTION_WORLD_DELTA: this point's world offset from where it was last frame (motion_vector.inc.glsl). The includer
+// that draws moving meshes defines it as its interpolant; without it (the terrain: static) the AO read compiles the
+// camera-only reprojection.
 
 struct MaterialInfo
 {
 	uint flags;
-    float opacity;
-    uint diffuseNormalTexIdx;
+	float opacity;
+	uint diffuseNormalTexIdx;
 	uint metalRoughnessTexIdxAlphaMode;
 };
 struct LightInfo
@@ -39,18 +39,18 @@ layout (binding = 4, std430) readonly buffer InLightInfos
 };
 layout (binding = 5, std430) readonly buffer InLightGrid
 {
-    uint in_gridData[];
+	uint in_gridData[];
 };
 layout (binding = 6, std430) readonly buffer InGridTable
 {
 	uint in_numGrids;
 	uint in_gridDataCounter;
-    uint in_tableSize;
-    uint in_gridTable[];
+	uint in_tableSize;
+	uint in_gridTable[];
 };
 
-layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 23) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 20) uniform sampler2DArray u_skyMap; // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
+layout (binding = 23) uniform sampler2D u_textures[];  // highest binding in the set: variable descriptor count
 #define CLOUD_SHADOW_BINDING 22
 #include "cloud_shadow.inc.glsl"
 #ifdef GI_VOLUME
@@ -58,15 +58,15 @@ layout (binding = 23) uniform sampler2D u_textures[]; // highest binding in the 
 layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
-layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;      // comparison sampler (hardware PCF)
-layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;       // raw depth (PCSS blocker search)
-layout (binding = 13) uniform sampler2D u_ao;                       // LAST frame's denoised half-res screen-space AO (reprojected bilateral upsample)
-layout (binding = 12) uniform sampler2D u_prevDepth;                // LAST frame's full-res hardware depth (the AO upsample's edge weights)
+layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap; // comparison sampler (hardware PCF)
+layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;  // raw depth (PCSS blocker search)
+layout (binding = 13) uniform sampler2D u_ao;                  // LAST frame's denoised half-res screen-space AO (reprojected bilateral upsample)
+layout (binding = 12) uniform sampler2D u_prevDepth;           // LAST frame's full-res hardware depth (the AO upsample's edge weights)
 
-layout (binding = 11) uniform accelerationStructureEXT u_tlas;       // ray-traced shadows for punctual/area lights
+layout (binding = 11) uniform accelerationStructureEXT u_tlas; // ray-traced shadows for punctual/area lights
 
-// Mesh/instance data for the shadow rays' alpha test (rt_shadow.inc.glsl). in_instances must be the same
-// buffer the TLAS instance records were built from (custom index = index into it), not the culled list.
+// Mesh/instance data for the shadow rays' alpha test (rt_shadow.inc.glsl). in_instances must be the same buffer the
+// TLAS instance records were built from (custom index = index into it), not the culled list.
 struct InMeshInfo
 {
 	vec3 center;
@@ -88,18 +88,18 @@ layout (binding = 15, std430) readonly buffer InRTIndices   { uint in_indices[];
 layout (binding = 16, std430) readonly buffer InRTMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_instances[]; };
 
-// GI irradiance probes (diffuse indirect). Persistent cascaded clipmap SH volume, written by the probe
-// trace pass; addressed toroidally relative to the camera (u_viewPos), so no hash table is needed.
+// GI irradiance probes (diffuse indirect): a cascaded clipmap SH volume written by the probe trace pass, addressed
+// toroidally relative to the camera, so no hash table is needed.
 layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }; // vec4 layout: gi_probe.inc.glsl
 
 #include "shadows.inc.glsl"
 
-#define GRID_DATA_NAME         in_gridData
-#define GRID_TABLE_NAME 	   in_gridTable
-#define TABLE_SIZE_NAME        in_tableSize
+#define GRID_DATA_NAME  in_gridData
+#define GRID_TABLE_NAME in_gridTable
+#define TABLE_SIZE_NAME in_tableSize
 #include "light_grid.inc.glsl"
 
-#define GI_GRID_DATA_NAME      gi_gridData
+#define GI_GRID_DATA_NAME gi_gridData
 #define GI_PROBE_HALF // the fp16 read side (computeLitColor's indirect term is half)
 #include "gi_probe.inc.glsl"
 
@@ -107,8 +107,8 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 
 #include "punctual_lights.inc.glsl"
 
-// The RT shadow toggles are defines on every includer of this core (the lit, masked, transparent and
-// terrain fragments); the uniforms stay for the ocean, the fog and GI, which read them at run time.
+// The RT shadow toggles are defines on every includer of this core; the uniforms stay for the ocean, the fog and
+// GI, which read them at run time.
 #ifndef LIT_RT_SUN_SHADOW
 #error "LIT_RT_SUN_SHADOW must be defined by the pipeline"
 #endif
@@ -116,45 +116,44 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 #error "LIT_RT_LIGHT_SHADOWS must be defined by the pipeline"
 #endif
 
-// Terrain data cascades (height/water level/climate/altitude) + FFT ocean maps: underwater sunlight
-// (caustics) for EVERY lit material, and the terrain variant's procedural coloring. Both bindings exist
-// set-wide (19 = terrain data, 7 = u_oceanMaps - see StaticMeshGraphicsPipeline::buildPipelineLayout).
+// Terrain data cascades + FFT ocean maps: underwater sunlight (caustics) for EVERY lit material, and the terrain
+// variant's procedural colouring. Both bindings exist set-wide (StaticMeshGraphicsPipeline::buildPipelineLayout).
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
 #define UNDERWATER_OCEAN_BINDING 7
 #include "underwater_light.inc.glsl"
 
-// Optional precomputed local water level, so callers that already sampled the terrain data cascade (the
-// terrain variant does, for its splatting) don't pay for a second identical terrainDataAt fetch here.
-// >= this sentinel = not provided -> fetch it. Default keeps every other lit variant unchanged.
+// Optional precomputed local water level: the terrain variant already sampled the terrain data cascade for its
+// splatting, so it skips a second terrainDataAt fetch here. >= this sentinel = not provided -> fetch it.
 const float WATER_LEVEL_UNSET = 1e30;
 float g_waterLevelOverride = WATER_LEVEL_UNSET;
-// The sun's shadow visibility x eclipse that doSunLight resolved for this pixel (PCSS / RT / terrain
-// march), BEFORE the underwater factor (no caustic focus, no Beer-Lambert): the sun as it arrives at the
-// water SURFACE above this pixel. A material that adds a lobe on that surface after computeLitColor (the
-// terrain's water film glint and whitewater) lights it with sunSurfaceRadiance() instead of paying the
-// shadow evaluation again - with the underwater factor the ground's caustic pattern rode into the film's
-// specular and showed as warped caustics on every filmed pixel under a wave. One HALF scalar, not the
-// radiance: it is live across computeLitColor's whole light loop. 0 = sun behind the surface.
+
+// The sun's shadow visibility x eclipse that doSunLight resolved for this pixel, BEFORE the underwater factor: the
+// sun as it arrives at the water SURFACE above this pixel. A material that adds a lobe on that surface after
+// computeLitColor (the terrain's water film glint and whitewater) lights it with sunSurfaceRadiance() instead of a
+// second shadow evaluation; with the underwater factor the ground's caustics would show in the film's specular. One
+// HALF scalar, not the radiance: it is live across computeLitColor's whole light loop. 0 = sun behind the surface.
 float16_t g_sunVisSurface = float16_t(0.0);
+
 // The material's own sun occlusion, set before computeLitColor: the terrain's relief self-shadow
-// (terrain_splat.inc.glsl, TERRAIN_SPLAT_RELIEF). Scales the ground's sun only - not g_sunVisSurface, so the
-// water film on top keeps its glint. A constant 1 (folded away) for every other material.
+// (TERRAIN_SPLAT_RELIEF). Scales the ground's sun only, not g_sunVisSurface, so the water film keeps its glint. A
+// constant 1 (folded away) for every other material.
 float16_t g_sunVisMaterial = float16_t(1.0);
+
 vec3 sunSurfaceRadiance()
 {
 	return u_sunTransmittance * u_sunColor.rgb * float(g_sunVisSurface);
 }
-// Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data),
-// resolved by doSunLight for every pixel - the same test that gates the caustics/absorption, published
-// so the terrain's water film can gate on it too (ground under the live surface is the ocean's to draw).
+
+// Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data), resolved by
+// doSunLight for every pixel - the test that gates the caustics/absorption, published so the terrain's water film can
+// gate on it too (ground under the live surface is the ocean's to draw).
 float g_liveDepthBelow = -1e30;
 float g_liveWaterLevel = 0.0;      // the calm local level the depth was measured from
-bool  g_liveDepthResolved = false; // resolveLiveDepth ran for this pixel (a material may call it EARLY -
-                                   // the terrain gates its wetness gloss on it before computeLitColor)
+bool  g_liveDepthResolved = false; // resolveLiveDepth ran (a material may call it EARLY: the terrain's wetness gloss)
 
-// Resolves g_liveDepthBelow / g_liveWaterLevel for worldPos, once per pixel. One water-level fetch (or
-// the material's override); only the swash band pays for the wave taps.
+// Resolves g_liveDepthBelow / g_liveWaterLevel for worldPos, once per pixel. One water-level fetch (or the
+// material's override); only the swash band pays for the wave taps.
 void resolveLiveDepth(vec3 worldPos)
 {
 	if (g_liveDepthResolved)
@@ -164,15 +163,12 @@ void resolveLiveDepth(vec3 worldPos)
 		return;
 	const float localWaterLevel = g_waterLevelOverride < WATER_LEVEL_UNSET ? g_waterLevelOverride : terrainDataAt(worldPos.xz).y;
 	float depthBelow = localWaterLevel - worldPos.y;
-	// Gate against the LIVE displaced surface, not the calm level - a receded wave leaves sand below
-	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
-	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
-	// the surface's max EXCURSION (u_ocean_waveExcursion, on the CPU) - the larger of the swash reach and the
-	// open-water trough (fog_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
-	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
-	// the contribution fades out over a half-excursion band (u_ocean_waveExcursionFadeEnd) instead of cutting. A hard cut at the swash
-	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
-	// wave height across it. The excursion is >= the swash reach (>= 0.01: "Swash amplitude" >= 0.04 on the CPU).
+
+	// Gate against the LIVE displaced surface, not the calm level: a receded wave leaves sand below the calm line dry,
+	// and the run-up tongue is lit as underwater. Within the surface's max EXCURSION (u_ocean_waveExcursion: the
+	// larger of the swash reach and the open-water trough) the wave decides the side, so it adds in full; beyond it
+	// only the path length would change, so it fades out over a half-excursion band (u_ocean_waveExcursionFadeEnd).
+	// A hard cut drew a line across the seabed that moved with "Swash amplitude".
 	const float excursion = u_ocean_waveExcursion;
 	const float fadeEnd = u_ocean_waveExcursionFadeEnd;
 	const float dist = abs(depthBelow);
@@ -186,22 +182,19 @@ void resolveLiveDepth(vec3 worldPos)
 // the clouds. N = the normal the shadow's offset follows.
 float sunShadowVisibility(vec3 worldPos, vec3 N)
 {
-	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
-	// BAKED (LIT_RT_SUN_SHADOW, StaticMeshGraphicsPipeline): only the active path is compiled, so the
-	// registers are allocated for one of the PCSS search and the ray-query loop, not for the larger one.
+	const vec3 L = u_sunDirection.xyz; // normalized on the CPU
+	// BAKED (LIT_RT_SUN_SHADOW): only the active path compiles, so the registers are allocated for one of the PCSS
+	// search and the ray-query loop, not for the larger one.
 #if LIT_RT_SUN_SHADOW
 	float visibility = traceSunVisibility(worldPos, N);
 #else
 	float visibility = sampleSunShadow(worldPos, N);
 #endif
-	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring -
-	// the cascades end at Shadows/Max distance (3 km default), the RT path's instances at RT/TLAS Range
-	// (4 km) - while terrain meshes run to ~33 km, so distant ground otherwise sits uniformly lit behind a
-	// hard terminator. The baked height cascades still cover all of it, so march them there and take the
-	// DARKER of the two: inside the fade band both terms see the same ridge (min is a no-op, no double
-	// darkening), past it only the march survives. Skipped up close, where the map's texels are coarser
-	// than the geometry they would be shadowing and could only produce acne.
-	// Reach is bias * 2^10 - ~77 km at the default 150 m, comfortably past the far cascade's own range.
+
+	// Long-range terrain shadows: the cascades (Shadows/Max distance) and the RT instances (RT/TLAS Range) end well
+	// inside the terrain mesh ring (~33 km), so march the baked height cascades there and take the DARKER of the two
+	// (inside the fade band both see the same ridge: no double darkening). Skipped up close, where the map's texels
+	// are coarser than the geometry and could only produce acne. Reach = bias * 2^10 (~77 km at the default 150 m).
 	if (terrainHeightMapPresent())
 	{
 		const float fadeIn = smoothstep(u_shadow_terrainMarchStart, u_shadow_terrainMarchStart * 1.25, distance(worldPos, u_viewPos));
@@ -211,16 +204,16 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 			visibility = min(visibility, mix(1.0, terrainVis, fadeIn));
 		}
 	}
+
 	visibility *= u_sunVisible;
-	if (visibility > 0.0) // in full shadow the cloud lookup (one or two fetches) changes nothing
+	if (visibility > 0.0) // in full shadow the cloud lookup changes nothing
 		visibility *= cloudSunTransmittance(worldPos);
 	return visibility;
 }
 
-// SUN_SHADOW_FIRST (the lit FS and the terrain ground define it): the includer evaluates sunShadowVisibility
-// itself at the TOP of main, from the GEOMETRIC normal, before it reads the material, and stores it here. The
-// shadow search is the register peak (Nsight, 2026-09-28: 70 live in pcssCascade), and there nothing of the
-// surface is live yet.
+// SUN_SHADOW_FIRST (the lit FS and the terrain ground): the includer evaluates sunShadowVisibility at the TOP of
+// main, from the GEOMETRIC normal, before it reads the material, and stores it here. The shadow search is the
+// register peak (70 live in pcssCascade), and there nothing of the surface is live yet.
 #ifdef SUN_SHADOW_FIRST
 float g_sunShadowFirst = 0.0;
 #endif
@@ -228,12 +221,12 @@ float g_sunShadowFirst = 0.0;
 vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	const vec3 N = vec3(Nh); // the facing test (and, without SUN_SHADOW_FIRST, the shadow's normal offset)
-	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
+	const vec3 L = u_sunDirection.xyz; // normalized on the CPU
 	if (dot(N, L) <= 0.0)
 		return vec3(0.0);
-	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's
-	// film gate) resolves it itself before computeLitColor; here it is a no-op then, and other lit
-	// materials keep paying the water-level fetch only on sun-facing pixels.
+
+	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's film gate)
+	// resolves it before computeLitColor (a no-op here then); other materials pay the fetch on sun-facing pixels only.
 	resolveLiveDepth(worldPos);
 	const float depthBelow = g_liveDepthBelow;
 	const float localWaterLevel = g_liveWaterLevel;
@@ -242,29 +235,25 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 #else
 	const float visibility = sunShadowVisibility(worldPos, N);
 #endif
-	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
+
+	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), once per frame on the CPU.
 	g_sunVisSurface = float16_t(visibility);
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * float(g_sunVisMaterial));
-	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption
-	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
-	// the live depth resolved above.
+	// Underwater: caustic focus + Beer-Lambert absorption (underwater_light.inc.glsl).
 	if (depthBelow > 0.0)
 		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
 	return doLightH(lightRadiance, f16vec3(L), V, Nh, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
-// Depth-aware 2x2 upsample of LAST FRAME's half-res AO/bent-normal image, reprojected. The AO is traced
-// from the scene depth, which this pass is still writing - so this pass reads the previous frame's AO
-// against the previous frame's depth: no input of this frame, no ordering constraint on the trace.
-// The reprojection follows the point itself - the camera AND the object's own motion (MOTION_WORLD_DELTA,
-// the motion vectors) - so a moving object reads its own AO from where it was, and the taps are tested
-// against where the point WAS. Plain bilinear bleeds across depth discontinuities (a far wall's AO/bent
-// normal mixing into a near silhouette shows as a bright GI rim), so each tap's bilinear weight is scaled
-// by its world-space distance to that point; the same test rejects disoccluded taps. Returns (0, 0, 0, 1)
-// - no bent normal, no occlusion - without history.
+
+// Depth-aware 2x2 upsample of LAST FRAME's half-res AO/bent-normal image, reprojected: the AO is traced from the
+// scene depth this pass is still writing, so this pass reads the previous frame's AO against the previous frame's
+// depth (no ordering constraint on the trace). The reprojection follows the camera AND the object's own motion
+// (MOTION_WORLD_DELTA), and the taps are tested against where the point WAS. Plain bilinear bleeds across depth
+// edges (a bright GI rim on a near silhouette), so each tap's weight is scaled by its world-space distance to that
+// point; the same test rejects disoccluded taps. Returns (0, 0, 0, 1) - no bent normal, no occlusion - without history.
 vec4 sampleAOBilateral(vec3 pos, float viewDist)
 {
-	// Clip-space reprojection of this fragment (fragPrevClip). Last frame's image holds a surface at its
-	// unjittered uv + ITS jitter.
+	// Last frame's image holds a surface at its unjittered uv + ITS jitter.
 #ifdef MOTION_WORLD_DELTA
 	const vec3 prevDelta = MOTION_WORLD_DELTA;
 	const vec4 prevClip = fragPrevClip(prevDelta);
@@ -280,15 +269,14 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 
 	const vec2 aoRes   = ceil(u_screenSize.xy * 0.5);
 	const vec2 aoTexel = 1.0 / aoRes;
-	const vec2 st   = prevUv * aoRes - 0.5;
-	const vec2 base = (floor(st) + 0.5) * aoTexel;
-	const vec2 f    = fract(st);
+	const vec2 st      = prevUv * aoRes - 0.5;
+	const vec2 base    = (floor(st) + 0.5) * aoTexel;
+	const vec2 f       = fract(st);
 	const float bw[4] = float[]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
 	const vec2 offs[4] = vec2[](vec2(0.0), vec2(aoTexel.x, 0.0), vec2(0.0, aoTexel.y), aoTexel);
 
-	// ALL EIGHT FETCHES FIRST, back to back, then the weights: one texture-latency wait instead of a chain (each
-	// AO tap used to sit behind its own depth test). textureLod: single-level images, no derivatives, so the
-	// fetches need no uniform flow. The AO taps are held half (4 x 2 registers).
+	// ALL EIGHT FETCHES FIRST, then the weights: one texture-latency wait instead of a chain. textureLod: single-level
+	// images, no derivatives, so the fetches need no uniform flow. The AO taps are held half (4 x 2 registers).
 	float d[4];
 	f16vec4 aoTap[4];
 	for (int i = 0; i < 4; ++i)
@@ -308,7 +296,7 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 			continue;
 		const vec3 tapPos = worldPosFromDepthMat(base + offs[i] - prevJitter, d[i], u_prevInvMvp);
 		const vec3 dp = tapPos - prevPos;
-		const float w  = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
+		const float w = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
 		sum  += vec4(aoTap[i]) * w;
 		wsum += w;
 	}
@@ -316,52 +304,44 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 	return wsum > 1e-4 ? sum / wsum : vec4(0.0, 0.0, 0.0, 1.0);
 }
 
-// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light
-// count heat, 3 light ranges. BAKED: StaticMeshGraphicsPipeline defines LIGHT_GRID_DEBUG and the tweak
-// reloads the pipeline, so at 0 every debug branch and variable below folds away (the sun cascade
-// view is the SHADOW_DEBUG overlay at the end).
+// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light count heat,
+// 3 light ranges. BAKED (the tweak reloads the pipeline), so at 0 every debug branch folds away.
 #ifndef LIGHT_GRID_DEBUG
 #define LIGHT_GRID_DEBUG 0
 #endif
 
-// Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun
-// (with underwater caustics) and the clustered light grid. texAO multiplies only the ambient/indirect
-// term (baked texture AO on top of the screen-space term - pass 1.0 when the material carries none).
-// The surface arrives HALF (N, colour, roughness = GGX alpha >= 0.01, metalness, AO): the direct-light BRDF
-// is half math end to end (punctual_lights.inc.glsl, the fp16 BRDF), and so is the ambient/indirect term.
-// Only V converts here; no 32-bit copy of the surface exists to stay live across the sun's shadow search.
-// (A second, specular-only lobe riding this light loop - the terrain's water film, one shadow ray per light
-// for both - was tried and dropped: the film's surface then had to be resolved before the loop and its
-// values stayed live across the shadow ray query, 80/64 regs/local against 80/32 with the film's own loop.)
 #ifdef FOLIAGE_NO_RTAO
-// FOLIAGE cards (set by the lit FS around computeLitColor): no RTAO. The AO is traced from the depth image, so on
-// a card it is the occlusion of the flat card by the crossing card and the ground, not of the crown it stands for.
+// FOLIAGE cards (set by the lit FS around computeLitColor): no RTAO. The AO is traced from the depth image, so on a
+// card it is the occlusion of the flat card by the crossing card and the ground, not of the crown it stands for.
 bool g_noRtao = false;
 #endif
 
+// Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun (with underwater
+// caustics) and the clustered light grid. texAO multiplies only the ambient/indirect term (baked texture AO; 1.0 when
+// the material carries none). The surface arrives HALF (roughness = GGX alpha >= 0.01): the direct-light BRDF and the
+// indirect term are half math end to end, and only V converts here, so no 32-bit copy of the surface stays live
+// across the sun's shadow search. (The terrain's water film has its own light loop: riding this one kept its surface
+// live across the shadow ray query - 80/64 regs/local against 80/32.)
 vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
 	const f16vec3 V = f16vec3(Vf);
 	const f16vec3 specularColor = mix(f16vec3(0.04), materialColor, metalness);
-	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so the BRDF's
-	// kD = (1 - F) * (1 - 0) and metalness is not live across the light loop (one register fewer).
+	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so metalness is not live
+	// across the light loop (one register fewer).
 	const f16vec3 diffuseColOverPi = materialColor * (float16_t(INV_PI) * (float16_t(1.0) - metalness));
 
-	// The sun FIRST: its shadow search (PCSS taps or the ray-query loop) is the likely register peak, and
-	// here no AO / GI result is live across it yet.
-	// The accumulator is HALF (the scene colour target is RGBA16F): live from here across the GI read and the
-	// whole light loop. Each light's radiance is unbounded, so it is clamped to the half range as it lands.
+	// The sun FIRST: its shadow search is the likely register peak, and here no AO / GI result is live across it yet.
+	// The accumulator is HALF (the scene colour target is RGBA16F); each light's unbounded radiance is clamped to the
+	// half range as it lands.
 	f16vec3 colorH = f16vec3(min(doSunLight(worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH), vec3(MEDIUMP_FLT_MAX)));
 
 	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
 	float16_t ao = float16_t(1.0);
 	f16vec3 bentN = N;
 #ifndef LIT_NO_RTAO // the grass (grass.fs.glsl): no RTAO read at all - its own root occlusion stands in
-	// Past the RTAO max distance (u_rt_aoMaxDistance) the trace writes exactly (0, 1.0) - no occlusion, no
-	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
-	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly.
-	// The gate measures from the SCENE FOCUS, the same origin as rtao.cs.glsl's early-out; the camera
-	// distance still drives the upsample's depth weights.
+	// Past the RTAO max distance the trace writes exactly (0, 1.0) (rtao.cs.glsl early-out), so skip the upsample and
+	// use those constants. The gate measures from the SCENE FOCUS, as that early-out does; the camera distance still
+	// drives the upsample's depth weights.
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
 #ifdef FOLIAGE_NO_RTAO
 	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance && !g_noRtao)
@@ -372,24 +352,22 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(worldPos, aoViewDist);
 		ao = float16_t(aoSample.w);
-		// Evaluate the indirect irradiance along the bent normal rather than the surface normal: in concave
-		// areas it points toward the open hemisphere, so the low-frequency probe SH stops leaking light from
-		// occluded directions. Mix partway toward N so flat, unoccluded surfaces are left untouched.
-		// A zero bent normal = none (past the trace's range, fully occluded, or no history): keep N.
+		// The indirect irradiance along the bent normal: in concave areas it points toward the open hemisphere, so the
+		// low-frequency probe SH stops leaking light from occluded directions. Mixed partway toward N so flat surfaces
+		// stay untouched. A zero bent normal = none (past the trace's range, fully occluded, or no history): keep N.
 		const float bentLen2 = dot(aoSample.xyz, aoSample.xyz);
 		if (bentLen2 > 1e-6)
 			bentN = normalize(mix(bentN, f16vec3(aoSample.xyz * inversesqrt(bentLen2)), float16_t(0.75)));
 	}
 #endif
-	// Blend to the virtual sky probe over the probe field's outer band (coverage) instead of stepping
-	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.
-	// Volume mode: ~8 filtered fetches, not ~100 probe loads.
+
+	// Blends to the virtual sky probe over the probe field's outer band. Volume mode: ~8 filtered fetches, not ~100
+	// probe loads.
 	const f16vec3 indirect = giIndirectOverPiH(worldPos, bentN);
-	// indirect * strength + ambient, times AO: two scalar folds fewer than the previous grouping.
 	colorH += materialColor * ((indirect * float16_t(u_rt_giStrength) + f16vec3(u_ambientColor)) * (ao * texAO));
 
 	const ivec3 gridPos = getGridPos(worldPos);
-    uint tableIdx = getTableIdx(gridPos);
+	uint tableIdx = getTableIdx(gridPos);
 
 #if LIGHT_GRID_DEBUG == 2
 	bool  debugHit = false;          // this point's grid was found in the hash table
@@ -409,8 +387,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #if LIGHT_GRID_DEBUG == 2
 			debugHit = true;
 #endif
-			// ONE loop over the grid's large lights, then the cell's lights: the loop body inlines every
-			// light type plus the shadow ray queries, and two loops carried two copies of all of it.
+			// ONE loop over the grid's large lights, then the cell's lights: the body inlines every light type plus
+			// the shadow ray queries, and two loops carried two copies of all of it.
 			const uint numLargeLights = getLargeLightCount(gridIdx);
 			const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
 			const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
@@ -418,8 +396,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 			{
 				const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
 				const LightInfo light = in_lightInfos[lightId];
-				// The analytic term goes HALF before the shadow ray: only the half result (not its 32-bit value,
-				// not the light record) is live across the query, the loop's peak.
+				// The analytic term goes HALF before the shadow ray: only the half result is live across the query,
+				// the loop's peak.
 				const vec3 lit = doLight(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH);
 				const f16vec3 litH = f16vec3(min(lit, vec3(MEDIUMP_FLT_MAX)));
 				float16_t visibility = float16_t(1.0);

@@ -1,11 +1,9 @@
 #version 450
 
-// GI probe debug visualization: one instance per clipmap probe, placed at the probe (relocation offset
-// included) and sized with the cascade. Procedural geometry (no vertex buffers).
-// Every probe is a SPHERE IMPOSTOR: 6 verts = a camera-facing quad, and the fragment shader intersects the
-// sphere. Mode 0 (irradiance) evaluates the probe's SH per pixel along the true normal there; modes 1
-// (cascade / LOD), 2 (update priority) and 3 (relocation / backface state) pass a flat colour, which the
-// fragment shader shades by the sphere normal for depth perception. Mode 4 (visibility) is per pixel too.
+// GI probe debug visualization: one instance per clipmap probe, placed at the probe (relocation offset included) and
+// sized with the cascade. Every probe is a SPHERE IMPOSTOR: 6 verts = a camera-facing quad; the FS intersects the sphere.
+// Modes 0 (irradiance) and 4 (visibility) evaluate per pixel; modes 1 (cascade), 2 (update rate) and 3 (relocation /
+// backface state) pass a flat colour.
 
 #include "shared.inc.glsl"
 
@@ -38,10 +36,9 @@ void main()
     uint  cellBase = giProbeBase(cascade, lc);
     vec3  center  = vec3(lc) * float(spacing) + giProbeOffset(cellBase);
 
-    // Sphere impostor: a quad through the centre, facing the camera. The silhouette of a sphere seen from
-    // distance d is wider than its radius at the centre plane - r * d / sqrt(d^2 - r^2) - so the quad takes
-    // that size and the fragment shader discards what misses. A camera inside (or almost inside) the sphere
-    // has no silhouette: collapse the instance.
+    // Sphere impostor: a quad through the centre, facing the camera. Seen from distance d the silhouette is wider than
+    // the radius at the centre plane - r * d / sqrt(d^2 - r^2) - so the quad takes that size. A camera inside (or almost
+    // inside) the sphere has no silhouette: collapse the instance.
     const float r     = 0.5 * pc_radius * sqrt(float(spacing));
     const vec3  toCam = u_viewPos - center;
     const float d     = length(toCam);
@@ -55,6 +52,7 @@ void main()
         gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // outside the clip volume
         return;
     }
+
     const vec3 fwd   = toCam / d;
     const vec3 right = normalize(cross(abs(fwd.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), fwd));
     const vec3 up    = cross(fwd, right);
@@ -64,17 +62,14 @@ void main()
 
     if (pc_mode == 4u)
     {
-        // Visibility: evaluated per pixel by the fragment shader. x = spacing (the depth cap's unit),
-        // y = brightness (backface-dead probes, which the lookup rejects, are dimmed).
+        // Visibility, evaluated per pixel. x = spacing (the depth cap's unit), y = brightness (backface-dead probes dimmed).
         v_color = vec3(float(spacing), giProbeBackfaceFrac(cellBase) > GI_BACKFACE_DEAD_MAX ? 0.2 : 1.0, 0.0);
     }
     else if (pc_mode == 3u)
     {
-        // Relocation / backface state (the misc vec4): red = how far the lookup has faded the probe out as
-        // backface-dead, blue = relocation offset as a fraction of its clamp, YELLOW = escaped on its last
-        // visit (the trace pins the stored fraction to exactly DEAD_MAX there). A probe that keeps
-        // returning to yellow is escaping again and again - its lookup weight and its irradiance jump at
-        // the visit rate.
+        // Relocation / backface state: red = how far the lookup has faded the probe out as backface-dead, blue =
+        // relocation offset as a fraction of its clamp, YELLOW = escaped on its last visit (the trace pins the stored
+        // fraction to exactly DEAD_MAX there). A probe that keeps returning to yellow escapes again and again.
         const vec4  misc   = gi_gridData[cellBase + GI_MISC_V4];
         const float dead   = smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, misc.x);
         const float offset = clamp(length(misc.yzw) / (0.45 * float(spacing)), 0.0, 1.0);
@@ -84,12 +79,10 @@ void main()
     }
     else if (pc_mode == 2u)
     {
-        // Update rate: the wave's ACTUAL interval in frames (giWaveUpdateInterval, what the trace uses).
-        // MAGENTA = every frame (the maximum rate) - a HUE the ramp never produces, not white: these cubes
-        // go through the scene's exposure and bloom, where the ramp's bright yellow can clip to white.
-        // The rest is a LOG ramp, each doubling an equal step: blue (2 frames) -> green (~22) ->
-        // yellow (~76) -> red (256 or more). Backface-dead probes (GI_DEAD_INTERVAL on top) are dimmed.
-        // A COVERED wave (giWaveCovered) shows through its interval: a slow block in the fast centre.
+        // Update rate: the wave's ACTUAL interval in frames (giWaveUpdateInterval). MAGENTA = every frame - a hue the
+        // ramp never produces (not white: through exposure and bloom the ramp's yellow can clip to white). The rest is
+        // a LOG ramp: blue (2 frames) -> green (~22) -> yellow (~76) -> red (256 or more). Backface-dead probes
+        // (GI_DEAD_INTERVAL on top) are dimmed. A COVERED wave shows as a slow block in the fast centre.
         const uint interval = giWaveUpdateInterval(cascade, giWaveMin(lc, giCascadeOrigin(cascade, u_sceneFocus.xyz)), spacing);
         if (interval <= 1u)
             v_color = vec3(1.0, 0.0, 1.0);

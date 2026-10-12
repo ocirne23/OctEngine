@@ -1,14 +1,10 @@
-// Diffuse-only direct lighting used to shade GI ray-trace hits. It reuses the exact same world-space
-// light grid as the main forward pass (light_grid.inc.glsl accessors) plus the sun, so an indirect
-// bounce is lit consistently with primary surfaces. Reflections/specular are intentionally dropped
-// (probes only store diffuse irradiance).
-//
-// Requires the includer to have declared/included, with these names:
-//   - struct LightInfo + in_lightInfos[]              (the light list)
+// Diffuse-only direct lighting for GI ray-trace hits: the forward pass' light grid plus the sun, so a bounce is lit
+// like the primary surfaces. No specular (probes store diffuse irradiance only).
+// Requires the includer to have declared / included, with these names:
+//   - struct LightInfo + in_lightInfos[]
 //   - the light grid buffers + #include "light_grid.inc.glsl"
-//   - UBO
+//   - the UBO, PI (shared.inc.glsl)
 //   - u_shadowMap (sampler2DArrayShadow)
-//   - PI (shared.inc.glsl)
 
 #ifndef LIGHTING_INC_GLSL
 #define LIGHTING_INC_GLSL
@@ -23,8 +19,8 @@ float giSquareFalloff(float dist, float lightRadius)
     return attenuation * falloff;
 }
 
-// Hard single-tap cascaded sun shadow. A trimmed version of shadows.inc.glsl's PCSS that avoids its
-// gl_FragCoord-based dither (unavailable in compute); cheap and leak-free enough for diffuse GI.
+// Hard single-tap cascaded sun shadow: shadows.inc.glsl's PCSS without its gl_FragCoord dither (unavailable in
+// compute); good enough for diffuse GI.
 float giSunShadow(vec3 worldPos, vec3 N)
 {
     float dist = length(worldPos - u_sceneFocus.xyz); // same pick as shadows.inc.glsl's getSunCascade
@@ -33,6 +29,7 @@ float giSunShadow(vec3 worldPos, vec3 N)
     {
         if (dist < u_cascadeViewProj[i][0][3]) { cascade = i; break; } // per-cascade far stashed in m[0][3]
     }
+
     mat4 m = u_cascadeViewProj[cascade];
     m[0][3] = 0.0; m[1][3] = 0.0; m[2][3] = 0.0; m[3][3] = 1.0; // restore canonical bottom row
     vec4 lp = m * vec4(worldPos + N * 0.1, 1.0);
@@ -43,11 +40,10 @@ float giSunShadow(vec3 worldPos, vec3 N)
     return texture(u_shadowMap, vec4(uv, float(cascade), proj.z - 0.0015));
 }
 
-// Incoming irradiance (radiance * NdotL, colored) from one grid light. The light type is selected with
-// the same width/range encoding as the forward pass' doLight() (instanced_indirect.fs.glsl): width < 0 =>
-// spot, width > 0 && range < 0 => tube, width > 0 => rect area, width == 0 => point. Lights are treated as
-// a point at their center for the falloff/distance (low-frequency diffuse only), but the cone (spot) and
-// one-sided forward emission (rect area) are honored so they match the primary surfaces.
+// Incoming irradiance (radiance * NdotL) from one grid light. The type has the forward pass' doLight() encoding
+// (punctual_lights.inc.glsl): width < 0 = spot, width > 0 && range < 0 = tube, width > 0 = rect area, width == 0 =
+// point. Every light is a point at its centre for the falloff, but the spot cone and the rect's one-sided emission
+// are kept, to match the primary surfaces.
 vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
 {
     vec3 toLight = light.pos - pos;
@@ -68,9 +64,7 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
     }
     else if (light.width > 0.0 && light.range >= 0.0) // rect area light: one-sided, emits along its normal
     {
-        // Reconstruct the quad's facing normal exactly as doAreaLight() does: up = normalize(direction),
-        // right is rotated about up by light.rotation, normal = cross(up, right). Only fragments in front
-        // of the quad receive light, faded by how directly the quad faces them.
+        // The quad's normal exactly as doAreaLight() builds it; only points in front of the quad receive light.
         float height = length(light.direction);
         vec3 up     = light.direction / height;
         vec3 ref    = abs(up.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -82,20 +76,19 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
             return vec3(0.0);
         shape = facing;
     }
+
     return light.color * (giSquareFalloff(dist, abs(light.range)) * shape * NdotL);
 }
 
-// One grid light's irradiance with its ray-traced shadow. GI_LIGHT_RT_SHADOWS is defined by an includer
-// that has rt_shadow.inc.glsl (and everything that needs) in scope BEFORE this file - the GI probe trace;
-// without it the light is unshadowed (vol_scatter). One ray to the light's CENTRE, like the falloff: the
-// bounce is low-frequency and temporally blended, so an area light's penumbra is not worth more rays.
-// Unshadowed, a lamp lit every gather hit in its range THROUGH walls - a leak the probe visibility test
-// cannot see, because the light is already in the probe's own SH. Follows the forward pass' toggle
-// (u_rt_lightShadows), and traces only past GI_LIGHT_SHADOW_MIN: a cell lists every light whose RANGE
-// touches it, and most of those contribute next to nothing at the hit.
+// One grid light's irradiance with its ray-traced shadow. GI_LIGHT_RT_SHADOWS: the includer has rt_shadow.inc.glsl in
+// scope BEFORE this file (the GI probe trace); without it the light is unshadowed (vol_scatter). One ray to the light's
+// CENTRE: the bounce is low-frequency and temporally blended. Unshadowed, a lamp lights every hit in its range THROUGH
+// walls - a leak the probe visibility test cannot see. Traces only past GI_LIGHT_SHADOW_MIN: a cell lists every light
+// whose RANGE touches it, and most of those give next to nothing at the hit.
 #ifndef GI_LIGHT_SHADOW_MIN
 #define GI_LIGHT_SHADOW_MIN 0.002
 #endif
+
 vec3 giLightIrradianceShadowed(LightInfo light, vec3 pos, vec3 N)
 {
     vec3 e = giLightIrradiance(light, pos, N);
@@ -111,13 +104,12 @@ vec3 giLightIrradianceShadowed(LightInfo light, vec3 pos, vec3 N)
     return e;
 }
 
-// Optional sun-shadow override: when >= 0, giGatherDirect uses this value instead of the cascade shadow
-// map (giSunShadow). The GI probe trace sets it to a view-independent, ray-traced per-probe visibility so
-// off-screen probes are shadowed correctly (the camera shadow maps only cover the view frustum). The
-// fragment shader never sets it, so it keeps using giSunShadow.
+// >= 0: giGatherDirect uses this sun visibility instead of the cascades. The GI probe trace sets a ray-traced
+// per-probe value, so off-screen probes are shadowed too (the cascades only cover the view frustum).
 float g_sunShadowOverride = -1.0;
-// Output: the SUN's part of the last giGatherDirect's result (albedo/PI included). The GI trace keeps it apart
-// as the probe's sun fraction (GI_SUN_V4 in gi_probe.inc.glsl); dead code for everyone else.
+
+// Output: the SUN's part of the last giGatherDirect's result (albedo / PI included). The GI trace keeps it apart as the
+// probe's sun fraction (GI_SUN_V4 in gi_probe.inc.glsl); dead code for everyone else.
 vec3 g_gatherSunRadiance = vec3(0.0);
 
 // Full diffuse direct lighting at a world position: sun (shadowed) + all grid lights, times albedo/PI.
@@ -131,17 +123,13 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
     if (sunNdotL > 0.0)
     {
         float sunShadow = (g_sunShadowOverride >= 0.0) ? g_sunShadowOverride : giSunShadow(pos, N);
-        // Same atmospheric attenuation as the forward pass' doSunLight - without it, probe-lit bounce
-        // light stays at full space-sun strength at low sun angles while direct light (and the
-        // out-of-field skyGroundRadiance fallback) dims with transmittance. u_sunTransmittance = the
-        // Chapman evaluation, done ONCE per frame on the CPU (this ran per gather hit before).
+        // The forward pass' atmospheric attenuation (doSunLight), so the bounce dims with the direct light at low sun.
         E += u_sunTransmittance * u_sunColor.rgb * sunShadow * sunNdotL * u_sunVisible;
         g_gatherSunRadiance = albedo * (E / PI);
     }
 
-    // The sky radiance light is intentionally absent here: it is injected directly into the probe SH
-    // (gi_probe_trace.cs.glsl), and its bounces arrive through the multi-bounce prevE feedback - adding
-    // it at hit points too would double-count.
+    // No sky light here: gi_probe_trace.cs.glsl injects it into the probe SH and its bounces arrive through the prevE
+    // feedback - adding it at the hits would count it twice.
 
     const ivec3 gridPos = getGridPos(pos);
     uint tableIdx = getTableIdx(gridPos);
@@ -154,8 +142,8 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         if (gridMin == gridPos)
         {
             const uint numLargeLights = getLargeLightCount(gridIdx);
-            // The counts are written capped; the mins stay as the loops' compile-time bound: without them
-            // gi_probe_trace (which inlines this loop) went 96 -> 125 registers.
+            // The counts are written capped; the mins stay as the loops' compile-time bound: without them gi_probe_trace
+            // (which inlines this loop) needs 125 instead of 96 registers.
             for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
                 E += giLightIrradianceShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], pos, N);
 

@@ -1,9 +1,8 @@
-// Light grid data structure accessors (READ side). The grid set, the hash table and the per-grid
-// candidate lists are built on the CPU (LightGridComputePipeline::build); light_grid.cs.glsl gathers
-// the per-cell lists from them, so no shader ever inserts into this structure.
-//
-// Required defines: GRID_DATA_NAME. Optional: TABLE_SIZE_NAME + GRID_TABLE_NAME for the hash lookup
-// (getTableIdx / getNextTableIdx / getGridIdx); the gather shader does without them.
+// Light grid accessors (READ side). The grids, the hash table and the candidate lists are built on the CPU
+// (LightGridComputePipeline::build); light_grid.cs.glsl gathers the per-cell lists. No shader inserts.
+// Required: GRID_DATA_NAME. Optional: TABLE_SIZE_NAME + GRID_TABLE_NAME for the hash lookup (getTableIdx /
+// getNextTableIdx / getGridIdx); the gather shader does without them.
+
 ivec3 getGridPos(vec3 pos);
 ivec3 getGridMin(uint gridIdx);
 
@@ -18,7 +17,6 @@ uint getLargeLightId(uint gridIdx, uint lightIdx);
 #define MAX_LARGE_LIGHTS_PER_GRID 14 // Must be even
 #define MAX_LIGHTCELL_LIGHTS 16      // Must be even
 #define GRID_HEADER_SIZE (4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1)) // uints before the cells
-// GRID_SIZE is defined in hash_grid.inc.glsl (included below).
 // LightGridComputePipeline.cpp mirrors these three constants and the layout below: keep them in sync.
 
 // GRID DATA MEMORY LAYOUT:
@@ -33,17 +31,16 @@ uint getLargeLightId(uint gridIdx, uint lightIdx);
 //         uint16_t lightIds[MAX_LIGHTCELL_LIGHTS];
 //     } cells[(GRID_SIZE / cellSize)^3];
 // }
-// numLights / numLargeLights hold the TRUE candidate count (may exceed the caps): readers clamp.
+// numLights / numLargeLights are already capped by the gather pass: readers loop over them raw.
 
 #ifndef GRID_DATA_NAME
 #error "GRID_DATA_NAME not set"
 #endif
 
-// Hashing, table probing, GRID_SIZE and getGridPos are shared with the GI probe grid.
+// Hashing, GRID_SIZE and getGridPos.
 #include "hash_grid.inc.glsl"
 
 #if defined(TABLE_SIZE_NAME) && defined(GRID_TABLE_NAME)
-// Thin wrappers binding the shared hash helpers to this grid's table size.
 uint getTableIdx(ivec3 gridPos)
 {
 	return hashTableIndex(gridPos, TABLE_SIZE_NAME);

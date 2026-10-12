@@ -13,10 +13,10 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // the per-eye view
 
 struct MaterialInfo
 {
-	uint flags;
+    uint flags;
     float opacity;
     uint diffuseNormalTexIdx;
-	uint metalRoughnessTexIdxAlphaMode;
+    uint metalRoughnessTexIdxAlphaMode;
 };
 
 layout (binding = 2, std430) readonly buffer InMaterialInfos
@@ -41,20 +41,19 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const uint16_t materialIdx = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
-    const MaterialInfo material = in_materialInfos[materialIdx];
-    const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
+    const uint16_t materialIdx          = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
+    const MaterialInfo material         = in_materialInfos[materialIdx];
+    const uint16_t diffuseTexIdx        = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
     const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
-	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
+    const uint16_t alphaMode            = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 
     const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], vec2(in_posU.w, in_normalV.w));
-    //const vec4 diffuseSample = vec4(0.5, 0.5, 0.5, 1.0);
 
-    // Alpha mask (alphaMode 1): discard fragments below the cutoff (stored in material.opacity).
+    // Alpha mask: discard fragments below the cutoff (stored in material.opacity).
     if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
         discard;
-	out_color = vec4(diffuseSample.xyz, min(diffuseSample.a, material.opacity));
+    out_color = vec4(diffuseSample.xyz, min(diffuseSample.a, material.opacity));
 #ifndef NO_MOTION_OUTPUT
-	out_motion = motionVector(in_prevWorldDelta);
+    out_motion = motionVector(in_prevWorldDelta);
 #endif
 }

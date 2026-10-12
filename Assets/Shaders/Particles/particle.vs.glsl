@@ -2,10 +2,9 @@
 
 #extension GL_EXT_nonuniform_qualifier : enable // the GI volume's per-cascade texture index
 
-// Particle billboard vertex shader: 6 vertices per instance (one quad), instance -> pool index via the
-// OUT alive list the sim pass compacted this frame (the indirect draw's instanceCount is its count).
-// All per-particle work lives here (color/size over life, fades, flipbook frame select, optional
-// per-particle lighting: GI probe irradiance + sun), so the fragment shader stays minimal.
+// Particle billboard vertex shader: 6 vertices per instance (one quad), instance -> pool index via the OUT alive list
+// the sim pass compacted this frame (the indirect draw's instanceCount is its count). All per-particle work lives here
+// (color/size over life, fades, flipbook frame select, optional lighting), so the fragment shader stays minimal.
 
 #include "shared.inc.glsl"
 #include "particle.inc.glsl"
@@ -23,13 +22,13 @@ layout (binding = 10) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the
 #define GI_VOLUME_TEXTURES_NAME u_giVolume
 #endif
 #include "gi_probe.inc.glsl"
+
 // The terrain-data cascades (height / water level) for the ground fade (PARTICLE_FLAG_GROUND_FADE).
 #define TERRAIN_HEIGHT_BINDING 6
 #include "terrain_height.inc.glsl"
 
-// The scene's punctual lights through the light grid (the forward pass's own buffers), for LIT
-// particles: a dust mote near a lamp picks up the lamp. Irradiance only - a particle is a scattering
-// speck with no normal, so every light contributes its falloff-attenuated colour isotropically.
+// The scene's punctual lights through the light grid (the forward pass's own buffers), for LIT particles. Irradiance
+// only: a particle is a scattering speck with no normal, so every light adds its falloff-attenuated colour isotropically.
 struct LightInfo
 {
     vec3 pos;
@@ -53,10 +52,9 @@ layout (binding = 9, std430) readonly buffer InGridTable
 #define TABLE_SIZE_NAME in_tableSize
 #include "light_grid.inc.glsl"
 
-// Scattering phase, Henyey-Greenstein normalized so g = 0 gives 1: forward scattering makes a light
-// BEHIND the particle (light -> particle -> camera aligned) bright and one beside it dim - the halo
-// and dark side that stop a lit mist reading flat. cosTheta = dot(light-to-particle, particle-to-eye);
-// g = "Particles/Anisotropy" (u_particles_anisotropy), separate from the fog's.
+// Scattering phase, Henyey-Greenstein normalized so g = 0 gives 1: forward scattering makes a light BEHIND the particle
+// bright and one beside it dim, so a lit mist does not read flat. cosTheta = dot(light-to-particle, particle-to-eye);
+// g = u_particles_anisotropy, separate from the fog's.
 float particlePhase(float cosTheta)
 {
     const float g = u_particles_anisotropy;
@@ -65,8 +63,8 @@ float particlePhase(float cosTheta)
     return (1.0 - g2) / (denom * sqrt(denom));
 }
 
-// One light's irradiance at a point (the forward pass's falloff + spot cone; area and tube lights as a
-// point at their centre - a particle cannot resolve their shape), phase-weighted toward the eye.
+// One light's irradiance at a point (the forward pass's falloff + spot cone; area and tube lights as a point at their
+// centre - a particle cannot resolve their shape), phase-weighted toward the eye.
 vec3 particleLightIrradiance(LightInfo light, vec3 pos, vec3 toEye)
 {
     const vec3 lightVec = light.pos - pos;
@@ -137,8 +135,8 @@ void main()
     const ParticleEmitter e = pe_emitters[particle.misc.x];
 
     const float age = particle.posAge.w;
-    // A weather volume particle never ages out (it wraps), so its "life" sits at the midpoint: colour and
-    // size are the mid blend and the fade envelope is replaced by the box's XZ edge fade below.
+    // A weather volume particle never ages out (it wraps), so its "life" sits at the midpoint: colour and size are the
+    // mid blend and the fade envelope is the box's XZ edge fade.
     const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u;
     const float lifeFrac = volume ? 0.5 : age / particle.velLife.w;
     const vec3 pos = particle.posAge.xyz;
@@ -151,14 +149,12 @@ void main()
     // Alpha envelope: fade in over the first fadeParams.x of life, out from fadeParams.y to death.
     const float fadeIn = clamp(lifeFrac / e.fadeParams.x, 0.0, 1.0);
     const float fadeOut = 1.0 - smoothstep(e.fadeParams.y, 1.0, lifeFrac);
-    float envelope = volume
-        ? particleVolumeEdgeFade(pos - e.posSpawnRadius.xyz, e.volumeParams.xyz) * weatherSheet(pos, u_timeSeconds)
-        : fadeIn * fadeOut;
-    // The camera's side of the water decides whole-emitter visibility: an underwater volume shows only
-    // while the camera is under the water surface at its XZ, an above-water one only while it is over
-    // it. The surface is the LIVE wave height under the camera when the ocean supplies it (the CPU
-    // mirror, u_weather_cameraWaterY), else the local calm water level from the terrain data, else sea level.
-    // The sim keeps the particles themselves on their side of the live surface; this is the gate.
+    float envelope = volume ? particleVolumeEdgeFade(pos - e.posSpawnRadius.xyz, e.volumeParams.xyz) * weatherSheet(pos, u_timeSeconds) : fadeIn * fadeOut;
+
+    // The camera's side of the water decides whole-emitter visibility: an underwater volume shows only while the camera
+    // is under the water surface at its XZ, an above-water one only while it is over it. The surface is the LIVE wave
+    // height under the camera when the ocean supplies it (u_weather_cameraWaterY), else the local calm water level, else
+    // sea level. The sim keeps the particles themselves on their side of the live surface; this is the gate.
     if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
     {
         const float waterAtCamera = u_weather_cameraWaterValid > 0.5 ? u_weather_cameraWaterY
@@ -167,9 +163,9 @@ void main()
         if (((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u) != cameraUnder)
             envelope = 0.0;
     }
-    // Ground fade: exp(-height above the TERRAIN / fade height) - dust hugs the ground and thins out with
-    // height - and none over water: it fades out with the water depth across the first half metre, so
-    // the sea is dust-free and the waterline is a soft edge rather than a cut.
+
+    // Ground fade: exp(-height above the TERRAIN / fade height), and none over water - it fades out with the water
+    // depth across the first half metre, so the waterline is a soft edge rather than a cut.
     if ((e.texFlags.y & PARTICLE_FLAG_GROUND_FADE) != 0u && terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(pos.xz);
@@ -179,9 +175,6 @@ void main()
     float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
     vec3 color = mix(e.colorStart.rgb, e.colorEnd.rgb, lifeFrac);
 
-    // (Lighting is evaluated further down, at the CORNER's world position, so a big sprite gets a
-    // gradient across it from the interpolation instead of one flat tint.)
-
     // Billboard basis for the selected view.
     const vec3 fwd = normalize(pos - u_viewPos);
     vec3 right = cross(vec3(0.0, 1.0, 0.0), fwd);
@@ -190,21 +183,19 @@ void main()
 
     const uint vi = uint(gl_VertexIndex);
     // (0,0) (1,0) (1,1) / (0,0) (1,1) (0,1)
-    const vec2 corner01 = vec2((vi == 1u || vi == 2u || vi == 4u) ? 1.0 : 0.0,
-                               (vi == 2u || vi == 4u || vi == 5u) ? 1.0 : 0.0);
+    const vec2 corner01 = vec2((vi == 1u || vi == 2u || vi == 4u) ? 1.0 : 0.0, (vi == 2u || vi == 4u || vi == 5u) ? 1.0 : 0.0);
     vec2 c = corner01 * 2.0 - 1.0;
 
     float halfW = size * 0.5;
     float halfH = size * 0.5;
-    // Weather volume streaks: a streak is the drop's motion relative to what the EYE TRACKS. A player
-    // tracks the ground, not the camera, so only a fraction (u_particles_streakCameraBlur) of the camera's own
-    // motion smears the drops - the full amount lays fast-panned rain nearly flat.
+    // Weather volume streaks: a streak is the drop's motion relative to what the EYE TRACKS. A player tracks the ground,
+    // not the camera, so only a fraction (u_particles_streakCameraBlur) of the camera's own motion smears the drops -
+    // the full amount lays fast-panned rain nearly flat.
     const vec3 vel = volume ? particle.velLife.xyz - u_weather_cameraVelocity * u_particles_streakCameraBlur : particle.velLife.xyz;
     if (e.sizeParams.w > 0.0 && dot(vel, vel) > 1e-4)
     {
-        // Velocity stretch: align the quad's up axis with the screen-projected velocity, and stretch by
-        // the PROJECTED speed - a drop flying along the view ray is seen end-on as a dot, so its axis
-        // (numerically arbitrary at that point) never shows.
+        // Velocity stretch: align the quad's up axis with the screen-projected velocity, and stretch by the PROJECTED
+        // speed - a drop flying along the view ray is seen end-on as a dot, so its (arbitrary) axis never shows.
         const vec3 velPlane = vel - fwd * dot(vel, fwd);
         const float l = length(velPlane);
         if (l > 1e-3)
@@ -227,19 +218,15 @@ void main()
 
     if ((e.texFlags.y & PARTICLE_FLAG_LIT) != 0u)
     {
-        // Lit at THIS corner's world position (the four corners differ, and the rasterizer interpolates
-        // the colour across the quad), so a lamp beside a 2 m mist sprite lights its near edge more than
-        // its far edge and the sprite reads as a gradient rather than a flat card.
+        // Lit at THIS corner's world position (the rasterizer interpolates the colour across the quad), so a lamp beside
+        // a 2 m mist sprite lights its near edge more than its far edge: a gradient rather than a flat card.
         const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
-        // x "GI/Strength" (u_rt_giStrength, 0 with GI or RT off, where the probes and the sky SH are stale),
-        // like every other GI consumer.
+        // x "GI/Strength" (0 with GI or RT off, where the probes and the sky SH are stale), like every other GI consumer.
         const vec3 irr = u_rt_giStrength > 0.0 ? giIrradiance(world, n) * u_rt_giStrength : vec3(0.0);
-        // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
-        // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
+        // The sun and the scene's lights are phase-weighted (a back-lit mist glows, a side-lit one dims); GI and ambient
+        // stay isotropic.
         const vec3 toEye = n;
         const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-u_sunDirection, toEye));
-        // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
-        // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);
         color *= mix(light, vec3(1.0), e.spinParams.z);
     }

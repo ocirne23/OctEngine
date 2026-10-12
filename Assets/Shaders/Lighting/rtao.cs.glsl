@@ -13,8 +13,8 @@ layout (binding = 2) uniform sampler2D u_sceneDepth;  // hardware depth (the nor
 layout (binding = 3) uniform accelerationStructureEXT u_tlas;
 layout (binding = 4, rgba16f) uniform restrict writeonly image2D u_aoOut; // rgb = bent normal, a = AO
 
-// Alpha-masked rays are a compile-time variant (RTAO_ALPHA_TEST injected by the pipeline when the
-// "RTAO/Alpha Test" tweak is on); the opaque path compiles out the geometry fetch + alpha test entirely.
+// Alpha-masked rays are a compile-time variant (RTAO_ALPHA_TEST, the "RTAO/Alpha Test" tweak); the opaque path has no
+// geometry fetch and no alpha test.
 struct MaterialInfo
 {
     uint flags;
@@ -22,6 +22,7 @@ struct MaterialInfo
     uint diffuseNormalTexIdx;
     uint metalRoughnessTexIdxAlphaMode;
 };
+
 struct InMeshInstance
 {
     uint renderNodeIdx;
@@ -29,9 +30,11 @@ struct InMeshInstance
     uint meshIdxMaterialIdx;
     uint pipelineIdxAlphaMode;
 };
+
 // Both variants: a hit's material flags (the tessellated terrain's underside skip, below).
 layout (binding = 8, std430) readonly buffer InInstances { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials { MaterialInfo in_materialInfos[]; };
+
 #ifdef RTAO_ALPHA_TEST
 struct InMeshInfo
 {
@@ -42,8 +45,8 @@ struct InMeshInfo
     int  vertexOffset;
     uint _padding;
 };
-// Geometry for the alpha-masked candidate test. Same buffers/layout the GI trace uses; rt_shadow.inc.glsl
-// supplies the alpha test against them (with the instances + materials above).
+
+// Geometry for the alpha test (rt_shadow.inc.glsl): the GI trace's buffers and layout.
 layout (binding = 5, std430) readonly buffer InVertices  { MeshVertex in_vertices[]; };
 layout (binding = 6, std430) readonly buffer InIndices   { uint in_indices[]; };
 layout (binding = 7, std430) readonly buffer InMeshInfos { InMeshInfo in_meshInfos[]; };
@@ -91,27 +94,22 @@ void main()
     // Geometric normal from the depth image: there is no normal target.
     const vec3 N = normalFromDepth(u_sceneDepth, depthPx, depth, u_taaJitter.xy);
 
-    // The depth image is jittered (the scene pass's own depth); reconstruct at the surface's true
-    // unjittered position so ray origins don't wobble sub-pixel with the jitter - see taaJitterUv.
+    // The depth image is jittered: reconstruct at the unjittered position, so ray origins do not wobble - see taaJitterUv.
     const vec3 worldPos = worldPosFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth);
     const float focusDist = length(u_sceneFocus.xyz - worldPos);  // quality falloff: from the scene focus (the game's player)
 
-    // Past the AO max distance the result is always "no occlusion", so skip the ray loop entirely.
-    // (no bent normal, so the forward pass evaluates GI along its shading normal.) Measured from
-    // the scene focus, like the fade below, so a top-down camera far above the ground does not fade
-    // the AO out under the player.
+    // Past the AO max distance: no occlusion, no bent normal. From the scene focus, like the fade below, so a top-down
+    // camera far above the ground does not fade the AO out under the player.
     if (focusDist >= u_rt_aoMaxDistance)
     {
         imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
 
-    // Ray-origin self-intersection bias. worldPos reconstructs from half-res depth, whose error lies
-    // ALONG THE VIEW RAY and grows with distance - a fixed offset left distant slope pixels starting
-    // under the RT surface (dark banding on sloped terrain). Compensate along V, toward the camera: it
-    // cancels the depth error 1:1 and lifts off the surface plane by only offset*NoV, so grazing walls
-    // are NOT pushed away from their own contact detail (a 1/NoV-scaled NORMAL offset did exactly that
-    // and artifacted flat walls). The small constant normal offset handles triangle self-intersection.
+    // Ray-origin bias. The half-res depth's error lies ALONG THE VIEW RAY and grows with distance (dark banding on
+    // sloped terrain with a fixed offset). An offset along V cancels it 1:1 and lifts off the plane by only offset * NoV,
+    // so grazing walls keep their contact detail (a 1/NoV-scaled NORMAL offset does not). The small normal offset
+    // handles triangle self-intersection.
     const float viewDist = length(u_viewPos - worldPos);
     const vec3 V = (u_viewPos - worldPos) / viewDist; // depth > 0 (tested above): viewDist > 0
     const vec3 rayOrigin = worldPos + N * u_rt_aoNormalBias + V * min(viewDist * u_rt_aoDistanceBias, u_rt_aoRadius * 0.5);
@@ -120,18 +118,14 @@ void main()
     vec3 T = normalize(cross(up, N));
     vec3 B = cross(N, T);
 
-    // Per-pixel + per-frame decorrelation (Cranley-Patterson). The frame term rotates the set so the
-    // temporal pass (stage 3) accumulates fresh samples each frame.
-    // Frame counter comes from the UBO (not the push constant) so this pass can be recorded once and still
-    // rotate its sampling each frame (the push-constant frameIndex is left unused / stale).
+    // Per-pixel + per-frame decorrelation (Cranley-Patterson), so the temporal pass accumulates fresh samples. The frame
+    // counter is the UBO's, so this pass can be recorded once.
     const float frameRot = float(u_frameIndex);
-    vec2 jitter = vec2(ign(vec2(px) + frameRot * 1.6180339),
-                       ign(vec2(px.yx) + frameRot * 3.1415926 + vec2(17.3, 5.1)));
+    vec2 jitter = vec2(ign(vec2(px) + frameRot * 1.6180339), ign(vec2(px.yx) + frameRot * 3.1415926 + vec2(17.3, 5.1)));
 
-    // The TESSELLATED terrain: the depth holds the displaced relief, centred on the flat mesh the TLAS holds, so
-    // a relief low sits UNDER its own mesh and every ray hit the mesh's underside at once (dark blotches in the
-    // lows, strongest in shadow where only the ambient shows). A TERRAIN hit nearer than the relief depth,
-    // inside the tessellation's reach, is that underside: the ray continues past it once.
+    // The TESSELLATED terrain: the depth holds the displaced relief, centred on the flat mesh in the TLAS, so a relief
+    // low sits UNDER its own mesh and every ray hits the underside at once (dark blotches). A TERRAIN hit nearer than the
+    // relief depth, inside the tessellation's reach, is that underside: the ray continues past it once.
     const float terrainSkip = (u_terrainTess_enabled > 0.5 && viewDist < u_terrainTess_fadeEnd)
         ? max(u_terrainTess_depthGround, u_terrainTess_depthRock) : 0.0;
 
@@ -152,14 +146,12 @@ void main()
         {
             rayQueryEXT rq;
 #ifdef RTAO_ALPHA_TEST
-            // Masked geometry is non-opaque in the TLAS; run the alpha test on candidates, hardware still
-            // auto-commits opaque hits. Terminate-on-first-hit gives the nearest confirmed hit for falloff.
-            // Cull mask 0x01: not the FOLIAGE cards (gi_tlas_instances.cs.glsl).
+            // Masked geometry is non-opaque in the TLAS: the alpha test runs on its candidates. Cull mask 0x01: not the
+            // FOLIAGE cards (gi_tlas_instances.cs.glsl).
             rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsTerminateOnFirstHitEXT, 0x01u, rayOrigin, tStart, dir, u_rt_aoRadius);
             while (rayQueryProceedEXT(rq))
             {
-                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT
-                    && rtsCandidateBlocks(rq))
+                if (rayQueryGetIntersectionTypeEXT(rq, false) == gl_RayQueryCandidateIntersectionTriangleEXT && rtsCandidateBlocks(rq))
                     rayQueryConfirmIntersectionEXT(rq);
             }
 #else
@@ -172,6 +164,7 @@ void main()
             t = rayQueryGetIntersectionTEXT(rq, true);
             if (pass > 0 || t >= terrainSkip)
                 break;
+
             const uint instanceIdx = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true));
             // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material.
             const uint materialIdx = (instanceIdx & 0x800000u) != 0u ? instanceIdx & 0xFFFFu
@@ -181,6 +174,7 @@ void main()
             tStart = t + 0.01; // the terrain's underside: continue past it
             hit = false;
         }
+
         if (hit)
         {
             occ += 1.0 - t / u_rt_aoRadius; // closer hits darken more; a hit t is in [0.01, radius]
@@ -193,11 +187,12 @@ void main()
 
     float ao = clamp(1.0 - (occ / float(n)) * u_rt_aoIntensity, 0.0, 1.0);
     ao = pow(ao, u_rt_aoPower);
-    // Distance falloff: far-away surfaces get noisy/low-quality AO (radius is fixed in world units, so it
-    // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart
-    // - distance from the scene focus (see focusDist), matching the early-out above.
+
+    // Far surfaces get noisy AO (the radius shrinks on screen with distance): fade to no AO past fadeStart, from the
+    // scene focus like the early-out above.
     const float fade = clamp((focusDist - u_rt_aoFadeStart) * u_rt_aoFadeInvRange, 0.0, 1.0);
     ao = mix(ao, 1.0, fade);
+
     // Bent normal = average unoccluded direction; none (zero) when fully occluded.
     vec3 bentN = (dot(bent, bent) > 1e-8) ? normalize(bent) : vec3(0.0);
     imageStore(u_aoOut, px, vec4(bentN, ao));

@@ -1,14 +1,11 @@
 #version 460
 
-// Per-emitter applied force: one thread per compacted live emitter. The opposing teams' field
-// pressure is integrated over a small fixed set of sample points spread through the emitter's own
-// bubble (the shape's midpoint + 12 icosahedron directions at ~70% of its half-extent) - a single
-// center tap would read zero when two large bubbles press rims together without their centers
-// overlapping. Each sample is weighted by the emitter's own normalized field there, so deep-contact
-// samples dominate and the result is continuous as contact begins/ends. The opposing gradient is
-// finite-differenced (4-tap tetrahedral) - the warped-sphere shape has no cheap analytic gradient.
-// Results are written SLOT-indexed (the source slot rides in teamFlags.z) straight into the
-// host-visible readback buffer; the CPU reads them ~2 frames later (ocean-readback contract).
+// Per-emitter applied force: one thread per compacted live emitter. The opposing teams' pressure is integrated over 13
+// samples inside the emitter's own bubble (the midpoint + 12 icosahedron directions) - a single center tap reads zero
+// when two large bubbles press rims together without their centers overlapping. Each sample is weighted by the
+// emitter's own normalized field, so deep-contact samples dominate and the result is continuous as contact begins /
+// ends. The opposing gradient is finite-differenced (the warped-sphere shape has no cheap analytic gradient).
+// Results go SLOT-indexed (teamFlags.z) into the host-visible readback buffer; the CPU reads them ~2 frames later.
 
 layout (local_size_x = FORCE_SIM_GROUP_SIZE) in;
 
@@ -33,11 +30,12 @@ void main()
     const ForceEmitterData e = fe_emitters[i];
     if ((e.teamFlags.y & FORCE_FLAG_READBACK) == 0u)
         return; // served from the CPU pressure bake (the default); only flagged slots integrate here
+
     const uint team = e.teamFlags.x;
     const float R = e.posReach.w;
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (R * 0.5); // midpoint of the output line
     const float sampleRadius = 0.35 * R;
-    const float h = max(0.02 * R, 0.01); // finite-difference step, reach-scaled
+    const float h = max(0.02 * R, 0.01); // finite-difference step
     const float emitterOutput = max(e.outputParams.x, 1e-4);
 
     vec3 force = vec3(0.0);
@@ -49,6 +47,7 @@ void main()
         const float wSelf = forceContribution(x, e) / emitterOutput;
         if (wSelf <= 0.0)
             continue;
+
         float own, opp;
         forceTeamSample(x, team, own, opp);
         float o0, o1, o2, o3, unused;
@@ -60,7 +59,9 @@ void main()
         force += wSelf * -grad;
         pressure += opp;
     }
-    force *= e.outputParams.x * (1.0 / 13.0); // Output * mean - the raw integral; the "Force gain"
-    pressure *= 1.0 / 13.0;                   // tweak is a CPU-side multiplier on the readback
+
+    // Output * mean: the raw integral; the "Force gain" tweak is a CPU-side multiplier on the readback.
+    force *= e.outputParams.x * (1.0 / 13.0);
+    pressure *= 1.0 / 13.0;
     out_forces[e.teamFlags.z] = vec4(force, pressure);
 }

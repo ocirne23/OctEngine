@@ -438,7 +438,8 @@ void Renderer::buildUboSunShadow(const Camera& camera)
     }
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
     const float aspect = (float)viewportSize.x / (float)viewportSize.y;
-    computeSunCascades(camera, aspect, m_skyParams.sunDirection, m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
+    computeSunCascades(camera, aspect, m_skyParams.sunDirection,
+        m_sceneFocusFrozen ? &m_frozenSceneFocus : m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
         m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
     m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
     // PCSS penumbra scale per cascade (the shader's former pcssSunSizeTexels): the physical penumbra

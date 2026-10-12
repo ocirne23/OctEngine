@@ -2,15 +2,14 @@
 
 #extension GL_EXT_nonuniform_qualifier : enable
 
-// Particle fragment shader: texture (or procedural round sprite) x the per-particle color the vertex
-// shader computed, soft-faded against the scene depth. Premultiplied output over the lit scene with
-// (ONE, ONE_MINUS_SRC_ALPHA): additivity scales the alpha the destination keeps, so one pipeline covers
-// alpha-blended smoke (additivity 0) through additive fire/sparks (additivity 1) per emitter.
+// Particle fragment shader: texture (or procedural round sprite) x the per-particle color the vertex shader computed,
+// soft-faded against the scene depth. Premultiplied output with (ONE, ONE_MINUS_SRC_ALPHA): additivity scales the alpha
+// the destination keeps, so one pipeline covers alpha-blended smoke (additivity 0) through additive fire (1) per emitter.
 
 #include "shared.inc.glsl"
 
 layout (binding = 4) uniform sampler2D u_sceneDepth; // this frame's opaque scene depth (soft particles)
-layout (binding = 20) uniform sampler2D u_textures[];  // bindless texture array (variable count)
+layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 

@@ -8,11 +8,9 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
-// Procedural terrain variant of instanced_indirect.fs.glsl (EPipelineIndex::TerrainLit): same lighting
-// core (instanced_indirect_lit.inc.glsl), but the material albedo is replaced by climate-picked texture
-// splatting - procedural terrain chunks carry no textures of their own.
-// The surface-water film over this ground is terrain_film.fs.glsl (EPipelineIndex::TerrainOverlay); the
-// shared part of the two is terrain_common.inc.glsl.
+// Procedural terrain variant of instanced_indirect.fs.glsl (EPipelineIndex::TerrainLit): the same lit core, but the
+// material is climate-picked texture splatting. The surface-water film over this ground is terrain_film.fs.glsl
+// (TerrainOverlay); the shared part of the two is terrain_common.inc.glsl.
 
 #include "shared.inc.glsl"
 
@@ -28,6 +26,7 @@ layout (location = 3) in vec3 in_meshPos;
 #else
 #define TERRAIN_LIT_POS in_pos
 #endif
+
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
@@ -43,9 +42,9 @@ layout (location = 1) out vec4 out_motion;
 #include "terrain_common.inc.glsl"
 #include "grass.inc.glsl" // the canopy shading of the ground under the grass (grassGroundCanopy)
 
-// --- Terrain field debug view: set a mode, F5. Draws the baked data map instead of shading it. ---
-//   1 = temperature  heat ramp -25..+50 C, 5 C contours; MAGENTA = freezing line, CYAN + darkened
-//                    fill = the live snow line. No contours at all = the field is stuck.
+// Terrain field debug view: set a mode, F5. Draws the baked data map instead of shading it.
+//   1 = temperature  heat ramp -25..+50 C, 5 C contours; MAGENTA = freezing line, CYAN + darkened fill = the live
+//                    snow line. No contours at all = the field is stuck.
 //   2 = humidity     black -> white, 0.1 contours
 //   3 = crag relief  |height - altitude|: black 0 -> white 200 m (drives the rock layer)
 //   4 = altitude     black sea level -> white 5 km
@@ -104,29 +103,28 @@ vec3 terrainDebugColor(TerrainFields f, vec3 worldPos)
 #endif
 
 #ifdef TERRAIN_TESS
-// The normal of the CONTINUOUS displaced surface at this pixel - terrain_tess.tes.glsl's displacement function
-// (the same layers, height composite, depth and falloff, evaluated at the undisplaced point) differentiated by
-// forward differences along world X and Z: the shading follows the geometry 1:1 at any distance (a facet-normal
-// tilt showed the tessellated triangles as facets close up). L = the coverages at in_meshPos, shared with the
-// splat; the relief taps take explicit gradients (non-uniform flow).
-// The step AND the mip are the TES's own footprint (the target edge at max(distance, freeze distance)), not the
-// pixel's: at a pixel step close up, mip 0 magnified the height map's TEXEL GRID (bilinear = a constant
-// gradient per texel, jumping at every texel edge) and its BC4 steps into a pixelated contour pattern. Finer
-// detail than the geometry's is the normal maps' (kept at half strength).
-// strength = how much of the relief is displaced here (0..1), for the normal map's fade-down.
+// The normal of the CONTINUOUS displaced surface at this pixel: terrain_tess.tes.glsl's displacement (the same layers,
+// height composite, depth and falloff, at the undisplaced point) by forward differences along world X and Z, so the
+// shading follows the geometry 1:1 (a facet normal showed the tessellated triangles close up). L = the coverages at
+// in_meshPos, shared with the splat; the relief taps take explicit gradients (non-uniform flow).
+// The step AND the mip are the TES's own footprint, not the pixel's: at a pixel step close up, mip 0 magnified the
+// height map's texel grid and BC4 steps into a pixelated contour pattern. Finer detail is the normal maps'.
+// strengthOut = how much of the relief is displaced here (0..1), for the normal map's fade-down.
 vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 {
 	strengthOut = 0.0;
-	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
+	// The CENTRE view, as the TES (both VR eyes see the same displaced surface).
 	const float dist = distance(in_meshPos, u_views_viewPos[VIEW_CENTER].xyz);
 	if (dist >= u_terrainTess_fadeEnd || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
 		return N;
+
 	const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 	const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
 	const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
 	if (depth <= 1e-4)
 		return N;
 	strengthOut = strength;
+
 	// The TES's footprint (terrain_tess.tes.glsl).
 	const float e = max(max(dist, u_terrainTess_freezeDistance) * u_terrainTess_spacingPerMetre, 1e-3);
 	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
@@ -146,26 +144,24 @@ void main()
 	g_viewIndex = int(u_viewIndex);
 #endif
 	out_motion = vec4(0.0); // write-masked: static
-	// coverN: the smooth mesh normal - the layer coverages and the slope drain read it (the relief's bumps must
-	// not scatter rock / snow). geoN: the shading base - the same, except on the tessellated terrain.
+
+	// coverN: the smooth mesh normal - the layer coverages and the slope drain read it (the relief's bumps must not
+	// scatter rock / snow). geoN: the shading base - the same, except on the tessellated terrain.
 	const vec3 coverN = normalize(in_normal);
-	// THE SHADOW FIRST, before the layers, the splat and the wetness - only the position and coverN live. From the
-	// smooth MESH normal, also on the tessellated terrain: the shadow is evaluated at the flat mesh
-	// (TERRAIN_LIT_POS), which is what the shadow map and the TLAS hold, so its own normal carries the offset. The
-	// displaced faces turned away from the sun are gated below (reliefSunGate), and doSunLight's facing test on
-	// the shading normal still applies. Never the splat's normal maps: they must not bend the shadow's offset.
+	// THE SHADOW FIRST, while only the position and coverN are live. From the smooth MESH normal, also on the
+	// tessellated terrain: the shadow is evaluated at the flat mesh, which the shadow map and the TLAS hold. Displaced
+	// faces turned from the sun are gated below (reliefSunGate). Never the normal maps: they must not bend the offset.
 	g_sunShadowFirst = dot(coverN, u_sunDirection.xyz) > 0.0 ? sunShadowVisibility(TERRAIN_LIT_POS, coverN) : 0.0;
 	const TerrainFields fields = terrainFields();
+
 #ifdef TERRAIN_TESS
-	// The shading base: the displaced surface's own normal (terrainTessPixelNormal). reliefStrength fades the
-	// normal maps down below (they carry the same relief again).
-	// The coverages ONCE, at the undisplaced point the TES displaced from: the pixel normal and the splat share
-	// them (terrainLayers is the costly part: the climate walk, the crag fBm).
+	// The coverages ONCE, at the undisplaced point: the pixel normal and the splat share them (terrainLayers is the
+	// costly part). reliefStrength fades the normal maps down below (they carry the same relief again).
 	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
 	float reliefStrength;
 	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
-	// THE GRASS CANOPY over this ground (grass.inc.glsl): its sun and ambient, from the same layer coverages as the
-	// grass placement. Formed here so only these two halves stay live across the splat, not the layers' picks.
+	// THE GRASS CANOPY over this ground: its sun and ambient, from the same coverages as the grass placement. Formed
+	// here so only these two halves stay live across the splat, not the layers' picks.
 	const f16vec2 grassCanopy = f16vec2(grassGroundCanopy(tessLayers, in_meshPos, coverN));
 #else
 	const vec3 geoN = coverN;
@@ -184,37 +180,28 @@ void main()
 #else
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
 #endif
-	// THE GROUND'S WET LOOK: one darkening and one roughness drop, both on the wetness field alone (the
-	// clipmap's memory of where water stood, slope-drained per pixel). No instantaneous "under the live
-	// surface" override: the field accumulates at the wet-in rate, so ground under a wave soaks up visibly
-	// instead of snapping to wet, and a cliff a wave splashes only ever gets damp.
+
+	// THE GROUND'S WET LOOK: one darkening and one roughness drop, on the wetness field alone (no instantaneous "under
+	// the live surface" override: ground under a wave soaks up visibly, a cliff a wave splashes only gets damp).
 	float16_t wet, aboveLive;
 	terrainWetness(coverN, fields, 0.0, wet, aboveLive);
 	float16_t skyReflW = float16_t(0.0); // the wet ground's sky reflection weight (after the lighting, below)
 	if (terrainWetPresent())
 	{
-		// Damp ground: darker and glossier with the wetness itself. The STANDING water's own highlights are
-		// the film's (the overlay draws exactly where water stands), so nothing here tries to double them.
-		// Under the live ocean the ground is seabed: it keeps the darkening - the ocean's traced seabed
-		// carries the same - and takes "Underwater roughness" instead of the wet gloss (a sky reflection has
-		// no business under the ocean's own; the ocean's edge fade shows this ground).
-		// The darkening and the gloss each hold full above their own wetness THRESHOLD ("Darkening threshold",
-		// "Roughness threshold": u_terrainWater_darkeningThreshold / roughnessThreshold) - a plateau while the
-		// ground is soaked - and fade smoothly to dry below it.
+		// The STANDING water's highlights are the film's, so nothing here doubles them. Under the live ocean the
+		// ground is seabed: it keeps the darkening (the ocean's traced seabed carries the same) and takes "Underwater
+		// roughness" instead of the wet gloss. Darkening and gloss each hold full above their own wetness THRESHOLD
+		// and fade smoothly to dry below it.
 		const float16_t darkAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWater_darkeningThreshold), wet);
 		const float16_t glossAmount = smoothstep(float16_t(0.0), float16_t(u_terrainWater_roughnessThreshold), wet);
-		// THE DRYING PATTERN: ground does not dry uniformly - a beach breaks into metre-scale blotches
-		// (porosity, micro-drainage) that dry first while the rest stays dark. P (0..1, low = holds its water
-		// longest) is a world-anchored value fBm of "Drying pattern size (m)" (u_terrainWater_invDryingPatternSize
-		// = 1 / size), with "Drying pattern relief" (dryingPatternRelief) of the splat's height composite mixed in
-		// for the fine breakup at the island edges. Each amount becomes a LEVEL through P: below it wet, above it
-		// a dry ISLAND, and the islands grow as the level sinks. The darkening and the gloss share P, so an island
-		// loses its gloss first (a higher roughness threshold), then its darkness. The soft band around each level
-		// is its own: "Darkening edge" (darkeningEdge) - wide, the darkening fades over a larger range - and
-		// "Roughness edge" (roughnessEdge) - crisp gloss islands. "Drying pattern" (dryingPattern, 0..1) mixes
-		// from the uniform amount (0) to the patterned
-		// one, and fades out where the blotches shrink to a few pixels (the noise would shimmer).
-		// (The relief ALONE, tried before, tiles at the splat texture's scale: speckle, not drying patches.)
+
+		// THE DRYING PATTERN: a beach dries in metre-scale blotches. P (0..1, low = holds its water longest) is a
+		// world-anchored value fBm of "Drying pattern size (m)" plus "Drying pattern relief" of the splat's height
+		// (the fine breakup at the island edges; the relief ALONE tiles at the splat scale: speckle). Each amount
+		// becomes a LEVEL through P: above it a dry ISLAND, growing as the level sinks. Darkening and gloss share P, so
+		// an island loses its gloss first, then its darkness; each has its own soft edge band ("Darkening edge" wide,
+		// "Roughness edge" crisp). "Drying pattern" mixes uniform (0) -> patterned, faded out where the blotches
+		// shrink to a few pixels (the noise would shimmer).
 		const float16_t darkBand = float16_t(u_terrainWater_darkeningEdge);
 		const float16_t band = float16_t(u_terrainWater_roughnessEdge);
 		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
@@ -223,32 +210,27 @@ void main()
 		float16_t damp = darkAmount, glossW = glossAmount;
 		if (patternW > float16_t(0.0))
 		{
-			// The fBm stays 32-bit (its hash is fract() of large products); stretched from its central
-			// bunching toward the full 0..1 by "Drying pattern contrast" (dryingContrastHalf, pre-halved): higher =
-			// more of the ground at the extremes, so the islands separate more strongly (clamped: fully dry / fully wet).
+			// The fBm stays 32-bit (its hash is fract() of large products); stretched from its central bunching toward
+			// the full 0..1 by "Drying pattern contrast" (pre-halved), clamped.
 			const float n = clamp(terrainFbm(TERRAIN_LIT_POS.xz * u_terrainWater_invDryingPatternSize) * u_terrainWater_dryingContrastHalf + 0.5, 0.0, 1.0);
 			const float16_t P = mix(float16_t(n), surf.height, float16_t(u_terrainWater_dryingPatternRelief));
 			damp = mix(damp, smoothstep(P - darkBand, P + darkBand, darkAmount * (one + darkBand + darkBand) - darkBand), patternW);
 			glossW = mix(glossW, smoothstep(P - band, P + band, glossAmount * (one + band + band) - band), patternW);
 		}
 		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), damp);
-		// Where the FILM stands over this ground: the same pool level through the relief the film's coverage
-		// uses, faded over its "Edge fade (m)" (the ground/beach relief depth as the metres). The ground there is
-		// UNDER water - its wet gloss would sit beneath the film's own surface - so it takes the underwater
-		// roughness, as under the live ocean (not a wetness gate: this follows the film's actual outline).
+
+		// Where the FILM stands over this ground (the film coverage's pool level, faded over its "Edge fade (m)"), the
+		// ground is UNDER water and takes the underwater roughness, as under the live ocean.
 		const float16_t poolOver = (float16_t(terrainPoolLevel(float(wet), coverN.y)) - surf.height)
 			* float16_t(u_terrainTess_depthGround / u_terrainWater_edgeFade);
 		const float16_t underFilm = clamp(poolOver, float16_t(0.0), one);
 		// "Wet roughness" with the gloss, "Underwater roughness" under the film and the live ocean.
 		const float16_t submerged = max(one - aboveLive, underFilm);
 		surf.rough = mix(mix(surf.rough, float16_t(u_terrainWater_wetRoughness), glossW), float16_t(u_terrainWater_underwaterRoughness), submerged);
-		// GLINTS ("Glint size (m)" u_terrainWater_invGlintSize = 1 / size, "Glint coverage" glintCoverage, "Glint
-		// roughness" glintRoughness): wet sand is not uniformly glossy - beaded water and flat wet grains catch the sun in small sharp
-		// points. Sparse world-anchored patches - a single-octave value noise over glint-size cells, its peaks
-		// (the high corner hashes) thresholded so roughly "Glint coverage" of the ground qualifies - drop the
-		// roughness to a near-mirror alpha, on the wet gloss only (not under the film or the ocean). Small and
-		// sparse, so the overall specular barely changes. Faded out where the patches shrink toward a pixel:
-		// there they would only shimmer.
+
+		// GLINTS: beaded water and flat wet grains catch the sun in small sharp points. The peaks of a single-octave
+		// value noise over "Glint size (m)" cells (about "Glint coverage" of the ground) drop the roughness to a
+		// near-mirror alpha, on the wet gloss only. Faded out where the patches shrink toward a pixel (shimmer).
 		{
 			const float glintFade = 1.0 - smoothstep(0.3, 0.7, pixelWidth * u_terrainWater_invGlintSize);
 			if (glintFade > 0.0)
@@ -258,49 +240,46 @@ void main()
 				surf.rough = mix(surf.rough, float16_t(u_terrainWater_glintRoughness), float16_t(glint) * glossW * (one - submerged));
 			}
 		}
-		// "Wet normal scale" (u_terrainWater_wetNormalScale): the normal map's tilt off the shading base, scaled with the
-		// gloss - below 1 the water fills the micro relief (a sharper highlight: at full, the bumps scattered
-		// it over the whole wet area), above 1 it is exaggerated. Kept on the base's side of the horizon (an
-		// extrapolated tilt can pass it).
+
+		// "Wet normal scale": the normal map's tilt off the shading base, scaled with the gloss - below 1 the water
+		// fills the micro relief (a sharper highlight). Kept on the base's side of the horizon (an extrapolated tilt
+		// can pass it).
 		{
 			const f16vec3 baseN = f16vec3(geoN);
 			f16vec3 n = baseN + (surf.normal - baseN) * mix(one, float16_t(u_terrainWater_wetNormalScale), glossW);
 			n += baseN * max(float16_t(0.05) - dot(n, baseN), float16_t(0.0));
 			surf.normal = normalize(n);
 		}
-		// The sky reflection's weight: the gloss above the live ocean, minus where the film stands (it mirrors
-		// the sky itself there).
-		// The GI's sky visibility (no sky mirrored under a roof or an overhang), folded in HERE: skyReflW is live
-		// across the lit core anyway, and the lookup runs before its peak, not after it with the colour live.
+
+		// The sky reflection's weight: the gloss above the live ocean, minus where the film stands (it mirrors the sky
+		// there). The GI's sky visibility (no sky under an overhang) is folded in HERE: skyReflW is live across the
+		// lit core anyway, and the lookup runs before its peak, not after it with the colour live.
 		skyReflW = glossW * aboveLive * (one - underFilm);
 		if (skyReflW > float16_t(0.0))
 			skyReflW *= float16_t(giSkyVisibility(TERRAIN_LIT_POS, geoN));
 	}
+
 #ifdef TERRAIN_TESS
-	// Where the relief is displaced, the normal maps carry the same relief a second time: their tilt re-lit the
-	// faces the displacement turned away from the sun. Half of it is kept at full displacement (the fine detail
-	// finer than the height composite). And the relief surface itself gates the sun: a face turned away from it
-	// gets none, whatever the normal map says (through g_sunVisMaterial - the ground's sun only).
+	// Where the relief is displaced, the normal maps carry the same relief a second time (their tilt re-lit faces the
+	// displacement turned from the sun): half is kept at full displacement. And a relief face turned from the sun gets
+	// none, whatever the normal map says (g_sunVisMaterial: the ground's sun only).
 	surf.normal = normalize(mix(surf.normal, f16vec3(geoN), float16_t(0.5 * reliefStrength)));
 	const float reliefSunGate = mix(1.0, smoothstep(0.0, 0.1, dot(geoN, u_sunDirection.xyz)), reliefStrength);
 	g_sunVisMaterial = float16_t(float(g_sunVisMaterial) * reliefSunGate);
 #endif
-	// THE WET SKY REFLECTION: the lit core has no environment
-	// specular (diffuse GI + the lights' GGX lobes only), so wet ground showed one sun highlight and read as
-	// merely darker. The film's sky: the baked mirror sky along R, water Fresnel (F0 0.02), the film's
-	// roughness-to-blur rule (rough wet ground mirrors nothing), the texture AO as the specular occlusion and
-	// the mirror fog rule (the bake carries no fog). After the lighting. It costs the TESSELLATED ground 16 B
-	// (72/16 -> 72/32; untessellated unchanged): the normal, roughness, AO and weight it reads stay live across
-	// the lit core's peak. Measured alternatives, none better (tessellated / untessellated): the weight before
-	// and the normal across 72/32 / 72/16; R.xz + the weight across 72/32 / 72/32; the whole reflection
-	// before, its half result across 72/32 / 72/32.
-	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
+
+	// The grass canopy: the ground's sun only (the water film keeps its own) and its ambient.
 	// V HERE, not at the top: its 3 registers are then not live across the shadow, the layers and the splat.
-	// The grass canopy: the ground's sun only (the water film on top keeps its own) and its ambient.
 	g_sunVisMaterial *= grassCanopy.x;
 	surf.ao *= grassCanopy.y;
 	const vec3 V = normalize(u_viewPos - in_pos);
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
+
+	// THE WET SKY REFLECTION (the lit core has no environment specular, so wet ground read as merely darker): the
+	// mirror sky along R, water Fresnel (F0 0.02), the film's roughness-to-blur rule, the texture AO as the specular
+	// occlusion and the mirror fog rule. After the lighting. It costs the TESSELLATED ground 16 B (72/16 -> 72/32):
+	// the normal, roughness, AO and weight stay live across the lit core's peak. Measured alternatives (the weight
+	// and normal, R.xz + the weight, or the whole reflection before the lighting) were none better.
 	if (skyReflW > float16_t(0.0))
 	{
 		const f16vec3 Vh = f16vec3(V);

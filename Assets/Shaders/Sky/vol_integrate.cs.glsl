@@ -1,10 +1,8 @@
 #version 450
 
-// Volumetric fog integration: one invocation per froxel column, marching front to back along Z.
-// Each slice's in-scatter (rgb, per meter) and extinction (a, 1/m) from vol_scatter.cs.glsl are
-// integrated analytically over the slice's depth, accumulating transmittance-weighted in-scatter.
-// Every slice stores the accumulated result so the apply pass can sample fog at any scene depth:
-// rgb = total in-scattered radiance camera..slice, a = transmittance camera..slice.
+// Volumetric fog integration: one invocation per froxel column, front to back. Each slice's in-scatter (rgb, per metre)
+// and extinction (a, 1/m) from vol_scatter.cs.glsl are integrated analytically over the slice depth. Every slice stores
+// the accumulation, so the apply pass can sample fog at any depth: rgb = in-scatter camera..slice, a = transmittance.
 
 #include "shared.inc.glsl"
 #include "vol_fog.inc.glsl"
@@ -14,9 +12,8 @@ layout (binding = 2, rgba16f) uniform writeonly image3D u_outIntegrated;
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// 3x3 XY tent filter over the scatter grid (weights 1-2-1, separable). The scatter pass's jittered,
-// few-ray lighting is noisy per froxel; one cheap spatial pass at froxel resolution removes the
-// remaining blotchiness the temporal blend doesn't catch, at well below pixel frequency.
+// 3x3 XY tent (1-2-1) over the scatter grid: removes the blotchiness of the jittered few-ray lighting that the temporal
+// blend does not catch, at well below pixel frequency.
 vec4 filteredScatter(ivec2 xy, int z)
 {
     vec4 sum = vec4(0.0);

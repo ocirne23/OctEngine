@@ -1,18 +1,12 @@
 // PROCEDURAL GRASS, shared by the patch cull (grass_cull.cs.glsl) and the blade vertex shader (grass.vs.glsl).
-//
 // The world is a grid of PATCHES (u_grass_patchSize metres square). A patch is drawn from ONE static index buffer of N
-// blades (u_grass_bladesPerPatch) in RANK order: blade k sits at the k-th point of an R2 low-discrepancy sequence over the
-// patch, so EVERY PREFIX of the ranks is evenly spread. The cull writes one indexed draw per visible patch and draws
-// the first K blades; the vertex shader keeps blade k where rank (k + 0.5) / N < density x thinning, and shrinks it
-// into the ground over the grow band below that. One rule thins by density AND by distance, so the two always agree
-// and a blade fades out by shrinking, never by popping.
-//
-// Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices in the vertex
-// mega-buffer (the chunk grid's two triangles per cell, as TerrainGenerator.cpp splits them), so they sit exactly on
-// the drawn ground - the baked height map (8 m texels) is far too coarse for that.
-//
-// Needs shared.inc.glsl (the UBO) and the includer's `in_vertices` (MeshVertex, the vertex mega-buffer) first.
-// The constants (GRASS_*) are injected from RendererVKLayout (Layout.ixx).
+// blades in RANK order: blade k sits at the k-th point of an R2 low-discrepancy sequence, so EVERY PREFIX of the ranks
+// is evenly spread. The cull writes one indexed draw per visible patch (the first K blades); the VS keeps blade k where
+// rank (k + 0.5) / N < density x thinning and shrinks it into the ground over the grow band below that. One rule thins
+// by density AND by distance, so a blade fades out by shrinking, never by popping.
+// Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices (two triangles per
+// cell, as TerrainGenerator.cpp splits them) - the baked height map (8 m texels) is far too coarse.
+// Needs shared.inc.glsl and the includer's `in_vertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
 
 #ifndef GRASS_INC_GLSL
 #define GRASS_INC_GLSL
@@ -23,11 +17,13 @@ uint grassLodSegments(uint lod)
 {
     return lod == 0u ? GRASS_LOD0_SEGMENTS : lod == 1u ? GRASS_LOD1_SEGMENTS : lod == 2u ? GRASS_LOD2_SEGMENTS : GRASS_LOD3_SEGMENTS;
 }
+
 // A blade of S segments: 2 vertices per row below the tip, one tip vertex; 2S - 1 triangles.
 uint grassIndicesPerBlade(uint lod)
 {
     return (2u * grassLodSegments(lod) - 1u) * 3u;
 }
+
 // The index buffer holds the LODs one after another, each N blades in rank order (GrassPipeline::buildIndices).
 uint grassLodFirstIndex(uint lod, uint blades)
 {
@@ -46,14 +42,17 @@ uint grassHash(uint x)
     x ^= x >> 16;
     return x;
 }
+
 uint grassHash2(ivec2 p)
 {
     return grassHash(uint(p.x) * 1597334673u ^ grassHash(uint(p.y) * 3812015801u));
 }
+
 float grassUnit(uint h)
 {
     return float(h >> 8) * (1.0 / 16777216.0);
 }
+
 // Smooth value noise in [0, 1] (clumps, bare patches, dry spots, gusts).
 float grassValueNoise(vec2 p)
 {
@@ -76,6 +75,7 @@ float grassClump(vec2 xz)
     const float bare = u_grass_bareFraction;
     return mix(1.0, smoothstep(bare - 0.2, bare + 0.2, grassValueNoise(xz * u_grass_invClumpSize)), u_grass_patchiness);
 }
+
 float grassCoverSize(float cover)
 {
     return mix(1.0, cover, u_grass_sizeByCover);
@@ -83,19 +83,19 @@ float grassCoverSize(float cover)
 
 // THE CANOPY: grass self-shadowing without a shadow map (a blade is far below a shadow-map texel). The grass layer is
 // a thin volume of blades: its top at the mean blade height, its extinction (1/m) = u_grass_canopyExtinction ("Canopy
-// shadow" x blades per m^2 x the mean blade width, the CPU's fold) x the COVER (not the clumps: those are sampled along
-// the sun path, grassCanopySun) x the size by cover; its RESULT fades with the blades over the range's end
-// (grassRangeFade). The blades
-// (grass.vs/fs.glsl) and the ground under them (instanced_indirect_terrain.fs.glsl) use the same terms, so the soil
-// between the blades matches their feet.
+// shadow" x blades per m^2 x the mean blade width, the CPU's fold) x the COVER (the clumps are sampled along the sun
+// path) x the size by cover. The blades and the ground under them use the same terms, so the soil between the blades
+// matches their feet.
 float grassCanopyHeight(float clump, float coverSize)
 {
     return u_grass_bladeHeight * (1.0 - 0.5 * u_grass_heightVariation) * mix(0.6, 1.0, clump) * coverSize;
 }
+
 float grassCanopyExtinction(float cover, float coverSize, float dist)
 {
     return u_grass_canopyExtinction * cover * coverSize;
 }
+
 // The blades' "Range fade" (1 inside, 0 at the range). The canopy's RESULT fades with it, linearly: fading the
 // extinction instead kept exp(-extinction x path) nearly black until the band's last metres - an edge, not a fade.
 float grassRangeFade(float dist)
@@ -103,20 +103,17 @@ float grassRangeFade(float dist)
     return 1.0 - smoothstep(u_grass_range - u_grass_rangeFade, u_grass_range, dist);
 }
 
-// The sun reaching pos, `depth` metres below the canopy top, along the sun's path up through it (capped at 10x the
-// depth: a sun near the horizon):
-// - the CLUMPS at 4 points along that path (not at pos): a clump shadows the bare ground beside it, stretched away
-//   from the sun;
-// - SUN FLECKS: what gets through arrives in bright and dark spots, not as an even gray - a noise at the path's ENTRY
-//   into the canopy decides each spot, about T of the ground lit (the mean keeps the transmittance T), stretched into
-//   streaks along the sun (below). Every point of one sun path shares its spot, so a fleck lights a blade and the soil
-//   under it alike. "Fleck size" (u_grass_invFleckSize
-//   = 1 / size), "Fleck contrast" (.fleckContrast), faded out from half the "Fleck fade distance" (.fleckFadeDistance) to it: smaller than a pixel
-//   it only shimmers.
+// The sun reaching pos, `depth` metres below the canopy top, along the sun's path up through it:
+// - the CLUMPS at 4 points along that path (not at pos): a clump shadows the bare ground beside it, away from the sun;
+// - SUN FLECKS: what gets through arrives in bright and dark spots, not an even gray - a noise at the path's ENTRY into
+//   the canopy decides each spot, about T of the ground lit (the mean keeps the transmittance T). Every point of one
+//   sun path shares its spot, so a fleck lights a blade and the soil under it alike. Faded out from half the "Fleck
+//   fade distance" to it: smaller than a pixel it only shimmers.
 float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 {
     if (extinction <= 0.0 || depth <= 0.0)
         return 1.0;
+
     // The sun's terms from the CPU (RendererUbo): its height floored at 0.1.
     const vec2 toSun = u_grass_sunToXZ; // XZ per metre of height along the sun
     float clumps = 0.0;
@@ -127,9 +124,9 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
     const float contrast = u_grass_fleckContrast * (1.0 - smoothstep(0.5 * u_grass_fleckFadeDistance, u_grass_fleckFadeDistance, dist));
     if (contrast <= 0.0)
         return mix(1.0, T, rangeFade);
-    // STREAKS, not round spots: the shadows of upright blades fall as lines away from the sun, longer as it sinks
-    // (a blade of height h casts h / tan(elevation)). The noise is stretched along the sun's horizontal direction by
-    // that ratio x "Fleck stretch" (u_grass_fleckStretch; capped at 16); across it the spots stay "Fleck size".
+
+    // STREAKS, not round spots: upright blades cast lines away from the sun, longer as it sinks (h / tan(elevation)).
+    // The noise is stretched along the sun's horizontal direction by that ratio x "Fleck stretch" (capped at 16).
     const vec2 entryPos = pos.xz + toSun * depth;
     const vec2 along = u_grass_fleckAlong;
     const vec2 entry = vec2(dot(entryPos, along) * u_grass_fleckInvStretch, dot(entryPos, vec2(-along.y, along.x))) * u_grass_invFleckSize;
@@ -139,23 +136,22 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL
-// THE NEAR GRASS CASCADE (the receivers: the blades, the ground under them): the real blade shadows from the extra
-// layer of the sun shadow array (u_shadowMap layer NUM_SHADOW_CASCADES; GrassPipeline's near pass), around the camera.
-// Returns the visibility; `weight` = how much of it to use (1 inside, fading to 0 over the box's outer part, where the
-// canopy takes over). The receiver moves toward the sun by "Near shadow bias" and off its normal by one texel: the
-// blades are thin and two-sided, and they receive their own casters.
+// THE NEAR GRASS CASCADE (receivers: the blades, the ground under them): the real blade shadows from the extra layer
+// of the sun shadow array (layer NUM_SHADOW_CASCADES; GrassPipeline's near pass), around the camera. `weight` = how
+// much of it to use (fading to 0 over the box's outer part, where the canopy takes over). The receiver moves toward
+// the sun by "Near shadow bias" and off its normal by one texel: the blades are thin, two-sided, and self-casting.
 float grassNearShadow(vec3 pos, vec3 N, out float weight)
 {
     weight = 0.0;
     if (u_grass_nearRange <= 0.0)
         return 1.0;
+
     const vec4 lp = u_grass_shadowViewProj * vec4(pos + u_sunDirection.xyz * u_grass_nearBias + N * u_grass_nearTexel, 1.0);
     const vec2 uv = lp.xy * 0.5 + 0.5;
     const vec2 edge = abs(uv - 0.5) * 2.0;
-    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (u_grass_nearCentre, ahead of the
-    // camera: full within the range, gone at 1.3 x): the box is square in LIGHT space, so on the ground it reaches
-    // range / sin(sun elevation) along the sun - far past the casters, which are drawn within range x 1.5 + 2 m of the
-    // centre only. There the map is empty (lit) and replaced the canopy: a bright gap between the two.
+    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (ahead of the camera; gone at 1.3 x
+    // the range): the box is square in LIGHT space, so on the ground it reaches range / sin(sun elevation) - far past
+    // the casters (drawn within range x 1.5 + 2 m only), where the empty map left a bright gap before the canopy.
     const float range = u_grass_nearRange;
     weight = (1.0 - smoothstep(0.85, 0.98, max(edge.x, edge.y)))
            * (1.0 - smoothstep(range, 1.3 * range, distance(pos.xz, u_grass_nearCentre)));
@@ -164,6 +160,7 @@ float grassNearShadow(vec3 pos, vec3 N, out float weight)
         weight = 0.0;
         return 1.0;
     }
+
     // 4 bilinear PCF taps one texel apart (a 3x3-texel footprint): a blade is a few texels wide.
     const float layer = float(NUM_SHADOW_CASCADES);
     const float texel = 1.0 / float(textureSize(u_shadowMap, 0).x);
@@ -177,12 +174,13 @@ float grassNearShadow(vec3 pos, vec3 N, out float weight)
 #endif
 
 #ifdef TERRAIN_SPLAT_INC_GLSL
-// THE TERRAIN TEXTURES' grass (terrain_splat.inc.glsl terrainLayers): what the beach, rock and snow layers leave of
-// the GROUND x the grass amount of its climate-picked textures (u_terrain_splatGrass, TerrainSplatMaterial::grass).
+// THE TERRAIN TEXTURES' grass: what the beach, rock and snow layers leave of the GROUND x the grass amount of its
+// climate-picked textures (u_terrain_splatGrass, TerrainSplatMaterial::grass).
 float grassTextureAmount(uint slot)
 {
     return u_terrain_splatGrass[slot >> 2u][slot & 3u];
 }
+
 float grassTerrainCover(TerrainLayers L)
 {
     const float ground = (1.0 - float(L.beachW)) * (1.0 - float(L.rockW)) * (1.0 - float(L.snowW));
@@ -194,10 +192,9 @@ float grassTerrainCover(TerrainLayers L)
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL // it reads the near grass cascade (the lit core's u_shadowMap)
-// The ground UNDER the grass at pos (the terrain FS; N = its smooth normal): x = its sun - the near grass cascade's
-// blade shadows inside its box (on ANY ground there: blades also shade the bare soil beside them), blending into the
-// canopy's (the full canopy depth) outside it -, y = its ambient (the blades' root occlusion, by how opaque the canopy
-// is). (1, 1) without grass there.
+// The ground UNDER the grass at pos (the terrain FS; N = its smooth normal): x = its sun - the near cascade's blade
+// shadows inside its box (on ANY ground there: blades also shade the bare soil beside them), blending into the
+// canopy's outside it; y = its ambient (the blades' root occlusion, by how opaque the canopy is). (1, 1) without grass.
 vec2 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 {
     if (u_grass_canopyExtinction <= 0.0 && u_grass_nearRange <= 0.0) // no canopy, no near cascade (or no grass at all)
@@ -205,11 +202,13 @@ vec2 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
     const float dist = distance(pos, u_viewPos);
     if (dist >= u_grass_range)
         return vec2(1.0);
+
     float nearWeight;
     const float nearSun = grassNearShadow(pos, N, nearWeight);
     const float cover = grassTerrainCover(L);
     if (cover <= 0.0)
         return vec2(mix(1.0, nearSun, nearWeight), 1.0);
+
     const float clump = grassClump(pos.xz);
     const float coverSize = grassCoverSize(cover);
     const float height = grassCanopyHeight(clump, coverSize);
@@ -231,8 +230,8 @@ float grassKeep(float dist)
 }
 
 // A BASE terrain chunk's ground in the vertex mega-buffer: a res x res cell grid, row-major, local XZ (0 .. chunk size)
-// with world Y, its rows u_present_groundStride vertices apart - a sub-grid of a bigger quadtree node's mesh (Procedural
-// TerrainStreamer; unstitched: the terrain VS snaps the edge vertices, these are the generated heights).
+// with world Y, its rows u_present_groundStride vertices apart - a sub-grid of a bigger quadtree node's mesh
+// (unstitched: the terrain VS snaps the edge vertices, these are the generated heights).
 struct GrassGround
 {
     vec2 chunkOrigin;
@@ -298,17 +297,17 @@ vec3 grassGroundSmoothNormal(GrassGround g, vec2 xz)
     return normalize(n);
 }
 
-// One ground vertex's river data (Procedural TerrainGenerator: the vertex's UV): the influence, the speed (m/s), 1 under
-// river or lake water (v < 0: -(speed + 0.01)).
+// One ground vertex's river data (TerrainGenerator, the vertex's UV): the influence, the speed (m/s), 1 under river or
+// lake water (v < 0: -(speed + 0.01)).
 vec3 grassGroundRiverVertex(uint i)
 {
     const vec2 uv = meshVertexUV(in_vertices[i]);
     return uv.y < 0.0 ? vec3(uv.x, -uv.y - 0.01, 1.0) : vec3(uv.x, uv.y, 0.0);
 }
 
-// The mesh's RIVER data at xz, over the same triangle as the height: x = the river influence (TerrainFields::river) -
-// what the ground's beach layer sees, so the grass and the clutter leave the same river bed -, y = the river's flow speed
-// (m/s; 0 off rivers and on lakes), z = under the water 0..1 (the river's channel or a lake, soft over a cell).
+// The mesh's RIVER data at xz, over the same triangle as the height: x = the river influence (what the ground's beach
+// layer sees, so the grass and the clutter leave the same river bed), y = the flow speed (m/s; 0 off rivers and on
+// lakes), z = under the water 0..1 (a river channel or a lake, soft over a cell).
 vec3 grassGroundRiverData(GrassGround g, vec2 xz)
 {
     const float res = float(g.res);

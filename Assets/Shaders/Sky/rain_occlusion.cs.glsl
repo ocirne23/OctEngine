@@ -2,9 +2,9 @@
 
 #extension GL_EXT_ray_query : require
 
-// The weather volume's RAIN OCCLUSION MAP (RainOcclusionPipeline): one texel = one vertical line through the
-// top-down orthographic box of u_weather_rainOcclusionViewProj (its inverse in the push constants), from the near plane (the
-// eye, "Rain occlusion pad" above the box) to the far plane (1 m below the box). Two ray queries down it:
+// The weather volume's RAIN OCCLUSION MAP (RainOcclusionPipeline): one texel = one vertical line through the top-down
+// ortho box of u_weather_rainOcclusionViewProj (its inverse in the push constants), from the near plane ("Rain occlusion
+// pad" above the box) to the far plane (1 m below the box). Two ray queries down it:
 //   SOLID   - opaque instances only (CullNoOpaque): the closest hit's ortho depth (t / range, standard Z; 1 = none).
 //   FOLIAGE - the alpha-masked (non-opaque) instances above that hit (CullOpaque, candidates never confirmed): the
 //             topmost one's depth and the layer count; each layer passes (1 - "Rain occlusion foliage block") of
@@ -25,6 +25,7 @@ void main()
     const uvec2 p = gl_GlobalInvocationID.xy;
     if (p.x >= pc_resolution || p.y >= pc_resolution)
         return;
+
     // Texel centre -> NDC as the rasterizer saw it (row 0 = NDC y -1, the sim's uv = ndc * 0.5 + 0.5).
     const vec2 ndc = (vec2(p) + 0.5) / float(pc_resolution) * 2.0 - 1.0;
     const vec4 nearPoint = pc_invViewProj * vec4(ndc, 0.0, 1.0);

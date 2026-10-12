@@ -659,6 +659,11 @@ void Renderer::beginFrame()
         m_treeCullTaken.store(false, oc::memory_order_relaxed);
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
+        if (Globals::settings.renderer.freezeSceneFocus != m_sceneFocusFrozen)
+        {
+            m_frozenSceneFocus = m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos;
+            m_sceneFocusFrozen = Globals::settings.renderer.freezeSceneFocus;
+        }
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
         snapshotLodStats(frameData);
     }

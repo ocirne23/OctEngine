@@ -1,22 +1,18 @@
 #version 450
 
-// AERIAL PERSPECTIVE LUT (VolumetricFogPipeline, after the fog integrate): the sky's own single-scattering Rayleigh +
-// Mie atmosphere (atmosphere.inc.glsl, the model sky.fs.glsl draws) between the CENTRE view's camera and every point
-// of its frustum, so distant terrain takes the blue of the sky behind it. vol_apply.fs.glsl reads it at each scene
-// pixel and lays it BEHIND the fog (the height fog sits on the ground near the camera; the air fills the distance).
+// AERIAL PERSPECTIVE LUT (VolumetricFogPipeline, after the fog integrate): the sky's own atmosphere (atmosphere.inc.glsl)
+// between the CENTRE view's camera and every point of its frustum, so distant terrain takes the blue of the sky behind
+// it. vol_apply.fs.glsl lays it BEHIND the fog (the height fog sits near the camera; the air fills the distance).
 //
-// ONE WORKGROUP PER (x, y) COLUMN, one lane per slice: rgb = in-scatter (radiance, the sun and sky-radiance lights
-// included), a = the view ray's mean transmittance (the apply's blend is scalar). Slice k holds the value at its FAR
-// edge, t = maxDist * ((k + 1) / Z)^2 - quadratic: most slices where the haze changes fastest. Every step's
-// contribution is independent of the others (the view optical depth is closed-form, atmosRayOD), so a slice's value is
-// a PREFIX SUM: each lane marches its own slice's substeps and a subgroup scan adds the slices in front. (One thread per
-// column marching all 64 steps was 2304 threads on the whole GPU: latency-bound, ~0.1 ms.) The workgroup is ONE
-// subgroup: AERIAL_LUT_Z (32) = NVIDIA's warp, the engine's minimum spec.
-// Each step's sun is cloud-shadowed (cloud_shadow.inc.glsl), so overcast air does not light distant terrain blue.
-// Matches sky.fs.glsl: observer at the camera altitude along u_skyUp, the same scatter boost, the same eclipse
-// saturation curve on the sun part. No jitter: a texel covers many pixels, and no temporal pass averages it.
-// "Strength" (u_fog_aerialStrength) scales the air density along the VIEW ray only; the sun reaches every point through
-// the unscaled atmosphere, as it does in the sky.
+// ONE WORKGROUP PER (x, y) COLUMN, one lane per slice: rgb = in-scatter (sun + sky-radiance light), a = the view ray's
+// mean transmittance (the apply's blend is scalar). Slice k holds the value at its FAR edge, t = maxDist * ((k + 1) / Z)^2
+// (quadratic: most slices where the haze changes fastest). Each step is independent (the view optical depth is closed
+// form, atmosRayOD), so a slice is a PREFIX SUM: each lane marches its own substeps and a subgroup scan adds the slices
+// in front (one thread per column is only 2304 threads: latency-bound). The workgroup is ONE subgroup: AERIAL_LUT_Z (32)
+// = NVIDIA's warp, the minimum spec.
+// The sun is cloud-shadowed, so overcast air does not light distant terrain blue. Matches sky.fs.glsl: observer at the
+// camera altitude along u_skyUp, the same scatter boost and eclipse curve. No jitter: no temporal pass averages it.
+// "Strength" (u_fog_aerialStrength) scales the air density along the VIEW ray only; the sun path is unscaled, as in the sky.
 
 #extension GL_KHR_shader_subgroup_arithmetic : require
 
@@ -72,8 +68,7 @@ void main()
         const float h = length(p) - ATMOS_R_PLANET;
         const vec2 dens = exp(-max(h, 0.0) / vec2(ATMOS_H_RAY, ATMOS_H_MIE)) * (dt * strength);
         const vec3 viewTau = atmosTau(atmosRayOD(ray, t)) * strength;
-        const vec3 sunAtt = exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, L))))
-                          * cloudSunTransmittanceBilinear(u_viewPos + dir * t);
+        const vec3 sunAtt = exp(-(viewTau + atmosTau(atmosLightOpticalDepth(p, L)))) * cloudSunTransmittanceBilinear(u_viewPos + dir * t);
         sunR += sunAtt * dens.x;
         sunM += sunAtt * dens.y;
         if (skyLight)
@@ -83,6 +78,7 @@ void main()
             skyM += skyAtt * dens.y;
         }
     }
+
     // The slices in front, added: the scattered light from the camera to this slice's far edge.
     sunR = subgroupInclusiveAdd(sunR);
     sunM = subgroupInclusiveAdd(sunM);

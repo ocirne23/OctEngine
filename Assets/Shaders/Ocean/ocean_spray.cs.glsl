@@ -1,17 +1,12 @@
 #version 460
 
-// Ocean spray: the first PRODUCER on the particle GPU spawn path (particle_spawn.inc.glsl). Runs as the
-// last OceanSimulationPipeline step, after the maps' mip chain, over a world-space grid of
-// OCEAN_SPRAY_GRID^2 cells around the scene focus ("Ocean/Spray radius"). Each cell jitters one sample
-// point, rebuilds the fold Jacobian + crest acceleration the water shader's whitecap foam keys on
-// (explicit LOD at the cell's footprint - this is compute, no derivatives), and where the crest is
-// breaking rolls a hashed dice at "Spray rate" x cell area x dt x breaking. A hit appends spawn
-// requests at the displaced surface with the crest's forward motion (along the wind) plus an upward
-// kick; the particle chain later this frame turns them into particles of the ONE emitter slot the CPU
-// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_ocean_sprayEmitter).
-//
-// Land is skipped through the shore data (depth <= 0), and the grid ORIGIN is snapped to whole cells so
-// the sample lattice does not swim with the focus.
+// Ocean spray: the first PRODUCER on the particle GPU spawn path (particle_spawn.inc.glsl). The last
+// OceanSimulationPipeline step (after the mip chain), over OCEAN_SPRAY_GRID^2 world cells around the scene focus ("Ocean/
+// Spray radius"). Each cell jitters one sample, rebuilds the fold Jacobian + crest acceleration the whitecap foam keys on,
+// and where the crest breaks rolls a hashed dice at "Spray rate" x cell area x dt x breaking. A hit appends spawn requests
+// at the displaced surface, moving with the crest plus an upward kick, for the ONE emitter slot the CPU published
+// (u_ocean_sprayEmitter: the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance).
+// Land is skipped through the shore data; the grid ORIGIN snaps to whole cells so the lattice does not swim with the focus.
 
 #include "shared.inc.glsl"
 #define OCEAN_MAPS_BINDING 1
@@ -24,8 +19,8 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// oceanSampleSurface's Jacobian + acceleration with EXPLICIT LOD at the cell footprint (the shared
-// helper samples with implicit derivatives, which compute has none of). Same depth weighting.
+// oceanSampleSurface's Jacobian + acceleration with EXPLICIT LOD at the cell footprint (compute has no derivatives).
+// Same depth weighting.
 void sprayCrest(vec2 worldXZ, float cell, vec2 shoreHW, out float jacobian, out float accel)
 {
     const float chop = u_ocean_choppiness;
@@ -82,7 +77,6 @@ void main()
 
     float jacobian, accel;
     sprayCrest(worldXZ, cell, shoreHW, jacobian, accel);
-    // The water shader's crest foam: spray where the whitecaps break.
     const float foam = oceanInstantFoam(jacobian, accel);
     const float breaking = smoothstep(u_ocean_sprayThreshold, 1.0, foam);
     if (breaking <= 0.0)
@@ -97,23 +91,20 @@ void main()
         return;
 
     const vec3 disp = oceanSampleDisplacement(worldXZ, cell, 0.0, shoreHW);
-    // The simulated field TRAVELS AGAINST u_ocean_windDirection (see oceanFlowRotation's note), so the
-    // crests move along -wind: throw the spray with them.
+
+    // The field TRAVELS AGAINST u_ocean_windDirection (see oceanFlowRotation), so the crests move along -wind.
     const vec2 wind = -u_ocean_windDirection; // unit
-    // Spawn AHEAD of the crest: the lip breaks forward, so the spray leaves from the front face, not
-    // from the top or the back. "Spray forward offset" m of lead along the travel direction, and
-    // "Spray height offset" m above the surface (so a fresh particle is not depth-cut by the wave).
+    // Spawn AHEAD of the crest (the lip breaks forward): "Spray forward offset" m of lead, and "Spray height offset" m up
+    // so a fresh particle is not depth-cut by the wave.
     const vec2 lead = wind * u_ocean_sprayForward;
     const vec3 surface = vec3(worldXZ.x + disp.x + lead.x, shoreHW.y + disp.y + u_ocean_sprayHeight, worldXZ.y + disp.z + lead.y);
-    // Energy: the stronger the breaking, the higher and faster the spray is thrown.
-    const float energy = 0.6 + 0.8 * breaking;
+    const float energy = 0.6 + 0.8 * breaking; // stronger breaking throws higher and faster
     for (uint i = 0u; i < count; ++i)
     {
-        // Jitter biased forward too: the box runs from the lip out to two cells ahead of it.
+        // Jitter biased forward too: the box runs from half a cell behind the lip to 1.5 cells ahead of it.
         const vec2 j2 = vec2(particleRand(seed) - 0.5, particleRand(seed) - 0.5) * cell;
         const vec3 jitter = vec3(j2.x + wind.x * (particleRand(seed) * cell), 0.0, j2.y + wind.y * (particleRand(seed) * cell));
-        // Atomised mist: carried forward with the crest, barely lifting - it hangs at the lip rather
-        // than arcing away like a thrown droplet would.
+        // Atomised mist: carried with the crest, barely lifting - it hangs at the lip, not arcing away like a droplet.
         const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * (0.6 * u_ocean_worldScale);
         const float fwd = u_ocean_spraySpeed * (0.4 + 0.4 * particleRand(seed)) * energy;
         const float up = u_ocean_sprayKick * (0.05 + 0.1 * particleRand(seed)) * energy;

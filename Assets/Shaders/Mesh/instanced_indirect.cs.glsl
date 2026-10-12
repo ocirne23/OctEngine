@@ -90,8 +90,7 @@ void prevInstanceTransform(InMeshInstance instance, out vec4 prevPosScale, out u
         return;
     const InMeshInstanceOffset offset = in_instanceOffsets[instance.instanceOffsetIdx];
     const vec4 q = quat_multiply(prev.quat, offset.quat);
-    prevPosScale = vec4(prev.posScale.xyz + quat_transform(offset.posScale.xyz * prev.posScale.w, prev.quat),
-                        prev.posScale.w * offset.posScale.w);
+    prevPosScale = vec4(prev.posScale.xyz + quat_transform(offset.posScale.xyz * prev.posScale.w, prev.quat), prev.posScale.w * offset.posScale.w);
     prevQuat = uvec2(packSnorm2x16(q.xy), packSnorm2x16(q.zw));
 }
 
@@ -109,13 +108,12 @@ bool frustumCheck(vec3 pos, float radius)
 
 void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree)
 {
-    uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
-    const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
-    const vec3 centerOffset           = quat_transform(meshInfo.center * instancePosScale.w, quat);
-    // Tree-set rocks: LOD chain, no wind.
-    const bool isRock                 = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK;
-    const float radius                = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliage_windReach : 0.0);
-    const vec3 centerPos              = instancePosScale.xyz + centerOffset;
+    uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
+    const InMeshInfo meshInfo = in_meshInfos[meshIdx];
+    const vec3 centerOffset   = quat_transform(meshInfo.center * instancePosScale.w, quat);
+    const bool isRock         = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK; // tree-set rocks: LOD chain, no wind
+    const float radius        = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliage_windReach : 0.0);
+    const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     // The ocean mesh is undisplaced: pad by the measured wave displacement. Frustum test only.
     float cullRadius = radius;
@@ -132,8 +130,7 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
         {
             const MeshLodGroup group = in_meshLodGroups[lodGroupIdx];
             const float dist = max(0.01, length(centerPos - u_views_viewPos[VIEW_CENTER].xyz) - radius);
-            int level = lodSelectLevel(group, dist, radius, instancePosScale.w,
-                u_lod_maxErrorPx, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
+            int level = lodSelectLevel(group, dist, radius, instancePosScale.w, u_lod_maxErrorPx, 0.0, isTree ? -1 : int(lodLevelState[stateSlot]));
             if (!isTree)
                 lodLevelState[stateSlot] = uint(level);
             level = lodResidentLevel(group, level);
@@ -148,15 +145,15 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             }
         }
 
-        const uint firstInstance      = in_firstInstances[meshIdx];
-        const uint16_t pipelineIdx    = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
+        const uint firstInstance   = in_firstInstances[meshIdx];
+        const uint16_t pipelineIdx = uint16_t(instance.pipelineIdxAlphaMode & 0x0000FFFF);
         // By pipeline family, not alpha mode: each DGC set has one fragment output interface.
-        const bool isTransparent      = ((PIPELINE_TRANSPARENT_MASK >> uint(pipelineIdx)) & 1u) != 0u;
-        const bool isTerrain          = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
+        const bool isTransparent   = ((PIPELINE_TRANSPARENT_MASK >> uint(pipelineIdx)) & 1u) != 0u;
+        const bool isTerrain       = pipelineIdx == uint16_t(PIPELINE_IDX_TERRAIN_LIT);
         // Only chunks reaching into the tess fade end; +1 covers the VR eye offset.
-        const bool terrainTess        = TERRAIN_TESS_ROUTE != 0 && isTerrain
+        const bool terrainTess     = TERRAIN_TESS_ROUTE != 0 && isTerrain
             && distance(centerPos, u_views_viewPos[VIEW_CENTER].xyz) - radius < u_terrainTess_fadeEnd + 1.0;
-        const bool terrainFilm        = isTerrain && terrainOverlayCovers(centerPos, radius);
+        const bool terrainFilm     = isTerrain && terrainOverlayCovers(centerPos, radius);
 
         uint idx;
         if (isTransparent)
@@ -186,8 +183,8 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
 
             if (isTerrain)
             {
-                // Not exclusive: tess draws the ground, the film draws the (untessellated) water on top.
-                // Count raised to cover this slot; instances in range outside the film discard their pixels.
+                // Not exclusive: tess draws the ground, the film draws the (untessellated) water on top. Count raised
+                // to cover this slot; instances in range outside the film discard their pixels.
                 if (terrainTess)
                 {
                     atomicMax(out_terrainTessCommands[meshIdx].instanceCount, idx + 1u);
@@ -231,6 +228,7 @@ void main()
     bool isTree;
     uint pieceIdx, passBits;
     const uint instanceIdx = treeCullThreadInstance(gid, isTree, pieceIdx, passBits);
+
     // One loop for trees and plain instances (k = 0), so cullInstance is inlined once.
     TreeCullPiecePick pick;
     InMeshInstance instance;
@@ -253,6 +251,7 @@ void main()
         instanceTransform(instance, pick.posScale, pick.quat);
         pick.lodStateBase = uint(int(instanceIdx) + in_nodeLodStateBias[instance.renderNodeIdx]);
     }
+
     for (uint k = pick.kBegin; k < pick.kEnd; ++k)
     {
         if (isTree)

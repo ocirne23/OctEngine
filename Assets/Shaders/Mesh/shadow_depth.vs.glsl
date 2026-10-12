@@ -9,10 +9,9 @@
 #include "shared.inc.glsl"
 #include "tree_wind.inc.glsl"
 
-// Depth-only vertex shader for the sun shadow cascades, rendered in a single multiview pass:
-// gl_ViewIndex selects the cascade. The shadow cull packed the set of cascades each caster overlaps
-// into a bitmask (in the meshIdxMaterialIdx slot); for cascades a caster does not touch the primitive
-// is collapsed to a degenerate point so it is cheaply discarded before rasterization.
+// Depth-only vertex shader for the sun shadow cascades, rendered in a single multiview pass: gl_ViewIndex selects the
+// cascade. The shadow cull packed the cascades each caster overlaps into a bitmask; for a cascade a caster does not
+// touch, the primitive collapses to a degenerate point, discarded before rasterization.
 struct InMeshInstancesData
 {
     vec4 posScale;
@@ -42,6 +41,7 @@ void main()
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0); // not in this cascade: degenerate -> discarded
         return;
     }
+
     vec3 worldPos = quat_transform(in_posU.xyz * inst.posScale.w, inst.quat) + inst.posScale.xyz;
     // A tree (the shadow cull's bit 15): the wind's TRUNK bend only (its casters are mostly the billboards; no payload
     // attribute in this pass) - the same bend the main pass gives every representation.
@@ -50,6 +50,7 @@ void main()
         vec3 unusedPrevDelta;
         worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, unusedPrevDelta);
     }
+
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).
     mat4 m = u_cascadeViewProj[gl_ViewIndex];
     m[0][3] = 0.0; m[1][3] = 0.0; m[2][3] = 0.0; m[3][3] = 1.0;
