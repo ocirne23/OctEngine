@@ -72,9 +72,9 @@ float terrainWetnessAt(vec2 worldXZ)
 float terrainPoolLevel(float wet, float normalY)
 {
     const float start = u_terrainWater_fillStart, full = u_terrainWater_fillFull;
-    const float t = clamp((wet - start) / max(full - start, 1e-3), 0.0, 1.0);
+    const float t = clamp((wet - start) / (full - start), 0.0, 1.0);
     const float slope = smoothstep(u_terrainWater_slopeCut, u_terrainWater_slopeFull, normalY);
-    return clamp(pow(t, max(u_terrainWater_fillCurve, 1e-3)), 0.0, 1.0) * slope;
+    return pow(t, u_terrainWater_fillCurve) * slope;
 }
 
 #endif

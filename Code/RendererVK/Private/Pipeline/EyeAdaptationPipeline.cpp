@@ -17,7 +17,7 @@ void EyeAdaptationPipeline::registerPushFields()
     const BloomParams& bloom = Globals::settings.bloom;
     const PostParams& post = Globals::settings.post;
     m_histogramBlock.lockable(m_histogramPush.bloomThreshold, bloom.threshold);
-    m_histogramBlock.lockable(m_histogramPush.bloomKnee, bloom.knee);
+    m_histogramBlock.lockable(m_histogramPush.bloomKnee, [&bloom] { return oc::max(bloom.knee, 1e-4f); }, bloom.knee);
     m_histogramBlock.lockable(m_histogramPush.manualExposure, [&post] { return exp2f(post.exposureEV); }, post.exposureEV); // the composite's u_exposure
     m_histogramBlock.lockable(m_histogramPush.autoExposure, [&post] { return post.autoExposure ? 1 : 0; }, post.autoExposure);
 }
@@ -94,7 +94,7 @@ void EyeAdaptationPipeline::updateParams(uint32 frameIdx, const PostParams& post
         .invLogLumRange = 1.0f / logLumRange,
         .logLumRange = logLumRange,
         .dt = deltaSeconds,
-        .tau = post.adaptTau,
+        .tau = oc::max(post.adaptTau, 1e-3f),
         .key = post.adaptKey,
         .minExposure = exp2f(post.adaptMinEV),
         .maxExposure = exp2f(post.adaptMaxEV),

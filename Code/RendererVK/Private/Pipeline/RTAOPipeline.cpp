@@ -290,12 +290,9 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
     transitionToGeneral(cmd, m_accum, cur, true);
     recordPhase(commandBuffer, frameIdx, eye, params, 1);
     storeWriteToSampledRead();
-    if (numPhases() > 2)
-    {
-        transitionToGeneral(cmd, m_final, cur, true);
-        recordPhase(commandBuffer, frameIdx, eye, params, 2);
-        storeWriteToSampledRead();
-    }
+    transitionToGeneral(cmd, m_final, cur, true);
+    recordPhase(commandBuffer, frameIdx, eye, params, 2);
+    storeWriteToSampledRead();
 }
 
 void RTAOPipeline::recordPhase(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const RecordParams& params, uint32 phase)

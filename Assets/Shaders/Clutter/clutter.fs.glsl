@@ -8,12 +8,9 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
-// THE RIGID CLUTTER's surface (clutter.vs.glsl): the lit core without RTAO (not in the TLAS, and far below the AO's
-// resolution), a material per KIND:
-//   PEBBLE   - the climate's BEDROCK (the splat's rock entries), triplanar at a finer scale, x the type's colour;
-//   BRANCH   - bark (part 0) with fissures and lichen, the end grain (part 1) in the second colour;
-//   MUSHROOM - the cap (part 1) in the type's colour with optional spots, the stem (0) and the gills (2) in the second.
-// The foot darkens where it meets the ground ("Contact darkening"); the near grass cascade shades it.
+// THE RIGID CLUTTER's surface (clutter.vs.glsl): the lit core without RTAO (not in the TLAS, far below the AO's resolution).
+// Per KIND: PEBBLE - the climate's BEDROCK, triplanar at a finer scale, x the type's colour; BRANCH - bark (part 0), end
+// grain (1); MUSHROOM - cap (1, optional spots), stem (0), gills (2). The foot darkens ("Contact darkening").
 
 #include "shared.inc.glsl"
 
@@ -79,12 +76,15 @@ vec3 clutterBump(vec3 pos, vec3 N, float h)
     const vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
     const vec3 bumped = abs(det) * N - grad;
     // Never past the horizon: a bump tilts the normal, it does not turn it away from the surface.
-    return dot(bumped, N) > 0.1 * length(bumped) ? normalize(bumped) : N;
+    // dot(b, N) > 0.1 |b|, squared (one rsqrt, in the normalize, instead of a sqrt as well).
+    const float bn = dot(bumped, N);
+    return bn > 0.0 && bn * bn > 0.01 * dot(bumped, bumped) ? normalize(bumped) : N;
 }
 
 void main()
 {
     out_motion = motionVector(vec3(0.0));
+
     // The normals point OUT but the winding is not consistent between the generators: no gl_FrontFacing flip.
     const vec3 geoN = normalize(in_normal);
     // The shadow first (the register peak).
@@ -98,16 +98,16 @@ void main()
     const vec3 albedo1 = clutterUnpackAlbedo(in_look.y, spots);
     const uint kind = in_look.z;
     const uint part = in_look.w;
-
     vec3 albedo = albedo0;
     f16vec3 N = f16vec3(geoN);
     float ao = clamp(in_fields.x, 0.0, 1.0);
+
     if (kind == CLUTTER_KIND_PEBBLE)
     {
         albedo = vec3(0.42, 0.40, 0.38) * albedo0;
         if (u_terrain_splatBase >= 0.0 && u_terrain_numRock >= 1.0)
         {
-            const vec2 climate = vec2(clamp((in_fields.z + 25.0) / 75.0, 0.0, 1.0), in_fields.w);
+            const vec2 climate = vec2(clamp(in_fields.z * (1.0 / 75.0) + (25.0 / 75.0), 0.0, 1.0), in_fields.w); // -25 .. 50 C
             const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
             const ClimatePick r = pickClimate(climate, int(u_terrain_numGround), int(u_terrain_numRock), invS2);
             // Finer than a boulder: a pebble shows a few centimetres of the bedrock's grain.
@@ -122,7 +122,7 @@ void main()
     else if (kind == CLUTTER_KIND_BRANCH)
     {
         // The detail fades out with the distance (past a few pixels per fissure the bump's derivatives are noise).
-        const float detail = 1.0 - smoothstep(6.0, 25.0, distance(in_pos, u_viewPos));
+        const float detail = 1.0 - smoothstep(6.0, 25.0, length(in_relPos));
         if (part == 1u)
         {
             // THE END GRAIN: growth rings around the cut's axis (uv.zw), a little wobbly, the heartwood darker.
@@ -145,19 +145,23 @@ void main()
     else // CLUTTER_KIND_MUSHROOM
     {
         // uv.xy = (cos, sin) of the angle around the mushroom: radial lines on the gills, faint streaks on the cap.
-        const float around = atan(in_uv.y, in_uv.x);
-        if (part == 1u)
-            albedo = mix(albedo0 * (0.94 + 0.06 * sin(around * 36.0)), vec3(0.92, 0.9, 0.85), clutterSpots(in_local, spots));
-        else if (part == 2u)
-            albedo = albedo1 * (0.62 + 0.25 * smoothstep(-0.3, 0.6, sin(around * 90.0)));
-        else
+        if (part == 0u)
             albedo = albedo1;
+        else
+        {
+            const float around = atan(in_uv.y, in_uv.x);
+            if (part == 1u)
+                albedo = mix(albedo0 * (0.94 + 0.06 * sin(around * 36.0)), vec3(0.92, 0.9, 0.85), clutterSpots(in_local, spots));
+            else
+                albedo = albedo1 * (0.62 + 0.25 * smoothstep(-0.3, 0.6, sin(around * 90.0)));
+        }
     }
-    // THE FOOT: darker over the contact height, but at most a third of the object (else a stick a few cm high is
-    // all in the band).
+
+    // THE FOOT: darker over the contact height, but at most a third of the object (else a stick a few cm high is all in
+    // the band).
     const float band = max(min(u_clutter_contactHeight, 0.35 * in_height), 1e-3);
     ao *= 1.0 - u_clutter_contactDarkening * (1.0 - smoothstep(0.0, band, in_fields.y));
 
-    const vec3 V = normalize(u_viewPos - in_pos);
+    const vec3 V = normalize(-in_relPos); // in_relPos = pos - camera, exact near the camera
     out_color = vec4(computeLitColor(in_pos, V, N, f16vec3(albedo), float16_t(max(roughness, 0.05)), float16_t(0.0), float16_t(ao)), 1.0);
 }

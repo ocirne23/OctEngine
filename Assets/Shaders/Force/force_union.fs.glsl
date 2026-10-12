@@ -64,10 +64,10 @@ void main()
         discard;
 
     // World-space step size (u_force_unionStepSize), growing with DISTANCE so a far pixel never marches
-    // finer than ~2 px of world size (u_force_unionPxScale = px per radius/dist), hard-capped
+    // finer than ~2 px of world size (u_force_unionStepPerDist = 2 / px per radius/dist), hard-capped
     // (u_force_unionMaxSteps): the union interval can span several disjoint bubbles, so the step count
     // follows its LENGTH instead of being a fixed budget squeezed over it.
-    const float stepSize = max(u_force_unionStepSize, 2.0 * t0 / max(u_force_unionPxScale, 1.0));
+    const float stepSize = max(u_force_unionStepSize, t0 * u_force_unionStepPerDist);
     const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_force_unionMaxSteps));
     const float dt = (t1 - t0) / float(steps);
     uint bestTeam;

@@ -497,15 +497,18 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const 
     // bedrock colour per column; the fallback diffuse past their count.
     oc::array<vk::ImageView, TreeVolumePipeline::ROCK_TEXTURES> rockTextures;
     rockTextures.fill(Globals::textureManager.getViewForDescriptor(RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX));
+    uint32 numRock = 0;
     if (m_terrain.getSplatBaseMaterial() >= 0)
     {
         const TerrainSplatCounts& counts = m_terrain.getSplatCounts();
-        for (uint32 i = 0; i < oc::min(counts.numRock, TreeVolumePipeline::ROCK_TEXTURES); ++i)
+        numRock = oc::min(counts.numRock, TreeVolumePipeline::ROCK_TEXTURES);
+        for (uint32 i = 0; i < numRock; ++i)
             rockTextures[i] = Globals::textureManager.getViewForDescriptor((uint16)(m_terrain.getSplatTex()[counts.numGround + i].x & 0xFFFFu));
     }
     const TreeVolumePipeline::RecordParams params{
         .ubo = frameData.ubo,
         .rockTextures = rockTextures,
+        .numRock = numRock,
         .sceneDepthView = frameData.sceneColor.getDepthView(0),
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
         .terrainView = m_terrain.getHeightMap().getView(),

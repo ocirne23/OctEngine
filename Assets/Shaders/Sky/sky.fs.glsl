@@ -119,15 +119,15 @@ void main()
 	// cancels two large float32 values per pixel and jitters away from the origin): u_rayFromNdc (ubo.inc.glsl),
 	// exact and translation-free. The raster ran TAA-jittered while it is unjittered, so back the jitter out
 	// of the NDC first.
-	vec2 vpUv = (gl_FragCoord.xy * u_screenSize.zw - u_viewportRect.xy) / u_viewportRect.zw;
+	vec2 vpUv = (gl_FragCoord.xy * u_screenSize.zw - u_viewportRect.xy) * u_viewportInvSize;
 	vec2 ndc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0) - u_taaJitter.xy;
 	const vec3 dir = normalize(vec3(ndc, 1.0) * u_rayFromNdc);
 	// Direction-space size of one screen pixel, computed here in uniform control flow (derivatives are
 	// undefined inside non-uniform branches). Scaled by each star grid's frequency to clamp star
 	// footprints to >= a pixel so the TAA jitter samples them consistently.
 	const float dirPx = length(fwidth(dir));
-	const vec3 up = normalize(u_skyUp);
-	const vec3 L = normalize(u_sunDirection.xyz);
+	const vec3 up = u_skyUp;
+	const vec3 L = u_sunDirection.xyz;
 
 	// With the sun fully off (color/intensity zero) the entire scattering integral is a multiply by
 	// zero: skip the raymarch and keep only the cheap ground test for the branches below.
@@ -167,7 +167,7 @@ void main()
 
 		// Sun halo: a tight Henyey-Greenstein forward lobe (smooth peak, long graceful tail) instead of a
 		// pow() spike. u_sky_sunGlow is the strength; the transmittance keeps it warm/dim near the horizon.
-		if (sunLit && u_sky_sunGlow > 0.0 && moonCovered)
+		if (sunLit && moonCovered)
 			color += sunSurfaceColor * phaseHG(cosAngle, 0.985) * 0.015 * u_sky_sunGlow * transmittance;
 
 		if (sunLit && u_sky_sunAngularCos < 1.0 && moonCovered) // 1.0 disables the disc
@@ -176,7 +176,7 @@ void main()
 			// limb darkening.
 			vec3 sT = normalize(cross(L, abs(L.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 sB = cross(L, sT);
-			float discSin = sqrt(max(1.0 - u_sky_sunAngularCos * u_sky_sunAngularCos, 1e-12));
+			const float discSin = u_sky_sunDiscSin;
 			vec2 suv = vec2(dot(dir, sT), dot(dir, sB)) / discSin; // disc-local, rim at |suv| = 1
 			float r2 = dot(suv, suv);
 			if (r2 < 1.1 && cosAngle > 0.0)
@@ -193,11 +193,11 @@ void main()
 		// actual sun direction, so they react to where the sun is). Disc size comes from u_sky_moonCos.
 		// Drawn before the stars so its disc coverage can occlude them (even the unlit, new-moon part of
 		// the disc blocks the stars behind it). The cloud pass composites later, so clouds occlude it.
-		if (u_sky_moonBrightness > 0.0 && !moonCovered)
+		if (!moonCovered)
 		{
 			vec3 mT = normalize(cross(moonDir, abs(moonDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
 			vec3 mB = cross(moonDir, mT);
-			float discSin = sqrt(max(1.0 - u_sky_moonCos * u_sky_moonCos, 1e-8));
+			const float discSin = u_sky_moonSin;
 			vec2 duv = vec2(dot(dir, mT), dot(dir, mB)) / discSin;
 			float r2 = dot(duv, duv);
 
@@ -216,7 +216,7 @@ void main()
 		// Night sky (stars + nebula). Visibility comes from the local sky luminance - daylight in-scatter
 		// washes them out, so they fade in automatically at dusk and in dark sky regions. The moon disc
 		// masks both out (it is a solid body, not additive light).
-		if ((u_sky_starDensity > 0.0 || u_sky_nebulaIntensity > 0.0) && moonCovered)
+		if (moonCovered)
 		{
 			float skyLum = dot(color, vec3(0.2126, 0.7152, 0.0722));
 			float nightVis = clamp(1.0 - skyLum * 25.0, 0.0, 1.0);
@@ -227,11 +227,10 @@ void main()
 				// FBM (turns the blobs into wisps and filaments) and squashed across the band so structure
 				// stretches lengthwise, like a galaxy seen edge-on. Composed from four layers: broad tinted
 				// gas, ridged bright filaments, a narrow hot core line, and dark dust lanes cutting through.
-				if (u_sky_nebulaIntensity > 0.0)
 				{
-					vec3 bandPole = normalize(u_sky_nebulaAxis);
+					vec3 bandPole = u_sky_nebulaAxis;
 					float hgt = dot(dir, bandPole);
-					float bw = max(u_sky_nebulaBandWidth, 0.01);
+					float bw = u_sky_nebulaBandWidth;
 					float bandFade = exp(-(hgt * hgt) / (bw * bw));
 					if (bandFade > 0.004)
 					{
@@ -280,7 +279,6 @@ void main()
 				}
 
 				// Random stars
-				if (u_sky_starDensity > 0.0)
 				{
 					vec3 sd = dir * 220.0;
 					// Cell-space size of one screen pixel (derivatives are only defined in uniform control

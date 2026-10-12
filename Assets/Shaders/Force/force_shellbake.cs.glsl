@@ -35,7 +35,7 @@ void main()
         return;
     // Voxel CENTERS: world = min + (i + 0.5) / dims * size - texture() at uvw = (x - min) / size
     // then samples exactly these centers (the shell FS's mapping).
-    const vec3 size = 1.0 / max(u_force_bakeInvSize, vec3(1e-9));
+    const vec3 size = u_force_bakeSize;
     const vec3 world = u_force_bakeMin +(vec3(p) + 0.5) / vec3(dims) * size;
 
     float phi[NUM_FORCE_TEAMS];

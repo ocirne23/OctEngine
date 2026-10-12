@@ -52,7 +52,7 @@ float reflectionFogTau(vec3 target, float baseCam, float baseTarget, float densi
     const float len = max(distance(u_viewPos, target), 1e-3);
     const float h0 = u_viewPos.y - baseCam;
     const float slope = ((target.y - baseTarget) - h0) / len;
-    return volAnalyticOpticalDepthLinear(h0, slope, min(len, max(u_fog_range, 1.0)), u_fog_heightFalloff, density);
+    return volAnalyticOpticalDepthLinear(h0, slope, min(len, u_fog_range), u_fog_heightFalloff, density);
 }
 
 // Lays the fog's light over `radiance` for an optical depth tau along `dir`.
@@ -95,7 +95,7 @@ vec3 applyReflectionFog(vec3 radiance, vec3 origin, vec3 dir, float t, vec3 sunR
 // stretch is capped there), over the origin's base.
 vec3 applyReflectionFogSky(vec3 radiance, vec3 origin, vec3 dir, vec3 sunRadiance, vec3 L, vec3 ambientSky)
 {
-    const vec3 far = u_viewPos + dir * (2.0 * max(u_fog_range, 1.0));
+    const vec3 far = u_viewPos + dir * (2.0 * u_fog_range);
     return reflectionFogMirror(radiance, origin, dir, far, reflectionFogBase(origin.y), sunRadiance, L, ambientSky);
 }
 
@@ -108,7 +108,7 @@ vec3 applyRayFog(vec3 radiance, vec3 origin, vec3 dir, float t, vec3 sunRadiance
     const float baseOrigin = reflectionFogBase(origin.y);
     const float hitY = origin.y + dir.y * t;
     const float slope = ((hitY - reflectionFogBase(hitY)) - (origin.y - baseOrigin)) / max(t, 1e-3);
-    const float tau = volAnalyticOpticalDepthLinear(origin.y - baseOrigin, slope, min(t, max(u_fog_range, 1.0)), u_fog_heightFalloff, density);
+    const float tau = volAnalyticOpticalDepthLinear(origin.y - baseOrigin, slope, min(t, u_fog_range), u_fog_heightFalloff, density);
     return reflectionFogBlend(radiance, tau, dir, sunRadiance, L, ambientSky);
 }
 
@@ -118,7 +118,7 @@ vec3 applyRayFogSky(vec3 radiance, vec3 origin, vec3 dir, vec3 sunRadiance, vec3
     const float density = reflectionFogDensity();
     if (density <= 1e-7)
         return radiance;
-    const float tau = volAnalyticOpticalDepthLinear(origin.y - reflectionFogBase(origin.y), dir.y, max(u_fog_range, 1.0), u_fog_heightFalloff, density);
+    const float tau = volAnalyticOpticalDepthLinear(origin.y - reflectionFogBase(origin.y), dir.y, u_fog_range, u_fog_heightFalloff, density);
     return reflectionFogBlend(radiance, tau, dir, sunRadiance, L, ambientSky);
 }
 

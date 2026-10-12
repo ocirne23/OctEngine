@@ -49,7 +49,7 @@ vec3 bloomThreshold(vec3 c)
         return c;
     const float exposure = pc_manualExposure * (pc_autoExposure != 0 ? u_autoExposure : 1.0);
     const float brightness = max(max(c.r, c.g), c.b) * exposure;
-    const float knee = max(pc_bloomKnee, 1e-4);
+    const float knee = pc_bloomKnee;
     float soft = clamp(brightness - pc_bloomThreshold + knee, 0.0, 2.0 * knee);
     soft = soft * soft / (4.0 * knee);
     return c * (max(soft, brightness - pc_bloomThreshold) / max(brightness, 1e-6));

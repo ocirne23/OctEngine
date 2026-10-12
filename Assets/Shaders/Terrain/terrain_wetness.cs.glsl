@@ -114,13 +114,13 @@ void main()
         const vec4 d = terrainDataAt(worldXZ);
         float depth = d.y - d.x; // calm water level above ground (negative on dry land)
         // Swash band: gate against the LIVE displaced surface (see doSunLight in the lit core). Ground
-        // deeper than the reach is under water at any wave phase and skips the wave taps; u_ocean_swashReach
-        // is 0 with the swash or the ocean off, so this costs nothing then.
+        // deeper than the reach is under water at any wave phase and skips the wave taps (u_ocean_swashReach
+        // >= 0.01: "Swash amplitude" >= 0.04 on the CPU).
         const float reach = u_ocean_swashReach;
-        if (reach > 0.0 && abs(depth) < reach)
+        if (abs(depth) < reach)
             depth += underwaterLiveWaveY(worldXZ, depth, d.y);
         target = depth > 0.0 ? 1.0 : 0.0; // under the live surface = fully wet
-        if (target <= 0.0 && u_terrainWater_dryTempSensitivity > 0.0)
+        if (target <= 0.0)
         {
             // Warm ground dries faster: the decay exponent scales with the temperature above 15 C
             // (colder than that = the base dry time). Evaluated at the map's own height.
@@ -133,7 +133,7 @@ void main()
         // takes that much longer to soak. The slope comes from the map's height gradient - its 8 m
         // texels see cliffs and steep banks, not sub-metre ledges (those only drain faster, per pixel).
         // Only paid where something is accumulating.
-        if (u_terrainWater_slopeDrain > 0.0 && (target > 0.0 || u_terrain_wetRain > 0.0))
+        if (target > 0.0 || u_terrain_wetRain > 0.0)
         {
             const float h = 4.0; // half the near cascade's texel: central differences on its bilinear field
             const float gx = (terrainHeightAt(worldXZ + vec2(h, 0.0)) - terrainHeightAt(worldXZ - vec2(h, 0.0))) * (0.5 / h);
@@ -147,7 +147,7 @@ void main()
     // terrain-data map.
     if (target < u_river_wetness)
     {
-        const float r = 1.0 / max(rw_invTexel, 1e-6);
+        const float r = 1.0 / rw_invTexel; // the CPU writes it > 0, with or without a map
         if (riverWaterAt(worldXZ) || riverWaterAt(worldXZ + vec2(r, 0.0)) || riverWaterAt(worldXZ - vec2(r, 0.0)) ||
             riverWaterAt(worldXZ + vec2(0.0, r)) || riverWaterAt(worldXZ - vec2(0.0, r)))
         {

@@ -117,13 +117,12 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 {
     if (extinction <= 0.0 || depth <= 0.0)
         return 1.0;
-    const vec3 L = u_sunDirection.xyz;
-    const float sunY = max(L.y, 0.1);
-    const vec2 toSun = L.xz / sunY; // XZ per metre of height along the sun
+    // The sun's terms from the CPU (RendererUbo): its height floored at 0.1.
+    const vec2 toSun = u_grass_sunToXZ; // XZ per metre of height along the sun
     float clumps = 0.0;
     for (int i = 0; i < 4; ++i)
         clumps += grassClump(pos.xz + toSun * (depth * (float(i) + 0.5) * 0.25));
-    const float T = exp(-extinction * (0.25 * clumps) * depth / sunY);
+    const float T = exp(-extinction * (0.25 * clumps) * depth * u_grass_invSunY);
     const float rangeFade = grassRangeFade(dist);
     const float contrast = u_grass_fleckContrast * (1.0 - smoothstep(0.5 * u_grass_fleckFadeDistance, u_grass_fleckFadeDistance, dist));
     if (contrast <= 0.0)
@@ -132,10 +131,8 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
     // (a blade of height h casts h / tan(elevation)). The noise is stretched along the sun's horizontal direction by
     // that ratio x "Fleck stretch" (u_grass_fleckStretch; capped at 16); across it the spots stay "Fleck size".
     const vec2 entryPos = pos.xz + toSun * depth;
-    const float horizontal = length(L.xz);
-    const vec2 along = horizontal > 1e-4 ? L.xz / horizontal : vec2(1.0, 0.0);
-    const float stretch = clamp(1.0 + u_grass_fleckStretch * horizontal / sunY, 1.0, 16.0);
-    const vec2 entry = vec2(dot(entryPos, along) / stretch, dot(entryPos, vec2(-along.y, along.x))) * u_grass_invFleckSize;
+    const vec2 along = u_grass_fleckAlong;
+    const vec2 entry = vec2(dot(entryPos, along) * u_grass_fleckInvStretch, dot(entryPos, vec2(-along.y, along.x))) * u_grass_invFleckSize;
     float n = 0.65 * grassValueNoise(entry) + 0.35 * grassValueNoise(entry * 2.7 + 5.1);
     n = clamp((n - 0.5) * 1.8 + 0.5, 0.0, 1.0); // value noise bunches at 0.5: stretched toward an even spread
     return mix(1.0, mix(T, smoothstep(n - 0.1, n + 0.1, T), contrast), rangeFade);

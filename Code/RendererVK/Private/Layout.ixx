@@ -882,7 +882,7 @@ export namespace RendererVKLayout
     struct RiverWaterMapGpu
     {
         glm::vec2 origin; // world XZ of texel (0, 0)'s min corner
-        float invTexel;   // 1 / the texel (m)
+        float invTexel;   // 1 / the texel (m); always valid, also with dim 0
         uint32 dim;       // texels per axis (0 = no map)
         float height[RIVER_WATER_MAP_DIM * RIVER_WATER_MAP_DIM];
     };

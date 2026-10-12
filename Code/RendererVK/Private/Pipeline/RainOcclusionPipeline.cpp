@@ -15,7 +15,8 @@ namespace
 
 void RainOcclusionPipeline::registerPushFields()
 {
-    m_block.lockable(m_push.layerBlock, Globals::settings.particles.rainOcclusionFoliageBlock);
+    const float& block = Globals::settings.particles.rainOcclusionFoliageBlock;
+    m_block.lockable(m_push.layerBlock, [&block] { return glm::clamp(block, 0.0f, 1.0f); }, block);
 }
 
 void RainOcclusionPipeline::buildLayout(ComputePipelineLayout& layout)

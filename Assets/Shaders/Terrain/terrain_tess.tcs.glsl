@@ -54,20 +54,16 @@ float terrainEdgeFactor(vec3 a, vec3 b, float na, float nb)
 	if (max(na, nb) < TERRAIN_TESS_MIN_NORMAL_Y)
 		return 1.0;
 	const float maxFactor = u_terrainTess_maxFactor;
-	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
 	const float dist = distance(0.5 * (a + b), viewPos);
-	if (dist >= fadeEnd)
+	if (dist >= u_terrainTess_fadeEnd)
 		return 1.0;
-	// The projection's y scale is the length of row 1 of the centre mvp's 3x3 (P11 x a unit view row).
-	const mat4 mvp = u_views_mvp[VIEW_CENTER];
-	const float projY = length(vec3(mvp[0][1], mvp[1][1], mvp[2][1]));
-	const float pxPerMeterAt1m = 0.5 * projY * u_screenSize.y * u_viewportRect.w;
-	float factor = distance(a, b) * pxPerMeterAt1m / (max(dist, u_terrainTess_freezeDistance) * u_terrainTess_targetEdgePx);
+	// factorPerMetre = the centre view's pixels per metre at 1 m over the target edge length (the CPU's).
+	float factor = distance(a, b) * u_terrainTess_factorPerMetre / max(dist, u_terrainTess_freezeDistance);
 	// Eased down to 1 over the fade band with its OWN falloff ("Factor falloff exponent"); the TES's height
 	// fades by "Height falloff exponent". Equal = they agree; a factor dropping before the height leaves the
 	// still-displaced relief on coarser triangles (facets).
-	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+	const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 	factor = mix(1.0, factor, 1.0 - pow(t, u_terrainTess_factorFalloff));
 	return clamp(factor, 1.0, maxFactor);
 }

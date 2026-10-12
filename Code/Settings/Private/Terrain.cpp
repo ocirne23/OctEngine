@@ -82,11 +82,11 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Water", "Diffusion (1/s)", &s.wetDiffusionRate, 0.0f, 60.0f, 0.5f);
 	Tweak::floatVar("Terrain/Water", "Rain (1/s)", &s.wetRain, 0.0f, 0.1f, 0.001f);
 	Tweak::floatVar("Terrain/Water", "Dry time (s)", &s.wetDryTime, 1.0f, 600.0f, 1.0f);
-	Tweak::floatVar("Terrain/Water", "Dry temp sensitivity", &s.wetDryTempSens, 0.0f, 0.2f, 0.005f);
-	Tweak::floatVar("Terrain/Water", "Wet-in time (s)", &s.wetInTime, 0.0f, 10.0f, 0.05f);
+	Tweak::floatVar("Terrain/Water", "Dry temp sensitivity", &s.wetDryTempSens, 0.005f, 0.2f, 0.005f);
+	Tweak::floatVar("Terrain/Water", "Wet-in time (s)", &s.wetInTime, 0.05f, 10.0f, 0.05f);
 	// Steep ground sheds water: the terrain shader decays at rate x (1 + slope * drain) per pixel
 	// (mesh normal) and the compute pass divides wet-in / rain by the same factor (map gradient).
-	Tweak::floatVar("Terrain/Water", "Slope drain", &s.wetSlopeDrain, 0.0f, 20.0f, 0.1f);
+	Tweak::floatVar("Terrain/Water", "Slope drain", &s.wetSlopeDrain, 0.1f, 20.0f, 0.1f);
 	// --- The water surface: the LEVEL it fills the relief to (0 = its low points, 1 = its top), the
 	// fade at its intersection with the terrain, and how far it follows the live ocean.
 	Tweak::floatVar("Terrain/Water", "Fill start", &s.wetFillStart, 0.0f, 0.99f, 0.01f);
@@ -94,7 +94,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Water", "Fill curve", &s.wetFillCurve, 0.05f, 16.0f, 0.05f);
 	Tweak::floatVar("Terrain/Water", "Edge fade (m)", &s.wetEdgeFade, 0.0f, 0.5f, 0.005f);
 	Tweak::floatVar("Terrain/Water", "Ocean blend (m)", &s.wetOceanBlend, 0.01f, 20.0f, 0.05f);
-	Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &s.wetOceanEdgeFade, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Water", "Ocean edge fade (m)", &s.wetOceanEdgeFade, 0.01f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/Water", "Film max slope (deg)", &s.wetFilmMaxSlope, 0.0f, 90.0f, 0.5f);
 	Tweak::floatVar("Terrain/Water", "Film slope fade (deg)", &s.wetFilmSlopeFade, 0.0f, 45.0f, 0.5f);
 	Tweak::floatVar("Terrain/Water", "Film flow speed (m/s)", &s.wetFilmFlowSpeed, 0.0f, 10.0f, 0.05f);
@@ -118,7 +118,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Water", "Roughness threshold", &s.wetRoughnessThreshold, 0.0001f, 1.0f, 0.005f);
 	Tweak::floatVar("Terrain/Water", "Wet normal scale", &s.wetGroundNormalScale, 0.0f, 4.0f, 0.01f);
 	Tweak::floatVar("Terrain/Water", "Glint size (m)", &s.wetGlintSize, 0.005f, 1.0f, 0.005f);
-	Tweak::floatVar("Terrain/Water", "Glint coverage", &s.wetGlintCoverage, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Water", "Glint coverage", &s.wetGlintCoverage, 0.01f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/Water", "Glint roughness", &s.wetGlintRoughness, 0.01f, 1.0f, 0.005f);
 
 	Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &s.texUvScaleGround, 0.005f, 2.0f);
@@ -141,9 +141,9 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Textures", "Crag wander (m)", &s.texCragWanderAmp, 0.0f, 600.0f, 5.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag wander wavelength (m)", &s.texCragWanderWavelength, 200.0f, 20000.0f, 100.0f);
 	// Macro variation against the visible texture repeat: brightness, warm/cool hue and roughness from a world noise.
-	Tweak::floatVar("Terrain/Textures", "Macro variation", &s.texMacroStrength, 0.0f, 1.0f, 0.01f);
-	Tweak::floatVar("Terrain/Textures", "Macro hue", &s.texMacroHue, 0.0f, 0.5f, 0.005f);
-	Tweak::floatVar("Terrain/Textures", "Macro roughness", &s.texMacroRoughness, 0.0f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Textures", "Macro variation", &s.texMacroStrength, 0.01f, 1.0f, 0.01f);
+	Tweak::floatVar("Terrain/Textures", "Macro hue", &s.texMacroHue, 0.005f, 0.5f, 0.005f);
+	Tweak::floatVar("Terrain/Textures", "Macro roughness", &s.texMacroRoughness, 0.01f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/Textures", "Macro size (m)", &s.texMacroSize, 2.0f, 1000.0f, 1.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag relief start (m)", &s.texCragStart, 0.0f, 200.0f);
 	Tweak::floatVar("Terrain/Textures", "Crag relief full (m)", &s.texCragFull, 0.0f, 400.0f);
@@ -163,7 +163,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	Tweak::floatVar("Terrain/Textures", "Parallax depth rock (m)", &s.texParallaxDepthRock, 0.0f, 2.0f, 0.01f);
 	Tweak::floatVar("Terrain/Textures", "Parallax fade start (m)", &s.texParallaxFadeStart, 0.0f, 200.0f, 0.5f);
 	Tweak::floatVar("Terrain/Textures", "Parallax fade end (m)", &s.texParallaxFadeEnd, 1.0f, 300.0f, 0.5f);
-	Tweak::intVar("Terrain/Textures", "Parallax steps", &s.texParallaxSteps, 2, 64, 1.0f);
+	Tweak::intVar("Terrain/Textures", "Parallax steps", &s.texParallaxSteps, 4, 64, 1.0f);
 	Tweak::floatVar("Terrain/Textures", "Parallax self-shadow", &s.texParallaxShadow, 0.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Terrain/Textures", "Height blend contrast", &s.texHeightBlendContrast, 0.0f, 16.0f, 0.1f);
 	// Tessellation: the ground + overlay subdivide near the camera and displace by the same height

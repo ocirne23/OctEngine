@@ -424,7 +424,7 @@ namespace Procedural
 		params.shoreFoamBias = m_settings.shoreFoamBias;
 		params.swashFlow = m_settings.swashFlow;
 		params.cullMargin = w.cullMargin;
-		params.farCullError = w.farCullError;
+		params.farCullError = glm::max(m_settings.farCullError, 0.25f) * s; // the tweak min, as the UBO's
 		params.rtRefractionRange = w.rtRefractionRange;
 		params.rtReflectionRange = w.rtReflectionRange;
 		params.rtReflectionMaxRough = m_settings.rtReflectionMaxRough;
@@ -771,22 +771,21 @@ namespace Procedural
 	// Swash run-up reach (m). MIRRORS RendererUbo.cpp's u_ocean_swashReach - the conservative
 	// max run-up height derived from the wave-trough estimate this class itself publishes. It sizes the
 	// on-land band the shaders draw the tongue in, so it is also the band buoyancy must find water in.
+	// The amplitude is >= 0.04 (the tweak min) and the trough >= 0, so the reach is >= 0.01.
 	float OceanGenerator::swashReach() const
 	{
-		return glm::clamp(m_params.swashAmp, 0.0f, 4.0f) * (m_waveTrough + 0.25f);
+		return glm::clamp(m_params.swashAmp, 0.04f, 4.0f) * (m_waveTrough + 0.25f);
 	}
 
 	// CPU mirror of oceanSwashWeight (ocean_wave.inc.glsl): the swash base faded in across the approach
 	// band - the weight that gates the tongue behaviours (the backflow). depth < 0 = land height.
 	float OceanGenerator::swashWeight(float depth, float waterLevel) const
 	{
-		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
-		if (amp <= 0.0f)
-			return 0.0f;
+		const float amp = glm::clamp(m_params.swashAmp, 0.04f, 4.0f);
 		const float seaFade = 1.0f - glm::smoothstep(0.05f, 1.0f, std::fabs(waterLevel - m_seaLevel));
 		if (seaFade <= 0.0f)
 			return 0.0f; // landlocked water (lakes at altitude): no swell reaches it
-		const float reach = glm::max(swashReach(), 0.01f);
+		const float reach = swashReach();
 		const float landFade = glm::clamp(1.0f + glm::min(depth, 0.0f) / reach, 0.0f, 1.0f);
 		const float fadeIn = 1.0f - glm::smoothstep(0.0f,
 			glm::max(2.0f * reach, glm::max(m_params.shoalScale, 0.0f) * glm::max(m_params.cascadeSizes.y, 1.0f)), depth);
@@ -797,11 +796,9 @@ namespace Procedural
 	// swash amplitude x the sea-connection fade x the land-height fade, no approach fade-in.
 	float OceanGenerator::swashBase(float depth, float waterLevel) const
 	{
-		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
-		if (amp <= 0.0f)
-			return 0.0f;
+		const float amp = glm::clamp(m_params.swashAmp, 0.04f, 4.0f);
 		const float seaFade = 1.0f - glm::smoothstep(0.05f, 1.0f, std::fabs(waterLevel - m_seaLevel));
-		const float reach = glm::max(swashReach(), 0.01f);
+		const float reach = swashReach();
 		const float landFade = glm::clamp(1.0f + glm::min(depth, 0.0f) / reach, 0.0f, 1.0f);
 		return amp * seaFade * landFade;
 	}

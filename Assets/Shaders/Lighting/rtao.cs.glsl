@@ -100,7 +100,7 @@ void main()
     // (no bent normal, so the forward pass evaluates GI along its shading normal.) Measured from
     // the scene focus, like the fade below, so a top-down camera far above the ground does not fade
     // the AO out under the player.
-    if (u_rt_aoMaxDistance > 0.0 && focusDist >= u_rt_aoMaxDistance)
+    if (focusDist >= u_rt_aoMaxDistance)
     {
         imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0));
         return;
@@ -135,7 +135,7 @@ void main()
     const float terrainSkip = (u_terrainTess_enabled > 0.5 && viewDist < u_terrainTess_fadeEnd)
         ? max(u_terrainTess_depthGround, u_terrainTess_depthRock) : 0.0;
 
-    const uint n = max(uint(u_rt_aoRays), 1u);
+    const uint n = uint(u_rt_aoRays);
     float occ = 0.0;
     vec3 bent = vec3(0.0); // sum of unoccluded ray directions -> bent normal (average open direction)
     for (uint i = 0u; i < n; ++i)
@@ -196,11 +196,8 @@ void main()
     // Distance falloff: far-away surfaces get noisy/low-quality AO (radius is fixed in world units, so it
     // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart
     // - distance from the scene focus (see focusDist), matching the early-out above.
-    if (u_rt_aoMaxDistance > 0.0)
-    {
-        float fade = clamp((focusDist - u_rt_aoFadeStart) / max(u_rt_aoMaxDistance - u_rt_aoFadeStart, 1e-3), 0.0, 1.0);
-        ao = mix(ao, 1.0, fade);
-    }
+    const float fade = clamp((focusDist - u_rt_aoFadeStart) * u_rt_aoFadeInvRange, 0.0, 1.0);
+    ao = mix(ao, 1.0, fade);
     // Bent normal = average unoccluded direction; none (zero) when fully occluded.
     vec3 bentN = (dot(bent, bent) > 1e-8) ? normalize(bent) : vec3(0.0);
     imageStore(u_aoOut, px, vec4(bentN, ao));

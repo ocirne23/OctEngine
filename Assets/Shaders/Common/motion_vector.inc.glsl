@@ -16,7 +16,7 @@
 vec4 fragPrevClipCamera()
 {
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw - taaJitterUv(u_taaJitter.xy);
-    const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     return u_reprojClip * vec4(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0, gl_FragCoord.z, 1.0);
 }
 vec4 fragPrevClip(vec3 prevWorldDelta)

@@ -1,17 +1,16 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE from the WORLD TREE RECORDS, far out (TreeVolumePipeline; Procedural TreeWorld): one workgroup
-// per record chunk BEYOND the record detail distance of the bake centre (the ones within it splat in detail:
-// tree_volume_splat.cs's TREE_SPLAT_RECORDS, the same test). Every record adds its tree's MASS (its extinction
-// integrated over its volume, m^2: its variant's at scale 1 x its scale^2, both from its seed as Procedural
-// TreeSystem::expandChunk picks them) / the column's area into a 2D image, fixed point, over a TENT as wide as its crown
-// (at least a cell each way: a point splat made thin pillars where a column is smaller than a crown). The weights are
-// normalized per axis, so a tree adds its whole mass. Its nearest column also takes its type (atomic min: a tree's
-// before a rock's, the same every bake), whose height profile tree_volume_far.cs spreads the mass with, and its colour
-// (last writer wins). No bushes (a few metres tall, kilometres out).
-// albedo.w < 0.75 = a SOLID: its mass is its occupied volume x scale^3 x "Far rock extinction". albedo.w < 0.25 = a
-// ROCK: no colour, its share goes into the column's ROCK SUM in the accumulation's units (mass / area / slice height:
-// what tree_volume_far.cs adds, summed over the slices). 0.5 = dead wood: a solid's mass, a tree's colour.
+// FAR-TREE VOLUME BAKE from the WORLD TREE RECORDS, far out (TreeVolumePipeline): one workgroup per record chunk BEYOND the
+// record detail distance of the bake centre (the ones within it splat in detail: tree_volume_splat.cs's TREE_SPLAT_RECORDS,
+// the same test). Every record adds its tree's MASS (its extinction integrated over its volume, m^2: its variant's at scale
+// 1 x its scale^2, both from its seed as Procedural TreeSystem::expandChunk picks them) / the column's area into a 2D image,
+// fixed point, over a TENT as wide as its crown (at least a cell each way: a point splat made thin pillars where a column is
+// smaller than a crown). The weights are normalized per axis, so a tree adds its whole mass. Its nearest column also takes
+// its type (atomic min: a tree's before a rock's, the same every bake), whose height profile tree_volume_far.cs spreads the
+// mass with, and its colour (last writer wins). No bushes (a few metres tall, kilometres out).
+// albedo.w < 0.75 = a SOLID: its mass is its occupied volume x scale^3 x "Far rock extinction". albedo.w < 0.25 = a ROCK: no
+// colour, its share goes into the column's ROCK SUM in the accumulation's units (mass / area / slice height: what
+// tree_volume_far.cs adds, summed over the slices). 0.5 = dead wood: a solid's mass, a tree's colour.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -33,6 +32,7 @@ struct RecordChunk
     uint first;
     uint count;
 };
+
 struct RecordType
 {
     vec4 albedo;
@@ -51,6 +51,7 @@ struct RecordType
     uint bushTypes[8];
     float shape[32];
 };
+
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RecordList { uint r[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer ChunkList { RecordChunk c[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { RecordType t[]; };
@@ -85,6 +86,7 @@ void main()
         const uint numVariants = pc_types.t[type].numVariants;
         if (numVariants == 0u)
             continue;
+
         // The record's own variant and scale (expandChunk's placeVariant - keep in step).
         const uint seed = treeRecordSeed(pc_worldSeed, chunk.coord, record);
         const uint variant = treeHash(seed, 102u) % numVariants;
@@ -96,16 +98,19 @@ void main()
         const float mass = pc_types.t[type].variantMass[variant] * scale * scale * (solid ? scale * pc_rockExtinction : 1.0);
         if (mass <= 0.0)
             continue;
+
         const vec2 rel = origin + treeRecordLocal(record, pc_chunkSize) - pc_vol_centre;
         const float r = length(rel);
         if (r < pc_vol_rMin || r > pc_vol_rMax)
             continue;
+
         // Continuous texel coordinates (texel centres at integers) and the tent's half-width per axis, in texels.
-        const vec2 tc = vec2((atan(rel.y, rel.x) / TV_TWO_PI + 0.5) * float(angularRes), tvRadialUv(r, TV_PUSH_VOL) * float(radialRes)) - 0.5;
+        const vec2 tc = vec2((atan(rel.y, rel.x) * (1.0 / TV_TWO_PI) + 0.5) * float(angularRes), tvRadialUv(r, TV_PUSH_VOL) * float(radialRes)) - 0.5;
         const float radius = pc_types.t[type].radius * scale;
         const vec2 h = clamp(vec2(radius / tvTangentialCell(r, TV_PUSH_VOL), radius / tvRadialCell(r, TV_PUSH_VOL)), vec2(1.0), vec2(float(MAX_TENT)));
         const vec2 invH = 1.0 / h;
         const ivec2 lo = ivec2(ceil(tc - h)), hi = ivec2(floor(tc + h));
+
         // The per-axis sums (each tent's samples normalized to 1).
         float sumA = 0.0, sumR = 0.0;
         for (int x = lo.x; x <= hi.x; ++x)
@@ -114,15 +119,16 @@ void main()
             sumR += max(1.0 - abs(float(y) - tc.y) * invH.y, 0.0);
         if (sumA <= 0.0 || sumR <= 0.0)
             continue;
-        const float invSumA = 1.0 / sumA;
+
+        const float massPerSum = mass / (sumA * sumR);
         for (int y = max(lo.y, 0); y <= min(hi.y, radialRes - 1); ++y)
         {
-            const float wR = max(1.0 - abs(float(y) - tc.y) * invH.y, 0.0) / sumR;
+            const float wR = max(1.0 - abs(float(y) - tc.y) * invH.y, 0.0); // unnormalized: massPerSum holds the 1 / sums
             if (wR <= 0.0)
                 continue;
             // The column's area at its centre radius.
             const float rc = tvRadius(float(y) + 0.5, TV_PUSH_VOL);
-            const float rowAmount = wR * invSumA * mass / (tvRadialCell(rc, TV_PUSH_VOL) * tvTangentialCell(rc, TV_PUSH_VOL));
+            const float rowAmount = wR * massPerSum / (tvRadialCell(rc, TV_PUSH_VOL) * tvTangentialCell(rc, TV_PUSH_VOL));
             for (int x = lo.x; x <= hi.x; ++x)
             {
                 const float a = max(1.0 - abs(float(x) - tc.x) * invH.x, 0.0) * rowAmount; // mass / area
@@ -135,6 +141,7 @@ void main()
                     imageAtomicAdd(u_rockSum, col, uint(a * invSliceH * TV_ACCUM_SCALE + 0.5));
             }
         }
+
         const ivec2 nearest = ivec2(tvWrapAngle(int(round(tc.x)), angularRes), clamp(int(round(tc.y)), 0, radialRes - 1));
         imageAtomicMin(u_type, nearest, type);
         if (!bedrock)

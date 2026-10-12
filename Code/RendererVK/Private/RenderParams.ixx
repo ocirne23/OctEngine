@@ -65,11 +65,11 @@ export struct OceanParams
     // untouched. Faded out past detailFadeDist because this band is absent from the LEAN moments.
     float detailStrength   = 0.35f; // 0 = off
     float detailScale      = 0.18f; // fraction of the finest cascade's patch size (smaller = finer)
-    float detailFadeDist   = 60.0f; // m from the camera (a world metre: scaled); 0 = never fade
+    float detailFadeDist   = 60.0f; // m from the camera (a world metre: scaled); >= 5 model metres
     float detailRotation   = 0.9f;  // radians; keeps the borrowed field off the parent's crest lines
     // Crest subsurface scattering (Sea of Thieves-style): back-lit wave crests glow the scatter color,
     // scaled by height above the calm water line. Power shapes the toward-the-sun view lobe.
-    float sssStrength      = 0.75f;  // per meter of crest height; 0 disables (and the extra shadow rays with it)
+    float sssStrength      = 0.75f;  // per meter of crest height; >= 0.01 (scaled)
     float sssPower         = 1.0f;
     float undersideTransmission = 1.0f; // scale on the sky seen through Snell's window from below (1 = Fresnel
                                         // transmission; less = more internal reflection, a darker ceiling)

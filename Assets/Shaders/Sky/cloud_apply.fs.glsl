@@ -1,12 +1,12 @@
 #version 450
 
 // Cloud apply, FOG OFF only: a fullscreen pass in the scene-colour render pass (with the fog on, vol_apply.fs.glsl
-// composites the clouds inside the fog). Upsamples the half-res accumulated clouds (cloud_upsample.inc.glsl) and
-// blends (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + scene * transmittance. Alpha is not written
-// (the scene colour's alpha is TAA's ocean flag).
-// THE FAR TREES too while they marched (u_foliage_farMarched; their own apply stage is then skipped): the two
-// layers compose front to back by distance. The tree volume writes no depth, so the clouds' march limit is the
-// terrain BEHIND the trees, and clouds between the two must not draw over the trees.
+// composites the clouds inside the fog). Upsamples the half-res accumulated clouds (cloud_upsample.inc.glsl) and blends
+// (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + scene * transmittance. Alpha is not written (the scene
+// colour's alpha is TAA's ocean flag).
+// THE FAR TREES too while they marched (u_foliage_farMarched; their own apply stage is then skipped): the two layers
+// compose front to back by distance. The tree volume writes no depth, so the clouds' march limit is the terrain BEHIND
+// the trees, and clouds between the two must not draw over the trees.
 
 #include "shared.inc.glsl"
 #include "cloud_upsample.inc.glsl"
@@ -26,12 +26,12 @@ void main()
 {
     g_viewIndex = int(u_viewIndex);
     const float depth = texelFetch(u_depth, ivec2(gl_FragCoord.xy), 0).r;
-    const float logScene = depth > 0.0
-        ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0))
-        : 1e30;
+    const float logScene = depth > 0.0 ? log2(max(length(viewRelFromDepth(v_uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0)) : 1e30;
+
     float logCloudDist;
     const vec4 cloud = cloudUpsample(u_cloudColor, u_cloudDepth, gl_FragCoord.xy, logScene, logCloudDist);
     out_color = cloud;
+
     if (u_foliage_farMarched > 0.5)
     {
         const vec4 trees = texelFetch(u_farTreesColor, ivec2(gl_FragCoord.xy), 0);

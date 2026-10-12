@@ -326,6 +326,7 @@ void Renderer::initSharedBuffers()
             vk::MemoryPropertyFlagBits::eHostVisible, false, "RiverWaterMap", BufferHostAccess::eSequentialWrite);
         m_mappedRiverWaterMaps[i] = (RendererVKLayout::RiverWaterMapGpu*)m_riverWaterMaps[i].mapMemory().data();
         memset(m_mappedRiverWaterMaps[i], 0, offsetof(RendererVKLayout::RiverWaterMapGpu, height)); // dim 0: no map
+        m_mappedRiverWaterMaps[i]->invTexel = 1.0f / RendererVKLayout::RIVER_WATER_MAP_TEXEL; // valid even without a map
         m_riverWaterMaps[i].flushMappedMemory(offsetof(RendererVKLayout::RiverWaterMapGpu, height));
 
         // The river mist sources, the same way (the particle sim's mist producer binds them).

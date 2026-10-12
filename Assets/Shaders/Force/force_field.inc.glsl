@@ -240,22 +240,17 @@ void forceAccumulateVisible(vec3 x, out float phi[NUM_FORCE_TEAMS], out float ph
     }
 }
 
-// C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the
-// shells meet the equilibrium wall in a rounded fillet instead of a hard crease - the crease's
-// discontinuous normals printed march-step-sized classification jaggies along the junction.
-float forceSmoothMax(float a, float b, float k)
-{
-    const float h = max(k - abs(a - b), 0.0) / max(k, 1e-5);
-    return max(a, b) + h * h * k * 0.25;
-}
-
-// The bound a team's field must beat to be "inside": iso or the strongest opposing field, smoothly
-// blended (u_force_junctionSmoothing = junction smoothing as a fraction of iso; scale-free since the rim
-// region lives at field values ~iso). The query compute uses the same function, so gameplay
-// "inside" matches the drawn surface exactly.
+// The bound a team's field must beat to be "inside": iso or the strongest opposing field, blended by a
+// C1 smooth max (k = blend width; 0 = hard max) so the shells meet the equilibrium wall in a rounded
+// fillet instead of a hard crease - the crease's discontinuous normals printed march-step-sized
+// classification jaggies along the junction. iso is always u_force_isoThreshold: k = u_force_junctionK
+// (junction smoothing x iso, scale-free since the rim region lives at field values ~iso). The query
+// compute uses the same function, so gameplay "inside" matches the drawn surface exactly.
 float forceOpposingBound(float iso, float opposing)
 {
-    return forceSmoothMax(iso, opposing, u_force_junctionSmoothing * iso);
+    const float k = u_force_junctionK;
+    const float h = max(k - abs(iso - opposing), 0.0) * u_force_junctionInvK;
+    return max(iso, opposing) + h * h * k * 0.25;
 }
 
 // The render surface function F for a FIXED team t (marched/refined/differentiated holding the hit

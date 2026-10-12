@@ -43,7 +43,7 @@ vec3 cascadeDebugColor(int cascade)
 // The viewport is y-flipped (negative height), so viewport-local v=0 (top) maps to ndc.y=+1.
 vec3 worldPosFromDepthMat(vec2 uv, float depth, mat4 invM)
 {
-    vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     vec4 clip = vec4(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0, depth, 1.0);
     vec4 world = invM * clip;
     return world.xyz / world.w;
@@ -66,7 +66,7 @@ vec2 taaJitterUv(vec2 jitterNdc) { return vec2(jitterNdc.x, -jitterNdc.y) * 0.5 
 // the eye term cancels analytically and only the per-frame constant carries a (smooth) rounding bias.
 vec3 viewRelFromDepth(vec2 uv, float depth)
 {
-    const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     const mat4 invM = u_invMvp;
     const vec3 dir = invM[0].xyz * (vpUv.x * 2.0 - 1.0) + invM[1].xyz * (1.0 - vpUv.y * 2.0) + (invM[3].xyz - u_viewPos * invM[3].w);
     return dir / (invM[2].w * depth + invM[3].w);
@@ -124,7 +124,7 @@ vec2 prevClipToScreenUV(vec4 prevClip)
 }
 vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
 {
-    vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     vec4 prevClip = u_reprojClip * vec4(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0, depth, 1.0);
     clipW = prevClip.w;
     return prevClipToScreenUV(prevClip);

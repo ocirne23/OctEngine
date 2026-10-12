@@ -26,14 +26,15 @@ void main()
     if (any(greaterThanEqual(uvec2(px), pc_size)))
         return;
     const vec2 uv = (vec2(px) + 0.5) / vec2(pc_size);
-    const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     if (any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
         imageStore(u_outColor, px, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
+
     const float depth = texelFetch(u_sceneDepth, px, 0).r;
-    const float logMax = log2(max(pc_vol_rMax, 1.0));
+    const float logMax = log2(pc_vol_rMax);
     const float logScene = depth > 0.0 ? min(log2(max(length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)), 1.0)), logMax) : logMax;
 
     const ivec2 size = textureSize(u_treeColor, 0);
@@ -58,6 +59,7 @@ void main()
         logDistSum += d.y * cw;
         distWeight += cw;
     }
+
     imageStore(u_outColor, px, wSum > 1e-6 ? sum / wSum : vec4(0.0, 0.0, 0.0, 1.0));
     imageStore(u_outDistance, px, vec4(exp2(distWeight > 1e-6 ? logDistSum / distWeight : logScene)));
 }

@@ -48,10 +48,10 @@ float treeWindTreeRand(vec2 instXZ)
     return treeWindHash(cell.x * 0x8da6b343u ^ cell.y * 0xd8163841u);
 }
 
-// 1 up to 100 m before "Trees/Wind/Trunk fade end", 0 past it (always 1 when it is 0).
+// 1 up to 100 m before "Trees/Wind/Trunk fade end" (>= 100 m on the CPU), 0 past it.
 float treeWindTrunkFade(float dist)
 {
-    return u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
+    return 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist);
 }
 
 // The world-space offset of a tree vertex at `time`. localPos = the mesh-local position (+Y up from the tree's base),
@@ -120,7 +120,7 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
 vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 normal)
 {
     const float code = abs(tangentW);
-    if (u_foliage_windBillboardWaves <= 0.0 || code < 2.0 || code >= 3.0)
+    if (code < 2.0 || code >= 3.0)
         return uv;
     const float fade = treeWindTrunkFade(distance(instanceOrigin, u_views_viewPos[VIEW_CENTER].xyz));
     if (fade <= 0.0)

@@ -159,7 +159,7 @@ float oceanWaveHeightAt(vec2 worldXZ, float waterDepth, float footprint)
     for (int c = 0; c < OCEAN_CASCADES; ++c)
     {
         const float L = u_ocean_cascadeSizes[c];
-        const float fade = smoothstep(0.0, max(u_ocean_shoalScale * L, 0.01), waterDepth);
+        const float fade = smoothstep(0.0, u_ocean_shoalFadeDepth[c], waterDepth);
         const float lod = max(log2(max(footprint, 1e-3) * float(OCEAN_FFT_SIZE) / L), 0.0);
         h += textureLod(u_uwOceanMaps, vec3(worldXZ / L, float(c)), lod).y * fade;
     }
@@ -268,9 +268,7 @@ void main()
         // them and valleys carved below the macro surface sit INSIDE the fog (the generator's
         // valley-fog thickness keys on the same carve depth). Clamped to sea level so fog rests on
         // the water instead of sinking over the seabed.
-        if (u_fog_terrainFollow > 0.0)
-            heightBase += u_fog_terrainFollow * (u_terrain_mapSeaLevel + max(td.w, 0.0));
-        if (u_fog_regionStrength > 0.0)
+        heightBase += u_fog_terrainFollow * (u_terrain_mapSeaLevel + max(td.w, 0.0));
         {
             // Regional climate: x = fog thickness (density multiplier), and the height-falloff multiplier
             // (fog hugs the ground in one region, towers in another) DERIVED from temperature - it is a
@@ -330,7 +328,7 @@ void main()
     // noise is pure aliasing the temporal blend turns into shimmer; its mean is 1) and is skipped
     // entirely where there is no medium to modulate - sky/above-fog froxels pay nothing.
     float noiseMul = 1.0;
-    const float noiseWavelength = 1.0 / max(u_fog_noiseScale, 1e-4);
+    const float noiseWavelength = u_fog_noiseWavelength;
     const float noiseAmp = u_fog_noiseStrength * (1.0 - smoothstep(40.0 * noiseWavelength, 80.0 * noiseWavelength, viewZ));
     if (noiseAmp > 0.001 && (heightDensity + underDensity > 1e-7 || in_numFogVolumes > 0u))
         noiseMul = max(1.0 + noiseAmp * (fogNoise(worldPos) * 2.0 - 1.0), 0.0);
@@ -364,9 +362,9 @@ void main()
     // computed one; above the fog, the clouds' alone (terrain shadows skipped - the shafts are the clouds').
     // Its density is taken HERE and its radiance joins `emissive` once the sun visibility is known, so the slice bounds
     // and the submerged fraction are not live across the shadow rays and the light loop.
-    const float hazeSigma = u_fog_hazeDensity > 0.0 && underFrac < 1.0
+    const float hazeSigma = underFrac < 1.0
         ? u_fog_hazeDensity * heightFogMean(yA, yB, u_fog_heightBase, u_fog_hazeInvHeight) * (1.0 - underFrac) : 0.0;
-    const vec3 sunDir = normalize(u_sunDirection.xyz);
+    const vec3 sunDir = u_sunDirection.xyz;
     const vec3 hazeRadiance = u_fog_albedo * u_sunTransmittance * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * u_sunVisible * u_fog_sunScatter); // x hazeSigma x the sun visibility
 
@@ -387,11 +385,11 @@ void main()
             // Froxel receivers float in air, so they need none of the surface path's self-shadow bias:
             // its own tuned 25 m start / 10 steps (~12.8 km reach), kept as-is now that the march is
             // shared with the lit surfaces (which start much further out - see u_shadow_terrainMarchStart).
-            sunVis = terrainSunVisibility(worldPos, sunDir, 25.0, 10, max(u_fog_sunSoftness, 0.015), 4.0);
+            sunVis = terrainSunVisibility(worldPos, sunDir, 25.0, 10, u_fog_sunSoftness, 4.0);
         }
         else if (u_rt_sunShadow > 0.5)
         {
-            const uint numRays = max(uint(u_fog_sunRays), 1u);
+            const uint numRays = uint(u_fog_sunRays);
             const float softness = u_fog_sunSoftness;
             const vec3 refAxis = abs(sunDir.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
             const vec3 t1 = normalize(cross(sunDir, refAxis));
@@ -500,7 +498,7 @@ void main()
     const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, u_viewForward), 1e-3));
     float prevW;
     const vec2 prevFullUv = prevScreenUV(centerPos, prevW);
-    const vec2 prevVpUv = (prevFullUv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 prevVpUv = (prevFullUv - u_viewportRect.xy) * u_viewportInvSize;
     // Accept history up to a couple of froxels OUTSIDE the grid with a clamped lookup: the edge froxel is
     // a close stand-in, and rejecting outright made the screen border flash fresh (noisy) samples during
     // every small rotation. Larger overshoots still reject (stretching the edge across the screen is worse).
@@ -512,7 +510,7 @@ void main()
         if (prevSlice <= 1.0)
         {
             const vec4 history = texture(u_history, vec3(clamp(prevVpUv, vec2(0.0), vec2(1.0)), prevSlice));
-            result = mix(result, history, clamp(u_fog_temporalBlend, 0.0, 0.97));
+            result = mix(result, history, u_fog_temporalBlend);
         }
     }
 

@@ -403,7 +403,7 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	{
 		const float cold  = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, f.temperature);
 		const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, slope);
-		const float wet = smoothstep(0.0, max(u_terrainTex_snowAridity, 1e-3), f.humidity);
+		const float wet = smoothstep(0.0, u_terrainTex_snowAridity, f.humidity);
 		snowW = float16_t(cold * holds * wet);
 	}
 	L.snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrain_hasBeach > 0.5 ? 1u : 0u);
@@ -423,7 +423,7 @@ TerrainLayers terrainLayers(vec3 worldPos, vec3 geoN, TerrainFields f)
 	float16_t beachW = float16_t(0.0);
 	if (u_terrain_hasBeach > 0.5)
 	{
-		const float shore = 1.0 - smoothstep(0.3, max(u_terrainTex_beachBand, 0.31), worldPos.y - f.waterLevel);
+		const float shore = 1.0 - smoothstep(0.3, u_terrainTex_beachBand, worldPos.y - f.waterLevel);
 		const float bed = smoothstep(TERRAIN_RIVER_BED_START, TERRAIN_RIVER_BED_FULL, f.river);
 		beachW = float16_t(max(shore, bed));
 	}
@@ -724,11 +724,7 @@ vec3 terrainParallaxOffset(TerrainLayers L, vec3 worldPos, vec3 geoNInterp, vec3
 // finds that grid in their low-frequency content. Two taps of the noise texture's macro channels at unrelated scales
 // and orientations - the second 3.71x larger and turned 34 deg, so the pair does not repeat in view - give a
 // brightness (x) and an independent warm/cool hue (y), both ~[-1, 1]. Call in uniform flow (screen derivatives).
-bool terrainMacroEnabled()
-{
-	return u_terrainTex_macroStrength + u_terrainTex_macroHue + u_terrainTex_macroRoughness > 0.0;
-}
-
+// Always on: the three strengths are >= their tweak mins on the CPU.
 f16vec2 terrainMacroAt(vec2 xz)
 {
 	const vec2 uv = xz * u_terrainTex_macroUvScale;
@@ -764,8 +760,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 		return TerrainSample(f16vec3(0.5), geoNh, float16_t(0.92), float16_t(0.0), float16_t(1.0), float16_t(0.5));
 
 	// The macro taps here, in uniform flow; applied under the snow (step 4).
-	const bool macroOn = terrainMacroEnabled();
-	const f16vec2 macro = macroOn ? terrainMacroAt(worldPos.xz) : f16vec2(0.0);
+	const f16vec2 macro = terrainMacroAt(worldPos.xz);
 
 	const int baseMat = L.baseMat;
 	const int numGround = L.numGround;
@@ -845,8 +840,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	}
 
 	// 4. Macro variation over ground, beach and rock: the snow lies on top, clean.
-	if (macroOn)
-		terrainApplyMacro(surf, macro);
+	terrainApplyMacro(surf, macro);
 
 	// 5. Snow (partial cover; full cover returned above).
 	if (snowW > blendEps)

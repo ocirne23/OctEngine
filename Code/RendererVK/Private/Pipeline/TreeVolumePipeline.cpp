@@ -184,7 +184,7 @@ void TreeVolumePipeline::registerPushFields(const FarTreeParams& s)
     m_recordsBlock.lockable(m_recordsPush.rockExtinction, s.rockExtinction);
     m_floorSmoothBlock.lockable(m_floorSmoothPush.angularRes, s.angularRes);
     m_floorSmoothBlock.lockable(m_floorSmoothPush.radialRes, s.radialRes);
-    m_floorSmoothBlock.lockable(m_floorSmoothPush.floorSmoothing, s.floorSmoothing);
+    m_floorSmoothBlock.lockable(m_floorSmoothPush.floorSmoothing, [&s] { return (int32)oc::max(s.floorSmoothing, 1); }, s.floorSmoothing); // the tweak min
     // The march passes: the shown bake's.
     const auto shown = [this]() -> const FarTreeParams& { return marchSettings(); };
     addVolLockables(m_marchBlock, m_marchPush.vol, s, shown);
@@ -985,7 +985,6 @@ glm::vec4 TreeVolumePipeline::handoverUbo() const
 void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const RecordParams& params)
 {
     BakeJob& job = m_job;
-    const FarTreeParams& s = job.settings;
     const uint32 back = 1u - m_front;
     const bool records = job.records.numTypes > 0;
     // The pushes write the volume's centre; its other values are lockable (the blocks write them from the settings).
@@ -1147,10 +1146,9 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     if (job.stage == EBakeStage::Smooth)
     {
         job.stage = EBakeStage::Splat;
-        if (s.floorSmoothing > 0)
         {
-            // The floor's separable tent blur (tree_volume_floor_smooth.cs): along the angle into floorCover (free after
-            // the floor pass), then along the radius back into the floor.
+            // The floor's separable tent blur (tree_volume_floor_smooth.cs; "Far floor smoothing" >= 1): along the angle
+            // into floorCover (free after the floor pass), then along the radius back into the floor.
             cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_floorSmoothPipeline.getPipeline());
             for (uint32 axis = 0; axis < 2; ++axis)
             {
@@ -1301,6 +1299,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             columnPc.set(m_resolvePush.vol.centre, job.centre);
             columnPc.set(m_resolvePush.sliceOffset, 0u);
             columnPc.set(m_resolvePush.columnPass, 1u);
+            columnPc.set(m_resolvePush.numRock, oc::min(params.numRock, ROCK_TEXTURES));
             cmd.pushConstants(m_resolvePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, columnPc.size(), columnPc.data());
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, 1);
             cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &floorToSplat }); // column sums -> conversion
@@ -1312,6 +1311,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
             resolvePc.set(m_resolvePush.vol.centre, job.centre);
             resolvePc.set(m_resolvePush.sliceOffset, job.progress);
             resolvePc.set(m_resolvePush.columnPass, 0u);
+            resolvePc.set(m_resolvePush.numRock, oc::min(params.numRock, ROCK_TEXTURES));
             cmd.pushConstants(m_resolvePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, resolvePc.size(), resolvePc.data());
             cmd.dispatch((m_angularRes + 7) / 8, (m_radialRes + 7) / 8, slices);
             job.progress += slices;

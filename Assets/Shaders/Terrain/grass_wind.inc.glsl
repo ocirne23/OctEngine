@@ -20,7 +20,7 @@ vec2 grassWind(vec2 xz, float time, float phase)
     vec2 dir;
     const float speed = vegetationWind(xz, time, dir);
     const float sway = sin(time * u_grass_swayFrequency * GRASS_TWO_PI + phase);
-    const float ripple = grassValueNoise((xz - vegetationWindMeanDir() * (max(length(u_weather_windVelocity.xz), 1.0) * time)) * u_grass_invRippleSize);
+    const float ripple = grassValueNoise((xz - u_weather_windDirection * (u_weather_windTravelSpeed * time)) * u_grass_invRippleSize);
     return dir * (speed * (u_grass_windBend * (0.85 + 0.15 * sway) + u_grass_rippleBend * ripple * (0.8 + 0.2 * sway)));
 }
 

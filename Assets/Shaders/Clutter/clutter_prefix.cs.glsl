@@ -3,10 +3,10 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE CLUTTER BUCKETS' LAYOUT (after clutter_cull): ONE workgroup, a thread per bucket. An exclusive prefix sum of the
-// bucket counts gives each bucket its range of the sorted records, and its indexed draw (instanceCount = its count,
-// firstInstance = its range's start). The flower buckets come first (a fixed CLUTTER_FLOWER_LODS draws), then
-// (mesh, LOD), whose draw COUNT goes to io_counts[1].
+// THE CLUTTER BUCKETS' LAYOUT (after clutter_cull): ONE workgroup, a thread per bucket. An exclusive prefix sum of the counts
+// gives each bucket its range of the sorted records and its indexed draw (instanceCount = its count, firstInstance = its
+// range's start). The flower buckets first (a fixed CLUTTER_FLOWER_LODS draws), then (mesh, LOD): their draw COUNT goes to
+// io_counts[1].
 
 #define CLUTTER_FRAME_BINDING 0
 #include "clutter.inc.glsl"
@@ -36,6 +36,7 @@ void main()
     const uint count = b < CLUTTER_MAX_BUCKETS ? in_bucketCounts[b] : 0u;
     s_scan[b] = count;
     barrier();
+
     for (uint offset = 1u; offset < CLUTTER_PREFIX_GROUP; offset <<= 1u)
     {
         const uint add = b >= offset ? s_scan[b - offset] : 0u;
@@ -45,6 +46,7 @@ void main()
     }
     if (b >= CLUTTER_MAX_BUCKETS)
         return;
+
     const uint first = s_scan[b] - count;
     out_bucketBase[b] = first;
     DrawIndexedIndirect draw = DrawIndexedIndirect(0u, 0u, 0u, 0, first);
@@ -61,6 +63,7 @@ void main()
         }
     }
     out_commands[b] = draw;
+
     if (b == 0u)
         io_counts[1] = cf_numMeshes * CLUTTER_LODS;
 }

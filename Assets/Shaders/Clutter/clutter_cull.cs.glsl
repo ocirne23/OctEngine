@@ -7,19 +7,14 @@
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 #extension GL_EXT_nonuniform_qualifier : enable    // the splat height maps (u_textures)
 
-// THE CLUTTER CULL (ClutterPipeline; Docs/GroundClutterPlan.md 3): ONE WORKGROUP PER PATCH of the grid around the
-// camera, ONE THREAD PER RANK. Per clutter type, rank k stands at the k-th point of an R2 sequence over the patch
-// (offset per patch and type) and is KEPT where k + 0.5 < the type's density there x the patch area. Every prefix of
-// the ranks is evenly spread, so a thinning density removes objects evenly, and one near the threshold shrinks into the
-// ground over the grow band instead of popping. Types are independent lists: no type swaps for another.
-//
-// A type's density = Density x the climate fit x per term mix(a, b, measure):
-//   the TERRAIN (terrainLayers, as the grass cull): grass cover, crag, beach; humidity (wet); the RIVER influence, its
-//   FLOW and under the WATER (the terrain vertex's uv); snow removes everything;
-//   the FOREST FLOOR MAP: canopy, trunk and rock proximity; nothing inside a trunk or a rock;
-//   the slope, the height above the water, the cluster noise and the fairy rings.
-// A kept object goes into its BUCKET (mesh and LOD; a flower: its LOD) with a bucket-local index; clutter_prefix lays
-// the buckets out, clutter_scatter sorts the records into them.
+// THE CLUTTER CULL (ClutterPipeline; Docs/GroundClutterPlan.md 3): ONE WORKGROUP PER PATCH around the camera, ONE THREAD PER
+// RANK. Per type, rank k stands at the k-th R2 point over the patch (offset per patch and type) and is KEPT where
+// k + 0.5 < density x patch area: every prefix is evenly spread, so a thinning density removes objects evenly, and one near
+// the threshold shrinks into the ground over the grow band (no pops). Types are independent lists.
+// Density = Density x climate fit x per term mix(a, b, measure): the terrain (grass, crag, beach, wet, river, flow, water),
+// the forest floor (canopy, trunk, rock), slope, altitude, cluster noise, fairy rings. Snow or an occupied floor: none.
+// A kept object goes to its BUCKET (mesh and LOD; a flower: its LOD) with a bucket-local index; clutter_prefix lays the
+// buckets out, clutter_scatter sorts the records into them.
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 1
@@ -55,8 +50,8 @@ layout (binding = 8, std430) writeonly buffer OutKeys { uint out_keys[]; }; // b
 layout (binding = 9, std430) buffer Counts { uint io_counts[4]; };          // [0] the kept records
 layout (binding = 10, std430) buffer BucketCounts { uint io_bucketCounts[]; };
 
-// THE TERRAIN'S MEASURES over the patch: a CLUTTER_GRID^2 grid (threads 0..24), bilinear per candidate. The 4 corners
-// alone aliased the bedrock's small-scale noise into grid-aligned diamonds.
+// THE TERRAIN'S MEASURES over the patch: a CLUTTER_GRID^2 grid (threads 0..24), bilinear per candidate. 4 corners alone
+// aliased the bedrock's small-scale noise into grid-aligned diamonds.
 #define CLUTTER_GRID 5u
 #define CLUTTER_GRID_SAMPLES (CLUTTER_GRID * CLUTTER_GRID)
 shared float s_height[CLUTTER_GRID_SAMPLES];
@@ -82,8 +77,8 @@ bool clutterGroundAt(vec2 xz, out GrassGround g)
     return true;
 }
 
-// One grid sample's terrain measures (as the grass cull feeds the splat). Without a texture set or a height map: no
-// cover, a mild climate.
+// One grid sample's terrain measures (as the grass cull feeds the splat). No texture set or height map: no cover, a mild
+// climate.
 void clutterCorner(uint i, vec2 xz, GrassGround g)
 {
     vec3 facetN;
@@ -97,6 +92,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_river[i] = vec3(river.x, smoothstep(RIVER_FLOW_SLOW, RIVER_FLOW_FAST, river.y), river.z);
     if (!terrainHeightMapPresent())
         return;
+
     const vec4 td = terrainDataAt(xz);
     const vec4 climate = terrainClimateAt(xz);
     const float temperature = terrainTemperatureAt(climate, h);
@@ -105,6 +101,7 @@ void clutterCorner(uint i, vec2 xz, GrassGround g)
     s_humidity[i] = climate.w;
     if (u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
         return;
+
     const TerrainLayers L = terrainLayers(vec3(xz.x, h, xz.y), grassGroundSmoothNormal(g, xz),
         TerrainFields(td.w, temperature, climate.w, td.y, river.x));
     s_cover[i] = vec4(grassTerrainCover(L), float(L.rockW), float(L.beachW), float(L.snowW));
@@ -124,17 +121,15 @@ ClutterReliefView clutterReliefView()
     ClutterReliefView v;
     v.enabled = !(u_terrainTess_enabled < 0.5 || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0 || !terrainHeightMapPresent());
     v.viewPos = u_views_viewPos[VIEW_CENTER].xyz;
-    v.invFadeWidth = 1.0 / max(u_terrainTess_fadeEnd - u_terrainTess_fadeStart, 1e-3);
-    const mat4 centreMvp = u_views_mvp[VIEW_CENTER];
-    const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
-    v.spacingPerMetre = 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
+    v.invFadeWidth = u_terrainTess_invFadeWidth;
+    v.spacingPerMetre = u_terrainTess_spacingPerMetre;
     return v;
 }
 
-// THE TESSELLATED RELIEF: the offset to add to a mesh point, so an object stands on the DRAWN ground (the mesh
-// displaced along its smooth normal by (height - 0.5) x depth - keep in step with terrain_tess.tes.glsl: the layers,
-// fade, slope gate, depth and height mip). Over a footprint (m, 0 = the point alone) the height lies between the mean
-// and the lowest of 5 taps: a branch over a bump buries a little rather than float at its ends.
+// THE TESSELLATED RELIEF: the offset that puts a mesh point on the DRAWN ground (displaced along the smooth normal by
+// (height - 0.5) x depth - keep in step with terrain_tess.tes.glsl: layers, fade, slope gate, depth, height mip).
+// Over a footprint (m, 0 = the point alone) the height lies between the mean and the lowest of 5 taps: a branch over a
+// bump buries a little rather than float at its ends.
 vec3 clutterRelief(ClutterReliefView view, vec3 meshPos, vec3 smoothN, float river, float footprint)
 {
     if (!view.enabled)
@@ -142,6 +137,7 @@ vec3 clutterRelief(ClutterReliefView view, vec3 meshPos, vec3 smoothN, float riv
     const float dist = distance(meshPos, view.viewPos);
     if (dist >= u_terrainTess_fadeEnd)
         return vec3(0.0);
+
     const vec4 td = terrainDataAt(meshPos.xz);
     const vec4 climate = terrainClimateAt(meshPos.xz);
     const TerrainLayers L = terrainLayers(meshPos, smoothN, TerrainFields(td.w, terrainTemperatureAt(climate, meshPos.y), climate.w, td.y, river));
@@ -150,6 +146,7 @@ vec3 clutterRelief(ClutterReliefView view, vec3 meshPos, vec3 smoothN, float riv
     const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
     if (depth <= 1e-4)
         return vec3(0.0);
+
     // The TES's height mip: the target edge length at this distance.
     const float spacing = max(dist, u_terrainTess_freezeDistance) * view.spacingPerMetre;
     const vec2 dx = vec2(spacing, 0.0), dy = vec2(0.0, spacing);
@@ -206,6 +203,7 @@ void main()
     // Every early return up to the barrier is uniform over the workgroup (the patch alone decides it).
     if (patchIdx >= cf_gridDim * cf_gridDim || cf_numTypes == 0u)
         return;
+
     const float P = cf_patchSize;
     const vec2 origin = cf_gridOrigin + vec2(float(patchIdx % cf_gridDim), float(patchIdx / cf_gridDim)) * P;
     const vec2 nearestXZ = clamp(u_viewPos.xz, origin, origin + P);
@@ -220,8 +218,8 @@ void main()
         clutterCorner(k, origin + vec2(float(k % CLUTTER_GRID), float(k / CLUTTER_GRID)) * gridStep, patchGround);
     barrier();
 
-    // The patch's box (its grid + the tallest clutter) against the view, or within the near grass cascade's caster
-    // reach (an object just off screen still casts).
+    // The patch's box (its grid + the tallest clutter) against the view, or within the near grass cascade's caster reach
+    // (an object just off screen still casts).
     float hMin = s_height[0], hMax = s_height[0];
     for (uint i = 1u; i < CLUTTER_GRID_SAMPLES; ++i)
     {
@@ -237,6 +235,7 @@ void main()
     for (int i = 0; i < 6; ++i)
         if (dot(vec4(sphereCentre, 1.0), u_frustumPlanes[i]) + sphereRadius < 0.0)
             patchVisible = false;
+
     const vec2 nearCentre = u_grass_nearCentre;
     const float nearReach = u_grass_nearRange * 1.5 + 2.0;
     const bool patchNear = u_grass_nearRange > 0.0 && distance(clamp(nearCentre, origin, origin + P), nearCentre) <= nearReach;
@@ -253,6 +252,7 @@ void main()
         // The ranks this type can keep anywhere (every term at its largest): the others never test.
         if (rank >= type.bound.x * countScale)
             continue;
+
         const uint typeSeed = (t + 1u) * 0x9E3779B9u;
         const uint listHash = grassHash(patchHash ^ typeSeed);
         const vec2 r2Offset = vec2(grassUnit(listHash), grassUnit(grassHash(listHash + 1u)));
@@ -277,12 +277,13 @@ void main()
         const float water = dot(vec4(s_water[i00], s_water[i10], s_water[i01], s_water[i11]), w);
         const vec3 river = s_river[i00] * w.x + s_river[i10] * w.y + s_river[i01] * w.z + s_river[i11] * w.w;
         const vec4 floorMap = clutterFloorAt(xz);
-        // THE GRASS AS DRAWN (the `Grass` term's measure): the cover x the blades' clumps and bare spots x the canopy
-        // thinning, as grass_cull keeps them - so no flower stands in a bare spot between the clumps.
+        // THE GRASS AS DRAWN (the `Grass` term's measure): cover x the blades' clumps x the canopy thinning, as grass_cull
+        // keeps them - so no flower stands in a bare spot between the clumps.
         const float grass = cover.x * grassClump(xz) * (1.0 - u_grass_canopyThinning * floorMap.x);
 
         // The climate fit: 1 inside the ideal box, a Gaussian of the distance outside it (as a tree species').
-        const vec2 climate = vec2(clamp((temperature + 25.0) / 75.0, 0.0, 1.0), humidity);
+        // Temperature -25 .. 50 C -> 0 .. 1.
+        const vec2 climate = vec2(clamp(temperature * (1.0 / 75.0) + (25.0 / 75.0), 0.0, 1.0), humidity);
         const vec2 outside = max(type.climate.xz - climate, vec2(0.0)) + max(climate - type.climate.yw, vec2(0.0));
         const vec2 scaled = outside * type.placement.y;
         float density = type.placement.x * exp(-0.5 * dot(scaled, scaled));
@@ -297,10 +298,11 @@ void main()
         // The cluster and ring factors are <= 1: a rank past the count so far never passes.
         if (rank >= keep)
             continue;
+
         if (type.placement.z > 0.0)
         {
             const float coverage = type.placement.w;
-            const float n = grassValueNoise(xz * type.placement.z + vec2(float(t) * 37.1, float(t) * 11.7));
+            const float n = grassValueNoise(xz * type.placement.z + float(t) * vec2(37.1, 11.7));
             keep *= smoothstep(1.0 - coverage - 0.15, 1.0 - coverage + 0.15, n);
         }
         if (type.ring.x > 0.0)
@@ -314,17 +316,18 @@ void main()
             continue;
         vec3 groundN;
         const float groundY = grassGroundHeight(g, xz, groundN);
-        const float slope = sqrt(max(1.0 - groundN.y * groundN.y, 0.0)) / max(groundN.y, 1e-3);
-        if (slope > type.terms3.z || groundY - water < type.terms3.w)
+        // The slope (rise / run = sin / cos) against its max, multiplied out (no divide).
+        const float sinSlope = sqrt(max(1.0 - groundN.y * groundN.y, 0.0));
+        if (sinSlope > type.terms3.z * max(groundN.y, 1e-3) || groundY - water < type.terms3.w)
             continue;
 
-        const float grow = clamp((keep - rank) / max(u_clutter_growBand * keep, 1e-3), 0.0, 1.0);
+        const float grow = clamp((keep - rank) / (u_clutter_growBand * keep), 0.0, 1.0);
         const uint h = grassHash(listHash ^ (k * 0x85EBCA6Bu));
         const uint kind = type.info.z;
         const uint variants = max(type.info.y, 1u);
         const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % variants;
-        // A FLOWER shrinks with the grass cover as the blades do (grassCoverSize): where the cover fades the few blades
-        // left are tiny. Not REEDS or TUFTS: they grow on the bare bank.
+        // A FLOWER shrinks with the grass cover as the blades do (grassCoverSize). Not REEDS or TUFTS: they grow on the
+        // bare bank.
         const uint head = type.info.w & 0xFFu;
         const bool reed = kind == CLUTTER_KIND_FLOWER && (head == FLOWER_HEAD_REED || head == FLOWER_HEAD_TUFT);
         const float coverSize = kind == CLUTTER_KIND_FLOWER && !reed ? grassCoverSize(cover.x) : 1.0;
@@ -333,12 +336,12 @@ void main()
             continue;
 
         // A yaw, then up -> the ground's normal by its align (a flower stands upright: its VS reads the yaw only).
-        const float yaw = grassUnit(grassHash(h + 2u)) * (2.0 * PI);
-        const vec4 qYaw = vec4(0.0, sin(0.5 * yaw), 0.0, cos(0.5 * yaw));
+        const float halfYaw = grassUnit(grassHash(h + 2u)) * PI;
+        const vec4 qYaw = vec4(0.0, sin(halfYaw), 0.0, cos(halfYaw));
         const float align = kind == CLUTTER_KIND_FLOWER ? 0.0 : type.albedo1.w;
         const vec4 q = quat_multiply(clutterQuatFromUp(normalize(mix(vec3(0.0, 1.0, 0.0), groundN, align))), qYaw);
 
-        // The bounds, the sink and the LOD.
+        // The bounds.
         const uint mesh = type.info.x + variant;
         float height, radius;
         if (kind == CLUTTER_KIND_FLOWER)
@@ -351,10 +354,13 @@ void main()
             height = in_meshes[mesh].bounds.y * scale;
             radius = in_meshes[mesh].bounds.x * scale;
         }
-        const vec3 up = quat_transform(vec3(0.0, 1.0, 0.0), q);
+
         // On the DRAWN ground: the mesh point + the tessellated relief (over the object's footprint).
         const vec3 groundPos = vec3(xz.x, groundY, xz.y);
         const vec3 relief = clutterRelief(reliefView, groundPos, grassGroundSmoothNormal(g, xz), grassGroundRiver(g, xz), kind == CLUTTER_KIND_FLOWER ? 0.0 : 0.35 * radius);
+        const vec3 up = quat_transform(vec3(0.0, 1.0, 0.0), q);
+
+        // The sink, the view test and the LOD.
         const vec3 base = groundPos + relief - up * (type.shape.w * height);
         const vec3 centre = base + up * (0.5 * height);
         bool visible = patchVisible;
@@ -365,12 +371,14 @@ void main()
         const bool nearCaster = patchNear && distance(xz, nearCentre) <= nearReach;
         if (!visible && !nearCaster)
             continue;
+
         const float dist = distance(centre, u_viewPos);
         uint lod;
         if (kind == CLUTTER_KIND_FLOWER)
             lod = dist < u_clutter_flowerLod1Distance ? 0u : dist < u_clutter_flowerLod2Distance ? 1u : 2u;
         else
         {
+            // The projected size radius / dist against the LOD sizes, multiplied out (no divide).
             const float size = radius / max(dist, 1e-3);
             lod = size > u_clutter_lod1Size ? 0u : size > u_clutter_lod2Size ? 1u : 2u;
             while (lod > 0u && in_meshes[mesh].lods[lod].y == 0u)
@@ -382,6 +390,7 @@ void main()
             continue;
         const uint bucket = clutterBucket(kind, mesh, lod);
         const uint local = atomicAdd(io_bucketCounts[bucket], 1u);
+
         // The colours vary per object (+-12 %), as the grass blades do.
         const float variation = 1.0 + 0.24 * (grassUnit(grassHash(h + 3u)) - 0.5);
         const vec3 albedo0 = clamp(type.albedo0.rgb * variation, vec3(0.0), vec3(1.0));

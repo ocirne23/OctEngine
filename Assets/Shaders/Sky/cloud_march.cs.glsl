@@ -1,8 +1,8 @@
 #version 460
 
-// Volumetric cloud march: one invocation per HALF-RES pixel, every pixel every frame (a fly-through has
-// parallax at every depth, so an amortized 1-in-N update would smear). Marches the view ray through the cloud
-// shell (cloud_raymarch.inc.glsl) up to the farthest scene surface of the pixel's 2x2 block, and writes
+// Volumetric cloud march: one invocation per HALF-RES pixel, every pixel every frame (a fly-through has parallax at every
+// depth, so an amortized 1-in-N update would smear). Marches the view ray through the cloud shell
+// (cloud_raymarch.inc.glsl) up to the farthest scene surface of the pixel's 2x2 block, and writes
 //   out color = (in-scatter incl. the aerial perspective in front of the cloud, transmittance)
 //   out depth = log2 distances: x = first cloud hit, y = transmittance-weighted cloud distance (the temporal
 //               reprojection), z = the march limit (the scene surface / max distance); w = steps
@@ -46,9 +46,9 @@ void writeEmpty(ivec2 px, float logLimit)
     imageStore(u_outDepth, px, vec4(logLimit, logLimit, logLimit, 0.0));
 }
 
-// The pixel of this invocation. CLOUD_CHECKERBOARD: the dispatch covers half the columns, and each thread takes
-// the pixel of this frame's parity ((x + y + frame) even) in its row, so the warps stay full (a per-pixel early
-// out would idle half of every warp). cloud_temporal.cs.glsl fills in the other half.
+// The pixel of this invocation. CLOUD_CHECKERBOARD: the dispatch covers half the columns, and each thread takes the pixel
+// of this frame's parity ((x + y + frame) even) in its row, so the warps stay full (a per-pixel early out would idle
+// half of every warp). cloud_temporal.cs.glsl fills in the other half.
 ivec2 marchPixel()
 {
 #ifdef CLOUD_CHECKERBOARD
@@ -70,21 +70,22 @@ void main()
     const float logMax = log2(maxDist);
     const ivec2 full = px * 2;
     const vec2 uv = (vec2(full) + 1.0) * u_screenSize.zw; // the 2x2 block's centre, full-target UV
-    const vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 vpUv = (uv - u_viewportRect.xy) * u_viewportInvSize;
     if (u_clouds_enabled < 0.5 || any(lessThan(vpUv, vec2(0.0))) || any(greaterThan(vpUv, vec2(1.0))))
     {
         writeEmpty(px, logMax);
         return;
     }
 
-    // The FARTHEST surface of the block (reversed-Z: the smallest depth, 0 = sky): the march reaches every
-    // full-res pixel's surface, and the apply drops the clouds a nearer pixel has in front of it.
+    // The FARTHEST surface of the block (reversed-Z: the smallest depth, 0 = sky): the march reaches every full-res
+    // pixel's surface, and the apply drops the clouds a nearer pixel has in front of it.
     const ivec2 last = textureSize(u_depth, 0) - 1;
     const float depth = min(min(texelFetch(u_depth, min(full, last), 0).r, texelFetch(u_depth, min(full + ivec2(1, 0), last), 0).r),
                             min(texelFetch(u_depth, min(full + ivec2(0, 1), last), 0).r, texelFetch(u_depth, min(full + ivec2(1, 1), last), 0).r));
     const vec2 uvJ = uv - taaJitterUv(u_taaJitter.xy);
     const float limit = depth > 0.0 ? min(length(viewRelFromDepth(uvJ, depth)), maxDist) : maxDist;
     const float logLimit = log2(max(limit, 1.0));
+
     const vec3 dir = normalize(viewRelFromDepth(uvJ, 1.0));
     // Angular size of one half-res pixel: the mip level from the footprint at each distance.
     const float pixelAngle = length(normalize(viewRelFromDepth(uvJ + vec2(2.0 * u_screenSize.z, 0.0), 1.0)) - dir);

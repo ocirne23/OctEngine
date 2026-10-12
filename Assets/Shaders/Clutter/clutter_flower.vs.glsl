@@ -5,20 +5,14 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE FLOWERS (with CLUTTER_NEAR_SHADOW: the near grass cascade's casters). No vertex buffer: one indexed draw per LOD
-// over a fixed topology (ClutterPipeline::buildFlowerIndices - the stem's strip, CLUTTER_FLOWER_PETALS quads, one
-// centre quad), the record as instance-rate attributes. Everything is built here from the record:
-//   THE STEM is a GRASS BLADE: the same Bezier, lean and wind (grass_wind.inc.glsl), so a flower sways exactly as the
-//   grass around it; the motion vectors are the same stem at last frame's time.
-//   THE HEAD sits at the tip, in a frame along the stem's upper chord (it nods with the stem):
-//     RADIAL - petals around a centre disc, tilted up by `open` (0 flat, ~60 deg a cup, below 0 swept back);
-//     SPIKE  - florets in a spiral up the top of the stem;
-//     UMBEL  - small flat florets over a disc;
-//     BELL   - florets hanging from the arching top of the stem;
-//     REED   - the petals are long, nearly pointed LEAVES (the stem's colours) in REED_TUFTS tufts side by side, the
-//              centre a CATTAIL spike on the stalk's top;
-//     TUFT   - no stalk: fine leaves (3 slots each near, 2 further out) rising as a bundle, then arching out (a sedge).
-//   A slot past the petal count collapses to a point (no area). A LOD with fewer slots than petals widens them.
+// THE FLOWERS (with CLUTTER_NEAR_SHADOW: the near grass cascade's casters). No vertex buffer: one indexed draw per LOD over
+// a fixed topology (ClutterPipeline::buildFlowerIndices: the stem's strip, CLUTTER_FLOWER_PETALS quads, a centre quad), the
+// record instance-rate. THE STEM is a GRASS BLADE (grass_wind.inc.glsl: the same Bezier, lean and wind, so it sways as the
+// grass around it; motion = the same stem at last frame's time). THE HEAD sits at the tip in a frame along the stem's
+// upper chord: RADIAL (petals around a disc, tilted up by `open`), SPIKE (a floret spiral up the stem's top), UMBEL (flat
+// florets over a disc), BELL (florets hanging from the arching top), REED (long leaves in REED_TUFTS tufts + a CATTAIL
+// spike), TUFT (no stalk: arching leaves, a sedge). A slot past the petal count collapses (no area); a LOD with fewer
+// slots than petals widens them.
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -77,6 +71,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
     const uint S = flowerStemSegments(lod);
     const uint stemVerts = 2u * (S + 1u);
     const vec3 up = vec3(0.0, 1.0, 0.0);
+
     if (v < stemVerts)
     {
         const float t = float(v >> 1u) / float(S);
@@ -87,6 +82,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         along = t;
         return flowerStemPoint(f, ctrl, tip, t, sideSign);
     }
+
     if (f.head == FLOWER_HEAD_TUFT)
     {
         // A TUFT (sedge): no stalk (zero width, main) and no centre. A leaf takes `segs` slots (its bend): an arc out
@@ -127,6 +123,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const float width = f.petalWidth * f.headSize * f.petalScale * mix(1.0, 0.08, s * s);
         return p + across * (((corner == 1u || corner == 2u) ? 0.5 : -0.5) * width);
     }
+
     if (f.head == FLOWER_HEAD_REED)
     {
         const uint slots = flowerPetalSlots(lod);
@@ -150,6 +147,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
             normal = up;
             return f.root; // an unused slot: no area
         }
+
         // A LEAF: long and nearly pointed, leaning out by `open`, its tip swaying with the stalk. Leaf j is in tuft
         // j % REED_TUFTS: the first around the stalk, the others 0.15 .. 0.25 x the height beside it, a little shorter.
         const float fj = float(j);
@@ -179,6 +177,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const vec2 sway = (tip.xz - f.root.xz - f.lean) * (len / max(f.height, 1e-3));
         return base + dir * len + vec3(sway.x, 0.0, sway.y) + across * (s * 0.15 * width);
     }
+
     // The head's frame: along the stem's upper chord (it always rises - the tangent at the tip is the horizontal
     // lean), a random turn about it.
     vec3 axis = normalize(tip - grassBezier(f.root, ctrl, tip, 0.7));
@@ -217,6 +216,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         normal = axis;
         return tip; // an unused slot: no area
     }
+
     const float fj = float(j);
     const float n = float(f.petals);
     vec3 base, dir, across;
@@ -236,11 +236,11 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
     {
         // Florets over a disc (a sunflower spiral), each a small flat quad facing along the axis.
         const float psi = fj * FLOWER_GOLDEN_ANGLE + f.rotation;
-        const float r = H * sqrt((fj + 0.5) / n);
+        const float r01 = sqrt((fj + 0.5) / n); // the radius / H
         const vec3 d = b1 * cos(psi) + b2 * sin(psi);
         across = normalize(cross(axis, d));
         len = 0.45 * H * f.petalScale;
-        base = tip + d * r - d * (0.5 * len) + axis * (0.1 * H * (1.0 - r / max(H, 1e-4)));
+        base = tip + d * (H * r01 - 0.5 * len) + axis * (0.1 * H * (1.0 - r01));
         dir = d;
         tipWidth = len;
         baseWidth = len;
@@ -249,12 +249,14 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
     {
         // SPIKE / BELL: florets up the top of the stem, a spiral of outward directions (around the vertical: they read
         // as a column even when the stem leans).
-        const float tj = (f.head == FLOWER_HEAD_SPIKE ? 0.5 : 0.62) + (f.head == FLOWER_HEAD_SPIKE ? 0.5 : 0.38) * (fj + 0.5) / n;
+        const bool spike = f.head == FLOWER_HEAD_SPIKE;
+        const float up01 = (fj + 0.5) / n; // this floret's place up the head
+        const float tj = spike ? 0.5 + 0.5 * up01 : 0.62 + 0.38 * up01;
         const vec3 at = grassBezier(f.root, ctrl, tip, tj);
         const float psi = fj * FLOWER_GOLDEN_ANGLE + f.rotation;
         const vec3 o = vec3(cos(psi), 0.0, sin(psi));
         across = vec3(-o.z, 0.0, o.x);
-        const float size = H * f.petalScale * (f.head == FLOWER_HEAD_SPIKE ? mix(1.1, 0.55, (fj + 0.5) / n) : 1.0);
+        const float size = H * f.petalScale * (spike ? mix(1.1, 0.55, up01) : 1.0);
         dir = f.head == FLOWER_HEAD_SPIKE ? normalize(o + up * 0.7) : normalize(o * 0.35 - up);
         base = at;
         len = size;
@@ -273,12 +275,15 @@ void main()
 {
 #ifdef CLUTTER_NEAR_SHADOW
     // Only the flowers around the near cascade's box (as the blades).
-    if (distance(in_instPosScale.xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
+    const vec2 toNear = in_instPosScale.xz - u_grass_nearCentre;
+    const float nearReach = u_grass_nearRange * 1.5 + 2.0;
+    if (dot(toNear, toNear) > nearReach * nearReach)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 #endif
+
     const uint lod = (in_instData.z >> 16) & 0xFFu;
     const uint h = in_instData.w;
     const vec2 stemHead = unpackHalf2x16(in_instLook.z);
@@ -288,7 +293,8 @@ void main()
     f.root = in_instPosScale.xyz;
     f.height = stemHead.x * scale * mix(0.75, 1.15, grassUnit(grassHash(h + 11u)));
     f.headSize = stemHead.y * scale;
-    const float dist = distance(f.root, u_viewPos);
+    const vec3 toRoot = f.root - u_viewPos;
+    const float dist = length(toRoot);
     f.stemHalfWidth = 0.5 * max(0.05 * f.headSize, dist * u_grass_minWidthPerMetre * 0.5);
     const float leanAngle = grassUnit(grassHash(h + 12u)) * GRASS_TWO_PI;
     f.lean = vec2(cos(leanAngle), sin(leanAngle)) * (f.height * 0.2 * grassUnit(grassHash(h + 13u)));
@@ -297,14 +303,14 @@ void main()
     f.head = in_instLook.w & 0xFFu;
     const uint typePetals = max((in_instLook.w >> 8) & 0xFFu, 1u);
     f.petals = min(typePetals, flowerPetalSlots(lod));
-    f.petalScale = f.head == FLOWER_HEAD_RADIAL || f.head == FLOWER_HEAD_UMBEL
-        ? min(float(typePetals) / float(f.petals), 3.0) : sqrt(float(typePetals) / float(f.petals));
-    f.petalWidth = float((in_instLook.w >> 16) & 0xFFu) / 255.0;
-    f.open = (float(in_instLook.w >> 24) / 255.0 - 0.5) * PI;
-    const vec3 toRoot = f.root - u_viewPos;
+    const float petalRatio = float(typePetals) / float(f.petals);
+    f.petalScale = f.head == FLOWER_HEAD_RADIAL || f.head == FLOWER_HEAD_UMBEL ? min(petalRatio, 3.0) : sqrt(petalRatio);
+    f.petalWidth = float((in_instLook.w >> 16) & 0xFFu) * (1.0 / 255.0);
+    f.open = float(in_instLook.w >> 24) * (PI / 255.0) - 0.5 * PI; // -pi/2 .. pi/2
     const vec2 across = vec2(-toRoot.z, toRoot.x);
     const float acrossLen2 = dot(across, across);
     f.side = acrossLen2 > 1e-8 ? vec3(across.x, 0.0, across.y) * inversesqrt(acrossLen2) : vec3(1.0, 0.0, 0.0);
+
     if (f.head == FLOWER_HEAD_BELL)
         f.lean *= 2.5; // an arching stem
     else if (f.head == FLOWER_HEAD_REED)
@@ -320,6 +326,7 @@ void main()
     vec3 normal;
     float part, along;
     const vec3 pos = flowerVertex(f, uint(gl_VertexIndex), lod, ctrl, tip, normal, part, along);
+
 #ifdef CLUTTER_NEAR_SHADOW
     gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
@@ -328,11 +335,13 @@ void main()
     vec3 prevNormal;
     float prevPart, prevAlong;
     const vec3 prevPos = flowerVertex(f, uint(gl_VertexIndex), lod, ctrlPrev, tipPrev, prevNormal, prevPart, prevAlong);
+
     out_pos = pos;
     out_normal = normal;
     out_flower = vec4(part, along, 0.0, 0.0);
     out_prevWorldDelta = prevPos - pos;
     out_look = in_instLook.xy;
+
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #endif

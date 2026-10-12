@@ -116,9 +116,8 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
 vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunTint, float sunVis, vec3 L, vec3 inscatter, bool rtInRange)
 {
     const vec3 sigmaT = u_ocean_absorption;
-    const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
     const float range = u_ocean_rtRefractionRange;
-    const float tMax = min(4.6 / minSigma, range);
+    const float tMax = u_ocean_bodyTMax;
     SceneHit hit;
     // A ray the TLAS can answer is FINAL: a miss means no bottom within tMax, which is the in-scatter.
     // The height field stands in only where the TLAS cannot answer - rays off ("Ray cutoff dist"), or the
@@ -164,8 +163,6 @@ vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunT
 // floor oceanSampleShoreData returns, re-derived from the UBO).
 float oceanEdgeCover()
 {
-    if (u_terrainWater_oceanEdgeFade <= 0.0)
-        return 1.0;
     float filmY = u_ocean_seaLevel - u_ocean_depth;
     if (terrainHeightMapPresent())
     {
@@ -175,7 +172,7 @@ float oceanEdgeCover()
         {
             // The film's lift (instanced_indirect_terrain.vs.glsl): the centre view and the HEIGHT falloff.
             const float tf = clamp((distance(in_pos, u_views_viewPos[VIEW_CENTER].xyz) - u_terrainTess_fadeStart)
-                / max(u_terrainTess_fadeEnd - u_terrainTess_fadeStart, 1e-3), 0.0, 1.0);
+                * u_terrainTess_invFadeWidth, 0.0, 1.0);
             reliefDepth = u_terrainTess_depthGround * (1.0 - pow(tf, u_terrainTess_heightFalloff));
         }
         // The pool level sinks on slopes ("Film max slope"), as the film's: the ground normal's y from the
@@ -197,8 +194,8 @@ void main()
     // out_factor (the dual-source dst multiplier) is written AT each return, never as a default up here: an
     // early store plus the edge fade's dynamic one at the end kept the output live through the whole shader
     // (80/16 -> 80/32). Every early return (the debug views, the underside) writes it opaque: vec4(0).
-    const vec3 up = normalize(u_skyUp);
-    const vec3 L  = normalize(u_sunDirection.xyz);
+    const vec3 up = u_skyUp;
+    const vec3 L  = u_sunDirection.xyz;
     const vec3 toCam = u_viewPos - in_pos;
     const float viewDist = length(toCam);
     const vec3 V = toCam / max(viewDist, 1e-4);
@@ -286,8 +283,7 @@ void main()
             // exceeded the cap. NORMALISED so full lace (1) reaches the cap exactly: the bare knee
             // fm (1 - e^(-x / fm)) gave 1 - 1/e = 0.63 at full lace and cap 1 - a grey veil next to the
             // fully covering foam offshore, whatever the cap.
-            const float foamMax = max(u_ocean_shoreFoamMax, 1e-3);
-            shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax)) / (1.0 - exp(-1.0 / foamMax));
+            shoreFoam = u_ocean_shoreFoamMax * (1.0 - exp(-shoreFoam * u_ocean_shoreFoamInvMax)) * u_ocean_shoreFoamKneeNorm;
         }
     }
     const float foamW = clamp(max(foam, shoreFoam), 0.0, 1.0);
@@ -304,7 +300,7 @@ void main()
         if (depthDbg >= 0.0 && fract(depthDbg * 2.0) < 0.05)
             dbg.g = 1.0;
 #elif OCEAN_DEBUG_MODE == 2
-        dbg = vec3(swDbg / max(u_ocean_swashAmp, 1e-3));
+        dbg = vec3(swDbg / u_ocean_swashAmp);
 #elif OCEAN_DEBUG_MODE == 3
         dbg = vec3(oceanSurfaceWeight(depthDbg, shoreHW.y));
 #elif OCEAN_DEBUG_MODE == 5
@@ -448,7 +444,7 @@ void main()
     // near field falls onto the 0.02 alpha clamp: a mirror, plastic water up close. Not scaled by "Glint
     // filtering" (that trades away FILTERED variance; this band was never in the spectrum). Enters as
     // alpha^2 = 2 sigma^2, like the LEAN term.
-    const float perceptualRough = clamp(u_ocean_roughness, 0.02, 1.0);
+    const float perceptualRough = u_ocean_roughness;
     const float slopeVariance = 0.5 * (slopeVar.x + slopeVar.y) * (ns * ns);
     const float microVariance = u_ocean_microRoughness * (ns * ns);
     const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
@@ -475,9 +471,9 @@ void main()
     const float16_t foamH = float16_t(foamW);
     const f16vec3 sunTintH = f16vec3(sunTint);
 
-    // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest
-    // SSS is on - the subsurface glow must stay shadow-gated.
-    const bool sunUp = L.y > 0.0 && (NoL > float16_t(0.0) || u_ocean_sssStrength > 0.0 || foamW > 0.003);
+    // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests need it too: the crest SSS
+    // (always on, >= 0.01 on the CPU) must stay shadow-gated.
+    const bool sunUp = L.y > 0.0;
     const float16_t sunVis = float16_t(!sunUp ? 0.0
         : (u_rt_sunShadow > 0.5 ? rtShadowVisibility(in_pos + vec3(Nh) * 0.1, L, 0.05, 10000.0)
                                : sampleSunShadowHard(in_pos, vec3(Nh)))); // one tap: the moving water hides a penumbra
@@ -512,13 +508,11 @@ void main()
         C = oceanBubbleRadianceFrame(NoV, sunTintH * sunVis, ambientSky + f16vec3(u_ambientColor), inscatter) * milk;
     // Crest SSS: sun through back-lit crests glows the scatter color, scaled by height above the calm
     // line. In the transmitted body so Fresnel fades it at grazing like all subsurface light.
-    const float sssStrength = u_ocean_sssStrength;
-    if (sssStrength > 0.0)
     {
         const float16_t waveH = float16_t(max(in_pos.y - shoreHW.y, 0.0));
         const float16_t towardSun = pow(clamp(dot(Vh, -Lh), float16_t(0.0), float16_t(1.0)), float16_t(u_ocean_sssPower));
         const float16_t backSlope = float16_t(0.5) - float16_t(0.5) * dot(Lh, Nh);
-        C += f16vec3(u_ocean_scatterColor) * sunTintH * (float16_t(sssStrength) * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
+        C += f16vec3(u_ocean_scatterColor) * sunTintH * (float16_t(u_ocean_sssStrength) * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
     }
     // Sun glint: Cook-Torrance specular, shadow-gated. D * (Vis * NoL) is clamped to the half range
     // (<= ~2e4 at the 0.02 alpha floor), and so is the tinted glint.

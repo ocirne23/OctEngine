@@ -119,19 +119,16 @@ vec3 terrainTessPixelNormal(vec3 N, TerrainLayers L, out float strengthOut)
 	strengthOut = 0.0;
 	// The CENTRE view, as the TES (both VR eyes see the same displaced surface, so the same normal).
 	const float dist = distance(in_meshPos, u_views_viewPos[VIEW_CENTER].xyz);
-	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
-	if (dist >= fadeEnd || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
+	if (dist >= u_terrainTess_fadeEnd || u_terrain_splatBase < 0.0 || u_terrain_numGround < 1.0)
 		return N;
-	const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+	const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 	const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff, as the TES
 	const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
 	if (depth <= 1e-4)
 		return N;
 	strengthOut = strength;
-	// The TES's footprint (terrain_tess.tes.glsl): the projection's y scale is row 1 of the centre mvp's 3x3.
-	const mat4 centreMvp = u_views_mvp[VIEW_CENTER];
-	const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
-	const float e = max(max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0), 1e-3);
+	// The TES's footprint (terrain_tess.tes.glsl).
+	const float e = max(max(dist, u_terrainTess_freezeDistance) * u_terrainTess_spacingPerMetre, 1e-3);
 	const vec3 h3 = vec3(terrainReliefAt3(L, in_meshPos.xz, e, vec2(e, 0.0), vec2(0.0, e))); // at xz, xz + (e, 0), xz + (0, e)
 	const float invE = 1.0 / e;
 	const float hx = (h3.y - h3.x) * invE;
@@ -218,8 +215,8 @@ void main()
 		// from the uniform amount (0) to the patterned
 		// one, and fades out where the blotches shrink to a few pixels (the noise would shimmer).
 		// (The relief ALONE, tried before, tiles at the splat texture's scale: speckle, not drying patches.)
-		const float16_t darkBand = float16_t(max(u_terrainWater_darkeningEdge, 1e-3));
-		const float16_t band = float16_t(max(u_terrainWater_roughnessEdge, 1e-3));
+		const float16_t darkBand = float16_t(u_terrainWater_darkeningEdge);
+		const float16_t band = float16_t(u_terrainWater_roughnessEdge);
 		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
 		const float footprint = pixelWidth * u_terrainWater_invDryingPatternSize; // pattern cells per pixel
 		const float16_t patternW = float16_t(u_terrainWater_dryingPattern * (1.0 - smoothstep(0.15, 0.4, footprint)));
@@ -240,7 +237,7 @@ void main()
 		// UNDER water - its wet gloss would sit beneath the film's own surface - so it takes the underwater
 		// roughness, as under the live ocean (not a wetness gate: this follows the film's actual outline).
 		const float16_t poolOver = (float16_t(terrainPoolLevel(float(wet), coverN.y)) - surf.height)
-			* float16_t(u_terrainTess_depthGround / max(u_terrainWater_edgeFade, 1e-4));
+			* float16_t(u_terrainTess_depthGround / u_terrainWater_edgeFade);
 		const float16_t underFilm = clamp(poolOver, float16_t(0.0), one);
 		// "Wet roughness" with the gloss, "Underwater roughness" under the film and the live ocean.
 		const float16_t submerged = max(one - aboveLive, underFilm);
@@ -252,7 +249,6 @@ void main()
 		// roughness to a near-mirror alpha, on the wet gloss only (not under the film or the ocean). Small and
 		// sparse, so the overall specular barely changes. Faded out where the patches shrink toward a pixel:
 		// there they would only shimmer.
-		if (u_terrainWater_glintCoverage > 0.0)
 		{
 			const float glintFade = 1.0 - smoothstep(0.3, 0.7, pixelWidth * u_terrainWater_invGlintSize);
 			if (glintFade > 0.0)

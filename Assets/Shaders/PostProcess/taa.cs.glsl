@@ -74,7 +74,7 @@ void main()
     const vec3 current = currentRgba.rgb;
 
     // Pixels outside the editor viewport panel carry no reliable motion; pass straight through.
-    if (!insideViewport(uv) || u_post_taaFeedback <= 0.0)
+    if (!insideViewport(uv))
     {
         imageStore(u_resolveOut, px, vec4(current, 1.0));
         return;
@@ -165,7 +165,7 @@ void main()
     // Last frame's depth image is jittered by LAST frame's jitter (u_taaJitter.zw): the surface at unjittered
     // position prevUv lives at pixel prevUv + prevJitter, so fetch there and reconstruct at prevUv.
     const float prevDepth = texture(u_prevSceneDepth, prevUv + taaJitterUv(u_taaJitter.zw)).r;
-    float fb = mix(u_post_taaFeedback, min(u_post_taaFeedback, u_post_taaOceanFeedback), ocean);
+    float fb = mix(u_post_taaFeedback, u_post_taaOceanFeedback, ocean);
     const bool prevSky = prevDepth <= 0.0;
     if (sky != prevSky)
     {

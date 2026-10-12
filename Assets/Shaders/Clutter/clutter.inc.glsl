@@ -1,9 +1,7 @@
-// GROUND CLUTTER (ClutterPipeline; Docs/GroundClutterPlan.md): placed by clutter_cull.cs.glsl, drawn by clutter.vs/fs
-// (rigid meshes) and clutter_flower.vs/fs (flowers, built in the VS).
-// The structs MIRROR RendererVKLayout (Layout.ixx) - keep them in step.
-//
-// With CLUTTER_FRAME_BINDING defined: the CLUTTER FRAME (ClutterFrameGpu: the patch grid, the counts, the forest floor
-// map) at that binding, and clutterFloorAt.
+// GROUND CLUTTER (ClutterPipeline; Docs/GroundClutterPlan.md): placed by clutter_cull.cs.glsl, drawn by clutter.vs/fs (rigid
+// meshes) and clutter_flower.vs/fs (flowers, built in the VS). The structs MIRROR RendererVKLayout (Layout.ixx) - keep them
+// in step. With CLUTTER_FRAME_BINDING defined: the CLUTTER FRAME (ClutterFrameGpu: patch grid, counts, forest floor map) at
+// that binding, and clutterFloorAt.
 
 #ifndef CLUTTER_INC_GLSL
 #define CLUTTER_INC_GLSL
@@ -37,9 +35,8 @@ struct ClutterInstance // RendererVKLayout::ClutterInstanceGpu
 {
     vec4 posScale;
     uvec4 data; // xy quaternion (halves), z type | variant << 8 | lod << 16 | kind << 24, w hash
-    // x albedo0 (sqrt rgb, roughness), y albedo1 (sqrt rgb, spots),
-    // z half2(stem height, head size) - a rigid object: half2(its height m, 0),
-    // w head | petals << 8 | petal width << 16 | open << 24
+    // x albedo0 (sqrt rgb, roughness), y albedo1 (sqrt rgb, spots), z half2(stem height, head size) - a rigid object:
+    // half2(its height m, 0), w head | petals << 8 | petal width << 16 | open << 24
     uvec4 look;
 };
 
@@ -89,6 +86,7 @@ vec4 clutterFloorAt(vec2 xz)
     const float last = float(cf_floorDim - 1u);
     if (any(lessThan(g, vec2(0.0))) || any(greaterThan(g, vec2(last))))
         return vec4(0.0);
+
     const uvec2 i0 = min(uvec2(g), uvec2(cf_floorDim - 2u));
     const vec2 f = g - vec2(i0);
     const uint base = i0.y * cf_floorDim + i0.x;

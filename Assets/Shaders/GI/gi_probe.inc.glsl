@@ -168,9 +168,9 @@ float giWavePriority(ivec3 waveMin, int spacing)
     // cascade 0, 58 m in cascade 3 - so a coarse block counts as nearer than a fine one at the same centre
     // distance, and the same world distance gets a different priority per cascade.
     const float focusDist = (distance(center, u_sceneFocus.xyz) - radius);// * (GI_CASCADE_BASE_SPACING / s);
-    const float priorityDist = max(u_rt_giPriorityDist, 1.0);
-    const float viewBoost    = mix(max(u_rt_giPriorityFrustumWeight, 1.0), 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
-    return pow(max(focusDist / priorityDist, 1e-4), max(u_rt_giPriorityFalloff, 0.0)) / viewBoost; // pow(0, 0) is undefined
+    const float priorityDist = u_rt_giPriorityDist;
+    const float viewBoost    = mix(u_rt_giPriorityFrustumWeight, 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
+    return pow(max(focusDist / priorityDist, 1e-4), u_rt_giPriorityFalloff) / viewBoost; // pow(0, 0) is undefined
 }
 
 // Width of the cross-cascade fade band at a window's outer faces, in cells (a fraction of the narrowest dim).
@@ -209,7 +209,7 @@ uint giWaveUpdateInterval(int cascade, ivec3 waveMin, int spacing)
 {
     const float covered = giWaveCovered(cascade, waveMin) ? GI_COVERED_INTERVAL : 1.0;
     // The ceiling is numeric safety only (a float past 2^32 has no defined uint conversion), not a rate cap.
-    return max(uint(min(max(u_rt_giIntervalMult, 1.0) * giWavePriority(waveMin, spacing) * covered, 1.0e6)), 1u);
+    return max(uint(min(u_rt_giIntervalMult * giWavePriority(waveMin, spacing) * covered, 1.0e6)), 1u);
 }
 
 // THE trace schedule. The irradiance-volume bake re-bakes a voxel on exactly the frames a probe under it can
@@ -290,7 +290,7 @@ vec3 giEvalSHLinear(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec4 Yk)
 // a cloud: the probe field went darker than the area past it (giEvalSkySHCloud dims by direction).
 float giSunShare(float sunDC, vec3 eLin, vec3 n, vec4 Yk)
 {
-    return clamp(sunDC * Yk.x * (1.0 - dot(n, normalize(u_skyUp))) / max(dot(eLin, GI_LUMA_W), 1e-6), 0.0, 1.0);
+    return clamp(sunDC * Yk.x * (1.0 - dot(n, u_skyUp)) / max(dot(eLin, GI_LUMA_W), 1e-6), 0.0, 1.0);
 }
 
 // Cosine-convolved irradiance E(n) from SH-L1 coefficients. Diffuse exit radiance is albedo/PI * E(n).
@@ -350,7 +350,7 @@ vec3 giSkySHRadiance(vec3 d)
 // so without this every point out of the probe field got the camera's sunlit ground under a cloud shadow too.
 vec3 giSkySunIrradiance(vec3 n)
 {
-    const vec3 up = normalize(u_skyUp);
+    const vec3 up = u_skyUp;
     const float w = u_sky_groundHorizon;
     return skyGroundSun(up) * (PI * w + (1.0 - w) * (0.5 * PI) * (1.0 - dot(n, up)));
 }

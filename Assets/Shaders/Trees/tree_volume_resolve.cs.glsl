@@ -1,12 +1,12 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, the resolve (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as
-// two half floats per texel (tree_volume.inc.glsl). The march's hand-over reads them through the RG16F view, then
+// FAR-TREE VOLUME BAKE, the resolve (TreeVolumePipeline): the splat's fixed-point sums -> the extinction, IN PLACE as two
+// half floats per texel (tree_volume.inc.glsl). The march's hand-over reads them through the RG16F view, then
 // tree_volume_copy.cs moves them into the R16F density. A range of texel layers per dispatch.
 // THE COLUMN PASS (pc_columnPass, before any layer converts): the ROCK fraction = the column's rock sum / its sum over the
-// slices. A column with rocks mixes the CLIMATE'S BEDROCK into its colour by it - the terrain's rock materials' mean
-// colours, weighted by their climate boxes (terrain_splat.inc.glsl's box weight, over every rock entry) - and stores
-// 1 - the fraction in alpha (the march's rock lighting). Columns without rocks keep the splat's colour.
+// slices. A column with rocks mixes the CLIMATE'S BEDROCK into its colour by it - the terrain's rock materials' mean colours,
+// weighted by their climate boxes (terrain_splat.inc.glsl's box weight, over every rock entry) - and stores 1 - the fraction
+// in alpha (the march's rock lighting). Columns without rocks keep the splat's colour.
 
 #extension GL_EXT_scalar_block_layout : require
 
@@ -24,22 +24,24 @@ layout (binding = 6, r32ui) uniform readonly uimage2D u_floor;
 const int ROCK_TEXTURES = 8; // TreeVolumePipeline::ROCK_TEXTURES
 layout (binding = 7) uniform sampler2D u_rockTextures[ROCK_TEXTURES];
 
-// The push block: TreeVolumePipeline's ResolvePush (pc_vol_*: the bake's lockable values).
+// The push block: TreeVolumePipeline's ResolvePush (pc_vol_*: the bake's lockable values; pc_numRock: the bound rock textures).
 #include "push.generated.glsl"
 
 // The climate's bedrock colour at a point (y: the ground, for the temperature's lapse).
 vec3 bedrockAlbedo(vec2 xz, float y)
 {
     const int numGround = int(u_terrain_numGround);
-    const int numRock = min(int(u_terrain_numRock), ROCK_TEXTURES);
-    if (u_terrain_splatBase < 0.0 || numRock <= 0)
+    const int numRock = int(pc_numRock); // <= ROCK_TEXTURES, 0 without a splat set (the CPU)
+    if (numRock <= 0)
         return vec3(0.3, 0.29, 0.27); // no texture set
+
     vec2 climate = vec2(0.5);
     if (terrainHeightMapPresent())
     {
         const vec4 c = terrainClimateAt(xz);
         climate = vec2(clamp((terrainTemperatureAt(c, y) + 25.0) / 75.0, 0.0, 1.0), c.w);
     }
+
     const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
     vec3 sum = vec3(0.0);
     float weight = 0.0;
@@ -65,10 +67,12 @@ void main()
         imageStore(u_accum, p, uvec4(packHalf2x16(vec2(float(sums & 0xFFFFu), float(sums >> 16)) * (1.0 / TV_ACCUM_SCALE))));
         return;
     }
+
     // THE COLUMN PASS (one layer dispatched).
     const uint rock = imageLoad(u_rockSum, p.xy).r;
     if (rock == 0u)
         return;
+
     uint total = 0u;
     for (int z = 0; z < imageSize(u_accum).z; ++z)
     {
@@ -76,6 +80,7 @@ void main()
         total += (sums & 0xFFFFu) + (sums >> 16);
     }
     const float fraction = clamp(float(rock) / max(float(total), 1.0), 0.0, 1.0);
+
     const vec2 xz = tvTexelWorldXZ(p.xy, TV_PUSH_VOL);
     const uint floorBits = imageLoad(u_floor, p.xy).r;
     const float ground = floorBits != 0u ? tvFloorDecode(floorBits) : terrainHeightAt(xz);

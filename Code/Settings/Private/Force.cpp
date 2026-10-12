@@ -20,7 +20,7 @@ void Settings::registerForce(ForceFieldParams& params, ForceSystemSettings& s)
     // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
     Tweak::floatVar("Force/Shell", "Min screen radius (px)", &params.minShellPixels, 0.0f, 50.0f, 0.5f);
     Tweak::floatVar("Force/Shell", "Full-detail radius (px)", &params.shellFullResPixels, 8.0f, 1024.0f, 4.0f);
-    Tweak::floatVar("Force/Shell", "Sampled tier radius (m)", &params.sampledShellRadius, 0.0f, 100.0f, 1.0f);
+    Tweak::floatVar("Force/Shell", "Sampled tier radius (m)", &params.sampledShellRadius, 1.0f, 100.0f, 1.0f);
     Tweak::boolean("Force/Shell", "Union march", &params.unionMarch);
     Tweak::boolean("Force/Shell", "Union half res", &params.unionHalfRes); // rebuild-class (device idle)
     Tweak::boolean("Force/Shell", "Union jitter", &params.unionJitter);    // rebuild-class (shader define)
@@ -39,7 +39,7 @@ void Settings::registerForce(ForceFieldParams& params, ForceSystemSettings& s)
     Tweak::floatVar("Force/Glow", "Contact width", &params.contactGlowWidth, 0.01f, 1.0f);
     Tweak::floatVar("Force/Glow", "Contact wall alpha", &params.contactWallAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Junction smoothing", &params.junctionSmoothing, 0.0f, 2.0f);
-    Tweak::floatVar("Force/Glow", "Geometry distance (m)", &params.geoGlowDistance, 0.0f, 4.0f);
+    Tweak::floatVar("Force/Glow", "Geometry distance (m)", &params.geoGlowDistance, 0.01f, 4.0f);
     Tweak::boolean("Force/Glow", "Bubble light", &s.bubbleLight);
     Tweak::floatVar("Force/Glow", "Bubble light intensity", &s.bubbleLightIntensity, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Force/Glow", "Bubble light range (x radius)", &s.bubbleLightRange, 0.5f, 4.0f, 0.05f);

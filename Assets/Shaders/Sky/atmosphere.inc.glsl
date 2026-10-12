@@ -224,17 +224,15 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 // sunlit ground the probes actually see.
 // The below-horizon ground's direct-sun term (constant over directions). The GI trace counts it as SUN light
 // on its downward misses, so the lookup's cloud dimming reaches it (GI_SUN_V4 in gi_probe.inc.glsl).
-// up is always normalize(u_skyUp), so the ground's sun transmittance is the CPU's per-frame u_sunTransmittance.
+// up is always u_skyUp, so the whole term is the CPU's per-frame u_sky_groundSun; up is unused (kept for the callers).
 vec3 skyGroundSun(vec3 up)
 {
-	const vec3 sunDir = normalize(u_sunDirection.xyz);
-	return u_sky_groundAlbedo * u_sunTransmittance * u_sunColor.rgb
-		* (u_sunVisible * max(dot(sunDir, up), 0.0) / PI);
+	return u_sky_groundSun;
 }
 
 vec3 skyRadiance(vec3 dir)
 {
-	const vec3 up = normalize(u_skyUp);
+	const vec3 up = u_skyUp;
 	vec3 groundAtten = vec3(1.0);
 	vec3 groundSun = vec3(0.0);
 	float cosUp = dot(dir, up);
@@ -244,7 +242,7 @@ vec3 skyRadiance(vec3 dir)
 		groundAtten = u_sky_groundAlbedo;
 		groundSun = skyGroundSun(up);
 	}
-	vec3 radiance = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 4) * u_sunColor.rgb * u_sunVisible;
+	vec3 radiance = atmosphereScatterCheap(dir, u_sunDirection.xyz, up, 4) * u_sunColor.rgb * u_sunVisible;
 	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 		radiance += atmosphereScatterCheap(dir, up, up, 2) * u_sky_radiance;
 	return radiance * groundAtten + groundSun;
@@ -255,10 +253,10 @@ vec3 skyRadiance(vec3 dir)
 // reflections look along. No sun disc (the GGX glint is its reflection) and no ground term.
 vec3 mirrorSkyRadiance(vec3 dir)
 {
-	const vec3 up = normalize(u_skyUp);
+	const vec3 up = u_skyUp;
 	const float eclipse = u_sunVisible;
 	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-	vec3 color = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 12) * u_sunColor.rgb;
+	vec3 color = atmosphereScatterCheap(dir, u_sunDirection.xyz, up, 12) * u_sunColor.rgb;
 	color = mix(vec3(dot(color, luminosity)), color, 2.0 * (2.0 - eclipse)) * eclipse;
 	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 		color += atmosphereScatterCheap(dir, up, up, 4) * u_sky_radiance;

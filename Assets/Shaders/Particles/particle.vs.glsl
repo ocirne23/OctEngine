@@ -59,10 +59,10 @@ layout (binding = 9, std430) readonly buffer InGridTable
 // g = "Particles/Anisotropy" (u_particles_anisotropy), separate from the fog's.
 float particlePhase(float cosTheta)
 {
-    const float g = clamp(u_particles_anisotropy, -0.95, 0.95);
+    const float g = u_particles_anisotropy;
     const float g2 = g * g;
     const float denom = 1.0 + g2 - 2.0 * g * cosTheta;
-    return (1.0 - g2) / (denom * sqrt(max(denom, 1e-4)));
+    return (1.0 - g2) / (denom * sqrt(denom));
 }
 
 // One light's irradiance at a point (the forward pass's falloff + spot cone; area and tube lights as a
@@ -236,8 +236,7 @@ void main()
         // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
         // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
         const vec3 toEye = n;
-        const vec3 sunDir = normalize(u_sunDirection);
-        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-sunDir, toEye));
+        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittanceBilinear(world)) * particlePhase(dot(-u_sunDirection, toEye));
         // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
         // dust around it).
         const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);

@@ -64,7 +64,7 @@ void main()
     if (any(greaterThanEqual(id, uvec2(OCEAN_SPRAY_GRID))))
         return;
 
-    const float radius = max(u_ocean_sprayRadius, 1.0);
+    const float radius = u_ocean_sprayRadius;
     const float cell = 2.0 * radius / float(OCEAN_SPRAY_GRID);
     const vec2 origin = floor(u_sceneFocus.xz / cell) * cell - vec2(radius);
     uint seed = particlePcg(u_frameIndex * 0x9E3779B9u + id.x * 0x85EBCA6Bu + id.y * 0xC2B2AE35u);

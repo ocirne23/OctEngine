@@ -148,7 +148,7 @@ vec3 skyMiss(vec3 d) { return skyMapGISample(u_skyMap, d, int(SKY_MAP_LAYER_GI))
 // the loop's sky sums held there).
 vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
 {
-    const vec3  up    = normalize(u_skyUp);
+    const vec3  up    = u_skyUp;
     const float cosUp = dot(d, up);
     skyOpen = max(cosUp, 0.0);
     sunLuma = dot(skyGroundSun(up), GI_LUMA_W) * (cosUp < 0.0 ? 1.0 : u_sky_groundHorizon);
@@ -160,7 +160,7 @@ vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
 // correctly, unlike the camera-frustum-fit shadow maps.
 float sunVisibility(vec3 origin)
 {
-    return rtShadowVisibility(origin, normalize(u_sunDirection.xyz), 0.05, 1.0e4);
+    return rtShadowVisibility(origin, u_sunDirection.xyz, 0.05, 1.0e4);
 }
 
 // sunLuma = the luminance of the returned radiance's SUN part (the direct sun + its share of the multi-bounce),
@@ -264,7 +264,7 @@ void projectSkySH(uint lane)
     // virtual probe then matches the miss rays by construction - both see the same filtered bake.
     const vec3 dir = sampleSphere(lane, 64u, vec2(0.0));
     vec3 rad = skyMiss(dir);
-    const vec3 up = normalize(u_skyUp);
+    const vec3 up = u_skyUp;
     // Sky/Ground Horizon (u_sky_groundHorizon): on rolling terrain part of the above-horizon hemisphere is
     // other sunlit ground, not sky - real probes see that as geometry hits; blend the ground in.
     if (dot(dir, up) > 0.0)
@@ -378,7 +378,7 @@ void main()
     // probe layer that scrolled in is fresh.
     // LIVE even while "Ray tracing" is locked: a constant count unrolled the ray loop (96/0 -> 96/16); [[dont_unroll]]
     // cost the unlocked shader 96 -> 125 registers instead (2026-10-06).
-    const uint N = max(uint(UBO_LIVE_rt_giRaysPerProbe), 1u) * (fresh ? uint(GI_FRESH_RAY_MULT) : 1u);
+    const uint N = uint(UBO_LIVE_rt_giRaysPerProbe) *(fresh ? uint(GI_FRESH_RAY_MULT) : 1u);
     const float wsh = 4.0 * PI / float(N);
     // The per-visit shift of the ray lattice is an R2 (plastic-number Kronecker) SEQUENCE over the wave's
     // visit number, not a white hash: the temporal blend is an average over the last ~1/alpha visits, and
@@ -447,7 +447,7 @@ void main()
     // the temporal blend smooths it further. Bounces arrive for free through the prevE multi-bounce.
     if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
     {
-        const vec3 up = normalize(u_skyUp);
+        const vec3 up = u_skyUp;
         const float upVis = u_rt_skyRadiance > 0.5 ? rtShadowVisibility(probePos, up, 0.05, 1.0e4) : 1.0;
         const vec3 cd = u_sky_radiance * upVis;
         const vec4 Ysky = shBasisL1(up);

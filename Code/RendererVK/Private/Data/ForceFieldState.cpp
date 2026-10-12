@@ -7,7 +7,7 @@ import :ForceFieldState;
 void ForceFieldState::buildShellCull(bool enabled, const Frustum& centerFrustum, const glm::vec3& cameraPos, float pixelScale)
 {
     m_shellCull = ForceFieldPipeline::ShellCull{};
-    m_shellCull.sampledRadius = m_params.sampledShellRadius > 0.0f ? m_params.sampledShellRadius : FLT_MAX;
+    m_shellCull.sampledRadius = glm::max(m_params.sampledShellRadius, 1.0f); // the tweak min
     if (enabled)
     {
         m_shellCull.enabled = true;

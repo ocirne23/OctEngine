@@ -68,11 +68,12 @@ void main()
 		discard;
 	if (treeDistanceFaded(material.flags, pos)) // the crossfades (tree_fade.inc.glsl)
 		discard;
+
 	// After the discards: a cut-out pixel pays no shadow.
 	sunShadowFirstTree(pos, (material.flags & MATERIAL_FLAG_LEAF) != 0u);
 
-	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness,
-	// metalness and the normal-map decode + TBN.
+	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness, metalness and the
+	// normal-map decode + TBN.
 	float16_t roughness = float16_t(0.65);
 	float16_t metalness = float16_t(0.0);
 	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
@@ -83,8 +84,9 @@ void main()
 	}
 
 	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
-	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
-	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+
+	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal into the surface -
+	// reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
 	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], texUv).xyz);
 	f16vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
@@ -96,6 +98,7 @@ void main()
 	{
 		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
 	}
+
 	const f16vec3 geoN = f16vec3(in_normalV.xyz);
 	const f16vec3 T = f16vec3(in_tangent.xyz);
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
@@ -112,18 +115,16 @@ void main()
 		const float noV = dot(vec3(N), V);
 		if (noV < u_foliage_minNoV)
 			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
+
 		// TRANSMISSION: thin leaves let the sun through, tinted by their own colour - a diffuse back term saturate(-N.L)
-		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on
-		// the sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's
-		// shadow, which would leave the backlit view no glow.
-		if (u_foliage_transmission > 0.0)
-		{
-			const vec3 L = u_sunDirection.xyz;
-			const float back = max(-dot(vec3(N), L), 0.0);
-			const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
-			const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow);
-			transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
-		}
+		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on the
+		// sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's shadow,
+		// which would leave the backlit view no glow.
+		const vec3 L = u_sunDirection.xyz;
+		const float back = max(-dot(vec3(N), L), 0.0);
+		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
+		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow);
+		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
 	}
 
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));

@@ -7,9 +7,9 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_ray_query : enable
 
-// THE FLOWERS' surface (clutter_flower.vs.glsl): the lit core, two-sided, without RTAO (as the grass). The stem in the
-// grass's root -> tip colours, the petals in the type's colour (darker at the base), the centre in the second colour;
-// the sun through a petal from behind ("Flower transmission"). The near grass cascade shades it.
+// THE FLOWERS' surface (clutter_flower.vs.glsl): the lit core, two-sided, without RTAO (as the grass). The stem in the grass's
+// root -> tip colours, the petals in the type's colour (darker at the base), the centre in the second colour; the sun
+// through a petal from behind ("Flower transmission").
 
 #include "shared.inc.glsl"
 
@@ -59,8 +59,9 @@ void main()
     const float back = max(-dot(N, L), 0.0);
     const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * u_clutter_flowerTransmission * INV_PI, MEDIUMP_FLT_MAX));
     const vec3 V = normalize(u_viewPos - in_pos);
-    vec3 color = computeLitColor(in_pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_clutter_flowerRoughness),float16_t(0.0), float16_t(ao));
+    vec3 color = computeLitColor(in_pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_clutter_flowerRoughness), float16_t(0.0), float16_t(ao));
     color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+
     out_color = vec4(color, 1.0);
     out_motion = motionVector(in_prevWorldDelta);
 }

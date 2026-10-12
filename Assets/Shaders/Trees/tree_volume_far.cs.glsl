@@ -2,12 +2,11 @@
 
 // FAR-TREE VOLUME BAKE, the WORLD TREE RECORDS' second step (TreeVolumePipeline), one thread per column, after
 // tree_volume_records.cs summed the records' mass per column:
-// * THE FLOOR of a column with record mass, or next to one, that no tree floored: the ground under its centre (its
-//   chunk's height grid, the terrain map where that chunk holds none). The ring around the mass needs a floor too, as
-//   the splat's floor ring: the march filters the density over 2x2 columns but skips a column without a floor.
+// * THE FLOOR of a column with record mass, or next to one, that no tree floored: the ground under its centre (its chunk's
+//   height grid, the terrain map where that chunk holds none). The ring around the mass needs a floor too, as the splat's
+//   floor ring: the march filters the density over 2x2 columns but skips a column without a floor.
 // * THE SLICES: the column's mass x its type's height profile (the profile's mean over each slice), added to the
-//   accumulation in the splat's fixed point. A column without a type takes a neighbour's, else the first type with
-//   mass.
+//   accumulation in the splat's fixed point. A column without a type takes a neighbour's, else the first type with mass.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -60,6 +59,7 @@ void main()
     const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     if (col.x >= angularRes || col.y >= radialRes)
         return;
+
     // The floor: a column with mass or next to one (the ring).
     const uint amountBits = imageLoad(u_amount, col).r;
     bool massNear = amountBits != 0u;
@@ -71,6 +71,7 @@ void main()
     }
     if (!massNear)
         return;
+
     if (imageLoad(u_floor, col).r == 0u)
     {
         const vec2 xz = tvTexelWorldXZ(col, TV_PUSH_VOL);
@@ -100,6 +101,7 @@ void main()
     const float invBinH = float(PROFILE_BINS) / height;
     const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float amountPerH = float(amountBits) / (TV_AMOUNT_SCALE * sliceH); // x a slice's profile sum = its mean extinction
+
     for (uint s = 0u; s < pc_vol_slices; ++s)
     {
         // The profile's mean over the slice [s0, s1].

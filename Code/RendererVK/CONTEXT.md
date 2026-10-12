@@ -766,7 +766,7 @@ ground, so tinting it turned the near valley mist blue and still never matched t
   air`), on the scene and the far-tree layer. **Not on the sky** (it holds the whole ray) **and not on the clouds**
   (their march has its own `cloudAerialScatter`; with `sameFog` the cloud folds the scene's fog BEFORE the air is
   added).
-* **"Strength"** (`u_fog_aerialStrength`, default 1, 0 = off) scales the air density along the VIEW ray only (the sun
+* **"Strength"** (`u_fog_aerialStrength`, default 1, min 0.05: always on) scales the air density along the VIEW ray only (the sun
   still reaches each point through the unscaled atmosphere, as in the sky). **"Max distance (km)"**
   (`u_fog_aerialMaxDistance`, default 40): the LUT's depth; past it the scene keeps the last slice.
 * Not (yet): multiple scattering (the shadowed haze is too dark, as in the sky), the mirror rays' reflection fog,
@@ -922,7 +922,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
     sunset on distant clouds). The aerial perspective in front of the cloud is a 4-step single-scatter
     segment from the camera altitude (`cloudAerialScatter`; "Lighting/Aerial perspective strength",
     `u_clouds_aerialStrength`, 0-5, default 1: x the ADDED air light only - the cloud's dimming through the air stays
-    physical; 0 = off entirely, the cloud as lit with no air in front). The sun march runs only where the shadow map
+    physical; min 0.01: always on). The sun march runs only where the shadow map
     does not cover the sample (or "Self-shadow from map" is off - the default: the user keeps it off for
     quality; on, it measured march 0.63 -> 0.35 ms). **The sun march** (`cloudLightOpticalDepth`, "Light steps" 4,
     quadratic spacing) runs over a PER-SAMPLE reach: the way out of the sample's OWN layer toward the sun,
@@ -978,7 +978,7 @@ variant (`sky.fs.glsl`) draws NO clouds any more.
       subtracts its shadowed share: the froxels' GI-off ambient (the froxel's cloud tap), `giIrradiance`'s
       out-of-field fallback (its `cloudSunTransmittanceSoft`, so surfaces too), and the far field (weighted by
       `sunW`, no extra taps). The sun cone in the sky (aureole) is not part of it.
-    * **"Fog/Shaft haze"** (Density (1/m), default 0.001, 0 = off; Height (m), default 200; `u_fog_hazeDensity` / `hazeInvHeight`): the fog is a
+    * **"Fog/Shaft haze"** (Density (1/m), default 0.001, min 1e-5: always on; Height (m), default 200; `u_fog_hazeDensity` / `hazeInvHeight`): the fog is a
       HEIGHT fog, nearly gone a few tens of metres up, so shafts from the clouds showed only after cranking the base
       density. The haze is a separate thin medium reaching up to the clouds (its own scale height from the fog's
       height base) that adds SUNLIT in-scatter only (x "Sun scatter"): no extinction, no ambient - non-physical on
@@ -1423,7 +1423,7 @@ beyond the billboards, `Far start` to `Far end` — as ONE marched volume:
   dark vertical lines through the blobs, finer but as many at a higher angular resolution - the user's A/B,
   2026-10-03: they went with self shadow + normal + interior off), written
   by the splat shader's `TREE_FLOOR_PASS` variant before the splat, then **SMOOTHED** (`tree_volume_floor_smooth.cs`,
-  `Far floor smoothing` = the tent radius in columns, default 2, 0 = off; a rebake setting): a separable masked tent
+  `Far floor smoothing` = the tent radius in columns, default 2, min 1: always dispatched; a rebake setting): a separable masked tent
   blur, along the angle into `floorCover` (free after the floor pass), then along the radius back. A column without a
   floor keeps none and adds nothing to its neighbours. The dominant tree's base jumps whole floor steps between
   neighbouring columns on a slope, and with everything stored and read relative to it those steps showed as faint
@@ -2992,7 +2992,7 @@ the sand, so the two can never disagree.
     occlusion, and the mirror fog rule. Gated by `aboveLive` and off under the film (`underFilm`, below),
     so the two never both mirror the sky. Two sky-map fetches on reflecting pixels only. Its register
     cost is unmeasured.
-* **GLINTS** ("Glint size (m)" `u_terrainWater_invGlintSize`, "Glint coverage" `glintCoverage` (0 = off),
+* **GLINTS** ("Glint size (m)" `u_terrainWater_invGlintSize`, "Glint coverage" `glintCoverage` (min 0.01),
   "Glint roughness" `glintRoughness`): wet sand is not uniformly glossy. Beaded water and flat wet grains catch
   the sun in small sharp points.
   * Sparse world-anchored patches: a single-octave `terrainValueNoise` over glint-size cells, its peaks
@@ -3024,7 +3024,7 @@ the sand, so the two can never disagree.
   * The film's coverage depth is `max(pool depth, live water over the ground)`. So the film always covers
     the ocean's thin edge, also where the wetness has not caught up yet. The Beer-Lambert tint runs on the
     same value.
-  * "Ocean edge fade (m)" (`u_terrainWater_oceanEdgeFade`, 0 = off): **the ocean** (`ocean.fs.glsl`) fades out
+  * "Ocean edge fade (m)" (`u_terrainWater_oceanEdgeFade`, min 0.01): **the ocean** (`ocean.fs.glsl`) fades out
     over this much water column, so its mesh no longer ends in a hard line where it cuts the ground; the
     film under it carries the water. A real blend: the Ocean variant composites DUAL-SOURCE
     (out = ocean x a + scene x (1 - a)), and **the cull puts ocean instances in the TRANSPARENT sequence** so
@@ -3385,6 +3385,13 @@ and its place stay: neither says live or lockable.
   (`UboDeclaration.cpp`) makes the GLSL from the block's entries; the shader includer serves that text as
   **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes, and a copy for reading is written to
   `Assets/Local/Shaders/ubo.generated.glsl`.
+* **THE CPU GUARANTEES VALID VALUES; SHADERS DO NOT RE-GUARD THEM.** A lambda (or a push fill / lockable) returns unit
+  directions (`u_sunDirection`, `u_skyUp`, the wind), floors and clamps (also the ones a tweak range already implies:
+  the panel can type past a range), ordered start/end pairs, and DERIVED values for a guarded form (`<subject>_inv<X>`
+  reciprocals, `force_junctionInvK`) when 0 stays legal for the raw value's other readers. **A numeric tweak whose
+  default is above 0 has a min above 0**, and its lambda floors at that min - the GPU has no "0 = off / unlimited" branch
+  for it (2026-10-12). Explicit toggles (bools, mode enums) keep their branches.
+  No GPU `normalize` / `max(u_x, eps)` / bound on a UBO or push value; a wrong value may hard-crash the GPU.
 * **`u_present_*`** is what only `present()` knows (the tree range, the TLAS live count): source `UboPresent`, registered
   together (contiguous), skipped by `evaluate()`; present() runs `evaluatePresent()` and uploads that byte range alone
   (`presentBegin` / `presentSize`) after the begin-frame upload.
@@ -3517,8 +3524,8 @@ calls `reloadShaders()`.
   (`shaderRelaxedExtendedInstruction`) when the driver offers it.
 * **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
   `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
-  atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
-  normalized on the CPU, so shaders use it raw; PCSS takes 6 blocker GATHERS (`textureGather`: 2x2 texels
+  atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` and `u_skyUp` are
+  normalized on the CPU, so shaders use them raw; PCSS takes 6 blocker GATHERS (`textureGather`: 2x2 texels
   each, 24 texels, since 2026-09-28 for the L1TEX latency; 12 single-texel taps before, 16 before that) + 12
   filter taps. The gathers stay spread over the Vogel disk; the four texels of one gather are neighbours.
   **Umbra early-out** (`pcssCascade`, not the border path): all 24 search texels occluded AND one

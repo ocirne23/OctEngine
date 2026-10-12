@@ -1,11 +1,6 @@
-// The scene side of the water surfaces, shared by ocean.fs.glsl (EPipelineIndex::Ocean) and river.fs.glsl
-// (EPipelineIndex::River), which share one pipeline layout: the bindings, the BRDF terms, the sky lookups, and the
-// RAY-TRACED scene hit (traceScene) with its analytic shading (shadeHit).
-//
-// The includer provides, before the include:
-//   WATER_ABSORPTION          the water column's absorption (vec3, 1/m), for the ambient that reaches a hit
-// and after it, the bed albedo at a terrain hit (declared below):
-//   vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel)
+// The scene side of the water surfaces, shared by ocean.fs.glsl and river.fs.glsl (one pipeline layout): the bindings, the
+// BRDF terms, the sky lookups, and the RAY-TRACED scene hit (traceScene) with its analytic shading (shadeHit).
+// The includer defines WATER_ABSORPTION (vec3, 1/m) before the include, and the bed hook waterBedAlbedo (declared below).
 #ifndef WATER_SCENE_INC_GLSL
 #define WATER_SCENE_INC_GLSL
 
@@ -97,6 +92,7 @@ float D_GGX(float NoH, float a)
     const float d  = (NoH * a2 - NoH) * NoH + 1.0;
     return a2 / (PI * d * d);
 }
+
 float V_SmithGGX(float NoV, float NoL, float a) // height-correlated Smith, includes 1/(4 NoV NoL)
 {
     const float a2 = a * a;
@@ -104,14 +100,16 @@ float V_SmithGGX(float NoV, float NoL, float a) // height-correlated Smith, incl
     const float ggxL = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
     return 0.5 / max(ggxV + ggxL, 1e-5);
 }
+
 float F_Schlick(float u, float f0)
 {
     const float x = clamp(1.0 - u, 0.0, 1.0);
     const float x2 = x * x;
     return f0 + (1.0 - f0) * (x2 * x2 * x);
 }
-// Geometric specular AA. Weight / cap far below the usual 0.5 / 0.18: a full-strength term re-widens the lobe by
-// exactly what "Glint sharpness" reveals (cancelling the knob), and water wants a little sub-pixel shimmer.
+
+// Geometric specular AA. Weight / cap far below the usual 0.5 / 0.18: a full-strength term re-widens the lobe by exactly what
+// "Glint sharpness" reveals (cancelling the knob), and water wants a little sub-pixel shimmer.
 float normalVariance(vec3 N)
 {
     const vec3 dNdx = dFdx(N);
@@ -119,16 +117,16 @@ float normalVariance(vec3 N)
     return min(0.25 * (dot(dNdx, dNdx) + dot(dNdy, dNdy)), 0.03);
 }
 
-// Sky for the mirror ray: the per-frame bake of mirrorSkyRadiance (atmosphere.inc.glsl), one fetch. No sun disc: the
-// GGX glint is its reflection.
+// Sky for the mirror ray: the per-frame bake of mirrorSkyRadiance (atmosphere.inc.glsl). No sun disc: the GGX glint is its
+// reflection.
 vec3 reflectedSkyRadiance(vec3 dir)
 {
     return textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR), 0.0).rgb;
 }
-// The sky light on the water (body in-scatter, whitewater, the blurred reflection share): the HEMISPHERE average
-// E(n) / pi of the GI sky SH, one constant for every pixel. Not the sky map's zenith texel: with clouds that is the one
-// cloud over the camera. With GI off the SH is stale, so the zenith texel is the fallback.
-// The GI test reads the strength LIVE even while "Ray tracing" is locked: baked, the SH values lived across the traces.
+
+// The sky light on the water: the HEMISPHERE average E(n) / pi of the GI sky SH. Not the sky map's zenith texel (with clouds,
+// the one cloud over the camera), which is only the fallback when GI is off (the SH is stale then).
+// The strength is read LIVE even while "Ray tracing" is locked: baked, the SH values lived across the traces (registers).
 vec3 skyAmbientUp(vec3 up)
 {
     if (UBO_LIVE_rt_giStrength > 0.0)
@@ -145,8 +143,8 @@ struct SceneHit
     float waterLevel; // the water surface above the hit (the column shadeHit and the body attenuate through)
 };
 
-// The bed at a ray hit IS the terrain: the terrain shader's own splat, evaluated at the hit with the baked fields.
-// Albedo only (the water column blurs any detail normal away), at a ray-cone LOD (a ray hit has no derivatives).
+// The bed at a ray hit IS the terrain: the terrain's own splat at the hit, with the baked fields. Albedo only (the water
+// column blurs any detail normal away), at a ray-cone LOD (a ray hit has no derivatives).
 float g_seabedLod = 0.0;
 #define TERRAIN_SPLAT_TEX(tex, uv) textureLod(tex, uv, g_seabedLod)
 #define TERRAIN_MACRO_TEX(tex, uv) textureLod(tex, uv, 0.0) // metres-wide texels: the top mip is fine under the water
@@ -156,8 +154,8 @@ float g_seabedLod = 0.0;
 // The includer's bed at a terrain hit. It may set waterLevel from its own terrain fetch (one fetch serves both).
 vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel);
 
-// columnLevel: the water surface over an underwater ray's hits; < -1e29 for none (a ray above the water, or one whose
-// column waterBedAlbedo or the caller fills in).
+// columnLevel: the water surface over an underwater ray's hits; < -1e29 for none (a ray above the water, or one whose column
+// waterBedAlbedo or the caller fills in).
 bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneHit hit)
 {
     rayQueryEXT rq;
@@ -177,9 +175,9 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
     hit.albedo = vec3(0.3);
     hit.waterLevel = columnLevel;
 
-    // Interpolated normal / uv + material albedo, bounds-checked like rt_shadow.inc.glsl.
+    // Interpolated normal / uv + material albedo, bounds-checked like rt_shadow.inc.glsl. Bit 23 of the custom index = a
+    // baked TREE (gi_tlas_instances.cs.glsl): the index holds its material, it has no stream entry.
     const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
     const bool tree = (instanceIdx & 0x800000) != 0;
     const uint meshIdx = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
     if ((tree || uint(instanceIdx) < in_instances.length()) && meshIdx < in_meshInfos.length())
@@ -200,6 +198,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
                 hit.N = normalize(mat3(rayQueryGetIntersectionObjectToWorldEXT(rq, true)) * objN);
                 if (dot(hit.N, dir) > 0.0)
                     hit.N = -hit.N;
+
 
                 const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
                 if (materialIdx < in_materialInfos.length())

@@ -155,7 +155,7 @@ public:
     // From the "Ocean" settings (the same values the pushed OceanParams carry): the UBO's lockable ocean values and the
     // live work both read these.
     float getOceanWorldScale() const { return oceanWorldScaled(Globals::settings.ocean).s; }
-    float getOceanSwashAmp() const { return glm::clamp(Globals::settings.ocean.swashAmp, 0.0f, 4.0f); }
+    float getOceanSwashAmp() const { return glm::clamp(Globals::settings.ocean.swashAmp, 0.04f, 4.0f); } // the tweak min: the reach is >= 0.01
     float getOceanBubbleDepth() const { return glm::max(oceanWorldScaled(Globals::settings.ocean).bubbleDepth, 0.0f); }
     float getOceanBubbleBrightness() const { return glm::max(Globals::settings.ocean.bubbleBrightness, 0.0f); }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
@@ -512,9 +512,10 @@ private:
     // Not while upscaling: its velocity and gather assume one resolution for the depth and the resolved colour.
     bool motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1 && !upscaling(); }
     // Desktop only (level 0 comes from the left eye's histogram in VR); off = no chain, no level-0 writes.
-    bool bloomEnabled() const { return m_bloomParams.enabled && m_bloomParams.intensity > 0.0f && m_sceneViewCount == 1; }
-    // The bloom's share in the composite mix (u_post_bloomKeep / bloomScale): 0 while bloom is off.
-    float bloomMixIntensity() const { return bloomEnabled() ? m_bloomParams.intensity : 0.0f; }
+    bool bloomEnabled() const { return m_bloomParams.enabled && m_sceneViewCount == 1; }
+    // The bloom's share in the composite mix (u_post_bloomKeep / bloomScale): 0 while bloom is off. Floored at the
+    // tweak min (0.005).
+    float bloomMixIntensity() const { return bloomEnabled() ? glm::max(m_bloomParams.intensity, 0.005f) : 0.0f; }
     // CloudParams toggles -> the baked shader defines (buildLayoutPreamble). Returns whether they changed, so a
     // strength slider that only crosses 0 at the ends (Powder) reloads the shaders only when its define flips.
     bool syncCloudDefines()

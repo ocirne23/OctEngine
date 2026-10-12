@@ -39,6 +39,15 @@ namespace
     float skyBetaMie(const SkyParams& sky) { return 3.996e-6f * sky.mieScatter; }
     glm::vec3 skyMoonDirection(const SkyParams& sky) { return glm::normalize(sky.moonDirection); }
     float skyMoonCos(const SkyParams& sky) { return cosf(glm::radians(sky.moonSizeDeg)); }
+    // The sun direction and the up axis as the shaders get them: unit vectors (the shaders never normalize them).
+    glm::vec3 skySunDirection(const SkyParams& sky) { return glm::normalize(sky.sunDirection); }
+    glm::vec3 skyUpAxis(const SkyParams& sky) { return glm::normalize(sky.up); }
+    float skySunVisible(const SkyParams& sky)
+    {
+        return sunVisibleFraction(skySunDirection(sky), skyMoonDirection(sky), sky.sunAngularCos, skyMoonCos(sky), sky.sunGlow);
+    }
+    // sqrt(1 - cos^2) of a disc's angular radius, floored as the sky shader did (sky.fs.glsl's disc-local uv divides by it).
+    float discSin(float cosAngle, float floorSq) { return std::sqrt(glm::max(1.0f - cosAngle * cosAngle, floorSq)); }
 
     // The cloud noise periods (m, double: the live wind / evolve offsets wrap by them).
     double cloudWeatherPeriod(const CloudParams& c) { return glm::max((double)c.weatherSizeKm, 1.0) * 1000.0; }
@@ -50,7 +59,7 @@ namespace
     float cloudMainTop(const CloudParams& c) { return glm::max(c.top, cloudMainBottom(c) + 100.0f); }
     float cloudUpperBottom(const CloudParams& c) { return glm::max(c.upperBottom, 0.0f); }
     float cloudUpperTop(const CloudParams& c) { return glm::max(c.upperTop, cloudUpperBottom(c) + 50.0f); }
-    bool cloudUpperOn(const CloudParams& c) { return c.upperEnabled && c.upperDensity > 0.0f && c.upperCoverage > 0.0f; }
+    bool cloudUpperOn(const CloudParams& c) { return c.upperEnabled; } // density and coverage are >= 0.01 (the tweak mins)
     float cloudShellBottom(const CloudParams& c) { return cloudUpperOn(c) ? glm::min(cloudMainBottom(c), cloudUpperBottom(c)) : cloudMainBottom(c); }
     float cloudShellTop(const CloudParams& c) { return cloudUpperOn(c) ? glm::max(cloudMainTop(c), cloudUpperTop(c)) : cloudMainTop(c); }
     float cloudCoverage(const CloudParams& c) { return glm::clamp(c.coverage, 0.0f, 1.0f); }
@@ -82,12 +91,23 @@ namespace
             const float X0 = X * sinChi;
             return 2.0f * std::sqrt(1.5707963f * X0) * std::exp(glm::min(X - X0, 60.0f)) - c / ((c - 1.0f) * (-cosChi) + 1.0f);
         };
-        const float cosChi = glm::dot(glm::normalize(sky.up), sky.sunDirection); // pos = up * R, so cos(chi) = up . L
+        const float cosChi = glm::dot(skyUpAxis(sky), skySunDirection(sky)); // pos = up * R, so cos(chi) = up . L
         const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
         const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
         const glm::vec3 tau = skyBetaRayleigh(sky) * odR + glm::vec3(skyBetaMie(sky) * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
         return glm::exp(-tau);
     }
+
+    glm::vec3 oceanCascadeSizes(const OceanSettings& o) { return glm::max(oceanWorldScaled(o).cascadeSizes, glm::vec3(1.0f)); }
+    float oceanRefractionRange(const OceanSettings& o) { return glm::max(oceanWorldScaled(o).rtRefractionRange, 1.0f); } // the tweak's own minimum
+    // A water body's refraction ray length: ~99 % extinction in its clearest channel, at most the refraction range.
+    float waterBodyTMax(const glm::vec3& absorption, float range)
+    {
+        return glm::min(4.6f / glm::max(glm::min(absorption.x, glm::min(absorption.y, absorption.z)), 1e-3f), range);
+    }
+
+    float terrainTessFadeStart(const TerrainSettings& t) { return glm::max(t.texTessFadeStart, 0.0f); }
+    float terrainTessFadeEnd(const TerrainSettings& t) { return glm::max(t.texTessFadeEnd, terrainTessFadeStart(t) + 0.1f); }
 
     float terrainFilmMaxSlopeDeg(const TerrainSettings& w) { return glm::clamp(w.wetFilmMaxSlope, 0.0f, 90.0f); }
     float terrainFilmFlowMinSlopeRad(const TerrainSettings& w) { return glm::radians(glm::clamp(w.wetFilmFlowMinSlope, 0.0f, 80.0f)); }
@@ -455,25 +475,25 @@ void Renderer::buildUboForce()
 
     // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
     // support boxes (+ margin) - the FIXED texel grid's resolution then self-adjusts to the active
-    // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
+    // spread. No qualifying emitter = no bake dispatch and the FS branch stays cold. The radius is >= 1 m (the tweak min).
     glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
-    if (force.sampledShellRadius > 0.0f)
-        for (const RendererVKLayout::ForceEmitterGpu& e : m_force.getEmitters())
-        {
-            if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
-                || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
-                || e.outputParams.y <= 0.0f
-                || RendererVKLayout::forceEmitterVisibleRadius(e) < force.sampledShellRadius)
-                continue;
-            // The proxy's support AABB (the forceEmitterBounds rule): the output line +- side.
-            const float R = e.posReach.w;
-            const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
-            const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
-            const glm::vec3 a = glm::vec3(e.posReach);
-            const glm::vec3 b = a + glm::vec3(e.dirFocus) * R;
-            bakeLo = glm::min(bakeLo, glm::min(a, b) - side);
-            bakeHi = glm::max(bakeHi, glm::max(a, b) + side);
-        }
+    const float sampledRadius = glm::max(force.sampledShellRadius, 1.0f);
+    for (const RendererVKLayout::ForceEmitterGpu& e : m_force.getEmitters())
+    {
+        if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
+            || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
+            || e.outputParams.y <= 0.0f
+            || RendererVKLayout::forceEmitterVisibleRadius(e) < sampledRadius)
+            continue;
+        // The proxy's support AABB (the forceEmitterBounds rule): the output line +- side.
+        const float R = e.posReach.w;
+        const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
+        const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
+        const glm::vec3 a = glm::vec3(e.posReach);
+        const glm::vec3 b = a + glm::vec3(e.dirFocus) * R;
+        bakeLo = glm::min(bakeLo, glm::min(a, b) - side);
+        bakeHi = glm::max(bakeHi, glm::max(a, b) + side);
+    }
     // VIEW FOOTPRINT CLIP (XZ): the volume only has to cover what is on screen. The four corner
     // rays hit the union's height band at eight points; their XZ box (+ "Volume view margin") clips
     // the fit, so the fixed texel grid follows the zoom instead of stretching over every large
@@ -573,6 +593,14 @@ void Renderer::buildUboTerrain()
 void Renderer::registerUboValues(UboBlock& list)
 {
     using namespace RendererVKLayout;
+    // Live values several sections derive from: the swash run-up reach (from the wave-amplitude readback) and the
+    // waterline band gating the fog's FFT wave taps (fog_waveBand).
+    const auto oceanSwashReach = [this] { return getOceanSwashAmp() * (m_oceanSimPipeline.getWaveTrough() + 0.25f); };
+    const auto oceanWaveBand = [this]
+    {
+        const float waveTrough = m_oceanSimPipeline.getWaveTrough();
+        return m_oceanSimPipeline.isOceanEnabled() ? glm::max(waveTrough * 2.0f + 0.5f, getOceanSwashAmp() * (waveTrough + 0.25f)) : 0.0f;
+    };
     {
         // ---- The frame: the views (m_views: [VIEW_CENTER] = the centre / combined view - the only one on desktop; in VR
         // sized to the union of both eyes' FOV, so the shared world-space passes cover what either eye sees - [1] = left
@@ -588,6 +616,7 @@ void Renderer::registerUboValues(UboBlock& list)
         // The render target (px) and 1 / it; the render rect's min and size in [0,1] of the target.
         list.add("screenSize", [this] { const glm::vec2 s(m_renderExtent); return glm::vec4(s, 1.0f / s); }, UboLive);
         list.add("viewportRect", [this] { const glm::vec2 s(m_renderExtent); return glm::vec4(glm::vec2(m_renderRect.min) / s, glm::vec2(m_renderRect.getSize()) / s); }, UboLive);
+        list.add("viewportInvSize", [this] { const glm::vec2 s(m_renderExtent); return 1.0f / (glm::vec2(m_renderRect.getSize()) / s); }, UboLive); // 1 / viewportRect.zw
         list.add("taaJitter", [this] { return m_taaJitter; }, UboLive);         // xy = this frame's TAA jitter (NDC), zw = last frame's
         list.add("frameIndex", [this] { return m_uboFrameIndex; }, UboLive);    // monotonic (RNG / temporal rotation)
         list.add("timeSeconds", [this] { return m_frameTime; }, UboLive);       // SIM time (s): stops with the global pause
@@ -597,34 +626,43 @@ void Renderer::registerUboValues(UboBlock& list)
     {
         // ---- Sky ("Sky")
         const SkyParams& s = Globals::settings.sky;
-        list.add("sunDirection", [&s] { return s.sunDirection; }, UboLive); // normalized, toward the sun
+        list.add("sunDirection", [&s] { return skySunDirection(s); }, UboLive); // unit, toward the sun
         list.add("sunColor", [&s] { return s.sunColor * s.sunIntensity; }, UboLive);
         list.add("sunTransmittance", [&s] { return sunTransmittance(s); }, UboLive);
         // Solar eclipse: the moon-covered sun fraction, so every sun consumer dims consistently.
-        list.add("sunVisible", [&s] { return sunVisibleFraction(s.sunDirection, skyMoonDirection(s), s.sunAngularCos, skyMoonCos(s), s.sunGlow); }, UboLive);
-        list.add("skyUp", [&s] { return s.up; }, UboLive);
+        list.add("sunVisible", [&s] { return skySunVisible(s); }, UboLive);
+        list.add("skyUp", [&s] { return skyUpAxis(s); }, UboLive); // unit
+        // The below-horizon ground's direct sun (atmosphere.inc.glsl skyGroundSun, constant over directions).
+        list.add("sky_groundSun", [&s]
+            {
+                const float cosSun = glm::max(glm::dot(skySunDirection(s), skyUpAxis(s)), 0.0f);
+                return s.groundColor * s.groundIntensity * sunTransmittance(s) * (s.sunColor * s.sunIntensity) * (skySunVisible(s) * cosSun / glm::pi<float>());
+            }, UboLive);
         list.add("ambientColor", [&s] { return s.ambientColor * s.ambientIntensity; }, UboLive);
         list.add("sky_betaRayleigh", [&] { return skyBetaRayleigh(s); }, s.rayleighScatter);
         list.add("sky_betaMie", [&] { return skyBetaMie(s); }, s.mieScatter);
         list.add("sky_radiance", [&] { return s.skyRadianceColor * s.skyRadianceIntensity; }, s.skyRadianceColor, s.skyRadianceIntensity);
         list.add("sky_sunAngularCos", s.sunAngularCos);
+        list.add("sky_sunDiscSin", [&] { return discSin(s.sunAngularCos, 1e-12f); }, s.sunAngularCos);
         list.add("sky_groundAlbedo", [&] { return s.groundColor * s.groundIntensity; }, s.groundColor, s.groundIntensity);
         list.add("sky_groundHorizon", [&] { return glm::clamp(s.groundHorizon, 0.0f, 1.0f); }, s.groundHorizon);
         list.add("sky_moonDirection", [&] { return skyMoonDirection(s); }, s.moonDirection);
         list.add("sky_moonCos", [&] { return skyMoonCos(s); }, s.moonSizeDeg);
+        list.add("sky_moonSin", [&] { return discSin(skyMoonCos(s), 1e-8f); }, s.moonSizeDeg);
         list.add("sky_nebulaAxis", [&] { return glm::normalize(s.nebulaAxis); }, s.nebulaAxis);
-        list.add("sky_sunGlow", s.sunGlow);
+        // Sun glow, moon brightness, star density and nebula intensity: floored at their tweak mins (0.01) - no GPU off-test.
+        list.add("sky_sunGlow", [&] { return glm::max(s.sunGlow, 0.01f); }, s.sunGlow);
         list.add("sky_scatterBoost", s.scatterBoost);
         list.add("sky_mieG", s.mieG);
-        list.add("sky_moonBrightness", s.moonBrightness);
-        list.add("sky_starDensity", s.starDensity);
+        list.add("sky_moonBrightness", [&] { return glm::max(s.moonBrightness, 0.01f); }, s.moonBrightness);
+        list.add("sky_starDensity", [&] { return glm::max(s.starDensity, 0.01f); }, s.starDensity);
         list.add("sky_starSize", s.starSize);
         list.add("sky_starSizeVariation", s.starSizeVar);
         list.add("sky_starBrightness", s.starBrightness);
         list.add("sky_starColorVariation", s.starColorVar);
-        list.add("sky_nebulaIntensity", s.nebulaIntensity);
+        list.add("sky_nebulaIntensity", [&] { return glm::max(s.nebulaIntensity, 0.01f); }, s.nebulaIntensity);
         list.add("sky_nebulaScale", s.nebulaScale);
-        list.add("sky_nebulaBandWidth", s.nebulaBandWidth);
+        list.add("sky_nebulaBandWidth", [&] { return glm::max(s.nebulaBandWidth, 0.01f); }, s.nebulaBandWidth);
         list.add("sky_nebulaDust", s.nebulaDust);
         list.add("sky_rayleighHeight", s.rayleighHeight);
         list.add("sky_mieHeight", s.mieHeight);
@@ -666,29 +704,34 @@ void Renderer::registerUboValues(UboBlock& list)
             }, UboLive);
         list.add("clouds_detailDrift", [this] { return (float)m_cloudEvolveOffset; }, UboLive); // the detail's vertical drift (m, wrapped)
         list.add("clouds_shellBottom", [&] { return cloudShellBottom(c); },
-            c.bottom, c.upperBottom, c.upperEnabled, c.upperDensity, c.upperCoverage, UboLive);
+            c.bottom, c.upperBottom, c.upperEnabled, UboLive);
         list.add("clouds_shellTop", [&] { return cloudShellTop(c); },
-            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, c.upperDensity, c.upperCoverage, UboLive);
+            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, UboLive);
         list.add("clouds_invShellHeight", [&] { return 1.0f / (cloudShellTop(c) - cloudShellBottom(c)); },
-            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, c.upperDensity, c.upperCoverage, UboLive);
+            c.bottom, c.top, c.upperBottom, c.upperTop, c.upperEnabled, UboLive);
         list.add("clouds_coverage", [&] { return cloudCoverage(c); }, c.coverage, UboLive);
         list.add("clouds_mainBottom", [&] { return cloudMainBottom(c); }, c.bottom);
         list.add("clouds_mainInvHeight", [&] { return 1.0f / (cloudMainTop(c) - cloudMainBottom(c)); }, c.bottom, c.top);
-        list.add("clouds_upperEnabled", [&] { return cloudUpperOn(c) ? 1.0f : 0.0f; }, c.upperEnabled, c.upperDensity, c.upperCoverage);
-        list.add("clouds_upperDensity", c.upperDensity);
+        list.add("clouds_mainTop", [&] { return cloudMainTop(c); }, c.bottom, c.top);
+        // The sun march's reach and the aerial steps' sun path divide by the sun's elevation, floored (a low sun).
+        const SkyParams& sky = Globals::settings.sky;
+        list.add("clouds_invSunUpLight", [&sky] { return 1.0f / glm::max(skySunDirection(sky).y, 0.02f); }, UboLive);
+        list.add("clouds_invSunUpAir", [&sky] { return 1.0f / glm::max(skySunDirection(sky).y, 0.05f); }, UboLive);
+        list.add("clouds_upperEnabled", [&] { return cloudUpperOn(c) ? 1.0f : 0.0f; }, c.upperEnabled);
+        list.add("clouds_upperDensity", [&] { return glm::max(c.upperDensity, 0.01f); }, c.upperDensity); // the tweak min
         list.add("clouds_upperBottom", [&] { return cloudUpperBottom(c); }, c.upperBottom);
         list.add("clouds_upperInvHeight", [&] { return 1.0f / (cloudUpperTop(c) - cloudUpperBottom(c)); }, c.upperBottom, c.upperTop);
         // The upper layer's coverage is a multiplier on the main layer's (its density already is one: the shader adds
         // it x upperDensity to the main density before "Density (1/m)").
-        list.add("clouds_upperCoverage", [&] { return glm::clamp(c.upperCoverage * c.coverage, 0.0f, 1.0f); }, c.upperCoverage, c.coverage);
+        list.add("clouds_upperCoverage", [&] { return glm::clamp(glm::max(c.upperCoverage, 0.01f) * c.coverage, 0.0f, 1.0f); }, c.upperCoverage, c.coverage);
         list.add("clouds_upperType", [&] { return glm::clamp(c.upperType, 0.0f, 1.0f); }, c.upperType);
         list.add("clouds_upperHeightVariation", [&] { return glm::clamp(c.upperHeightVariation, 0.0f, 0.8f); }, c.upperHeightVariation);
-        list.add("clouds_shelfCount", [&] { return (float)glm::clamp(c.shelfCount, 0, 3); }, c.shelfCount);
+        list.add("clouds_shelfCount", [&] { return (float)glm::clamp(c.shelfCount, 1, 3); }, c.shelfCount); // the tweak range
         list.add("clouds_shelfStrength", [&] { return glm::max(c.shelfStrength, 0.0f); }, c.shelfStrength);
         list.add("clouds_shelfHalfThickness", [&] { return glm::clamp(c.shelfThickness, 0.005f, 0.2f); }, c.shelfThickness);
         // The shelf stack is CENTRED in the layer: the lowest at 0.5 - (count - 1) / 2 x spacing.
         list.add("clouds_shelfLowest",
-            [&] { return 0.5f - 0.5f * (float)glm::max(glm::clamp(c.shelfCount, 0, 3) - 1, 0) * glm::max(c.shelfSpacing, 0.0f); },
+            [&] { return 0.5f - 0.5f * (float)(glm::clamp(c.shelfCount, 1, 3) - 1) * glm::max(c.shelfSpacing, 0.0f); },
             c.shelfCount, c.shelfSpacing);
         list.add("clouds_shelfSpacing", [&] { return glm::max(c.shelfSpacing, 0.0f); }, c.shelfSpacing);
         list.add("clouds_invWeatherPeriod", [&] { return (float)(1.0 / cloudWeatherPeriod(c)); }, c.weatherSizeKm);
@@ -711,7 +754,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("clouds_baseSharpness", [&] { return glm::clamp(c.baseSharpness, 0.0f, 1.0f); }, c.baseSharpness);
         list.add("clouds_towerCoreLink", [&] { return glm::clamp(c.towerCoreLink, 0.0f, 1.0f); }, c.towerCoreLink);
         list.add("clouds_minStep", [&] { return glm::max(c.minStep, 0.25f); }, c.minStep);
-        list.add("clouds_aerialStrength", [&] { return glm::max(c.aerialStrength, 0.0f); }, c.aerialStrength);
+        list.add("clouds_aerialStrength", [&] { return glm::max(c.aerialStrength, 0.01f); }, c.aerialStrength); // the tweak min
         list.add("clouds_giSkyObserverRadius", [&] { return glm::max(c.giSkyObserverRadius, 0.0f); }, c.giSkyObserverRadius);
         // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
         // Scattering Function for Fog and Cloud Rendering"), valid for diameters 5 .. 50 um.
@@ -727,13 +770,22 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("clouds_ambient", c.ambient);
         list.add("clouds_groundAlbedo", c.groundAlbedo);
         list.add("clouds_powder", [&] { return c.powder; }); // no tweak (its registration is commented out): a constant
-        list.add("clouds_multiScatterAttenuation", c.multiScatter);
+        list.add("clouds_multiScatterAttenuation", [&] { return glm::clamp(c.multiScatter, 0.0f, 0.95f); }, c.multiScatter);
+        // The sun march's early out (cloud_raymarch.inc.glsl): the slowest multi-scatter octave, exp(-od min(tailExt, ms)),
+        // is under 0.1 % past od = 7 / that (normalized density x metres).
+        list.add("clouds_sunOdCut", [&]
+            {
+                const float ms = glm::clamp(c.multiScatter, 0.0f, 0.95f);
+                const float tailExt = std::pow(ms, 1.0f + 1.0f / (1.0f - ms));
+                return 7.0f / (glm::max(glm::min(tailExt, ms), 0.02f) * c.densityScale);
+            }, c.multiScatter, c.densityScale);
         list.add("clouds_multiScatterStrength", [&] { return glm::max(c.multiScatterStrength, 0.0f); }, c.multiScatterStrength);
-        list.add("clouds_maxSteps", [&] { return (float)glm::max(c.maxSteps, 1); }, c.maxSteps);
+        list.add("clouds_maxSteps", [&] { return (float)glm::max(c.maxSteps, 16); }, c.maxSteps); // the tweak's minimum
         list.add("clouds_maxDistance", [&] { return c.maxDistanceKm * 1000.0f; }, c.maxDistanceKm);
         list.add("clouds_nearStep", [&] { return glm::max(c.nearStep, 0.5f); }, c.nearStep);
-        list.add("clouds_stepsPerRay", [&] { return (float)glm::max(c.stepsPerRay, 1); }, c.stepsPerRay);
-        list.add("clouds_lightSteps", [&] { return (float)glm::max(c.lightSteps, 0); }, c.lightSteps);
+        list.add("clouds_stepsPerRay", [&] { return (float)glm::max(c.stepsPerRay, 16); }, c.stepsPerRay);   // the tweak's minimum
+        list.add("clouds_lightSteps", [&] { return (float)glm::max(c.lightSteps, 1); }, c.lightSteps); // the tweak min
+        list.add("clouds_invLightSteps", [&] { return 1.0f / (float)glm::max(c.lightSteps, 1); }, c.lightSteps);
         list.add("clouds_lightDistance", c.lightDistance);
         list.add("clouds_temporalBlend", [&] { return glm::clamp(c.temporalBlend, 0.0f, 0.98f); }, c.temporalBlend);
         list.add("clouds_invDetailDistance", [&] { return 1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f); }, c.detailDistanceKm);
@@ -752,11 +804,24 @@ void Renderer::registerUboValues(UboBlock& list)
         // radius (texels) per unit of depth gap.
         list.addArray("cascadeViewProj", NUM_SHADOW_CASCADES, [this](uint32 i) { return m_sunCascadeViewProj[i]; }, UboLive);
         list.add("cascadeSunSizeTexels", [this] { return m_cascadeSunSizeTexels; }, UboLive);
+        // Per cascade: the cross-fade band into the next one (shadows.inc.glsl sunCascadeBlend) - the last
+        // CASCADE_BLEND of its range - as its start (focus distance) and 1 / its width.
+        const auto cascadeBand = [this](uint32 c)
+        {
+            constexpr float CASCADE_BLEND = 0.25f;
+            const float splitFar = m_sunCascadeViewProj[c][0][3];
+            const float prevSplit = c > 0 ? m_sunCascadeViewProj[c - 1][0][3] : 0.0f;
+            const float start = glm::mix(prevSplit, splitFar, 1.0f - CASCADE_BLEND);
+            return glm::vec2(start, 1.0f / glm::max(splitFar - start, 1e-4f));
+        };
+        static_assert(NUM_SHADOW_CASCADES == 4, "cascadeBlendStart / cascadeBlendInvWidth are one vec4");
+        list.add("cascadeBlendStart", [cascadeBand] { return glm::vec4(cascadeBand(0).x, cascadeBand(1).x, cascadeBand(2).x, cascadeBand(3).x); }, UboLive);
+        list.add("cascadeBlendInvWidth", [cascadeBand] { return glm::vec4(cascadeBand(0).y, cascadeBand(1).y, cascadeBand(2).y, cascadeBand(3).y); }, UboLive);
         list.addArray("cascadePlanes", NUM_SHADOW_CASCADES * 6, [this](uint32 i) { return m_cascadePlanes[i]; }, UboLive);
         list.add("shadow_depthBias", sh.depthBias);
         list.add("shadow_normalBias", sh.normalBias);
         list.add("shadow_invResolution", [] { return 1.0f / (float)RendererVKLayout::SHADOW_MAP_RESOLUTION; });
-        list.add("shadow_terrainMarchStart", [&] { return glm::max(sh.terrainMarchStart, 0.0f); }, sh.terrainMarchStart);
+        list.add("shadow_terrainMarchStart", [&] { return glm::max(sh.terrainMarchStart, 50.0f); }, sh.terrainMarchStart); // the tweak min
         list.add("shadow_terrainMarchBias", [&] { return glm::max(sh.terrainMarchBias, 1.0f); }, sh.terrainMarchBias);
         list.add("shadow_terrainMarchSpread", [&] { return glm::max(sh.terrainMarchSpread, 0.002f); }, sh.terrainMarchSpread);
     }
@@ -773,20 +838,23 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("rt_sunShadow", [&] { return rtSunShadowActive(r) ? 1.0f : 0.0f; }, r.enabled, r.rtSunShadow);
         list.add("rt_lightShadows", [&] { return r.enabled && r.rtLightShadows ? 1.0f : 0.0f; }, r.enabled, r.rtLightShadows);
         list.add("rt_skyRadiance", [&] { return r.enabled && r.rtSkyRadiance ? 1.0f : 0.0f; }, r.enabled, r.rtSkyRadiance);
-        list.add("rt_sunShadowRays", r.sunShadowRays);
+        list.add("rt_sunShadowRays", [&] { return (float)glm::clamp(r.sunShadowRays, 1, 8); }, r.sunShadowRays);
         list.add("rt_aoEnabled", [&] { return r.enabled && ao.enabled ? 1.0f : 0.0f; }, r.enabled, ao.enabled);
         // Past the RTAO max distance the trace writes exactly (N, 1.0) (rtao.cs.glsl early-out), so the forward pass
-        // skips its depth-aware AO upsample there and uses those values directly.
-        list.add("rt_aoMaxDistance", ao.maxDistance);
+        // skips its depth-aware AO upsample there and uses those values directly. Floored at the tweak min (1 m).
+        const auto aoMaxDistance = [&ao] { return glm::max(ao.maxDistance, 1.0f); };
+        list.add("rt_aoMaxDistance", aoMaxDistance, ao.maxDistance);
         list.add("rt_aoFadeStart", ao.fadeStart);
+        list.add("rt_aoFadeInvRange", [&ao, aoMaxDistance] { return 1.0f / glm::max(aoMaxDistance() - ao.fadeStart, 1e-3f); }, ao.maxDistance, ao.fadeStart);
         list.add("rt_aoRays", [&] { return (float)oc::max(ao.rays, 1); }, ao.rays);
-        list.add("rt_aoRadius", ao.radius);
-        list.add("rt_aoPower", ao.power);
+        // Floored: the rays' tMax, which must stay above their tMin (0.01 m).
+        list.add("rt_aoRadius", [&] { return glm::max(ao.radius, 0.02f); }, ao.radius);
+        list.add("rt_aoPower", [&] { return glm::max(ao.power, 0.05f); }, ao.power); // the tweak min: pow(0, 0) is undefined
         list.add("rt_aoIntensity", ao.intensity);
         list.add("rt_aoNormalBias", ao.normalBias);
         list.add("rt_aoDistanceBias", ao.distanceBias);
         list.add("rt_aoMaxHistory", ao.maxHistory);
-        list.add("rt_aoBlurRadius", [&] { return (float)oc::max(ao.blurRadius, 0); }, ao.blurRadius);
+        list.add("rt_aoBlurRadius", [&] { return (float)oc::max(ao.blurRadius, 1); }, ao.blurRadius); // the tweak min: the spatial pass always runs
         m_giProbePipeline.registerUboFields(list, r.enabled, r.giEnabled); // rt_gi*: its tweaks are private
     }
     {
@@ -795,49 +863,55 @@ void Renderer::registerUboValues(UboBlock& list)
         // Live: what rides the ocean (its readback, its world scale). The waterline band gating the fog's FFT wave taps
         // (0 = ocean off): froxel segments outside +-band of the calm level are trivially above / below any wave. It also
         // covers the swash RUN-UP (ocean_swashReach's reach).
-        list.add("fog_waveBand", [this]
-            {
-                const float waveTrough = m_oceanSimPipeline.getWaveTrough();
-                return m_oceanSimPipeline.isOceanEnabled() ? glm::max(waveTrough * 2.0f + 0.5f, getOceanSwashAmp() * (waveTrough + 0.25f)) : 0.0f;
-            }, UboLive);
+        list.add("fog_waveBand", oceanWaveBand, UboLive);
         // "Underwater wave offset" x the deepest live wave trough, down: a higher sea needs a lower boundary.
         list.add("fog_boundaryOffset", [this, &f] { return -glm::max(f.underwaterWaveOffset, 0.0f) * m_oceanSimPipeline.getWaveTrough(); }, UboLive);
         // The underwater metres ride "Ocean/World scale": lengths x s, the per-metre depth fade / s.
         list.add("fog_causticDepthFade", [this, &f] { return glm::max(f.causticDepthFade, 0.0f) / getOceanWorldScale(); }, UboLive);
-        list.add("fog_causticShoreFade", [this, &f] { return glm::max(f.causticShoreFade, 0.0f) * getOceanWorldScale(); }, UboLive);
+        list.add("fog_causticShoreFade", [this, &f] { return glm::max(f.causticShoreFade, 0.01f) * getOceanWorldScale(); }, UboLive); // the tweak min
+        // The underwater sun path (underwater_light.inc.glsl): xy = the sun's XZ per metre of depth, z = 1 / its elevation,
+        // floored at 0.08 (a grazing sun caps the path-length blow-up).
+        list.add("fog_causticSunStep", []
+            {
+                const glm::vec3 L = skySunDirection(Globals::settings.sky);
+                const float invY = 1.0f / glm::max(L.y, 0.08f);
+                return glm::vec3(L.x * invY, L.z * invY, invY);
+            }, UboLive);
         list.add("fog_albedo", [&] { return f.albedo * f.albedoIntensity; }, f.albedo, f.albedoIntensity);
-        list.add("fog_anisotropy", f.anisotropy);
+        // The tweak's range: the HG phase's 1 + g^2 - 2 g cos stays >= (1 - 0.95)^2.
+        list.add("fog_anisotropy", [&] { return glm::clamp(f.anisotropy, -0.9f, 0.95f); }, f.anisotropy);
         list.add("fog_density", f.density);
         list.add("fog_heightBase", f.heightBase);
         list.add("fog_heightFalloff", [&] { return f.heightFalloff * f.heightFalloff; }, f.heightFalloff);
-        list.add("fog_range", f.range);
+        list.add("fog_range", [&] { return glm::max(f.range, 2.25f); }, f.range); // past the froxels' near plane (VOL_FOG_NEAR + 1, vol_fog.inc.glsl)
         list.add("fog_noiseScale", f.noiseScale);
+        list.add("fog_noiseWavelength", [&] { return 1.0f / glm::max(f.noiseScale, 1e-4f); }, f.noiseScale);
         list.add("fog_noiseStrength", f.noiseStrength);
-        list.add("fog_temporalBlend", f.temporalBlend);
-        list.add("fog_terrainFollow", [&] { return glm::clamp(f.terrainFollow, 0.0f, 1.0f); }, f.terrainFollow);
+        list.add("fog_temporalBlend", [&] { return glm::clamp(f.temporalBlend, 0.0f, 0.97f); }, f.temporalBlend);
+        list.add("fog_terrainFollow", [&] { return glm::clamp(f.terrainFollow, 0.01f, 1.0f); }, f.terrainFollow); // the tweak range
         list.add("fog_enabled", f.enabled);
         list.add("fog_lightShadows", f.lightShadows);
-        list.add("fog_sunRays", f.sunRays);
+        list.add("fog_sunRays", [&] { return (float)glm::clamp(f.sunRays, 1, 8); }, f.sunRays);
         list.add("fog_spatialFilter", f.spatialFilter);
         list.add("fog_giAmbient", f.giAmbient);
-        list.add("fog_sunSoftness", f.sunSoftness);
+        list.add("fog_sunSoftness", [&] { return glm::max(f.sunSoftness, 0.015f); }, f.sunSoftness); // the tweak min (the terrain march's cone)
         list.add("fog_slicePower", [&] { return glm::clamp(f.slicePower, 0.25f, 2.0f); }, f.slicePower);
         list.add("fog_terrainShadowDistance", f.terrainShadowDist);
-        list.add("fog_regionStrength", [&] { return glm::clamp(f.regionStrength, 0.0f, 1.0f); }, f.regionStrength); // the baked regional thickness modulation
+        list.add("fog_regionStrength", [&] { return glm::clamp(f.regionStrength, 0.01f, 1.0f); }, f.regionStrength); // the baked regional thickness modulation (the tweak range)
         list.add("fog_underwaterDensity", [&] { return glm::max(f.underwaterDensity, 0.0f); }, f.underwaterDensity);
         list.add("fog_inlandUnderwaterDensity", [&] { return glm::max(f.inlandUnderwaterDensity, 0.0f); }, f.inlandUnderwaterDensity);
         list.add("fog_riverUnderwaterScale", [&] { return glm::max(f.riverUnderwaterScale, 0.0f); }, f.riverUnderwaterScale);
         list.add("fog_shaftBoost", [&] { return glm::max(f.shaftBoost, 0.0f); }, f.shaftBoost);
-        list.add("fog_causticStrength", [&] { return glm::max(f.causticStrength, 0.0f); }, f.causticStrength);
-        list.add("fog_farFieldMaxDistance", [&] { return f.farFieldMaxDistanceKm > 0.0f ? f.farFieldMaxDistanceKm * 1000.0f : 1e30f; }, f.farFieldMaxDistanceKm);
+        list.add("fog_causticStrength", [&] { return glm::max(f.causticStrength, 0.05f); }, f.causticStrength); // the tweak min
+        list.add("fog_farFieldMaxDistance", [&] { return glm::max(f.farFieldMaxDistanceKm, 1.0f) * 1000.0f; }, f.farFieldMaxDistanceKm); // the tweak min (km)
         list.add("fog_sunScatter", [&] { return glm::max(f.sunScatter, 0.0f); }, f.sunScatter);
         list.add("fog_farFieldEnabled", f.farField);
         list.add("fog_farFieldDensity", [&] { return glm::max(f.farFieldDensity, 0.0f); }, f.farFieldDensity);
         list.add("fog_farFieldFalloffScale", [&] { return 1.0f / glm::clamp(f.farFieldThickness, 0.01f, 100.0f); }, f.farFieldThickness);
         list.add("fog_farFieldSteps", [&] { return (float)glm::max(f.farFieldSteps, 1); }, f.farFieldSteps);
-        list.add("fog_hazeDensity", [&] { return glm::max(f.shaftHazeDensity, 0.0f); }, f.shaftHazeDensity);
+        list.add("fog_hazeDensity", [&] { return glm::max(f.shaftHazeDensity, 1e-5f); }, f.shaftHazeDensity); // the tweak min
         list.add("fog_hazeInvHeight", [&] { return 1.0f / glm::max(f.shaftHazeHeight, 1.0f); }, f.shaftHazeHeight);
-        list.add("fog_aerialStrength", [&] { return glm::max(f.aerialStrength, 0.0f); }, f.aerialStrength);
+        list.add("fog_aerialStrength", [&] { return glm::max(f.aerialStrength, 0.05f); }, f.aerialStrength); // the tweak min
         list.add("fog_aerialMaxDistance", [&] { return glm::max(f.aerialMaxDistanceKm, 1.0f) * 1000.0f; }, f.aerialMaxDistanceKm);
     }
     {
@@ -874,9 +948,27 @@ void Renderer::registerUboValues(UboBlock& list)
             }, UboLive);
         list.add("ocean_foamDrift", [this] { return m_oceanSimPipeline.getFoamDrift(); }, UboLive); // the foam field's accumulated drift (m)
         list.add("ocean_shoreFoamDepth", [this] { return glm::max(m_oceanSimPipeline.getOceanParams().shoreFoamDepth, 0.0f); }, UboLive);
-        list.add("ocean_shoreFoamMax", [this] { return glm::clamp(m_oceanSimPipeline.getOceanParams().shoreFoamMax, 0.0f, 1.0f); }, UboLive);
+        // "Shore foam max" (floored: the lace's soft knee divides by it) and the knee's two per-frame factors: 1 / the cap
+        // and the normalisation 1 / (1 - e^(-1 / cap)) that brings full lace to the cap exactly.
+        const auto shoreFoamMax = [this] { return glm::clamp(m_oceanSimPipeline.getOceanParams().shoreFoamMax, 1e-3f, 1.0f); };
+        list.add("ocean_shoreFoamMax", shoreFoamMax, UboLive);
+        list.add("ocean_shoreFoamInvMax", [shoreFoamMax] { return 1.0f / shoreFoamMax(); }, UboLive);
+        list.add("ocean_shoreFoamKneeNorm", [shoreFoamMax] { return 1.0f / (1.0f - std::exp(-1.0f / shoreFoamMax())); }, UboLive);
         // The run-up estimate from the wave-amplitude readback: sizes the on-land band, keeps the vertex cull off the beach.
-        list.add("ocean_swashReach", [this] { return getOceanSwashAmp() * (m_oceanSimPipeline.getWaveTrough() + 0.25f); }, UboLive);
+        // >= 0.01 ("Swash amplitude" >= 0.04, the trough >= 0), also with the ocean off.
+        list.add("ocean_swashReach", oceanSwashReach, UboLive);
+        // The shore weights' forms of it (ocean_wave.inc.glsl oceanSwashFadeIn / oceanSwashBase, underwater_light.inc.glsl
+        // oceanShoreWeights): 1 / the reach, the approach band (the wider of two reaches and "Shoal depth scale" x the mid
+        // cascade), and the backflow's soft cap.
+        list.add("ocean_swashInvReach", [oceanSwashReach] { return 1.0f / oceanSwashReach(); }, UboLive);
+        list.add("ocean_swashFadeBand", [oceanSwashReach, &o] { return glm::max(2.0f * oceanSwashReach(), glm::max(o.shoalScale, 0.0f) * oceanCascadeSizes(o).y); }, UboLive);
+        list.add("ocean_swashFlowCap", [oceanSwashReach] { return glm::clamp(0.5f * oceanSwashReach(), 0.25f, 1.0f); }, UboLive);
+        // The water surface's max excursion around the calm level (the lit core's live wave depth): the larger of the
+        // swash reach and the open-water trough (fog_waveBand = 2 x trough + 0.5; 0 = no water), and where its
+        // contribution has faded out (a half-excursion band past it, at least 0.5 m).
+        const auto waveExcursion = [oceanSwashReach, oceanWaveBand] { return glm::max(oceanSwashReach(), 0.5f * (oceanWaveBand() - 0.5f)); };
+        list.add("ocean_waveExcursion", waveExcursion, UboLive);
+        list.add("ocean_waveExcursionFadeEnd", [waveExcursion] { const float e = waveExcursion(); return e + glm::max(0.5f * e, 0.5f); }, UboLive);
         // How far the VS moves a vertex off its lattice (the per-instance cull padding; 0 with the ocean off).
         list.add("ocean_displacementExtent", [this] { return m_oceanSimPipeline.getOceanParams().enabled ? m_oceanSimPipeline.getDisplacementExtent() : 0.0f; }, UboLive);
         list.add("ocean_cameraUnderwater", [this] { return m_oceanSimPipeline.getOceanParams().cameraUnderwater; }, UboLive);
@@ -885,10 +977,11 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ocean_sprayDt", [] { return oc::min((float)Globals::time.getSimDeltaSec(), 0.25f); }, UboLive);
         list.add("ocean_sprayEmitter", [this] { return m_particles.isEnabled() ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX; }, UboLive);
         const auto ws = [&o] { return oceanWorldScaled(o); };
-        list.add("ocean_cascadeSizes", [ws] { return glm::max(ws().cascadeSizes, glm::vec3(1.0f)); }, o.cascadeSizes, o.worldScale);
+        list.add("ocean_cascadeSizes", [&] { return oceanCascadeSizes(o); }, o.cascadeSizes, o.worldScale);
         list.add("ocean_amplitude", o.amplitude);
         list.add("ocean_absorption", [ws] { return ws().absorption; }, o.absorption, o.worldScale);
-        list.add("ocean_roughness", o.roughness);
+        list.add("ocean_bodyTMax", [&] { return waterBodyTMax(oceanWorldScaled(o).absorption, oceanRefractionRange(o)); }, o.absorption, o.worldScale, o.rtRefractionRange);
+        list.add("ocean_roughness", [&] { return glm::clamp(o.roughness, 0.02f, 1.0f); }, o.roughness);
         list.add("ocean_scatterColor", o.scatterColor);
         list.add("ocean_scatterStrength", o.scatterStrength);
         list.add("ocean_foamColor", o.foamColor);
@@ -902,11 +995,14 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ocean_horizonDepthRange", [ws] { return glm::max(ws().horizonDepthRange, 0.0f); }, o.horizonDepthRange, o.worldScale);
         list.add("ocean_detailBias", [&] { return glm::clamp(o.detailBias, -4.0f, 4.0f); }, o.detailBias);
         list.add("ocean_shoalScale", [&] { return glm::max(o.shoalScale, 0.0f); }, o.shoalScale);
+        // Per cascade: the depth its waves fade in over ("Shoal depth scale" x its size), floored (the froxels' wave taps).
+        list.add("ocean_shoalFadeDepth", [&] { return glm::max(glm::max(o.shoalScale, 0.0f) * oceanCascadeSizes(o), glm::vec3(0.01f)); },
+            o.shoalScale, o.cascadeSizes, o.worldScale);
         list.add("ocean_foamSoftness", [&] { return glm::max(o.foamSoftness, 0.02f); }, o.foamSoftness);
         list.add("ocean_foamBreakAccel", [&] { return glm::max(o.foamBreakAccel, 0.01f); }, o.foamBreakAccel);
-        list.add("ocean_farCullError", [ws] { return glm::max(ws().farCullError, 0.0f); }, o.farCullError, o.worldScale);
+        list.add("ocean_farCullError", [ws, &o] { return glm::max(o.farCullError, 0.25f) * ws().s; }, o.farCullError, o.worldScale); // the tweak min, scaled
         list.add("ocean_glintFilter", [&] { return glm::max(o.glintFilter, 0.0f); }, o.glintFilter);
-        list.add("ocean_sssStrength", [ws] { return glm::max(ws().sssStrength, 0.0f); }, o.sssStrength, o.worldScale);
+        list.add("ocean_sssStrength", [ws, &o] { return glm::max(o.sssStrength, 0.01f) / ws().s; }, o.sssStrength, o.worldScale); // the tweak min, scaled
         list.add("ocean_sssPower", [&] { return glm::max(o.sssPower, 1.0f); }, o.sssPower);
         list.add("ocean_cullMargin", [ws] { return glm::max(ws().cullMargin, 0.0f); }, o.cullMargin, o.worldScale);
         list.add("ocean_swashAmp", [this] { return getOceanSwashAmp(); }, o.swashAmp);
@@ -914,7 +1010,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ocean_shoreFoamBias", [&] { return glm::clamp(o.shoreFoamBias, -1.0f, 1.0f); }, o.shoreFoamBias);
         list.add("ocean_rtReflectionFog", [&] { return glm::max(o.rtReflectionFog, 0.0f); }, o.rtReflectionFog);
         list.add("ocean_rtRayCutoff", [ws] { return glm::max(ws().rtRayCutoffDist, 0.0f); }, o.rtRayCutoffDist, o.worldScale);
-        list.add("ocean_rtRefractionRange", [ws] { return glm::max(ws().rtRefractionRange, 1.0f); }, o.rtRefractionRange, o.worldScale); // the tweak's own minimum
+        list.add("ocean_rtRefractionRange", [&] { return oceanRefractionRange(o); }, o.rtRefractionRange, o.worldScale);
         list.add("ocean_rtReflectionRange", [ws] { return glm::max(ws().rtReflectionRange, 50.0f); }, o.rtReflectionRange, o.worldScale);
         list.add("ocean_rtReflectionMaxRough", [&] { return glm::clamp(o.rtReflectionMaxRough, 0.0f, 1.0f); }, o.rtReflectionMaxRough);
         list.add("ocean_microRoughness", [&] { return glm::max(o.microRoughness, 0.0f); }, o.microRoughness);
@@ -923,7 +1019,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ocean_undersideTransmission", [&] { return glm::clamp(o.undersideTransmission, 0.0f, 1.0f); }, o.undersideTransmission);
         list.add("ocean_detailStrength", [&] { return glm::max(o.detailStrength, 0.0f); }, o.detailStrength);
         list.add("ocean_detailScale", [&] { return glm::max(o.detailScale, 0.001f); }, o.detailScale);
-        list.add("ocean_detailFadeDistance", [ws] { return glm::max(ws().detailFadeDist, 0.0f); }, o.detailFadeDist, o.worldScale);
+        list.add("ocean_detailFadeDistance", [ws, &o] { return glm::max(o.detailFadeDist, 5.0f) * ws().s; }, o.detailFadeDist, o.worldScale); // the tweak min, scaled
         list.add("ocean_detailRotation", o.detailRotation);
         list.add("ocean_bubbleDepth", [this] { return getOceanBubbleDepth(); }, o.bubbleDepth, o.worldScale);
         list.add("ocean_bubbleBrightness", [this] { return getOceanBubbleBrightness(); }, o.bubbleBrightness);
@@ -1001,7 +1097,7 @@ void Renderer::registerUboValues(UboBlock& list)
         // framerate independent), the ping / pong layer written, the clipmap window's origin and the previous tick's.
         list.add("terrain_wetDecay", [this, &t] { return t.wetDryTime > 0.0f ? std::exp(-m_wetTick.dt / t.wetDryTime) : 0.0f; }, UboLive);
         list.add("terrain_wetRain", [this, &t] { return glm::max(t.wetRain, 0.0f) * m_wetTick.dt; }, UboLive);
-        list.add("terrain_wetIn", [this, &t] { return t.wetInTime > 0.0f ? m_wetTick.dt / t.wetInTime : 1.0f; }, UboLive);
+        list.add("terrain_wetIn", [this, &t] { return m_wetTick.dt / glm::max(t.wetInTime, 0.05f); }, UboLive); // the tweak min
         list.add("terrain_wetSpread", [this, &t] { return 1.0f - std::exp(-glm::max(t.wetDiffusionRate, 0.0f) * m_wetTick.dt); }, UboLive);
         list.add("terrain_wetLayer", [this] { return (float)m_wetTick.writeLayer; }, UboLive);
         list.add("terrain_wetOrigin", [this] { return glm::vec2((float)m_wetTick.origin.x, (float)m_wetTick.origin.y); }, UboLive);
@@ -1027,23 +1123,25 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainTex_cragWanderUvScale", [this, &t] {
             return 1.0f / (glm::max(t.texCragWanderWavelength * m_terrainCragScale, 1.0f) * (float)TerrainResources::NOISE_CRAG_CELLS); }, UboLive);
         // Macro variation; uv per metre: one "Macro size" per lattice cell of the macro channels.
-        list.add("terrainTex_macroStrength", [&] { return glm::clamp(t.texMacroStrength, 0.0f, 1.0f); }, t.texMacroStrength);
-        list.add("terrainTex_macroHue", [&] { return glm::clamp(t.texMacroHue, 0.0f, 1.0f); }, t.texMacroHue);
-        list.add("terrainTex_macroRoughness", [&] { return glm::clamp(t.texMacroRoughness, 0.0f, 1.0f); }, t.texMacroRoughness);
+        // Floored at the tweak mins: the variation is always on.
+        list.add("terrainTex_macroStrength", [&] { return glm::clamp(t.texMacroStrength, 0.01f, 1.0f); }, t.texMacroStrength);
+        list.add("terrainTex_macroHue", [&] { return glm::clamp(t.texMacroHue, 0.005f, 1.0f); }, t.texMacroHue);
+        list.add("terrainTex_macroRoughness", [&] { return glm::clamp(t.texMacroRoughness, 0.01f, 1.0f); }, t.texMacroRoughness);
         list.add("terrainTex_macroUvScale", [&] { return 1.0f / (glm::max(t.texMacroSize, 1.0f) * (float)TerrainResources::NOISE_MACRO_CELLS); }, t.texMacroSize);
-        list.add("terrainTex_beachBand", t.texBeachBand);
+        list.add("terrainTex_beachBand", [&] { return glm::max(t.texBeachBand, 0.31f); }, t.texBeachBand); // above the sand's 0.3 m start
         list.add("terrainTex_snowTempFull", t.texSnowTempFull);
         list.add("terrainTex_snowTempNone", [&] { return glm::max(t.texSnowTempNone, t.texSnowTempFull + 1e-3f); }, t.texSnowTempNone, t.texSnowTempFull);
         list.add("terrainTex_snowSlopeStart", t.texSnowSlopeStart);
         list.add("terrainTex_snowSlopeFull", [&] { return glm::max(t.texSnowSlopeFull, t.texSnowSlopeStart + 1e-3f); }, t.texSnowSlopeFull, t.texSnowSlopeStart);
-        list.add("terrainTex_snowAridity", t.texSnowAridity);
+        list.add("terrainTex_snowAridity", [&] { return glm::max(t.texSnowAridity, 1e-3f); }, t.texSnowAridity);
         list.add("terrainTex_parallaxDepthGround", [&] { return glm::max(t.texParallaxDepthGround, 0.0f); }, t.texParallaxDepthGround);
         list.add("terrainTex_parallaxDepthRock", [&] { return glm::max(t.texParallaxDepthRock, 0.0f); }, t.texParallaxDepthRock);
         list.add("terrainTex_parallaxFadeStart", [&] { return glm::max(t.texParallaxFadeStart, 0.0f); }, t.texParallaxFadeStart);
         list.add("terrainTex_parallaxFadeEnd",
             [&] { return t.texParallaxEnabled && t.texParallaxFadeEnd > 0.0f ? glm::max(t.texParallaxFadeEnd, t.texParallaxFadeStart + 0.1f) : 0.0f; },
             t.texParallaxEnabled, t.texParallaxFadeEnd, t.texParallaxFadeStart);
-        list.add("terrainTex_parallaxSteps", [&] { return glm::clamp((float)t.texParallaxSteps, 2.0f, 64.0f); }, t.texParallaxSteps);
+        // At least the march's 4 base steps (terrain_splat.inc.glsl clamps the step count into [4, this]).
+        list.add("terrainTex_parallaxSteps", [&] { return glm::clamp((float)t.texParallaxSteps, 4.0f, 64.0f); }, t.texParallaxSteps);
         list.add("terrainTex_parallaxShadow", [&] { return glm::clamp(t.texParallaxShadow, 0.0f, 1.0f); }, t.texParallaxShadow);
         list.add("terrainTex_heightBlendContrast", [&] { return glm::max(t.texHeightBlendContrast, 0.0f); }, t.texHeightBlendContrast);
     }
@@ -1054,8 +1152,21 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainTess_maxFactor", [&] { return glm::clamp((float)t.texTessMaxFactor, 1.0f, 64.0f); }, t.texTessMaxFactor);
         list.add("terrainTess_targetEdgePx", [&] { return glm::max(t.texTessTargetPx, 1.0f); }, t.texTessTargetPx);
         list.add("terrainTess_factorFalloff", [&] { return glm::clamp(t.texTessFalloffExponent, 0.05f, 16.0f); }, t.texTessFalloffExponent);
-        list.add("terrainTess_fadeStart", [&] { return glm::max(t.texTessFadeStart, 0.0f); }, t.texTessFadeStart);
-        list.add("terrainTess_fadeEnd", [&] { return glm::max(t.texTessFadeEnd, t.texTessFadeStart + 0.1f); }, t.texTessFadeEnd, t.texTessFadeStart);
+        list.add("terrainTess_fadeStart", [&] { return terrainTessFadeStart(t); }, t.texTessFadeStart);
+        list.add("terrainTess_fadeEnd", [&] { return terrainTessFadeEnd(t); }, t.texTessFadeEnd, t.texTessFadeStart);
+        list.add("terrainTess_invFadeWidth", [&] { return 1.0f / (terrainTessFadeEnd(t) - terrainTessFadeStart(t)); }, t.texTessFadeEnd, t.texTessFadeStart); // width >= 0.1
+        // The relief's footprint (live: the centre view's projection and the render rect): the centre mvp's y scale (the
+        // length of row 1 of its 3x3) x the render rect's height in px. spacingPerMetre = the target subdivided edge (m)
+        // per metre of distance (the TES's / ground FS's height-map footprint, the clutter cull's), factorPerMetre = the
+        // TCS's tessellation factor per metre of edge per metre of distance (unfloored).
+        const auto centreProjYPx = [this]
+        {
+            const glm::mat4& mvp = m_views[VIEW_CENTER].mvp;
+            const glm::vec2 s(m_renderExtent);
+            return glm::length(glm::vec3(mvp[0][1], mvp[1][1], mvp[2][1])) * s.y * ((float)m_renderRect.getSize().y / s.y);
+        };
+        list.add("terrainTess_spacingPerMetre", [centreProjYPx, &t] { return 2.0f * glm::max(t.texTessTargetPx, 1.0f) / glm::max(centreProjYPx(), 1.0f); }, UboLive);
+        list.add("terrainTess_factorPerMetre", [centreProjYPx, &t] { return 0.5f * centreProjYPx() / glm::max(t.texTessTargetPx, 1.0f); }, UboLive);
         list.add("terrainTess_depthGround", [&] { return glm::max(t.texTessDepthGround, 0.0f); }, t.texTessDepthGround);
         list.add("terrainTess_depthRock", [&] { return glm::max(t.texTessDepthRock, 0.0f); }, t.texTessDepthRock);
         list.add("terrainTess_freezeDistance", [&] { return glm::max(t.texTessFreezeDistance, 0.1f); }, t.texTessFreezeDistance);
@@ -1068,9 +1179,9 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainWater_texelSize", [&] { return terrainWetTexelSize(w); }, w.wetTexelSize);
         list.add("terrainWater_invTexelSize", [&] { return 1.0f / terrainWetTexelSize(w); }, w.wetTexelSize);
         list.add("terrainWater_darkening", [&] { return glm::clamp(w.wetDarkening, 0.0f, 1.0f); }, w.wetDarkening);
-        list.add("terrainWater_waterRoughness", [&] { return glm::clamp(w.wetRoughness, 0.0f, 1.0f); }, w.wetRoughness);
-        list.add("terrainWater_dryTempSensitivity", [&] { return glm::max(w.wetDryTempSens, 0.0f); }, w.wetDryTempSens);
-        list.add("terrainWater_slopeDrain", [&] { return glm::max(w.wetSlopeDrain, 0.0f); }, w.wetSlopeDrain);
+        list.add("terrainWater_waterRoughness", [&] { return glm::clamp(w.wetRoughness, 0.02f, 1.0f); }, w.wetRoughness); // perceptual, as the ocean's
+        list.add("terrainWater_dryTempSensitivity", [&] { return glm::max(w.wetDryTempSens, 0.005f); }, w.wetDryTempSens); // the tweak min
+        list.add("terrainWater_slopeDrain", [&] { return glm::max(w.wetSlopeDrain, 0.1f); }, w.wetSlopeDrain); // the tweak min
         list.add("terrainWater_fillStart", [&] { return glm::clamp(w.wetFillStart, 0.0f, 0.99f); }, w.wetFillStart);
         list.add("terrainWater_fillFull", [&] { return glm::clamp(w.wetFillFull, w.wetFillStart + 0.01f, 1.0f); }, w.wetFillFull, w.wetFillStart);
         list.add("terrainWater_fillCurve", [&] { return glm::clamp(w.wetFillCurve, 0.05f, 16.0f); }, w.wetFillCurve);
@@ -1079,7 +1190,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainWater_waviness", [&] { return glm::clamp(w.wetWaviness, 0.0f, 1.0f); }, w.wetWaviness);
         list.add("terrainWater_normalScale", [&] { return glm::max(w.wetNormalScale, 0.0f); }, w.wetNormalScale);
         list.add("terrainWater_rippleStrength", [&] { return glm::max(w.wetRippleStrength, 0.0f); }, w.wetRippleStrength);
-        list.add("terrainWater_oceanEdgeFade", [&] { return glm::max(w.wetOceanEdgeFade, 0.0f); }, w.wetOceanEdgeFade);
+        list.add("terrainWater_oceanEdgeFade", [&] { return glm::max(w.wetOceanEdgeFade, 0.01f); }, w.wetOceanEdgeFade); // the tweak min
         // Film max slope as mesh normal.y thresholds for terrainPoolLevel: no pool below cos(max), the full level above
         // cos(max - fade). 90 = off (both below any normal).
         list.add("terrainWater_slopeCut", [&] {
@@ -1107,14 +1218,17 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("terrainWater_dryingPatternRelief", [&] { return glm::clamp(w.wetDryingPatternRelief, 0.0f, 1.0f); }, w.wetDryingPatternRelief);
         list.add("terrainWater_dryingContrastHalf", [&] { return 0.5f * glm::max(w.wetDryingPatternContrast, 0.0f); }, w.wetDryingPatternContrast);
         list.add("terrainWater_invGlintSize", [&] { return 1.0f / glm::max(w.wetGlintSize, 0.005f); }, w.wetGlintSize);
-        list.add("terrainWater_glintCoverage", [&] { return glm::clamp(w.wetGlintCoverage, 0.0f, 1.0f); }, w.wetGlintCoverage);
+        list.add("terrainWater_glintCoverage", [&] { return glm::clamp(w.wetGlintCoverage, 0.01f, 1.0f); }, w.wetGlintCoverage); // the tweak range
         list.add("terrainWater_glintRoughness", [&] { return glm::clamp(w.wetGlintRoughness, 0.01f, 1.0f); }, w.wetGlintRoughness);
     }
     {
         // ---- Rivers ("Terrain/Rivers/Surface"): the river / lake water (EPipelineIndex::River, River/river.fs.glsl). Its
         // RT ranges and toggles are the ocean's ("Ocean/RT").
         const TerrainSettings& r = Globals::settings.terrain;
+        const OceanSettings& o = Globals::settings.ocean;
         list.add("river_absorption", [&] { return glm::max(r.riverAbsorption, glm::vec3(0.0f)); }, r.riverAbsorption);
+        list.add("river_bodyTMax", [&] { return waterBodyTMax(glm::max(r.riverAbsorption, glm::vec3(0.0f)), oceanRefractionRange(o)); },
+            r.riverAbsorption, o.rtRefractionRange, o.worldScale);
         list.add("river_scatterColor", [&] { return glm::max(r.riverScatterColor, glm::vec3(0.0f)); }, r.riverScatterColor);
         list.add("river_roughness", [&] { return glm::clamp(r.riverRoughness, 0.02f, 1.0f); }, r.riverRoughness);
         list.add("river_invRippleSize", [&] { return 1.0f / glm::max(r.riverRippleSize, 0.05f); }, r.riverRippleSize);
@@ -1178,7 +1292,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_bladesPerPatch", [&] { return (float)glm::clamp(g.bladesPerPatch, 1, (int)RendererVKLayout::GRASS_MAX_BLADES); }, g.bladesPerPatch);
         list.add("grass_patchSize", [this] { return grassPatchSize(); }, g.patchSize);
         list.add("grass_range", [this] { return grassGridRange(); }, g.range, g.patchSize);
-        list.add("grass_rangeFade", [this, &g] { return glm::clamp(g.rangeFade, 0.0f, grassGridRange()); }, g.rangeFade, g.range, g.patchSize);
+        list.add("grass_rangeFade", [this, &g] { return glm::clamp(g.rangeFade, 0.5f, grassGridRange()); }, g.rangeFade, g.range, g.patchSize); // the tweak min: smoothstep needs two edges
         list.add("grass_bladeHeight", g.bladeHeight);
         list.add("grass_heightVariation", [&] { return glm::clamp(g.heightVariation, 0.0f, 1.0f); }, g.heightVariation);
         list.add("grass_bladeWidth", g.bladeWidth);
@@ -1190,8 +1304,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_lod1Distance", g.lod1Distance);
         list.add("grass_lod2Distance", [&] { return grassLod2Distance(g); }, g.lod2Distance, g.lod1Distance);
         list.add("grass_lod3Distance", [&] { return glm::max(g.lod3Distance, grassLod2Distance(g)); }, g.lod3Distance, g.lod2Distance, g.lod1Distance);
-        list.add("grass_lodMorphBand", [&] { return glm::clamp(g.lodMorphBand, 0.0f, 1.0f); }, g.lodMorphBand);
-        list.add("grass_groundBlendDistance", g.groundBlendDistance);
+        list.add("grass_lodMorphBand", [&] { return glm::clamp(g.lodMorphBand, 0.01f, 1.0f); }, g.lodMorphBand); // the tweak min: smoothstep needs two edges
+        list.add("grass_groundBlendDistance", [&] { return glm::max(g.groundBlendDistance, 1e-3f); }, g.groundBlendDistance);
         list.add("grass_groundBlend", g.groundBlend);
         // The direction, speed and gusts are the shared wind's (wind.inc.glsl); these the blades' response to it.
         list.add("grass_windBend", [&] { return glm::max(g.windBend, 0.0f); }, g.windBend);
@@ -1210,13 +1324,31 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_transmission", g.transmission);
         list.add("grass_roundness", g.roundness);
         list.add("grass_coldTemperature", g.coldTemperature);
-        list.add("grass_warmTemperature", g.warmTemperature);
+        list.add("grass_warmTemperature", [&] { return glm::max(g.warmTemperature, g.coldTemperature + 0.01f); }, g.warmTemperature, g.coldTemperature);
         list.add("grass_coldDarkening", [&] { return glm::clamp(g.coldDarkening, 0.0f, 1.0f); }, g.coldDarkening);
         list.add("grass_shadowBias", [&] { return glm::max(g.shadowBias, 0.0f); }, g.shadowBias);
         list.add("grass_invFleckSize", [&] { return 1.0f / glm::max(g.fleckSize, 0.01f); }, g.fleckSize);
         list.add("grass_fleckContrast", [&] { return glm::clamp(g.fleckContrast, 0.0f, 1.0f); }, g.fleckContrast);
         list.add("grass_fleckFadeDistance", [&] { return glm::max(g.fleckFadeDistance, 1.0f); }, g.fleckFadeDistance);
         list.add("grass_fleckStretch", [&] { return glm::max(g.fleckStretch, 0.0f); }, g.fleckStretch);
+        // The canopy's sun path (grass.inc.glsl grassCanopySun; live: the sun). The sun's elevation floored at 0.1:
+        // sunToXZ = XZ per metre of height along the sun, invSunY = 1 / the floored elevation; the flecks' streak axis
+        // (the sun's horizontal direction, +X straight overhead) and 1 / their stretch along it (capped at 16).
+        const SkyParams& sky = Globals::settings.sky;
+        const auto sunY = [&sky] { return glm::max(skySunDirection(sky).y, 0.1f); };
+        const auto sunHorizontal = [&sky] { const glm::vec3 L = skySunDirection(sky); return glm::vec2(L.x, L.z); };
+        list.add("grass_sunToXZ", [sunY, sunHorizontal] { return sunHorizontal() / sunY(); }, UboLive);
+        list.add("grass_invSunY", [sunY] { return 1.0f / sunY(); }, UboLive);
+        list.add("grass_fleckAlong", [sunHorizontal]
+            {
+                const glm::vec2 h = sunHorizontal();
+                const float len = glm::length(h);
+                return len > 1e-4f ? h / len : glm::vec2(1.0f, 0.0f);
+            }, UboLive);
+        list.add("grass_fleckInvStretch", [sunY, sunHorizontal, &g]
+            {
+                return 1.0f / glm::clamp(1.0f + glm::max(g.fleckStretch, 0.0f) * glm::length(sunHorizontal()) / sunY(), 1.0f, 16.0f);
+            }, UboLive);
         list.add("grass_nearStrength", [&] { return glm::clamp(g.nearShadowStrength, 0.0f, 1.0f); }, g.nearShadowStrength);
         list.add("grass_nearBias", [&] { return glm::max(g.nearShadowBias, 0.0f); }, g.nearShadowBias);
         list.add("grass_canopyThinning", [&] { return glm::clamp(g.canopyThinning, 0.0f, 1.0f); }, g.canopyThinning);
@@ -1258,17 +1390,18 @@ void Renderer::registerUboValues(UboBlock& list)
             }, UboLive);
         list.add("foliage_rtRange", f.rtRange);
         list.add("foliage_crownNormal", f.crownNormal);
-        list.add("foliage_shadowLength", f.shadowLength);
+        list.add("foliage_shadowLength", [&] { return glm::max(f.shadowLength, 0.05f); }, f.shadowLength); // the tweak min
         list.add("foliage_interiorShadow", f.interiorShadow);
         list.add("foliage_interiorStart", [&] { return glm::clamp(f.interiorStart, 0.0f, 1.0f); }, f.interiorStart);
-        list.add("foliage_interiorEnd", [&] { return glm::clamp(f.interiorEnd, 0.0f, 1.0f); }, f.interiorEnd);
-        list.add("foliage_interiorTopCardScale", f.interiorTopCardScale);
+        list.add("foliage_interiorEnd", [&] { return glm::max(glm::clamp(f.interiorEnd, 0.0f, 1.0f), glm::clamp(f.interiorStart, 0.0f, 1.0f) + 1e-3f); },
+            f.interiorEnd, f.interiorStart);
+        list.add("foliage_interiorTopCardScale", [&] { return glm::max(f.interiorTopCardScale, 0.01f); }, f.interiorTopCardScale); // an exponent: pow(0, 0) is undefined
         list.add("foliage_interiorViewFade", [&] { return glm::clamp(f.interiorViewFade, 0.0f, 1.0f); }, f.interiorViewFade);
         list.add("foliage_edgeFadeStart", f.edgeFadeStart);
         list.add("foliage_edgeFadeEnd", f.edgeFadeEnd);
         list.add("foliage_edgeFadeCentreScale", f.edgeFadeCentreScale);
         list.add("foliage_edgeFadeTopCardScale", f.edgeFadeTopCardScale);
-        list.add("foliage_transmission", f.transmission);
+        list.add("foliage_transmission", [&] { return glm::max(f.transmission, 0.01f); }, f.transmission); // the tweak min
         list.add("foliage_transmissionFocus", f.transmissionFocus);
         list.add("foliage_transmissionGlow", f.transmissionGlow);
         list.add("foliage_transmissionShadow", f.transmissionShadow);
@@ -1287,8 +1420,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_windBranchFadeEnd", [&] { return glm::max(f.windBranchFadeEnd, f.windBranchFadeStart + 0.01f); }, f.windBranchFadeEnd, f.windBranchFadeStart);
         list.add("foliage_windLeafFadeStart", f.windLeafFadeStart);
         list.add("foliage_windLeafFadeEnd", [&] { return glm::max(f.windLeafFadeEnd, f.windLeafFadeStart + 0.01f); }, f.windLeafFadeEnd, f.windLeafFadeStart);
-        list.add("foliage_windTrunkFadeEnd", [&] { return glm::max(f.windTrunkFadeEnd, 0.0f); }, f.windTrunkFadeEnd);
-        list.add("foliage_windBillboardWaves", [&] { return glm::max(f.windBillboardWaves, 0.0f); }, f.windBillboardWaves);
+        list.add("foliage_windTrunkFadeEnd", [&] { return glm::max(f.windTrunkFadeEnd, 100.0f); }, f.windTrunkFadeEnd); // the tweak min: the 100 m fade band
+        list.add("foliage_windBillboardWaves", [&] { return glm::max(f.windBillboardWaves, 0.0005f); }, f.windBillboardWaves); // the tweak min
         list.add("foliage_farStepScale", [&] { return glm::max(s.stepScale, 0.05f); }, s.stepScale);
         list.add("foliage_farMaxSteps", [&] { return (float)s.maxSteps; }, s.maxSteps);
         list.add("foliage_farOverlap", [&] { return glm::max(s.overlap, 1.0f); }, s.overlap);
@@ -1296,7 +1429,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_farAmbient", s.ambient);
         list.add("foliage_farSunScale", s.sunScale);
         list.add("foliage_farSelfShadow", s.selfShadow);
-        list.add("foliage_farNormalStrength", s.normalStrength);
+        list.add("foliage_farNormalStrength", [&] { return glm::clamp(s.normalStrength, 0.01f, 1.0f); }, s.normalStrength); // the tweak range
         list.add("foliage_farGroundDark", s.groundDarkening);
         list.add("foliage_farForwardScatter", [&] { return glm::clamp(s.forwardScatter, -0.95f, 0.95f); }, s.forwardScatter);
         list.add("foliage_farAlbedoScale", s.albedoScale);
@@ -1311,7 +1444,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("rock_coverStart", [&] { return rockCoverStart(r); }, r.coverSlopeStart);
         list.add("rock_coverFull", [&] { return glm::max(glm::clamp(r.coverSlopeFull, 0.0f, 1.0f), rockCoverStart(r) + 1e-3f); }, r.coverSlopeFull, r.coverSlopeStart);
         list.add("rock_invCoverPatchSize", [&] { return 1.0f / glm::max(r.coverPatchSize, 0.05f); }, r.coverPatchSize);
-        list.add("rock_contactHeight", [&] { return glm::max(r.contactHeight, 0.0f); }, r.contactHeight);
+        list.add("rock_contactHeight", [&] { return glm::max(r.contactHeight, 1e-3f); }, r.contactHeight);
         list.add("rock_contactBlend", [&] { return glm::clamp(r.contactBlend, 0.0f, 1.0f); }, r.contactBlend);
         list.add("rock_contactDarkening", [&] { return glm::clamp(r.contactDarkening, 0.0f, 1.0f); }, r.contactDarkening);
         list.add("rock_contactFadeDistance", [&] { return glm::max(r.contactFadeDistance, 1.0f); }, r.contactFadeDistance);
@@ -1336,12 +1469,14 @@ void Renderer::registerUboValues(UboBlock& list)
         list.addArray("force_teamColors", MAX_FORCE_TEAMS, [this](uint32 i) { return glm::vec4(m_force.getParams().teamColors[i], 0.0f); }, UboLive); // rgb = linear team colour
         list.add("force_bakeMin", [this] { return m_forceBakeMin; }, UboLive);
         // The reach threshold an emitter marches the volume at (the VISIBLE-radius tier; none reaches FLT_MAX: no bake).
-        list.add("force_bakeThreshold", [this] { return m_force.isShellBakeActive() ? m_force.getParams().sampledShellRadius : FLT_MAX; }, UboLive);
+        list.add("force_bakeThreshold", [this] { return m_force.isShellBakeActive() ? glm::max(m_force.getParams().sampledShellRadius, 1.0f) : FLT_MAX; }, UboLive);
         list.add("force_bakeInvSize", [this] { return m_forceBakeInvSize; }, UboLive);
+        list.add("force_bakeSize", [this] { return 1.0f / glm::max(m_forceBakeInvSize, glm::vec3(1e-9f)); }, UboLive); // the box size (huge while no bake)
         list.add("force_bakeEnabled", [this] { return m_force.isShellBakeActive(); }, UboLive);
-        // The shell march's LOD: (px per radius / dist) / the full-detail px (0 = off); px per (radius / dist): the union's.
+        // The shell march's LOD: (px per radius / dist) / the full-detail px (0 = off).
         list.add("force_shellLodScale", [this] { return m_mipPixelScale * 0.5f / glm::max(m_force.getParams().shellFullResPixels, 1.0f); }, UboLive);
-        list.add("force_unionPxScale", [this] { return m_mipPixelScale * 0.5f; }, UboLive);
+        // The union march's distance-grown step (m per m of distance): ~2 px of world size, the px scale floored at 1.
+        list.add("force_unionStepPerDist", [this] { return 2.0f / glm::max(m_mipPixelScale * 0.5f, 1.0f); }, UboLive);
         // CAMERA-INSIDE: a property of ONE point per frame, so the full field is evaluated at the camera here (CPU mirror)
         // instead of a per-fragment re-sample at the ray origin in both fragment shaders.
         list.add("force_cameraInside", [this]
@@ -1367,7 +1502,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("force_shellAlpha", [&] { return glm::clamp(f.shellAlpha, 0.0f, 1.0f); }, f.shellAlpha);
         list.add("force_glowIntensity", [&] { return glm::max(f.contactGlowIntensity, 0.0f); }, f.contactGlowIntensity);
         list.add("force_glowWidth", [&] { return glm::max(f.contactGlowWidth, 1e-3f); }, f.contactGlowWidth);
-        list.add("force_geoGlowDistance", [&] { return glm::max(f.geoGlowDistance, 0.0f); }, f.geoGlowDistance);
+        list.add("force_geoGlowDistance", [&] { return glm::max(f.geoGlowDistance, 0.01f); }, f.geoGlowDistance); // the tweak min
         list.add("force_marchSteps", [&] { return (float)glm::clamp(f.marchSteps, 8, 256); }, f.marchSteps);
         list.add("force_patternScale", [&] { return glm::max(f.patternScale, 0.0f); }, f.patternScale);
         list.add("force_patternSpeed", f.patternSpeed);
@@ -1375,7 +1510,11 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("force_interiorAlpha", [&] { return glm::clamp(f.interiorAlpha, 0.0f, 1.0f); }, f.interiorAlpha);
         list.add("force_backfaceAlpha", [&] { return glm::clamp(f.backfaceAlpha, 0.0f, 1.0f); }, f.backfaceAlpha);
         list.add("force_contactWallAlpha", [&] { return glm::clamp(f.contactWallAlpha, 0.0f, 1.0f); }, f.contactWallAlpha);
-        list.add("force_junctionSmoothing", [&] { return glm::clamp(f.junctionSmoothing, 0.0f, 2.0f); }, f.junctionSmoothing);
+        // The opposing bound's smooth-max width k = smoothing x iso (force_field.inc.glsl forceOpposingBound; 0 = a hard
+        // max) and 1 / max(k, 1e-5): the blend weight is 0 at k = 0 whatever the reciprocal.
+        const auto junctionK = [&f] { return glm::clamp(f.junctionSmoothing, 0.0f, 2.0f) * forceIsoThreshold(f); };
+        list.add("force_junctionK", junctionK, f.junctionSmoothing, f.isoThreshold);
+        list.add("force_junctionInvK", [junctionK] { return 1.0f / glm::max(junctionK(), 1e-5f); }, f.junctionSmoothing, f.isoThreshold);
         list.add("force_densityRange", [&] { return glm::max(f.densityRange, 1e-3f); }, f.densityRange);
         list.add("force_unionStepSize", [&] { return glm::max(f.unionStepSize, 0.05f); }, f.unionStepSize);
         list.add("force_unionMaxSteps", [&] { return (float)glm::clamp(f.unionMaxSteps, 8, 512); }, f.unionMaxSteps);
@@ -1400,7 +1539,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("weather_cameraVelocity", [this] { return m_cameraVelocity; }, UboLive); // the centre view's velocity this frame (m/s)
         list.add("weather_invGustSize", [&wind] { return 1.0f / glm::max(wind.gustSize, 1.0f); }, UboLive);
         list.add("weather_windDirection", [&wind] { return wind.direction(); }, UboLive); // unit XZ (valid at zero speed)
-        list.add("weather_windSpeed", [&wind] { return glm::max(wind.speed, 0.0f); }, UboLive);
+        list.add("weather_windSpeed", [&wind] { return glm::max(wind.speed, 0.0f); }, UboLive); // = length(windVelocity.xz)
+        list.add("weather_windTravelSpeed", [&wind] { return glm::max(wind.speed, 1.0f); }, UboLive); // what the gusts / ripples travel at (>= 1 m/s)
         list.add("weather_cameraWaterY", [this] { return m_oceanSimPipeline.getCameraWaterSurface(); }, UboLive); // the LIVE water surface under the camera
         list.add("weather_cameraWaterValid", [this] { return m_oceanSimPipeline.hasCameraWaterSurface(); }, UboLive);
         list.add("weather_rainOcclusionPresent", [this] { return m_rainOcclusion.present; }, UboLive);
@@ -1413,8 +1553,11 @@ void Renderer::registerUboValues(UboBlock& list)
         const MotionBlurParams& mb = Globals::settings.motionBlur;
         const PostParams& p = Globals::settings.post;
         const BloomParams& b = Globals::settings.bloom;
-        list.add("post_taaFeedback", [&] { return taa.taaEnabled ? taa.taaFeedback : 0.0f; }, taa.taaEnabled, taa.taaFeedback);
-        list.add("post_taaOceanFeedback", [&] { return taa.taaEnabled ? taa.taaOceanFeedback : 0.0f; }, taa.taaEnabled, taa.taaOceanFeedback);
+        // Floored at the tweak min (0.05). 0 with TAA off, where the pass is bypassed (taaActive) and never reads it.
+        const auto taaFeedback = [&taa] { return glm::max(taa.taaFeedback, 0.05f); };
+        list.add("post_taaFeedback", [&taa, taaFeedback] { return taa.taaEnabled ? taaFeedback() : 0.0f; }, taa.taaEnabled, taa.taaFeedback);
+        list.add("post_taaOceanFeedback", [&taa, taaFeedback] { return taa.taaEnabled ? glm::min(taaFeedback(), taa.taaOceanFeedback) : 0.0f; }, // never above the feedback
+            taa.taaEnabled, taa.taaFeedback, taa.taaOceanFeedback);
         list.add("post_mbShutter", mb.shutter);
         list.add("post_mbMaxRadius", [&] { return MotionBlurPipeline::clampMaxRadius(mb.maxRadius); }, mb.maxRadius);
         list.add("post_mbCameraScale", mb.cameraScale);

@@ -1,8 +1,8 @@
 #version 460
 
-// Generates the cloud noise textures (CloudPipeline::generateNoise, at initialize and on a shader reload; the
-// channel layout is in clouds.inc.glsl). Every field TILES: the Worley feature points and the Perlin gradients
-// are hashed from the lattice cell wrapped by the period, so the textures repeat under REPEAT addressing.
+// Generates the cloud noise textures (CloudPipeline::generateNoise, at initialize and on a shader reload; the channel
+// layout is in clouds.inc.glsl). Every field TILES: the Worley feature points and the Perlin gradients are hashed from
+// the lattice cell wrapped by the period, so the textures repeat under REPEAT addressing.
 // NOISE_3D: binding 0 is a 3D image (modes 0 base, 1 detail); else a 2D image (modes 2 weather, 3 curl).
 
 layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
@@ -25,6 +25,7 @@ vec3 hash33(ivec3 c, int seed)
 {
     return vec3(pcg3d(uvec3(c + ivec3(seed * 157, seed * 311, seed * 541)))) * (1.0 / 4294967295.0);
 }
+
 ivec3 wrapCell(ivec3 c, int period) { return ((c % period) + period) % period; }
 
 // Inverted Worley (1 at a feature point) of p in cell units [0, period)^3.
@@ -44,6 +45,7 @@ float worley(vec3 p, int period, int seed)
     }
     return 1.0 - clamp(sqrt(d2), 0.0, 1.0);
 }
+
 // Three octaves at period, 2 * period and 4 * period; uvw in [0, 1)^3.
 float worleyFbm(vec3 uvw, int period, int seed)
 {
@@ -65,10 +67,12 @@ float perlin(vec3 p, int period, int seed)
         const vec3 g = normalize(hash33(wrapCell(i + o, period), seed) * 2.0 - 1.0 + 1e-6);
         n[k] = dot(g, f - vec3(o));
     }
+
     const float x0 = mix(n[0], n[1], u.x), x1 = mix(n[2], n[3], u.x);
     const float x2 = mix(n[4], n[5], u.x), x3 = mix(n[6], n[7], u.x);
     return mix(mix(x0, x1, u.y), mix(x2, x3, u.y), u.z) * 1.5;
 }
+
 // fBm in [0, 1]: each octave doubles the frequency AND the period, so the sum still tiles.
 float perlinFbm(vec3 uvw, int period, int octaves, int seed)
 {

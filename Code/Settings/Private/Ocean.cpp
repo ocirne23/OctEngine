@@ -70,10 +70,10 @@ void Settings::registerOcean(OceanSettings& s)
 	// mips filter away would just disappear instead of turning into roughness.
 	Tweak::floatVar("Ocean/Shading", "Detail strength", &s.detailStrength, 0.0f, 2.0f, 0.01f);
 	Tweak::floatVar("Ocean/Shading", "Detail scale", &s.detailScale, 0.02f, 1.0f, 0.01f);
-	Tweak::floatVar("Ocean/Shading", "Detail fade (m)", &s.detailFadeDist, 0.0f, 500.0f, 5.0f);
+	Tweak::floatVar("Ocean/Shading", "Detail fade (m)", &s.detailFadeDist, 5.0f, 500.0f, 5.0f);
 	Tweak::floatVar("Ocean/Shading", "Detail rotation (rad)", &s.detailRotation, 0.0f, 3.14159265f, 0.01f);
 	// Crest SSS (Sea of Thieves-style): sun shining through back-lit crests, scaled by wave height.
-	Tweak::floatVar("Ocean/Shading", "SSS strength", &s.sssStrength, 0.0f, 4.0f, 0.01f);
+	Tweak::floatVar("Ocean/Shading", "SSS strength", &s.sssStrength, 0.01f, 4.0f, 0.01f);
 	Tweak::floatVar("Ocean/Shading", "SSS power", &s.sssPower, 1.0f, 16.0f, 0.1f);
 	Tweak::floatVar("Ocean/Shading", "Underside transmission", &s.undersideTransmission, 0.0f, 1.0f, 0.01f); // sky through Snell's window from below; less = more internal reflection
 	Tweak::boolean("Ocean/Shading", "Hit lighting", &s.hitLighting); // lights on geometry seen through/mirrored in the water
@@ -119,7 +119,7 @@ void Settings::registerOcean(OceanSettings& s)
 	Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &s.horizonDepthRange, 0.0f, 8000.0f, 50.0f);
 	Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &s.shoreFoamDepth, 0.0f, 8.0f, 0.05f);
 	Tweak::floatVar("Ocean/Shore", "Shore foam max", &s.shoreFoamMax, 0.0f, 1.0f, 0.01f);
-	Tweak::floatVar("Ocean/Shore", "Swash amplitude", &s.swashAmp, 0.0f, 2.0f, 0.01f);
+	Tweak::floatVar("Ocean/Shore", "Swash amplitude", &s.swashAmp, 0.04f, 2.0f, 0.01f);
 	Tweak::floatVar("Ocean/Shore", "Shore foam bias", &s.shoreFoamBias, -1.0f, 1.0f, 0.01f);
 	Tweak::floatVar("Ocean/Shore", "Swash backflow", &s.swashFlow, 0.0f, 3.0f, 0.01f);
 	// Land cull: clipmap triangles buried deeper than this under the local water level (over their
@@ -129,7 +129,7 @@ void Settings::registerOcean(OceanSettings& s)
 	// error allowance in meters (covers the far mesh LODs' drift off the bake). Narrow rivers the
 	// coarse far bake cannot resolve may lose triangles out there - speed over accuracy; raise it
 	// if that shows, 0 = never cull from far data.
-	Tweak::floatVar("Ocean/Shore", "Far cull error (m)", &s.farCullError, 0.0f, 20.0f, 0.25f);
+	Tweak::floatVar("Ocean/Shore", "Far cull error (m)", &s.farCullError, 0.25f, 20.0f, 0.25f);
 	// Whole-sector skip when the baked terrain buries a sector's entire footprint (see the header):
 	// deep inland the ocean then costs nothing at all.
 	Tweak::boolean("Ocean/Shore", "Dry sector cull", &s.drySectorCull);

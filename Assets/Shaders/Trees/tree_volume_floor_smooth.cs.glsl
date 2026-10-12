@@ -1,12 +1,11 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, between the floor passes and the splat (TreeVolumePipeline): the tree FLOOR blurred, one AXIS
-// per dispatch (angular, then radial: a separable tent of "Far floor smoothing" columns each way).
-//
-// The floor is the base of each column's dominant tree, so on a slope neighbouring columns differ by whole floor steps,
-// and everything is stored and read relative to it: the steps showed as faint vertical lines and a moire on slopes.
-// Masked: a column WITHOUT a floor (0) stays without one and adds nothing to its neighbours' averages. A tree that no
-// longer fits the layer is moved down into it by the splat (its `shift`).
+// FAR-TREE VOLUME BAKE, between the floor passes and the splat (TreeVolumePipeline): the tree FLOOR blurred, one AXIS per
+// dispatch (angular, then radial: a separable tent of "Far floor smoothing" columns each way). The floor is the base of each
+// column's dominant tree, so on a slope neighbouring columns differ by whole floor steps, and everything is stored and read
+// relative to it: the steps showed as faint vertical lines and a moire on slopes.
+// Masked: a column WITHOUT a floor (0) stays without one and adds nothing to its neighbours' averages. A tree that no longer
+// fits the layer is moved down into it by the splat (its `shift`).
 
 #include "tree_volume.inc.glsl"
 
@@ -25,12 +24,14 @@ void main()
     const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     if (p.x >= angularRes || p.y >= radialRes)
         return;
+
     const uint centre = imageLoad(u_src, p).r;
     if (centre == 0u)
     {
         imageStore(u_dst, p, uvec4(0u));
         return;
     }
+
     // Relative to the centre column's floor: the sum stays small whatever the absolute height.
     const float base = tvFloorDecode(centre);
     float sum = 0.0, weight = 0.0;
@@ -46,5 +47,6 @@ void main()
         sum += w * (tvFloorDecode(bits) - base);
         weight += w;
     }
+
     imageStore(u_dst, p, uvec4(tvFloorEncode(base + sum / weight)));
 }

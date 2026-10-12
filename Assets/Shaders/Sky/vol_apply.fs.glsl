@@ -102,8 +102,6 @@ float volFarSunVis(vec3 dir, float a, float b, float jitter)
 // does not dim the scene) - times the clouds' visibility over the piece. Flat-based, the fog's height base.
 float volFarHazeStep(vec3 dir, float a, float b, float fogTau, inout float hazeTau, float vis)
 {
-    if (u_fog_hazeDensity <= 0.0)
-        return 0.0;
     const float seg = volAnalyticOpticalDepth(u_viewPos, dir, a, b, u_fog_heightBase, u_fog_hazeInvHeight, u_fog_hazeDensity);
     const float w = exp(-fogTau - hazeTau) * (1.0 - exp(-seg)) * vis;
     hazeTau += seg;
@@ -113,11 +111,11 @@ float volFarHazeStep(vec3 dir, float a, float b, float fogTau, inout float hazeT
 vec4 volFarField(vec3 dir, float t0, float t1)
 {
     const float density = u_fog_density * u_fog_farFieldDensity;
-    if ((density <= 1e-7 && u_fog_hazeDensity <= 0.0) || t1 <= t0)
+    if (t1 <= t0) // the shaft haze (>= 1e-5 on the CPU) is always there, so a fog density of 0 still marches
         return vec4(0.0, 0.0, 0.0, 1.0);
     const float falloff = u_fog_heightFalloff * u_fog_farFieldFalloffScale;
     const float tauOpaque = 12.0; // transmittance < 1e-5
-    const bool followsTerrain = terrainHeightMapPresent() && u_fog_terrainFollow > 0.0;
+    const bool followsTerrain = terrainHeightMapPresent();
     // THE SUN IS SHADOWED BY THE CLOUDS per sub-segment (the light shafts): each adds its share of the in-scatter,
     // T before it x (1 - its own T), times the clouds' sun visibility over it. The ambient stays one constant.
     const float visJitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 63u), vec2(0.06711056, 0.00583715))));
@@ -130,7 +128,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     {
         // Split so the visibility can vary along the ray; each piece stays closed-form.
         const float tEnd = min(t1, t0 + visTail);
-        const int steps = max(int(u_fog_farFieldSteps), 1);
+        const int steps = int(u_fog_farFieldSteps);
         float tPrev = t0;
         tau = 0.0;
         for (int i = 1; i <= steps; ++i)
@@ -161,7 +159,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
         // VOL_FAR_INFINITY, from spreading their steps across 10,000 km).
         const float reach = (u_terrain_mapInvFarSize > 0.0) ? 0.5 / u_terrain_mapInvFarSize : 0.5 / u_terrain_mapInvNearSize;
         const float tEnd = min(t1, t0 + reach);
-        const int steps = max(int(u_fog_farFieldSteps), 1);
+        const int steps = int(u_fog_farFieldSteps);
 
         vec2 gPrev = volFarFieldGround(u_viewPos.xz + dir.xz * t0, 1.0);
         float tPrev = t0;
@@ -219,7 +217,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
     // extinction, hence integral(rho * exp(-tau)) == 1 - T. The sun's is sunW (above): shadowed by the CLOUDS
     // only - the froxel volume's terrain shadow march is a sparse min() that only holds up filtered and
     // temporally blended.
-    const vec3 sunDir = normalize(u_sunDirection.xyz);
+    const vec3 sunDir = u_sunDirection.xyz;
     const vec3 sunLight = u_sunTransmittance * u_sunColor.rgb
         * (volPhaseHG(dot(dir, sunDir), u_fog_anisotropy) * u_sunVisible * u_fog_sunScatter); // x "Sun scatter", as the froxels
     // Virtual sky probe only: the GI probe field ends well inside the froxel volume, so evalProbeCoverage
@@ -244,7 +242,7 @@ vec4 volFarField(vec3 dir, float t0, float t1)
 // subtraction). invCos: the volume is bounded by view-Z, the far field integrates along the ray.
 void fogRay(out vec3 dir, out float invCos)
 {
-    const vec2 rayVpUv = (v_uv - u_viewportRect.xy) / u_viewportRect.zw;
+    const vec2 rayVpUv = (v_uv - u_viewportRect.xy) * u_viewportInvSize;
     const vec2 rayNdc = vec2(rayVpUv.x * 2.0 - 1.0, 1.0 - rayVpUv.y * 2.0) - u_taaJitter.xy;
     dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
     invCos = 1.0 / max(dot(dir, u_viewForward), 1e-3);
@@ -304,8 +302,6 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
 // edge: the haze is smooth, unlike the froxels.
 vec4 aerialTo(vec3 worldPos)
 {
-    if (u_fog_aerialStrength <= 0.0)
-        return vec4(0.0, 0.0, 0.0, 1.0);
     const vec4 centerClip = u_views_mvp[VIEW_CENTER] * vec4(worldPos, 1.0);
     if (centerClip.w <= 0.0)
         return vec4(0.0, 0.0, 0.0, 1.0);

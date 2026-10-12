@@ -37,7 +37,7 @@ export struct SkyParams
     glm::vec3 sunColor = glm::vec3(0.9568f, 1.0f, 0.9214f);
     float sunIntensity = 3.0f;
     float sunAngularCos = 0.99998f;     // cos of the disc radius (1 = disc off)
-    float sunGlow = 1.0f;               // sun halo strength (0 = none, ~0.5 subtle, 2 = heavy); HG forward lobe in sky.fs
+    float sunGlow = 1.0f;               // sun halo strength (>= 0.01, ~0.5 subtle, 2 = heavy); HG forward lobe in sky.fs
 
     // Ambient + sky radiance (the non-sun lighting inputs)
     glm::vec3 ambientColor = glm::vec3(1.0f);   // flat non-physical minimum ambient
@@ -77,7 +77,7 @@ export struct SkyParams
     float starColorVar = 0.85f;         // 0 = white, 1 = full cool/warm per-star tint
 
     // Nebula (milky-way band)
-    float nebulaIntensity = 0.2f;       // band glow strength (0 = off)
+    float nebulaIntensity = 0.2f;       // band glow strength (>= 0.01)
     float nebulaScale = 5.7f;           // noise frequency
     float nebulaBandWidth = 0.1f;       // gaussian width of the band around its great circle
     float nebulaDust = 1.0f;            // dark dust lane strength inside the band
@@ -116,7 +116,7 @@ export struct CloudParams
     float towerCoreLink = 1.0f;        // 0 = the top follows the tower field only (tilted ramps), 1 = the cloud's own coverage (its core rises)
     // SHELVES: stable layers (inversions) at fixed heights of the main layer where the clouds that reach them spread
     // out into flat tiers (stratocumulus cumulogenitus; at the top of a storm, the anvil).
-    int   shelfCount = 1;              // 0..3
+    int   shelfCount = 1;              // 1..3
     float shelfStrength = 0.55f;       // how far a cloud spreads at a shelf
     float shelfThickness = 0.1f;       // half thickness (fraction of the layer height)
     float shelfSpacing = 0.2f;         // from one shelf to the next (fraction of the layer height); the stack is centred in the layer
@@ -149,8 +149,7 @@ export struct CloudParams
     float groundAlbedo = 0.15f;      // ground bounce onto the cloud bottoms
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
-    float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays);
-                                       // 0 = no aerial perspective at all (the clouds as lit: no haze, no dimming)
+    float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays); >= 0.01
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
@@ -212,7 +211,7 @@ export struct ShadowParams
     // ring that reaches ~33 km. The baked terrain height cascades still have data far beyond that, so
     // distant pixels cone-march them instead (terrainSunVisibility) and take the darker of the two. These
     // apply to BOTH shadow modes; only the terrain map has to be up.
-    float terrainMarchStart = 1000.0f; // camera distance where the march fades in (m; 0 = off). Sits
+    float terrainMarchStart = 1000.0f; // camera distance where the march fades in (m; >= 50). Sits
                                 // inside maxDistance on purpose: inside the overlap both terms see the
                                 // same ridge, so the handover has nothing to show.
     float terrainMarchBias = 150.0f;   // first sample distance up the sun ray (m). THE self-shadow knob:
@@ -239,7 +238,7 @@ export struct FoliageParams
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
     float shadowLength = 3.5f;  // the sun shadow fades in over this many metres between the receiver and its
-                                // blockers (0 = hard, as any surface): light reaches into a crown, so its own
+                                // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
     float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
@@ -303,8 +302,8 @@ export struct FoliageParams
     float windBranchFadeEnd = 70.0f;
     float windLeafFadeStart = 20.0f;   // m: the leaf flutter fades out between these
     float windLeafFadeEnd = 40.0f;
-    float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (0 = no limit); a 100 m band fades it out
-    float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (0 = off)
+    float windTrunkFadeEnd = 3000.0f;  // m: no wind at all beyond this (>= 100); a 100 m band fades it out
+    float windBillboardWaves = 0.012f; // the whole-tree billboards' texture waves, a fraction of the card (>= 0.0005)
 };
 
 // PROCEDURAL GRASS ("Grass" tweaks; GrassPipeline, grass.inc.glsl). UBO-driven (u_grass*), so everything is live but
@@ -330,7 +329,7 @@ export struct GrassParams
     float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
     float lod2Distance = 30.0f;
     float lod3Distance = 60.0f;
-    float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (0 = pop)
+    float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (>= 0.01)
     float minPixelWidth = 1.0f;    // px: a blade is never narrower (fights the far shimmer)
     float groundBlendDistance = 80.0f; // m at which the normal has blended "Ground normal blend" of the way to the ground's
     float groundBlend = 0.7f;
@@ -431,7 +430,7 @@ export struct FarTreeParams
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
     float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
-    float normalStrength = 0.5f;  // 0..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
+    float normalStrength = 0.5f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 1.0f; // how much darker the sky light is at the ground than at the volume's top
     float interiorShadow = 1.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
@@ -452,7 +451,7 @@ export struct FarTreeParams
     // BAKE AHEAD: the bake centres on where the camera will be at the swap (its smoothed velocity x the last bake's real
     // duration), and the re-bake test uses that point too - the lag cancels at a steady speed, at any frame rate.
     bool bakeAhead = true;
-    int floorSmoothing = 2;       // the tree floor's tent blur radius, in columns (tree_volume_floor_smooth.cs); 0 = off
+    int floorSmoothing = 2;       // the tree floor's tent blur radius, in columns (tree_volume_floor_smooth.cs); >= 1
     // The world tree records' chunks within this of the bake centre (m) expand into their trees and bushes and splat in
     // detail; beyond, each record adds its mass per column (TreeVolumePipeline RecordSource).
     float recordDetail = 4000.0f;
@@ -477,7 +476,7 @@ export struct FogParams
     float heightBase = 0.0f;       // world height where the global fog is densest
     float heightFalloff = 0.25f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
-                                   // terrain height map, see Renderer::setFogTerrainHeightMap): 0 = flat fog,
+                                   // terrain height map, see Renderer::setFogTerrainHeightMap): 0.01 = near flat fog,
                                    // 1 = fog hugs the terrain at constant depth; in between it reaches higher
                                    // on mountainsides but still clears the peaks
     glm::vec3 albedo = glm::vec3(0.839f, 0.961f, 1.0f); // #D6F5FF
@@ -488,13 +487,13 @@ export struct FogParams
     float sunScatter = 1.0f;
     // SHAFT HAZE: a thin medium for the god rays alone - sunlit in-scatter only (x "Sun scatter"), no extinction, no
     // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
-    // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. 0 = off.
+    // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. >= 1e-5.
     float shaftHazeDensity = 0.001f;   // 1/m
     float shaftHazeHeight = 200.0f;   // m: the scale height (density / e per this much height)
     // AERIAL PERSPECTIVE: the sky's own Rayleigh + Mie atmosphere between the camera and the scene (the blue haze on
     // distant terrain), baked per frame into a frustum LUT (aerial_lut.cs.glsl) and laid behind the fog by the apply.
     // Strength scales the air's density along the view ray only (1 = the sky's atmosphere; the sun light stays as the
-    // sky has it); 0 = off.
+    // sky has it); >= 0.05.
     float aerialStrength = 1.0f;
     float aerialMaxDistanceKm = 40.0f; // the LUT's depth: past it the scene takes the value at this distance
     float anisotropy = 0.15f;      // HG phase g (0 = isotropic, ->1 = forward scattering)
@@ -508,7 +507,7 @@ export struct FogParams
     float farFieldThickness = 1.0f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
-    float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (0 = unbounded).
+    float farFieldMaxDistanceKm = 40.0f; // the far field integrates up to this distance from the camera (>= 1 km).
                                    // Past it a cloud and the scene behind it see the SAME fog, so the fog apply
                                    // evaluates it once for both (vol_apply.fs.glsl)
     int   farFieldSteps = 4;      // ground samples along the far segment. Each sub-segment between them is
@@ -521,18 +520,18 @@ export struct FogParams
                                    // at distance - TLAS is range-bounded); needs the terrain fog map
     float regionStrength = 1.0f;   // how much the baked regional fog fields (terrain data map channel B:
                                    // thickness + height-falloff mul, Procedural's sampleFogThickness /
-                                   // sampleFogHeightFalloff) modulate the height fog: 0 = uniform fog,
+                                   // sampleFogHeightFalloff) modulate the height fog: 0.01 = near uniform fog,
                                    // 1 = fully region-driven
     float shaftBoost = 10.0f;        // non-physical gain on the underwater sun in-scatter (fog only, not
                                     // surfaces): water scatters little at fog densities, so physically
                                     // correct shafts are faint - this makes them readable. 1 = physical.
     float causticStrength = 1.5f;   // underwater caustic focus (fold-Jacobian light pattern on submerged
-                                    // surfaces + fog shafts; underwater_light.inc.glsl): 0 = off, > 1
+                                    // surfaces + fog shafts; underwater_light.inc.glsl): >= 0.05, > 1
                                     // exaggerated. Beer-Lambert depth absorption is separate (Ocean/Absorption).
     float causticDepthFade = 0.25f; // caustic contrast decay with depth (1/m) - approximates defocus;
                                     // higher = the pattern washes out closer to the surface
     float causticShoreFade = 1.0f;  // caustic contrast ramps in over this much water depth (m), so the
-                                    // pattern dissolves at the terrain-waterline intersection; 0 = off
+                                    // pattern dissolves at the terrain-waterline intersection; >= 0.01
     float underwaterDensity = 1.5f; // multiplier on the global density at/below the LOCAL water surface
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
@@ -625,7 +624,7 @@ export struct RTAOParams
     float intensity = 1.0f;
     float fadeStart = 100.0f;  // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus - the player in game
                                // mode; the camera when unset) where AO begins to fade out
-    float maxDistance = 120.0f; // focus distance at which AO is fully gone (trace early-out); 0 disables the falloff
+    float maxDistance = 120.0f; // focus distance at which AO is fully gone (trace early-out); >= 1
     float normalBias = 0.02f;    // constant ray-origin offset along the surface normal (m)
     float distanceBias = 0.001f; // ray-origin offset toward the camera per meter of view distance: absorbs
                                  // the depth-reconstruction error (grows with distance, lies along the view
@@ -798,7 +797,7 @@ export struct ForceFieldParams
                                        // not authored reach) is >= this march the BAKED shell volume
                                        // (two trilinear taps/sample) instead of the analytic
                                        // candidate loop - hits/normals/shading stay analytic.
-                                       // 0 = tier off. Small bubbles stay analytic: the fixed-size
+                                       // >= 1. Small bubbles stay analytic: the fixed-size
                                        // volume's resolution cannot resolve them
     float shellVolumeViewMargin = 10.0f; // the sampled-tier volume's fit is CLIPPED to the camera's
                                        // ground-band view footprint plus this margin (m), so its

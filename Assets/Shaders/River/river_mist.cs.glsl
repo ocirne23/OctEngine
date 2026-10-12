@@ -1,10 +1,9 @@
 #version 460
 
-// River mist: the particle GPU spawn path's second producer (particle_spawn.inc.glsl), at the head of the particle sim
-// pass. One thread per whitewater stretch (rapids, falls) near the camera, from Procedural's RiverSystem. Its expected
-// spawn count is "Mist rate" x its area x dt x the whitewater past "Mist threshold"; the fraction is a hashed dice roll.
-// Each particle spawns over the stretch (along it and across the channel), drifts downstream and is kicked upward,
-// into the ONE emitter slot the CPU published (Effects/river_mist.pfx, u_river_mistEmitter).
+// River mist: the particle GPU spawn path's second producer (particle_spawn.inc.glsl), at the head of the particle sim pass.
+// One thread per whitewater stretch (rapids, falls) near the camera (Procedural RiverSystem). Expected spawns = "Mist rate" x
+// area x dt x the whitewater past "Mist threshold", the fraction a hashed dice roll. Each particle spawns over the stretch,
+// drifts downstream and is kicked upward, into the ONE emitter slot the CPU published (river_mist.pfx, u_river_mistEmitter).
 
 #include "shared.inc.glsl"
 #include "particle.inc.glsl"
@@ -35,6 +34,7 @@ void main()
     const uint i = gl_GlobalInvocationID.x;
     if (i >= s_count)
         return;
+
     const RiverMistSource src = s_sources[i];
     const float strength = pow(smoothstep(u_river_mistThreshold, 1.0, src.flowFoam.z), u_river_mistCurve);
     if (strength <= 0.0)
@@ -49,6 +49,7 @@ void main()
     const float halfWidth = max(abs(src.posHalf.w), 0.1);
     const float len       = max(src.flowFoam.w, 0.1);
     const float expected  = rate * (2.0 * halfWidth * len) * u_ocean_sprayDt * strength;
+
     uint seed  = particlePcg(u_frameIndex * 0x9E3779B9u + i * 0x85EBCA6Bu + 0x27D4EB2Fu);
     uint count = uint(expected);
     if (particleRand(seed) < fract(expected))

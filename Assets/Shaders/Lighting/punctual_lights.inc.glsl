@@ -40,13 +40,13 @@ vec2 shadowJitter()
 // IGN's structured pattern when the disc is wide.
 float traceSunVisibility(vec3 pos, vec3 N)
 {
-	const vec3 L = normalize(u_sunDirection.xyz);
+	const vec3 L = u_sunDirection.xyz;
 	const vec3 ref = abs(L.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
 	const vec3 T = normalize(cross(ref, L));
 	const vec3 B = cross(L, T);
 	const vec3 origin = pos + N * 0.02;
 
-	const uint numRays = clamp(uint(u_rt_sunShadowRays), 1u, 8u);
+	const uint numRays = uint(u_rt_sunShadowRays);
 	const vec2 jitter = shadowJitter();
 	float vis = 0.0;
 	for (uint i = 0u; i < numRays; ++i)

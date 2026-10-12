@@ -55,7 +55,7 @@ void main()
 
     const uint solidBits = uint(round(clamp(tSolid / range, 0.0, 1.0) * 65535.0));
     const uint foliageBits = layers > 0u ? uint(round(clamp(tTop / range, 0.0, 1.0) * 4095.0)) : 4095u;
-    const float pass = pow(1.0 - clamp(pc_layerBlock, 0.0, 1.0), float(layers));
+    const float pass = pow(1.0 - pc_layerBlock, float(layers));
     const uint passBits = uint(round(pass * 15.0));
     imageStore(u_rainOcclusion, ivec2(p), uvec4(solidBits | (foliageBits << 16) | (passBits << 28), 0u, 0u, 0u));
 }

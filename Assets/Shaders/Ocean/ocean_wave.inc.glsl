@@ -99,8 +99,8 @@ bool oceanVertexCulled(vec2 worldXZ, float cellSize, vec2 shoreHW)
         else
         {
             const float invFar = u_terrain_mapInvFarSize;
-            if (u_ocean_farCullError <= 0.0 || invFar <= 0.0 || (cheb + reach) * invFar >= 0.48)
-                return false; // far cull off / footprint reaches the far map's clamp-to-edge border
+            if (invFar <= 0.0 || (cheb + reach) * invFar >= 0.48)
+                return false; // no far map / footprint reaches the far map's clamp-to-edge border
             err = u_ocean_farCullError;
         }
     }
@@ -152,8 +152,7 @@ float oceanVertexLod(float cellSize, float morph, float patchSize)
 // scale" x the mid cascade's patch size. The band across which open water becomes the shore.
 float oceanSwashFadeIn(float depth)
 {
-    const float reach = max(u_ocean_swashReach, 0.01);
-    return 1.0 - smoothstep(0.0, max(2.0 * reach, u_ocean_shoalScale * u_ocean_cascadeSizes.y), depth);
+    return 1.0 - smoothstep(0.0, u_ocean_swashFadeBand, depth);
 }
 
 // Swash base: the fraction of the raw wave field that runs up the beach - "Swash amplitude" x the
@@ -162,11 +161,8 @@ float oceanSwashFadeIn(float depth)
 float oceanSwashBase(float depth, float waterLevel)
 {
     const float amp = u_ocean_swashAmp;
-    if (amp <= 0.0)
-        return 0.0;
     const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_ocean_seaLevel));
-    const float reach = max(u_ocean_swashReach, 0.01);
-    const float landFade = clamp(1.0 + min(depth, 0.0) / reach, 0.0, 1.0);
+    const float landFade = clamp(1.0 + min(depth, 0.0) * u_ocean_swashInvReach, 0.0, 1.0);
     return amp * seaFade * landFade;
 }
 
@@ -208,12 +204,11 @@ vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
         return vec2(0.0);
     float fade = surfaceWeight; // dies into the beach with every other wave term
     const float fadeDist = u_ocean_detailFadeDistance;
-    if (fadeDist > 0.0)
-        fade *= 1.0 - smoothstep(0.5 * fadeDist, fadeDist, distance(worldXZ, u_viewPos.xz));
+    fade *= 1.0 - smoothstep(0.5 * fadeDist, fadeDist, distance(worldXZ, u_viewPos.xz));
     if (fade <= 0.0)
         return vec2(0.0);
     const int c = OCEAN_CASCADES - 1; // the finest cascade: the shortest waves there are to borrow
-    const float L = max(u_ocean_cascadeSizes[c] * u_ocean_detailScale, 1e-3);
+    const float L = u_ocean_cascadeSizes[c] * u_ocean_detailScale;
     const vec2 rot = vec2(cos(u_ocean_detailRotation), sin(u_ocean_detailRotation));
     const vec2 p = vec2(rot.x * sampleXZ.x + rot.y * sampleXZ.y, -rot.y * sampleXZ.x + rot.x * sampleXZ.y);
     const vec2 g = texture(u_oceanMaps, vec3(p / L, float(OCEAN_CASCADES + c))).xy; // (dh/dx, dh/dz)
@@ -258,7 +253,7 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
         // ~the swash reach (the raw offset is unbounded and would shear triangles into streaks).
         const float flowFade = smoothstep(0.0, 0.35, rawY * sw + depth);
         vec2 flowOff = rawXZ * (chop * u_ocean_swashFlow * sw * flowFade);
-        const float flowCap = clamp(0.5 * u_ocean_swashReach, 0.25, 1.0);
+        const float flowCap = u_ocean_swashFlowCap;
         flowOff *= flowCap / (flowCap + length(flowOff));
         disp.xz += flowOff;
         disp.xz = oceanFlowToWorld(disp.xz, fr);
@@ -309,9 +304,9 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
             fine = vec3(g.z, g.w, d.w);
     }
     jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
-    // Buried under land: flat calm surface (with swash on, the run-up band still shades, and its surf
-    // lace still reads the raw folds).
-    if (depth <= (u_ocean_swashAmp > 0.0 ? -u_ocean_swashReach : 0.0))
+    // Buried under land past the swash band: flat calm surface (the run-up band still shades, and its
+    // surf lace still reads the raw folds).
+    if (depth <= -u_ocean_swashReach)
     {
         slope = vec2(0.0);
         jacobian = 1.0;
@@ -351,7 +346,7 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
 // field) and the spray.
 float oceanInstantFoam(float jacobian, float accel)
 {
-    const float softness = max(u_ocean_foamSoftness, 0.02);
+    const float softness = u_ocean_foamSoftness;
     const float bias = u_ocean_foamBias;
     const float fold = 1.0 - smoothstep(bias - softness, bias, jacobian);
     const float breaking = smoothstep(u_ocean_foamBreakAccel, u_ocean_foamBreakAccel + softness, -accel / 9.81);

@@ -96,13 +96,13 @@ export struct TerrainSettings
 	float wetDryTime = 10.0f;         // s to decay to 1/e on cool ground
 	float wetDryTempSens = 0.04f;     // extra decay rate per C above 15 C
 	float wetInTime = 5.0f;           // s for ground under water to reach full wetness
-	float wetSlopeDrain = 20.0f;      // steep ground dries faster / soaks slower; 0 = off
+	float wetSlopeDrain = 20.0f;      // steep ground dries faster / soaks slower; >= 0.1
 	float wetFillStart = 0.5f;        // wetness at which water begins to stand in the relief's low points
 	float wetFillFull = 1.0f;         // wetness that submerges the relief (level 1)
 	float wetFillCurve = 1.0f;        // exponent between them: 1 = linear, > 1 = fills late, < 1 = early
 	float wetEdgeFade = 0.5f;         // m of water depth the film fades out over at the terrain intersection
 	float wetOceanBlend = 5.0f;       // m of live ocean water over the ground the film fades into the ocean over
-	float wetOceanEdgeFade = 0.5f;    // m of column the ocean blends out over at its edge (0 = hard edge)
+	float wetOceanEdgeFade = 0.5f;    // m of column the ocean blends out over at its edge (>= 0.01)
 	float wetFilmMaxSlope = 25.0f;    // degrees: no standing water on steeper ground (90 = off)
 	float wetFilmSlopeFade = 5.0f;    // degrees below the max over which the pool level sinks to nothing
 	float wetFilmFlowSpeed = 1.0f;    // m/s the film's ripples run downhill at 45 degrees (x sqrt(tan slope))
@@ -125,7 +125,7 @@ export struct TerrainSettings
 	float wetRoughnessThreshold = 1.0f;    // wetness at which the ground's wet gloss is full
 	float wetGroundNormalScale = 1.75f;    // normal map tilt at full gloss: 1 = unchanged, < 1 flatter, > 1 stronger
 	float wetGlintSize = 0.04f;            // m: glint patch cell size
-	float wetGlintCoverage = 0.15f;        // ~ share of the wet ground that glints (0 = off)
+	float wetGlintCoverage = 0.15f;        // ~ share of the wet ground that glints (>= 0.01)
 	float wetGlintRoughness = 0.15f;       // GGX alpha inside a glint patch
 
 	// --- "Terrain/Textures" + "Terrain/Tessellation": splat shaping, read by the renderer (the UBO) ---
@@ -149,7 +149,7 @@ export struct TerrainSettings
 	// Macro variation: the splat textures repeat every few metres, and at a distance the eye finds that grid in their
 	// low-frequency content. A world noise at two unrelated scales varies the brightness, a warm/cool hue and the
 	// roughness of the ground, beach and rock layers (not the snow).
-	float texMacroStrength = 0.18f;  // albedo brightness +- (0 = off)
+	float texMacroStrength = 0.18f;  // albedo brightness +- (>= 0.01)
 	float texMacroHue = 0.06f;       // warm/cool shift +-
 	float texMacroRoughness = 0.15f; // roughness +-
 	float texMacroSize = 40.0f;      // m: the noise's largest feature (the second tap's: 3.71x)

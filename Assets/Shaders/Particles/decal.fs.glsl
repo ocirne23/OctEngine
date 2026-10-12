@@ -76,7 +76,7 @@ void main()
         // x "GI/Strength" (u_rt_giStrength, 0 with GI or RT off, where the probes and the sky SH are stale),
         // like every other GI consumer.
         const vec3 irr = u_rt_giStrength > 0.0 ? giIrradiance(worldPos, n) * u_rt_giStrength : vec3(0.0);
-        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittance(worldPos)) * max(dot(n, normalize(u_sunDirection)), 0.0);
+        const vec3 sun = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittance(worldPos)) * max(dot(n, u_sunDirection), 0.0);
         color *= (irr + sun) * (1.0 / PI) + u_ambientColor;
     }
     color += decal.emissiveFadeWidth.rgb;

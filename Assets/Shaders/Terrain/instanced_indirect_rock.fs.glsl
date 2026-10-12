@@ -135,8 +135,7 @@ void main()
 		const vec2 climate = vec2(clamp((in_rockFields.y + 25.0) / 75.0, 0.0, 1.0), in_rockFields.z);
 		const float invS2 = 1.0 / (2.0 * u_terrainTex_climateSigma * u_terrainTex_climateSigma);
 		// The terrain's macro variation at this point (uniform flow), so a boulder keeps the tone of the ground around it.
-		const bool macroOn = terrainMacroEnabled();
-		const f16vec2 macro = macroOn ? terrainMacroAt(in_pos.xz) : f16vec2(0.0);
+		const f16vec2 macro = terrainMacroAt(in_pos.xz);
 
 		// --- The coverages first (cheap), so a buried layer never samples ---
 		// SNOW: the terrain's rule (cold x holds x humid) with this face's own slope - an underside holds none.
@@ -145,14 +144,14 @@ void main()
 		{
 			const float cold = 1.0 - smoothstep(u_terrainTex_snowTempFull, u_terrainTex_snowTempNone, in_rockFields.y);
 			const float holds = 1.0 - smoothstep(u_terrainTex_snowSlopeStart, u_terrainTex_snowSlopeFull, 1.0 - clamp(geoN.y, 0.0, 1.0));
-			const float humid = smoothstep(0.0, max(u_terrainTex_snowAridity, 1e-3), in_rockFields.z);
+			const float humid = smoothstep(0.0, u_terrainTex_snowAridity, in_rockFields.z);
 			snowW = float16_t(cold * holds * humid);
 		}
 		// THE CONTACT BAND: 1 at the ground, 0 "Contact height" above it. The ground height is the terrain-data
 		// map's (per vertex): metres-wide texels near the camera, far coarser beyond - so the band fades out by
 		// "Contact fade distance".
 		const float bandFade = 1.0 - smoothstep(0.5 * u_rock_contactFadeDistance, u_rock_contactFadeDistance, distance(in_pos, u_viewPos));
-		contact = float16_t((1.0 - smoothstep(0.0, max(u_rock_contactHeight, 1e-3), in_pos.y - in_rockFields.x)) * bandFade);
+		contact = float16_t((1.0 - smoothstep(0.0, u_rock_contactHeight, in_pos.y - in_rockFields.x)) * bandFade);
 		// THE GROUND COVER: "Ground cover" of the up-facing faces ("Cover start / full"), broken into patches by a
 		// world noise ("Cover patch size") - and of the CREVICES ("Cavity cover" x the baked cavity: moss and dust
 		// gather where the rock is occluded), on any face that does not look down.
@@ -190,7 +189,7 @@ void main()
 		}
 
 		// The macro variation, under the snow as on the terrain (not on dead wood: its bark is no splat material).
-		if (macroOn && !wood)
+		if (!wood)
 			terrainApplyMacro(surf, macro);
 
 		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough).
@@ -216,8 +215,8 @@ void main()
 	{
 		const float16_t slope = one - float16_t(clamp(geoN.y, 0.0, 1.0));
 		const float16_t wet = pow(float16_t(terrainWetnessAt(in_pos.xz)), one + slope * float16_t(u_terrainWater_slopeDrain));
-		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), smoothstep(float16_t(0.0), float16_t(max(u_terrainWater_darkeningThreshold, 1e-3)), wet));
-		surf.rough = mix(surf.rough, float16_t(u_terrainWater_wetRoughness), smoothstep(float16_t(0.0), float16_t(max(u_terrainWater_roughnessThreshold, 1e-3)), wet));
+		surf.albedo *= mix(one, float16_t(u_terrainWater_darkening), smoothstep(float16_t(0.0), float16_t(u_terrainWater_darkeningThreshold), wet));
+		surf.rough = mix(surf.rough, float16_t(u_terrainWater_wetRoughness), smoothstep(float16_t(0.0), float16_t(u_terrainWater_roughnessThreshold), wet));
 	}
 
 	// V HERE, not at the top: its registers are then not live across the shadow and the splat.

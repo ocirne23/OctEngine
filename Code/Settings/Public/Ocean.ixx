@@ -84,11 +84,11 @@ export struct OceanSettings
 	float horizonDepthRange = 3000.0f;
 	float shoreFoamDepth = 8.0f;   // surf band: water-column height (m) that churns white; 0 = off
 	float shoreFoamMax = 1.0f;     // surf band opacity cap: keeps the refracted bottom visible through the foam
-	float swashAmp = 0.5f;         // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
+	float swashAmp = 0.5f;         // swash run-up: the fraction of the raw wave height that runs up the beach (>= 0.04)
 	float shoreFoamBias = 0.1f;    // surf fold-threshold shift: negative = sparser/more transparent surf
 	float swashFlow = 0.5f;        // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
 	float cullMargin = 1.0f;       // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)
-	float farCullError = 4.0f;     // land cull from the FAR terrain cascade: flat error allowance (m); 0 = near-only
+	float farCullError = 4.0f;     // land cull from the FAR terrain cascade: flat error allowance (m); >= 0.25
 	bool  drySectorCull = true;    // whole-sector skip where the baked terrain buries a sector's entire footprint
 
 	// --- Ray tracing budget (ocean.fs.glsl per-pixel refraction/reflection rays; all live) ---

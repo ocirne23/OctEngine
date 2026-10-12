@@ -7,11 +7,10 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
-// River / lake water (EPipelineIndex::River; Procedural RiverSystem's ribbons and lake surfaces). The ocean's shading,
-// with the scene side shared through water_scene.inc.glsl: the normal from the river waves (river_wave.inc.glsl) plus a flow-mapped noise
-// ripple; the Fresnel split (Schlick, F0 0.02) between the RAY-TRACED refraction to the bed (Beer-Lambert both ways) and
-// the RAY-TRACED mirror (sky fallback); the GGX sun glint; TURBULENCE as a smooth gradient (rougher, milkier); the scene
-// lights. The RT toggles and ranges are the ocean's (OCEAN_RT_REFLECTIONS / OCEAN_HIT_LIGHTS, u_ocean_rt*).
+// River / lake water (EPipelineIndex::River; Procedural RiverSystem's ribbons and lake surfaces): the ocean's shading without
+// its waves, the scene side shared through water_scene.inc.glsl. Normal = the river waves (river_wave.inc.glsl) + a flow-mapped
+// noise ripple. Fresnel (F0 0.02) splits the RT refraction to the bed (Beer-Lambert both ways) and the RT mirror (sky fallback);
+// plus the GGX sun glint and the scene lights. The RT toggles and ranges are the ocean's (OCEAN_RT_*, u_ocean_rt*).
 
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
@@ -32,14 +31,13 @@ layout (location = 4) in float in_waveSize;   // the waves' scale with the river
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-// DUAL-SOURCE composite: out = out_color + scene * out_factor, the alpha too. Opaque (factor 0) except over the edge
-// fade: a ribbon over its last "Edge softness" of half-width, a lake over its last "Lake edge fade" of water column.
+// DUAL-SOURCE composite: out = out_color + scene * out_factor, the alpha too; opaque except over the edge fade.
 // Alpha 0 = TAA's animated-surface flag (the ripples move without motion vectors), as the ocean.
 layout (location = 0, index = 0) out vec4 out_color;
 layout (location = 0, index = 1) out vec4 out_factor;
 
-// The NEAR data cascade's weight at xz (terrainDataAt's handover band): only it holds the carved ground. The far cascade
-// is the generator's coarse stage, uncarved and smoothed, and stands above most lakes.
+// The NEAR data cascade's weight at xz (terrainDataAt's handover band): only it holds the carved ground. The far cascade is
+// the generator's coarse stage, uncarved and smoothed, and stands above most lakes.
 float nearMapWeight(vec2 xz)
 {
     if (!terrainHeightMapPresent())
@@ -67,6 +65,7 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
         f.humidity    = climate.w;
         f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }
+
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
     f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
     if (u_terrainWater_enabled > 0.5)
@@ -81,25 +80,24 @@ vec3 riverInscatter(float aeration, vec3 ambientSky, vec3 sunTint, vec3 L)
     return mix(u_river_scatterColor, 0.35 * u_river_foamColor, aeration) * (ambientSky + sunTint * (max(L.y, 0.0) * INV_PI));
 }
 
-// The water body along the refracted `dir` from `origin`: the traced bed (TLAS; the baked height map only where the TLAS
-// cannot answer), shaded, Beer-Lambert absorbed over the path and blended into the in-scatter, then faded behind the
-// aeration. The column is measured from this pixel's water surface `surfPos`. The in-scatter is built AFTER the trace
-// from values live anyway: no vec3 of it across the ray query (registers).
+// The water body along the refracted `dir`: the traced bed (TLAS; the baked height map only where the TLAS cannot answer),
+// shaded, Beer-Lambert absorbed and blended into the in-scatter, then faded behind the aeration. The column counts from this
+// pixel's surface `surfPos`. The in-scatter is built AFTER the trace: no vec3 of it live across the ray query (registers).
 vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sunVis, vec3 L, float aeration, vec3 ambientSky, bool rtInRange)
 {
     const vec3 sigmaT = u_river_absorption;
-    const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
     const float range = u_ocean_rtRefractionRange;
-    const float tMax = min(4.6 / minSigma, range); // 1 % transmittance
+    const float tMax = u_river_bodyTMax; // 1 % transmittance, capped at the range
     SceneHit hit;
     const bool traced = rtInRange && distance(surfPos, u_sceneFocus.xyz) + tMax < u_rt_giTlasRange;
-    // The ray starts 1 m BACK along itself: in a shallow stream the TLAS bed (a coarser terrain LOD) can lie at or just
-    // above the drawn surface, and a ray from the surface misses it (a bright band along the banks). The water path
-    // still counts from the surface.
+
+    // The ray starts 1 m BACK: in a shallow stream the TLAS bed (a coarser terrain LOD) can lie at or above the drawn
+    // surface, and a ray from the surface misses it (a bright band along the banks). The path still counts from the surface.
     const float back = 1.0;
     bool haveHit = rtInRange && traceScene(origin - dir * back, dir, tMax + back, surfPos.y, hit);
     if (haveHit)
         hit.t = max(hit.t - back, 0.0);
+
     // Out of the TLAS range: the bed from the baked height map (near cascade only, nearMapWeight).
     if (!haveHit && !traced && dir.y < -0.02 && nearMapWeight(surfPos.xz) > 0.5)
     {
@@ -116,6 +114,7 @@ vec3 traceRiverBody(vec3 origin, vec3 dir, vec3 surfPos, vec3 sunTint, float sun
     }
     if (!haveHit)
         return riverInscatter(aeration, ambientSky, sunTint, L);
+
     const float sunPath = max(hit.waterLevel - hit.pos.y, 0.0) / max(L.y, 0.25); // the column above the hit
     const vec3 hitRadiance = shadeHit(hit, dir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
     // = mix(hit x T + inscatter x (1 - T), inscatter, aeration), T also faded out at the end of the range.
@@ -133,6 +132,8 @@ vec2 rippleSlope(vec2 xz, vec2 flow, float t)
     const float p1 = fract(phase + 0.5);
     const float w0 = 1.0 - abs(2.0 * p0 - 1.0);
     const vec2 drift = flow * (period * u_river_invRippleSize);
+    const mat2 octaveStep = mat2(0.8, -0.6, 0.6, 0.8) * 2.7; // next octave: rotated, x 2.7, shifted
+
     vec2  slope = vec2(0.0);
     float amp   = 1.0;
     vec2  base  = xz * u_river_invRippleSize;
@@ -142,7 +143,7 @@ vec2 rippleSlope(vec2 xz, vec2 flow, float t)
         const vec2 b = texture(TERRAIN_NOISE_SAMPLER, base - drift * p1 + vec2(0.37, 0.61)).rg * 2.0 - 1.0;
         slope += (a * w0 + b * (1.0 - w0)) * amp;
         amp *= 0.5;
-        base = mat2(0.8, -0.6, 0.6, 0.8) * base * 2.7 + vec2(0.13, 0.71); // next octave: rotated, x 2.7, shifted
+        base = octaveStep * base + vec2(0.13, 0.71);
     }
     return slope;
 }
@@ -152,20 +153,20 @@ void main()
 #ifdef STEREO
     g_viewIndex = int(u_viewIndex);
 #endif
-    const vec3 up = normalize(u_skyUp);
+    const vec3 up = u_skyUp;
     const vec3 L  = u_sunDirection.xyz; // normalized on the CPU: read from the UBO at each use, never held in registers
     const vec3 toCam = u_viewPos - in_pos;
     const float viewDist = length(toCam);
     const vec3 V = toCam / max(viewDist, 1e-4);
     const bool lake = in_uv.x > 1.5;
-    // A LIGHT ribbon or flat lake quad goes where the dense near cells are all built (u_river_nearCovered): the dense
-    // waves are the only surface there, else a camera in a deep channel sees the sunk light surface as a second layer.
-    // A discard before the derivatives below is safe: the covered disc is far larger than a pixel quad.
+
+    // A LIGHT ribbon or flat lake quad goes where the dense near cells are all built: else a camera in a deep channel sees
+    // the sunk light surface as a second layer. Safe before the derivatives: the covered disc is far larger than a quad.
     if (in_dense < 0.5 && distance(in_pos, u_views_viewPos[VIEW_CENTER].xyz) < u_river_nearCovered)
         discard;
 
-    // The normal (uniform control flow: the taps take screen derivatives): the WAVES' slope, so the shading follows the
-    // dense geometry, plus the noise ripples as finer detail. A lake drifts slowly in one direction and ripples weaker.
+    // The normal (uniform control flow: the taps take screen derivatives): the WAVES' slope, so the shading follows the dense
+    // geometry, plus the noise ripples as finer detail. A lake drifts slowly in one direction and ripples weaker.
     const vec2 flow = lake ? vec2(0.05, 0.03) * u_river_flowSpeed : in_flow.xz * u_river_flowSpeed;
     const float whitewaterIn = lake ? 0.0 : in_flow.y;
     const float strength = u_river_rippleStrength * (lake ? u_river_lakeRipple : 1.0 + in_flow.y);
@@ -173,15 +174,15 @@ void main()
                      + rippleSlope(in_pos.xz, flow, u_timeSeconds) * strength;
     vec3 N = normalize(vec3(-slope.x, 1.0, -slope.y));
     const float variance = normalVariance(N);
-    // TURBULENCE: a smooth gradient from calm water, not a kind of water. The vertex whitewater amount x "Foam strength"
-    // x the river's size (a trickle has too little water to churn). It makes the water rougher, the body milkier
-    // (aeration, below) and the waves higher (river_wave.inc.glsl).
+
+    // TURBULENCE, a smooth gradient from calm water: whitewater x "Foam strength" x the river's size (a trickle has too
+    // little water to churn). Rougher water, a milkier body (aeration) and higher waves (river_wave.inc.glsl).
     const float turb = lake ? 0.0 : clamp(in_flow.y * u_river_foamStrength * in_waveSize, 0.0, 1.0);
 
+    // The edge fade. A lake only inside the near data cascade (nearMapWeight); past it opaque, the terrain mesh cuts the shore.
     float cover = 1.0;
     if (lake)
     {
-        // Only inside the near data cascade (nearMapWeight); past it opaque, the terrain mesh cuts the shore by depth.
         const float nearW = nearMapWeight(in_pos.xz);
         if (nearW > 0.0)
             cover = mix(1.0, clamp((in_pos.y - terrainHeightAt(in_pos.xz)) / u_river_lakeEdgeFade, 0.0, 1.0), nearW);
@@ -212,8 +213,8 @@ void main()
     const float aeration = 0.6 * turb; // entrained air (riverInscatter, traceRiverBody)
     const float F = F_Schlick(NoV, 0.02);
 
-    // The refracted body FIRST (registers): no part of `color` is live across its ray query - the glint and the sky
-    // share are added after it.
+    // The refracted body FIRST (registers): no part of `color` is live across its ray query - the glint and the sky share
+    // are added after it.
     const float bodyWeight = 1.0 - F;
     vec3 body;
     const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
@@ -229,6 +230,7 @@ void main()
     const float NoH = max(dot(N, H), 0.0);
     const float LoH = max(dot(L, H), 0.0);
     const float glint = min(D_GGX(NoH, alpha) * V_SmithGGX(NoV, NoL, alpha) * NoL, MEDIUMP_FLT_MAX) * (sunVis * F_Schlick(LoH, 0.02));
+
     vec3 color = body * bodyWeight + F * reflBlur * skyVis * ambientSky + sunTint * glint;
 
     // The mirror: ray-traced (the ocean's toggle and ranges), sky fallback.

@@ -173,7 +173,7 @@ public:
     glm::vec3 getPriorityParams() const
     {
         const GiSettings& gi = Globals::settings.gi;
-        return glm::vec3(gi.priorityDist, oc::max(gi.priorityFalloff, 0.0f), gi.priorityFrustumWeight);
+        return glm::vec3(oc::max(gi.priorityDist, 1.0f), oc::max(gi.priorityFalloff, 0.0f), oc::max(gi.priorityFrustumWeight, 1.0f));
     }
 
     // Debug visualization: a sphere impostor at every clipmap probe, drawn into the main color pass - the SH

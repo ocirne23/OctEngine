@@ -267,12 +267,12 @@ void main()
 	float16_t surfaceAO;
 	{
 		float interior = 1.0 - u_foliage_interiorShadow
-			* smoothstep(u_foliage_interiorStart, max(u_foliage_interiorEnd, u_foliage_interiorStart + 1e-3), float(normalTap.w));
+			* smoothstep(u_foliage_interiorStart, u_foliage_interiorEnd, float(normalTap.w)); // end > start on the CPU
 		// On the horizontal card ^ "Foliage interior shadow top card scale" (u_foliage_interiorTopCardScale): an EXPONENT, so > 1
 		// darkens it at any strength (a multiplier on the strength saturated at 1). x |V.y|, the view's steepness: from
 		// BELOW V.y is negative - a negative factor on the AO and the sun turned the card black (from level: 0).
 		if (foliageTopCard(cardDu, cardDv, material.flags))
-			interior = pow(max(interior, 0.0), max(u_foliage_interiorTopCardScale, 0.01)) * abs(V.y); // pow(0, 0) is undefined
+			interior = pow(max(interior, 0.0), u_foliage_interiorTopCardScale) * abs(V.y); // pow(0, 0) is undefined: the CPU floors the exponent at 0.01
 		// The visible leaf's depth into the crown for the self-shadow: the baked interior, faded out as the view lines up
 		// with the sun (from the front the leaves seen through the gaps are lit through those same gaps).
 		const float leafDepth = float(normalTap.w) * (1.0 - max(dot(V, u_sunDirection.xyz), 0.0));
@@ -328,7 +328,7 @@ void main()
 	// sun dark as a whole. Formed BEFORE computeLitColor: its light loop is the shader's register peak, and only this half
 	// colour is live across it - not the shadow, the interior term and the surface colour it is made of.
 	f16vec3 transmit = f16vec3(0.0);
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u && u_foliage_transmission > 0.0)
+	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);

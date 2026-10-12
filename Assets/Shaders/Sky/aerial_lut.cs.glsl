@@ -42,8 +42,8 @@ void main()
     const vec2 uv = (vec2(cell) + 0.5) / vec2(AERIAL_LUT_X, AERIAL_LUT_Y);
     const vec3 dir = normalize(vec3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 1.0) * u_rayFromNdc);
 
-    const vec3 up = normalize(u_skyUp);
-    const vec3 L = normalize(u_sunDirection.xyz);
+    const vec3 up = u_skyUp;
+    const vec3 L = u_sunDirection.xyz;
     const vec3 ro = up * (ATMOS_R_PLANET + max(u_viewPos.y, ATMOS_OBSERVE_HEIGHT));
     const AtmosRay ray = atmosRayBegin(ro, dir);
 

@@ -13,11 +13,10 @@
 // The wind at `xz` at `time`: its speed (m/s) and direction (unit, XZ).
 float vegetationWind(vec2 xz, float time, out vec2 dir)
 {
-    const float meanSpeed = length(u_weather_windVelocity.xz);
-    const vec2 meanDir = meanSpeed > 1e-3 ? u_weather_windVelocity.xz / meanSpeed : u_weather_windDirection;
+    const vec2 meanDir = u_weather_windDirection;
     const float along = dot(xz, meanDir);
     const float across = dot(xz, vec2(-meanDir.y, meanDir.x));
-    const float travel = time * max(meanSpeed, 1.0);
+    const float travel = time * u_weather_windTravelSpeed;
     const float k1 = 5.236 * u_weather_invGustSize;  // 2 pi / (1.2 x the gust size)
     const float k2 = 13.66 * u_weather_invGustSize;  // 2 pi / (0.46 x the gust size)
     const vec2 gust = vec2(0.6 * sin((along - travel) * k1) + 0.4 * sin((along * 0.8 + across * 0.6 - travel) * k2),
@@ -26,13 +25,6 @@ float vegetationWind(vec2 xz, float time, out vec2 dir)
     const float speed = length(wind);
     dir = speed > 1e-3 ? wind / speed : meanDir;
     return speed;
-}
-
-// The mean wind's direction (unit, XZ) and speed (m/s) alone: what small-scale detail travels with.
-vec2 vegetationWindMeanDir()
-{
-    const float meanSpeed = length(u_weather_windVelocity.xz);
-    return meanSpeed > 1e-3 ? u_weather_windVelocity.xz / meanSpeed : u_weather_windDirection;
 }
 
 #endif

@@ -100,16 +100,15 @@ void main()
 	const vec3 N = normalize(Ni);
 	out_meshPos = pos;
 
-	const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
 	// The CENTRE view for every displacement decision (the fade, the mip footprint): both VR eyes displace the
 	// same surface (terrain_tess.tcs.glsl). Only gl_Position below uses the eye's matrix.
 	const float dist = distance(pos, u_views_viewPos[VIEW_CENTER].xyz);
-	if (dist < fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
+	if (dist < u_terrainTess_fadeEnd && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
 	{
 		const TerrainFields f = TerrainFields(fieldsV.x, fieldsV.y, fieldsV.z, fieldsV.w, riverV);
 		const TerrainLayers L = terrainLayers(pos, N, f);
 		// Falloff across the fade band: 1 - t^p ("Falloff exponent"; the TCS eases its factor the same way).
-		const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+		const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
 		const float strength = (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff
 		const float depth = mix(mix(u_terrainTess_depthGround, u_terrainTess_depthRock, float(L.rockW)), u_terrainTess_depthGround, float(L.snowW)) * strength;
 		if (depth > 1e-4)
@@ -118,10 +117,7 @@ void main()
 			// only, so the patches sharing a vertex pick the same mip (a per-patch footprint cracked the edges).
 			// Held at the freeze distance closer in, like the control stage's factor: a mip that kept
 			// sharpening as the camera approached moved every height under it.
-			// The projection's y scale is the length of row 1 of the mvp's 3x3 (P11 x a unit view row).
-			const mat4 centreMvp = u_views_mvp[VIEW_CENTER];
-			const float projY = length(vec3(centreMvp[0][1], centreMvp[1][1], centreMvp[2][1]));
-			const float spacing = max(dist, u_terrainTess_freezeDistance) * 2.0 * u_terrainTess_targetEdgePx / max(projY * u_screenSize.y * u_viewportRect.w, 1.0);
+			const float spacing = max(dist, u_terrainTess_freezeDistance) * u_terrainTess_spacingPerMetre;
 			const float height = float(terrainReliefAt(L, pos.xz, vec2(spacing, 0.0), vec2(0.0, spacing)));
 			pos += N * ((height - 0.5) * depth);
 		}

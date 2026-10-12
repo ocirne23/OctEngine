@@ -167,20 +167,17 @@ void resolveLiveDepth(vec3 worldPos)
 	// Gate against the LIVE displaced surface, not the calm level - a receded wave leaves sand below
 	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
 	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
-	// the surface's max EXCURSION - the larger of the swash reach (u_ocean_swashReach) and the open-water
-	// trough (u_fog_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
+	// the surface's max EXCURSION (u_ocean_waveExcursion, on the CPU) - the larger of the swash reach and the
+	// open-water trough (fog_waveBand = 2 x trough + 0.5) - the wave decides which side of the surface the point
 	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
-	// the contribution fades out over a half-excursion band instead of cutting. A hard cut at the swash
+	// the contribution fades out over a half-excursion band (u_ocean_waveExcursionFadeEnd) instead of cutting. A hard cut at the swash
 	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
-	// wave height across it. Both terms are 0 with the ocean off, so this is free without water.
-	const float excursion = max(u_ocean_swashReach, 0.5 * (u_fog_waveBand - 0.5));
-	if (excursion > 0.0)
-	{
-		const float fadeEnd = excursion + max(0.5 * excursion, 0.5);
-		const float dist = abs(depthBelow);
-		if (dist < fadeEnd)
-			depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel) * (1.0 - smoothstep(excursion, fadeEnd, dist));
-	}
+	// wave height across it. The excursion is >= the swash reach (>= 0.01: "Swash amplitude" >= 0.04 on the CPU).
+	const float excursion = u_ocean_waveExcursion;
+	const float fadeEnd = u_ocean_waveExcursionFadeEnd;
+	const float dist = abs(depthBelow);
+	if (dist < fadeEnd)
+		depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel) * (1.0 - smoothstep(excursion, fadeEnd, dist));
 	g_liveDepthBelow = depthBelow;
 	g_liveWaterLevel = localWaterLevel;
 }
@@ -205,7 +202,7 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 	// darkening), past it only the march survives. Skipped up close, where the map's texels are coarser
 	// than the geometry they would be shadowing and could only produce acne.
 	// Reach is bias * 2^10 - ~77 km at the default 150 m, comfortably past the far cascade's own range.
-	if (u_shadow_terrainMarchStart > 0.0 && terrainHeightMapPresent())
+	if (terrainHeightMapPresent())
 	{
 		const float fadeIn = smoothstep(u_shadow_terrainMarchStart, u_shadow_terrainMarchStart * 1.25, distance(worldPos, u_viewPos));
 		if (fadeIn > 0.0)
@@ -362,14 +359,14 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #ifndef LIT_NO_RTAO // the grass (grass.fs.glsl): no RTAO read at all - its own root occlusion stands in
 	// Past the RTAO max distance (u_rt_aoMaxDistance) the trace writes exactly (0, 1.0) - no occlusion, no
 	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
-	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
-	// 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
-	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
+	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly.
+	// The gate measures from the SCENE FOCUS, the same origin as rtao.cs.glsl's early-out; the camera
+	// distance still drives the upsample's depth weights.
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
 #ifdef FOLIAGE_NO_RTAO
-	if (u_rt_aoEnabled > 0.5 && (u_rt_aoMaxDistance <= 0.0 || aoFocusDist < u_rt_aoMaxDistance) && !g_noRtao)
+	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance && !g_noRtao)
 #else
-	if (u_rt_aoEnabled > 0.5 && (u_rt_aoMaxDistance <= 0.0 || aoFocusDist < u_rt_aoMaxDistance))
+	if (u_rt_aoEnabled > 0.5 && aoFocusDist < u_rt_aoMaxDistance)
 #endif
 	{
 		const float aoViewDist = length(worldPos - u_viewPos);

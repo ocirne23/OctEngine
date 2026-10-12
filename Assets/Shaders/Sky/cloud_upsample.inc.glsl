@@ -2,8 +2,8 @@
 // cloud_apply.fs.glsl (fog off) and vol_apply.fs.glsl (fog on). Requires ubo.inc.glsl.
 //
 // The four half-res texels around the pixel, bilinear, and:
-//  - a texel whose FIRST cloud lies behind this pixel's surface contributes "no cloud" (its march ran on to a
-//    farther surface of the 2x2 block);
+//  - a texel whose FIRST cloud lies behind this pixel's surface contributes "no cloud" (its march ran on to a farther
+//    surface of the 2x2 block);
 //  - a texel whose march ended at a different distance than this pixel's surface is trusted less.
 // Returns (in-scatter, transmittance); logCloudDist = log2 of the transmittance-weighted cloud distance.
 
@@ -18,6 +18,7 @@ vec4 cloudUpsample(sampler2D cloudColor, sampler2D cloudDepth, vec2 fragCoord, f
     const ivec2 base = ivec2(floor(hp));
     const vec2 f = hp - vec2(base);
     const float logSceneC = min(logScene, logMax);
+
     vec4 sum = vec4(0.0);
     float wSum = 0.0;
     float logDistSum = 0.0;
@@ -40,6 +41,7 @@ vec4 cloudUpsample(sampler2D cloudColor, sampler2D cloudDepth, vec2 fragCoord, f
         logDistSum += d.y * cw;
         distWeight += cw;
     }
+
     logCloudDist = distWeight > 1e-6 ? logDistSum / distWeight : logSceneC;
     return wSum > 1e-6 ? sum / wSum : vec4(0.0, 0.0, 0.0, 1.0);
 }

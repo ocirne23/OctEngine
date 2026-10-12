@@ -36,11 +36,10 @@ void main()
         // the forward pass upsamples this image with plain bilinear, so background texels bleed into
         // silhouette edge pixels and brighten their GI term (bright aliased rim). Averaging the nearby
         // geometry samples instead makes the blend across the silhouette a no-op.
-        const int r = max(AO_BLUR_RADIUS, 1);
         vec4 sum = vec4(0.0);
         float wsum = 0.0;
-        for (int dy = -r; dy <= r; ++dy)
-        for (int dx = -r; dx <= r; ++dx)
+        for (int dy = -AO_BLUR_RADIUS; dy <= AO_BLUR_RADIUS; ++dy)
+        for (int dx = -AO_BLUR_RADIUS; dx <= AO_BLUR_RADIUS; ++dx)
         {
             const vec2 nuv = uv + vec2(dx, dy) * texel;
             if (texture(u_depth, nuv).r <= 0.0) continue;

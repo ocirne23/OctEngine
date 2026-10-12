@@ -1,6 +1,7 @@
 // Shadow mapping and PCSS functions
 
-// Fraction of a cascade's far range over which it cross-fades into the next cascade.
+// Fraction of a cascade's far range over which it cross-fades into the next cascade. Not read here: the band is
+// u_cascadeBlendStart / u_cascadeBlendInvWidth, from the CPU's CASCADE_BLEND in RendererUbo.cpp - keep both in sync.
 #define SHADOW_CASCADE_BLEND 0.25
 #define GOLDEN_RATIO_FRACT 0.6180339887
 #define PCSS_MAX_PENUMBRA_TEXELS 15.0  // cap so the kernel never gets too sparse/noisy
@@ -39,7 +40,7 @@ bool g_shadowFoliage = false;
 float foliageTransmit(float visibility, float gap, int cascade)
 {
 #ifdef SHADOW_FOLIAGE_BIAS
-	if (g_shadowFoliage && u_foliage_shadowLength > 0.0)
+	if (g_shadowFoliage)
 	{
 		const float metres = max(gap, 0.0) * cascadeDepthRange(cascade);
 		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliage_shadowLength));
@@ -216,10 +217,7 @@ float sunCascadeBlend(vec3 worldPos, out int cascade, out int nextCascade, out f
 	cascade = getSunCascade(worldPos);
 	nextCascade = min(cascade + 1, NUM_SHADOW_CASCADES - 1);
 	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
-	float splitFar = cascadeSplit(cascade);
-	float prevSplit = (cascade > 0) ? cascadeSplit(cascade - 1) : 0.0;
-	float bandStart = mix(prevSplit, splitFar, 1.0 - SHADOW_CASCADE_BLEND);
-	t = (cascade == nextCascade) ? 0.0 : clamp((dist - bandStart) / max(splitFar - bandStart, 1e-4), 0.0, 1.0);
+	t = (cascade == nextCascade) ? 0.0 : clamp((dist - u_cascadeBlendStart[cascade]) * u_cascadeBlendInvWidth[cascade], 0.0, 1.0);
 	return dist;
 }
 
@@ -308,10 +306,7 @@ vec3 shadowDebugOverlay(vec3 color, vec3 worldPos, vec3 N)
 	return mix(color, cascadeDebugColor(cascade), 0.5);
 #elif SHADOW_DEBUG == 2
 	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
-	float splitFar = cascadeSplit(cascade);
-	float prevSplit = (cascade > 0) ? cascadeSplit(cascade - 1) : 0.0;
-	float bandStart = mix(prevSplit, splitFar, 1.0 - SHADOW_CASCADE_BLEND);
-	float t = (cascade == NUM_SHADOW_CASCADES - 1) ? 0.0 : clamp((dist - bandStart) / max(splitFar - bandStart, 1e-4), 0.0, 1.0);
+	float t = (cascade == NUM_SHADOW_CASCADES - 1) ? 0.0 : clamp((dist - u_cascadeBlendStart[cascade]) * u_cascadeBlendInvWidth[cascade], 0.0, 1.0);
 	return mix(mix(color, cascadeDebugColor(cascade), 0.3), vec3(1.0), t);
 #elif SHADOW_DEBUG == 3
 	return vec3(sampleSunShadow(worldPos, N));

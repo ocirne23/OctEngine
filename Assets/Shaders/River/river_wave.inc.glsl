@@ -1,20 +1,19 @@
 #ifndef RIVER_WAVE_INC_GLSL
 #define RIVER_WAVE_INC_GLSL
 
-// THE RIVER'S WAVES: one field for the dense near geometry (river.vs.glsl) and the shading normal (river.fs.glsl), so
-// the two agree. It is the OCEAN's FFT maps (per cascade c: layer c = displacement (Dx, h, Dz, -), layer
-// OCEAN_CASCADES + c = gradients (dh/dx, dh/dz, ...)), which always run with the rivers, scaled to the river:
-// h(x) = H * h0(T x), so the slope is H * T * g0(T x) ("Wave tiling" T, "Wave height" H x the whitewater's "Wave
-// rapids"). It is DRAGGED DOWNSTREAM with a two-phase flow map: each phase restarts every RIVER_WAVE_PERIOD seconds,
-// the two are half a period apart and cross-faded, and the second samples elsewhere in the field, so no restart shows.
+// THE RIVER'S WAVES: one field for the dense near geometry (river.vs.glsl) and the shading normal (river.fs.glsl), so the two
+// agree. The OCEAN's FFT maps (always running with the rivers; per cascade c: layer c = displacement (Dx, h, Dz, -), layer
+// OCEAN_CASCADES + c = gradients (dh/dx, dh/dz, ...)) scaled to the river: h(x) = H * h0(T x), slope = H * T * g0(T x)
+// ("Wave tiling" T, "Wave height" H x the whitewater's "Wave rapids"). DRAGGED DOWNSTREAM by a two-phase flow map: the phases
+// restart every RIVER_WAVE_PERIOD, half a period apart and cross-faded, the second elsewhere in the field (no restart shows).
 // The includer defines RIVER_WAVE_TEX(uvLayer) first: textureLod(..., 0.0) in the VS, texture() in the FS.
 
 layout (binding = 7) uniform sampler2DArray u_oceanMaps;
 
 const float RIVER_WAVE_PERIOD = 2.0; // s
 
-// The dense near cells' size (m) - Procedural RiverSystem's c_nearCell, keep in step. The light ribbon stays sunk out to
-// the farthest a resident dense cell can reach (the radius + one cell from its centre), then rises over one more cell.
+// The dense near cells' size (m) - Procedural RiverSystem's c_nearCell, keep in step. The light ribbon stays sunk out to the
+// farthest a resident dense cell can reach (the radius + one cell from its centre), then rises over one more cell.
 const float RIVER_NEAR_CELL = 64.0;
 
 // The two phases' sample positions (in the tiled domain) and the first one's weight.

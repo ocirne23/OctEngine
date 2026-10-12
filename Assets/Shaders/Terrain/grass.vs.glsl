@@ -129,7 +129,7 @@ void main()
     float sink = u_grass_rootSink;
     if (u_terrainTess_enabled > 0.5 && dist < u_terrainTess_fadeEnd)
     {
-        const float t = clamp((dist - u_terrainTess_fadeStart) / max(u_terrainTess_fadeEnd - u_terrainTess_fadeStart, 1e-3), 0.0, 1.0);
+        const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
         sink += 0.5 * u_terrainTess_depthGround * (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, groundN.y);
     }
     const float heightVar = grassUnit(grassHash(bladeHash + 2u));
@@ -202,11 +202,11 @@ void main()
 
     const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
     const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
-    const float groundBlend = clamp(dist / max(u_grass_groundBlendDistance, 1e-3), 0.0, 1.0) * u_grass_groundBlend;
+    const float groundBlend = clamp(dist / u_grass_groundBlendDistance, 0.0, 1.0) * u_grass_groundBlend;
     // The albedo factor: the per-blade variation, x the COLD darkening (full at "Cold temperature", none from "Warm
     // temperature"; the patch's mean temperature at its height - climate is km-scale, so no patch steps show).
     const float variation = 1.0 + u_grass_colorVariation * (grassUnit(grassHash(bladeHash + 7u)) * 2.0 - 1.0);
-    const float warm = smoothstep(u_grass_coldTemperature, max(u_grass_warmTemperature, u_grass_coldTemperature + 0.01), cellTemperature.y);
+    const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, cellTemperature.y);
     out_blade = vec4(t, variation * mix(1.0 - u_grass_coldDarkening, 1.0, warm), dryness, groundBlend);
     out_pos = pos;
     out_prevWorldDelta = prevPos - pos;

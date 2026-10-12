@@ -82,7 +82,7 @@ float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reli
         // The swash band rides the live displaced surface (the lit core's gate; underwater_light.inc.glsl).
         // Ground deeper than the reach is under water at any wave phase and skips the wave taps.
         const float reach = u_ocean_swashReach;
-        if (reach > 0.0 && abs(depthBelow) < reach)
+        if (abs(depthBelow) < reach)
             depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
         level = max(level, clamp(0.5 + depthBelow / max(reliefDepth, 1e-3), 0.0, 1.0));
     }
@@ -200,11 +200,10 @@ void main()
     if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
     {
         const vec3 N = normalize(out_normal);
-        const float fadeStart = u_terrainTess_fadeStart, fadeEnd = u_terrainTess_fadeEnd;
         const float dist = distance(out_pos, u_views_viewPos[VIEW_CENTER].xyz); // the centre view, as the TES: both VR eyes lift the same
-        if (dist < fadeEnd)
+        if (dist < u_terrainTess_fadeEnd)
         {
-            const float t = clamp((dist - fadeStart) / max(fadeEnd - fadeStart, 1e-3), 0.0, 1.0);
+            const float t = clamp((dist - u_terrainTess_fadeStart) * u_terrainTess_invFadeWidth, 0.0, 1.0);
             const float depth = u_terrainTess_depthGround * (1.0 - pow(t, u_terrainTess_heightFalloff)) * smoothstep(0.35, 0.6, N.y); // the HEIGHT falloff
             if (depth > 1e-4)
             {

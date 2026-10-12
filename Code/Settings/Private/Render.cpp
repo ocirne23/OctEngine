@@ -29,7 +29,7 @@ void Settings::registerSky(SkyParams& s)
     Tweak::color3("Sky", "Ground Albedo", &s.groundColor, &s.groundIntensity, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Sky", "Ground Horizon", &s.groundHorizon, 0.0f, 0.5f, 0.01f);
     Tweak::floatVar("Sky/Sun", "Sun Angle Cos", &s.sunAngularCos, 0.9995f, 1.0f, 0.000001f);
-    Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.0, 5.0f, 0.01f);
+    Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.01f, 5.0f, 0.01f);
 
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
     // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
@@ -40,19 +40,19 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky/Atmosphere", "Haze height", &s.mieHeight, 200.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Sky/Atmosphere", "Haze extinction", &s.mieExtinction, 1.0f, 2.0f, 0.005f);
     Tweak::floatVar("Sky/Atmosphere", "Ozone", &s.ozone, 0.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Sky/Stars", "Density", &s.starDensity, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Stars", "Density", &s.starDensity, 0.01f, 1.0f);
     Tweak::floatVar("Sky/Stars", "Size", &s.starSize, 0.2f, 3.0f, 0.01f);
     Tweak::floatVar("Sky/Stars", "Size Variation", &s.starSizeVar, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Sky/Stars", "Brightness", &s.starBrightness, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Sky/Stars", "Color Variation", &s.starColorVar, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Sky/Nebula", "Intensity", &s.nebulaIntensity, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Sky/Nebula", "Intensity", &s.nebulaIntensity, 0.01f, 2.0f, 0.01f);
     Tweak::floatVar("Sky/Nebula", "Scale", &s.nebulaScale, 0.5f, 12.0f, 0.05f);
     Tweak::floatVar("Sky/Nebula", "Band Width", &s.nebulaBandWidth, 0.05f, 1.0f, 0.005f);
     Tweak::floatVar("Sky/Nebula", "Dust Lanes", &s.nebulaDust, 0.0f, 1.0f, 0.01f);
     Tweak::float3("Sky/Nebula", "Axis", &s.nebulaAxis, 0.01f, [p]() { p->nebulaAxis = glm::normalize(p->nebulaAxis); });
     Tweak::float3("Sky/Moon", "Direction", &s.moonDirection, 0.01f, [p]() { p->moonDirection = glm::normalize(p->moonDirection); });
     Tweak::floatVar("Sky/Moon", "Size", &s.moonSizeDeg, 0.05f, 10.0f, 0.01f);
-    Tweak::floatVar("Sky/Moon", "Brightness", &s.moonBrightness, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Moon", "Brightness", &s.moonBrightness, 0.01f, 2.0f);
     Tweak::float3("Sky", "Up Axis", &s.up, 0.01f, [p]() { p->up = glm::normalize(p->up); }, ETweakFlags::Runtime);
 }
 
@@ -73,7 +73,7 @@ void Settings::registerShadow(ShadowParams& s)
     Tweak::floatVar("Shadows", "Caster pad (m)", &s.casterPad, 0.0f, 5000.0f, 10.0f);
     Tweak::floatVar("Shadows", "Depth bias", &s.depthBias, 0.0f, 0.005f, 0.0001f);
     Tweak::floatVar("Shadows", "Normal bias", &s.normalBias, 0.0f, 10.0f);
-    Tweak::floatVar("Shadows", "Terrain march start (m)", &s.terrainMarchStart, 0.0f, 20000.0f, 50.0f);
+    Tweak::floatVar("Shadows", "Terrain march start (m)", &s.terrainMarchStart, 50.0f, 20000.0f, 50.0f);
     Tweak::floatVar("Shadows", "Terrain march bias (m)", &s.terrainMarchBias, 0.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Shadows", "Terrain march spread", &s.terrainMarchSpread, 0.002f, 0.1f, 0.001f);
 }
@@ -82,7 +82,7 @@ void Settings::registerFoliage(FoliageParams& s)
 {
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
     Tweak::floatVar("Trees", "Foliage crown normal", &s.crownNormal, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.05f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Foliage interior depth start", &s.interiorStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior depth end", &s.interiorEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior view fade", &s.interiorViewFade, 0.0f, 1.0f, 0.01f);
@@ -90,7 +90,7 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Foliage transmission self shadow", &s.transmissionSelfShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow", &s.interiorShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior shadow top card scale", &s.interiorTopCardScale, 0.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Trees", "Foliage transmission", &s.transmission, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission", &s.transmission, 0.01f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission focus", &s.transmissionFocus, 1.0f, 64.0f, 0.1f);
     Tweak::floatVar("Trees", "Foliage transmission glow", &s.transmissionGlow, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission shadow", &s.transmissionShadow, 0.0f, 1.0f, 0.01f);
@@ -113,8 +113,8 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees/Wind", "Branch fade end (m)", &s.windBranchFadeEnd, 0.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Trees/Wind", "Leaf fade start (m)", &s.windLeafFadeStart, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Trees/Wind", "Leaf fade end (m)", &s.windLeafFadeEnd, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Trees/Wind", "Trunk fade end (m)", &s.windTrunkFadeEnd, 0.0f, 20000.0f, 10.0f);
-    Tweak::floatVar("Trees/Wind", "Billboard waves", &s.windBillboardWaves, 0.0f, 0.1f, 0.0005f);
+    Tweak::floatVar("Trees/Wind", "Trunk fade end (m)", &s.windTrunkFadeEnd, 100.0f, 20000.0f, 10.0f);
+    Tweak::floatVar("Trees/Wind", "Billboard waves", &s.windBillboardWaves, 0.0005f, 0.1f, 0.0005f);
 }
 
 void Settings::registerFarTree(FarTreeParams& s)
@@ -134,7 +134,7 @@ void Settings::registerFarTree(FarTreeParams& s)
     Tweak::floatVar("Trees", "Far ambient", &s.ambient, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Far sun scale", &s.sunScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Far self shadow", &s.selfShadow, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Trees", "Far normal strength", &s.normalStrength, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far normal strength", &s.normalStrength, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Far ground darkening", &s.groundDarkening, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Far interior shadow", &s.interiorShadow, 0.0f, 20.0f, 0.01f);
     Tweak::floatVar("Trees", "Far interior radius", &s.interiorRadius, 0.0f, 0.5f, 0.001f);
@@ -149,7 +149,7 @@ void Settings::registerFarTree(FarTreeParams& s)
     Tweak::floatVar("Trees", "Far record detail (m)", &s.recordDetail, 0.0f, 40000.0f, 10.0f);
     Tweak::intVar("Trees", "Far bake frames", &s.bakeFrames, 1, 120, 1.0f);
     Tweak::floatVar("Trees", "Far swap time (s)", &s.swapTime, 0.0f, 10.0f, 0.01f);
-    Tweak::intVar("Trees", "Far floor smoothing", &s.floorSmoothing, 0, 8, 1.0f);
+    Tweak::intVar("Trees", "Far floor smoothing", &s.floorSmoothing, 1, 8, 1.0f);
     Tweak::floatVar("Trees", "Far rock extinction (1/m)", &s.rockExtinction, 0.0f, 50.0f, 0.05f);
 }
 
@@ -174,7 +174,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::intVar("Grass", "Blades per patch", &s.bladesPerPatch, 16, GrassParams::MAX_BLADES, 1.0f); // rebuilds the blade index buffer
     Tweak::floatVar("Grass", "Patch size (m)", &s.patchSize, 1.0f, 16.0f, 0.1f);
     Tweak::floatVar("Grass", "Range (m)", &s.range, 5.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Grass", "Range fade (m)", &s.rangeFade, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Grass", "Range fade (m)", &s.rangeFade, 0.5f, 200.0f, 0.5f);
     Tweak::floatVar("Grass/Blade", "Height (m)", &s.bladeHeight, 0.01f, 3.0f, 0.005f);
     Tweak::floatVar("Grass/Blade", "Height variation", &s.heightVariation, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Blade", "Width (m)", &s.bladeWidth, 0.002f, 0.5f, 0.001f);
@@ -188,7 +188,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/LOD", "LOD 2 distance (m)", &s.lod2Distance, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/LOD", "LOD 3 distance (m)", &s.lod3Distance, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/LOD", "Min pixel width", &s.minPixelWidth, 0.0f, 4.0f, 0.01f);
-    Tweak::floatVar("Grass/LOD", "LOD morph band", &s.lodMorphBand, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/LOD", "LOD morph band", &s.lodMorphBand, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Bend (per m/s)", &s.windBend, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Grass/Wind", "Ripple (per m/s)", &s.rippleBend, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Grass/Wind", "Ripple size (m)", &s.rippleSize, 0.5f, 200.0f, 0.1f);
@@ -233,12 +233,12 @@ void Settings::registerFog(FogParams& s)
     Tweak::floatVar("Fog", "Global Density", &s.density, 0.0f, 1.0f, 0.001f);
     Tweak::floatVar("Fog", "Height Base", &s.heightBase, -200.0f, 500.0f);
     Tweak::floatVar("Fog", "Height Falloff", &s.heightFalloff, 0.0f, 1.0f, 0.002f);
-    Tweak::floatVar("Fog", "Terrain Follow", &s.terrainFollow, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Fog", "Terrain Follow", &s.terrainFollow, 0.01f, 1.0f, 0.01f);
     Tweak::color3("Fog", "Albedo", &s.albedo, &s.albedoIntensity);
     Tweak::floatVar("Fog", "Sun scatter", &s.sunScatter, 0.0f, 50.0f, 0.05f);
-    Tweak::floatVar("Fog/Shaft haze", "Density (1/m)", &s.shaftHazeDensity, 0.0f, 0.01f, 0.00001f);
+    Tweak::floatVar("Fog/Shaft haze", "Density (1/m)", &s.shaftHazeDensity, 0.00001f, 0.01f, 0.00001f);
     Tweak::floatVar("Fog/Shaft haze", "Height (m)", &s.shaftHazeHeight, 10.0f, 10000.0f, 10.0f);
-    Tweak::floatVar("Fog/Aerial perspective", "Strength", &s.aerialStrength, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Fog/Aerial perspective", "Strength", &s.aerialStrength, 0.05f, 20.0f, 0.05f);
     Tweak::floatVar("Fog/Aerial perspective", "Max distance (km)", &s.aerialMaxDistanceKm, 1.0f, 400.0f, 1.0f);
     Tweak::floatVar("Fog", "Anisotropy", &s.anisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Fog", "Range", &s.range, 32.0f, 4096.0f, 32.0f);
@@ -246,23 +246,23 @@ void Settings::registerFog(FogParams& s)
     Tweak::floatVar("Fog/Far Field", "Density Scale", &s.farFieldDensity, 0.0f, 4.0f, 0.05f);
     Tweak::floatVar("Fog/Far Field", "Thickness Scale", &s.farFieldThickness, 0.1f, 20.0f, 0.1f);
     Tweak::intVar("Fog/Far Field", "Ground Steps", &s.farFieldSteps, 1, 32);
-    Tweak::floatVar("Fog/Far Field", "Max distance (km)", &s.farFieldMaxDistanceKm, 0.0f, 400.0f, 0.5f);
+    Tweak::floatVar("Fog/Far Field", "Max distance (km)", &s.farFieldMaxDistanceKm, 1.0f, 400.0f, 0.5f);
     Tweak::floatVar("Fog", "Slice Power", &s.slicePower, 0.4f, 1.5f, 0.01f);
     Tweak::floatVar("Fog", "Noise Scale", &s.noiseScale, 0.005f, 1.0f, 0.005f);
     Tweak::floatVar("Fog", "Noise Strength", &s.noiseStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Temporal Blend", &s.temporalBlend, 0.0f, 0.97f, 0.01f);
-    Tweak::floatVar("Fog", "Region strength", &s.regionStrength, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Fog", "Region strength", &s.regionStrength, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Fog", "Underwater density", &s.underwaterDensity, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Fog", "Lake underwater density", &s.inlandUnderwaterDensity, 0.0f, 20.0f, 0.1f); // lakes and rivers
     Tweak::floatVar("Fog", "River underwater scale", &s.riverUnderwaterScale, 0.0f, 50.0f, 0.1f); // x the above in rivers
     Tweak::floatVar("Fog", "Underwater wave offset", &s.underwaterWaveOffset, 0.0f, 2.0f, 0.01f); // x the live wave trough, lowers the boundary
     Tweak::floatVar("Fog", "Shaft boost", &s.shaftBoost, 0.0f, 100.0f, 0.1f);
-    Tweak::floatVar("Fog", "Caustic strength", &s.causticStrength, 0.0f, 2.0f, 0.05f);
+    Tweak::floatVar("Fog", "Caustic strength", &s.causticStrength, 0.05f, 2.0f, 0.05f);
     Tweak::floatVar("Fog", "Caustic depth fade", &s.causticDepthFade, 0.0f, 0.5f, 0.005f);
-    Tweak::floatVar("Fog", "Caustic shore fade (m)", &s.causticShoreFade, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Fog", "Caustic shore fade (m)", &s.causticShoreFade, 0.01f, 10.0f, 0.05f);
     Tweak::intVar("Fog/Quality", "Sun Rays", &s.sunRays, 1, 8);
     Tweak::floatVar("Fog/Quality", "Terrain Shadow Dist", &s.terrainShadowDist, 32.0f, 8192.0f, 16.0f);
-    Tweak::floatVar("Fog/Quality", "Sun Softness", &s.sunSoftness, 0.0f, 0.2f, 0.005f);
+    Tweak::floatVar("Fog/Quality", "Sun Softness", &s.sunSoftness, 0.015f, 0.2f, 0.005f);
     Tweak::boolean("Fog/Quality", "Spatial Filter", &s.spatialFilter);
     Tweak::boolean("Fog/Quality", "GI Ambient", &s.giAmbient);
     Tweak::boolean("Fog/Quality", "Light Shadows", &s.lightShadows);
@@ -283,7 +283,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds", "Wind speed scale", &s.windSpeedScale, 0.0f, 100.0f, 0.1f); // x "Sky/Wind/Speed"
     Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &s.evolveSpeed, 0.0f, 100.0f);
 
-    Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &s.aerialStrength, 0.0f, 5.0f); // 0 = off
+    Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &s.aerialStrength, 0.01f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &s.multiScatter, 0.0f, 0.95f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter strength", &s.multiScatterStrength, 0.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &s.ambient, 0.0f, 4.0f);
@@ -300,17 +300,17 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Shape", "Top roundness", &s.topRoundness, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Shape", "Base sharpness", &s.baseSharpness, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Shape", "Tower core link", &s.towerCoreLink, 0.0f, 1.0f);
-    Tweak::intVar("Sky/Clouds/Shape", "Shelf count", &s.shelfCount, 0, 3);
+    Tweak::intVar("Sky/Clouds/Shape", "Shelf count", &s.shelfCount, 1, 3);
     Tweak::floatVar("Sky/Clouds/Shape", "Shelf strength", &s.shelfStrength, 0.0f, 3.0f);
     Tweak::floatVar("Sky/Clouds/Shape", "Shelf thickness", &s.shelfThickness, 0.005f, 0.2f, 0.005f);
     Tweak::floatVar("Sky/Clouds/Shape", "Shelf spacing", &s.shelfSpacing, 0.0f, 0.5f);
     Tweak::boolean("Sky/Clouds/Upper layer", "Enabled", &s.upperEnabled);
     Tweak::floatVar("Sky/Clouds/Upper layer", "Bottom (m)", &s.upperBottom, 0.0f, 12000.0f, 10.0f, [p]() { p->upperTop = oc::max(p->upperTop, p->upperBottom + 50.0f); });
     Tweak::floatVar("Sky/Clouds/Upper layer", "Top (m)", &s.upperTop, 50.0f, 15000.0f, 10.0f, [p]() { p->upperBottom = oc::min(p->upperBottom, p->upperTop - 50.0f); });
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Coverage", &s.upperCoverage, 0.0f, 2.0f); // x the main coverage
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Coverage", &s.upperCoverage, 0.01f, 2.0f); // x the main coverage
     Tweak::floatVar("Sky/Clouds/Upper layer", "Type", &s.upperType, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Upper layer", "Height variation", &s.upperHeightVariation, 0.0f, 0.8f);
-    Tweak::floatVar("Sky/Clouds/Upper layer", "Density", &s.upperDensity, 0.0f, 2.0f);
+    Tweak::floatVar("Sky/Clouds/Upper layer", "Density", &s.upperDensity, 0.01f, 2.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Erosion", &s.erosion, 0.0f, 1.0f);
     Tweak::floatVar("Sky/Clouds/Quality", "Erosion cutoff", &s.erosionCutoff, 0.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Curl (m)", &s.curl, 0.0f, 1000.0f, 1.0f);
@@ -333,7 +333,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds/Quality", "Near step (m)", &s.nearStep, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds/Quality", "Min step (m)", &s.minStep, 0.25f, 50.0f, 0.25f);
     Tweak::intVar("Sky/Clouds/Quality", "Steps per ray", &s.stepsPerRay, 16, 1024);
-    Tweak::intVar("Sky/Clouds/Quality", "Light steps", &s.lightSteps, 0, 16);
+    Tweak::intVar("Sky/Clouds/Quality", "Light steps", &s.lightSteps, 1, 16);
     Tweak::floatVar("Sky/Clouds/Quality", "Light distance (m)", &s.lightDistance, 50.0f, 20000.0f, 10.0f); // the cap on the per-sample reach
     Tweak::floatVar("Sky/Clouds/Quality", "Temporal blend", &s.temporalBlend, 0.0f, 0.98f);
     Tweak::floatVar("Sky/Clouds/Quality", "Sky map history (s)", &s.skyMapHistorySec, 0.0f, 30.0f);
@@ -362,22 +362,22 @@ void Settings::registerRTAO(RTAOParams& s)
 {
     Tweak::boolean("RTAO", "Enabled", &s.enabled);
     Tweak::intVar("RTAO", "Rays Per Pixel", &s.rays, 1, 32, 1.0f);
-    Tweak::floatVar("RTAO", "Radius", &s.radius, 0.0f, 32.0f, 0.01f);
-    Tweak::floatVar("RTAO", "Power", &s.power, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("RTAO", "Radius", &s.radius, 0.02f, 32.0f, 0.01f);
+    Tweak::floatVar("RTAO", "Power", &s.power, 0.05f, 8.0f, 0.01f);
     Tweak::floatVar("RTAO", "Intensity", &s.intensity, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("RTAO", "Fade Start", &s.fadeStart, 0.0f, 200.0f, 0.5f);
-    Tweak::floatVar("RTAO", "Max Distance", &s.maxDistance, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("RTAO", "Max Distance", &s.maxDistance, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("RTAO", "Normal Bias", &s.normalBias, 0.0f, 0.2f, 0.001f);
     Tweak::floatVar("RTAO", "Distance Bias", &s.distanceBias, 0.0f, 0.01f, 0.0002f);
     Tweak::floatVar("RTAO", "Max History", &s.maxHistory, 0.0f, 1.0f, 0.01f);
-    Tweak::intVar("RTAO", "Blur Radius", &s.blurRadius, 0, 8, 1.0f);
+    Tweak::intVar("RTAO", "Blur Radius", &s.blurRadius, 1, 8, 1.0f);
     Tweak::boolean("RTAO", "Alpha Test", &s.alphaTest);
 }
 
 void Settings::registerTAA(TAAParams& s)
 {
     Tweak::boolean("TAA", "Enabled", &s.taaEnabled);
-    Tweak::floatVar("TAA", "History Feedback", &s.taaFeedback, 0.0f, 0.98f, 0.01f);
+    Tweak::floatVar("TAA", "History Feedback", &s.taaFeedback, 0.05f, 0.98f, 0.01f);
     Tweak::floatVar("TAA", "Ocean feedback", &s.taaOceanFeedback, 0.0f, 0.98f, 0.01f);
 }
 
@@ -402,7 +402,7 @@ void Settings::registerMotionBlur(MotionBlurParams& s)
 void Settings::registerBloom(BloomParams& s)
 {
     Tweak::boolean("Post/Bloom", "Enabled", &s.enabled);
-    Tweak::floatVar("Post/Bloom", "Intensity", &s.intensity, 0.0f, 2.0f, 0.005f);
+    Tweak::floatVar("Post/Bloom", "Intensity", &s.intensity, 0.005f, 2.0f, 0.005f);
     Tweak::floatVar("Post/Bloom", "Threshold", &s.threshold, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Post/Bloom", "Knee", &s.knee, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Post/Bloom", "Radius", &s.radius, 0.0f, 1.0f, 0.01f);

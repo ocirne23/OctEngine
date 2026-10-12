@@ -5,18 +5,15 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// River / lake water VS (EPipelineIndex::River). Same pipeline layout and vertex input as the shared static-mesh VS (it
-// feeds the same DGC execution set); its outputs are its own. The meshes are Procedural RiverSystem's, per river unit,
-// at the carved water surface. MeshVertex as RiverSystem fills it:
+// River / lake water VS (EPipelineIndex::River). Same pipeline layout and vertex input as the shared static-mesh VS (the
+// same DGC execution set); its outputs are its own. MeshVertex as Procedural RiverSystem fills it:
 //   positionU = (unit-local position, u): u = across a ribbon (-1 .. 1), 2 = a lake
-//   normalV   = (dense near-cell mark (1/0), the channel's centre depth (m; lake 1e4), the water column under a dense
-//               vertex (m), v = the distance along the river (m))
+//   normalV   = (dense near-cell mark (1/0), the channel's centre depth (m; lake 1e4), the water column under a dense vertex (m),
+//               v = the distance along the river (m))
 //   tangent   = (flow x speed (m/s) in x / z, the whitewater amount in y, the handedness)
-// SIZE = centre depth / "Full size depth" (at most 1): it scales the waves (here and the FS slope, out_waveSize) and the
-// flow by mix("Small river flow", 1, size).
-// THE WAVES (river_wave.inc.glsl) displace only the DENSE ribbons and lake grids (RiverSystem's near cells), faded out
-// toward "Near radius" (a ribbon also over its last 40 % to each bank). A LIGHT ribbon or flat lake quad sinks "Near
-// drop" wherever a dense cell can be; river.fs.glsl discards it where all cells are built.
+// SIZE = centre depth / "Full size depth" (at most 1) scales the waves and the flow (mix("Small river flow", 1, size)).
+// The waves displace only the DENSE ribbons and lake grids; a LIGHT ribbon or flat lake quad sinks "Near drop" wherever a
+// dense cell can be (river.fs.glsl discards it where all cells are built).
 
 #include "shared.inc.glsl"
 #define RIVER_WAVE_TEX(uvLayer) textureLod(u_oceanMaps, uvLayer, 0.0)
@@ -26,8 +23,8 @@
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 #endif
 
-// The main cull's OutMeshInstance (instanced_indirect.cs.glsl). The prev* fields are unused here (the dual-source blend
-// writes no motion vectors), but the stride must match.
+// The main cull's OutMeshInstance (instanced_indirect.cs.glsl). The prev* fields are unused (the dual-source blend writes no
+// motion vectors), but the stride must match.
 struct InMeshInstancesData
 {
     vec4  posScale;
@@ -71,16 +68,16 @@ void main()
     const float dist = distance(out_pos, u_views_viewPos[VIEW_CENTER].xyz); // the centre view: both eyes alike
     if (in_normalV.x > 0.5)
     {
-        // A dense lake grid takes the river's waves with its slow drift and "Lake ripple" (as river.fs.glsl shades it),
-        // out to its shore (the ground cuts the shoreline).
+        // Faded out toward "Near radius", a ribbon also over its last 40 % to each bank. A dense lake grid takes the waves
+        // with its slow drift and "Lake ripple" (as river.fs.glsl shades it), out to its shore (the ground cuts the shoreline).
         const float near = R > 0.0 ? 1.0 - smoothstep(0.7 * R, R, dist) : 0.0;
         const float bank = lake ? 1.0 : 1.0 - smoothstep(0.6, 1.0, abs(in_posU.w));
         if (near * bank > 0.0)
         {
             const vec2 waveFlow = lake ? vec2(0.05, 0.03) * u_river_flowSpeed : flow.xz * u_river_flowSpeed;
             float h = riverWaveHeight(out_pos.xz, waveFlow, lake ? 0.0 : in_tangent.y) * ((lake ? u_river_lakeRipple : 1.0) * out_waveSize);
-            // A trough is soft-limited to 70 % of the water column under the vertex, else a shallow stream shows its
-            // bed through the troughs.
+
+            // A trough is soft-limited to 70 % of the water column under the vertex, else a shallow stream shows its bed.
             const float floorDepth = 0.7 * in_normalV.z;
             if (h < 0.0)
                 h = floorDepth > 1e-4 ? -floorDepth * (1.0 - exp(h / floorDepth)) : 0.0;

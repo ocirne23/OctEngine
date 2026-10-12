@@ -56,7 +56,7 @@ void main()
         treeSky += 0.15 * (giLayerRadiance(vec3(ringS, ringS, 0.0)) + giLayerRadiance(vec3(-ringS, ringS, 0.0))
                          + giLayerRadiance(vec3(0.0, ringS, ringS)) + giLayerRadiance(vec3(0.0, ringS, -ringS)));
         imageStore(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, vec4(treeSky, 1.0));
-        imageStore(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, vec4(giLayerRadiance(normalize(u_skyUp)), 1.0));
+        imageStore(u_skyMap, SKY_MAP_GI_ZENITH_TEXEL, vec4(giLayerRadiance(u_skyUp), 1.0));
     }
     const vec3 dir = skyMapDir((vec2(xy) + 0.5) / vec2(size));
     vec3 radiance;

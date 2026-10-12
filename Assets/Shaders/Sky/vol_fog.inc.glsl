@@ -22,7 +22,7 @@
 // VOL_FROXEL_X/Y/Z are injected by the engine from RendererVKLayout (Layout.ixx)
 #define VOL_FOG_NEAR 1.25
 
-float volFogFar() { return max(u_fog_range, VOL_FOG_NEAR + 1.0); }
+float volFogFar() { return u_fog_range; } // >= VOL_FOG_NEAR + 1 on the CPU
 
 // Exponential slice distribution: more resolution near the camera, where fog detail is visible.
 // The slice power (u_fog_slicePower) warps the normalized slice first: < 1 thickens the nearest slices
@@ -42,11 +42,12 @@ float volViewZToSlice(float viewZ)
 
 // Henyey-Greenstein phase. cosTheta = dot(photon travel direction, out-scatter direction); with both the
 // view ray (camera -> froxel) and the light direction (light -> froxel) negated, the negations cancel,
-// so callers pass dot(viewDir, dirTowardLight).
+// so callers pass dot(viewDir, dirTowardLight). Every caller's |g| <= 0.95 (u_fog_anisotropy, clamped on the CPU, or
+// a mix of it toward 0.78), so the denominator stays >= 0.0025.
 float volPhaseHG(float cosTheta, float g)
 {
     const float g2 = g * g;
-    const float denom = max(1.0 + g2 - 2.0 * g * cosTheta, 1e-4);
+    const float denom = 1.0 + g2 - 2.0 * g * cosTheta;
     return (1.0 - g2) / (4.0 * PI * denom * sqrt(denom));
 }
 

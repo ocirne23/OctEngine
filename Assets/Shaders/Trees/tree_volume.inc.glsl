@@ -1,14 +1,13 @@
-// The FAR-TREE VOLUME (TreeVolumePipeline): one camera-centred volume of leaf / wood EXTINCTION (1/m) that the far
-// trees are marched through, from "Far start" to "Far end". Mirrors TreeVolumePipeline.cpp - keep them in step.
+// The FAR-TREE VOLUME (TreeVolumePipeline): one camera-centred volume of leaf / wood EXTINCTION (1/m) that the far trees
+// are marched through, from "Far start" to "Far end". Mirrors TreeVolumePipeline.cpp - keep them in step.
 //
-// POLAR + LOG: image x = the angle around the bake centre (atan2(dz, dx), -pi..pi -> 0..1; it WRAPS, so sample with
-// a repeating sampler), image y = log(r / rMin) / log(rMax / rMin) (the cells grow linearly with the distance: a
-// constant angular size), image z = the height above the column's FLOOR, [0, height] in `slices` slices. Nothing is
-// stored inside rMin, a FIXED horizontal radius (a high camera moves the hand-over out instead).
+// POLAR + LOG: image x = the angle around the bake centre (atan2(dz, dx), -pi..pi -> 0..1; it WRAPS, so sample with a
+// repeating sampler), y = log(r / rMin) / log(rMax / rMin) (the cells grow linearly with the distance: a constant angular
+// size), z = the height above the column's FLOOR, [0, height] in `slices` slices. Nothing is stored inside rMin, a FIXED
+// horizontal radius (a high camera moves the hand-over out instead).
 // THE FLOOR (R32UI, tvFloorEncode; 0 = no floor) is the base of the column's dominant tree (tree_volume_splat.cs's
-// TREE_FLOOR_PASS), NOT the terrain height map: its far texels put the ground tens of metres off on mountains and the
-// trees fell out of the thin layer. The world tree records' trees stand on their chunk's ground grid
-// (tree_record.inc.glsl treeRecordGround). A column without a floor holds no density.
+// TREE_FLOOR_PASS), NOT the terrain height map: its far texels put the ground tens of metres off on mountains and the trees
+// fell out of the thin layer. A column without a floor holds no density.
 
 #ifndef TREE_VOLUME_INC_GLSL
 #define TREE_VOLUME_INC_GLSL
@@ -26,25 +25,27 @@ struct TreeVolumeParams
     float pad0, pad1, pad2;
 };
 
-// The params in a pass's PUSH BLOCK (push.generated.glsl, TreeVolumePipeline's TvVolPush): flat pc_vol_* members, all
-// but the centre lockable. TV_PUSH_VOL packs them for the helpers below, so the baked members fold.
-#define TV_PUSH_VOL TreeVolumeParams(pc_vol_centre, pc_vol_rMin, pc_vol_rMax, pc_vol_angularRes, pc_vol_radialRes, pc_vol_slices, \
-    pc_vol_height, pc_vol_densityScale, 0.0, 0.0, 0.0)
+// The params in a pass's PUSH BLOCK (push.generated.glsl, TreeVolumePipeline's TvVolPush): flat pc_vol_* members, all but
+// the centre lockable. TV_PUSH_VOL packs them for the helpers below, so the baked members fold.
+#define TV_PUSH_VOL TreeVolumeParams(pc_vol_centre, pc_vol_rMin, pc_vol_rMax, pc_vol_angularRes, pc_vol_radialRes, pc_vol_slices, pc_vol_height, \
+    pc_vol_densityScale, 0.0, 0.0, 0.0)
 
 const float TV_TWO_PI = 6.28318531;
 
-// THE ACCUMULATION (the bake's R32UI 3D image) packs TWO SLICES per texel: slice s in texel layer s / 2, its low (even
-// s) or high (odd s) 16 bits, a fixed-point extinction x TV_ACCUM_SCALE summed by imageAtomicAdd. A sum must stay below
-// 64 / m per slice and texel (a carry spills into the other slice). After the resolve each half holds its slice's
-// extinction as a half float (packHalf2x16: x = the even slice).
+// THE ACCUMULATION (the bake's R32UI 3D image) packs TWO SLICES per texel: slice s in texel layer s / 2, its low (even s)
+// or high (odd s) 16 bits, a fixed-point extinction x TV_ACCUM_SCALE summed by imageAtomicAdd. A sum must stay below 64 / m
+// per slice and texel (a carry spills into the other slice). After the resolve each half holds its slice's extinction as a
+// half float (packHalf2x16: x = the even slice).
 const float TV_ACCUM_SCALE = 1024.0;
 ivec3 tvAccumTexel(ivec2 col, uint s) { return ivec3(col, int(s >> 1)); }
 // One add's amount, clamped to its half and shifted into slice s's half.
 uint tvAccumAmount(float extinction, uint s) { return min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu) << ((s & 1u) * 16u); }
+
 // The world tree records' mass per column (tree_volume_records.cs -> tree_volume_far.cs), fixed point.
 const float TV_AMOUNT_SCALE = 4096.0;
-// The max-floor grid (tree_volume_floor_max.cs): columns per block side (TreeVolumePipeline's FLOOR_MAX_BLOCK), the
-// value of a region without any floor, and the blocks each way of the angle its AHEAD value covers.
+
+// The max-floor grid (tree_volume_floor_max.cs): columns per block side (TreeVolumePipeline's FLOOR_MAX_BLOCK), the value
+// of a region without any floor, and the blocks each way of the angle its AHEAD value covers.
 const int TV_FLOOR_MAX_BLOCK = 16;
 const float TV_FLOOR_MAX_NONE = -1e30;
 const int TV_FLOOR_AHEAD_SECTORS = 4;
@@ -73,6 +74,7 @@ uint tvFloorEncode(float y)
     const uint u = floatBitsToUint(y);
     return ~((u & 0x80000000u) != 0u ? ~u : u | 0x80000000u);
 }
+
 float tvFloorDecode(uint e)
 {
     const uint o = ~e;

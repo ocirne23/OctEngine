@@ -133,6 +133,7 @@ struct ResolvePush
     TvVolPush vol{ { g.block, "vol_" } };
     PushValue<uint32> sliceOffset = g("sliceOffset");      // this dispatch's first texel layer
     PushValue<uint32> columnPass = g("columnPass");        // 1: the per-column colour pass (before any conversion); 0: convert the layers in place
+    PushValue<uint32> numRock = g("numRock");              // the bound rock textures (RecordParams::numRock, <= ROCK_TEXTURES)
 };
 // tree_volume_floor_smooth.cs.glsl.
 struct FloorSmoothPush
@@ -255,6 +256,7 @@ public:
         // The terrain's rock materials' diffuse views, in slot order (ROCK_TEXTURES of them: a fallback past the count,
         // u_terrain_numRock, which the resolve reads from the UBO).
         oc::span<const vk::ImageView> rockTextures;
+        uint32 numRock = 0;           // the real ones among them: min(u_terrain_numRock, ROCK_TEXTURES), 0 without a splat set
         vk::ImageView sceneDepthView; // SCENE_DEPTH_SAMPLED_LAYOUT, after the opaque stages
         vk::Sampler sceneDepthSampler;
         vk::ImageView terrainView;    // the baked terrain-data cascades (SHADER_READ_ONLY)

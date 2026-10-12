@@ -255,7 +255,7 @@ The FS's step count tapers linearly with the proxy's projected size below "Full-
 
 ### Sampled shell tier
 
-"Sampled tier radius (m)", default 5; 0 = off.
+"Sampled tier radius (m)", default 8, min 1 (the tier is always on; no qualifying emitter = no bake dispatch).
 
 Emitters whose **VISIBLE bubble radius** is at or above it march a BAKED FIELD VOLUME instead of the
 analytic candidate loop.

@@ -126,7 +126,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
     vec3 E = vec3(0.0);
     g_gatherSunRadiance = vec3(0.0);
 
-    vec3 sunL = normalize(u_sunDirection.xyz);
+    vec3 sunL = u_sunDirection.xyz;
     float sunNdotL = max(dot(N, sunL), 0.0);
     if (sunNdotL > 0.0)
     {

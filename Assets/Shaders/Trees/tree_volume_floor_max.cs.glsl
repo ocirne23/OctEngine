@@ -32,6 +32,7 @@ void main()
     const ivec2 b = ivec2(gl_GlobalInvocationID.xy);
     if (any(greaterThanEqual(uvec2(b), pc.dstSize)))
         return;
+
     float m = TV_FLOOR_MAX_NONE;
 #ifdef TREE_FLOOR_MAX_DILATE
     for (int dy = -1; dy <= 1; ++dy)
@@ -42,6 +43,7 @@ void main()
         for (int dx = -1; dx <= 1; ++dx)
             m = max(m, imageLoad(u_src, ivec2(tvWrapAngle(b.x + dx, int(pc.srcSize.x)), row)).r);
     }
+
     float ahead = m; // from the dilated value: it also holds the inner row, which only makes the bound safer
     for (int row = b.y; row < int(pc.srcSize.y); ++row)
         for (int dx = -TV_FLOOR_AHEAD_SECTORS; dx <= TV_FLOOR_AHEAD_SECTORS; ++dx)

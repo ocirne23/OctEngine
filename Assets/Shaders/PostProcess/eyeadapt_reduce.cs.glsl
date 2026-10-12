@@ -54,7 +54,7 @@ void main()
 
     // Exponential adaptation toward the target luminance. On the first frame (u_avgLum == 0) snap.
     float prev = u_avgLum > 0.0 ? u_avgLum : targetLum;
-    float adapted = mix(targetLum, prev, exp(-u_dt / max(u_tau, 1e-3)));
+    float adapted = mix(targetLum, prev, exp(-u_dt / u_tau));
 
     u_avgLum = adapted;
     u_exposure = clamp(u_key / max(adapted, 1e-4), u_minExposure, u_maxExposure);
