@@ -12,25 +12,25 @@ public:
 
     BitRangeAllocator(uint32 size)
     {
-        const uint32 numInts = (size + 63) / 64;
-        m_size = numInts * 64;
-        m_pBits = oc::make_unique<uint64[]>(numInts);
+        m_size = size;
+        m_pBits = oc::make_unique<uint64[]>((size + 63) / 64);
+        reserveTail();
     }
     ~BitRangeAllocator() {};
     BitRangeAllocator(const BitRangeAllocator&) = delete;
 
     void resize(uint32 size)
     {
-        const uint32 numInts = (size + 63) / 64;
-        const uint32 newSize = numInts * 64;
-        if (m_size <= newSize)
-        {
-            const uint32 oldNumInts = (m_size + 63) / 64;
-            m_size = newSize;
-            auto newBits = oc::make_unique<uint64[]>(numInts); // value-init: grown tail starts free
-            memcpy(newBits.get(), m_pBits.get(), oldNumInts * sizeof(uint64));
-            m_pBits = oc::move(newBits);
-        }
+        if (size < m_size)
+            return;
+        const uint32 oldNumInts = (m_size + 63) / 64;
+        auto newBits = oc::make_unique<uint64[]>((size + 63) / 64); // value-init: grown tail starts free
+        memcpy(newBits.get(), m_pBits.get(), oldNumInts * sizeof(uint64));
+        if (m_size % 64 != 0)
+            newBits[m_size / 64] &= ~(~0ull << (m_size % 64)); // the old tail padding becomes real slots
+        m_pBits = oc::move(newBits);
+        m_size = size;
+        reserveTail();
     }
 
     int acquireOne()
@@ -207,6 +207,15 @@ public:
     }
 
 private:
+
+    // The bits past m_size in the last word stay SET, so the word-granular searches never hand them out: the owner's
+    // storage ends at exactly m_size slots (rounding the size up to whole words gave MeshDataManager ranges past the
+    // end of its buffer).
+    void reserveTail()
+    {
+        if (m_size % 64 != 0)
+            m_pBits[m_size / 64] |= ~0ull << (m_size % 64);
+    }
 
     uint64 loadBits(int intIdx) const
     {
