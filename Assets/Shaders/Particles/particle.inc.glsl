@@ -25,7 +25,7 @@ struct ParticleEmitter
     vec4 sizeParams;      // x = size start (m), y = size end, z = size variance, w = velocity stretch (s)
     vec4 colorStart;      // rgb = linear color * intensity, a = start alpha
     vec4 colorEnd;
-    vec4 fadeParams;      // x = fade-in end (life frac), y = fade-out start, z = additivity, w = soft fade dist (m)
+    vec4 fadeParams;      // x = fade-in end (life frac), y = fade-out start, z = additivity, w = 1 / soft fade dist (1/m)
     vec4 spinParams;      // x = max spin (rad/s), y = random initial rotation (0/1), z = lit emissive floor, w = ground fade height (m)
     uvec4 texFlags;       // x = texture idx, y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16, w = flipbook fps (float bits)
     vec4 volumeParams;    // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s)
@@ -43,7 +43,7 @@ vec3 particleVolumeWrap(vec3 rel, vec3 halfExtents)
 // Alpha fade over the outer band of the box's XZ footprint, so the wrap seam at the sides never pops.
 float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
 {
-    const vec2 edge = abs(rel.xz) / max(halfExtents.xz, vec2(1e-3));
+    const vec2 edge = abs(rel.xz) / halfExtents.xz;
     return 1.0 - smoothstep(0.8, 1.0, max(edge.x, edge.y));
 }
 

@@ -80,7 +80,7 @@ void main()
             // A trough is soft-limited to 70 % of the water column under the vertex, else a shallow stream shows its bed.
             const float floorDepth = 0.7 * in_normalV.z;
             if (h < 0.0)
-                h = floorDepth > 1e-4 ? -floorDepth * (1.0 - exp(h / floorDepth)) : 0.0;
+                h = -floorDepth * (1.0 - exp(h / floorDepth)); // the CPU keeps the column >= 2e-4
             out_pos.y += h * near * bank;
         }
     }

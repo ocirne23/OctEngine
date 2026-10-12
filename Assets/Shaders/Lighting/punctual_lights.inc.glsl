@@ -185,7 +185,7 @@ vec3 doAreaLightSpecularH(vec3 lightRadiance, f16vec3 Lspec, f16vec3 V, f16vec3 
 	const float16_t NoL   = max(dot(N, Lspec), float16_t(0.0));
 	const float16_t NoV   = max(dot(N, V), float16_t(0.0));
 	const float16_t NoH   = max(dot(N, H), float16_t(0.0));
-	const f16vec3 F       = FresnelSchlickH(max(dot(H, V), float16_t(0.0)), specularCol);
+	const f16vec3 F       = FresnelSchlickH(dot(H, V), specularCol);
 	const float16_t spec  = min(D_GGX_H(alphaPrime, NoH, cross(N, H)) * (normRatio * normRatio)
 		* (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL), float16_t(MEDIUMP_FLT_MAX));
 	return vec3(F * spec) * lightRadiance;
@@ -206,7 +206,7 @@ vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specu
 	const float16_t NoL = max(dot(N, L), float16_t(0.0));
 	const float16_t NoV = max(dot(N, V), float16_t(0.0));
 	const float16_t NoH = max(dot(N, H), float16_t(0.0));
-	const f16vec3 F     = FresnelSchlickH(max(dot(H, V), float16_t(0.0)), specularCol);
+	const f16vec3 F     = FresnelSchlickH(dot(H, V), specularCol);
 	const float16_t spec = min(D_GGX_H(alpha, NoH, cross(N, H)) * (V_SmithGGXCorrelatedFastH(NoV, NoL, alpha) * NoL),
 		float16_t(MEDIUMP_FLT_MAX)) * antiLightFade(L, V);
 	return vec3(F * spec + (f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
@@ -279,17 +279,17 @@ vec3 doAreaLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	vec3 closest     = closestPointOnRect(pos, center, right, up, halfWidth, halfHeight);
 	vec3 LdiffVec    = closest - pos;
 	float distDiff   = length(LdiffVec);
-	vec3 Ldiff       = LdiffVec / max(distDiff, 1e-5);
-	float facingDiff = max(dot(quadNormal, -Ldiff), 0.0);
+	vec3 Ldiff       = LdiffVec / distDiff;           // pos is off the quad plane (the test above): distDiff > 0
+	float facingDiff = dot(quadNormal, -Ldiff);
 
 	// Horizon clamp: smoothstep the center N.L over the quad's angular half-extent.
 	// As the quad clips below the horizon it fades out proportionally to its apparent size.
 	float NdotLcenter = dot(vec3(N), normalize(center - pos));
-	float halfExtent  = lightSize / max(distDiff, 1e-5);
+	float halfExtent  = lightSize / distDiff;
 	float horizonVis  = smoothstep(-halfExtent, halfExtent, NdotLcenter);
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, light.range) * facingDiff;
 	f16vec3 Hdiff     = normalize(f16vec3(Ldiff) + V);
-	f16vec3 Fdiff     = FresnelSchlickH(max(dot(Hdiff, V), float16_t(0.0)), specularCol);
+	f16vec3 Fdiff     = FresnelSchlickH(dot(Hdiff, V), specularCol);
 	vec3 diffuse      = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
 	// ---- Specular (representative point) -------------------------------------
@@ -305,16 +305,15 @@ vec3 doAreaLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 		float d = dot(R, quadNormal);
 		if (d < 0.0)
 		{
-			float t = dot(center - pos, quadNormal) / d;
-			if (t > 0.0)
-				specPoint = closestPointOnRect(pos + R * t, center, right, up, halfWidth, halfHeight);
+			float t = dot(center - pos, quadNormal) / d; // both negative: t > 0
+			specPoint = closestPointOnRect(pos + R * t, center, right, up, halfWidth, halfHeight);
 		}
 
-		vec3 LspecVec = specPoint - pos;
-		distSpec      = max(length(LspecVec), 1e-4);
+		vec3 LspecVec = specPoint - pos; // specPoint is on the quad plane: length >= the plane distance > 0
+		distSpec      = length(LspecVec);
 		Lspec         = LspecVec / distSpec;
 
-		float facingSpec = max(dot(quadNormal, -Lspec), 0.0);
+		float facingSpec = dot(quadNormal, -Lspec);
 		specRadiance = light.color * squareFalloff(distSpec, light.range) * facingSpec;
 	}
 	else
@@ -334,9 +333,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	float height   = length(light.direction);
 	float halfLen  = height * 0.5;
 	float radius   = abs(light.width);
-	float absRange = abs(light.range);
-	if (halfLen < 1e-5 || absRange < 1e-5)
-		return vec3(0.0);
+	float absRange = abs(light.range); // CPU (addLightInfo): tube length >= 1e-4, |range| > 1e-5
 
 	vec3 axis = light.direction / height;
 	vec3 pa   = light.pos - axis * halfLen;
@@ -357,7 +354,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, absRange);
 	f16vec3 Hdiff = normalize(f16vec3(Ldiff) + V);
-	f16vec3 Fdiff = FresnelSchlickH(max(dot(Hdiff, V), float16_t(0.0)), specularCol);
+	f16vec3 Fdiff = FresnelSchlickH(dot(Hdiff, V), specularCol);
 	vec3 diffuse = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
 	// ---- Specular (representative point) -------------------------------------

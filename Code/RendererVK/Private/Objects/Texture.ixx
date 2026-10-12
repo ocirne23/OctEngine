@@ -24,7 +24,9 @@ public:
     bool initialize(const char* filePath, bool generateMips, bool sRGB = false);
     // sRGB: the pixel data is sRGB-encoded color (albedo/emissive) - sample through an Srgb format so
     // the hardware linearizes it. Data textures (normals, metal/roughness) must stay Unorm.
-    bool initialize(const ITextureData& textureData, bool generateMips, bool sRGB = false);
+    // minG: a floor on the G channel of DECODED pixel data (the metal-roughness slot's roughness, which the lit
+    // shaders read unguarded); a texture loaded from a DDS path keeps its stored values.
+    bool initialize(const ITextureData& textureData, bool generateMips, bool sRGB = false, uint8 minG = 0);
     bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName);
 
     vk::ImageView getImageView() const { return m_imageView; }

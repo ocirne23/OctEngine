@@ -62,7 +62,7 @@ void main()
     const vec3 projDir = decalQuatRotate(decal.rotation, vec3(0.0, 0.0, -1.0)); // toward the surface
     const float facing = dot(n, -projDir);
     const float cutoff = decal.halfExtentsAngleFade.w;
-    const float angleFade = smoothstep(cutoff, cutoff + max(decal.emissiveFadeWidth.w, 1e-3), facing);
+    const float angleFade = smoothstep(cutoff, cutoff + decal.emissiveFadeWidth.w, facing);
     // Soften the box's near/far clip so the projection doesn't end in a hard line on steep geometry.
     const float depthFade = 1.0 - smoothstep(0.8, 1.0, abs(local.z));
 

@@ -178,7 +178,7 @@ vec4 clutterQuatFromUp(vec3 n)
 // The fairy rings of a type: radius +-30 %, one per `cell` with `chance`; 1 on a ring, falling off over `width`.
 float clutterRing(vec2 xz, vec4 ring, uint typeSeed)
 {
-    const float cell = max(ring.z, 1.0);
+    const float cell = ring.z; // ClutterType: >= 2 x radius + 1
     const ivec2 c0 = ivec2(floor(xz / cell));
     float best = 0.0;
     for (int dz = -1; dz <= 1; ++dz)
@@ -190,7 +190,7 @@ float clutterRing(vec2 xz, vec4 ring, uint typeSeed)
                 continue;
             const vec2 centre = (vec2(c) + 0.25 + 0.5 * vec2(grassUnit(grassHash(h + 1u)), grassUnit(grassHash(h + 2u)))) * cell;
             const float radius = ring.x * (0.7 + 0.6 * grassUnit(grassHash(h + 3u)));
-            const float off = (distance(xz, centre) - radius) / max(ring.y, 0.05);
+            const float off = (distance(xz, centre) - radius) / ring.y; // ClutterType: width >= 0.05
             best = max(best, exp(-off * off));
         }
     return best;
@@ -291,7 +291,7 @@ void main()
                  * mix(type.terms1.x, type.terms1.y, cover.z) * mix(type.terms1.z, type.terms1.w, floorMap.x)
                  * mix(type.terms2.x, type.terms2.y, floorMap.y) * mix(type.terms2.z, type.terms2.w, floorMap.z)
                  * mix(type.terms3.x, type.terms3.y, humidity)
-                 * mix(type.terms4.x, type.terms4.y, pow(clamp(river.x, 0.0, 1.0), type.terms5.x)) * mix(type.terms4.z, type.terms4.w, river.y)
+                 * mix(type.terms4.x, type.terms4.y, pow(river.x, type.terms5.x)) * mix(type.terms4.z, type.terms4.w, river.y)
                  * mix(type.bound.z, type.bound.w, river.z);
         density *= (1.0 - cover.w) * (1.0 - smoothstep(0.3, 0.7, floorMap.w));
         float keep = density * countScale * rangeFade;
@@ -317,15 +317,15 @@ void main()
         vec3 groundN;
         const float groundY = grassGroundHeight(g, xz, groundN);
         // The slope (rise / run = sin / cos) against its max, multiplied out (no divide).
-        const float sinSlope = sqrt(max(1.0 - groundN.y * groundN.y, 0.0));
-        if (sinSlope > type.terms3.z * max(groundN.y, 1e-3) || groundY - water < type.terms3.w)
+        const float sinSlope = length(groundN.xz);
+        if (sinSlope > type.terms3.z * groundN.y || groundY - water < type.terms3.w)
             continue;
 
         const float grow = clamp((keep - rank) / (u_clutter_growBand * keep), 0.0, 1.0);
         const uint h = grassHash(listHash ^ (k * 0x85EBCA6Bu));
         const uint kind = type.info.z;
-        const uint variants = max(type.info.y, 1u);
-        const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % variants;
+        // A rigid type has >= 1 variant (ClutterSystem skips one with no mesh); a flower's 0 is never used.
+        const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % type.info.y;
         // A FLOWER shrinks with the grass cover as the blades do (grassCoverSize). Not REEDS or TUFTS: they grow on the
         // bare bank.
         const uint head = type.info.w & 0xFFu;
@@ -380,9 +380,8 @@ void main()
         {
             // The projected size radius / dist against the LOD sizes, multiplied out (no divide).
             const float size = radius / max(dist, 1e-3);
+            // An empty LOD slot holds the finer level's range (setClutterAssets).
             lod = size > u_clutter_lod1Size ? 0u : size > u_clutter_lod2Size ? 1u : 2u;
-            while (lod > 0u && in_meshes[mesh].lods[lod].y == 0u)
-                --lod;
         }
 
         const uint slot = atomicAdd(io_counts[0], 1u);
@@ -393,15 +392,16 @@ void main()
 
         // The colours vary per object (+-12 %), as the grass blades do.
         const float variation = 1.0 + 0.24 * (grassUnit(grassHash(h + 3u)) - 0.5);
-        const vec3 albedo0 = clamp(type.albedo0.rgb * variation, vec3(0.0), vec3(1.0));
-        const vec3 albedo1 = clamp(type.albedo1.rgb, vec3(0.0), vec3(1.0));
-        const uint petalWidth = uint(clamp(type.flower.z, 0.0, 1.0) * 255.0 + 0.5);
-        const uint open = uint(clamp(type.flower.w * INV_PI + 0.5, 0.0, 1.0) * 255.0 + 0.5); // -pi/2 .. pi/2
+        // The colours are >= 0 (ClutterSystem); packUnorm4x8 clamps the top. petalWidth / open are in range (ClutterType).
+        const vec3 albedo0 = type.albedo0.rgb * variation;
+        const vec3 albedo1 = type.albedo1.rgb;
+        const uint petalWidth = uint(type.flower.z * 255.0 + 0.5);
+        const uint open = uint((type.flower.w * INV_PI + 0.5) * 255.0 + 0.5); // -pi/2 .. pi/2
         ClutterInstance inst;
         inst.posScale = vec4(base, scale);
         inst.data = uvec4(packHalf2x16(q.xy), packHalf2x16(q.zw), t | (variant << 8) | (lod << 16) | (kind << 24), h);
         inst.look = uvec4(packUnorm4x8(vec4(sqrt(albedo0), type.albedo0.w)),
-                          packUnorm4x8(vec4(sqrt(albedo1), clamp(type.bound.y, 0.0, 1.0))),
+                          packUnorm4x8(vec4(sqrt(albedo1), type.bound.y)),
                           packHalf2x16(kind == CLUTTER_KIND_FLOWER ? type.flower.xy : vec2(height, 0.0)),
                           type.info.w | (petalWidth << 16) | (open << 24));
         out_flat[slot] = inst;

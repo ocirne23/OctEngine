@@ -83,7 +83,7 @@ void main()
 	{
 		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
 		metalness = metalRoughness.x;
-		roughness = max(metalRoughness.y, float16_t(0.01));
+		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
 	}
 
 	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);

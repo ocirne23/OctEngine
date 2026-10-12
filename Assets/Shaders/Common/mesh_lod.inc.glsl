@@ -46,7 +46,7 @@ int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceS
     if (forceLod >= 0.0)
         return min(int(forceLod), int(group.numLods) - 1);
 
-    const float pixelsPerUnit = u_mipPixelScale / max(dist, 0.01);
+    const float pixelsPerUnit = u_mipPixelScale / dist; // both callers pass dist >= 0.01
     const float hysteresis = u_lod_hysteresis;
     int level;
     if (group.errors1_4.x > 0.0)

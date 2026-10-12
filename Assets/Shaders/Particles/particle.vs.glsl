@@ -79,7 +79,7 @@ vec3 particleLightIrradiance(LightInfo light, vec3 pos, vec3 toEye)
     float spot = 1.0;
     if (light.width < 0.0)
     {
-        const float softness = max(length(light.direction), 1e-4);
+        const float softness = length(light.direction);
         const float cosAngle = dot(-lightVec / dist, light.direction / softness);
         const float cosOuter = cos(light.rotation);
         spot = smoothstep(cosOuter, mix(cosOuter, 1.0, softness), cosAngle);
@@ -102,6 +102,7 @@ vec3 particleLocalLights(vec3 pos, vec3 toEye)
         if (getGridMin(gridIdx) == gridPos)
         {
             const uint numLargeLights = getLargeLightCount(gridIdx);
+            // The counts are written capped; the mins stay as the loop bound (without them: 56 -> 61 registers).
             for (uint i = 0u; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
                 sum += particleLightIrradiance(in_lightInfos[getLargeLightId(gridIdx, i)], pos, toEye);
             const uint cellOffset = calcCellOffset(gridIdx, gridPos, pos);
@@ -139,16 +140,16 @@ void main()
     // A weather volume particle never ages out (it wraps), so its "life" sits at the midpoint: colour and
     // size are the mid blend and the fade envelope is replaced by the box's XZ edge fade below.
     const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u;
-    const float lifeFrac = volume ? 0.5 : clamp(age / particle.velLife.w, 0.0, 1.0);
+    const float lifeFrac = volume ? 0.5 : age / particle.velLife.w;
     const vec3 pos = particle.posAge.xyz;
 
     // Per-particle constants re-derived from the spawn seed (cheaper than storing them).
     uint seed = particle.misc.y ^ 0x27D4EB2Fu;
     const float sizeRand = 1.0 + e.sizeParams.z * (particleRand(seed) * 2.0 - 1.0);
-    const float size = max(1e-4, mix(e.sizeParams.x, e.sizeParams.y, lifeFrac) * sizeRand);
+    const float size = mix(e.sizeParams.x, e.sizeParams.y, lifeFrac) * sizeRand;
 
     // Alpha envelope: fade in over the first fadeParams.x of life, out from fadeParams.y to death.
-    const float fadeIn = clamp(lifeFrac / max(e.fadeParams.x, 1e-3), 0.0, 1.0);
+    const float fadeIn = clamp(lifeFrac / e.fadeParams.x, 0.0, 1.0);
     const float fadeOut = 1.0 - smoothstep(e.fadeParams.y, 1.0, lifeFrac);
     float envelope = volume
         ? particleVolumeEdgeFade(pos - e.posSpawnRadius.xyz, e.volumeParams.xyz) * weatherSheet(pos, u_timeSeconds)
@@ -172,7 +173,7 @@ void main()
     if ((e.texFlags.y & PARTICLE_FLAG_GROUND_FADE) != 0u && terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(pos.xz);
-        envelope *= exp(-max(pos.y - td.x, 0.0) / max(e.spinParams.w, 0.01));
+        envelope *= exp(-max(pos.y - td.x, 0.0) / e.spinParams.w);
         envelope *= 1.0 - smoothstep(0.0, 0.5, td.y - td.x);
     }
     float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
@@ -209,7 +210,7 @@ void main()
         if (l > 1e-3)
         {
             up = velPlane / l;
-            right = normalize(cross(fwd, up));
+            right = cross(fwd, up);
             halfH += l * e.sizeParams.w * 0.5;
         }
     }
@@ -267,6 +268,6 @@ void main()
     v_color = vec4(color, alpha);
     v_texIdx = e.texFlags.x;
     v_additivity = e.fadeParams.z;
-    v_softInv = 1.0 / max(e.fadeParams.w, 1e-3);
+    v_softInv = e.fadeParams.w;
     v_clipW = gl_Position.w;
 }

@@ -84,7 +84,7 @@ float terrainFilmLevel(vec3 meshPos, float normalY, float waterLevel, float reli
         const float reach = u_ocean_swashReach;
         if (abs(depthBelow) < reach)
             depthBelow += underwaterLiveWaveY(meshPos.xz, depthBelow, waterLevel);
-        level = max(level, clamp(0.5 + depthBelow / max(reliefDepth, 1e-3), 0.0, 1.0));
+        level = max(level, clamp(0.5 + depthBelow / reliefDepth, 0.0, 1.0));
     }
     return level;
 }
@@ -199,7 +199,7 @@ void main()
     out_meshLift = 0.0;
     if (u_terrainTess_enabled > 0.5 && u_terrain_splatBase >= 0.0 && u_terrain_numGround >= 1.0)
     {
-        const vec3 N = normalize(out_normal);
+        const vec3 N = out_normal; // unit: the mesh normal x the identity quat
         const float dist = distance(out_pos, u_views_viewPos[VIEW_CENTER].xyz); // the centre view, as the TES: both VR eyes lift the same
         if (dist < u_terrainTess_fadeEnd)
         {

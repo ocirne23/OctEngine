@@ -94,7 +94,7 @@ void main()
     const vec3 vel = req.velEmitter.xyz + e.velocityInherit.xyz * e.velocityInherit.w;
 #else
     // Direction: uniform within the cone around the emitter's local +Y.
-    const float cosCone = cos(clamp(e.spawnParams.x, 0.0, PARTICLE_PI));
+    const float cosCone = cos(e.spawnParams.x);
     const float cosTheta = mix(cosCone, 1.0, particleRand(seed));
     const float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
     const float phi = particleRand(seed) * 2.0 * PARTICLE_PI;
@@ -105,7 +105,7 @@ void main()
     const vec3 vel = dir * speed + e.velocityInherit.xyz * e.velocityInherit.w;
 #endif
 
-    const float lifetime = max(0.01, mix(e.lifeParams.x, e.lifeParams.y, particleRand(seed)));
+    const float lifetime = mix(e.lifeParams.x, e.lifeParams.y, particleRand(seed));
     const float rotation = e.spinParams.y > 0.5 ? particleRand(seed) * 2.0 * PARTICLE_PI : 0.0;
     const float spin = e.spinParams.x * (particleRand(seed) * 2.0 - 1.0);
 

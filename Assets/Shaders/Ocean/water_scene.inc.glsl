@@ -98,12 +98,12 @@ float V_SmithGGX(float NoV, float NoL, float a) // height-correlated Smith, incl
     const float a2 = a * a;
     const float ggxV = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
     const float ggxL = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
-    return 0.5 / max(ggxV + ggxL, 1e-5);
+    return 0.5 / (ggxV + ggxL); // callers: NoV >= 1e-3, a >= 0.02
 }
 
-float F_Schlick(float u, float f0)
+float F_Schlick(float u, float f0) // callers pass u in [0, 1]
 {
-    const float x = clamp(1.0 - u, 0.0, 1.0);
+    const float x = 1.0 - u;
     const float x2 = x * x;
     return f0 + (1.0 - f0) * (x2 * x2 * x);
 }
@@ -208,7 +208,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, float columnLevel, out SceneH
                     else
                     {
                         const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
-                        const float lod = clamp(log2(max(hit.t, 1.0)) + 1.0, 0.0, 7.0); // ray-cone-ish LOD by distance
+                        const float lod = min(log2(max(hit.t, 1.0)) + 1.0, 7.0); // ray-cone-ish LOD by distance
                         hit.albedo = textureLod(u_textures[nonuniformEXT(diffuseTexIdx)], uv, lod).rgb;
                     }
                 }
@@ -245,9 +245,9 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
         if (gridMin == gridPos)
         {
             // ONE loop over large + cell lights: each loop inlines every light type.
-            const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+            const uint numLargeLights = getLargeLightCount(gridIdx);
             const uint cellOffset     = calcCellOffset(gridIdx, gridMin, hit.pos);
-            const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+            const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
             for (uint i = 0; i < numLights; ++i)
             {
                 const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);

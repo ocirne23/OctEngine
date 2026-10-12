@@ -578,7 +578,7 @@ float giVolumeCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
     const vec3 q1 = qa.xyz, q2 = vec3(qa.w, qb.xy), q3 = vec3(qb.zw, tl.x);
     eLin = c0 * (Yk.x + GI_SQRT3 * (q1 * Yk.y + q2 * Yk.z + q3 * Yk.w));
     // The stored DC sun FRACTION x luma(c0) = the sun DC coefficient.
-    sun  = giSunShare(min(tl.z * invW, 1.0) * dot(c0, GI_LUMA_W), eLin, n, Yk);
+    sun  = giSunShare(tl.z * invW * dot(c0, GI_LUMA_W), eLin, n, Yk); // the bake stores sun x W <= W
     return W;
 }
 
@@ -612,7 +612,7 @@ float giSkyVisibility(vec3 worldPos, vec3 n)
         if (t.x <= 1e-4)
             return 1.0;
     }
-    const float v = clamp(t.y / t.x, 0.0, 1.0);
+    const float v = t.y / t.x; // the bake stores visibility x W <= W
     return c == GI_NUM_CASCADES - 1 ? mix(1.0, v, fade) : v;
 }
 #else

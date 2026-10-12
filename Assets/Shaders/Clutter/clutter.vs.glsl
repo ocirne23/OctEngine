@@ -72,7 +72,7 @@ void main()
         temperature = terrainTemperatureAt(climate, pos.y);
     }
     out_fields = vec4(in_posAo.w, in_posAo.y * scale, temperature, humidity);
-    out_look = uvec4(in_instLook.x, in_instLook.y, kind, uint(in_normalPart.w + 0.5));
+    out_look = uvec4(in_instLook.x, in_instLook.y, kind, uint(in_normalPart.w)); // fp32, written as exact 0 / 1 / 2
     out_uv = kind == CLUTTER_KIND_BRANCH ? in_uv * scale : in_uv; // bark: metres
     out_height = unpackHalf2x16(in_instLook.z).x;
 

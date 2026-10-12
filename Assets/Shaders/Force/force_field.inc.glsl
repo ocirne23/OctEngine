@@ -80,7 +80,7 @@ float forceContribution(vec3 x, ForceEmitterData e)
     const float z = dot(d, e.dirFocus.xyz);
     if (z <= 0.0 || z >= R)
         return 0.0; // the bubble spans exactly the output line: nothing behind pos or past target
-    const float lat2 = max(dot(d, d) - z * z, 0.0);
+    const float lat2 = dot(d, d) - z * z; // dir is unit; a rounding -0 only feeds the polynomial
     const float X = z * (2.0 / R) - 1.0;        // axial [-1 at emitter .. 1 at target]
     const float invW = 1.0 / e.outputParams.w;  // width: pure lateral scale, reach untouched
     const float Y2 = lat2 * (4.0 / (R * R)) * (invW * invW); // lateral, in (width*R/2)^2 units
@@ -125,7 +125,7 @@ void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, o
     const float lo = float(p & 0xFFu) * (1.0 / 255.0);
     const float hi = float((p >> 8u) & 0xFFu) * (1.0 / 255.0);
     side *= float(p >> 16u) * (1.0 / 65535.0);
-    forward = R * min(hi + 0.02, 1.02);
+    forward = R * (hi + 0.02);
     back = R * (0.02 - lo); // lo > 0.02: negative back - the box starts in FRONT of the emitter
 }
 

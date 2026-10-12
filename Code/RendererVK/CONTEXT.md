@@ -2620,6 +2620,13 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   FS 80/32 unchanged. cloud_temporal's checkerboard fill pixels in ONE neighbour loop (the clamp range gathered with
   the weighted average): 48/0 and 9216 B before and after, cloud and TREE_TEMPORAL (scale 2, checker) variants alike -
   the driver had already merged the duplicate fetches. clutter_cull 80/16 after its relief view terms left the loop.
+* **Measured 2026-10-12, the CPU-guarantee rounds** (UBO guards, then data guards; regs/local): lit FS 72/48 -> **64/32**
+  (all 3 variants), terrain FS 72/16 -> 64/32, sky.fs 64 -> 56, aerial_lut 79 -> 73, particle_sim 62 -> 56, ocean 80/32
+  -> 80/16, film 64/48 -> 64/32, rock 64/16 -> 64/16 (64/32 between the rounds). Worse by 16 B: the tessellated terrain
+  FS (64/48) and clutter_cull (80/32) - not bisected (the driver's +-16 B). **The light loops' `min(count, MAX)` stay**
+  although the counts are written capped, in `lighting.inc.glsl` and `particle.vs.glsl`: without them gi_probe_trace went
+  96 -> 125 and the particle VS 56 -> 61 (an unbounded loop). The lit / ocean / river / film / vol_scatter loops read the
+  counts raw at no cost.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
@@ -3640,8 +3647,8 @@ calls `reloadShaders()`.
     `kickGridBuilds` in the App loop.
   * **GPU (`light_grid.cs.glsl`, GATHER):** one thread per cell loops its grid's candidate list
     (box test + the range sphere for point/spot) and writes the cell's count + packed ids in one
-    go. No atomics, no spin, no clear: every header and cell of every grid is written. Counts hold
-    the TRUE candidate count (the debug heat view shows saturation); readers clamp.
+    go. No atomics, no spin, no clear: every header and cell of every grid is written. Counts are
+    written CAPPED (the debug heat view shows the cap as saturation); readers use them raw.
     `light_grid.inc.glsl` is read-only API now; the table wrappers need `TABLE_SIZE_NAME` +
     `GRID_TABLE_NAME`, the gather shader does without them.
   * **The distance LOD** is `LightGridParams` under "Graphics/LOD/Light grid", read by the CPU

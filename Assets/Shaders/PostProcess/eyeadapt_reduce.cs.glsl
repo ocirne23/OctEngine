@@ -57,5 +57,5 @@ void main()
     float adapted = mix(targetLum, prev, exp(-u_dt / u_tau));
 
     u_avgLum = adapted;
-    u_exposure = clamp(u_key / max(adapted, 1e-4), u_minExposure, u_maxExposure);
+    u_exposure = clamp(u_key / adapted,u_minExposure, u_maxExposure);
 }

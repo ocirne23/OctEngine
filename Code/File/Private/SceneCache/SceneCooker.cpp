@@ -226,6 +226,201 @@ namespace
             *pA = (uint8)oc::min(255.0f, (float)*pA * scale + 0.5f);
     }
 
+    // ---------------------------------------------------------------- roughness floor
+    //
+    // The lit / tree / foliage FS read the metal-roughness G as the GGX alpha with NO floor of their own: alpha
+    // >= 0.01 is guaranteed here, in every block of every mip of a texture in a roughness slot. A BC1-style colour
+    // block's G comes only from its two 565 endpoints (the palette interpolates them), so G6 >= 1 on both endpoints
+    // (4/255 decoded) puts every texel of the block at >= 4/255 (~3.5/255 = 0.0137 after the hardware's palette
+    // rounding). Filtering and mips only take convex combinations of those texels, so any sample holds the floor.
+
+    constexpr uint16 BC_G_MASK = 0x07E0; // the 6 G bits of a 565 endpoint
+    constexpr uint16 BC_G_ONE = 0x0020;
+    constexpr uint8 ROUGHNESS_FLOOR_8 = 4; // = G6 1 expanded to 8 bits
+
+    void applyChannelFloor(uint8* pRgba, size_t numPixels, const uint8* pChannelMin)
+    {
+        for (int c = 0; c < 4; ++c)
+        {
+            const uint8 minValue = pChannelMin[c];
+            if (minValue == 0)
+                continue;
+            uint8* p = pRgba + c;
+            for (size_t i = 0; i < numPixels; ++i, p += 4)
+                *p = oc::max(*p, minValue);
+        }
+    }
+
+    // A BC1 3-colour block that USES index 3 (black, or transparent black: G = 0) has no endpoint fix: its 16 texels
+    // are decoded, G-floored and re-encoded as a 4-colour block (stb_dxt never writes 3-colour mode). Lossy, but only
+    // authored files can hold such a block.
+    void reencodeColourBlock(uint8* pBlock)
+    {
+        uint16 c[2];
+        uint32 indices;
+        memcpy(c, pBlock, 4);
+        memcpy(&indices, pBlock + 4, 4);
+        uint8 palette[4][4];
+        for (int e = 0; e < 2; ++e)
+        {
+            const uint32 r = ((uint32)c[e] >> 11) & 31u, g = ((uint32)c[e] >> 5) & 63u, b = (uint32)c[e] & 31u;
+            palette[e][0] = (uint8)((r << 3) | (r >> 2));
+            palette[e][1] = (uint8)((g << 2) | (g >> 4));
+            palette[e][2] = (uint8)((b << 3) | (b >> 2));
+            palette[e][3] = 255;
+        }
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            palette[2][ch] = (uint8)(((uint32)palette[0][ch] + palette[1][ch]) / 2);
+            palette[3][ch] = 0;
+        }
+        palette[2][3] = 255;
+        palette[3][3] = 255;
+        uint8 texels[16 * 4];
+        for (uint32 i = 0; i < 16; ++i)
+        {
+            memcpy(&texels[i * 4], palette[(indices >> (2 * i)) & 3u], 4);
+            texels[i * 4 + 1] = oc::max(texels[i * 4 + 1], ROUGHNESS_FLOOR_8);
+        }
+        stb_compress_dxt_block(pBlock, texels, 0, STB_DXT_HIGHQUAL);
+    }
+
+    // Raises the G of both endpoints of one BC1-style colour block to G6 >= 1; every texel keeps its decoded colour
+    // except for the raised G floor. fourColourAlways: the BC2 / BC3 colour block, interpolated in 4-colour mode
+    // whatever the endpoint order. A BC1 block's MODE is its endpoint order (c0 > c1: 4 colours; c0 <= c1: 3 colours
+    // + black), so when the raise flips the order the endpoints swap and the indices remap to the same entries.
+    void raiseColourBlockGreen(uint8* pBlock, bool fourColourAlways)
+    {
+        uint16 c0, c1;
+        uint32 indices;
+        memcpy(&c0, pBlock, 2);
+        memcpy(&c1, pBlock + 2, 2);
+        if ((c0 & BC_G_MASK) && (c1 & BC_G_MASK))
+            return;
+        memcpy(&indices, pBlock + 4, 4);
+        if (!fourColourAlways && c0 <= c1)
+        {
+            bool usesBlack = false;
+            for (uint32 i = 0; i < 16; ++i)
+                usesBlack |= ((indices >> (2 * i)) & 3u) == 3u;
+            if (usesBlack)
+            {
+                reencodeColourBlock(pBlock); // now 4-colour, or c0 == c1 with every index 0
+                memcpy(&c0, pBlock, 2);
+                memcpy(&c1, pBlock + 2, 2);
+                memcpy(&indices, pBlock + 4, 4);
+                if ((c0 & BC_G_MASK) && (c1 & BC_G_MASK))
+                    return;
+            }
+        }
+
+        // A BC2 / BC3 block keeps its c0 > c1 order too: correct under either reading of its mode.
+        const bool ordered = c0 > c1;
+        uint16 r0 = (c0 & BC_G_MASK) ? c0 : (uint16)(c0 | BC_G_ONE);
+        uint16 r1 = (c1 & BC_G_MASK) ? c1 : (uint16)(c1 | BC_G_ONE);
+        if (ordered && r0 < r1)
+        {
+            // 4-colour palette {c0, c1, (2c0 + c1) / 3, (c0 + 2c1) / 3}: a swap maps index i to i ^ 1
+            oc::swap(r0, r1);
+            indices ^= 0x55555555u;
+        }
+        else if (ordered && r0 == r1)
+            indices = 0; // the endpoints differed only in G 0 vs 1: ONE colour now (BC1 3-colour mode, index 0)
+        else if (!ordered && !fourColourAlways && r0 > r1)
+        {
+            // BC1 3-colour palette {c0, c1, (c0 + c1) / 2, black}: a swap maps 0 <-> 1, 2 and 3 stay
+            oc::swap(r0, r1);
+            indices ^= ~(indices >> 1) & 0x55555555u;
+        }
+        memcpy(pBlock, &r0, 2);
+        memcpy(pBlock + 2, &r1, 2);
+        memcpy(pBlock + 4, &indices, 4);
+    }
+
+    // blockStride 8 (BC1) or 16 (BC2 / BC3: the colour block sits at byte 8).
+    void raiseRoughnessFloor(uint8* pBlocks, size_t numBlocks, uint32 blockStride)
+    {
+        const bool bc1 = blockStride == 8;
+        uint8* pColour = pBlocks + (bc1 ? 0 : 8);
+        for (size_t i = 0; i < numBlocks; ++i, pColour += blockStride)
+            raiseColourBlockGreen(pColour, !bc1);
+    }
+
+    // An authored .dds in a roughness slot: copied to outPath with the roughness floor in every colour block of every
+    // mip / slice (all of them sit back to back after the header). False, with the reason, for a format this cannot
+    // patch: BC7 and the rest would need a decoder, and an _SRGB format decodes the G through the sRGB curve.
+    bool copyDdsWithRoughnessFloor(const oc::string& srcPath, const oc::string& outPath, oc::string& outReason)
+    {
+        std::error_code ec;
+        const uint64 size = std::filesystem::file_size(toPath(srcPath), ec);
+        if (ec || size < sizeof(dds::Header::magic) + sizeof(dds::Header::header))
+        {
+            outReason = "unreadable";
+            return false;
+        }
+        oc::vector<uint8> fileData((size_t)size);
+        {
+            FILE* pFile = nullptr;
+            fopen_s(&pFile, srcPath.c_str(), "rb");
+            if (!pFile)
+            {
+                outReason = "unreadable";
+                return false;
+            }
+            const bool ok = fread(fileData.data(), 1, fileData.size(), pFile) == fileData.size();
+            fclose(pFile);
+            if (!ok)
+            {
+                outReason = "unreadable";
+                return false;
+            }
+        }
+
+        const dds::Header header = dds::read_header(fileData.data(), fileData.size());
+        if (!header.is_valid())
+        {
+            outReason = "not a valid DDS";
+            return false;
+        }
+        uint32 blockStride = 0;
+        switch (header.format())
+        {
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC1_TYPELESS:
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM:
+            blockStride = 8;
+            break;
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC2_TYPELESS:
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC2_UNORM:
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC3_TYPELESS:
+        case dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM:
+            blockStride = 16;
+            break;
+        default:
+            outReason = oc::format("DXGI format {}", (int)header.format());
+            return false;
+        }
+        const size_t dataOffset = (size_t)header.data_offset();
+        if (dataOffset >= fileData.size())
+        {
+            outReason = "no pixel data";
+            return false;
+        }
+        raiseRoughnessFloor(fileData.data() + dataOffset, (fileData.size() - dataOffset) / blockStride, blockStride);
+
+        FILE* pFile = nullptr;
+        fopen_s(&pFile, outPath.c_str(), "wb");
+        if (!pFile)
+        {
+            outReason = "output not writable";
+            return false;
+        }
+        const bool ok = fwrite(fileData.data(), 1, fileData.size(), pFile) == fileData.size();
+        fclose(pFile);
+        if (!ok)
+            outReason = "output not writable";
+        return ok;
+    }
+
     // coverageCutoff: alpha-test cutoff of the masked material(s) using this texture, or < 0 when the
     // texture is never alpha-tested (no coverage preservation).
     bool convertTextureToDds(const ITextureData& texData, const oc::string& resolvedFile, ETexUsage usage, float coverageCutoff, const oc::string& outPath)
@@ -280,7 +475,10 @@ namespace
                     preserveAlphaCoverage(mipPixels.data(), (size_t)mipW * mipH, cutoff255, refCoverage);
                 pSrc = mipPixels.data();
             }
+            const size_t mipBegin = fileData.size();
             compressMip(pSrc, mipW, mipH, format, fileData);
+            if (usage == ETexUsage::Data) // only the metal-roughness slot marks Data: the G is the GGX alpha
+                raiseRoughnessFloor(fileData.data() + mipBegin, (fileData.size() - mipBegin) / 8, 8);
         }
 
         FILE* pFile = nullptr;
@@ -294,7 +492,10 @@ namespace
 
     // Mips + BC compression + .dds write for an already-decoded RGBA8 image (the shared tail of the
     // TextureConvert entry points; alpha-coverage preservation is a cooked-scene concern, not needed here).
-    bool compressRgbaToDds(const uint8* pRgba, uint32 width, uint32 height, TextureConvert::EUsage usage, const char* outPath)
+    // pChannelMin (4 entries, or null): a per-channel floor re-applied after every mip resize - the caller
+    // has already applied it to level 0.
+    bool compressRgbaToDds(const uint8* pRgba, uint32 width, uint32 height, TextureConvert::EUsage usage, const char* outPath,
+        const uint8* pChannelMin = nullptr)
     {
         dds::DXGI_FORMAT format = dds::DXGI_FORMAT::DXGI_FORMAT_BC1_UNORM;
         if (usage == TextureConvert::EUsage::NormalMap || usage == TextureConvert::EUsage::TwoChannel)
@@ -330,6 +531,8 @@ namespace
                     stbir_resize_uint8_srgb(pRgba, (int)width, (int)height, 0, mipPixels.data(), (int)mipW, (int)mipH, 0, STBIR_RGBA_NO_AW);
                 else
                     stbir_resize_uint8_linear(pRgba, (int)width, (int)height, 0, mipPixels.data(), (int)mipW, (int)mipH, 0, STBIR_4CHANNEL);
+                if (pChannelMin)
+                    applyChannelFloor(mipPixels.data(), (size_t)mipW * mipH, pChannelMin);
                 pSrc = mipPixels.data();
             }
             compressMip(pSrc, mipW, mipH, format, fileData);
@@ -500,6 +703,7 @@ namespace
         // full-res alpha coverage (Blend materials want the true averaged alpha, so they don't).
         oc::vector<uint8> usage(numTextures, 0xFF);
         oc::vector<float> coverageCutoff(numTextures, -1.0f);
+        oc::vector<uint8> feedsRoughness(numTextures, 0);
         auto markUsage = [&](uint32 texIdx, ETexUsage use) {
             if (texIdx < numTextures && usage[texIdx] == 0xFF)
                 usage[texIdx] = (uint8)use;
@@ -510,6 +714,8 @@ namespace
             markUsage(material.getDiffuseTexIdx(), ETexUsage::Color);
             markUsage(material.getNormalTexIdx(), ETexUsage::NormalMap);
             markUsage(material.getMetalRoughnessTexIdx(), ETexUsage::Data);
+            if (material.getMetalRoughnessTexIdx() < numTextures)
+                feedsRoughness[material.getMetalRoughnessTexIdx()] = 1;
             if (material.getAlphaMode() == IMaterialData::EAlphaMode::Mask)
             {
                 const uint32 texIdx = material.getDiffuseTexIdx();
@@ -517,6 +723,13 @@ namespace
                     coverageCutoff[texIdx] = material.getAlphaCutoff();
             }
         }
+        // A texture shared by a roughness slot and a diffuse / normal slot cooks for the OTHER slot (sRGB BC1/BC3 or
+        // BC5): its G cannot carry the floor (a sRGB 4/255 decodes to 0.0012), so the shaders' roughness guarantee
+        // does not hold for it.
+        for (uint32 texIdx = 0; texIdx < numTextures; ++texIdx)
+            if (feedsRoughness[texIdx] && usage[texIdx] != (uint8)ETexUsage::Data)
+                Log::warning(oc::format("SceneCache: texture '{}' of '{}' is in a roughness slot AND a {} slot: no roughness floor for it",
+                    scene.getTexture(texIdx)->getFileName(), sourcePath, usage[texIdx] == (uint8)ETexUsage::Color ? "diffuse" : "normal"));
 
         const oc::string modelFolder = oc::fromStd(toPath(sourcePath).parent_path().string());
         // A recook regenerates every conversion, so clear out the previous set first - otherwise .dds
@@ -535,6 +748,7 @@ namespace
             // Loose files resolve like Texture.cpp: next to the model first, then Assets-root-relative.
             oc::string resolvedFile;
             const bool isEmbedded = texData.getPixels() != nullptr;
+            bool isAuthoredDds = false;
             if (!isEmbedded)
             {
                 if (originalPath.empty())
@@ -542,8 +756,10 @@ namespace
                 std::error_code ec;
                 const std::filesystem::path nextToModel = toPath(modelFolder) / oc::toStd(originalPath);
                 resolvedFile = std::filesystem::exists(nextToModel, ec) ? oc::fromStd(nextToModel.string()) : originalPath;
-                if (toPath(resolvedFile).extension() == ".dds")
-                    continue; // already streamable
+                isAuthoredDds = toPath(resolvedFile).extension() == ".dds";
+                // Already streamable - except in a roughness slot, where a copy gets the roughness floor.
+                if (isAuthoredDds && usage[texIdx] != (uint8)ETexUsage::Data)
+                    continue;
                 if (!std::filesystem::exists(toPath(resolvedFile), ec))
                 {
                     Log::warning(oc::format("SceneCache: texture '{}' of '{}' not found; keeping original reference", originalPath, sourcePath));
@@ -565,7 +781,16 @@ namespace
                 std::filesystem::create_directories(toPath(texFolder), ec);
                 texFolderCreated = true;
             }
-            if (!convertTextureToDds(texData, resolvedFile, (ETexUsage)usage[texIdx], coverageCutoff[texIdx], cookedPath))
+            if (isAuthoredDds)
+            {
+                oc::string reason;
+                if (!copyDdsWithRoughnessFloor(resolvedFile, cookedPath, reason))
+                {
+                    Log::warning(oc::format("SceneCache: roughness texture '{}' of '{}' kept as authored, NO roughness floor ({})", originalPath, sourcePath, reason));
+                    continue;
+                }
+            }
+            else if (!convertTextureToDds(texData, resolvedFile, (ETexUsage)usage[texIdx], coverageCutoff[texIdx], cookedPath))
             {
                 Log::warning(oc::format("SceneCache: failed to convert texture '{}' of '{}'; keeping original reference", originalPath, sourcePath));
                 continue;
@@ -1018,7 +1243,11 @@ bool TextureConvert::convertChannelsToDds(const PackChannel (&channels)[4], EUsa
             for (size_t i = 0; i < numPixels; ++i, pDst += 4, pSrc += 4)
                 *pDst = (uint8)oc::clamp(128.0f + ((float)*pSrc - 128.0f) * scale + 0.5f, 0.0f, 255.0f);
         }
-        ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath);
+        const uint8 channelMin[4] = { channels[0].minValue, channels[1].minValue, channels[2].minValue, channels[3].minValue };
+        const bool hasFloor = (channelMin[0] | channelMin[1] | channelMin[2] | channelMin[3]) != 0;
+        if (hasFloor)
+            applyChannelFloor(rgba.data(), numPixels, channelMin);
+        ok = compressRgbaToDds(rgba.data(), width, height, usage, outPath, hasFloor ? channelMin : nullptr);
     }
     else
         ok = false;

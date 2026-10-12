@@ -138,8 +138,8 @@ every non-procedural container.
 
 **Serves a binary snapshot** at `Assets/Local/Cooked/<tag>.vsc` — reader `File:CookedSceneData`,
 writer SceneCooker.cpp — **re-read with a single `fread`**. Raw little-endian structs, no versioning
-compatibility: any layout change bumps `SCENE_CACHE_VERSION` (currently **6**) and stale files
-silently re-cook.
+compatibility: any layout change bumps `SCENE_CACHE_VERSION` (currently **7**) and stale files
+silently re-cook. So does a change in what the cooked textures guarantee (v7: the roughness floor).
 
 ### Validity
 
@@ -172,6 +172,19 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
   the fraction of texels passing the material's alpha-test cutoff matches level 0. Only meaningful
   where the alpha channel survives compression (BC3) and the full-res coverage is not already
   all-or-nothing.
+
+* **The roughness floor — THE SHADERS RELY ON IT.** The lit / tree / foliage FS read the metal-roughness G as
+  the GGX alpha with NO `max(.., 0.01)` of their own. Every texture in a metal-roughness slot gets, in every BC
+  colour block of every mip, both 565 endpoints raised to G6 >= 1 (4/255 decoded; >= ~3.5/255 = 0.0137 after
+  the palette rounding). The palette interpolates the endpoints, and filtering and mips are convex, so every
+  sample holds it. A BC1 block's mode IS its endpoint order: when the raise flips it, the endpoints swap and the
+  indices remap to the same entries; a 3-colour block that uses index 3 (black) is re-encoded. Covered: the
+  cooked Data BC1 AND authored BC1 / BC2 / BC3 `.dds` files (Bistro's `*_Specular.dds`), which a roughness
+  slot now COPIES into `_tex/` with the fix (other slots still reference authored `.dds` in place). **NOT
+  covered — each logs a warning at cook:** an authored BC7 / `_SRGB` / other-format `.dds`, and a texture
+  shared by a roughness slot and a diffuse / normal slot (it cooks for the other slot). Also not covered: the
+  uncooked import (skinned scenes, `convertTextures` false, a failed conversion) and `.oc`
+  `MaterialOverrides MetalRoughnessTexIdx`.
 
 ### Garbage collection
 
@@ -220,7 +233,8 @@ loose textures that no `ISceneData` references — the procedural terrain's biom
   roughness and metalness maps into one ARM-style texture. All present sources must share dimensions.
 * `convertChannelsToDds(PackChannel[4], EUsage, out)` — the general packer: output channel i = channel
   `srcChannel` of image `path`, or the constant `fill` without a path; `scale` scales its contrast about 128 (the
-  terrain's per-set height scale). Each distinct source is decoded once;
+  terrain's per-set height scale); `minValue` floors the channel at level 0 AND after every mip resize (the
+  Mitchell filter undershoots) - the terrain diffr roughness alpha's 3/255. Each distinct source is decoded once;
   all must share dimensions. The terrain splat bake uses it for its packed set (albedo + roughness as
   ColorAlpha, height + AO as TwoChannel).
 

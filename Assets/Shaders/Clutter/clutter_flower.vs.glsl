@@ -103,8 +103,9 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const float psi = fl * FLOWER_GOLDEN_ANGLE + f.rotation;
         const vec3 o = vec3(cos(psi), 0.0, sin(psi));
         const float lean = f.open * mix(0.55, 1.35, fract(fl * 0.618034 + f.phase));
-        const float len = f.height * mix(0.65, 1.0, fract(fl * 0.754878 + f.rotation));
-        const vec2 wind = (tip.xz - f.root.xz - f.lean) * (len / max(f.height, 1e-3));
+        const float lenFrac = mix(0.65, 1.0, fract(fl * 0.754878 + f.rotation)); // len / height
+        const float len = f.height * lenFrac;
+        const vec2 wind = (tip.xz - f.root.xz - f.lean) * lenFrac;
         // A quadratic Bezier with its control STRAIGHT UP from the root: it rises as a bundle, then arches out to its
         // tip - out by sin(lean), the tip at least 15 % of its length up (else the low leaves lie in the relief).
         const vec3 c0 = f.root;
@@ -136,7 +137,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         {
             // THE CATTAIL: a spike along the stalk's top (HeadSize long), facing the viewer as the stalk does.
             part = 2.0;
-            const float tt = corner < 2u ? clamp(1.0 - 1.05 * f.headSize / max(f.height, 1e-3), 0.3, 0.95) : 0.97;
+            const float tt = corner < 2u ? clamp(1.0 - 1.05 * f.headSize / f.height, 0.3, 0.95) : 0.97;
             const vec3 tangent = 2.0 * (1.0 - tt) * (ctrl - f.root) + 2.0 * tt * (tip - ctrl);
             normal = normalize(cross(f.side, tangent) + 1e-4 * up);
             return grassBezier(f.root, ctrl, tip, tt) + f.side * (s * 0.1 * f.headSize); // a tenth as wide as long
@@ -163,18 +164,19 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const float psi = fj * FLOWER_GOLDEN_ANGLE + f.rotation;
         const vec3 o = vec3(cos(psi), 0.0, sin(psi));
         const float lean = f.open * mix(0.5, 1.4, fract(fj * 0.618034 + f.phase));
-        const vec3 dir = normalize(o * sin(lean) + up * cos(lean));
-        const float len = f.height * tuftHeight * mix(0.6, 1.0, fract(fj * 0.754878 + f.rotation));
+        const vec3 dir = o * sin(lean) + up * cos(lean); // unit: o is unit and horizontal
+        const float lenFrac = tuftHeight * mix(0.6, 1.0, fract(fj * 0.754878 + f.rotation)); // len / height
+        const float len = f.height * lenFrac;
         const vec3 across = vec3(-o.z, 0.0, o.x);
         const float width = f.petalWidth * f.headSize * f.petalScale;
-        normal = normalize(cross(dir, across));
+        normal = cross(dir, across); // an orthonormal pair
         if (dot(normal, o) < 0.0)
             normal = -normal;
         normal = normalize(mix(normal, up, 0.3));
         const vec3 base = tuftCentre + o * (0.3 * width);
         if (corner < 2u)
             return base + across * (s * width);
-        const vec2 sway = (tip.xz - f.root.xz - f.lean) * (len / max(f.height, 1e-3));
+        const vec2 sway = (tip.xz - f.root.xz - f.lean) * lenFrac;
         return base + dir * len + vec3(sway.x, 0.0, sway.y) + across * (s * 0.15 * width);
     }
 
@@ -225,8 +227,8 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
     {
         const float theta = GRASS_TWO_PI * fj / n;
         const vec3 d = b1 * cos(theta) + b2 * sin(theta);
-        dir = normalize(d * cos(f.open) + axis * sin(f.open));
-        across = normalize(cross(axis, d));
+        dir = d * cos(f.open) + axis * sin(f.open); // d and axis: an orthonormal pair
+        across = cross(axis, d);
         base = tip + d * (0.12 * H);
         len = H;
         tipWidth = f.petalWidth * H * f.petalScale;
@@ -238,7 +240,7 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const float psi = fj * FLOWER_GOLDEN_ANGLE + f.rotation;
         const float r01 = sqrt((fj + 0.5) / n); // the radius / H
         const vec3 d = b1 * cos(psi) + b2 * sin(psi);
-        across = normalize(cross(axis, d));
+        across = cross(axis, d);
         len = 0.45 * H * f.petalScale;
         base = tip + d * (H * r01 - 0.5 * len) + axis * (0.1 * H * (1.0 - r01));
         dir = d;
@@ -257,13 +259,13 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
         const vec3 o = vec3(cos(psi), 0.0, sin(psi));
         across = vec3(-o.z, 0.0, o.x);
         const float size = H * f.petalScale * (spike ? mix(1.1, 0.55, up01) : 1.0);
-        dir = f.head == FLOWER_HEAD_SPIKE ? normalize(o + up * 0.7) : normalize(o * 0.35 - up);
+        dir = spike ? (o + up * 0.7) * (1.0 / sqrt(1.49)) : (o * 0.35 - up) * (1.0 / sqrt(1.1225));
         base = at;
         len = size;
         tipWidth = f.petalWidth * size * 1.6;
         baseWidth = f.head == FLOWER_HEAD_BELL ? 0.6 * tipWidth : 0.4 * tipWidth;
     }
-    normal = normalize(cross(dir, across));
+    normal = cross(dir, across); // unit: dir and across are an orthonormal pair for every head kind
     if (dot(normal, axis) < 0.0)
         normal = -normal;
     normal = normalize(mix(normal, axis, 0.35)); // a petal is soft, not a flat card
@@ -301,7 +303,7 @@ void main()
     f.phase = grassUnit(grassHash(h + 14u)) * GRASS_TWO_PI;
     f.rotation = grassUnit(grassHash(h + 15u)) * GRASS_TWO_PI;
     f.head = in_instLook.w & 0xFFu;
-    const uint typePetals = max((in_instLook.w >> 8) & 0xFFu, 1u);
+    const uint typePetals = (in_instLook.w >> 8) & 0xFFu; // ClutterType: [1, 48]
     f.petals = min(typePetals, flowerPetalSlots(lod));
     const float petalRatio = float(typePetals) / float(f.petals);
     f.petalScale = f.head == FLOWER_HEAD_RADIAL || f.head == FLOWER_HEAD_UMBEL ? min(petalRatio, 3.0) : sqrt(petalRatio);

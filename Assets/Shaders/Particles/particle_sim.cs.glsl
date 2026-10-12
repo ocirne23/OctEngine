@@ -170,7 +170,7 @@ void main()
         // Weather volume: the box rides the emitter (the camera). A drop under the occlusion map's
         // surface restarts at the box top at a fresh random XZ - the same XZ would just drop it back
         // onto the roof, and a box top that is itself indoors would pin it there. Then wrap.
-        const vec3 halfExt = max(e.volumeParams.xyz, vec3(1e-3));
+        const vec3 halfExt = e.volumeParams.xyz;
         // Wind: the horizontal velocity relaxes onto the LOCAL wind (mean wind swung by the gust field) at
         // the emitter's wind response rate - heavy drops lean slowly, flakes follow at once.
         if (e.volumeParams.w > 0.0)

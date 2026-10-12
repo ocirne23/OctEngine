@@ -113,7 +113,7 @@ float cloudHeightProfile(float hf, float type, float roundnessP, float baseSharp
     vec4 g = type < 0.5 ? mix(stratus, cumulus, type * 2.0) : mix(cumulus, cumulonimbus, type * 2.0 - 1.0);
     g.y = mix(g.y, g.x + 0.005, baseSharpness);
     const float s = smoothstep(g.z, g.w, hf);
-    return smoothstep(g.x, g.y, hf) * pow(max(1.0 - pow(s, roundnessP), 0.0), 1.0 / roundnessP);
+    return smoothstep(g.x, g.y, hf) * pow(1.0 - pow(s, roundnessP), 1.0 / roundnessP);
 }
 
 // The tower-height signal (0..1) of a column. The tower field alone (weather.a) is broad, so neighbouring tops tilt

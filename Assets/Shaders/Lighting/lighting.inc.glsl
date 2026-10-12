@@ -53,7 +53,7 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
     vec3 toLight = light.pos - pos;
     float dist = length(toLight);
     vec3 L = toLight / max(dist, 1e-4);
-    float NdotL = max(dot(N, L), 0.0);
+    float NdotL = dot(N, L);
     if (NdotL <= 0.0)
         return vec3(0.0);
 
@@ -61,7 +61,7 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
     if (light.width < 0.0) // spot light: rotation = cone half-angle, |direction| = edge softness
     {
         float softness = length(light.direction);
-        float cosAngle = dot(-L, light.direction / max(softness, 1e-4));
+        float cosAngle = dot(-L, light.direction / softness); // CPU: spot |direction| >= 0.001
         float cosOuter = cos(light.rotation);
         float cosInner = mix(cosOuter, 1.0, softness);
         shape = smoothstep(cosOuter, cosInner, cosAngle);
@@ -127,7 +127,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
     g_gatherSunRadiance = vec3(0.0);
 
     vec3 sunL = u_sunDirection.xyz;
-    float sunNdotL = max(dot(N, sunL), 0.0);
+    float sunNdotL = dot(N, sunL);
     if (sunNdotL > 0.0)
     {
         float sunShadow = (g_sunShadowOverride >= 0.0) ? g_sunShadowOverride : giSunShadow(pos, N);
@@ -154,6 +154,8 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         if (gridMin == gridPos)
         {
             const uint numLargeLights = getLargeLightCount(gridIdx);
+            // The counts are written capped; the mins stay as the loops' compile-time bound: without them
+            // gi_probe_trace (which inlines this loop) went 96 -> 125 registers.
             for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
                 E += giLightIrradianceShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], pos, N);
 

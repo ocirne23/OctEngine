@@ -113,7 +113,7 @@ void main()
     // are NOT pushed away from their own contact detail (a 1/NoV-scaled NORMAL offset did exactly that
     // and artifacted flat walls). The small constant normal offset handles triangle self-intersection.
     const float viewDist = length(u_viewPos - worldPos);
-    const vec3 V = (u_viewPos - worldPos) / max(viewDist, 1e-4);
+    const vec3 V = (u_viewPos - worldPos) / viewDist; // depth > 0 (tested above): viewDist > 0
     const vec3 rayOrigin = worldPos + N * u_rt_aoNormalBias + V * min(viewDist * u_rt_aoDistanceBias, u_rt_aoRadius * 0.5);
 
     vec3 up = abs(N.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
@@ -143,7 +143,7 @@ void main()
         vec2 u = fract(hammersley(i, n) + jitter);
         float r = sqrt(u.x);                       // cosine-weighted hemisphere
         float phi = 6.2831853 * u.y;
-        vec3 dir = T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(max(0.0, 1.0 - u.x));
+        vec3 dir = T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(1.0 - u.x);
 
         bool hit = false;
         float t = 0.0;
@@ -183,7 +183,7 @@ void main()
         }
         if (hit)
         {
-            occ += 1.0 - clamp(t / u_rt_aoRadius, 0.0, 1.0); // closer hits darken more
+            occ += 1.0 - t / u_rt_aoRadius; // closer hits darken more; a hit t is in [0.01, radius]
         }
         else
         {

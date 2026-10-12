@@ -115,7 +115,7 @@ float16_t terrainHeightWeight(float16_t w, float16_t dh)
 #ifndef TERRAIN_SPLAT_HEIGHT_ONLY
 // A splat material's texture indices, from the UBO (Renderer's buildUboTerrain), not the material buffer: the
 // texture fetches then do not wait on a storage-buffer load first (L1TEX long-scoreboard latency).
-// x = diffuse (RGB albedo + ROUGHNESS in A) | normal << 16, y = 1 when the normal is BC5.
+// x = diffuse (RGB albedo + ROUGHNESS in A) | normal << 16. y (1 = BC5 normal) is unused: every baked normal is BC5.
 // THREE fetches per material (TerrainStreamer's packed bake): diffuse + roughness, normal, height + AO.
 // Metalness is always 0.
 uvec2 terrainSplatTex(uint matIdx)
@@ -147,32 +147,23 @@ TerrainSample sampleTerrainXZ(uint matIdx, vec2 uv, f16vec3 geoN)
 	const f16vec3 normalSample = f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uv).xyz);
 	const f16vec2 heightAo = terrainHeightAoTap(matIdx, uv);
 	s.albedo = diffRough.rgb;
-	s.rough = max(diffRough.a, float16_t(0.01));
+	s.rough = diffRough.a; // the bake floors the alpha >= 3/255 at every mip
 	s.height = heightAo.x;
 	s.ao = heightAo.y;
 
-	f16vec3 tn;
-	if (tex.y != 0u) // BC5 normal
-	{
-		const f16vec2 nxy = normalSample.xy * float16_t(2.0) - float16_t(1.0);
-		tn = f16vec3(nxy, sqrt(max(float16_t(1.0) - dot(nxy, nxy), float16_t(0.0))));
-	}
-	else
-		tn = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
+	// Every baked splat normal is BC5 (the RGBA8 flat fallback decodes the same way).
+	const f16vec2 nxy = normalSample.xy * float16_t(2.0) - float16_t(1.0);
+	const f16vec3 tn = f16vec3(nxy, sqrt(max(float16_t(1.0) - dot(nxy, nxy), float16_t(0.0))));
 	s.normal = normalize(f16vec3(tn.x, float16_t(0.0), tn.y) + tn.z * geoN);
 #endif
 	return s;
 }
 
-// Decode one triplanar normal-map tap into tangent space (BC5 reconstructs Z).
-f16vec3 decodeTriplanarNormal(f16vec3 ns, bool bc5)
+// Decode one triplanar normal-map tap into tangent space (BC5: reconstructs Z).
+f16vec3 decodeTriplanarNormal(f16vec3 ns)
 {
-	if (bc5)
-	{
-		const f16vec2 xy = ns.xy * float16_t(2.0) - float16_t(1.0);
-		return f16vec3(xy, sqrt(max(float16_t(1.0) - dot(xy, xy), float16_t(0.0))));
-	}
-	return normalize(ns * float16_t(2.0) - float16_t(1.0));
+	const f16vec2 xy = ns.xy * float16_t(2.0) - float16_t(1.0);
+	return f16vec3(xy, sqrt(max(float16_t(1.0) - dot(xy, xy), float16_t(0.0))));
 }
 
 // BIPLANAR version for the rock layer (whiteout-style normal blend), so cliff faces don't smear: of the three
@@ -193,7 +184,6 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 	const uint diffuseTexIdx = tex.x & 0xFFFFu;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
 	const uint normalTexIdx  = tex.x >> 16;
-	const bool bc5 = tex.y != 0u;
 #endif
 
 	const f16vec3 a = abs(geoN);
@@ -202,7 +192,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 	const float16_t wSum = w.x + w.y + w.z;
 	w = wSum > float16_t(1e-3) ? w / wSum : f16vec3(0.0, 1.0, 0.0); // all three equal (the exact diagonal): the top plane
 	const bvec3 use = greaterThan(w, f16vec3(BIPLANAR_WMIN));
-	w /= max(dot(w, f16vec3(use)), float16_t(1e-4)); // renormalise over the kept planes
+	w /= dot(w, f16vec3(use)); // renormalise over the kept planes (the largest, >= 0.5, is always kept)
 	const vec2 uvX = worldPos.zy * uvScale; // plane normal = X
 	const vec2 uvY = worldPos.xz * uvScale; // plane normal = Y
 	const vec2 uvZ = worldPos.xy * uvScale; // plane normal = Z
@@ -216,7 +206,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 		albedo += dr.rgb * w.x;
 		rough += dr.a * w.x;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
-		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvX).xyz), bc5);
+		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvX).xyz));
 		nrm += f16vec3(tn.z * sign(geoN.x), tn.y, tn.x) * w.x;
 #endif
 	}
@@ -226,7 +216,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 		albedo += dr.rgb * w.y;
 		rough += dr.a * w.y;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
-		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvY).xyz), bc5);
+		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvY).xyz));
 		nrm += f16vec3(tn.x, tn.z * sign(geoN.y), tn.y) * w.y;
 #endif
 	}
@@ -236,7 +226,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 		albedo += dr.rgb * w.z;
 		rough += dr.a * w.z;
 #ifndef TERRAIN_SPLAT_ALBEDO_ONLY
-		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvZ).xyz), bc5);
+		const f16vec3 tn = decodeTriplanarNormal(f16vec3(TERRAIN_SPLAT_TEX(u_textures[nonuniformEXT(normalTexIdx)], uvZ).xyz));
 		nrm += f16vec3(tn.x, tn.y, tn.z * sign(geoN.z)) * w.z;
 #endif
 	}
@@ -253,7 +243,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, f16vec3 geoN, f
 	const f16vec2 heightAo = terrainHeightAoTap(matIdx, uvY);
 	s.height = heightAo.x;
 	s.ao = heightAo.y;
-	s.rough = max(rough, float16_t(0.01));
+	s.rough = rough; // the bake floors the alpha >= 3/255 at every mip; the weights sum to 1
 	s.normal = normalize(nrm + geoN * float16_t(2.0)); // biased toward geoN: detail, not replacement
 #endif
 	return s;
@@ -486,7 +476,7 @@ float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
 	{
 		h = terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 0), xz * sG, dx * sG, dy * sG);
 		if (L.g.n1 > blendEps)
-			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
+			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, dx * sG, dy * sG), L.g.n1 / (float16_t(1.0) - L.g.n2));
 		if (L.g.n2 > blendEps)
 			h = terrainMixHeight(h, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.g, 2), xz * sG, dx * sG, dy * sG), L.g.n2);
 	}
@@ -499,7 +489,7 @@ float16_t terrainReliefAt(TerrainLayers L, vec2 xz, vec2 dx, vec2 dy)
 	{
 		float16_t hr = terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 0), xz * sR, dx * sR, dy * sR);
 		if (L.r.n1 > blendEps)
-			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
+			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, dx * sR, dy * sR), L.r.n1 / (float16_t(1.0) - L.r.n2));
 		if (L.r.n2 > blendEps)
 			hr = terrainMixHeight(hr, terrainHeightGrad(uint(L.baseMat) + climatePickIdx(L.r, 2), xz * sR, dx * sR, dy * sR), L.r.n2);
 		h = L.rockW >= opaque ? hr : terrainMixHeight(h, hr, L.rockW);
@@ -542,7 +532,7 @@ f16vec3 terrainReliefAt3(TerrainLayers L, vec2 xz, float e, vec2 dx, vec2 dy)
 	{
 		h = terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 0), xz * sG, e * sG, dx * sG, dy * sG);
 		if (L.g.n1 > blendEps)
-			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, e * sG, dx * sG, dy * sG), L.g.n1 / max(float16_t(1.0) - L.g.n2, float16_t(1e-4)));
+			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 1), xz * sG, e * sG, dx * sG, dy * sG), L.g.n1 / (float16_t(1.0) - L.g.n2));
 		if (L.g.n2 > blendEps)
 			h = terrainMixHeight3(h, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.g, 2), xz * sG, e * sG, dx * sG, dy * sG), L.g.n2);
 	}
@@ -555,7 +545,7 @@ f16vec3 terrainReliefAt3(TerrainLayers L, vec2 xz, float e, vec2 dx, vec2 dy)
 	{
 		f16vec3 hr = terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 0), xz * sR, e * sR, dx * sR, dy * sR);
 		if (L.r.n1 > blendEps)
-			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, e * sR, dx * sR, dy * sR), L.r.n1 / max(float16_t(1.0) - L.r.n2, float16_t(1e-4)));
+			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 1), xz * sR, e * sR, dx * sR, dy * sR), L.r.n1 / (float16_t(1.0) - L.r.n2));
 		if (L.r.n2 > blendEps)
 			hr = terrainMixHeight3(hr, terrainHeightGrad3(uint(L.baseMat) + climatePickIdx(L.r, 2), xz * sR, e * sR, dx * sR, dy * sR), L.r.n2);
 		h = L.rockW >= opaque ? hr : terrainMixHeight3(h, hr, L.rockW);
@@ -737,8 +727,8 @@ f16vec2 terrainMacroAt(vec2 xz)
 void terrainApplyMacro(inout TerrainSample s, f16vec2 m)
 {
 	const float16_t one = float16_t(1.0);
-	s.albedo *= max(one + float16_t(u_terrainTex_macroStrength) * m.x, float16_t(0.0))
-		* (one + float16_t(u_terrainTex_macroHue) * m.y * f16vec3(1.0, 0.0, -1.0));
+	s.albedo *= (one + float16_t(u_terrainTex_macroStrength) * m.x) // >= 0: m.x >= -1, strength <= 1
+		*(one + float16_t(u_terrainTex_macroHue) * m.y * f16vec3(1.0, 0.0, -1.0));
 	s.rough = clamp(s.rough * (one + float16_t(u_terrainTex_macroRoughness) * m.x), float16_t(0.01), one);
 }
 
@@ -793,9 +783,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 	const float16_t blendEps = float16_t(TERRAIN_BLEND_EPS);
 	if (snowW >= opaque)
 	{
-		TerrainSample surf = sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh);
-		surf.normal = normalize(surf.normal);
-		return surf;
+		return sampleTerrainXZ(L.snowMatIdx, texPos.xz * u_terrainTex_uvScaleSnow, geoNh); // already unit
 	}
 	const vec2 uvGround = texPos.xz * u_terrainTex_uvScaleGround;
 
@@ -807,7 +795,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 		const ClimatePick g = L.g;
 		surf = sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 0), uvGround, geoNh);
 		if (g.n1 > blendEps)
-			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 1), uvGround, geoNh), g.n1 / max(float16_t(1.0) - g.n2, float16_t(1e-4)));
+			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 1), uvGround, geoNh), g.n1 / (float16_t(1.0) - g.n2));
 		if (g.n2 > blendEps)
 			terrainMixInto(surf, sampleTerrainXZ(uint(baseMat) + climatePickIdx(g, 2), uvGround, geoNh), g.n2);
 	}
@@ -830,7 +818,7 @@ TerrainSample terrainSplatLayers(vec3 worldPos, vec3 geoN, TerrainLayers L)
 		const ClimatePick r = L.r;
 		TerrainSample rock = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), texPos, geoNh, u_terrainTex_uvScaleRock);
 		if (r.n1 > blendEps)
-			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), texPos, geoNh, u_terrainTex_uvScaleRock), r.n1 / max(float16_t(1.0) - r.n2, float16_t(1e-4)));
+			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), texPos, geoNh, u_terrainTex_uvScaleRock), r.n1 / (float16_t(1.0) - r.n2));
 		if (r.n2 > blendEps)
 			terrainMixInto(rock, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), texPos, geoNh, u_terrainTex_uvScaleRock), r.n2);
 		if (rockW >= opaque)

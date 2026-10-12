@@ -160,7 +160,7 @@ float oceanWaveHeightAt(vec2 worldXZ, float waterDepth, float footprint)
     {
         const float L = u_ocean_cascadeSizes[c];
         const float fade = smoothstep(0.0, u_ocean_shoalFadeDepth[c], waterDepth);
-        const float lod = max(log2(max(footprint, 1e-3) * float(OCEAN_FFT_SIZE) / L), 0.0);
+        const float lod = max(log2(footprint * float(OCEAN_FFT_SIZE) / L), 0.0);
         h += textureLod(u_uwOceanMaps, vec3(worldXZ / L, float(c)), lod).y * fade;
     }
     return h;
@@ -187,7 +187,7 @@ vec3 volLightScatter(LightInfo light, vec3 pos, vec3 viewDir, float g, bool shad
     if (light.width < 0.0) // spot: rotation = cone half-angle, |direction| = edge softness
     {
         const float softness = length(light.direction);
-        const float cosAngle = dot(-L, light.direction / max(softness, 1e-4));
+        const float cosAngle = dot(-L, light.direction / softness);
         const float cosOuter = cos(light.rotation);
         const float cosInner = mix(cosOuter, 1.0, softness);
         shape = smoothstep(cosOuter, cosInner, cosAngle);
@@ -246,7 +246,7 @@ void main()
     // the per-frame jitter into the history lookup.
     const vec2 ndc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0);
     const vec3 dir = normalize(vec3(ndc, 1.0) * u_rayFromNdc);
-    const vec3 worldPos = u_viewPos + dir * (viewZ / max(dot(dir, u_viewForward), 1e-3));
+    const vec3 worldPos = u_viewPos + dir * (viewZ / dot(dir, u_viewForward));
 
     // ---- Media density + scattering albedo ------------------------------------------------------------
     // Terrain-following height fog: raise the base by a fraction of the local terrain height, so fog pools
@@ -286,7 +286,7 @@ void main()
     }
     // Height density = the analytic mean over this slice's segment of the sample ray (see heightFogMean),
     // not a point sample at worldPos.
-    const float tScale = 1.0 / max(dot(dir, u_viewForward), 1e-3);
+    const float tScale = 1.0 / dot(dir, u_viewForward);
     const float yA = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z) / float(VOL_FROXEL_Z)) * tScale);
     const float yB = u_viewPos.y + dir.y * (volSliceToViewZ(float(cell.z + 1) / float(VOL_FROXEL_Z)) * tScale);
     const float heightDensity = u_fog_density * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
@@ -331,7 +331,7 @@ void main()
     const float noiseWavelength = u_fog_noiseWavelength;
     const float noiseAmp = u_fog_noiseStrength * (1.0 - smoothstep(40.0 * noiseWavelength, 80.0 * noiseWavelength, viewZ));
     if (noiseAmp > 0.001 && (heightDensity + underDensity > 1e-7 || in_numFogVolumes > 0u))
-        noiseMul = max(1.0 + noiseAmp * (fogNoise(worldPos) * 2.0 - 1.0), 0.0);
+        noiseMul = 1.0 + noiseAmp * (fogNoise(worldPos) * 2.0 - 1.0);
     float density = max(heightDensity, underDensity) * noiseMul;
     // Underwater the medium is water, not air: blend the fog albedo toward the ocean's in-scatter color
     // by how submerged the slice is, so the murk reads blue-green instead of atmospheric gray.
@@ -345,7 +345,7 @@ void main()
         if (any(greaterThan(d, fv.halfExtents)))
             continue;
         // Soft box falloff over the outer edgeSoftness fraction of each half extent.
-        const vec3 soft = max(fv.halfExtents * max(fv.edgeSoftness, 1e-3), vec3(1e-3));
+        const vec3 soft = fv.halfExtents * fv.edgeSoftness;
         const vec3 t = clamp((fv.halfExtents - d) / soft, vec3(0.0), vec3(1.0));
         const float falloff = t.x * t.y * t.z;
         const float dv = fv.density * falloff * noiseMul;
@@ -471,9 +471,9 @@ void main()
             if (gridMin == gridPos)
             {
                 // ONE loop over the large lights and the cell's: each volLightScatter inlines a shadow ray query.
-                const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+                const uint numLargeLights = getLargeLightCount(gridIdx);
                 const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
-                const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+                const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
                 for (uint i = 0u; i < numLights; ++i)
                 {
                     const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
@@ -495,7 +495,7 @@ void main()
     const vec2 centerNdc = vec2(centerUv.x * 2.0 - 1.0, 1.0 - centerUv.y * 2.0);
     const vec3 centerDir = normalize(vec3(centerNdc, 1.0) * u_rayFromNdc);
     const float centerViewZ = volSliceToViewZ((float(cellOut.z) + 0.5) / float(VOL_FROXEL_Z));
-    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / max(dot(centerDir, u_viewForward), 1e-3));
+    const vec3 centerPos = u_viewPos + centerDir * (centerViewZ / dot(centerDir, u_viewForward));
     float prevW;
     const vec2 prevFullUv = prevScreenUV(centerPos, prevW);
     const vec2 prevVpUv = (prevFullUv - u_viewportRect.xy) * u_viewportInvSize;

@@ -42,7 +42,7 @@ void main()
     g_sunShadowFirst *= mix(1.0, nearSun, nearWeight);
 
     const float part = in_flower.x;
-    const float t = clamp(in_flower.y, 0.0, 1.0);
+    const float t = in_flower.y; // the VS writes `along` in [0, 1]
     float unused;
     vec3 albedo;
     float ao = 1.0;

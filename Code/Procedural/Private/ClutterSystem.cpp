@@ -57,7 +57,8 @@ namespace
 		const float maxDensity = p.density * termMax(p.grass) * termMax(p.crag) * termMax(p.beach) * termMax(p.canopy)
 			* termMax(p.trunk) * termMax(p.rock) * termMax(p.wet) * termMax(p.river) * termMax(p.flow) * termMax(p.water);
 		t.bound = glm::vec4(maxDensity, desc.spots, p.water);
-		t.info = glm::uvec4(firstMesh, numMeshes, (uint32)desc.kind, (uint32)desc.head | ((uint32)glm::min(desc.petals, 255) << 8));
+		// y >= 1: the cull takes `hash % y` unguarded (a flower has no mesh and ignores the variant).
+		t.info = glm::uvec4(firstMesh, glm::max(numMeshes, 1u), (uint32)desc.kind, (uint32)desc.head | ((uint32)glm::min(desc.petals, 255) << 8));
 		return t;
 	}
 

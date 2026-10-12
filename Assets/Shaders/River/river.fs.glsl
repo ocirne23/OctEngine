@@ -66,7 +66,7 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
         f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }
 
-    g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
+    g_seabedLod = min(log2(max(rayT, 1.0)) + 1.0, 7.0);
     f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
     if (u_terrainWater_enabled > 0.5)
         albedo *= float16_t(u_terrainWater_darkening);
@@ -217,8 +217,8 @@ void main()
     // are added after it.
     const float bodyWeight = 1.0 - F;
     vec3 body;
-    const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
-    if (bodyWeight > 0.02 && dot(refrDir, refrDir) > 1e-6)
+    const vec3 refrDir = refract(-V, N, 1.0 / 1.33); // air into water (N faces V): never totally reflects
+    if (bodyWeight > 0.02)
         body = traceRiverBody(in_pos + N * 0.05, refrDir, in_pos, sunTint, sunVis, L, aeration, ambientSky, rtInRange);
     else
         body = riverInscatter(aeration, ambientSky, sunTint, L);
@@ -228,8 +228,8 @@ void main()
     const vec3 H = normalize(L + V);
     const float NoL = max(dot(N, L), 0.0);
     const float NoH = max(dot(N, H), 0.0);
-    const float LoH = max(dot(L, H), 0.0);
-    const float glint = min(D_GGX(NoH, alpha) * V_SmithGGX(NoV, NoL, alpha) * NoL, MEDIUMP_FLT_MAX) * (sunVis * F_Schlick(LoH, 0.02));
+    const float LoH = dot(L, H); // = |L + V| / 2 >= 0
+    const float glint = D_GGX(NoH, alpha) * V_SmithGGX(NoV, NoL, alpha) * NoL * (sunVis * F_Schlick(LoH, 0.02)); // <= ~2e4 at alpha >= 0.02
 
     vec3 color = body * bodyWeight + F * reflBlur * skyVis * ambientSky + sunTint * glint;
 
@@ -269,9 +269,9 @@ void main()
             const ivec3 gridMin = getGridMin(gridIdx);
             if (gridMin == gridPos)
             {
-                const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+                const uint numLargeLights = getLargeLightCount(gridIdx);
                 const uint cellOffset     = calcCellOffset(gridIdx, gridMin, in_pos);
-                const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+                const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
                 for (uint i = 0; i < numLights; ++i)
                 {
                     const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);

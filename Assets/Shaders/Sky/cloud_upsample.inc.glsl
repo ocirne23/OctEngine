@@ -43,7 +43,7 @@ vec4 cloudUpsample(sampler2D cloudColor, sampler2D cloudDepth, vec2 fragCoord, f
     }
 
     logCloudDist = distWeight > 1e-6 ? logDistSum / distWeight : logSceneC;
-    return wSum > 1e-6 ? sum / wSum : vec4(0.0, 0.0, 0.0, 1.0);
+    return sum / wSum; // >= ~0.004: the bilinear weights sum to 1, the depth weight is never near 0
 }
 
 #endif

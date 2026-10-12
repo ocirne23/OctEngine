@@ -267,8 +267,8 @@ void marchAt(ivec2 px)
     const float a = dot(dir.xz, dir.xz);
     const float b = dot(rel, dir.xz);
     const float c = dot(rel, rel);
-    // The far root of |rel + dir.xz t| = R (the camera inside the circle).
-    #define TV_RING_T(R) ((-b + sqrt(max(b * b - a * (c - (R) * (R)), 0.0))) / a)
+    // The far root of |rel + dir.xz t| = R (the camera inside the circle: c <= R^2, so the discriminant is >= b^2).
+    #define TV_RING_T(R) ((-b + sqrt(b * b - a * (c - (R) * (R)))) / a)
     if (a < 1e-8)
     {
         storeOut(px, vec4(0.0, 0.0, 0.0, 1.0)); // straight up / down: never reaches the ring
@@ -309,7 +309,7 @@ void marchAt(ivec2 px)
     const float phase = (1.0 - g * g) / (hgBase * sqrt(hgBase)); // ^1.5
     const float sunLeaf = u_foliage_farSunScale * phase;
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
-    const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * u_foliage_farAmbient);
+    const vec3 skyBase = skyMean * (PI * u_foliage_farAmbient);
     const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
 
@@ -419,7 +419,7 @@ void marchAt(ivec2 px)
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
                 // "Far saturation scale": toward the colour's linear luminance (Rec. 709).
                 const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale;
-                const float hNorm = clamp(h * (1.0 / pc_vol_height), 0.0, 1.0);
+                const float hNorm = h * (1.0 / pc_vol_height);
 
                 // The volume's NORMAL = -grad(density), by forward differences over half a cell (horizontal) / one slice
                 // (up), from the taps' floor, x "Far normal strength"; a rock takes the full N.L.

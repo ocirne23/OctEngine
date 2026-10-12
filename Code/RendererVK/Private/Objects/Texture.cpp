@@ -263,7 +263,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 	return initialize(width, height, format, imgData, generateMips && !m_pStreamingMeta, filePath);
 }
 
-bool Texture::initialize(const ITextureData& textureData, bool generateMips, bool sRGB)
+bool Texture::initialize(const ITextureData& textureData, bool generateMips, bool sRGB, uint8 minG)
 {
     const ITextureData::Pixel* pPixels = textureData.getPixels();
     if (!pPixels)
@@ -291,7 +291,8 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
     vk::Format format = vk::Format::eUndefined;
 
     oc::vector<oc::span<uint8>> imgData;
-    
+    oc::vector<ITextureData::Pixel> flooredPixels; // a copy of const pixel data when minG must raise it
+
     if (height == 0)
     {
         if (formatInfo.compare("png") == 0)
@@ -308,6 +309,9 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
                 return false;
 			}
             imgData.push_back(oc::span((uint8*)pixelData, width * height * desiredComponents));
+            if (minG > 0)
+                for (size_t i = 1; i < imgData.back().size(); i += 4)
+                    imgData.back()[i] = oc::max(imgData.back()[i], minG);
             switch (desiredComponents)
             {
             case 1:
@@ -343,7 +347,15 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
         if (formatInfo.compare("rgba8888") == 0)
 		{
 			const size_t dataSize = (size_t)width * height * sizeof(ITextureData::Pixel);
-			imgData.push_back(oc::span((uint8*)textureData.getPixels(), dataSize));
+			if (minG > 0)
+			{
+				flooredPixels.assign(pPixels, pPixels + (size_t)width * height);
+				for (ITextureData::Pixel& p : flooredPixels)
+					p.g = oc::max(p.g, minG);
+				imgData.push_back(oc::span((uint8*)flooredPixels.data(), dataSize));
+			}
+			else
+				imgData.push_back(oc::span((uint8*)textureData.getPixels(), dataSize));
 			format = sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
 		}
 		else

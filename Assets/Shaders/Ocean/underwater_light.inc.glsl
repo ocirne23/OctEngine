@@ -128,7 +128,7 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         // dissolves at the terrain-waterline intersection instead of cutting off there (a caustic
         // needs a water column to focus through; at depth 0 there is none).
         const float shoreFade = smoothstep(0.0, u_fog_causticShoreFade, depthBelow);
-        focus = pow(clamp(1.0 / max(J, 0.125), 0.02, 8.0), 1.5 * u_fog_causticStrength * depthFade * shoreFade);
+        focus = pow(max(1.0 / max(J, 0.125), 0.02),1.5 * u_fog_causticStrength * depthFade * shoreFade);
     }
 
     return exp(-u_ocean_absorption * pathLen) * focus;

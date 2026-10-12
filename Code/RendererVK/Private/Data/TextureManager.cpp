@@ -46,9 +46,9 @@ uint32 TextureManager::getDescriptorCap() const
 	return oc::min({ deviceLimit - 16u, (uint32)UINT16_MAX - 1u, 16u * 1024u });
 }
 
-uint16 TextureManager::upload(const ITextureData& textureData, bool generateMips, bool sRGB)
+uint16 TextureManager::upload(const ITextureData& textureData, bool generateMips, bool sRGB, uint8 minG)
 {
-	return uploadImpl([&](Texture& texture) { return texture.initialize(textureData, generateMips, sRGB); });
+	return uploadImpl([&](Texture& texture) { return texture.initialize(textureData, generateMips, sRGB, minG); });
 }
 
 uint16 TextureManager::upload(const char* filePath, bool generateMips, bool sRGB)

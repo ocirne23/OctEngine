@@ -78,7 +78,7 @@ float hasselmann(float theta, float w, float U, float F)
         s = 6.97 * pow(w / wp, 4.06);
     else
         s = 9.77 * pow(w / wp, -2.33 - 1.45 * (U * wp / G - 1.17));
-    s = clamp(s, 0.0, 30.0);
+    s = min(s, 30.0);
     // N(s) = Gamma(s+1) / (2 sqrt(pi) Gamma(s+1/2)) ~= sqrt(s + 0.25) / (2 sqrt(pi))
     float norm = sqrt(s + 0.25) / (2.0 * sqrt(PI));
     return norm * pow(abs(cos(theta * 0.5)), 2.0 * s);
@@ -136,7 +136,7 @@ void main()
     // h~(k, t) = h0(k) e^{iwt} + h0*(-k) e^{-iwt}   (Tessendorf eq. 43)
     const vec2 h0p = h0( m, cascade, L, kMin, kMax, 0u);
     const vec2 h0m = h0(-m, cascade, L, kMin, kMax, 0u);
-    const float w = dispersion(max(k, 1e-5), u_ocean_depth);
+    const float w = dispersion(k, u_ocean_depth); // dispersion(0) = 0
     // The clock rate (u_ocean_timeScale) is sqrt(world scale): the Froude-scaled inputs shrink the sea
     // but shorten its periods by the same sqrt(s), and this holds them at the model sea's. Only the
     // evolution reads it - the accel/velocity signals below stay in spectrum time on purpose, so the

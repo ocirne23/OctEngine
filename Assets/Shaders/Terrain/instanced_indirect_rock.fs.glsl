@@ -59,7 +59,7 @@ TerrainSample woodSurface(vec3 geoN)
 	const uint normalIdx = material.diffuseNormalTexIdx >> 16;
 	const vec3 w = in_wood.xyz;
 	const float r = length(w.yz);
-	const float bark = clamp(in_wood.w - 1.0, 0.0, 1.0);
+	const float bark = in_wood.w - 1.0; // the generator writes 1 + bark, bark in [0, 1]
 
 	// u: the angle around the part (0..1). Where it wraps, its derivatives come from a copy that wraps on the far side
 	// (whichever is smaller), so the seam's pixels keep their mip level.
@@ -72,14 +72,9 @@ TerrainSample woodSurface(vec3 geoN)
 	dy.x = abs(wrappedDy) < abs(dy.x) ? wrappedDy : dy.x;
 	const vec3 albedo = textureGrad(u_textures[nonuniformEXT(albedoIdx)], uv, dx, dy).rgb;
 	const vec3 normalTap = textureGrad(u_textures[nonuniformEXT(normalIdx)], uv, dx, dy).xyz;
-	vec3 tangentNormal;
-	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
-	{
-		const vec2 xy = normalTap.xy * 2.0 - 1.0;
-		tangentNormal = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
-	}
-	else
-		tangentNormal = normalize(normalTap * 2.0 - 1.0);
+	// Bark normals are always BC5.
+	const vec2 xy = normalTap.xy * 2.0 - 1.0;
+	const vec3 tangentNormal = vec3(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
 	// The bark's tangent frame from the screen derivatives of the position and the uv (Schueler 2013, the cotangent
 	// frame): the part's axis is not known here.
 	const vec3 dpx = dFdx(in_pos), dpy = dFdy(in_pos);
@@ -118,7 +113,7 @@ void main()
 
 	const float16_t one = float16_t(1.0);
 	const f16vec3 geoNh = f16vec3(geoN);
-	const float cavity = clamp(in_cavity, 0.0, 1.0);
+	const float cavity = in_cavity; // in [0, 1]: the generator clamps it
 	// Before a splat texture set is registered (the terrain off, or its bake still running): plain grey stone. Dead wood
 	// is its own (no splat needed).
 	const bool wood = in_wood.w > 0.5;
@@ -169,7 +164,7 @@ void main()
 			const float uvScale = u_terrainTex_uvScaleRock * u_rock_uvScale;
 			surf = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 0), in_pos, geoNh, uvScale);
 			if (r.n1 > blendEps)
-				terrainMixInto(surf, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), in_pos, geoNh, uvScale), r.n1 / max(one - r.n2, float16_t(1e-4)));
+				terrainMixInto(surf, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 1), in_pos, geoNh, uvScale), r.n1 / (one - r.n2));
 			if (r.n2 > blendEps)
 				terrainMixInto(surf, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(r, 2), in_pos, geoNh, uvScale), r.n2);
 		}
@@ -181,7 +176,7 @@ void main()
 			const ClimatePick g = pickClimate(climate, 0, numGround, invS2);
 			TerrainSample ground = sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 0), in_pos, geoNh, u_terrainTex_uvScaleGround);
 			if (g.n1 > blendEps)
-				terrainMixInto(ground, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 1), in_pos, geoNh, u_terrainTex_uvScaleGround), g.n1 / max(one - g.n2, float16_t(1e-4)));
+				terrainMixInto(ground, sampleTerrainTriplanar(uint(baseMat) + climatePickIdx(g, 1), in_pos, geoNh, u_terrainTex_uvScaleGround), g.n1 / (one - g.n2));
 			if (groundW >= opaque)
 				surf = ground;
 			else

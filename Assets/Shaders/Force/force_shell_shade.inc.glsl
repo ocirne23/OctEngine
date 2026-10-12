@@ -112,7 +112,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_force_rimPower);
     // Contact glow: the equilibrium seam lights up as the best VISIBLE opposing field approaches
     // our own - an invisible field pressing in doesn't light the whole rim as a seam.
-    const float contact = smoothstep(1.0 - u_force_glowWidth, 1.0, opposingPhiVis / max(ownPhi, 1e-4));
+    const float contact = smoothstep(1.0 - u_force_glowWidth, 1.0, opposingPhiVis / ownPhi);
     // Geometry glow: the shell surface fading into nearby opaque geometry along the view ray.
     const float geoGlow = 1.0 - clamp((sceneDist - tHit) / u_force_geoGlowDistance, 0.0, 1.0);
     const float pattern = forcePattern(hitPos, n) * u_force_patternIntensity;

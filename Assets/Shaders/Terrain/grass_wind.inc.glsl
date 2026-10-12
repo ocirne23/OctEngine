@@ -31,7 +31,7 @@ vec3 grassTip(vec3 root, vec2 lean, vec2 wind, float h, out vec3 ctrl)
     const float len = length(offset);
     if (len > 0.9 * h)
         offset *= 0.9 * h / len;
-    const float y = sqrt(max(h * h - dot(offset, offset), 0.0));
+    const float y = sqrt(h * h - dot(offset, offset)); // the radicand >= 0.19 h^2: offset <= 0.9 h
     ctrl = root + vec3(0.0, y, 0.0);
     return root + vec3(offset.x, y, offset.y);
 }

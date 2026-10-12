@@ -17,7 +17,7 @@
 
 layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal;
-layout (location = 2) in vec3 in_groundNormal;
+layout (location = 2) flat in vec3 in_groundNormal; // unit, one per blade
 layout (location = 3) in vec4 in_blade; // x = along the blade, y = albedo factor (variation x cold), z = dryness, w = ground normal blend
 layout (location = 4) in vec3 in_prevWorldDelta;
 layout (location = 5) in vec2 in_canopy; // x = depth below the canopy top (m), y = the canopy's extinction (1/m)
@@ -65,11 +65,11 @@ void main()
     albedo *= in_blade.y; // the per-blade variation and the cold darkening (grass.vs.glsl)
     const float ao = mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t));
 
-    const vec3 N = normalize(mix(bladeN, normalize(in_groundNormal), in_blade.w));
+    const vec3 N = normalize(mix(bladeN, in_groundNormal, in_blade.w));
     // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
     // register peak): only this half colour is live across it.
     const float back = max(-dot(N, L), 0.0);
-    const f16vec3 transmit = f16vec3(albedo * min(back * g_sunShadowFirst * ao * u_grass_transmission * INV_PI, MEDIUMP_FLT_MAX));
+    const f16vec3 transmit = f16vec3(albedo * (back * g_sunShadowFirst * ao * u_grass_transmission * INV_PI)); // <= 1.28 by the tweak ranges
 
     vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grass_roughness), float16_t(0.0), float16_t(ao));
     color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);

@@ -107,7 +107,7 @@ vec3 applyRayFog(vec3 radiance, vec3 origin, vec3 dir, float t, vec3 sunRadiance
         return radiance;
     const float baseOrigin = reflectionFogBase(origin.y);
     const float hitY = origin.y + dir.y * t;
-    const float slope = ((hitY - reflectionFogBase(hitY)) - (origin.y - baseOrigin)) / max(t, 1e-3);
+    const float slope = ((hitY - reflectionFogBase(hitY)) - (origin.y - baseOrigin)) / t; // a scene hit: t >= the ray's tMin
     const float tau = volAnalyticOpticalDepthLinear(origin.y - baseOrigin, slope, min(t, u_fog_range), u_fog_heightFalloff, density);
     return reflectionFogBlend(radiance, tau, dir, sunRadiance, L, ambientSky);
 }

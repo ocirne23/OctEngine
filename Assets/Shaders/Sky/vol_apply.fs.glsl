@@ -245,7 +245,7 @@ void fogRay(out vec3 dir, out float invCos)
     const vec2 rayVpUv = (v_uv - u_viewportRect.xy) * u_viewportInvSize;
     const vec2 rayNdc = vec2(rayVpUv.x * 2.0 - 1.0, 1.0 - rayVpUv.y * 2.0) - u_taaJitter.xy;
     dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
-    invCos = 1.0 / max(dot(dir, u_viewForward), 1e-3);
+    invCos = 1.0 / dot(dir, u_viewForward);
 }
 
 // Fog (in-scatter, transmittance) from the camera to worldPos: the froxel volume, then the far field out to
@@ -277,7 +277,7 @@ vec4 fogTo(vec3 worldPos, float t1, vec3 dir, float invCos)
     // Inside the first slice there is no "before fog" texel to lerp from: fade the fog in linearly so
     // very near geometry isn't over-fogged by the first slice's full accumulation.
     if (s < 1.0)
-        fog = mix(vec4(0.0, 0.0, 0.0, 1.0), fog, max(s, 0.0));
+        fog = mix(vec4(0.0, 0.0, 0.0, 1.0), fog, s);
 
     if (u_fog_farFieldEnabled > 0.5) // far field: picks up exactly where the volume's last slice ends
     {

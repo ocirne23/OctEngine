@@ -560,7 +560,8 @@ void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitD
                 uint16& idx = temp.textureIdxForMaterialTex[metalRoughnessTexIdx];
                 if (idx == UINT16_MAX)
                 {
-                    idx = Globals::textureManager.upload(*sceneData.getTexture(metalRoughnessTexIdx), false);
+                    // Roughness (G) >= 3/255: the lit shaders read it unguarded (GGX alpha >= 0.01); the cook floors its DDS.
+                    idx = Globals::textureManager.upload(*sceneData.getTexture(metalRoughnessTexIdx), false, false, 3);
                     if (idx != UINT16_MAX)
                         m_ownedTextures.push_back(idx);
                 }

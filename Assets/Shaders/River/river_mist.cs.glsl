@@ -46,8 +46,8 @@ void main()
     const float mistSpeed = plunge ? u_river_plungeSpeed     : u_river_mistSpeed;
     const float kick      = plunge ? u_river_plungeKick      : u_river_mistKick;
     const float height    = plunge ? u_river_plungeHeight    : u_river_mistHeight;
-    const float halfWidth = max(abs(src.posHalf.w), 0.1);
-    const float len       = max(src.flowFoam.w, 0.1);
+    const float halfWidth = abs(src.posHalf.w); // RiverSystem::updateMist: >= 0.1 (the sign is the plunge flag)
+    const float len       = src.flowFoam.w;     // >= 0.1
     const float expected  = rate * (2.0 * halfWidth * len) * u_ocean_sprayDt * strength;
 
     uint seed  = particlePcg(u_frameIndex * 0x9E3779B9u + i * 0x85EBCA6Bu + 0x27D4EB2Fu);
@@ -60,7 +60,7 @@ void main()
 
     const vec2 flow = src.flowFoam.xy;
     const float speed = length(flow);
-    const vec2 dir = speed > 1e-4 ? flow / speed : vec2(1.0, 0.0);
+    const vec2 dir = flow / speed; // updateMist: |flow| >= 1e-3
     const vec2 side = vec2(-dir.y, dir.x);
     const float energy = 0.5 + strength; // stronger whitewater throws the mist higher
     for (uint k = 0u; k < count; ++k)

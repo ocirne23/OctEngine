@@ -418,7 +418,7 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 	// the water standing here.
 	f16vec3 bubbles = f16vec3(0.0);
 	if (milk > float16_t(0.003))
-		bubbles = oceanBubbleRadiance(min(float16_t(u_ocean_bubbleDepth), max(waterDepth, float16_t(0.0))), NoV, float16_t(max(L.y, 0.0)),
+		bubbles = oceanBubbleRadiance(min(float16_t(u_ocean_bubbleDepth), waterDepth), NoV, float16_t(max(L.y, 0.0)),
 			sunLight, ambientSky + f16vec3(u_ambientColor), inscatter);
 
 	// The film is LINEAR in the body and in its remaining unknowns, the mirror (the sky; the traced scene
@@ -501,9 +501,9 @@ void terrainFilmShade(vec3 worldPos, TerrainFilm film, float16_t maskH, float16_
 			if (gridMin == gridPos)
 			{
 				// ONE loop over large + cell lights (as the lit core): each loop inlines doLightShadowed whole.
-				const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+				const uint numLargeLights = getLargeLightCount(gridIdx); // light_grid.cs writes capped counts
 				const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
-				const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+				const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
 				for (uint i = 0; i < numLights; ++i)
 				{
 					const uint lightId = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);

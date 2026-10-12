@@ -132,18 +132,18 @@ vec4 foliageCrownNormal(vec3 pos, vec3 V, vec3 cardDu, vec3 cardDv, vec2 uv, uin
 	const vec3 D = -V;
 	const vec3 w = foliageToUnit((centre - pos) + D * distance(u_viewPos, pos), axis, radii); // centre - camera, kept small-valued
 	const vec3 Du = foliageToUnit(D, axis, radii);
-	const float DuLen2 = max(dot(Du, Du), 1e-12);
+	const float DuLen2 = dot(Du, Du); // > 0: the frame has non-zero radii, V is unit
 	const vec3 offset = Du * (dot(w, Du) / DuLen2) - w;
 	const float r2 = dot(offset, offset);
 	const vec3 hit = offset - Du * (inversesqrt(DuLen2) * sqrt(max(1.0 - r2, 0.0)));
 	{
 		// The leaf (unit-sphere space: the map is linear, so the blend holds there), then its exit along L (the parameter is
 		// the world distance, both scale alike). A leaf outside the ellipsoid (c >= 0): no chord.
-		const vec3 leaf = mix(hit, foliageToUnit(pos - centre, axis, radii), clamp(leafDepth, 0.0, 1.0));
+		const vec3 leaf = mix(hit, foliageToUnit(pos - centre, axis, radii), leafDepth); // leafDepth in [0, 1]
 		const vec3 Ls = foliageToUnit(u_sunDirection.xyz, axis, radii);
-		const float a = max(dot(Ls, Ls), 1e-12), b = dot(leaf, Ls), c = dot(leaf, leaf) - 1.0;
-		if (c < 0.0)
-			sunChord = max((-b + sqrt(max(b * b - a * c, 0.0))) / a, 0.0) / radii.y;
+		const float a = dot(Ls, Ls), b = dot(leaf, Ls), c = dot(leaf, leaf) - 1.0;
+		if (c < 0.0) // a > 0 and c < 0: the root is > |b|, the chord > 0
+			sunChord = ((-b + sqrt(b * b - a * c)) / a) / radii.y;
 	}
 	const vec3 toPos = pos - centre;
 	return vec4(normalize(foliageToUnit(hit, axis, radii)), length(toPos - axis * dot(toPos, axis)) / radii.y);
@@ -231,7 +231,7 @@ void main()
 	{
 		const f16vec2 metalRoughness = f16vec2(texture(u_textures[metalRoughnessTexIdx], texUv).bg);
 		metalness = metalRoughness.x;
-		roughness = max(metalRoughness.y, float16_t(0.01));
+		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
 	}
 
 	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
@@ -272,7 +272,7 @@ void main()
 		// darkens it at any strength (a multiplier on the strength saturated at 1). x |V.y|, the view's steepness: from
 		// BELOW V.y is negative - a negative factor on the AO and the sun turned the card black (from level: 0).
 		if (foliageTopCard(cardDu, cardDv, material.flags))
-			interior = pow(max(interior, 0.0), u_foliage_interiorTopCardScale) * abs(V.y); // pow(0, 0) is undefined: the CPU floors the exponent at 0.01
+			interior = pow(interior, u_foliage_interiorTopCardScale) * abs(V.y); // pow(0, 0) is undefined: the CPU floors the exponent at 0.01
 		// The visible leaf's depth into the crown for the self-shadow: the baked interior, faded out as the view lines up
 		// with the sun (from the front the leaves seen through the gaps are lit through those same gaps).
 		const float leafDepth = float(normalTap.w) * (1.0 - max(dot(V, u_sunDirection.xyz), 0.0));
@@ -293,7 +293,7 @@ void main()
 			const float angle = atan(sinTurn, dot(faceN, crown.xyz)) * crownWeight;
 			const float c = cos(angle), s = sin(angle);
 			const vec3 n = vec3(N);
-			N = f16vec3(normalize(n * c + cross(k, n) * s + k * (dot(k, n) * (1.0 - c))));
+			N = f16vec3(n * c + cross(k, n) * s + k * (dot(k, n) * (1.0 - c))); // a rotation about a unit axis: stays unit
 		}
 		g_noRtao = true;
 		// THE SUN through the crown: the interior fades out of it as the view lines up with the sun (x "Foliage interior
@@ -303,7 +303,7 @@ void main()
 		// direct sun; the TRANSMISSION - light scattered forward through the leaves, which loses less - takes the
 		// self-shadow x "Foliage transmission self shadow" (u_foliage_transmissionSelfShadow; at the full share a crown seen toward the
 		// sun hid "Foliage transmission" entirely). The ambient keeps the full interior (AO).
-		const float sunInterior = mix(interior, 1.0, clamp(u_foliage_interiorViewFade * abs(dot(V, u_sunDirection.xyz)), 0.0, 1.0));
+		const float sunInterior = mix(interior, 1.0, u_foliage_interiorViewFade * abs(dot(V, u_sunDirection.xyz)));
 		crownSun = sunInterior * exp(-u_foliage_selfShadow * sunChord);
 		crownTransmit = sunInterior * exp(-u_foliage_selfShadow * u_foliage_transmissionSelfShadow * sunChord);
 		g_sunShadowFirst *= crownSun;
@@ -334,7 +334,7 @@ void main()
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		const float visibility = mix(1.0, sunVisibility, u_foliage_transmissionShadow) * crownTransmit;
-		transmit = materialColor * float16_t(min((back + glow) * visibility * u_foliage_transmission * INV_PI, MEDIUMP_FLT_MAX));
+		transmit = materialColor * float16_t((back + glow) * visibility * u_foliage_transmission * INV_PI); // <= ~11.5 by the tweak ranges
 	}
 
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);

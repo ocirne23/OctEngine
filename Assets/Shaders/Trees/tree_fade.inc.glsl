@@ -11,7 +11,7 @@ bool treeDistanceFaded(uint flags, vec3 pos)
 	if ((flags & MATERIAL_FLAG_DISTANCE_FADE) == 0u)
 		return false;
 	const float fadeStart = float(flags & 0xFFFu);
-	const float fadeWidth = max(float((flags >> 12) & 0x3FFu), 1.0);
+	const float fadeWidth = float((flags >> 12) & 0x3FFu); // >= 1: makeDistanceFadeFlags (Layout.ixx)
 	const float f = clamp((distance(u_viewPos, pos) - fadeStart) / fadeWidth, 0.0, 1.0);
 	const vec2 pixel = gl_FragCoord.xy + 5.588238 * float(u_frameIndex & 7u);
 	const float dither = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));

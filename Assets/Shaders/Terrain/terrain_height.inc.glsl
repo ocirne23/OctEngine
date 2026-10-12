@@ -91,7 +91,7 @@ float terrainSunVisibility(vec3 pos, vec3 sunDir, float startT, int steps, float
 // channel that the LAPSE RATE genuinely needs. Mirrors Procedural's fogFalloffFromTemperature.
 float fogFalloffFromTemperature(float celsius)
 {
-    return clamp(1.8 - 1.2 * clamp((celsius + 10.0) * (1.0 / 40.0), 0.0, 1.0), 0.0, 4.0);
+    return 1.8 - 1.2 * clamp((celsius + 10.0) * (1.0 / 40.0), 0.0, 1.0); // [0.6, 1.8]
 }
 
 // One decoded climate texel from the bit-packed B channel at integer texel coords:

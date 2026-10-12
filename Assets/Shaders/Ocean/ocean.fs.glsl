@@ -68,7 +68,7 @@ float16_t V_SmithGGX_H(float16_t NoV, float16_t NoL, float16_t a)
 }
 float16_t F_SchlickH(float16_t u, float16_t f0)
 {
-    const float16_t x = clamp(float16_t(1.0) - u, float16_t(0.0), float16_t(1.0));
+    const float16_t x = float16_t(1.0) - u;
     const float16_t x2 = x * x;
     return f0 + (float16_t(1.0) - f0) * (x2 * x2 * x);
 }
@@ -95,7 +95,7 @@ vec3 waterBedAlbedo(vec3 worldPos, vec3 geoN, float rayT, inout float waterLevel
         f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }
     waterLevel = f.waterLevel;
-    g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
+    g_seabedLod = min(log2(max(rayT, 1.0)) + 1.0, 7.0);
     f16vec3 albedo = terrainSplat(worldPos, geoN, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
     // full wetness ("Wet darkening" - instanced_indirect_terrain.fs.glsl), so the sand seen through the
@@ -202,14 +202,14 @@ void main()
     // Entrained bubbles (the foam amount): the cloud's coverage, read where the refracted view ray reaches
     // "Bubble depth" - so the cloud slides under the surface with the view instead of sitting on it. Read
     // blurred by "Bubble blur (m)" (u_ocean_bubbleBlur): the cloud is a diffuse volume, so the separate
-    // breaking events merge into clouds instead of texel-sized spots. The parallax is capped at 5x the depth
-    // at grazing. FIRST in main, where almost nothing is live: its B-spline taps (up to 16) in the middle of
+    // breaking events merge into clouds instead of texel-sized spots. The refracted ray is never flatter than
+    // the critical angle, so the parallax stays below 1.52x the depth. FIRST in main, where almost nothing is live: its B-spline taps (up to 16) in the middle of
     // the top side's shading set the shader's peak (80/32 -> 80/48); here only the one result stays live. So
     // it refracts through the LEVEL plane, not the rippled normal (the cloud is metres of blur anyway), and
     // the underside pixels pay the tap for nothing.
-    const float milkF = clamp(oceanSampleFoamField(u_oceanMaps,
-        in_uv + refract(-V, vec3(0.0, 1.0, 0.0), 1.0 / 1.33).xz * (u_ocean_bubbleDepth / max(sqrt(1.0 - (1.0 - V.y * V.y) / (1.33 * 1.33)), 0.2)),
-        length(fwidth(in_uv)), u_ocean_bubbleBlur), 0.0, 1.0);
+    const float milkF = oceanSampleFoamField(u_oceanMaps,
+        in_uv + refract(-V, vec3(0.0, 1.0, 0.0), 1.0 / 1.33).xz * (u_ocean_bubbleDepth / sqrt(1.0 - (1.0 - V.y * V.y) / (1.33 * 1.33))),
+        length(fwidth(in_uv)), u_ocean_bubbleBlur);
     // per-frame atmosTransmittanceToLight, and the cloud shadow at the surface (the glint, the body, the foam)
     const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * (u_sunVisible * cloudSunTransmittance(in_pos));
     // "Ray cutoff dist": beyond it no scene rays at all - the body uses the analytic bottom (the path
@@ -286,7 +286,7 @@ void main()
             shoreFoam = u_ocean_shoreFoamMax * (1.0 - exp(-shoreFoam * u_ocean_shoreFoamInvMax)) * u_ocean_shoreFoamKneeNorm;
         }
     }
-    const float foamW = clamp(max(foam, shoreFoam), 0.0, 1.0);
+    const float foamW = max(foam, shoreFoam);
 
 #if OCEAN_DEBUG_MODE != 0 && OCEAN_DEBUG_MODE != 6
     // The depth-keyed modes are a function of the position alone: before the side split, so the underside
@@ -447,9 +447,10 @@ void main()
     const float perceptualRough = u_ocean_roughness;
     const float slopeVariance = 0.5 * (slopeVar.x + slopeVar.y) * (ns * ns);
     const float microVariance = u_ocean_microRoughness * (ns * ns);
-    const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
-        + (normalVariance(N) + 2.0 * slopeVariance) * u_ocean_glintFilter + 2.0 * microVariance
-        + foamAmount * 0.35;
+    // alphaGateSq: every term except the micro band (the "Reflection max rough" gate ignores it).
+    const float alphaGateSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
+        + (normalVariance(N) + 2.0 * slopeVariance) * u_ocean_glintFilter + foamAmount * 0.35;
+    const float alphaSq = alphaGateSq + 2.0 * microVariance;
 
 
     // From here the top side shades in HALF math: the vectors, the dots, the roughness, the ray weights
@@ -458,8 +459,8 @@ void main()
     // N / V), and each traced result converts to half ONCE. The scene lights accumulate in 32-bit (a
     // light's radiance has no bound).
     const float16_t alphaF = float16_t(clamp(sqrt(alphaSq), 0.02, 1.0));
-    // "Reflection max rough"'s gate value (see the mirror below), resolved here so alphaSq dies before the body trace.
-    const float alphaGate = sqrt(max(alphaSq - 2.0 * microVariance, 0.0));
+    // "Reflection max rough"'s gate value (see the mirror below), resolved here so alphaGateSq dies before the body trace.
+    const float alphaGate = sqrt(alphaGateSq);
     const f16vec3 Nh = f16vec3(N);
     const f16vec3 Vh = f16vec3(V);
     const f16vec3 Lh = f16vec3(L);
@@ -467,7 +468,7 @@ void main()
     const float16_t NoV = clamp(dot(Nh, Vh), float16_t(1e-3), float16_t(1.0));
     const float16_t NoL = max(dot(Nh, Lh), float16_t(0.0));
     const float16_t NoH = max(dot(Nh, Hh), float16_t(0.0));
-    const float16_t LoH = max(dot(Lh, Hh), float16_t(0.0));
+    const float16_t LoH = dot(Lh, Hh); // = |L + V| / 2 >= 0
     const float16_t foamH = float16_t(foamW);
     const f16vec3 sunTintH = f16vec3(sunTint);
 
@@ -514,11 +515,11 @@ void main()
         const float16_t backSlope = float16_t(0.5) - float16_t(0.5) * dot(Lh, Nh);
         C += f16vec3(u_ocean_scatterColor) * sunTintH * (float16_t(u_ocean_sssStrength) * waveH * towardSun * backSlope * backSlope * backSlope * sunVis);
     }
-    // Sun glint: Cook-Torrance specular, shadow-gated. D * (Vis * NoL) is clamped to the half range
-    // (<= ~2e4 at the 0.02 alpha floor), and so is the tinted glint.
+    // Sun glint: Cook-Torrance specular, shadow-gated. D * (Vis * NoL) stays <= ~2e4 at the 0.02 alpha floor;
+    // the tinted glint is clamped to the half range.
     const float16_t D  = D_GGX_H(alphaF, NoH, cross(Nh, Hh));
     const float16_t Vv = V_SmithGGX_H(NoV, NoL, alphaF);
-    const float16_t glint = min(D * (Vv * NoL), float16_t(MEDIUMP_FLT_MAX)) * (sunVis * F_SchlickH(LoH, float16_t(0.02)));
+    const float16_t glint = D * (Vv * NoL) * (sunVis * F_SchlickH(LoH, float16_t(0.02)));
     // Crest foam + shoreline surf: the final mix over everything (no longer gated at 0.3% foam - the
     // branch saved nothing once the terms fold here).
     // The blur's sky share: the sky SH's cosine lobe (E(n) / pi) toward the reflection's side of the sky - a
@@ -539,9 +540,9 @@ void main()
     f16vec3 body = inscatter;
     if (bodyWeight > float16_t(0.02))
     {
+        // Air into water never totally reflects (N faces V): refract always returns a direction.
         const vec3 refrDir = refract(-vec3(Vh), vec3(Nh), 1.0 / 1.33);
-        if (dot(refrDir, refrDir) > 1e-6)
-            body = f16vec3(traceWaterBody(in_pos + vec3(Nh) * 0.05, refrDir, in_pos, shoreHW, sunTint, float(sunVis), L, vec3(inscatter), rtInRange));
+        body = f16vec3(traceWaterBody(in_pos + vec3(Nh) * 0.05, refrDir, in_pos, shoreHW, sunTint, float(sunVis), L, vec3(inscatter), rtInRange));
     }
     f16vec3 color = C + body * bodyWeight;
 
@@ -598,7 +599,7 @@ void main()
     vec3 outColor = vec3(color);
     {
         const f16vec3 matColOverPi = mix(f16vec3(u_ocean_scatterColor * u_ocean_scatterStrength), f16vec3(u_ocean_foamColor), foamH) * float16_t(INV_PI);
-        const float16_t lightRough = clamp(mix(alphaF, float16_t(0.85), foamH), float16_t(0.02), float16_t(1.0));
+        const float16_t lightRough = mix(alphaF, float16_t(0.85), foamH);
         const f16vec3 waterSpec = f16vec3(0.02);
 
         const ivec3 gridPos = getGridPos(in_pos);
@@ -613,9 +614,9 @@ void main()
             {
                 // ONE loop over the grid's large lights, then the cell's lights (as the lit core): each loop
                 // inlines doLightShadowed whole, light types plus shadow ray queries.
-                const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+                const uint numLargeLights = getLargeLightCount(gridIdx);
                 const uint cellOffset     = calcCellOffset(gridIdx, gridMin, in_pos);
-                const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+                const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
                 for (uint i = 0; i < numLights; ++i)
                 {
                     const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);

@@ -59,7 +59,7 @@ void main()
         if (mesh < cf_numMeshes)
         {
             const uvec4 range = in_meshes[mesh].lods[lod];
-            draw = DrawIndexedIndirect(range.y, range.y > 0u ? count : 0u, range.x, int(range.z), first);
+            draw = DrawIndexedIndirect(range.y, count, range.x, int(range.z), first); // indexCount 0 draws nothing
         }
     }
     out_commands[b] = draw;

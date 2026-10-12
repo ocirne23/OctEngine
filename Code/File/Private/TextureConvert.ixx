@@ -19,13 +19,16 @@ export namespace TextureConvert
 
 	// One output channel for convertChannelsToDds: channel srcChannel (0..3 = RGBA) of the image at path, or
 	// the constant fill when path is nullptr. scale reduces / raises the source's contrast about mid grey
-	// (128 + (v - 128) * scale): a height map's relief, with 0.5 = flat unchanged.
+	// (128 + (v - 128) * scale): a height map's relief, with 0.5 = flat unchanged. minValue is a floor on the
+	// channel, held at level 0 AND after every mip resize (the Mitchell filter undershoots): a guarantee the
+	// shader may rely on (the terrain diffr roughness alpha >= 3/255).
 	struct PackChannel
 	{
 		const char* path = nullptr;
 		uint8 srcChannel = 0;
 		uint8 fill = 0;
 		float scale = 1.0f;
+		uint8 minValue = 0;
 	};
 
 	// Converts srcPath (png/jpg/tga/...) into a full-mip-chain .dds at outPath. Returns false when the

@@ -171,6 +171,7 @@ namespace
 		"the splat table outgrew the UBO's climate array - raise MAX_TERRAIN_SPLAT_MATERIALS");
 
 	constexpr const char* TERRAIN_TEX_CACHE_DIR = "Local/TerrainTex/";
+	constexpr uint8 TERRAIN_ROUGHNESS_FLOOR = 3; // /255, the diffr alpha (GGX alpha >= 0.01 with fp16 margin)
 
 	// Poly Haven layout; the two ambientCG sets override it per map. map: "diff", "nor_gl", "arm", "disp".
 	oc::string terrainTexSrcPath(const TerrainTexSource& src, const char* map)
@@ -187,6 +188,9 @@ namespace
 	{
 		if (src.heightScale != 1.0f && oc::string_view(map) == "hao")
 			return oc::format("{}{}_hao_h{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, (int)(src.heightScale * 100.0f + 0.5f));
+		// The roughness floor is part of the diffr name (diffr_f3 = alpha >= 3/255): a changed floor re-bakes.
+		if (oc::string_view(map) == "diffr")
+			return oc::format("{}{}_diffr_f{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, (int)TERRAIN_ROUGHNESS_FLOOR);
 		return oc::format("{}{}_{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, map);
 	}
 
@@ -259,8 +263,12 @@ namespace
 				case 0:
 				{
 					const oc::string diff = terrainTexSrcPath(src, "diff");
-					const TextureConvert::PackChannel channels[4] = { { diff.c_str(), 0 }, { diff.c_str(), 1 }, { diff.c_str(), 2 }, { arm.c_str(), 1 } };
+					// The roughness alpha keeps >= 3/255 (GGX alpha 0.0118) in every mip: the splat shader has no floor of its own.
+					const TextureConvert::PackChannel channels[4] = { { diff.c_str(), 0 }, { diff.c_str(), 1 }, { diff.c_str(), 2 },
+						{ arm.c_str(), 1, 0, 1.0f, TERRAIN_ROUGHNESS_FLOOR } };
 					ok = TextureConvert::convertChannelsToDds(channels, TextureConvert::EUsage::ColorAlpha, terrainTexCachePath(src, "diffr").c_str());
+					if (ok) // the unfloored bake of the old name is dead
+						FileSystem::remove(oc::format("{}{}_diffr.dds", TERRAIN_TEX_CACHE_DIR, src.stem));
 					break;
 				}
 				case 1: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "nor_gl").c_str(), TextureConvert::EUsage::NormalMap, terrainTexCachePath(src, "nor").c_str()); break;

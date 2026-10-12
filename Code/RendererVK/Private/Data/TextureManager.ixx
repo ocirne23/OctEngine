@@ -13,7 +13,7 @@ public:
 
     ~TextureManager();
     //uint16 upload(const oc::vector<ITextureData*>& textureData, bool generateMips);
-    uint16 upload(const ITextureData& textureData, bool generateMips, bool sRGB = false);
+    uint16 upload(const ITextureData& textureData, bool generateMips, bool sRGB = false, uint8 minG = 0);
     // Standalone texture file (e.g. a terrain biome .dds): same slot/streaming/descriptor handling as the
     // ITextureData path, resolved relative to the working directory (Assets/).
     uint16 upload(const char* filePath, bool generateMips, bool sRGB = false);

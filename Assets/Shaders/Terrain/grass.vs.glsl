@@ -29,7 +29,7 @@ layout (location = 1) in uvec4 in_patchData;   // x = the chunk's first vertex, 
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;       // the blade's normal (one face; the FS flips it to the viewer)
-layout (location = 2) out vec3 out_groundNormal; // the terrain's facet normal under the root
+layout (location = 2) flat out vec3 out_groundNormal; // the terrain's facet normal under the root (unit, one per blade)
 layout (location = 3) out vec4 out_blade;        // x = along the blade (0 root .. 1 tip), y = colour variation [0, 1],
                                                  // (with the cold darkening: an albedo factor), z = dryness,
                                                  // w = blend toward the ground normal
@@ -65,9 +65,9 @@ vec3 grassBladeNormal(float t, float sideSign)
 {
     const vec3 side = g_blade.side;
     const float r = u_grass_roundness;
-    const vec3 rootN = normalize(cross(vec3(0.0, 1.0, 0.0), side));
+    const vec3 rootN = cross(vec3(0.0, 1.0, 0.0), side); // unit: side = (cos, 0, sin)
     const vec3 tipAcross = cross(g_blade.tip - grassBezier(g_blade.root, g_blade.ctrl, g_blade.tip, 0.5), side);
-    const vec3 tipN = tipAcross * inversesqrt(max(dot(tipAcross, tipAcross), 1e-12));
+    const vec3 tipN = tipAcross * inversesqrt(dot(tipAcross, tipAcross)); // |tipAcross| >= the chord's rise > 0
     const vec3 linearN = mix(rootN, tipN, t) + side * (sideSign * r * (1.0 - t));
     const vec3 tangent = 2.0 * (1.0 - t) * (g_blade.ctrl - g_blade.root) + 2.0 * t * (g_blade.tip - g_blade.ctrl);
     const vec3 across = cross(tangent, side);
@@ -117,7 +117,7 @@ void main()
     const float thinning = grassKeep(dist);
     const float keep = density * thinning;
     const float rank = (float(blade) + 0.5) / N;
-    const float grow = clamp((keep - rank) / max(u_grass_growBand * keep, 1e-5), 0.0, 1.0);
+    const float grow = clamp((keep - rank) / (u_grass_growBand * keep), 0.0, 1.0); // keep = 0: -inf -> 0
     if (grow <= 0.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0); // every vertex of the blade lands here: no area, no fragments
@@ -153,7 +153,7 @@ void main()
     const float t = float(row) / float(segments);
     const float sideSign = vert >= 2u * segments ? 0.0 : ((vert & 1u) != 0u ? 1.0 : -1.0);
     // Fewer blades far away get WIDER (toward the same coverage, capped), and never narrower than the pixel floor.
-    const float widthScale = min(pow(1.0 / max(thinning, 1e-3), u_grass_widthCompensation), u_grass_maxWidthScale);
+    const float widthScale = min(pow(1.0 / thinning, u_grass_widthCompensation), u_grass_maxWidthScale);
     g_blade.root = root;
     g_blade.side = side;
     g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * coverSize, dist * u_grass_minWidthPerMetre);

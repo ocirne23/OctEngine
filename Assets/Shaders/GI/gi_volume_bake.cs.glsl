@@ -121,8 +121,9 @@ void main()
     // range; a black channel stores 0 (no direction). The unsigned 11/10-bit floats hold no negative and top out
     // at 65024: a0 >= 0 for a non-negative radiance, the clamps only guard numeric noise.
     const vec3 l0 = clamp(a0, vec3(0.0), vec3(65000.0));
-    const vec3 inv = mix(vec3(0.0), 1.0 / (max(a0, vec3(1e-8)) * GI_SQRT3), greaterThan(a0, vec3(1e-8)));
-    const vec3 q1 = clamp(a1 * inv, -1.0, 1.0), q2 = clamp(a2 * inv, -1.0, 1.0), q3 = clamp(a3 * inv, -1.0, 1.0);
+    // The bvec mix is a select: the inf of a black lane is discarded. The SNORM stores clamp q to [-1, 1].
+    const vec3 inv = mix(vec3(0.0), 1.0 / (a0 * GI_SQRT3), greaterThan(a0, vec3(1e-8)));
+    const vec3 q1 = a1 * inv, q2 = a2 * inv, q3 = a3 * inv;
     // `cascade` is uniform across the workgroup (see main's first comment), so these index the storage-image
     // arrays DYNAMICALLY UNIFORM - no nonuniformEXT, which would need shaderStorageImageArrayNonUniformIndexing.
     imageStore(u_volumeL0[cascade], vslot, vec4(l0, 0.0));

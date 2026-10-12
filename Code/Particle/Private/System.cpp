@@ -281,7 +281,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             ParticleEmitterGpu gpu = desc.toGpu(emitter.textureIdx);
             gpu.sizeParams.x *= sizeScale;
             gpu.sizeParams.y *= sizeScale;
-            gpu.sizeParams.z = oc::min(gpu.sizeParams.z * sizeVarScale, 1.0f); // > 1 would flip sizes negative
+            gpu.sizeParams.z = oc::clamp(gpu.sizeParams.z * sizeVarScale, 0.0f, 1.0f); // outside [0, 1] would flip sizes negative
             gpu.colorStart.w *= alphaScale;
             gpu.colorEnd.w *= alphaScale;
             // The ocean spray is authored at the model sea's scale: the sea is drawn shrunk by "Ocean/World
@@ -407,7 +407,7 @@ uint32 ParticleSystem::spawnDecal(const DecalDesc& desc, const glm::vec3& pos, c
     decal.info.angleFadeCos = std::cos(glm::radians(desc.angleFadeDeg));
     decal.info.tint = desc.tint;
     decal.info.emissive = desc.emissive;
-    decal.info.normalFadeWidth = desc.angleFadeWidth;
+    decal.info.normalFadeWidth = oc::max(desc.angleFadeWidth, 1e-3f); // the FS's smoothstep band: edge0 < edge1
     decal.info.params = glm::uvec4(getTexture(desc.texturePath, desc.textureSRGB),
         desc.lit ? DECAL_FLAG_LIT : 0u, 0u, 0u);
     m_decals.push_back(decal);

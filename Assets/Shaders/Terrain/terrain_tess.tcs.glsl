@@ -96,7 +96,7 @@ void main()
 		// silhouette corners sit near dot 0, inside the margin. The rasterizer would cull its flat triangle
 		// anyway; this saves its tessellation and displacement.
 		const vec3 viewPos = u_views_viewPos[VIEW_CENTER].xyz;
-		const vec3 n0 = normalize(in_normal[0]), n1 = normalize(in_normal[1]), n2 = normalize(in_normal[2]);
+		const vec3 n0 = in_normal[0], n1 = in_normal[1], n2 = in_normal[2]; // per vertex (not interpolated): unit
 		if (!outside)
 			outside = dot(n0, normalize(viewPos - in_pos[0])) < TERRAIN_TESS_BACKFACE_MARGIN
 				&& dot(n1, normalize(viewPos - in_pos[1])) < TERRAIN_TESS_BACKFACE_MARGIN

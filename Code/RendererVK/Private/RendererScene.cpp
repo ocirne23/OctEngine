@@ -690,15 +690,36 @@ uint32 Renderer::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshI
 
 // ---- The per-frame submission surface ----
 
-void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
+// THE choke point for every light record: the light shaders read the record without degenerate-size guards.
+// A zero / non-finite range lights nothing (the falloff divides by it): dropped. A tube's length and an area's
+// height (the direction's magnitude) and its width / radius get a 0.1 mm floor (a zero axis becomes +Y), so the
+// axis divide and the area's horizon smoothstep never see 0. A spot's |direction| (edge softness) is
+// already >= 0.001 (SpotLight).
+void Renderer::addLightInfo(const RendererVKLayout::LightInfo& lightIn)
 {
+    if (!(glm::abs(lightIn.radius) > 1e-5f))
+        return;
+    RendererVKLayout::LightInfo light = lightIn;
+    if (light.width > 0.0f)
+    {
+        constexpr float minSize = 1e-4f;
+        const float len = glm::length(light.direction);
+        if (!(len >= minSize))
+            light.direction = (len > 1e-20f ? light.direction / len : glm::vec3(0.0f, 1.0f, 0.0f)) * minSize;
+        light.width = glm::max(light.width, minSize);
+    }
+    assert(light.width >= 0.0f || glm::length(light.direction) >= 1e-3f - 1e-6f);
     const uint32 idx = m_submission.addLight(m_swapChain.getCurrentFrameIndex(), light);
     if (idx != UINT32_MAX)
         m_lightGridComputePipeline.addLight(idx, light); // bounds + grid claims, right here on the adding thread
 }
 
-void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume)
+// vol_scatter.cs.glsl divides by halfExtents x edgeSoftness unguarded: that product is >= 1 mm per axis here.
+void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolumeIn)
 {
+    RendererVKLayout::FogVolumeInfo fogVolume = fogVolumeIn;
+    fogVolume.edgeSoftness = glm::clamp(fogVolume.edgeSoftness, 1e-3f, 1.0f);
+    fogVolume.halfExtents = glm::max(fogVolume.halfExtents, glm::vec3(1e-3f / fogVolume.edgeSoftness));
     m_submission.addFogVolume(m_swapChain.getCurrentFrameIndex(), fogVolume);
 }
 
@@ -909,8 +930,14 @@ void Renderer::setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu>
         gpu.bounds = glm::vec4(radius, height, 0.0f, 0.0f);
         for (uint32 lod = 0; lod < CLUTTER_LODS; ++lod)
         {
+            // A missing coarser level reuses the finer one's range, so clutter_cull's LOD pick needs no
+            // step-back over empty slots.
             if (mesh.indices[lod].empty())
+            {
+                if (lod > 0)
+                    gpu.lods[lod] = gpu.lods[lod - 1];
                 continue;
+            }
             gpu.lods[lod] = glm::uvec4((uint32)indices.size(), (uint32)mesh.indices[lod].size(), (uint32)vertices.size(), 0u);
             vertices.insert(vertices.end(), mesh.vertices[lod].begin(), mesh.vertices[lod].end());
             indices.insert(indices.end(), mesh.indices[lod].begin(), mesh.indices[lod].end());

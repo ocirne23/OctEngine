@@ -141,7 +141,7 @@ float oceanEffectiveDepth(vec2 worldXZ, float depth)
 // Both displacement passes MUST use this same function.
 float oceanVertexLod(float cellSize, float morph, float patchSize)
 {
-    return max(log2(max(cellSize, 1e-3) * float(OCEAN_FFT_SIZE) / patchSize) + morph + u_ocean_detailBias, 0.0);
+    return max(log2(cellSize * float(OCEAN_FFT_SIZE) / patchSize) + morph + u_ocean_detailBias, 0.0);
 }
 
 // --- The shore, in three weights. depth = calm water level above the ground (negative = land height).

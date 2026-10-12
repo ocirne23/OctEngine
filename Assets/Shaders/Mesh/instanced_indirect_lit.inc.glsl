@@ -411,9 +411,9 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #endif
 			// ONE loop over the grid's large lights, then the cell's lights: the loop body inlines every
 			// light type plus the shadow ray queries, and two loops carried two copies of all of it.
-			const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+			const uint numLargeLights = getLargeLightCount(gridIdx);
 			const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
-			const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+			const uint numLights      = numLargeLights + getNumLightsForCell(cellOffset);
 			for (uint i = 0; i < numLights; ++i)
 			{
 				const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);

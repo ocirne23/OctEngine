@@ -95,16 +95,16 @@ export namespace RendererVKLayout
         glm::vec4 posSpawnRadius{ 0.0f };          // xyz = world position, w = spawn radius (m)
         glm::vec4 rotation{ 0.0f, 0.0f, 0.0f, 1.0f }; // quat; the spawn cone axis is local +Y
         glm::vec4 velocityInherit{ 0.0f };         // xyz = emitter velocity (m/s), w = inherit factor [0,1]
-        glm::vec4 spawnParams{ 0.0f, 1.0f, 1.0f, 0.0f }; // x = cone angle (rad), y = speed min, z = speed max, w = spawn on shell (0 = solid, 1 = surface)
-        glm::vec4 lifeParams{ 1.0f, 1.0f, 0.0f, 0.0f };  // x = life min (s), y = life max, z = gravity (m/s^2, along -Y), w = drag (1/s)
+        glm::vec4 spawnParams{ 0.0f, 1.0f, 1.0f, 0.0f }; // x = cone angle (rad, [0, pi]), y = speed min, z = speed max, w = spawn on shell (0 = solid, 1 = surface)
+        glm::vec4 lifeParams{ 1.0f, 1.0f, 0.0f, 0.0f };  // x = life min (s, >= 0.01), y = life max (>= 0.01), z = gravity (m/s^2, along -Y), w = drag (1/s)
         glm::vec4 noiseParams{ 0.0f, 0.25f, 0.0f, 0.3f };// x = turbulence accel (m/s^2), y = turbulence frequency (1/m), z = turbulence scroll (m/s), w = collision bounce [0,1]
-        glm::vec4 sizeParams{ 0.1f, 0.1f, 0.0f, 0.0f };  // x = size start (m), y = size end, z = size variance [0,1], w = velocity stretch (s, 0 = round billboard)
+        glm::vec4 sizeParams{ 0.1f, 0.1f, 0.0f, 0.0f };  // x = size start (m, >= 0), y = size end (>= 0), z = size variance [0,1], w = velocity stretch (s, 0 = round billboard)
         glm::vec4 colorStart{ 1.0f };              // rgb = linear color * intensity, a = start alpha
         glm::vec4 colorEnd{ 1.0f, 1.0f, 1.0f, 0.0f };
-        glm::vec4 fadeParams{ 0.1f, 0.7f, 0.0f, 0.25f }; // x = fade-in end (life frac), y = fade-out start, z = additivity [0,1], w = soft-particle fade distance (m)
-        glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w = ground fade height (m, PARTICLE_FLAG_GROUND_FADE)
+        glm::vec4 fadeParams{ 0.1f, 0.7f, 0.0f, 4.0f }; // x = fade-in end (life frac, >= 1e-3), y = fade-out start (<= 0.999), z = additivity [0,1], w = 1 / soft-particle fade distance (1/m)
+        glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w = ground fade height (m, >= 0.01 with PARTICLE_FLAG_GROUND_FADE)
         glm::uvec4 texFlags{ PARTICLE_TEX_NONE, 0u, 0u, 0u }; // x = texture idx (PARTICLE_TEX_NONE = procedural), y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16 (0 = none), w = flipbook fps (float bits)
-        glm::vec4 volumeParams{ 0.0f };            // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s: how fast the horizontal velocity relaxes onto the local wind)
+        glm::vec4 volumeParams{ 0.0f };            // PARTICLE_FLAG_VOLUME: xyz = box half extents (m, >= 1e-3) around posSpawnRadius.xyz, w = wind response (1/s: how fast the horizontal velocity relaxes onto the local wind)
         glm::vec4 cullParams{ 0.0f };              // x = fraction of this emitter's live particles the sim recycles THIS FRAME
                                                    // (a lowered count tweak on a weather volume: it never ages out, so there is
                                                    // nothing else to remove); ONE frame only, the CPU clears it again. yzw unused
@@ -130,7 +130,7 @@ export namespace RendererVKLayout
                                                    // projection (cos of the cutoff angle vs -Z; -1 = never)
         glm::vec4 tint{ 1.0f };                    // rgb = color * intensity, a = base alpha
         glm::vec3 emissive{ 0.0f };                // radiance added regardless of lighting
-        float normalFadeWidth = 0.2f;              // angle-fade smoothstep band width (cos units)
+        float normalFadeWidth = 0.2f;              // angle-fade smoothstep band width (cos units, >= 1e-3)
         glm::uvec4 params{ PARTICLE_TEX_NONE, 0u, 0u, 0u }; // x = diffuse texture idx (PARTICLE_TEX_NONE = solid tint), y = DECAL_FLAG_* bits, zw unused
     };
     static_assert(sizeof(DecalInfo) == 96);

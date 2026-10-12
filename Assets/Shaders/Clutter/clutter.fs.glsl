@@ -100,7 +100,7 @@ void main()
     const uint part = in_look.w;
     vec3 albedo = albedo0;
     f16vec3 N = f16vec3(geoN);
-    float ao = clamp(in_fields.x, 0.0, 1.0);
+    float ao = in_fields.x; // the generator writes AO in [0.4, 1]
 
     if (kind == CLUTTER_KIND_PEBBLE)
     {
@@ -114,7 +114,7 @@ void main()
             const TerrainSample s = sampleTerrainTriplanar(uint(u_terrain_splatBase) + climatePickIdx(r, 0), in_pos,
                 f16vec3(geoN), u_terrainTex_uvScaleRock * u_rock_uvScale * 4.0);
             albedo = vec3(s.albedo) * albedo0;
-            N = normalize(s.normal);
+            N = s.normal; // unit: sampleTerrainTriplanar normalizes it
             roughness = float(s.rough);
             ao *= float(s.ao);
         }

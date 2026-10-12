@@ -45,7 +45,7 @@ layout (binding = 5, r32ui) uniform uimage2D u_floorCover; // the largest tree c
 layout (binding = 6, r32ui) uniform uimage2D u_rockSum;    // the solids' share per column (the accumulation's units)
 
 // A tree's coverage of a column as an orderable key: 0 = only the rectangle's ring reaches it.
-uint coverKey(float coverXZ) { return coverXZ > 0.0 ? 1u + uint(clamp(coverXZ, 0.0, 1.0) * 65534.0) : 0u; }
+uint coverKey(float coverXZ) { return coverXZ > 0.0 ? 1u + uint(coverXZ * 65534.0) : 0u; }
 
 // The layouts mirror TreeVolumePipeline.ixx (TreeVolumeTypeGpu / TreeVolumePieceGpu).
 struct VolumeType
@@ -180,7 +180,7 @@ void splatPiece(VolumePiece piece)
     // radius is small, and a tree under the camera surrounds it) takes every angle.
     const bool around = rMid <= halfDiag;
     const float thetaMid = atan(midXZ.y, midXZ.x);
-    const float halfAngle = around ? 0.0 : asin(min(halfDiag / rMid, 1.0));
+    const float halfAngle = around ? 0.0 : asin(halfDiag / rMid);
     const int a0 = around ? 0 : int(floor(((thetaMid - halfAngle) / TV_TWO_PI + 0.5) * float(angularRes))) - 1;
     const int a1 = around ? angularRes - 1 : int(floor(((thetaMid + halfAngle) / TV_TWO_PI + 0.5) * float(angularRes))) + 1;
     const ivec2 t0 = ivec2(a0, max(r0 - 1, 0));

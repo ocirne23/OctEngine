@@ -351,7 +351,8 @@ namespace
 							// the surface at the channel's edge, 1 / c_ribbonWiden of the ribbon's half-width.
 							const float channelHalf = row.half / c_ribbonWiden;
 							const float edgeIn = channelHalf - row.half * std::abs(u01);
-							const float column = RiverCarveConfig::channelCut(edgeIn, row.depth, channelHalf, wallSlope);
+							// Floored: river.vs.glsl divides the trough by 0.7 x the column unguarded (0 at / past the channel edge).
+							const float column = glm::max(RiverCarveConfig::channelCut(edgeIn, row.depth, channelHalf, wallSlope), 2e-4f);
 							m.push(glm::vec3(p.x, row.y, p.y), tangent, glm::vec2(u01, row.along), true, row.depth, column);
 						}
 						return base;
@@ -801,10 +802,16 @@ namespace Procedural
 				if (d2 > R * R)
 					continue;
 				RiverMistSourceGpu g;
+				// river_mist.cs.glsl reads these unguarded: |half-width| >= 0.1, length >= 0.1, |flow| >= 1e-3 (a still
+				// point keeps its direction when it has one, else +X).
 				// A plunge source's half-width goes NEGATIVE: the shader's mark for the plunge mist's own look.
-				g.posHalf = glm::vec4(world, p.plunge > 0.0f ? -glm::max(p.half, 0.1f) : p.half);
+				const float halfWidth = glm::max(p.half, 0.1f);
+				g.posHalf = glm::vec4(world, p.plunge > 0.0f ? -halfWidth : halfWidth);
 				const float size = glm::mix(1.0f, glm::clamp(p.depth / fullSize, 0.0f, 1.0f), sizeWeight);
-				g.flowFoam = glm::vec4(p.flow, p.foam * size, len);
+				const float flowSpeed = glm::length(p.flow);
+				const glm::vec2 flow = flowSpeed >= 1e-3f ? p.flow
+					: flowSpeed > 1e-6f ? p.flow * (1e-3f / flowSpeed) : glm::vec2(1e-3f, 0.0f);
+				g.flowFoam = glm::vec4(flow, p.foam * size, glm::max(len, 0.1f));
 				found.push_back({ d2, g });
 			}
 		}

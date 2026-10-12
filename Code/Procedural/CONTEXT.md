@@ -885,7 +885,9 @@ Consumed by fog terrain-follow, ocean depth/level (GPU through `terrain_height.i
 copy), terrain colouring and the terrain sun march.
 
 It also bakes the splat textures, PACKED into THREE per set (one texture fetch fewer per splat layer than the
-four sources; since 2026-09-28): `diffr` = albedo + ROUGHNESS in the alpha (the ARM's G; BC3), `nor` (BC5),
+four sources; since 2026-09-28): `diffr` = albedo + ROUGHNESS in the alpha (the ARM's G; BC3; floored to
+>= 3/255 in every mip - **the splat shader relies on it**, no GPU floor; the floor is in the file name,
+`<stem>_diffr_f3.dds`, so a change re-bakes, and a bake deletes the old unfloored `<stem>_diffr.dds`), `nor` (BC5),
 `hao` = HEIGHT (the `disp` source's R, 0.5 = flat without one - the terrain relief's input: the parallax +
 height blend in "Terrain/Textures", the displacement in "Terrain/Tessellation"; see the RendererVK CONTEXT) +
 AO (the ARM's R; BC5). A set's `heightScale` (`TerrainTexSource`, default 1) scales its baked height about 0.5 - the

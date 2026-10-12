@@ -69,7 +69,7 @@ void main()
         out_gridData[gridIdx + 1] = uint(gridPos.y);
         out_gridData[gridIdx + 2] = uint(gridPos.z);
         out_gridData[gridIdx + 3] = cellSize;
-        out_gridData[gridIdx + 4] = largeCount;
+        out_gridData[gridIdx + 4] = min(largeCount, MAX_LARGE_LIGHTS_PER_GRID);
         for (uint i = 0u; i < MAX_LARGE_LIGHTS_PER_GRID / 2; ++i)
         {
             const uint lo = 2u * i, hi = 2u * i + 1u;
@@ -112,11 +112,12 @@ void main()
         }
         if (count < MAX_LIGHTCELL_LIGHTS)
             packed[count / 2] |= (lightId & 0xFFFFu) << ((count & 1u) == 0u ? 0 : 16);
-        ++count; // the true demand: the readers clamp, the debug heat view shows saturation
+        ++count;
     }
 
+    // Capped: the readers loop over the count raw; the debug heat view shows the cap as saturation.
     const uint cellOffset = getCellOffset(gridIdx, cellIdx);
-    out_gridData[cellOffset] = count;
+    out_gridData[cellOffset] = min(count, MAX_LIGHTCELL_LIGHTS);
     for (uint i = 0u; i < MAX_LIGHTCELL_LIGHTS / 2; ++i)
         out_gridData[cellOffset + 1 + i] = packed[i];
 }

@@ -60,6 +60,6 @@ void main()
         distWeight += cw;
     }
 
-    imageStore(u_outColor, px, wSum > 1e-6 ? sum / wSum : vec4(0.0, 0.0, 0.0, 1.0));
+    imageStore(u_outColor, px, sum / wSum); // as cloud_upsample.inc.glsl: wSum >= ~0.004
     imageStore(u_outDistance, px, vec4(exp2(distWeight > 1e-6 ? logDistSum / distWeight : logScene)));
 }

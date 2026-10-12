@@ -261,7 +261,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             const float alt = cloudAltitude(rel, camAlt);
             const vec2 nxz = rel.xz + noiseOffset;
             const float logDist = log2(ts);
-            const float lodBase = max(logDist + lodBaseBias, 0.0);
+            const float lodBase = logDist + lodBaseBias; // < 0 is fine: the noise sampler's minLod is 0 (CloudPipeline.cpp)
             if (coarse)
             {
                 if (cloudDensity(nxz, alt, ts, 0.0, lodBase, 0.0) > 0.0) // detail 0: no detail fetch, no detail mip
@@ -275,7 +275,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             }
 
             t += dt;
-            const float lodDetail = max(logDist + lodDetailBias, 0.0);
+            const float lodDetail = logDist + lodDetailBias;
             const float detailWeight = clamp(5.0 - 5.0 * ts * detailInvDist, 0.0, 1.0);
             const float dens = cloudDensity(nxz, alt, ts, detailWeight, lodBase, lodDetail);
             if (dens <= 0.0)

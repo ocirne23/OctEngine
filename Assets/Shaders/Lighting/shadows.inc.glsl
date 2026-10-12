@@ -42,7 +42,7 @@ float foliageTransmit(float visibility, float gap, int cascade)
 #ifdef SHADOW_FOLIAGE_BIAS
 	if (g_shadowFoliage)
 	{
-		const float metres = max(gap, 0.0) * cascadeDepthRange(cascade);
+		const float metres = gap * cascadeDepthRange(cascade); // every blocker found is nearer than p.z: gap > 0
 		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliage_shadowLength));
 	}
 #endif

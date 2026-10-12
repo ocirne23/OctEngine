@@ -202,7 +202,7 @@ void main()
 			float r2 = dot(duv, duv);
 
 			// Visible-hemisphere normal at this disc point; Lambert against the sun => phase.
-			vec3 n = normalize(mT * duv.x + mB * duv.y - moonDir * sqrt(1.0 - r2));
+			vec3 n = mT * duv.x + mB * duv.y - moonDir * sqrt(1.0 - r2); // orthonormal frame: unit length
 			float surfAngle = dot(n, -dir);
 			float lambert = clamp(dot(n, L), 0.02, 1.0);
 			float planetlit = mix(0.0, 0.07, surfAngle * surfAngle * surfAngle);

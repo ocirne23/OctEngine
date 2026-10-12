@@ -14,14 +14,18 @@ ParticleEmitterGpu ParticleEmitterDesc::toGpu(uint16 textureIdx) const
     gpu.posSpawnRadius = glm::vec4(0.0f, 0.0f, 0.0f, spawnRadius); // position set per instance
     gpu.rotation = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);              // rotation set per instance
     gpu.velocityInherit = glm::vec4(0.0f, 0.0f, 0.0f, inheritVelocity);
-    gpu.spawnParams = glm::vec4(glm::radians(coneAngleDeg), speedMin, speedMax, spawnShell);
-    gpu.lifeParams = glm::vec4(lifeMin, lifeMax, gravity, drag);
+    // The shaders read these fields unguarded: every floor / range the GPU relies on is applied here.
+    gpu.spawnParams = glm::vec4(glm::radians(glm::clamp(coneAngleDeg, 0.0f, 180.0f)), speedMin, speedMax, spawnShell);
+    gpu.lifeParams = glm::vec4(glm::max(lifeMin, 0.01f), glm::max(lifeMax, 0.01f), gravity, drag);
     gpu.noiseParams = glm::vec4(turbulence, turbulenceFrequency, turbulenceScroll, collisionBounce);
-    gpu.sizeParams = glm::vec4(sizeStart, sizeEnd, sizeVariance, velocityStretch);
+    gpu.sizeParams = glm::vec4(glm::max(sizeStart, 0.0f), glm::max(sizeEnd, 0.0f), glm::clamp(sizeVariance, 0.0f, 1.0f), velocityStretch);
     gpu.colorStart = colorStart;
     gpu.colorEnd = colorEnd;
-    gpu.fadeParams = glm::vec4(fadeIn, fadeOutStart, additivity, softFadeDistance);
-    gpu.spinParams = glm::vec4(spinMax, randomRotation ? 1.0f : 0.0f, emissiveFloor, glm::max(heightFalloff, 0.0f));
+    // x > 0 (the fade-in divide); y < 1 (smoothstep(y, 1) needs edge0 < edge1, and the sim's water-floor age
+    // push max(age, life * y) stays below the life); w = 1 / soft fade distance.
+    gpu.fadeParams = glm::vec4(glm::max(fadeIn, 1e-3f), glm::min(fadeOutStart, 0.999f), additivity,
+        1.0f / glm::max(softFadeDistance, 1e-3f));
+    gpu.spinParams = glm::vec4(spinMax, randomRotation ? 1.0f : 0.0f, emissiveFloor, heightFalloff > 0.0f ? glm::max(heightFalloff, 0.01f) : 0.0f);
     uint32 flags = 0;
     if (heightFalloff > 0.0f)
         flags |= PARTICLE_FLAG_GROUND_FADE;
@@ -36,7 +40,7 @@ ParticleEmitterGpu ParticleEmitterDesc::toGpu(uint16 textureIdx) const
         flags |= PARTICLE_FLAG_VOLUME;
         if (occlude)
             flags |= PARTICLE_FLAG_OCCLUDE;
-        gpu.volumeParams = glm::vec4(volume, glm::max(windResponse, 0.0f));
+        gpu.volumeParams = glm::vec4(glm::max(volume, glm::vec3(1e-3f)), glm::max(windResponse, 0.0f));
     }
     // Water-side flags apply to every emitter: the sim's relocation is volume-only by itself, the draw's
     // camera gate is not (the ocean spray is a non-volume emitter that hides under the sea).

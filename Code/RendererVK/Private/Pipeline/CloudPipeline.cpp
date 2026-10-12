@@ -563,6 +563,8 @@ void CloudPipeline::initialize(uint32 fullWidth, uint32 fullHeight, vk::RenderPa
         m_applySets[i].initialize(m_applyPipeline.getDescriptorSetLayout(), "Clouds.apply");
     }
 
+    // minLod 0 + the same linear mag / min filter: cloud_raymarch passes NEGATIVE textureLod levels unclamped (the
+    // hardware clamp gives the level-0 read). Keep both if this sampler changes.
     m_noiseSampler = createSampler(vk::SamplerAddressMode::eRepeat, 1000.0f, "Clouds.noise");
     m_linearSampler = createSampler(vk::SamplerAddressMode::eClampToEdge, 0.0f, "Clouds.linear");
     createNoiseTexture(m_base, BASE_SIZE, true, "Clouds.base");

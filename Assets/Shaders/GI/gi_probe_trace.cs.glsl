@@ -123,7 +123,7 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
     float u1 = fract(float(i) * 0.61803398875 + jitter.x);
     float u2 = (float(i) + jitter.y) / float(n);
     float z = 1.0 - 2.0 * u1;
-    float r = sqrt(max(0.0, 1.0 - z * z));
+    float r = sqrt(1.0 - z * z);
     float phi = 2.0 * PI * u2;
     return vec3(r * cos(phi), r * sin(phi), z);
 }
@@ -212,7 +212,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
     // Two wide loads per vertex: the normal and the uv's v share normalV, the u rides positionU.w.
     const vec4 nv0 = in_vertices[v0].normalV, nv1 = in_vertices[v1].normalV, nv2 = in_vertices[v2].normalV;
-    const vec3 objN = normalize(b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz);
+    const vec3 objN = b.x * nv0.xyz + b.y * nv1.xyz + b.z * nv2.xyz; // the next normalize cancels its length
     vec3 worldN = normalize(mat3(o2w) * objN);
     const vec2 uv = b.x * vec2(in_vertices[v0].positionU.w, nv0.w) + b.y * vec2(in_vertices[v1].positionU.w, nv1.w)
                   + b.z * vec2(in_vertices[v2].positionU.w, nv2.w);
