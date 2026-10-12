@@ -1,24 +1,21 @@
 #version 460
 
-// Cloud temporal accumulation (half res): reprojects last frame's accumulated clouds to this frame's march
-// and blends. The reprojection point is the transmittance-weighted cloud distance, moved back by this
-// frame's wind displacement (the field travels). History is rejected when its cloud distance differs
-// (a different layer / disocclusion) and clamped to this pixel's neighbourhood (camera motion through
-// the medium has parallax at every depth, which one reprojection distance cannot follow).
+// Cloud temporal accumulation (half res): reprojects last frame's accumulated clouds to this frame's march and
+// blends. The reprojection point is the transmittance-weighted cloud distance, moved back by this frame's wind
+// displacement. The history is rejected when its cloud distance lies outside the neighbourhood's range (a
+// disocclusion) and clamped to the neighbourhood (camera motion through the medium has parallax at every depth,
+// which one reprojection distance cannot follow).
 //
-// CLOUD_CHECKERBOARD (baked, "Quality/Checkerboard"): the march covered only this frame's checker parity
-// ((x + y + frame) even). The parity flips every frame, and so does the frame slot, so the OTHER half of this
-// slot's march images is never valid - only this frame's parity is read:
-//  - a marched pixel: itself, its neighbourhood = its 4 diagonals (the same parity);
-//  - the other pixels: the current value = the average of the 4 side neighbours (marched this frame), the
-//    history = last frame's march AT this pixel (the parity flipped); the march limit from the scene depth.
-
+// CLOUD_CHECKERBOARD: the march covered only this frame's parity ((x + y + frame) even). The parity flips every
+// frame, and so does the frame slot, so only this frame's parity of this slot's march images is valid:
+//  - a marched pixel: itself; its neighbourhood = its 4 diagonals (the same parity);
+//  - the other pixels: the current value = the 4 side neighbours (marched this frame), the history = last
+//    frame's march AT this pixel; the march limit from the scene depth.
 //
-// TREE_TEMPORAL (TreeVolumePipeline's instance): the same pass over the FAR-TREE march (tree_volume_march.cs) - no
-// wind; the history weight ("Trees/Far temporal blend") and the march's max distance from the push constant, the
-// scale (TREE_TEMPORAL_SCALE: 1 = full res, 2 = "Far half res") and the checkerboard (TREE_TEMPORAL_CHECKER, "Far
-// pixel skip") baked, instead of the clouds' baked / UBO values; u_outMeanDistance only at full res (at half res the
-// upsample writes the full-res pair).
+// TREE_TEMPORAL (TreeVolumePipeline's instance): the same pass over the FAR-TREE march (tree_volume_march.cs):
+// no wind; the history weight and the max distance from the push constant, the scale (TREE_TEMPORAL_SCALE: 1 =
+// full res, 2 = half res) and the checkerboard (TREE_TEMPORAL_CHECKER) baked. u_outMeanDistance only at full res
+// (at half res the upsample writes the full-res pair).
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -44,13 +41,13 @@ layout (binding = 7) uniform sampler2D u_sceneDepth; // the checkerboard's unmar
 layout (binding = 8, r16f) uniform writeonly image2D u_outMeanDistance;
 #endif
 
-// The neighbourhood clamp takes only the neighbours whose march LIMIT (log2) is within this of the pixel's own:
-// at a silhouette a texel over the near surface holds "no cloud" (its march stopped under the clouds), and in
-// the range of a sky texel it let the history fade to clear sky - a sky-coloured outline around every object.
+// The neighbourhood takes only the neighbours whose march LIMIT (log2) is within this of the pixel's own: at a
+// silhouette a texel over the near surface holds "no cloud" (its march stopped under the clouds), and in a sky
+// texel's range it let the history fade to clear sky - a sky-coloured outline around every object.
 const float LIMIT_MATCH = 0.15;
 
 #ifdef TREE_TEMPORAL
-// The trees' push block: TreeVolumePipeline's TemporalPush (pc_vol_rMax, the march's max distance: lockable).
+// TreeVolumePipeline's TemporalPush (pc_vol_rMax, the march's max distance: lockable).
 #include "push.generated.glsl"
 #define u_viewIndex pc_viewIndex
 #define u_width pc_width
@@ -66,8 +63,6 @@ layout (push_constant) uniform CloudPC
 };
 #endif
 
-// The trees' variant BAKES its scale (1, or 2 at "Far half res") and checkerboard (TreeVolumePipeline compiles one per
-// setting); at full res it also writes u_outMeanDistance.
 #ifndef TREE_TEMPORAL_SCALE
 #define TREE_TEMPORAL_SCALE 1
 #endif
@@ -101,10 +96,10 @@ void main()
     vec4 cur;
     vec4 curDepth;
     vec4 lo, hi;
-    // The neighbourhood's range of weighted cloud distance (log2): the history test (below).
+    // The neighbourhood's range of weighted cloud distance (log2), for the history test.
     float dLo = 1e30, dHi = -1e30;
-    // A checkerboard fill pixel whose limit matches NO side neighbour (a thin occluder or a gap in one, e.g. a leaf
-    // against the clouds): its current value is a guess from the wrong surface, so the history is taken unclamped.
+    // A checkerboard fill pixel whose limit matches NO side neighbour (a thin occluder or a gap in one, e.g. a
+    // leaf against the clouds): its current value comes from the wrong surface, so the history is taken unclamped.
     bool isolated = false;
     if (TT_CHECKER && ((px.x + px.y + int(u_frameIndex)) & 1) == 0)
     {
@@ -129,13 +124,11 @@ void main()
     }
     else if (TT_CHECKER)
     {
-        // The 4 side neighbours (marched this frame), weighted by how well their march LIMIT matches this
-        // pixel's own (the march's rule, from the scene depth): their average is the current value, their
-        // nearest front and mean weighted distance its depth. A plain average let a neighbour over a near
-        // surface - its march stopped under the clouds: "no cloud" - into a sky texel at every silhouette, a
-        // clear-sky outline around it. The front comes only from neighbours that HOLD cloud: an empty march
-        // stores its own limit as the front, so the near neighbour's limit became the front of cloud from the
-        // sky neighbours, and the upsample let that cloud onto the near surface.
+        // The 4 side neighbours (marched this frame), weighted by how well their march LIMIT matches this pixel's
+        // own (from the scene depth): their average is the current value, their nearest front and mean weighted
+        // distance its depth. Weighted, so a neighbour over a near surface ("no cloud") does not leak into a sky
+        // texel. The front comes only from neighbours that HOLD cloud: an empty march stores its own limit as the
+        // front, and the upsample would then let the sky neighbours' cloud onto the near surface.
         const ivec2 full = px * TT_SCALE;
         const ivec2 lastFull = textureSize(u_sceneDepth, 0) - 1;
         const ivec2 corner = ivec2(TT_SCALE - 1); // the block's far corner (the same texel at full res)
@@ -149,7 +142,10 @@ void main()
         float front = 1e30;
         float frontAny = 1e30;
         float weighted = 0.0;
-        int matched = 0;
+        bool matched = false;
+        // The clamp range in the same pass: the matching neighbours only (the current value joins after the loop).
+        lo = vec4(1e30);
+        hi = vec4(-1e30);
         for (int i = 0; i < 4; ++i)
         {
             const ivec2 o = i < 2 ? ivec2(i * 2 - 1, 0) : ivec2(0, i * 2 - 5);
@@ -161,7 +157,14 @@ void main()
             weighted += d.y * w;
             wSum += w;
             const bool match = abs(d.z - logLimit) < LIMIT_MATCH;
-            matched += match ? 1 : 0;
+            if (match)
+            {
+                matched = true;
+                lo = min(lo, n);
+                hi = max(hi, n);
+                dLo = min(dLo, d.y);
+                dHi = max(dHi, d.y);
+            }
             if (n.a < 0.999)
             {
                 frontAny = min(frontAny, d.x);
@@ -170,30 +173,15 @@ void main()
             }
         }
         cur /= wSum;
-        isolated = matched == 0;
+        isolated = !matched;
         // Isolated: the neighbours' cloud keeps its OWN front, unclamped - behind this pixel's surface it stays
-        // behind it, and the upsample drops it there (clamped to the limit, it was drawn ON the leaf: flicker).
+        // behind it, and the upsample drops it there (clamped to the limit, it was drawn ON the leaf).
         const float curFront = isolated ? (frontAny < 1e29 ? frontAny : logLimit) : min(front, logLimit);
         curDepth = vec4(curFront, min(weighted / wSum, logLimit), logLimit, 0.0);
-        // The clamp range: the matching neighbours only (the same leak through the history clamp), always
-        // holding the current value.
-        lo = cur;
-        hi = cur;
-        dLo = curDepth.y;
-        dHi = curDepth.y;
-        for (int i = 0; i < 4; ++i)
-        {
-            const ivec2 o = i < 2 ? ivec2(i * 2 - 1, 0) : ivec2(0, i * 2 - 5);
-            const ivec2 q = clamp(px + o, ivec2(0), last);
-            const vec4 d = texelFetch(u_curDepth, q, 0);
-            if (abs(d.z - logLimit) >= LIMIT_MATCH)
-                continue;
-            const vec4 n = texelFetch(u_curColor, q, 0);
-            lo = min(lo, n);
-            hi = max(hi, n);
-            dLo = min(dLo, d.y);
-            dHi = max(dHi, d.y);
-        }
+        lo = min(lo, cur);
+        hi = max(hi, cur);
+        dLo = min(dLo, curDepth.y);
+        dHi = max(dHi, curDepth.y);
     }
     else
     {
@@ -228,8 +216,8 @@ void main()
     const vec3 prevWorld = u_viewPos + dir * tCloud - u_clouds_windStep;
 #endif
     float clipW;
-    // Last frame marched the direction of (texel uv - ITS jitter), so the texel holding this point sits at
-    // the unjittered projection + last frame's jitter.
+    // Last frame marched the direction of (texel uv - ITS jitter), so the texel holding this point sits at the
+    // unjittered projection + last frame's jitter.
     const vec2 prevUv = prevScreenUV(prevWorld, clipW) + taaJitterUv(u_taaJitter.zw);
     const vec2 prevVp = (prevUv - u_viewportRect.xy) / u_viewportRect.zw;
     bool valid = clipW > 0.0 && all(greaterThanEqual(prevVp, vec2(0.0))) && all(lessThanEqual(prevVp, vec2(1.0)));
@@ -239,17 +227,11 @@ void main()
     {
         vec4 hist = textureLod(u_histColor, prevUv, 0.0);
         const vec4 histDepth = textureLod(u_histDepth, prevUv, 0.0);
-        // A history cloud distance OUTSIDE this frame's neighbourhood range (padded 0.2 in log2 = 15 %) is a
-        // different surface of the medium - a disocclusion - unless neither frame saw any cloud there. Not the
-        // pixel's own distance: a ray that runs flat through the layer passes clouds at very different
-        // distances, so its one weighted distance jumps with the step jitter every frame, and a per-pixel
-        // test rejected the history exactly where the raw march is noisiest.
-        // And the history's MARCH LIMIT must match this frame's (0.15 in log2 = 11 %): at a silhouette the
-        // bilinear history fetch pulls in part of the sky neighbour's cloud, the neighbourhood clamp lets it
-        // through (the sky neighbours hold cloud), and the feedback builds it up in the texel over the near
-        // surface - whose first-cloud distance is that surface's own, so the upsample kept it: a cloud-coloured
-        // outline on every edge against clouds, thicker the higher the blend. The sky keeps its history (both
-        // limits are the max distance there).
+        // Rejected when the history's cloud distance lies OUTSIDE this frame's neighbourhood range (padded 0.2 in
+        // log2), unless neither frame saw cloud there. Not a per-pixel test: a ray flat through the layer passes
+        // clouds at very different distances, so its one weighted distance jumps with the step jitter.
+        // And the history's MARCH LIMIT must match this frame's: at a silhouette the bilinear history fetch pulls
+        // in part of the sky neighbour's cloud, and the feedback built a cloud-coloured outline on every edge.
         valid = (isolated || (histDepth.y >= dLo - 0.2 && histDepth.y <= dHi + 0.2) || (cur.a > 0.995 && hist.a > 0.995))
              && abs(histDepth.z - curDepth.z) < LIMIT_MATCH;
         if (valid && isolated)
@@ -275,6 +257,6 @@ void main()
     imageStore(u_outColor, px, result);
     imageStore(u_outDepth, px, curDepth);
 #if defined(TREE_TEMPORAL) && TREE_TEMPORAL_SCALE == 1
-    imageStore(u_outMeanDistance, px, vec4(exp2(curDepth.y))); // at half res the upsample writes the full-res pair
+    imageStore(u_outMeanDistance, px, vec4(exp2(curDepth.y)));
 #endif
 }

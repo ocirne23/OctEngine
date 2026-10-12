@@ -1,19 +1,15 @@
 #version 460
 
-// FAR-TREE MARCH (TreeVolumePipeline): full res every pixel, or ("Far half res") one ray per 2x2 block - its centre,
-// to the block's FARTHEST surface (the upsample drops trees a nearer pixel has in front of it, as cloud_march) -
-// and / or ("Far pixel skip") this frame's parity only ((x + y + frame) even; cloud_temporal.cs fills the rest) under
-// TREE_TEMPORAL_OUT (the temporal pass reconstructs), or 1 of 2 / 1 of 4 per block without it (main, below: the other
-// pixels copied from their latest march). The view ray through the far-tree
-// volume's ring (tree_volume.inc.glsl), from "Far start" to the scene surface or "Far end": steps of about one
-// volume cell (x "Step scale"), so they grow with the distance like the cells do; above the volume's
-// top the step is the height gap. Per step with extinction: the leaves' colour lit by the sun (its transmittance
-// through the volume toward the sun - two taps - x the terrain's sun visibility, one per ray at the first hit, x the
-// cloud shadow per step)
-// plus an ambient that darkens toward the ground. Out: rgb = in-scatter, a = transmittance (the apply composites
-// colour + scene x T, like the clouds).
-// ROCKS (R5): the colour map's alpha is 1 - the column's rock fraction (tree_volume_resolve.cs). By it the sun term
-// loses its phase (a surface does not glow backlit), takes the full N.L, and the interior darkening drops to a quarter.
+// FAR-TREE MARCH (TreeVolumePipeline): the view ray through the far-tree volume's ring (tree_volume.inc.glsl), from
+// "Far start" to the scene surface or "Far end", in steps of about one volume cell (x "Far step scale"), so they grow
+// with the distance like the cells. Per step with extinction: the colour lit by the sun (its transmittance through the
+// crown x the terrain's sun visibility, once per ray x the cloud shadow) plus the sky light, darker toward the ground.
+// Out: rgb = in-scatter, a = transmittance (the apply composites colour + scene x T, like the clouds).
+// Which pixels march: every one; or ("Far half res") one ray per 2x2 block to its FARTHEST surface; and / or this
+// frame's checkerboard parity under TREE_TEMPORAL_OUT (the temporal pass reconstructs the rest); or, without it, 1 of 2
+// / 1 of 4 per block ("Far pixel skip", main: the others copied from their latest march).
+// ROCKS: the colour map's alpha is 1 - the column's rock fraction (tree_volume_resolve.cs). By it the sun term loses
+// its phase (a surface does not glow backlit), takes the full N.L, and the interior darkening drops to a quarter.
 
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_control_flow_attributes : require
@@ -32,9 +28,8 @@ layout (binding = 3) uniform sampler3D u_density;
 layout (binding = 4) uniform sampler2D u_colour;
 layout (binding = 5, rgba16f) uniform writeonly image2D u_out;
 #ifdef TREE_TEMPORAL_OUT
-// The variant under the temporal pass ("Far temporal blend" > 0): the distances in cloud_temporal.cs's format, log2 of
-// x = the first tree, y = the transmittance-weighted mean distance, z = the march's limit. No tree: all three the
-// limit.
+// Under the temporal pass: the distances in cloud_temporal.cs's format, log2 of x = the first tree, y = the
+// transmittance-weighted mean distance, z = the march's limit. No tree: all three the limit.
 layout (binding = 6, rgba16f) uniform writeonly image2D u_outDepth;
 #else
 layout (binding = 6, r16f) uniform writeonly image2D u_outDepth; // the weighted mean distance (m): the fog apply's layer depth
@@ -43,14 +38,12 @@ layout (binding = 7, r32ui) uniform readonly uimage2D u_floor;   // the columns'
 layout (binding = 10) uniform sampler2DArray u_skyMap;           // GI's sky bake (atmosphere.inc.glsl): the canopy's sky light
 layout (binding = 12, rg32f) uniform readonly image2D u_floorMax; // the max-floor grid: x dilated, y ahead (tree_volume_floor_max.cs.glsl)
 
-// THE HAND-OVER (TREE_HANDOVER, a variant run only while it lasts - TreeVolumePipeline): a finished bake CROSS-FADES
-// into the shown one over "Far swap time". Per RAY a dither picks one bake: the new one when the pixel's noise (IGN,
-// stepped by the golden ratio per frame) lies under the fade (u_foliage_handoverFade). The temporal pass / TAA averages the
-// picks into an image-space blend of the two results - the opacity mixes correctly, which mixing the density per
-// sample would not. The new bake: its centre (u_foliage_handoverCentre), floor / colour / max-floor grid (the back copies) and
-// its density (the accumulation's RG16F view, two slices per texel: the resolve converted it in place). The whole ray reads its bake (g_new)
-// - the ring, the polar lookup, the skip, the floor, the density, the colour and its lighting taps - so the variant
-// costs what the normal one does. The normal variant reads the front bake only.
+// THE HAND-OVER (TREE_HANDOVER, only while it lasts): a finished bake CROSS-FADES into the shown one over "Far swap
+// time". Per RAY a dither picks one bake: the new one when the pixel's noise lies under u_foliage_handoverFade. TAA /
+// the temporal pass averages the picks into an image-space blend, so the opacity mixes correctly (a per-sample density
+// mix would not). The new bake: its centre (u_foliage_handoverCentre), the back floor / colour / max-floor grid, and its
+// density through the accumulation's RG16F view. The whole ray reads its pick (g_new), so the variant costs what the
+// normal one does.
 #ifdef TREE_HANDOVER
 layout (binding = 13) uniform sampler3D u_densityNew; // RG16F: two slices per texel (densityTexelNew)
 layout (binding = 14, r32ui) uniform readonly uimage2D u_floorNew;
@@ -62,20 +55,20 @@ layout (binding = 16, rg32f) uniform readonly image2D u_floorMaxNew;
 // ("Trees/Far ...") ride the frame UBO: u_foliage_far*.
 #include "push.generated.glsl"
 
-// The bake a read goes to (TREE_HANDOVER: g_new, per ray; else always the front one).
+// The bake a read goes to (TREE_HANDOVER: g_new, per ray; else the front one).
 #ifdef TREE_HANDOVER
 bool g_new = false; // this ray shows the new bake
 bool handoverPicksNew(ivec2 px)
 {
-    // Spatially offset from the step jitter's IGN (decorrelated); the golden-ratio step spreads each pixel's picks
-    // evenly over consecutive frames, so a short history already averages to the fade.
+    // IGN offset from the step jitter's (decorrelated), stepped by the golden ratio per frame: a short history already
+    // averages to the fade.
     const float ign = fract(52.9829189 * fract(dot(vec2(px) + vec2(17.0, 59.0), vec2(0.06711056, 0.00583715))));
     return fract(ign + float(u_frameIndex & 1023u) * 0.6180339887) < u_foliage_handoverFade;
 }
 vec2 bakeCentre() { return g_new ? u_foliage_handoverCentre : pc_vol_centre; }
 uint floorBitsAt(ivec2 c) { return g_new ? imageLoad(u_floorNew, c).r : imageLoad(u_floor, c).r; }
-// The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice, tree_volume.inc.glsl): the hardware
-// filters across the columns only (each fetch at a texel layer's centre), the slice axis is blended here.
+// The new bake's view holds TWO SLICES per texel (RG16F: x = the even slice): the hardware filters across the columns
+// only (each fetch at a texel layer's centre), the slice axis is blended here.
 float densityTexelNew(vec3 at)
 {
     const int slices = int(pc_vol_slices);
@@ -98,10 +91,9 @@ vec4 colourAt(vec2 uv) { return textureLod(u_colour, uv, 0.0); }
 vec2 floorMaxAt(ivec2 block) { return imageLoad(u_floorMax, block).xy; }
 #endif
 
-// BAKED (TreeVolumePipeline compiles a variant per setting, so the dead paths and their registers go):
+// BAKED (a variant per setting, so the dead paths and their registers go):
 // TREE_MARCH_SCALE = render pixels per march pixel per axis (1, or 2 at "Far half res"; TREE_TEMPORAL_OUT only);
-// TREE_MARCH_SKIP = 0 none, 1 the CHECKERBOARD (1 of 2: the dispatch covers half the columns, this frame's parity),
-// 2 = 1 of 4 (the dispatch covers one pixel per 2x2 block; plain variant only).
+// TREE_MARCH_SKIP = 0 none, 1 = 1 of 2 (the CHECKERBOARD), 2 = 1 of 4 (one pixel per 2x2 block; plain variant only).
 #ifndef TREE_MARCH_SCALE
 #define TREE_MARCH_SCALE 1
 #endif
@@ -117,16 +109,14 @@ vec2 floorMaxAt(ivec2 block) { return imageLoad(u_floorMax, block).xy; }
 layout (binding = 8, rgba16f) uniform image2D u_latest;
 layout (binding = 9, r16f) uniform image2D u_latestDepth;
 
-// A point's polar image coordinates (tvUvXZ) from its offset to the bake centre and that offset's length: callers that
-// also need the length (the cell size) compute it once. Every density read takes ONE of these - the atan + log were
-// computed twice per read before (once for the density, once more for the floor), 25 times per lit step.
+// A point's polar image coordinates from its offset to the bake centre and that offset's length (the caller needs the
+// length for the cell size too). ONE per step: the atan + log are the expensive part.
 vec2 polarUv(vec2 rel, float r)
 {
     return vec2(atan(rel.y, rel.x) / TV_TWO_PI + 0.5, tvRadialUv(r, TV_PUSH_VOL));
 }
 
-// The volume's ground at the point of `uv`: the nearest column's tree floor (the splat measured that column's slices
-// from it). False where the column has no tree (the caller falls back to the height map - only where it needs to).
+// The volume's ground at `uv`: the nearest column's tree floor. False where the column has no floor.
 bool floorAtUv(vec2 uv, out float floorY)
 {
     floorY = 0.0;
@@ -140,12 +130,11 @@ bool floorAtUv(vec2 uv, out float floorY)
     return bits != 0u;
 }
 
-// The PRIMARY sample: the 4 columns around p bilinearly, EACH at its own height above its own floor - what the splat
-// stored. The hardware filter across columns mixes a neighbour's density in at THIS column's height, so on a steep floor
-// step (peaks, slopes) a neighbour's crown leaked up by the floor difference: thin spikes over the trees. Per column
-// the texture is read at the column's centre, so only the vertical axis filters in hardware.
-// `smoothFloor`: the same 4 columns' floors blended bilinearly (the columns with a floor; `fallback` without any) - the
-// CONTINUOUS ground the lighting taps measure their heights from (densityTap / densityAbove).
+// The PRIMARY sample: the 4 columns around p bilinearly, EACH at its own height above its own floor, as the splat
+// stored it (the hardware filter across columns put a neighbour's crown in at THIS column's height: spikes over every
+// steep floor step). Each column is read at its centre, so only the vertical axis filters in hardware.
+// `smoothFloor`: the same columns' floors blended bilinearly (`fallback` without any) - the CONTINUOUS ground the
+// lighting taps measure their heights from.
 float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
 {
     smoothFloor = fallback;
@@ -179,14 +168,11 @@ float densityAtColumns(vec3 p, vec2 uv, float fallback, out float smoothFloor)
     return max(sum - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
 }
 
-// The LIGHTING TAPS (sun, normal, interior - 12 per lit step) lie within ~10 m of their sample, which lies >= ~400 m
-// from the bake centre: their polar uv to FIRST ORDER around the sample's (polarJ: d uv / d xz), under ~0.1 texel off
-// even for the farthest tap - instead of an atan + log + length per tap. A purely VERTICAL tap keeps the sample's
-// column outright: its uv, only another height (densityAbove).
-// THE TAPS' HEIGHT is measured from the sample's SMOOTH floor (densityAtColumns), not from each tap's nearest column's
-// floor: that one jumps at every column boundary where two dominant trees stand at different bases, and the shading
-// stepped with it - a bright / dark vertical line along every angular column edge (finer columns: thinner lines, as
-// many). No floor load per tap either; a column without trees holds no density, so its tap reads ~0 anyway.
+// The LIGHTING TAPS (sun, normal, interior - up to 12 per lit step) lie within ~10 m of their sample, which lies
+// >= ~400 m from the bake centre: their polar uv is taken to FIRST ORDER around the sample's (polarJ: d uv / d xz,
+// < ~0.1 texel off) instead of an atan + log per tap. A purely VERTICAL tap keeps the sample's uv (densityAbove).
+// THE TAPS' HEIGHT is measured from the sample's SMOOTH floor, not each tap's nearest column's floor: that one jumps at
+// every column edge between two different floors, and the shading showed it as vertical lines. No floor load per tap.
 mat2 polarJ(vec2 rel, float r)
 {
     const float ir2 = 1.0 / (r * r);
@@ -197,7 +183,7 @@ float densityAbove(vec2 uv, float h)
 {
     if (uv.y < 0.0 || uv.y > 1.0 || h < 0.0 || h > pc_vol_height)
         return 0.0;
-    // u (the angle) repeats. The shrink cuts the filtered fall-off at a blob's edge first.
+    // u (the angle) repeats. "Far blob shrink" cuts the filtered fall-off at a blob's edge first.
     return max(densityTexel(vec3(uv, h / pc_vol_height)) - u_foliage_farShrink, 0.0) * pc_vol_densityScale;
 }
 float densityTap(vec2 uv, mat2 J, float h, vec3 d)
@@ -210,7 +196,7 @@ float densityTap(vec2 uv, mat2 J, float h, vec3 d)
 const float PLAIN_HAS_TREES = 0.999;
 const float PLAIN_LIMIT_MAX = 65000.0;
 
-// The marched pixel's stored result (the plain checkerboard's neighbour fallback, main).
+// The marched pixel's stored result (the pixel skip's donor, main).
 vec4 g_colour = vec4(0.0, 0.0, 0.0, 1.0);
 float g_distance = PLAIN_LIMIT_MAX;
 
@@ -257,19 +243,15 @@ void marchAt(ivec2 px)
         depth = min(min(depth, texelFetch(u_sceneDepth, min(full + ivec2(1, 0), last), 0).r),
                     min(texelFetch(u_sceneDepth, min(full + ivec2(0, 1), last), 0).r, texelFetch(u_sceneDepth, min(full + ivec2(1, 1), last), 0).r));
     }
-    // THE RAY as vol_apply.fs.glsl's fogRay: u_rayFromNdc, NOT a reconstructed position - u_invMvp is a float32 CPU
-    // inverse whose error re-rolls every frame, and kilometres out that wobble moved the blobs - and through this
-    // frame's TAA-JITTERED sub-pixel position (-u_taaJitter in NDC), as every raster pass samples: an unjittered ray
-    // had TAA un-jitter content that never was jittered, a pixel's wobble per frame.
+    // THE RAY as vol_apply.fs.glsl's fogRay: from u_rayFromNdc (u_invMvp's float32 error re-rolls every frame and moved
+    // the blobs kilometres out), through this frame's TAA-JITTERED sub-pixel position, as every raster pass samples.
     const vec2 rayNdc = vec2(vpUv.x * 2.0 - 1.0, 1.0 - vpUv.y * 2.0) - u_taaJitter.xy;
     const vec3 dir = normalize(vec3(rayNdc, 1.0) * u_rayFromNdc);
-    // Reversed Z: 0 = sky. Camera-relative (shared.inc.glsl), at the jittered position the depth was rasterized at.
+    // Reversed Z: 0 = sky. At the jittered position the depth was rasterized at.
     const float sceneT = depth > 0.0 ? length(viewRelFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth)) : 1e30;
-    // The volume is the ring rMin..rMax around the BAKE centre (rMin lies a rebake distance + 30 m inside the
-    // horizontal distance of "Far start" at the camera's height, so the ring covers the hand-over wherever the
-    // camera moved since the bake).
-    // The march starts at "Far start" from the CAMERA and the result fades in over "Far overlap" (at the end) - the
-    // billboards draw up to its end (tree_cull.inc.glsl): an overlap, not a seam. It leaves at rMax.
+    // The volume is the ring rMin..rMax around the BAKE centre; rMin lies far enough inside "Far start" to cover the
+    // hand-over wherever the camera moved since the bake. The march starts at "Far start" from the CAMERA and fades in
+    // over "Far overlap", where the billboards still draw (tree_cull.inc.glsl).
     const vec2 rel = u_viewPos.xz - bakeCentre();
     const float a = dot(dir.xz, dir.xz);
     const float b = dot(rel, dir.xz);
@@ -288,12 +270,11 @@ void marchAt(ivec2 px)
     }
     const float tEnd = min(sceneT, TV_RING_T(pc_vol_rMax));
 #ifdef TREE_TEMPORAL_OUT
-    // The stored march LIMIT is the scene distance capped at the volume's end - the rule cloud_temporal.cs applies to a
-    // checkerboard's unmarched pixels (the ring exit, a function of the ray's slope, would never match it).
+    // The stored march LIMIT is the scene distance capped at the volume's end: the rule cloud_temporal.cs applies to an
+    // unmarched pixel (the ring exit depends on the ray's slope and would never match it).
     const float logLimit = log2(max(min(sceneT, pc_vol_rMax), 1.0));
 #endif
-    // From the air the inner radius shrinks (TreeVolumePipeline innerRadius: the hand-over is a 3D distance) and the
-    // camera may sit OUTSIDE the small inner circle: then it is already in the ring (t from 0).
+    // A camera OUTSIDE the inner circle is already in the ring (t from 0).
     const float tRing = c <= pc_vol_rMin * pc_vol_rMin ? TV_RING_T(pc_vol_rMin) : 0.0;
     float t = max(tRing, pc_startDistance);
     if (t >= tEnd)
@@ -308,46 +289,37 @@ void marchAt(ivec2 px)
     }
 
     const vec3 L = u_sunDirection.xyz;
-    // x the eclipse's visible sun fraction (u_sunVisible), as every other sun consumer: without it the far trees
-    // stayed sunlit while the moon covered the sun.
-    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_sunVisible;
-    // PER RAY, not per lit step: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic, "Far
-    // forward scatter" - 1 at g = 0 - times "Far sun scale") and the SKY LIGHT: the real sky's irradiance on an
-    // up-facing leaf - pi x the mean radiance of GI's sky map over the upper hemisphere, cosine-weighted from 5 taps (the
-    // zenith and a ring 45 degrees down: one cloud straight overhead does not set it alone) - x "Far ambient"; its
-    // height factor stays per step. (It was a fixed cool blue tint x the sun's luminance.)
+    const vec3 sunRadiance = u_sunTransmittance * u_sunColor.rgb * u_sunVisible; // u_sunVisible: the eclipse
+    // PER RAY: the sun term's direction-only factors (Henyey-Greenstein relative to isotropic - 1 at g = 0 - x "Far sun
+    // scale"; a rock takes no phase) and the SKY LIGHT: pi x the cosine-weighted mean radiance of GI's sky map over the
+    // upper hemisphere (5 taps, baked once per frame: gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL) x "Far ambient".
     const float g = u_foliage_farForwardScatter;
     const float phase = (1.0 - g * g) / pow(max(1.0 + g * g - 2.0 * g * dot(dir, L), 1e-4), 1.5);
-    // A ROCK (the colour's alpha: 1 - the column's rock fraction, R5) is a surface: no phase (it does not glow backlit).
     const float sunLeaf = u_foliage_farSunScale * phase;
-    // The 5-tap mean is baked once per frame (gi_sky_map.cs.glsl, SKY_MAP_TREE_SKY_TEXEL).
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     const vec3 skyBase = max(skyMean, vec3(0.0)) * (PI * u_foliage_farAmbient);
     const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
-    // TWO SEGMENTS, split at the fade-in's end: the BAND (from "Far start" over "Far overlap", where the billboards still
-    // draw) and BEHIND it. Each accumulates its own in-scatter, transmittance and weighted distance; only the band
-    // fades in (as a whole, by its own mean distance - below). One fade for the whole ray let a ray that grazed a
-    // band tree's blob beside its billboard pull its mean distance into the band and fade the far trees behind out
-    // with it: a sky-coloured outline along the billboard silhouettes.
+    // TWO SEGMENTS, split at the fade-in's end: the BAND (over "Far overlap", where the billboards still draw) and
+    // BEHIND it, each with its own in-scatter, transmittance and weighted distance. Only the band fades in, as a whole
+    // (one fade for the whole ray let a band tree's blob fade out the far trees behind it: a sky-coloured outline along
+    // the billboards).
     const float fadeEnd = pc_startDistance + max(u_foliage_farOverlap, 1.0);
     // A segment's distance weights sum to 1 - its transmittance (sum of T x alpha telescopes): no weight sums are kept.
     vec3 inBand = vec3(0.0), inBehind = vec3(0.0);
     float tBand = 1.0, tBehind = 1.0;
     float distSumBand = 0.0, distSumBehind = 0.0;
 #ifdef TREE_TEMPORAL_OUT
-    float tFront = tEnd;                   // the first tree
+    float tFront = tEnd; // the first tree
 #endif
     float terrainVis = -1.0; // the terrain's sun visibility, once per ray at the first hit
-    // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling). The
-    // steps are measured from the camera, so they slide through the volume as it moves; jittering only the first
-    // sample left every later one on that sliding grid - blobs sampled differently each frame, "shaking".
+    // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling): the steps
+    // are measured from the camera, and jittering only the first sample left the rest on a grid sliding with it.
     t += jitter * max(tvCellSize(length(u_viewPos.xz + dir.xz * t - bakeCentre()), TV_PUSH_VOL) * u_foliage_farStepScale, 0.25);
-    // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs.glsl): above its value + the volume's height, a point is
-    // above every tree within one block in every direction - at least r x skipReach away (the block's tangential width
-    // as a chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a
-    // descending one at most down to that height). Sky rays, the air over the canopy and treeless land then take ~4x
-    // longer steps than the 4-cell cap below, and skip the floor + height map reads.
+    // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs): above its value + the volume's height, a point is above
+    // every tree within one block in every direction - at least r x skipReach away (the block's tangential width as a
+    // chord, or the inner neighbour block's radial depth, whichever is less) - so the ray steps that far (a descending
+    // one at most down to that height).
     const float skipReach = min(sin(float(TV_FLOOR_MAX_BLOCK) * TV_TWO_PI / float(pc_vol_angularRes)),
         1.0 - exp(-float(TV_FLOOR_MAX_BLOCK) * tvLogSpan(TV_PUSH_VOL) / float(pc_vol_radialRes)));
     // THE END for a RISING ray: above the grid's AHEAD value (+ the height) - the highest floor of this block's row and
@@ -383,19 +355,16 @@ void marchAt(ivec2 px)
         }
         float floorY;
         const bool hasFloor = floorAtUv(uv, floorY);
-        // A column WITHOUT a tree floor: the splat floors every tree's footprint PLUS one ring, so such a column lies
-        // 2+ columns from any density and all 4 of densityAtColumns' taps read 0 - no sample (its 4 floor loads, below),
-        // and at least a whole cell of step (the ring column still lies between it and the density). In the step
-        // formula, not a branch of its own: that branch cost the march 8 registers (56 -> 64).
+        // A column WITHOUT a tree floor lies 2+ columns from any density (the splat floors every footprint PLUS one
+        // ring): no sample, and at least a whole cell of step. In the step formula, not a branch of its own: that branch
+        // cost the march 8 registers.
         float dt = max(cell * (hasFloor ? u_foliage_farStepScale : max(u_foliage_farStepScale, 1.0)), 0.25);
         if (!hasFloor)
             floorY = terrainHeightAt(p.xz); // no tree reaches the column: the height map
         const float h = p.y - floorY;
-        // The tree floor and the height map disagree by up to tens of metres (the map's far texels): the break below
-        // the ground takes the LOWER of the two, the skip above the layer the HIGHER - and a few cells at most, since
-        // a column's floor can sit above the map's slope. The height map is read only for those two: inside the layer
-        // neither applies (the lower of the two lies at or under the floor; the skip needs h above the layer), and the
-        // break needs h below -0.5 x the layer.
+        // The tree floor and the height map disagree by up to tens of metres (the map's far texels): the break below the
+        // ground takes the LOWER of the two, the skip above the layer the HIGHER (capped at 4 cells). Inside the layer
+        // neither applies, so the height map is read only above it or deeper than half a layer under it.
         if (h > pc_vol_height)
         {
             // Above the volume: no tree before the ground comes within its height again.
@@ -416,50 +385,45 @@ void marchAt(ivec2 px)
             {
                 if (terrainVis < 0.0)
                     terrainVis = terrainSunVisibility(p, L, 20.0, 8, 0.02, 1.0);
-                // The clouds' sun transmittance per lit step (a ray crosses kilometres of canopy): the bilinear lookup,
-                // as the fog's media - the steps and TAA average it.
+                // The cloud shadow per lit step (a ray crosses kilometres of canopy).
                 const float cloudT = cloudSunTransmittanceBilinear(p);
                 const mat2 J = polarJ(rel, r);
-                const float hs = p.y - smoothFloor; // the taps' height (densityTap)
-                // The sun through the crown toward it: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
+                const float hs = p.y - smoothFloor; // the taps' height
+                // The sun through the crown: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
                 const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
                     + densityTap(uv, J, hs, L * 10.0) * 8.0) * u_foliage_farSelfShadow);
                 const vec4 baked = colourAt(uv);
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
-                // "Far saturation scale": toward the colour's linear luminance (Rec. 709) - distant canopies read greyer.
+                // "Far saturation scale": toward the colour's linear luminance (Rec. 709).
                 const vec3 albedo = max(mix(vec3(dot(baked.rgb, vec3(0.2126, 0.7152, 0.0722))), baked.rgb, u_foliage_farSaturation), 0.0) * u_foliage_farAlbedoScale;
                 const float hNorm = clamp(h / pc_vol_height, 0.0, 1.0);
-                // The volume's NORMAL: the density falls off outward, so -grad(density) points out of the blob. Forward
-                // differences over half a cell (horizontal) / one slice (up); only when "Far normal strength" asks.
+                // The volume's NORMAL = -grad(density), by forward differences over half a cell (horizontal) / one
+                // slice (up), from the taps' floor. Only when "Far normal strength" asks; a rock takes the full N.L.
                 float sunCos = 1.0;
                 if (u_foliage_farNormalStrength > 0.0)
                 {
                     const float hx = 0.5 * cell;
-                    // The base of the differences on the same floor as the taps (sigma's own is the per-column blend).
                     const float here = densityAbove(uv, hs);
                     const float up = densityAbove(uv, hs + sliceH);
                     const vec3 grad = vec3(densityTap(uv, J, hs, vec3(hx, 0.0, 0.0)) - here, (up - here) * hx / sliceH,
                         densityTap(uv, J, hs, vec3(0.0, 0.0, hx)) - here);
                     const float len2 = dot(grad, grad);
-                    // A rock takes the full N.L: it is a surface, not a crown of leaves facing every way.
                     if (len2 > 1e-12)
                         sunCos = mix(1.0, max(dot(-grad * inversesqrt(len2), L), 0.0), mix(u_foliage_farNormalStrength, 1.0, rock));
                 }
-                // Leaves as Lambert surfaces of a mean cosine toward the sun (sunPart: the phase and "Far sun scale"); the
-                // sky light darker toward the ground ("Far ground darkening").
+                // The sky light, darker toward the ground ("Far ground darkening").
                 const vec3 sky = skyBase * mix(1.0 - u_foliage_farGroundDark, 1.0, hNorm);
-                // INTERIOR (the volume's "Foliage interior shadow"): the mean extinction of 6 taps around the sample
-                // (+-x / +-z / +-y at "Far interior radius" cells) - deep in a blob dense on every side, at its surface
-                // empty on one - as an AO term on the sun and the sky alike.
+                // INTERIOR: the mean extinction of 6 taps around the sample (+-x / +-z / +-y at "Far interior radius"
+                // cells) as an AO term on the sun and the sky alike. Radius 0 puts the taps on the sample: skipped.
                 float interior = 1.0;
-                if (u_foliage_farInteriorShadow > 0.0 && u_foliage_farInteriorRadius > 0.0) // radius 0: the taps sit on the sample, exp(0)
+                if (u_foliage_farInteriorShadow > 0.0 && u_foliage_farInteriorRadius > 0.0)
                 {
                     const float rr = u_foliage_farInteriorRadius * cell;
                     const float ry = min(rr, 0.5 * pc_vol_height);
                     const float m = (densityTap(uv, J, hs, vec3(rr, 0.0, 0.0)) + densityTap(uv, J, hs, vec3(-rr, 0.0, 0.0))
                         + densityTap(uv, J, hs, vec3(0.0, 0.0, rr)) + densityTap(uv, J, hs, vec3(0.0, 0.0, -rr))
                         + densityAbove(uv, hs + ry) + densityAbove(uv, hs - ry)) / 6.0;
-                    // A rock's core is solid: no lit interior to darken, a quarter of the term.
+                    // A rock's core is solid, with no lit interior to darken: a quarter of the term.
                     interior = exp(-u_foliage_farInteriorShadow * m * rr * (1.0 - 0.75 * rock));
                 }
                 const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
@@ -475,8 +439,8 @@ void marchAt(ivec2 px)
                     tBand *= 1.0 - alpha;
                     if (tBand < 0.01)
                     {
-                        // The band is opaque: behind it matters only while the band is not yet faded in fully. Its
-                        // distance sum is normalised first (its weight becomes 1 with the transmittance at 0).
+                        // The band is opaque: what lies behind it matters only while the band is not fully faded in.
+                        // Its distance sum is normalised before its transmittance becomes 0.
                         distSumBand /= 1.0 - tBand;
                         tBand = 0.0;
                         if (smoothstep(pc_startDistance, fadeEnd, distSumBand) > 0.99)
@@ -501,9 +465,8 @@ void marchAt(ivec2 px)
         }
         t += dt;
     }
-    // The FADE-IN over "Far overlap": the BAND's result as a whole, by its weighted mean distance - not each sample's
-    // density, which thinned a blob's front and let the ray reach its dark core (a half-faded tree read too dark).
-    // Then the band over what lies behind it, unfaded.
+    // The FADE-IN over "Far overlap": the BAND's result as a whole, by its weighted mean distance (fading each sample's
+    // density let the ray reach a blob's dark core), over what lies behind it, unfaded.
     const float meanBand = tBand < 1.0 ? distSumBand / (1.0 - tBand) : fadeEnd;
     const float meanBehind = tBehind < 1.0 ? distSumBehind / (1.0 - tBehind) : tEnd;
     const float fade = smoothstep(pc_startDistance, fadeEnd, meanBand);
@@ -519,17 +482,17 @@ void marchAt(ivec2 px)
     imageStore(u_outDepth, px, vec4(tFront < tEnd ? log2(max(tFront, 1.0)) : logLimit,
         weightBehind + coverBand > 0.0 ? log2(max(meanT, 1.0)) : logLimit, logLimit, 0.0));
 #else
-    // Without trees the distance is the march LIMIT (the composites read it only where trees are): the checkerboard's
+    // Without trees the distance is the march LIMIT (the composites read it only where trees are): the pixel skip's
     // copy test (main) needs to know how far a tree-less pixel's march reached.
     storeDistance(px, T < PLAIN_HAS_TREES ? meanT : min(sceneT, PLAIN_LIMIT_MAX));
 #endif
 }
 
 #ifndef TREE_TEMPORAL_OUT
-// Whether a stored march result fits a pixel whose surface lies at `surface`: with trees, the surface must lie
-// behind them (their mean distance); without, not farther than that march reached (its stored limit). Wide
-// tolerances: a silhouette that matters puts a near surface against trees kilometres out; the TAA jitter alone moves a
-// grazing terrain's distance by several %. A cleared pixel (no trees, distance 0) never fits.
+// Whether a stored march result fits a pixel whose surface lies at `surface`: with trees, the surface must lie behind
+// them (their mean distance); without, not farther than that march reached (its stored limit). The tolerances are WIDE
+// (x0.7 / x1.5): a silhouette that matters puts a near surface against trees kilometres out, while the TAA jitter alone
+// moves a grazing terrain's distance by several %. A cleared pixel (no trees, distance 0) never fits.
 bool copyFits(vec4 colour, float distance, float surface)
 {
     return colour.a < PLAIN_HAS_TREES ? surface >= distance * 0.7 : min(surface, PLAIN_LIMIT_MAX) <= distance * 1.5;
@@ -548,42 +511,30 @@ void main()
 {
     const uvec2 gid = gl_GlobalInvocationID.xy;
 #ifdef TREE_TEMPORAL_OUT
-    // The checkerboard under the temporal pass (which reconstructs the rest): each thread takes this frame's parity
-    // pixel of its row pair, so the warps stay full (an early-out per pixel would idle half of every warp) -
-    // cloud_march.cs.glsl's marchPixel.
+    // The checkerboard under the temporal pass: each thread takes this frame's parity pixel of its pair, so the warps
+    // stay full (as cloud_march.cs.glsl's marchPixel).
     const ivec2 px = MARCH_CHECKER ? ivec2(gid.x * 2u + ((gid.y + u_frameIndex) & 1u), gid.y) : ivec2(gid);
     if (any(greaterThanEqual(uvec2(px), pc_size)))
         return;
     marchAt(px);
 #else
-    // PIXEL SKIP (no temporal pass): each thread owns a BLOCK - a horizontal pair (1 of 2, the checkerboard: the
-    // marched pixel alternates per frame and row) or a 2x2 block (1 of 4: the marched pixel cycles through the block
-    // over 4 frames) - marches ONE pixel of it, and fills the others from u_latest: each pixel's latest march, one to
-    // three frames old (no reprojection: late under camera motion). A copy must still fit THIS frame's surface - the
-    // TAA jitter moves every silhouette by up to a pixel per frame, and a copy marched against the other side of an
-    // edge gave a bright outline: trees over a near leaf, or none on the background beside it. With trees, this
-    // frame's surface must lie behind them (their mean distance); without, not farther than that march reached (the
-    // stored limit). A failed test needs NO march (one march per thread; a second one stalled the whole warp): trees
-    // in front of a nearer surface -> "no trees" (exact: the surface hides them); a surface farther than the march
-    // reached (the background moved in) -> this frame's marched pixel of the block, which usually shows the same
-    // background. The tolerances are WIDE (x0.7 / x1.5): a silhouette that matters puts a near surface (tens of metres)
-    // against trees kilometres out, while the jitter alone moves a grazing terrain's distance by more than a few %.
-    // The block and its SCHEDULE: the pixel due this frame first, then the rest in the order they come due. Without
-    // pixel skipping the block is the thread's one pixel.
+    // PIXEL SKIP (no temporal pass): each thread owns a BLOCK - a horizontal pair (1 of 2) or a 2x2 block (1 of 4) -
+    // marches ONE pixel of it and fills the others from u_latest, each pixel's latest march (1 to 3 frames old, no
+    // reprojection). A copy must still fit THIS frame's surface (copyFits): the TAA jitter moves every silhouette by up
+    // to a pixel per frame. A failed test never marches again (a second march stalled the whole warp).
+    // The block's SCHEDULE: the pixel due this frame first, then the rest in the order they come due. Without pixel
+    // skipping the block is the thread's one pixel.
     const bool skip = MARCH_QUAD || MARCH_CHECKER;
     const ivec2 base = MARCH_QUAD ? ivec2(gid) * 2 : MARCH_CHECKER ? ivec2(gid.x * 2u, gid.y) : ivec2(gid);
     const int count = MARCH_QUAD ? 4 : MARCH_CHECKER ? 2 : 1;
     if (any(greaterThanEqual(uvec2(base), pc_size)))
         return;
-    // A pixel whose surface lies nearer than "Far start" needs NO march: its result is exactly "no trees" (the march
-    // would stop before the volume begins). So the march goes to the first FAR pixel of the schedule: at a near
-    // silhouette - the alpha-tested fringe of a crown, leaf and gap alternating per pixel and per frame - the block's
-    // background side is marched THIS frame and donates to its other far pixels; marching the scheduled pixel blindly
-    // left the gaps with only leaf-side copies to choose from: a bare-sky speckle along every near crown. A block
-    // without a far pixel marches nothing.
+    // A pixel whose surface lies nearer than "Far start" needs NO march (its result is exactly "no trees"), so the march
+    // goes to the first FAR pixel of the schedule: at a near crown's alpha-tested fringe the background side is then
+    // marched this frame and donates to the block's other far pixels. A block without a far pixel marches nothing.
     // REGISTERS, not local memory: the block loops unroll (their bound is baked) so the arrays are indexed by
-    // constants, the marched pixel is its own variable, and the schedule / neighbour offsets are arithmetic - arrays
-    // indexed at run time (pixels[pick], a const table by the frame index) lived in local memory: 48 bytes of spill.
+    // constants, the marched pixel is its own variable, and the schedule / neighbour offsets are arithmetic (arrays
+    // indexed at run time spilled to local memory).
     ivec2 pixels[4];
     float surfaces[4];
     int pick = skip ? -1 : 0; // without skipping: always march the one pixel (no surface test)
@@ -635,11 +586,9 @@ void main()
         {
             // Trees in front of a nearer surface: the surface hides them - exact, no donor needed.
             const bool hidden = colour.a < PLAIN_HAS_TREES;
-            // Else (the background moved in) MORE DONORS before giving up: the block's marched pixel (this frame),
-            // then the 4 direct neighbours' latest marches - next to an edge one of them usually lies on the
-            // background side. Taking the marched pixel blindly gave a bare-sky halo along every near silhouette
-            // whenever it sat on the near side. (Neighbours being written by other threads read either their old or
-            // this frame's march - both real results, both tested.)
+            // Else (the background moved in) MORE DONORS through the same test: the block's marched pixel, then the 4
+            // direct neighbours' latest marches (next to an edge one of them usually lies on the background side).
+            // A neighbour another thread writes reads its old or this frame's march: both real results.
             bool found = false;
             if (!hidden && copyFits(g_colour, g_distance, surface))
             {

@@ -1,7 +1,6 @@
 // WORLD TREE RECORDS (Procedural TreeWorld, Docs/TreeRenderingPlan.md 3.5): 4 bytes per tree - x, z (12 bits each,
 // chunk-local on a TREE_RECORD_STEPS lattice, the cell centre) and the species type (8 bits). Variant, scale and yaw
-// come from treeRecordSeed. MIRRORS Code/Procedural/Private/TreeWorld.ixx and treeHash (TreeGenerator.ixx) - keep
-// them in step. Read by tree_volume_records.cs (the far volume's records, W4).
+// come from treeRecordSeed. MIRRORS Procedural TreeWorld.ixx and treeHash (TreeGenerator.ixx) - keep them in step.
 
 #ifndef TREE_RECORD_INC_GLSL
 #define TREE_RECORD_INC_GLSL
@@ -35,8 +34,10 @@ uint treeRecordSeed(uint worldSeed, ivec2 chunk, uint record)
 
 #ifdef TREE_RECORD_GROUND
 // THE GROUND the records' trees stand on (they carry no height): each chunk's TREE_RECORD_HEIGHT_RES^2 heights, corners
-// included, right before its records in the pool, found through the CHUNK MAP. MIRRORS RendererVK TreeRecordPool.ixx
+// included, right before its records in the pool, found through the CHUNK MAP. MIRRORS TreeRecordPool.ixx
 // (TreeRecordMapGpu, the height encoding). The includer enables GL_EXT_buffer_reference and GL_EXT_scalar_block_layout.
+// Pool layout per chunk ground: word 0 = min height, word 1 = height step (both float bits), then the heights as 16-bit
+// steps, two per word (low half = the even index).
 #define TREE_RECORD_HEIGHT_RES 17u
 
 struct TreeRecordMapEntry

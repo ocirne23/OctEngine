@@ -2,10 +2,9 @@
 
 // FAR-TREE UPSAMPLE ("Far half res", TreeVolumePipeline): the half-res temporal result -> the full-res pair every
 // composite reads (tree_volume_apply / vol_apply / cloud_apply): in-scatter + transmittance, and the weighted mean
-// distance (R16F, m). Depth-aware, as cloud_upsample.inc.glsl: the four half-res texels around the pixel, bilinear,
-// and
-//  - a texel whose FIRST tree lies behind this pixel's surface contributes "no tree" (its march ran on to a farther
-//    surface of the 2x2 block - the march takes the block's farthest);
+// distance (R16F, m). Depth-aware, as cloud_upsample.inc.glsl - the four half-res texels around the pixel, bilinear:
+//  - a texel whose FIRST tree lies behind this pixel's surface contributes "no tree" (the march ran to the 2x2
+//    block's farthest surface);
 //  - a texel whose march ended at a different distance than this pixel's surface is trusted less.
 
 #include "shared.inc.glsl"
@@ -49,14 +48,13 @@ void main()
         const ivec2 q = clamp(base + o, ivec2(0), size - 1);
         vec4 c = texelFetch(u_treeColor, q, 0);
         const vec4 d = texelFetch(u_treeDepth, q, 0);
-        const vec2 bw = mix(1.0 - f, f, vec2(o));
-        float w = bw.x * bw.y;
         if (logScene < d.x - 0.02)
             c = vec4(0.0, 0.0, 0.0, 1.0);
-        w *= 1.0 / (1.0 + 16.0 * abs(d.z - logScene));
+        const vec2 bw = mix(1.0 - f, f, vec2(o));
+        const float w = bw.x * bw.y / (1.0 + 16.0 * abs(d.z - logScene));
         sum += c * w;
         wSum += w;
-        const float cw = w * (1.0 - c.a); // the distance of the texels that hold trees, weighted by how much
+        const float cw = w * (1.0 - c.a); // the distance only of the texels with trees, by their opacity
         logDistSum += d.y * cw;
         distWeight += cw;
     }

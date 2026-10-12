@@ -3,8 +3,8 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE CLUTTER RECORDS INTO THEIR BUCKETS (ClutterPipeline, after clutter_prefix): a thread per kept record, to its
-// bucket's start + its bucket-local index (both from the cull's key). The draws read the sorted buffer.
+// THE CLUTTER RECORDS INTO THEIR BUCKETS (after clutter_prefix): a thread per kept record, to its bucket's start + its
+// bucket-local index (the cull's key). The draws read the sorted buffer.
 
 #include "clutter.inc.glsl"
 

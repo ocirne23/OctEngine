@@ -1,6 +1,5 @@
-// The half-res accumulated clouds (cloud_temporal.cs.glsl) upsampled to a full-res pixel, depth-aware. Shared
-// by the two passes that composite the clouds: cloud_apply.fs.glsl (fog off) and vol_apply.fs.glsl (fog on,
-// which composites the clouds INSIDE the fog). Requires ubo.inc.glsl.
+// The half-res accumulated clouds (cloud_temporal.cs.glsl) upsampled to a full-res pixel, depth-aware. Shared by
+// cloud_apply.fs.glsl (fog off) and vol_apply.fs.glsl (fog on). Requires ubo.inc.glsl.
 //
 // The four half-res texels around the pixel, bilinear, and:
 //  - a texel whose FIRST cloud lies behind this pixel's surface contributes "no cloud" (its march ran on to a

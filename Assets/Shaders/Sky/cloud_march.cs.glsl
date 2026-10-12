@@ -1,12 +1,11 @@
 #version 460
 
 // Volumetric cloud march: one invocation per HALF-RES pixel, every pixel every frame (a fly-through has
-// parallax at every depth, so an amortized 1-in-N update would smear). Marches the view ray through the
-// cloud shell (clouds.inc.glsl; the march itself is cloud_raymarch.inc.glsl) up to the farthest scene
-// surface of the pixel's 2x2 block, and writes
+// parallax at every depth, so an amortized 1-in-N update would smear). Marches the view ray through the cloud
+// shell (cloud_raymarch.inc.glsl) up to the farthest scene surface of the pixel's 2x2 block, and writes
 //   out color = (in-scatter incl. the aerial perspective in front of the cloud, transmittance)
-//   out depth = log2 distances: x = first cloud hit, y = transmittance-weighted cloud distance (the
-//               temporal reprojection), z = the march limit (the scene surface / max distance), w = steps
+//   out depth = log2 distances: x = first cloud hit, y = transmittance-weighted cloud distance (the temporal
+//               reprojection), z = the march limit (the scene surface / max distance); w = steps
 // cloud_temporal.cs.glsl accumulates it; cloud_apply.fs.glsl / vol_apply.fs.glsl upsample it over the scene.
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
@@ -36,17 +35,6 @@ layout (push_constant) uniform CloudPC
     uint u_pad;
 };
 
-// The step jitter: a per-pixel hash, advanced by the golden ratio each frame (R1: a well-spread sequence per
-// pixel). Interleaved-gradient noise has a diagonal line structure that only hides under accumulation; where
-// the history is missing (disocclusion, the first frame) it showed as diagonal stripes - this shows as grain.
-float marchJitter(ivec2 p)
-{
-    uint h = uint(p.x) * 1597334673u ^ uint(p.y) * 3812015801u;
-    h = (h ^ (h >> 16u)) * 0x7feb352du;
-    h ^= h >> 15u;
-    return fract(float(h) * (1.0 / 4294967296.0) + float(u_frameIndex & 1023u) * 0.61803398875);
-}
-
 vec3 stepHeat(float x)
 {
     return clamp(vec3(x * 3.0 - 1.0, x < 0.5 ? x * 2.0 : 2.0 - x * 2.0, 1.0 - x * 3.0), 0.0, 1.0);
@@ -58,10 +46,9 @@ void writeEmpty(ivec2 px, float logLimit)
     imageStore(u_outDepth, px, vec4(logLimit, logLimit, logLimit, 0.0));
 }
 
-// The pixel of this invocation. CLOUD_CHECKERBOARD (baked, "Quality/Checkerboard"): the dispatch covers half
-// the columns and each thread takes the pixel of this frame's parity ((x + y + frame) even) in its row pair, so
-// the warps stay full (an early-out per pixel would idle half of every warp); cloud_temporal.cs.glsl fills in
-// the other half.
+// The pixel of this invocation. CLOUD_CHECKERBOARD: the dispatch covers half the columns, and each thread takes
+// the pixel of this frame's parity ((x + y + frame) even) in its row, so the warps stay full (a per-pixel early
+// out would idle half of every warp). cloud_temporal.cs.glsl fills in the other half.
 ivec2 marchPixel()
 {
 #ifdef CLOUD_CHECKERBOARD
@@ -111,9 +98,8 @@ void main()
         return;
     }
 
-    const float jitter = marchJitter(px);
-    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), jitter, pixelAngle, CLOUD_DEBUG_MODE == 2);
-    // Past the march, re-derived instead of held live across it: the pixel and the limit's log.
+    const CloudMarchResult r = cloudRaymarch(vec3(0.0), dir, seg0, seg1, int(u_clouds_maxSteps), cloudJitter(px), pixelAngle, CLOUD_DEBUG_MODE == 2);
+    // Re-derived after the march instead of held live across it (registers): the pixel and the limit's log.
     const ivec2 outPx = marchPixel();
     const float outLogLimit = log2(max(limit, 1.0));
     if (r.front < 0.0)

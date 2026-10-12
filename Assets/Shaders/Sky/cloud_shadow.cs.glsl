@@ -1,14 +1,12 @@
 #version 460
 
-// Cloud Beer shadow map: one invocation per texel of one cascade (push constant). The texel's line along the
-// sun direction L starts where it leaves the shell top toward the sun and marches down through the shell
-// (both intervals; the ground ends it) with a fixed step count. Writes the front's along-light coordinate,
-// the mean extinction between the first and the last cloud, and the whole optical depth - the layout and
-// the lookup are in cloud_shadow.inc.glsl.
-//
-// PROGRESSIVE (Renderer::buildUboClouds): a frame renders one texel of every 2x2 (split 1), 4x4 (split 2) or 8x8
-// (split 3) block - the phase's - one thread per rendered texel. The phases rotate in an order that spreads each
-// frame's texels evenly (the 2x2 order (0,0) (1,1) (1,0) (0,1), applied at every level of the block).
+// Cloud Beer shadow map: one invocation per rendered texel of one cascade (push constant). The texel's line
+// along the sun direction L starts where it leaves the main layer's top toward the sun and marches down
+// through the band (both intervals; the ground ends it) in a fixed step count. The layout and the lookup are
+// in cloud_shadow.inc.glsl.
+// PROGRESSIVE (Renderer::buildUboClouds): a frame renders one texel of every 2x2 (split 1), 4x4 (split 2) or
+// 8x8 (split 3) block. The phase order spreads each frame's texels evenly (the 2x2 order (0,0) (1,1) (1,0)
+// (0,1), applied at every level of the block).
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -55,10 +53,9 @@ void main()
     const vec3 origin = cascade.xyz + u_clouds_shadowAxis0 * local.x + u_clouds_shadowAxis1 * local.y; // on the plane through the centre
     const float camAlt = u_viewPos.y; // centre view (g_viewIndex 0)
 
-    // THE MAIN LAYER ONLY: the upper layer casts no map shadow (thin, low-density sheets - a weak shadow). Over the
-    // union shell the fixed step count was spread across the gap and the upper band, and the main layer's shadows
-    // got coarser whenever the upper layer was on.
-    // Start where the line leaves the main band's top toward the sun (at the plane when the plane is above it).
+    // THE MAIN LAYER ONLY: the upper layer (thin, low-density sheets) casts no map shadow, so all steps go to the
+    // main band. Start where the line leaves the main band's top toward the sun (at the plane when the plane is
+    // above it).
     const vec2 tTop = cloudRaySphere(cloudAltitude(origin, camAlt), cloudRayB(origin, L, camAlt), cloudMainTop());
     const float aStart = tTop.y > tTop.x ? max(tTop.y, 0.0) : 0.0;
     const vec3 start = origin + L * aStart;
@@ -73,7 +70,7 @@ void main()
         return;
     }
 
-    const int steps = max(int(u_cascade == 0u ? u_clouds_shadowNearSteps : u_clouds_shadowFarSteps), 1); // per cascade: the far one updates less often
+    const int steps = max(int(u_cascade == 0u ? u_clouds_shadowNearSteps : u_clouds_shadowFarSteps), 1);
     const float dt = total / float(steps);
     const vec2 noiseOffset = cloudNoiseOffset();
     const float lodBase = max(log2(texel * u_clouds_baseFrequency * CLOUD_BASE_RES), 0.0);
@@ -86,18 +83,18 @@ void main()
         const float u = (float(i) + 0.5) * dt;
         const float t = u < len0 ? seg0.x + u : seg1.x + (u - len0);
         const vec3 p = start - L * t;
-        // The detail erosion in BOTH cascades: it removes much of the base density, so a base-only far
-        // cascade shadows far darker and its border shows as a box. At the far texel size the detail's mip
-        // is close to its mean, which is what the far cascade needs.
+        // The detail erosion in BOTH cascades: it removes much of the base density, so a base-only far cascade
+        // shadows far darker and its border shows as a box. At the far texel size the detail mip is near its mean.
         const float dens = cloudMainDensity(p.xz + noiseOffset, cloudAltitude(p, camAlt), 1e30, 1.0, lodBase, lodDetail);
         if (dens <= 0.0)
             continue;
-        od += dens * u_clouds_extinction * dt;
+        od += dens * dt;
         const float a = aStart - t; // = dot(p - centre, L): origin - centre is perpendicular to L
         if (aFront == -1e30)
             aFront = a + 0.5 * dt;
         aBack = a - 0.5 * dt;
     }
+    od *= u_clouds_extinction;
     if (od <= 0.0)
     {
         imageStore(u_outShadow, dst, noCloud);

@@ -1,9 +1,9 @@
-// GROUND CLUTTER (ClutterPipeline; Docs/GroundClutterPlan.md): pebbles, branches, mushrooms and flowers, placed on the
-// GPU every frame by clutter_cull.cs.glsl and drawn by clutter.vs/fs.glsl (rigid meshes) and clutter_flower.vs/fs.glsl
-// (flowers, built in the vertex shader). The structs MIRROR RendererVKLayout (Layout.ixx) - keep them in step.
+// GROUND CLUTTER (ClutterPipeline; Docs/GroundClutterPlan.md): placed by clutter_cull.cs.glsl, drawn by clutter.vs/fs
+// (rigid meshes) and clutter_flower.vs/fs (flowers, built in the VS).
+// The structs MIRROR RendererVKLayout (Layout.ixx) - keep them in step.
 //
-// With CLUTTER_FRAME_BINDING defined: the per-frame CLUTTER FRAME (ClutterFrameGpu: the patch grid, the counts, the
-// FOREST FLOOR MAP) at that binding, and clutterFloorAt.
+// With CLUTTER_FRAME_BINDING defined: the CLUTTER FRAME (ClutterFrameGpu: the patch grid, the counts, the forest floor
+// map) at that binding, and clutterFloorAt.
 
 #ifndef CLUTTER_INC_GLSL
 #define CLUTTER_INC_GLSL
@@ -37,18 +37,16 @@ struct ClutterInstance // RendererVKLayout::ClutterInstanceGpu
 {
     vec4 posScale;
     uvec4 data; // xy quaternion (halves), z type | variant << 8 | lod << 16 | kind << 24, w hash
-    uvec4 look; // x albedo0 (sqrt rgb, roughness), y albedo1 (sqrt rgb, spots), z half2(stem height, head size) - rigid: half2(its height m, 0) -, w head | petals << 8 | petal width << 16 | open << 24
+    // x albedo0 (sqrt rgb, roughness), y albedo1 (sqrt rgb, spots),
+    // z half2(stem height, head size) - a rigid object: half2(its height m, 0),
+    // w head | petals << 8 | petal width << 16 | open << 24
+    uvec4 look;
 };
 
-// The flower bucket of a LOD, then (mesh, LOD) for the rigid meshes.
+// The flower buckets (one per LOD) first, then one per (mesh, LOD).
 uint clutterBucket(uint kind, uint mesh, uint lod)
 {
     return kind == CLUTTER_KIND_FLOWER ? lod : CLUTTER_FLOWER_LODS + mesh * CLUTTER_LODS + lod;
-}
-
-vec3 clutterQuatRotate(vec4 q, vec3 v)
-{
-    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
 }
 
 vec4 clutterUnpackQuat(uvec2 packed)
@@ -81,8 +79,8 @@ layout (binding = CLUTTER_FRAME_BINDING, std430) readonly buffer InClutterFrame 
     uint cf_floor[];
 };
 
-// THE FOREST FLOOR at xz (bilinear): x canopy, y trunk proximity, z rock proximity, w occupied (a trunk or a rock stands
-// there). 0 everywhere without a map (no trees or rocks, or the trees' world off) and outside it.
+// THE FOREST FLOOR at xz (bilinear): x canopy, y trunk proximity, z rock proximity, w occupied (a trunk or a rock
+// stands there). 0 without a map and outside it.
 vec4 clutterFloorAt(vec2 xz)
 {
     if (cf_floorDim < 2u)

@@ -2616,6 +2616,10 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   * river FS: the body trace FIRST, the glint and the sky share after it (`color` not live across its ray query), and
     the in-scatter + the aeration mix built INSIDE `traceRiverBody` after the trace (`riverInscatter`). Tried and
     reverted: the lights before the mirror trace (72/16), the sun tint as one scalar rebuilt from the UBO per use (64/48).
+* **Measured 2026-10-12** (RelWithDebInfo; regs/local): the shared `water_scene.inc.glsl` left river FS 64/32 and ocean
+  FS 80/32 unchanged. cloud_temporal's checkerboard fill pixels in ONE neighbour loop (the clamp range gathered with
+  the weighted average): 48/0 and 9216 B before and after, cloud and TREE_TEMPORAL (scale 2, checker) variants alike -
+  the driver had already merged the duplicate fetches. clutter_cull 80/16 after its relief view terms left the loop.
 * **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
   both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
   values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
@@ -2791,7 +2795,10 @@ Procedural's `RiverSystem` (Procedural CONTEXT "Rivers") builds ONE `RenderMesh`
 segment at the carved water surface and a quad per lake row run at the lake's level - on the River pipeline's one
 material (`createMeshMaterial(River, false)`: not in the TLAS), main pass only (`PASS_MAIN`), pushed every frame like
 the ocean sectors. **The ocean is NOT extended for inland water** (the user, 2026-10-08): the river has its own
-shaders, `River/river.vs.glsl` + `river.fs.glsl`, whose shading is COPIED from `ocean.fs.glsl` without the waves -
+shaders, `River/river.vs.glsl` + `river.fs.glsl`, whose shading follows `ocean.fs.glsl` without the waves. **The scene
+side is SHARED** through `Ocean/water_scene.inc.glsl` (the common bindings, the BRDF terms, the sky lookups, `traceScene`
+/ `shadeHit`); each includer defines `WATER_ABSORPTION` and its own bed hook `waterBedAlbedo` (the ocean returns the
+calm level from its terrain fetch; the river keeps its own surface as the column) -
 Fresnel (F0 0.02), the RT refraction to the bed (Beer-Lambert both ways, `u_river_absorption`; the bed is the terrain
 splat with the river bed's beach layer, the baked height map where the TLAS cannot answer), the RT mirror (sky fallback,
 reflection fog), the GGX glint, whitewater, the light-grid lights. **Its RT toggles and ranges are the ocean's**: the

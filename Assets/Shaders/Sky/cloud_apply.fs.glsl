@@ -1,13 +1,12 @@
 #version 450
 
-// Cloud apply, FOG OFF only: fullscreen pass in the scene-colour render pass. With the fog on, the fog apply
-// (vol_apply.fs.glsl) composites the clouds itself, inside the fog. Upsamples the half-res accumulated clouds
-// (cloud_upsample.inc.glsl) and blends (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + scene *
-// transmittance. Alpha is not written (the scene colour's alpha is TAA's ocean flag).
-// THE FAR TREES too while they marched (u_foliage_farMarched; their own "Far trees apply" stage is then skipped): the
-// two layers compose front to back by distance, as in vol_apply.fs.glsl without the fog. The volume writes no
-// depth, so the clouds' march limit is the terrain BEHIND the trees - composited after them, the clouds between the
-// two drew OVER the trees.
+// Cloud apply, FOG OFF only: a fullscreen pass in the scene-colour render pass (with the fog on, vol_apply.fs.glsl
+// composites the clouds inside the fog). Upsamples the half-res accumulated clouds (cloud_upsample.inc.glsl) and
+// blends (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + scene * transmittance. Alpha is not written
+// (the scene colour's alpha is TAA's ocean flag).
+// THE FAR TREES too while they marched (u_foliage_farMarched; their own apply stage is then skipped): the two
+// layers compose front to back by distance. The tree volume writes no depth, so the clouds' march limit is the
+// terrain BEHIND the trees, and clouds between the two must not draw over the trees.
 
 #include "shared.inc.glsl"
 #include "cloud_upsample.inc.glsl"

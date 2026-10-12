@@ -5,11 +5,10 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE RIGID CLUTTER (pebbles, branches, mushrooms; StaticMeshGraphicsPipeline's clutter pipeline, ClutterPipeline's
-// near-shadow casters with CLUTTER_NEAR_SHADOW). One indexed draw per bucket (a mesh LOD): the mesh's vertices
-// (ClutterVertexGpu, binding 0) and the sorted record as instance-rate attributes (binding 1, firstInstance = the
-// bucket's range). Static: no motion of their own. The climate is read per vertex, as the rock VS does: a pebble takes
-// the bedrock of the climate it lies in.
+// THE RIGID CLUTTER (pebbles, branches, mushrooms; with CLUTTER_NEAR_SHADOW: the near grass cascade's casters).
+// One indexed draw per bucket (a mesh LOD): the mesh's vertices (ClutterVertexGpu, binding 0) and the sorted record as
+// instance-rate attributes (binding 1, firstInstance = the bucket's range). Static: no motion. The climate is read per
+// vertex, as the rock VS does: a pebble takes the bedrock of the climate it lies in.
 
 #include "shared.inc.glsl"
 #include "clutter.inc.glsl"
@@ -28,34 +27,37 @@ layout (location = 5) in vec4 in_uv;
 
 layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
-layout (location = 2) out vec3 out_local;            // the mesh-local position (scale 1): the procedural patterns
-layout (location = 3) out vec4 out_fields;           // x ao, y height above the object's base (m), z temperature C, w humidity
-layout (location = 4) flat out uvec4 out_look;       // x albedo0, y albedo1, z kind, w part
-layout (location = 5) out vec4 out_uv;               // the mesh's pattern coordinates (ClutterVertexGpu::uv; a branch's x the scale: metres)
-layout (location = 6) flat out float out_height;     // the object's height (m): the contact band's scale
-// The position RELATIVE TO THE CAMERA, built so that it stays exact near it: the mesh's own small offset + (instance -
-// camera), the second part one value per object. The bump's screen derivatives read it - the world position's own
-// steps (~2 mm at 20 km from the origin, rounded per vertex) turned a twig's derivatives into noise: sparkles.
+layout (location = 2) out vec3 out_local;        // the mesh-local position (scale 1): the procedural patterns
+layout (location = 3) out vec4 out_fields;       // x ao, y height above the object's base (m), z temperature C, w humidity
+layout (location = 4) flat out uvec4 out_look;   // x albedo0, y albedo1, z kind, w part
+layout (location = 5) out vec4 out_uv;           // the mesh's pattern coordinates (a branch's in metres)
+layout (location = 6) flat out float out_height; // the object's height (m): the contact band's scale
+// The position relative to the camera: the mesh offset + (instance - camera), exact near the camera. The bump's
+// screen derivatives read it - the world position's rounding (~2 mm at 20 km) made them noise: sparkles.
 layout (location = 7) out vec3 out_relPos;
 #endif
 
 void main()
 {
-    const vec4 q = clutterUnpackQuat(in_instData.xy);
-    const float scale = in_instPosScale.w;
-    const vec3 pos = clutterQuatRotate(q, in_posAo.xyz * scale) + in_instPosScale.xyz;
 #ifdef CLUTTER_NEAR_SHADOW
-    // THE NEAR GRASS CASCADE's casters: the objects around its box only (as the blades).
+    // Only the objects around the near cascade's box (as the blades).
     if (distance(in_instPosScale.xz, u_grass_nearCentre) > u_grass_nearRange * 1.5 + 2.0)
     {
         gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
+#endif
+    const vec4 q = clutterUnpackQuat(in_instData.xy);
+    const float scale = in_instPosScale.w;
+    const vec3 offset = quat_transform(in_posAo.xyz * scale, q);
+    const vec3 pos = offset + in_instPosScale.xyz;
+#ifdef CLUTTER_NEAR_SHADOW
     gl_Position = u_grass_shadowViewProj * vec4(pos, 1.0);
 #else
+    const uint kind = in_instData.z >> 24;
     out_pos = pos;
-    out_relPos = clutterQuatRotate(q, in_posAo.xyz * scale) + (in_instPosScale.xyz - u_viewPos);
-    out_normal = clutterQuatRotate(q, in_normalPart.xyz);
+    out_relPos = offset + (in_instPosScale.xyz - u_viewPos);
+    out_normal = quat_transform(in_normalPart.xyz, q);
     out_local = in_posAo.xyz;
     float temperature = 12.5;
     float humidity = 0.5;
@@ -66,8 +68,8 @@ void main()
         temperature = terrainTemperatureAt(climate, pos.y);
     }
     out_fields = vec4(in_posAo.w, in_posAo.y * scale, temperature, humidity);
-    out_look = uvec4(in_instLook.x, in_instLook.y, in_instData.z >> 24, uint(in_normalPart.w + 0.5));
-    out_uv = (in_instData.z >> 24) == CLUTTER_KIND_BRANCH ? in_uv * scale : in_uv; // bark: real metres
+    out_look = uvec4(in_instLook.x, in_instLook.y, kind, uint(in_normalPart.w + 0.5));
+    out_uv = kind == CLUTTER_KIND_BRANCH ? in_uv * scale : in_uv; // bark: metres
     out_height = unpackHalf2x16(in_instLook.z).x;
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

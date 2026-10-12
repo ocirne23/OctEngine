@@ -1,11 +1,10 @@
 #version 460
 
 // River mist: the particle GPU spawn path's second producer (particle_spawn.inc.glsl), at the head of the particle sim
-// pass. Procedural's RiverSystem hands up the stretches of whitewater (rapids, falls) near the camera - each a point on
-// the water surface with the channel's half-width, the flow's velocity, the whitewater (already x the river's size) and
-// the stretch's length. One thread per stretch rolls a hashed dice at "Mist rate" x its area x dt x the whitewater past
-// "Mist threshold"; a hit spawns over the stretch (along it and across the channel), drifting downstream with the
-// water and kicked upward, into the ONE emitter slot the CPU published (Effects/river_mist.pfx, u_river_mistEmitter).
+// pass. One thread per whitewater stretch (rapids, falls) near the camera, from Procedural's RiverSystem. Its expected
+// spawn count is "Mist rate" x its area x dt x the whitewater past "Mist threshold"; the fraction is a hashed dice roll.
+// Each particle spawns over the stretch (along it and across the channel), drifts downstream and is kicked upward,
+// into the ONE emitter slot the CPU published (Effects/river_mist.pfx, u_river_mistEmitter).
 
 #include "shared.inc.glsl"
 #include "particle.inc.glsl"
@@ -16,7 +15,7 @@
 struct RiverMistSource
 {
     vec4 posHalf;  // xyz = world position on the water surface, w = the channel's half-width (m; negative = a plunge pool)
-    vec4 flowFoam; // xy = the flow's velocity in XZ (m/s), z = the whitewater 0..1, w = the stretch's length (m)
+    vec4 flowFoam; // xy = the flow's velocity in XZ (m/s), z = the whitewater 0..1 (x the river's size), w = the stretch's length (m)
 };
 layout (binding = 3, std430) readonly buffer RiverMistSources
 {
@@ -42,15 +41,15 @@ void main()
         return;
 
     // A NEGATIVE half-width marks a fall's plunge pool (RiverSystem::updateMist): its own centering, speed, kick, height.
-    const bool plunge = src.posHalf.w < 0.0;
+    const bool  plunge    = src.posHalf.w < 0.0;
     const float centering = plunge ? u_river_plungeCentering : u_river_mistCentering;
-    const float mistSpeed = plunge ? u_river_plungeSpeed : u_river_mistSpeed;
-    const float kick = plunge ? u_river_plungeKick : u_river_mistKick;
-    const float height = plunge ? u_river_plungeHeight : u_river_mistHeight;
+    const float mistSpeed = plunge ? u_river_plungeSpeed     : u_river_mistSpeed;
+    const float kick      = plunge ? u_river_plungeKick      : u_river_mistKick;
+    const float height    = plunge ? u_river_plungeHeight    : u_river_mistHeight;
     const float halfWidth = max(abs(src.posHalf.w), 0.1);
-    const float len = max(src.flowFoam.w, 0.1);
-    const float expected = rate * (2.0 * halfWidth * len) * u_ocean_sprayDt * strength;
-    uint seed = particlePcg(u_frameIndex * 0x9E3779B9u + i * 0x85EBCA6Bu + 0x27D4EB2Fu);
+    const float len       = max(src.flowFoam.w, 0.1);
+    const float expected  = rate * (2.0 * halfWidth * len) * u_ocean_sprayDt * strength;
+    uint seed  = particlePcg(u_frameIndex * 0x9E3779B9u + i * 0x85EBCA6Bu + 0x27D4EB2Fu);
     uint count = uint(expected);
     if (particleRand(seed) < fract(expected))
         ++count;
@@ -62,8 +61,7 @@ void main()
     const float speed = length(flow);
     const vec2 dir = speed > 1e-4 ? flow / speed : vec2(1.0, 0.0);
     const vec2 side = vec2(-dir.y, dir.x);
-    // The stronger the whitewater, the higher the mist is thrown.
-    const float energy = 0.5 + strength;
+    const float energy = 0.5 + strength; // stronger whitewater throws the mist higher
     for (uint k = 0u; k < count; ++k)
     {
         const float a = (particleRand(seed) - 0.5) * len;

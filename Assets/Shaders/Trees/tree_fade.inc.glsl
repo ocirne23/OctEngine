@@ -1,12 +1,11 @@
 // The tree DISTANCE FADE (Layout.ixx makeDistanceFadeFlags; Procedural TreeSystem::applyFadeBands): a dithered fade over
-// a camera-distance band, for the tree mesh -> card mesh -> billboard crossfades. Included by the two tree fragment
-// shaders, instanced_indirect_tree.fs.glsl (LitTree) and instanced_indirect_foliage.fs.glsl (LitFoliage).
+// a camera-distance band, for the tree mesh -> card mesh -> billboard crossfades. Used by LitTree and LitFoliage.
 #ifndef TREE_FADE_INC_GLSL
 #define TREE_FADE_INC_GLSL
 
-// True where this pixel is faded away. A fade-out surface keeps the pixels with dither < 1 - f, a fade-in one those
-// with dither >= 1 - f, so an out/in pair over the same band shares no pixel. Interleaved gradient noise, shifted per
-// frame so TAA resolves the dither into a smooth blend.
+// True where this pixel is faded away. A fade-out surface keeps the pixels with dither < 1 - f, a fade-in one the
+// others, so an out / in pair over the same band shares no pixel. Interleaved gradient noise, shifted per frame so TAA
+// blends it.
 bool treeDistanceFaded(uint flags, vec3 pos)
 {
 	if ((flags & MATERIAL_FLAG_DISTANCE_FADE) == 0u)

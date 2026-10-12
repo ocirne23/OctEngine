@@ -21,7 +21,7 @@ import :MeshLodRegistry; // IndexRangeFreeList
 //
 // ONE thread at a time, after beginFrame and before present (which reads it): Procedural TreeWorld drives it from its
 // "TreeWorld pool" job, which main.cpp joins before present (and TreeSystem before setTypes).
-export struct TreeRecordChunkGpu // MIRRORED in tree_volume_splat.cs.glsl / tree_volume_records.cs.glsl
+export struct TreeRecordChunkGpu // MIRRORED in tree_volume_records.cs.glsl
 {
     glm::ivec2 coord{ 0 };
     uint32 first = 0;  // the first record in the pool

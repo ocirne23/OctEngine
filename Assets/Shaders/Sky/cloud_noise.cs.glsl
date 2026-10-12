@@ -1,8 +1,8 @@
 #version 460
 
-// Generates the cloud noise textures ONCE (CloudPipeline::generateNoise; see clouds.inc.glsl for the
-// channel layout). Every field TILES: the Worley feature points and the Perlin gradients are hashed from
-// the lattice cell wrapped by the period, so the textures repeat seamlessly under REPEAT addressing.
+// Generates the cloud noise textures (CloudPipeline::generateNoise, at initialize and on a shader reload; the
+// channel layout is in clouds.inc.glsl). Every field TILES: the Worley feature points and the Perlin gradients
+// are hashed from the lattice cell wrapped by the period, so the textures repeat under REPEAT addressing.
 // NOISE_3D: binding 0 is a 3D image (modes 0 base, 1 detail); else a 2D image (modes 2 weather, 3 curl).
 
 layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
@@ -115,8 +115,8 @@ void main()
         const float coverage = smoothstep(0.2, 0.8, perlinFbm(uvw, 6, 5, 71));
         const float type = smoothstep(0.25, 0.75, perlinFbm(uvw, 3, 3, 81));
         const float density = smoothstep(0.15, 0.85, perlinFbm(uvw, 12, 3, 91));
-        // Per-column top height, at the COVERAGE's scale (6 cells, 2 octaves): about one smooth top per cloud. At 16
-        // cells / 4 octaves every cloud held several top maxima and its top followed them - a range of peaks.
+        // Per-column top height, at the COVERAGE's scale (6 cells, 2 octaves): about one smooth top per cloud. A
+        // finer field gives each cloud several top maxima - a range of peaks.
         const float towerHeight = smoothstep(0.2, 0.8, perlinFbm(uvw, 6, 2, 111));
         result = vec4(coverage, type, density, towerHeight);
     }

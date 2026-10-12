@@ -3,11 +3,10 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// THE CLUTTER BUCKETS' LAYOUT (ClutterPipeline, after clutter_cull): ONE workgroup, a thread per bucket. An exclusive
-// prefix sum of the bucket counts gives each bucket its range of the sorted record buffer; each bucket gets its indexed
-// draw (instanceCount = its count, firstInstance = its range's start - the records are instance-rate attributes). The
-// flowers' buckets come first (their draw is fixed: CLUTTER_FLOWER_LODS commands), then (mesh, LOD) - their draw COUNT
-// is written here (io_counts[1]).
+// THE CLUTTER BUCKETS' LAYOUT (after clutter_cull): ONE workgroup, a thread per bucket. An exclusive prefix sum of the
+// bucket counts gives each bucket its range of the sorted records, and its indexed draw (instanceCount = its count,
+// firstInstance = its range's start). The flower buckets come first (a fixed CLUTTER_FLOWER_LODS draws), then
+// (mesh, LOD), whose draw COUNT goes to io_counts[1].
 
 #define CLUTTER_FRAME_BINDING 0
 #include "clutter.inc.glsl"
@@ -18,6 +17,7 @@ layout (binding = 1, std430) readonly buffer InMeshes { ClutterMesh in_meshes[];
 layout (binding = 2, std430) buffer Counts { uint io_counts[4]; };
 layout (binding = 3, std430) readonly buffer InBucketCounts { uint in_bucketCounts[]; };
 layout (binding = 4, std430) writeonly buffer OutBucketBase { uint out_bucketBase[]; };
+
 struct DrawIndexedIndirect // VkDrawIndexedIndirectCommand
 {
     uint indexCount;

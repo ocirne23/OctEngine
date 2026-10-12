@@ -1,32 +1,28 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, step 1 of 2 (TreeVolumePipeline): one workgroup per placed tree ADDS the tree's type
-// extinction volume into the camera-centred polar volume (tree_volume.inc.glsl), fixed point through imageAtomicAdd -
-// overlapping crowns sum, as extinction does. Every volume texel the tree's box touches samples the type volume
-// at the mip that matches the texel's footprint (in tree space), at the texel centre clamped into the box, x the
-// fraction of the texel the box covers: a texel larger than the tree still gets the tree's share instead of
-// missing it. The texel's colour column takes the tree type's albedo (last writer wins - per-tree speckle).
+// FAR-TREE VOLUME BAKE, the splat (TreeVolumePipeline): one workgroup per placed tree ADDS the tree's type extinction
+// volume into the polar volume (tree_volume.inc.glsl), fixed point through imageAtomicAdd - overlapping crowns sum, as
+// extinction does. Every texel the tree's box touches samples the type volume at the mip that matches the texel's
+// footprint (tree space), at the texel centre clamped into the box, x the tree's TENT weight horizontally and the
+// slice's box overlap vertically: a texel larger than the tree still gets the tree's share. The column's colour takes
+// the tree type's albedo (last writer wins).
 // The type volumes: per type a res^3 float mip chain (x fastest, then y, then z), the mips following level 0.
 //
-// TREE_FLOOR_PASS 1 and 2 (dispatched first, in that order): the same footprint walk, per COLUMN instead of per
-// voxel, setting the column's FLOOR (tree_volume.inc.glsl) that the splat measures its slices from. The floor is the
-// base of the column's DOMINANT tree - the one whose tent covers the column most (pass 1: the largest coverage per
-// column, atomic max; pass 2: the trees at that coverage write their base, atomic minimum among ties). The lowest
-// base of any tree reaching the column put an upper tree at a cliff edge above the layer in its edge columns, where
-// the splat moved it DOWN: blobs out of line with their billboards along every cliff. A ring column no tree covers
-// (coverage 0) keeps the lowest base of the trees whose rectangle reaches it.
+// TREE_FLOOR_PASS 1 and 2 (dispatched first, in that order): the same footprint walk per COLUMN, setting the column's
+// FLOOR: the base of its DOMINANT tree, the one whose tent covers it most (pass 1: the largest coverage per column,
+// atomic max; pass 2: the trees at that coverage write their base, the lowest among ties). With the lowest base of
+// any tree instead, a cliff-top tree sat above the layer in its edge columns. A ring column no tree covers (coverage
+// 0) keeps the lowest base of the trees whose rectangle reaches it.
 //
-// TREE_SPLAT_RECORDS (all three passes): the trees come from the WORLD TREE RECORDS (Procedural TreeWorld, W4) instead
-// of a tree set: one workgroup per record of the chunks within the record detail distance of the bake centre (the
-// chunks beyond add mass per column - tree_volume_records.cs, the same test), each record EXPANDED exactly as Procedural
-// TreeSystem::expandChunk does - variant, scale and yaw from its seed, its bushes - on the terrain map's ground, into
-// the world set's volume types. The tree set's own copies of those trees are never splatted: one source, so a chunk
-// entering or leaving the set does not change the volume.
+// TREE_SPLAT_RECORDS (all three passes): the trees come from the WORLD TREE RECORDS (Procedural TreeWorld): one
+// workgroup per record of the chunks within the record detail distance of the bake centre (the ones beyond:
+// tree_volume_records.cs, the same test), each record EXPANDED exactly as Procedural TreeSystem::expandChunk does -
+// variant, scale and yaw from its seed, its bushes - on its chunk's ground grid, into the world set's volume types.
 //
-// A SOLID type (albedo.w 0: Procedural's world ROCKS, R5) stores OCCUPANCY (0..1): its extinction is "Far rock
-// extinction" at any size (a crown's thins with its scale - its leaves spread over a larger volume - a rock's does not).
-// It writes no colour: it adds its share to the column's ROCK SUM, and the resolve mixes the climate's bedrock in by it.
-// albedo.w 0.5: a solid in its OWN colour (dead wood) - the solid's extinction, the tree's colour write.
+// albedo.w < 0.75 = a SOLID: it stores OCCUPANCY (0..1) and its extinction is "Far rock extinction" at any size (a
+// crown's thins with its scale - its leaves spread over a larger volume - a solid's does not). albedo.w < 0.25 = a
+// ROCK: no colour, its share goes into the column's ROCK SUM (the resolve mixes the climate's bedrock in by it).
+// 0.5 = dead wood: a solid in its own colour.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -71,13 +67,7 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Pi
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer TypeList { VolumeType t[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer FloatList { float v[]; };
 
-// Mirrors TreeRecordChunkGpu / TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
-struct RecordChunk
-{
-    ivec2 coord;
-    uint first;
-    uint count;
-};
+// Mirrors TreeRecordTypeGpu (RendererVK TreeRecordPool.ixx).
 struct RecordType
 {
     vec4 albedo;
@@ -96,7 +86,7 @@ struct RecordType
     uint bushTypes[8];
     float shape[32];
 };
-// A detail chunk (TreeVolumePipeline::bake): coord.xy, its first record's pool word, its first record's workgroup.
+// A detail chunk (TreeVolumePipeline::bake): coord.xy, its first record's pool word, its first workgroup.
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer DetailList { uvec4 d[]; };
 layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer RecordTypeList { RecordType t[]; };
 #ifndef TREE_SPLAT_RECORDS
@@ -106,8 +96,6 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Tr
 // The push block: TreeVolumePipeline's SplatPush (pc_pieces, or pc_map under TREE_SPLAT_RECORDS; pc_vol_*: the bake's
 // lockable values).
 #include "push.generated.glsl"
-
-vec3 quatRotate(vec4 q, vec3 v) { return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v); }
 
 uint mipOffset(VolumeType t, uint mip)
 {
@@ -143,9 +131,9 @@ float sampleType(VolumeType t, vec3 f, uint mip)
 float overlap(float c, float h, float lo, float hi) { return clamp(min(hi, c + h) - max(lo, c - h), 0.0, 2.0 * h) / (2.0 * h); }
 
 // The TENT weight of a texel for a body over [lo, hi] (texel centre at 0, tent half-width h = one cell): the
-// integral of max(0, 1 - |x| / h) over the body, / h. A tent splat with the trilinear reconstruction keeps a small
-// body's centroid AT the body whatever the grid's offset; a box splat moved it to the cell centre (up to half a
-// cell off), so every re-bake - a new grid centre - shifted every blob ("shaking").
+// integral of max(0, 1 - |x| / h) over the body, / h. With the trilinear reconstruction a tent splat keeps a small
+// body's centroid AT the body whatever the grid's offset (a box splat moved it to the cell centre, and every re-bake
+// shifted the blobs).
 float tentPrimitive(float x, float h)
 {
     if (x <= -h) return 0.0;
@@ -169,7 +157,7 @@ void splatPiece(VolumePiece piece)
     {
         const vec3 c = vec3((k & 1u) != 0u ? type.boxMax.x : type.boxMin.x, (k & 2u) != 0u ? type.boxMax.y : type.boxMin.y,
             (k & 4u) != 0u ? type.boxMax.z : type.boxMin.z);
-        const vec3 w = piece.posScale.xyz + quatRotate(piece.quat, c * scale);
+        const vec3 w = piece.posScale.xyz + quat_transform(c * scale, piece.quat);
         lo = min(lo, w);
         hi = max(hi, w);
     }
@@ -194,19 +182,26 @@ void splatPiece(VolumePiece piece)
     const ivec2 n = ivec2(min(a1 - a0 + 1, angularRes), min(r1 + 1, radialRes - 1) - t0.y + 1);
     // The tree's footprint for the tent: its centre and its horizontal half size (the box's xz extent, rotated
     // about up: the larger half axis), world.
-    const vec2 treeXZ = piece.posScale.xz + quatRotate(piece.quat, 0.5 * (type.boxMin + type.boxMax) * scale).xz;
+    const vec2 treeXZ = piece.posScale.xz + quat_transform(0.5 * (type.boxMin + type.boxMax) * scale, piece.quat).xz;
     const float treeHalf = 0.5 * max(type.boxMax.x - type.boxMin.x, type.boxMax.z - type.boxMin.z) * scale;
     const uint slices = pc_vol_slices;
     const float sliceH = pc_vol_height / float(slices);
     const vec3 boxSize = type.boxMax - type.boxMin;
+    const vec3 invBoxSize = 1.0 / boxSize;
     const float voxel = max(max(boxSize.x, boxSize.y), boxSize.z) / float(type.res);
     const uint maxMip = uint(findMSB(type.res));
+    const float invScale = 1.0 / scale;
+    const float halfSliceLocal = 0.5 * sliceH * invScale; // half a slice, tree space
+    // Extinction (1/m) in TREE space -> world: a scaled tree's leaves spread over a scaled volume. A solid: its
+    // occupancy x its extinction, at any size.
+    const float extinctionScale = type.albedo.w < 0.75 ? pc_rockExtinction : invScale;
+    const bool rock = type.albedo.w < 0.25;
 
 #ifdef TREE_FLOOR_PASS
     // The floor goes into the whole footprint rectangle PLUS one more ring, without the tent test: the march filters
     // the density bilinearly across columns but reads the floor of the NEAREST one, so every column the filter can
-    // reach from a tree's density must carry a tree floor. One that fell back to the height map (tens of metres off)
-    // placed the leaked density at the wrong height - thin hatched spikes above the crowns.
+    // reach from a tree's density must carry a tree floor (a height map fallback put the leaked density tens of metres
+    // off: thin spikes above the crowns).
     const ivec2 base = ivec2(t0.x - 1, max(t0.y - 1, 0));
     const ivec2 ext = ivec2(min(n.x + 2, angularRes), min(t0.y + n.y + 1, radialRes) - base.y);
     const uint count = uint(ext.x * ext.y);
@@ -239,59 +234,47 @@ void splatPiece(VolumePiece piece)
         const float coverXZ = tentWeight(off.x - treeHalf, off.x + treeHalf, cellR) * tentWeight(off.y - treeHalf, off.y + treeHalf, cellT);
 #if defined(TREE_FLOOR_PASS) && TREE_FLOOR_PASS == 1
         imageAtomicMax(u_floorCover, texel, coverKey(coverXZ));
-    }
-}
 #elif defined(TREE_FLOOR_PASS)
         // WITHIN A FEW STEPS of the column's largest coverage, not equal to it: the two passes are separately compiled
-        // variants, and their float math may round a tree's coverage a few bits apart (contraction) - with an exact
-        // match no tree matched, the column got no floor, and the splat skipped it: radial gaps in the volume (whole
-        // angular columns at some angles, changing with every rebake - a moire).
+        // variants whose float math may round a tree's coverage a few bits apart; with an exact match some columns got
+        // no floor at all (radial gaps in the volume).
         if (coverKey(coverXZ) + 4u >= imageLoad(u_floorCover, texel).r)
             imageAtomicMax(u_floor, texel, tvFloorEncode(lo.y)); // the minimum among the dominant trees
-    }
-}
 #else
         if (coverXZ <= 0.0)
             continue;
-        // No floor should not happen (the floor passes cover every column the tree reaches) - but if it does, the tree's
-        // own base stands in: density a little off in height, never missing.
+        // The floor passes cover every column the tree reaches; should one have none, the tree's own base stands in.
         const uint floorBits = imageLoad(u_floor, texel).r;
         const float ground = floorBits != 0u ? tvFloorDecode(floorBits) : lo.y;
-        // A lower tree set the floor (a slope across the column): this one sits higher in the layer. A tree that would
-        // reach past the layer's top moves DOWN into it (as far as its base allows) - off by that much vertically,
-        // kilometres out, instead of cut.
+        // A tree that would reach past the layer's top (a lower tree set the floor) moves DOWN into it, as far as its
+        // base allows: off by that much vertically, kilometres out, instead of cut.
         const float shift = max(min(hi.y - ground - pc_vol_height, lo.y - ground), 0.0);
         const vec3 world = vec3(xz.x, ground + (float(s) + 0.5) * sliceH + shift, xz.y);
         if (world.y < lo.y - sliceH || world.y > hi.y + sliceH)
             continue;
-        const float halfXZ = 0.5 * max(cellR, cellT) / scale; // tree space, for the footprint mip
-        const vec3 local = quatRotate(invQuat, world - piece.posScale.xyz) / scale;
-        const float cover = coverXZ * overlap(local.y, 0.5 * sliceH / scale, type.boxMin.y, type.boxMax.y);
+        const vec3 local = quat_transform(world - piece.posScale.xyz, invQuat) * invScale;
+        const float cover = coverXZ * overlap(local.y, halfSliceLocal, type.boxMin.y, type.boxMax.y);
         if (cover <= 0.0)
             continue;
-        const vec3 halfExt = vec3(halfXZ, 0.5 * sliceH / scale, halfXZ);
-        const float footprint = 2.0 * max(halfXZ, halfExt.y);
+        const float halfXZ = 0.5 * max(cellR, cellT) * invScale; // tree space, for the footprint mip
+        const float footprint = 2.0 * max(halfXZ, halfSliceLocal);
         const uint mip = min(uint(max(log2(footprint / voxel), 0.0)), maxMip);
-        const vec3 f = (clamp(local, type.boxMin, type.boxMax) - type.boxMin) / boxSize;
-        // Extinction (1/m) in TREE space -> world: a scaled tree's leaves are spread over a scaled volume. A solid's
-        // occupancy x its extinction, at any size.
-        const bool solid = type.albedo.w < 0.75;
-        const float extinction = sampleType(type, f, mip) * cover * (solid ? pc_rockExtinction : 1.0 / scale);
+        const vec3 f = (clamp(local, type.boxMin, type.boxMax) - type.boxMin) * invBoxSize;
+        const float extinction = sampleType(type, f, mip) * cover * extinctionScale;
         if (extinction <= 1e-4)
             continue;
-        imageAtomicAdd(u_accum, tvAccumTexel(texel, uint(s)), tvAccumAmount(extinction, uint(s)));
-        if (type.albedo.w < 0.25)
+        imageAtomicAdd(u_accum, tvAccumTexel(texel, s), tvAccumAmount(extinction, s));
+        if (rock)
             imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu)); // the same units
         else
             imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
+#endif
     }
 }
-#endif
 
 #ifdef TREE_SPLAT_RECORDS
 // One plant of a record (its tree, or one of its bushes): Procedural TreeSystem::expandChunk's placeVariant - keep in
-// step. The ground is its chunk's height grid (16 m, from the generator's own field - the tree set's copy stands on
-// the sampler's 2 m grid); the terrain map only where that chunk holds none.
+// step. It stands on its chunk's height grid, on the terrain map only where that chunk holds none.
 void splatRecordPlant(uint recordType, uint seed, vec2 p)
 {
     const uint numVariants = pc_recordTypes.t[recordType].numVariants;
@@ -301,7 +284,7 @@ void splatRecordPlant(uint recordType, uint seed, vec2 p)
     const vec2 range = pc_recordTypes.t[recordType].scale;
     const float scale = mix(range.x, range.y, treeHash01(treeHash(seed, 103u)))
         * exp2(pc_recordTypes.t[recordType].sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0 - 1.0));
-    const float yaw = treeHash01(treeHash(seed, 104u)) * 6.28318531;
+    const float yaw = treeHash01(treeHash(seed, 104u)) * TV_TWO_PI;
     float ground;
     if (!treeRecordGround(pc_records, pc_map, pc_mapSize, pc_chunkSize, p, ground))
         ground = terrainHeightAt(p);
@@ -316,9 +299,8 @@ void splatRecordPlant(uint recordType, uint seed, vec2 p)
 void main()
 {
 #ifdef TREE_SPLAT_RECORDS
-    // ONE WORKGROUP PER RECORD (past 65535 the dispatch wraps into y): its chunk by a binary search over the detail
-    // chunks' first workgroups (the CPU picked them: within the record detail distance - tree_volume_records.cs takes
-    // the rest). A workgroup per CHUNK ran its ~3000 plants in sequence: 31 ms per bake.
+    // ONE WORKGROUP PER RECORD (past 65535 the dispatch wraps into y), not per chunk (a chunk's ~3000 plants in
+    // sequence were too slow): its chunk by a binary search over the detail chunks' first workgroups.
     const uint local = gl_WorkGroupID.x + gl_WorkGroupID.y * 65535u;
     if (local >= pc_numPieces)
         return;
@@ -353,7 +335,7 @@ void main()
     for (uint b = 0u; b < count; ++b)
     {
         const uint bushSeed = treeHash(seed, 200u + b);
-        const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531;
+        const float angle = treeHash01(treeHash(bushSeed, 111u)) * TV_TWO_PI;
         const float radius = mix(1.5, bushRadius, sqrt(treeHash01(treeHash(bushSeed, 112u))));
         const uint bushType = pc_recordTypes.t[type].bushTypes[treeHash(bushSeed, 113u) % numBushes];
         splatRecordPlant(bushType, bushSeed, p + vec2(cos(angle), sin(angle)) * radius);

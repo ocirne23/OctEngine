@@ -1,16 +1,12 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, between the floor passes and the splat (TreeVolumePipeline): the tree FLOOR blurred, one
-// AXIS per dispatch (angular, then radial - a separable tent of "Far floor smoothing" columns each way).
+// FAR-TREE VOLUME BAKE, between the floor passes and the splat (TreeVolumePipeline): the tree FLOOR blurred, one AXIS
+// per dispatch (angular, then radial: a separable tent of "Far floor smoothing" columns each way).
 //
-// The floor is the base of each column's dominant tree, so on a slope neighbouring columns differ by whole floor
-// steps. Everything is stored and read relative to it: the march's bilinear primary sample blends 4 columns at 4
-// floors and its lighting taps a smooth blend of them, and either way the steps showed as faint vertical lines and a
-// moire on slopes (2026-10-03). A smooth floor keeps the splat and the march in one continuous frame.
-//
-// Masked: a column WITHOUT a floor (0) stays without one (the march skips it, the splat writes nothing there) and
-// adds nothing to its neighbours' averages. The splat moves a tree that no longer fits the layer down into it (its
-// `shift`), as for any floor below the tree.
+// The floor is the base of each column's dominant tree, so on a slope neighbouring columns differ by whole floor steps,
+// and everything is stored and read relative to it: the steps showed as faint vertical lines and a moire on slopes.
+// Masked: a column WITHOUT a floor (0) stays without one and adds nothing to its neighbours' averages. A tree that no
+// longer fits the layer is moved down into it by the splat (its `shift`).
 
 #include "tree_volume.inc.glsl"
 
@@ -40,7 +36,7 @@ void main()
     float sum = 0.0, weight = 0.0;
     for (int k = -pc_floorSmoothing; k <= pc_floorSmoothing; ++k)
     {
-        const ivec2 q = pc_radialAxis != 0u ?ivec2(p.x, p.y + k) : ivec2(tvWrapAngle(p.x + k, angularRes), p.y);
+        const ivec2 q = pc_radialAxis != 0u ? ivec2(p.x, p.y + k) : ivec2(tvWrapAngle(p.x + k, angularRes), p.y);
         if (q.y < 0 || q.y >= radialRes)
             continue;
         const uint bits = imageLoad(u_src, q).r;

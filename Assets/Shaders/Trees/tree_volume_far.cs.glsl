@@ -1,16 +1,13 @@
 #version 460
 
-// FAR-TREE VOLUME BAKE, the WORLD TREE RECORDS' second step (TreeVolumePipeline, W4), one thread per column, after
+// FAR-TREE VOLUME BAKE, the WORLD TREE RECORDS' second step (TreeVolumePipeline), one thread per column, after
 // tree_volume_records.cs summed the records' mass per column:
-// * THE FLOOR of a column with record mass, or next to one, that no tree set floored: the ground under its centre -
-//   its chunk's height grid (the records carry no height - a record's tree stands on it), the terrain map where that
-//   chunk holds none. (The map alone, ~100 m texels in its far cascade, buried the trees on every peak until the
-//   camera came within its near cascade.) The march filters the density over
-//   the 2x2 columns around a point but reads the nearest column's floor and skips a column without one: the ring
-//   around the mass must carry a floor too, as the splat's floor ring (tree_volume_splat.cs).
+// * THE FLOOR of a column with record mass, or next to one, that no tree floored: the ground under its centre (its
+//   chunk's height grid, the terrain map where that chunk holds none). The ring around the mass needs a floor too, as
+//   the splat's floor ring: the march filters the density over 2x2 columns but skips a column without a floor.
 // * THE SLICES: the column's mass x its type's height profile (the profile's mean over each slice), added to the
-//   accumulation in the splat's fixed point. A column without a type (its trees' nearest columns lie next to it)
-//   takes a neighbour's, else the first type with mass.
+//   accumulation in the splat's fixed point. A column without a type takes a neighbour's, else the first type with
+//   mass.
 
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_scalar_block_layout : require
@@ -53,7 +50,7 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Ty
 // The push block: TreeVolumePipeline's FarPush (pc_vol_*: the bake's lockable values).
 #include "push.generated.glsl"
 
-const uint PROFILE_BINS = 32u;      // TREE_RECORD_PROFILE_BINS
+const uint PROFILE_BINS = 32u; // TREE_RECORD_PROFILE_BINS
 
 bool validType(uint type) { return type < pc_numTypes && pc_types.t[type].mass > 0.0; }
 
@@ -63,6 +60,7 @@ void main()
     const int angularRes = int(pc_vol_angularRes), radialRes = int(pc_vol_radialRes);
     if (col.x >= angularRes || col.y >= radialRes)
         return;
+    // The floor: a column with mass or next to one (the ring).
     const uint amountBits = imageLoad(u_amount, col).r;
     bool massNear = amountBits != 0u;
     for (int k = 0; k < 9 && !massNear; ++k)
@@ -73,19 +71,18 @@ void main()
     }
     if (!massNear)
         return;
-    uint floorBits = imageLoad(u_floor, col).r;
-    if (floorBits == 0u)
+    if (imageLoad(u_floor, col).r == 0u)
     {
         const vec2 xz = tvTexelWorldXZ(col, TV_PUSH_VOL);
         float ground;
         if (!treeRecordGround(pc_records, pc_map, pc_mapSize, pc_chunkSize, xz, ground))
             ground = terrainHeightAt(xz);
-        floorBits = tvFloorEncode(ground);
-        imageStore(u_floor, col, uvec4(floorBits));
+        imageStore(u_floor, col, uvec4(tvFloorEncode(ground)));
     }
     if (amountBits == 0u)
         return;
 
+    // The type: the column's own, a neighbour's, else the first with mass.
     uint type = imageLoad(u_type, col).r;
     for (int k = 0; k < 9 && !validType(type); ++k)
     {
@@ -98,10 +95,11 @@ void main()
     if (!validType(type))
         return;
 
-    const float amount = float(amountBits) / TV_AMOUNT_SCALE;
     const float height = pc_types.t[type].height;
     const float binH = height / float(PROFILE_BINS);
+    const float invBinH = float(PROFILE_BINS) / height;
     const float sliceH = pc_vol_height / float(pc_vol_slices);
+    const float amountPerH = float(amountBits) / (TV_AMOUNT_SCALE * sliceH); // x a slice's profile sum = its mean extinction
     for (uint s = 0u; s < pc_vol_slices; ++s)
     {
         // The profile's mean over the slice [s0, s1].
@@ -109,12 +107,12 @@ void main()
         if (s0 >= height)
             break;
         float sum = 0.0;
-        for (uint b = uint(s0 / binH); b < PROFILE_BINS && float(b) * binH < s1; ++b)
+        for (uint b = uint(s0 * invBinH); b < PROFILE_BINS && float(b) * binH < s1; ++b)
         {
             const float o = min(s1, float(b + 1u) * binH) - max(s0, float(b) * binH);
             sum += pc_types.t[type].shape[b] * max(o, 0.0);
         }
-        const float extinction = amount * sum / sliceH;
+        const float extinction = amountPerH * sum;
         if (extinction > 1e-4)
             imageAtomicAdd(u_accum, tvAccumTexel(col, s), tvAccumAmount(extinction, s));
     }

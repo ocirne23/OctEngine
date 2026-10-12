@@ -7,9 +7,8 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 #extension GL_EXT_ray_query : enable
 
-// EPipelineIndex::LitTree: the procedural tree MESHES (Procedural TreeSystem: the leaf clusters and the bark / leaf
-// crossfade copies) - instanced_indirect.fs.glsl's LitMasked path plus the tree-only terms: the DISTANCE FADE
-// (tree_fade.inc.glsl, the mesh -> card mesh -> billboard crossfades) and the LEAF terms (MATERIAL_FLAG_LEAF: the
+// EPipelineIndex::LitTree: the procedural tree MESHES (Procedural TreeSystem) - instanced_indirect.fs.glsl's LitMasked
+// path plus the tree-only terms: the DISTANCE FADE (tree_fade.inc.glsl) and the LEAF terms (MATERIAL_FLAG_LEAF: the
 // sun-side shadow, the edge-on N.V bend, the transmission). Its own shader so the tree code never sets the register
 // count of the other lit meshes. The VS is instanced_indirect.vs.glsl (ALPHA_MASK).
 
@@ -27,21 +26,19 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target
 
-// The lit core's AO read follows this point to where it was last frame (read where it is used, so the
-// interpolant is not live across the sun's shadow search).
+// The lit core's AO read follows this point to where it was last frame (read where it is used, so the interpolant is
+// not live across the sun's shadow search).
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 
-// THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES (MATERIAL_FLAG_LEAF) looked up from
-// their sun side: thin and two-sided, so a leaf facing AWAY from the sun is still lit through - its transmission needs
-// its real shadow. The facing reject gave every such leaf 0, the very leaves the transmission's back term lights, so
-// "Foliage transmission shadow" scaled them all as one. The bias follows the geometric normal flipped toward the sun;
-// doSunLight's facing test on the shading normal still keeps the front light off a back-facing leaf. Any other surface
-// keeps the facing reject. ONE call of sunShadowVisibility for both: each call site inlines the whole shadow search
-// (two cost ~20 KB of code).
+// THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES looked up from their sun side: a thin
+// leaf facing AWAY from the sun is still lit through, and its transmission needs its real shadow (the facing reject
+// gave it 0). The bias follows the geometric normal flipped toward the sun; doSunLight's facing test on the shading
+// normal still keeps the front light off a back-facing leaf. ONE call of sunShadowVisibility for both cases: each call
+// site inlines the whole shadow search (two cost ~20 KB of code).
 void sunShadowFirstTree(vec3 pos, bool leaf)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
@@ -57,15 +54,15 @@ void main()
 	const vec3 pos = in_posU.xyz;
 	const vec3 V = normalize(u_viewPos - pos);
 
-	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
-	const MaterialInfo material  = in_materialInfos[materialIdx];
-	const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
-	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
+	const uint16_t materialIdx          = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
+	const MaterialInfo material         = in_materialInfos[materialIdx];
+	const uint16_t diffuseTexIdx        = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
+	const uint16_t normalTexIdx         = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
 	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
-	const vec2 texUv = vec2(in_posU.w, in_normalV.w);
+	const vec2 texUv                    = vec2(in_posU.w, in_normalV.w);
 
-	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], texUv);
-	// The alpha-mode test stays, because a material override can put an opaque material here.
+	const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], texUv);
+	// The alpha-mode test stays: a material override can put an opaque material here.
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
@@ -109,18 +106,16 @@ void main()
 	f16vec3 transmit = f16vec3(0.0);
 	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
-		// Seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V" (u_foliage_minNoV). The
-		// cards' normals are bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing (Fresnel -> 1, the
-		// Smith term growing) lit one leaf near the sun hundreds of times brighter than its diffuse: a blinding spot with
-		// bloom. Adding V x (min - N.V) gives N.V = min / |N'| (just under min) - and N.L barely moves.
+		// Seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V". The cards' normals are
+		// bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing lit a leaf hundreds of times brighter
+		// than its diffuse. Adding V x (min - N.V) gives N.V = min / |N'| (just under min); N.L barely moves.
 		const float noV = dot(vec3(N), V);
 		if (noV < u_foliage_minNoV)
 			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
 		// TRANSMISSION: thin leaves let the sun through, tinted by their own colour - a diffuse back term saturate(-N.L)
-		// (lit from behind) plus a forward GLOW saturate(V.-L)^focus x glow (looking toward the sun: the backlit rim).
-		// x "Trees/Foliage transmission" (u_foliage_transmission). Its visibility leans on the sun shadow by "Foliage
-		// transmission shadow" (u_foliage_transmissionShadow) only - a leaf seen from the shaded side sits in its own
-		// crown's shadow, which would leave the backlit view no glow.
+		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on
+		// the sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's
+		// shadow, which would leave the backlit view no glow.
 		if (u_foliage_transmission > 0.0)
 		{
 			const vec3 L = u_sunDirection.xyz;

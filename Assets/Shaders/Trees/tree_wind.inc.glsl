@@ -3,16 +3,14 @@
 
 #include "wind.inc.glsl"
 
-// TREE WIND: a vertex-shader sway of the procedural trees in the shared VEGETATION wind (wind.inc.glsl: the weather
-// wind + its gusts, the grass bends in the same), tuned by u_foliage_wind* (FoliageParams wind*, "Trees/Wind"). No
-// textures and no per-tree data. Three layers:
+// TREE WIND: a vertex-shader sway of the procedural trees in the shared VEGETATION wind (wind.inc.glsl, the grass's
+// too), tuned by u_foliage_wind* ("Trees/Wind"). No textures and no per-tree data. Three layers:
 //   TRUNK  - the whole tree leans downwind and sways, the offset growing with (height / ref height)^2 and the tree
 //            dropping slightly so it keeps its length. From the mesh-local height alone, so the mesh, the merged branch
 //            cards and the whole-tree billboard bend alike (the crossfades stay aligned).
 //   BRANCH - meshes only: per-vertex weights + phases from the bake (Procedural TreeGenerator), each branch bending as one
 //            unit; faded out before the mid tier's cards ("Branch fade").
 //   LEAF   - leaf cards only: the card's tip flutters along its normal; faded out sooner ("Leaf fade").
-// The gusts are wind.inc.glsl's (analytic: no field texture).
 //
 // THE PAYLOAD rides the tangent's w MAGNITUDE (RenderMeshData: texCoords.z), its sign staying the handedness:
 //   |w| = 1          an ordinary mesh: no wind
@@ -22,7 +20,7 @@
 //                      bits 13..16 the sub-branch phase, bits 17..19 the module placement's phase
 //                      bit 20      a leaf card's TIP vertex (flutters), bit 21 = TREE_WIND_BIT (always set)
 //   |w| >= 2         the tree billboards' / branch cards' strip and axis codes (lit FS): the trunk bend only
-// Requires the UBO.
+// Requires the UBO and mathutils.inc.glsl (shared.inc.glsl).
 
 #define TREE_WIND_BIT (1u << 21)
 #define TREE_WIND_TIP_BIT (1u << 20)
@@ -37,18 +35,23 @@ bool treeWindPayload(float tangentW, out uint payload)
         return true;
     if (m <= 1.0)
         return false;
-    payload = uint((m - 1.0) * 4194304.0 + 0.5);
+    payload = uint((m - 1.0) * 4194304.0 + 0.5); // x 2^22
     return (payload & TREE_WIND_BIT) != 0u;
 }
 
-float treeWindHash(uint h)
+float treeWindHash(uint h) { return float(hashU(h)) * (1.0 / 4294967296.0); }
+
+// The tree's random value in [0, 1), from its world position's bits.
+float treeWindTreeRand(vec2 instXZ)
 {
-    h ^= h >> 16;
-    h *= 0x7feb352du;
-    h ^= h >> 15;
-    h *= 0x846ca68bu;
-    h ^= h >> 16;
-    return float(h) * (1.0 / 4294967296.0);
+    const uvec2 cell = floatBitsToUint(instXZ);
+    return treeWindHash(cell.x * 0x8da6b343u ^ cell.y * 0xd8163841u);
+}
+
+// 1 up to 100 m before "Trees/Wind/Trunk fade end", 0 past it (always 1 when it is 0).
+float treeWindTrunkFade(float dist)
+{
+    return u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
 }
 
 // The world-space offset of a tree vertex at `time`. localPos = the mesh-local position (+Y up from the tree's base),
@@ -58,8 +61,7 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
     vec2 dir;
     const float speed = vegetationWind(instPos.xz, time, dir);
     const vec2 side = vec2(-dir.y, dir.x);
-    const uvec2 cell = floatBitsToUint(instPos.xz);
-    const float treeRand = treeWindHash(cell.x * 0x8da6b343u ^ cell.y * 0xd8163841u);
+    const float treeRand = treeWindTreeRand(instPos.xz);
     const float phase = treeRand * TREE_WIND_TAU;
 
     // TRUNK: lean + sway, x (height / ref height)^2; the drop keeps the length (to first order).
@@ -102,7 +104,7 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
         const float leafFade = 1.0 - smoothstep(u_foliage_windLeafFadeStart, u_foliage_windLeafFadeEnd, dist);
         if (leafFade > 0.0)
         {
-            const float cardRand = treeWindHash((payload & 0xFFFFFu) ^ (cell.x * 0x27d4eb2du));
+            const float cardRand = treeWindHash((payload & 0xFFFFFu) ^ (floatBitsToUint(instPos.x) * 0x27d4eb2du));
             const float flutter = sin(time * TREE_WIND_TAU * u_foliage_windLeafHz * (0.8 + 0.4 * cardRand) + cardRand * TREE_WIND_TAU);
             offset += worldNormal * (u_foliage_windLeaf * flutter * min(speed * 0.2, 1.0) * leafFade);
         }
@@ -110,19 +112,17 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
     return offset;
 }
 
-// THE BILLBOARD WAVES (the lit FS, FOLIAGE): a whole-tree billboard cannot bend its branches, so its texture lookup
-// moves instead - two crossing waves over the card, growing toward the card's top (the outer crown; on the HORIZONTAL
+// THE BILLBOARD WAVES (instanced_indirect_foliage.fs.glsl): a whole-tree billboard cannot bend its branches, so its
+// texture lookup moves instead - two crossing waves over the card, growing toward the card's top (on the HORIZONTAL
 // card toward its rim) from a still base, x the wind (speed / 8 m/s, at most 1.5) and "Billboard waves" (a fraction of
-// the card). The texture coordinate stays inside the card's own strip. Only the whole-tree billboards (the strip code:
-// |tangent w| in [2, 3)); the merged branch cards (the axis code) and everything else keep `uv`. The motion vectors do
-// not carry it (a texture-space motion).
+// the card), kept inside the card's own strip. Only the whole-tree billboards (the strip code: |tangent w| in [2, 3));
+// everything else keeps `uv`. Not in the motion vectors (a texture-space motion).
 vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 normal)
 {
     const float code = abs(tangentW);
     if (u_foliage_windBillboardWaves <= 0.0 || code < 2.0 || code >= 3.0)
         return uv;
-    const float dist = distance(instanceOrigin, u_views_viewPos[VIEW_CENTER].xyz);
-    const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
+    const float fade = treeWindTrunkFade(distance(instanceOrigin, u_views_viewPos[VIEW_CENTER].xyz));
     if (fade <= 0.0)
         return uv;
     const float stripV = code - 2.0;
@@ -133,8 +133,7 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
 
     vec2 dir;
     const float speed = vegetationWind(instanceOrigin.xz, u_timeSeconds, dir);
-    const uvec2 cell = floatBitsToUint(instanceOrigin.xz);
-    const float phase = treeWindHash(cell.x * 0x8da6b343u ^ cell.y * 0xd8163841u) * TREE_WIND_TAU;
+    const float phase = treeWindTreeRand(instanceOrigin.xz) * TREE_WIND_TAU;
     const float t = u_timeSeconds * TREE_WIND_TAU * u_foliage_windBranchHz;
     const vec2 wave = vec2(sin(local.x * 9.0 + local.y * 5.0 - t + phase),
                            0.6 * sin(local.x * 5.0 - local.y * 11.0 - t * 1.37 + phase * 1.7));
@@ -143,13 +142,12 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
                 clamp(uv.y + offset.y * stripV, strip * stripV, (strip + 1.0) * stripV - 1e-4));
 }
 
-// The whole wind for a vertex: `outPrevDelta` = last frame's offset minus this frame's (the motion vectors). 0 beyond
-// "Trees/Wind/Trunk fade end" (a 100 m band).
+// The whole wind for a vertex: `outPrevDelta` = last frame's offset minus this frame's (the motion vectors).
 vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta)
 {
     outPrevDelta = vec3(0.0);
     const float dist = distance(instPos, u_views_viewPos[VIEW_CENTER].xyz);
-    const float fade = u_foliage_windTrunkFadeEnd > 0.0 ? 1.0 - smoothstep(u_foliage_windTrunkFadeEnd - 100.0, u_foliage_windTrunkFadeEnd, dist) : 1.0;
+    const float fade = treeWindTrunkFade(dist);
     if (fade <= 0.0)
         return vec3(0.0);
     const vec3 now = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_timeSeconds) * fade;
