@@ -5,8 +5,8 @@
 
 // THE CLUTTER BUCKETS' LAYOUT (after clutter_cull): ONE workgroup, a thread per bucket. An exclusive prefix sum of the counts
 // gives each bucket its range of the sorted records and its indexed draw (instanceCount = its count, firstInstance = its
-// range's start). The flower buckets first (a fixed CLUTTER_FLOWER_LODS draws), then (mesh, LOD): their draw COUNT goes to
-// io_counts[1].
+// range's start). The flower buckets first (a fixed CLUTTER_FLOWER_BUCKETS draws: (topology, LOD)), then (mesh, LOD): their
+// draw COUNT goes to io_counts[1].
 
 #define CLUTTER_FRAME_BINDING 0
 #include "clutter.inc.glsl"
@@ -50,12 +50,12 @@ void main()
     const uint first = s_scan[b] - count;
     out_bucketBase[b] = first;
     DrawIndexedIndirect draw = DrawIndexedIndirect(0u, 0u, 0u, 0, first);
-    if (b < CLUTTER_FLOWER_LODS)
+    if (b < CLUTTER_FLOWER_BUCKETS)
         draw = DrawIndexedIndirect(cf_flowerLods[b].y, count, cf_flowerLods[b].x, 0, first);
     else
     {
-        const uint mesh = (b - CLUTTER_FLOWER_LODS) / CLUTTER_LODS;
-        const uint lod = (b - CLUTTER_FLOWER_LODS) % CLUTTER_LODS;
+        const uint mesh = (b - CLUTTER_FLOWER_BUCKETS) / CLUTTER_LODS;
+        const uint lod = (b - CLUTTER_FLOWER_BUCKETS) % CLUTTER_LODS;
         if (mesh < cf_numMeshes)
         {
             const uvec4 range = in_meshes[mesh].lods[lod];

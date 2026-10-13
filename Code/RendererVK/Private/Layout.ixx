@@ -774,11 +774,17 @@ export namespace RendererVKLayout
     // indexed draw per bucket and a scatter pass sorts the records into the buckets' ranges (instance-rate attributes).
     constexpr uint32 CLUTTER_CANDIDATES = 256;     // ranked points per patch and type = the cull's workgroup (16 / m^2 at 4 m patches)
     constexpr uint32 CLUTTER_MAX_PATCHES = 6400;   // the cull's dispatch (80^2): the patch grid is capped to it
-    constexpr uint32 CLUTTER_MAX_TYPES = 32;
+    constexpr uint32 CLUTTER_MAX_TYPES = 64;       // GPU types = Placement blocks (the record keeps its index in 8 bits)
     constexpr uint32 CLUTTER_MAX_MESHES = 256;     // variant meshes of every rigid type together
     constexpr uint32 CLUTTER_LODS = 3;             // mesh levels per rigid variant
     constexpr uint32 CLUTTER_FLOWER_LODS = 3;      // flower geometry levels (built in the vertex shader)
-    constexpr uint32 CLUTTER_MAX_BUCKETS = CLUTTER_FLOWER_LODS + CLUTTER_MAX_MESHES * CLUTTER_LODS;
+    // Two flower TOPOLOGIES (the index ranges the VS builds over): 0 = the flowers' (CLUTTER_FLOWER_PETALS slots), 1 = the
+    // LARGE one (CLUTTER_FLOWER_BIG_PETALS: the ferns' fronds) - a large one for every flower would make each pay for
+    // its slots. A bucket per (textured, topology, LOD): (textured x TOPOLOGIES + topology) x LODS + LOD - the textured
+    // half drawn by the alpha-tested pipeline, so its discard does not cost the untextured flowers their early depth.
+    constexpr uint32 CLUTTER_FLOWER_TOPOLOGIES = 2;
+    constexpr uint32 CLUTTER_FLOWER_BUCKETS = 2 * CLUTTER_FLOWER_TOPOLOGIES * CLUTTER_FLOWER_LODS;
+    constexpr uint32 CLUTTER_MAX_BUCKETS = CLUTTER_FLOWER_BUCKETS + CLUTTER_MAX_MESHES * CLUTTER_LODS;
     constexpr uint32 CLUTTER_PREFIX_GROUP = 1024;  // the prefix pass: ONE workgroup, a thread per bucket
     static_assert(CLUTTER_MAX_BUCKETS <= CLUTTER_PREFIX_GROUP);
     constexpr uint32 CLUTTER_MAX_INSTANCES = 131072; // kept objects per frame (a bucket-local index fits 17 bits)
@@ -793,6 +799,14 @@ export namespace RendererVKLayout
     // Flower geometry (clutter_flower.vs.glsl): per LOD the stem's segments and the petal slots (a quad each).
     constexpr uint32 CLUTTER_FLOWER_STEM_SEGMENTS[CLUTTER_FLOWER_LODS] = { 4, 2, 1 };
     constexpr uint32 CLUTTER_FLOWER_PETALS[CLUTTER_FLOWER_LODS] = { 16, 8, 4 };
+    constexpr uint32 CLUTTER_FLOWER_BIG_PETALS[CLUTTER_FLOWER_LODS] = { 32, 18, 8 }; // the large topology (ferns: 4 / 3 / 2 quads per textured frond)
+    // A textured grain ear's strip is this x the ear's width: room for its awns to fan out (Procedural ClutterTexture
+    // draws the ear narrower by as much).
+    constexpr float CLUTTER_GRAIN_STRIP_WIDEN = 5.0f;
+    // A grain stalk's half width at its top, x the ear's width (PetalWidth x HeadSize) - the same as the RACHIS at the
+    // ear's / panicle's base in its texture, so the head continues the stalk. The stalk widens to 1 / 0.7 of it at the
+    // root (clutter_flower.vs.glsl).
+    constexpr float CLUTTER_GRAIN_STALK_HALF_WIDTH = 0.045f;
     // The `Flow` placement term's measure (the clutter cull - RIVER_FLOW_SLOW / FAST defines - and Procedural's rock
     // rules): a river's speed (m/s, TerrainPoint::riverSpeed) from slow to fast. The Manning speeds run ~0.3 m/s in flat
     // water to ~3 m/s in a steep stream.
@@ -802,7 +816,7 @@ export namespace RendererVKLayout
     // The kinds of clutter (ClutterTypeGpu::info.z): how the cull places it and which draw and material it takes.
     enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3 };
     // A flower's head (clutter_flower.vs.glsl).
-    enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3, Reed = 4, Tuft = 5 };
+    enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3, Reed = 4, Tuft = 5, Grain = 6, Fern = 7, Rosette = 8, Leafy = 9 };
 
     // One clutter TYPE (Procedural's .clutter file): where it grows and what it looks like. The density is the product
     // of the type's terms; each two-value term is mix(.x, .y, its measure 0..1). Colours are LINEAR.
@@ -815,7 +829,9 @@ export namespace RendererVKLayout
         glm::vec4 terms2;    // xy Trunk (far .. at a trunk), zw RockNear (far .. at a rock's foot)
         glm::vec4 terms3;    // xy Wet (dry .. wet: the climate's humidity), z max slope (rise / run), w min altitude above water (m)
         glm::vec4 terms4;    // xy River (none .. full: the terrain vertex's u), zw Flow (slow .. fast: its v, the river's speed)
-        glm::vec4 terms5;    // x the River term's curve (its measure ^ this: > 1 = close to the water), yzw unused
+        glm::vec4 terms5;    // x the River term's curve (its measure ^ this: > 1 = close to the water), y a flower's u_textures index + 1
+                             // (0 = none: a fern's frond, a radial petal, a grain's ear; the cull copies it into the
+                             // record's data.x and picks a textured bucket), zw unused
         glm::vec4 ring;      // x ring radius (m, 0 = none), y ring width (m), z ring cell (m), w the chance a cell holds a ring
         glm::vec4 shape;     // x..y scale range, z range (m), w sink (fraction of the mesh height below the ground)
         glm::vec4 albedo0;   // rgb main colour (pebble: a tint on the climate's bedrock; flower: the petals), w roughness
@@ -848,7 +864,7 @@ export namespace RendererVKLayout
     struct ClutterInstanceGpu
     {
         glm::vec4 posScale;   // the ground contact point (world), the scale (already x the grow factor)
-        glm::uvec4 data;      // xy the rotation quaternion (4 halves), z type | variant << 8 | lod << 16 | kind << 24, w its hash
+        glm::uvec4 data;      // xy the rotation quaternion (4 halves; a flower: x its texture + 1, 0 = none), z type | variant << 8 | lod << 16 | kind << 24, w its hash
         glm::uvec4 look;      // x albedo0 (rgba8: rgb, roughness), y albedo1 (rgba8: rgb, spots), z packHalf2x16(stem height, head size)
                               // - a rigid object: packHalf2x16(its height (m), 0) -, w head | petals << 8 | petal width (unorm8) << 16 | open angle (unorm8 of pi / 2) << 24
     };
@@ -868,7 +884,7 @@ export namespace RendererVKLayout
         uint32 numMeshes;
         float range;           // m: the farthest type's range (the patch test)
         uint32 pad0;
-        glm::uvec4 flowerLods[CLUTTER_FLOWER_LODS]; // x first index, y index count (the flower index buffer)
+        glm::uvec4 flowerLods[CLUTTER_FLOWER_BUCKETS]; // per flower bucket (its topology's range): x first index, y index count (the flower index buffer)
         uint32 floor[CLUTTER_FLOOR_DIM * CLUTTER_FLOOR_DIM];
     };
 

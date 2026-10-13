@@ -706,13 +706,16 @@ void StaticMeshGraphicsPipeline::buildDesktopExtras(const GraphicsPipelineLayout
         else if (!pipeline.reloadShaders(m_renderPass, layout))
             printf("StaticMeshGraphicsPipeline: %s shader reload failed, keeping previous pipeline\n", name);
     };
-    GraphicsPipelineLayout grassLayout, clutterLayout, flowerLayout;
+    GraphicsPipelineLayout grassLayout, clutterLayout, flowerLayout, texturedFlowerLayout;
     buildGrassLayout(main, grassLayout);
     buildClutterLayout(main, clutterLayout, false);
     buildClutterLayout(main, flowerLayout, true);
+    buildClutterLayout(main, texturedFlowerLayout, true);
+    texturedFlowerLayout.fragmentShader.defines.push_back(ShaderDefine{ "CLUTTER_TEXTURED", "1" });
     build(m_grassPipeline, m_grassBuilt, grassLayout, "grass");
     build(m_clutterPipeline, m_clutterBuilt, clutterLayout, "clutter");
     build(m_flowerPipeline, m_flowerBuilt, flowerLayout, "flower");
+    build(m_texturedFlowerPipeline, m_texturedFlowerBuilt, texturedFlowerLayout, "textured flower");
 }
 
 void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view)
@@ -1111,7 +1114,8 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     }
     // THE GROUND CLUTTER, with the grass (before the film: a pebble in a puddle stays under its water): one indexed
     // draw per bucket of ClutterPipeline's sorted records - the rigid meshes' (mesh, LOD) buckets, their count written
-    // by the prefix pass, then the flowers' fixed LOD buckets.
+    // by the prefix pass, then the flowers' fixed (textured, topology, LOD) buckets: the untextured half opaque, the
+    // textured half alpha-tested through its own pipeline, so the discard does not cost the others their early depth.
     if (params.clutter)
     {
         using namespace RendererVKLayout;
@@ -1123,17 +1127,21 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_clutterPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
             vkCommandBuffer.bindVertexBuffers(0, { clutter.vertices->getBuffer(), clutter.instances->getBuffer() }, { 0, 0 });
             vkCommandBuffer.bindIndexBuffer(clutter.indices->getBuffer(), 0, vk::IndexType::eUint32);
-            vkCommandBuffer.drawIndexedIndirectCount(clutter.commands->getBuffer(), CLUTTER_FLOWER_LODS * commandSize,
-                clutter.counts->getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_LODS, commandSize);
+            vkCommandBuffer.drawIndexedIndirectCount(clutter.commands->getBuffer(), CLUTTER_FLOWER_BUCKETS * commandSize,
+                clutter.counts->getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_BUCKETS, commandSize);
         }
-        if (m_flowerBuilt)
-        {
-            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_flowerPipeline.getPipeline());
-            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_flowerPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
+        constexpr uint32 halfBuckets = CLUTTER_FLOWER_BUCKETS / 2; // the untextured buckets, then the textured ones
+        const auto drawFlowers = [&](GraphicsPipeline& pipeline, uint32 textured) {
+            vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline.getPipeline());
+            vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
             vkCommandBuffer.bindVertexBuffers(0, { clutter.instances->getBuffer() }, { 0 });
             vkCommandBuffer.bindIndexBuffer(clutter.flowerIndices->getBuffer(), 0, vk::IndexType::eUint32);
-            vkCommandBuffer.drawIndexedIndirect(clutter.commands->getBuffer(), 0, CLUTTER_FLOWER_LODS, commandSize);
-        }
+            vkCommandBuffer.drawIndexedIndirect(clutter.commands->getBuffer(), textured * halfBuckets * commandSize, halfBuckets, commandSize);
+        };
+        if (m_flowerBuilt)
+            drawFlowers(m_flowerPipeline, 0);
+        if (m_texturedFlowerBuilt)
+            drawFlowers(m_texturedFlowerPipeline, 1);
     }
     drawSequences(m_graphicsPipeline.getPipelineVariant((uint32)RendererVKLayout::EPipelineIndex::TerrainOverlay), m_graphicsPipeline.getPipelineLayout(),
         params.terrainFilmCommandBuffer, 3);

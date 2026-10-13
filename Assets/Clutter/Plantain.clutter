@@ -1,0 +1,23 @@
+# Ribwort plantain: a flat rosette of narrow leaves and short stalks with a dark seed head, common in short and trampled
+# grass almost everywhere temperate.
+ClutterType Plantain
+	Kind Flower
+	Seed 419
+	Scale 0.8 1.2
+	Range 55
+	Color 0.24 0.38 0.14
+	Color2 0.28 0.22 0.12
+	Head Rosette
+	Petals 6
+	Open 18
+	PetalWidth 0.25
+	Stem 0.3
+	HeadSize 0.13
+	Placement
+		Density 1.5
+		Temperature 0 24
+		Precipitation 400 1800
+		Grass 0.2 1
+		Canopy 1 0.3
+		Cluster 12 0.5
+		Slope 0.7

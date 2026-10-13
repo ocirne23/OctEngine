@@ -15,7 +15,7 @@ struct ClutterType // RendererVKLayout::ClutterTypeGpu
     vec4 terms2;    // Trunk (far .. near), RockNear (far .. near)
     vec4 terms3;    // Wet (dry .. wet), z max slope, w min altitude above water (m)
     vec4 terms4;    // River (none .. full), Flow (slow .. fast)
-    vec4 terms5;    // x the River term's curve (its measure ^ this)
+    vec4 terms5;    // x the River term's curve (its measure ^ this), y a flower's u_textures index + 1 (0 = none)
     vec4 ring;      // x radius (0 = none), y width, z cell (m), w chance
     vec4 shape;     // x..y scale range, z range (m), w sink (fraction of the height)
     vec4 albedo0;   // rgb main (linear), w roughness
@@ -40,10 +40,17 @@ struct ClutterInstance // RendererVKLayout::ClutterInstanceGpu
     uvec4 look;
 };
 
-// The flower buckets (one per LOD) first, then one per (mesh, LOD).
-uint clutterBucket(uint kind, uint mesh, uint lod)
+// A flower head's TOPOLOGY (the index range its VS builds over): 1 = the large one (a fern's fronds), 0 = the flowers'.
+uint clutterFlowerTopology(uint head)
 {
-    return kind == CLUTTER_KIND_FLOWER ? lod : CLUTTER_FLOWER_LODS + mesh * CLUTTER_LODS + lod;
+    return head == FLOWER_HEAD_FERN ? 1u : 0u;
+}
+
+// The flower buckets (one per (textured, topology, LOD): the textured half last) first, then one per (mesh, LOD).
+uint clutterBucket(uint kind, uint head, bool textured, uint mesh, uint lod)
+{
+    return kind == CLUTTER_KIND_FLOWER ? ((textured ? CLUTTER_FLOWER_TOPOLOGIES : 0u) + clutterFlowerTopology(head)) * CLUTTER_FLOWER_LODS + lod
+        : CLUTTER_FLOWER_BUCKETS + mesh * CLUTTER_LODS + lod;
 }
 
 vec4 clutterUnpackQuat(uvec2 packed)
@@ -72,7 +79,7 @@ layout (binding = CLUTTER_FRAME_BINDING, std430) readonly buffer InClutterFrame 
     uint cf_numMeshes;
     float cf_range;
     uint cf_pad0;
-    uvec4 cf_flowerLods[CLUTTER_FLOWER_LODS];
+    uvec4 cf_flowerLods[CLUTTER_FLOWER_BUCKETS]; // per (topology, LOD)
     uint cf_floor[];
 };
 

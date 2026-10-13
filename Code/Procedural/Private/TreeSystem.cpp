@@ -171,6 +171,16 @@ namespace
 		else
 			Log::warning(oc::format("Trees: failed to write '{}'", path));
 	}
+
+	// A tree species' UNDERGROWTH: x = its bushes per tree, y = how far out they go (m, at least the trunk's 1.5 m). The
+	// species' `Undergrowth` block, else "Bushes per tree" and 0.75 x "Spacing (m)". The preview, the world expansion and
+	// the far volume's record types (TreeRecordTypeGpu, per type) all read it.
+	glm::vec2 bushUndergrowth(const TreeSpeciesDesc& desc, const TreeSettings& settings)
+	{
+		const float perTree = desc.undergrowthBushes >= 0.0f ? desc.undergrowthBushes : settings.bushesPerTree;
+		const float radius = desc.undergrowthRadius >= 0.0f ? desc.undergrowthRadius : 0.75f * settings.spacing;
+		return glm::vec2(glm::max(perTree, 0.0f), glm::max(radius, 1.5f));
+	}
 }
 
 namespace Procedural
@@ -948,8 +958,8 @@ namespace Procedural
 		for (const Species& species : m_species)
 			(species.desc.bush ? bushSpecies : treeSpecies).push_back(&species);
 
-		// Per tree species the bushes of its CLIMATE (`Climate`, case-insensitive); a tree whose climate no bush shares
-		// takes every bush.
+		// Per tree species the bushes of its CLIMATE (`Climate`, case-insensitive), each `Weight` times; a tree whose climate
+		// no bush shares takes every bush.
 		auto sameClimate = [](const oc::string& a, const oc::string& b)
 		{
 			if (a.size() != b.size())
@@ -959,33 +969,39 @@ namespace Procedural
 					return false;
 			return true;
 		};
+		oc::vector<const Species*> weightedBushes;
+		for (const Species* bush : bushSpecies)
+			for (int w = 0; w < bush->desc.weight; ++w)
+				weightedBushes.push_back(bush);
 		oc::unordered_map<const Species*, oc::vector<const Species*>> bushesFor;
 		for (const Species* tree : treeSpecies)
 		{
 			oc::vector<const Species*>& list = bushesFor[tree];
-			for (const Species* bush : bushSpecies)
+			for (const Species* bush : weightedBushes)
 				if (sameClimate(bush->desc.climate, tree->desc.climate))
 					list.push_back(bush);
 			if (list.empty())
-				list = bushSpecies;
+				list = weightedBushes;
 		}
 
 		auto placeTree = [&](const Species* tree, uint32 seed, glm::vec2 p)
 		{
 			if (tree)
 				placeVariant(*tree, seed, p);
-			// "Bushes per tree": the whole part always, the fraction by chance. Each around its tree - out of the
-			// trunk's way (1.5 m), out to 0.75 x the spacing (area-uniform) - a random bush species of its climate.
-			const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : bushSpecies;
-			if (bushes.empty() || m_settings.bushesPerTree <= 0.0f)
+			// The species' undergrowth (bushUndergrowth): the whole part always, the fraction by chance. Each around its
+			// tree - out of the trunk's way (1.5 m), out to its radius (area-uniform) - a bush species of its climate.
+			const oc::vector<const Species*>& bushes = tree ? bushesFor[tree] : weightedBushes;
+			const glm::vec2 undergrowth = tree ? bushUndergrowth(tree->desc, m_settings)
+				: glm::vec2(m_settings.bushesPerTree, glm::max(0.75f * m_settings.spacing, 1.5f));
+			if (bushes.empty() || undergrowth.x <= 0.0f)
 				return;
-			const float whole = std::floor(m_settings.bushesPerTree);
-			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < m_settings.bushesPerTree - whole ? 1u : 0u);
+			const float whole = std::floor(undergrowth.x);
+			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < undergrowth.x - whole ? 1u : 0u);
 			for (uint32 b = 0; b < count; ++b)
 			{
 				const uint32 bushSeed = treeHash(seed, 200u + b);
 				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
-				const float radius = glm::mix(1.5f, glm::max(0.75f * m_settings.spacing, 1.5f), std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
+				const float radius = glm::mix(1.5f, undergrowth.y, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
 				const Species& bush = *bushes[treeHash(bushSeed, 113u) % (uint32)bushes.size()];
 				placeVariant(bush, bushSeed, p + glm::vec2(std::cos(angle), std::sin(angle)) * radius);
 			}
@@ -1130,11 +1146,10 @@ namespace Procedural
 		context->worldSeed = m_world.seed();
 		context->chunkSize = (float)Globals::terrain.chunkSize();
 		context->sizeVariation = m_settings.sizeVariation;
-		context->bushesPerTree = m_settings.bushesPerTree;
-		context->bushRadius = glm::max(0.75f * m_settings.spacing, 1.5f);
+		context->bushRadius = 1.5f;
 		context->riverClear = Globals::settings.terrain.riverVegetationClear;
-		// Every loaded species (its baked variants), then per TREE species the bushes of its climate (as the preview:
-		// case-insensitive; a tree whose climate no bush shares takes every bush).
+		// Every loaded species (its baked variants; a tree its undergrowth), then per TREE species the bushes of its climate
+		// (as the preview: case-insensitive, each `Weight` times; a tree whose climate no bush shares takes every bush).
 		oc::vector<uint32> bushes;
 		for (const Species& species : m_species)
 		{
@@ -1143,7 +1158,16 @@ namespace Procedural
 			for (const PieceMeshes& meshes : species.variantMeshes)
 				out.variants.push_back({ typeOf[&meshes], meshes.farCentre, meshes.farRadius });
 			if (species.desc.bush && !species.variantMeshes.empty())
-				bushes.push_back((uint32)(context->species.size() - 1));
+				for (int w = 0; w < species.desc.weight; ++w)
+					bushes.push_back((uint32)(context->species.size() - 1));
+			if (!species.desc.bush)
+			{
+				const glm::vec2 undergrowth = bushUndergrowth(species.desc, m_settings);
+				out.bushesPerTree = undergrowth.x;
+				out.bushRadius = undergrowth.y;
+				if (undergrowth.x > 0.0f)
+					context->bushRadius = glm::max(context->bushRadius, undergrowth.y);
+			}
 		}
 		auto sameClimate = [](const oc::string& a, const oc::string& b)
 		{
@@ -1223,8 +1247,8 @@ namespace Procedural
 				for (uint32 bush : climateBushes)
 					if (out.numBushes < TREE_RECORD_MAX_BUSHES && recordTypeOfSpecies[bush] >= 0)
 						out.bushTypes[out.numBushes++] = (uint32)recordTypeOfSpecies[bush];
-				out.bushesPerTree = context->bushesPerTree;
-				out.bushRadius = context->bushRadius;
+				out.bushesPerTree = context->species[s].bushesPerTree;
+				out.bushRadius = context->species[s].bushRadius;
 			}
 			const float meanScale = 0.5f * (species.desc.scale.x + species.desc.scale.y);
 			for (uint32 v = 0; v < out.numVariants; ++v)
@@ -1544,17 +1568,17 @@ namespace Procedural
 				continue;
 			const ExpandSpecies& tree = context.species[(size_t)s];
 			placeVariant(tree, seed, p);
-			// "Bushes per tree": the whole part always, the fraction by chance, out of the trunk's way (1.5 m) to
-			// bushRadius (area-uniform), a random bush species of its climate.
-			if (tree.bushes.empty() || context.bushesPerTree <= 0.0f)
+			// The species' undergrowth (bushUndergrowth): the whole part always, the fraction by chance, out of the trunk's
+			// way (1.5 m) to its bush radius (area-uniform), a bush species of its climate by weight.
+			if (tree.bushes.empty() || tree.bushesPerTree <= 0.0f)
 				continue;
-			const float whole = std::floor(context.bushesPerTree);
-			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < context.bushesPerTree - whole ? 1u : 0u);
+			const float whole = std::floor(tree.bushesPerTree);
+			const uint32 count = (uint32)whole + (treeHash01(treeHash(seed, 110u)) < tree.bushesPerTree - whole ? 1u : 0u);
 			for (uint32 b = 0; b < count; ++b)
 			{
 				const uint32 bushSeed = treeHash(seed, 200u + b);
 				const float angle = treeHash01(treeHash(bushSeed, 111u)) * 6.28318531f;
-				const float radius = glm::mix(1.5f, context.bushRadius, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
+				const float radius = glm::mix(1.5f, tree.bushRadius, std::sqrt(treeHash01(treeHash(bushSeed, 112u))));
 				const ExpandSpecies& bush = context.species[tree.bushes[treeHash(bushSeed, 113u) % (uint32)tree.bushes.size()]];
 				const glm::vec2 at = p + glm::vec2(std::cos(angle), std::sin(angle)) * radius;
 				if (!inWater(at))

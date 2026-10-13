@@ -14,6 +14,8 @@ import Threading;
 import :ClutterSystem;
 import :ClutterType;
 import :ClutterGenerator;
+import :ClutterTexture;
+import :TreeLeafTexture;
 import :TreeSystem;
 import :TreeWorld;
 import :TreeGenerator; // treeHash
@@ -37,7 +39,7 @@ namespace
 	float termMax(const glm::vec2& term) { return glm::max(term.x, term.y); }
 
 	// One Placement block of a type as the GPU's type (RendererVKLayout::ClutterTypeGpu).
-	ClutterTypeGpu gpuType(const ClutterTypeDesc& desc, const ClutterPlacementDesc& p, uint32 firstMesh, uint32 numMeshes)
+	ClutterTypeGpu gpuType(const ClutterTypeDesc& desc, const ClutterPlacementDesc& p, uint32 firstMesh, uint32 numMeshes, uint16 texture)
 	{
 		ClutterTypeGpu t{};
 		t.climate = glm::vec4(temperatureTo01(p.temperature.x), temperatureTo01(p.temperature.y), precipTo01(p.precipitation.x), precipTo01(p.precipitation.y));
@@ -47,7 +49,8 @@ namespace
 		t.terms2 = glm::vec4(p.trunk, p.rock);
 		t.terms3 = glm::vec4(p.wet, p.maxSlope, p.minAltitude);
 		t.terms4 = glm::vec4(p.river, p.flow);
-		t.terms5 = glm::vec4(p.riverCurve, 0.0f, 0.0f, 0.0f);
+		// y: the u_textures index + 1 (0 = untextured) - a fern's frond.
+		t.terms5 = glm::vec4(p.riverCurve, texture != UINT16_MAX ? (float)texture + 1.0f : 0.0f, 0.0f, 0.0f);
 		t.ring = p.ring;
 		t.shape = glm::vec4(desc.scale, desc.range, desc.sink);
 		t.albedo0 = glm::vec4(srgbToLinear(desc.color), desc.roughness);
@@ -96,6 +99,11 @@ namespace Procedural
 	{
 		Globals::jobSystem.wait(m_genCounter);
 		Globals::jobSystem.wait(m_floorCounter);
+		for (const Type& type : m_types)
+			if (type.texture != UINT16_MAX)
+				Globals::rendererVK.releaseTexture(type.texture);
+		for (uint16 texture : m_retiredTextures)
+			Globals::rendererVK.releaseTexture(texture);
 	}
 
 	void ClutterSystem::initialize()
@@ -123,6 +131,9 @@ namespace Procedural
 			m_settings.reload = false;
 			m_remesh = false;
 			Globals::jobSystem.wait(m_genCounter); // the jobs write into m_types
+			for (const Type& type : m_types)
+				if (type.texture != UINT16_MAX)
+					m_retiredTextures.push_back(type.texture);
 			m_types.clear();
 			loadTypes();
 			kickGeneration();
@@ -202,6 +213,11 @@ namespace Procedural
 					generateClutterMeshes(type.desc, resolution, type.meshes);
 					saveClutterMeshes(path, hash, type.meshes);
 				}
+				// The flower's texture (a frond, a petal, an ear): once per load (the mesh resolution does not change it).
+				uint32 size = 0;
+				oc::vector<uint8> level0;
+				if (type.texture == UINT16_MAX && generateClutterTexture(type.desc, size, level0))
+					buildLeafClusterMips(level0, size, type.image);
 				m_genInFlight.fetch_sub(1, oc::memory_order_release);
 			}, { "Clutter generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 		}
@@ -242,6 +258,14 @@ namespace Procedural
 			for (Renderer::ClutterMesh& mesh : type.meshes)
 				meshes.push_back(oc::move(mesh));
 			type.meshes.clear();
+			if (!type.image.mips.empty())
+			{
+				oc::vector<oc::span<uint8>> mips;
+				for (oc::vector<uint8>& level : type.image.mips)
+					mips.push_back(oc::span<uint8>(level.data(), level.size()));
+				type.texture = renderer.createTexture(type.image.size, type.image.size, mips, oc::format("Clutter/{}", type.desc.name).c_str());
+				type.image = {};
+			}
 			for (const ClutterPlacementDesc& placement : type.desc.placements)
 			{
 				if (types.size() >= CLUTTER_MAX_TYPES)
@@ -249,11 +273,14 @@ namespace Procedural
 					Log::warning(oc::format("Clutter: more than {} placement blocks - '{}' is cut short", CLUTTER_MAX_TYPES, type.desc.name));
 					break;
 				}
-				types.push_back(gpuType(type.desc, placement, firstMesh, numMeshes));
+				types.push_back(gpuType(type.desc, placement, firstMesh, numMeshes, type.texture));
 			}
 			flowers += flower ? 1 : 0;
 		}
 		renderer.setClutterAssets(types, meshes);
+		for (uint16 texture : m_retiredTextures)
+			renderer.releaseTexture(texture);
+		m_retiredTextures.clear();
 		Log::info(oc::format("Clutter: {} types ({} flowers), {} placement rules, {} meshes", m_types.size(), flowers, types.size(), meshes.size()));
 	}
 

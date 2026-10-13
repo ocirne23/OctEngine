@@ -41,9 +41,9 @@ export struct SkyParams
 
     // Ambient + sky radiance (the non-sun lighting inputs)
     glm::vec3 ambientColor = glm::vec3(1.0f);   // flat non-physical minimum ambient
-    float ambientIntensity = 0.003f;
+    float ambientIntensity = 0.001f;
     glm::vec3 skyRadianceColor = glm::vec3(0.55f, 0.65f, 1.0f); // directional sky radiance (moonlight/space light), along up
-    float skyRadianceIntensity = 0.05f;
+    float skyRadianceIntensity = 0.01f;
 
     // Ground plane of the sky sphere (below the horizon): albedo lit by sun + sky. Also tints the
     // ground-bounce fallback in skyRadiance() for downward GI/fog rays. Can stay 0: the GI probe gather

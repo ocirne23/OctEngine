@@ -7,11 +7,12 @@ ClutterType Gentian
 	Color 0.10 0.20 0.75
 	Color2 0.15 0.30 0.55
 	Head Radial
+	PetalShape Pointed
 	Petals 5
 	Open 60
 	PetalWidth 0.6
 	Stem 0.08
-	HeadSize 0.02
+	HeadSize 0.05
 	Placement
 		Density 2
 		Temperature -8 6

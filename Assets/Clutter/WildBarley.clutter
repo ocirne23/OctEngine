@@ -1,0 +1,25 @@
+# Wild barley (foxtail / wall barley): pale stalks with slender, upright ears and a silky brush of very long, nearly
+# parallel awns (three per node), still a little green - on dry meadows, verges and waste ground.
+ClutterType WildBarley
+	Kind Flower
+	Seed 307
+	Scale 1.2 1.9
+	Range 80
+	Color 0.58 0.66 0.36
+	Color2 0.76 0.74 0.52
+	Head Grain
+	Ear Slender
+	Petals 3
+	Open 10
+	PetalWidth 0.16
+	Stem 0.5
+	HeadSize 0.12
+	Awns 1
+	Placement
+		Density 0.2
+		Temperature 5 24
+		Precipitation 300 1000
+		Grass 0 1
+		Canopy 1 0
+		Cluster 10 0.1
+		Slope 0.7

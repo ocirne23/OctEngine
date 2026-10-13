@@ -7,11 +7,12 @@ ClutterType Cornflower
 	Color 0.20 0.35 0.85
 	Color2 0.25 0.20 0.50
 	Head Radial
+	PetalShape Fringed
 	Petals 9
 	Open 20
 	PetalWidth 0.35
 	Stem 0.45
-	HeadSize 0.018
+	HeadSize 0.045
 	Placement
 		Density 1.6
 		Temperature 5 20

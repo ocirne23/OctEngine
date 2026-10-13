@@ -270,6 +270,10 @@ public:
         const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0,
         ETextureEncoding albedoEncoding = ETextureEncoding::Rgba8, ETextureEncoding normalEncoding = ETextureEncoding::Rgba8);
     void destroyTextureMaterial(uint16 materialIdx);
+    // A bare bindless texture (sRGB RGBA8 from a caller-built mip chain, level 0 first): its index in the shaders'
+    // u_textures (the ground clutter's fern fronds). Free with releaseTexture (retired once the GPU has drained).
+    uint16 createTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
+    void releaseTexture(uint16 texIdx);
     // A copy of `source` with `extraFlags` added, SHARING its textures: free it with releaseMaterial (the slot
     // only), never destroyTextureMaterial.
     uint16 deriveMaterial(uint16 source, uint32 extraFlags);

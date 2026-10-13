@@ -116,13 +116,28 @@ namespace Procedural
 			const oc::string head = n->asString();
 			out.head = iequals(head, "Spike") ? EFlowerHead::Spike : iequals(head, "Umbel") ? EFlowerHead::Umbel
 				: iequals(head, "Bell") ? EFlowerHead::Bell : iequals(head, "Reed") ? EFlowerHead::Reed
-				: iequals(head, "Tuft") ? EFlowerHead::Tuft : EFlowerHead::Radial;
+				: iequals(head, "Tuft") ? EFlowerHead::Tuft : iequals(head, "Grain") ? EFlowerHead::Grain
+				: iequals(head, "Fern") ? EFlowerHead::Fern : iequals(head, "Rosette") ? EFlowerHead::Rosette
+				: iequals(head, "Leafy") ? EFlowerHead::Leafy : EFlowerHead::Radial;
 		}
 		readInt(*type, "Petals", out.petals);
 		readFloat(*type, "Open", out.open);
 		readFloat(*type, "PetalWidth", out.petalWidth);
 		readFloat(*type, "Stem", out.stemHeight);
 		readFloat(*type, "HeadSize", out.headSize);
+		if (const AssetNode* n = type->find("Ear"))
+		{
+			const oc::string ear = n->asString();
+			out.ear = iequals(ear, "Slender") ? EGrainEar::Slender : iequals(ear, "Panicle") ? EGrainEar::Panicle : EGrainEar::Dense;
+		}
+		if (const AssetNode* n = type->find("PetalShape"))
+		{
+			const oc::string shape = n->asString();
+			out.petalShape = iequals(shape, "Notched") ? EPetalShape::Notched : iequals(shape, "Pointed") ? EPetalShape::Pointed
+				: iequals(shape, "Fringed") ? EPetalShape::Fringed : iequals(shape, "None") ? EPetalShape::None : EPetalShape::Round;
+		}
+		// Grain: the awns (0..1 = 0 .. 2 x the ear's length). A flower has no spots, so they ride that slot of the record.
+		readFloat(*type, "Awns", out.spots);
 
 		for (const AssetNode* placement : type->findAll("Placement"))
 		{

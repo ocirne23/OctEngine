@@ -15,6 +15,24 @@ export namespace Procedural
 	using EClutterKind = RendererVKLayout::EClutterKind;
 	using EFlowerHead = RendererVKLayout::EFlowerHead;
 
+	// A RADIAL head's petal outline (its generated texture, ClutterTexture).
+	enum class EPetalShape : uint8
+	{
+		Round,   // a narrow claw, then a wide rounded blade (poppy, buttercup)
+		Notched, // long and narrow, a small notch in the tip (daisy)
+		Pointed, // widest in the middle, a pointed tip (gazania)
+		Fringed, // a wedge widening to a toothed tip (cornflower, dandelion)
+		None,    // untextured: the plain tapered quad
+	};
+
+	// A GRAIN head's ear (its generated texture, ClutterTexture).
+	enum class EGrainEar : uint8
+	{
+		Dense,   // a stout ear of plump spikelets, fanning awns (wheat)
+		Slender, // a narrow ear, three long, nearly parallel awns per node (barley)
+		Panicle, // no ear: a loose panicle of thin branches with hanging spikelets (oat)
+	};
+
 	enum class EMushroomCap : uint8
 	{
 		Dome,   // a round cap (bolete, fly agaric)
@@ -80,12 +98,22 @@ export namespace Procedural
 		// Flower (no mesh: built in the vertex shader). A REED head: the petals are long pointed leaves from the root
 		// (PetalWidth x HeadSize wide, Open = their lean out from upright), the head a cattail spike (Color2). A TUFT head:
 		// no stalk, Petals / 2 fine leaves (two slots each: a bend) arching out from one point and drooping (Color).
+		// GRAIN (wild wheat, barley, oat): ONE stalk (Petals ignored; four slots; Color2 = straw) with an ear
+		// (HeadSize long, PetalWidth x HeadSize wide; Color) nodding by Open, and `Awns` (0..1: 0 .. 2 x the ear) beyond it.
+		// FERN: Petals fronds from one crown (the LARGE topology), arching out by Open, HeadSize = the widest pinna (a
+		// side), the frond a generated texture; no stalk. RADIAL / GRAIN are textured too: the petal outline
+		// (`PetalShape`), the ear's spikelets and awns. ROSETTE (dock, plantain): Petals broad leaves
+		// (two slots each) lying round the root, raised by Open, HeadSize long, + the stalk with a seed spike (Color2).
+		// LEAFY (nettle, goosefoot, thistle): Petals leaves in opposite pairs up the stalk, HeadSize long at the bottom and
+		// smaller up, raised by Open, + a top spike (Color2).
 		EFlowerHead head = EFlowerHead::Radial;
 		int petals = 6;
 		float open = 10.0f;            // degrees: the petals' tilt up from the head's plane (negative: swept back)
 		float petalWidth = 0.45f;      // x the head size
 		float stemHeight = 0.35f;      // m at scale 1
 		float headSize = 0.03f;        // m at scale 1 (a petal's length)
+		EPetalShape petalShape = EPetalShape::Round; // Radial: the outline; Umbel / Spike / Bell: only None (untextured) counts
+		EGrainEar ear = EGrainEar::Dense;            // Grain only
 
 		oc::vector<ClutterPlacementDesc> placements; // the blocks with a density
 	};

@@ -7,11 +7,12 @@ ClutterType Dandelion
 	Color 1.00 0.80 0.05
 	Color2 1.00 0.75 0.05
 	Head Radial
+	PetalShape Fringed
 	Petals 30
 	Open 15
 	PetalWidth 0.15
 	Stem 0.15
-	HeadSize 0.016
+	HeadSize 0.04
 	Placement
 		Density 2
 		Temperature 0 22

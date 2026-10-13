@@ -18,8 +18,8 @@ import :Layout;
 //
 // Per frame: CULL (a workgroup per patch: the kept records + their bucket keys + the bucket counts) -> PREFIX (one
 // workgroup: the buckets' ranges + one indexed draw per bucket) -> SCATTER (the records into their buckets' ranges, the
-// draws' instance-rate attributes). The buckets: CLUTTER_FLOWER_LODS for the flowers (a fixed draw of that many
-// commands), then one per (mesh, LOD) - their draw count is written by the prefix pass.
+// draws' instance-rate attributes). The buckets: CLUTTER_FLOWER_BUCKETS for the flowers, one per (topology, LOD) (a
+// fixed draw of that many commands), then one per (mesh, LOD) - their draw count is written by the prefix pass.
 //
 // The ASSETS (setAssets: the types, the rigid meshes) live in device-local buffers and change only on a load (GPU idle).
 // The CLUTTER FRAME (ClutterFrameGpu: the patch grid, the counts, the flower index ranges, the FOREST FLOOR MAP) is
@@ -47,7 +47,7 @@ public:
     uint32 numTypes() const { return m_numTypes; }
     uint32 numMeshes() const { return m_numMeshes; }
     // The flower index buffer's range per LOD (x first index, y index count): the clutter frame's header.
-    const oc::array<glm::uvec4, RendererVKLayout::CLUTTER_FLOWER_LODS>& flowerLods() const { return m_flowerLods; }
+    const oc::array<glm::uvec4, RendererVKLayout::CLUTTER_FLOWER_BUCKETS>& flowerLods() const { return m_flowerLods; }
 
     struct RecordParams
     {
@@ -117,7 +117,7 @@ private:
     Buffer m_vertices;
     Buffer m_indices;
     Buffer m_flowerIndices;
-    oc::array<glm::uvec4, RendererVKLayout::CLUTTER_FLOWER_LODS> m_flowerLods{}; // x first index, y count
+    oc::array<glm::uvec4, RendererVKLayout::CLUTTER_FLOWER_BUCKETS> m_flowerLods{}; // per (topology, LOD): x first index, y count
     uint32 m_numTypes = 0;
     uint32 m_numMeshes = 0;
     uint32 m_maxTextures = 1;

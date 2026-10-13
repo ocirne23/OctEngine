@@ -7,11 +7,12 @@ ClutterType Gazania
 	Color 0.95 0.45 0.08
 	Color2 0.30 0.10 0.05
 	Head Radial
+	PetalShape Pointed
 	Petals 14
 	Open 10
 	PetalWidth 0.3
 	Stem 0.15
-	HeadSize 0.025
+	HeadSize 0.0625
 	Placement
 		Density 2.4
 		Temperature 18 32

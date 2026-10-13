@@ -11,7 +11,7 @@ ClutterType Poppy
 	Open 35
 	PetalWidth 0.9
 	Stem 0.4
-	HeadSize 0.03
+	HeadSize 0.075
 	Placement
 		Density 2.4
 		Temperature 8 24

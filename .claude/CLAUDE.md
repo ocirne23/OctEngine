@@ -459,9 +459,11 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 ## `.tree` — tree species
 
 `TreeSpecies <name>` with `Trunk` / `Crown` / `Module` (+ `Level` children) / `Leaves` / `Color` blocks, in
-`Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree.
+`Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree. `Kind Bush`
+species grow around the trees of their `Climate` (picked by `Weight`); a tree's `Undergrowth` block sets how many and
+how far out.
 **The grammar is in "Trees" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; placeholders
-`Oak.tree`, `Pine.tree`, `Acacia.tree`, plus two bushes per tree `Climate`. Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
+`Oak.tree`, `Pine.tree`, `Acacia.tree`, plus three bushes per tree `Climate` (one of them a wide ground cover). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
 Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
 (not in git) and reused (regenerate with `Trees/Regenerate textures`).
 
@@ -478,7 +480,8 @@ Loaded by `RockSystem` itself (not `AssetRegistry`).
 
 ## `.clutter` — ground clutter types
 
-`ClutterType <name>` in `Assets/Clutter/`: a pebble, a fallen branch, a mushroom or a flower (`Kind`), its shape
+`ClutterType <name>` in `Assets/Clutter/`: a pebble, a fallen branch, a mushroom or a flower (`Kind`; the flower path
+also builds reeds, sedges, wild grains, ferns and weeds - `Head Grain|Fern|Rosette|Leafy`, ...), its shape
 (a pebble takes the `.rock` shape keys; a flower has no mesh: `Head`, `Petals`, `Open`, ...), and any number of
 `Placement` blocks (density per m², a climate box, and `a b` TERMS over the terrain and the FOREST FLOOR - `Grass`,
 `Crag`, `Beach`, `Canopy`, `Trunk`, `Rock`, `Wet` - plus `Cluster` and fairy `Ring`s); their densities add. Placed on the

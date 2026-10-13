@@ -148,7 +148,9 @@ export namespace Procedural
 		{
 			glm::vec2 scale{ 1.0f };
 			oc::vector<ExpandVariant> variants;
-			oc::vector<uint32> bushes;  // trees: the bush species of their climate (indices into species)
+			oc::vector<uint32> bushes;  // trees: the bush species of their climate (indices into species), each `Weight` times
+			float bushesPerTree = 0.0f; // trees: their undergrowth (bushUndergrowth)
+			float bushRadius = 1.5f;    // trees: bushes out to this from the tree (m)
 		};
 		// A ROCK type of the world (RockSystem's WorldType, Docs/RockRenderingPlan.md 6): a record expands to ONE piece -
 		// its variant, scale (rockRecordScale) and yaw from the record's seed, laid on the ground under its footprint
@@ -179,8 +181,7 @@ export namespace Procedural
 			uint32 worldSeed = 1;
 			float chunkSize = 256.0f;
 			float sizeVariation = 0.0f;
-			float bushesPerTree = 0.0f;
-			float bushRadius = 1.5f;    // bushes out to this from their tree (m)
+			float bushRadius = 1.5f;    // the LARGEST species' bush radius (m): the ground grid's margin
 			float riverClear = 1.0f;    // "Terrain/Rivers/Vegetation clear": no bush where the river influence is above it
 		};
 		struct ExpandResult

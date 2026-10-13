@@ -1,0 +1,25 @@
+# Broad-leaved dock: a rosette of big, long leaves lying round the root and a tall rust-brown seed stalk, scattered over
+# damp grassland and field edges. Head Rosette: Petals = leaves (two slots each), HeadSize = their length, Open = how far
+# they rise from the ground; Color2 = the seed spike.
+ClutterType Dock
+	Kind Flower
+	Seed 409
+	Scale 0.8 1.25
+	Range 70
+	Color 0.22 0.36 0.12
+	Color2 0.42 0.22 0.10
+	Head Rosette
+	Petals 6
+	Open 25
+	PetalWidth 0.4
+	Stem 0.7
+	HeadSize 0.25
+	Placement
+		Density 0.25
+		Temperature 0 22
+		Precipitation 500 2000
+		Grass 0.3 1
+		Wet 0.6 1
+		Canopy 1 0.3
+		Cluster 10 0.4
+		Slope 0.7

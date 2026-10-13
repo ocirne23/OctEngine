@@ -252,4 +252,7 @@ C3 (it can start with the climate + grass terms and take the floor map after C1)
   wind), the ground table, the grass's stem colours and the near grass cascade.
 * **Placement blocks: any number per type**, each its own GPU type (their densities add), as the rocks' blocks.
 * **The rigid draw is one indexed indirect draw per (mesh, LOD) bucket** (cull -> prefix -> scatter), not one per object.
+* **Textured flowers** (2026-10-13): the ferns' fronds, the radial heads' petals (`PetalShape`), the grains' ears +
+  awns and the umbel / spike / bell florets are alpha-tested strips with generated textures (ClutterTexture), in their
+  own (textured) buckets and pipeline. Reeds, tufts and the weeds stay untextured geometry.
 * Not built: the `Stream` term (no flow field read yet), `Species` (decision 5), pine cones, the far tints (9).

@@ -258,6 +258,17 @@ uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::ve
     return (uint16)addMaterialInfos({ material });
 }
 
+uint16 Renderer::createTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+{
+    // No re-record: the upload queued its bindless write (as createTextureMaterial's).
+    return Globals::textureManager.uploadMips(width, height, vk::Format::eR8G8B8A8Srgb, mips, debugName);
+}
+
+void Renderer::releaseTexture(uint16 texIdx)
+{
+    m_textures.queueFree(oc::span<const uint16>(&texIdx, 1));
+}
+
 void Renderer::destroyTextureMaterial(uint16 materialIdx)
 {
     // Like removeObjectContainer: the image retires once the GPU has drained, the slot recycles.
@@ -1037,8 +1048,8 @@ void Renderer::uploadClutterFrame(uint32 frameIdx)
     }
     frame.numTypes = m_clutterPipeline.numTypes();
     frame.numMeshes = m_clutterPipeline.numMeshes();
-    for (uint32 lod = 0; lod < CLUTTER_FLOWER_LODS; ++lod)
-        frame.flowerLods[lod] = m_clutterPipeline.flowerLods()[lod];
+    for (uint32 bucket = 0; bucket < CLUTTER_FLOWER_BUCKETS; ++bucket)
+        frame.flowerLods[bucket] = m_clutterPipeline.flowerLods()[bucket];
     const bool floorDirty = m_clutterFloorDirty[frameIdx];
     if (floorDirty)
     {

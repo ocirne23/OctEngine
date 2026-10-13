@@ -1,0 +1,24 @@
+# Lady fern: a shuttlecock of fine, bright fronds arching from one crown, on the damp, shaded forest floor near the trunks
+# and along the water.
+ClutterType LadyFern
+	Kind Flower
+	Seed 509
+	Scale 0.8 1.2
+	Range 70
+	Color 0.30 0.48 0.14
+	Color2 0.30 0.48 0.14
+	Head Fern
+	Petals 7
+	Open 38
+	PetalWidth 0.35
+	Stem 0.6
+	HeadSize 0.08
+	Placement
+		Density 1.2
+		Temperature 0 20
+		Precipitation 900 2600
+		Canopy 0.05 1
+		Trunk 1 1.6
+		Wet 0.3 1
+		Cluster 8 0.35
+		Slope 0.9

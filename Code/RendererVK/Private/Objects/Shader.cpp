@@ -276,6 +276,10 @@ static oc::string buildLayoutPreamble()
     def("CLUTTER_SCATTER_GROUP", CLUTTER_SCATTER_GROUP);
     def("CLUTTER_LODS", CLUTTER_LODS, "u");
     def("CLUTTER_FLOWER_LODS", CLUTTER_FLOWER_LODS, "u");
+    def("CLUTTER_FLOWER_TOPOLOGIES", CLUTTER_FLOWER_TOPOLOGIES, "u");
+    def("CLUTTER_GRAIN_STRIP_WIDEN", CLUTTER_GRAIN_STRIP_WIDEN);
+    def("CLUTTER_GRAIN_STALK_HALF_WIDTH", CLUTTER_GRAIN_STALK_HALF_WIDTH);
+    def("CLUTTER_FLOWER_BUCKETS", CLUTTER_FLOWER_BUCKETS, "u");
     def("CLUTTER_FLOOR_DIM", CLUTTER_FLOOR_DIM, "u");
     def("CLUTTER_FLOWER_STEM0", CLUTTER_FLOWER_STEM_SEGMENTS[0], "u");
     def("CLUTTER_FLOWER_STEM1", CLUTTER_FLOWER_STEM_SEGMENTS[1], "u");
@@ -283,6 +287,9 @@ static oc::string buildLayoutPreamble()
     def("CLUTTER_FLOWER_PETALS0", CLUTTER_FLOWER_PETALS[0], "u");
     def("CLUTTER_FLOWER_PETALS1", CLUTTER_FLOWER_PETALS[1], "u");
     def("CLUTTER_FLOWER_PETALS2", CLUTTER_FLOWER_PETALS[2], "u");
+    def("CLUTTER_FLOWER_BIG_PETALS0", CLUTTER_FLOWER_BIG_PETALS[0], "u");
+    def("CLUTTER_FLOWER_BIG_PETALS1", CLUTTER_FLOWER_BIG_PETALS[1], "u");
+    def("CLUTTER_FLOWER_BIG_PETALS2", CLUTTER_FLOWER_BIG_PETALS[2], "u");
     def("RIVER_FLOW_SLOW", RIVER_FLOW_SLOW); // float literals (to_string keeps the decimal point)
     def("RIVER_FLOW_FAST", RIVER_FLOW_FAST);
     def("CLUTTER_KIND_PEBBLE", (uint32)EClutterKind::Pebble, "u");
@@ -295,6 +302,10 @@ static oc::string buildLayoutPreamble()
     def("FLOWER_HEAD_BELL", (uint32)EFlowerHead::Bell, "u");
     def("FLOWER_HEAD_REED", (uint32)EFlowerHead::Reed, "u");
     def("FLOWER_HEAD_TUFT", (uint32)EFlowerHead::Tuft, "u");
+    def("FLOWER_HEAD_GRAIN", (uint32)EFlowerHead::Grain, "u");
+    def("FLOWER_HEAD_FERN", (uint32)EFlowerHead::Fern, "u");
+    def("FLOWER_HEAD_ROSETTE", (uint32)EFlowerHead::Rosette, "u");
+    def("FLOWER_HEAD_LEAFY", (uint32)EFlowerHead::Leafy, "u");
     def("PASS_MAIN", PASS_MAIN, "u");
     def("PASS_SHADOW", PASS_SHADOW, "u");
     def("PASS_GI", PASS_GI, "u");

@@ -1,0 +1,26 @@
+# Stinging nettles: upright stalks with pairs of pointed, dark-green leaves, in dense patches on damp, rich ground - the
+# edge of a wood, near the trunks, along the water. Head Leafy: Petals = leaves (in pairs up the stalk, two slots each),
+# HeadSize = the bottom leaf's length, Open = how far they rise from flat; Color2 = the drooping flower catkins on top.
+ClutterType Nettle
+	Kind Flower
+	Seed 401
+	Scale 0.8 1.25
+	Range 70
+	Color 0.18 0.32 0.10
+	Color2 0.40 0.45 0.25
+	Roughness 0.7
+	Head Leafy
+	Petals 8
+	Open 25
+	PetalWidth 0.55
+	Stem 0.8
+	HeadSize 0.11
+	Placement
+		Density 2.5
+		Temperature 0 22
+		Precipitation 600 2500
+		Wet 0.4 1
+		Canopy 0.6 1
+		Trunk 1 1.5
+		Cluster 6 0.25
+		Slope 0.8

@@ -10,6 +10,7 @@ import Settings;
 
 import :TerrainSampler;
 import :ClutterType;
+import :TreeLeafTexture;
 
 // GROUND CLUTTER ("Clutter" tweaks; Docs/GroundClutterPlan.md): pebbles, fallen branches, mushrooms and flowers. The
 // objects themselves are placed on the GPU every frame (RendererVK ClutterPipeline, clutter_cull.cs.glsl) - nothing per
@@ -46,6 +47,10 @@ export namespace Procedural
 			ClutterTypeDesc desc;
 			uint64 meshHash = 0; // the .clutter file's text (MeshCache's key, with the mesh resolution)
 			oc::vector<Renderer::ClutterMesh> meshes;
+			// A flower's texture (ClutterTexture: a fern's frond, a radial petal, a grain's ear): the chain from the job,
+			// uploaded and freed in finishGeneration.
+			TreeLeafTexture image;
+			uint16 texture = UINT16_MAX; // the renderer's u_textures index
 		};
 		// What a floor map bake reads: a copy of the records under the map and what their types mean.
 		struct FloorRecords
@@ -74,6 +79,9 @@ export namespace Procedural
 		bool m_generating = false;
 		bool m_floorSet = false;      // the renderer holds a floor map (cleared on disable)
 		oc::vector<Type> m_types;
+		// The textures of the types a reload dropped: the renderer's GPU types still use them until the next
+		// setClutterAssets, so they are freed after it.
+		oc::vector<uint16> m_retiredTextures;
 		oc::atomic<int32> m_genInFlight{ 0 };
 		JobCounter m_genCounter;
 

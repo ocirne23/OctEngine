@@ -1324,8 +1324,11 @@ frame - no CPU memory per object, no CPU work per frame but the clutter frame's 
 * **THE DRAWS** (`StaticMeshGraphicsPipeline`, with the grass: the main layout, so the lit core's set binds; after the
   grass, before the film): the RIGID meshes (`clutter.vs/fs.glsl`; `drawIndexedIndirectCount` over the (mesh, LOD)
   buckets: the meshes' own vertex / index buffers, `ClutterVertexGpu` at binding 0, the record instance-rate at
-  binding 1) and the FLOWERS (`clutter_flower.vs/fs.glsl`; `drawIndexedIndirect` of the 3 flower buckets over the
-  flower topology index buffer, the record at binding 0, no vertex buffer). Two-sided, no discard, the opaque family,
+  binding 1) and the FLOWERS (`clutter_flower.vs/fs.glsl`; `drawIndexedIndirect` of the `CLUTTER_FLOWER_BUCKETS` = 12
+  flower buckets - (textured, topology, LOD), bucket (textured x 2 + topology) x 3 + LOD - over the flower topology
+  index buffer, the record at binding 0, no vertex buffer: the 6 untextured buckets through the flower pipeline, the 6
+  textured ones through the TEXTURED FLOWER pipeline - the same shaders with `CLUTTER_TEXTURED` on the FS, the only one
+  with a discard). Two-sided, the opaque family,
   `LIT_NO_RTAO` (not in the TLAS; no RT, no GI of their own), the near grass cascade received; the flowers write motion.
 * **THE RIGID MATERIAL** per kind: PEBBLE - the climate's BEDROCK (the splat's rock entries, the top climate pick,
   triplanar at 4 x the rocks' uv scale) x the type's colour; BRANCH - bark with streaks along the wood (part 0), end
@@ -1335,12 +1338,30 @@ frame - no CPU memory per object, no CPU work per frame but the clutter frame's 
   (`grass_wind.inc.glsl`, moved out of grass.vs.glsl: `grassBezier` / `grassWind` / `grassTip`), so a flower sways
   exactly as the grass around it; motion vectors from last frame's time. The HEAD sits at the tip in a frame along the
   stem's upper chord: RADIAL (petals around a centre disc, tilted up by `Open`), SPIKE (florets spiralling up the top
-  of the stem), UMBEL (small flat florets over a disc), BELL (florets hanging from the arching top). The topology per
-  LOD: the stem's strip (4 / 2 / 1 segments) + `CLUTTER_FLOWER_PETALS` (16 / 8 / 4) petal quads + a centre quad; a slot
-  past the flower's petal count collapses (no area), fewer slots than petals widen them. The FS: the grass's root -> tip
-  colours on the stem, the type's colours on the petals and the centre, transmission (`Flower transmission`).
+  of the stem), UMBEL (small flat florets over a disc), BELL (florets hanging from the arching top), and the plants of
+  the same path - REED, TUFT, GRAIN (a tuft of stalks with ears and awns), FERN (saw-toothed fronds), ROSETTE / LEAFY
+  (weeds; `flowerLeaf`: a two-quad leaf) - see Procedural CONTEXT, `.clutter`. The topology per LOD: the stem's strip
+  (4 / 2 / 1 segments) + `CLUTTER_FLOWER_PETALS` (16 / 8 / 4) petal quads + a centre quad; a slot past the flower's petal
+  count collapses (no area), fewer slots than petals widen them. TWO TOPOLOGIES (`clutterFlowerTopology`: the bucket is
+  topology x 3 + LOD): 0 for every head but the fern, 1 = the LARGE one (`CLUTTER_FLOWER_BIG_PETALS` 32 / 18 / 8) for
+  a fern's fronds - in one shared topology every flower would run the VS for 32 slots. The FS: the grass's root -> tip
+  colours on the stem, the type's colours on the petals and the centre, transmission (`Flower transmission`). Its
+  normal is turned to the VIEWER by N.V (the VS normal is one face, bent, not tied to the winding - a gl_FrontFacing
+  flip left cards facing away, N.V = 0, and the sun's GGX lit them very bright at some view angles), then bent toward
+  V up to the foliage's min N.V (`u_foliage_minNoV`), as the edge-on leaves.
+* **TEXTURED FLOWERS** (2026-10-13; ferns, radial petals, grain ears, umbel / spike / bell florets): a flower type's texture is a bindless
+  `u_textures` slot (`Renderer::createTexture` / `releaseTexture`: RGBA8 sRGB with the caller's mip chain, no material).
+  Its index + 1 rides `ClutterTypeGpu::terms5.y` (0 = none); the cull copies it into the record's `data.x` (a flower has
+  no quaternion) and picks a textured bucket. The textured part (part 1) becomes a strip of the part's full width, u
+  across it (`out_flower.z`), v along: a FERN frond (4 / 3 / 2 quads), a RADIAL petal or an UMBEL / SPIKE / BELL floret
+  (a rectangle, the outline in the texture), a GRAIN ear (ONE strip over the ear and its awns, `CLUTTER_GRAIN_STRIP_WIDEN` x the ear's width for the
+  fanning awns: the awn quad collapses; its stalks are `CLUTTER_GRAIN_STALK_HALF_WIDTH` x the ear's width at the top -
+  the texture's rachis width - not the flower stem's width). The FS samples part 1 only
+  (`textureGrad`, the derivatives outside the branch), discards alpha < 0.5, and takes mix(Color, Color2, G) x R (G: a
+  grain's awns, a fern's rachis).
 * **NEAR SHADOWS**: the rigid and flower VS with `CLUTTER_NEAR_SHADOW` into the near grass cascade (the casters within
-  its reach). Nothing casts into the scene cascades (the user's choice, 2026-10-07).
+  its reach). Nothing casts into the scene cascades (the user's choice, 2026-10-07). No alpha test there: a textured
+  strip casts narrowed to about its cover (a frond 0.55 x, an ear 0.6 x, a petal 0.65 x).
 * Off (`Enabled`, no types, VR, or no ground table this frame): `recordClear` zeroes the counts and the flower commands.
   `setClutterAssets` (GPU idle, re-record) / `setClutterFloorMap` (each slot takes it in present: the clutter frame's
   floor part is flushed only then) are Procedural ClutterSystem's. The GPU cost is not measured yet.

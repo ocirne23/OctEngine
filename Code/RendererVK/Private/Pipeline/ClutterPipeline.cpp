@@ -211,28 +211,35 @@ void ClutterPipeline::setAssets(oc::span<const ClutterTypeGpu> types, oc::span<c
         m_indices.upload(indices.size_bytes(), indices.data());
 }
 
-// The flower topology, one flower per LOD: the stem's strip (2 vertices per row, S segments), the petal slots (a quad of
-// 4 vertices each), the centre quad. The VS builds every vertex from its id (clutter_flower.vs.glsl flowerVertex).
+// The flower topologies, one flower per (topology, LOD) - buckets (textured x TOPOLOGIES + topology) x LODS + LOD: the stem's strip
+// (2 vertices per row, S segments), the petal slots (a quad of 4 vertices each: CLUTTER_FLOWER_PETALS, or the large
+// topology's CLUTTER_FLOWER_BIG_PETALS), the centre quad. The VS builds every vertex from its id (clutter_flower.vs.glsl
+// flowerVertex; it takes the slot count from the head kind).
 void ClutterPipeline::buildFlowerIndices()
 {
     oc::vector<uint32> indices;
-    for (uint32 lod = 0; lod < CLUTTER_FLOWER_LODS; ++lod)
-    {
-        const uint32 first = (uint32)indices.size();
-        const uint32 segments = CLUTTER_FLOWER_STEM_SEGMENTS[lod];
-        for (uint32 row = 0; row < segments; ++row)
+    for (uint32 topology = 0; topology < CLUTTER_FLOWER_TOPOLOGIES; ++topology)
+        for (uint32 lod = 0; lod < CLUTTER_FLOWER_LODS; ++lod)
         {
-            const uint32 l0 = 2 * row, r0 = l0 + 1, l1 = l0 + 2, r1 = l0 + 3;
-            indices.insert(indices.end(), { l0, r0, l1, r0, r1, l1 });
+            const uint32 first = (uint32)indices.size();
+            const uint32 segments = CLUTTER_FLOWER_STEM_SEGMENTS[lod];
+            for (uint32 row = 0; row < segments; ++row)
+            {
+                const uint32 l0 = 2 * row, r0 = l0 + 1, l1 = l0 + 2, r1 = l0 + 3;
+                indices.insert(indices.end(), { l0, r0, l1, r0, r1, l1 });
+            }
+            const uint32 stemVerts = 2 * (segments + 1);
+            const uint32 slots = topology == 0 ? CLUTTER_FLOWER_PETALS[lod] : CLUTTER_FLOWER_BIG_PETALS[lod];
+            for (uint32 quad = 0; quad <= slots; ++quad) // the petals, then the centre
+            {
+                const uint32 b = stemVerts + 4 * quad;
+                indices.insert(indices.end(), { b, b + 1, b + 2, b, b + 2, b + 3 });
+            }
+            // The untextured and the textured bucket of this (topology, LOD) draw the same range.
+            const glm::uvec4 range(first, (uint32)indices.size() - first, 0u, 0u);
+            m_flowerLods[topology * CLUTTER_FLOWER_LODS + lod] = range;
+            m_flowerLods[(CLUTTER_FLOWER_TOPOLOGIES + topology) * CLUTTER_FLOWER_LODS + lod] = range;
         }
-        const uint32 stemVerts = 2 * (segments + 1);
-        for (uint32 quad = 0; quad <= CLUTTER_FLOWER_PETALS[lod]; ++quad) // the petals, then the centre
-        {
-            const uint32 b = stemVerts + 4 * quad;
-            indices.insert(indices.end(), { b, b + 1, b + 2, b, b + 2, b + 3 });
-        }
-        m_flowerLods[lod] = glm::uvec4(first, (uint32)indices.size() - first, 0u, 0u);
-    }
     m_flowerIndices.destroy();
     m_flowerIndices.initialize(indices.size() * sizeof(uint32), vk::BufferUsageFlagBits2::eIndexBuffer | vk::BufferUsageFlagBits2::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterFlowerIndices");
@@ -279,7 +286,7 @@ void ClutterPipeline::recordClear(vk::CommandBuffer primary, uint32 frameIdx)
 {
     // The slot's last draws read these (its fence was waited): no rigid draws, empty flower draws.
     primary.fillBuffer(m_counts[frameIdx].getBuffer(), 0, 4 * sizeof(uint32), 0u);
-    primary.fillBuffer(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_LODS * CLUTTER_COMMAND_SIZE, 0u);
+    primary.fillBuffer(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_BUCKETS * CLUTTER_COMMAND_SIZE, 0u);
     const vk::MemoryBarrier2 toDraw{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -394,8 +401,8 @@ void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 fram
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_nearShadowPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.bindVertexBuffers(0, { m_vertices.getBuffer(), m_sorted[frameIdx].getBuffer() }, { 0, 0 });
         cmd.bindIndexBuffer(m_indices.getBuffer(), 0, vk::IndexType::eUint32);
-        cmd.drawIndexedIndirectCount(m_commands[frameIdx].getBuffer(), CLUTTER_FLOWER_LODS * CLUTTER_COMMAND_SIZE,
-            m_counts[frameIdx].getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_LODS, CLUTTER_COMMAND_SIZE);
+        cmd.drawIndexedIndirectCount(m_commands[frameIdx].getBuffer(), CLUTTER_FLOWER_BUCKETS * CLUTTER_COMMAND_SIZE,
+            m_counts[frameIdx].getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_BUCKETS, CLUTTER_COMMAND_SIZE);
     }
     if (m_nearShadowFlowerBuilt)
     {
@@ -406,6 +413,6 @@ void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 fram
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_nearShadowFlowerPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.bindVertexBuffers(0, { m_sorted[frameIdx].getBuffer() }, { 0 });
         cmd.bindIndexBuffer(m_flowerIndices.getBuffer(), 0, vk::IndexType::eUint32);
-        cmd.drawIndexedIndirect(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_LODS, CLUTTER_COMMAND_SIZE);
+        cmd.drawIndexedIndirect(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_BUCKETS, CLUTTER_COMMAND_SIZE);
     }
 }

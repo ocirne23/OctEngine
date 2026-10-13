@@ -147,8 +147,10 @@ private:
     // The ground clutter (ClutterPipeline): one indexed indirect draw per bucket, outside the execution set too.
     GraphicsPipeline m_clutterPipeline;
     GraphicsPipeline m_flowerPipeline;
+    GraphicsPipeline m_texturedFlowerPipeline; // the textured flower buckets: alpha-tested (CLUTTER_TEXTURED)
     bool m_clutterBuilt = false;
     bool m_flowerBuilt = false;
+    bool m_texturedFlowerBuilt = false;
     // Two sets over the same variants: a set needs ONE fragment output interface. The opaque sequence runs the
     // opaque family (colour + the motion target), the transparent sequence the transparent family (colour only;
     // RendererVKLayout::PIPELINE_TRANSPARENT_MASK).

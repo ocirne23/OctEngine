@@ -1,0 +1,84 @@
+# Boreal ground cover (with Pine): a WIDE, low dwarf-birch mat - short creeping stems, flat-angled modules spreading
+# far sideways, small olive leaf clusters (~0.5-0.9 m tall, ~4-6 m across). It fills the open floor between the pines
+# with one piece where the round bushes need three: Weight 2, so half the climate's bushes are one.
+TreeSpecies DwarfBirch
+	Kind Bush
+	Climate Boreal
+	Weight 2
+	Seed 89
+	Scale 0.8 1.2
+	Trunk
+		Count 4
+		Height 0.15 0.3
+		Radius 0.02
+		Taper 0.6
+		Curve 12
+		Wobble 6
+		Flare 0.2
+		Sink 0.2
+		Rings 6
+		Sides 5
+	Crown
+		Shape Ellipsoid
+		Start 0
+		Radius 2.6
+		Slots 16
+		Fill 0.95
+		Angle 87 66
+		AngleVar 10
+		BranchRadius 4
+	Module
+		Count 8
+		Radius 0.005
+		Curve 25 10
+		UpAttract 0.1
+		Wobble 8
+		Elbows 1.2
+		ElbowAngle 22 8
+		Rings 7
+		Sides 4
+		Level
+			Count 5
+			Start 0.1
+			Length 0.45
+			LengthTaper 0.45
+			Angle 50 14
+			Curve 14 8
+			UpAttract 0.15
+			Wobble 10
+			Radius 0.55
+			Rings 3
+			Sides 3
+		Level
+			Count 3
+			Start 0.2
+			Length 0.5
+			LengthTaper 0.4
+			Angle 45 12
+			Curve 8 6
+			Wobble 8
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.55
+		Aspect 0.85
+		PerBranch 5
+		Levels 3
+		ClusterLeaves 12
+		ClusterLeafSize 0.26
+		NormalBend 0.4
+	Billboard
+		Distance 30
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 7
+	Bark
+		Plates 14 5
+		Crack 0.07
+		Relief 0.8
+		Lichen 0.3
+	Color
+		Bark 0.34 0.24 0.19
+		Leaf 0.17 0.24 0.09

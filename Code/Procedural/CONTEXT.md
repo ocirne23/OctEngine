@@ -1309,6 +1309,11 @@ TreeSpecies <name>
 	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush is scattered around the grove's trees, never one)
 	Climate <name> (a Bush grows around the trees of the same climate only, case-insensitive; a tree whose
 	        climate no bush shares takes every bush)
+	Weight n (a Bush, 1..8, default 1: how often its climate picks it - it is listed n times in each tree's bush list,
+	        which the CPU and the far volume's GPU mirror both pick from uniformly; a tree's list holds at most 8 entries
+	        in the far volume, TREE_RECORD_MAX_BUSHES)
+	Undergrowth { Bushes (per tree, the fraction by chance) · Radius (m: out to this from the tree) } (a Tree; absent =
+	        "Trees/Bushes per tree" and 0.75 x "Trees/Spacing (m)"; the far volume reads it per record type)
 	Trunk   Count · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5) · <shape>
 	        Lobes n (ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius fractions)
 	        LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over the height)
@@ -1379,7 +1384,18 @@ Ellipsoid envelope (upper reach ~84 % of the lower; Cone gave ~33 %), Angle 55 3
 too -, 7 strands per branch that rise, arch over the dome and hang plumb - Length 2.6, Rise 0.7, Droop 280 - of random length
 (`LengthVar 0.65`: curtains ending at layered heights), narrow cluster cards along them, `Leaves Align 0.8`;
 ~1000+ cards per module, ~5x Oak).
-Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate. Bushes (`Kind Bush`), two per climate:
+Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate. Undergrowth: Oak and Pine 4 bushes out
+to 8 m (the global default's count); Acacia 6 out to 12 m (its trees stand ~29 m apart). **The open floor is filled by
+WIDTH, not count** (2026-10-13; the user: "dense" = less open space, not more leaves): a bush's cover grows with its
+radius squared, so one wide, low ground-cover bush per climate - `Weight 2`, half the climate's bushes - fills what three
+round ones would, for one piece (one slot in the set, one cull entry, one far splat):
+* `Bramble` (Temperate), `DwarfBirch` (Boreal), `Brush` (Savanna): crown `Radius` 2.6, `Scale` 0.8-1.2 (~4-6 m across,
+  ~0.5-1.3 m tall), 14-16 near-flat slots from the ground, `Billboard Distance` 30. LEAVES ON EVERY LEVEL (`Levels 3`,
+  `PerBranch 6`, 12 leaves per cluster) and THIN stems: `Module Radius` 0.005, trunk `Radius` 0.02. **`Module Radius` is a
+  fraction of the module LENGTH** - with `Length 0` that is the crown radius, so the first draft's 0.022 x 2.6 m made
+  ~11 cm stems: tree branches, bare between sparse clusters (the user, 2026-10-13: "branchy, not leafy").
+
+The round bushes, two per climate:
 * Temperate: `Shrub` (broadleaf, round, sparse cluster cards) and `Thicket` (denser and wide: crown radius 1.5 m,
   flat slot angles).
 * Boreal: `Juniper` (a low SPREADING conifer, blue-green needle-spray cards, uncrossed - crossed read too dense; the first conifer bush, on
@@ -1755,7 +1771,8 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   keep radius is raised to near + 1: `requireKeepRadius`) is EXPANDED on a Low job, nearest ring first, at most 4 in
   flight: per record its tree (`treeRecordSeed`: the preview's variant / scale / yaw rules, `Size variation`) on the
   ground of ONE Full `sampleGrid` at 2 m (the terrain's LOD 0 spacing) over the chunk plus the bushes' reach, plus its
-  BUSHES (`Bushes per tree`, out to 0.75 x `Spacing`, the bush species of its climate - the preview's rule), none in
+  BUSHES (its species' `Undergrowth`, else `Bushes per tree` out to 0.75 x `Spacing`; the bush species of its climate
+  by `Weight` - the preview's rule; `ExpandSpecies::bushesPerTree` / `bushRadius`, `bushUndergrowth`), none in
   WATER (at the grid's nearest point: under a river's / lake's surface or the sea, or a river bed past "Terrain/Rivers/
   Vegetation clear"; the far volume's GPU mirror has no water data and keeps them). The job
   reads only an immutable `ExpandContext` (types, scales, far centre / radius per variant, the record-type -> species
@@ -1788,7 +1805,7 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   its bushes - the same hashes; the terrain map's ground) and splats it in detail; beyond, its exact mass per column.
   So a chunk entering or leaving the near radius changes nothing in the volume. The spawn hands the renderer the
   record types (`setTreeRecordTypes`: per TreeWorld type its variants as the set's types, Scale range, size
-  variation, a tree's bush types in `ExpandSpecies::bushes` order, bushes per tree / radius, per-variant mass, the
+  variation, a tree's bush types in `ExpandSpecies::bushes` order (weights as repeats), its OWN bushes per tree / radius, per-variant mass, the
   height profile); a respawn clears them. **Keep `expandChunk` and `tree_volume_splat.cs`'s `splatRecordPlant` /
   `main` (and `tree_volume_records.cs`'s variant / scale) in step.** At most 8 variants per species and 8 bush species
   per tree (a warning past that). Without `Trees/Enabled` (no species meshes, so no density) the records are not in
@@ -1800,8 +1817,8 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
 uploads each piece as two `RenderMesh`es (bark + double-sided diamond leaf cards, solid-colour `LitOpaque`
 materials), and spawns a `Grove size`² grove in front of the camera plus the piece library in rows behind it
 (`Show piece library`; reloads - off, the module / trunk billboards are not uploaded). `Bushes per tree` (default 4; the fraction by chance) scatters the `Kind Bush` species
-around each grove tree (1.5 m .. 0.75 × spacing out, area-uniform, a random bush species, the same variant / scale /
-yaw rules). `Bush shadow distance (m)` (default 100, GPU path): bushes farther than this from the shadow
+around each grove tree (1.5 m .. 0.75 × spacing out, area-uniform, a bush species by `Weight`, the same variant / scale /
+yaw rules) - unless the tree's species has an `Undergrowth` block, which replaces both. `Bush shadow distance (m)` (default 100, GPU path): bushes farther than this from the shadow
 cascades' centre cast no sun shadow (`TreeInstanceType::shadowDistance`). `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name — the
 names are a fixed list in Settings.Trees (`TREE_GROVE_TYPES`; a tweak enum registers before the species load), so a
 new species needs its name added there; a missing one falls back to mixed with a warning. Trees sit on a
@@ -2081,8 +2098,11 @@ ClutterType <name>
 	          Color2 = end grain
 	MUSHROOM: Cap Dome|Flat|Cone|Funnel · CapSize radius height (x its height) · StemRadius · Group n (1..5 per variant,
 	          each smaller, leaning out) · Spots 0..1 (white spots on the cap). Color = cap, Color2 = stem and gills
-	FLOWER:   Head Radial|Spike|Umbel|Bell|Reed|Tuft · Petals n · Open degrees (Radial: the petals' tilt up; below 0 swept
-	          back) · PetalWidth (x HeadSize) · Stem m · HeadSize m. Color = petals, Color2 = the centre. NO MESH: the
+	FLOWER:   Head Radial|Spike|Umbel|Bell|Reed|Tuft|Grain|Fern|Rosette|Leafy · Petals n · Open degrees (Radial: the petals' tilt up; below 0 swept
+	          back) · PetalWidth (x HeadSize) · Stem m · HeadSize m · PetalShape Round|Notched|Pointed|Fringed|None
+	          (Radial: the petal outline texture - poppy / daisy / gazania / cornflower; None = the plain tapered quad;
+	          Umbel / Spike / Bell: textured florets unless None).
+	          Color = petals, Color2 = the centre. NO MESH: the
 	          vertex shader builds it (RendererVK "Ground clutter", the flowers). REED: the petals are long, nearly
 	          pointed LEAVES (the stem's colours; Open = their lean out from upright, PetalWidth x HeadSize wide) in 3
 	          TUFTS side by side (the first around the stalk, the others 0.15-0.25 x the height beside it; at most 16
@@ -2091,7 +2111,25 @@ ClutterType <name>
 	          leaves at most), each a Bezier with its control
 	          straight up - out of the root as a bundle, then arching out by Open, the tip at least 15 % of its length
 	          above the ground - Stem tall, PetalWidth x HeadSize wide, in Color. Neither shrinks with the grass cover
-	          (a bank is bare beach)
+	          (a bank is bare beach). GRAIN (wild wheat / barley / oat; 2026-10-13): ONE STALK at every LOD (Petals
+	          is ignored: a tuft lost stalks with the LOD's fewer slots and popped; 4 slots: two stalk halves, the ear, the
+	          awns; no main stem), Stem tall (x 0.82
+	          .. 1.05), `Ear Dense|Slender|Panicle` (the texture's kind, see THE FLOWER TEXTURES), the ear HeadSize long and PetalWidth x HeadSize wide (Color), nodding by Open (0 upright .. 90
+	          hanging), `Awns` 0..1 = a thin bristle 0 .. 2 x the ear past it (the record's spots slot); stalks and awns
+	          Color2 (straw). A stalk's top is as wide as the head's rachis (`CLUTTER_GRAIN_STALK_HALF_WIDTH` x the
+	          ear's width - the same constant sizes the rachis in the texture, in Color2 unshaded), 1 / 0.7 of it at the
+	          root: the head continues the stalk. FERN: Petals FRONDS from one crown over the LARGE topology (`CLUTTER_FLOWER_BIG_PETALS`
+	          32 / 18 / 8 slots: 4 / 3 / 2 quads per frond, so 8 / 6 / 4 fronds), Stem long, leaning out by Open, arching
+	          over with the tip drooping. TEXTURED (see TEXTURES below): a strip 2 x HeadSize wide with the frond in it - a
+	          stipe (the first 15 %), 12..18 pinna pairs (by the Seed), the longest at ~40 %, each cut into pinnules
+	          (PetalWidth = how much of a pinna's width the notches keep, 0 = to its midrib). Without a texture (fallback):
+	          a bare stipe (the first fifth), then pinnae up to HeadSize per side - every quad
+	          narrow at its base (PetalWidth = how wide the notch stays) and wide at its top: a SAW-TOOTHED edge. Color
+	          (the base darker). ROSETTE (dock, plantain): Petals broad LEAVES (2 slots each: narrow base, widest at 40 %,
+	          a point) lying round the root, HeadSize long, raised by Open, + the stalk (Stem) with a seed spike on its top
+	          quarter (Color2). LEAFY (nettle, goosefoot): Petals leaves in OPPOSITE PAIRS up the stalk (each pair turned a
+	          quarter; HeadSize at the bottom, ~half at the top), raised by Open, + a spike on the top tenth (Color2).
+	          Ferns and the two weeds do not shrink with the grass cover either (shade, bare and trampled ground)
 	Placement (ANY NUMBER: each is its own GPU type, their densities add)
 		Density (per m^2 at full fit) · Temperature min max (C) · Precipitation min max (mm/yr) · ClimateWidth
 		Cluster size coverage (m, 0..1: drifts / groups) · Slope max (rise / run) · Altitude min (m above the water)
@@ -2115,7 +2153,29 @@ spots, cool forest), `Chanterelle` (groups, damp), `InkCap` (meadows), `FairyRin
 `Yarrow` (umbel), `Foxglove` (bells, forest edge), `Bluebell` (bells, UNDER the canopy), `Gazania` (savanna),
 `Gentian` (alpine). By the water (2026-10-09): `Reed` (cattails at the edge of SLOW water, a few in the shallows),
 `Sedge` (low arching fountains on the banks, `Head Tuft`), `RiverStone` (rounded cobbles in the bed, many where the water is FAST); `Pebble`
-keeps out of river beds (`River 1 0.1`: the bed takes the beach layer it favours).
+keeps out of river beds (`River 1 0.1`: the bed takes the beach layer it favours). Grains and weeds (2026-10-13):
+`WildWheat` (`Ear Dense`: stout ears, fanning awns; warm dry grassland), `WildBarley` (`Ear Slender`: a brush of
+very long awns, greener), `WildOat` (`Ear Panicle`: tall, a loose panicle of hanging spikelets) - `Head Grain`, all
+near upright (`Open` 5 / 10 / 5: a large nod kinks at the stalk's tip and reads as broken); `Nettle` (`Head Leafy`: damp, rich ground, the edge of a wood, near the trunks), `Dock` and
+`Plantain` (`Head Rosette`: damp grassland / short, trampled grass); ferns `Bracken` (big spreading stands, clearings and
+open woods) and `LadyFern` (a fine shuttlecock on the damp, shaded floor near the trunks) - `Head Fern`.
+
+**THE FLOWER TEXTURES** (2026-10-13; ClutterTexture.cpp `generateClutterTexture`): a FERN's frond (256^2), a RADIAL
+head's petal (128^2: the `PetalShape` outline, fine veins), a GRAIN's ear (256^2: ONE strip over the ear and its awns -
+the ear the first 1 / (1 + 2 x Awns), spikelets alternating either side of the rachis; 2..3 awns ~2 texels wide from
+each spikelet's tip, 75..100 % of the awn length, FANNING OUT evenly over -32..32 degrees from upright (not split by
+the spikelet's side: that left a V with a gap down the middle; set in the strip's
+physical proportions; an awn that would leave the strip is shortened) - the strip is `CLUTTER_GRAIN_STRIP_WIDEN` (5)
+x the ear's width, the ear drawn in its middle; 512^2 so the ear keeps ~100 texels across). The Grain key `Ear`
+picks the kind: `Dense` (wheat, the default: that), `Slender` (barley: 24..32 smaller spikelets, three long awns each at
+-13..13 degrees - a silky brush), `Panicle` (oat: no ear - a stout rachis tapering up, 4..5 levels of 1..2 thin pedicels
+arching out (25..50 degrees) and over, ONE spikelet hanging from each end and the rachis's tip - 7..11 in all, each two
+long pointed glumes in a narrow V - some with a bent awn; Awns 0, PetalWidth x 5 = its width per HeadSize), an UMBEL's floret quad (128^2: 5..7 five-lobed florets with Color2 centres - the
+quads overlap into a lacy plate), a SPIKE's floret (128^2: a pea flower - round banner, keel and wings toward Color2),
+a BELL's floret (128^2: a tube flaring to a five-lobed mouth). R = shading, G = a mask toward Color2 (the awns, a fern's rachis), A = cover. Made
+on the type's generation job with TreeLeafTexture's coverage-preserving mips, uploaded in `finishGeneration`
+(`Renderer::createTexture`), freed after the next `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy have
+none; `PetalShape None` turns a Radial / Umbel / Spike / Bell texture off.
 
 **THE RIVER DATA ON THE GROUND** (TerrainGenerator; the terrain vertex's UV, which the terrain does not use as UV):
 u = `TerrainPoint::river`, v = `riverSpeed` (m/s: the Manning speed of the most influential piece, as the water

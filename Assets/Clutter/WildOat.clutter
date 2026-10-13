@@ -1,0 +1,26 @@
+# Wild oat: tall, slender stalks topped by a loose, open PANICLE - thin branches in whorls with pale spikelets hanging
+# from them (no ear, few awns) - scattered through temperate grassland and field edges. Ear Panicle: HeadSize = the
+# panicle's length, PetalWidth x 5 = its width (x HeadSize), Awns 0 (the panicle fills the strip).
+ClutterType WildOat
+	Kind Flower
+	Seed 311
+	Scale 1.1 1.5
+	Range 80
+	Color 0.80 0.80 0.58
+	Color2 0.66 0.68 0.42
+	Head Grain
+	Ear Panicle
+	Petals 3
+	Open 5
+	PetalWidth 0.1
+	Stem 0.95
+	HeadSize 0.2
+	Awns 0
+	Placement
+		Density 0.2
+		Temperature 4 22
+		Precipitation 400 1400
+		Grass 0 1
+		Canopy 1 0.1
+		Cluster 16 0.1
+		Slope 0.6

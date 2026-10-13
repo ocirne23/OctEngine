@@ -87,6 +87,11 @@ export namespace Procedural
 		glm::vec2 scale{ 0.85f, 1.15f }; // uniform tree scale range
 		bool bush = false;               // `Kind Bush`: scattered under the grove's trees, never one of its trees
 		oc::string climate;              // `Climate <name>`: a bush grows around the trees of its climate only
+		int weight = 1;                  // `Weight n` (bushes, 1..8): how often its climate picks it - n entries in each tree's bush list
+		// `Undergrowth` block (trees): the bushes around each of its trees - `Bushes` per tree (the fraction by chance) out
+		// to `Radius` m from it. < 0 = "Trees/Bushes per tree" / 0.75 x "Trees/Spacing (m)".
+		float undergrowthBushes = -1.0f;
+		float undergrowthRadius = -1.0f;
 		TreePlacementDesc placement;
 
 		// Trunks

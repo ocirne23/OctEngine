@@ -12,7 +12,7 @@ ClutterType Buttercup
 	Open 30
 	PetalWidth 0.75
 	Stem 0.3
-	HeadSize 0.012
+	HeadSize 0.03
 	Placement
 		Density 6
 		Temperature 2 18

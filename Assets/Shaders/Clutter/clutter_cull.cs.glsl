@@ -326,10 +326,12 @@ void main()
         const uint kind = type.info.z;
         // A rigid type has >= 1 variant (ClutterSystem skips one with no mesh); a flower's 0 is never used.
         const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % type.info.y;
-        // A FLOWER shrinks with the grass cover as the blades do (grassCoverSize). Not REEDS or TUFTS: they grow on the
-        // bare bank.
+        // A FLOWER shrinks with the grass cover as the blades do (grassCoverSize). Not REEDS or TUFTS (they grow on the
+        // bare bank), FERNS (the shaded forest floor, where the grass is thin) or the WEEDS (rosettes, leafy stalks: on
+        // bare and trampled ground too).
         const uint head = type.info.w & 0xFFu;
-        const bool reed = kind == CLUTTER_KIND_FLOWER && (head == FLOWER_HEAD_REED || head == FLOWER_HEAD_TUFT);
+        const bool reed = kind == CLUTTER_KIND_FLOWER && (head == FLOWER_HEAD_REED || head == FLOWER_HEAD_TUFT
+            || head == FLOWER_HEAD_FERN || head == FLOWER_HEAD_ROSETTE || head == FLOWER_HEAD_LEAFY);
         const float coverSize = kind == CLUTTER_KIND_FLOWER && !reed ? grassCoverSize(cover.x) : 1.0;
         const float scale = mix(type.shape.x, type.shape.y, grassUnit(grassHash(h + 1u))) * grow * coverSize;
         if (scale <= 0.0)
@@ -347,7 +349,8 @@ void main()
         if (kind == CLUTTER_KIND_FLOWER)
         {
             height = type.flower.x * scale;
-            radius = 0.6 * height + type.flower.y * scale;
+            // A fern's fronds reach out about their length (the Stem); a stalk leans out ~0.6 of it.
+            radius = (head == FLOWER_HEAD_FERN ? 1.0 : 0.6) * height + type.flower.y * scale;
         }
         else
         {
@@ -387,7 +390,7 @@ void main()
         const uint slot = atomicAdd(io_counts[0], 1u);
         if (slot >= CLUTTER_MAX_INSTANCES)
             continue;
-        const uint bucket = clutterBucket(kind, mesh, lod);
+        const uint bucket = clutterBucket(kind, head, type.terms5.y > 0.0, mesh, lod);
         const uint local = atomicAdd(io_bucketCounts[bucket], 1u);
 
         // The colours vary per object (+-12 %), as the grass blades do.
@@ -399,7 +402,9 @@ void main()
         const uint open = uint((type.flower.w * INV_PI + 0.5) * 255.0 + 0.5); // -pi/2 .. pi/2
         ClutterInstance inst;
         inst.posScale = vec4(base, scale);
-        inst.data = uvec4(packHalf2x16(q.xy), packHalf2x16(q.zw), t | (variant << 8) | (lod << 16) | (kind << 24), h);
+        // A flower has no orientation (its VS turns it by the hash): x = its texture + 1 (0 = none; a fern's frond).
+        inst.data = uvec4(kind == CLUTTER_KIND_FLOWER ? uint(type.terms5.y) : packHalf2x16(q.xy), packHalf2x16(q.zw),
+                          t | (variant << 8) | (lod << 16) | (kind << 24), h);
         inst.look = uvec4(packUnorm4x8(vec4(sqrt(albedo0), type.albedo0.w)),
                           packUnorm4x8(vec4(sqrt(albedo1), type.bound.y)),
                           packHalf2x16(kind == CLUTTER_KIND_FLOWER ? type.flower.xy : vec2(height, 0.0)),

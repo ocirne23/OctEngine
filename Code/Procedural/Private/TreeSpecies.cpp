@@ -125,6 +125,13 @@ namespace Procedural
 			out.bush = iequals(n->asString(), "Bush");
 		if (const AssetNode* n = species->find("Climate"))
 			out.climate = n->asString();
+		readInt(*species, "Weight", out.weight);
+		out.weight = glm::clamp(out.weight, 1, 8);
+		if (const AssetNode* undergrowth = species->find("Undergrowth"))
+		{
+			readFloat(*undergrowth, "Bushes", out.undergrowthBushes);
+			readFloat(*undergrowth, "Radius", out.undergrowthRadius);
+		}
 
 		if (const AssetNode* trunk = species->find("Trunk"))
 		{
