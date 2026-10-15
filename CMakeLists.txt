@@ -43,7 +43,7 @@ add_definitions(/FI"${ROOT_DIR}/Code/Core/Private/forceinclude.h"
 # /LTCG above), instead of the default runtime-compiled, hot-reloadable script DLLs. OFF for normal dev. NOTE:
 # the .scr files must be regenerated once after enabling (the codegen wraps each script in a self-registering
 # class) — this is a deliberate one-time shipping step, not a hot path.
-option(SCRIPTS_STATIC "Compile visual scripts statically into the engine (cooked build) instead of runtime DLLs" OFF)
+option(SCRIPTS_STATIC "Compile visual scripts statically into the engine (cooked build) instead of runtime DLLs" ON)
 if(SCRIPTS_STATIC)
 	add_definitions(/DSCRIPTS_STATIC)
 endif()
