@@ -12,13 +12,17 @@ instead of only the camera.
   frame's minus last frame's UNJITTERED full-frame uv, z = the surface's hardware depth LAST frame (<= 0:
   behind last frame's camera), w = 1. **Cleared to 0: w = 0 = no object motion**, and the readers then keep
   the exact camera-only reprojection (`prevScreenUVClip`). So only a point that really moved stores a uv
-  (fp16 rounding: sub-pixel below ~0.1 of the screen per frame).
+  (fp16 rounding: sub-pixel below ~0.1 of the screen per frame). **The NO-AO flag** (`motionVectorNoAo` /
+  `motionNoAo`): w = 2 (object motion) or w = -1 (camera alone) marks a pixel RTAO does not trace - see "RTAO and
+  normals" ([Lighting.md](Lighting.md)). Every reader goes through `motionIsObject` (w > 0.5), so the flag changes
+  nothing else.
   Readers: `prevScreenUVMotion(uvUnjit, depth, motion, valid)`; a disocclusion test compares last frame's
   depth against `worldPosFromDepthMat(prevUv, motion.z, u_prevInvMvp)` - where the point WAS - instead of
   this frame's position.
 * **Who writes it** (`GraphicsPipelineLayout::motionTarget` + `writeMotion` / `PipelineVariant::writeMotion`;
   otherwise the second blend state is write-masked): the variants that can draw moving meshes - LitOpaque,
-  UnlitOpaque, LitMasked, LitFoliage, LitTree - plus the grass and the clutter flowers (wind). Masked, and
+  UnlitOpaque, LitMasked, LitFoliage, LitTree - plus the grass and the clutter flowers (wind), and the rigid
+  clutter (static: only the NO-AO flag). Masked, and
   correct because static: terrain, rocks, sky, GI probe debug. Masked, keeping the opaque surface behind: the
   transparent family, the gizmos. **The ocean cannot write it**: dual-source blending allows one fragment
   output location (`maxFragmentDualSrcAttachments`), so the waves keep TAA's ocean feedback cap, and an ocean

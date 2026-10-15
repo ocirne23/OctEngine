@@ -93,5 +93,5 @@ void main()
     color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
 
     out_color = vec4(color, 1.0);
-    out_motion = motionVector(in_prevWorldDelta);
+    out_motion = motionVectorNoAo(in_prevWorldDelta);
 }

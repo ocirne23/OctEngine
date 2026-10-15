@@ -667,7 +667,7 @@ void StaticMeshGraphicsPipeline::buildClutterLayout(const GraphicsPipelineLayout
     clutter.pushConstantRanges = main.pushConstantRanges;
     clutter.indirectBindable = false;
     clutter.motionTarget = true; // the opaque family; the wind moves the flowers
-    clutter.writeMotion = flowers;
+    clutter.writeMotion = true;  // the rigid meshes are static, but write the NO-AO flag (motionVectorNoAo)
     clutter.cullMode = vk::CullModeFlagBits::eNone; // two-sided petals; the branch ends are open
     clutter.polygonMode = main.polygonMode;
 

@@ -31,7 +31,10 @@ void main()
     const vec2 uv = (vec2(px) + 0.5) * texel;
 
     const float depth = texture(u_depth, uv).r;
-    if (depth <= 0.0) // background (reversed-Z: far/cleared = 0)
+    const vec4 centerAO = texture(u_accumAO, uv);
+    // A NO-AO hole (a < 0: grass, clutter - rtao.cs.glsl) has no AO of its own and its depth-derived normal is noise:
+    // filled like the background, from the traced surfaces around, so the ground between the blades takes the ground's AO.
+    if (depth <= 0.0 || centerAO.a < 0.0) // background (reversed-Z: far/cleared = 0), or a hole
     {
         // Dilate geometry AO into background texels: the forward pass upsamples this image with plain bilinear, so the
         // trace's background value (bentN = +Z, ao = 1) would bleed into silhouette pixels as a bright rim.
@@ -42,8 +45,10 @@ void main()
         {
             const vec2 nuv = uv + vec2(dx, dy) * texel;
             if (texture(u_depth, nuv).r <= 0.0) continue;
+            const vec4 tap = texture(u_accumAO, nuv);
+            if (tap.a < 0.0) continue;
             const float ws = exp(-float(dx * dx + dy * dy) / 8.0);
-            sum  += texture(u_accumAO, nuv) * ws;
+            sum  += tap * ws;
             wsum += ws;
         }
 
@@ -54,7 +59,7 @@ void main()
             bg.xyz = (dot(bg.xyz, bg.xyz) > 1e-8) ? normalize(bg.xyz) : vec3(0.0);
         }
         else
-            bg = texture(u_accumAO, uv); // no geometry nearby: keep the background value
+            bg = vec4(0.0, 0.0, 0.0, 1.0); // nothing traced nearby: no occlusion, no bent normal
         imageStore(u_aoOut, px, bg);
         return;
     }
@@ -76,6 +81,8 @@ void main()
         const vec2 nuv = uv + vec2(dx, dy) * texel;
         const float nDepth = texture(u_depth, nuv).r;
         if (nDepth <= 0.0) continue;
+        const vec4 tap = texture(u_accumAO, nuv);
+        if (tap.a < 0.0) continue; // a NO-AO hole
 
         const vec3 dPos = viewRelFromDepth(nuv, nDepth) - centerPos;
         const float dp = dot(dPos, centerN);
@@ -84,11 +91,11 @@ void main()
         const float ws = exp(-float(dx * dx + dy * dy) / 8.0);
         const float w  = wz * wn * ws;
 
-        sum  += texture(u_accumAO, nuv) * w;
+        sum  += tap * w;
         wsum += w;
     }
 
-    vec4 ao = (wsum > 1e-4) ? sum / wsum : texture(u_accumAO, uv);
+    vec4 ao = (wsum > 1e-4) ? sum / wsum : centerAO;
     ao.xyz = (dot(ao.xyz, ao.xyz) > 1e-8) ? normalize(ao.xyz) : vec3(0.0);
     imageStore(u_aoOut, px, ao);
 }

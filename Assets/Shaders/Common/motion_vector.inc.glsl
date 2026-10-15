@@ -35,4 +35,13 @@ vec4 motionVector(vec3 prevWorldDelta)
     return vec4(uv - prevClipToScreenUV(prevClip), prevClip.z / prevClip.w, 1.0);
 }
 
+// The same, flagged NO-AO (shared.inc.glsl motionNoAo): the surfaces in the depth image that are not in the TLAS and read
+// no RTAO (the grass, the clutter). A trace from their depth is noise that bleeds into the ground around them.
+vec4 motionVectorNoAo(vec3 prevWorldDelta)
+{
+    vec4 m = motionVector(prevWorldDelta);
+    m.w = m.w > 0.5 ? 2.0 : -1.0;
+    return m;
+}
+
 #endif

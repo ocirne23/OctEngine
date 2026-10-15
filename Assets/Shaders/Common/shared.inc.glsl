@@ -129,7 +129,10 @@ vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
 // MOTION VECTORS - the scene's motion target (SceneColor::getMotionView; motion_vector.inc.glsl writes it): xy = this
 // frame's minus last frame's UNJITTERED full-frame uv, z = the surface's hardware depth LAST frame (<= 0: behind last
 // frame's camera), w = 1 where written. w = 0 = no object motion: the pixel reprojects through the camera alone.
+// NO-AO pixels (the grass and the clutter: motionVectorNoAo) carry w = 2 (object motion) or -1 (camera alone): RTAO
+// traces none of them, and fills them from the surfaces around.
 bool motionIsObject(vec4 motion) { return motion.w > 0.5; }
+bool motionNoAo(vec4 motion) { return motion.w < -0.5 || motion.w > 1.5; }
 
 // Last frame's UNJITTERED uv of the surface at uvUnjit. valid = false: no history (behind last frame's camera).
 vec2 prevScreenUVMotion(vec2 uvUnjit, float depth, vec4 motion, out bool valid)

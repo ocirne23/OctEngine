@@ -24,7 +24,7 @@ layout (location = 6) flat in float in_height; // the object's height (m)
 layout (location = 7) in vec3 in_relPos;       // the position relative to the camera (the bump's derivatives)
 
 layout (location = 0) out vec4 out_color;
-layout (location = 1) out vec4 out_motion; // static
+layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
 
 #define SUN_SHADOW_FIRST
 #define LIT_NO_RTAO
@@ -83,7 +83,7 @@ vec3 clutterBump(vec3 pos, vec3 N, float h)
 
 void main()
 {
-    out_motion = motionVector(vec3(0.0));
+    out_motion = motionVectorNoAo(vec3(0.0));
 
     // The normals point OUT but the winding is not consistent between the generators: no gl_FrontFacing flip.
     const vec3 geoN = normalize(in_normal);

@@ -30,7 +30,7 @@ void main()
     const vec2 uv = (vec2(px) + 0.5) / vec2(pc.aoWidth, pc.aoHeight);
     const vec4 raw = texture(u_rawAO, uv); // rgb = bent normal, a = AO
     const float depth = texture(u_curDepth, uv).r;
-    if (depth <= 0.0) { imageStore(u_accumOut, px, raw); return; } // background (reversed-Z far = 0)
+    if (depth <= 0.0 || raw.a < 0.0) { imageStore(u_accumOut, px, raw); return; } // background (reversed-Z far = 0), or a NO-AO hole
 
     // The depth image is jittered; compensate geometric uses - see taaJitterUv.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
@@ -74,7 +74,10 @@ void main()
             const vec3 prevWorld = worldPosFromDepthMat(tapUv, prevDepth, u_prevInvMvp);
             if (length(prevWorld - refPos) >= thresh)
                 continue;
-            sum  += texture(u_historyAO, tapUv) * bw[i];
+            const vec4 tap = texture(u_historyAO, tapUv);
+            if (tap.a < 0.0) // last frame's NO-AO hole
+                continue;
+            sum  += tap * bw[i];
             wsum += bw[i];
         }
 

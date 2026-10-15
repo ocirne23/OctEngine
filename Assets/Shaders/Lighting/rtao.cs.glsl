@@ -9,6 +9,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
 
+layout (binding = 1) uniform sampler2D u_motion;      // the motion target: only its NO-AO flag (motionNoAo)
 layout (binding = 2) uniform sampler2D u_sceneDepth;  // hardware depth (the normal is derived from it)
 layout (binding = 3) uniform accelerationStructureEXT u_tlas;
 layout (binding = 4, rgba16f) uniform restrict writeonly image2D u_aoOut; // rgb = bent normal, a = AO
@@ -90,6 +91,10 @@ void main()
     const ivec2 depthPx = ivec2(uv * vec2(textureSize(u_sceneDepth, 0)));
     const float depth = texelFetch(u_sceneDepth, depthPx, 0).r;
     if (depth <= 0.0) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0)); return; } // background (reversed-Z far = 0): no occlusion
+
+    // A NO-AO pixel (grass, clutter: not in the TLAS, no RTAO read): a HOLE (a < 0), no rays. The temporal pass keeps it,
+    // the spatial pass fills it from the surfaces around - so the ground between the blades takes the ground's AO.
+    if (motionNoAo(texelFetch(u_motion, depthPx, 0))) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, -1.0)); return; }
 
     // Geometric normal from the depth image: there is no normal target.
     const vec3 N = normalFromDepth(u_sceneDepth, depthPx, depth, u_taaJitter.xy);

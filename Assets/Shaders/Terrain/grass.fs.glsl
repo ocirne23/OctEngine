@@ -70,5 +70,5 @@ void main()
     vec3 color = computeLitColor(pos, V, f16vec3(N), f16vec3(albedo), float16_t(u_grass_roughness), float16_t(0.0), float16_t(ao));
     color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
     out_color = vec4(color, 1.0);
-    out_motion = motionVector(in_prevWorldDelta);
+    out_motion = motionVectorNoAo(in_prevWorldDelta);
 }
