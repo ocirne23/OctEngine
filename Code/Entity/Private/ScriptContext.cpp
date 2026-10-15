@@ -600,7 +600,7 @@ void registerScriptDslBindings()
         } });
 
     // The render camera, as a read-only view onto the per-frame fields ScriptContext already carries (see its
-    // `Per-frame data` block -- ScriptContext::update refreshes them once a frame). Every emit here reads a
+    // `Per-frame data` block -- EngineScriptContext::update refreshes them once a frame). Every emit here reads a
     // FIELD, not a call, so none of them mention "$r": the object exists purely to group them under a name.
     const DSLType cameraType = bindings.registerNamespace("Camera");
     bindings.registerObject({ "Camera", cameraType, /*sidebarTopLevel*/ false,
@@ -1856,23 +1856,30 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
 }
 #pragma warning(pop)
 
-ScriptContext::ScriptContext()
-    : log(&thunk_log)
-    , logf(&thunk_logf)
-#define SCRIPT_CTX_INIT(ret, name, ...) , name(&thunk_##name)
-    SCRIPT_CTX_FUNCS(SCRIPT_CTX_INIT)
+// ScriptContext is an aggregate (ScriptAPI.h declares no constructor), so the base is filled with designated
+// initializers, IN DECLARATION ORDER. A member left out here is silently null: keep log/logf/networkEventSender.
+EngineScriptContext::EngineScriptContext()
+    : ScriptContext{
+        .deltaSeconds = 0.0f,
+        .elapsedSeconds = 0.0f,
+        .cameraPosition = glm::vec3(0.0f),
+        .cameraDirection = glm::vec3(0.0f, 0.0f, -1.0f),
+        .cameraUp = glm::vec3(0.0f, 1.0f, 0.0f),
+        .cameraFovDeg = 45.0f,
+        .cameraNear = 0.0f,
+        .cameraFar = 0.0f,
+        .log = &thunk_log,
+        .logf = &thunk_logf,
+// The thunks take the real Entity*, the table the ABI's opaque OcEntity* (see ScriptAPI.h): same pointer.
+#define SCRIPT_CTX_INIT(ret, name, ...) .name = reinterpret_cast<decltype(ScriptContext::name)>(&thunk_##name),
+        SCRIPT_CTX_FUNCS(SCRIPT_CTX_INIT)
 #undef SCRIPT_CTX_INIT
-    , networkEventSender(&thunk_networkEventSender) // hand-declared (zero-arg), see ScriptAPI.h
+        .networkEventSender = &thunk_networkEventSender, // hand-declared (zero-arg), see ScriptAPI.h
+    }
 {
-    deltaSeconds = 0.0f;
-    elapsedSeconds = 0.0f;
-    cameraPosition = glm::vec3(0.0f);
-    cameraDirection = glm::vec3(0.0f, 0.0f, -1.0f);
-    cameraUp = glm::vec3(0.0f, 1.0f, 0.0f);
-    cameraFovDeg = 45.0f;
 }
 
-void ScriptContext::update(const Camera& camera, float newDeltaSeconds, float newElapsedSeconds)
+void EngineScriptContext::update(const Camera& camera, float newDeltaSeconds, float newElapsedSeconds)
 {
     ProfileScope profileScope("Script context", EProfileCategory::Script);
     deltaSeconds = newDeltaSeconds;

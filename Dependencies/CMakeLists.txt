@@ -1,6 +1,15 @@
 # Unused: all dependencies are prebuilt into Include/Lib/Dll, and NO source is kept in this folder.
 # What follows are the recipes to rebuild the prebuilt libs from an upstream clone.
 #
+# AFTER EVERY MSVC UPDATE: the Release phonon.lib and imgui.lib hold /GL objects, which /LTCG only links when
+# the SAME compiler built them (C1047 in non-Debug App builds). Rebuild both with the new compiler. Check for
+# others: `dumpbin /headers <lib>` lists /GL objects with ClassID {0CB3FE38-D9A5-4DAB-AC9B-D6B6222653C2}.
+#
+# Dear ImGui (docking branch, headers in Include/imgui -- the local copy adds ImRect::Floor to
+# imgui_internal.h, inline only). Rebuilding Lib/imgui(d).lib: a static-lib vcxproj (v145, C++20, the DLL CRT,
+# Release with WholeProgramOptimization) over imgui.cpp, imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp,
+# imgui_impl_null.cpp, imgui_impl_sdl3.cpp and imgui_impl_vulkan.cpp; Debug -> imguid.lib.
+#
 # box3d (box3d.lib / box3dd.lib in Lib, headers in Include/box3d): build it standalone with the DLL
 # CRT ("MultiThreaded$<$<CONFIG:Debug>:Debug>DLL", its own CMakeLists defaults to the static CRT) and
 # copy the outputs over.

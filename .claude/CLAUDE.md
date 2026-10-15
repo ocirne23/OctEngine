@@ -75,9 +75,9 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
 * Output: `Build/Code/App/<Config>/App.exe`. Run it from anywhere inside the repo:
   `FileSystem::initialize()` walks up to find `Assets/` and makes it the working directory, so all
   asset paths are relative to `Assets/`.
-* VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`. The
-  `cooked` custom target configures and builds a sibling `Build-Cooked/` tree with
-  `SCRIPTS_STATIC=ON` (see Script).
+* VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`.
+  `SCRIPTS_STATIC` is ON by default (scripts compiled into App, see Script). In a tree configured with
+  `SCRIPTS_STATIC=OFF`, the `cooked` custom target configures and builds a sibling `Build-Cooked/` tree with it ON.
 * **Unattended performance measurement:** `Tools/profile.ps1` (see Profiling in
   [`Docs/Context/Core/CONTEXT.md`](../Docs/Context/Core/CONTEXT.md)) builds, runs
   `App.exe --profile-after <sec> --quit-after <sec> --no-vsync --tweak ...`, and prints the text

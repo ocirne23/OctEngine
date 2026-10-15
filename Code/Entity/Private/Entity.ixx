@@ -156,7 +156,6 @@ private:
 
 private:
 
-    friend class SceneComponent;
     friend class World;
 };
 static_assert(sizeof(Entity) <= 64);

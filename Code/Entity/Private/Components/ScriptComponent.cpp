@@ -32,6 +32,9 @@ import Script;
 // only return the exception code and the plain C++ wrappers below them do the logging.
 namespace
 {
+    // The ABI's opaque stand-in for Entity (see OcEntity in ScriptAPI.h): the same pointer.
+    OcEntity* toAbi(Entity* entity) { return reinterpret_cast<OcEntity*>(entity); }
+
 #if OC_SCRIPT_FAULT_CONTAINMENT
     int scriptFaultFilter(unsigned long code)
     {
@@ -62,37 +65,37 @@ namespace
     // OnSpawn and OnDestroy share one shape, so one invoker serves both.
     unsigned long sehInvoke(ScriptOnSpawnFn fn, Entity* entity, void* data)
     {
-        __try { fn(&Globals::scriptContext, entity, data); }
+        __try { fn(&Globals::scriptContext, toAbi(entity), data); }
         __except (scriptFaultFilter(_exception_code())) { return _exception_code(); }
         return 0;
     }
     unsigned long sehInvoke(ScriptUpdateFn fn, Entity* entity, float deltaSeconds, void* data)
     {
-        __try { fn(&Globals::scriptContext, entity, deltaSeconds, data); }
+        __try { fn(&Globals::scriptContext, toAbi(entity), deltaSeconds, data); }
         __except (scriptFaultFilter(_exception_code())) { return _exception_code(); }
         return 0;
     }
     unsigned long sehInvoke(ScriptOnEventFn fn, Entity* entity, int eventIdx, void* data)
     {
-        __try { fn(&Globals::scriptContext, entity, eventIdx, data); }
+        __try { fn(&Globals::scriptContext, toAbi(entity), eventIdx, data); }
         __except (scriptFaultFilter(_exception_code())) { return _exception_code(); }
         return 0;
     }
     unsigned long sehInvoke(ScriptOnPhysicsEventFn fn, Entity* entity, Entity* other, int begin, int sensor, long long contactId, void* data)
     {
-        __try { fn(&Globals::scriptContext, entity, other, begin, sensor, contactId, data); }
+        __try { fn(&Globals::scriptContext, toAbi(entity), toAbi(other), begin, sensor, contactId, data); }
         __except (scriptFaultFilter(_exception_code())) { return _exception_code(); }
         return 0;
     }
 #else
     // Containment off: raw calls, same signatures so the wrappers below don't change. Never returns nonzero,
     // so reportScriptFault and the `faulted` gate are dead paths (the flag then simply never sets).
-    unsigned long sehInvoke(ScriptOnSpawnFn fn, Entity* entity, void* data)                    { fn(&Globals::scriptContext, entity, data); return 0; }
-    unsigned long sehInvoke(ScriptUpdateFn fn, Entity* entity, float deltaSeconds, void* data) { fn(&Globals::scriptContext, entity, deltaSeconds, data); return 0; }
-    unsigned long sehInvoke(ScriptOnEventFn fn, Entity* entity, int eventIdx, void* data)      { fn(&Globals::scriptContext, entity, eventIdx, data); return 0; }
+    unsigned long sehInvoke(ScriptOnSpawnFn fn, Entity* entity, void* data)                    { fn(&Globals::scriptContext, toAbi(entity), data); return 0; }
+    unsigned long sehInvoke(ScriptUpdateFn fn, Entity* entity, float deltaSeconds, void* data) { fn(&Globals::scriptContext, toAbi(entity), deltaSeconds, data); return 0; }
+    unsigned long sehInvoke(ScriptOnEventFn fn, Entity* entity, int eventIdx, void* data)      { fn(&Globals::scriptContext, toAbi(entity), eventIdx, data); return 0; }
     unsigned long sehInvoke(ScriptOnPhysicsEventFn fn, Entity* entity, Entity* other, int begin, int sensor, long long contactId, void* data)
     {
-        fn(&Globals::scriptContext, entity, other, begin, sensor, contactId, data); return 0;
+        fn(&Globals::scriptContext, toAbi(entity), toAbi(other), begin, sensor, contactId, data); return 0;
     }
 #endif
 

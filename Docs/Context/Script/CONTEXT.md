@@ -70,7 +70,7 @@ Two mechanics worth knowing:
 Intermediates (`.obj` / `.lib` / `.exp` / the compiler PDB) are cleared; the build log lands in
 `Assets/Local/Scripts/build.log`.
 
-### The cooked alternative (`SCRIPTS_STATIC`, off by default)
+### The cooked build (`SCRIPTS_STATIC`, on by default)
 
 `Code/AppScripts` generates ONE aggregate TU that `#include`s **every `Assets/Scripts/*.dsl`** into
 its own namespace and compiles it into the engine, linking every engine library like App.
@@ -87,8 +87,9 @@ its own namespace and compiles it into the engine, linking every engine library 
   `thunk_foo(x)` instead of a function-pointer call, so `/GL` + `/LTCG` inlines it.
 * All-or-nothing: one broken script fails the aggregate. Adding, renaming or removing a script needs a
   reconfigure; editing a body just recompiles the aggregate.
-* Off (the default) it is an empty INTERFACE library, so App's link line names it unconditionally.
-* VS target `run-cooked` builds a sibling `Build-Cooked/` tree with `SCRIPTS_STATIC=ON`.
+* Off it is an empty INTERFACE library, so App's link line names it unconditionally.
+* In a tree configured with `SCRIPTS_STATIC=OFF` (the hot-reload DLL path), VS target `run-cooked` builds a
+  sibling `Build-Cooked/` tree with `SCRIPTS_STATIC=ON`.
 
 ### `ScriptModule`
 
@@ -118,13 +119,29 @@ today, uses 7; a 9th needs one more `_PARAMS`/`_ARGS` pair and a wider `SCRIPT_C
 ### The `Entity` mirror
 
 Scripts see a layout-compatible mirror — `pos`, `scale`, `rot`, `parent` only — selected by
-`SCRIPT_BUILD`. The offsets are static_asserted in `ScriptContext.cpp` (Entity).
+`SCRIPT_BUILD` / `SCRIPT_STATIC_BUILD`. The offsets are static_asserted in `ScriptContext.cpp` (Entity).
+
+**The ABI spells the entity `OcEntity`, never `Entity`.** Script side: `typedef struct Entity OcEntity`
+(the mirror), so script code keeps writing `Entity*`. Host side: an opaque `struct OcEntity;`.
+
+> **The header declares NO engine type on the host side.** The host includes it in a global module
+> fragment, so a `class Entity;` (or `Camera`, or a component) there is a global-module entity, a
+> DIFFERENT entity from the module-attached engine type: MSVC rejects that (C7756) in every TU that also
+> imports the module. The engine crosses with a `reinterpret_cast` (same pointer): the table init in
+> `ScriptContext.cpp` (`SCRIPT_CTX_INIT`, the thunks keep taking the real `Entity*`) and `toAbi` at the
+> entry-point invokers in `ScriptComponent.cpp`.
+>
+> **`ScriptContext` has no member functions** (the per-frame update takes `Camera`). It is an aggregate;
+> `EngineScriptContext` (`Entity:ScriptContext`, the type of `Globals::scriptContext`) derives from it,
+> fills it with designated initializers in declaration order, and owns `update`. **A member left out of
+> that initializer is silently null** — the X-macro generates the table rows, but `log`, `logf` and
+> `networkEventSender` are written by hand.
 
 Components a script cannot name are **opaque forward-declared handles** (`PhysicsComponent`,
-`AudioComponent`, `ForceComponent`, `SceneComponent`, `LightComponent`, `AnimatorComponent`), passed
-through to `void*` thunks. **An object pointer converts to `void*` implicitly, so no cast is needed at
-the call site** — and `ScriptData` can cache a typed pointer per component with no layout to keep in
-sync.
+`AudioComponent`, `ForceComponent`, `SceneComponent`, `LightComponent`, `AnimatorComponent`) — script
+side only — passed through to `void*` thunks. **An object pointer converts to `void*` implicitly, so no
+cast is needed at the call site** — and `ScriptData` can cache a typed pointer per component with no
+layout to keep in sync.
 
 ### `ScriptData` and the required-component slots
 

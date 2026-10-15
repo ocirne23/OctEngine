@@ -23,10 +23,7 @@ struct Entity
     glm::quat rot;
     Entity*   parent; // null for a root entity
 };
-#else
-class Entity;
-#endif
-struct Camera; // engine render camera; only the host-only update() below touches it (scripts never see it)
+typedef struct Entity OcEntity;
 
 // Opaque component handles: forward-declared only, never dereferenced by generated script code (always passed
 // through to the matching ctx->component*() thunks, which take void* -- an object pointer converts to void*
@@ -38,6 +35,14 @@ class ForceComponent;
 class SceneComponent;
 class LightComponent;
 class AnimatorComponent;
+#else
+// The host includes this header in a global module fragment, and the engine's Entity is attached to the Entity
+// module: a global `class Entity;` here would be a DIFFERENT entity, which MSVC rejects (C7756) in any TU that
+// also imports Entity. So the ABI names the entity OcEntity -- the mirror struct on the script side, an opaque
+// stand-in on the host side that the engine casts to and from its real Entity* (same pointer, same ABI).
+// The host declares no engine type at all here, for the same reason.
+struct OcEntity;
+#endif
 
 // Handle to an engine-owned dynamic array (the DSL's `T[]`). A plain POD id so it can live in a script's
 // persistent ScriptData block: the ELEMENTS live engine-side, keyed by this id, which means a hot-reload that
@@ -131,32 +136,32 @@ struct OcScriptField
     X(int,         isKeyDown,              (const char*, keyName)) /* e.g. "Space", "A", "Left Shift" */ \
     X(void,        spawnPointLight,        (glm::vec3, position), (float, range), (glm::vec3, color), (float, intensity)) \
     X(void,        setSun,                 (glm::vec3, direction), (glm::vec3, color), (float, intensity)) \
-    X(Entity*,     spawnEntity,            (const char*, assetPath), (glm::vec3, position)) \
-    X(void,        destroyEntity,          (Entity*, entity)) /* queues the entity (e.g. self) for removal */ \
+    X(OcEntity*,     spawnEntity,            (const char*, assetPath), (glm::vec3, position)) \
+    X(void,        destroyEntity,          (OcEntity*,entity)) /* queues the entity (e.g. self) for removal */ \
     /* ---- entity reads ---- */ \
-    X(const char*, entityGetName,          (Entity*, entity)) \
-    X(int,         entityGetEnabled,       (Entity*, entity)) \
-    X(int,         entityGetChildCount,    (Entity*, entity)) /* used by the Get Entity node's Children output; child hierarchy nodes go through the SceneComponent handle (below) */ \
-    X(float,       entityGetBoundsRadius,  (Entity*, entity)) /* world-space render bounds radius (0 if no mesh) */ \
+    X(const char*, entityGetName,          (OcEntity*,entity)) \
+    X(int,         entityGetEnabled,       (OcEntity*,entity)) \
+    X(int,         entityGetChildCount,    (OcEntity*,entity)) /* used by the Get Entity node's Children output; child hierarchy nodes go through the SceneComponent handle (below) */ \
+    X(float,       entityGetBoundsRadius,  (OcEntity*,entity)) /* world-space render bounds radius (0 if no mesh) */ \
     /* ---- entity writes ---- */ \
-    X(void,        entitySetEnabled,       (Entity*, entity), (int, enabled)) \
-    X(void,        entitySetAnimFloat,     (Entity*, entity), (const char*, param), (float, value)) \
-    X(void,        entitySetAnimBool,      (Entity*, entity), (const char*, param), (int, value)) \
-    X(void,        entitySetAnimTrigger,   (Entity*, entity), (const char*, param)) \
+    X(void,        entitySetEnabled,       (OcEntity*,entity), (int, enabled)) \
+    X(void,        entitySetAnimFloat,     (OcEntity*,entity), (const char*, param), (float, value)) \
+    X(void,        entitySetAnimBool,      (OcEntity*,entity), (const char*, param), (int, value)) \
+    X(void,        entitySetAnimTrigger,   (OcEntity*,entity), (const char*, param)) \
     /* ---- physics (global) ---- */ \
     X(void,        physicsSetGravity,      (glm::vec3, gravity)) \
     X(int,         physicsRayCast,         (glm::vec3, origin), (glm::vec3, translation), (glm::vec3*, outPoint), (glm::vec3*, outNormal), (float*, outFraction)) /* ray = origin + translation, 1 on hit */ \
     X(float,       physicsRayCastDistance, (glm::vec3, origin), (glm::vec3, dir), (float, maxDist)) /* dir need not be pre-normalized; distance to the closest hit within maxDist, or maxDist itself on a miss (never a sentinel outside the query range) */ \
     /* ---- events ---- */ \
     X(void,        sendEvent,              (const char*, eventName)) \
-    X(void,        sendEventToEntity,      (Entity*, entity), (const char*, eventName)) \
+    X(void,        sendEventToEntity,      (OcEntity*,entity), (const char*, eventName)) \
     /* ---- physics contact queries ---- */ \
     X(int,         physicsContactGetPoint, (long long, contactId), (glm::vec3*, outPoint), (glm::vec3*, outNormal)) \
     /* ---- spatial queries ---- */ \
-    X(int,         spatialQueryRadius,     (glm::vec3, position), (float, radius), (Entity**, outEntities), (int, maxOut)) \
-    X(Entity*,     spatialGetNearestEntity,(glm::vec3, position), (float, maxRadius), (Entity*, exclude)) \
+    X(int,         spatialQueryRadius,     (glm::vec3, position), (float, radius), (OcEntity**, outEntities), (int, maxOut)) \
+    X(OcEntity*,     spatialGetNearestEntity,(glm::vec3, position), (float, maxRadius), (OcEntity*,exclude)) \
     /* ---- force field ----  */ \
-    X(void*,       entityGetForceComponent,(Entity*, entity)) \
+    X(void*,       entityGetForceComponent,(OcEntity*,entity)) \
     X(float,       forceGetOutput,         (void*, forceComponent)) \
     X(float,       forceGetReach,          (void*, forceComponent)) \
     X(float,       forceGetFocus,          (void*, forceComponent)) \
@@ -178,23 +183,23 @@ struct OcScriptField
     X(void,        forceSetLocalOffset,    (void*, forceComponent), (glm::vec3, offset)) \
     X(void,        forceSetCentered,       (void*, forceComponent), (int, centered)) \
     /* ---- scene component ---- */ \
-    X(void*,       entityGetSceneComponent,(Entity*, entity)) \
+    X(void*,       entityGetSceneComponent,(OcEntity*,entity)) \
     X(int,         sceneGetChildCount,     (void*, sceneComponent)) \
-    X(Entity*,     sceneFindChild,         (void*, sceneComponent), (const char*, name)) /* direct child by name, null if none match */ \
-    X(Entity*,     sceneGetChildAt,        (void*, sceneComponent), (int, index)) /* direct child by index, null if out of range */ \
-    X(void,        sceneAddChild,          (void*, parentSceneComponent), (Entity*, child)) /* reparents child under the component's owner (no-op on a cycle / wrong current parent) */ \
-    X(void,        sceneRemoveChild,       (void*, parentSceneComponent), (Entity*, child)) /* detaches child, becoming a root entity (no-op if not the component owner's child) */ \
+    X(OcEntity*,     sceneFindChild,         (void*, sceneComponent), (const char*, name)) /* direct child by name, null if none match */ \
+    X(OcEntity*,     sceneGetChildAt,        (void*, sceneComponent), (int, index)) /* direct child by index, null if out of range */ \
+    X(void,        sceneAddChild,          (void*, parentSceneComponent), (OcEntity*,child)) /* reparents child under the component's owner (no-op on a cycle / wrong current parent) */ \
+    X(void,        sceneRemoveChild,       (void*, parentSceneComponent), (OcEntity*,child)) /* detaches child, becoming a root entity (no-op if not the component owner's child) */ \
     X(void,        sceneRemoveChildAt,     (void*, parentSceneComponent), (int, index)) /* same as sceneRemoveChild, by child index */ \
     /* ---- physics component ---- */ \
-    X(void*,       entityGetPhysicsComponent,(Entity*, entity)) \
+    X(void*,       entityGetPhysicsComponent,(OcEntity*,entity)) \
     X(int,         physicsIsAwake,         (void*, physicsComponent)) \
     X(glm::vec3,   physicsGetVelocity,     (void*, physicsComponent)) \
     X(void,        physicsSetVelocity,     (void*, physicsComponent), (glm::vec3, velocity)) \
     X(void,        physicsApplyImpulse,    (void*, physicsComponent), (glm::vec3, impulse)) /* world space, at the center of mass, wakes the body */ \
     X(void,        physicsTeleport,        (void*, physicsComponent), (glm::vec3, position), (glm::vec3, eulerDeg)) /* queued; applied before the next physics step */ \
     /* ---- audio component ---- */ \
-    X(void*,       entityGetAudioComponent,(Entity*, entity)) \
-    X(void,        audioTrigger,           (void*, audioComponent), (Entity*, entity), (const char*, alias), (int, overrideMask), (glm::vec3, position), (float, volume), (float, pitch)) \
+    X(void*,       entityGetAudioComponent,(OcEntity*,entity)) \
+    X(void,        audioTrigger,           (void*, audioComponent), (OcEntity*,entity), (const char*, alias), (int, overrideMask), (glm::vec3, position), (float, volume), (float, pitch)) \
     X(void,        audioStop,              (void*, audioComponent), (const char*, alias)) \
     /* Every DSL string LITERAL is emitted as a call to this rather than as a bare C++ literal: a literal lives
        in the script DLL's .rdata, which is unmapped on hot-reload, so anything that outlives one call (a
@@ -210,7 +215,7 @@ struct OcScriptField
        back null instead of dangling) and string elements are COPIED engine-side (a script DLL's .rdata is
        unmapped on reload). Values are copied in/out rather than exposing an interior pointer, so no caller can
        hold or corrupt the storage. */ \
-    X(void,        arrayPush,              (Entity*, owner), (OcArray*, handle), (int, elemKind), (int, elemSize), (const void*, value)) /* creates on *handle == 0 and writes the new id back through `handle` */ \
+    X(void,        arrayPush,              (OcEntity*,owner), (OcArray*, handle), (int, elemKind), (int, elemSize), (const void*, value)) /* creates on *handle == 0 and writes the new id back through `handle` */ \
     X(int,         arrayGet,               (OcArray, handle), (int, index), (int, elemSize), (void*, outValue)) /* ENTITY/STRING elements only (POD goes through arrayElem): 1 on success, 0 (outValue untouched) for a stale handle, an out-of-range index, a dead entity, or a POD array */ \
     X(void,        arraySet,               (OcArray, handle), (int, index), (int, elemSize), (const void*, value)) /* Entity/String only; no-op when out of range */ \
     X(int,         arrayCount,             (OcArray, handle)) /* 0 for a stale/empty handle */ \
@@ -221,7 +226,7 @@ struct OcScriptField
        an Entity and is kept for the visual-script nodes built against it; these take the component handle, so
        the DSL reaches them through self.animator / `ifexist` like every other component. A null handle is a
        no-op (or a zero/empty read) throughout, same contract as the physics/audio/force blocks. */ \
-    X(void*,       entityGetAnimatorComponent,(Entity*, entity)) \
+    X(void*,       entityGetAnimatorComponent,(OcEntity*,entity)) \
     X(void,        animatorSetFloat,       (void*, animator), (const char*, name), (float, value)) \
     X(void,        animatorSetBool,        (void*, animator), (const char*, name), (int, value)) \
     X(void,        animatorSetTrigger,     (void*, animator), (const char*, name)) /* consumed by the next transition that tests it */ \
@@ -243,7 +248,7 @@ struct OcScriptField
     X(void,        worldDrawLine,          (glm::vec3, from), (glm::vec3, to), (glm::vec3, color)) \
     /* First ROOT entity with this display name, or null. Roots only -- a whole-scene search would be a
        different (and far more expensive) operation, and the name is not unique either way. */ \
-    X(Entity*,     worldFindRootEntity,    (const char*, displayName)) \
+    X(OcEntity*,     worldFindRootEntity,    (const char*, displayName)) \
     /* ---- radius query ---- three calls, because the DSL has no way to hand back a list: the first RUNS the
        query and returns a HANDLE to its results, the other two read that handle. The results live in a
        THREAD-LOCAL ring of buffers, so concurrent callers never share one, and the handle is generation-tagged
@@ -251,7 +256,7 @@ struct OcScriptField
        as empty rather than as someone else's results. 0 is never a valid handle. */ \
     X(int,         worldQueryRadius,       (glm::vec3, position), (float, radius)) \
     X(int,         worldQueryCount,        (int, queryHandle)) \
-    X(Entity*,     worldQueryResultAt,     (int, queryHandle), (int, index)) /* null out of range or stale */ \
+    X(OcEntity*,     worldQueryResultAt,     (int, queryHandle), (int, index)) /* null out of range or stale */ \
     /* ---- physics component (rigid body) ---- every one of these is a no-op / zero read on a null handle or a
        component whose body isn't valid, so gameplay code never has to guard. Angular quantities are RADIANS
        here (box3d's own unit); the DSL bindings convert, since the DSL speaks degrees throughout. */ \
@@ -277,14 +282,14 @@ struct OcScriptField
     X(void,        physicsSetAwake,        (void*, physicsComponent), (int, awake)) \
     /* ---- particle component ---- the effect follows its entity on its own (ParticleComponent::update), so
        what a script controls is whether it emits and when it bursts, not where it is. */ \
-    X(void*,       entityGetParticleComponent,(Entity*, entity)) \
+    X(void*,       entityGetParticleComponent,(OcEntity*,entity)) \
     X(void,        particleBurst,          (void*, particleComponent)) /* every emitter's Burst count, once */ \
     X(int,         particleGetEmitting,    (void*, particleComponent)) \
     X(void,        particleSetEmitting,    (void*, particleComponent), (int, emitting)) /* continuous rates only; bursts still fire */ \
     /* ---- render component ---- READS only, plus the local offset. The node's own transform is recomposed
        from the entity's world transform every frame (Entity::updateTree), so there is nothing here to write it
        with: `offset` is the per-instance nudge that survives, and moving the entity is the other way. */ \
-    X(void*,       entityGetRenderComponent,(Entity*, entity)) \
+    X(void*,       entityGetRenderComponent,(OcEntity*,entity)) \
     X(float,       renderGetBoundsRadius,  (void*, renderComponent)) /* world space; 0 with no mesh */ \
     X(glm::vec3,   renderGetBoundsCenter,  (void*, renderComponent)) /* world space */ \
     X(int,         renderIsVisible,        (void*, renderComponent)) /* as of this frame's spatial pass */ \
@@ -317,7 +322,7 @@ struct OcScriptField
        lightSetAt clamps/normalizes and no-ops out of range, so scripts need no bounds proof. Writes land
        on the live component (lights re-upload every frame). Node/DSL emits that touch single fields go
        copy-out / edit / copy-in through the same pair. */ \
-    X(void*,       entityGetLightComponent,(Entity*, entity)) \
+    X(void*,       entityGetLightComponent,(OcEntity*,entity)) \
     X(int,         lightGetCount,          (void*, lightComponent)) \
     X(int,         lightGetAt,             (void*, lightComponent), (int, index), (OcLight*, outLight)) \
     X(void,        lightSetAt,             (void*, lightComponent), (int, index), (const OcLight*, light)) \
@@ -326,7 +331,7 @@ struct OcScriptField
     X(void,        sendNetworkEvent,       (const char*, eventName)) \
     /* As above, but attributes the event to the entity firing it (a script's `self`). The netId
        travels with the event so the receiving server can hand the entity to its event filter. */ \
-    X(void,        sendNetworkEventFrom,   (Entity*, sender), (const char*, eventName)) \
+    X(void,        sendNetworkEventFrom,   (OcEntity*,sender), (const char*, eventName)) \
     /* ---- game HUD ---- the in-game viewport overlay (Core.GameHud): a 10-slot hotbar (keys 1..9,0 ->
        slots 0..9; a press fires the global "Hotbar Select" script event) plus bars and numeric counters
        stacked from the top left. GLOBAL state -- one screen, one HUD -- so nothing here takes an entity.
@@ -345,7 +350,7 @@ struct OcScriptField
     X(void,        hudClear,               (int, unused)) /* removes every slot, bar and counter */ \
     /* ---- game components (GameUnit/GameStructure/GameProjectile - the shared C++ sim; the DSL is
        the orders/config tier: read state, re-tune stats, set/clear a unit's walk target) ---- */ \
-    X(void*,       entityGetGameUnitComponent,(Entity*, entity)) \
+    X(void*,       entityGetGameUnitComponent,(OcEntity*,entity)) \
     X(float,       gameUnitGetHealth,      (void*, gameUnit)) \
     X(void,        gameUnitSetHealth,      (void*, gameUnit), (float, health)) \
     X(float,       gameUnitGetHealthMax,   (void*, gameUnit)) \
@@ -361,14 +366,14 @@ struct OcScriptField
     X(int,         gameUnitHasTarget,      (void*, gameUnit)) \
     X(void,        gameUnitSetMoveSpeed,   (void*, gameUnit), (float, speed)) \
     X(float,       gameUnitGetMoveSpeed,   (void*, gameUnit)) \
-    X(void*,       entityGetGameStructureComponent,(Entity*, entity)) \
+    X(void*,       entityGetGameStructureComponent,(OcEntity*,entity)) \
     X(float,       gameStructureGetHealth, (void*, gameStructure)) \
     X(void,        gameStructureSetHealth, (void*, gameStructure), (float, health)) \
     X(float,       gameStructureGetHealthMax,(void*, gameStructure)) \
     X(int,         gameStructureGetTeam,   (void*, gameStructure)) \
     X(int,         gameStructureIsBlueprint,(void*, gameStructure)) \
     X(void,        gameStructureDamage,    (void*, gameStructure), (float, amount)) /* respects invulnerable */ \
-    X(void*,       entityGetGameProjectileComponent,(Entity*, entity)) \
+    X(void*,       entityGetGameProjectileComponent,(OcEntity*,entity)) \
     X(int,         gameProjectileGetTeam,  (void*, gameProjectile)) \
     X(float,       gameProjectileGetAge,   (void*, gameProjectile))
 
@@ -417,26 +422,20 @@ typedef struct ScriptContext
     // Who fired the event being handled: 0 = the server (or a local single-player fire), else the
     // originating client. Server-stamped from the receiving connection, so it cannot be forged.
     unsigned int (* const networkEventSender)(void);
-
-#ifdef __cplusplus
-#ifndef SCRIPT_BUILD
-    ScriptContext(); // the engine binds all the function pointers here; scripts never construct one
-
-    void update(const Camera& camera, float newDeltaSeconds, float newElapsedSeconds);
-#endif // SCRIPT_BUILD
-#endif // __cplusplus
+    // No member functions: the engine fills this aggregate from EngineScriptContext (Entity:ScriptContext), which
+    // also owns the per-frame update -- that one takes the engine's Camera, which this header cannot name (see OcEntity).
 #endif // SCRIPT_STATIC_BUILD (inline forwarders) vs. the pointer table
 } ScriptContext;
 
 #pragma warning(pop)
 
-typedef void (*ScriptOnSpawnFn)(const ScriptContext*, Entity* self, void* scriptData);
-typedef void (*ScriptOnDestroyFn)(const ScriptContext*, Entity* self, void* scriptData);
-typedef void (*ScriptUpdateFn)(const ScriptContext*, Entity* self, float deltaSeconds, void* scriptData);
-typedef void (*ScriptOnEventFn)(const ScriptContext*, Entity* self, int eventIdx, void* scriptData);
+typedef void (*ScriptOnSpawnFn)(const ScriptContext*, OcEntity* self, void* scriptData);
+typedef void (*ScriptOnDestroyFn)(const ScriptContext*, OcEntity* self, void* scriptData);
+typedef void (*ScriptUpdateFn)(const ScriptContext*, OcEntity* self, float deltaSeconds, void* scriptData);
+typedef void (*ScriptOnEventFn)(const ScriptContext*, OcEntity* self, int eventIdx, void* scriptData);
 typedef int          (*ScriptEventCountFn)(void);
 typedef const char*  (*ScriptEventNameFn)(int eventIdx);
-typedef void         (*ScriptOnPhysicsEventFn)(const ScriptContext*, Entity* self, Entity* other, int begin, int sensor, long long contactId, void* scriptData);
+typedef void         (*ScriptOnPhysicsEventFn)(const ScriptContext*, OcEntity* self, OcEntity* other, int begin, int sensor, long long contactId, void* scriptData);
 typedef unsigned int (*ScriptDataSizeFn)(void);
 
 // Optional export: which components the script requires (see //@@require), as an EComponentID bitmask
@@ -486,7 +485,7 @@ template<class T> T ocArrGet(const ScriptContext* ctx, OcArray h, int i)
 { T v = T(); ctx->arrayGet(h, i, (int)sizeof(T), &v); return v; }
 template<class T> void ocArrSet(const ScriptContext* ctx, OcArray h, int i, const T& v)
 { ctx->arraySet(h, i, (int)sizeof(T), &v); }
-template<class T> void ocArrPush(const ScriptContext* ctx, Entity* self, OcArray* h, int kind, const T& v)
+template<class T> void ocArrPush(const ScriptContext* ctx, OcEntity* self, OcArray* h, int kind, const T& v)
 { ctx->arrayPush(self, h, kind, (int)sizeof(T), &v); }
 // POD element access as a typed LOAD/STORE through the element's own address -- no type-erased copy, and the
 // success flag is the pointer itself. ocArrLoad is what an `ifexist ... at <key>` branches on; it leaves `out`
