@@ -13,7 +13,7 @@ import :TerrainSampler;
 import :RockType;
 import :RockGenerator;
 
-// Procedural rocks ("Rocks" tweaks; Docs/RockRenderingPlan.md). Loads every Assets/Rocks/*.rock type and generates its
+// Procedural rocks ("Rocks" tweaks; Docs/Context/Procedural/Rocks.md). Loads every Assets/Rocks/*.rock type and generates its
 // variants (an SDF each, meshed by surface nets into a regular mesh LOD chain) for the WORLD (TreeWorld's rock records,
 // drawn through TreeSystem's world set) and, on request ("Show preview"), a PREVIEW field in front of the camera - one
 // row per type, one rock per variant - as plain RenderNodes. Both draw on the rock material (RendererVK
@@ -32,7 +32,7 @@ export namespace Procedural
 		// Per frame, after trees.update. `maps` places the preview on the terrain (y = 0 without it).
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
-		// --- THE WORLD's view (TreeSystem's world mode; Docs/RockRenderingPlan.md 6) - MAIN THREAD ---
+		// --- THE WORLD's view (TreeSystem's world mode; Docs/Context/Procedural/Rocks.md) - MAIN THREAD ---
 		// TreeWorld places rock RECORDS from the .rock Placement blocks; TreeSystem expands them into its instance set
 		// with these meshes. A loaded variant: its LOD chain's level 0 (the set's culls pick the level) and its
 		// rock-local bounds.

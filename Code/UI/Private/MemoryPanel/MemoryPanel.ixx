@@ -128,6 +128,13 @@ private:
     float m_rateAlpha = 0.0f; // EMA blend factor for this frame's instantaneous rates
     bool m_rateFold = false;  // fold this frame's deltas (false = reseed/freeze: tracking off or long gap)
 
+    // pointer-map health line: EMA rates of the tracker's cumulative map counters (same window as above)
+    MemoryTracker::MapStats m_lastMapStats;
+    bool m_mapStatsSeeded = false;
+    float m_allocsPerSec = 0.0f;
+    float m_freesPerSec = 0.0f;
+    float m_lockSpinsPerSec = 0.0f;
+
     // VRAM snapshot (kept capacity; the names stay valid until the next prepare)
     oc::vector<VramEntry> m_vramEntries;
     oc::vector<char> m_vramNames;

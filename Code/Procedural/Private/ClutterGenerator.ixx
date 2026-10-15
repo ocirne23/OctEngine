@@ -5,7 +5,7 @@ import RendererVK;
 
 import :ClutterType;
 
-// The GROUND CLUTTER's meshes (Docs/GroundClutterPlan.md 6): one per variant, each a short LOD chain
+// The GROUND CLUTTER's meshes (Docs/Context/Procedural/Clutter.md): one per variant, each a short LOD chain
 // (RendererVKLayout::CLUTTER_LODS levels), at a nominal size of 1, y up, the lowest point at y = 0:
 //   PEBBLE   - the rock SDF generator (RockGenerator: the type's rock keys) - its regular LOD chain, its cavity as AO;
 //   BRANCH   - a fallen stick along X (length 1): a bent, tapering tube lying on the ground, its end grain capped, a few

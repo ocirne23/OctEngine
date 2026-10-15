@@ -3,7 +3,7 @@ import File;
 import Script;
 import Entity;
 
-// DslCompiler: command-line DSL -> .dsl compile. See CONTEXT.md next to this file for usage and the full
+// DslCompiler: command-line DSL -> .dsl compile. See Docs/Context/DslCompiler/CONTEXT.md for usage and the full
 // language reference. Parses DSL text, transpiles it, and writes the dual-purpose .dsl file (generated C++ +
 // "//@"-commented DSL block) -- the exact file the Script Editor's Save produces. Only registerScriptDslBindings
 // runs (pure registration); no engine system is initialized, and main() exits via _Exit because the init_seg
@@ -137,7 +137,7 @@ int main(int argc, char* argv[])
 	if (paths.empty() || paths.size() > 2)
 	{
 		std::cout << "usage: DslCompiler <input> [output.dsl] [--compile]\n"
-			"  input:     raw DSL text (see Code/DslCompiler/CONTEXT.md) or an existing .dsl\n"
+			"  input:     raw DSL text (see Docs/Context/DslCompiler/CONTEXT.md) or an existing .dsl\n"
 			"  output:    defaults to the input path with a .dsl extension\n"
 			"  --compile: after writing, cl-compile + load the output via ScriptHost (the F6 pipeline)\n"
 			"  relative paths resolve against Assets/\n";

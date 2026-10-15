@@ -766,7 +766,7 @@ export namespace RendererVKLayout
         glm::uvec2 chunks[GRASS_TABLE_DIM * GRASS_TABLE_DIM]; // x = the mesh's first vertex, y = grid cells per side (0 = none)
     };
 
-    // GROUND CLUTTER (ClutterPipeline; clutter.inc.glsl, Docs/GroundClutterPlan.md): pebbles, branches, mushrooms and
+    // GROUND CLUTTER (ClutterPipeline; clutter.inc.glsl, Docs/Context/Procedural/Clutter.md): pebbles, branches, mushrooms and
     // flowers, placed on the GPU every frame. A grid of PATCHES around the camera; per patch and clutter TYPE a ranked
     // list of CLUTTER_CANDIDATES points (an R2 sequence, so every prefix is evenly spread): candidate k of a type is kept
     // where k + 0.5 < the type's density there x the patch area. One cull workgroup per patch, one thread per rank.

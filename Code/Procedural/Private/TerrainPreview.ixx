@@ -25,7 +25,7 @@ export namespace Procedural
 	// Main thread: request() / update() / the accessors. The bake itself is ONE Low job that fills the
 	// grid in row bands (a cancel lands within one band's tile fetches) and colours it.
 	//
-	// RIVERS (Docs/RiverPlan.md V0): the bake also routes the coarse river network over the tiles the map covers
+	// RIVERS (Docs/Context/Procedural/Rivers.md): the bake also routes the coarse river network over the tiles the map covers
 	// ("Terrain/Rivers") and draws it on top - rivers by discharge, lakes, terminal lakes, salt pans, dry beds. A
 	// river tweak changed while the map is up re-colours it from the stored samples (no re-sampling).
 	//

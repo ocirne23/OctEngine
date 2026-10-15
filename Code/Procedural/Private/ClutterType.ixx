@@ -6,7 +6,7 @@ import RendererVK; // RendererVKLayout::EClutterKind / EFlowerHead
 
 import :RockType;
 
-// One GROUND CLUTTER type, authored as a `.clutter` text asset (Assets/Clutter/; Docs/GroundClutterPlan.md 5): what it
+// One GROUND CLUTTER type, authored as a `.clutter` text asset (Assets/Clutter/; Docs/Context/Procedural/Clutter.md): what it
 // is (the SHAPE - a pebble, a fallen branch, a mushroom, a flower) and where it grows (its Placement blocks: the
 // climate, the terrain, and the FOREST FLOOR - canopy, trunks, rocks). Placement is evaluated on the GPU every frame
 // (clutter_cull.cs.glsl); every Placement block is its own GPU type over the same meshes, so their densities ADD.

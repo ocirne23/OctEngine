@@ -20,7 +20,6 @@ import :OutputLog;
 import :TweakPanel;
 import :ProfilerPanel;
 import :MemoryPanel;
-import :TextEditor;
 import :GameHudOverlay;
 import Script;
 import :ScriptEditor;
@@ -61,7 +60,6 @@ public:
     // Main thread, after the widget pass joined: work panels collected but must not run on a
     // worker - tweak onChange callbacks and the Entity Editor's container imports.
     void flushMainThreadWork();
-	void setRenderStats(const Stats& stats) { m_renderStats = stats; }
 
     Entity* getSelectedEntity() const { return m_sceneView.getSelected(); }
 
@@ -182,9 +180,7 @@ private:
     // Follow the hierarchy selection into the Script Editor: when a selected entity carries a .dsl script, open
     // it. Only ever acts on selection CHANGES, hence the tracking pointer.
     Entity*     m_scriptSelectionTracked = nullptr;
-
 	IGizmo* m_gizmo = nullptr; // non-owning, see setGizmo
-	Stats m_renderStats;
 	AssetBrowser    m_assetBrowser;
 	SceneView       m_sceneView;
 	PropertiesPanel m_propertiesPanel;
@@ -193,7 +189,6 @@ private:
 	TweakPanel      m_tweakPanel;
 	ProfilerPanel   m_profilerPanel;
 	MemoryPanel     m_memoryPanel;
-	TextEditor      m_textEditor;
 	ScriptEditor    m_scriptEditor;
 	GameHudOverlay  m_gameHudOverlay; // in-game HUD painted over the viewport (Core.GameHud is the model)
 	ChatPanel       m_chat;           // multiplayer text chat (lobby page + game overlay; Game's ChatSystem is the model)

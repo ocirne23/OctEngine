@@ -1,5 +1,5 @@
 # A fallen tree: a trunk lying on the forest floor - snapped (both ends splintered) or uprooted (its root plate standing
-# up), sometimes hollow, with broken branch stubs. Format: Code/Procedural/CONTEXT.md, "Rocks".
+# up), sometimes hollow, with broken branch stubs. Format: Docs/Context/Procedural/Rocks.md.
 RockType FallenLog
 	Seed 41
 	Scale 4.8 14.4

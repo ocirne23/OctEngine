@@ -3,7 +3,7 @@ export module Settings.Nav;
 import Core;
 
 // "Nav": the flow-field service (Nav::NavSystem). The behaviour of each value is documented at its use in
-// Code/Nav (System.cpp) and in the Tweaks table of Code/Nav/CONTEXT.md.
+// Code/Nav (System.cpp) and in the Tweaks table of Docs/Context/Nav/CONTEXT.md.
 export struct NavSettings
 {
     bool enabled = true;

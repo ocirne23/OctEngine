@@ -7,7 +7,7 @@ import :Buffer;
 import :Layout;
 import :MeshLodRegistry; // IndexRangeFreeList
 
-// WORLD TREE RECORDS on the GPU (Procedural TreeWorld; Docs/TreeRenderingPlan.md 3.5, W2): every terrain chunk's 4-byte
+// WORLD TREE RECORDS on the GPU (Procedural TreeWorld; Docs/Context/Procedural/Trees.md, W2): every terrain chunk's 4-byte
 // tree records in ONE fixed-size device-local pool, plus a TABLE of the resident chunks per frame slot. The far-tree
 // volume's bake reads them (W4: EVERY tree of the volume comes from the records - tree_volume_splat.cs in detail near
 // the camera, tree_volume_records.cs / tree_volume_far.cs as mass per column beyond).

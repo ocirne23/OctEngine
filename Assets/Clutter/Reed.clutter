@@ -1,6 +1,6 @@
 # Reeds / cattails: tall stands on the banks and in the shallows of SLOW water - a river's calm reaches, its pools, a
 # lake's shore. Long leaves from the root (the stem's colours) around a stalk with a brown cattail spike. Format:
-# Code/Procedural/CONTEXT.md, "Ground clutter".
+# Docs/Context/Procedural/Clutter.md.
 ClutterType Reed
 	Kind Flower
 	Seed 211

@@ -4,7 +4,7 @@ import Core;
 import Core.Allocator;
 import Core.Windows;
 
-// The calling thread's track, set only by registerThread (registration is always explicit). Safe
+// The calling thread's track, set only by registerThread's registerTrack (registration is always explicit). Safe
 // under /GT because every access re-reads it through the accessor in the same call; the one hazard
 // (a ProfileScope spanning a fiber wait) is asserted in the scope destructor instead.
 static thread_local ProfileTrack* t_profileTrack = nullptr;
@@ -149,23 +149,16 @@ ProfileTrack* Profiler::registerThread(const char* name, uint32 sortKey, uint32 
         track->setSortKey(sortKey);
         return track;
     }
-    ProfileTrack* track = registerTrack(name, (uint32)GetCurrentThreadId(), sortKey, capacity);
-    t_profileTrack = track;
-    return track;
+    return registerTrack(name, (uint32)GetCurrentThreadId(), sortKey, capacity, true);
 }
 
 ProfileTrack* Profiler::createNamedTrack(const char* name, uint32 sortKey)
 {
-    return registerTrack(name, 0, sortKey);
+    return registerTrack(name, 0, sortKey, ProfileTrack::CAPACITY, false);
 }
 
-ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 sortKey, uint32 capacity)
+ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 sortKey, uint32 capacity, bool bindThread)
 {
-    // The track + its ring are PERMANENT profiler infrastructure, and on a freshly registering
-    // thread they allocate before t_profileTrack exists - suppress the memory hooks so they don't
-    // land misattributed in "<other threads>"/"<unscoped>".
-    MemoryHookSuppress suppressTracking;
-
     while (m_registerLock.exchange(1, oc::memory_order_acquire) != 0)
         std::this_thread::yield();
 
@@ -173,9 +166,13 @@ ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 
     const uint32 idx = m_numTracks.load(oc::memory_order_relaxed);
     if (idx < MAX_TRACKS)
     {
-        m_tracks[idx] = oc::make_unique<ProfileTrack>();
-        m_tracks[idx]->initialize(name, threadId, sortKey, capacity);
-        track = m_tracks[idx].get();
+        track = &m_tracks[idx];
+        if (bindThread)
+            t_profileTrack = track;
+        {
+            ProfileScope scope("Profiler track", EProfileCategory::Core); // attributes the ring
+            track->initialize(name, threadId, sortKey, capacity);
+        }
         m_numTracks.store(idx + 1, oc::memory_order_release); // publish after construction
     }
 
@@ -523,7 +520,7 @@ oc::string Profiler::buildReport(const ProfileReportOptions& options) const
 bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, oc::vector<ProfileRecord>& out) const
 {
     out.clear();
-    const ProfileTrack& track = *m_tracks[trackIdx];
+    const ProfileTrack& track = m_tracks[trackIdx];
     const uint64 cursor = track.getCursor();
     const uint64 capacity = track.getCapacity();
     const uint64 lo = cursor > capacity ? cursor - capacity : 0;

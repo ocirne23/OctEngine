@@ -46,12 +46,23 @@ public:
 
     // ---- reading (any thread; the panel uses main) ----
     const MemScopeNode* getRoot() const { return m_root; }
-    uint64 getTrackedBytes() const { return (uint64)m_trackedBytes.load(oc::memory_order_relaxed); }
-    uint32 getTrackedCount() const { return (uint32)m_trackedCount.load(oc::memory_order_relaxed); }
+    // Sums of the per-shard counters, read without the shard locks (a slightly stale view is fine).
+    uint64 getTrackedBytes() const;
+    uint32 getTrackedCount() const;
     uint32 getNumNodes() const { return m_numNodes.load(oc::memory_order_relaxed); }
     // Allocations dropped because a map shard or the node pool was full - nonzero means the
     // treemap under-reports by whatever those allocations held.
-    uint64 getDroppedAllocs() const { return m_droppedAllocs.load(oc::memory_order_relaxed); }
+    uint64 getDroppedAllocs() const;
+
+    // Pointer-map health, summed over the shards (the cumulative counters are for per-frame deltas).
+    struct MapStats
+    {
+        uint64 allocs = 0;        // successful inserts since start
+        uint64 frees = 0;         // successful erases since start
+        uint64 lockSpins = 0;     // failed shard-lock attempts since start (0 = no contention)
+        uint32 peakShardCount = 0; // fullest shard's high-water mark, of SHARD_CAPACITY (inserts cap at 75%)
+    };
+    MapStats getMapStats() const;
 
     void onAlloc(void* ptr, uint64 size); // hook bodies (public for the free-function thunks)
     void onFree(void* ptr);
@@ -66,12 +77,21 @@ private:
         uint64 size = 0;
         MemScopeNode* node = nullptr;
     };
+    // The counters live here instead of in global atomics: written only under `lock`, so the hooks
+    // never do a contended RMW on a line every thread shares.
     struct alignas(64) MapShard
     {
         oc::atomic<uint32> lock = 0;
         uint32 count = 0;
         MapEntry* entries = nullptr; // SHARD_CAPACITY, allocated at initialize, never freed
+        uint64 trackedBytes = 0;
+        uint64 droppedAllocs = 0;
+        uint64 allocs = 0;
+        uint64 frees = 0;
+        uint64 lockSpins = 0;
+        uint32 peakCount = 0;
     };
+    static_assert(sizeof(MapShard) == 64);
 
     MemScopeNode* resolveCurrentNode();
     MemScopeNode* findOrAddChild(MemScopeNode* parent, const char* name, uint8 category);
@@ -85,9 +105,6 @@ private:
 
     MapShard m_shards[NUM_SHARDS];
 
-    oc::atomic<int64> m_trackedBytes = 0;
-    oc::atomic<int64> m_trackedCount = 0;
-    oc::atomic<uint64> m_droppedAllocs = 0;
     oc::atomic<bool> m_enabled = true;
     bool m_initialized = false;
 };

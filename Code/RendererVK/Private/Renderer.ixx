@@ -132,7 +132,6 @@ public:
     const glm::vec3& cameraPos() const { return m_cameraPos; } // Valid after joinBeginFrameJob().
 
     // -- Metrics --
-    Stats getStats();
     uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
     uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
     uint32 getNumMaterials() const { return m_materials.count(); }

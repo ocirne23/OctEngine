@@ -1,6 +1,6 @@
 # A snapped piece of a fallen tree: the UPPER HALF of a FallenLog (its top half's taper and thickness at half the length,
 # more branch stubs), its base a long splintered break where the trunk snapped, its top a shorter one where the crown
-# broke off. Its lower half: SnappedLog. Format: Code/Procedural/CONTEXT.md, "Rocks".
+# broke off. Its lower half: SnappedLog. Format: Docs/Context/Procedural/Rocks.md.
 RockType SnappedTop
 	Seed 53
 	Scale 2.4 7.2

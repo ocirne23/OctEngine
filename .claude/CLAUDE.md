@@ -9,8 +9,9 @@ Guidance for Claude Code when working in this repository.
   * [Building](#building)
   * [Style](#style)
 * [Libraries](#libraries) — dependency direction, and where each library's documentation lives
+  (all in [`Docs/Context/`](../Docs/Context/), indexed in [this table](#where-each-library-documents-itself))
 * [Asset files](#asset-files)
-* [`TODO.md`](../TODO.md) — loose list of improvements and open issues (not a plan). Add ideas there.
+* [`Docs/TODO.md`](../Docs/TODO.md) — loose list of improvements and open issues (not a plan). Add ideas there.
 
 ---
 
@@ -20,8 +21,9 @@ Guidance for Claude Code when working in this repository.
   more.
 * Always talk in ASD-STE100 Simplified Technical English.
 * Always read CLAUDE.md / CONTEXT.md files. Library-specific documentation lives in
-  `Code/<Lib>/CONTEXT.md` (see [Libraries](#libraries)) — **read the CONTEXT.md of every library you
-  touch BEFORE changing it.**
+  `Docs/Context/<Lib>/CONTEXT.md` (see [Libraries](#libraries)) — **read the CONTEXT.md of every library you
+  touch BEFORE changing it**, plus the topic file of the feature you change when the library has topic files
+  (RendererVK, Procedural, Entity, Game).
 * For each assertion, add a tag for your confidence in the statement, rather than relying on English:
   * `[Certain]` — hard evidence
   * `[Likely]` — strong guess
@@ -35,9 +37,11 @@ Guidance for Claude Code when working in this repository.
 * **ALWAYS make file changes with the Edit/Write tools, NEVER via shell scripts** (python, sed,
   heredocs through Bash). The user reviews every change as the inline diff those tools render, and
   script edits show nothing. This overrides any session default that prefers shell-based editing.
-* Keep this file and the `Code/<Lib>/CONTEXT.md` files up to date. Cross-library rules (style, build,
+* Keep this file and the `Docs/Context/<Lib>/` files up to date. Cross-library rules (style, build,
   dependency direction, asset formats) go here; everything about ONE library goes in that library's
-  CONTEXT.md.
+  CONTEXT.md, or in a topic file next to it in `Docs/Context/<Lib>/` when the CONTEXT.md gets too big.
+  **Every doc file must be listed in the [Libraries](#where-each-library-documents-itself) table** — that
+  table is the only index a new session has.
 
 ---
 
@@ -50,11 +54,11 @@ DSL script editor, entity editor, tweaks, profiler, memory panel — around a vi
 
 App.exe with NO mode flags boots into a fullscreen MAIN MENU: co-op / PvP / sandbox plus host/join, a
 LOBBY for multiplayer picks, and a text CHAT in the lobby and in-game. See
-[`Code/App/CONTEXT.md`](../Code/App/CONTEXT.md) for the menu/lobby/chat flow, **the frame loop** and
+[`Docs/Context/App/CONTEXT.md`](../Docs/Context/App/CONTEXT.md) for the menu/lobby/chat flow, **the frame loop** and
 the testbed keys.
 
 The actual game — top-down tactical PvP plus co-op PvE — is `Code/Game`; see
-[`Code/Game/CONTEXT.md`](../Code/Game/CONTEXT.md).
+[`Docs/Context/Game/CONTEXT.md`](../Docs/Context/Game/CONTEXT.md).
 
 ## Building
 
@@ -74,14 +78,14 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
   `cooked` custom target configures and builds a sibling `Build-Cooked/` tree with
   `SCRIPTS_STATIC=ON` (see Script).
 * **Unattended performance measurement:** `Tools/profile.ps1` (see Profiling in
-  [`Code/Core/CONTEXT.md`](../Code/Core/CONTEXT.md)) builds, runs
+  [`Docs/Context/Core/CONTEXT.md`](../Docs/Context/Core/CONTEXT.md)) builds, runs
   `App.exe --profile-after <sec> --quit-after <sec> --no-vsync --tweak ...`, and prints the text
   report. This is Claude's measure → change → re-measure loop; the user does not need to be at the
   screen. **Always `-Config RelWithDebInfo`.** GPU work: **`-Fullscreen -After 60`** (the user's 1440p, after the
   sandbox streaming), each case twice - see `Tools/profile.ps1` in Core's CONTEXT for the noise.
 * **Shader fp16 work:** `Tools/fp16conv.ps1 <shader>.glsl` lists every fp16 <-> fp32 conversion in the
   shader's SPIR-V dump by source line (glslang never warns about implicit widening). Rules and results in
-  "Half floats" in [`Code/RendererVK/CONTEXT.md`](../Code/RendererVK/CONTEXT.md).
+  "Half floats" in [`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md).
 * No test suite, no linter. Verifying = it compiles, plus the user runs it.
 
 ### Global compile flags
@@ -176,7 +180,7 @@ glslang/shaderc + SPIRV-Tools (glslang 16.3, copied from Vulkan SDK 1.4.350: `Li
 columns from the wrong source), OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles
 pffft, mysofa and zlib), miniaudio (single header), meshoptimizer, zstd, onnxruntime, NVIDIA Streamline
 2.14.1 (`Include/sl` headers + the five DLSS runtime DLLs, LoadLibrary'd and optional - see DLSS in
-[`Code/RendererVK/CONTEXT.md`](../Code/RendererVK/CONTEXT.md); update = copy `include/` and
+[`Docs/Context/RendererVK/PostProcess.md`](../Docs/Context/RendererVK/PostProcess.md); update = copy `include/` and
 `bin/x64/{sl.interposer,sl.common,sl.dlss,nvngx_dlss,NvLowLatencyVk}.dll` from the release zip).
 
 **EASTL is 3.27.01 with ONE LOCAL PATCH:** `Include/EASTL/internal/config.h` defaults
@@ -366,28 +370,55 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 
 | Library | Covers |
 |---|---|
-| [App](../Code/App/CONTEXT.md) | The testbed executable: **the frame loop table**, init order, command line, main menu + lobby + chat flow, escape menu, testbed keys |
-| [Core](../Code/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, `Core.GameHud`, plus the **Profiling** and **Memory** sections |
-| [Settings](../Code/Settings/CONTEXT.md) | **Every tweak**: `Globals::settings` (one copy of each value, read directly), the domain modules + `registerAll`, listeners (`Tweak::onChange`), and the tweak registry (`Settings.Tweaks`: groups, Saved / Synced / Runtime, overrides, locks) |
-| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: **the frame UBO (generated GLSL) + the tweak locks that bake it into the shaders**, frame pacing, the fence slot, the begin-frame job, frame order, instance flow, streaming, LODs, terrain/ocean integration, procedural grass, shaders |
-| [Entity](../Code/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, the parallel update pass, **SIM LOD**, parallel spawning/destruction, World, the components, script glue, and the **Multiplayer** section |
-| [Script](../Code/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
-| [Physics](../Code/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
-| [Particle](../Code/Particle/CONTEXT.md) | GPU particles + decals, `.pfx` effects, ParticleComponent |
-| [Force](../Code/Force/CONTEXT.md) | Forcefield bubbles: the analytic field, live team count, the baked pressure field, shell tiers / union march, emitter merging, ForceComponent |
-| [Spatial](../Code/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
-| [Nav](../Code/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
-| [Threading](../Code/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
-| [Procedural](../Code/Procedural/CONTEXT.md) | `ITerrainSampler`, the V3 diffusion generator, TerrainStreamer, HeightMapBaker (water reach / flow), ocean clipmap, terrain collider, trees, rocks, **ground clutter** (`.clutter`, the forest floor map) |
-| [Network](../Code/Network/CONTEXT.md) | Winsock transport: `NetHost`, deliveries/channels, handshake + encryption, abuse limits, serialization, sockets |
-| [NetFuzz](../Code/NetFuzz/CONTEXT.md) | The protocol fuzzer — **the regression gate for wire changes** |
-| [Audio](../Code/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources, AudioComponent |
-| [Animation](../Code/Animation/CONTEXT.md) | Skeletons, clips, AnimationPlayer, the state machine, retargeting |
-| [File](../Code/File/CONTEXT.md) | `FileSystem` (**THE disk seam**, main-thread IO assert), AssetParser, the cooked scene cache + GC, TextureConvert |
-| [UI](../Code/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels, game layout, HUD overlay, gizmo split |
-| [Input](../Code/Input/CONTEXT.md) | The window thread (`Core.Window`), the ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
-| [Game](../Code/Game/CONTEXT.md) | The game: the three ticks, co-op PvE (generated map, waves), PvP arenas, sync layers, teams, economy/cables/construction, hotbar + interaction modes, units, player |
-| [DslCompiler](../Code/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
+All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
+
+| Library | Covers |
+|---|---|
+| [App](../Docs/Context/App/CONTEXT.md) | The testbed executable: **the frame loop table**, init order, command line, main menu + lobby + chat flow, escape menu, testbed keys |
+| [Core](../Docs/Context/Core/CONTEXT.md) | `Core.OcSTL` (the EASTL backing seam and the `oc::` vocabulary), `Core.OcBit`, SmallVector, the two clocks + global pause, frame pacing entry, `Core.GameHud`, plus the **Profiling** and **Memory** sections |
+| [Settings](../Docs/Context/Settings/CONTEXT.md) | **Every tweak**: `Globals::settings` (one copy of each value, read directly), the domain modules + `registerAll`, listeners (`Tweak::onChange`), and the tweak registry (`Settings.Tweaks`: groups, Saved / Synced / Runtime, overrides, locks) |
+| [RendererVK](../Docs/Context/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing, the fence slot, the begin-frame job, **frame order**, source layout, debug names, the graphics-queue mutex, VR. **Read it first; the topic files below hold the features** |
+| ↳ [FrameUbo](../Docs/Context/RendererVK/FrameUbo.md) | **The frame UBO (generated GLSL) + the tweak locks that bake it into the shaders**, push blocks |
+| ↳ [Scene](../Docs/Context/RendererVK/Scene.md) | Per-frame instance flow, scene objects (single meshes, the sky draw, tree records, tint), texture + mesh streaming, mesh LODs, draw-list compaction |
+| ↳ [Lighting](../Docs/Context/RendererVK/Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, long-range sun shadows, aerial perspective |
+| ↳ [Clouds](../Docs/Context/RendererVK/Clouds.md) | Volumetric clouds |
+| ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
+| ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
+| ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water |
+| ↳ [Shaders](../Docs/Context/RendererVK/Shaders.md) | GLSL in `Assets/Shaders/`: folders, includes, compile, hoisted work, pipeline statistics (register counts), **half floats (fp16)** |
+| [Entity](../Docs/Context/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, CullMode, the parallel update pass, parallel spawning/destruction, World, assets + tint, script glue. **Read it first; the topic files below hold the rest** |
+| ↳ [SimLod](../Docs/Context/Entity/SimLod.md) | **SIM LOD**: focus, the visit set, tiers, the delta, dormant / wake edges |
+| ↳ [Components](../Docs/Context/Entity/Components.md) | The components: the bone-model animators (HumanoidAnimator grammar), Light, the Game components |
+| ↳ [Multiplayer](../Docs/Context/Entity/Multiplayer.md) | **Multiplayer**: ownership, roles, the wire protocol, snapshots, the spawn stream, claims, validation, correction, ownership transfer, events, session |
+| [Script](../Docs/Context/Script/CONTEXT.md) | ScriptHost DLL compilation + the cooked build, the ScriptAPI ABI (append-only table, require slots, `OcArray`), the DSL rules, fault containment, the DSL subsystem |
+| [Physics](../Docs/Context/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
+| [Particle](../Docs/Context/Particle/CONTEXT.md) | GPU particles + decals, `.pfx` effects, ParticleComponent |
+| [Force](../Docs/Context/Force/CONTEXT.md) | Forcefield bubbles: the analytic field, live team count, the baked pressure field, shell tiers / union march, emitter merging, ForceComponent |
+| [Spatial](../Docs/Context/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
+| [Nav](../Docs/Context/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
+| [Threading](../Docs/Context/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
+| [Procedural](../Docs/Context/Procedural/CONTEXT.md) | The six globals, parking, `ITerrainSampler` (+ climate encoding), the terrain collider, the generated-mesh cache. **Read it first; the topic files below hold the systems** |
+| ↳ [Generator](../Docs/Context/Procedural/Generator.md) | `TerrainGenV3` (the diffusion generator), world origin, `TerrainPreview`, generated bounds, `TerrainSeeder`, world scale |
+| ↳ [Rivers](../Docs/Context/Procedural/Rivers.md) | Rivers: the coarse network, the units, the sampler |
+| ↳ [TerrainStreamer](../Docs/Context/Procedural/TerrainStreamer.md) | `TerrainStreamer` (quadtree, node memory, edge stitching, the world datum, the terrain-data map), `HeightMapBaker` (water reach / flow) |
+| ↳ [Ocean](../Docs/Context/Procedural/Ocean.md) | `OceanGenerator`: the clipmap, sectors, buoyancy field, wind, near-field shading |
+| ↳ [Trees](../Docs/Context/Procedural/Trees.md) | Trees: the `.tree` grammar, LODs, far representations, textures, world records, world mode |
+| ↳ [Rocks](../Docs/Context/Procedural/Rocks.md) | Rocks: the `.rock` grammar, DEAD WOOD, ground placement |
+| ↳ [Clutter](../Docs/Context/Procedural/Clutter.md) | **Ground clutter**: the `.clutter` grammar, the meshes |
+| [Network](../Docs/Context/Network/CONTEXT.md) | Winsock transport: `NetHost`, deliveries/channels, handshake + encryption, abuse limits, serialization, sockets |
+| [NetFuzz](../Docs/Context/NetFuzz/CONTEXT.md) | The protocol fuzzer — **the regression gate for wire changes** |
+| [Audio](../Docs/Context/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources, AudioComponent |
+| [Animation](../Docs/Context/Animation/CONTEXT.md) | Skeletons, clips, AnimationPlayer, the state machine, retargeting |
+| [File](../Docs/Context/File/CONTEXT.md) | `FileSystem` (**THE disk seam**, main-thread IO assert), AssetParser, the cooked scene cache + GC, TextureConvert |
+| [UI](../Docs/Context/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels, game layout, HUD overlay, gizmo split |
+| [Input](../Docs/Context/Input/CONTEXT.md) | The window thread (`Core.Window`), the ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
+| [Game](../Docs/Context/Game/CONTEXT.md) | The game: the architecture rule, partitions, the frame (the three ticks), the world, determinism, save / load. **Read it first; the topic files below hold the rest** |
+| ↳ [Modes](../Docs/Context/Game/Modes.md) | Co-op PvE (generated map, teams, waves, the spawn blob) and PvP (arenas, teams, structure damage) |
+| ↳ [Sync](../Docs/Context/Game/Sync.md) | Multiplayer sync: the sync layers, the game blob, player capsules, client intents |
+| ↳ [Economy](../Docs/Context/Game/Economy.md) | The cable transport, physical cables, construction, grid placement |
+| ↳ [Hotbar](../Docs/Context/Game/Hotbar.md) | The RTS grid hotbar pages, bases, structure health + labels, unit selection, interaction modes |
+| ↳ [Units](../Docs/Context/Game/Units.md) | Units (split, targets, damage, far tick, parked spawns) and the player (the shield battery) |
+| [DslCompiler](../Docs/Context/DslCompiler/CONTEXT.md) | **The DSL language reference** + the DslCompiler tool — how Claude authors `.dsl` scripts |
 
 ---
 
@@ -421,7 +452,7 @@ Network/Scene` children, plus the game components `Component GameUnit/GameStruct
 `.apl`: `Bone <name>` blocks — a transform and an optional `Component Render`, authored like an
 entity but NOT one — and a fixed, bare-minimum animation: four limb bones about their local Z
 (CubeGuy, the body of every game unit). The grammar is in
-[`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md); demo `Entities/Debug/CubeGuy.pre`.
+[`Docs/Context/Entity/Components.md`](../Docs/Context/Entity/Components.md); demo `Entities/Debug/CubeGuy.pre`.
 `Component SceneAnimator` (the same bone model with general `Layer` / track animation) is PARKED: the
 code exists but has no component id, so a prefab that authors it gets a warning and no component.
 `Component Animator` is for skinned meshes only.
@@ -431,7 +462,7 @@ inherited**) makes the World visit it every frame regardless of the SIM LOD.
 `CullMode PerEntity|RootOnly|None` sets the spatial registration: `PerEntity` (default) — every
 entity culls itself; `RootOnly` — this entity culls for its whole subtree (one entry over all child
 render bounds, e.g. a box-limb character); `None` — no entry, never culled, always visited. See
-CullMode in [`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md).
+CullMode in [`Docs/Context/Entity/CONTEXT.md`](../Docs/Context/Entity/CONTEXT.md).
 
 Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 
@@ -462,7 +493,7 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 `Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree. `Kind Bush`
 species grow around the trees of their `Climate` (picked by `Weight`); a tree's `Undergrowth` block sets how many and
 how far out.
-**The grammar is in "Trees" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; placeholders
+**The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`, plus three bushes per tree `Climate` (one of them a wide ground cover). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
 Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
 (not in git) and reused (regenerate with `Trees/Regenerate textures`).
@@ -475,7 +506,7 @@ climate, never the type. DEAD WOOD is rock types too: `Shape Trunk` (a fallen lo
 `RootPlate`, `Stubs`, `Roots`, `Hollow`) with `Surface Wood` (`Bark <TreeSpecies>`: that species' bark texture, x a `Color` tint). Any
 number of `Placement` blocks say where the world puts it (a climate box, the ground: `Slope`, `Crag`, `Talus`,
 `Plains` / `Rugged` / `Valley`, `Forest`); their densities add. **The grammar is
-in "Rocks" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; the plan is `Docs/RockRenderingPlan.md`.
+in [`Docs/Context/Procedural/Rocks.md`](../Docs/Context/Procedural/Rocks.md)**.
 Loaded by `RockSystem` itself (not `AssetRegistry`).
 
 ## `.clutter` — ground clutter types
@@ -485,15 +516,15 @@ also builds reeds, sedges, wild grains, ferns and weeds - `Head Grain|Fern|Roset
 (a pebble takes the `.rock` shape keys; a flower has no mesh: `Head`, `Petals`, `Open`, ...), and any number of
 `Placement` blocks (density per m², a climate box, and `a b` TERMS over the terrain and the FOREST FLOOR - `Grass`,
 `Crag`, `Beach`, `Canopy`, `Trunk`, `Rock`, `Wet` - plus `Cluster` and fairy `Ring`s); their densities add. Placed on the
-GPU every frame, nothing per object on the CPU. **The grammar is in "Ground clutter" in
-[`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)**; the plan is `Docs/GroundClutterPlan.md`. Loaded by
+GPU every frame, nothing per object on the CPU. **The grammar is in
+[`Docs/Context/Procedural/Clutter.md`](../Docs/Context/Procedural/Clutter.md)**. Loaded by
 `ClutterSystem` itself (not `AssetRegistry`).
 
 ## `.dsl` — scripts
 
 A dual-purpose file: **generated C++ on top, the `//@`-commented DSL block below**, between
 `//@@dsl 1` and `//@@end`. Author them through DslCompiler — see
-[`Code/DslCompiler/CONTEXT.md`](../Code/DslCompiler/CONTEXT.md).
+[`Docs/Context/DslCompiler/CONTEXT.md`](../Docs/Context/DslCompiler/CONTEXT.md).
 
 ## `.scr` — legacy
 
@@ -517,6 +548,6 @@ Checked-in inputs for repeatable runs:
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
 generated tree textures and far bakes), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/` (the generated meshes -
-"The generated-mesh cache" in [`Code/Procedural/CONTEXT.md`](../Code/Procedural/CONTEXT.md)), `TerrainTex/`
+"The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
 splats, the `Diffusion/<seed>/` tile cache, `imgui.ini` (the editor layout),
 `gamesave.txt` and `profile.txt`.

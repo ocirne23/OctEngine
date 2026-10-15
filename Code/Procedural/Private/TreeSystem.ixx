@@ -19,7 +19,7 @@ import :TreeWorld;
 // Procedural CONTEXT) or a PREVIEW: a grove of composited trees in front of the camera plus the piece
 // library itself, drawn through the plain RenderMesh path (one node per placed piece mesh, GPU mesh LOD
 // chains, billboards beyond a distance). The dedicated GPU tree path (bone palettes, own
-// shaders) replaces the preview draw in G4; see Docs/TreeRenderingPlan.md.
+// shaders) replaces the preview draw in G4; see Docs/Context/Procedural/Trees.md.
 export namespace Procedural
 {
 	class TreeSystem
@@ -134,7 +134,7 @@ export namespace Procedural
 		// Hooks a set into the terrain chunks: the walk lists the drawn chunks (m_vegChunkOf: coordinate -> set chunk).
 		void hookTerrain(uint32 numChunks);
 
-		// --- WORLD MODE (Trees/World/Enabled + GPU expansion; Docs/TreeRenderingPlan.md 3.5, W3) ---
+		// --- WORLD MODE (Trees/World/Enabled + GPU expansion; Docs/Context/Procedural/Trees.md, W3) ---
 		// The near chunks of TreeWorld's records, EXPANDED into one DYNAMIC set: per record the tree (variant, scale, yaw from
 		// its hash, the exact ground) plus its bushes, chunk by chunk on Low jobs; a chunk that leaves the near radius frees
 		// its set chunk. Everything an expansion reads is in an immutable ExpandContext.
@@ -152,7 +152,7 @@ export namespace Procedural
 			float bushesPerTree = 0.0f; // trees: their undergrowth (bushUndergrowth)
 			float bushRadius = 1.5f;    // trees: bushes out to this from the tree (m)
 		};
-		// A ROCK type of the world (RockSystem's WorldType, Docs/RockRenderingPlan.md 6): a record expands to ONE piece -
+		// A ROCK type of the world (RockSystem's WorldType, Docs/Context/Procedural/Rocks.md): a record expands to ONE piece -
 		// its variant, scale (rockRecordScale) and yaw from the record's seed, laid on the ground under its footprint
 		// (RockSystem::groundTransform: it follows the ground's normal by `align`).
 		struct ExpandRockVariant
@@ -218,7 +218,7 @@ export namespace Procedural
 		bool m_loaded = false;
 		bool m_spawned = false;
 
-		TreeWorld m_world; // every tree of the terrain ring as records (Docs/TreeRenderingPlan.md 3.5)
+		TreeWorld m_world; // every tree of the terrain ring as records (Docs/Context/Procedural/Trees.md)
 		// World mode.
 		bool m_worldMode = false;      // this spawn is the world (else the preview grove)
 		bool m_worldFullLogged = false;

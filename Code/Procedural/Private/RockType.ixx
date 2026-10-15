@@ -8,7 +8,7 @@ export import Settings.Rocks; // RockWorldDesc
 // One rock type, authored as a `.rock` text asset (Assets/Rocks/). The type sets the SHAPE: a signed distance field
 // built per variant from its seed. A ROCK's colour comes from the climate at the rock (the terrain's bedrock
 // materials), never from the type; DEAD WOOD (`Surface Wood`) takes a tree species' bark texture (`Bark`). See
-// Docs/RockRenderingPlan.md.
+// Docs/Context/Procedural/Rocks.md.
 export namespace Procedural
 {
 	enum class ERockShape : uint8
@@ -32,7 +32,7 @@ export namespace Procedural
 	constexpr int ROCK_PROFILE_POINTS = 5; // a Pillar's widths, base to top, evenly spaced
 	constexpr int ROCK_MAX_LIMBS = 12;     // a Trunk's branch stubs + roots (RockShape::limbs)
 
-	// One world placement RULE (Docs/RockRenderingPlan.md 6): TreeWorld's rock records. A type has any number of them
+	// One world placement RULE (Docs/Context/Procedural/Rocks.md): TreeWorld's rock records. A type has any number of them
 	// (`Placement` blocks) and their densities ADD - a rule for everywhere plus one for a climate it is common in, each
 	// with its own ground.
 	struct RockPlacementDesc

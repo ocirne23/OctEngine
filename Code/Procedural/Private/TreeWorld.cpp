@@ -820,7 +820,7 @@ namespace Procedural
 			return total;
 		};
 
-		// THE ROCKS FIRST (Docs/RockRenderingPlan.md 6). Each rock type has its own WORLD lattice (RockSpecies::cell,
+		// THE ROCKS FIRST (Docs/Context/Procedural/Rocks.md). Each rock type has its own WORLD lattice (RockSpecies::cell,
 		// anchored at the world origin - NOT at the chunk): a cell's rock is a pure function of (seed, type, cell), so
 		// this chunk computes its neighbours' rocks exactly as they do. Every cell that can put a rock within
 		// ROCK_REACH of the chunk is evaluated: the chunk's own rocks become records, the others only keep the trees

@@ -3,7 +3,7 @@ export module Settings.Rocks;
 import Core;
 import Core.glm;
 
-// "Rocks": Procedural's RockSystem (Docs/RockRenderingPlan.md).
+// "Rocks": Procedural's RockSystem (Docs/Context/Procedural/Rocks.md).
 export namespace Procedural
 {
 	// The WORLD's rules over every rock type ("Rocks/World" tweaks -> TreeWorld's placement): what the types' ground

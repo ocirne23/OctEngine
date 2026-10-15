@@ -259,7 +259,7 @@ void Settings::registerTerrain(TerrainSettings& s)
 	// .tile files already in Local/Diffusion/<seed>/ (a missing tile falls back to the coarse stage, else sea level).
 	// Turning it off with the models up unloads them.
 
-	// Rivers (Docs/RiverPlan.md): the coarse drainage network. Runoff = rain - evaporation (the Budyko curve over the
+	// Rivers (Docs/Context/Procedural/Rivers.md): the coarse drainage network. Runoff = rain - evaporation (the Budyko curve over the
 	// model's precipitation and temperature), routed downhill over the conditioned coarse field; lakes balance their
 	// inflow against open-water evaporation (full lakes spill, terminal ones and salt pans do not). The lobby preview
 	// re-applies a change at once, from its stored samples.

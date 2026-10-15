@@ -1,7 +1,7 @@
 # Wild wheat (emmer, einkorn): golden stalks with stout, dense, upright ears and fanning awns a little
 # shorter than the ear, in drifts on warm, dry grassland. Head Grain: Ear = the ear's kind (Dense / Slender / Panicle),
 # one stalk per object (Petals is ignored), HeadSize = the ear, Open = how far it nods, Awns = their length (0..1 = 0 .. 2 x
-# the ear). Color = the ear, Color2 = the straw. Format: Code/Procedural/CONTEXT.md, "Ground clutter".
+# the ear). Color = the ear, Color2 = the straw. Format: Docs/Context/Procedural/Clutter.md.
 ClutterType WildWheat
 	Kind Flower
 	Seed 301

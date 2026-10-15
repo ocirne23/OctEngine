@@ -4,7 +4,7 @@ import Core;
 
 import :ClutterType;
 
-// The ground clutter's generated TEXTURES (Docs/GroundClutterPlan.md): the alpha-tested cards of a flower type - a fern's
+// The ground clutter's generated TEXTURES (Docs/Context/Procedural/Clutter.md): the alpha-tested cards of a flower type - a fern's
 // FROND, a radial head's PETAL, a grain's EAR with its awns, an umbel's FLORET CLUSTER, a spike's PEA FLORET, a bell. RGBA8, sRGB, square; v along the part (0 = its base, 1 = its
 // tip), u across it (0.5 = its axis). R = the part's own shading (x the type's Color), G = a mask toward the second
 // colour (Color2: a grain's awns, a fern's rachis), alpha = the cover. clutter_flower.fs.glsl:

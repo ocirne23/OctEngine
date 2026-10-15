@@ -3,7 +3,7 @@ export module Procedural:RiverRouting;
 import Core;
 import :GeneratorV3;
 
-// The drainage router BOTH river levels run (Docs/RiverPlan.md 4.1 coarse, 4.3 the units): the sea, a priority-flood
+// The drainage router BOTH river levels run (Docs/Context/Procedural/Rivers.md): the sea, a priority-flood
 // from the coast and the caller's seeds (a pit queue for flats), depressions -> lakes with their water balance, and
 // the upstream-first accumulation with the dry-land channel loss. Model frame: model metres, real m3/s.
 export namespace Procedural

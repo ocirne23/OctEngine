@@ -8,7 +8,7 @@ import Threading;
 import :RiverUnits;
 import :RiverTerrain;
 
-// The river WATER and the debug view (Docs/RiverPlan.md V1 + V3), owned by TerrainStreamer (no global of its own). It
+// The river WATER and the debug view (Docs/Context/Procedural/Rivers.md), owned by TerrainStreamer (no global of its own). It
 // reads the units from the live RiverTerrain's store - the same units the sampler carves - pulling the ones around the
 // camera ONE at a time on a Low job (nearest first; a cold unit fetches its tiles, so the wait parks the fiber).
 //   * THE WATER ("Terrain/Rivers/Surface"): per unit its WATER TILES (one per terrain base chunk, built on the pull job,

@@ -15,7 +15,6 @@ export extern "C++"
 	struct Sphere;
 	class Allocator;
 	template<bool ThreadSafe = false> class BitRangeAllocator;
-	template<typename T, typename Alloc> class STLAllocator;
 	template<typename T> class LockedList;
 	template <typename T> class LockFreeList;
 	template<size_t Size> class RefCountTracker;

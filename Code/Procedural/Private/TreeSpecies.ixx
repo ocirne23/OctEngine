@@ -5,7 +5,7 @@ import Core.glm;
 
 // One tree species, authored as a `.tree` text asset (Assets/Trees/). The species does not describe one
 // tree: it describes a LIBRARY of pieces (trunks with attach slots, branch modules) and the rules the
-// composite function uses to assemble a unique tree per seed from them. See Docs/TreeRenderingPlan.md.
+// composite function uses to assemble a unique tree per seed from them. See Docs/Context/Procedural/Trees.md.
 export namespace Procedural
 {
 	enum class ETreeCrownShape : uint8

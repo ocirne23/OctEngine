@@ -6,7 +6,7 @@ import Core.glm;
 export import Settings.Render;
 
 // The pushed / reported parameter blocks that are not settings: OceanParams (Procedural::OceanGenerator builds it
-// every frame) and the Stats snapshot.
+// every frame) and the GPU allocation report types.
 
 // FFT/Tessendorf ocean: spectrum inputs for the GPU simulation (OceanSimulationPipeline) + water shading.
 // The Renderer feeds these into the per-frame UBO (ocean* fields), which drives BOTH the compute simulation
@@ -187,70 +187,3 @@ export struct GpuAllocationInfo
 // Renderer::gpuEnumName: which Vulkan enum / flag set a GpuAllocationInfo value is.
 export enum class GpuEnum : uint8 { Format, ImageUsage, BufferUsage, MemoryProperties };
 
-export struct Stats
-{
-    uint32 numLights;
-    uint32 maxLights;
-
-    uint32 numMeshInstances;
-    uint32 maxMeshInstances;
-
-    uint32 numInstanceOffsets;
-    uint32 maxInstanceOffsets;
-
-    uint32 numMeshTypes;
-    uint32 maxMeshTypes;
-
-    uint32 numMaterials;
-    uint32 maxMaterials;
-
-    uint32 numRenderNodes;
-    uint32 maxRenderNodes;
-
-    uint32 numTextures;
-    uint32 maxTextures;
-
-    uint64 vertexDataUsedBytes;
-    uint64 maxVertexDataBytes;
-
-    uint64 indexDataUsedBytes;
-    uint64 maxIndexDataBytes;
-
-    uint32 numObjectContainers;
-
-    uint32 numLightGrids;
-    uint32 maxLightGrids;
-
-    uint64 lightGridMemUsageBytes;
-    uint64 maxLightGridMemUsageBytes;
-
-    // Total GPU memory tracked by VMA across all heaps.
-    uint64 gpuMemoryUsedBytes;     // bytes our live allocations occupy
-    uint64 gpuMemoryReservedBytes; // bytes VMA has reserved in blocks (>= used)
-    uint64 gpuMemoryBudgetBytes;   // device-local budget available to the process
-
-    // Texture mip streaming (see TextureStreamer).
-    uint64 textureBudgetBytes;
-    uint64 textureResidentBytes;   // live allocations of streamable textures
-    uint64 texturePinnedBytes;     // unstreamable textures, always fully resident
-    uint64 textureDesiredBytes;    // what the priority pass wants resident
-    uint64 textureTailBytes;       // always-resident mip tails (part of resident)
-    uint32 numStreamableTextures;
-    uint32 numStreamOpsInFlight;
-
-    // Static BLAS memory (see AccelerationStructure; excludes the per-frame skinned BLASes).
-    uint64 blasBytes;
-    uint64 blasCompactionSavedBytes; // cumulative bytes reclaimed by copy-compaction
-
-    // Mesh data streaming (see MeshStreamer).
-    uint64 meshBudgetBytes;
-    uint64 meshStreamableBytes; // registered mesh sets, resident or not
-    uint64 meshResidentBytes;
-    uint64 meshColdBytes;       // resident but unseen long enough to be eviction candidates
-    uint32 numMeshSets;
-    uint32 numEvictedMeshSets;
-
-    // Mesh LOD (see MeshLodParams; selection runs in the GPU cull, counters read back a few frames late).
-    uint32 numMeshLodGroups;
-    uint32 lodInstanceCounts[5];   // VISIBLE LOD instances per selected level (MAX_MESH_LODS)
-};

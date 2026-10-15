@@ -1,5 +1,5 @@
 # A snag: a dead tree still standing - greyed, its top broken off, a few branch stubs left. Format:
-# Code/Procedural/CONTEXT.md, "Rocks".
+# Docs/Context/Procedural/Rocks.md.
 RockType Snag
 	Seed 47
 	Scale 5 14

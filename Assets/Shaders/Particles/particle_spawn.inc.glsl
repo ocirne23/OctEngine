@@ -2,7 +2,7 @@
 #define PARTICLE_SPAWN_INC_GLSL
 
 // The particle GPU SPAWN PATH, producer side. Any compute pass that runs before the particle sim in the frame (see the
-// frame order in RendererVK/CONTEXT.md) binds the particle counters + request buffers (handed out from the
+// frame order in Docs/Context/RendererVK/CONTEXT.md) binds the particle counters + request buffers (handed out from the
 // ParticlePipeline) and appends spawn requests here; the begin pass latches the count and the GPU emit dispatch turns
 // every request into a particle of the named emitter slot (an ordinary .pfx emitter instance whose slot the CPU
 // published to the producer). The includer defines PARTICLE_COUNTERS_BINDING and PARTICLE_REQUESTS_BINDING and has

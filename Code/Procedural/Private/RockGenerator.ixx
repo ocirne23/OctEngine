@@ -5,7 +5,7 @@ import Core.glm;
 
 import :RockType;
 
-// The rock shape generator (Docs/RockRenderingPlan.md 4). A variant is a SIGNED DISTANCE FIELD at a nominal size
+// The rock shape generator (Docs/Context/Procedural/Rocks.md). A variant is a SIGNED DISTANCE FIELD at a nominal size
 // of 1 (the longest axis), built from the type and a seed into a RockShape: every random decision is made ONCE
 // there, so rockSdf is a pure function of (shape, point). The field is meshed on the CPU into a regular mesh LOD
 // chain (no GPU tessellation).

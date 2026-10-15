@@ -8,7 +8,7 @@ import :GeneratorV3;
 import :RiverNetwork;
 import :RiverUnits;
 
-// THE RIVER SAMPLER (Docs/RiverPlan.md 5): an ITerrainSampler that wraps the diffusion generator and carves the river
+// THE RIVER SAMPLER (Docs/Context/Procedural/Rivers.md): an ITerrainSampler that wraps the diffusion generator and carves the river
 // units into it, so every terrain consumer - the chunks, the collider, both bakes, the tree / rock records - gets the
 // rivers from the one datum with no change of its own. A wrapper, not a part of TerrainGenV3: the units are built FROM
 // the generator's tiles.

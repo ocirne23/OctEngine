@@ -1,4 +1,4 @@
-// GROUND CLUTTER (ClutterPipeline; Docs/GroundClutterPlan.md): placed by clutter_cull.cs.glsl, drawn by clutter.vs/fs (rigid
+// GROUND CLUTTER (ClutterPipeline; Docs/Context/Procedural/Clutter.md): placed by clutter_cull.cs.glsl, drawn by clutter.vs/fs (rigid
 // meshes) and clutter_flower.vs/fs (flowers, built in the VS). The structs MIRROR RendererVKLayout (Layout.ixx) - keep them
 // in step. With CLUTTER_FRAME_BINDING defined: the CLUTTER FRAME (ClutterFrameGpu: patch grid, counts, forest floor map) at
 // that binding, and clutterFloorAt.

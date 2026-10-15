@@ -6,7 +6,7 @@ import :GeneratorV3;
 import :RiverRouting;
 import :RiverNetwork;
 
-// The river UNITS (Docs/RiverPlan.md 4.2-4.7): N x N full tiles on a fixed model-space lattice, routed at native
+// The river UNITS (Docs/Context/Procedural/Rivers.md): N x N full tiles on a fixed model-space lattice, routed at native
 // resolution. A unit talks to its neighbours ONLY through CROSSINGS - the coarse links that cross its edge - so it is
 // computable from its own tiles plus the outside tile of each crossing, never from its upstream catchment:
 //   * a crossing sits at the low point of the shared tile edge near its middle, judged on BOTH tiles' border pixels

@@ -7,10 +7,6 @@ module Core.MemoryTracker;
 import Core;
 import Core.Allocator;
 
-// Reentrancy guard: the hooks never allocate through the engine paths themselves (fixed pools),
-// but this keeps any future slip from recursing into the allocator.
-static thread_local bool t_inMemoryHook = false;
-
 namespace
 {
     uint64 hashPtr(const void* ptr)
@@ -21,10 +17,15 @@ namespace
         return h;
     }
 
-    void spinLock(oc::atomic<uint32>& lock)
+    uint32 spinLock(oc::atomic<uint32>& lock) // returns the failed attempts (contention)
     {
+        uint32 spins = 0;
         while (lock.exchange(1, oc::memory_order_acquire) != 0)
+        {
+            ++spins;
             _mm_pause();
+        }
+        return spins;
     }
     void spinUnlock(oc::atomic<uint32>& lock)
     {
@@ -67,45 +68,31 @@ MemoryTracker::~MemoryTracker()
 
 void MemoryTracker::onAlloc(void* ptr, uint64 size)
 {
-    if (ptr == nullptr || !m_enabled.load(oc::memory_order_relaxed) || t_inMemoryHook)
+    if (ptr == nullptr || !m_enabled.load(oc::memory_order_relaxed))
         return;
-    t_inMemoryHook = true;
 
     MemScopeNode* node = resolveCurrentNode();
-    if (node == nullptr || !mapInsert(ptr, size, node))
-    {
-        m_droppedAllocs.fetch_add(1, oc::memory_order_relaxed);
-        t_inMemoryHook = false;
+    if (!mapInsert(ptr, size, node)) // counts the drop (null node or full shard)
         return;
-    }
     node->selfBytes.fetch_add((int64)size, oc::memory_order_relaxed);
     node->selfCount.fetch_add(1, oc::memory_order_relaxed);
     node->totalAllocBytes.fetch_add(size, oc::memory_order_relaxed);
     node->totalAllocCount.fetch_add(1, oc::memory_order_relaxed);
-    m_trackedBytes.fetch_add((int64)size, oc::memory_order_relaxed);
-    m_trackedCount.fetch_add(1, oc::memory_order_relaxed);
-
-    t_inMemoryHook = false;
 }
 
 void MemoryTracker::onFree(void* ptr)
 {
     // NOT gated on m_enabled: blocks tracked while enabled must still untrack after a disable,
     // or their counts would leak.
-    if (ptr == nullptr || t_inMemoryHook)
+    if (ptr == nullptr)
         return;
-    t_inMemoryHook = true;
 
     MapEntry entry;
     if (mapErase(ptr, entry)) // miss = allocated before tracking (or dropped) - ignore
     {
         entry.node->selfBytes.fetch_sub((int64)entry.size, oc::memory_order_relaxed);
         entry.node->selfCount.fetch_sub(1, oc::memory_order_relaxed);
-        m_trackedBytes.fetch_sub((int64)entry.size, oc::memory_order_relaxed);
-        m_trackedCount.fetch_sub(1, oc::memory_order_relaxed);
     }
-
-    t_inMemoryHook = false;
 }
 
 MemScopeNode* MemoryTracker::resolveCurrentNode()
@@ -167,9 +154,10 @@ bool MemoryTracker::mapInsert(void* ptr, uint64 size, MemScopeNode* node)
     constexpr uint32 mask = SHARD_CAPACITY - 1;
     uint32 slot = (uint32)(hash >> 6) & mask;
 
-    spinLock(shard.lock);
-    if (shard.count >= SHARD_CAPACITY - (SHARD_CAPACITY >> 2)) // keep probes short: cap at 75%
+    shard.lockSpins += spinLock(shard.lock);
+    if (node == nullptr || shard.count >= SHARD_CAPACITY - (SHARD_CAPACITY >> 2)) // keep probes short: cap at 75%
     {
+        shard.droppedAllocs++;
         spinUnlock(shard.lock);
         return false;
     }
@@ -177,6 +165,9 @@ bool MemoryTracker::mapInsert(void* ptr, uint64 size, MemScopeNode* node)
         slot = (slot + 1) & mask;
     shard.entries[slot] = MapEntry{ .ptr = ptr, .size = size, .node = node };
     shard.count++;
+    shard.peakCount = oc::max(shard.peakCount, shard.count);
+    shard.trackedBytes += size;
+    shard.allocs++;
     spinUnlock(shard.lock);
     return true;
 }
@@ -188,7 +179,7 @@ bool MemoryTracker::mapErase(void* ptr, MapEntry& out)
     constexpr uint32 mask = SHARD_CAPACITY - 1;
     const uint32 home = (uint32)(hash >> 6) & mask;
 
-    spinLock(shard.lock);
+    shard.lockSpins += spinLock(shard.lock);
     uint32 i = home;
     while (shard.entries[i].ptr != ptr)
     {
@@ -225,6 +216,45 @@ bool MemoryTracker::mapErase(void* ptr, MapEntry& out)
     }
     shard.entries[hole].ptr = nullptr;
     shard.count--;
+    shard.trackedBytes -= out.size;
+    shard.frees++;
     spinUnlock(shard.lock);
     return true;
+}
+
+uint64 MemoryTracker::getTrackedBytes() const
+{
+    uint64 total = 0;
+    for (const MapShard& shard : m_shards)
+        total += shard.trackedBytes;
+    return total;
+}
+
+uint32 MemoryTracker::getTrackedCount() const
+{
+    uint32 total = 0;
+    for (const MapShard& shard : m_shards)
+        total += shard.count;
+    return total;
+}
+
+uint64 MemoryTracker::getDroppedAllocs() const
+{
+    uint64 total = 0;
+    for (const MapShard& shard : m_shards)
+        total += shard.droppedAllocs;
+    return total;
+}
+
+MemoryTracker::MapStats MemoryTracker::getMapStats() const
+{
+    MapStats stats;
+    for (const MapShard& shard : m_shards)
+    {
+        stats.allocs += shard.allocs;
+        stats.frees += shard.frees;
+        stats.lockSpins += shard.lockSpins;
+        stats.peakShardCount = oc::max(stats.peakShardCount, shard.peakCount);
+    }
+    return stats;
 }

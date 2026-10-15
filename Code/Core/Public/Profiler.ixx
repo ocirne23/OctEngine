@@ -261,7 +261,7 @@ public:
 
     // ---- Track reading (main thread) ----
     uint32_t getNumTracks() const { return m_numTracks.load(oc::memory_order_acquire); }
-    const ProfileTrack& getTrack(uint32_t idx) const { return *m_tracks[idx]; }
+    const ProfileTrack& getTrack(uint32_t idx) const { return m_tracks[idx]; }
 
     // Copies every record overlapping [tMin, tMax] into out (unspecified order: newest-first).
     // Returns false (out cleared) if the writer lapped the ring mid-copy - retry next frame.
@@ -290,9 +290,12 @@ private:
     ReportWriterFn m_reportWriter;
 
     void initialize();
-    ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey, uint32_t capacity = ProfileTrack::CAPACITY);
+    // bindThread: makes the track the calling thread's (t_profileTrack) BEFORE its ring allocates.
+    ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey, uint32_t capacity, bool bindThread);
 
-    oc::array<oc::unique_ptr<ProfileTrack>, MAX_TRACKS> m_tracks;
+    // Inline (no allocation), so a registering thread has its track before anything allocates and
+    // the ring lands under a real scope instead of "<other threads>".
+    oc::array<ProfileTrack, MAX_TRACKS> m_tracks;
     oc::atomic<uint32_t> m_numTracks = 0;
     oc::atomic<uint32_t> m_registerLock = 0; // registration-only spinlock
 

@@ -13,7 +13,7 @@ import :TreeSpecies;
 import :TreeGenerator;
 import :RockType;
 
-// WORLD TREE PLACEMENT (Docs/TreeRenderingPlan.md 3.5): EVERY tree in the terrain ring, stored as a 4-byte
+// WORLD TREE PLACEMENT (Docs/Context/Procedural/Trees.md): EVERY tree in the terrain ring, stored as a 4-byte
 // RECORD per terrain chunk - x, z and the species, nothing else. The height is the terrain's; variant, scale and yaw
 // come from the record's hash (treeRecordSeed), so the same tree comes back wherever and whenever it is asked for.
 // The records are a pure function of (seed, chunk, the species' Placement blocks, the sampler): a chunk that leaves
@@ -25,7 +25,7 @@ import :RockType;
 // table), within an upload budget per frame. The CPU keeps a chunk's records only inside "CPU keep radius" (the near
 // chunks, which expansion needs); beyond it they are dropped once uploaded and generated again on the way back in.
 //
-// ROCKS (Docs/RockRenderingPlan.md 6; setRocks): the .rock types' Placement blocks place ROCK records into the same
+// ROCKS (Docs/Context/Procedural/Rocks.md; setRocks): the .rock types' Placement blocks place ROCK records into the same
 // chunks - the same 4 bytes, their types appended to the list after the trees (firstRockType). A rock's lattice is a
 // pure function of its WORLD cell, so a chunk also knows the rocks of its neighbours that reach into it: the trees
 // give way to every rock (placeChunk).
@@ -111,7 +111,7 @@ export namespace Procedural
 		uint32 generation() const { return m_generation; }
 		// Main thread: a chunk's records, when the CPU holds them (inside the keep radius); nullptr otherwise.
 		const oc::vector<TreeRecord>* cpuRecords(glm::ivec2 coord) const;
-		// THE FOREST FLOOR (Procedural ClutterSystem, Docs/GroundClutterPlan.md 4.2): what each record type means on the
+		// THE FOREST FLOOR (Procedural ClutterSystem, Docs/Context/Procedural/Clutter.md): what each record type means on the
 		// ground around it - indexed by the record's type, read by the clutter's floor map bake.
 		struct FloorType
 		{

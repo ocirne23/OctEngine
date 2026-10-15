@@ -210,7 +210,7 @@ export struct TerrainSettings
 	// terrain for a given seed.
 	bool  v3Fp16 = false;
 
-	// --- "Terrain/Rivers": the drainage network (Docs/RiverPlan.md). MODEL-frame units: model metres, real m3/s.
+	// --- "Terrain/Rivers": the drainage network (Docs/Context/Procedural/Rivers.md). MODEL-frame units: model metres, real m3/s.
 	bool  riverEnabled = true;       // the terrain sampler carves the rivers and reports their water (RiverTerrain)
 	bool  riverPreview = true;       // draw the coarse network on the lobby's world preview
 	int   riverCoarseDomain = 2;     // coarse tiles of margin each coarse tile's network is routed with

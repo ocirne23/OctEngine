@@ -12,7 +12,7 @@ import :TerrainSampler;
 import :ClutterType;
 import :TreeLeafTexture;
 
-// GROUND CLUTTER ("Clutter" tweaks; Docs/GroundClutterPlan.md): pebbles, fallen branches, mushrooms and flowers. The
+// GROUND CLUTTER ("Clutter" tweaks; Docs/Context/Procedural/Clutter.md): pebbles, fallen branches, mushrooms and flowers. The
 // objects themselves are placed on the GPU every frame (RendererVK ClutterPipeline, clutter_cull.cs.glsl) - nothing per
 // object lives on the CPU. This system feeds it:
 //   * THE TYPES: every Assets/Clutter/*.clutter (name-sorted), their meshes generated on Low jobs in the background

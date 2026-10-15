@@ -48,7 +48,7 @@ export namespace Procedural
 
 	// What water a point is under. `waterLevel` is ALWAYS the sea's (the ocean, its swash, its buoyancy and the bake's
 	// water channel ride it); inland water - a river, a lake - is `TerrainPoint::inlandWater` instead, drawn by its
-	// own pipeline (Docs/RiverPlan.md 7.1).
+	// own pipeline (Docs/Context/Procedural/Rivers.md).
 	enum class ETerrainWater : uint8
 	{
 		None,

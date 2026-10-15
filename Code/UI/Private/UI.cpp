@@ -17,7 +17,6 @@ import :OutputLog;
 import :TweakPanel;
 import :ProfilerPanel;
 import :MemoryPanel;
-import :TextEditor;
 import :ScriptEditor;
 import :GameHudOverlay;
 import :MainMenu;
@@ -236,27 +235,24 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
 
-            ImGuiID dock_id_right, dock_id_left;
-            ImGuiID dock_id_left_top, dock_id_left_bottom;
-            ImGuiID dock_id_scene, dock_id_properties;
+            ImGuiID dock_id_top, dock_bottom;
+            ImGuiID dock_id_left_bottom, dock_id_right_bottom;
 
-            ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Left, 0.3f, &dock_id_left, &dock_id_right);
-            //ImGui::DockBuilderSplitNode(dock_id_right, ImGuiDir_Up, 0.8f, &dock_id_up, &dock_id_down);
-            ImGui::DockBuilderSplitNode(dock_id_left,  ImGuiDir_Up, 0.2f, &dock_id_left_top, &dock_id_left_bottom);
-            ImGui::DockBuilderSplitNode(dock_id_left_top, ImGuiDir_Right, 0.5f, &dock_id_properties, &dock_id_scene);
+            ImGui::DockBuilderSplitNode(dockspace_id, ImGuiDir_Up, 0.8f, &dock_id_top, &dock_bottom);
+            ImGui::DockBuilderSplitNode(dock_bottom,  ImGuiDir_Left, 0.7f, &dock_id_left_bottom, &dock_id_right_bottom);
 
-            ImGui::DockBuilderDockWindow("Scene",      dock_id_scene);
-            ImGui::DockBuilderDockWindow("Properties", dock_id_properties);
-            ImGui::DockBuilderDockWindow("Stats",      dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Log",        dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Tweaks",     dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Profiler",   dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Memory",     dock_id_left_bottom);
             ImGui::DockBuilderDockWindow("Content",    dock_id_left_bottom);
-            ImGui::DockBuilderDockWindow("Entity Editor",  dock_id_properties);
-            ImGui::DockBuilderDockWindow("Text Editor", dock_id_right);
-            ImGui::DockBuilderDockWindow("Script Editor", dock_id_right);
-            ImGui::DockBuilderDockWindow("Viewport", dock_id_right);
+            ImGui::DockBuilderDockWindow("Log",        dock_id_left_bottom);
+            ImGui::DockBuilderDockWindow("Profiler",   dock_id_left_bottom);
+            ImGui::DockBuilderDockWindow("Properties", dock_id_left_bottom);
+
+            ImGui::DockBuilderDockWindow("Script Editor", dock_id_right_bottom);
+            ImGui::DockBuilderDockWindow("Entity Editor", dock_id_right_bottom);
+            ImGui::DockBuilderDockWindow("Memory",        dock_id_right_bottom);
+            ImGui::DockBuilderDockWindow("Scene",         dock_id_right_bottom);
+            ImGui::DockBuilderDockWindow("Tweaks",        dock_id_right_bottom);
+
+            ImGui::DockBuilderDockWindow("Viewport",      dock_id_top);
             ImGui::DockBuilderFinish(dockspace_id);
         }
 
@@ -335,115 +331,6 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     }
 
     {
-        ProfileScope scope("Panel: Text Editor", EProfileCategory::UI);
-        if (ImGui::Begin("Text Editor"))
-            m_textEditor.render();
-        ImGui::End();
-    }
-
-    {
-        ProfileScope scope("Panel: Script Editor", EProfileCategory::UI);
-        if (ImGui::Begin("Script Editor"))
-        {
-            m_scriptEditorOpen = true;
-            m_scriptEditor.render();
-        }
-        else
-            m_scriptEditorOpen = false;
-        ImGui::End();
-    }
-
-    {
-        ProfileScope scope("Panel: Scene", EProfileCategory::UI);
-        if (ImGui::Begin("Scene"))
-            m_sceneView.render(rootEntities);
-        ImGui::End();
-    }
-
-    // When the hierarchy selection changes to an entity carrying a .dsl script, make it active in the Script
-    // Editor (the only script editor -- the node panel and its .scr routes are gone).
-    if (Entity* selected = m_sceneView.getSelected(); selected != m_scriptSelectionTracked)
-    {
-        m_scriptSelectionTracked = selected;
-        if (selected)
-            if (ScriptComponent* script = getComponent<ScriptComponent>(selected))
-                if (script->scriptModule)
-                {
-                    const oc::string& path = script->scriptModule->scriptPath;
-                    if (FileSystem::extension(path) == ".dsl")
-                        m_scriptEditor.requestOpen(path);
-                }
-    }
-
-    // The three data-heavy panels remember whether they were open: only open ones get a prepare
-    // job next frame (a hidden panel costs nothing, exactly as before).
-    {
-        ProfileScope scope("Panel: Log", EProfileCategory::UI);
-        m_logOpen = ImGui::Begin("Log");
-        if (m_logOpen)
-            m_outputLog.render();
-        ImGui::End();
-    }
-
-    {
-        ProfileScope scope("Panel: Profiler", EProfileCategory::UI);
-        m_profilerOpen = ImGui::Begin("Profiler");
-        if (m_profilerOpen)
-            m_profilerPanel.render();
-        ImGui::End();
-    }
-
-    {
-        ProfileScope scope("Panel: Memory", EProfileCategory::UI);
-        m_memoryOpen = ImGui::Begin("Memory");
-        if (m_memoryOpen)
-            m_memoryPanel.render();
-        ImGui::End();
-    }
-
-    ProfileScope statsScope("Panel: Stats", EProfileCategory::UI);
-    if (ImGui::Begin("Stats"))
-    {
-        ImGui::Text("numMeshInstances: %i (%.1f%%)", m_renderStats.numMeshInstances, (float)m_renderStats.numMeshInstances / m_renderStats.maxMeshInstances * 100.0f);
-        ImGui::Text("numInstanceOffsets: %i (%.1f%%)", m_renderStats.numInstanceOffsets, (float)m_renderStats.numInstanceOffsets / m_renderStats.maxInstanceOffsets * 100.0f);
-        ImGui::Text("numMeshTypes: %i (%.1f%%)", m_renderStats.numMeshTypes, (float)m_renderStats.numMeshTypes / m_renderStats.maxMeshTypes * 100.0f);
-        ImGui::Text("numMaterials: %i (%.1f%%)", m_renderStats.numMaterials, (float)m_renderStats.numMaterials / m_renderStats.maxMaterials * 100.0f);
-        ImGui::Text("numRenderNodes: %i (%.1f%%)", m_renderStats.numRenderNodes, (float)m_renderStats.numRenderNodes / m_renderStats.maxRenderNodes * 100.0f);
-		ImGui::Text("numTextures: %i (%.1f%%)", m_renderStats.numTextures, (float)m_renderStats.numTextures / m_renderStats.maxTextures * 100.0f);
-        ImGui::Text("numObjectContainers: %i", m_renderStats.numObjectContainers);
-        ImGui::Text("numLightGrids: %i (%.1f%%)", m_renderStats.numLightGrids, (float)m_renderStats.numLightGrids / m_renderStats.maxLightGrids * 100.0f);
-        ImGui::Text("lightGridMemUsageBytes: %llu (%.1f%%)", m_renderStats.lightGridMemUsageBytes, (float)m_renderStats.lightGridMemUsageBytes / m_renderStats.maxLightGridMemUsageBytes * 100.0f);
-		ImGui::Text("vertexDataUsedBytes: %llu (%.1f%%)", m_renderStats.vertexDataUsedBytes, (float)m_renderStats.vertexDataUsedBytes / m_renderStats.maxVertexDataBytes * 100.0f);
-		ImGui::Text("indexDataUsedBytes: %llu (%.1f%%)", m_renderStats.indexDataUsedBytes, (float)m_renderStats.indexDataUsedBytes / m_renderStats.maxIndexDataBytes * 100.0f);
-        ImGui::Separator();
-        const float toMiB = 1.0f / (1024.0f * 1024.0f);
-        if (m_renderStats.gpuMemoryBudgetBytes > 0)
-            ImGui::Text("gpuMemoryUsed: %.1f MiB (%.1f%% of %.1f MiB budget)", m_renderStats.gpuMemoryUsedBytes * toMiB,
-                (float)m_renderStats.gpuMemoryUsedBytes / m_renderStats.gpuMemoryBudgetBytes * 100.0f, m_renderStats.gpuMemoryBudgetBytes * toMiB);
-        else
-            ImGui::Text("gpuMemoryUsed: %.1f MiB", m_renderStats.gpuMemoryUsedBytes * toMiB);
-        ImGui::Text("gpuMemoryReserved: %.1f MiB", m_renderStats.gpuMemoryReservedBytes * toMiB);
-        ImGui::Separator();
-        ImGui::Text("texStream resident: %.1f MiB (%.1f%% of %.1f MiB budget)", m_renderStats.textureResidentBytes * toMiB,
-            m_renderStats.textureBudgetBytes > 0 ? (float)m_renderStats.textureResidentBytes / m_renderStats.textureBudgetBytes * 100.0f : 0.0f,
-            m_renderStats.textureBudgetBytes * toMiB);
-        ImGui::Text("texStream desired: %.1f MiB, tail: %.1f MiB, pinned: %.1f MiB", m_renderStats.textureDesiredBytes * toMiB,
-            m_renderStats.textureTailBytes * toMiB, m_renderStats.texturePinnedBytes * toMiB);
-        ImGui::Text("texStream streamable: %u, opsInFlight: %u", m_renderStats.numStreamableTextures, m_renderStats.numStreamOpsInFlight);
-        ImGui::Text("meshStream resident: %.1f MiB (of %.1f MiB streamable, %.1f MiB budget)", m_renderStats.meshResidentBytes * toMiB,
-            m_renderStats.meshStreamableBytes * toMiB, m_renderStats.meshBudgetBytes * toMiB);
-        ImGui::Text("meshStream cold: %.1f MiB, sets: %u, evicted: %u", m_renderStats.meshColdBytes * toMiB,
-            m_renderStats.numMeshSets, m_renderStats.numEvictedMeshSets);
-        ImGui::Text("static BLAS: %.1f MiB (compaction saved %.1f MiB)", m_renderStats.blasBytes * toMiB,
-            m_renderStats.blasCompactionSavedBytes * toMiB);
-        ImGui::Text("meshLOD groups: %u, picks L0-L4 (debug builds): %u/%u/%u/%u/%u", m_renderStats.numMeshLodGroups,
-            m_renderStats.lodInstanceCounts[0], m_renderStats.lodInstanceCounts[1], m_renderStats.lodInstanceCounts[2],
-            m_renderStats.lodInstanceCounts[3], m_renderStats.lodInstanceCounts[4]);
-    }
-    ImGui::End();
-    statsScope.stop();
-
-    {
         ProfileScope scope("Panel: Content", EProfileCategory::UI);
         m_contentOpen = ImGui::Begin("Content");
         if (m_contentOpen)
@@ -466,16 +353,42 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         // Route the asset browser's "Edit Entity" action into the Entity Editor.
         if (oc::string editPath = m_assetBrowser.takeEntityEditRequest(); !editPath.empty())
             m_entityEditor.requestOpen(editPath);
+    }
 
-        // Route the asset browser's "Open Text File" action into the Text Editor.
-        if (oc::string textPath = m_assetBrowser.takeTextOpenRequest(); !textPath.empty())
-            m_textEditor.requestOpen(textPath);
+    // The three data-heavy panels remember whether they were open: only open ones get a prepare
+    // job next frame (a hidden panel costs nothing, exactly as before).
+    {
+        ProfileScope scope("Panel: Log", EProfileCategory::UI);
+        m_logOpen = ImGui::Begin("Log");
+        if (m_logOpen)
+            m_outputLog.render();
+        ImGui::End();
     }
 
     {
-        ProfileScope scope("Panel: Tweaks", EProfileCategory::UI);
-        if (ImGui::Begin("Tweaks"))
-            m_tweakPanel.render();
+        ProfileScope scope("Panel: Profiler", EProfileCategory::UI);
+        m_profilerOpen = ImGui::Begin("Profiler");
+        if (m_profilerOpen)
+            m_profilerPanel.render();
+        ImGui::End();
+    }
+
+    {
+        ProfileScope scope("Panel: Properties", EProfileCategory::UI);
+        if (ImGui::Begin("Properties"))
+            m_propertiesPanel.render(m_sceneView.getSelected());
+        ImGui::End();
+    }
+
+    {
+        ProfileScope scope("Panel: Script Editor", EProfileCategory::UI);
+        if (ImGui::Begin("Script Editor"))
+        {
+            m_scriptEditorOpen = true;
+            m_scriptEditor.render();
+        }
+        else
+            m_scriptEditorOpen = false;
         ImGui::End();
     }
 
@@ -504,9 +417,40 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     }
 
     {
-        ProfileScope scope("Panel: Properties", EProfileCategory::UI);
-        if (ImGui::Begin("Properties"))
-            m_propertiesPanel.render(m_sceneView.getSelected());
+        ProfileScope scope("Panel: Memory", EProfileCategory::UI);
+        m_memoryOpen = ImGui::Begin("Memory");
+        if (m_memoryOpen)
+            m_memoryPanel.render();
+        ImGui::End();
+    }
+
+    {
+        ProfileScope scope("Panel: Scene", EProfileCategory::UI);
+        if (ImGui::Begin("Scene"))
+            m_sceneView.render(rootEntities);
+        ImGui::End();
+    }
+
+    // When the hierarchy selection changes to an entity carrying a .dsl script, make it active in the Script
+    // Editor (the only script editor -- the node panel and its .scr routes are gone).
+    if (Entity* selected = m_sceneView.getSelected(); selected != m_scriptSelectionTracked)
+    {
+        m_scriptSelectionTracked = selected;
+        if (selected)
+            if (ScriptComponent* script = getComponent<ScriptComponent>(selected))
+                if (script->scriptModule)
+                {
+                    const oc::string& path = script->scriptModule->scriptPath;
+                    if (FileSystem::extension(path) == ".dsl")
+                        m_scriptEditor.requestOpen(path);
+                }
+    }
+
+    // Last of its dock: a new dock puts its last submitted window in front, and Tweaks is the startup tab.
+    {
+        ProfileScope scope("Panel: Tweaks", EProfileCategory::UI);
+        if (ImGui::Begin("Tweaks"))
+            m_tweakPanel.render();
         ImGui::End();
     }
 

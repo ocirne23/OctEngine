@@ -16,7 +16,7 @@ import :Npc;
 // MULTIPLAYER: the team slots, the per-client capsules and the join replay, every game event -
 // the server's broadcasts (GPl/GRm/GSt/GCb/GCf/GRt/GBu/GLt/GWv/GMp/GPz/GDm) and the clients'
 // Gq* requests - and the request seams local input shares with them. See the Match.ixx
-// MULTIPLAYER comment and Code/Game/CONTEXT.md "Multiplayer sync".
+// MULTIPLAYER comment and Docs/Context/Game/Sync.md.
 
 void GameMatch::setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, uint8>> picks)
 {

@@ -8,7 +8,7 @@
 #extension GL_EXT_ray_query : enable
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 
-// The procedural rocks (EPipelineIndex::LitRock; RockSystem, Docs/RockRenderingPlan.md 5): the lit core with a surface
+// The procedural rocks (EPipelineIndex::LitRock; RockSystem, Docs/Context/Procedural/Rocks.md): the lit core with a surface
 // from the CLIMATE, never from the rock type or a material. Bottom-up, the terrain splat's own materials and rules:
 //   1. BEDROCK - the splat's rock entries, picked by the climate as a cliff face there picks them, world-space
 //                biplanar (a rock is static: no swimming, and every instance gets its own piece of the texture).

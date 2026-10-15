@@ -168,6 +168,20 @@ void MemoryPanel::prepare()
         m_rateAlpha = (float)(1.0 - std::pow(0.5, gap / kRateHalfLifeSec));
     }
 
+    const MemoryTracker::MapStats mapStats = Globals::memoryTracker.getMapStats();
+    if (m_mapStatsSeeded && m_rateFold)
+    {
+        const auto fold = [&](float& rate, uint64 now, uint64 last)
+        {
+            rate += m_rateAlpha * ((float)((double)(now - last) / m_rateDt) - rate);
+        };
+        fold(m_allocsPerSec, mapStats.allocs, m_lastMapStats.allocs);
+        fold(m_freesPerSec, mapStats.frees, m_lastMapStats.frees);
+        fold(m_lockSpinsPerSec, mapStats.lockSpins, m_lastMapStats.lockSpins);
+    }
+    m_lastMapStats = mapStats;
+    m_mapStatsSeeded = true;
+
     if (const MemScopeNode* root = Globals::memoryTracker.getRoot())
     {
         m_nodes.resize(1); // trivial nodes: clear + resize keeps the capacity
@@ -502,6 +516,17 @@ void MemoryPanel::drawHeader()
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Allocations the tracker could not record (pointer map shard or node pool full) -\nthe view under-reports by whatever those hold");
     }
+
+    // Pointer-map health: allocation rate, shard-lock contention, headroom of the fullest shard
+    const float peakFill = (float)m_lastMapStats.peakShardCount / (float)MemoryTracker::SHARD_CAPACITY;
+    ImGui::TextDisabled("allocs: %.0f/frame  frees: %.0f/frame  |  lock spins: %.0f/s  |  fullest shard peak: %.0f%%",
+        m_allocsPerSec * m_rateDt, m_freesPerSec * m_rateDt, m_lockSpinsPerSec, peakFill * 100.0f);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Tracker pointer map (EMA-smoothed):\n"
+            "allocs / frees = tracked allocations and frees per frame, over every thread\n"
+            "lock spins = failed shard-lock attempts per second (0 = the %u shards never contend)\n"
+            "fullest shard peak = the highest fill any shard reached; inserts drop at 75%%",
+            MemoryTracker::NUM_SHARDS);
 
     // Total allocator bandwidth (root inclusive = every path) while the churn metric is up
     const char* suffix = m_snapshotMetric == EMetric::Churn ? "/s" : "";

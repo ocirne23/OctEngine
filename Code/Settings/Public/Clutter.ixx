@@ -2,7 +2,7 @@ export module Settings.Clutter;
 
 import Core;
 
-// "Clutter": GROUND CLUTTER (Docs/GroundClutterPlan.md) - pebbles, fallen branches, mushrooms and flowers. Procedural's
+// "Clutter": GROUND CLUTTER (Docs/Context/Procedural/Clutter.md) - pebbles, fallen branches, mushrooms and flowers. Procedural's
 // ClutterSystem loads the Assets/Clutter/*.clutter types, generates their meshes and bakes the FOREST FLOOR MAP;
 // RendererVK's ClutterPipeline places every object on the GPU each frame (clutter_cull.cs.glsl) and draws it. The
 // renderer half is UBO-driven (u_clutter_*): live.

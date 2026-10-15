@@ -9,7 +9,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 
 # Entity is what carries registerScriptDslBindings (the whole DSL vocabulary), and its public link surface
 # pulls in everything it depends on (RendererVK, File, Script, Physics, ...). Nothing gets initialized at
-# runtime -- the tool only needs the registration call and Script's loader/transpiler. See CONTEXT.md.
+# runtime -- the tool only needs the registration call and Script's loader/transpiler. See Docs/Context/DslCompiler/CONTEXT.md.
 target_link_libraries(${PROJECT_NAME} PRIVATE Core Entity Script File)
 
 apply_compile_settings(${PROJECT_NAME})

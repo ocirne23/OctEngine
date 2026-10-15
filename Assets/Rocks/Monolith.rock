@@ -1,4 +1,4 @@
-# Weathering pillar: one tall layered monolith on open ground, narrow at the foot and widest above the middle. Format: Code/Procedural/CONTEXT.md, "Rocks".
+# Weathering pillar: one tall layered monolith on open ground, narrow at the foot and widest above the middle. Format: Docs/Context/Procedural/Rocks.md.
 RockType Monolith
 	Seed 21
 	Scale 10 22

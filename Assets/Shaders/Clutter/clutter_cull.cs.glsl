@@ -7,7 +7,7 @@
 #extension GL_EXT_control_flow_attributes : enable // terrain_splat.inc.glsl's [[dont_unroll]]
 #extension GL_EXT_nonuniform_qualifier : enable    // the splat height maps (u_textures)
 
-// THE CLUTTER CULL (ClutterPipeline; Docs/GroundClutterPlan.md 3): ONE WORKGROUP PER PATCH around the camera, ONE THREAD PER
+// THE CLUTTER CULL (ClutterPipeline; Docs/Context/Procedural/Clutter.md): ONE WORKGROUP PER PATCH around the camera, ONE THREAD PER
 // RANK. Per type, rank k stands at the k-th R2 point over the patch (offset per patch and type) and is KEPT where
 // k + 0.5 < density x patch area: every prefix is evenly spread, so a thinning density removes objects evenly, and one near
 // the threshold shrinks into the ground over the grow band (no pops). Types are independent lists.

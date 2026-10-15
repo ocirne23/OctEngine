@@ -1,5 +1,5 @@
 # A snapped piece of a fallen tree: the BASE HALF of a FallenLog (the same thickness at half the length, with the base's
-# slow taper), both ends long splintered breaks. Its upper half: SnappedTop. Format: Code/Procedural/CONTEXT.md, "Rocks".
+# slow taper), both ends long splintered breaks. Its upper half: SnappedTop. Format: Docs/Context/Procedural/Rocks.md.
 RockType SnappedLog
 	Seed 47
 	Scale 2.4 7.2

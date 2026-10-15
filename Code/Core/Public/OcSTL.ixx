@@ -208,10 +208,49 @@ export namespace oc
     // Global new/delete already route through Globals::allocator, so the default allocator is
     // tracked and attributed by the MemoryTracker like everything else.
 #ifdef OC_EASTL
-    // EASTL allocators are NOT element-typed -- one allocator type serves every T, and it hands out
-    // raw bytes. The parameter is ignored so both backings share one alias signature; the byte-level
-    // difference is absorbed by allocateArray/deallocateArray below.
-    template<typename T> using allocator = ocstl::allocator;
+    // EASTL never rebinds an allocator: one object serves all of a container's blocks (its nodes, a
+    // hash table's bucket array) in raw bytes. This one is element-typed anyway, so EVERY block of a
+    // container uses alignof(T), and deallocate frees through the operator delete form that matches
+    // its operator new. That is what lets Globals::allocator hand out blocks with no header: it is
+    // told the alignment on every free. (eastl::allocator frees an over-aligned block with plain
+    // delete[], which a headerless allocator cannot serve - see Core.Allocator.) alignof is taken in
+    // the member bodies, so a container of a still-incomplete T (a tree node's children) is fine.
+    template<typename T>
+    class allocator
+    {
+    public:
+        allocator(const char* = nullptr) noexcept {}
+        allocator(const allocator&, const char*) noexcept {}
+
+        void* allocate(size_t n, int = 0) { return allocateBlock(n); }
+        void* allocate(size_t n, size_t alignment, [[maybe_unused]] size_t offset, int = 0)
+        {
+            assert(offset == 0 && alignment <= (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__ ? alignof(T) : __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                && "oc::allocator: a block aligned past its element type");
+            return allocateBlock(n);
+        }
+        void deallocate(void* p, size_t)
+        {
+            if constexpr (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                ::operator delete(p, std::align_val_t(alignof(T)));
+            else
+                ::operator delete(p);
+        }
+
+        const char* get_name() const { return "oc::allocator"; }
+        void set_name(const char*) {}
+        friend bool operator==(const allocator&, const allocator&) { return true; }
+        friend bool operator!=(const allocator&, const allocator&) { return false; }
+
+    private:
+        static void* allocateBlock(size_t n)
+        {
+            if constexpr (alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+                return ::operator new(n, std::align_val_t(alignof(T)));
+            else
+                return ::operator new(n);
+        }
+    };
 #else
     template<typename T> using allocator = ocstl::allocator<T>;
 #endif
@@ -221,7 +260,7 @@ export namespace oc
     template<typename T> T* allocateArray(size_t count)
     {
 #ifdef OC_EASTL
-        return static_cast<T*>(allocator<T>().allocate(count * sizeof(T), alignof(T), 0));
+        return static_cast<T*>(allocator<T>().allocate(count * sizeof(T)));
 #else
         return allocator<T>().allocate(count);
 #endif
@@ -346,10 +385,18 @@ export namespace oc
     {
         return unique_ptr<T>(new std::remove_extent_t<T>[count]()); // the () is the whole point
     }
+    // NOT ocstl::make_shared either: EASTL's allocates the control block (with T inside) through
+    // eastl::allocator's plain allocate, which neither aligns an over-aligned T nor frees it through
+    // the matching delete. oc::allocator<T> does both.
+    template<typename T, typename... Args>
+    shared_ptr<T> make_shared(Args&&... args)
+    {
+        return ocstl::allocate_shared<T>(allocator<T>(), ocstl::forward<Args>(args)...);
+    }
 #else
     using ocstl::make_unique;
-#endif
     using ocstl::make_shared;
+#endif
     using ocstl::static_pointer_cast;
     using ocstl::dynamic_pointer_cast;
     using ocstl::const_pointer_cast;

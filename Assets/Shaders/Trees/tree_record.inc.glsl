@@ -1,4 +1,4 @@
-// WORLD TREE RECORDS (Procedural TreeWorld, Docs/TreeRenderingPlan.md 3.5): 4 bytes per tree - x, z (12 bits each,
+// WORLD TREE RECORDS (Procedural TreeWorld, Docs/Context/Procedural/Trees.md): 4 bytes per tree - x, z (12 bits each,
 // chunk-local on a TREE_RECORD_STEPS lattice, the cell centre) and the species type (8 bits). Variant, scale and yaw
 // come from treeRecordSeed. MIRRORS Procedural TreeWorld.ixx and treeHash (TreeGenerator.ixx) - keep them in step.
 

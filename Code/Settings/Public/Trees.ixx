@@ -3,7 +3,7 @@ export module Settings.Trees;
 import Core;
 
 // "Trees": Procedural's TreeSystem (the species, the preview grove, the world set) and "Trees/World": its TreeWorld
-// (every tree of the terrain ring as records). Docs/TreeRenderingPlan.md.
+// (every tree of the terrain ring as records). Docs/Context/Procedural/Trees.md.
 
 // "Trees/Grove type": "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name. The names
 // are fixed here (a tweak enum registers before the species load) - add a new species' name.

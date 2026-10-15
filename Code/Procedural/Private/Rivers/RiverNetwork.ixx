@@ -5,7 +5,7 @@ import Settings;
 import :GeneratorV3;
 import :RiverRouting;
 
-// The river drainage network, COARSE level (Docs/RiverPlan.md 4.1). One coarse pixel is one full tile, so a flow
+// The river drainage network, COARSE level (Docs/Context/Procedural/Rivers.md). One coarse pixel is one full tile, so a flow
 // direction here is the direction water leaves a full tile: the backbone the river units refine.
 //
 // Per coarse tile, routed over its own DOMAIN - the (2R+1)^2 coarse tiles centred on it - so the result is a pure

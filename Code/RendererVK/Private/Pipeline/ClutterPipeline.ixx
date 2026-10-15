@@ -11,7 +11,7 @@ import :DescriptorSet;
 import :Sampler;
 import :Layout;
 
-// GROUND CLUTTER (Docs/GroundClutterPlan.md): its compute half, its buffers and its near-shadow casters (the objects
+// GROUND CLUTTER (Docs/Context/Procedural/Clutter.md): its compute half, its buffers and its near-shadow casters (the objects
 // draw in StaticMeshGraphicsPipeline: they need the lit core's descriptor set). The model is in clutter.inc.glsl /
 // clutter_cull.cs.glsl: a grid of patches around the camera, per patch and type a ranked list of candidates, kept by
 // the type's density there.

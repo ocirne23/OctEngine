@@ -1,5 +1,5 @@
 # Rounded pebbles and small stones: everywhere a little, many at a rock's foot, on bedrock and on the beach. The colour is
-# the climate's bedrock (Color tints it). Format: Code/Procedural/CONTEXT.md, "Ground clutter".
+# the climate's bedrock (Color tints it). Format: Docs/Context/Procedural/Clutter.md.
 ClutterType Pebble
 	Kind Pebble
 	Seed 11

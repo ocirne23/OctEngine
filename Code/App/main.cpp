@@ -180,11 +180,6 @@ int main(int argc, char* argv[])
             window.setTitle(windowTitleBuf);
             return Timer::REPEAT;
         });
-    Timer renderStatsUpdateTimer(std::chrono::seconds(1), [&](Timer&) {
-            if (!headlessServer)
-                Globals::ui.setRenderStats(Globals::rendererVK.getStats());
-            return Timer::REPEAT;
-        });
     Timer headlessStatusTimer(std::chrono::seconds(5), [&](Timer&) {
             if (headlessServer)
                 Log::info("Headless: " + oc::to_string(fps) + " ticks/s | " + Globals::networkManager.getStatusText());

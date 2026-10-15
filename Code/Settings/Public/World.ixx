@@ -15,7 +15,7 @@ import Core;
 // follow = false pins the entity to full rate while selected); the bubble gate and the dormant
 // physics edge apply to every selected entity by distance. The entity itself only sees the delta
 // it is handed (0 = skipped frame: sync + placement, no sim step). Full account in
-// Code/Entity/CONTEXT.md.
+// Docs/Context/Entity/CONTEXT.md.
 export struct SimLodConfig
 {
     bool enabled = true;

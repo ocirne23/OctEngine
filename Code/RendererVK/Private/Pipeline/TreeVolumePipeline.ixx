@@ -15,7 +15,7 @@ import :RenderParams;
 import :TreeRecordPool;
 import :PushBlock;
 
-// FAR TREES as a marched volume (Docs/TreeRenderingPlan.md T2, prototype P1). Three stages:
+// FAR TREES as a marched volume (Docs/Context/Procedural/Trees.md, prototype P1). Three stages:
 //   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
 //           log radius from "Far start" to "Far end" (cells grow linearly with the distance - tree_volume.inc.glsl),
 //           z = height above the column's tree FLOOR. tree_volume_splat.cs twice (one workgroup per tree): its
