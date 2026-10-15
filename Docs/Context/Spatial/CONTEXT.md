@@ -4,13 +4,13 @@
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
 The spatial index: culling and position lookup, **independent of the entity parent/child
-hierarchy**. Links Threading only.
+hierarchy**. Links Threading (and Settings, for its tweaks).
 
 ## The one call the App makes
 
-`SpatialIndex::update(camera, frustum, viewProjRelCamera)`
-([Query.cpp:597](../../../Code/Spatial/Private/Query.cpp#L597)) is the whole per-frame spatial step, and it runs **as a
-High job**:
+`SpatialIndex::update(camera, frustum, viewProjRelCamera, sunDirection)`
+([Query.cpp:960](../../../Code/Spatial/Private/Query.cpp#L960)) is the whole per-frame spatial step, and it runs **as the
+High job "Spatial cull"**:
 
 ```cpp
 Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, viewportRect));
@@ -21,36 +21,37 @@ Globals::spatialIndex.joinUpdateJob();
 In order, `update` does:
 
 1. **`commitFrame()`** — applies the cell moves queued during last frame's entity updates.
-2. **SIM LOD tier stamps**, if a focus is set. Deliberately BEFORE the culling-mode gate: update
-   selection is not culling and must not stop with it.
-3. **`setCullMaxDist(camera.far)`** — the main-pass cull distance tracks the render camera's far
+2. **`setCullMaxDist(camera.far)`** — the main-pass cull distance tracks the render camera's far
    plane, so terrain and entities stream to exactly the view distance rather than a fixed cap.
-4. Returns early if the mode is `Off` or `freeze` is set.
-5. **Occlusion raster**, when the CPU occlusion buffer is enabled.
-6. **The Main stamp** — the margin-inflated camera frustum over `SpatialLayer_Render |
-   SpatialLayer_Terrain`.
-7. **The Near stamp** — a camera ball over `SpatialLayer_Render` only, behind requery hysteresis.
+3. Returns early if the mode is `Off` or `freeze` is set.
+4. **Occlusion raster**, when the CPU occlusion buffer is enabled.
+5. **The Main stamp** — the margin-inflated camera frustum over `SpatialLayer_Render |
+   SpatialLayer_Terrain` (it also fills the visible-set hand-over lists).
+6. **The Near stamp** — a camera ball over `SpatialLayer_Render` only, behind requery hysteresis.
+7. **The Shadow stamp** — the inflated frustum swept toward the sun, over `SpatialLayer_Render`.
+
+The SIM LOD tier stamps are NOT made here — see "The SIM LOD tiers are NOT stamped by the cull job".
 
 ### The kick/join window
 
 main.cpp kicks right BEFORE `physics.update`, next to the renderer's "Begin frame" job, and joins
-after the physics step, `audio.update` and the nav publish
-([main.cpp:757-782](../../../Code/App/main.cpp#L757)).
+after the physics step, `audio.update`, `navSystem.update` and the begin-frame join
+([main.cpp:298-307](../../../Code/App/main.cpp#L298)).
 
 > **The index must stay QUIESCENT between kick and join. NOTHING added there may touch it** — no
 > registers, commits, queries or traversals.
 
-That holds today because the entity-change drains, net receive and `game.update` above the kick are
-the last pre-pass writers, and contact scripts fire only AFTER the join
-(`physics.dispatchContactEvents`). The reason it matters: `commitFrame` relinks cells.
-(`registerEntry` no longer moves the SoA - the pool reserves its address space.)
+That holds because the entity-change drains, net receive, `game.updatePlayer` and the script context
+update above the kick are the last pre-pass writers, and `game.update` and the contact scripts
+(`physics.dispatchContactEvents`) run only AFTER the join. The reason it matters: `commitFrame`
+relinks cells.
 
 **An INVALID view skips the whole update for that frame** — the first VR frame, where no head view
 exists yet. Stamps stay a frame stale (the spawn guard keeps fresh entries visible) and the commit's
 pending ops wait one frame.
 
 **Headless** has no cull job, so main.cpp calls `commitFrame()` directly
-([main.cpp:784](../../../Code/App/main.cpp#L784)) — every entity still registers, so radius queries (script
+([main.cpp:310](../../../Code/App/main.cpp#L310)) — every entity still registers, so radius queries (script
 queries, unit targeting) work server-side.
 
 ## Structure
@@ -64,8 +65,8 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   `SPATIAL_FINEST_CELL_SIZE`, default 8 m; 21 bits per axis puts the world bound at ±8389 km, with
   the origin mid-lattice. **8 m is a density choice:** at game density unit-sized entries share a
   cell ~10 to one. At 2 m they sat one per cell — the traversal tested ~2 cells per hit and the
-  8-lane static blocks ran 2 lanes full; 8 m cut cells tested 6× for the same visible set. 32 m
-  measured the same, so the finer of the two won.
+  8-lane blocks ran 2 lanes full; 8 m cut cells tested 6× for the same visible set. 32 m measured the
+  same, so the finer of the two won.
 * **BMI2 Morton keys** (`Spatial:Morton`): `pdep` / `pext`. A level-L key is the fine key `>> 6*L`, a
   parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
 * **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
@@ -100,15 +101,15 @@ setLayerMask(handle, mask)
 commitFrame()
 ```
 
-`SpatialEntry` ([Types.ixx:18](../../../Code/Spatial/Private/Types.ixx#L18)) is the move-only RAII wrapper.
+`SpatialEntry` ([Types.ixx:19](../../../Code/Spatial/Private/Types.ixx#L19)) is the move-only RAII wrapper.
 
 **Queries**, read-only and valid between commits:
 `querySphere` · `queryAABB` · `queryFrustum` · `queryRay` (a **broadphase** — entries whose bounds
-cross the segment) · `queryNearest`, all filling a caller's `oc::vector<uint64>`; plus the
-CALLBACK forms `forEachInSphere` / `forEachInFrustum`, which hand each hit to a functor straight
-out of the traversal — **the form to use from job code**: no result buffer, so nothing
-`thread_local` rides a fiber that may resume on another thread (zero-allocation type erasure; no lock
-is held, but do not wait inside the callback). Every game/entity probe uses them.
+cross the segment) · `queryNearest`, all filling a caller's `oc::vector<uint64>` (`queryNearest`
+returns one userData); plus the CALLBACK forms `forEachInSphere` / `forEachInFrustum`, which hand each
+hit to a functor straight out of the traversal — **the form to use from job code**: no result buffer,
+so nothing `thread_local` rides a fiber that may resume on another thread (zero-allocation type
+erasure). **Do not wait inside the callback.** Every game/entity probe uses them.
 
 ### `spawnVisible` — the spawn guard
 
@@ -129,6 +130,10 @@ sectors both pass false.
 | `query*` | **Lock-free**, also beside concurrent registrations — a spawning worker's script `OnSpawn` may query while another worker registers: the pool rows never move and the cell maps change only at commit. |
 | `setLayerMask` / `commitFrame` | Single-threaded, main, outside the pass. |
 | `markVisible*` traversals | Lock-free. The kick/join window forbids registration **by contract**. |
+
+The pending ops are deliberately a `PerWorker` (not owner-sliced or a shared queue): the pushes come
+from ANY job with no chunk identity to slice by, the per-frame volume is unbounded, and thousands of
+pushes on one shared cursor would contend.
 
 ### The record pool
 
@@ -153,21 +158,20 @@ sectors both pass false.
 | `SpatialLayer_Render` | 0 | Entities that have a RenderComponent. **This is the gameplay-query layer.** |
 | `SpatialLayer_Stress` | 1 | Synthetic stress-test entries. |
 | `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean clipmap sectors. |
-| `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
+| `SpatialLayer_Entity` | 3 | EVERY registered entity. The World's update-selection layer. |
 
 > **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is its
 > streamer `Resident*` (its node AND its vegetation, AND the river water over it: Procedural RiverSystem's tiles ride
 > the chunks), an ocean sector's is its `RenderNode*` **with
-> `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set** (a 0 userData is still dropped:
-> the removed scatter's groups carried it). The streamer and the ocean share ONE hand-over list (collect slot 1), walked ONCE by
-> `TerrainStreamer::render`'s job, which tells the two apart by the tag and pushes every node with its own
-> pass mask; the tag also keeps the sectors out of the terrain's shadow ball. The owners keep a dead node's memory until `visibleCollectGeneration`
-> moves on (see the hand-over below). **Gameplay queries must never include that layer**
-> ([Types.ixx:58](../../../Code/Spatial/Private/Types.ixx#L58)).
+> `SpatialTerrainTag_Ocean` (bit 63, above the 47-bit user address range) set**. The streamer and the ocean share ONE
+> hand-over list (collect slot 1), walked ONCE by `TerrainStreamer::render`'s job, which tells the two apart by the tag
+> and pushes every node with its own pass mask; the tag also keeps the sectors out of the terrain's shadow ball. The
+> owners keep a dead node's memory until `visibleCollectGeneration` moves on (see the hand-over below). **Gameplay
+> queries must never include that layer** ([Types.ixx:59](../../../Code/Spatial/Private/Types.ixx#L59)).
 
 ## Visibility stamps
 
-Five passes (`ESpatialPass`), each with its own stamp generation. **Each `markVisible*` call
+Eight stamp passes (`ESpatialPass`), each with its own stamp generation. **Each `markVisible*` call
 invalidates that pass's previous generation — one consumer per pass by design.**
 
 | Pass | Meaning |
@@ -184,7 +188,7 @@ current again. **The 8 pass stamps of an entry sit together** (`RecordPool::stam
 `PassStamps` per entry, not one array per pass): `getPassMask` / `getPassMaskExact` are one
 `__m128i` load compared against the 8 current generations (`m_visibleQueryId`, 16-aligned) with
 `_mm_cmpeq_epi16`, the spawn guard one more compare against 0 — one cache line per call instead of
-one per pass. The traversal's stamp stores are random by pool index either way. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
+one per pass. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
 `storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
 a reused slot.
 
@@ -197,8 +201,8 @@ variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` i
 
 ### Multithreaded traversal
 
-Both `markVisibleSet` and `markVisibleSphere` run `traverseParallel`
-([Query.cpp:376](../../../Code/Spatial/Private/Query.cpp#L376)):
+`markVisibleSet`, `markVisibleSphere` and `queryUpdateTiers` run `traverseParallel`
+([Query.cpp:629](../../../Code/Spatial/Private/Query.cpp#L629)):
 
 1. The top level is a handful of huge cells, so a **serial frontier expansion** splits the tree until
    it holds `numWorkers * 4` independent subtree roots — **4× over-partitioned so the shared
@@ -210,18 +214,18 @@ Both `markVisibleSet` and `markVisibleSphere` run `traverseParallel`
 
 Every emit gets the lane's layer mask (`(idx, pos, layers)`), so a consumer never reads the pool's
 `layerMask` row per hit. A chunk-aware emit `(idx, pos, layers, chunk)` gets `prepareChunks(n)`
-before any emit with `chunk < n`, so
-a caller can keep an owner-sliced list per chunk (slot 0 = the serial expansion, `1 + root index`
-= the fan-out). A caller outside the kick/join window (`queryUpdateTiers`) needs no lock either:
-registrations never move the pool rows (see "The record pool"). The
-`m_frontier` scratch allows ONE traverseParallel at a time: the cull job's, or the post-update
-selection's, never both in flight (the selection is joined before the spatial kick).
+before any emit with `chunk < n`, so a caller can keep an owner-sliced list per chunk (slot 0 = the
+serial expansion, `1 + ` the chunk's first frontier index = the fan-out). A caller outside the
+kick/join window (`queryUpdateTiers`) needs no lock either: registrations never move the pool rows
+(see "The record pool"). The `m_frontier` scratch allows ONE traverseParallel at a time: the cull
+job's, or the post-update selection's, never both in flight (the selection is joined before the
+spatial kick).
 
 **Thread-safe by structure:** an entry lives in exactly ONE cell, so no two roots ever stamp the same
 slot; the cell maps only mutate in `commitFrame`; and the stamp is a pure store. Per-traversal
-counters (`TraverseStats`) accumulate locally and merge once — which also fixed a pre-existing stats
-race from concurrent script-worker queries. `OcclusionBuffer`'s hidden-cell counter went atomic with
-a plain-int mirror for the tweak panel, which binds a raw `int*`.
+counters (`TraverseStats`) accumulate locally and merge once, since traversals run concurrently
+(script queries on workers, the fan-out). `OcclusionBuffer`'s hidden-cell counter is atomic with a
+plain-int mirror for the tweak panel, which binds a raw `int*`.
 
 ### The SIM LOD tiers are NOT stamped by the cull job
 
@@ -232,18 +236,17 @@ job through `advanceUpdateTiers` + `queryUpdateTiers` (below), off the frame-cri
 
 The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask, slot, what)` set, the
 stamp lambda appends every hit carrying one of that slot's layers to the slot's owner-sliced
-per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx, pos, layers, chunk)` — list 0
-for its serial expansion, 1 + the chunk's first frontier index for the fan-out), merged once inside
-the job. A slot collects either **`ECollect::Handles`** (`visibleHandles(slot)`) or
-**`ECollect::UserData`** (`visibleUserData(slot)`: the value is read from the pool IN THE JOB and
-zeros are dropped, so the consumer's walk touches no pool row at all — but it gets a value, not a
-live check, and must tolerate an entry that changed or died since the stamp). **Two collect slots**
-(`NumVisibleCollectSlots`):
+per-chunk list (list 0 for the serial expansion, 1 + the chunk's first frontier index for the
+fan-out), merged once inside the job. A slot collects either **`ECollect::Handles`**
+(`visibleHandles(slot)`) or **`ECollect::UserData`** (`visibleUserData(slot)`: the value is read from
+the pool IN THE JOB and zeros are dropped, so the consumer's walk touches no pool row at all — but it
+gets a value, not a live check, and must tolerate an entry that changed or died since the stamp).
+**Two collect slots** (`NumVisibleCollectSlots`):
 * slot 0 — the World's (`SpatialLayer_Entity`, Handles, the default arguments): entities die in the
   destroy windows between the join and the World's pass, and `userData(handle)` reads 0 for those.
-* slot 1 — the terrain streamer's (`SpatialLayer_Terrain`, UserData): `RenderNode` pointers of its
-  chunks and of the ocean's sectors, pushed in ONE walk by `TerrainStreamer::render`'s job (a 0
-  userData never enters the list) — see Procedural.
+* slot 1 — the terrain streamer's (`SpatialLayer_Terrain`, UserData): the `Resident*` of its chunks
+  and the tagged `RenderNode*` of the ocean's sectors, pushed in ONE walk by `TerrainStreamer::render`'s
+  job (a 0 userData never enters the list) — see Procedural.
 
 The lists are valid from `joinUpdateJob` until the next kick, and a FROZEN cull keeps the last list,
 like the stamps. **`visibleCollectGeneration()`** counts the list rebuilds (real Main stamps only —
@@ -253,15 +256,16 @@ until the generation moves past the value at retirement — from then on no list
 terrain residents and the ocean grids work this way.
 
 `forEachInSphere(..., skipStampedIn)` drops hits currently stamped in any of the given passes (exact
-compare, read in the traversal): the terrain's shadow ball skips what the Main set already pushed. **This is how the World selects what is on screen every frame without a traversal
-of its own**, and how the streamer and the ocean push their on-screen geometry without walking it all.
+compare, read in the traversal): the terrain's shadow ball skips what the Main set already pushed.
+**This is how the World selects what is on screen every frame without a traversal of its own**, and
+how the streamer and the ocean push their on-screen geometry without walking it all.
 
 ### The Near ball's hysteresis
 
 The Near ball barely changes frame to frame, so it is inflated by `nearSlack` (16 m) and requeried
 only once the camera has moved that far — **or every 30 frames**, which keeps off-screen MOVERS from
 staying unstamped: they can enter the ball without the camera moving
-([Query.cpp:646](../../../Code/Spatial/Private/Query.cpp#L646)).
+([Query.cpp:1002](../../../Code/Spatial/Private/Query.cpp#L1002)).
 
 Terrain rides the Main stamp but **skips the Near ball**: main-culled terrain keeps its shadow and GI
 passes unconditionally.
@@ -284,16 +288,16 @@ All Spatial tweaks are `SpatialSettings` = `Globals::settings.spatial` (`Setting
 re-exports `Settings.Spatial`, so `ESpatialCullMode` / `SpatialCullingConfig` / `SpatialStats` reach every
 importer of Spatial. The index binds `m_culling` / `m_stats` as references to them.
 
-| Field | Default | Notes |
-|---|---|---|
-| `mode` | `Cull` | `Off` / `StatsOnly` / `Cull` / `MainOnly` (debug — visibly breaks off-screen shadows and GI). |
-| `freeze` | false | Stop re-stamping and fly around to inspect the culled set. |
-| `margin` | 4 m | Frustum inflation masking the one-frame stamp latency. |
-| `nearRadius` | **0** | Ray-tracing (and RT shadow) relevance range around the camera. |
-| `shadowReach` | 60 m | Shadow pass: how far the view frustum is swept toward the sun; 0 = off. |
-| `nearSlack` | 16 m | Near-ball inflation and requery threshold; 0 = every frame. |
-| `maxDist` | overwritten | Set from the camera far plane every update. |
-| `skinnedRadiusScale` | 1.5 | Animation can exceed the bind-pose bounds sphere. |
+| Field | Tweak | Default | Notes |
+|---|---|---|---|
+| `mode` | `Mode` | `Cull` | `Off` / `StatsOnly` / `Cull` / `MainOnly` (debug — visibly breaks off-screen shadows and GI). |
+| `freeze` | `Freeze` | false | Stop re-stamping and fly around to inspect the culled set. |
+| `margin` | `Margin` | 4 m | Frustum inflation masking the one-frame stamp latency. |
+| `nearRadius` | `Near radius` | **0** | Ray-tracing (and RT shadow) relevance range around the camera. |
+| `shadowReach` | `Shadow reach (m)` | 60 m | Shadow pass: how far the view frustum is swept toward the sun; 0 = off. |
+| `nearSlack` | `Near requery slack` | 16 m | Near-ball inflation and requery threshold; 0 = every frame. |
+| `maxDist` | — (not a tweak) | overwritten | Set from the camera far plane every update. |
+| `skinnedRadiusScale` | `Skinned radius scale` | 1.5 | Animation can exceed the bind-pose bounds sphere. |
 
 ## Entity integration
 
@@ -309,24 +313,24 @@ a `RootOnly` root registers one entry over its whole subtree and the subtree reg
 * Headless has no render nodes, so every entry there is a point.
 * `updateSelf` refreshes it every visit, and the render gate reads its pass mask.
 * Update pushes per-pass masks: Main-visible entities push `PASS_ALL`, Near-only push
-  `PASS_SHADOW|PASS_GI` so shadows and GI keep off-screen entities.
+  `PASS_SHADOW|PASS_GI` so shadows and GI keep off-screen entities, Shadow-only push `PASS_SHADOW`.
 
 ### SIM LOD hooks
 
-`advanceUpdateTiers()` opens a new stamp generation for the three `UpdateTier` passes — the World's
-selection job calls it once per selection, and NOTHING else stamps those passes, so the stamps stay
-current until the next selection (which may be several frames later).
+`advanceUpdateTiers()` opens a new stamp generation for the three `UpdateTier` passes and `UpdateRoot`
+— the World's selection job calls it once per selection, and NOTHING else stamps those passes, so the
+stamps stay current until the next selection (which may be several frames later).
 
 `queryUpdateTiers(center, queryRadius, tierRadius[3], horizontal, layerMask)` is ONE PARALLEL
 traversal of the ball (`traverseParallel`) that stamps every hit in each tier
 whose radius exceeds its distance to the center (nested balls; a `tierRadius` <= 0 is never stamped
-by that ball; `horizontal` = XZ distance) and returns the hits as **one owner-sliced list per
+by that ball; `horizontal` = XZ distance) and returns the hits' userData as **one owner-sliced list per
 traversal chunk** (`m_tierHitChunks`, some empty, valid until the next call). The World runs its
 spheres IN SEQUENCE (the frontier scratch allows one traversal at a time) — **the stamps are pure
 stores, so overlapping balls stamping the same entry is fine.** The distance test is
 center-to-center (the entry radius only widens the query ball).
 
-Three accessors exist purely for the World's selection logic:
+The accessors that exist purely for the World's selection logic:
 
 | Accessor | Difference from the normal one |
 |---|---|
@@ -336,6 +340,7 @@ Three accessors exist purely for the World's selection logic:
 | `stampCurrent` | Single-entry stamp (a pure store, job-safe); the selection job marks the ancestors of every hit with it. |
 | `stampCurrentOnce` | Stamp + "was it not current before" as ONE atomic exchange: of several jobs reaching the same root exactly one gets true. The World's root dedupe. |
 | `advanceStamp` | Opens a new generation for one pass (the World: `VisibleRoot`, every pass). |
+| `isAlive` | Whether a root the post-update selection found still exists when the next pass uses it. |
 
 See [`Docs/Context/Entity/SimLod.md`](../Entity/SimLod.md).
 
@@ -346,7 +351,7 @@ See [`Docs/Context/Entity/SimLod.md`](../Entity/SimLod.md).
 The largest triangles by area of static mesh colliders — extracted by
 `OcclusionBuffer::extractOccluders`, registered by PhysicsComponent through the RAII
 `SpatialOccluder` — rasterize camera-relative into a **256×144** CPU depth buffer plus **8×8**
-max-depth blocks. Default budget 2048 triangles.
+max-depth blocks. Default budget 2048 triangles (`Max occluder tris`).
 
 It plugs into the Main stamp as `IOcclusionTester`, so occluded cells drop from the MAIN pass only.
 
@@ -355,7 +360,7 @@ the block mip keeps the FARTHEST depth, and any near-plane crossing reports visi
 
 > The renderer's projection is REVERSED-Z, so `update` flips the z row back to standard orientation
 > (`z' = w - z`) before handing the matrix to the rasterizer — for the rasterizer ONLY
-> ([Query.cpp:624](../../../Code/Spatial/Private/Query.cpp#L624)).
+> ([Query.cpp:979](../../../Code/Spatial/Private/Query.cpp#L979)).
 
 `addOccluder` / `removeOccluder` take a mutex: they run concurrently from spawn jobs
 (PhysicsComponent spawn and resume), while `render()` runs in the cull window where no spawn is
@@ -366,12 +371,10 @@ legal.
 Every linked entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
 `CellRecord.head`), so the 8-wide AVX2 testers (`test8`) load a block transpose-free and **every
 mutation costs the size of its cell, never the level**. A `CellBlock` is `alignas(64)`, 256 bytes,
-so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets the alignment from the
-engine allocator — see Core). The fully-inside emit masks live lanes with one AVX2 compare (`liveLanes`). There is no separate dynamic list and no
-static tier: a settled entry and a moving one are the same lane, the difference is only whether
-`updateEntry` writes it this frame. (The tier existed when static entries were sorted level-wide
-ranges; per-cell blocks made the split pointless, since a block lane takes an in-place write as
-cheaply as the pool did.)
+so no 32-byte lane row splits a cache line (the `oc::vector` holding them gets the alignment from
+`oc::allocator<T>` — see Core). The fully-inside emit masks live lanes with one AVX2 compare
+(`liveLanes`). There is no separate dynamic list and no static tier: a settled entry and a moving one
+are the same lane, the difference is only whether `updateEntry` writes it this frame.
 
 * **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unlinked`). The pool keeps the
   authoritative copy (`getPosition`, the same-cell compare in `updateEntry`, the Link op inserts
@@ -386,32 +389,30 @@ cheaply as the pool did.)
   commit (the Unlink op, or a Move).
 * **Blocks free as soon as they empty**, so `count == 0` <=> no chain (the sweep relies on it). A
   cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED
-  lanes — a tombstoned lane whose Unlink op is still queued this commit is still owned, dropping it
-  would strand that op's `storeIdx`; owned = the record's `level` is this level AND its `storeIdx`
-  names the lane — slots are numbered per level, so a record that moved levels can hold the same
-  slot number elsewhere) — into the kept `m_compactScratch`, refill from the head, free
-  the tail) — at least one block freed per pass, so one cell walk per 8 retirements. The chain's
-  block count for that test lives in the HEAD block (`CellBlock::chainBlocks`, in the alignment
-  padding, so `CellRecord` stays 16 bytes); `insert`, the block unlink in `retireLane` and
-  `compactCell` keep it, and a Debug assert re-walks the chain to check it.
+  lanes into the kept `m_compactScratch`, refill from the head, free the tail) — at least one block
+  freed per pass, so one cell walk per 8 retirements. **Owned** = the record's `level` is this level
+  AND its `storeIdx` names the lane: a tombstoned lane whose Unlink op is still queued this commit is
+  still owned (dropping it would strand that op's `storeIdx`), and slots are numbered per level, so a
+  record that moved levels can hold the same slot number elsewhere. The chain's block count for that
+  test lives in the HEAD block (`CellBlock::chainBlocks`, in the alignment padding, so `CellRecord`
+  stays 16 bytes); `insert`, the block unlink in `retireLane` and `compactCell` keep it, and a Debug
+  assert re-walks the chain to check it.
 * Sphere, AABB and frustum testers test blocks 8-wide; the ray tester goes lane by lane. Stats:
   `Blocks` (entries / blocks = the lane fill) and `Cell moves`.
 
 ## Stress harness
 
 `Globals::spatialStress`, Spatial/Stress tweaks: synthetic entries on `SpatialLayer_Stress`, churn,
-timed queries, brute-force verification. Stats under Spatial/Stats. **Nothing calls its `update()`
-at present** — the tweaks show in the panel but do nothing until the App drives it.
+timed queries, brute-force verification. Stats under Spatial/Stats. **Nothing calls its `update()`**
+— the tweaks show in the panel but do nothing until the App drives it.
 
 ## Not yet built
 
-**Threading-parallel LARGE script QUERIES.** The `markVisible*` stamps and `queryUpdateTiers` fan
-out, but the other `query*` / `forEachIn*` entry points traverse serially: their emit appends to
-one out-vector (or runs the caller's inline callback), and they may run concurrently from script
-workers, so they cannot share the single `m_frontier` scratch. Small ones take the direct cell path
-and need no fan-out; only a large ball from a script would gain.
-
-**Leaf-cell slicing in the fan-out.** The expansion stops at leaves: a narrow view over a few big
-cells yields fewer roots than `numWorkers * 4`, and one root can hold most of the work. Splitting a
-leaf's static chain (indexable by block) and its dynamic list (a serial walk to cut it) into slices
-would fill the workers for that case.
+* **Parallel LARGE script queries.** Only the `markVisible*` stamps and `queryUpdateTiers` fan out;
+  the other `query*` / `forEachIn*` entry points traverse serially (their emit appends to one
+  out-vector or runs the caller's callback, and they may run concurrently from script workers, so
+  they cannot share the single `m_frontier` scratch). Small ones take the direct cell path; only a
+  large ball from a script would gain.
+* **Leaf-cell slicing in the fan-out.** The expansion stops at leaves: a narrow view over a few big
+  cells yields fewer roots than `numWorkers * 4`, and one root can hold most of the work. Splitting a
+  leaf's block chain (indexable by block) into slices would fill the workers for that case.

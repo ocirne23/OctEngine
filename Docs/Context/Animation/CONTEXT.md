@@ -13,12 +13,12 @@ uploads it.
 |---|---|---|
 | Import a rig into a `Skeleton`, and clips into an `AnimationSet` | **File** (Assimp) | `ISceneData::loadAnimations` — [ISceneData.ixx:80](../../../Code/File/Private/ISceneData.ixx#L80) |
 | Keep the rig's own skeleton copy | **RendererVK** | `ObjectContainer::m_skeleton` — [ObjectContainer.ixx:149](../../../Code/RendererVK/Private/ObjectContainer.ixx#L149) |
-| Cache clip libraries per skeleton + animator | **Entity** | `World::getOrBuildClipSet` — [World.ixx:238](../../../Code/Entity/Private/World.ixx#L238) |
+| Cache clip libraries per skeleton + animator | **Entity** | `World::getOrBuildClipSet` — [World.ixx:230](../../../Code/Entity/Private/World.ixx#L230) |
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
 
 **Rigid-part models (no skin) are NOT in this library** — the box-limb character's bones and walk
-are Entity's `SceneAnimatorComponent` / `HumanoidAnimatorComponent`. The one thing they take from
+are Entity's `HumanoidAnimatorComponent` (and the parked `SceneAnimatorComponent`). The one thing they take from
 here is **`Animation:BoneMath`** ([BoneMath.ixx](../../../Code/Animation/Private/BoneMath.ixx)): the numeric kernels both
 share — `polyTrig` / `polyTrig4` (sin + cos by polynomial, scalar and SSE), `phaseTrig` (a 0..1
 phase folded onto the nearest quadrant axis, no CRT call), `phaseSin` (the sine alone, folded with
@@ -78,11 +78,12 @@ source plays plus the blend axis — and then ticks the player.
 * Parameters: `setFloat` / `setBool` / `setTrigger`, read back with `getFloat` / `getBool`.
 * Conditions AND together: `floatGreater`, `floatLess`, `boolIs`, `trigger`.
   **Triggers are one-shot** — firing a transition consumes every trigger it tested
-  ([StateMachine.cpp:105](../../../Code/Animation/Private/StateMachine.cpp#L105)).
+  ([StateMachine.cpp:103](../../../Code/Animation/Private/StateMachine.cpp#L103)).
 * `addTransition(from, to, ...)` and `addAnyTransition(to, ...)` for an escape hatch such as death.
 * Transitions are evaluated **in declaration order**, any-state ones included; the first whose source
   gate, `exitTime` gate and conditions all pass fires
-  ([StateMachine.cpp:91](../../../Code/Animation/Private/StateMachine.cpp#L91)).
+  ([StateMachine.cpp:91](../../../Code/Animation/Private/StateMachine.cpp#L91)). A transition into the
+  current state is skipped.
 * `exitTime > 0` holds the transition until the current source reaches that normalized time.
 * On the first `update` with no current state it enters the entry state (or state 0) and returns.
 

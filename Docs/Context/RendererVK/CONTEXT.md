@@ -33,14 +33,14 @@ feature you touch BEFORE changing it.**
 | [`Clouds.md`](Clouds.md) | Volumetric clouds |
 | [`Vegetation.md`](Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
 | [`PostProcess.md`](PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
-| [`Terrain.md`](Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water |
+| [`Terrain.md`](Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water, the rain occlusion map |
 | [`Shaders.md`](Shaders.md) | Shaders (folders, includes, compile, hoisted work), pipeline statistics (register counts), **half floats (fp16)** |
 
 ---
 
 # Frame pacing
 
-`Core.Time` owns all of it. `Time::registerTweaks()` plus
+`Core.Time` owns all of it; the "Time" tweaks are registered by `Settings::registerTime` (`TimeSettings`).
 **`beginFrame(windowFocused, vr, vsync, displayRefreshHz, pumpWindow, waitFence)`** — ONE call at the
 loop top does the fence wait, the frame-rate limit, the event-pump kick and the next frame's clock.
 
@@ -50,7 +50,8 @@ cannot see the renderer.**
 ## The limit
 
 Waits until the desired end — last frame start + 1/target, where target is `Max FPS` (0 = uncapped),
-or `Inactive max FPS` (30) when unfocused. **Never in VR: `xrWaitFrame` owns pacing.**
+or `Inactive max FPS` (30) when unfocused, further capped by `Time::setFpsCeiling` (main sets 60 while a
+menu is up). **Never in VR: `xrWaitFrame` owns pacing.**
 
 It sleeps in 1 ms steps while more than `Busy-wait window (ms)` (2.5) remains — **real milliseconds
 thanks to the window thread's `timeBeginPeriod(1)`** — then spins the last stretch.
@@ -59,17 +60,14 @@ thanks to the window thread's `timeBeginPeriod(1)`** — then spins the last str
 
 **When it waited, the frame's END is ATTRIBUTED as the desired end, not the clock after the wait.**
 The OS's post-target lateness is charged to the NEXT frame as processing time, **which keeps the delta
-flat instead of jittering with scheduler tails** (the CryEngine / Star Citizen "tail jitter" rule). An
-already-late frame ends now.
+flat instead of jittering with scheduler tails.** An already-late frame ends now.
 
 ## Uncapped + vsync
 
 With `Max FPS` 0 and FIFO present, **every frame lands on a whole number of refresh periods BY
 CONSTRUCTION — only the CPU's view of it jitters**, because the throttle lands either in the loop-top
-fence or in the end-of-frame acquire.
-
-> Loop-top intervals read like 4/8 ms around a 6 ms period, **which is why a tolerance-gated snap
-> rejected most frames.**
+fence or in the end-of-frame acquire. (Loop-top intervals read like 4/8 ms around a 6 ms period, so a
+tolerance-gated snap rejects most frames.)
 
 So the start is QUANTIZED to the nearest whole number of periods (a dropped frame = 2), using
 the display's reported refresh (`Window::getDisplayRefreshHz`) or the measured period EMA when the
@@ -77,21 +75,19 @@ platform reports none. **Rounding against the real clock every frame bounds the 
 period.** Without vsync the intervals are arbitrary and the raw clock stands.
 
 **A frame that rounds to ZERO periods (under half a period since the last start) keeps the raw
-clock.** That is a present that did NOT throttle — an occluded window, a refresh-rate mismatch — and
-snapping it forward would advance the attributed clock a whole period per frame, so it ran minutes
-ahead of the wall clock; the limiter then slept the whole lead out the moment the window lost focus
-(`Inactive max FPS`), which read as a deadlock. The limiter also never waits more than one period,
-whatever the attributed start says.
+clock**, and the limiter never waits more than one period. Such a present did NOT throttle (an occluded
+window, a refresh-rate mismatch); snapping it forward advances the attributed clock a period per frame,
+until the limiter sleeps the whole lead out at once (it reads as a deadlock).
 
 ## The pump kick
 
-`requestPump()` fires `Input pump lead (ms)` (2.0) BEFORE the frame starts, so the window thread pumps
+`Window::requestPump()` fires `Input pump lead (ms)` (2.0) BEFORE the frame starts, so the window thread pumps
 while main still waits.
 
 * **CAPPED:** the end is exact, so the limiter kicks inside its own wait.
 * **UNCAPPED:** the fence decides, so the kick targets **the EARLIEST plausible unblock** — the raw
   last start plus a decayed running MINIMUM of the raw interval. *Under FIFO the CPU unblocks early on
-  alternate frames, and a mean-based prediction kicked too late on those.* The fence is waited
+  alternate frames, and a mean-based prediction kicks too late on those.* The fence is waited
   (bounded) until a lead before that, then kicked, then waited out.
 
 ## VSync is a runtime tweak
@@ -124,93 +120,96 @@ retired. **It is the vsync/GPU throttle of the whole loop.**
   0 is a marker-free STATUS POLL** that still claims the slot when signaled. A device error recreates
   the swapchain and reports signaled. Idempotent within a frame.
 * **Called FIRST THING in the loop, through `Time::beginFrame`** — before the "main loop" profiler
-  scope opens and before input is sampled.
-  > So the vsync/GPU stall shows as its own top-level "Fence wait" (the main-loop scope then measures
-  > only real work) and **input → sim → present stays tight.** The wait used to sit inside
-  > `beginFrame`, between input sampling and the sim: ~4 ms of stale input at 165 Hz.
+  scope opens and before input is sampled. So the vsync/GPU stall shows as its own top-level
+  "Frame wait" (the main-loop scope measures only real work), and **input → sim → present stays
+  tight** (a wait between input sampling and the sim makes the input a frame stale).
 * **NOTHING may write a slot's host-visible per-frame buffers before it** — renderNode instance
-  memcpys, LOD redirects, sparse transforms. **Torn slot data was the one-frame LOD-flash bug.**
-  `beginFrame` asserts it ran (and waits anyway); `present()` re-arms it when the slot advances.
+  memcpys, LOD redirects, sparse transforms. **Torn slot data shows as one-frame LOD flashes** (the
+  cull's buckets overflow into neighbouring meshes' draw ranges). `beginFrame` asserts it ran (and
+  waits anyway); `present()` re-arms it when the slot advances.
 
 ---
 
 # Begin frame as a job
 
-`kickBeginFrameJob(camera, viewportRect)` / `joinBeginFrameJob()` — camera and rect copied into
-members (the job outlives the caller's stack), ONE High `"Begin frame job"`.
+`setFrameView(camera, viewportRect)` (below) stores the camera and rect in members (the job outlives the
+caller's stack); `kickBeginFrameJob()` then submits ONE High `"Begin frame job"`, and `joinBeginFrameJob()`
+waits for it.
 
-* main.cpp kicks BEFORE `physics.update`, next to "Spatial cull", and joins after the physics step,
-  `audio.update` and the nav publish ([main.cpp:757-782](../../../Code/App/main.cpp#L757)).
+* main.cpp kicks right after `setFrameView` and the spatial index's update kick, BEFORE `physics.update`, and
+  joins after the physics step, `audio.update` and `navSystem.update`
+  ([main.cpp](../../../Code/App/main.cpp#L298)).
+* `kickBeginFrameJob` first runs `applyUboLocks` on main (see [FrameUbo.md](FrameUbo.md)).
 * **Legal because the window is renderer-QUIESCENT**: tweak `onChange` is flushed at the top of the
   frame, force and terrain param setters run after `world.update`, and the streamers' Vulkan work
   happens in `present` on main. Also because `StagingManager` is thread-safe with every graphics-queue
   call behind Device's queue mutex.
 * **`beginFrame` is the SERIAL-OWNER of the render chain — ONE call in flight.** Nothing may touch
   renderer frame state between kick and join, and its outputs — counter resets, `m_cameraPos`,
-  `m_mipPixelScale`, `m_centerViewProj`, `m_sunCascadeViewProj`, the returned frustum — **are valid
-  only after the join.**
-* **VR:** the kick only STORES and DEFERS; `joinBeginFrameJob` then runs `beginFrame` synchronously on
-  main, **because `xrWaitFrame` owns VR pacing and would pin a worker.** The OpenXR poll, beginFrame
-  and head pose all live inside it.
+  `m_mipPixelScale`, `m_centerViewProj`, `m_sunCascadeViewProj`, the frame UBO — **are valid only after
+  the join.**
+* **VR:** the kick only DEFERS; `joinBeginFrameJob` then runs `beginFrame` synchronously on main,
+  **because `xrWaitFrame` owns VR pacing and would pin a worker.** The OpenXR poll, the XR begin frame
+  and the head pose all live inside it (`applyVrHeadPose`).
 
 ## The cull view
 
-`setFrameView(camera, viewportRect)` publishes the frame's view and gives the spatial cull its
-frustum BEFORE `beginFrame`:
+`setFrameView(camera, viewportRect)` publishes the frame's view and returns the spatial cull's `CullView`
+BEFORE `beginFrame`. It applies the viewport rect first (`setViewportRect`, before any projection is built
+from its aspect).
 
-* **Desktop** — `computeCullFrustum` builds **the exact frustum `beginFrame` will build**, because the
-  camera and viewport are final by then and **TAA jitter is never baked into the mvp.** It is
-  bit-identical by construction: both go through `computeCenterViewProj`, **the ONE place the centre
-  view-projection is built.** It applies the viewport rect (idempotent with `beginFrame`'s own apply)
-  and publishes `m_centerViewProj` early. Asserts `!VR`.
-* **VR** — LAST frame's head view, since the head pose only exists after `xrWaitFrame` inside
-  `beginFrame`. **One frame of cull latency, absorbed by the culling margin and near-ball slack**, and
-  the first VR frame's view is invalid so culling is skipped that frame.
+* **Desktop** — **the exact frustum `beginFrame` will build**, because the camera and viewport are final by
+  then and **TAA jitter is never baked into the mvp.** It is bit-identical by construction: both go through
+  `computeCenterViewProj`, **the ONE place the centre view-projection is built**, and `m_centerViewProj` is
+  published early.
+* **VR** — LAST frame's head view (`m_lastCullCamera`), since the head pose only exists after `xrWaitFrame`
+  inside `beginFrame`. **One frame of cull latency, absorbed by the culling margin and near-ball slack**, and
+  the first VR frame's view is invalid, so culling is skipped that frame.
 
 ---
 
 # Frame order
 
-The **primary command buffer**, assembled in `present()`. Desktop:
+Desktop, as recorded by `recordCommandBuffers` (`recordPrimaryPreScene` + `recordPrimaryDesktop`) and
+`recordPresentCommandBuffer`:
 
 ```
 GPU Frame
   Skinning → Ocean sim (+ its spray step: particle spawn requests)
-    → Shadow cull → Shadow draw            (both skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see below)
+    → Shadow cull → Shadow draw            (both skipped under RT sun shadow; FIRST: they borrow the main cull's buffers, see Scene.md)
     → Indirect cull (+ the previous-transform copy, see "Motion vectors") → Light grid → Force compute
-    → Terrain wetness
+    → Terrain wetness                      (tick frames only)
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
     → Grass near shadow                    (desktop, the shadow array's extra layer; after the grass cull)
-    → Cloud shadow                         (the Beer shadow map; only the cascades due this frame; see "Volumetric clouds")
+    → Cloud shadow                         (the cloud shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
     → GI                                   (BLAS builds + THIS frame's TLAS, then the probe trace)
     → Rain occlusion                       (ray query on that TLAS; only while a weather volume requested the map; see Particle)
     → Particle sim                         (after the TLAS: it reads this frame's rain map)
     → Volumetric fog
     → Scene opaque                         (WRITES the scene depth, then parks it read-only)
-    → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
-    → Cloud march                          (march + temporal, half res; reads this frame's depth; see "Volumetric clouds")
-    → Far trees                            (the far-tree volume: bake when due + march, full res; see "Far-tree volume")
+    → Far tree bake                        (only while a bake runs; see "Far-tree volume")
+    → Post-scene compute                   (RTAO + cloud march + far-tree march, phase by phase; reads this frame's depth; see below)
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
-    → Scene forward → TAA (+ motion blur velocity) | DLSS (mvec pass + the upscale, see "DLSS")
-    → Motion blur (desktop, "Post/Motion blur": tile max only;
-      the composite gathers) → Eye adaptation (+ bloom level 0)
+    → Scene forward → TAA | DLSS (mvec pass + the upscale, see "DLSS")
+    → Motion blur (desktop, "Post/Motion blur": tile max only; the composite gathers)
+    → Eye adaptation (+ bloom level 0)
     → Bloom (desktop, "Post/Bloom": the down/up chain; the composite mixes it in)
-  Composite + UI
+  Composite + UI                           (CB.present, see "Recording vs submitting")
 ```
 
-The quoted sections are in the topic files: "Motion vectors" and "DLSS" in
-[PostProcess.md](PostProcess.md), "Procedural grass", "Ground clutter" and "Far-tree volume" in
+RTAO's result is read by the NEXT frame's forward pass. The quoted sections are in the topic files: "Motion vectors"
+and "DLSS" in [PostProcess.md](PostProcess.md), "Procedural grass", "Ground clutter" and "Far-tree volume" in
 [Vegetation.md](Vegetation.md), "Volumetric clouds" in [Clouds.md](Clouds.md).
 
 > ### THERE IS NO DEPTH PREPASS / G-BUFFER
 >
-> Measured: the prepass cost about as much as the whole forward pass (both are geometry-bound) and
-> its early-Z saved the forward pass ~10 %. It is gone, with its normal target. **`SceneColor` owns THE
-> scene depth**, and every screen-space reader samples that one image: RTAO, the force march, decals,
-> particles, fog apply, TAA — and, as "last frame's depth" out of the OTHER frame slot, the forward
-> pass's AO reprojection, the AO temporal pass and the particle collision.
+> Measured: a prepass cost about as much as the whole forward pass (both are geometry-bound) and
+> its early-Z saved the forward pass ~10 %. **`SceneColor` owns THE scene depth**, and every
+> screen-space reader samples that one image: RTAO, the force march, decals, particles, fog apply,
+> TAA — and, as "last frame's depth" out of the OTHER frame slot, the forward pass's AO reprojection,
+> the AO temporal pass and the particle collision.
 >
 > * **The depth has exactly TWO layouts:** `DEPTH_STENCIL_ATTACHMENT` while the opaque stages write
 >   it, and `SCENE_DEPTH_SAMPLED_LAYOUT` (= `DEPTH_STENCIL_READ_ONLY`, SceneColor.ixx) the rest of the
@@ -229,10 +228,11 @@ The quoted sections are in the topic files: "Motion vectors" and "DLSS" in
 > * **TAA's ocean flag is the scene colour's ALPHA:** `ocean.fs.glsl` writes 0, every other opaque
 >   surface its material alpha (> 0), and TAA reads `alpha < 0.004` on non-sky pixels. So nothing
 >   layered over the opaque scene may write alpha: `GraphicsPipelineLayout::colorWriteAlpha = false`
->   on decals, debug lines, force shells / union / upsample, particles, cloud apply and fog apply, and
->   `GraphicsPipeline` masks alpha on every BLENDED variant (a transparent mesh keeps the alpha of
->   the opaque surface behind it). The ONE exception is the Ocean variant (`dualSourceAlpha`): it blends
->   its edge over the ground, so it composites the flag itself (see "Terrain surface water" ([Terrain.md](Terrain.md))). **A new pipeline that draws into scene colour after the opaque
+>   on decals, debug lines, force shells / union / upsample, particles, the far-tree apply, cloud apply
+>   and fog apply, and `GraphicsPipeline` masks alpha on every BLENDED variant (a transparent mesh keeps
+>   the alpha of the opaque surface behind it). The exceptions are the Ocean and River variants
+>   (`dualSourceAlpha`): they blend their edge over the ground, so they composite the flag themselves (see
+>   "Terrain surface water" ([Terrain.md](Terrain.md))). **A new pipeline that draws into scene colour after the opaque
 >   stages sets `colorWriteAlpha = false`.**
 > * **The Sky variant does not write depth** (`depthWrite = false`): a sky pixel's depth stays at the
 >   cleared far plane, which is how every reader tells "sky". See THE SKY DRAW ([Scene.md](Scene.md)).
@@ -245,14 +245,15 @@ Scene opaque   (depth WRITTEN):            Static meshes → GI probe debug
 Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Far trees apply → Cloud apply → Fog apply
 ```
 
-`SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance clears, the last
-hands colour to TAA, and the depth is either written or a read-only attachment. All variants are
+(With the fog on, the fog apply composites the clouds and far trees itself; with the fog off and clouds on, the cloud
+apply composites the far trees.) `SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance
+clears, the last hands colour to TAA, and the depth is either written or a read-only attachment. All variants are
 compatible with the base pass (never begun; pipelines and secondaries are built against it) since only
 load/store ops and layouts differ (**the deps are verbatim — they are part of compatibility**), and
 one framebuffer serves them all. **The GI probe debug impostors write depth** (`gl_FragDepth`, they
 sort among themselves), so they run in the opaque group; the AO trace and the decals then see them as
 geometry (debug only). **VR** records the same split inline per eye: static meshes → barrier → AO →
-one layered instance.
+clouds → one layered instance.
 
 **Line width.** Every pipeline that rasterizes lines — the debug-line pass (line topology) and the
 wireframe variants (`eLine` polygon mode) — is created with `lineWidth = LINE_WIDTH` (3 px, a
@@ -280,56 +281,50 @@ effect immediately.**
 
 **Call `setHaveToRecordCommandBuffers()` after invalidating changes.**
 
-**TWO BATCHES PER FRAME** (2026-10-11). `CB.primary` (`recordCommandBuffers`) holds ALL the frame's work but the
+**TWO BATCHES PER FRAME.** `CB.primary` (`recordCommandBuffers`) holds ALL the frame's work but the
 swapchain pass and is submitted BEFORE `acquireNextImage`, with no image wait and no fence; `CB.present`
 (`recordPresentCommandBuffer`: the composite + ImGui render pass into the acquired image's framebuffer) is recorded
 after the acquire and submitted through `SwapChain::submitCommandBuffer` - the only batch that waits `presentComplete`,
 signalling `renderComplete` and the slot's fence (a fence signal covers every batch submitted before it on the queue).
-**Why:** with one primary the whole frame waited for the image's release - the driver starts a batch only once its wait
-semaphores signal, whatever the stage mask - and the image is released only after the previous frame's present: a gap
-after EVERY GPU frame, VSync off too. The composite reads the work batch's results through that batch's own barriers
-(a barrier's second scope reaches later batches). The "GPU Frame" profiler scope opens in `CB.primary` and closes in
-`CB.present`. An acquire failure after the work batch drains the queue (the slot does not advance).
+**Why:** the driver starts a batch only once its wait semaphores signal, whatever the stage mask, and the image is
+released only after the previous frame's present - with one primary, every GPU frame waited for that, VSync off too.
+The composite reads the work batch's results through that batch's own barriers (a barrier's second scope reaches later
+batches). The "GPU Frame" profiler scope opens in `CB.primary` and closes in `CB.present`. An acquire failure after
+the work batch drains the queue (the slot does not advance).
 
-## Per-frame CPU -> GPU buffers live in ReBAR, not system memory (2026-10-07)
+## Per-frame CPU -> GPU buffers live in ReBAR, not system memory
 
 A buffer the CPU writes and the GPU reads every frame is `eHostVisible` + `BufferHostAccess::eSequentialWrite`, and
 VMA (`MEMORY_USAGE_AUTO`) places it in DEVICE-LOCAL host-visible memory (ReBAR). `eHostCached` / random access puts it
-in cached SYSTEM memory, where every GPU read crosses PCIe - latency-bound: the instance stream (`MeshInstances`,
-read by the culls, the TLAS instance write and every ray-query hit) and the TLAS writer's `AS.blasAddresses` /
-`AS.meshAlias` were there; moving them took "BLAS builds" 0.21 -> 0.17 ms and "Indirect cull" 0.114 -> 0.109 ms
-(sandbox 1440p). **Cached system memory is for READBACKS only** (the GPU writes, the CPU reads: ocean, force,
-particle counters, LOD stats). A ReBAR mapping is uncached for CPU READS: a table the CPU also reads in loops keeps a
-CPU mirror (`AccelerationStructure::m_meshAlias`, written through `writeMeshAlias`); a rare read-back on growth
+in cached SYSTEM memory, where every GPU read crosses PCIe (latency-bound: measurably slower BLAS builds and culls).
+**Cached system memory is for READBACKS only** (the GPU writes, the CPU reads: ocean, force, particle counters, LOD
+stats). A ReBAR mapping is uncached for CPU READS: a table the CPU also reads in loops keeps a CPU mirror
+(`AccelerationStructure::m_meshAlias`, written through `writeMeshAlias`); a rare read-back on growth
 (`growInstances`, `resizeBlasAddressBuffer`) is acceptable.
 
-## Barriers and overlap (measured 2026-10-07, sandbox 1440p, RTX 4090)
+## Barriers and overlap
 
 A compute->compute barrier waits for ALL earlier compute work in the queue. **The post-scene compute group**
 (`recordPostSceneCompute`: RTAO, the cloud march + temporal, the far-tree march) records the three passes PHASE by
 phase (`RTAOPipeline::recordPhase`, `CloudPipeline::recordPhase`, `TreeVolumePipeline::marchPrepare` /
 `recordMarchPhase`; one cached secondary per phase for RTAO and the clouds) with ONE barrier between phases - their
-union - instead of each pass's own, so the passes of a phase run side by side. GPU scope "Post-scene compute", with
-one child scope per PHASE ("Trace + marches", "Temporal passes", "Blur + upsample") and inside each one per PASS
-("Cloud march", "Far trees march", "RTAO trace", ...). The passes of a phase run one after the other in practice
-(Nsight GPU Trace 2026-10-07: the cloud march and the far march back to back, no overlap - which is why the group
-gains so little), so a pass's bottom-of-pipe stamp waits only for its own dispatch: exact and free.
+union - instead of each pass's own. GPU scope "Post-scene compute", with one child scope per PHASE ("Trace + marches",
+"Temporal passes", "Blur + upsample") and inside each one per PASS ("RTAO trace", "Cloud march", "Far trees march",
+...). In practice the passes of a phase still run one after the other (Nsight GPU Trace), so a pass's stamp is exact.
 "Renderer/Overlap compute" off: the same barriers around each pass alone, each in its own scope ("RTAO", "Cloud
-march", "Far trees") - for per-pass timing. **Measured gain: ~0.01-0.02 ms** (0.933-0.944 vs 0.942-0.960 ms): those
-passes each fill the GPU, only their tails overlap. **Tried and dropped:** the cloud shadow + sky recorded AFTER the
-TLAS build (their compute barriers do not wait for the AS-build stage, so they could run beside it) - 0.426/0.435 vs
-0.417/0.414 ms, no overlap in practice; and the TLAS built PREFER_FAST_BUILD - the build 0.01 ms faster, the traces
-that much slower. Overlapping BIG passes gains nothing here; small chains (the ocean sim's mip blits) were not tried
-(the whole blit chain costs ~0.03 of the ocean sim's 0.19 ms).
+march", "Far trees") - for per-pass timing. **Measured gain: ~0.01-0.02 ms**: those passes each fill the GPU, only
+their tails overlap.
 
-**Synchronization validation** (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with `EValidation::ENABLED` in main.cpp; a
+**Tried and dropped:** the cloud shadow + sky recorded after the TLAS build (to run beside it) - no overlap in
+practice; the TLAS built PREFER_FAST_BUILD - the build gets faster by as much as the traces get slower. Overlapping
+BIG passes gains nothing here.
+
+**Synchronization validation**: `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` with `EValidation::ENABLED` in main.cpp. A
 hazard is an error, so the callback's break stops the run - set `setBreakOnValidationLayerError(false)` to collect them
-all). The 2026-10-07 run found three, all fixed: the cloud noise's init transition did not cover its mip BLITS
-(`CloudPipeline` noise init: dst stage + blit), the ocean's final transition did not wait for its readback COPY
-(`toSampled` src + copy), and the staging manager's buffer copies into overlapping bytes were unordered (a growth's
-whole-buffer re-upload vs a one-entry update in the same batch: `StagingManager::updateNoLock` now puts a copy -> copy
-barrier before a copy that overlaps the range written to its buffer since the last one). What remains is Streamline's
-own legacy `vkCmdPipelineBarrier` on the depth in the DLSS evaluate (a WAW against the depth store) - not ours.
+all. `StagingManager::updateNoLock` puts a copy -> copy barrier before a copy that overlaps the range written to its
+buffer since the last one (a growth's whole-buffer re-upload vs a one-entry update in the same batch). The one known
+remaining report is Streamline's own legacy `vkCmdPipelineBarrier` on the depth in the DLSS evaluate (a WAW against
+the depth store) - not ours.
 
 ---
 
@@ -350,10 +345,10 @@ Each feature's details are in its topic file (see [The documentation files](#the
 
 | Directory | Contents |
 |---|---|
-| `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, Dlss (its motion vectors), MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
-| `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). Plus the four registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
-| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed dropped their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
+| `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, `Allocator.ixx` (`GpuAllocator`), **VrEyeTargets** (the two per-eye LDR composite targets, re-created with the swapchain), ... |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, Taa, Dlss (its motion vectors), MotionBlur, Bloom, VolumetricFog, Cloud, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, Grass, Clutter, TreeVolume (the far-tree volume), RainOcclusion, IndirectCull, ShadowCull (both own a DrawCompact), ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Data/` | The GPU-resident scene, carved out of the Renderer. Streaming and managers: MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional), TreeRecordPool (see [Scene.md](Scene.md)). Plus the registries the Renderer owns and delegates to — each takes its frame-wide effects as callbacks (`onGpuIdle` before a buffer is re-created, `onInvalidate` to re-record) and knows nothing about the device or the pipelines: |
+| | **`InstanceStream`** — THE per-frame push surface: the six mapped buffers `renderNode` writes into (transforms, pass masks, LOD bias, mesh instances, first instances, mesh count - the slots the draw-list compaction walks), one set per frame slot, the device-local PREVIOUS transforms + masks the motion vectors read (`recordPrevCopy`), plus the lock-free monotonic instance claim, the transform slot free list and the two capacity growths. **A claim past the capacity is never rolled back** — see the header. **BOTH growths run only in `checkFrameCapacities`, never mid-frame:** re-creating the node buffers after some nodes pushed drops their transforms / masks / biases for that frame (a whole-scene one-frame flicker). A node spawned past the node capacity is skipped by `renderNode` until then. |
 | | **`SharedTable<T>`** — an append-only device-local scene table with slot recycling and a CPU mirror: the mesh infos, the materials and the mesh instance offsets are three instances of it. Growth doubles, re-uploads the mirror and re-records. |
 | | **`SkinnedMeshRegistry`** — the skinning jobs + their parallel skinned-BLAS builds, the bone palette store, the per-container sources, and the spawn BUNDLES (parked in place on death, reused wholesale by the next spawn of the same container). |
 | | **`MeshLodRegistry`** — the LOD chains, the per-mesh chain mapping, the three GPU selection buffers and `IndexRangeFreeList`. The Renderer keeps only the RT-alias half of `addMeshLodGroup`, because aliases are AccelerationStructure state. |
@@ -361,22 +356,22 @@ Each feature's details are in its topic file (see [The documentation files](#the
 | | **`TerrainResources`** — what Procedural pushes in: the world params, the splat material set + its climate boxes, `TerrainTexTweaks` / `TerrainWetTweaks`, the CPU-baked height/water map every terrain-aware pass samples, and the fixed-tick **wetness state machine** (`advanceWetness`). `buildUboTerrain` stays in the Renderer and reads it. |
 | | **`ParticleState`** — the GPU particle system's CPU side: the emitter slot table (KILL flag drains through the sim before a slot recycles), this frame's spawn requests, the `"Particles"` tweaks, the weather volume's rain box (latched by present for the NEXT frame's begin-frame job) and the one-shot pool reset. |
 | | **`ForceFieldState`** — params, the emitter + point-query slot registries (STABLE indices across the ~2-frame readback latency), this frame's bake chunk set, the shell-cull build, and **its between-frames job** (`buildGrid` / `applyGridGrowth`), mirroring `FrameSubmission`'s. |
-| | **`BindlessTextures`** — the two counts that are not the same (the fixed LAYOUT CAP baked into every pipeline layout vs the LIVE descriptor count the variable-count sets are allocated with), the streamer's pending slot writes, and the deferred free queue. The six consumers are reached through two callbacks the Renderer wires in `initBindlessTextures`. |
+| | **`BindlessTextures`** — the two counts that are not the same (the fixed LAYOUT CAP baked into every pipeline layout vs the LIVE descriptor count the variable-count sets are allocated with), the streamer's pending slot writes, and the deferred free queue. The seven consumers (the static mesh and shadow draw sets, GI, RTAO, particles, decals, clutter) are reached through two callbacks the Renderer wires in `initBindlessTextures`. |
 | | **`RayTracingScene`** — owns `AccelerationStructure` plus the CPU bookkeeping around it: the per-MeshInfo vertex counts (BLAS maxVertex) and skinned-output flags, the TLAS instance capacity, and **the one-time build watermark**. A static BLAS builds once, so `takeBuildList` scans forward from the watermark — which is exactly why a RE-STREAMED mesh and a RECYCLED slot below it must be queued explicitly, and why a skinned output region is never in the list at all. |
 | `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. The structs must stay in sync with `shared.inc.glsl`; the frame UBO is not here (registered: `UboBlock.ixx`). |
 | `UboBlock.ixx` | `UboBlock`: the frame UBO's registered layout + bytes - every value one `add` / `addArray` line with its sources (tweaks = lockable, `UboLive`, `UboPresent`). |
 | `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
 | `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks" ([FrameUbo.md](FrameUbo.md)). |
-| `RendererUbo.cpp` note | compiled with `/bigobj` (RendererVK CMakeLists): one lambda per UBO value passed the COFF section limit in Debug. |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and the GPU allocation report types; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
 | `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
-| `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
-| `Renderer.ixx` | The whole class. One interface, **four implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
-| `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each now a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` as five phases (`attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`), then `waitFrameSlot` → `beginFrame` (+ its job kick/join) → `present`. |
-| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo`, the `buildUbo*` frame-state steps (the views, the camera velocity, GI's one-frame flags, the cloud wind + shadow recentre, the sun cascades, the force bake box, the wetness tick, the grass cascade), `registerUboValues` (every value, live and lockable, by subject). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs; `m_views` keeps last frame's mvps (the reprojection). |
+| `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `Aftermath` / `Streamline` (the runtime-loaded DLLs), `GridClaim` (the light/force hash grid's CPU side), `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
+| `Renderer.ixx` | The whole class. One interface, **seven implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
+| `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` runs `attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`; per frame `waitFrameSlot` → `setFrameView` → `beginFrame` (+ its job kick/join) → `present`. |
+| `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo`, the `buildUbo*` frame-state steps (the views, the camera velocity, GI's one-frame flags, the cloud wind + shadow recentre, the sun cascades, the force bake box, the wetness tick, the grass cascade), `registerUboValues` (every value, live and lockable, by subject). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs; `m_views` keeps last frame's mvps (the reprojection). Compiled with `/bigobj` (RendererVK CMakeLists): one lambda per UBO value passes the COFF section limit in Debug. |
 | `RendererScene.cpp` | The scene the outside owns, in two halves. **Residency**: container add/remove, `renderNode` (the push), the spawn-path entry points, the bindless descriptor upkeep, and the cross-cutting work a capacity growth needs (`onUniqueMeshCapacityGrown`). **Submission** (bottom of the file, mostly called from jobs): lights / fog volumes / decals and the emitter + query registries, each a thin delegate into the `Data/` object that owns the contract. |
-| `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the two primaries (desktop / VR). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only (the debug overlays). |
+| `RendererTrees.cpp` | The tree instance sets and tree records (see [Scene.md](Scene.md)) and the far-tree volume's recording. |
+| `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the primaries (desktop / VR / present). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only. |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
 
 ## Debug names and labels (Nsight / RenderDoc)
@@ -414,9 +409,8 @@ not only with validation — the validation messenger stays validation-only.
 * **Never record an EMPTY scope** (a begin and an end with no command between them): Nsight's GPU Trace times a
   zero-length range at the NEXT workload, and when that is the first command inside a render pass begun with
   SECONDARY_COMMAND_BUFFERS contents (the force interval pass, a scene stage), its vkCmdWriteTimestamp is illegal -
-  `VUID-vkCmdWriteTimestamp-commandBuffer-recording`, under Nsight only (2026-10-07: the "Far tree bake" scope, empty
-  on every frame without a bake; now opened only when `TreeVolumePipeline::updateBake` reports a running bake, and
-  "Far trees" only when the volume is `ready`). Gate the scope with the work, not the work inside the scope.
+  `VUID-vkCmdWriteTimestamp-commandBuffer-recording`, under Nsight only. Gate the scope with the work, not the work
+  inside the scope (e.g. "Far tree bake" opens only when `TreeVolumePipeline::updateBake` reports a running bake).
 * **Nsight 2026.3.1 GPU Trace: turn OFF "multi-pass metrics"** in the capture settings. With it on,
   opening a capture that holds these labels crashes Nsight (heap corruption in its "Per Shader Warp
   Occupancy" code) for every labelled range that does not start at the beginning of the primary. The
@@ -442,8 +436,8 @@ its flush and submit (a writer takes no lock to finish, so the wait under the mu
 fences a GROW: every allocate / `upload*` / `free*` holds it SHARED - over the staging copy too, which names the
 buffer by handle - and `growBuffer`, which replaces the buffer AND the allocator's bit array, holds it
 EXCLUSIVE (a full allocator re-tries under the exclusive lock before growing: another thread may have grown it).
-Before 2026-10-05 a plain mutex covered the allocation alone, and a grow on another thread could replace the buffer
-between an upload's allocation and its staging copy. Lock order: grow → staging → queue.
+A lock over the allocation alone is not enough: a grow on another thread could replace the buffer between an upload's
+allocation and its staging copy. Lock order: grow → staging → queue.
 
 **`present()` holds a `MeshDataManager::BufferHold`** (the grow lock, shared) from its mesh-generation check through
 the submit, so the check, the recording and the submit see ONE set of mega-buffers; a worker's grow waits for the
@@ -464,14 +458,13 @@ builds read every frame: the mesh mega-buffers (MeshDataManager), the `SharedTab
 offsets) and the MeshLodRegistry tables. Such a copy can rewrite bytes a frame in flight reads, and a ring overflow
 submits a batch the moment it fills. The batch that holds one (`m_sharedWrite`) therefore opens with a barrier from
 `eAllCommands` to the copy: a barrier's first scope is every command earlier in submission order on the queue,
-earlier submissions included, so the GPU orders the copies after those frames and the CPU never waits. A batch
-without one keeps its overlap. **Until 2026-10-11 the first such upload of a frame drained the queue ON THE CPU**
-(`ensureDrainedForSharedWrite` → `graphicsQueueWaitIdle`): 11 ms on main through a terrain upload's join.
+earlier submissions included, so the GPU orders the copies after those frames and **the CPU never waits** (a CPU
+queue drain here cost 11 ms on main through a terrain upload's join). A batch without one keeps its overlap.
 
 ## VR
 
 Two-phase init around Vulkan device creation; stereo is a 2-layer multiview swapchain. **In VR the
-editor viewport sub-rect is ignored** (VR renders full-extent).
+editor viewport sub-rect is ignored** (VR renders full-extent; `setViewportRect` returns at once).
 
-`beginFrame(camera, viewportRect)` applies the rect — **`setViewportRect` is private, so rect changes
-only happen at frame boundaries** — and builds the projection from its aspect.
+`setFrameView` applies the rect — **`setViewportRect` is private, so rect changes only happen at frame
+boundaries** — and the projection is built from its aspect.

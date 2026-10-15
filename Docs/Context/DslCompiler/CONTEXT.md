@@ -8,7 +8,7 @@ The way to author `.dsl` scripts WITHOUT hand-writing the transpiled C++.
 You write only the DSL text; the tool validates it with the exact same loader the Script Editor uses,
 transpiles it, and writes the dual-purpose `.dsl` file — generated C++ on top, plus the
 `//@`-commented DSL block below — byte-identical to what the editor's Save button produces. The engine
-then compiles and hot-reloads that `.dsl` like any script (F6, Script panel).
+then compiles and hot-reloads that `.dsl` like any script (F6, or Save in the Script Editor).
 
 ## Contents
 
@@ -32,7 +32,8 @@ DslCompiler <input> [output.dsl] [--compile]
 * `output` defaults to the input path with its extension replaced by `.dsl`.
 * Input is either RAW DSL text (below) or an existing `.dsl` (detected by its `//@@dsl` line) — the latter
   re-saves it normalized with the C++ regenerated, so `DslCompiler Scripts/Foo.dsl` refreshes a file in place.
-* Errors print as `<input>(<line>): <what>` and exit code 1. Success prints `wrote <output>`, exit code 0.
+* Errors print as `error: <input>(<line>): <what>` (line numbers are the RAW input's) and exit code 1.
+  Success prints `wrote <output>`, exit code 0.
 * `--compile` (or `-c`): after writing, run the output through the REAL ScriptHost pipeline — vcvars64 + cl
   into `Assets/Local/Scripts/`, then LoadLibrary. The exact path the engine's F6 takes, so a green result
   means the script loads in the engine as-is. On success it prints the DLL path, the entry points found,
@@ -77,7 +78,7 @@ Consequences:
 | Directive | Meaning |
 |---|---|
 | `@require <Component>[, <Component>...]` | Components this script needs on its entity. Gates `self.<component>` access — using `self.physics` without requiring `PhysicsComponent` is a load error. The script only runs on entities that have every required component (`requirementsMet`, re-checked at EVERY entry point — hot-reload mutates the module in place). Names: `SceneComponent`, `RenderComponent`, `AnimatorComponent`, `PhysicsComponent`, `AudioComponent`, `ParticleComponent`, `ForceComponent`, `LightComponent`, `GameUnitComponent`, `GameStructureComponent`, `GameProjectileComponent`. |
-| `@data [private\|public] <type> <name>` | One persistent per-instance field, read/written as `self.data.<name>`. Types: `int`, `float`, `bool`, `string`, `vec2/3/4`, `quat`, and arrays (`int[]`, `float[]`, `bool[]`, `string[]`). `Entity`/`Entity[]` are NOT storable. `private`/`public` exposes the field to the editor's Properties panel / Entity Editor (arrays can't be exposed); omitted = hidden. |
+| `@data [private\|public] <type> <name>` | One persistent per-instance field, read/written as `self.data.<name>`. Types: `int`, `float`, `bool`, `string`, any registered struct (`vec2/3/4`, `quat`, `Light`, `RayHit`), and one-level arrays of those (`int[]`, `string[]`, `vec3[]`, ...). `Entity`/`Entity[]` are NOT storable. `private`/`public` exposes the field to the editor's Properties panel / Entity Editor (only scalar and struct fields; arrays can't be exposed); omitted = hidden. |
 | `@event <Name>` | One named script event. Declares the constant `self.events.<Name>` (its index) and subscribes this script's `OnEvent` to the global event of that name (`fireEvent`/`world.sendEvent`). |
 
 ## Entry points
@@ -116,7 +117,9 @@ end
   sits in.
 * There is NO null and NO index syntax (`a[i]` does not exist) — optionals and containers go through
   `ifexist`/`foreach` (below).
-* Reserved words (cannot be names): the keywords, plus `ctx`, `self`, `ScriptData`, `scriptData`.
+* Reserved words (cannot be names): the keywords (`if elseif else while for foreach ifexist in at ref
+  return break function`), `true`, `false`, `null`, plus `ctx`, `self`, `ScriptData`, `scriptData`. A
+  variable also cannot reuse a function's name.
 
 ### Calls
 
@@ -262,8 +265,9 @@ quatLookRotation(forward, up)`. Members: `pi`, `tau`, `epsilon`.
 ## Using the result
 
 Reference the `.dsl` from a prefab: `Component Script` / `Path Scripts/YourScript.dsl` in the `.pre`
-(see `Assets/Entities/` for examples), or set it on an entity in the editor's Properties panel. Hot-reload:
-F6 / the Script panel's Compile & Run.
+(e.g. `Assets/Entities/Debug/hudDemo.pre`), or set it on an entity in the editor's Properties panel.
+Hot-reload: F6 (the Script Editor's current script), or Save in the Script Editor (a save queues a compile
++ hot-reload).
 
 ## Worked example
 

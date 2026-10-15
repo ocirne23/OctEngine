@@ -58,7 +58,7 @@ never head-of-line-blocks another.
 `netMaxSinglePacketMessage(maxPacketSize, encrypted)`
 ([Reliable.ixx:130](../../../Code/Network/Private/Reliable.ixx#L130)) is the exported way to derive your own message cap.
 **Use it instead of hardcoding a margin**, which silently rots the moment any header grows. Entity's
-`MaxEventDataBytes` is static_asserted against it.
+`MaxEventMessageBytes` and the snapshot cap (`snapshotMaxBytes`) are static_asserted against it.
 
 ### Packet layout
 
@@ -170,5 +170,6 @@ Both address helpers return port 0; callers fill in their own. They feed the mai
 ## Link simulation
 
 `simPacketLoss` (0..1 drop chance), `simLatencyMs`, `simJitterMs` apply to OUTGOING packets and are
-live-editable. Delayed sends are held in `m_delayedSends` and released by `update()`. Disconnect
-packets bypass the sim so teardown is not delayed.
+live-editable. Delayed sends are held in `m_delayedSends` and released by `update()`. The disconnect
+packets `close()` sends bypass the sim, since the socket closes right after; a per-peer
+`disconnect()` or a timeout goes through it.

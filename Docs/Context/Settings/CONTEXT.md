@@ -1,7 +1,7 @@
 # Settings
 
 **Every tweak's value and the tweak registry.** Depends on Core only; Threading and Audio link it, so every library
-above them has it (App links it directly).
+above them has it (most also link it directly).
 
 | Piece | File | What |
 |---|---|---|
@@ -39,8 +39,9 @@ Force, ParticleSystem, Hud, Input, App, Game.
   `removeListeners(owner)` / `unregisterInRange` like the row listeners.
 * **Code that writes a setting** and wants the reactions calls `Tweak::notifyChanged(Globals::settings.x.y)`. A
   renderer setter that stores a lockable value (`setShadowParams`, `setFogParams`, ...) marks its bake dirty itself.
-* **Everything registers, headless included** (before the move some only registered on the windowed path). The Game
-  rows are global: their values persist across matches.
+* **Everything registers, headless included.** The Game rows are global: their values persist across matches.
+* **Startup order** (main): `installFileHooks` (`setFileIo` + `loadSaved`) → `Settings::registerAll()` (a Saved row
+  takes its saved value as it registers, an override wins over it) → `Globals::time.bindSettings(Globals::settings.time)`.
 
 ## Adding a tweak
 
@@ -134,5 +135,6 @@ run, and `--tweak "@lock/<name>=0|1"` (a section) / `"@lock/<Category/Name>=0|1"
 ## The IO hooks
 
 `setFileIo(read, write)`: this library cannot see File (it sits right above Core), so main injects
-`FileSystem::readFileStr` / `writeFileStr` (`installFileHooks`, before `registerAll`). Without them the registry keeps
-working in memory.
+`FileSystem::readFileStr` / `writeFileStr` (`installFileHooks` in `App/Session.ixx`, before `registerAll`). Saved values
+live in `Assets/Local/tweaks.cfg`, written back debounced after a change. Without the hooks the registry keeps working
+in memory and Saved is inert.

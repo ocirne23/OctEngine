@@ -9,21 +9,22 @@ PRIVATE).
 
 ## `FileSystem` — THE disk seam
 
-[FileSystem.ixx:23](../../../Code/File/Private/FileSystem.ixx#L23). **The ONLY code that includes `<filesystem>` and
-`<fstream>`.** Core does not export them, so no other library can touch the disk behind its back — a
-library that needs the disk links File.
+[FileSystem.ixx:23](../../../Code/File/Private/FileSystem.ixx#L23). **Only File's own sources import
+`<filesystem>` and `<fstream>`.** Core does not export them, so no other library can touch the disk behind
+its back — a library that needs the disk links File.
 
-Paths are plain UTF-8 `std::string`; **no `std::filesystem::path` leaks into any consumer.**
+Paths are plain UTF-8 `oc::string`; **no `std::filesystem::path` leaks into any consumer.**
 
 `initialize()` walks up from the working directory to the repo root, makes `Assets/` the working
-directory, and registers `Dependencies/Dll/`. Main thread, at startup — exempt by nature.
+directory, and registers `Dependencies/Dll/` (`AddDllDirectory`). Main thread, at startup — exempt by
+nature.
 
 | Group | API |
 |---|---|
 | Reads / writes | `readFileStr`, `readFileBytes`, `writeFileStr`, `writeFileBytes` |
 | Queries | `exists`, `isDirectory`, `isRegularFile`, `fileSize` (0 when missing), `lastWriteTimeSec` |
 | Mutations | `createDirectories`, `remove`, `removeAll`, `rename`, `copyFile`, `copyLastWriteTime` |
-| Listing | `listDirectory`, `listDirectoryRecursive` → `DirEntry{path, name, extension, isDirectory, size}`. **Unsorted**; false clears `out`. |
+| Listing | `listDirectory`, `listDirectoryRecursive` → `DirEntry{path, name, extension, isDirectory, size}`. **Unsorted**; false when the directory cannot be read; `out` is cleared either way. |
 | Working dir / resolution | `currentPath`, `setCurrentPath`, `absolutePath`, `canonicalPath` (requires the path to exist), `weaklyCanonicalPath`, `relativePath` |
 
 `lastWriteTimeSec` is seconds since the *file clock's* epoch — **only ever compared or stored, never
@@ -66,10 +67,10 @@ rather than just silencing the assert.
 mesh streamer stream binary ranges through `FILE*`/`ifstream` directly (seeks, byte ranges), which no
 read-it-all API can express, so they call it at their IO entry points and stay inside the policy.
 
-**Already declared main-thread-by-design:** main()'s whole INIT phase — ONE scope, released at
-`initScope.stop()`, so anything the FRAME LOOP does trips the assert — plus `loadAssetFile`, scene
-load and cook, shader compiles, ScriptHost compile/load, the editor panels (explicit user actions),
-and game save/load.
+**Already declared main-thread-by-design:** main()'s whole INIT phase — ONE scope (`startupIo`),
+released right before the frame loop, so anything the FRAME LOOP does trips the assert — plus
+`loadAssetFile`, scene load and cook, shader compiles, ScriptHost compile/load, the editor panels
+(explicit user actions), the mode start (`Session::startWorldAndGame`), and game save/load.
 
 ### Profile markers
 
@@ -80,9 +81,10 @@ the profiler deliberately leaves unregistered — the transient startup texture-
 
 ## `ImageIO` (`File:ImageIO`)
 
-PNG out / any stb-decodable image in, RGBA8, for GENERATED content written once and read back on later runs
-(the procedural tree textures in `Assets/Local/Trees/Textures`). stb encodes / decodes in memory and the bytes go
-through `FileSystem::writeFileBytes` / `readFileBytes`, so the disk seam and its main-thread rule hold
+`writePngRgba8` / `readImageRgba8`: PNG out / any stb-decodable image in, RGBA8, for GENERATED content
+(the procedural tree textures in `Assets/Local/Trees/Textures`, which rocks read back for their bark; the
+renderer's screenshot). stb encodes / decodes in memory and the bytes go through
+`FileSystem::writeFileBytes` / `readFileBytes`, so the disk seam and its main-thread rule hold
 (`allowMainThread`). Its stb implementations are STATIC (internal linkage), like SceneCooker.cpp's —
 RendererVK owns the external-linkage `stb_image`.
 
@@ -107,8 +109,7 @@ Indentation defines hierarchy — tabs or spaces.
 `parseAssetText` · `loadAssetFile` · `writeAssetText`.
 
 **`File:ObjectDescription`** parses `.oc` into `ObjectContainerDesc` (`loadObjectContainerDesc`,
-`toObjectContainerDesc`). It lives here so a library below Entity can import through `.oc` too (Procedural's
-scatter did, until it was removed 2026-10-07):
+`toObjectContainerDesc`). It lives here so a library below Entity can read `.oc` too:
 `name`, `path`, `procedural`, `mergeNodes`, `preTransformVertices`, `decimationFactor`, plus
 `MaterialOverridesDesc` (pipeline name, `excludeFromRayTracing`, `useSceneTextures`, and
 diffuse/normal/metalRoughness texture index overrides where −1 keeps the default).
@@ -121,10 +122,10 @@ diffuse/normal/metalRoughness texture index overrides where −1 keeps the defau
 |---|---|
 | `createAssimpLoader()` | Model files. |
 | `createProceduralLoader()` | Generated geometry by shape name — terrain, skysphere, debug shapes. |
-| `createMeshScene(MeshGeometryDesc, colorRGBA, w, h)` | Wraps caller-supplied geometry as a single-mesh, single-material scene ready for `ObjectContainer`. Optional RGBA8 image becomes the material's diffuse texture; null leaves the material on the renderer's shared fallback textures. Terrain chunks and ocean sectors no longer go through it: they build RendererVK's `RenderMeshData` from the same `MeshGeometryDesc` (no container). Pointers are borrowed only for the call. |
+| `createMeshScene(MeshGeometryDesc, colorRGBA, w, h)` | Wraps caller-supplied geometry as a single-mesh, single-material scene ready for `ObjectContainer`. Optional RGBA8 image becomes the material's diffuse texture; null leaves the material on the renderer's shared fallback textures. Pointers are borrowed only for the call. **No engine code calls it at present**: terrain chunks and ocean sectors build RendererVK's `RenderMeshData` from the same `MeshGeometryDesc` (no container). |
 
 Queries: `getRootNode`, `getMesh(name|idx)`, `getMaterial`, `getTexture`, plus the skeletal set
-`getSkeleton` / `getAnimations` / `getAnimation` (null and 0 when the scene has no bones).
+`getSkeleton` / `getAnimations` / `getAnimation` (null when the scene has no bones).
 
 `loadAnimations(filePath, targetSkeleton, outSet, skipName, clipNameOverride, trackName)` loads clips
 from a SEPARATE file — rig in one, animations in others — **resolving each channel against the target
@@ -175,16 +176,16 @@ the per-converted-texture stamps all match. Any mismatch re-imports and re-cooks
 
 * **The roughness floor — THE SHADERS RELY ON IT.** The lit / tree / foliage FS read the metal-roughness G as
   the GGX alpha with NO `max(.., 0.01)` of their own. Every texture in a metal-roughness slot gets, in every BC
-  colour block of every mip, both 565 endpoints raised to G6 >= 1 (4/255 decoded; >= ~3.5/255 = 0.0137 after
-  the palette rounding). The palette interpolates the endpoints, and filtering and mips are convex, so every
-  sample holds it. A BC1 block's mode IS its endpoint order: when the raise flips it, the endpoints swap and the
-  indices remap to the same entries; a 3-colour block that uses index 3 (black) is re-encoded. Covered: the
-  cooked Data BC1 AND authored BC1 / BC2 / BC3 `.dds` files (Bistro's `*_Specular.dds`), which a roughness
-  slot now COPIES into `_tex/` with the fix (other slots still reference authored `.dds` in place). **NOT
-  covered — each logs a warning at cook:** an authored BC7 / `_SRGB` / other-format `.dds`, and a texture
-  shared by a roughness slot and a diffuse / normal slot (it cooks for the other slot). Also not covered: the
-  uncooked import (skinned scenes, `convertTextures` false, a failed conversion) and `.oc`
-  `MaterialOverrides MetalRoughnessTexIdx`.
+  colour block of every mip, both 565 endpoints raised to G6 >= 1 (`ROUGHNESS_FLOOR_8` = 4/255 decoded;
+  >= ~3.5/255 = 0.0137 after the palette rounding). The palette interpolates the endpoints, and filtering and
+  mips are convex, so every sample holds it. A BC1 block's mode IS its endpoint order: when the raise flips it,
+  the endpoints swap and the indices remap to the same entries; a 3-colour block that uses index 3 (black) is
+  re-encoded. Covered: the cooked Data BC1 AND authored BC1 / BC2 / BC3 `.dds` files (Bistro's
+  `*_Specular.dds`), which a roughness slot COPIES into `_tex/` with the fix (other slots reference authored
+  `.dds` in place). **NOT covered — each logs a warning at cook:** an authored BC7 / `_SRGB` / other-format
+  `.dds`, and a texture shared by a roughness slot and a diffuse / normal slot (it cooks for the other slot).
+  Also not covered: the uncooked import (skinned scenes, `convertTextures` false, a failed conversion) and
+  `.oc` `MaterialOverrides MetalRoughnessTexIdx`.
 
 ### Garbage collection
 
@@ -217,15 +218,16 @@ Every field participates in the options hash, so changing any of them re-cooks a
 | `enableCache` | true — false always imports directly, no read and no write |
 | `convertTextures` | true |
 | `generateLods` | true |
-| `lodLevels` | 4 |
-| `lodReduction` | 0.25 index-count factor per level |
+| `lodLevels` | 4 (capped at `MAX_COOKED_LOD_LEVELS`) |
+| `lodReduction` | 0.25 index-count factor per level (clamped 0.05..0.75) |
 | `lodMinIndices` | 32 |
 | `decimationFactor` | 1.0 |
 
 ## `TextureConvert`
 
-Standalone image → BC `.dds` conversion using the **same compressor the scene cooker uses**, for
-loose textures that no `ISceneData` references — the procedural terrain's biome texture sets.
+Standalone image → BC `.dds` conversion using the **same compressor the scene cooker uses** (it is
+implemented in SceneCooker.cpp), for loose textures that no `ISceneData` references — the procedural
+terrain's biome texture sets.
 
 * `convertToDds(src, EUsage, out)` — png/jpg/tga/... into a full mip-chain `.dds`.
 * `convertPackedToDds(r, g, b, out)` — builds an RGB image from up to three GRAYSCALE sources
@@ -243,4 +245,4 @@ Output mip chains stream through the `TextureStreamer` like any cooked `.dds`.
 * **In memory** (no file): `compressBlockRows(rgba, w, h, EBlockFormat, rowBegin, rowEnd, dst)` compresses block
   rows of one RGBA8 image into the whole image's output buffer (`compressedSize`), so a caller can split the rows
   over jobs (File cannot link Threading). BC1 / BC3 / BC4 / BC5; the cooker's `compressMip` uses it too. User: the
-  procedural trees' runtime textures (Procedural "Texture files").
+  procedural trees' runtime textures ("Texture files" in [`Docs/Context/Procedural/Trees.md`](../Procedural/Trees.md)).

@@ -33,14 +33,16 @@ file of every system you touch BEFORE changing it.**
 | `Globals::rocks` | `RockSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Rocks" ([Rocks.md](Rocks.md)) |
 | `Globals::clutter` | `ClutterSystem` | `update(renderer, camera, terrain.activeClimateMaps())` — see "Ground clutter" ([Clutter.md](Clutter.md)) (after the trees: it reads their records) |
 
-main.cpp updates them **in that order**, after entity updates and before present
-([main.cpp:803](../../../Code/App/main.cpp#L803)).
+main.cpp updates them **in that order**, after the world update and before present
+([main.cpp:323](../../../Code/App/main.cpp#L323)), with `terrain.render(renderer, ocean)` between the ocean and the
+trees and `trees.kickWorldUpdate()` after the clutter.
 
 All six sit in init_seg `OC_SEG_PROCEDURAL`, **the first globals to destruct** — their dtors free
 renderer residency and collider bodies and may wait on in-flight jobs. **Order among them is undefined
 and deliberately independent.**
 
-`ocean.swellTravelAngle()` → `terrain.setFlowWindAngle` is wired once at init.
+`ocean.swellTravelAngle()` → `terrain.setFlowWindAngle` runs once at init and every frame before `terrain.update`, so a
+"Sky/Wind" change reaches the next bake.
 
 **Every tweak VALUE lives in the Settings library**, not in these classes: `Globals::settings.terrain` /
 `terrainCollider` (Settings.Terrain, which also holds `WaterReach` / `FlowField`), `.ocean` (Settings.Ocean),
@@ -73,12 +75,11 @@ clipmap sectors on disable, and `rebuildGrid()` restores them on re-enable.
 
 # `ITerrainSampler` — the terrain field interface
 
-[TerrainSampler.ixx:106](../../../Code/Procedural/Private/TerrainSampler.ixx#L106).
+[TerrainSampler.ixx:123](../../../Code/Procedural/Private/TerrainSampler.ixx#L123).
 
-**A PURE interface: nothing here has a default.** The defaults it used to carry composed the
-single-field samplers point by point, which is only free if the field is a cheap function of (x, z) —
-true of the old noise generator, **false of a tile-based one, which would silently inherit a cache
-lock per texel of every bake.**
+**A PURE interface: nothing here has a default.** A default that composes the single-field samplers
+point by point is only free if the field is a cheap function of (x, z) — **a tile-based generator would
+silently inherit a cache lock per texel of every bake.**
 
 All methods are **pure functions of world position — seeded, thread-safe, world-continuous**, which is
 what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumers hold
@@ -91,10 +92,9 @@ what keeps chunks, LODs, bakes and buoyancy consistent with each other. Consumer
 * **`sampleRiverGrid`** fills the river influence ALONE on a grid (no terrain): placement asks for it at a resolution
   finer than its terrain grid, because channels are narrower than that. A generator with no rivers writes 0.
   RiverTerrain's goes PER PIECE: each river piece writes the points within its reach (the max wins), so the cost
-  follows the river length in the rect, not its area (a per-point search of each 16 px cell's pieces was half of
-  TreeWorld's `placeChunk`, 2026-10-11). Each LAKE run writes too (not pans): 1 out to 1 px from a wet pixel (the
-  drawn sheet reaches a pixel past its runs), fading to 0 over "Lake shore (px)" - without it trees stood in the lakes'
-  edges ("Vegetation clear" saw only the rivers).
+  follows the river length in the rect, not its area (a per-point search of the pieces was half of TreeWorld's
+  `placeChunk`). Each LAKE run writes too (not pans): 1 out to 1 px from a wet pixel (the drawn sheet reaches a pixel
+  past its runs), fading to 0 over "Lake shore (px)", so "Vegetation clear" keeps trees out of the lakes' edges.
 * **`sampleGrid`** is where an implementer hoists per-point overhead out of the loop, and **wide-area
   consumers should always prefer it.** For V3 it is the difference between a shared-cache lock per
   point and one per tile: *a terrain-data cascade is 512² texels resolving to a couple of dozen tiles,
@@ -123,13 +123,12 @@ low-resolution approximation** for bakes spanning tens of km at low texel densit
 `TerrainPoint::temperatureSeaLevel` are consistent with it by construction, so a consumer can
 re-derive the temperature at any height from the baseline alone.
 
-> **Why the BASELINE is what the map bakes, not the temperature.** The terrain-data map has two
-> cascades, and they bake DIFFERENT heights for the same spot — the near one the full-detail surface,
-> the far one its multi-km average, which cannot know a peak exists. **A baked temperature is only
-> valid at the height it was baked from**, so the far cascade reported the temperature of the plateau a
-> peak stands on — 10.6 °C too warm, wider than a climate box, and its texture flipped at the
-> crossfade. A baseline plus a shared constant has no such anchor: every consumer evaluates at the
-> height it shades, and the cascades agree by construction.
+> **Why the map bakes the sea-level BASELINE, not the temperature.** The terrain-data map's two
+> cascades bake DIFFERENT heights for the same spot — the near one the full-detail surface, the far one
+> its multi-km average, which cannot know a peak exists. **A baked temperature is only valid at the
+> height it was baked from** (a baked sample put peaks ~10 °C too warm in the far cascade, and the
+> texture flipped at the crossfade). A baseline plus one shared constant has no such anchor: every
+> consumer evaluates at the height it shades, and the cascades agree by construction.
 
 A generator that models no lapse reports the baseline equal to the temperature, so the two agree
 either way.
@@ -147,9 +146,11 @@ Shared with the shaders (`terrain_height.inc.glsl` mirrors them — **keep them 
 `temperatureTo01` / `precipTo01` map into the normalized space **the tree / rock / clutter Placement climate boxes
 and the terrain shader's texture splatting BOTH share.**
 
-`fogFalloffFromTemperature` — cold air hugs the ground, warm air lets fog tower. **It is no longer
-baked**, being a pure function of temperature, so the shaders recompute it and **its 8 bits in the
-packed channel now carry the LAPSE RATE**, which nothing else can reconstruct.
+`fogFalloffFromTemperature` — cold air hugs the ground, warm air lets fog tower. **It is not baked**: it is a
+pure function of temperature, so the shaders recompute it. The lapse rate is not baked either — it is one value, pushed
+as `u_terrain_lapseRate` (`terrainTemperatureAt` in `terrain_height.inc.glsl`). The packed channel's four bytes are fog
+thickness | flow direction | sea-level temperature | humidity (see "The terrain-data map" in
+[TerrainStreamer.md](TerrainStreamer.md)).
 
 ---
 
@@ -157,11 +158,12 @@ packed channel now carry the LAPSE RATE**, which nothing else can reconstruct.
 
 "Terrain/Collision" tweaks. A **focus-centered** ring of small static triangle-mesh collider tiles.
 
-**Sampled from the SAME `ITerrainSampler` the terrain renders**, on the render LOD0 lattice with the
-render mesh's triangulation, **so bodies rest exactly on the drawn surface.**
+**Sampled from the SAME `ITerrainSampler` the terrain renders**, on a world lattice of "Spacing" with the
+render mesh's triangulation, **so bodies rest on the drawn surface.** It is exact only when "Spacing" equals the render
+LOD0 spacing (`chunkSize / lod0Res`: 2 m at the defaults; "Spacing" defaults to 1 m).
 
-It **never touches the render chunks**: a LOD0 chunk is ~500k triangles, and a collider only needs the
-ground near dynamic bodies. Tiles are a few tens of metres and exist only within "Radius" of the focus
+It **never touches the render nodes**: a collider only needs the ground near dynamic bodies. Tiles are "Tile size"
+(32 m) and exist only within "Radius" of the focus
 (the camera — thrown bodies start there).
 
 Each tile is `sampleGrid`'d and BVH-built on **ONE in-flight job, nearest-first** (`"Terrain collider
@@ -174,8 +176,8 @@ build, creates / destroys the static bodies (layer "Terrain"; box3d create/destr
 `g_bodyLifecycleMutex`), scans for the nearest missing tile and kicks its build. **main.cpp joins it
 (`joinUpdate`) right before `kickPostUpdateJobs`**: the Sim batch (the game's nav feed) reads body
 positions, and the next frame's main-thread physics users (player controls, scripts, net receive, the
-step) must not overlap a body create/destroy. Between the kick and the join only ocean / trees / rocks / clutter /
-particles / force / UI kick run on main — none touches box3d. Sub-scopes `"Terrain collider clear"` /
+step) must not overlap a body create/destroy. Between the kick and the join main runs only the ocean, the terrain
+render kick, trees / rocks / clutter, particles, force and the UI kick — none touches box3d. Sub-scopes `"Terrain collider clear"` /
 `"... create body"` / `"... evict"` show the box3d cost.
 
 Tiles clear and rebuild on a sampler identity change, exactly like the streamer's residents; eviction

@@ -7,9 +7,10 @@
 
 ImGui (docking branch) for all UI. Links Entity, RendererVK and Script (+ imgui PRIVATE).
 
-`Globals::ui` sits in init_seg `OC_SEG_UI` and is **the FIRST engine global to destruct**: the panels
-hold EntityPtrs (Scene selection, the Entity Editor document, a pending prefab save) and EntityChange
-queues, which must be released while everything an entity destructor touches is still alive.
+`Globals::ui` sits in init_seg `OC_SEG_UI` (XCU9) and **destructs before World and every other
+entity-holding global** (only Nav and the procedural systems go earlier): the panels hold EntityPtrs (Scene
+selection, the Entity Editor document, a pending prefab save) and EntityChange queues, which must be
+released while everything an entity destructor touches is still alive.
 
 **The UI never mutates the world directly.** Panel mutations flow back as an `EntityChange` queue
 through `takeEntityChanges()`, which merges every panel's queue into ONE vector — each source appends
@@ -29,7 +30,7 @@ update, and the draw-data snapshot — runs as **ONE Normal post-update job.**
 | `UI::flushMainThreadWork()` | main | right after the join |
 | tweak poll / input / drains / sim | main | |
 | `UI::prepare()` | main (submits jobs) | early — right after `input.update`, BEFORE controls / camera / `game.updateWindowed` |
-| `UI::update(...)` | main | right before `kickPostUpdateJobs()` |
+| `UI::update(...)` | main | shortly before `kickPostUpdateJobs()` |
 | `updateJob` | a worker | during present, `profiler.endFrame` and the fence/vsync wait |
 
 **So the pass runs in a window where main MUTATES NOTHING the panels read and the workers are
@@ -61,14 +62,13 @@ frame, and widgets built from frame N's state reach the screen at frame N+1's pr
 
 Work the panels collected but must NOT run on a worker:
 
-* **TweakPanel `onChange` callbacks** — they re-record renderers, reload shaders with `waitIdle` and
-  poke box3d, so the panel only COLLECTS changed vars.
-* **The Entity Editor's container imports** — panels use lookup-only `World::findLoadedContainer`, and
-  a miss queues the name for `flushContainerLoads`, because an import creates GPU resources.
+* **TweakPanel `onChange` callbacks** (`flushDeferredCallbacks`) — they re-record renderers, reload
+  shaders with `waitIdle` and poke box3d, so the panel only COLLECTS changed vars (and lock toggles).
+* **The Entity Editor's container imports** (`flushContainerLoads`) — panels use lookup-only
+  `World::findLoadedContainer`, and a miss queues the name, because an import creates GPU resources.
 
 Panel enable-toggles are `EntityChange::SetEnabled` for the same reason: `setEnabled` walks the
-subtree suspending physics bodies, which are main-thread-only box3d writes. **"The UI never mutates
-the world directly" now actually holds for it.**
+subtree suspending physics bodies, which are main-thread-only box3d writes.
 
 ## The draw-data snapshot
 
@@ -88,8 +88,7 @@ slot held from N−2**, which present N−1 finished with before this job was ev
 ImGui 1.92 bakes glyphs ON DEMAND, and **`ImDrawData::Textures` points at the LIVE
 `ImGui::GetPlatformIO().Textures`** — which `ImGui_ImplVulkan_RenderDrawData` would service from
 inside `present()` **while the widget pass is in `NewFrame` mutating those same `ImTextureData`s and
-growing that vector.** A freed atlas read, not just a stale one. **This is what made the pass's
-overlap with present unsafe.**
+growing that vector** — a freed-atlas read.
 
 So the snapshot sets `Textures = nullptr` — imgui's documented "control the timing of texture updates
 yourself" path — and **`Renderer::updateImGuiTextures()` does the uploads on MAIN in the quiescent
@@ -97,14 +96,13 @@ window between the join and the next `UI::update()`.** A glyph baked by pass N u
 frame N+1, before the present that draws it.
 
 **The snapshot handoff is two-step for the same reason:** `setImGuiDrawData` from the job only parks
-the snapshot as PENDING, and `updateImGuiTextures()` promotes it to what present records. A fast pass
-that finished before present N recorded used to be drawn a frame EARLY, with its textures still
-create requests — on frame 0 the atlas always is, which tripped imgui's `GetTexID` assert at startup
-in Debug every time.
+the snapshot as PENDING, and `updateImGuiTextures()` promotes it to what present records. Otherwise a
+fast pass that finished before present N recorded would be drawn a frame EARLY, with its textures still
+create requests (on frame 0 the atlas always is: imgui's `GetTexID` assert).
 
 ## Known sharp edge
 
-EntityEditor's `commitRespawn` draft builds (`build*SpawnInfo`) still run on the job and can import a
+EntityEditor's `commitRespawn` draft builds (`World::build*SpawnInfo`) run on the job and can import a
 container not yet cached — **only when authoring a NEW container name**, since the edited entity's own
 container is always already loaded.
 
@@ -132,19 +130,15 @@ never a requirement.**
 | **AssetBrowser** | The filesystem rescans. See below. |
 
 **CONTRACT: prepare reads only view state that render wrote LAST frame** — pause, zoom, filters, the
-metric toggle. The same ordering the single-threaded version had, **so a filter edit shows next
-frame.** A panel that fiber-waits inside prepare or render must not cache thread_locals across it —
-**the widget pass is itself a job fiber now.**
+metric toggle — **so a filter edit shows next frame.** A panel that fiber-waits inside prepare or
+render must not cache thread_locals across it — **the widget pass is itself a job fiber.**
 
 ## AssetBrowser caching
 
-Its listings are **CACHED per directory.**
+Its listings are **CACHED per directory** — enumerating every frame (a `file_size` syscall per row, the
+tree recursing per expanded folder) costs about 1 ms/frame.
 
-> It used to enumerate the filesystem EVERY FRAME: the current folder plus a `file_size` syscall per
-> list row, and the tree ran TWO `directory_iterator` passes per expanded folder recursively —
-> **about 1 ms/frame of syscalls.**
-
-Now `listing(dir)` serves a cached `DirListing` (sorted dirs-first, sizes included), scanned inline the
+`listing(dir)` serves a cached `DirListing` (sorted dirs-first, sizes included), scanned inline the
 first time and re-scanned by the prepare job **at most every `RescanIntervalSec` (1 s — files also
 arrive from outside: prefab saves, compiled scripts, cooked assets), and ONLY while the panel is
 focused or hovered (`m_active`), and only for listings a render actually read (`touchedFrame`).**
@@ -159,18 +153,19 @@ spot.
 
 | Panel | Notes |
 |---|---|
-| **Viewport** | Renderer output. Assets drag-drop from Content to spawn at the cursor (`Camera::screenToWorld`), queued into `m_viewportChanges`. |
-| **Scene** (`SceneView`) | Live hierarchy. **Selection is an OWNING `EntityPtr`** — a raw one dangled when anything else deleted the entity — and `pruneSelection` drops it once its tree leaves the world. F2 rename, Delete, drag-reparent, drag-to-Content saves a prefab, prefab instances locked (unpackable). |
+| **Viewport** | Renderer output. Assets drag-drop from Content to spawn at the cursor (an `EntityChange::CreateViewport`, queued into `m_viewportChanges`; World places it through `Camera::screenToWorld`). |
+| **Scene** (`SceneView`) | Live hierarchy. **Selection is an OWNING `EntityPtr`** (a raw one dangles when anything else deletes the entity), and `pruneSelection` drops it once its tree leaves the world. F2 rename, Delete, drag-reparent, drag-to-Content saves a prefab, prefab instances locked (unpackable). Selecting an entity with a `.dsl` script opens it in the Script Editor. |
 | **Properties** | Name, enabled, transform, render info + bounds toggle, script path, live public ScriptData fields. |
-| **Content** (`AssetBrowser`) | Filesystem browser rooted at `Assets/`; drag into viewport or hierarchy, prefab drop guards. **THE place scripts are created and opened**: "New Script" writes a minimal `.dsl` and opens it; double-click or drag a `.dsl` reaches the Script Editor, **whose sidebar holds Save/Reload — it has no path field of its own.** |
-| **Script Editor** | The DSL text editor (autocomplete-driven). It handles RAW key events through `UI::handleKeyEvent`, which is why `isScriptEditorFocused()` exists — see the Input capture gate. |
-| **Text Editor** | Plain text. |
+| **Content** (`AssetBrowser`) | Filesystem browser rooted at `Assets/`; drag into viewport or hierarchy, prefab drop guards. **THE place scripts are created and opened**: "New Script" writes a minimal `.dsl` and opens it; double-click or drag a `.dsl` reaches the Script Editor (and brings its tab to front), **whose sidebar holds Save/Reload — it has no path field of its own.** "Edit Entity" opens a prefab in the Entity Editor. |
+| **Script Editor** | The DSL text editor (autocomplete-driven). It handles RAW key events through `UI::handleKeyEvent`, which is why `isScriptEditorFocused()` exists — see the Input capture gate. A save queues a compile + hot-reload request (`takeScriptReloadRequests`). |
+| **Text Editor** | `UI:TextEditor` (plain `.txt` editing) compiles but is **NOT wired in**: `UI` holds no instance, and nothing drains the AssetBrowser's `takeTextOpenRequest`. |
 | **Log** (`OutputLog`) | `Core.Log` view with filters and search. |
 | **Entity Editor** | Authors a `.pre` document. See below. |
 | **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Settings.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Settings. A fold that is a **lock**'s category (Settings `TweakLock`) carries a right-aligned **Lock / Partly locked / Locked** toggle (`ImGuiTreeNodeFlags_AllowOverlap`) that sets every row under it; each covered row has its own **`L` / `U`** button in front (`drawTweakVar` with `deferredLocks`; the Settings page passes none). A locked row draws read-only (`BeginDisabled`, so the Settings page greys it too). Clicks are COLLECTED (`TweakLockToggle`) like an `onChange` and applied by `flushDeferredCallbacks` on main (`TweakRegistry::setLocked` / `setVarLocked`). **Search bar** on top (Ctrl+F focuses, Escape / `X` clears): space-separated terms, case-insensitive, ALL must hit the name, category path or group name. While it has terms the tree is replaced by a flat result list — one group-tinted `SeparatorText` per category path, matches highlighted in the row names (`drawTweakVar`'s `highlight`), `matches / total` inside the box — so the tree's fold state stays untouched. The list below the bar is a child window, so the bar stays put while scrolling. |
 | **Profiler**, **Memory** | |
 
-The docked set lives inside a `"Root"` window with a dockspace; `"Viewport"` uses
+The docked set lives inside a `"Root"` window with a dockspace (its first-time layout is built by
+`DockBuilder` once; Tweaks is submitted last of its dock, so it is the startup tab); `"Viewport"` uses
 `ImGuiWindowFlags_NoBackground` so the 3D render shows through.
 
 ## Entity Editor
@@ -185,12 +180,14 @@ viewport tracks the drag and there is ONE respawn on release.**
 `ForceEmitter` setters, and `LightComponent`'s list. **Physics, animator and script data stay
 respawn-only.**
 
-`onOpened` / `onRespawned` forward the entity main.cpp just spawned back into the panel.
+`UI::onOpened` / `onEntityRespawned` (World's `setOnPrefabOpened` / `setOnEntityRespawned` callbacks,
+installed by main) forward the spawned entity back into the panel.
 
 ## Chat (`UI:ChatPanel`)
 
-The multiplayer text-chat widget: a `ChatView` snapshot pushed by main through `UI::setChatView` **only
-when Game:Chat's log generation changed**, plus `takeChatOutgoing()` for the sent line.
+The multiplayer text-chat widget: a `ChatView` snapshot pushed by the App session through
+`UI::setChatView` **only when Game:Chat's log generation changed**, plus `takeChatOutgoing()` for the sent
+line. A line is at most `ChatPanel::c_maxTextLength` (200) characters.
 
 `renderEmbedded` draws it inside the lobby page (MainMenu holds a non-owning pointer, set by UI's
 ctor); `renderOverlay` draws it as a translucent bottom-right window in the game layout, after the
@@ -203,17 +200,18 @@ caller (`##GameViewport`), **so the viewport-focus hotkey gate re-arms.**
 ## Main menu (`UI:MainMenu`)
 
 **Not a docked panel: while active it REPLACES the whole widget pass** — a fullscreen menu over the
-world, and `updateJob` early-outs after rendering it plus the escape overlay (**reachable from the
-LOBBY page, its only leave mechanism**).
+world, and `updateJob` early-outs after rendering it plus the paused box and the escape overlay
+(**reachable from the LOBBY page, its only leave mechanism**).
 
 No panels run, so their open flags stay false and no prepare jobs are submitted; **the dockspace's
 first-time layout runs on the first post-menu frame instead.**
 
 It also owns the **escape overlay** for every running mode (`setEscapeMenuOpen` / `takeEscapeMenuAction`
-— Resume / ExitToMenu / Quit) and the **lobby page** (`setMainMenuLobbyView` / `takeMainMenuLobbyAction`).
+— Resume / Pause / Unpause / ExitToMenu / Quit; `EEscapeLayout` Game / Editor / Lobby), the **PAUSED box**
+(`renderPausedBox`), and the **lobby page** (`setMainMenuLobbyView` / `takeMainMenuLobbyAction`).
 
 Both the menu action and the lobby action use the same sequencing: **the UI only RECORDS an action, and
-main polls it after the post-update join and performs the mode start.** See
+the App session polls it after the post-update join and performs the mode start.** See
 [`Docs/Context/App/CONTEXT.md`](../App/CONTEXT.md).
 
 **The local lobby's world block** (`LobbyView::local`, `LobbyWorldView`, `renderLobbyWorld`) draws
@@ -221,59 +219,61 @@ the terrain-seed preview map through ONE ImGui-managed texture: an `ImTextureDat
 `ImGui::RegisterUserTexture` (imgui_internal; **`PlatformIO.Textures` is REBUILT at every Render from
 the atlases plus that user list, so a plain push into it vanishes**) with `RefCount 1`, so
 **`Renderer::updateImGuiTextures` creates and updates it on main exactly like the font atlas — no
-renderer API.** It is a NAMESPACE-SCOPE plain
-global in MainMenu.cpp, not a member: `ImGui_ImplVulkan_Shutdown` (the renderer's dtor) walks that
-list and UI (XCU9) is the first engine global to go, while a plain global destructs after every
-numbered section. The wrapper frees only the CPU pixels. The pass writes pixels + `WantCreate` /
-`WantUpdates` from the job (the only ImGui user in that window); the create lands at the top of the
-next frame, before the present that draws it, and the draw command resolves the id at record time.
-The pick on the map is page-local (`m_previewPick`) until "Seed world" sends it.
+renderer API.** It is a NAMESPACE-SCOPE plain global in MainMenu.cpp (`g_previewTexture`), not a member:
+`ImGui_ImplVulkan_Shutdown` (the renderer's dtor, XCU3) walks that list after UI (XCU9) is gone, while a
+plain global destructs after every numbered section. The wrapper frees only the CPU pixels. The pass
+writes pixels + `WantCreate` / `WantUpdates` from the job (the only ImGui user in that window); the
+create lands at the top of the next frame, before the present that draws it, and the draw command
+resolves the id at record time. The pick on the map is page-local (`m_previewPick`) until "Seed world"
+sends it.
 
 ## Game HUD overlay (`UI:GameHudOverlay`)
 
 Draws the in-game HUD OVER the viewport, with `Core.GameHud` as the model.
 
-**Pure `ImDrawList` painting into the Viewport window's own draw list — no ImGui widgets, so it never
-takes focus or eats input.** `UI::update` calls `render()` while the Viewport window is current.
+**Pure `ImDrawList` painting into the viewport window's own draw list — no ImGui widgets, so it never
+takes focus or eats input.** The widget pass calls `render()` while the Viewport (or `##GameViewport`)
+window is current.
 
 It takes ONE `GameHud::Snapshot` per frame and, crucially, **reports back where it drew**:
 `setSlotScreenRects` and `setPopupButtonRects`, or empty spans when nothing was drawn — **nothing drawn
 means nothing clickable.** That is how gameplay hit-tests clicks against the hotbar and the barracks
 popup.
 
-Tweaks under `HUD`: Enabled, Scale, Opacity, Hotbar slot size, Hotbar text scale.
+Tweaks under `HUD`: Enabled, Scale, Opacity, Hotbar slot size, Hotbar text scale (plus Game's "Label max
+distance").
 
 ---
 
 # Game layout
 
-`UI::setGameLayout(true)`, set by main's `startWorldAndGame` for co-op and PvP, cleared by
+`UI::setGameLayout(true)`, set by the session's `startWorldAndGame` for co-op and PvP, cleared by
 exit-to-menu. Main thread, in the pre-kick window — **the pass reads it on the job.**
 
 The widget pass draws **NO editor panels**. Instead:
 
-* **ONE fullscreen undecorated `##GameViewport` window.** A real ImGui window, so **the HUD paints into
-  its draw list and `IsWindowFocused` feeds the same `isViewportFocused` gate the editor's Viewport
-  panel does** — the input gate in Input.cpp, the game's focus checks and the camera controllers all
-  work unchanged. It is handed focus on the layout's first frame (`m_gameLayoutFocusPending`).
+* **ONE fullscreen undecorated `##GameViewport` window** (`UI::renderFullscreenViewport`). A real ImGui
+  window, so **the HUD paints into its draw list and `IsWindowFocused` feeds the same
+  `isViewportFocused` gate the editor's Viewport panel does** — the input gate in Input.cpp, the game's
+  focus checks and the camera controllers all work unchanged. It is handed focus on the layout's first
+  frame (`m_gameLayoutFocusPending`).
   > Clicking into the debug section takes focus off the game; clicking the world gives it back; the
   > escape overlay takes it while open.
 * **Optionally a LEFT `##GameDebug` window**, while the escape menu's "Debug panels" checkbox
-  (`MainMenu::debugPanelsEnabled`, offered only in the game layout) is set: pinned to the edge at full
-  height, width edge-resizable, holding **Tweaks / Profiler / Memory / Log as TABS**. The viewport rect
+  (`MainMenu::debugPanelsEnabled`) is set: pinned to the edge at full height, width edge-resizable
+  (300 px .. 60 % of the window), holding **Tweaks / Profiler / Memory / Log as TABS**. The viewport rect
   shrinks to the remainder.
 
-The prepare gating flags follow the SELECTED tab; Content and Script Editor stay closed. No dockspace
-runs, **so its first-time layout still builds on the first editor frame.** The sandbox pick keeps the
-full editor.
+The prepare gating flags follow the SELECTED tab; Content and Script Editor stay closed. The gizmo gets a
+null selection. No dockspace runs, **so its first-time layout still builds on the first editor frame.**
+The sandbox pick keeps the full editor.
 
 ## Editor layout without panels
 
 The editor layout has its OWN "Debug panels" state (`MainMenu::editorPanelsEnabled`, default ON; the
 game layout's stays default OFF — `MainMenu::EEscapeLayout` picks which one the checkbox binds). Off:
-**no panel is submitted, only the same `##GameViewport` window (`UI::renderFullscreenViewport`) over the
-full window**, the HUD overlay, the paused box and the escape overlay. All prepare gating flags drop and
-the gizmo gets a null selection.
+**no panel is submitted, only the same `##GameViewport` window over the full window**, the HUD overlay,
+the paused box and the escape overlay. All prepare gating flags drop and the gizmo gets a null selection.
 
 **The dockspace is still submitted, with `ImGuiDockNodeFlags_KeepAliveOnly`** — ImGui undocks the
 windows of a dockspace that is not kept alive, so the layout would not come back with the checkbox.
@@ -286,10 +286,10 @@ windows of a dockspace that is not kept alive, so the layout would not come back
 mouse listeners and viewport focus, which live below UI); main owns the object and calls
 `ui.setGizmo(&gizmo)`. **Non-owning — the controller detaches itself in its destructor.**
 
-`UI::update` drives it from the panel's own viewport rect and selection, after the panels settle.
+The widget pass drives it last, from the frame's viewport rect and selection, after the panels settle.
 
 **But the gizmo ENTITY has to tick with the rest of the scene**, so main makes a separate
-`ui.drawGizmoEntity(renderer, dt)` call at the entity-update point — *it needs the renderer, which
+`ui.drawGizmoEntity(renderer, dt)` call right before `ui.update` — *it needs the renderer, which
 `UI::update` has no business holding.*
 
 ---
@@ -297,5 +297,5 @@ mouse listeners and viewport focus, which live below UI); main owns the object a
 # The NodeEditor is dead code
 
 `UI/Private/NodeEditor/` and the vendored `UI/Private/lib/imgui-node-editor` **still compile but are
-not reachable from the running editor**: there is no node panel, no `UI::m_scene`, and no `.scr` open
-or create routes. See [`Docs/Context/Script/CONTEXT.md`](../Script/CONTEXT.md).
+not reachable from the running editor**: there is no node panel and no `.scr` open or create routes (a
+`.scr` reads as plain text in Content). See [`Docs/Context/Script/CONTEXT.md`](../Script/CONTEXT.md).

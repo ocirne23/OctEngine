@@ -11,7 +11,7 @@ Particle, Force, Spatial, Threading, Network and Nav.
 | File | Covers |
 |---|---|
 | [SimLod.md](SimLod.md) | SIM LOD: the tweaks, focus + zones, the visit set, tiers, per-entity kinds, unstamped visits, force-bubble and buoyancy gates, the delta, dormant and wake edges, known gaps, the selection job |
-| [Components.md](Components.md) | The components: the component table, the parked SceneAnimator, HumanoidAnimator, Light, the Game components (authoring, structure stores and the transport) |
+| [Components.md](Components.md) | The components: the component table, the bone models (HumanoidAnimator, the parked SceneAnimator), Light, the Game components (authoring, structure stores and the transport) |
 | [Multiplayer.md](Multiplayer.md) | Multiplayer: ownership model, state layout, roles + thread contract, headless server, wire protocol, snapshots, spawn stream, claims, validation, client correction, remote-owned entities, teleport contract, transfer / steal / arbitration, events, session, testing, player control |
 
 ## The three invariants everything else follows from
@@ -26,7 +26,7 @@ Particle, Force, Spatial, Threading, Network and Nav.
 
 ## `Entity`
 
-[Entity.ixx:70](../../../Code/Entity/Private/Entity.ixx#L70) (the partition `Entity:Entity`; the module's barrel is
+[Entity.ixx:89](../../../Code/Entity/Private/Entity.ixx#L89) (the partition `Entity:Entity`; the module's barrel is
 `Public/EntityP.ixx`). Fields: `pos` / `scale` / `rot`, `parent`,
 `spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits),
 `schedTick` (14 bits).
@@ -81,10 +81,9 @@ and holds the shared machinery.
 4. Create/destroy switches in Entity.cpp.
 5. Parse branch in `World::buildTemplate`.
 6. Write branch in Prefab.cpp.
-7. **Require-slot fill branch in `ScriptComponent::syncScriptData`** — the host reserves one pointer
-   slot per required component at the FRONT of ScriptData in ascending bit order, so **a missing
-   branch shifts every later slot. This crashed once.** See
-   [`Docs/Context/Script/CONTEXT.md`](../Script/CONTEXT.md).
+7. **Require-slot fill branch in `ScriptComponent::syncScriptData`** if the DSL can require it — the host reserves
+   one pointer slot per required component at the FRONT of ScriptData in ascending bit order, so **a missing
+   branch shifts every later slot (a crash).** See [`Docs/Context/Script/CONTEXT.md`](../Script/CONTEXT.md).
 8. Entity.natvis offset entry.
 9. Bump `MaxInlineComponentTypes`.
 10. An Entity Editor section, if authorable.
@@ -95,8 +94,8 @@ and holds the shared machinery.
 `oc::atomic_ref`, which is what keeps `Entity` inside its cache line.
 
 `Entity::create(template, transform, initialFlags)` placement-news into `Globals::entityAllocator` —
-lock-free: an atomic chunk bump plus tagged per-size-class Treiber free lists, blocks ≤ 64 KB.
-`initialFlags` applies **before components spawn**, so e.g. Frozen is already visible to a
+an atomic chunk bump plus tagged per-size-class Treiber free lists, blocks ≤ 64 KB (only the rare 1 MB chunk add
+takes a spinlock). `initialFlags` applies **before components spawn**, so e.g. Frozen is already visible to a
 component's `spawn()`.
 
 The tree is `SceneComponent::children` plus `Entity::parent`; `reparentEntity` moves ownership.
@@ -125,21 +124,24 @@ the spawn recursion through a `treeCursor`.
 per-entity visit**:
 
 ```
-Script → Network → Animator → Physics
+not frozen / paused:  [sim step] GameUnit → GameStructure → GameProjectile → Script
+                      → Network → [sim step] Animator → Physics → [sim step] HumanoidAnimator
+  ([sim step] = only when delta > 0)
   → compose world transform
   → RenderComponent::place, then the culling tail: refresh the SpatialIndex entry (RootOnly root:
     cached subtree bounds; else the node bounds; no node: the entity position, radius 0),
     push the RenderNode under the pass mask (own getPassMask when Spatial culling mode >= Cull,
     or the mask inherited from a RootOnly ancestor — see CullMode)
+  → HumanoidAnimator::place → Audio → Particle (not frozen) → Force → Light → emit children
 ```
 
-`updateSelf` emits its children into a caller-supplied vector rather than recursing, which is what
-lets the parallel pass slice them.
+A disabled entity returns at the top (after suspending its subtree's physics once). `updateSelf` emits its
+children into a caller-supplied vector rather than recursing, which is what lets the parallel pass slice them.
 
 ## Spatial entries
 
-**EVERY entity registers at the end of `Entity::create`** — parallel-spawn safe, since the index
-locks — **unless its `CullMode` says otherwise (below).**
+**EVERY entity registers at the end of `Entity::create`** — parallel-spawn safe, since registration is
+lock-free — **unless its `CullMode` says otherwise (below).**
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when it has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by the culling config's
@@ -190,7 +192,7 @@ Demo: `Entities/Debug/CubeGuy.pre` (RootOnly — one entry for all body parts).
 
 ## The parallel update pass
 
-`World::update(renderer, dt)` ([World.cpp:222](../../../Code/Entity/Private/World.cpp#L222)). Always on.
+`World::update(renderer, dt)` ([World.cpp:328](../../../Code/Entity/Private/World.cpp#L328)). Always on.
 
 ### Continuation batches — no level barrier
 
@@ -199,18 +201,15 @@ emitted into new batch jobs** on ONE pass-wide `JobCounter` that main waits on (
 
 **The only real dependency is parent-before-CHILD**: a child reads its parent solely through the
 `parentWorld` baked into its `EntityUpdateNode`, and the child's batch is submitted only after its
-parent's batch body ran. Subtrees therefore descend independently.
-
-> The old breadth-first level walk stalled every depth on the slowest batch of the previous one at a
-> "Level merge" barrier.
+parent's batch body ran. Subtrees therefore descend independently — never reintroduce a per-depth barrier, which
+stalls every level on the slowest batch of the previous one.
 
 **The first budget of a batch's children runs on the SAME fiber**: `submitEntityBatches` hands the
 first batch back to the calling `updateBatchJob`, which loops on it, and only the remaining batches
 become jobs. A unit's few child parts are therefore updated by the job that updated the unit — one
-job per subtree BUDGET, not one per level per parent, which at 40k units was 40k+ continuation
-jobs a frame and exhausted the job pool. The root slices still submit every batch (they are the
-fan-out). The other continuations land on that worker's LIFO deque, so wide fan-outs get stolen
-while the warm subtree stays put. Batches submit at **`EJobPriority::High`**
+job per subtree BUDGET, not one per level per parent (which at 40k units exhausts the job pool). The root slices
+still submit every batch (they are the fan-out). The other continuations land on that worker's LIFO deque, so wide
+fan-outs get stolen while the warm subtree stays put. Batches submit at **`EJobPriority::High`**
 under the name `"Entity Update"` — the pass is the frame's critical path, every batch is bounded, and
 High is what the window-thread helper serves between pumps.
 
@@ -218,25 +217,26 @@ High is what the window-thread helper serves between pumps.
 
 Every entity carries `updateCost`, a **u8 in 250 ns units, MEASURED**: 0 = unmeasured, the entity's
 FIRST update is timed and becomes the cost — **no guessed initial value, the first update IS the
-guess** — then a low-chance random re-measure keeps it honest. Unmeasured counts as 1 so it still
+guess** — then a ~1/1024-per-frame random re-measure keeps it honest. Unmeasured counts as 1 so it still
 partitions.
 
-A batch fills until the summed cost reaches ~25 µs (`m_updateBudget`, clamped to 1..4096).
-`m_updateCost`'s EMA is fed COST UNITS as its item count, **so `nsPerItem()` self-calibrates to "ns
-per cost unit".** There is no even-split term any more: **parallelism comes from the fan-out itself.**
+A batch fills until the summed cost reaches the budget `m_updateBudget` = `m_batchTimeUs` (200 µs) over
+`m_updateCost.nsPerItem()`, clamped to 1..4096. `m_updateCost`'s EMA is fed COST UNITS as its item count, **so
+`nsPerItem()` self-calibrates to "ns per cost unit".** There is no even-split term: **parallelism comes from the
+fan-out itself.**
 
 ### The frame arena
 
 `m_updateArena` is claimed with an atomic bump that is **NEVER rolled back**, is pointer-stable during
 the pass, and is resized **only between passes** (jobs hold pointers into it) from last frame's use
-plus overflow, doubled.
+plus overflow, doubled (minimum 4096).
 
 A claim past the end **spills into a block of its own** (`m_updateArenaSpill`, allocated under a
 mutex — the rare path, since a burst such as a wave spawn or a camera swing is what gets there),
 pointer-stable like the arena and freed between passes once the arena has grown to cover it. The
-pass stays parallel. (It used to run those subtrees serially on the submitting thread, which on main
-was a 20 ms "Update batch submit" on a burst frame.) Batch jobs address nodes by POINTER, never by
-arena index, so arena and spill batches are the same to them.
+pass stays parallel; do not fall back to running the overflow serially on the submitting thread (on main that
+cost 20 ms on a burst frame). Batch jobs address nodes by POINTER, never by arena index, so arena and spill
+batches are the same to them.
 
 `updateSelf` emits children into `PerWorker` staging, and `submitEntityBatches` copies them into the
 arena in **ONE claim BEFORE the first submit.**
@@ -246,7 +246,7 @@ arena in **ONE claim BEFORE the first submit.**
 > once the first submit goes out.
 
 **Neither the batch job nor `updateSelf` ever fiber-waits**, which is what makes one `PerWorker`
-staging slot per worker sufficient.
+staging slot per worker sufficient; `updateBatchJob` holds a `ThreadLocalScope` to assert it.
 
 ### What is safe inline
 
@@ -268,7 +268,7 @@ components:
 # Parallel entity spawning and destruction
 
 `Entity::create` / `Entity::destroy` are callable from worker jobs **CONCURRENTLY WITH EACH OTHER**,
-in the same frame window where main-thread spawning is legal today — the entity-change drains and
+in the same frame window where main-thread spawning is legal — the entity-change drains and
 `game.update`, after the spatial/begin-frame joins. **Never during the parallel entity pass, the
 physics step, or present.**
 
@@ -285,7 +285,7 @@ requests, with a null entry for an unknown prefab.
 
 ## `World::releaseBatch(vector<EntityPtr>&&)`
 
-Fans the releases — and so the `Entity::destroy` of every last reference — over a parallelFor.
+Fans the releases — and so the `Entity::destroy` of every last reference — over a parallelFor ("Destroy batch").
 
 **A handle that is not the entity's LAST reference just decrements**, so callers drop every OTHER
 owner they mean to (the root list through `removeRootEntity`, so its roster callback stays serial;
@@ -306,14 +306,15 @@ Each seam locks ONLY create/destroy — **the parallel-pass hot paths stay lock-
 |---|---|
 | EntityAllocator, `treeAllocSize` / `treeNetworkCount` caches | Already lock-free / benign-race |
 | Spatial `registerEntry` / `unregisterEntry` | LOCK-FREE, and so are the `query*` beside them: the record pool's rows are `VirtualArray`s that never move (see "The record pool" in Spatial). The cull kick/join window still forbids registration. |
-| `OcclusionBuffer` add/remove | Mutex (PhysicsComponent spawn and resume) |
+| `OcclusionBuffer` add/remove | `m_occluderMutex` (PhysicsComponent spawn and resume) |
 | box3d body create/destroy | The Physics-module `g_bodyLifecycleMutex` |
-| Renderer transform slots, LOD state ranges, force / particle slots, solid-colour tint HITS, skinned despawns (queued, parked at beginFrame) | LOCK-FREE (RendererVK `Util/SlotAlloc.ixx`; see "The per-entity spawn allocators" in RendererVK) |
-| Renderer registries — mesh/material/instance-offset tables (adds AND releases), LOD groups, skinned bundles/palettes/job ranges, a NEW solid-colour material | ONE RECURSIVE `Renderer::m_spawnMutex`; `spawnSkinnedNode` holds it over its bundle work |
+| Renderer transform slots, LOD state ranges, force / particle slots, solid-colour tint HITS, skinned despawns (queued, parked at beginFrame) | LOCK-FREE (RendererVK `Util/SlotAlloc.ixx`; see "The per-entity spawn allocators" in [RendererVK Scene.md](../RendererVK/Scene.md)) |
+| Renderer registries — mesh/material/instance-offset tables (adds AND releases), LOD groups, skinned bundles/palettes/job ranges | ONE RECURSIVE `Renderer::m_spawnMutex`; `spawnSkinnedNode` holds it over its bundle work |
+| A NEW solid-colour material | Its own `Renderer::m_solidColorMutex` (the texture upload must not run under the spawn mutex; order `m_solidColorMutex` → `m_spawnMutex`) |
 | `MeshDataManager` range alloc/free, `TextureManager` upload/free | Mutex each |
-| ForceSystem create/destroy | Mutex, plus `m_emitters` / `m_queries` RESERVED to the renderer caps at initialize so growth never reallocates under a concurrent handle resolve |
+| ForceSystem create/destroy | `m_createMutex`, plus `m_emitters` / `m_queries` RESERVED at initialize so growth never reallocates under a concurrent handle resolve |
 | ParticleSystem effect create/destroy/cache | Mutex held only for the map and vector work — the `.pfx` load, texture loads and renderer slot creation run outside it |
-| `ScriptHost::getOrLoad` | Mutex (cacheKey canonicalization outside) |
+| `ScriptHost::getOrLoad` | `m_loadMutex` (cacheKey canonicalization outside) |
 | ScriptEventManager listeners | A plain mutex; `fireEvent` SNAPSHOTS the dispatch list under it and invokes the scripts after releasing |
 | NetworkManager registration | A recursive `m_registerMutex`, taken only for a registration that gets an id: a LOCAL-INERT one (single player, client-local content: role None, or Client outside a replicated spawn) returns before it. See below. |
 | AudioSystem source list | `m_sourceMutex` over create/release/detach; the miniaudio teardown runs outside it |
@@ -335,7 +336,7 @@ component is torn down.
 A script `OnDestroy` firing a global event on one worker can therefore never reach a sibling another
 worker is mid-teardown. **The wait is only ever taken on the destroy path**, never from inside a
 dispatch: destroys are deferred requests, and `syncScriptDataLive`'s re-registration passes
-`waitForDispatches = false`.
+`waitForDispatches = false` (the default).
 
 ---
 
@@ -353,8 +354,9 @@ dispatch: destroys are deferred requests, and `syncScriptDataLive`'s re-registra
   re-resolves when it sees a new value. Every spawn runs inside a `ProfileScope` named by the
   template's `displayName` (the single route and the batch job alike), so the memory panel
   attributes spawn allocations per prefab.
-* `addRootEntity` also queues the root for ONE unconditional visit and, if Global, adds it to the
-  always-visited list.
+* `addRootEntity` puts an `alwaysVisited` root (Global, or no spatial entry) on the always-visited list, and every
+  other root on the pending list, visited unconditionally until a selection job could have found it (see
+  [SimLod.md](SimLod.md)).
 * **`removeRootEntity` notifies `m_onRootEntityRemoved` FIRST, while the entity is still alive.** The
   Game layer's rosters deregister through it, **so EVERY removal path — editor delete, script destroy
   request, network despawn — reaches them without any world-wide query.** The callback must not call
@@ -394,9 +396,9 @@ UI notifications route back through `setOnPrefabOpened` / `setOnEntityRespawned`
 ## Headless
 
 `setHeadless(true)` BEFORE any spawn makes `buildTemplate` emit only **Scene / Physics / Script /
-Network** components. Everything renderer-touching (Render, Animator, Light, Particle, Force) and
-Audio is dropped at build time, **so `updateSelf` never dereferences the uninitialized renderer and no
-GPU resource is ever created.**
+Network** components. Everything renderer-touching (Render, Animator, HumanoidAnimator, Light, Particle, Force),
+Audio, and the Game components (they create Force queries) are dropped at build time, **so `updateSelf` never
+dereferences the uninitialized renderer and no GPU resource is ever created.**
 
 Hull and Mesh collision still works: the Render node's container NAME is parsed textually and the
 geometry comes from the renderer-free `ensureCollisionSource` import.
@@ -410,7 +412,7 @@ renderer state.** It fires, for each side:
 1. `PhysicsComponent::onContact`
 2. `GameProjectileComponent::onContact` — the shared game-layer behaviour: a projectile spends itself
    on first touch and damages an enemy-team victim
-3. the script's `OnPhysicsEvent`
+3. the script's `OnPhysicsEvent` (`ScriptComponent::firePhysicsEvent`)
 
 ---
 
@@ -447,11 +449,13 @@ Lives here, not in Script.
 
 ## Thunk thread-safety
 
-Scripts tick on workers.
+Scripts tick on workers, every entry point under a `ThreadLocalScope`: **no thunk may wait.**
 
-* `ctx->spawnEntity` queues `EntityChange::SpawnAtPosition` and **returns null** — the DSL types
-  `world.spawn` as `Entity?`, so scripts take the miss branch on the spawning frame.
-* `internString` is shared_mutex; script RNG is `thread_local`; `spatialQueryRadius`'s buffer is
-  `thread_local`.
-* The DSL array registry is CHUNKED (`g_arrayChunks`, 64 × 1024, handle = 16 bits), **so storage never
-  moves and resolve is lock-free.**
+* `ctx->spawnEntity` queues `EntityChange::SpawnAtPosition` (`ScriptEventManager::addSpawnRequest`) and
+  **returns null** — the DSL types `world.spawn` as `Entity?`, so scripts take the miss branch on the spawning frame.
+* `internString` is shared_mutex; script RNG is a `thread_local` `mt19937`.
+* `spatialQueryRadius` writes straight into the caller's array (no scratch). `worldQueryRadius` hands out a
+  generation-tagged handle into a `thread_local` ring of 8 result buffers (queries nest inside `foreach`); a handle
+  older than 8 further queries reads as empty, never as another query's results.
+* The DSL array registry is CHUNKED (`g_arrayChunks`, 64 × 1024, handle index = 16 bits), **so storage never
+  moves and resolve is lock-free.** Only allocation and the free list take a lock.

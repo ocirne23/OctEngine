@@ -33,22 +33,30 @@ Index:
 
 ## Doc fixes
 
-Text that looks out of date or contradicts itself.
+Code comments that contradict the code (found in the 2026-10-15 doc review; the docs follow the code).
 
-* [Procedural Generator](Context/Procedural/Generator.md): TerrainGenV3 says "no unload API" (the intro) but a
-  later paragraph describes `unloadModels()`.
-* [Procedural Trees](Context/Procedural/Trees.md): the header status still says G1 + CPU preview
-  only; "bone palette" was dropped; `tree_record.inc.glsl` "not read by a shader yet"
-  is no longer true; the preview section describes G4 and "no RT" as future.
-* [RendererVK Vegetation](Context/RendererVK/Vegetation.md): far-tree March bullet (~L389) still describes the old
-  COOL sky term; far-tree defaults (~L137) may conflict with the user's choice at ~L168 (self
-  shadow, normal, interior off).
-* [Game](Context/Game/CONTEXT.md): Determinism says a mid-trickle wave is not resumed; Save /
-  load says it is.
-* [Spatial](Context/Spatial/CONTEXT.md): "Not yet built" (~L414) mentions a leaf's dynamic list, which no
-  longer exists (~L369).
-* Memory: `game-iteration-roadmap` (tweak sync shipped), `procedural-trees-plan` (G1 "next", "refine
-  plan before building"), `weather-roadmap` ("no wind tilt").
+* Entity: `Entity.cpp` "registerEntry locks" and `World.cpp` "registrations take the index's exclusive lock" (the
+  index is lock-free); `NetworkManager.cpp` "the SpatialIndex holds every non-global entity" (Global entities register
+  too); `World.ixx` batch budget "~25us" (200 µs); `World.cpp` `simLodCadence` and `Settings/Public/World.ixx` still
+  describe the old per-frame time ring.
+* Spatial: `Types.ixx` terrain userData "RenderNode*" (it is `Resident*`) and tiers "stamped in the cull job via
+  setUpdateLod".
+* Core / Threading: `Time.ixx` says the escape overlay sets the fps ceiling; `Profiler.ixx` says the tracker is XCA3
+  (XCA2); `JobSystemDesc` says "PHYSICAL cores - 2".
+* RendererVK: `Layout.ixx` `INITIAL_UNIQUE_MESHES` ("whole range"; it is 2048) and the mega-buffer sizes (1.5 / 0.5 GiB;
+  768 / 256 MiB), `TerrainLit` "no textures"; `BindlessTextures.ixx` "six pipelines" (seven); `FoliageParams` crown
+  normal "sphere" (ellipsoid) and transmission "LitFoliage only"; `GiSettings` example still 10 m / falloff 3;
+  `RendererRecord.cpp` says `recordGlobalIllum` builds the TLAS (`recordGlobalIllumPrep` does).
+* Procedural: `TreeSystem.ixx` preview text (G4 future, GPU LOD chains) and `TreeSystem.cpp` "the generator still builds
+  every level" (`MESHED_LODS` = 1); dated comments in `RockGenerator.cpp` / `ClutterSystem`; `TerrainColliderSettings::
+  spacing` says render LOD0 is 1 m (it is 2 m); `Settings/Public/Terrain.ixx` "snow sheds EARLIER than rock appears"
+  (the default ranges overlap).
+* Animation: `StateMachine.ixx` "any-state transitions checked first" (all transitions run in declaration order).
+* Nav: `Field.ixx` `NavSource::kind` lists 0/1 only (2 = goal, 3 = unit are used).
+* Game: `Match.ixx` ("stack local in main()", "Two ticks", "36² grid", "after applyPlayerCamera"); `Match.cpp` /
+  `MatchInput.cpp` Q/W/E key text; `StructureTypes.ixx` says the Base shield pays energy (it is free).
+* UI / Particle: `UI.ixx` "first global to destruct"; `Effect.ixx` grammar comment "Particles/Wind tweaks" (`Sky/Wind`).
+* Script: `ScriptHost.ixx` / `ScriptComponent.cpp` "Compile & Run" (no such button; F6 or a save recompiles).
 
 ---
 

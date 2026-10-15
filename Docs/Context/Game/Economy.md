@@ -5,30 +5,30 @@
 ## Economy
 
 A node produces NOTHING until an **extractor** is built on it — one per node; the ghost snaps to the
-nearest free node within "Extractor snap radius", validated again at place time — AND that extractor
-is fed energy.
+nearest free node within "Extractor snap radius" (6 m), validated again at place time — AND that
+extractor is fed energy.
 
 ### The cable transport (three media, one model)
 
-**Energy, fuel and minerals move over the cables as WHOLE CELLS** (`Transport.cpp`). There are no
-links, bands or per-pair transfers any more: every built cable segment and conducting crossing is a
-NODE with an integer fill and an out-rate, and the flow is a local transport — a stencil over the
-node graph — so **a run's bottleneck is literally its slowest segment**, producers and consumers can
-sit anywhere along a line, loops and junctions need no routing, and the consumer nearest the
-producer is served first (what a conveyor does).
+**Energy, fuel and minerals move over the cables as WHOLE CELLS** (`Transport.cpp`). Every built
+cable segment and conducting crossing is a NODE with an integer fill and an out-rate, and the flow is
+a local transport — a stencil over the node graph — so **a run's bottleneck is literally its slowest
+segment**, producers and consumers can sit anywhere along a line, loops and junctions need no routing,
+and the consumer nearest the producer is served first (what a conveyor does).
 
 | | |
 |---|---|
-| Node | a segment / crossing: `fill` cells (soft capacity per MEDIUM — "Cable / Pipeline / Conveyor cells per segment" 2 / 1 / 1: energy holds a burst, the slower media are pure transport), out-rate = the medium's "… throughput" (cells/s), `moved` gauge |
+| Node | a segment / crossing: `fill` cells (soft capacity per MEDIUM — "Cable / Pipeline / Conveyor cells per segment" 2 / 1 / 1: energy holds a burst, the slower media are pure transport), out-rate = the medium's "Cable / Pipeline / Conveyor throughput" (20 / 4 / 4 cells/s), `moved` gauge |
 | Junction | one per (BUILT building, medium): the building's PORT. Every segment touching the building is its neighbour, and those segments are also connected to EACH OTHER, **so a line through an emitter carries through cable-to-cable** — the port itself accepts cells only while a slot on it still wants some (nothing parks in a producer's port, nothing relays through it); its out-rate scales with its degree so the cable stays the bottleneck |
-| Slot | the building's port on its junction: role by type — **producer** (generator, solar; extractor fuel/minerals; fabricator minerals) pushes whole cells OUT of its float store, **consumer** pulls into its headroom, **storage** (battery and Base; fuel tank; Base and silo for MINERALS) reads the CABLE next to its port — the mean fill of its junction's neighbours, never the junction itself, which its own push fills — as the price signal, with TRUE hysteresis: it switches to PULLING when that fill reaches "Storage pulls above" (0.75) and keeps pulling until it drops to "Storage pushes below" (0.25), where it switches to PUSHING until the cable fills back up (a per-tick band idled a battery every other tick on 2-cell segments). **The Base's shield is FREE** (no per-second draw, no pressure surcharge — only the enemy siege load drains it), so the Base is a pure storage building: it banks for the grid and self-generates a trickle |
-| Tick | fixed "Transport tick rate" 10 Hz, runs staggered over "Transport spread" 4 groups so a big base's work lands on several frames |
+| Slot | the building's port on its junction: role by type — **producer** (generator, solar; extractor fuel/minerals; fabricator minerals) pushes whole cells OUT of its float store, **consumer** pulls into its headroom, **storage** (battery and Base; fuel tank; Base and silo for MINERALS) reads the CABLE next to its port — the mean fill of its junction's neighbours, never the junction itself, which its own push fills — as the price signal, with TRUE hysteresis: it switches to PULLING when that fill reaches "Storage pulls above (fill)" (0.75) and keeps pulling until it drops to "Storage pushes below (fill)" (0.25), where it switches to PUSHING until the cable fills back up (a per-tick band idles a battery every other tick on 2-cell segments). **The Base's shield is FREE** (no per-second draw, no pressure surcharge — only the enemy siege load drains it), so the Base is a pure storage building: it banks for the grid and self-generates a trickle |
+| Tick | fixed "Transport tick rate (Hz)" 10, staggered over "Transport spread (groups)" 4 so a big base's work lands on several frames |
 
 **Per tick, on main:** `kickTransport` — inject every due slot (supply capped at the port's free
 space; a PRODUCER's taken cells simply come off its store at the join — the transport is that
 store's only drain, so no reservation and no visible dip; STORAGE reserves, since the Base's siege
 load drains it meanwhile, refunded at the join; metered machines — barracks "energy intake", turret
-shot energy / fire interval — meter their demand with a carry), then ONE job.
+shot energy / fire interval — meter their demand with a carry), then ONE job ("Transport tick").
+
 **The job** runs "Transport substeps" (4) × three owner-only passes: OFFER (a node serves its own
 slots' demand first, then FORWARDS everything it can into neighbours with free space that are
 strictly DOWNHILL on THE DEMAND FIELD — `dist`, one BFS per run per tick from every port with
@@ -38,42 +38,42 @@ UPHILL on THE SUPPLY FIELD — `sdist`, the same BFS from every port pushing sup
 toward demand when there is any and otherwise FILL the network outward from the producers until it
 is full: no fill gradient, nothing drifts back toward a source or into another producer's dead end,
 no ping-pong, loops are harmless — space-weighted with the integer remainder rotated, all inside
-its out-budget, which
-BANKS while idle, capped at two ticks, so a front crosses a segment per sub-step; then takes slot
-supply into its free space),
-APPLY (fill' = fill − out + the neighbours' out-slots aimed here), CLEAR. **The due runs tick IN
-PARALLEL** (one job per run above a couple of runs; each run's BFS queue is its own slice of one
-shared buffer — no `thread_local`, no `PerWorker`: the nested fan-out below is a wait, and a job
-may resume on another thread after it); a run over 1024 nodes additionally fans its passes out per
-node. No atomics, no entity walk, scheduling-independent. Scopes: `Transport inject` /
-`Transport apply` (main), `Transport tick` → `Transport runs` → `Transport run` → `Transport
-offer/apply/clear` (job).
+its out-budget, which BANKS while idle, capped at two ticks, so a front crosses a segment per
+sub-step; then takes slot supply into its free space), APPLY (fill' = fill − out + the neighbours'
+out-slots aimed here), CLEAR.
+
+**The due runs tick IN PARALLEL** (a `parallelFor` over the runs once two or more are due; each run's
+BFS queue is its own slice of one shared buffer — no `thread_local`, no `PerWorker`: the nested
+fan-out below is a wait, and a job may resume on another thread after it); a run of 1024+ nodes
+additionally fans its passes out per node. No atomics, no entity walk, scheduling-independent.
+Scopes: `Transport inject` / `Transport apply` / `Transport join` (main), `Transport tick` →
+`Transport runs` → `Transport run` → `Transport offer/apply/clear` (job).
+
 **At the join** (`joinTransport`, top of the next tick) the cells land in the stores and
 `flowUtil` = the served fraction of what each port asked.
 
 Consumers still drain their internal float battery every production tick; empty = unpowered. A
 full producer buffer still throttles production. Cells in the cables are real: a long run buffers
-`segments × its medium's cells per segment`, and a cut line keeps what it held (fills survive rebuilds by structure id, save as
-`Fill`, and mirror to clients by id — `GCf`, rotating, 6 B a segment: the fill plus the ~2 s
-throughput average as a fraction of the rate, so clients draw the same bottleneck rings and label
-numbers).
+`segments × its medium's cells per segment`, and a cut line keeps what it held (fills survive rebuilds
+by structure id, save as `Fill`, and mirror to clients by id — GCf, see [Sync.md](Sync.md): the fill
+plus the ~2 s throughput average as a fraction of the rate, so clients draw the same bottleneck rings
+and label numbers).
 
 **Buffers:** extractor and other consumers "Internal buffer" 10; the shield emitters hold deeper
 stores — "Emitter buffer" 50, "Bastion buffer" 150, "Lance buffer" 100 (the emitter restart charge
-clamps to each) — generators 20, battery 200, **barracks =
-the selected unit's energy cost** (stamped per instance in `stampTuning`; `energyCapacityOf` returns
-a 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its transport slot
-meters its demand to "Barracks energy intake/s" 2 whatever feeds its junction, so the store fills
-at the build rate and a unit is born the moment it is full (build time = cost / intake — Grunt
-2.5 s, Brute 10 s; no timer). A barracks needs a power cable and holds no minerals. Powered
-extractors and fabricators fill their OWN buffer and **stall when full**. Only
-what sits in Mineral silos and the Base is SPENDABLE (a per-team cache recomputed per tick; spending
-drains silos first, Base last).
+clamps to each) — "Generator buffer" 10, "Battery capacity" 200. **A barracks' energy capacity is the
+selected unit's spawn energy** (stamped per instance in `stampTuning`; `energyCapacityOf` returns a
+1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its transport slot meters
+its demand to "Barracks energy intake/s" (2) whatever feeds its junction, so the store fills at the
+build rate and a unit is born the moment it is full (build time = cost / intake — Grunt 2.5 s, Brute
+10 s; no timer). A barracks needs a power cable and holds no minerals. Powered extractors and
+fabricators fill their OWN buffer and **stall when full**. Only what sits in Mineral silos and the
+Base is SPENDABLE (a per-team cache recomputed per tick; spending drains silos first, Base last).
 
 ### Physical cables
 
-The link tools, point-to-point cables and Connector range links are all REMOVED. **`Connector` is a
-RETIRED enum slot** — its table entries remain, placement refuses it, and `loadFrom` skips it.
+**`Connector` is a RETIRED enum slot** — its table entries remain, placement refuses it, and
+`loadFrom` skips it.
 
 Cables are **1-cell GRID STRUCTURES**: `CablePower` / `CablePipe` / `CableConveyor` (one per medium,
 no tiers) plus the **1×3 oriented crossing** bridges — **ALSO one per medium**: `CrossingPower` /
@@ -110,7 +110,7 @@ request drain and in `tickMirror` (it joins the transport job first: the job ind
 `m_cells`: cellKey → `{id, underId}`, maintained at the spawn and remove seams (a crossing demotes
 what its middle bridges to `underId`; removal promotes it back).
 
-It backs `cellsFree` — **per cell now: buildings refuse ANY occupied cell (no building on a cable); a
+It backs `cellsFree` — **per cell: buildings refuse ANY occupied cell (no building on a cable); a
 cable may slot under a free crossing middle; a crossing's middle may bridge exactly one plain cable
 OR one END cell of another crossing (`isBridgeable` — an end counts as cable for bridging, so
 crossings chain and stack); its ends must be free** — plus the derivation and the arm visuals.
@@ -119,16 +119,16 @@ crossings chain and stack); its ends must be free** — plus the derivation and 
 > **A CROSSING is validated by `planCrossing`, not `cellsFree`** (both share `footprintAreaClear`
 > for the bounds / rock / reserved-node checks). One relaxation: an END cell may hold a plain cable
 > of the crossing's OWN medium and OWN team, which the placement **REPLACES** — that segment is
-> redundant under an end, which conducts that medium anyway, and refusing it meant a paint stroke
-> could not cross a foreign line wherever its own run already stood. Anything else (another medium,
-> a building, a second crossing, an enemy's cable) blocks exactly as before. `placeStructure`
-> demolishes the named segments right before the spawn, so the cells are free when `insertCells`
-> runs and the networks simply re-derive. **The replaced run is severed until the crossing is
-> BUILT** — a blueprint conducts nothing.
+> redundant under an end, which conducts that medium anyway, and refusing it would stop a paint
+> stroke from crossing a foreign line wherever its own run already stands. Anything else (another
+> medium, a building, a second crossing, an enemy's cable) blocks. `placeStructure` demolishes the
+> named segments right before the spawn, so the cells are free when `insertCells` runs and the
+> networks simply re-derive. **The replaced run is severed until the crossing is BUILT** — a
+> blueprint conducts nothing.
 
 **`isWalkThrough`** = cables, crossings AND the flat **Solar** slab: their prefab collider is `Layer
 Cable, CollidesWith Projectile`, so players and units pass over them, and the code treats them alike
-— no nav obstacle in `feedNav`, `actorInFootprint` never refuses them, `ignoreCables` lets unit
+— no nav obstacle in `gatherNavFeed`, `actorInFootprint` never refuses them, `ignoreCables` lets unit
 spawns land on them, and an RMB on one is a plain ground order. (The Solar keeps everything else a
 building has: cells refuse other placements, labels, GSt, links.)
 
@@ -140,20 +140,20 @@ child entities** (`ArmPX/NX/PZ/NZ`, `Enabled false` in the `.pre`, cached on `Re
 toggled by `updateArms` — toward a crossing only when its medium matches). A crossing is tinted to
 its TYPE's medium hue always, conducting or not.
 
-`drawDebug` adds only the FLOW pulse: per conducting run, a pulsing ring over every segment, with
-brightness and speed from the busiest attached building's `flowUtil` — **which the server computes and
-clients receive through GSt, so the reading is the same everywhere.**
+`drawDebug` draws the BOTTLENECK marker — a pulsing red ring over every segment whose ~2 s average
+throughput sits at or above 90 % of its out-rate (clients read the mirrored GCf average, so they see
+the same rings) — plus the node rings, the constructor / medic reach rings and a red ring on every
+unpowered consumer.
 
 Segments are full structures: a blueprint phase (**NON-conductive until built**), health ("Cable
-health max" 40 — **`healthMax` is per-COMPONENT now**, so `investMaterials` heals against
+health max" 40 — **`healthMax` is per-COMPONENT**, so `investMaterials` heals against
 `state->healthMax`), territory drain, projectile damage (`Layer Cable, CollidesWith Projectile` plus
-`Layer Projectile` on the shot prefabs — **the first named physics layers in content**; everyone
-else's Default/All masks are untouched, so players and units walk straight through), and death-sweep
-destruction that re-derives the run broken.
+`Layer Projectile` on the shot prefabs; everyone else's Default/All masks are untouched, so players
+and units walk straight through), and death-sweep destruction that re-derives the run broken.
 
-**Cables are SKIPPED by:** GSt (the 79 cap), `feedNav` (no obstacle, no source), `actorInFootprint`,
-the RMB building-face move order and route-click checks (treated as ground), and overhead labels
-except blueprint or damaged on the authority.
+**Cables are SKIPPED by:** GSt (the 79 cap), `gatherNavFeed` (no obstacle, no source),
+`actorInFootprint`, the RMB building-face move order and route-click checks (treated as ground), the
+problem badges, and overhead labels except blueprint or damaged on the authority.
 
 ### Construction
 
@@ -164,7 +164,7 @@ income or flows; links pre-wire but carry nothing).
 > (`investMaterials`), and full health = built. The bar is blue while blueprint, and **damage
 > literally undoes construction.** The SAME price repairs damaged built structures.
 
-**Cheat:** "Game/Cheats/Free instant build" (a Synced checkbox — **the server's value rules all
+**Cheat:** "Game/Construction/Free instant build" (a Synced checkbox — **the server's value rules all
 players**) skips the blueprint phase.
 
 **Materials come from:**
@@ -173,27 +173,29 @@ players**) skips the blueprint phase.
   players**, clients receive theirs through the game blob), refilled within "Refill radius" (6 m) of
   own-team Silos, Base or mineral Extractors at "Refill rate" (15/s) — `takeStoredMinerals`, so
   **hand-couriering a fresh dig site's buffer works before any conveyor exists** — and invested into
-  nearby BLUEPRINTS only within "Build radius" (6 m) at "Player build rate" (8/s). Dropped on death.
+  nearby BLUEPRINTS only within "Player build radius" (6 m) at "Player build rate" (8/s), all
+  "Game/Construction" tweaks.
 * **The CONSTRUCTOR structure** (Production hotbar; conveyor-fed mineral stock plus powered; amber
   range ring in `drawDebug`), which funds the nearest own-team blueprint **OR damaged structure**
-  within "Constructor range". With nothing to build or repair it idles.
+  within "Constructor range" (27 m) at "Constructor build rate" (4/s). With nothing to build or
+  repair it idles.
 
 Blueprint state mirrors through a GPl built flag plus a GSt status-bits byte (bit0 powered, bit1
 blueprint).
 
-**NPC emitter drain (`addEmitterLoad`) is SHIELD-INDEPENDENT** — collapsed units strain emitters like
-shielded ones.
+**Unit siege drain (`GameStructureComponent::addLoad`) is SHIELD-INDEPENDENT** — collapsed units
+strain emitters like shielded ones.
 
 ### Grid placement
 
 Every placement — **extractors included, since the node's position snaps too** — aligns to a
 `GridCellSize` **2 m** world grid (odd footprints centre on a cell, even on a corner) and occupies
-`footprintExtent(type, rot)` cells.
+`footprintExtent(type, rot)` cells, within "Place range" (30 m) of the player.
 
 | Footprint | Types |
 |---|---|
-| 1×1 (cables included) | most |
-| 2×2 | FuelTank, Bastion, Turret, Solar, Fabricator, MineralSilo, House |
+| 1×1 (cables included) | Emitter, Generator, Battery, Lance, Wall, Constructor |
+| 2×2 | FuelTank, Bastion, Turret, Solar, Extractor, Fabricator, MineralSilo, House, MedicStation |
 | 3×3 | Barracks, Base |
 | 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 

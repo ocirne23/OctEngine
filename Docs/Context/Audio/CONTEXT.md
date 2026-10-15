@@ -3,10 +3,10 @@
 > Library documentation for `Code/Audio`.
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
-Core-only. Two third-party libraries, both PRIVATE — neither API leaks, because every public type
-holds an opaque `uint64` handle:
+Links Core and Settings (the master volume tweak). Two third-party libraries, both PRIVATE —
+neither API leaks, because every public type holds an opaque `uint64` handle:
 
-* **miniaudio** — device, mixing, decoding. `MINIAUDIO_IMPLEMENTATION` lives in Audio.cpp.
+* **miniaudio** — device, mixing, decoding. `MINIAUDIO_IMPLEMENTATION` lives in Engine.cpp.
 * **Steam Audio** (`phonon`) — HRTF binaural. Static `phonon(d).lib`.
 
 ## `Globals::audio` (`AudioSystem`)
@@ -20,12 +20,12 @@ holds an opaque `uint64` handle:
 | `loadSound(path)` | WAV / FLAC / MP3, relative to `Assets/`. |
 | `createBuffer(format, pcm, rate)` | Procedural sounds. |
 | `createSource()` | A free-standing voice. |
-| `playOneShot(buffer, pos, gain, pitch)` / `playOneShot2D` | Fire-and-forget from a pool of `MaxOneShotSources` (32); steals the oldest slot when full. |
+| `playOneShot(buffer, pos, gain, pitch)` / `playOneShot2D` | Fire-and-forget from a pool of `MaxOneShotSources` (32): the first idle slot, else a round-robin steal. |
 | `isInitialized()` | Everything no-ops before initialize. |
 
 ### Threading
 
-`m_sourceMutex` ([System.ixx:49](../../../Code/Audio/Private/System.ixx#L49)) serializes **source list edits only**. They
+`m_sourceMutex` ([System.ixx:50](../../../Code/Audio/Private/System.ixx#L50)) serializes **source list edits only**. They
 come from parallel entity spawn/despawn jobs — an `AudioComponent`'s voices die with its entity — and
 from script triggers on workers.
 
@@ -78,9 +78,7 @@ clips, each with its own `Volume` / `Pitch` / `Loop` / `Relative` / `ReferenceDi
 * Demo: `Entities/Debug/physicsCube.pre`.
 
 **DSL surface** — `self.audio.trigger(string alias)` and `self.audio.stop(string alias)`, registered
-in `registerScriptDslBindings` ([ScriptContext.cpp:338](../../../Code/Entity/Private/ScriptContext.cpp#L338)).
+in `registerScriptDslBindings` ([ScriptContext.cpp:336](../../../Code/Entity/Private/ScriptContext.cpp#L336)).
 They lower to the `ctx->audioTrigger` / `ctx->audioStop` ABI thunks; `audioTrigger` takes an
-`overrideMask` (bit 0 position, bit 1 volume, bit 2 pitch) that the DSL binding passes as 0.
-
-> The retired NodeEditor's "Trigger Audio" / "Stop Audio" nodes used the same thunks with a real
-> `overrideMask`. Those sources still compile but are not reachable from the editor — see Script.
+`overrideMask` (bit 0 position, bit 1 volume, bit 2 pitch) that the DSL binding passes as 0. Only the
+legacy NodeEditor's "Trigger Audio" node (`UI/Private/NodeEditor`) passes a real mask.

@@ -24,7 +24,7 @@ file's content.
 
 ## `ScriptHost` (`Globals::scriptHost`)
 
-[ScriptHost.ixx:60](../../../Code/Script/Public/ScriptHost.ixx#L60).
+[ScriptHost.ixx:60](../../../Code/Script/Public/ScriptHost.ixx#L60) (the module is `Script`).
 
 * `getOrLoad(path, forceRecompile = false)` returns the cached module, compiling on first use. **On
   failure it returns null and KEEPS the previous build**, and first-time failures are cached so they
@@ -38,10 +38,10 @@ file's content.
 ### The compile
 
 **Blocks the main thread by design** — F6, an editor save, or a spawn that needs its module — under
-an explicit `AllowMainThreadIO`.
+an explicit `FileSystem::AllowMainThreadIO`.
 
 `findVcvars()` locates `vcvars64.bat` through `vswhere -latest -prerelease`, cached after the first
-lookup, with hardcoded VS 18 / 2022 fallbacks.
+lookup, with hardcoded VS 18 Insiders / VS 2022 fallbacks.
 
 ```
 cl /nologo /LD /std:c++20 /Zc:preprocessor /MD /Od /Zi /EHsc /arch:AVX2 /wd4100 /DSCRIPT_BUILD
@@ -87,14 +87,14 @@ its own namespace and compiles it into the engine, linking every engine library 
   `thunk_foo(x)` instead of a function-pointer call, so `/GL` + `/LTCG` inlines it.
 * All-or-nothing: one broken script fails the aggregate. Adding, renaming or removing a script needs a
   reconfigure; editing a body just recompiles the aggregate.
-* Off (the default) it is an empty stub, so App's link line names it unconditionally.
+* Off (the default) it is an empty INTERFACE library, so App's link line names it unconditionally.
 * VS target `run-cooked` builds a sibling `Build-Cooked/` tree with `SCRIPTS_STATIC=ON`.
 
 ### `ScriptModule`
 
-DLL entry pointers plus `dataSize`, `dataLayoutId`, `dataFields` / `numDataFields`,
-`requiredComponents`, `eventNames`, the `faulted` flag, and `eventKeyToIndex` (filled by
-`ScriptEventManager` on every reload).
+DLL entry pointers (`onSpawn` / `update` / `onDestroy` / `onEvent` / `onPhysicsEvent`) plus `dataSize`,
+`dataLayoutId`, `dataFields` / `numDataFields`, `requiredComponents`, `eventNames`, the `faulted` flag, and
+`eventKeyToIndex` (filled by `ScriptEventManager` on every reload).
 
 **Do not cache function pointers across reloads.** `dataFields` points into the module's own static
 storage and is valid exactly as long as the module.
@@ -118,7 +118,7 @@ today, uses 7; a 9th needs one more `_PARAMS`/`_ARGS` pair and a wider `SCRIPT_C
 ### The `Entity` mirror
 
 Scripts see a layout-compatible mirror — `pos`, `scale`, `rot`, `parent` only — selected by
-`SCRIPT_BUILD`. The offsets are static_asserted in `ScriptContext.cpp`.
+`SCRIPT_BUILD`. The offsets are static_asserted in `ScriptContext.cpp` (Entity).
 
 Components a script cannot name are **opaque forward-declared handles** (`PhysicsComponent`,
 `AudioComponent`, `ForceComponent`, `SceneComponent`, `LightComponent`, `AnimatorComponent`), passed
@@ -132,15 +132,15 @@ sync.
 
 **The host allocates one 8-byte pointer slot per set bit at the FRONT of the `ScriptData` block, in
 ascending bit order, and fills each straight off `getComponent<T>()` right after allocating — before
-`OnSpawn` runs.** That is why `self.physics` emits as `scriptData-><name>` and reads an
-already-resolved pointer instead of re-fetching the handle on every access.
+`OnSpawn` runs** (`ScriptComponent::syncScriptData`). That is why `self.physics` emits as `scriptData-><name>` and
+reads an already-resolved pointer instead of re-fetching the handle on every access.
 
 > This is the mechanism behind the Entity checklist item *"a missing require-slot fill branch shifts
-> every later slot"* — it crashed once.
+> every later slot"* — a crash.
 
 `ScriptDataLayoutId()` is a hash of every field's **type and name, in order**. The host keeps an
-existing data block across a hot-reload **only while this matches**; otherwise it drops the block —
-freeing the arrays those `OcArray` handles owned — and starts from a zeroed one.
+existing data block across a hot-reload **only while it and `ScriptDataSize()` both match**; otherwise it drops
+the block — freeing the arrays those `OcArray` handles owned — and starts from a zeroed one.
 
 > **Size alone cannot tell a layout change from a no-op**: `int a; int b;` and `float a; float b;`
 > are the same size, and reinterpreting one as the other silently corrupts every field, array handles
@@ -172,8 +172,7 @@ nothing to copy, and **the script never owns heap memory.**
 [`Docs/Context/DslCompiler/CONTEXT.md`](../DslCompiler/CONTEXT.md). Points that belong here:
 
 * **`math.*` — ALL ANGLES IN DEGREES.** The `ocInverseLerp` / `ocRemap` / `ocMoveTowards` / ... helpers
-  in ScriptAPI.h avoid double-evaluation. Randomness is one ENGINE-side generator, so hot-reload does
-  not reset it.
+  in ScriptAPI.h avoid double-evaluation. Randomness is ENGINE-side, so hot-reload does not reset it.
 * **Animation is the animator's surface** — `self.animator.setFloat/setBool/setTrigger/...`. Nothing
   names a clip.
 * **A getter-call member MUST register `writable = false`**: a writable member's emit is used verbatim
@@ -186,7 +185,8 @@ nothing to copy, and **the script never owns heap memory.**
 `//@@data [private|public] <type> <name>`; default Hidden. Exposed fields surface through
 `ScriptDataFields()`. **The Properties panel edits them LIVE and never serializes**; the Entity Editor
 authors INITIAL values as text under `Component Script` / `Data` in a `.pre`, re-applied by
-`applyInitialValues` after every `syncScriptData` reallocation.
+`applyInitialValues` after every `syncScriptData` reallocation (after the require slots; a field name that no
+longer exists is skipped).
 
 ### The container mutation rule
 
@@ -201,14 +201,14 @@ indexes it raw, so growth mid-loop would dangle that span.
 
 It runs from BOTH `save()` and `load()`, deliberately at document level rather than as part of the
 parse, **because the editor's save path never parses** — so no authoring route can produce a script
-that breaks it. The editor-side grey-out (`ScriptLang::isContainerIterated`) is still syntactic, so
-transitive mutation through a user function is authorable and gets refused at load.
+that breaks it. The editor-side grey-out (`isContainerIterated` in ScriptLang.cpp) is only syntactic, so
+transitive mutation through a user function is authorable and gets refused at save/load.
 
 `ref` is refused on handle types and non-writable containers; non-`ref` elements cannot be assigned.
 
 ### `//@@require` is enforced LIVE
 
-`requirementsMet` (a mask test) runs at **every entry point**, not latched at spawn — hot-reload
+`ScriptComponent::requirementsMet` (a mask test) runs at **every entry point**, not latched at spawn — hot-reload
 mutates the module in place.
 
 * `OnSpawn` runs once, the first frame the entity qualifies (`onSpawnRan`). **`OnDestroy` pairs with
@@ -223,25 +223,26 @@ mutates the module in place.
 [ScriptComponent.cpp](../../../Code/Entity/Private/Components/ScriptComponent.cpp), default 1. **Set it to 0 for
 raw calls, so faults crash normally and give clean dumps.**
 
-Every entry-point call goes through SEH-guarded invokers — plain `__try` / `__except`, no C++
-exceptions, **zero cost until a fault**. The `__try` helpers must stay free of objects with
-destructors (C2712), so they only return the exception code and plain C++ wrappers do the logging.
+Every entry-point call goes through SEH-guarded invokers (`sehInvoke`) — plain `__try` / `__except`, no C++
+exceptions, **zero cost until a fault** — each under a `ThreadLocalScope` (a script tick never parks). The
+`__try` helpers must stay free of objects with destructors (C2712), so they only return the exception code and
+plain C++ wrappers do the logging.
 
 **Caught** (`scriptFaultFilter`): access violation, in-page error, illegal instruction, array bounds
 exceeded, privileged instruction, integer divide by zero (the common one), integer overflow
-(`INT_MIN / -1`), and the six float faults.
+(`INT_MIN / -1`), and the seven float faults.
 
 > The float faults only exist if someone UNMASKS the FP control word. Masked — the default, and what
 > the engine wants — float math produces inf/NaN and never raises.
 
 **Deliberately NOT caught:** breakpoints and single-step stay with the debugger; C++ exceptions
-(0xE06D7363) stay fatal as they are today; and **stack overflow stays fatal because the guard page is
+(0xE06D7363) stay fatal; and **stack overflow stays fatal because the guard page is
 spent** — continuing after it would fault unrecoverably anyway.
 
 A fault marks the module `faulted` and logs. `requirementsMet` folds the flag in, so the script stops
 running everywhere — **`OnDestroy` included, since its data may be half-written** — and
 ScriptEventManager's direct `OnEvent` path checks it itself. A successful (re)load clears it, so
-**F6 / Compile & Run is the recovery path.**
+**a recompile (F6, or a save in the Script panel) is the recovery path.**
 
 ## The DSL subsystem
 
@@ -251,8 +252,8 @@ nothing here depends on UI or ImGui, and UI's Script Editor panel is simply its 
 | Partition | Role |
 |---|---|
 | `:DSL` | The document data model — `DSLSymbol` structures, lines, `dataFields`, `eventNames`, `requiredComponents`. |
-| `:ScriptLang` | Syntax, formatting and the autocomplete rules. |
-| `:ScriptBindings` | **The engine-exposure registry.** `registerStruct` / `registerObject` / `registerComponentType` / `registerEntryPoint` are PUBLIC, so any library can expose its own surface. Each member carries an emit template: `$r` = the receiver's emitted expression, `$1..$n` = arguments in the callee's parameter order. |
+| `:ScriptLang` | Syntax (`Syntax::format`), formatting and the autocomplete rules. |
+| `:ScriptBindings` | **The engine-exposure registry.** `registerStruct` / `registerObject` / `registerComponentType` / `registerEntryPoint` are PUBLIC, so any library can expose its own surface (Entity's `ScriptContext.cpp` registers the components). Each member carries an emit template: `$r` = the receiver's emitted expression, `$1..$n` = arguments in the callee's parameter order. |
 | `:ScriptLoader` | Native save/load of the `.dsl` format, plus `checkContainerMutations`. |
 | `:Transpiler` | Emits the C++. |
 
@@ -318,12 +319,8 @@ the engine as-is.
 ## `.scr` — legacy
 
 A `.scr` IS the generated C++ (the same 5 entry points) with the node graph appended as `//@graph` /
-`//@node` comments.
-
-**The `.scr` / NodeEditor path is REMOVED from the running editor:** no node panel, no `.scr` open or
-create routes. The `NodeEditor/` sources remain in the tree for reference and still compile as unused
-partitions.
+`//@node` comments. **There is no `.scr` editor**: no node panel, no `.scr` open or create routes. The
+`Code/UI/Private/NodeEditor/` sources remain in the tree for reference only.
 
 A `.scr` shows as a plain text file in Content, is not offered by script pickers, and is not cooked.
-`ScriptHost` itself would still compile one if a `.pre` carried the path, but nothing authors that any
-more.
+`ScriptHost` itself would still compile one if a `.pre` carried the path, but nothing authors that.

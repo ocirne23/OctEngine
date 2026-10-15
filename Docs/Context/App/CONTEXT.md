@@ -1,10 +1,10 @@
 # App
 
 > Documentation for `Code/App` — the testbed executable: `main.cpp` (ONLY `main()`: the init
-> sequence, the timers, the frame loop), `App.Session`, `InputControls`, `App.UnattendedRun`. (The
-> lobby and chat MODELS, `LobbySystem` / `ChatSystem`, are `Game:Lobby` /
-> `Game:Chat` — plain stack locals in main, which services them; the profile report writer is
-> `Profiler::writeReport` with main's injected file writer.)
+> sequence, the timers, the frame loop), `App.Session`, `App.InputControls`, `App.Tools`,
+> `App.UnattendedRun`. (The lobby and chat MODELS, `LobbySystem` / `ChatSystem`, are `Game:Lobby` /
+> `Game:Chat`, owned by the Session; the profile report writer is `Profiler::writeReport` with the
+> injected file writer.)
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency
 > direction.
 >
@@ -18,91 +18,103 @@ App links everything, plus Game and AppScripts.
 # The frame loop
 
 ONE loop and ONE init sequence for every mode; `headlessServer` branches inside it. In order
-([main.cpp:542](../../../Code/App/main.cpp#L542) onward):
+([main.cpp:226](../../../Code/App/main.cpp#L226) onward):
 
 | # | Step | Notes |
 |---|---|---|
-| 1 | **`Time::beginFrame(...)`** | The whole frame boundary: fence wait, frame-rate limit, event-pump kick, next frame's clock. **BEFORE the "main loop" scope opens and before input is sampled** — see RendererVK. Headless calls plain `Time::update()`. |
+| 1 | `time.setFpsCeiling(...)` (60 while the main menu is up), then **`Time::beginFrame(...)`** | The whole frame boundary: fence wait, frame-rate limit, event-pump kick, next frame's clock. **BEFORE the "main loop" scope opens and before input is sampled** — see RendererVK. Headless calls plain `Time::update()`. |
 | 2 | `ProfileScope("main loop")` opens | |
-| 3 | **`joinPostUpdateJobs()`** (the FRAME batch) | Last frame's widget pass only. The SIM batch — Nav field steps, the game's nav feed (gather + the Nav setters) + ambient wander — joins later, at row 10, so it also overlaps input, prepare and the camera. Windowed and headless alike. |
-| 4 | `ui.flushMainThreadWork()` + `renderer.updateImGuiTextures()` | Deferred tweak callbacks, container imports, and the glyphs the pass baked — **the ImGui context is quiescent from the join until `ui.update()`.** Also promotes the pass's PENDING draw-data snapshot to the one present records (never earlier: the pass can finish before present). |
+| 3 | **`joinPostUpdateJobs()`** (the FRAME batch) | Last frame's widget pass only. The SIM batch (Nav field steps, the game's nav feed + ambient wander) joins later, at row 10, so it also overlaps input, prepare and the camera. Windowed and headless alike. |
+| 4 | `ui.flushMainThreadWork()` + `renderer.updateImGuiTextures()` (once a widget pass was kicked) | Deferred tweak callbacks, container imports, and the glyphs the pass baked — **the ImGui context is quiescent from the join until `ui.update()`.** Also promotes the pass's PENDING draw-data snapshot to the one present records (never earlier: the pass can finish before present). |
 | 5 | `forceSystem.joinMerge()` | Last frame's merge job — **before input or drains can touch emitters.** |
-| 6 | Menu / lobby / chat servicing | Only while the main menu is active. See below. |
+| 6 | `session.serviceServerLost()` → `serviceMainMenu()` → `serviceChat()` | The menu / lobby servicing runs only while the main menu is active; the chat every windowed frame. See below. |
 | 7 | `TweakRegistry::update(dt)` | Synced change detection. |
 | 8 | `input.update` → **`ui.prepare()`** → `controls.update` | The panel prepare jobs overlap everything down to `ui.update`. |
-| 9 | Escape menu | |
-| 10 | **`joinPostUpdateJobs(Sim)`**, then camera: `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
-| 11 | Script reload requests, then the UI and script `EntityChange` drains | |
-| 12 | `simDeltaSec = time.getSimDeltaSec()` | **Read HERE, after the input dispatch and tweak poll, so a pause toggle applies to this very frame.** |
+| 9 | `session.serviceEscapeMenu()` | |
+| 10 | **`joinPostUpdateJobs(Sim)`**, then `session.updateCamera`: `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
+| 11 | Script reload requests and the UI `EntityChange` drain (windowed), then the script `EntityChange` drain | |
+| 12 | `simDeltaSec = time.getSimDeltaSec()`, `jobSystem.setFrameHasPhysicsStep(physics.willStep(simDt))` | **Read HERE, after the input dispatch and tweak poll, so a pause toggle applies to this very frame.** |
 | 13 | `networkManager.receive(dt)` | Snapshot targets and events land before the sim reads them. |
 | 14 | `game->updatePlayer(simDt)` | ONLY the player-body writes (pre-physics). |
 | 15 | `scriptContext.update(...)` | |
-| 16 | **`world.joinSelection()`**, **`terrain.joinUploads()`** (last frame's chunk mesh upload job, kicked after present — the begin-frame job and the entity pass read the mesh tables it grows), then **KICKS: `renderer.setFrameView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`, it had the whole frame) must be done before the commit inside the spatial kick — normally a no-op. Kicks under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
+| 16 | **`world.joinSelection()`**, **`terrain.joinUploads()`** (last frame's chunk mesh upload job, kicked after present — the begin-frame job and the entity pass read the mesh tables it grows), then **KICKS: `renderer.setFrameView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`) must be done before the commit inside the spatial kick — normally a no-op. The kicks run under a `"Frame kicks"` scope, which attributes the submit + wake cost. |
 | 17 | `physics.update(simDt)` | ≤ 1 step; contact events stay buffered. |
-| 18 | `audio.update` → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()`. |
+| 18 | `audio.update` → **`navSystem.update(simDt)`** → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()` (and runs no nav update). |
 | 19 | `game->update(simDt)` **or** `world.setSimLodFocus(&camera.position, 1)` | The rest of the game tick; also publishes the SIM LOD focus. |
 | 20 | `physics.dispatchContactEvents(...)` | **AFTER the joins** — contact scripts query the index and can touch renderer state. |
 | 21 | **`world.update(renderer, simDt)`** | The parallel entity pass. |
 | 22 | `networkManager.send(dt)` | Server: snapshot entities at their POST-update poses. |
 | 23 | terrain → collider (kicks its `"Terrain collider"` job; joined at row 25) → ocean → **`terrain.render(ocean)`** (one walk of the visible hand-over for chunks + ocean sectors; kicks both push jobs) → trees (joins last frame's TreeWorld bookkeeping job first, then kicks the TreeWorld POOL job: the record pool's adds / removes + `updateTreeRecords`) → rocks → clutter (after the trees: it reads their records) → **`trees.kickWorldUpdate()`** (joins the pool job, then kicks the TreeWorld bookkeeping job: after its last reader, the clutter; the next trees.update joins it) → particles → force → **`renderer.kickGridBuilds()`** | The force update is the frame's LAST light source and the last writer of the force emitter slots, so the light grid's merge job and the force compaction + grid build job kick right after it (see RendererVK: the per-light work already ran inline in every `addLightInfo`). **Any new light source or emitter writer must run before this kick.** |
 | 24 | `ui.drawGizmoEntity` → `game->joinWorldLabels()` → **`ui.update(...)`** | The game's world-labels job (kicked at the end of its tick, row 19, overlapping the entity pass) feeds the widget pass's HUD overlay, so it joins right before the pass is queued. |
-| 25 | **`navSystem.update`** → **`terrainCollider.joinUpdate()`** (its box3d body create/destroy must end before the Sim batch reads bodies) → **`kickPostUpdateJobs()` → `terrain.joinRender()` → `ocean.joinRender()` → `trees.joinWorldPool()` (present reads the tree record pool) → `renderer.present()` → `terrain.kickUploads()`** (the chunk mesh uploads overlap the frame-pacing wait; joined at row 16) | The nav publish + its Low-priority build kicks go LAST before the post-update kick, so the build slices run through present and the fence wait instead of next to the cull chunks (they used to kick at row 18, right after the spatial kick, and delay it). It also queues the field-steps job that rides this kick. A finished build publishes one frame later. Headless kicks too — **an unkicked queue only fills up.** `terrain.joinRender()` / `ocean.joinRender()` join the streamer's chunk render-push job and the ocean's sector job (kicked in their `update`s) so their `renderNode` pushes, and the ocean's wave-extent / camera-surface stores, land before present. |
+| 25 | **`terrainCollider.joinUpdate()`** (its box3d body create/destroy must end before the Sim batch reads bodies) → **`kickPostUpdateJobs()` → `terrain.joinRender()` → `ocean.joinRender()` → `trees.joinWorldPool()` (present reads the tree record pool) → `renderer.present()` → `terrain.kickUploads()`** (the chunk mesh uploads overlap the frame-pacing wait; joined at row 16) | Headless kicks too — **an unkicked queue only fills up.** `terrain.joinRender()` / `ocean.joinRender()` join the streamer's chunk render-push job and the ocean's sector job (kicked in their `update`s) so their `renderNode` pushes, and the ocean's wave-extent / camera-surface stores, land before present. |
 | 26 | `mainLoopScope.stop()` → `profiler.endFrame()` | **The scope stops BEFORE the frame mark, so the record stays inside this frame's window.** |
-| 27 | Headless: Sleep-based tick limiter | |
+| 27 | Headless: Sleep-based tick limiter (`--tickrate`) | |
 
-After the loop: `joinPostUpdateJobs()` and `forceSystem.joinMerge()` for the final in-flight batches.
+After the loop: both `joinPostUpdateJobs()` batches, `world.joinSelection()` and `forceSystem.joinMerge()`
+for the final in-flight work.
 
 > **The quiescent window (16 → 18) is the whole point.** The drains, net receive and `game.updatePlayer`
-> above it are the last registers and container loads, and `physics.update` no longer fires contact
-> scripts — so the cull and begin-frame jobs overlap the physics step and audio.
+> above it are the last registers and container loads, and `physics.update` does not fire contact
+> scripts — so the cull and begin-frame jobs overlap the physics step, audio and the nav update.
 > **Nothing added between the kicks and the joins may touch the spatial index or renderer frame
 > state.**
 
-**THE RESIZE HOLD** (main.cpp, right before the frame kicks): while the left mouse button is down
+**THE RESIZE HOLD** (main.cpp, inside the "Frame kicks" scope): while the left mouse button is down
 (`SDL_GetGlobalMouseState` - an OS query, so it also sees a window-border drag in Windows' modal sizing loop on
 the window thread), the renderer keeps its sizes - `setFrameView` gets the LAST viewport rect,
 `SDL_EVENT_WINDOW_RESIZED` only sets `windowResizePending`, and `Renderer::setResizeHold` makes an out-of-date
-swapchain skip the frame instead of rebuilding. On release: one `recreateWindowSurface` (or swapchain rebuild) and
-the final viewport rect. A rebuild per frame of the drag recreated the DLSS feature every frame and broke it.
+swapchain skip the frame instead of rebuilding. On release: one `recreateWindowSurface` and the final viewport
+rect. **A rebuild per frame of the drag recreates the DLSS feature every frame and breaks it.**
 
 ## Init order
 
-Window (**spawns the WINDOW THREAD**) → `input` → **`jobSystem`** → `registerExternalHelper` +
-`setIdleWork` on the window thread → camera → renderer → UI → world (+ `setHeadless` **BEFORE any
-spawn**) → physics → audio → spatialIndex → occlusionBuffer → particleSystem + forceSystem (**before
-any world spawn** — components register on spawn) → networkManager → scriptEvents +
-`registerScriptDslBindings` → terrain / terrainCollider / trees / rocks / clutter / ocean → the ocean↔terrain wiring
-and `physics.setWaterSurface` (the higher of the ocean's wave surface and the rivers' / lakes' calm one).
+`FileSystem::initialize` → `installFileHooks` (tweak file IO + saved values, the profile report writer) →
+`Settings::registerAll` → `runCommandLineTool` → `parseCommandLine` → Window (**spawns the WINDOW
+THREAD**) → `input` → **`jobSystem`** → `registerExternalHelper` + `setIdleWork` on the window thread →
+renderer → UI → world (+ `setHeadless` **BEFORE any spawn**) → physics → audio → spatialIndex →
+occlusionBuffer → particleSystem + forceSystem (**before any world spawn** — components register on
+spawn) → networkManager → scriptEvents + `registerScriptDslBindings` → terrain / terrainCollider / trees /
+rocks / clutter / ocean → `physics.setWaterSurface` (the higher of the ocean's wave surface and the rivers'
+/ lakes' calm one) → VR input → `Session` + `InputControls` → the main menu or `startFromCommandLine`.
 
 ---
 
 # Command line
 
+Parsed by `parseCommandLine` (Session.ixx); an unknown argument logs a warning.
+
 | Flag | Effect |
 |---|---|
-| `--game` | The whitebox game instead of the testbed scene. **Refused with `--headless`** — GPU field readbacks drive the authority sim. |
+| `--game` | The whitebox game instead of the testbed scene. **Ignored with a headless server** — GPU field readbacks drive the authority sim. |
 | `--coop` | PvE. **Needs `--game`**; clients pass it too, since the layout is local. |
-| `--sandbox` | Skips the main menu and boots straight into the sandbox (the command-line testbed path, `startWorldAndGame(false, ...)`). Ignored with `--game`. |
-| `--server` / `--connect <ip>` / `--port N` / `--tickrate N` / `--headless` / `--no-encrypt` | |
-| `--scenario <save\|default>` / `--scenario-at <sec>` | |
-| `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` / `--profile-workers` | |
-| `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
-| `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. **Either unattended flag also installs `App.UnattendedRun`'s failure handling**: no modal dialogs (assert / abort / OS fault box — the run FAILS instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the debugger break. |
+| `--sandbox` | Skips the main menu and boots straight into the sandbox (`startWorldAndGame(false, ...)`). Ignored with `--game`. |
+| `--server` / `--connect <ip>` / `--port N` (default 27888) / `--tickrate N` (10..240, default 60; the headless tick) / `--headless` (only with `--server`) / `--no-encrypt` | |
+| `--scenario <save\|default>` / `--scenario-at <sec>` (default 1) | Runs `GameMatch::runScenario` once; needs `--game`. |
+| `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` (default `Local/profile.txt`) / `--profile-workers` | |
+| `--quit-after <sec>` | |
+| `--screenshot-after <sec>` / `--screenshot-out path` | The frame presented after `<sec>` is written as a PNG (default `Local/screenshot.png`, relative to `Assets/`) by `Renderer::requestScreenshot`: read back from the swapchain image itself, so the window may be covered, unfocused or on another monitor. `Tools/screenshot.ps1` runs it (sandbox, fullscreen, ~10 s is enough) and copies the PNG out. |
+| `--no-vsync` | Just `setOverride("Time/VSync=0")`. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
-| `--camera x y z dx dy dz` | The free-fly camera's start position and look direction (the HUD's `pos` / `dir`), instead of `Session::START_POS` / `START_DIR`. With `Tools/screenshot.ps1` it is Claude's visual repro loop for a view the user reports. |
-| `--screenshot-after <sec>` / `--screenshot-out path` | The frame presented after `<sec>` is written as a PNG (default `Local/screenshot.png`, relative to `Assets/`) by `Renderer::requestScreenshot`: read back from the swapchain image itself, so the window may be covered, unfocused or on another monitor. An unattended flag (no main menu, the failure handling). `Tools/screenshot.ps1` runs it (sandbox, fullscreen, ~10 s is enough) and copies the PNG out. |
-| `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Parsed in `main` itself, before the window exists. |
+| `--camera x y z dx dy dz` | The free-fly camera's start position and look direction (the window title's `pos` / `dir`), instead of `Session::START_POS` / `START_DIR`. With `Tools/screenshot.ps1` it is Claude's visual repro loop for a view the user reports. |
+| `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Read in `main` itself, before the window exists. |
+| `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
 
-**The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
-`--game`, not `--sandbox`, not an unattended run (`--profile-after`, `--quit-after` or `--screenshot-after`), and no `--scenario`.
+**UNATTENDED RUN** = `--profile-after`, `--quit-after` or `--screenshot-after`. It installs
+`App.UnattendedRun`'s failure handling: no modal dialogs (assert / abort / OS fault box — the run FAILS
+instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the
+faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the
+debugger break. An unattended run also counts as focused for frame pacing.
+
+**The MAIN MENU boots when none of these apply** (`LaunchOptions::mainMenu`): not a client or server,
+not `--game`, not `--sandbox`, not an unattended run, and no `--scenario`.
 
 ## One-shot tools (`App.Tools`)
 
 A flag that runs one job instead of the engine and exits 0 (success) or 1. main calls
-`runCommandLineTool(argc, argv)` right after `FileSystem::initialize`, before `parseCommandLine` (so the
-tool flags never reach its unknown-argument warning) and before anything else initializes. **A new tool is
-one function plus a row in `c_tools`** — never a branch in main. The exit is `_Exit` after a flush: the
-global destructors assume a live renderer (`~StagingManager` destroys its fences on the device).
+`runCommandLineTool(argc, argv)` after `FileSystem::initialize` and the tweak registration, before
+`parseCommandLine` and before any engine system initializes. **A new tool is one function plus a row in
+`c_tools`** — never a branch in main. The exit is `_Exit` after a flush: the global destructors assume a
+live renderer (`~StagingManager` destroys its fences on the device).
 
 ---
 
@@ -113,18 +125,18 @@ terrain as background — and nothing mode-specific starts until a selection arr
 
 Contents: co-op / PvP / sandbox buttons; a **"Host a server" checkbox** or an address field
 (`ip[:port]`, empty = offline); Quit; and a **SETTINGS page built from the tweak registry** — curated
-per-section category-prefix tables in MainMenu.cpp, with dev branches (Debug / Stress / Stats / Cheats
-/ Emitter / V3, plus Time/Paused) filtered out, rows drawn by the exported `drawTweakVar` shared with
-the TweakPanel, and `onChange` deferred through the TweakPanel's list.
+per-section category-prefix tables in MainMenu.cpp, with dev branches (any category containing Debug /
+Stress / Stats / Cheats / Emitter / V3, plus Time/Paused) filtered out, rows drawn by `drawTweakVar`
+shared with the TweakPanel, and `onChange` deferred through the TweakPanel's list.
 
 **The host endpoint display** is seeded with `netGetLocalAddress()` + the launch port, then upgraded to
 the EXTERNAL IP once `netGetExternalAddress()` lands — **run on a detached thread with a shared_ptr
-result block, polled in the loop's menu block.** The LAN address then moves to a dim note line; a
-failure keeps the LAN address with a note.
+result block, polled in `serviceMainMenu`.** The LAN address then moves to a dim note line; a failure
+keeps the LAN address with a note.
 
-**Flow:** the menu only RECORDS a `MainMenuAction`. main polls `takeMainMenuAction()` **after the
+**Flow:** the menu only RECORDS a `MainMenuAction`. The session polls `takeMainMenuAction()` **after the
 post-update join** and runs the start in the **pre-kick window**, where main-thread spawns and the
-network start are legal, **under a one-shot `AllowMainThreadIO`** (the F10 pattern).
+network start are legal; `startWorldAndGame` holds its own `AllowMainThreadIO`.
 
 A failed host or join leaves the menu up with the reason in the log. During the menu phase the testbed
 keys are muted (`setGameMode(true)`) and free flight is paused; the mode start restores both.
@@ -133,11 +145,10 @@ keys are muted (`setGameMode(true)`) and free flight is paused; the mode start r
 `parseCommandLine`, `installFileHooks` and the `g_running` flag) — a stack local in `main()` (it owns the
 `oc::optional<GameMatch>`, the `LobbySystem` and the `ChatSystem`, so it must stay one: see the
 `GameMatch` rule in [`Docs/Context/Game/CONTEXT.md`](../Game/CONTEXT.md)). Its methods are the phases the
-loop calls in order: `serviceServerLost` / `serviceMainMenu` / `serviceChat` (menu servicing, row 6),
+loop calls in order: `serviceServerLost` / `serviceMainMenu` / `serviceChat` (row 6),
 `serviceEscapeMenu` and `updateCamera` (rows 9–10), plus the network event dispatch it installs
-(`installNetworkCallbacks`). `main()` itself keeps the command line (`parseCommandLine` →
-`LaunchOptions`), the engine init sequence INLINE (its order is the init-order documentation), the
-timers and the frame loop.
+(`installNetworkCallbacks`). `main()` itself keeps the engine init sequence INLINE (its order is the
+init-order documentation), the timers and the frame loop.
 
 **The start is SPLIT in two (both `Session` methods):**
 
@@ -149,8 +160,8 @@ timers and the frame loop.
 
 # Lobby (`Game:Lobby`, serviced here)
 
-`LobbySystem` is a plain stack local in main — **plain state, no entity handles.** The UI is the
-MainMenu's lobby page, with `LobbyView` / `LobbyAction` snapshots polled exactly like the menu action.
+`LobbySystem` is a Session member — **plain state, no entity handles.** The UI is the MainMenu's lobby
+page, with `LobbyView` / `LobbyAction` snapshots polled exactly like the menu action.
 
 **EVERY co-op or PvP pick enters the lobby instead of starting** — multiplayer to gather players,
 offline as a LOCAL lobby (see below). The sandbox starts immediately, and command-line runs never
@@ -172,8 +183,8 @@ adds a second column, **the WORLD block** (`LobbyView::local` + `LobbyWorldView`
   its own ImGui-managed texture. **A new preview first UNSEEDS a seeded world** — the diffusion
   runtime holds one seed process-wide.
 * **Click the map, pick a playable-area size, then "Seed world"** — `LobbyAction::SeedWorld`
-  carries the pick (0..1) and the area's side in metres; `serviceWorldAction` turns it into tweak
-  OVERRIDES: `Terrain/Seed`, `Terrain/Origin X (m)` / `Origin Z (m)` (from
+  carries the pick (0..1) and the area's side in metres (clamped 256..65536); `serviceWorldAction` turns
+  it into tweak OVERRIDES: `Terrain/Seed`, `Terrain/Origin X (m)` / `Origin Z (m)` (from
   `TerrainPreview::worldOffsetAt`, so the pick becomes the engine's origin), **`Terrain/Range
   (chunks)` sized to the area** (the previous radius is remembered and restored on unseed),
   `Terrain/Enabled=1` and `Ocean/Enabled=1` — the sandbox's switch. It then starts the session's
@@ -189,16 +200,17 @@ adds a second column, **the WORLD block** (`LobbyView::local` + `LobbyWorldView`
   cold tile.
 * **Start** first calls `TerrainGenV3::unloadModels()` for a seeded world (every tile it needs is on
   disk; the caches keep serving and nothing infers in game), then runs
-  `startWorldAndGame(true, coop)` unchanged: the game spawns over the streamed terrain (its flat ground plane and grid still sit at y = 0 — the match does not yet read the
-  terrain height), and `exitToMenu` unseeds, resets the preview and switches the terrain off.
+  `startWorldAndGame(true, coop)` unchanged: the game spawns over the streamed terrain (its flat ground
+  plane and grid still sit at y = 0 — the match does not read the terrain height), and `exitToMenu`
+  unseeds, resets the preview and switches the terrain off.
 
 The multiplayer lobby has no world block: a client would not get the seed or the origin (they would
-have to ride the game's GMp event), so the seeded world is single-player only for now.
+have to ride the game's GMp event), so the seeded world is single-player only.
 
 **The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): the procedural world (the sky
-is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through
-tweak OVERRIDES (applied at once) and switched off again in
-`exitToMenu`, so every other mode keeps its own default of off.
+is no entity: the renderer draws it under `Sky/Enabled`) — `Terrain/Enabled` and `Ocean/Enabled` are
+switched ON through tweak OVERRIDES (applied at once) and switched off again in `exitToMenu`, so every
+other mode keeps its own default of off. A sandbox SERVER also spawns `Entities/Debug/networkTest.pre`.
 
 ## Events (server-authoritative, reliable)
 
@@ -218,16 +230,16 @@ lanes), the PvP `numTeams` and `pvpMap`, and the roster with ready bits AND team
 ## The map and match blocks
 
 **Co-op** — the lobby page's "Map" block holds seed / fill / lanes as host-editable widgets committing
-on release as a `SetMapSettings` action, read-only on clients. At launch main hands them to the host's
-GameMatch through `setMapSettings` before `spawnWorld`. **Clients still generate ONLY from the game's
-GMp event — the lobby copy is display.**
+on release as a `SetMapSettings` action, read-only on clients. At launch the session hands them to the
+host's GameMatch through `setMapSettings` before `spawnWorld`. **Clients still generate ONLY from the
+game's GMp event — the lobby copy is display.**
 
 **PvP** — the host's MAP combo (`EPvpMap`; **the names reach the UI through
 `LobbyView::pvpMapNames`, so UI never imports Game**) and a "Number of teams" slider (2..8, commit on
 release). Every player picks a team through the combo on their OWN row of the player list.
 
 **A joiner lands on the least-populated team, lowering the count re-seats anyone above it, and any map
-or team-layout change mid-countdown cancels it.** At launch main hands count + picks + arena to
+or team-layout change mid-countdown cancels it.** At launch the session hands count + picks + arena to
 GameMatch (`setLobbyTeams`, `setPvpMap`) before `spawnWorld`.
 
 ## Ready check and launch
@@ -248,9 +260,9 @@ At countdown end the server spawns its world and calls `game->onClientJoined` fo
   address** — becomes `exitToMenu`. Host: the server closes and every client sees a disconnect.
   Client: just its disconnect, and the server's `onClientLeft` hooks drop it.
 * **A CLIENT whose server goes away** gets `NetworkManager::setOnServerLost`, fired inside `receive()`
-  before the auto-reconnect. **main only sets a flag there** and runs `exitToMenu` at the next loop top
-  (pre-kick window; the shutdown ends the reconnect), with a "Disconnected from the server" status
-  line. **Command-line clients keep the auto-reconnect.**
+  before the auto-reconnect. **The callback only sets a flag** and `serviceServerLost` runs `exitToMenu`
+  at the next loop top (pre-kick window; the shutdown ends the reconnect), with a "Disconnected from the
+  server" status line. **Command-line clients keep the auto-reconnect.**
 
 **Known limit:** a CLI `--game --connect` client in a menu-hosted lobby never readies — its lobby is
 inert, so the host cannot start.
@@ -259,18 +271,19 @@ inert, so the host cannot start.
 
 # Chat (`Game:Chat`, serviced here)
 
-`ChatSystem` (Game's `Chat.ixx`), a plain stack local next to the lobby. The UI is `UI:ChatPanel`: main pushes a `ChatView`
-snapshot **only when `chat.generation()` changed**, and polls `takeChatOutgoing()` every frame.
+`ChatSystem` (Game's `Chat.ixx`), a Session member next to the lobby. The UI is `UI:ChatPanel`: the
+session pushes a `ChatView` snapshot **only when `chat.generation()` changed**, and polls
+`takeChatOutgoing()` every frame.
 
 Drawn EMBEDDED in the lobby page and as a translucent OVERLAY in the game layout's bottom-right corner
 (co-op and PvP; single player fires locally only).
 
 **ONE event, `"ChM"` [string ≤ 200 chars], reliable.** A sent line is `fireNetworkEvent`'d — the local
 fire is our own log entry, and **the server relays to the other clients re-attributed to the real
-sender.** main's dispatcher routes "ChM" to `chat.handleNetEvent()` BEFORE the Lb*/game split.
+sender.** The session's dispatcher routes "ChM" to `chat.handleNetEvent()` BEFORE the Lb*/game split.
 
 Both server-side event filters admit it: `ChatSystem::allowsEvent` in the lobby filter, and **the Game
-layer's `Gq*` filter repeats the 256-byte cap by hand, because Game cannot import App.**
+layer's `Gq*` filter repeats the 256-byte cap (`ChatSystem::c_maxEventBytes`) by hand.**
 
 Names are "Host" / "Player N", like the lobby roster. The log survives lobby → match and resets on
 exit-to-menu; 100 messages kept.
@@ -298,7 +311,7 @@ the pre-kick window**, where main-thread entity destruction and the network shut
 keep running under your menu). "Pause game" (offered over a running game only) calls
 `GameMatch::requestPause(true)`: the authority flips `Time::setPaused` and broadcasts **GPz**; a
 client sends a **GqZ** request instead, which the server applies and re-broadcasts — so **any
-player may pause, and any player may resume**. main mirrors `game->isPaused()` into
+player may pause, and any player may resume**. The session mirrors `game->isPaused()` into
 `UI::setGamePaused` every frame: while set, `MainMenu::renderPausedBox` draws a centered PAUSED box
 (under the escape menu, no dim) with a Resume button (`EscapeMenuAction::Unpause` →
 `requestPause(false)`). The transport keeps running on the real clock, so the resume event still
@@ -307,7 +320,7 @@ clears the pause so exit-to-menu never strands the clock.
 
 While the overlay is over a RUNNING game **the frame camera is left untouched** — neither the game's
 follow cam nor the fly camera runs, because the fly-camera branch would overwrite it with the testbed
-camera's pose (*the view dropped to that pose every time the overlay opened*).
+camera's pose.
 
 The overlay also carries the **"Debug panels"** checkbox, and next to it **"Pause profiler"** —
 `Profiler::setPaused` without the Profiler panel's own UI in the frame (the panel adopts the state when
@@ -320,21 +333,24 @@ CONTEXT.
 
 # Testbed keys (`InputControls`)
 
-`InputControls` is headless-inert — update and key handling never run there.
+`InputControls` is headless-inert — `update` runs only in the windowed branch, and headless has no key
+events.
 
-**In game mode `setGameMode(true)` mutes the spawn and possess keys.** Script event fires, hotbar
-routing, F5/F6 and T/R/G stay. And **while the game HUD's hotbar is ACTIVE, keys 1..9 and 0 select
-hotbar slots** and the testbed meanings are skipped.
+**In game mode (`setGameMode(true)`, also during the main menu) only Esc, the W/A/S/D/LShift/Space script
+events, T/R/G, F5, F6, F7 and Pause/Break stay**; every other key below is muted and `update` does
+nothing. Outside game mode, **while the game HUD's hotbar is ACTIVE, keys 1..9 and 0 (without Ctrl)
+select hotbar slots 0..9** and fire the `"Hotbar Select"` script event; the testbed meanings of those keys
+are skipped.
 
 ## Always
 
 | Key | Action |
 |---|---|
 | F5 | Reload shaders |
-| F6 | Recompile the Script Editor's current script |
+| F6 | Recompile and hot-reload the script the Script Editor is editing (`scriptHost.reloadCurrentScript`) |
 | F7 | Write the profiler text report (to `--profile-out`) |
-| Pause/Break | Toggle the global simulation pause — see Core's two clocks; **works in game mode too** |
-| T / R / G | Gizmo Translate / Rotate / Scale (editor only) |
+| Pause/Break | Toggle the global simulation pause (`Time::setPaused`, also the "Time/Paused" tweak) — see Core's two clocks |
+| T / R / G | Gizmo Translate / Rotate / Scale |
 | Esc | The escape menu (see above) |
 
 **Script events fired on every press and release:** W/A/S/D, LShift, Space → `"W Down"` / `"W Up"` etc.
@@ -343,14 +359,15 @@ hotbar slots** and the testbed meanings are skipped.
 
 | Key | Spawns at the camera |
 |---|---|
-| 2 | Point light, range 25, intensity 50 |
-| 3 | Point light, range ~15, intensity 30 |
-| 4 | Spot, cone 25°, edge softness 0.25 |
-| 5 | Area quad, 1×1, emitting along the camera direction |
-| 6 | Tube, radius 0.1, length 1, axis = camera up |
-| 7 | Burst of 100 random point lights |
+| 2 | Point light, range 25, intensity 50, random colour |
+| 3 | Point light, range 15.5..16.5, intensity 30, random colour |
+| 4 | Spot along the camera direction, range 12.5, intensity 20, cone 25°, edge softness 0.25 |
+| 5 | Area quad, 1×1, range 10, emitting along the camera direction |
+| 6 | Tube, radius 0.1, length 1, range 10, axis = camera up |
+| 7 | Burst of 100 small random point lights near the world origin (not the camera) |
 
-Values live on the component and are **deliberately not serialized**.
+All share ONE spawn template (a lone Light component); the values live on the component and are
+**deliberately not serialized**.
 
 ## Physics and force
 
@@ -368,29 +385,31 @@ Values live on the component and are **deliberately not serialized**.
 
 | Key | Action |
 |---|---|
-| P | Toggle the GI probe debug cubes (also the "GI/Debug probes" tweak — the game modes have no P) |
-| O | Cycle its mode (irradiance ↔ cellSize/LOD colour; also "GI/Debug probe colour") |
+| P | Toggle the GI probe debug cubes (also the "GI/Debug probes" tweak) |
+| O | Cycle its colour mode: irradiance → cascade / LOD colour → update priority → relocation / backface → visibility (also "GI/Debug probe colour") |
 | L | Aim the sun down the camera forward |
 
 ## Player control
 
-**`C` toggles player control**, and **`V` toggles first/third person** while it is on (third pulls in on
-a wall raycast).
+**`C` toggles player control** (plain C; Ctrl+C stays copy), and **`V` toggles first/third person**
+(third pulls in on a wall raycast).
 
-* **On a network client** it drives the locally-owned capsule (see Multiplayer) with the same camera
+* **On a network client** it drives the locally-owned entity (see Multiplayer) with the same camera
   follow.
-* **Single player or server** it spawns and possesses a local upright `playerCapsule.pre`
+* **Single player or server** it spawns and possesses a local upright `Entities/Debug/playerCapsule.pre`
   (`LockRotation`): camera-relative WASD velocity steering, Space jump off a ground raycast, LShift
-  sprint.
-* The camera follows the interpolated body pose. `Player` tweaks cover eye height, third distance and
-  sprint; the move params are shared with `Network/Player`.
-* **`InputControls::applyPlayerCamera` overrides the frame camera right after the fly camera** in main.
+  sprint (×2).
+* The camera follows the shown body pose. Eye height (0.55 m), third-person distance (3.5 m) and the
+  sprint factor are constants in `InputControls`; move speed, acceleration and jump speed are the
+  `Network/Player` tweaks (`AppControlsSettings`).
+* **`InputControls::applyPlayerCamera` overrides the frame camera right after the fly camera** in
+  `Session::updateCamera`.
 
 ## Network testing
 
 | Key | Action |
 |---|---|
-| U (server) | Throw `Entities/Debug/netPhysCube.pre` |
+| U (not on a client) | Throw `Entities/Debug/netPhysCube.pre` (replicates to the clients on a server) |
 | C (client) | Toggle player control |
 | K | Fire the `"NetPing"` network event |
 
@@ -398,8 +417,8 @@ a wall raycast).
 
 # The profile report writer
 
-`Globals::profiler.writeReport(path, options)` (Core) writes `buildReport` through the writer main
-injects with `setReportWriter` at startup — **because Core does no IO**, the same pattern as the tweak
-registry's `setFileIo`: the lambda in main creates the directory and writes through FileSystem with
-main-thread IO allowed explicitly (a one-shot). Wired to F7, the Profiler panel's Dump button, and the
-`--profile-after` timer. See **Profiling** in [`Docs/Context/Core/CONTEXT.md`](../Core/CONTEXT.md).
+`Globals::profiler.writeReport(path, options)` (Core) writes `buildReport` through the writer
+`installFileHooks` injects with `setReportWriter` at startup — **because Core does no IO**, the same
+pattern as the tweak registry's `setFileIo`: the lambda creates the directory and writes through
+FileSystem with main-thread IO allowed explicitly. Wired to F7, the Profiler panel's Dump button, and
+the `--profile-after` timer. See **Profiling** in [`Docs/Context/Core/CONTEXT.md`](../Core/CONTEXT.md).

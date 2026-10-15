@@ -15,14 +15,14 @@ leaks** — ids are stored as integer bits (`b3BodyId` in a `uint64`, `b3WorldId
 
 ## `Globals::physics` (`PhysicsWorld`)
 
-[PhysicsWorld.ixx:13](../../../Code/Physics/Private/PhysicsWorld.ixx#L13).
+[PhysicsWorld.ixx:14](../../../Code/Physics/Private/PhysicsWorld.ixx#L14).
 
 ### The frame
 
 ```cpp
-physics.update(simDeltaSec);                       // main.cpp:775 — overlapped by the cull + begin-frame jobs
-...  spatial/begin-frame joins, game.update  ...
-physics.dispatchContactEvents(callback);           // main.cpp:796
+physics.update(simDeltaSec);                       // main.cpp:301 — overlapped by the cull + begin-frame jobs
+...  nav update, spatial/begin-frame joins, game.update  ...
+physics.dispatchContactEvents(callback);           // main.cpp:315
 ```
 
 `update(deltaSec)`:
@@ -85,10 +85,10 @@ default unless an override set them first.
 | `Physics/World → Time Scale` | 1 | 0..4 |
 | `Physics/World → Sub Steps` | 4 | 1..16 |
 | `Physics/World → Step Hz` | **20** | 5..120 |
-| `Physics/World → Worker count` | see below | 1..`B3_MAX_WORKERS` |
-| `Physics/World → Contact hertz` | box3d's default, read from `b3DefaultWorldDef` | live (`b3World_SetContactTuning`) |
+| `Physics/World → Worker count` | see below | 1..32 (`B3_MAX_WORKERS`, static_asserted) |
+| `Physics/World → Contact hertz` | box3d's default, read from `b3DefaultWorldDef` | 5..240, live (`b3World_SetContactTuning`) |
 | `Physics/World → Contact damping` | **50** | 0..50 — high = overlap recovery bleeds energy instead of bouncing |
-| `Physics/World → Contact push speed (m/s)` | **0.1** | 0.1..20 — the cap on overlap resolution speed. box3d's own default unwinds a deep overlap in one step, which was the "explosion" when a stack of far-ticked unit bodies enabled at the SIM LOD edge. |
+| `Physics/World → Contact push speed (m/s)` | **0.1** | 0.1..20 — the cap on overlap resolution speed. box3d's own default unwinds a deep overlap in one step: an explosion when stacked unit bodies enable at the SIM LOD edge. |
 | `Physics/Buoyancy → Density (kg/m3)` | 200 | 0..3000 |
 | `Physics/Buoyancy → Linear drag` | 0.5 | 0..20 |
 | `Physics/Debug → Draw colliders / joints / contacts / bounds` | off | |
@@ -163,9 +163,8 @@ Always on, `EProfileCategory::Physics`. Scope tree: `"Physics"` → `"Physics st
   flame graph agree.
 * **box3d's own `taskName` is DELIBERATELY IGNORED.** `ProfileRecord` stores names BY POINTER and the
   panel reads them back frames later, but box3d builds `taskName` into a TRANSIENT buffer, so the
-  pointer is dangling by draw time — every physics scope rendered as a row of `?????`. Copying the
-  text into the task slot does not fix it either: the slot is reused a step later and the copy is
-  overwritten, so names on already-recorded blocks visibly keep changing.
+  pointer dangles by draw time. Copying the text into the task slot does not fix it: the slot is
+  reused a step later, so names on already-recorded blocks change.
 * **Not rate-limited or gated**, unlike the per-entity component updates: the record volume is bounded
   by the STEP rate, not the frame rate — `B3_MAX_TASKS` per step × the 120 Hz `Step Hz` ceiling
   ≈ 15.6K records/sec spread across every worker, which is tens of seconds of ring history per thread
@@ -222,8 +221,8 @@ a `std::mutex` is constant-initialized, so static init is safe.
 Move-only RAII, like `RenderNode`. Destroying the handle destroys the body.
 
 * Reads: `getPosition`, `getRotation`, `getLinearVelocity`, `getAngularVelocity` (**radians/second**),
-  `getMass` (0 for static/kinematic), `getCenterOfMass` (world), `getPointVelocity` (includes spin),
-  `getGravityScale`, damping, `isAwake`, `isEnabled`.
+  `getMass` (0 for static/kinematic), `getCenterOfMass` (world), `getAABB` (world, over every shape),
+  `getPointVelocity` (includes spin), `getGravityScale`, damping, `isAwake`, `isEnabled`.
 * **IMPULSES are instantaneous** (a hit, a jump). **FORCES accumulate over the step and box3d clears
   them every step**, so a continuous push must be re-applied each frame. Both wake the body.
 * The `AtPoint` variants take a WORLD-space point and therefore also impart spin; the plain forms
@@ -253,26 +252,26 @@ bit 0. Two shapes collide when **each one's mask contains the other's category**
 matching `groupIndex` overrides (negative = never, positive = always).
 
 In a `.pre`: `Layer Debris` + `CollidesWith Default, Player` (or `All` / `None`) + optional
-`Group <int>`. Demo: `physicsSphere.pre`.
+`Group <int>`. Demo: `Entities/Debug/physicsSphere.pre`.
 
 ## Buoyancy
 
 `setWaterSurface(fn, activeFn)`. `fn(x, z)` returns the water surface world Y at that column, or
-`-FLT_MAX` where there is no water; the App wires in the higher of the ocean's `sampleWaterHeight` (with its waves)
-and the rivers' / lakes' calm surface (`TerrainStreamer::sampleInlandWaterHeight`, no waves, the inland water map
-round the camera), gated by either having water.
+`-FLT_MAX` where there is no water; the App wires in the higher of the ocean's `sampleWaterHeight` (with its waves,
+only while `OceanGenerator::hasWater()`) and the rivers' / lakes' calm surface
+(`TerrainStreamer::sampleInlandWaterHeight`, no waves, the inland water map round the camera).
 
 **The PhysicsWorld applies NO buoyancy itself.** It only holds the sampler plus the
 `Physics/Buoyancy` tweaks and exposes them as thread-safe reads: `isWaterActive()`,
 `sampleWaterHeight(x, z)`, `getWaterDensity()`, `getWaterLinearDrag()`, `getGravity()`. The
 probe math runs PER COMPONENT on the entity pass (workers) — `PhysicsComponent::applyBuoyancy` in
 Entity, gated by SIM LOD tier — and the result is queued as one `ApplyForce` plus one `ApplyTorque`
-through the body-command queue. It used to be a main-thread pass over a whole-world broadphase
-overlap per step (box3d has no body-list API), which scaled with every enabled body on the map.
+through the body-command queue. (A world-level pass would need a whole-world broadphase overlap per
+step — box3d has no body-list API — and scale with every enabled body on the map.)
 
-`activeFn` is the cheap global gate: `OceanGenerator::hasWater()` false — disabled, or the readback
-unprimed — and every component skips. An empty `activeFn` means always active; an empty `fn`
-disables buoyancy entirely.
+`activeFn` is the cheap global gate: `OceanGenerator::hasWater()` (false while disabled or the
+readback is unprimed) OR `TerrainStreamer::hasInlandWater()`; when it is false every component skips.
+An empty `activeFn` means always active; an empty `fn` disables buoyancy entirely.
 
 The sampler is read from workers, so it must be a const read: the ocean's CPU tile is refreshed by
 the ocean's render job (kicked from `TerrainStreamer::render`, after the entity pass has joined, and
@@ -326,8 +325,8 @@ The component is inline in every physics entity (16-byte slots), so it holds onl
   1. `bodyType` / `lockRotation`: spawn constants. **Never write them after `spawn()`**; other
      workers read them (`unpark`'s overlap probe).
   2. `enabled` / `suspended` / `buoyant` / `poseHeld`: run-time, written by the entity's own job or
-     by main outside the pass. (`enabled` is written only by `spawn()` today; it sits in this byte
-     so a later setter is safe.) **Known and deliberately left:** the `unpark` probe of ANOTHER worker reads
+     by main outside the pass. (`enabled` is written only by `spawn()`; it sits in this byte so a
+     later setter is safe.) **Known and deliberately left:** the `unpark` probe of ANOTHER worker reads
      `suspended` while the owner rewrites the byte for `buoyant` / `poseHeld`. The rewrite keeps
      the `suspended` bit, so the read is right on x86, but it is a data race by the letter of the
      standard (the same class as the probe's `schedTier` read).
@@ -366,18 +365,18 @@ that skips frames still continues exactly. A `lockRotation` body skips the rotat
 
 * `prev` = the pose the entity SHOWS when the step arrives, mixed toward the body. Near the step
   rate a step arrives on almost every frame with a small alpha, so each frame covers only `alpha` of
-  the gap that is left: at 25 fps / 20 Hz the frame-to-frame motion was 0.91, 0.64, 0.39, 0, 2.06
-  steps. (The table above uses the shown pose only BETWEEN steps and on a gap, never at a step.)
+  the gap that is left — uneven motion (at 25 fps / 20 Hz: 0.91, 0.64, 0.39, 0, 2.06 steps per
+  frame). The table above uses the shown pose only BETWEEN steps and on a gap, never at a step.
 * No stored pose: `body − velocity × (1 − alpha) / stepHz`. Fits 32 bytes, but a velocity written
-  between two steps moved the shown pose at once, by up to `Δv / stepHz` — visible on rapid
+  between two steps moves the shown pose at once, by up to `Δv / stepHz` — visible on rapid
   velocity changes.
 
 `snapPose(entity, pos[, rot])` is the teleport contract (see Entity's CONTEXT): it writes the WORLD
 pose into the entity at once (the rotation only when the body owns `entity.rot`) and sets `poseHeld`,
 so the next update leaves the entity pose alone. It also makes the snap the stored step pose
-(`shownAlpha` = 1), so later updates show the teleported body, and the next step mixes from the snap. `PhysicsComponent::getShownPosition(entity)` is the
-entity's world position — read before the entity pass (the player camera, frame row 10) it is the pose
-the mesh showed last frame.
+(`shownAlpha` = 1), so later updates show the teleported body, and the next step mixes from the
+snap. `PhysicsComponent::getShownPosition(entity)` is the entity's world position — read before the
+entity pass (the player camera) it is the pose the mesh showed last frame.
 
 ### Suspend / park
 
@@ -385,7 +384,7 @@ the mesh showed last frame.
 |---|---|
 | `suspendBody()` / `suspendPhysicsTree` | The entity was DISABLED (`EEntityFlag_Enabled`). `updateTree` stops reaching it, so the body would otherwise keep colliding invisibly. Drops the occluder too; the next update after re-enable re-adds and resyncs. |
 | `park(disable)` | SIM LOD dormancy. Zero the velocities, then either DISABLE or merely sleep. |
-| `unpark(entity, velocity)` | Set the linear velocity to `velocity` (a marching unit's walk from `GameUnitComponent::wakeVelocity` — full speed along its far heading, so it does not stand until its first throttled tick; zero for anything at rest, and a body parked inside a crowd may still hold a contact push-out), zero the angular velocity, and enable. **Skipped while `suspended`**: an Enabled-off subtree owns its own disable. **OVERLAP LIFT** first, for a DYNAMIC body: one 1 m `forEachInSphere` on the Entity layer; if any live (or same-pass-woken, by `schedTier`) dynamic body is within 1 m, this one is teleported 2 m up. Far-ticked units teleport through each other, so the front of a wave wakes stacked; landing on a body is fine, being blasted out of it was the "explosion". |
+| `unpark(entity, velocity)` | Set the linear velocity to `velocity` (a marching unit's walk from `GameUnitComponent::wakeVelocity` — full speed along its far heading, so it does not stand until its first throttled tick; zero for anything at rest, and a body parked inside a crowd may still hold a contact push-out), zero the angular velocity, and enable. **Skipped while `suspended`**: an Enabled-off subtree owns its own disable. **OVERLAP LIFT** first, for a DYNAMIC body: one 1 m `forEachInSphere` on the Entity layer; if any live (or same-pass-woken, by `schedTier`) dynamic body is within 1 m, this one is teleported 2 m up. Far-ticked units teleport through each other, so the front of a wave wakes stacked; landing on a body is fine, being pushed out of it explodes the stack. |
 
 Both park calls ride the body-command queue, so **the entity pass never writes box3d.** See
 [`Docs/Context/Entity/SimLod.md`](../Entity/SimLod.md).
@@ -402,14 +401,13 @@ from box3d's mass at spawn).
 
 > **FRAME-RATE INDEPENDENCE IS THE `steps` ARGUMENT, not the schedule.** That deferral is NOT one
 > application per step: a step frame whose predecessor did not step is skipped, and near the step
-> rate the pattern repeats — at 25 fps against the 20 Hz default, one step in four gets no force,
-> so bodies floated 25 % weaker there than at 200 fps. `buoyancyStep` records the step the last
-> application was read after, and the gap to the current step is what this one OWES. **One step
-> consumes the queued force, so the owed count is its SCALE** and the impulse per second of sim
-> time is the same at any frame rate. A gap over `c_maxBuoyancyCatchUpSteps` (4) means the
-> component was out of the loop — spawned, parked, suspended, or tier-gated off — and starts fresh
-> with no catch-up; `buoyancyStep` also tracks the step count while the gate is off, so turning it
-> back on never fires a catch-up force.
+> rate the pattern repeats (at 25 fps against the 20 Hz default, one step in four gets no force).
+> `buoyancyStep` records the step the last application was read after, and the gap to the current
+> step is what this one OWES. **One step consumes the queued force, so the owed count is its SCALE**
+> and the impulse per second of sim time is the same at any frame rate. A gap over
+> `c_maxBuoyancyCatchUpSteps` (4) means the component was out of the loop — spawned, parked,
+> suspended, or tier-gated off — and starts fresh with no catch-up; `buoyancyStep` also tracks the
+> step count while the gate is off, so turning it back on never fires a catch-up force.
 >
 > Scaling the drag term up would let EXPLICIT damping reverse the velocity, so the drag coefficient
 > is capped at `mass / (fully submerged displaced mass × covered seconds)`. For a body near water

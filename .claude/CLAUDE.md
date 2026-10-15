@@ -41,7 +41,8 @@ Guidance for Claude Code when working in this repository.
   dependency direction, asset formats) go here; everything about ONE library goes in that library's
   CONTEXT.md, or in a topic file next to it in `Docs/Context/<Lib>/` when the CONTEXT.md gets too big.
   **Every doc file must be listed in the [Libraries](#where-each-library-documents-itself) table** — that
-  table is the only index a new session has.
+  table is the only index a new session has. Docs describe the CURRENT design and its rules: no build dates, status
+  notes, phase labels or "used to" history; a failed experiment stays only as a one-line "tried X, dropped because Y".
 
 ---
 
@@ -290,6 +291,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | Section | Globals |
 |---|---|
 | `XCA` / `XCA1` / `XCA2` | allocator → profiler → memoryTracker (**first up, last down**) |
+| `XCA3` | `Globals::settings` (every tweak value; up before any library global reads it) |
 | plain `XCU` | input, audio, spatialIndex, entityAllocator, scriptContext, scriptHost, assetRegistry, time, gameHud, Procedural's `g_diffusionRuntime` (destructs after terrain has joined its chunk pumps), ... |
 | `XCU1..XCU4` | VK instance → device + gpuAllocator → rendererVK + openXR → the data managers |
 | `XCU5` | **jobSystem** |
@@ -302,7 +304,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | `XCUB` | navSystem |
 
 So **destruction** runs: nav → procedural → ui → world → scriptEvents → networkManager → physics →
-jobSystem → renderer globals → plain XCU → memoryTracker → profiler → allocator.
+jobSystem → renderer globals → plain XCU → settings → memoryTracker → profiler → allocator.
 
 The constraints that shape it:
 
@@ -329,7 +331,8 @@ pattern.
 
 ## Dependency direction
 
-`target_link_libraries`, PUBLIC unless noted. Everything imports Core and (through Threading / Audio) Settings, and a library NEVER links one
+`target_link_libraries`, PUBLIC unless noted. Everything links Core; every library but Animation, File, Script and
+Network also links Settings directly (left out of the table). A library NEVER links one
 printed above it — read the stack bottom-up, where each row may use every row below it. Third-party
 libs in parentheses are PRIVATE: they never leak through a public interface.
 
@@ -344,8 +347,8 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
    ------------------------------------------------------------------------------------------------
    Particle       RendererVK, File
    Force          RendererVK, Threading   (the merge passes are parallelFors; neighbour search is a private candidate cell list, NOT the SpatialIndex)
-   Procedural     RendererVK, File, Spatial, Physics             (+ onnxruntime, zstd)
-   RendererVK     Animation, File, Threading                     (+ vulkan, glslang; Aftermath DLL is LoadLibrary'd, optional)
+   Procedural     RendererVK, File, Spatial, Physics             (+ onnxruntime, zstd, meshoptimizer)
+   RendererVK     Animation, File, Threading                     (+ vulkan, glslang/shaderc/SPIRV-Tools, openxr_loader, meshoptimizer; Aftermath DLL is LoadLibrary'd, optional)
    ------------------------------------------------------------------------------------------------
    Script         File          (ScriptHost compiles/loads .dsl from disk; disk access is File-only)
    Spatial        Threading
@@ -353,8 +356,8 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
    Physics        Threading     (box3d's solver fork/join runs as jobs)   (+ box3d)
    File           Animation                                      (+ assimp, zlib, meshoptimizer)
    ------------------------------------------------------------------------------------------------
-   Audio          Settings                                       (+ Steam Audio, miniaudio)
-   Threading      Settings
+   Audio          -                                              (+ Steam Audio, miniaudio)
+   Threading      -
    Animation      -                                              -- Core-only
    Network        -                                              (+ Ws2_32, Bcrypt)
    ------------------------------------------------------------------------------------------------
@@ -384,7 +387,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [Clouds](../Docs/Context/RendererVK/Clouds.md) | Volumetric clouds |
 | ↳ [Vegetation](../Docs/Context/RendererVK/Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
 | ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
-| ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water |
+| ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water, the rain occlusion map |
 | ↳ [Shaders](../Docs/Context/RendererVK/Shaders.md) | GLSL in `Assets/Shaders/`: folders, includes, compile, hoisted work, pipeline statistics (register counts), **half floats (fp16)** |
 | [Entity](../Docs/Context/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, CullMode, the parallel update pass, parallel spawning/destruction, World, assets + tint, script glue. **Read it first; the topic files below hold the rest** |
 | ↳ [SimLod](../Docs/Context/Entity/SimLod.md) | **SIM LOD**: focus, the visit set, tiers, the delta, dormant / wake edges |
@@ -535,12 +538,12 @@ reads as plain text in Content, is never cooked, and has no editor. **Author `.d
 
 Checked-in inputs for repeatable runs:
 
-* `*.txt` game saves — the F9 format: structures (cable segments included) and units — for
-  `--scenario <path>` and `Tools/profile.ps1`. `march-64-units.txt` is the corridor with 64 team-0
-  units, the standard perf scenario. `coop-42k.txt` is the starter base plus 42k ambient enemies and
-  nothing else — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD); a
-  co-op scenario loads as saved, with NO march order (`runScenario` skips it when `--coop`):
-  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-42k.txt" -ScenarioAt 2 -After 30`.
+* `*.txt` game saves — the F9 format: structures (cable segments included), units, and the co-op wave / trickle
+  state — for `--scenario <path>` and `Tools/profile.ps1`. The only save now is `coop-base-38k.txt`, a co-op match at
+  wave 18 — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD). A co-op scenario loads as saved,
+  with NO march order (`runScenario` skips it when `--coop`):
+  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-base-38k.txt" -ScenarioAt 2 -After 30`.
+  **`profile.ps1`'s `-Scenario` default (`march-64-units.txt`) no longer exists**: pass `-Scenario` explicitly.
 * `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.
 
 ## `Assets/Local/`

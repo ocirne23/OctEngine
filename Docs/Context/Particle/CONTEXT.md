@@ -11,9 +11,10 @@ GPU particles plus projected decals.
 
 ## `Globals::particleSystem`
 
-[System.ixx:46](../../../Code/Particle/Private/System.ixx#L46).
+[System.ixx:47](../../../Code/Particle/Private/System.ixx#L47).
 
-* `initialize()` before world spawns (currently empty, but keep the call — it is the init seam).
+* `initialize()` before world spawns (empty, but keep the call — it is the init seam; headless never
+  calls it).
 * **`update(renderer, dt)` once per frame on the main thread, AFTER `world.update` and before
   present.** It advances rate accumulators and bursts into renderer spawn requests, **re-uploads
   every emitter's GPU config** — which is why a live `.pfx` edit applies retroactively — and ages and
@@ -24,7 +25,7 @@ GPU particles plus projected decals.
 `ParticleEffect::setTransform` / `setVelocity` write only their own instance's slot, so they are
 **safe from the parallel entity pass** (one writer per instance) and stay lock-free.
 
-Everything else takes `m_effectMutex` ([System.ixx:112](../../../Code/Particle/Private/System.ixx#L112)), because effect
+Everything else takes `m_effectMutex` ([System.ixx:125](../../../Code/Particle/Private/System.ixx#L125)), because effect
 create/destroy runs concurrently from parallel spawn jobs:
 
 | Path | Locking |
@@ -78,9 +79,11 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
   isotropically (a particle is a scattering speck with no normal; spot cones apply, area and tube lights
   count as points). `EmissiveFloor` blends toward unlit.
 * It is the `"Particles"` scene stage inside "Scene forward", after Force union blend and before
-  Fog apply (the stage table, [RendererRecord.cpp:984](../../../Code/RendererVK/Private/RendererRecord.cpp#L984)).
-* Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain
-  occlusion trio, see below).
+  the far-trees / cloud / fog apply stages (the stage table, `Renderer::buildSceneStages`,
+  [RendererRecord.cpp:1363](../../../Code/RendererVK/Private/RendererRecord.cpp#L1363)).
+* Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats, Streak camera blur,
+  Anisotropy, the Wind sheet trio and the Rain occlusion set (see below), plus the built-in effect
+  toggles and Ocean spray / River mist.
 
 ### Diagnosing "the particles stopped"
 
@@ -94,11 +97,11 @@ sim) close that hole:
   spawns and the emitter count, which is enough to name the culprit.
 * `Particles: retired N non-finite particles` (once a second) means a live NaN source upstream. The
   guard stops the leak; the source is still a bug.
-* `Particles/Log stats` adds the full per-second line, now with `dropped` and `broken`.
+* `Particles/Log stats` adds the full per-second line, with `dropped` and `broken`.
 
-> The old log's "GPU spawns" was always 0: it read `c_gpuSpawnCount`, which the begin pass zeroes for
-> the next frame's producers before the readback is taken. It reads the latched `c_gpuSpawnConsume`
-> now, so ocean spray actually shows up as the pool consumer it is.
+> The logged "GPU spawns" must read the latched `c_gpuSpawnConsume`, never `c_gpuSpawnCount`: the begin
+> pass zeroes the latter for the next frame's producers before the readback is taken (it would always
+> read 0).
 
 ## The GPU spawn path (other compute passes driving particles)
 
@@ -164,9 +167,7 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   `weatherSheet` additionally multiplies the drawn alpha by a third travelling field (sheet contrast)
   for visible curtains. A storm: speed 15, gust strength 8, sheet contrast 0.7, sheet drift 6.
 * No terrain floor: a drop below the ground is hidden by the depth test until it wraps, which is
-  correct for every camera that cannot see under the terrain. Splashes at the impact point are the
-  natural follow-up (the depth collision already reports the hit).
-
+  correct for every camera that cannot see under the terrain.
 * `Underwater true` — the volume lives BELOW the live ocean surface: the sim puts a particle that is
   above the surface (same FFT + shore sampling as `WaterFloor`) back at a random depth under it, so
   a bubble reaching the surface pops and re-forms below; the draw hides the whole volume while the
@@ -198,14 +199,15 @@ a volume never ages out and has nothing else to remove. The handles are DETACHED
 
 A `ParticleEffectDesc` is a named set of `ParticleEmitterDesc`s — fire = flames + smoke + embers.
 `loadParticleEffect(path, ...)` parses the text asset; the **full grammar is documented at
-[Effect.ixx:92](../../../Code/Particle/Private/Effect.ixx#L92)**, every entry optional. Demos: `Assets/Effects/fire.pfx`,
-`rain.pfx`, `snow.pfx`.
+[Effect.ixx:119](../../../Code/Particle/Private/Effect.ixx#L119)**, every entry optional. Demos: `Assets/Effects/fire.pfx`,
+`rain.pfx`, `snow.pfx`, `dust.pfx`, `underwater.pfx`.
 
 Emitter fields group as **appearance** (texture, flipbook cols/rows/fps, colorStart/End, additivity,
 fadeIn, fadeOutStart, softFadeDistance, lit, emissiveFloor), **spawning** (rate, burst, spawnRadius,
 spawnShell, coneAngleDeg, speedMin/Max, localOffset, localDirection, inheritVelocity), **weather
-volume** (volume, count, followCamera, occlude - see above), **motion** (lifeMin/Max, gravity, drag,
-turbulence + frequency + scroll, collide, collisionBounce) and **shape over life** (sizeStart/End,
+volume / water** (volume, count, followCamera, occlude, windResponse, underwater, aboveWater, waterFloor,
+heightFalloff - see above), **motion** (lifeMin/Max, gravity, drag, turbulence + frequency + scroll,
+collide, collisionBounce) and **shape over life** (sizeStart/End,
 sizeVariance, velocityStretch, spinMax, randomRotation).
 
 An empty `texturePath` renders a procedural soft round sprite (`PARTICLE_TEX_NONE`). Textures load
@@ -219,7 +221,7 @@ or 0 if the spawn was dropped.
 * Aging pool: `lifetime` 0 = persistent; `removeDecal` turns it finite so it fades out over
   `fadeOutTime`; the oldest **non-persistent** decal is evicted at `MAX_DECALS` = 4096.
 * Pushed per frame through the lock-free `Renderer::addDecal`.
-* Drawn as ONE instanced draw of unit cubes — the `"Decals"` scene stage, right after static meshes.
+* Drawn as ONE instanced draw of unit cubes — the `"Decals"` scene stage, after static meshes (and the debug-only GI probe impostors).
   `cullMode = Front`, **depth test and write both off**, premultiplied blend.
 * The FS reconstructs the surface from the scene depth (and derives the surface normal from it), projects into decal space (+Z axis),
   angle-fades (`angleFadeDeg` / `angleFadeWidth`) and blends. `DECAL_FLAG_LIT` approximates sun + GI.

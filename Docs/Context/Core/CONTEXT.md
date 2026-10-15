@@ -4,10 +4,12 @@
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
 Cross-library utilities and the wrappers for the big third-party headers (glm, SDL, imgui, Windows —
-the Vulkan wrapper is RendererVK-private, `Util/VK.ixx`). **Core links nothing.**
+the Vulkan wrapper is RendererVK-private, `Util/VK.ixx`). **Core links no engine library** (only EASTL,
+vulkan-1, SDL3, imgui and Windows libs, all PRIVATE).
 
 Core uses DOTTED module names, one module per `.ixx`, and `Core.ixx` re-exports the vocabulary
-modules. It defines the `int8`..`uint64` typedefs, the `INT*_MAX` / `FLT_*` constants, `ARRAY_SIZE`
+modules (`Core.Profiler`, `Core.OcSTL`, `Core.SmallVector`, `Core.OcBit`). It defines the
+`int8`..`uint64` typedefs, the `INT*_MAX` / `INT*_MIN` / `UINT*_MAX` / `FLT_*` constants, `ARRAY_SIZE`
 and `Clock` (steady high-resolution).
 
 ---
@@ -18,10 +20,10 @@ and `Clock` (steady high-resolution).
 string, view, smart pointer, atomic and the utilities around them are spelled `oc::<name>` everywhere
 else, so swapping the backing is an edit HERE, not at ~6500 call sites.
 
-**ALIASES ONLY — one line per type, nothing with a body.** The engine's own containers live in
-`Core.SmallVector`, which imports this one; never the reverse. OcSTL's only imports are header units,
-so it sits BELOW everything including `Core.Profiler` (which imports it instead of Core, since Core
-re-exports Profiler).
+**ALIASES ONLY — one line per type, nothing with a body** (the few spelled-out exceptions are below).
+The engine's own containers live in `Core.SmallVector`, which imports this one; never the reverse.
+OcSTL's only imports are header units, so it sits BELOW everything including `Core.Profiler` (which
+imports it instead of Core, since Core re-exports Profiler).
 
 ## The backing is EASTL
 
@@ -50,8 +52,9 @@ have needs no `#ifdef`.
 
 | Name | Difference |
 |---|---|
-| `oc::allocator<T>` | EASTL allocators are **not element-typed** — one allocator serves every T and hands out raw bytes. The parameter is ignored so both backings share one alias signature; `oc::allocateArray` / `deallocateArray` absorb the byte-vs-element difference, and that is what `Core.SmallVector` allocates through. |
-| `oc::make_unique<T[]>` | **Spelled out, not aliased.** EASTL's is `new T[n]` (**DEFAULT**-init) where std's is `new T[n]()` (**VALUE**-init) — a silent divergence that shipped garbage into every zero-assuming array: `BitRangeAllocator`'s grown tail read as fully allocated and asserted at startup, and script data, profiler records and char buffers all assume zeroing. |
+| `oc::allocator<T>` | Under EASTL it is **our own class**: EASTL never rebinds an allocator and hands out raw bytes, so this one allocates EVERY block of a container with `alignof(T)` and frees through the matching `operator delete` form (see the application hooks below). `oc::allocateArray` / `deallocateArray` absorb the byte-vs-element difference between the backings; that is what `Core.SmallVector` allocates through. |
+| `oc::make_unique<T[]>` | **Spelled out, not aliased.** EASTL's is `new T[n]` (**DEFAULT**-init) where std's is `new T[n]()` (**VALUE**-init). Engine code assumes zeroed arrays (`BitRangeAllocator`'s grown tail, script data, profiler records, char buffers), so ours value-initializes. |
+| `oc::make_shared` | **Ours:** `allocate_shared` with `oc::allocator<T>`. EASTL's goes through `eastl::allocator`, which does not align an over-aligned `T`. |
 | `oc::as_bytes` | Ours in BOTH backings — `std::as_bytes` does not accept an `eastl::span`. |
 | atomics | **std in BOTH backings, deliberately.** An atomic is not a container: it allocates nothing and is a thin wrapper over intrinsics. EASTL's is a strict subset — no `atomic_ref`, no C++20 wait/notify (which the JobSystem eventcount and JobMutex are built on), and its memory orders are distinct **TAG TYPES** rather than one enum, which would not mix with the `std::atomic`s the engine still has to touch. |
 | `initializer_list`, `char_traits` | std in both. |
@@ -82,7 +85,7 @@ them, and routing them through here means Core.ixx has no std import of its own)
 * **`<bit>`** — see `Core.OcBit`.
 * **`<filesystem>` and `<fstream>`** — ALL file and directory access goes through the File library's
   `FileSystem`, so a library that needs the disk links File. **Core itself therefore cannot do IO:**
-  the tweak registry (now `Settings.Tweaks`) and the profiler's report writer take injected hooks from main.
+  the profiler's report writer takes an injected hook from main (as does `Settings.Tweaks`).
 
 ## Crossing to `std::`
 
@@ -115,19 +118,15 @@ is `malloc` / `free` for plain blocks and `_aligned_malloc` / `_aligned_free` fo
 over-aligned block must free through `deallocateAligned(ptr, align)`:
 
 * C++ `new` / `delete` of an over-aligned type use the `align_val_t` forms, which carry it.
-* **Every `oc::` container uses `oc::allocator<T>`** (Core.OcSTL), NOT `eastl::allocator`. EASTL never
-  rebinds an allocator, so the typed one allocates all of a container's blocks with `alignof(T)` and
-  its `deallocate` calls the matching `operator delete` form. `oc::vector<alignas(64) T>` works
-  (Spatial's `CellBlock`).
-* **`oc::make_shared` is ours** too: `allocate_shared` with `oc::allocator<T>`. EASTL's own used
-  `eastl::allocator`'s plain `allocate`, which did not even align an over-aligned `T`.
+* **Every `oc::` container uses `oc::allocator<T>`** (Core.OcSTL), NOT `eastl::allocator`, so
+  `oc::vector<alignas(64) T>` works (Spatial's `CellBlock`).
 * `eastl::allocator` itself (a bare `eastl::` container, `eastl::function`'s heap storage) frees every
   block with plain `delete[]`, so its aligned hook **aborts on align > 16** instead of corrupting the
-  heap; align ≤ 16 is a plain block. It still asserts on a non-zero `alignOffset`.
+  heap; align ≤ 16 is a plain block. It asserts on a non-zero `alignOffset`.
 
 `CHECK_BOUNDS` / `TRACK_ALLOCATION_SIZE` (both off, `#if 0` at the top of `Allocator.ixx`) bring back
-a 16-byte `AllocationHeader` (size, `alignPad`, check value) in front of every block; only then does
-`getUsedSize()` count anything.
+a 16-byte `AllocationHeader` (size, `alignPad`, check value) in front of every block (`CHECK_BOUNDS`
+adds a tail check value too); only then does `getUsedSize()` count anything.
 
 ## Debugger visualizers
 
@@ -168,8 +167,7 @@ wants an explicit cast.
   `countl_zero`. That is a property of the TZCNT/LZCNT encodings, **so do not lower `/arch` without
   revisiting this.**
 * `bitCast` is the one piece of `<bit>` that was never a dispatch problem — a compiler builtin, and
-  the only entry usable in constant expressions — which is why `std::bit_cast` is gone from the
-  codebase too.
+  the only entry usable in constant expressions. Use it instead of `std::bit_cast`.
 
 ---
 
@@ -190,7 +188,7 @@ The engine's own contiguous containers, re-exported by `Core.ixx` alongside OcST
 
 ## Global pause
 
-Tweak `Time/Paused` — **Synced**, so the server's pause freezes clients. The
+Tweak `Time/Paused` — **Synced** (never Saved), so the server's pause freezes clients. The
 Pause/Break key toggles it, game mode included.
 
 | Clock | Reads | Consumers |
@@ -222,15 +220,17 @@ Settings library - bound once by main with `bindSettings`) plus **`beginFrame(wi
 waitFence)`** — ONE call at the loop top does the whole frame boundary: the fence wait, the frame-rate
 limit, the window thread's event-pump kick, and the start of the next frame's clock.
 
-The fence goes through a function pointer main passes (`Renderer::waitFrameSlot`), **because Core
-cannot see the renderer**; both it and `pumpWindow` may be null.
+The fence goes through a function pointer main passes (a lambda over `Renderer::waitFrameSlot`),
+**because Core cannot see the renderer**; both it and `pumpWindow` may be null.
 
 Tweaks: `Max FPS` (0 = uncapped), `Inactive max FPS` (30), `Busy-wait window (ms)` (2.5),
-`Stable frame time` (on), `Input pump lead (ms)` (2.0), `VSync`.
+`Stable frame time` (on), `Input pump lead (ms)` (2.0). `Time/VSync` is registered with the render
+settings (`Settings.Render`), not `TimeSettings`; `beginFrame` gets it as the `vsync` argument.
 
 **`setFpsCeiling(fps)`** is a cap ON TOP of those (the target is the lower of the two; 0 = none), not a
-tweak and never saved: main sets 60 every frame while a menu is up (main menu pages, the lobby — NOT
-the escape overlay, the game runs under it) and 0 otherwise, so the settings survive untouched. Never applies in VR.
+tweak and never saved: main sets 60 every frame while the main menu is active (its pages and the lobby
+— NOT the escape overlay, the game runs under it) and 0 otherwise, so the settings survive untouched.
+Never applies in VR.
 
 The full behaviour — the limit, stable-time attribution, the vsync period quantization and the pump
 prediction — is documented under **Frame pacing** in
@@ -241,13 +241,13 @@ prediction — is documented under **Frame pacing** in
 Constructed with a duration and an optional callback returning `REPEAT` or `DONE`; serviced by
 `processTimers()` inside `Time::update`, so **a timer fires at the frame boundary**. Asserts on a
 duration under 1 ms. `reset(duration)` re-arms. The one-shot `--profile-after` / `--quit-after` /
-`--scenario-at` triggers are `Timer`s.
+`--scenario-at` / screenshot triggers are `Timer`s.
 
 ---
 
 # Tweaks
 
-The tweak registry (`Settings.Tweaks`) and every tweak's value moved to the **Settings** library - see
+The tweak registry (`Settings.Tweaks`) and every tweak's value live in the **Settings** library - see
 [`Docs/Context/Settings/CONTEXT.md`](../Settings/CONTEXT.md). Core has no tweak code; its own "Time" values are
 `TimeSettings` (above).
 
@@ -270,10 +270,10 @@ draws it once per frame over the viewport.
 
 | Element | Notes |
 |---|---|
-| **Hotbar** | `NumSlots` = 12. Default keys 1..9,0 in one row; `setHotbarLayout(columns, keyLabels)` folds it into a GRID — the RTS QWER/ASDF/ZXCV pattern. `HudSlot{ label, count, used }`; count > 0 draws a stack number. |
+| **Hotbar** | `NumSlots` = 12. Default keys `1`..`9`, `0`, `-`, `=` in one row; `setHotbarLayout(columns, keyLabels)` folds it into a GRID — the RTS QWER/ASDF/ZXCV pattern. `HudSlot{ label, count, used, tooltip }`; count > 0 draws a stack number, a non-empty `tooltip` is a hover card. |
 | **Bars** | `HudBar{ name, value, maxValue, color }` — keyed by display name, insertion order is display order. |
-| **Counters** | `HudCounter{ name, value, decimals, color }`, stacked from the top left. |
-| **World labels** | `HudWorldLabel` — gameplay **PRE-PROJECTS** the world position into viewport pixels (`Camera::worldToScreen`) and **replaces the whole list every frame**: no keys, no persistence, and off-screen entities are simply not submitted. Title, info lines, up to THREE stacked bars, and an `emphasized` flag for the selected entity. |
+| **Counters** | `HudCounter{ name, value, decimals, text, color }`, stacked from the top left; a non-empty `text` shows instead of the number. |
+| **World labels** | `HudWorldLabel` — gameplay **PRE-PROJECTS** the world position into viewport pixels (`Camera::worldToScreen`) and **replaces the whole list every frame**: no keys, no persistence, and off-screen entities are simply not submitted. Title, info lines, up to THREE stacked bars, a `warning` badge, and an `emphasized` flag for the selected entity. |
 | **Popup** | `HudPopup` — a world-anchored BUTTON ROW (the barracks unit-type picker), rebuilt every frame like the labels. |
 
 **Hit-testing works in both directions:** the overlay reports each drawn slot's and button's screen
@@ -295,11 +295,11 @@ destructs last, see InitSeg.h.
 | Module | What |
 |---|---|
 | `Core.Allocator` | Global `new`/`delete` routed through `Globals::allocator`. Exposes the `g_memoryAllocHook` / `g_memoryFreeHook` atomics the MemoryTracker installs — **null until installed, one relaxed load and a branch of overhead**. Contract: the alloc hook fires AFTER a successful allocation, the free hook BEFORE release, so a recycled address can never race its own map entry, and **hook implementations must never allocate through these paths.** |
-| `Core.Log` | 4096-message ring behind a mutex with a `g_revision` counter; the UI Log panel snapshots it. Levels Verbose / Info / Warning / Error. **`Log` also prints to stdout**, which is what makes an unattended run's output file useful. |
-| `Core.Camera` | `Camera` (position, viewMatrix, near, far) plus `screenToWorld` for viewport picking and `worldToScreen` for the HUD's world labels. |
+| `Core.Log` | 4096-message ring (`MaxMessages`) behind a mutex with a `g_revision` counter; the UI Log panel snapshots it. Levels Verbose / Info / Warning / Error. **`Log` also prints to stdout**, which is what makes an unattended run's output file useful. |
+| `Core.Camera` | `Camera` (position, viewMatrix, near, far) plus `screenToWorld` for viewport picking and `worldToScreen` for the HUD's world labels; `reverseZProjection` rewrites a projection to reversed-Z. |
 | Math | `Transform`, `Frustum`, `AABB`, `Sphere`, `Rect`. |
-| `Core.VirtualArray` | `VirtualArray<T>`: an array that NEVER moves — `reserve(maxCount)` reserves the whole size as address space, `commit(count)` (thread-safe, under its own mutex) commits zero-filled pages as it grows. Access is plain base + index. Trivial `T` only (never constructed). It bypasses the engine allocator, so it calls the tracker hooks itself: each commit step is one tracked allocation (keyed by the step's start address, sized by its byte delta) under a `ProfileScope` named by `reserve(maxCount, name, category)` — a box of that name in the Memory panel, nested under whatever scope the growth ran in; the destructor frees every step. At most 64 tracked steps. The OS calls are in `Private/VirtualArray.cpp` (`Core.Windows` exports `MEM_*` / `PAGE_READWRITE` as typed constants). User: Spatial's `RecordPool` (lock-free registration). |
-| Containers | `LPMultiMap`, `LockFreeList`, `ExpiryCache`, `BitRangeAllocator`, and `CheckedPtr` / `RefCheckable` (debug-checked non-owning pointers). `BitRangeAllocator<true>`: `acquire*` / `release*` lock-free (atomic_ref on the bit words and the search hint); **`resize()` and `isBitSet()` are not** - `resize` replaces the bit array, so the owner excludes every other call around it (MeshDataManager's grow lock). Its first user (2026-10-05); the variant had never compiled before (`.load()` on a plain `uint64`). |
+| `Core.VirtualArray` | `VirtualArray<T>`: an array that NEVER moves — `reserve(maxCount, name, category)` reserves the whole size as address space, `commit(count)` (thread-safe, under its own mutex) commits zero-filled pages as it grows. Access is plain base + index. Trivial `T` only (never constructed). It bypasses the engine allocator, so it calls the tracker hooks itself: each commit step is one tracked allocation (keyed by the step's start address, sized by its byte delta) under a `ProfileScope` named by `reserve`'s `name` (a string literal) — a box of that name in the Memory panel, nested under whatever scope the growth ran in; the destructor frees every step. At most 64 tracked steps. The OS calls are in `Private/VirtualArray.cpp` (`Core.Windows` exports `MEM_*` / `PAGE_READWRITE` as typed constants). User: Spatial's `RecordPool` (lock-free registration). |
+| Containers | `LPMultiMap`, `LockFreeList`, `ExpiryCache`, `BitRangeAllocator`, and `CheckedPtr` / `RefCheckable` (debug-checked non-owning pointers). `BitRangeAllocator<true>`: `acquire*` / `release*` lock-free (atomic_ref on the bit words and the search hint); **`resize()` and `isBitSet()` are not** - `resize` replaces the bit array, so the owner excludes every other call around it (MeshDataManager's grow lock, its only user). |
 | `Core.BitPathTrie` | `oc::BitmapPathTrie` (builder) + `oc::BitmapPathTrieView` (lookup / iteration): a static, case-insensitive path trie with 16-byte nodes, laid out to bake to disk and memory-map. Not re-exported from `Core.ixx`. The format notes are at the top of the file. **`OC_PATH_TRIE_IMPLICIT_KEYS`** (defined in the file, on by default): a key is the path's position in symbol order, not a stored id — `orderedKeys()` maps keys back to the ids passed to `insert()`. **Test:** `Core.BitPathTrieTest` (`App.exe --test-path-trie`) — every path found in every case spelling, canonical case, near misses, `forEach` / `forEachChild` against brute force; run it after any layout change, in both define modes. |
 | `Core.VrSession` | The `IVrSession` interface — opaque handles, no OpenXR types — implemented by RendererVK's `OpenXRSession` and consumed by Input's `VrInput`, **so Input and RendererVK stay unlinked.** |
 | `Core.glm` / `Core.SDL` / `Core.imgui` / `Core.Windows` | Wrappers for the big third-party headers. |
@@ -311,7 +311,8 @@ destructs last, see InitSeg.h.
 # Profiling
 
 CPU + GPU scope profiler: `Core.Profiler` (`Globals::profiler`), re-exported from `Core.ixx`. **Its
-interface must not import Core back** — it uses textual std includes in the GMF.
+interface must not import Core back** — it imports `Core.OcSTL` (plus `<intrin.h>` / `<cstdint>` in the
+GMF).
 
 ## `ProfileScope`
 
@@ -322,10 +323,9 @@ ProfileScope scope("Name", EProfileCategory::Physics);
 RAII, and **the name MUST be a string literal** — records store it by pointer. About 15 ns on the hot
 path: two rdtsc plus one 32-byte store into the calling thread's lock-free single-writer ring.
 
-`ProfileTrack` holds `CAPACITY` = 32K records (1 MiB per track) by default, overwrite-on-wrap;
-`registerThread` takes a per-track capacity (a power of two) and **the Main track gets 4x (128K
-records, 4 MiB)**: the main loop emits ~170 scopes a frame in a co-op session, which lapped 32K
-inside the default 256-frame report window.
+`ProfileTrack::CAPACITY` = 32K records (1 MiB per track), overwrite-on-wrap; `registerThread` takes a
+per-track capacity (a power of two) and **the Main track gets 4x (128K records, 4 MiB)**: the main loop
+emits ~170 scopes a frame in a co-op session, which laps 32K inside the default 256-frame report window.
 `MAX_TRACKS` = 64, `FRAME_HISTORY` = 512, `MAX_OPEN_DEPTH` = 32.
 
 `stop()` exists for the cases where a scope must end early; the destructor is then a no-op.
@@ -345,19 +345,20 @@ directly usable as an ImGui `ImU32`) — **must be edited together.**
 The entity pass carries a scope only for entities flagged `EEntityFlag_Profiled`, a one-way
 `setProfiled()` latch. Animator sets it at spawn; machine structures (barracks, medic, turret) latch
 it in update, since `machineKind` is stamped post-spawn. **Units, scripts and force emitters carry NO
-scope**: a co-op session runs thousands of unit updates per frame, and their scopes lapped the
-32k-record rings within ~60 frames. Static scenery stays scope-free for the same reason.
+scope**: a co-op session runs thousands of unit updates per frame, which would lap the 32K-record
+rings within ~60 frames. Static scenery stays scope-free for the same reason.
 
 ## Thread registration is explicit-only
 
 Every profiling thread calls `registerThread(name, sortKey)` at startup. **A `ProfileScope` on an
-unregistered thread debug-asserts and no-ops.**
+unregistered thread debug-asserts and no-ops.** Named tracks with no thread (the GPU track) come from
+`createNamedTrack`.
 
 Sort keys drive display order: `SORT_KEY_MAIN` 0, `SORT_KEY_NAMED` 1 (the GPU track),
 `SORT_KEY_WORKER` 2 + index, `SORT_KEY_BACKGROUND` 100 + offset (streamers, timer, loaders).
 
-* **Registered:** Main (in the profiler's static-init ctor), JobWorkerNN (in `workerMain`), GPU,
-  TexStream / MeshStreamer, V3 Loader, JobTimer.
+* **Registered:** Main (in the profiler's static-init ctor), JobWorkerNN (in `workerMain`), Window,
+  TexStream, MeshStreamer, V3 Loader, JobTimer; plus the named GPU track.
 * **Deliberately unregistered:** transient startup pools and stress-test threads — tracks are
   permanent at 1 MiB each — and miniaudio's thread.
 
@@ -388,8 +389,8 @@ makes a `ProfileScope` valid from any static initializer. `endStaticInit()` FIRS
 closes the synthetic `"Static init"` scope, so static-init allocations attribute there.
 
 **Recording is always on.** The panel's PAUSE freezes the data, not the bookkeeping (`setPaused`:
-ring pushes drop, while open/close keeps running so migration and Memory attribution stay live).
-Resume lays a GAP pseudo-frame (`isFrameGap`) whose duration is meaningless.
+ring pushes and frame marks drop, while open/close keeps running so migration and Memory attribution
+stay live). Resume lays a GAP pseudo-frame (`isFrameGap`) whose duration is meaningless.
 
 ## GPU pass timings
 
@@ -400,14 +401,15 @@ SECONDARY_COMMAND_BUFFERS subpass admits no other primary commands.
 That is why the desktop forward pass records **one render-pass instance per stage** — see
 [`Docs/Context/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md).
 
-One query pool per frame slot; results are read in `beginFrame` after the fence and pushed into a
-named "GPU" track. Alignment uses `VK_KHR_calibrated_timestamps`, with fallback submit-tick anchoring.
+One query pool per frame slot; a `collect` job kicked in `Renderer::beginFrame` after the slot's fence
+reads the results and pushes them into the named "GPU" track. Alignment uses
+`VK_KHR_calibrated_timestamps`, with fallback submit-tick anchoring.
 
 ## Text report
 
 `Profiler::buildReport(ProfileReportOptions)` → `oc::string`. **Core does no IO**, so
-`Profiler::writeReport(path, options)` writes it through the writer main injects (`setReportWriter` —
-FileSystem with main-thread IO allowed explicitly, a one-shot; Core itself does no IO).
+`Profiler::writeReport(path, options)` writes it through the writer main injects (`setReportWriter`:
+FileSystem with main-thread IO allowed for that one write).
 
 Contents — the last N completed frames, never across a pause gap:
 
@@ -420,8 +422,8 @@ Contents — the last N completed frames, never across a pause gap:
 
 JobWorker tracks MERGE into one "Workers (merged)" tree, or one each with `perWorkerTrees`. Parent =
 the last record one level up that CONTAINS the record, by time. Records are per on-thread SEGMENT, so
-a fiber-parked scope counts once per resume. **A "RING LAPPED" note flags a track whose 32K ring no
-longer covered the window.**
+a fiber-parked scope counts once per resume. **A "RING LAPPED" note flags a track whose ring no longer
+covered the window.**
 
 ### Triggers
 
@@ -434,38 +436,42 @@ App.exe --profile-after <sec> [--profile-frames W] [--profile-out path] [--profi
 ```
 
 **TIMES ARE SECONDS of engine time since the loop start** — frame counts would shift with the frame
-rate. `--profile-frames` clamps to `FRAME_HISTORY - 1` (511).
+rate. `--profile-frames` clamps to 1..`FRAME_HISTORY - 1` (511). `--no-vsync` is the override
+`Time/VSync=0`.
 
 Each trigger is a one-shot `Timer` returning `Timer::DONE`, armed before the loop, **so it fires from
 `Time::update()` at the frame boundary** — after the previous frame's mark and before the "main loop"
 scope opens, which is exactly where the report (completed frames only) and its IO belong.
 
-> main() re-bases the clock with ONE `Globals::time.update()` right before arming them. Nothing calls
-> `update()` during init, so the clock still stood at STATIC-INIT time and **every timed trigger
-> fired on frame 1 whenever init outlasted the flag's seconds.** The same re-base also stops the
-> first frame's delta from being the whole init phase.
+> main() re-bases the clock with ONE `Globals::time.update()` right before arming them. **Keep it:**
+> nothing calls `update()` during init, so without it the clock stands at static-init time, every timed
+> trigger fires on frame 1 when init outlasts its seconds, and the first frame's delta is the whole init.
 
-Either timed flag also makes the window count as FOCUSED — otherwise the "Inactive max FPS" cap is
-what gets measured.
+Any unattended flag (`--profile-after`, `--quit-after`, the screenshot trigger) also makes the window
+count as FOCUSED — otherwise the "Inactive max FPS" cap is what gets measured.
 
 ### `Tools/profile.ps1`
 
 ```
 Tools/profile.ps1 [-Config RelWithDebInfo] [-After 10] [-QuitAfter After+0.5] [-Frames 256]
-                  [-Out Local/profile.txt] [-Game] [-Scenario ...] [-ScenarioAt 1]
+                  [-Out Local/profile.txt] [-Game] [-Scenario Scenarios/march-64-units.txt] [-ScenarioAt 1]
                   [-Server] [-Port 27999] [-VSync] [-Fullscreen] [-Workers] [-NoBuild]
                   [-Tweak "..."] [-Tweaks Scenarios/cpu-profile.tweaks]
                   [-Show 80] [-TimeoutSec 300] [-AppArgs "..."]
 ```
 
-Builds App, runs it, waits for the clean exit and prints the report head. **THE loop for Claude to
-measure → change → re-measure without looking at the screen.** It always overrides `Time/Max FPS=0`.
+Builds App (`--target App`, unless `-NoBuild`), runs it, waits for the exit (kills it after
+`-TimeoutSec`) and prints the first `-Show` lines of the report. **THE loop for Claude to measure →
+change → re-measure without looking at the screen.** It always overrides `Time/Max FPS=0`, passes
+`--no-vsync` unless `-VSync`, and `--profile-workers` with `-Workers`. `-Out` and `-Tweaks` are
+`Assets/`-relative; the `-Tweaks` file goes first, so single `-Tweak` values win over it.
 
 * **GPU work: `-Fullscreen`** (App `--fullscreen`: a borderless desktop-size window, the editor panels hidden) -
   the user's display is 1440p, and the default 1920x1080 window with docked panels renders a far smaller viewport.
   **Sandbox GPU timings: `-Fullscreen -After 60`** - in fullscreen the terrain + tree streaming is still running at
-  30 s (TreeWorld::placeChunk, terrainUpload, ~2 ms of BLAS builds).
-* **Run-to-run noise is large (2026-10-05):** some runs are ~10-40 % slower in EVERY pass (GPU clock state), and the
+  30 s (TreeWorld::placeChunk, terrainUpload, ~2 ms of BLAS builds). Rendering work is the sandbox (no `-Game`;
+  `-Game` is PvP).
+* **Run-to-run noise is large:** some runs are ~10-40 % slower in EVERY pass (GPU clock state), and the
   tree-related passes (Static meshes, Far trees, Shadow draw) vary by ~15 % on their own between runs. Run each case
   twice and compare the minimum; for terrain / sky work `-Tweak "Trees/Enabled=0"` removes the tree noise. Only ONE
   `-Tweak` works through `powershell -File` (an array does not parse) - more overrides go in a `-Tweaks` file.
@@ -476,28 +482,26 @@ Seconds are formatted InvariantCulture — a Dutch locale would print "10,5".
 
 ### Game scenario
 
-`--scenario <save|default> [--scenario-at 1]`.
+`--scenario <save|default> [--scenario-at 1]` (needs `--game`).
 
-Script side: **`-Game -Server` is THE standard perf run.** `-Scenario` defaults to
-`Assets/Scenarios/march-64-units.txt`, a checked-in F9 save of the corridor with 64 team-0 units; `""`
-= none, `"default"` = F10's `Local/gamesave.txt`. `-Server` = `--server --port 27999`, so the
-networking path is live without colliding with a manually running instance on 27888.
+Script side: `-Scenario` only applies with `-Game`; `""` = none, `"default"` = F10's `Local/gamesave.txt`.
+`-Scenario` defaults to `Scenarios/march-64-units.txt`, **which is no longer in `Assets/Scenarios/`** (the
+only checked-in save is `coop-base-38k.txt`) — pass `-Scenario` explicitly. `-Server` = `--server --port 27999`,
+so the networking path is live without colliding with a manually running instance on 27888.
 
-It calls `GameMatch::runScenario` on the authority:
+It calls `GameMatch::runScenario` on the authority (single player or server):
 
 1. `loadGame(path)`.
-2. `issueScenarioOrder` RETRIES each update until three things are ready — the loaded units are
-   queryable (spatial entries link at `commitFrame`, AFTER `game.update`), the enemy Base is in
-   `StructureSystem`'s per-frame view (refreshed in `tickAuthority`, also after), and
-   `navSystem.raster()` is published.
-3. Then it selects EVERY live own-team unit (`NpcSystem::queryAllUnits`, a walk of the World's root
-   list) and issues
-   `moveOrderAt(pointOutsideFootprint(base))` — THE RMB move order, so locked targets plus one seeded
-   lane. `pointOutsideFootprint` is the click-on-building push-out, **because the Base CENTRE is
-   blocked cells, where the A\* fails and every unit's own plan request fails too**, which left the
-   crowd milling at spawn.
+2. **Co-op (`--coop`): nothing else** — the session is measured as saved, with no order.
+3. PvP: `issueScenarioOrder` RETRIES each update (up to 600) until three things are ready — own-team
+   units exist (`NpcSystem::queryAllUnits`, a walk of the World's root list), the enemy Base is in
+   `StructureSystem`'s per-frame view (refreshed later in the update), and `navSystem.raster()` is
+   published.
+4. Then it selects EVERY live own-team unit and issues `moveOrderAt(pointOutsideFootprint(base))` — THE
+   RMB move order, so locked targets plus one seeded lane. **The push-out matters: the Base CENTRE is
+   blocked cells, where the A\* fails** and every unit's own plan request fails too.
 
-It logs `Scenario: N units ordered to (x, z) after F frames, lane seeded|NOT seeded`.
+It logs `Scenario: N units ordered to (x, z) after F frames, lane plan queued|NOT queued (no raster yet)`.
 
 ## UI "Profiler" panel (`UI:ProfilerPanel`)
 
@@ -528,8 +532,8 @@ allocating thread.**
 * Live pointers sit in a **64-shard open-addressing map** (`NUM_SHARDS` 64 × `SHARD_CAPACITY` 8192 =
   512K entries at 24 B each), preallocated, lock-striped.
 * The tracked-bytes / count / dropped counters are **per shard, plain fields written under the shard
-  lock** (no global atomics: those were a contended RMW on one line for every alloc/free). The getters
-  sum the 64 shards without locking.
+  lock** — no global atomics, which would be a contended RMW on one line for every alloc/free. The
+  getters sum the 64 shards without locking.
 * The spare shard bytes hold **debug counters** (`getMapStats`): cumulative allocs / frees, failed
   shard-lock attempts, and each shard's peak fill. The Memory panel shows them as per-frame rates plus
   the fullest shard's peak against the 75% insert cap.
@@ -537,7 +541,8 @@ allocating thread.**
 **Construction through `#pragma init_seg`:** allocator `.CRT$XCA` → profiler `XCA1` → tracker `XCA2`
 (`InitSeg.h`), so static-init allocations are tracked and these three destruct after everything else.
 
-* **The hooks NEVER allocate** — everything is preallocated in the tracker ctor.
+* **The hooks NEVER allocate** — everything is preallocated in the tracker ctor, before the hooks
+  install.
 * **Pools deliberately leak at exit**: the dtor only uninstalls the hooks, since later global dtors
   still free tracked memory.
 * There is no hook suppression. The profiler's tracks are an inline array, so `registerTrack` binds
