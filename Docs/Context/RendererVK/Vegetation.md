@@ -5,7 +5,7 @@
 ## Procedural grass (`GrassPipeline`, "Grass" tweaks, `GrassParams`)
 
 Desktop only (no VR). Blades near the camera ("Range (m)", default 145 m; 1024 blades per 2 m patch, 1 m blades
-0.15 m wide). There is no far tier: past the range the terrain shading alone carries the look.
+0.15 m wide). Past the range the terrain shading carries the look, with THE FAR TIER (below) where grass grows.
 
 * **Patches of RANKED blades** (`grass.inc.glsl`): a world grid of patches ("Patch size (m)", 2 m) around the camera.
   ONE static index buffer (`GrassPipeline::buildIndices`) holds, per LOD (8 / 4 / 2 / 1 segments - they NEST, for the
@@ -103,6 +103,34 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 145 m; 1024 b
     the film keeps its own), and the blades' "Root occlusion" x the canopy's opacity on the ambient. Formed right
     after the layers, so only two halves stay live across the splat.
   * The shadow map keeps the big casters (trees, terrain); the canopy multiplies them.
+* **THE FAR TIER** ("Grass/Far" tweaks): where the blades thin and fade out, the GROUND takes the grass layer's look, out
+  to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (0.2; 0 = off), "Strength" (1, the
+  weight's cap), "Canopy shadow" (1; `u_grass_farSunExtinction`, built as the blades' `u_grass_canopyExtinction`), "Root
+  occlusion" (1), "Colour height" (0.33; 0 root .. 1 tip), "Brightness" (2), "Roughness" (0.5), "Grain" + "Grain size
+  (m)", "Flatten normal" (how far the normal goes to the smooth ground's). All lockable but the two extinctions (live: the blade count).
+  `grassGroundCanopy` (the same call, the same coverages) returns a third value, the weight = (1 - the cover the blades
+  keep) x the view's cover x "Strength":
+  * The blades' cover: grass.vs.glsl's kept fraction k (the thinning `(start / d)^exponent` x the range fade), each kept
+    blade widened by `(1 / k)^"Width compensation"` (capped by "Max width scale"): `min(k^(1 - compensation), k x cap)`.
+    The far tier fills what the LOD takes away, so the soil between the thinned blades shows no band before the range.
+  * The view's cover: `1 - exp(-tauV)`, `tauV = u_grass_farExtinction x cover x size by cover x clump x canopy height /
+    N.V` (a grazing view sees grass where a view from above sees soil between the clumps; N.V floored at 0.05).
+    `u_grass_farExtinction` = Thickness x blades per m^2 x the mean blade width ("Canopy shadow" is the sun's, not in it).
+  * THE SURFACE, right after the splat (before the wet look: wet grass darkens too), mixes by it toward
+    `grassFarAlbedo` (the root-to-tip colour at "Colour height" up the blade, the blades' own dry-patch noise, the cold
+    darkening at the ground's temperature, x "Brightness", and THE GRAIN: "Grain" of variation as "Grain size" tufts of
+    value noise, faded out as a tuft shrinks toward a pixel - the FS's one `fwidth` footprint, shared with the wet
+    look), "Roughness", and the smooth ground normal by "Flatten normal" (the far blades' normal blends to the
+    ground's: "Ground normal blend").
+  * THE LIGHT is the blades', AT THE DEPTH THE VIEW REACHES, in the sun and ambient values the call already returns,
+    blended by the weight. The layer's visible share at depth d is `kv e^(-kv d) / (1 - e^(-tauV))`, so a view from
+    above sees the shaded roots and a grazing one the lit tops: the sun = the canopy's `exp(-ks d)` under it (ks = the
+    far canopy extinction x cover x size by cover x clump / the sun's height; the flecks average out) = `tauV / (ks h +
+    tauV) x (1 - e^-(ks h + tauV)) / (1 - e^-tauV)`; the ambient = "Root occlusion" at the mean visible height, `1 - E[d] / h` with
+    `E[d] / h = 1 / tauV - e^-tauV / (1 - e^-tauV)`. Without them the far grass was clearly brighter than the blades.
+  * **No register cost:** the weight is ONE more half across the splat, the colour is formed after it from live values
+    (the position, the temperature, the footprint), the colours are the lockable grass colours (folded when locked); the
+    ground FS stays 64 / 32 B, the tessellated one 64 / 48 B. Not in it: the blades' back-lit transmission.
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
   shadows around the camera, the canopy beyond.
   * It is an EXTRA LAYER of the sun shadow array (`ShadowMap::initialize(..., extraLayer)`: layer

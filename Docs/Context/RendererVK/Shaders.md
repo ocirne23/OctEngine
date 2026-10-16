@@ -25,6 +25,16 @@ calls `reloadShaders()`.
   it to check the debug info). The debug info may contain `OpExtInstWithForwardRefsKHR` (a debug type that refers to
   one declared later, e.g. a struct passed to a function), so `Device` enables `VK_KHR_shader_relaxed_extended_instruction`
   (`shaderRelaxedExtendedInstruction`) when the driver offers it.
+* **The SPIR-V cache** (`Shader::GLSLtoSPV`): every compile result is stored as
+  `Local/ShaderCache/<path>.<key hash>.spvc` and served on the next compile of the same variant, so startup and F5
+  only parse the shaders that changed. The KEY holds everything that is not a file: `SPV_CACHE_VERSION`, glslang's
+  version, the stage, the file path, the whole preamble (the layout constants, the live settings baked into it, the
+  variant's defines, `SHADER_STATS` in Debug) and the push block. It is stored in full and compared; its hash only
+  names the file. The FILES are checked by content hash: the root source, and every include the compile resolved,
+  re-resolved through the same includer (so a new file that shadows an include also misses). A changed file
+  overwrites its entry; only a new define set adds a file. **Bump `SPV_CACHE_VERSION` when the `SpvOptions`, the
+  target env or the entry format change.** A cache hit writes no `Local/Shaders/*.spv` dump. Delete
+  `Local/ShaderCache/` to force a full recompile.
 * **Per-pixel work hoisted to the UBO / per pixel:**
   * `u_sunTransmittance` is the CPU mirror of `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; **keep the
     constants in sync with atmosphere.inc.glsl**) — no shader runs the Chapman function per pixel or per ray for it.

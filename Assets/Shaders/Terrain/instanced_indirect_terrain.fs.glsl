@@ -160,13 +160,13 @@ void main()
 	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
 	float reliefStrength;
 	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
-	// THE GRASS CANOPY over this ground: its sun and ambient, from the same coverages as the grass placement. Formed
-	// here so only these two halves stay live across the splat, not the layers' picks.
-	const f16vec2 grassCanopy = f16vec2(grassGroundCanopy(tessLayers, in_meshPos, coverN));
+	// THE GRASS CANOPY over this ground: its sun and ambient, plus the far tier's weight, from the same coverages as the
+	// grass placement. Formed here so only these three halves stay live across the splat, not the layers' picks.
+	const f16vec3 grassCanopy = f16vec3(grassGroundCanopy(tessLayers, in_meshPos, coverN));
 #else
 	const vec3 geoN = coverN;
 	const TerrainLayers layers = terrainLayers(in_pos, coverN, fields);
-	const f16vec2 grassCanopy = f16vec2(grassGroundCanopy(layers, in_pos, coverN)); // see the tessellated path
+	const f16vec3 grassCanopy = f16vec3(grassGroundCanopy(layers, in_pos, coverN)); // see the tessellated path
 #endif
 	const float16_t one = float16_t(1.0);
 
@@ -180,6 +180,20 @@ void main()
 #else
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
 #endif
+
+	// The pixel's ground footprint (m), in uniform control flow (derivatives): the far grass grain's and the wet look's
+	// fades (the drying pattern, the glints).
+	const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz));
+
+	// THE FAR GRASS TIER (grassGroundCanopy's z): where the blades have faded out, the ground takes the grass layer's look -
+	// its colour, its roughness, and the smooth ground normal (the far blades' own shading normal blends to the ground's,
+	// "Ground normal blend"; the soil's normal map is under the blades). Before the wet look: wet grass darkens too.
+	if (grassCanopy.z > float16_t(0.0))
+	{
+		surf.albedo = mix(surf.albedo, f16vec3(grassFarAlbedo(in_pos.xz, fields.temperature, pixelWidth)), grassCanopy.z);
+		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness), grassCanopy.z);
+		surf.normal = normalize(mix(surf.normal, f16vec3(geoN), grassCanopy.z * float16_t(u_grass_farFlattenNormal)));
+	}
 
 	// THE GROUND'S WET LOOK: one darkening and one roughness drop, on the wetness field alone (no instantaneous "under
 	// the live surface" override: ground under a wave soaks up visibly, a cliff a wave splashes only gets damp).
@@ -204,7 +218,6 @@ void main()
 		// shrink to a few pixels (the noise would shimmer).
 		const float16_t darkBand = float16_t(u_terrainWater_darkeningEdge);
 		const float16_t band = float16_t(u_terrainWater_roughnessEdge);
-		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
 		const float footprint = pixelWidth * u_terrainWater_invDryingPatternSize; // pattern cells per pixel
 		const float16_t patternW = float16_t(u_terrainWater_dryingPattern * (1.0 - smoothstep(0.15, 0.4, footprint)));
 		float16_t damp = darkAmount, glossW = glossAmount;

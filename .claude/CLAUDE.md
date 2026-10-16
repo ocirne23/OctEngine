@@ -548,7 +548,8 @@ Checked-in inputs for repeatable runs:
 
 ## `Assets/Local/`
 
-Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
+Generated output — **never hand-edit.** SPIR-V plus shader dumps, the SPIR-V cache (`ShaderCache/`, see
+[`Docs/Context/RendererVK/Shaders.md`](../Docs/Context/RendererVK/Shaders.md)), compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
 generated tree textures and far bakes), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/` (the generated meshes -
 "The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`

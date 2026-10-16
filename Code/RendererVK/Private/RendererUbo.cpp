@@ -1282,6 +1282,29 @@ void Renderer::registerUboValues(UboBlock& list)
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
                 return grassActive() ? glm::max(g.canopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
             }, UboLive);
+        // THE FAR TIER's extinction (1/m; grass.inc.glsl grassGroundCanopy): "Far/Thickness" x blades per m^2 x the mean
+        // blade width - the view's, not the sun's ("Canopy shadow" is not in it). 0 = off.
+        list.add("grass_farExtinction", [this, &g]
+            {
+                const float patchSize = grassPatchSize();
+                const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
+                return grassActive() ? glm::max(g.farThickness, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+            }, UboLive);
+        // The far tier's own canopy sun extinction (as grass_canopyExtinction, with "Far/Canopy shadow") and its look.
+        list.add("grass_farSunExtinction", [this, &g]
+            {
+                const float patchSize = grassPatchSize();
+                const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
+                return grassActive() ? glm::max(g.farCanopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
+            }, UboLive);
+        list.add("grass_farStrength", [&g] { return glm::clamp(g.farStrength, 0.0f, 1.0f); }, g.farStrength);
+        list.add("grass_farRootOcclusion", [&g] { return glm::clamp(g.farRootOcclusion, 0.0f, 1.0f); }, g.farRootOcclusion);
+        list.add("grass_farColourHeight", [&g] { return glm::clamp(g.farColourHeight, 0.0f, 1.0f); }, g.farColourHeight);
+        list.add("grass_farBrightness", [&g] { return glm::max(g.farBrightness, 0.0f); }, g.farBrightness);
+        list.add("grass_farRoughness", [&g] { return glm::clamp(g.farRoughness, 0.05f, 1.0f); }, g.farRoughness); // the BRDF's alpha floor
+        list.add("grass_farGrain", [&g] { return glm::clamp(g.farGrain, 0.0f, 1.0f); }, g.farGrain);
+        list.add("grass_invFarGrainSize", [&g] { return 1.0f / glm::max(g.farGrainSize, 0.1f); }, g.farGrainSize);
+        list.add("grass_farFlattenNormal", [&g] { return glm::clamp(g.farFlattenNormal, 0.0f, 1.0f); }, g.farFlattenNormal);
         list.add("grass_prevTime", [this] { return m_prevFrameTime; }, UboLive); // LAST frame's u_timeSeconds (the motion vectors)
         list.add("grass_rootAlbedo", [&] { return srgbToLinear(g.rootColor); }, g.rootColor);
         list.add("grass_roughness", g.roughness);

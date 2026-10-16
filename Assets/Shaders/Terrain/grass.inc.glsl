@@ -194,28 +194,80 @@ float grassTerrainCover(TerrainLayers L)
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL // it reads the near grass cascade (the lit core's u_shadowMap)
 // The ground UNDER the grass at pos (the terrain FS; N = its smooth normal): x = its sun - the near cascade's blade
 // shadows inside its box (on ANY ground there: blades also shade the bare soil beside them), blending into the
-// canopy's outside it; y = its ambient (the blades' root occlusion, by how opaque the canopy is). (1, 1) without grass.
-vec2 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
+// canopy's outside it; y = its ambient (the blades' root occlusion, by how opaque the canopy is); z = THE FAR TIER's
+// weight (grassFarAlbedo). x and y blend by z into the far tier's own light (the blades' mean canopy sun and root
+// occlusion), so the far grass is as dark as the blades it continues. (1, 1, 0) without grass.
+// THE FAR TIER: where the blades thin and fade out, the ground itself takes the grass layer's look. Its weight = the
+// share of the blades' cover the LOD took away x how much of the view the layer covers.
+// - The cover the blades keep: grass.vs.glsl's kept fraction k (grassKeep: (start / d)^exponent x the range fade), each
+//   kept blade wider by (1 / k)^"Width compensation" (capped by "Max width scale"): k^(1 - compensation), at most
+//   k x the cap. The far tier fills the rest, so the soil between the thinned blades does not show as a band.
+// - The view's cover: 1 - exp(-tau), tau = u_grass_farExtinction (blades per m^2 x the mean width x "Far/Thickness") x
+//   the cover x the size by cover x the clump x the height / N.V - a grazing view sees grass where a view from above
+//   still sees soil between the clumps.
+vec3 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 {
-    if (u_grass_canopyExtinction <= 0.0 && u_grass_nearRange <= 0.0) // no canopy, no near cascade (or no grass at all)
-        return vec2(1.0);
-    const float dist = distance(pos, u_viewPos);
-    if (dist >= u_grass_range)
-        return vec2(1.0);
+    if (u_grass_canopyExtinction <= 0.0 && u_grass_nearRange <= 0.0 && u_grass_farExtinction <= 0.0) // no canopy, no near cascade, no far tier (or no grass at all)
+        return vec3(1.0, 1.0, 0.0);
+    const vec3 toEye = u_viewPos - pos;
+    const float dist = length(toEye);
+    const bool inRange = dist < u_grass_range;
+    if (!inRange && u_grass_farExtinction <= 0.0)
+        return vec3(1.0, 1.0, 0.0);
 
-    float nearWeight;
-    const float nearSun = grassNearShadow(pos, N, nearWeight);
+    float nearWeight = 0.0, nearSun = 1.0;
+    if (inRange)
+        nearSun = grassNearShadow(pos, N, nearWeight);
     const float cover = grassTerrainCover(L);
     if (cover <= 0.0)
-        return vec2(mix(1.0, nearSun, nearWeight), 1.0);
+        return vec3(mix(1.0, nearSun, nearWeight), 1.0, 0.0);
 
     const float clump = grassClump(pos.xz);
     const float coverSize = grassCoverSize(cover);
     const float height = grassCanopyHeight(clump, coverSize);
+    const float rangeFade = grassRangeFade(dist);
     const float extinction = grassCanopyExtinction(cover, coverSize, dist);
-    const float presence = (1.0 - exp(-extinction * clump * height)) * grassRangeFade(dist); // the blades standing HERE (the ambient)
+    const float kept = (dist > u_grass_thinStart ? pow(u_grass_thinStart / dist, u_grass_thinExponent) : 1.0) * rangeFade;
+    const float bladeCover = kept > 0.0 ? min(pow(kept, 1.0 - u_grass_widthCompensation), kept * u_grass_maxWidthScale) : 0.0;
+    // 1 / N.V without the normalize: dist / dot(N, toEye), N.V floored at 0.05. tauV = the view's optical depth through
+    // the layer, kv = the same per metre of the layer's depth.
+    const float tauV = u_grass_farExtinction * cover * coverSize * clump * height * dist / max(dot(N, toEye), 0.05 * dist);
+    const float viewCover = 1.0 - exp(-tauV);
+    const float far = (1.0 - min(bladeCover, 1.0)) * viewCover * u_grass_farStrength; // "Far/Strength"
+    // The far tier's LIGHT, as the blades get it, AT THE DEPTH THE VIEW REACHES: a view from above looks deep into the
+    // layer (the shaded roots), a grazing one sees the lit tops. Along the view the layer's visible share at depth d is
+    // kv e^(-kv d) / (1 - e^(-tauV)) over [0, h]:
+    // - the sun = the canopy's exp(-ks d) under it (ks = the far canopy extinction - "Far/Canopy shadow", as the blades'
+    //   "Canopy shadow" - x the cover x the size by cover x the clump / the sun's height: grassCanopySun's mean, without
+    //   the flecks - they average out): kv / (ks + kv) x (1 - e^(-(ks + kv) h)) / viewCover;
+    // - the ambient = "Far/Root occlusion" at the mean visible height up the blade, 1 - E[d] / h, E[d] / h =
+    //   1 / tauV - e^(-tauV) / viewCover (0.5 for a thin layer).
+    const float sh = u_grass_farSunExtinction * cover * coverSize * clump * height * u_grass_invSunY; // ks x h
+    const float farSun = viewCover > 1e-4 ? tauV / (sh + tauV) * (1.0 - exp(-(sh + tauV))) / viewCover : (sh > 1e-3 ? (1.0 - exp(-sh)) / sh : 1.0);
+    const float meanDepth = tauV > 1e-3 ? 1.0 / tauV - (1.0 - viewCover) / viewCover : 0.5;
+    const float farAmbient = mix(1.0 - u_grass_farRootOcclusion, 1.0, smoothstep(0.0, 1.0, 1.0 - meanDepth));
+    if (!inRange)
+        return vec3(mix(1.0, farSun, far), mix(1.0, farAmbient, far), far);
+    const float presence = (1.0 - exp(-extinction * clump * height)) * rangeFade; // the blades standing HERE (the ambient)
     const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, height, extinction, dist) : 1.0;
-    return vec2(mix(canopySun, nearSun, nearWeight), mix(1.0, 1.0 - u_grass_rootOcclusion, presence));
+    return vec3(mix(mix(canopySun, nearSun, nearWeight), farSun, far), mix(mix(1.0, 1.0 - u_grass_rootOcclusion, presence), farAmbient, far), far);
+}
+
+// THE FAR TIER's colour: the blades' look at "Far/Colour height" up the blade (0 root .. 1 tip; a far view sees their
+// upper part), with their dry patches (grass.vs.glsl's noise, so the patches carry on past the blades) and the cold
+// darkening (the temperature at the ground), x "Far/Brightness". The colours are lockable: they fold when locked.
+// THE GRAIN: "Far/Grain" of variation as TUFTS - a value noise of "Far/Grain size (m)" cells - so the far grass is not a
+// flat paint; faded out as a tuft shrinks toward a pixel (`pixelWidth`, m: the footprint), where it would shimmer.
+vec3 grassFarAlbedo(vec2 xz, float temperature, float pixelWidth)
+{
+    const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
+    const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
+    const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, temperature);
+    const float grain = u_grass_farGrain * (1.0 - smoothstep(0.25, 0.6, pixelWidth * u_grass_invFarGrainSize))
+        * (grassValueNoise(xz * u_grass_invFarGrainSize + 41.7) * 2.0 - 1.0);
+    const float t = u_grass_farColourHeight;
+    return mix(mix(u_grass_rootAlbedo, u_grass_tipAlbedo, t), u_grass_dryAlbedo * mix(0.75, 1.0, t), dryness)
+        * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * (1.0 + grain) * u_grass_farBrightness);
 }
 #endif
 #endif

@@ -225,6 +225,16 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Look", "Roundness", &s.roundness, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Ground normal blend", &s.groundBlend, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Ground normal blend distance (m)", &s.groundBlendDistance, 1.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Grass/Far", "Thickness", &s.farThickness, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Strength", &s.farStrength, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Canopy shadow", &s.farCanopyShadow, 0.0f, 4.0f, 0.005f);
+    Tweak::floatVar("Grass/Far", "Root occlusion", &s.farRootOcclusion, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Colour height", &s.farColourHeight, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Brightness", &s.farBrightness, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Roughness", &s.farRoughness, 0.05f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Grain", &s.farGrain, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Grain size (m)", &s.farGrainSize, 0.1f, 20.0f, 0.05f);
+    Tweak::floatVar("Grass/Far", "Flatten normal", &s.farFlattenNormal, 0.0f, 1.0f, 0.01f);
 }
 
 void Settings::registerFog(FogParams& s)

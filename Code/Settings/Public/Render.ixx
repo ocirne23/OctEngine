@@ -387,6 +387,22 @@ export struct GrassParams
     float nearShadowStrength = 0.7f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
+    // THE FAR TIER (terrain FS, grass.inc.glsl grassGroundCanopy): where the blades fade out, the ground takes the grass
+    // layer's look by how much of the view the layer covers: x farThickness on its optical depth (blades per m^2 x the
+    // mean blade width x the cover x the height / N.V; 0 = off), the weight at most farStrength. Its own look, apart from
+    // the blades': the canopy's sun self-shadowing (as canopyShadow), the root occlusion, the colour at farColourHeight
+    // up the blade (0 root .. 1 tip) x farBrightness, the roughness, the tuft grain (farGrain of variation in
+    // farGrainSize cells) and how far the normal goes to the smooth ground's.
+    float farThickness = 0.2f;
+    float farStrength = 1.0f;
+    float farCanopyShadow = 1.0f;
+    float farRootOcclusion = 1.0f;
+    float farColourHeight = 0.33f;
+    float farBrightness = 2.0f;
+    float farRoughness = 0.5f;
+    float farGrain = 0.2f;
+    float farGrainSize = 1.5f;     // m
+    float farFlattenNormal = 1.0f;
 };
 
 // THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no

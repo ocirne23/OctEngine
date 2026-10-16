@@ -94,6 +94,26 @@ EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
     }
 }
 
+static uint64 hashText(oc::string_view text)
+{
+    uint64 hash = 0xcbf29ce484222325ull; // FNV-1a 64
+    for (const char c : text)
+    {
+        hash ^= (uint8)c;
+        hash *= 0x100000001b3ull;
+    }
+    return hash;
+}
+
+// One include the compile resolved: the SPIR-V cache re-resolves it the same way and compares.
+struct ShaderIncludeDep
+{
+    oc::string header;
+    oc::string includer;
+    oc::string resolved;
+    uint64 contentHash = 0;
+};
+
 class ShaderIncluder final : public glslang::TShader::Includer
 {
 public:
@@ -101,6 +121,17 @@ public:
         : m_pushDeclaration(pushDeclaration)
     {
         m_rootDir = FileSystem::parentPath(rootFilePath);
+    }
+
+    const oc::vector<ShaderIncludeDep>& getDeps() const { return m_deps; }
+
+    // True when the include still resolves to the same file with the same content.
+    bool isUnchanged(const ShaderIncludeDep& dep)
+    {
+        if (resolve(dep.header.c_str(), dep.includer.c_str()) == nullptr)
+            return false;
+        const ShaderIncludeDep& now = m_deps.back();
+        return now.resolved == dep.resolved && now.contentHash == dep.contentHash;
     }
 
     IncludeResult* includeLocal(const char* headerName, const char* includerName, size_t /*depth*/) override
@@ -120,12 +151,12 @@ private:
     {
         // The frame UBO's declaration is not a file: it is generated (RendererVKLayout::g_uboDeclaration).
         if (std::strcmp(headerName, "ubo.generated.glsl") == 0)
-            return store(headerName, oc::string(RendererVKLayout::g_uboDeclaration));
+            return store(headerName, includerName, headerName, oc::string(RendererVKLayout::g_uboDeclaration));
         // The compiling pipeline's push block (PushBlock::declaration): per compile, never a file either.
         if (std::strcmp(headerName, "push.generated.glsl") == 0)
         {
             assert(!m_pushDeclaration.empty() && "push.generated.glsl included, but the pipeline layout has no pushDeclaration");
-            return store(headerName, oc::string(m_pushDeclaration));
+            return store(headerName, includerName, headerName, oc::string(m_pushDeclaration));
         }
 
         oc::vector<oc::string> candidates;
@@ -147,7 +178,7 @@ private:
             oc::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
             if (content.empty())
                 continue;
-            return store(resolvedPath, oc::move(content));
+            return store(headerName, includerName, resolvedPath, oc::move(content));
         }
         return nullptr;
     }
@@ -167,8 +198,9 @@ private:
         return it != m_shaderTree.end() ? &it->second : nullptr;
     }
 
-    IncludeResult* store(const oc::string& name, oc::string content)
+    IncludeResult* store(const char* headerName, const char* includerName, const oc::string& name, oc::string content)
     {
+        m_deps.push_back({ headerName, includerName != nullptr ? includerName : "", name, hashText(content) });
         const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
         m_results.push_back(oc::make_unique<IncludeResult>(oc::toStd(name), stored.data(), stored.size(), nullptr));
         return m_results.back().get();
@@ -176,6 +208,7 @@ private:
 
     oc::string m_rootDir;
     const oc::string& m_pushDeclaration;
+    oc::vector<ShaderIncludeDep> m_deps;
     oc::unordered_map<oc::string, oc::string> m_shaderTree; // file name -> path, every file under Shaders/
     bool m_treeIndexed = false;
     oc::vector<oc::unique_ptr<oc::string>> m_contents;
@@ -357,9 +390,146 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
     return preamble;
 }
 
+// ---- The SPIR-V cache: Local/ShaderCache/<debugFilePath>.<key hash>.spvc ----------------------------
+// The KEY is everything the compile reads that is not a file: the cache version, glslang's version, the stage,
+// the file name, the preamble (layout constants, live settings, the variant's defines) and the push block. It is
+// stored whole and compared, the hash only names the file. The FILES - the root source and every resolved include -
+// are checked by content hash, the includes re-resolved the way the compile resolved them. A changed file
+// overwrites its entry; only a new define set adds one.
+
+constexpr uint32 SPV_CACHE_MAGIC = 0x4350534F; // "OSPC"
+constexpr uint32 SPV_CACHE_VERSION = 1; // bump when the compile options (SpvOptions, env) or this format change
+
+class SpvCacheWriter
+{
+public:
+    void u32(uint32 v) { raw(&v, sizeof(v)); }
+    void u64(uint64 v) { raw(&v, sizeof(v)); }
+    void str(const oc::string& s) { u32((uint32)s.size()); raw(s.data(), s.size()); }
+    void raw(const void* data, size_t size)
+    {
+        const uint8* bytes = static_cast<const uint8*>(data);
+        m_bytes.insert(m_bytes.end(), bytes, bytes + size);
+    }
+    const oc::vector<uint8>& bytes() const { return m_bytes; }
+
+private:
+    oc::vector<uint8> m_bytes;
+};
+
+class SpvCacheReader
+{
+public:
+    explicit SpvCacheReader(const oc::vector<uint8>& bytes) : m_bytes(bytes) {}
+
+    bool ok() const { return m_ok; }
+    uint32 u32() { uint32 v = 0; raw(&v, sizeof(v)); return v; }
+    uint64 u64() { uint64 v = 0; raw(&v, sizeof(v)); return v; }
+    oc::string str()
+    {
+        const uint32 size = u32();
+        if (!m_ok || size > m_bytes.size() - m_pos)
+        {
+            m_ok = false;
+            return {};
+        }
+        oc::string s(reinterpret_cast<const char*>(m_bytes.data() + m_pos), size);
+        m_pos += size;
+        return s;
+    }
+    void raw(void* out, size_t size)
+    {
+        if (!m_ok || size > m_bytes.size() - m_pos)
+        {
+            m_ok = false;
+            return;
+        }
+        std::memcpy(out, m_bytes.data() + m_pos, size);
+        m_pos += size;
+    }
+
+private:
+    const oc::vector<uint8>& m_bytes;
+    size_t m_pos = 0;
+    bool m_ok = true;
+};
+
+static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, ShaderIncluder& includer, oc::vector<unsigned int>& spirv)
+{
+    oc::vector<uint8> bytes;
+    if (!FileSystem::readFileBytes(path, bytes, /*allowMainThread*/ true))
+        return false;
+    SpvCacheReader reader(bytes);
+    if (reader.u32() != SPV_CACHE_MAGIC || reader.u32() != SPV_CACHE_VERSION || reader.str() != key || reader.u64() != sourceHash)
+        return false;
+    const uint32 numDeps = reader.u32();
+    for (uint32 i = 0; i < numDeps && reader.ok(); ++i)
+    {
+        ShaderIncludeDep dep;
+        dep.header = reader.str();
+        dep.includer = reader.str();
+        dep.resolved = reader.str();
+        dep.contentHash = reader.u64();
+        if (!reader.ok() || !includer.isUnchanged(dep))
+            return false;
+    }
+    const uint32 numWords = reader.u32();
+    if (!reader.ok() || numWords == 0 || (uint64)numWords * sizeof(unsigned int) > bytes.size())
+        return false;
+    spirv.resize(numWords);
+    reader.raw(spirv.data(), numWords * sizeof(unsigned int));
+    return reader.ok();
+}
+
+static void writeSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, const oc::vector<ShaderIncludeDep>& deps,
+    const oc::vector<unsigned int>& spirv)
+{
+    SpvCacheWriter writer;
+    writer.u32(SPV_CACHE_MAGIC);
+    writer.u32(SPV_CACHE_VERSION);
+    writer.str(key);
+    writer.u64(sourceHash);
+    writer.u32((uint32)deps.size());
+    for (const ShaderIncludeDep& dep : deps)
+    {
+        writer.str(dep.header);
+        writer.str(dep.includer);
+        writer.str(dep.resolved);
+        writer.u64(dep.contentHash);
+    }
+    writer.u32((uint32)spirv.size());
+    writer.raw(spirv.data(), spirv.size() * sizeof(unsigned int));
+
+    const oc::string folder = FileSystem::parentPath(path);
+    if (!FileSystem::exists(folder, /*allowMainThread*/ true))
+        FileSystem::createDirectories(folder, /*allowMainThread*/ true);
+    // Through a temp file: a reader never sees half an entry.
+    const oc::string tempPath = path + ".tmp";
+    if (FileSystem::writeFileBytes(tempPath, writer.bytes(), /*allowMainThread*/ true))
+        FileSystem::rename(tempPath, path, /*allowMainThread*/ true);
+}
+
 bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath,
     const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration)
 {
+    // The preamble's #extension may precede the file's #version: glslang scans the version from the
+    // shader strings alone. The string must outlive parse().
+    const oc::string preamble = buildPreamble(defines);
+
+    const glslang::Version glslangVersion = glslang::GetVersion();
+    oc::string cacheKey = oc::format("{} {}.{}.{} {} {}\n", SPV_CACHE_VERSION, glslangVersion.major, glslangVersion.minor, glslangVersion.patch,
+        (uint32)type, debugFilePath);
+    cacheKey += preamble;
+    cacheKey += '\n';
+    cacheKey += pushDeclaration;
+    const oc::string cachePath = oc::format("Local/ShaderCache/{}.{:016x}.spvc", debugFilePath, hashText(cacheKey));
+    const uint64 sourceHash = hashText(source);
+    {
+        ShaderIncluder checkIncluder(debugFilePath, pushDeclaration);
+        if (readSpvCache(cachePath, cacheKey, sourceHash, checkIncluder, spirv))
+            return true;
+    }
+
     const oc::string spvBinPath = "Local/" + debugFilePath + ".spv";
     const oc::string spvBinFolder = FileSystem::parentPath(spvBinPath);
     if (!FileSystem::exists(spvBinFolder, /*allowMainThread*/ true))
@@ -387,9 +557,6 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_3);
     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_6);
 
-    // The preamble's #extension may precede the file's #version: glslang scans the version from the
-    // shader strings alone. The string must outlive parse().
-    const oc::string preamble = buildPreamble(defines);
     shader.setPreamble(preamble.c_str());
 
     ShaderIncluder includer(debugFilePath, pushDeclaration);
@@ -428,7 +595,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
 
     glslang::OutputSpvBin(spirvStd, spvBinPath.c_str());
     spirv = oc::fromStd(spirvStd);
-
+    writeSpvCache(cachePath, cacheKey, sourceHash, includer.getDeps(), spirv);
 
     return true;
 }
