@@ -200,6 +200,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Cover", "Bare fraction", &s.bareFraction, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Grow band", &s.growBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Cover", "Size by cover", &s.sizeByCover, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Cover", "Width by height", &s.widthByHeight, -1.0f, 2.0f, 0.01f);
     Tweak::floatVar("Grass/Cover", "Canopy thinning", &s.canopyThinning, 0.0f, 1.0f, 0.01f);
     Tweak::color3("Grass/Look", "Root colour", &s.rootColor);
     Tweak::color3("Grass/Look", "Tip colour", &s.tipColor);
@@ -223,18 +224,23 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Shadows", "Near shadow strength", &s.nearShadowStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Transmission", &s.transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roundness", &s.roundness, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Grass/Look", "Ground normal blend", &s.groundBlend, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Look", "Ground normal blend distance (m)", &s.groundBlendDistance, 1.0f, 500.0f, 0.5f);
-    Tweak::floatVar("Grass/Far", "Thickness", &s.farThickness, 0.0f, 8.0f, 0.01f);
-    Tweak::floatVar("Grass/Far", "Strength", &s.farStrength, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Ground normal blend", &s.groundBlend, 0.0f, 1.0f, 0.01f);    Tweak::floatVar("Grass/Far", "Thickness", &s.farThickness, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Canopy shadow", &s.farCanopyShadow, 0.0f, 4.0f, 0.005f);
-    Tweak::floatVar("Grass/Far", "Root occlusion", &s.farRootOcclusion, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Far", "Colour height", &s.farColourHeight, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Brightness", &s.farBrightness, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Roughness", &s.farRoughness, 0.05f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Far", "Grain", &s.farGrain, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Grass/Far", "Grain size (m)", &s.farGrainSize, 0.1f, 20.0f, 0.05f);
-    Tweak::floatVar("Grass/Far", "Flatten normal", &s.farFlattenNormal, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Upright normal", &s.farUpright, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Normal variation", &s.farNormalVariation, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Diffuse variation", &s.farDiffuseVariation, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Sun glint", &s.farSunGlint, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Ripple glint", &s.farRippleGlint, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Ripple lean", &s.farRippleLean, -2.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Blade light", &s.farBladeLight, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Transmission", &s.farTransmission, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Blade stripes", &s.farStripes, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Stripe width", &s.farStripeWidth, 0.1f, 8.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Stripe length", &s.farStripeLength, 0.005f, 1.0f, 0.001f);
+    Tweak::floatVar("Grass/Far", "Stripe anchor step (m)", &s.farStripeAnchorStep, 1.0f, 1000.0f, 0.5f);
+    Tweak::floatVar("Grass/Far", "Stripe anchor fade (s)", &s.farStripeAnchorFade, 0.0f, 5.0f, 0.01f);
 }
 
 void Settings::registerFog(FogParams& s)

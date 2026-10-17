@@ -81,19 +81,26 @@ float grassCoverSize(float cover)
     return mix(1.0, cover, u_grass_sizeByCover);
 }
 
+// The blade WIDTH factor by its height factor (the size by cover x the clump's, as grassCanopyHeight): x that^-"Width by
+// height" - short grass (sparse climate, tree cover, thin clumps) gets wider blades. Floored at 0.05, capped at 4.
+float grassWidthSize(float coverSize, float clump)
+{
+    return min(pow(max(coverSize * mix(0.6, 1.0, clump), 0.05), -u_grass_widthByHeight), 4.0);
+}
+
 // THE CANOPY: grass self-shadowing without a shadow map (a blade is far below a shadow-map texel). The grass layer is
 // a thin volume of blades: its top at the mean blade height, its extinction (1/m) = u_grass_canopyExtinction ("Canopy
 // shadow" x blades per m^2 x the mean blade width, the CPU's fold) x the COVER (the clumps are sampled along the sun
-// path) x the size by cover. The blades and the ground under them use the same terms, so the soil between the blades
-// matches their feet.
+// path) x the blades' width factor (grassWidthSize). The blades and the ground under them use the same terms, so the
+// soil between the blades matches their feet.
 float grassCanopyHeight(float clump, float coverSize)
 {
     return u_grass_bladeHeight * (1.0 - 0.5 * u_grass_heightVariation) * mix(0.6, 1.0, clump) * coverSize;
 }
 
-float grassCanopyExtinction(float cover, float coverSize, float dist)
+float grassCanopyExtinction(float cover, float widthSize, float dist)
 {
-    return u_grass_canopyExtinction * cover * coverSize;
+    return u_grass_canopyExtinction * cover * widthSize;
 }
 
 // The blades' "Range fade" (1 inside, 0 at the range). The canopy's RESULT fades with it, linearly: fading the
@@ -196,7 +203,9 @@ float grassTerrainCover(TerrainLayers L)
 // shadows inside its box (on ANY ground there: blades also shade the bare soil beside them), blending into the
 // canopy's outside it; y = its ambient (the blades' root occlusion, by how opaque the canopy is); z = THE FAR TIER's
 // weight (grassFarAlbedo). x and y blend by z into the far tier's own light (the blades' mean canopy sun and root
-// occlusion), so the far grass is as dark as the blades it continues. (1, 1, 0) without grass.
+// occlusion), so the far grass is as dark as the blades it continues; w = the far tier's STRIPE scale, by how dense the
+// grass is (the cover x the clump, 0.05 .. 0.6): a grazing view saturates the weight over a few tufts too, but sparse
+// grass has no blade-on-blade pattern. (1, 1, 0, 0) without grass.
 // THE FAR TIER: where the blades thin and fade out, the ground itself takes the grass layer's look. Its weight = the
 // share of the blades' cover the LOD took away x how much of the view the layer covers.
 // - The cover the blades keep: grass.vs.glsl's kept fraction k (grassKeep: (start / d)^exponent x the range fade), each
@@ -205,69 +214,219 @@ float grassTerrainCover(TerrainLayers L)
 // - The view's cover: 1 - exp(-tau), tau = u_grass_farExtinction (blades per m^2 x the mean width x "Far/Thickness") x
 //   the cover x the size by cover x the clump x the height / N.V - a grazing view sees grass where a view from above
 //   still sees soil between the clumps.
-vec3 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
+vec4 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 {
     if (u_grass_canopyExtinction <= 0.0 && u_grass_nearRange <= 0.0 && u_grass_farExtinction <= 0.0) // no canopy, no near cascade, no far tier (or no grass at all)
-        return vec3(1.0, 1.0, 0.0);
+        return vec4(1.0, 1.0, 0.0, 0.0);
     const vec3 toEye = u_viewPos - pos;
     const float dist = length(toEye);
     const bool inRange = dist < u_grass_range;
     if (!inRange && u_grass_farExtinction <= 0.0)
-        return vec3(1.0, 1.0, 0.0);
+        return vec4(1.0, 1.0, 0.0, 0.0);
 
     float nearWeight = 0.0, nearSun = 1.0;
     if (inRange)
         nearSun = grassNearShadow(pos, N, nearWeight);
     const float cover = grassTerrainCover(L);
     if (cover <= 0.0)
-        return vec3(mix(1.0, nearSun, nearWeight), 1.0, 0.0);
+        return vec4(mix(1.0, nearSun, nearWeight), 1.0, 0.0, 0.0);
 
     const float clump = grassClump(pos.xz);
     const float coverSize = grassCoverSize(cover);
+    const float widthSize = grassWidthSize(coverSize, clump);
     const float height = grassCanopyHeight(clump, coverSize);
     const float rangeFade = grassRangeFade(dist);
-    const float extinction = grassCanopyExtinction(cover, coverSize, dist);
+    const float extinction = grassCanopyExtinction(cover, widthSize, dist);
     const float kept = (dist > u_grass_thinStart ? pow(u_grass_thinStart / dist, u_grass_thinExponent) : 1.0) * rangeFade;
     const float bladeCover = kept > 0.0 ? min(pow(kept, 1.0 - u_grass_widthCompensation), kept * u_grass_maxWidthScale) : 0.0;
     // 1 / N.V without the normalize: dist / dot(N, toEye), N.V floored at 0.05. tauV = the view's optical depth through
     // the layer, kv = the same per metre of the layer's depth.
-    const float tauV = u_grass_farExtinction * cover * coverSize * clump * height * dist / max(dot(N, toEye), 0.05 * dist);
+    const float tauV = u_grass_farExtinction * cover * widthSize * clump * height * dist / max(dot(N, toEye), 0.05 * dist);
     const float viewCover = 1.0 - exp(-tauV);
-    const float far = (1.0 - min(bladeCover, 1.0)) * viewCover * u_grass_farStrength; // "Far/Strength"
+    const float far = (1.0 - min(bladeCover, 1.0)) * viewCover;
     // The far tier's LIGHT, as the blades get it, AT THE DEPTH THE VIEW REACHES: a view from above looks deep into the
     // layer (the shaded roots), a grazing one sees the lit tops. Along the view the layer's visible share at depth d is
     // kv e^(-kv d) / (1 - e^(-tauV)) over [0, h]:
     // - the sun = the canopy's exp(-ks d) under it (ks = the far canopy extinction - "Far/Canopy shadow", as the blades'
     //   "Canopy shadow" - x the cover x the size by cover x the clump / the sun's height: grassCanopySun's mean, without
     //   the flecks - they average out): kv / (ks + kv) x (1 - e^(-(ks + kv) h)) / viewCover;
-    // - the ambient = "Far/Root occlusion" at the mean visible height up the blade, 1 - E[d] / h, E[d] / h =
-    //   1 / tauV - e^(-tauV) / viewCover (0.5 for a thin layer).
-    const float sh = u_grass_farSunExtinction * cover * coverSize * clump * height * u_grass_invSunY; // ks x h
+    // - the ambient: no term of its own - the dark stripes stand in for the view down between the blades (grassFarAlbedo).
+    const float sh = u_grass_farSunExtinction * cover * widthSize * clump * height * u_grass_invSunY; // ks x h
     const float farSun = viewCover > 1e-4 ? tauV / (sh + tauV) * (1.0 - exp(-(sh + tauV))) / viewCover : (sh > 1e-3 ? (1.0 - exp(-sh)) / sh : 1.0);
-    const float meanDepth = tauV > 1e-3 ? 1.0 / tauV - (1.0 - viewCover) / viewCover : 0.5;
-    const float farAmbient = mix(1.0 - u_grass_farRootOcclusion, 1.0, smoothstep(0.0, 1.0, 1.0 - meanDepth));
+    const float stripeScale = smoothstep(0.05, 0.6, cover * clump);
     if (!inRange)
-        return vec3(mix(1.0, farSun, far), mix(1.0, farAmbient, far), far);
+        return vec4(mix(1.0, farSun, far), 1.0, far, stripeScale);
     const float presence = (1.0 - exp(-extinction * clump * height)) * rangeFade; // the blades standing HERE (the ambient)
     const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, height, extinction, dist) : 1.0;
-    return vec3(mix(mix(canopySun, nearSun, nearWeight), farSun, far), mix(mix(1.0, 1.0 - u_grass_rootOcclusion, presence), farAmbient, far), far);
+    return vec4(mix(mix(canopySun, nearSun, nearWeight), farSun, far), mix(mix(1.0, 1.0 - u_grass_rootOcclusion, presence), 1.0, far), far, stripeScale);
 }
 
-// THE FAR TIER's colour: the blades' look at "Far/Colour height" up the blade (0 root .. 1 tip; a far view sees their
-// upper part), with their dry patches (grass.vs.glsl's noise, so the patches carry on past the blades) and the cold
+// THE FAR TIER's colour: the blades' TIP colour (a far view sees their upper part; the darker depth is "Far/Canopy
+// shadow"'s, on the sun), with their dry patches (grass.vs.glsl's noise, so the patches carry on past the blades) and the cold
 // darkening (the temperature at the ground), x "Far/Brightness". The colours are lockable: they fold when locked.
-// THE GRAIN: "Far/Grain" of variation as TUFTS - a value noise of "Far/Grain size (m)" cells - so the far grass is not a
-// flat paint; faded out as a tuft shrinks toward a pixel (`pixelWidth`, m: the footprint), where it would shimmer.
-vec3 grassFarAlbedo(vec2 xz, float temperature, float pixelWidth)
+// THE BLADES ("Far/Blade stripes"): thin streaks, VERTICAL ON SCREEN - long along the view on the ground, thin across it
+// (a world noise would compress into HORIZONTAL streaks at a grazing view), sized as blades are:
+// - THE ANCHOR they are built around is NOT the camera (a pattern following the camera slides in the world, and DLSS /
+//   TAA's reprojection - the static terrain's, the camera's motion only - rejected its history in motion: flicker) but a
+//   stand-in EYE stepping behind it (u_grass_stripeAnchorNew: xyz, w = the blend; u_grass_stripeAnchorOld: xyz;
+//   Renderer::buildUboGrass), the old one crossfading to the new (both evaluated only then, the variance re-normalized).
+//   EVERYTHING the stripe value reads comes from the anchor - the azimuth, the distance and the view angle that sets the
+//   length - never from the camera, so between steps the pattern is WORLD-FIXED. The far tier starts ~100 m out, so an
+//   anchor a step from the camera turns the stripes a few degrees.
+// - ACROSS: the AZIMUTH around the anchor (world axes: turning the camera leaves them in place), a stripe "Stripe
+//   width" blade widths wide IN THE WORLD - 2 pi r / width stripes around the circle at distance r. The wrapped noise needs a WHOLE count, so two power-of-two counts (8 x 2^k) crossfade by the fraction
+//   of k, as mip levels do (the variance re-normalized: a plain mix of two noises dips in contrast mid-way). A count's
+//   noise offset follows its ABSOLUTE index (k0, k0 + 1), never its slot: at a whole k the coarser count becomes the
+//   finer one, and a slot offset changed its pattern there - a ring at that distance.
+// - ALONG: the ground a blade hides behind it, "Stripe length" x its height x cot(the view's angle to the GROUND's
+//   normal) - long at a grazing view, down to the stripe width (a dot) looking straight down, right on slopes and
+//   hills too; in log(distance), so the scale follows r.
+float grassStripeNoise(vec2 p, int period)
 {
+    const vec2 i = floor(p);
+    vec2 f = p - i;
+    f = f * f * (3.0 - 2.0 * f);
+    const int x0 = int(uint(int(i.x) + 2 * period) % uint(period)); // never % of a negative (undefined)
+    const int x1 = x0 + 1 == period ? 0 : x0 + 1;
+    const int y = int(i.y);
+    const float a = grassUnit(grassHash2(ivec2(x0, y))), b = grassUnit(grassHash2(ivec2(x1, y)));
+    const float c = grassUnit(grassHash2(ivec2(x0, y + 1))), d = grassUnit(grassHash2(ivec2(x1, y + 1)));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// The stripe value [-1, 1] at pos (N: its smooth ground normal) seen from `anchor`; `width` (m). `fine` (out, 0..1):
+// the same noise 4x finer across and 3x along (the single blades of "Far/Ripple glint"; 0.5 without it).
+float grassStripeAt(vec3 pos, vec3 N, vec3 anchor, float width, out float fine)
+{
+    // Along: the hidden ground's length - from the ANCHOR's view angle - at least the width.
+    const vec3 fromAnchor3 = pos - anchor;
+    const float NoV = clamp(-dot(N, fromAnchor3) / length(fromAnchor3), 0.02, 1.0);
+    const float stripeLength = max(u_grass_farStripeLength * sqrt(1.0 - NoV * NoV) / NoV, width);
+    const vec2 fromAnchor = fromAnchor3.xz;
+    const float r = max(length(fromAnchor), 1.0);
+    const float along = log(r) * (r / stripeLength);
+    // Across: the azimuth (0..1) x two power-of-two stripe counts around the circle; each count's along offset follows its
+    // absolute index (no ring at a whole k).
+    const float azimuth = atan(fromAnchor.y, fromAnchor.x) * (1.0 / 6.28318531) + 0.5;
+    const float k = log2(max(6.28318531 * r / (8.0 * width), 1.0));
+    const float k0 = floor(k);
+    const int count0 = 8 << int(k0);
+    const float n0 = grassStripeNoise(vec2(azimuth * float(count0), along + 17.0 * k0), count0);
+    const float n1 = grassStripeNoise(vec2(azimuth * float(2 * count0), along + 17.0 * (k0 + 1.0)), 2 * count0);
+    const float t = k - k0;
+    const float norm = inversesqrt(t * t + (1.0 - t) * (1.0 - t));
+    fine = 0.5;
+    if (u_grass_farRippleGlint > 0.0)
+    {
+        const float f0 = grassStripeNoise(vec2(azimuth * float(4 * count0), along * 3.0 + 17.0 * k0 + 53.0), 4 * count0);
+        const float f1 = grassStripeNoise(vec2(azimuth * float(8 * count0), along * 3.0 + 17.0 * (k0 + 1.0) + 53.0), 8 * count0);
+        fine = (mix(f0, f1, t) - 0.5) * norm + 0.5;
+    }
+    const float n = (mix(n0, n1, t) - 0.5) * norm + 0.5;
+    return smoothstep(0.2, 0.8, n) * 2.0 - 1.0;
+}
+
+// `stripe` (out): the blade's stripe value in [-1, 1] (0 without stripes) - its lean in grassFarNormal; `fine` (out):
+// grassStripeAt's fine noise (0.5 without stripes).
+vec3 grassFarAlbedo(vec3 pos, vec3 N, float temperature, float stripeScale, out float stripe, out float fine)
+{
+    const vec2 xz = pos.xz;
     const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
     const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
     const float warm = smoothstep(u_grass_coldTemperature, u_grass_warmTemperature, temperature);
-    const float grain = u_grass_farGrain * (1.0 - smoothstep(0.25, 0.6, pixelWidth * u_grass_invFarGrainSize))
-        * (grassValueNoise(xz * u_grass_invFarGrainSize + 41.7) * 2.0 - 1.0);
-    const float t = u_grass_farColourHeight;
-    return mix(mix(u_grass_rootAlbedo, u_grass_tipAlbedo, t), u_grass_dryAlbedo * mix(0.75, 1.0, t), dryness)
-        * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * (1.0 + grain) * u_grass_farBrightness);
+    stripe = 0.0;
+    fine = 0.5;
+    if (u_grass_farStripes > 0.0)
+    {
+        const float width = u_grass_farStripeWidth;
+        stripe = grassStripeAt(pos, N, u_grass_stripeAnchorNew.xyz, width, fine);
+        const float b = u_grass_stripeAnchorNew.w;
+        if (b < 1.0) // crossfading from the old anchor (uniform: one branch per frame)
+        {
+            float fineOld;
+            const float stripeOld = grassStripeAt(pos, N, u_grass_stripeAnchorOld.xyz, width, fineOld);
+            const float norm = inversesqrt(b * b + (1.0 - b) * (1.0 - b));
+            stripe = clamp(mix(stripeOld, stripe, b) * norm, -1.0, 1.0);
+            fine = (mix(fineOld, fine, b) - 0.5) * norm + 0.5;
+        }
+        stripe *= stripeScale; // weaker on sparse grass (the normal's leans and the mirror share follow it)
+    }
+    // The stripes brighten and darken by "Blade stripes" (their dark half also stands in for the view down between the
+    // blades). On the albedo, so the sun and the ambient alike.
+    return mix(u_grass_tipAlbedo, u_grass_dryAlbedo, dryness)
+        * (mix(1.0 - u_grass_coldDarkening, 1.0, warm) * (1.0 + u_grass_farStripes * stripe) * u_grass_farBrightness);
+}
+
+// THE FAR TIER's shading NORMAL: a layer of UPRIGHT blades, not a surface - N = the smooth ground normal, then
+// - "Upright normal": tilted toward the viewer along the ground, by sin(the view's angle off the normal): a grazing view
+//   sees the blades' SIDES, turned to it (a view from above sees the ground between them);
+// - "Normal variation": the BLADES' lean - each stripe (grassFarAlbedo's `stripe`, -1..1) tilted SIDEWAYS, across the
+//   view along the ground: it follows the view, so mostly the SPECULAR (with the sun behind the view a sideways tilt
+//   is about perpendicular to the sun: N.L hardly moves);
+// - "Diffuse variation": the same stripes leaning TOWARD / AWAY FROM THE SUN, along the ground: N.L moves with it, so
+//   the DIFFUSE gets light and dark stripes - most with a low sun;
+// - "Sun glint": the share of the blades turned to MIRROR the sun (normal = the half vector, the specular's peak) - the
+//   brightest stripes first, the share growing down the stripe values (without stripes all at 0: none up to 0.5, all
+//   from 0.625);
+// - "Ripple lean": the WIND RIPPLE (grassWind's noise, moving with the wind, stretched to -1..1, x the ripple's bend at
+//   the mean wind speed, capped at 1) tilting the normal along the mean wind (before the glints), as the near blades
+//   bend in it: their moving patches carry on (negative: the other way);
+// - "Ripple glint": SINGLE BLADES (`fine`, grassStripeAt's finer noise, above a threshold) turned to mirror the sun
+//   too, and `glint` (out, 0..1) for the FS to sharpen their roughness: a share of "Ripple glint" x (0.5 + 0.5 x the
+//   ripple), so denser up the ripple and half of it with no wind.
+vec3 grassFarNormal(vec3 pos, vec3 N, float stripe, float fine, out float glint)
+{
+    const vec3 V = normalize(u_viewPos - pos);
+    const vec3 Vt = V - N * dot(N, V); // V's part along the ground, |Vt| = sin(the angle)
+    vec3 n = N + Vt * u_grass_farUpright;
+    if (u_grass_farNormalVariation > 0.0)
+        n += cross(N, Vt) * (stripe * u_grass_farNormalVariation / max(length(Vt), 1e-3)); // sideways, unit length
+    if (u_grass_farDiffuseVariation > 0.0)
+    {
+        const vec3 Lt = u_sunDirection.xyz - N * dot(N, u_sunDirection.xyz); // the sun's way along the ground
+        n += Lt * (stripe * u_grass_farDiffuseVariation / max(length(Lt), 1e-3));
+    }
+    float wave = 0.0;
+    if (u_grass_farRippleGlint > 0.0 || u_grass_farRippleLean != 0.0)
+    {
+        const float time = u_timeSeconds;
+        const float ripple = grassValueNoise((pos.xz - u_weather_windDirection * (u_weather_windTravelSpeed * time)) * u_grass_invRippleSize);
+        wave = (smoothstep(0.25, 0.75, ripple) * 2.0 - 1.0) * min(length(u_weather_windVelocity.xz) * u_grass_rippleBend, 1.0);
+        n += vec3(u_weather_windDirection.x, 0.0, u_weather_windDirection.y) * (wave * u_grass_farRippleLean);
+    }
+    n = normalize(n);
+    glint = 0.0;
+    if (u_grass_farSunGlint > 0.0 || u_grass_farRippleGlint > 0.0)
+    {
+        const float edge = 1.0 - 2.0 * u_grass_farSunGlint;
+        float mirror = smoothstep(edge, edge + 0.25, stripe);
+        if (u_grass_farRippleGlint > 0.0)
+        {
+            const float fineEdge = 1.0 - 0.5 * u_grass_farRippleGlint * (0.5 + 0.5 * wave);
+            glint = smoothstep(fineEdge, fineEdge + 0.04, fine);
+            mirror = max(mirror, glint);
+        }
+        n = normalize(mix(n, normalize(u_sunDirection.xyz + V), mirror));
+    }
+    return n;
+}
+
+// THE BLADE LIGHT (the terrain FS: "Far/Blade light" of the far layer's sun, the ground model keeping the rest): the
+// sun on UPRIGHT blades facing the viewer, per unit of sun radiance and albedo, before any visibility. A blade's face
+// takes the sun at about cos(its elevation) - a low sun nearly face-on, where flat ground gets sin(elevation) - LIT in
+// front with the sun behind the view and THROUGH ("Far/Transmission", the blades' term) with it ahead: c = the
+// horizontal cosine between the way to the eye and the sun's, front = (1 + c) / 2, back = (1 - c) / 2 (the blades'
+// azimuths spread, so a sun from the side lights about half of each).
+float grassFarBladeSun(vec3 pos)
+{
+    const vec2 sunH = u_sunDirection.xz;
+    const float cosElevation = length(sunH);
+    const vec2 toEye = u_viewPos.xz - pos.xz;
+    const float lenEye = length(toEye);
+    if (cosElevation < 1e-3 || lenEye < 1e-3)
+        return 0.0;
+    const float c = dot(toEye, sunH) / (lenEye * cosElevation);
+    return cosElevation * INV_PI * (0.5 + 0.5 * c + u_grass_farTransmission * (0.5 - 0.5 * c));
 }
 #endif
 #endif

@@ -154,7 +154,8 @@ void main()
     const float widthScale = min(pow(1.0 / thinning, u_grass_widthCompensation), u_grass_maxWidthScale);
     g_blade.root = root;
     g_blade.side = side;
-    g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * coverSize, dist * u_grass_minWidthPerMetre);
+    const float widthSize = grassWidthSize(coverSize, clump);
+    g_blade.halfWidth = 0.5 * max(u_grass_bladeWidth * widthScale * widthSize, dist * u_grass_minWidthPerMetre);
     g_blade.ctrl = ctrl;
     g_blade.tip = tip;
     // The normal: NEAR the curve's own (the bent top catches the light), easing into one LINEAR in t from "LOD 2
@@ -198,7 +199,7 @@ void main()
 
     const float dryNoise = grassValueNoise(xz * (u_grass_invClumpSize * 0.37) + 17.3);
     const float dryness = smoothstep(0.0, 0.3, dryNoise - (1.0 - u_grass_dryAmount));
-    const float groundBlend = clamp(dist / u_grass_groundBlendDistance, 0.0, 1.0) * u_grass_groundBlend;
+    const float groundBlend = clamp(dist / u_grass_range, 0.0, 1.0) * u_grass_groundBlend;
     // The albedo factor: the per-blade variation x the COLD darkening (full at "Cold temperature", none from "Warm
     // temperature"; the patch's mean temperature - climate is km-scale, so no patch steps show).
     const float variation = 1.0 + u_grass_colorVariation * (grassUnit(grassHash(bladeHash + 7u)) * 2.0 - 1.0);
@@ -210,7 +211,7 @@ void main()
     // The canopy at this blade: its mean height and extinction (the ground under it takes the same); the depth is
     // capped at the canopy height (the sunk root is below the ground).
     const float canopyHeight = grassCanopyHeight(clump, coverSize);
-    out_canopy = vec2(clamp(canopyHeight - (pos.y - groundY), 0.0, canopyHeight), grassCanopyExtinction(cover, coverSize, dist));
+    out_canopy = vec2(clamp(canopyHeight - (pos.y - groundY), 0.0, canopyHeight), grassCanopyExtinction(cover, widthSize, dist));
 
     gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)

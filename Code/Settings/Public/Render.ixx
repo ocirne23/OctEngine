@@ -315,24 +315,23 @@ export struct GrassParams
 
     bool enabled = true;
     int bladesPerPatch = 1024;     // blades in a full patch (<= MAX_BLADES): the near density is this / patch size^2
-    float patchSize = 2.0f;        // m; ideally a divisor of the terrain chunk size
-    float range = 145.0f;          // m: no blade past it
-    float rangeFade = 45.0f;       // m: the blades thin out to none over the last metres of the range
+    float patchSize = 1.5f;       // m; ideally a divisor of the terrain chunk size
+    float range = 150.0f;          // m: no blade past it
+    float rangeFade = 100.0f;      // m: the blades thin out to none over the last metres of the range
     float bladeHeight = 1.0f;      // m
     float heightVariation = 0.6f;  // 0..1: the shortest blade is (1 - this) x the height
-    float bladeWidth = 0.15f;      // m at the root
+    float bladeWidth = 0.04f;     // m at the root
     float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
-    float thinStart = 20.0f;       // m: all blades inside it; past it (start / d)^exponent of them
-    float thinExponent = 1.0f;
+    float thinStart = 25.0f;      // m: all blades inside it; past it (start / d)^exponent of them
+    float thinExponent = 1.5f;
     float widthCompensation = 0.5f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
-    float maxWidthScale = 4.0f;
+    float maxWidthScale = 2.0f;
     float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
     float lod2Distance = 30.0f;
     float lod3Distance = 60.0f;
     float lodMorphBand = 0.3f;    // the blades geomorph into the next LOD over this fraction of its distance (>= 0.01)
     float minPixelWidth = 1.0f;    // px: a blade is never narrower (fights the far shimmer)
-    float groundBlendDistance = 80.0f; // m at which the normal has blended "Ground normal blend" of the way to the ground's
-    float groundBlend = 0.7f;
+    float groundBlend = 0.3f;     // the normal's blend to the ground's at the grass range (linear from the camera)
     // The shared wind ("Sky/Wind", wind.inc.glsl: its direction, speed and gusts) bends the blades: the tip's push in
     // blade heights per m/s, plus a small-scale ripple (value noise moving with the mean wind).
     float windBend = 0.05f;        // blade heights per m/s
@@ -344,11 +343,13 @@ export struct GrassParams
     float windFadeEnd = 200.0f;
     float curvature = 0.4f;        // the blades' own lean, in blade heights (random direction)
     float clumpSize = 5.0f;        // m: the size of the clumps and bare spots
-    float patchiness = 0.6f;       // 0 = even cover, 1 = clumps with bare ground between
+    float patchiness = 0.25f;      // 0 = even cover, 1 = clumps with bare ground between
     float bareFraction = 0.25f;    // about this share of the ground is the bare / thin part of the clump pattern
     float growBand = 0.7f;         // a blade shrinks into the ground over this fraction of the kept range (no pops)
-    float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter and
-                                   // narrower by the cover - not only fewer (sparse long stalks otherwise)
+    float sizeByCover = 1.0f;      // 0..1: where the cover fades (climate, slope, water), the blades also get shorter by
+                                   // the cover - not only fewer (sparse long stalks otherwise)
+    float widthByHeight = 0.5f;    // the width x (the cover / clump height factor)^-this: > 0 = shorter blades get WIDER
+                                   // (1 = the same blade area), 0 = one width, < 0 = narrower
     float canopyThinning = 0.3f;   // 0..1: under a closed tree canopy the cover is x (1 - this) - a forest floor holds
                                    // little grass (the clutter's FOREST FLOOR MAP: needs "Clutter/Enabled" and the trees)
     // WHERE it grows is the terrain textures' logic (grass_cull.cs.glsl): the ground layer's coverage (no rock, beach,
@@ -384,25 +385,42 @@ export struct GrassParams
     bool nearShadows = true;
     float nearShadowRange = 8.0f;
     float nearShadowBias = 0.15f;
-    float nearShadowStrength = 0.7f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
+    float nearShadowStrength = 0.9f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
     // THE FAR TIER (terrain FS, grass.inc.glsl grassGroundCanopy): where the blades fade out, the ground takes the grass
     // layer's look by how much of the view the layer covers: x farThickness on its optical depth (blades per m^2 x the
-    // mean blade width x the cover x the height / N.V; 0 = off), the weight at most farStrength. Its own look, apart from
-    // the blades': the canopy's sun self-shadowing (as canopyShadow), the root occlusion, the colour at farColourHeight
-    // up the blade (0 root .. 1 tip) x farBrightness, the roughness, the tuft grain (farGrain of variation in
-    // farGrainSize cells) and how far the normal goes to the smooth ground's.
-    float farThickness = 0.2f;
-    float farStrength = 1.0f;
-    float farCanopyShadow = 1.0f;
-    float farRootOcclusion = 1.0f;
-    float farColourHeight = 0.33f;
-    float farBrightness = 2.0f;
+    // mean blade width x the cover x the height / N.V; 0 = off). Its own look, apart from the blades': the canopy's sun
+    // self-shadowing (as canopyShadow), the tip colour x farBrightness, the roughness, and the layer's shading NORMAL: the
+    // upright blades' sides turned to the view (farUpright: the tilt from the ground normal toward the viewer, by how
+    // grazing the view is) and the blades' lean (farNormalVariation: a sideways tilt per blade stripe).
+    float farThickness = 1.0f;
+    float farCanopyShadow = 1.5f;
+    float farBrightness = 0.67f;
     float farRoughness = 0.5f;
-    float farGrain = 0.2f;
-    float farGrainSize = 1.5f;     // m
-    float farFlattenNormal = 1.0f;
+    float farUpright = 0.1f;
+    float farNormalVariation = 1.0f;
+    float farDiffuseVariation = 0.3f; // the blades' lean toward / away from the SUN per stripe: diffuse light and dark stripes
+    float farSunGlint = 0.4f; // the fraction of the blades (the bright stripes first) turned to MIRROR the sun: specular glints
+    float farRippleGlint = 0.3f; // small, sparse GLINTS on single blades (sharper than farRoughness), denser up the ripple
+    float farRippleLean = 1.5f; // the normal's tilt along the wind by that ripple (-1..1), as the near blades bend in it
+    // THE BLADES as STRIPES (grassFarAlbedo): thin streaks, vertical on screen, of farStripes contrast (0 = off),
+    // farStripeWidth blade widths wide in the world and farStripeLength x the ground a blade hides behind it (its height
+    // over the view's slope to the ground) long.
+    float farStripes = 0.4f;
+    float farStripeWidth = 3.0f;   // x the blade width
+    float farStripeLength = 0.12f; // x the blade height
+    // The stripes are built around an ANCHOR, not the camera (a pattern following the camera slid under DLSS / TAA's
+    // reprojection: flicker in motion): it steps to the camera once the camera is farStripeAnchorStep metres away,
+    // crossfading old -> new over farStripeAnchorFade real seconds (faster when the camera moves fast: within one step of
+    // travel).
+    float farStripeAnchorStep = 50.0f; // m
+    float farStripeAnchorFade = 1.0f;   // s
+    // THE BLADE LIGHT: farBladeLight of the far layer's SUN lit as UPRIGHT blades facing the viewer - their faces take a
+    // low sun about face-on (cos(elevation)), lit in front with the sun behind the view, through from behind
+    // (farTransmission, the blades' "Transmission") with the sun ahead - instead of as flat ground (sin(elevation)).
+    float farBladeLight = 0.5f;
+    float farTransmission = 2.0f;
 };
 
 // THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no

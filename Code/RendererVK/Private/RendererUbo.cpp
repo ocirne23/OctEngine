@@ -276,6 +276,35 @@ void Renderer::buildUboGrass(const Camera& camera)
     }
     m_grassNear.range = nearRange;
     m_grassNear.centre = glm::vec2(nearCentre.x, nearCentre.z); // the receivers' fade disc and the casters' selection measure from it
+
+    // THE FAR STRIPES' ANCHOR: the stripes are built around it, not around the camera - a pattern that follows the camera
+    // slides in the world, and DLSS / TAA's reprojection (the static terrain's: the camera's motion only) then rejects
+    // their history in motion: flicker. A stand-in EYE in 3D: everything the stripe value reads comes from it - the
+    // azimuth, the distance AND the view angle that sets the stripe length - so between steps the pattern is world-fixed.
+    // It steps to the camera once the camera is "Stripe anchor step" away (3D: climbing changes the view angle too) and
+    // the last crossfade has ended; the old one crossfades out over "Stripe anchor fade" REAL seconds (any frame rate),
+    // and at least within one step of travel (fast flight never drags it far behind). 20 steps away (a teleport) it snaps.
+    GrassStripeAnchor& a = m_grassStripeAnchor;
+    const float step = glm::max(g.farStripeAnchorStep, 1.0f);
+    if (!a.valid || glm::distance(m_cameraPos, a.now) > 20.0f * step)
+    {
+        a.now = a.old = a.lastCamera = m_cameraPos;
+        a.blend = 1.0f;
+        a.valid = true;
+    }
+    const float moved = glm::distance(m_cameraPos, a.lastCamera);
+    a.lastCamera = m_cameraPos;
+    if (a.blend < 1.0f)
+    {
+        const float byTime = g.farStripeAnchorFade > 0.0f ? (float)Globals::time.getDeltaSec() / g.farStripeAnchorFade : 1.0f;
+        a.blend = glm::min(a.blend + glm::max(byTime, moved / step), 1.0f);
+    }
+    else if (glm::distance(m_cameraPos, a.now) > step)
+    {
+        a.old = a.now;
+        a.now = m_cameraPos;
+        a.blend = 0.0f;
+    }
 }
 
 // View matrices, frustum, and TAA jitter: the center (culling) view and the VR eye views (m_views, which keep last
@@ -1297,14 +1326,21 @@ void Renderer::registerUboValues(UboBlock& list)
                 const float bladesPerM2 = (float)m_grassPipeline.getBladesPerPatch() / (patchSize * patchSize);
                 return grassActive() ? glm::max(g.farCanopyShadow, 0.0f) * bladesPerM2 * 0.5f * g.bladeWidth : 0.0f;
             }, UboLive);
-        list.add("grass_farStrength", [&g] { return glm::clamp(g.farStrength, 0.0f, 1.0f); }, g.farStrength);
-        list.add("grass_farRootOcclusion", [&g] { return glm::clamp(g.farRootOcclusion, 0.0f, 1.0f); }, g.farRootOcclusion);
-        list.add("grass_farColourHeight", [&g] { return glm::clamp(g.farColourHeight, 0.0f, 1.0f); }, g.farColourHeight);
         list.add("grass_farBrightness", [&g] { return glm::max(g.farBrightness, 0.0f); }, g.farBrightness);
         list.add("grass_farRoughness", [&g] { return glm::clamp(g.farRoughness, 0.05f, 1.0f); }, g.farRoughness); // the BRDF's alpha floor
-        list.add("grass_farGrain", [&g] { return glm::clamp(g.farGrain, 0.0f, 1.0f); }, g.farGrain);
-        list.add("grass_invFarGrainSize", [&g] { return 1.0f / glm::max(g.farGrainSize, 0.1f); }, g.farGrainSize);
-        list.add("grass_farFlattenNormal", [&g] { return glm::clamp(g.farFlattenNormal, 0.0f, 1.0f); }, g.farFlattenNormal);
+        list.add("grass_farUpright", [&g] { return glm::max(g.farUpright, 0.0f); }, g.farUpright);
+        list.add("grass_farNormalVariation", [&g] { return glm::max(g.farNormalVariation, 0.0f); }, g.farNormalVariation);
+        list.add("grass_farDiffuseVariation", [&g] { return glm::max(g.farDiffuseVariation, 0.0f); }, g.farDiffuseVariation);
+        list.add("grass_farSunGlint", [&g] { return glm::clamp(g.farSunGlint, 0.0f, 1.0f); }, g.farSunGlint);
+        list.add("grass_farRippleGlint", [&g] { return glm::clamp(g.farRippleGlint, 0.0f, 1.0f); }, g.farRippleGlint);
+        list.add("grass_farRippleLean", [&g] { return g.farRippleLean; }, g.farRippleLean);
+        list.add("grass_farBladeLight", [&g] { return glm::clamp(g.farBladeLight, 0.0f, 1.0f); }, g.farBladeLight);
+        list.add("grass_farTransmission", [&g] { return glm::max(g.farTransmission, 0.0f); }, g.farTransmission);
+        list.add("grass_farStripes", [&g] { return glm::clamp(g.farStripes, 0.0f, 1.0f); }, g.farStripes);
+        list.add("grass_farStripeLength", [&g] { return glm::max(g.farStripeLength, 0.005f) * g.bladeHeight; }, g.farStripeLength, g.bladeHeight); // m
+        list.add("grass_farStripeWidth", [&g] { return glm::max(g.farStripeWidth, 0.1f) * glm::max(g.bladeWidth, 0.002f); }, g.farStripeWidth, g.bladeWidth); // m
+        list.add("grass_stripeAnchorNew", [this] { return glm::vec4(m_grassStripeAnchor.now, m_grassStripeAnchor.blend); }, UboLive); // xyz, w = the blend (0 old .. 1 new)
+        list.add("grass_stripeAnchorOld", [this] { return glm::vec4(m_grassStripeAnchor.old, 0.0f); }, UboLive); // xyz
         list.add("grass_prevTime", [this] { return m_prevFrameTime; }, UboLive); // LAST frame's u_timeSeconds (the motion vectors)
         list.add("grass_rootAlbedo", [&] { return srgbToLinear(g.rootColor); }, g.rootColor);
         list.add("grass_roughness", g.roughness);
@@ -1329,7 +1365,6 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_lod2Distance", [&] { return grassLod2Distance(g); }, g.lod2Distance, g.lod1Distance);
         list.add("grass_lod3Distance", [&] { return glm::max(g.lod3Distance, grassLod2Distance(g)); }, g.lod3Distance, g.lod2Distance, g.lod1Distance);
         list.add("grass_lodMorphBand", [&] { return glm::clamp(g.lodMorphBand, 0.01f, 1.0f); }, g.lodMorphBand); // the tweak min: smoothstep needs two edges
-        list.add("grass_groundBlendDistance", [&] { return glm::max(g.groundBlendDistance, 1e-3f); }, g.groundBlendDistance);
         list.add("grass_groundBlend", g.groundBlend);
         // The direction, speed and gusts are the shared wind's (wind.inc.glsl); these the blades' response to it.
         list.add("grass_windBend", [&] { return glm::max(g.windBend, 0.0f); }, g.windBend);
@@ -1344,6 +1379,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_growBand", [&] { return glm::max(g.growBand, 0.01f); }, g.growBand);
         list.add("grass_bareFraction", [&] { return glm::clamp(g.bareFraction, 0.0f, 1.0f); }, g.bareFraction);
         list.add("grass_sizeByCover", [&] { return glm::clamp(g.sizeByCover, 0.0f, 1.0f); }, g.sizeByCover);
+        list.add("grass_widthByHeight", [&] { return g.widthByHeight; }, g.widthByHeight);
         list.add("grass_rootOcclusion", g.rootOcclusion);
         list.add("grass_transmission", g.transmission);
         list.add("grass_roundness", g.roundness);

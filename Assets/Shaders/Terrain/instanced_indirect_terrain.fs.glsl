@@ -161,12 +161,12 @@ void main()
 	float reliefStrength;
 	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
 	// THE GRASS CANOPY over this ground: its sun and ambient, plus the far tier's weight, from the same coverages as the
-	// grass placement. Formed here so only these three halves stay live across the splat, not the layers' picks.
-	const f16vec3 grassCanopy = f16vec3(grassGroundCanopy(tessLayers, in_meshPos, coverN));
+	// grass placement. Formed here so only these four halves stay live across the splat, not the layers' picks.
+	const f16vec4 grassCanopy = f16vec4(grassGroundCanopy(tessLayers, in_meshPos, coverN));
 #else
 	const vec3 geoN = coverN;
 	const TerrainLayers layers = terrainLayers(in_pos, coverN, fields);
-	const f16vec3 grassCanopy = f16vec3(grassGroundCanopy(layers, in_pos, coverN)); // see the tessellated path
+	const f16vec4 grassCanopy = f16vec4(grassGroundCanopy(layers, in_pos, coverN)); // see the tessellated path
 #endif
 	const float16_t one = float16_t(1.0);
 
@@ -181,18 +181,22 @@ void main()
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
 #endif
 
-	// The pixel's ground footprint (m), in uniform control flow (derivatives): the far grass grain's and the wet look's
-	// fades (the drying pattern, the glints).
-	const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz));
-
 	// THE FAR GRASS TIER (grassGroundCanopy's z): where the blades have faded out, the ground takes the grass layer's look -
-	// its colour, its roughness, and the smooth ground normal (the far blades' own shading normal blends to the ground's,
-	// "Ground normal blend"; the soil's normal map is under the blades). Before the wet look: wet grass darkens too.
+	// its colour, its roughness, and its normal (grassFarNormal: upright blades seen side-on, the tufts' lean; the soil's
+	// normal map is under the blades). Before the wet look: wet grass darkens too.
+	// Its BLADE LIGHT (grassFarBladeSun: "Far/Blade light" of its sun on upright blades - front-lit, or THROUGH them with
+	// the sun ahead - instead of on flat ground): only this one half is live across the lit core; the sun visibility, the
+	// albedo and the AO join it after, and the ground's own sun gives up the same share (below, g_sunVisMaterial).
+	float16_t farBladeSun = float16_t(0.0);
 	if (grassCanopy.z > float16_t(0.0))
 	{
-		surf.albedo = mix(surf.albedo, f16vec3(grassFarAlbedo(in_pos.xz, fields.temperature, pixelWidth)), grassCanopy.z);
-		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness), grassCanopy.z);
-		surf.normal = normalize(mix(surf.normal, f16vec3(geoN), grassCanopy.z * float16_t(u_grass_farFlattenNormal)));
+		float stripe, fine, glint;
+		surf.albedo = mix(surf.albedo, f16vec3(grassFarAlbedo(in_pos, geoN, fields.temperature, grassCanopy.w, stripe, fine)), grassCanopy.z);
+		const vec3 farN = grassFarNormal(in_pos, geoN, stripe, fine, glint);
+		// "Ripple glint"'s blades are sharper than the layer: 0.3 x its roughness.
+		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness * (1.0 - 0.7 * glint)), grassCanopy.z);
+		surf.normal = normalize(mix(surf.normal, f16vec3(farN), grassCanopy.z));
+		farBladeSun = float16_t(float(grassCanopy.z) * u_grass_farBladeLight * grassFarBladeSun(in_pos));
 	}
 
 	// THE GROUND'S WET LOOK: one darkening and one roughness drop, on the wetness field alone (no instantaneous "under
@@ -218,6 +222,7 @@ void main()
 		// shrink to a few pixels (the noise would shimmer).
 		const float16_t darkBand = float16_t(u_terrainWater_darkeningEdge);
 		const float16_t band = float16_t(u_terrainWater_roughnessEdge);
+		const float pixelWidth = length(fwidth(TERRAIN_LIT_POS.xz)); // m (the drying pattern's and the glints' fades)
 		const float footprint = pixelWidth * u_terrainWater_invDryingPatternSize; // pattern cells per pixel
 		const float16_t patternW = float16_t(u_terrainWater_dryingPattern * (1.0 - smoothstep(0.15, 0.4, footprint)));
 		float16_t damp = darkAmount, glossW = glossAmount;
@@ -285,8 +290,16 @@ void main()
 	// V HERE, not at the top: its 3 registers are then not live across the shadow, the layers and the splat.
 	g_sunVisMaterial *= grassCanopy.x;
 	surf.ao *= grassCanopy.y;
+	// The far grass's blade light takes the ground's sun visibility (the canopy, the relief gate; the shadow joins it
+	// after the lit core), and the ground's own sun gives up that share of the far layer.
+	farBladeSun *= g_sunVisMaterial;
+	g_sunVisMaterial *= one - grassCanopy.z * float16_t(u_grass_farBladeLight);
 	const vec3 V = normalize(u_viewPos - in_pos);
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
+	// The far grass's blade light (above): x the shadow, the albedo and the AO, x the sun's radiance.
+	if (farBladeSun > float16_t(0.0))
+		color += vec3(surf.albedo) * (float(farBladeSun) * float(g_sunShadowFirst) * float(surf.ao))
+			* (u_sunTransmittance * u_sunColor.rgb);
 
 	// THE WET SKY REFLECTION (the lit core has no environment specular, so wet ground read as merely darker): the
 	// mirror sky along R, water Fresnel (F0 0.02), the film's roughness-to-blur rule, the texture AO as the specular

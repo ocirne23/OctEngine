@@ -602,6 +602,17 @@ private:
         glm::vec2 centre{ 0.0f };
         float range = 0.0f;                 // its half size (m; 0 = off)
     } m_grassNear;
+    // The far grass stripes' ANCHOR (buildUboGrass; grass.inc.glsl): the point the pattern is built around - a stand-in
+    // EYE, height included (the stripes' length comes from its view angle too) - in steps behind the camera, the old one
+    // crossfading to the new.
+    struct GrassStripeAnchor
+    {
+        glm::vec3 now{ 0.0f };
+        glm::vec3 old{ 0.0f };
+        glm::vec3 lastCamera{ 0.0f };
+        float blend = 1.0f;        // 0 = all old .. 1 = all new
+        bool valid = false;
+    } m_grassStripeAnchor;
     glm::vec3 m_forceBakeMin{ 0.0f };
     glm::vec3 m_forceBakeInvSize{ 0.0f };
     TerrainResources::WetnessTick m_wetTick{};
