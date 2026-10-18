@@ -66,13 +66,14 @@ TreeSpecies BirchClump
 			Sides 3
 	Leaves
 		Type Cluster
-		Size 0.5
+		Size 1.35
 		Aspect 0.65
-		PerBranch 10
+		PerBranch 2
 		Levels 2
 		Align 0.1
-		ClusterLeaves 14
-		ClusterLeafSize 0.22
+		ClusterLeaves 6
+		ClusterLeafSize 0.32
+		ClusterLeafWidth 0.38
 		NormalBend 0.0
 	Bark
 		Plates 4 12
@@ -87,9 +88,9 @@ TreeSpecies BirchClump
 		NormalBend 0.0
 		TopCardHeight 0.65
 		AlbedoScale 0.9
-		FarAlbedoScale 0.9
 	Color
 		Bark 0.78 0.76 0.71
+		Twig 0.30 0.20 0.14
 		Leaf 0.31 0.40 0.17
 		Mark 0.09 0.08 0.07
 		Section 0.42 0.32 0.24

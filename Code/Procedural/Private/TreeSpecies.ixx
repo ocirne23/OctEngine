@@ -228,6 +228,8 @@ export namespace Procedural
 		float billboardTopCardHeight = 0.5f; // the whole tree's horizontal card, as a fraction of its height (0 = bottom, 1 = top)
 		glm::vec3 barkColor{ 0.32f, 0.24f, 0.17f };
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
+		glm::vec3 twigColor{ -1.0f }; // `Color Twig`: the twigs drawn in the leaf texture (< 0 = barkColor)
+		glm::vec3 leafTwigColor() const { return twigColor.x >= 0.0f ? twigColor : barkColor; }
 		// The FAR-TREE VOLUME's colour: `Color Far` (sRGB like Leaf; < 0 = the leaf texture's mean) x farAlbedoScale.
 		glm::vec3 farColor{ -1.0f };
 		float farAlbedoScale = 1.0f;

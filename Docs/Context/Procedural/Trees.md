@@ -125,7 +125,8 @@ TreeSpecies <name>
 	        than along)
 	        Sections (0..1: about that share of the bark tinted to Color Section, soft areas longer along the branch)
 	Color   Bark r g b · Leaf r g b · Mark r g b (the lenticels' and patches' colour; default 0.09 0.08 0.07)
-	        Section r g b (default 0.45 0.33 0.24) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
+	        Section r g b (default 0.45 0.33 0.24) · Twig r g b (the twigs / stems drawn in the LEAF texture; absent =
+	        Bark - a birch's white bark read wrong on its twigs) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
 	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`)
 	Placement (WORLD placement, TreeWorld; trees only - absent or Density 0 = never placed in the world)
 	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)

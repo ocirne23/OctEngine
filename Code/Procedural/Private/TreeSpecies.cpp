@@ -293,6 +293,11 @@ namespace Procedural
 			readColor(*color, "Leaf", out.leafColor);
 			readColor(*color, "Mark", out.markColor);
 			readColor(*color, "Section", out.sectionColor);
+			if (color->find("Twig"))
+			{
+				out.twigColor = glm::vec3(0.0f);
+				readColor(*color, "Twig", out.twigColor);
+			}
 			if (color->find("Far"))
 			{
 				out.farColor = glm::vec3(0.0f);

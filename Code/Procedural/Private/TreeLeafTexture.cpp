@@ -125,7 +125,7 @@ namespace
 		{
 			const float t0 = (float)i / TWIG_SEGMENTS, t1 = (float)(i + 1) / TWIG_SEGMENTS;
 			drawCapsule(cell, bezier(base, ctrl, tip, t0), bezier(base, ctrl, tip, t1),
-				glm::mix(0.012f, 0.004f, t0), glm::mix(0.012f, 0.004f, t1), species.barkColor);
+				glm::mix(0.012f, 0.004f, t0), glm::mix(0.012f, 0.004f, t1), species.leafTwigColor());
 		}
 
 		const int numLeaves = glm::max(species.clusterLeaves, 1);
@@ -174,7 +174,7 @@ namespace
 		{
 			const float t0 = (float)i / TWIG_SEGMENTS, t1 = (float)(i + 1) / TWIG_SEGMENTS;
 			const glm::vec2 a = bezier(base, ctrl, tip, t0), b = bezier(base, ctrl, tip, t1);
-			drawCapsule(cell, a, b, glm::mix(twigRadius, twigRadius * 0.4f, t0), glm::mix(twigRadius, twigRadius * 0.4f, t1), species.barkColor);
+			drawCapsule(cell, a, b, glm::mix(twigRadius, twigRadius * 0.4f, t0), glm::mix(twigRadius, twigRadius * 0.4f, t1), species.leafTwigColor());
 			shootLength += glm::distance(a, b);
 		}
 
@@ -334,7 +334,7 @@ namespace
 			{
 				const float t0 = (float)s / TWIG_SEGMENTS, t1 = (float)(s + 1) / TWIG_SEGMENTS;
 				drawCapsule(cell, bezier(twig.base, twig.ctrl, twig.tip, t0), bezier(twig.base, twig.ctrl, twig.tip, t1),
-					glm::mix(twig.radius, twig.radius * 0.4f, t0), glm::mix(twig.radius, twig.radius * 0.4f, t1), species.barkColor);
+					glm::mix(twig.radius, twig.radius * 0.4f, t0), glm::mix(twig.radius, twig.radius * 0.4f, t1), species.leafTwigColor());
 			}
 		for (int i = 0; i < shoots / 3; ++i)
 			drawShoot();
@@ -357,7 +357,7 @@ namespace
 	{
 		auto rotate = [](glm::vec2 v, float a) { return glm::vec2(v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a)); };
 		const float px = 1.0f / cell.cellPx;
-		const glm::vec3 stemColor = glm::mix(species.barkColor, species.leafColor, 0.45f);
+		const glm::vec3 stemColor = glm::mix(species.leafTwigColor(), species.leafColor, 0.45f);
 		constexpr int RACHIS_SEGMENTS = 10;
 		float rachisLength = 0.0f;
 		for (int i = 0; i < RACHIS_SEGMENTS; ++i)
@@ -435,7 +435,7 @@ namespace
 		const float bend = rng.signed1() * 0.16f;  // its rachis curves (x its length)
 		const float lengthScale = rng.range(0.78f, 1.0f);
 		// A short woody twig the leaves grow from.
-		drawCapsule(cell, base, base + glm::vec2(0.0f, 0.03f), 0.008f, 0.006f, species.barkColor);
+		drawCapsule(cell, base, base + glm::vec2(0.0f, 0.03f), 0.008f, 0.006f, species.leafTwigColor());
 		oc::small_vector<int, 8> drawOrder;
 		for (int b = 0; b < numLeaves; ++b)
 			drawOrder.push_back(b);
