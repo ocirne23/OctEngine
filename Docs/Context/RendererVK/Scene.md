@@ -263,7 +263,11 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` / `pcssBorder`)
   keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the PCSS average blocker
   (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 3.5, min
-  0.05). ~0 on the axis, deepening into the crown; far blockers shadow fully.
+  0.05). ~0 on the axis, deepening into the crown; far blockers shadow fully. **The tree MESH leaves** (the LitTree FS,
+  `SHADOW_LEAF_TRANSMIT` / `g_shadowLeafLength`, set per leaf pixel; the normal bias stays) take the same fade with
+  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 3, 0 = off): their only caster is their own
+  billboard, whose top card at `TopCardHeight` put every leaf under it in full shadow and every leaf above it in none -
+  now a leaf just under the card is barely shaded, one deep under it fully. Bark keeps the full shadow.
 * **The billboard normal map is the CROWN layout** (Procedural TreeImpostor `bakeBillboards`): RGB = the full
   tangent-space normal, SIGN KEPT (a normal may face away, toward a sun behind the tree), **A = the BAKED INTERIOR**
   (linear: 0 on the crown's surface .. 1 at about the crown's core depth, from the piece's own blurred leaf field -

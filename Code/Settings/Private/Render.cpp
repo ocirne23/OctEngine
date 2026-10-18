@@ -83,6 +83,7 @@ void Settings::registerFoliage(FoliageParams& s)
     // In the Procedural TreeSystem's "Trees" category: the tree billboards are their only user.
     Tweak::floatVar("Trees", "Foliage crown normal", &s.crownNormal, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage shadow length (m)", &s.shadowLength, 0.05f, 20.0f, 0.05f);
+    Tweak::floatVar("Trees", "Leaf shadow length (m)", &s.leafShadowLength, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Foliage interior depth start", &s.interiorStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior depth end", &s.interiorEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage interior view fade", &s.interiorViewFade, 0.0f, 1.0f, 0.01f);

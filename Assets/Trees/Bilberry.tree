@@ -2,7 +2,7 @@
 # dwarf shrub under conifers (~0.3-0.5 m tall).
 TreeSpecies Bilberry
 	Kind Bush
-	Climate Boreal
+	Climate Boreal BirchWood
 	Seed 67
 	Scale 0.4 0.7
 	Trunk

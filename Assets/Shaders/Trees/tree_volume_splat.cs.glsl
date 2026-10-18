@@ -5,7 +5,7 @@
 // does. Every texel the tree's box touches samples the type volume at the mip that matches the texel's footprint (tree
 // space), at the texel centre clamped into the box, x the tree's TENT weight horizontally and the slice's box overlap
 // vertically: a texel larger than the tree still gets the tree's share. The column's colour takes the tree type's albedo
-// (last writer wins). The type volumes: per type a res^3 float mip chain (x fastest, then y, then z), the mips following
+// (last writer wins; a record's bushes write none). The type volumes: per type a res^3 float mip chain (x fastest, then y, then z), the mips following
 // level 0.
 //
 // TREE_FLOOR_PASS 1 and 2 (dispatched first, in that order): the same footprint walk per COLUMN, setting the column's FLOOR:
@@ -43,6 +43,10 @@ layout (binding = 3, rgba8) uniform writeonly image2D u_colour;
 layout (binding = 4, r32ui) uniform uimage2D u_floor;
 layout (binding = 5, r32ui) uniform uimage2D u_floorCover; // the largest tree coverage per column (floor pass 1)
 layout (binding = 6, r32ui) uniform uimage2D u_rockSum;    // the solids' share per column (the accumulation's units)
+
+// A record's BUSHES add extinction but write NO colour: the column's colour is last-writer-wins, and a small dark bush
+// set the colour of the tall crown above it (far birches in their bilberries' green).
+bool g_writeColour = true;
 
 // A tree's coverage of a column as an orderable key: 0 = only the rectangle's ring reaches it.
 uint coverKey(float coverXZ) { return coverXZ > 0.0 ? 1u + uint(coverXZ * 65534.0) : 0u; }
@@ -279,7 +283,7 @@ void splatPiece(VolumePiece piece)
         imageAtomicAdd(u_accum, tvAccumTexel(texel, s), tvAccumAmount(extinction, s));
         if (rock)
             imageAtomicAdd(u_rockSum, texel, min(uint(extinction * TV_ACCUM_SCALE + 0.5), 0xFFFFu)); // the same units
-        else
+        else if (g_writeColour)
             imageStore(u_colour, texel, vec4(type.albedo.rgb, 1.0));
 #endif
     }
@@ -348,6 +352,7 @@ void main()
     const float whole = floor(perTree);
     const uint count = uint(whole) + (treeHash01(treeHash(seed, 110u)) < perTree - whole ? 1u : 0u);
     const float bushRadius = pc_recordTypes.t[type].bushRadius;
+    g_writeColour = false;
     for (uint b = 0u; b < count; ++b)
     {
         const uint bushSeed = treeHash(seed, 200u + b);

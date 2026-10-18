@@ -1,0 +1,115 @@
+# Elm: one STRAIGHT trunk (Stems 1) whose top 65 % is a crown that FILLS an egg-shaped dome (Trunk Split 4 3 0 0.72 -0.4 1 1.8 2 - the 7th raises the MIDDLE, the 8th adds 2 leafy shoots on the inner branches,
+# the 6th value = fill; Crown Radius 7.5): every split divides its parent's cone of directions among 4 children, three
+# rounds, 64 tips on the dome - snaking (the trunk shape's Wobble 14), the last round arching out a little (-0.4). Every
+# tip ends in a whorl of 3 leafy limbs rising at 55 degrees (Crown Top 3 0.5 55, Crown Angle 55 55 - a drooping
+# species grows its limbs at Crown Angle) that arch over a little (Module Droop 60); thin leafy limbs (Module
+# Radius 0.005, ~2 cm at the base) on split tips that taper only to 0.7 a round (~1.5 cm), BranchRadius 1.5: no step
+# in thickness where a leafy limb meets its tip (0.012 with BranchRadius 6 put ~5 cm limbs on ~5 mm tips). Broad OVAL leaves (ClusterLeafWidth 0.55, ClusterLeafSize 0.27; narrow or small
+# ones, and strong droop, read as willow). Grey-brown, deeply furrowed bark. Temperate, a little drier and cooler than
+# Oak's core - Forest types make elm woods among the oaks.
+TreeSpecies Elm
+	Climate Temperate
+	Seed 83
+	Scale 1.0 1.25
+	Trunk
+		Count 6
+		Height 9 11
+		Radius 0.5
+		Taper 0.12
+		Curve 30 8
+		UpAttract 0.1
+		Wobble 14
+		Elbows 1.5
+		ElbowAngle 20 8
+		ElbowUpBias 0.8
+		ElbowRange 0.2 0.9
+		Stubs 0.3
+		Flare 0.35
+		Lobes 6
+		LobeDepth 0.35 0.05
+		LobeHeight 0.35
+		Twist 15
+		Stems 1 1
+		Split 4 3 0 0.72 -0.4 1 1.8 2
+		StemSpread 0.2
+		Rings 20
+		Sides 20
+	Crown
+		Shape Ellipsoid
+		Start 0.25
+		Radius 7.5
+		Slots 0
+		Angle 55 55
+		AngleVar 15
+		Top 3 0.5 55
+		SplitLimbs 0 40 0.4
+		BranchRadius 1.5
+	Module
+		Count 12
+		Radius 0.005
+		Curve 20 10
+		UpAttract 0.05
+		Droop 60
+		Wobble 6
+		Elbows 0.5
+		ElbowAngle 15 6
+		Stubs 0.2
+		Rings 8
+		Sides 5
+		Level
+			Count 8
+			Start 0.15
+			Length 0.55
+			LengthTaper 0.4
+			Angle 48 12
+			Curve 15 8
+			Droop 45
+			Wobble 6
+			Radius 0.5
+			Rings 5
+			Sides 3
+		Level
+			Count 1
+			Start 0.15
+			Length 0.6
+			LengthTaper 0.3
+			Angle 42 12
+			Curve 10 6
+			Droop 55
+			Wobble 6
+			Radius 0.5
+			Rings 4
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.95
+		Aspect 0.9
+		PerBranch 5
+		Levels 2
+		ClusterLeaves 11
+		ClusterLeafSize 0.27
+		ClusterLeafWidth 0.55
+		NormalBend 0.0
+	Bark
+		Plates 16 10
+		Crack 0.2
+		Breakup 0.2
+		Relief 2.5
+		Lichen 0.25
+	Billboard
+		NormalBend 0.0
+		TopCardHeight 0.7
+	Color
+		Bark 0.40 0.37 0.33
+		Leaf 0.23 0.36 0.12
+	Undergrowth
+		Bushes 3
+		Radius 8
+	Placement
+		Density 40
+		Temperature 9 16
+		Precipitation 700 1500
+		ClimateWidth 0.04
+		Cluster 200 0.6
+		MaxSlope 0.6
+		Spacing 11

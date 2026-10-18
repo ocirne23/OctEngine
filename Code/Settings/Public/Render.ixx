@@ -101,7 +101,7 @@ export struct CloudParams
     // Shape
     float bottom = 700.0f;             // shell bottom altitude (m)
     float top = 3000.0f;               // shell top altitude (m)
-    float coverage = 0.6f;            // 0 = clear, 1 = overcast
+    float coverage = 0.3f;            // 0 = clear, 1 = overcast
     float coverageVariation = 1.75f;   // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
@@ -241,6 +241,9 @@ export struct FoliageParams
                                 // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
+    float leafShadowLength = 3.0f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
+                                   // strength) - a leaf just under its own billboard's top card is barely shaded,
+                                   // one deep under it fully
     float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
                                 // (from the piece's own crown field: any crown shape), on the sun and the ambient
                                 // alike (0 = off) - a fully lit crown otherwise looked flat.
@@ -456,7 +459,7 @@ export struct FarTreeParams
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 16;            // height slices
-    float height = 22.0f;         // m above the column's tree floor the volume covers
+    float height = 30.0f;         // m above the column's tree floor the volume covers
     float densityScale = 0.4f;    // x the baked extinction
     float blobShrink = 0.4f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
     float stepScale = 1.5f;       // march step, x the cell size

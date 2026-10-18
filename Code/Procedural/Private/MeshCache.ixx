@@ -19,7 +19,7 @@ import :RockGenerator;
 // caller's AllowMainThreadIO.
 export namespace Procedural
 {
-	constexpr uint32 TREE_MESH_CACHE_VERSION = 1;    // generateTreeLibrary, bakeTreeVariant, bakeTreeDensity
+	constexpr uint32 TREE_MESH_CACHE_VERSION = 14;// generateTreeLibrary, bakeTreeVariant, bakeTreeDensity
 	constexpr uint32 ROCK_MESH_CACHE_VERSION = 1;    // generateRockVariant
 	constexpr uint32 CLUTTER_MESH_CACHE_VERSION = 1; // generateClutterMeshes (its pebbles: generateRockVariant too)
 

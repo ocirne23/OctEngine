@@ -205,6 +205,38 @@ namespace
 		}
 	}
 
+	// A branch that STARTS along `dir0` and bends to `dir1` over its first `bendEnd` of the length (smoothstep), then runs
+	// straight on: its first ring is square to `dir0`, so it continues a parent ending along `dir0` with no wedge between
+	// the two rings (a split's continuing branch).
+	// `wobble` (radians per segment, a random walk like growBranch's) starts after the bend's first half, so the first
+	// ring still meets the parent square.
+	void bentPath(BranchPath& b, const glm::vec3& origin, const glm::vec3& dir0, const glm::vec3& dir1, float length, float r0,
+		float r1, int rings, float bendEnd, float wobble = 0.0f, Rng* rng = nullptr)
+	{
+		const int n = glm::max(rings, 3);
+		b.points.clear();
+		b.length = length;
+		b.r0 = r0;
+		b.r1 = r1;
+		glm::vec3 p = origin;
+		b.points.push_back(p);
+		glm::quat walk(1.0f, 0.0f, 0.0f, 0.0f);
+		for (int k = 0; k < n - 1; ++k)
+		{
+			const float u = ((float)k + 0.5f) / (float)(n - 1);
+			glm::vec3 d = glm::normalize(glm::mix(dir0, dir1, glm::smoothstep(0.0f, bendEnd, u)));
+			if (wobble > 0.0f && rng && u > bendEnd * 0.5f)
+			{
+				walk = glm::normalize(glm::angleAxis(wobble * rng->signed1(), randomPerpendicular(d, *rng)) * walk);
+				d = glm::normalize(walk * d);
+			}
+			p += d * (length / (float)(n - 1));
+			b.points.push_back(p);
+		}
+		b.finish();
+		b.tangents.front() = glm::normalize(dir0); // finish takes it from the first segment: exactly the parent's end
+	}
+
 	// A lobed, twisting cross-section (trunk buttresses): radius x (1 + depth(u) * (ridges(theta + twist u) -
 	// mean)). Ridges are irregular (random phase jitter and height), deepest at the base, fading over
 	// `fadeHeight` to a small leftover irregularity.
@@ -264,8 +296,11 @@ namespace
 	// flat disc (the broken face of a stub). A `profile` deforms the cross-section; the normals then come
 	// from the deformed grid instead of the radial direction. `extendBase` adds one ring that continues the
 	// base backward by that many metres with the base's own cross-section (a trunk sunk into sloped ground).
+	// `tip` (a fraction of the length): over that last part the radius narrows to TUBE_TIP_RADIUS of the path's - a closed
+	// point, not an open cut (the trunk's end). The mesh only: BranchPath::sample keeps the linear radius (slots, children).
+	constexpr float TUBE_TIP_RADIUS = 0.12f;
 	void appendTube(TreeMesh& m, const BranchPath& b, int sides, uint8 bone, float flare = 0.0f, bool cap = false,
-		const TubeProfile* profile = nullptr, float extendBase = 0.0f)
+		const TubeProfile* profile = nullptr, float extendBase = 0.0f, float tip = 0.0f)
 	{
 		const int extra = extendBase > 0.0f ? 1 : 0;
 		const int n = (int)b.points.size() + extra; // rings
@@ -294,6 +329,8 @@ namespace
 				const float f = 1.0f - glm::smoothstep(0.0f, 0.15f, t); // eases into the trunk, no step
 				r *= 1.0f + flare * f * f;
 			}
+			if (tip > 0.0f)
+				r *= glm::mix(1.0f, TUBE_TIP_RADIUS, glm::smoothstep(1.0f - tip, 1.0f, t));
 			for (int j = 0; j <= sides; ++j)
 			{
 				const float theta = TWO_PI * (float)j / (float)sides;
@@ -376,6 +413,7 @@ namespace
 		float flare = 0.0f;
 		bool lobed = false;     // use the plan's TubeProfile
 		float sink = 0.0f;
+		float tip = 0.0f;       // appendTube's closing tip (trunks)
 		bool stub = false;      // a snapped-off stub (capped; dropped at the coarse levels)
 	};
 
@@ -585,7 +623,7 @@ namespace
 					continue;
 				const int sides = glm::max(3, (int)std::round((float)tube.sides * spec.sides));
 				appendTube(bark, subsamplePath(tube.path, spec.rings), sides, tube.bone, tube.flare, tube.stub,
-					tube.lobed ? &plan.profile : nullptr, tube.sink);
+					tube.lobed ? &plan.profile : nullptr, tube.sink, tube.tip);
 			}
 			for (uint32 v = 0; v < bark.numVertices(); ++v)
 				bark.texCoords[v].z = encodeWind(windPayload(out.bones, bark.positions[v], bark.bones[v], trunk));
@@ -633,10 +671,13 @@ namespace
 		case ETreeCrownShape::Cone:     return glm::max(1.0f - h, 0.08f);
 		case ETreeCrownShape::Umbrella: return 0.3f + 0.7f * std::pow(h, 1.5f);
 		case ETreeCrownShape::Column:   return 0.35f + 0.1f * std::sin(h * 3.14159265f);
+		case ETreeCrownShape::Dome:     return glm::max(std::sqrt(glm::max(0.0f, 1.0f - h * h * h)), 0.3f);
 		}
 		return 1.0f;
 	}
 
+	// A trunk piece: one stem, or (Trunk Stems) several from around one base. The single-stem path draws its randomness
+	// in the original order, so a one-stem species' trunks are unchanged.
 	void generateTrunk(const TreeSpeciesDesc& sp, uint32 seed, TreePiece& out)
 	{
 		Rng rng(seed);
@@ -644,55 +685,466 @@ namespace
 		out.length = height;
 		out.baseRadius = sp.trunkRadius;
 
-		PiecePlan plan;
-		TubePlan& trunk = plan.tubes.emplace_back();
-		oc::vector<Elbow> elbows;
-		growBranch(trunk.path, glm::vec3(0.0f), WORLD_UP, height, sp.trunkRadius, sp.trunkRadius * sp.trunkTaper,
-			sp.trunkShape, WORLD_UP, rng, &elbows, 1.6f); // rings packed toward the ground
-		trunk.sides = sp.trunkShape.sides;
-		trunk.flare = sp.trunkFlare;
-		trunk.lobed = sp.trunkLobes > 0;
-		trunk.sink = glm::max(sp.trunkSink, 0.0f);
-		if (trunk.lobed)
-			plan.profile.build(sp.trunkLobes, sp.trunkLobeDepth, sp.trunkLobeHeight, sp.trunkTwist, rng);
-		const BranchPath path = trunk.path; // planStubs grows plan.tubes: no reference into it past here
-		planStubs(plan, path, elbows, sp.trunkShape, 0, 0, rng);
-		out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, height });
+		const int stems = sp.trunkStems.y > sp.trunkStems.x
+			? sp.trunkStems.x + (int)(rng.next() % (uint32)(sp.trunkStems.y - sp.trunkStems.x + 1)) : sp.trunkStems.x;
+		const float stemAzimuth = stems > 1 ? rng.next01() * TWO_PI : 0.0f;
+		if (stems > 1)
+			out.baseRadius = sp.trunkRadius + sp.trunkStemSpread;
 
-		const float crownStart = glm::clamp(sp.crownStart, 0.0f, 0.98f);
-		for (int i = 0; i < sp.slots; ++i)
+		PiecePlan plan;
+		oc::vector<Elbow> elbows;
+		float crownStart = glm::clamp(sp.crownStart, 0.0f, 0.98f);
+
+		// FORK (several stems, Trunk Fork > 0): ONE trunk from the ground to the fork height - flare, ridges, sink - and
+		// the stems grow from its top, each thinner (the cross-section shared: base top radius x 1.15 / sqrt(stems), at
+		// most 0.85 of it), starting a tip radius down inside it so the joint is hidden. The crown starts at the same
+		// tree height, on the stems.
+		const float fork = stems > 1 ? glm::clamp(sp.trunkFork, 0.0f, 0.9f) : 0.0f;
+		const float treeCrownStart = crownStart;
+		glm::vec3 forkPoint(0.0f), forkTangent = WORLD_UP;
+		float stemRadius = sp.trunkRadius;
+		BranchPath basePath;
+		if (fork > 0.0f)
 		{
-			const float jitter = rng.signed1() * 0.3f / (float)sp.slots;
-			float h = glm::clamp(((float)i + 0.5f) / (float)sp.slots + jitter, 0.0f, 1.0f);
-			if (sp.crownTiers > 1)
-			{
-				// Tiers: slot i goes to whorl i * tiers / slots, spread over `crownTierSpread` of that whorl's band.
-				const int tier = i * sp.crownTiers / sp.slots;
-				const int first = (tier * sp.slots + sp.crownTiers - 1) / sp.crownTiers;
-				const int count = ((tier + 1) * sp.slots + sp.crownTiers - 1) / sp.crownTiers - first;
-				const float local = ((float)(i - first) + 0.5f) / (float)glm::max(count, 1) - 0.5f + jitter;
-				h = glm::clamp(((float)tier + 0.5f + local * sp.crownTierSpread) / (float)sp.crownTiers, 0.0f, 1.0f);
-			}
-			const BranchPath::Sample s = path.sample(crownStart + (1.0f - crownStart) * h);
-			const float pitch = glm::radians(glm::mix(sp.slotAngle.x, sp.slotAngle.y, h) + rng.signed1() * sp.slotAngleVar);
-			const float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.3f;
-			glm::vec3 horiz(std::cos(az), 0.0f, std::sin(az));
-			horiz = glm::normalize(horiz - s.tangent * glm::dot(horiz, s.tangent));
-			TreeSlot slot;
-			slot.pos = s.pos;
-			slot.dir = glm::normalize(std::cos(pitch) * s.tangent + std::sin(pitch) * horiz);
-			slot.length = crownEnvelope(sp.crownShape, h) * sp.crownRadius / glm::max(std::sin(pitch), 0.35f);
-			slot.radius = s.radius;
-			out.slots.push_back(slot);
+			// The lower trunk STRAIGHTER than the stems: a third of their curve and wobble, no elbows (the stems' bend made
+			// it look bent).
+			TreeBranchShape baseShape = sp.trunkShape;
+			baseShape.curve *= 0.33f;
+			baseShape.curveVar *= 0.33f;
+			baseShape.wobble *= 0.33f;
+			baseShape.elbows = 0.0f;
+			TubePlan& base = plan.tubes.emplace_back();
+			growBranch(base.path, glm::vec3(0.0f), WORLD_UP, height * fork, sp.trunkRadius,
+				sp.trunkRadius * glm::mix(1.0f, sp.trunkTaper, fork), baseShape, WORLD_UP, rng, &elbows, 1.6f);
+			base.sides = sp.trunkShape.sides;
+			base.flare = sp.trunkFlare;
+			base.lobed = sp.trunkLobes > 0;
+			base.sink = glm::max(sp.trunkSink, 0.0f);
+			if (base.lobed)
+				plan.profile.build(sp.trunkLobes, sp.trunkLobeDepth, sp.trunkLobeHeight, sp.trunkTwist, rng);
+			basePath = base.path;
+			planStubs(plan, basePath, elbows, sp.trunkShape, 0, 0, rng);
+			stemRadius = glm::min(basePath.r1 * 0.85f, basePath.r1 * 1.15f / std::sqrt((float)stems));
+			forkPoint = basePath.points.back() - basePath.tangents.back() * basePath.r1;
+			forkTangent = basePath.tangents.back();
+			crownStart = glm::clamp((crownStart - fork) / (1.0f - fork), 0.0f, 0.95f);
+			out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, height });
+			out.baseRadius = sp.trunkRadius;
 		}
-		if (sp.leader)
+
+		// The stems: at even azimuths around the base (jittered), leaning out by StemLean x 0.8..1.1, the first the
+		// tallest. Their slots are split by LENGTH (an even split left the tallest stem's layers sparse).
+		// With a fork the BASE trunk carries limbs too (the long low ones), its share of the slots by the length of it inside
+		// the crown, as each stem's.
+		struct StemPlan { glm::vec3 origin{ 0.0f }, dir = WORLD_UP, outward{ 0.0f }; float height = 0.0f; int slots = 0; };
+		oc::small_vector<StemPlan, 8> stemPlans((size_t)stems);
+		int baseSlots = 0;
+		if (stems > 1)
 		{
-			TreeSlot slot;
-			slot.pos = path.points.back();
-			slot.dir = path.tangents.back();
-			slot.length = glm::max(0.3f * sp.crownRadius, 0.15f * height);
-			slot.radius = path.r1;
-			out.slots.push_back(slot);
+			const float baseBearing = fork > 0.0f ? glm::max(fork - treeCrownStart, 0.0f) * height : 0.0f;
+			float total = baseBearing;
+			for (int stem = 0; stem < stems; ++stem)
+			{
+				StemPlan& p = stemPlans[(size_t)stem];
+				const float az = stemAzimuth + TWO_PI * (float)stem / (float)stems + rng.signed1() * 0.4f;
+				p.outward = glm::vec3(std::cos(az), 0.0f, std::sin(az));
+				p.origin = forkPoint + p.outward * (sp.trunkStemSpread * rng.range(0.6f, 1.0f));
+				const float lean = glm::radians(sp.trunkStemLean * rng.range(0.8f, 1.1f));
+				p.dir = glm::normalize(std::cos(lean) * forkTangent + std::sin(lean) * p.outward);
+				// The first stem the tallest - on the ground (a clump's leader); a forked crown's stems all alike (one full-
+				// height stem stood out of the crown).
+				p.height = height * (1.0f - fork) * (stem == 0 && fork <= 0.0f ? 1.0f : rng.range(0.7f, 0.95f));
+				total += p.height * (1.0f - crownStart);
+			}
+			float acc = baseBearing;
+			baseSlots = (int)std::round((float)sp.slots * acc / glm::max(total, 1e-3f));
+			for (StemPlan& p : stemPlans)
+			{
+				const int before = (int)std::round((float)sp.slots * acc / glm::max(total, 1e-3f));
+				acc += p.height * (1.0f - crownStart);
+				p.slots = (int)std::round((float)sp.slots * acc / glm::max(total, 1e-3f)) - before;
+			}
+		}
+		else
+		{
+			stemPlans[0].height = height;
+			stemPlans[0].slots = sp.slots;
+		}
+
+		// The limbs along one trunk path from `pathStart` (a fraction of it) to its end. With a fork the envelope and the
+		// angle follow the limb's height in the WHOLE tree (one crown: the longest limbs low), not along its own stem
+		// (each stem its own small crown, the stems' tops made an inverted pyramid); a forked tree's limbs take their angle
+		// from world up. `outward` shortens a stem's limbs into the clump.
+		auto placeSlots = [&](const BranchPath& path, int slots, float pathStart, const glm::vec3& outward)
+		{
+			// Tier jitter: each tier's height off its even spacing (at most half a band, the order kept) and its own reach -
+			// sheets at uneven heights, some wider than others. Drawn only with a jitter: other species are unchanged.
+			const int tiers = glm::min(sp.crownTiers, glm::max(slots, 1));
+			oc::small_vector<float, 64> tierCentre, tierReach;
+			if (tiers > 1 && sp.crownTierJitter > 0.0f)
+			{
+				for (int t = 0; t < tiers; ++t)
+				{
+					tierCentre.push_back(((float)t + 0.5f + rng.signed1() * 0.5f * sp.crownTierJitter) / (float)tiers);
+					tierReach.push_back(1.0f + rng.signed1() * 0.35f * sp.crownTierJitter);
+				}
+			}
+
+			for (int i = 0; i < slots; ++i)
+			{
+				const float jitter = rng.signed1() * 0.3f / (float)slots;
+				float h = glm::clamp(((float)i + 0.5f) / (float)slots + jitter, 0.0f, 1.0f);
+				float reach = 1.0f;
+				if (sp.crownTiers > 1)
+				{
+					// Tiers: slot i goes to whorl i * tiers / slots, spread over `crownTierSpread` of that whorl's band.
+					const int tier = i * tiers / slots;
+					const int first = (tier * slots + tiers - 1) / tiers;
+					const int count = ((tier + 1) * slots + tiers - 1) / tiers - first;
+					const float local = ((float)(i - first) + 0.5f) / (float)glm::max(count, 1) - 0.5f + jitter;
+					if (!tierCentre.empty())
+					{
+						h = glm::clamp(tierCentre[(size_t)tier] + local * sp.crownTierSpread / (float)tiers, 0.0f, 1.0f);
+						reach = tierReach[(size_t)tier];
+					}
+					else
+						h = glm::clamp(((float)tier + 0.5f + local * sp.crownTierSpread) / (float)tiers, 0.0f, 1.0f);
+				}
+				const BranchPath::Sample s = path.sample(pathStart + (1.0f - pathStart) * h);
+				const float shapeH = fork > 0.0f
+					? glm::clamp((s.pos.y / height - treeCrownStart) / glm::max(1.0f - treeCrownStart, 1e-3f), 0.0f, 1.0f) : h;
+				const float pitch = glm::radians(glm::mix(sp.slotAngle.x, sp.slotAngle.y, shapeH) + rng.signed1() * sp.slotAngleVar);
+				float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.3f;
+				// A forked stem fills its own SECTOR of the clump: centred on its outward direction, 1.2 x its share of the
+				// circle, an even golden-ratio fill of it - the stems' limbs fan out around the tree, not over each other
+				// (each stem's own full golden circle put limbs of neighbouring stems in the same directions).
+				if (fork > 0.0f && glm::dot(outward, outward) > 0.0f)
+				{
+					const float sector = TWO_PI / (float)stems * 1.2f;
+					const float f = (float)i * 0.618034f;
+					az = std::atan2(outward.z, outward.x) + (f - std::floor(f) - 0.5f) * sector + rng.signed1() * 0.05f;
+				}
+				const glm::vec3 axis = fork > 0.0f ? WORLD_UP : s.tangent;
+				glm::vec3 horiz(std::cos(az), 0.0f, std::sin(az));
+				horiz = glm::normalize(horiz - axis * glm::dot(horiz, axis));
+				TreeSlot slot;
+				slot.pos = s.pos;
+				slot.dir = glm::normalize(std::cos(pitch) * axis + std::sin(pitch) * horiz);
+				slot.length = crownEnvelope(sp.crownShape, shapeH) * sp.crownRadius * reach / glm::max(std::sin(pitch), 0.35f);
+				// Several stems: the branches into the clump's middle are half as long (the crowns share it).
+				if (stems > 1 && glm::dot(outward, outward) > 0.0f)
+					slot.length *= 0.75f + 0.25f * glm::dot(glm::vec3(horiz.x, 0.0f, horiz.z), outward);
+				slot.radius = s.radius;
+				out.slots.push_back(slot);
+			}
+		};
+		if (baseSlots > 0)
+			placeSlots(basePath, baseSlots, glm::clamp(treeCrownStart / fork, 0.0f, 0.95f), glm::vec3(0.0f));
+
+		for (int stem = 0; stem < stems; ++stem)
+		{
+			const StemPlan& stemPlan = stemPlans[(size_t)stem];
+			const glm::vec3 origin = stemPlan.origin, dir = stemPlan.dir, outward = stemPlan.outward;
+			const float stemHeight = stemPlan.height;
+			const int slots = stemPlan.slots;
+
+			// Split: the stem grows to (1 - span) of its height, as thick there as the full taper puts it; the splits take
+			// the rest.
+			const bool split = sp.trunkSplitCount >= 2;
+			// A fork's central leader (stem 0, below) stands near vertical: 0.85 x as long, so it does not top the crown.
+			const float leaderShorten = glm::mix(0.85f, 1.0f, glm::clamp((sp.trunkLeaderLean - 0.3f) / 0.7f, 0.0f, 1.0f));
+			const float mainHeight = (split ? stemHeight * (1.0f - sp.trunkSplitSpan) : stemHeight) * (fork > 0.0f && stem == 0 ? leaderShorten : 1.0f);
+			const size_t firstTube = plan.tubes.size(); // this stem's trunk tube (planStubs appends after it)
+			TubePlan& trunk = plan.tubes.emplace_back();
+			elbows.clear();
+			// With a fork the FIRST stem CONTINUES the lower trunk: from its last ring, as thick, starting along it and
+			// bending to its lean over its first 30 % - the lower trunk ends open with no cut showing (stems that all
+			// started inside it left its open end in view).
+			const bool continuesBase = fork > 0.0f && stem == 0;
+			const float r0 = continuesBase ? basePath.r1 : fork > 0.0f ? stemRadius : sp.trunkRadius;
+			const float fullR1 = glm::min(sp.trunkRadius * sp.trunkTaper, r0);
+			const float r1 = split ? glm::mix(r0, fullR1, 1.0f - sp.trunkSplitSpan) : fullR1;
+			// It stays near the middle (30 % of the stem lean): a central leader that fills the crown's centre (leaning out
+			// like the others it left a V with an empty middle).
+			if (continuesBase)
+				bentPath(trunk.path, basePath.points.back(), basePath.tangents.back(),
+					glm::normalize(glm::mix(basePath.tangents.back(), dir, sp.trunkLeaderLean)), mainHeight, r0, r1,
+					glm::max(sp.trunkShape.rings, 8), 0.3f);
+			else
+			{
+				// A FILLING crown's stem stands STRAIGHT (a third of the shape's curve and wobble, no elbows): the shape's
+				// wobble is for its snaking branches.
+				TreeBranchShape stemShape = sp.trunkShape;
+				if (split && sp.trunkSplitFill > 0.0f)
+				{
+					stemShape.curve *= 0.33f;
+					stemShape.curveVar *= 0.33f;
+					stemShape.wobble *= 0.33f;
+					stemShape.elbows = 0.0f;
+				}
+				growBranch(trunk.path, origin, dir, mainHeight, r0, r1, stemShape, WORLD_UP, rng, &elbows,
+					fork > 0.0f ? 1.0f : 1.6f); // a trunk from the ground packs its rings toward it
+			}
+			trunk.sides = sp.trunkShape.sides;
+			trunk.flare = fork > 0.0f ? 0.0f : sp.trunkFlare;
+			trunk.lobed = fork > 0.0f ? false : sp.trunkLobes > 0;
+			trunk.sink = fork > 0.0f ? 0.0f : glm::max(sp.trunkSink, 0.0f);
+			// The end closes into a point over ~6 tip radii (a leader grows on out of it): never an open cut. A split stem
+			// ends OPEN: its continuing branch carries on from its last ring.
+			trunk.tip = split ? 0.0f : glm::clamp(6.0f * r1 / glm::max(mainHeight, 0.1f), 0.03f, 0.3f);
+			if (trunk.lobed && stem == 0)
+				plan.profile.build(sp.trunkLobes, sp.trunkLobeDepth, sp.trunkLobeHeight, sp.trunkTwist, rng);
+			const BranchPath path = trunk.path; // planStubs grows plan.tubes: no reference into it past here
+			planStubs(plan, path, elbows, sp.trunkShape, 0, 0, rng);
+			if (stem == 0 && fork <= 0.0f)
+				out.bones.push_back({ -1, glm::vec3(0.0f), WORLD_UP, height });
+
+			placeSlots(path, slots, crownStart, outward);
+			// Crown Top: a whorl of level limbs at `pos` - a flat sheet on top, the point it grows from hidden among them.
+			auto addTopWhorl = [&](const glm::vec3& pos, float radius)
+			{
+				const float az0 = rng.next01() * TWO_PI;
+				for (int k = 0; k < sp.crownTopSlots; ++k)
+				{
+					const float az = az0 + TWO_PI * (float)k / (float)sp.crownTopSlots + rng.signed1() * 0.3f;
+					const glm::vec3 horiz(std::cos(az), 0.0f, std::sin(az));
+					const float pitch = glm::radians(sp.crownTopAngle + rng.signed1() * sp.slotAngleVar);
+					TreeSlot slot;
+					slot.pos = pos;
+					slot.dir = glm::normalize(std::cos(pitch) * WORLD_UP + std::sin(pitch) * horiz);
+					slot.length = sp.crownTopReach * sp.crownRadius * rng.range(0.8f, 1.1f);
+					slot.radius = radius;
+					out.slots.push_back(slot);
+				}
+			};
+			if (split)
+			{
+				// SPLITS (Trunk Split): from the stem's (open) end, `count` branches fanning out `angle` off their parent at
+				// even azimuths (jittered), pulled toward up (they follow the upward direction), splitting again `depth`
+				// times, every round ROUND_LENGTH x as long; the first round's length makes all rounds together about the
+				// span. The FIRST child CONTINUES its parent: from the parent's last ring exactly, as thick, with its sides,
+				// turned only half the angle - the parent ends open and the bark carries on, no point beside the split (a
+				// closing point next to the children read as a branch ending early). The others branch off from half a
+				// parent radius inside it, thinner (parent / sqrt(count), at most 0.75 of it). Each tapers to 0.45 of its
+				// start; only the final tips close into a point. Bark, the trunk's wind (bone 0). The Crown Top whorl at
+				// every final tip.
+				TreeBranchShape splitShape = sp.trunkShape;
+				splitShape.rings = 6;
+				splitShape.elbows = 0.0f;
+				splitShape.stubs = 0.0f;
+				const int splitSides = glm::max(sp.trunkShape.sides / 2, 6);
+				const int count = sp.trunkSplitCount;
+				constexpr float ROUND_LENGTH = 0.6f; // each round x this as long as the one before (0.8 left long bare final rounds)
+				float rounds = 0.0f;
+				for (int d = 0; d < sp.trunkSplitDepth; ++d)
+					rounds += std::pow(ROUND_LENGTH, (float)d);
+				// coneDir / coneHalf: the directions this branch's subtree fills (fill mode).
+				struct SplitAt
+				{
+					glm::vec3 pos, dir; float length, radius; int depth, sides;
+					glm::vec3 coneDir = WORLD_UP; float coneHalf = 0.0f;
+				};
+				// FILL (the 6th Split value): the stem's end is the centre of a half sphere of Crown Radius; the root cone is
+				// 80 degrees about up. Each split divides its cone among its children: child half-angle x 0.62 (2) / 0.55
+				// (3+), its centre offset to the parent cone's edge (parent half - child half) at even azimuths (a golden
+				// angle per node, +-0.15 rad); the child grows toward the point at its cone centre x Crown Radius x
+				// (rounds done / depth)^0.8 - the final tips land on the dome, every round fills its own share of it.
+				// Every child starts along its parent and bends to that target (`bentPath`, the shape's wobble: snaking).
+				// Cone centres stay at least 8 degrees above level.
+				const bool fill = sp.trunkSplitFill > 0.0f;
+				const glm::vec3 fillCentre = path.points.back();
+				uint32 fillNode = 0;
+				// The FINAL round curves UP: it leaves in its fan direction and bends toward up (its direction + 1 x up)
+				// over its length, so its tip - and the level whorl on it - sits on top: horizontal sheets.
+				auto splitFrom = [&](const SplitAt& first)
+				{
+					oc::small_vector<SplitAt, 32> open;
+					open.push_back(first);
+					while (!open.empty())
+					{
+						const SplitAt at = open.back();
+						open.pop_back();
+						const glm::vec3 side0 = anyPerpendicular(at.dir);
+						const float az0 = rng.next01() * TWO_PI;
+						if (fill)
+						{
+							const glm::vec3 coneSide0 = anyPerpendicular(at.coneDir);
+							const float fillAz0 = (float)(fillNode++) * GOLDEN_ANGLE;
+							const float childHalf = at.coneHalf * (count == 2 ? 0.62f : 0.55f);
+							const int roundsDone = sp.trunkSplitDepth - at.depth + 1;
+							const float reach = sp.crownRadius * std::pow((float)roundsDone / (float)sp.trunkSplitDepth, 0.8f);
+							const bool last = at.depth <= 1;
+							for (int c = 0; c < count; ++c)
+							{
+								// 3+ children: the first keeps the CENTRE direction (the dome's middle stays filled - all on the
+								// ring left a bowl), the others evenly on the ring; 2: both on the ring.
+								const bool centre = count >= 3 && c == 0;
+								const int ring = count >= 3 ? count - 1 : count;
+								const int slot = count >= 3 ? c - 1 : c;
+								const float az = fillAz0 + TWO_PI * (float)slot / (float)ring + rng.signed1() * 0.15f;
+								const glm::vec3 coneSide = glm::angleAxis(az, at.coneDir) * coneSide0;
+								const float offset = centre ? 0.0f : at.coneHalf - childHalf;
+								glm::vec3 cc = glm::normalize(std::cos(offset) * at.coneDir + std::sin(offset) * coneSide);
+								const float minY = std::sin(glm::radians(8.0f));
+								if (cc.y < minY)
+									cc = glm::normalize(glm::vec3(cc.x, 0.0f, cc.z) * std::sqrt(1.0f - minY * minY) + WORLD_UP * minY);
+								// The stretch weighted by how UP the cone points (cc.y^2): the middle rises, the sides stay put (a
+								// uniform stretch lifted the whole canopy).
+								const float stretch = 1.0f + (sp.trunkSplitFillHeight - 1.0f) * cc.y * cc.y;
+								const glm::vec3 target = fillCentre + glm::vec3(cc.x, cc.y * stretch, cc.z) * reach;
+								const bool continues = c == 0;
+								const glm::vec3 start = continues ? at.pos : at.pos - at.dir * (at.radius * 0.5f);
+								const glm::vec3 toTarget = target - start;
+								const float length = glm::max(glm::length(toTarget), 0.2f);
+								glm::vec3 childDir = glm::normalize(toTarget + WORLD_UP * 1e-3f);
+								if (last)
+								{
+									const glm::vec3 curved = childDir + WORLD_UP * (0.5f * sp.trunkSplitTipCurve);
+									if (glm::dot(curved, curved) > 1e-4f)
+										childDir = glm::normalize(curved);
+								}
+								// Fill: each branch tapers to 0.7 only (the children's split already thins them, 1 / sqrt(count)): with
+								// 0.45 three rounds left ~5 mm tips under ~5 cm leafy limbs - a step in thickness.
+								const float cr0 = continues ? at.radius : glm::min(at.radius * 0.75f, at.radius / std::sqrt((float)count));
+								const float cr1 = cr0 * 0.7f;
+								TubePlan& child = plan.tubes.emplace_back();
+								bentPath(child.path, start, continues ? at.dir : glm::normalize(at.dir + childDir), childDir, length, cr0, cr1,
+									9, 0.5f, glm::radians(splitShape.wobble), &rng);
+								child.sides = continues ? at.sides : splitSides;
+								child.tip = last ? glm::clamp(6.0f * cr1 / length, 0.03f, 0.3f) : 0.0f;
+								const BranchPath childPath = child.path; // the next emplace_back may move `child`
+								const BranchPath::Sample end = childPath.sample(1.0f - child.tip);
+								// SHOOTS (the 8th Split value): short side branches along an inner branch (35..85 % of it, spread
+								// evenly, alternate sides), out and up, 0.35 x its length, half its thickness there, each ending in a
+								// leafy whorl - leaves inside the crown, not only on the dome.
+								// Not on the first round (the innermost branches: too many leaves deep inside).
+								if (!last && sp.trunkSplitShoots > 0 && at.depth < sp.trunkSplitDepth)
+									for (int k = 0; k < sp.trunkSplitShoots; ++k)
+									{
+										const float u = glm::mix(0.35f, 0.85f, ((float)k + 0.5f) / (float)sp.trunkSplitShoots);
+										const BranchPath::Sample s = childPath.sample(u);
+										const glm::vec3 side = glm::angleAxis((float)k * GOLDEN_ANGLE + rng.signed1() * 0.4f, s.tangent)
+											* anyPerpendicular(s.tangent);
+										const glm::vec3 shootDir = glm::normalize(side + s.tangent * 0.6f + WORLD_UP * 0.4f);
+										const float shootLength = length * 0.35f * rng.range(0.8f, 1.1f);
+										const float sr0 = s.radius * 0.5f;
+										TubePlan& shoot = plan.tubes.emplace_back();
+										bentPath(shoot.path, s.pos - shootDir * (s.radius * 0.5f), shootDir, shootDir, shootLength, sr0, sr0 * 0.45f,
+											5, 0.5f, glm::radians(splitShape.wobble), &rng);
+										shoot.sides = splitSides;
+										shoot.tip = glm::clamp(6.0f * sr0 * 0.45f / shootLength, 0.03f, 0.3f);
+										const BranchPath shootPath = shoot.path;
+										if (sp.crownTopSlots > 0)
+										{
+											const BranchPath::Sample tipAt = shootPath.sample(1.0f - shoot.tip);
+											addTopWhorl(tipAt.pos, tipAt.radius);
+										}
+									}
+								if (!last)
+								{
+									SplitAt next{ end.pos, end.tangent, 0.0f, end.radius, at.depth - 1, continues ? at.sides : splitSides };
+									next.coneDir = cc;
+									next.coneHalf = childHalf;
+									open.push_back(next);
+								}
+								else if (sp.crownTopSlots > 0)
+									addTopWhorl(end.pos, end.radius);
+							}
+							continue;
+						}
+						for (int c = 0; c < count; ++c)
+						{
+							const float az = az0 + TWO_PI * (float)c / (float)count + rng.signed1() * 0.3f;
+							const glm::vec3 side = glm::angleAxis(az, at.dir) * side0;
+							const bool continues = c == 0;
+							const float angle = glm::radians(sp.trunkSplitAngle * rng.range(0.7f, 1.2f)) * (continues ? 0.5f : 1.0f);
+							const glm::vec3 childDir = glm::normalize(glm::normalize(std::cos(angle) * at.dir + std::sin(angle) * side) + WORLD_UP * 0.3f);
+							const float length = at.length * rng.range(0.8f, 1.0f);
+							const float cr0 = continues ? at.radius : glm::min(at.radius * 0.75f, at.radius / std::sqrt((float)count));
+							const float cr1 = cr0 * 0.45f;
+							const bool last = at.depth <= 1;
+							glm::vec3 lastDir = childDir + WORLD_UP * sp.trunkSplitTipCurve;
+							lastDir = glm::dot(lastDir, lastDir) > 1e-4f ? glm::normalize(lastDir) : childDir;
+							TubePlan& child = plan.tubes.emplace_back();
+							elbows.clear();
+							if (continues)
+								bentPath(child.path, at.pos, at.dir, last ? lastDir : childDir, length, cr0, cr1, 9, last ? 0.8f : 0.35f,
+									glm::radians(splitShape.wobble), &rng);
+							else if (last)
+								bentPath(child.path, at.pos - at.dir * (at.radius * 0.5f), childDir, lastDir, length, cr0, cr1, 9, 0.8f,
+									glm::radians(splitShape.wobble), &rng);
+							else
+								growBranch(child.path, at.pos - at.dir * (at.radius * 0.5f), childDir, length, cr0, cr1,
+									splitShape, WORLD_UP, rng, &elbows);
+							child.sides = continues ? at.sides : splitSides;
+							child.tip = last ? glm::clamp(6.0f * cr1 / glm::max(length, 0.1f), 0.03f, 0.3f) : 0.0f;
+							const BranchPath childPath = child.path; // the next emplace_back may move `child`
+							const BranchPath::Sample end = childPath.sample(1.0f - child.tip);
+							if (!last)
+								open.push_back({ end.pos, end.tangent, at.length * ROUND_LENGTH, end.radius, at.depth - 1,
+									continues ? at.sides : splitSides });
+							else if (sp.crownTopSlots > 0)
+								addTopWhorl(end.pos, end.radius);
+						}
+					}
+				};
+				{
+					SplitAt root{ path.points.back(), path.tangents.back(), stemHeight * sp.trunkSplitSpan / rounds, path.r1,
+						sp.trunkSplitDepth, sp.trunkShape.sides };
+					root.coneHalf = glm::radians(80.0f);
+					splitFrom(root);
+				}
+
+				// SPLIT LIMBS (Crown SplitLimbs): side limbs that split the same way - from the crown's start to near the
+				// stem's end, evenly up it (jittered), at azimuths in the stem's sector (or a golden spiral), `angle` from
+				// up (+-8), `length` x the stem height long, 0.6 x the stem there thick (from half a stem radius inside it,
+				// tapering to 0.6), ending OPEN into one round fewer of splits than the top (at least one), the first
+				// round half the limb's length.
+				const int splitLimbs = sp.crownSplitLimbs;
+				for (int k = 0; k < splitLimbs; ++k)
+				{
+					const float u = glm::clamp(glm::mix(crownStart, 0.9f, ((float)k + 0.5f + rng.signed1() * 0.3f) / (float)splitLimbs), 0.0f, 0.95f);
+					const BranchPath::Sample s = path.sample(u);
+					float az = (float)k * GOLDEN_ANGLE + rng.signed1() * 0.3f;
+					if (stems > 1 && glm::dot(outward, outward) > 0.0f)
+					{
+						const float f = (float)k * 0.618034f;
+						az = std::atan2(outward.z, outward.x) + (f - std::floor(f) - 0.5f) * TWO_PI / (float)stems * 1.2f;
+					}
+					const glm::vec3 horiz(std::cos(az), 0.0f, std::sin(az));
+					const float pitch = glm::radians(sp.crownSplitLimbAngle + rng.signed1() * 8.0f);
+					const glm::vec3 limbDir = glm::normalize(std::cos(pitch) * WORLD_UP + std::sin(pitch) * horiz);
+					// Their length follows the crown SHAPE by their height in the whole tree (Cone: long low, short high).
+					const float shapeH = glm::clamp((s.pos.y / height - treeCrownStart) / glm::max(1.0f - treeCrownStart, 1e-3f), 0.0f, 1.0f);
+					const float length = stemHeight * sp.crownSplitLimbLength * crownEnvelope(sp.crownShape, shapeH) * rng.range(0.8f, 1.1f);
+					const float lr0 = s.radius * 0.6f, lr1 = lr0 * 0.6f;
+					TubePlan& limb = plan.tubes.emplace_back();
+					elbows.clear();
+					growBranch(limb.path, s.pos - limbDir * (s.radius * 0.5f), limbDir, length, lr0, lr1, splitShape, WORLD_UP, rng, &elbows);
+					limb.sides = splitSides;
+					const BranchPath limbPath = limb.path;
+					splitFrom({ limbPath.points.back(), limbPath.tangents.back(), length * 0.5f, lr1,
+						glm::max(sp.trunkSplitDepth - 1, 1), splitSides });
+				}
+			}
+			else if (sp.leader)
+			{
+				// From where the trunk's closing tip starts: the leader grows out of the narrowing point, the two taper
+				// together (from the very end it stood on an open cut).
+				const float tipT = 1.0f - plan.tubes[(size_t)firstTube].tip;
+				TreeSlot slot;
+				slot.pos = path.sample(tipT).pos;
+				slot.dir = path.sample(tipT).tangent;
+				slot.length = glm::max(0.3f * sp.crownRadius, 0.15f * stemHeight);
+				slot.radius = path.r1;
+				out.slots.push_back(slot);
+			}
+			if (!split && sp.crownTopSlots > 0)
+			{
+				// Crown Top: the stem ENDS in a whorl from where its tip closes.
+				const BranchPath::Sample s = path.sample(1.0f - plan.tubes[(size_t)firstTube].tip);
+				addTopWhorl(s.pos, s.radius);
+			}
 		}
 		meshPiece(sp, plan, out, true);
 	}
@@ -740,7 +1192,14 @@ namespace
 					const float t = glm::clamp(start + (1.0f - start) * (((float)i + 0.5f) / (float)level.count + jitter), 0.0f, 0.98f);
 					const BranchPath::Sample s = parent.path.sample(t);
 					const float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.5f;
-					const glm::vec3 perp = glm::angleAxis(az, s.tangent) * anyPerpendicular(s.tangent);
+					glm::vec3 perp = glm::angleAxis(az, s.tangent) * anyPerpendicular(s.tangent);
+					// Flat: the side toward the nearer horizontal side of the parent - the children fan out in a sheet.
+					const glm::vec3 side = glm::cross(s.tangent, up);
+					if (level.flat > 0.0f && glm::dot(side, side) > 1e-6f)
+					{
+						const glm::vec3 flatSide = glm::normalize(side) * (glm::dot(perp, side) < 0.0f ? -1.0f : 1.0f);
+						perp = glm::normalize(glm::mix(perp, flatSide, level.flat));
+					}
 					const float angle = glm::radians(level.angle + rng.signed1() * level.angleVar);
 					glm::vec3 dir = glm::normalize(std::cos(angle) * s.tangent + std::sin(angle) * perp);
 					if (level.rise > 0.0f)
@@ -783,9 +1242,60 @@ namespace
 		for (const Branch& branch : tiers.back())
 			refLength += branch.path.length;
 		refLength = glm::max(refLength / (float)glm::max<size_t>(tiers.back().size(), 1), 1e-3f);
-		const size_t firstLeafTier = tiers.size() - glm::min((size_t)sp.leafLevels, tiers.size());
+		const bool pads = sp.padCount > 0 && sp.leafType == ETreeLeafType::Cluster;
+		const size_t firstLeafTier = pads ? tiers.size() : tiers.size() - glm::min((size_t)sp.leafLevels, tiers.size());
 		const float leafLength = sp.leafSize;
 		const float leafWidth = sp.leafSize * sp.leafAspect;
+		if (pads)
+		{
+			// FOLIAGE PADS: big cards through a flat dome over the limb, not on the twigs - centred at a random point of
+			// the limb's outer 85 %, out to either side over a disc (area-uniform, narrowing toward the limb's tip), at a
+			// height that is highest over the limb and falls off to the edge (1 - r^2); each card level +- a small tilt,
+			// turned at random about up, centred on its point.
+			const BranchPath& limb = tiers[0][0].path;
+			const float halfWidth = sp.padWidth * nominalLength, domeHeight = sp.padHeight * nominalLength;
+			for (int k = 0; k < sp.padCount; ++k)
+			{
+				// From padStart to the limb's end, denser toward the end (sqrt): the inner part lies in the tiers' shade.
+				const float u = glm::mix(sp.padStart, 1.0f, std::sqrt(rng.next01()));
+				const BranchPath::Sample s = limb.sample(u);
+				glm::vec3 side = glm::cross(s.tangent, up);
+				side = glm::dot(side, side) > 1e-6f ? glm::normalize(side) : anyPerpendicular(s.tangent);
+				const glm::vec3 forward = glm::normalize(glm::cross(up, side));
+				const float r = std::sqrt(rng.next01()), a = rng.next01() * TWO_PI;
+				const float reach = halfWidth * glm::mix(1.0f, 0.75f, u);
+				const glm::vec3 centre = s.pos + side * (std::cos(a) * r * reach) + forward * (std::sin(a) * r * reach * 0.4f)
+					+ up * (s.radius + domeHeight * (1.0f - r * r) * rng.range(0.6f, 1.0f));
+				// The card's base edge (the texture's twig, v = 0) toward the limb: pointing out from it, +- 40 degrees.
+				glm::vec3 away = centre - s.pos;
+				away -= up * glm::dot(away, up);
+				const float turn = glm::radians(rng.signed1() * 40.0f);
+				const glm::vec3 along = glm::angleAxis(turn, up) * (glm::dot(away, away) > 1e-4f ? glm::normalize(away) : forward);
+				const glm::vec3 tilt(rng.signed1(), rng.signed1(), rng.signed1());
+				glm::vec3 normal = up + tilt * sp.padTilt;
+				normal -= along * glm::dot(normal, along);
+				normal = glm::normalize(normal);
+				const float size = rng.range(0.8f, 1.2f);
+				const uint32 cell = rng.next() & 3u;
+				const glm::vec3 stem = centre - along * (0.5f * leafLength * size);
+				plan.leaves.push_back({ stem, along, normal, leafLength * size, leafWidth * size, cell, 0 });
+				// Its TWIG: a thin arched tube from the limb to the card's base edge, where the texture's twig starts (as thick
+				// as it: 0.011 of the card), so every card hangs on wood. Level 1: the coarse LODs drop it with the twigs.
+				const float twigRadius = 0.011f * leafLength * size;
+				const glm::vec3 from = s.pos + up * (s.radius * 0.5f);
+				if (glm::distance(from, stem) < 0.05f)
+					continue;
+				TubePlan& twig = plan.tubes.emplace_back();
+				twig.path.points = { from, glm::mix(from, stem, 0.5f) + up * (0.12f * glm::distance(from, stem)), stem };
+				twig.path.length = glm::distance(from, stem);
+				twig.path.r0 = glm::max(twigRadius * 1.6f, 1e-3f);
+				twig.path.r1 = glm::max(twigRadius, 5e-4f);
+				twig.path.finish();
+				twig.sides = 3;
+				twig.bone = 0;
+				twig.level = 1;
+			}
+		}
 		for (size_t tier = firstLeafTier; tier < tiers.size(); ++tier)
 		for (const Branch& branch : tiers[tier])
 		{
@@ -794,11 +1304,38 @@ namespace
 			{
 				const float t = glm::clamp(0.15f + 0.85f * ((float)k + 0.5f) / (float)numLeaves + rng.signed1() * 0.05f, 0.0f, 1.0f);
 				const BranchPath::Sample s = branch.path.sample(t);
-				const glm::vec3 perp = glm::angleAxis(rng.next01() * TWO_PI, s.tangent) * anyPerpendicular(s.tangent);
+				glm::vec3 perp = glm::angleAxis(rng.next01() * TWO_PI, s.tangent) * anyPerpendicular(s.tangent);
+				// Top: the card's side direction blended into the branch's HORIZONTAL side (the nearer one), so it lies flat
+				// in the branch's sheet facing up (the normal below leans to `up`), its stem lifted onto the branch's top.
+				glm::vec3 stemLift(0.0f);
+				const glm::vec3 flatSide = glm::cross(s.tangent, up);
+				if (sp.leafTop > 0.0f && glm::dot(flatSide, flatSide) > 1e-6f)
+				{
+					const glm::vec3 side = glm::normalize(flatSide) * (glm::dot(perp, flatSide) < 0.0f ? -1.0f : 1.0f);
+					perp = glm::normalize(glm::mix(perp, side, sp.leafTop));
+					const glm::vec3 top = up - s.tangent * glm::dot(up, s.tangent);
+					if (glm::dot(top, top) > 1e-6f)
+						stemLift = glm::normalize(top) * ((s.radius + 0.1f * leafLength) * sp.leafTop);
+				}
 				// Align 1: the card lies along the branch, facing out from it (a weeping strand's curtain).
-				const glm::vec3 along = glm::normalize(glm::mix(glm::normalize(perp * 0.8f + s.tangent * 0.6f), s.tangent, sp.leafAlign));
+				glm::vec3 along = glm::normalize(glm::mix(glm::normalize(perp * 0.8f + s.tangent * 0.6f), s.tangent, sp.leafAlign));
+				// Top: the card held LEVEL (its slope along a drooping twig taken out), so it never dips under the branch.
+				if (sp.leafTop > 0.0f)
+				{
+					const glm::vec3 level = along - up * (glm::dot(along, up) * sp.leafTop);
+					if (glm::dot(level, level) > 1e-6f)
+						along = glm::normalize(level);
+				}
 				const glm::vec3 randomDir = glm::normalize(glm::vec3(rng.signed1(), rng.signed1(), rng.signed1()) + glm::vec3(0.0f, 0.0f, 1e-3f));
 				glm::vec3 normal = glm::mix(up * 0.8f + perp * 0.4f + randomDir * 0.3f, perp + randomDir * 0.2f, sp.leafAlign);
+				if (sp.leafFaceUp > 0.0f)
+				{
+					normal = glm::mix(normal, up + randomDir * 0.15f, sp.leafFaceUp);
+					// Lying on the branch: the card raised onto its TOP (its radius + 5 % of a card), not through the wood.
+					const glm::vec3 top = up - s.tangent * glm::dot(up, s.tangent);
+					if (glm::dot(top, top) > 1e-6f)
+						stemLift += glm::normalize(top) * ((s.radius * 1.15f + 0.05f * leafLength) * sp.leafFaceUp);
+				}
 				normal -= along * glm::dot(normal, along);
 				normal = glm::dot(normal, normal) > 1e-6f ? glm::normalize(normal) : anyPerpendicular(along);
 				const float size = rng.range(0.8f, 1.2f);
@@ -809,7 +1346,27 @@ namespace
 				}
 				// Cards start at the branch centre: the twig in the texture grows out of the wood.
 				const uint32 cell = rng.next() & 3u;
-				plan.leaves.push_back({ s.pos, along, normal, leafLength * size, leafWidth * size, cell, branch.bone });
+				// Lift: above the branches along the module's up, a dome on top - the module frame's +Y is the limb, +X the
+				// sheet's side (perpendicular to the limb and to `up`), so |x| is how far out to the side.
+				if (sp.leafLift.x > 0.0f || sp.leafLift.y > 0.0f)
+				{
+					const float u = glm::clamp(s.pos.y / nominalLength, 0.0f, 1.0f);
+					const float side = glm::abs(s.pos.x) / (0.45f * nominalLength);
+					const float dome = glm::max(1.0f - side * side, 0.0f) * (1.0f - glm::smoothstep(0.55f, 1.0f, u));
+					stemLift += up * (sp.leafLift.x * leafLength + sp.leafLift.y * nominalLength * dome);
+				}
+				// Top: never under the LIMB (the module root - it curves up past its own sub-branches): the card at least
+				// the limb's height there + its radius + 0.1 card above, the limb taken at the card's distance along it.
+				if (sp.leafTop > 0.0f)
+				{
+					const BranchPath& limb = tiers[0][0].path;
+					const glm::vec3 p = s.pos + stemLift;
+					const BranchPath::Sample at = limb.sample(glm::clamp(p.y / nominalLength, 0.0f, 1.0f));
+					const float need = glm::dot(at.pos - p, up) + at.radius + 0.1f * leafLength;
+					if (need > 0.0f)
+						stemLift += up * need;
+				}
+				plan.leaves.push_back({ s.pos + stemLift, along, normal, leafLength * size, leafWidth * size, cell, branch.bone });
 			}
 		}
 		meshPiece(sp, plan, out, false);

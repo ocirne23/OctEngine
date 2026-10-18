@@ -1,0 +1,103 @@
+# Silver birch, one stem: a slender, nearly straight white trunk (Bark Lenticels / Patches: dark dashes and patches),
+# a narrow oval crown of ascending limbs whose twigs hang (Droop), small leaves. BirchClump is the multi-stem form.
+TreeSpecies Birch
+	Climate BirchWood
+	Seed 61
+	Scale 0.85 1.15
+	Trunk
+		Count 4
+		Height 13 17
+		Radius 0.17
+		Taper 0.12
+		Curve 5
+		UpAttract 0.35
+		Wobble 1.5
+		Flare 0.25
+		Rings 16
+		Sides 14
+	Crown
+		Shape Ellipsoid
+		Start 0.25
+		Radius 4.8
+		Slots 42
+		Fill 0.95
+		Angle 68 38
+		AngleVar 10
+		Leader true
+		BranchRadius 0.6
+	Module
+		Count 12
+		Radius 0.02
+		Curve 20 10
+		UpAttract 0.15
+		Wobble 5
+		Elbows 0.5
+		ElbowAngle 15 6
+		Stubs 0.2
+		Rings 8
+		Sides 5
+		Level
+			Count 13
+			Start 0.3
+			Length 0.5
+			LengthTaper 0.4
+			Angle 45 12
+			Curve 15 8
+			Droop 25
+			Wobble 6
+			Radius 0.5
+			Rings 5
+			Sides 3
+		Level
+			Count 9
+			Start 0.1
+			Length 0.8
+			LengthTaper 0.3
+			LengthVar 0.4
+			Angle 35 12
+			Curve 5 5
+			Droop 70
+			Wobble 4
+			Radius 0.5
+			Rings 5
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.5
+		Aspect 0.65
+		PerBranch 10
+		Levels 2
+		Align 0.1
+		ClusterLeaves 14
+		ClusterLeafSize 0.22
+		NormalBend 0.0
+	Bark
+		Plates 4 12
+		Crack 0.02
+		Breakup 0.9
+		Relief 0.4
+		Lichen 0.05
+		Lenticels 0.45
+		Patches 0.12
+		Sections 0.15
+	Billboard
+		NormalBend 0.0
+		TopCardHeight 0.65
+		AlbedoScale 0.9
+		FarAlbedoScale 0.9
+	Color
+		Bark 0.78 0.76 0.71
+		Leaf 0.31 0.40 0.17
+		Mark 0.09 0.08 0.07
+		Section 0.42 0.32 0.24
+	Undergrowth
+		Bushes 3
+		Radius 7
+	Placement
+		Density 80
+		Temperature 4 9
+		Precipitation 600 1800
+		ClimateWidth 0.04
+		Cluster 250 5.0
+		MaxSlope 0.6
+		Spacing 3

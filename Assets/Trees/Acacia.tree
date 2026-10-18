@@ -102,3 +102,4 @@ TreeSpecies Acacia
 		ClimateWidth 0.06
 		Cluster 120 0.4
 		MaxSlope 0.5
+		Spacing 6

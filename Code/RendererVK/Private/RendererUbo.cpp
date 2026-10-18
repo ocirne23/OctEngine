@@ -1451,6 +1451,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_rtRange", f.rtRange);
         list.add("foliage_crownNormal", f.crownNormal);
         list.add("foliage_shadowLength", [&] { return glm::max(f.shadowLength, 0.05f); }, f.shadowLength); // the tweak min
+        list.add("foliage_leafShadowLength", [&] { return glm::max(f.leafShadowLength, 0.0f); }, f.leafShadowLength);
         list.add("foliage_interiorShadow", f.interiorShadow);
         list.add("foliage_interiorStart", [&] { return glm::clamp(f.interiorStart, 0.0f, 1.0f); }, f.interiorStart);
         list.add("foliage_interiorEnd", [&] { return glm::max(glm::clamp(f.interiorEnd, 0.0f, 1.0f), glm::clamp(f.interiorStart, 0.0f, 1.0f) + 1e-3f); },

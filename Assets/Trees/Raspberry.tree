@@ -1,0 +1,71 @@
+# Birch-wood bush: raspberry / bramble canes - low, arching canes from the ground that bow over at the tips, with
+# broad, toothed-looking leaves in threes (~0.8-1.2 m). Fills the light gaps of the birch woods (Climate BirchWood).
+TreeSpecies Raspberry
+	Kind Bush
+	Climate BirchWood
+	Weight 2
+	Seed 97
+	Scale 0.8 1.2
+	Trunk
+		Count 3
+		Height 0.1 0.2
+		Radius 0.03
+		Taper 0.6
+		Curve 6
+		Wobble 4
+		Flare 0.1
+		Sink 0.1
+		Rings 3
+		Sides 5
+	Crown
+		Shape Ellipsoid
+		Start 0
+		Radius 1.1
+		Slots 12
+		Fill 0.9
+		Angle 40 25
+		AngleVar 12
+		BranchRadius 3
+	Module
+		Count 8
+		Length 1.5
+		Radius 0.008
+		Curve 20 8
+		Droop 70
+		Wobble 5
+		Rings 7
+		Sides 4
+		Level
+			Count 5
+			Start 0.3
+			Length 0.25
+			LengthTaper 0.3
+			Angle 55 12
+			Curve 10 6
+			Wobble 8
+			Radius 0.6
+			Rings 2
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 0.35
+		Aspect 0.9
+		PerBranch 4
+		Levels 2
+		ClusterLeaves 6
+		ClusterLeafSize 0.32
+		ClusterLeafWidth 0.45
+		NormalBend 0.4
+	Billboard
+		Distance 20
+		Resolution 256
+		NormalBend 0.0
+		FadeWidth 5
+	Bark
+		Plates 8 4
+		Crack 0.04
+		Relief 0.4
+		Lichen 0.0
+	Color
+		Bark 0.38 0.22 0.20
+		Leaf 0.20 0.34 0.11

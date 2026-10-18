@@ -123,6 +123,11 @@ namespace Procedural
 		Tweak::onChange(s.climateSharpness, this, dirty);
 		Tweak::onChange(s.climateFadeStart, this, dirty);
 		Tweak::onChange(s.climateFadeEnd, this, dirty);
+		Tweak::onChange(s.grasslandShare, this, dirty);
+		Tweak::onChange(s.grasslandSize, this, dirty);
+		Tweak::onChange(s.grasslandTrees, this, dirty);
+		Tweak::onChange(s.forestTypeSize, this, dirty);
+		Tweak::onChange(s.forestMinority, this, dirty);
 		Tweak::onChange(s.poolMB, this, dirty);
 		Tweak::onChange(s.keepRadius, this, [this]() { m_ringCam = glm::ivec2(INT32_MAX); });
 	}
@@ -290,6 +295,11 @@ namespace Procedural
 		config->fadeStart = glm::clamp(m_settings.climateFadeStart, 0.0f, 1.0f);
 		config->fadeEnd = glm::clamp(glm::max(m_settings.climateFadeEnd, config->fadeStart + 1e-3f), 0.0f, 1.0f);
 		config->riverClear = Globals::settings.terrain.riverVegetationClear;
+		config->grasslandShare = glm::clamp(m_settings.grasslandShare, 0.0f, 0.9f);
+		config->grasslandSize = glm::max(m_settings.grasslandSize, 1.0f);
+		config->grasslandTrees = glm::clamp(m_settings.grasslandTrees, 0.0f, 1.0f);
+		config->forestTypeSize = glm::max(m_settings.forestTypeSize, 10.0f);
+		config->forestMinority = glm::clamp(m_settings.forestMinority, 0.0f, 1.0f);
 		m_config = config;
 		std::lock_guard<std::mutex> lk(m_mutex);
 		m_pumpConfig = m_config;
@@ -676,7 +686,16 @@ namespace Procedural
 		// their border gets the same fit from both.
 		const uint32 res = (uint32)glm::max(2.0f, std::round(cs / GRID_STEP));
 		const float step = cs / (float)res;
-		const uint32 halo = config.rocks.empty() ? 1u : GRID_HALO;
+		// SPACING (below) evaluates the neighbours' candidates within `spacingReach` of the chunk: the grids reach that far
+		// (same world points - a wider halo changes no value inside).
+		float maxSpacing = 0.0f;
+		for (const Species& species : config.species)
+			maxSpacing = glm::max(maxSpacing, species.placement.spacing);
+		const uint32 treeCells = (uint32)glm::max(1.0f, std::round(cs / config.cellSize));
+		const float treeCell = cs / (float)treeCells;
+		const int spacingCells = maxSpacing > 0.0f ? (int)std::ceil(maxSpacing / treeCell) : 0;
+		const float spacingReach = (float)spacingCells * treeCell;
+		const uint32 halo = glm::max(config.rocks.empty() ? 1u : GRID_HALO, (uint32)std::ceil(spacingReach / step) + 1u);
 		const uint32 gpr = res + 1 + 2 * halo;
 		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
 		config.maps->sampleGrid(ox - step * (float)halo, oz - step * (float)halo, step, gpr, gpr, field, ESampleDetail::Full);
@@ -687,7 +706,7 @@ namespace Procedural
 		// Its extent: what is READ - the trees inside the chunk, the neighbours' rocks up to their reach + 2 m outside it (the
 		// terrain halo is wider for the talus probe and the rugged measure, which read no river). At 1 m it is the largest
 		// grid here: 284^2 points instead of the halo's 337^2.
-		const float riverPad = (config.rocks.empty() ? 0.0f : ROCK_REACH + 2.0f) + RIVER_GRID_STEP;
+		const float riverPad = glm::max(config.rocks.empty() ? 0.0f : ROCK_REACH + 2.0f, spacingReach) + RIVER_GRID_STEP;
 		const uint32 rpr = (uint32)std::ceil((cs + 2.0f * riverPad) / RIVER_GRID_STEP) + 1;
 		oc::vector<float> riverField((size_t)rpr * rpr);
 		config.maps->sampleRiverGrid(ox - riverPad, oz - riverPad, RIVER_GRID_STEP, rpr, rpr, riverField);
@@ -772,16 +791,51 @@ namespace Procedural
 		// TO THE BEST-FITTING species, sharpened ("Climate sharpness": (fit / best)^k) - a dense species' tail does not
 		// reach into a sparse one's core (pines among the acacias), and species sharing a climate ADD (a rare willow among
 		// the oaks takes no oaks away). The tree pass picks by it; the rocks' FOREST term reads the sum.
+		// GRASSLANDS ("Grassland share" / "size"): a world noise below its threshold is open land, the forests between
+		// keep their density (x 1 past a narrow edge). In the open, "Grassland trees" (t) keeps the most of:
+		// - COPSES: a finer noise (1/8 of the size) above 0.8 - 0.15 t: small groves at 0.7 of the forest's density;
+		// - THE FOREST EDGE: thinning out over 0.1 of the noise into the open, 0.4 t at the edge;
+		// - LONE TREES: 0.05 t everywhere.
 		oc::small_vector<NoiseField, 8> clusterNoise;
 		for (const Species& species : config.species)
 			clusterNoise.push_back(NoiseField(treeHash(config.seed, 1000u + species.type)));
+		const NoiseField grasslandNoise(treeHash(config.seed, 900u));
+		const NoiseField copseNoise(treeHash(config.seed, 901u));
+		// The fbm (x 0.5 + 0.5) spreads about +-0.15 around 0.5: the threshold for about that share of the land.
+		const float grasslandEdge = 0.5f + 0.3f * (config.grasslandShare - 0.5f);
+		const float copseEdge = 0.8f - 0.15f * config.grasslandTrees;
 		oc::small_vector<float, 8> weights(config.species.size(), 0.0f);
 		oc::small_vector<float, 8> fits(config.species.size(), 0.0f);
+		oc::small_vector<float, 8> scores(config.species.size(), 0.0f);
+		oc::small_vector<NoiseField, 8> forestTypeNoise;
+		for (const Species& species : config.species)
+			forestTypeNoise.push_back(NoiseField(treeHash(config.seed, 1500u + species.type)));
 		const auto speciesWeights = [&](const FieldSample& at, glm::vec2 world) -> float
 		{
 			const float slope2 = at.dx * at.dx + at.dz * at.dz;
 			if (at.river > config.riverClear)
 				return 0.0f; // a river's bed (Terrain/Rivers/Vegetation clear)
+			float forest = 1.0f;
+			if (config.grasslandShare > 0.0f)
+			{
+				const float noise = grasslandNoise.fbm(world.x / config.grasslandSize, world.y / config.grasslandSize, 3) * 0.5f + 0.5f;
+				forest = glm::smoothstep(grasslandEdge - 0.02f, grasslandEdge + 0.02f, noise);
+				if (forest < 1.0f && config.grasslandTrees > 0.0f)
+				{
+					const float t = config.grasslandTrees;
+					const float size = config.grasslandSize * 0.125f;
+					const float copse = 0.7f * glm::smoothstep(copseEdge - 0.02f, copseEdge + 0.02f,
+						copseNoise.fbm(world.x / size, world.y / size, 2) * 0.5f + 0.5f);
+					const float fringe = 0.4f * t * glm::smoothstep(grasslandEdge - 0.1f, grasslandEdge, noise);
+					forest += (1.0f - forest) * glm::max(glm::max(copse, fringe), 0.05f * t);
+				}
+				if (forest <= 0.0f)
+				{
+					for (size_t s = 0; s < config.species.size(); ++s)
+						weights[s] = 0.0f;
+					return 0.0f;
+				}
+			}
 			const float altitude = at.height - at.water;
 			const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
 			float best = 0.0f;
@@ -807,7 +861,7 @@ namespace Procedural
 				if (fits[s] <= 0.0f)
 					continue;
 				const TreePlacementDesc& p = config.species[s].placement;
-				float density = p.density * fits[s] * std::pow(fits[s] / best, config.sharpness);
+				float density = p.density * fits[s] * std::pow(fits[s] / best, config.sharpness) * forest;
 				if (density > 0.0f && p.clusterSize > 1.0f)
 				{
 					const float noise = clusterNoise[s].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
@@ -816,6 +870,30 @@ namespace Procedural
 				}
 				weights[s] = density;
 				total += density;
+			}
+			// FOREST TYPES ("Forest type size", "Forest minority"): one species DOMINATES a stand - each species has a
+			// large-scale noise; of those present here the highest noise wins, the others x the minority factor (fully
+			// once 0.06 of the noise behind the winner: a soft border between stands), then all rescaled to the same total
+			// - which trees grow changes, not how many.
+			if (config.forestMinority < 1.0f && total > 0.0f)
+			{
+				float bestScore = -1.0f;
+				for (size_t s = 0; s < config.species.size(); ++s)
+					if (weights[s] > 0.0f)
+					{
+						scores[s] = forestTypeNoise[s].fbm(world.x / config.forestTypeSize, world.y / config.forestTypeSize, 2) * 0.5f + 0.5f;
+						bestScore = glm::max(bestScore, scores[s]);
+					}
+				float sum = 0.0f;
+				for (size_t s = 0; s < config.species.size(); ++s)
+					if (weights[s] > 0.0f)
+					{
+						weights[s] *= glm::mix(1.0f, config.forestMinority, glm::clamp((bestScore - scores[s]) / 0.06f, 0.0f, 1.0f));
+						sum += weights[s];
+					}
+				const float rescale = total / glm::max(sum, 1e-6f);
+				for (size_t s = 0; s < config.species.size(); ++s)
+					weights[s] *= rescale;
 			}
 			return total;
 		};
@@ -1044,45 +1122,97 @@ namespace Procedural
 			return;
 		Globals::jobSystem.preemptionPoint();
 
-		const uint32 n = (uint32)glm::max(1.0f, std::round(cs / config.cellSize));
-		const float cell = cs / (float)n;
+		const uint32 n = treeCells;
+		const float cell = treeCell;
 		const float cellArea = cell * cell * (1.0f / 10000.0f) * config.densityScale; // hectares x the scale
-		const uint32 chunkSeed = treeHash(treeHash(config.seed, (uint32)coord.x), (uint32)coord.y);
 		// The most the species' densities can add up to (fit, its sharpening and the cluster noise are each at most 1): a
 		// candidate whose roll is above it has no tree - decided before its field sample and the per-species fits.
 		float maxTotal = 0.0f;
 		for (const Species& species : config.species)
 			maxTotal += glm::abs(species.placement.density);
 		const float maxChance = maxTotal * cellArea;
+
+		// A CANDIDATE of the cell (ci, cj) of chunk `c` (this one or a neighbour): its existence roll and species pick, at
+		// its record position, in THIS chunk's local space. A pure function of (seed, c, cell): a neighbour computes its own
+		// candidates exactly as this chunk does.
+		struct Candidate { glm::vec2 local; uint32 qx, qz, priority; size_t species; bool valid; };
+		const auto candidateAt = [&](glm::ivec2 c, uint32 ci, uint32 cj) -> Candidate
+		{
+			Candidate cand{};
+			const uint32 seedC = treeHash(treeHash(config.seed, (uint32)c.x), (uint32)c.y);
+			const uint32 h = treeHash(seedC, cj * n + ci);
+			if (treeHash01(treeHash(h, 3u)) >= maxChance)
+				return cand; // the same roll as the existence test below
+			const float lx = ((float)ci + treeHash01(treeHash(h, 1u))) * cell;
+			const float lz = ((float)cj + treeHash01(treeHash(h, 2u))) * cell;
+			cand.qx = glm::min((uint32)(lx / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+			cand.qz = glm::min((uint32)(lz / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+			// Evaluated at the RECORD's position (the quantized one), as everything that reads the record later.
+			cand.local = treeRecordLocal(makeTreeRecord(cand.qx, cand.qz, 0), cs) + glm::vec2(c - coord) * cs;
+
+			const FieldSample at = fieldAt(cand.local);
+			const float total = speciesWeights(at, glm::vec2((float)(ox + cand.local.x), (float)(oz + cand.local.y)));
+			// Whether a tree exists (the summed densities), then which one (by its share).
+			if (total <= 0.0f || treeHash01(treeHash(h, 3u)) >= total * cellArea)
+				return cand;
+			float pick = treeHash01(treeHash(h, 4u)) * total;
+			cand.species = config.species.size() - 1;
+			for (size_t s = 0; s < config.species.size(); ++s)
+			{
+				pick -= weights[s];
+				if (pick < 0.0f && weights[s] > 0.0f)
+				{
+					cand.species = s;
+					break;
+				}
+			}
+			cand.priority = treeHash(h, 6u);
+			cand.valid = true;
+			return cand;
+		};
+
+		// SPACING (`Placement Spacing`): every candidate - this chunk's cells and the neighbours' within spacingCells of it -
+		// on one grid of cells; a candidate gives way to one of HIGHER priority within max(both spacings). Decided on the
+		// candidates (existence + species), not on the surviving trees: no chain, so both chunks of a border agree.
+		const int span = (int)n + 2 * spacingCells;
+		oc::vector<Candidate> grid((size_t)span * span);
+		for (int gj = 0; gj < span; ++gj)
+			for (int gi = 0; gi < span; ++gi)
+			{
+				const int wi = gi - spacingCells, wj = gj - spacingCells; // cell index relative to this chunk
+				const glm::ivec2 c = coord + glm::ivec2(wi < 0 ? -1 : wi >= (int)n ? 1 : 0, wj < 0 ? -1 : wj >= (int)n ? 1 : 0);
+				const uint32 ci = (uint32)(wi - (c.x - coord.x) * (int)n), cj = (uint32)(wj - (c.y - coord.y) * (int)n);
+				grid[(size_t)gj * span + gi] = candidateAt(c, ci, cj);
+			}
+
 		for (uint32 cj = 0; cj < n; ++cj)
 		{
 			for (uint32 ci = 0; ci < n; ++ci)
 			{
-				const uint32 h = treeHash(chunkSeed, cj * n + ci);
-				if (treeHash01(treeHash(h, 3u)) >= maxChance)
-					continue; // the same roll as the existence test below
-				const float lx = ((float)ci + treeHash01(treeHash(h, 1u))) * cell;
-				const float lz = ((float)cj + treeHash01(treeHash(h, 2u))) * cell;
-				const uint32 qx = glm::min((uint32)(lx / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
-				const uint32 qz = glm::min((uint32)(lz / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
-				// Evaluated at the RECORD's position (the quantized one), as everything that reads the record later.
-				const glm::vec2 local = treeRecordLocal(makeTreeRecord(qx, qz, 0), cs);
-
-				const FieldSample at = fieldAt(local);
-				const float total = speciesWeights(at, glm::vec2((float)(ox + local.x), (float)(oz + local.y)));
-				// Whether a tree exists (the summed densities), then which one (by its share).
-				if (total <= 0.0f || treeHash01(treeHash(h, 3u)) >= total * cellArea)
+				const Candidate& cand = grid[(size_t)(cj + spacingCells) * span + (ci + spacingCells)];
+				if (!cand.valid)
 					continue;
-				float pick = treeHash01(treeHash(h, 4u)) * total;
-				size_t chosen = config.species.size() - 1;
-				for (size_t s = 0; s < config.species.size(); ++s)
+				const glm::vec2 local = cand.local;
+				const size_t chosen = cand.species;
+				const uint32 qx = cand.qx, qz = cand.qz;
+				if (spacingCells > 0)
 				{
-					pick -= weights[s];
-					if (pick < 0.0f && weights[s] > 0.0f)
-					{
-						chosen = s;
-						break;
-					}
+					bool crowded = false;
+					const float own = config.species[chosen].placement.spacing;
+					for (int dj = -spacingCells; dj <= spacingCells && !crowded; ++dj)
+						for (int di = -spacingCells; di <= spacingCells && !crowded; ++di)
+						{
+							if (di == 0 && dj == 0)
+								continue;
+							const Candidate& other = grid[(size_t)((int)cj + spacingCells + dj) * span + ((int)ci + spacingCells + di)];
+							if (!other.valid || other.priority <= cand.priority)
+								continue;
+							const float r = glm::max(own, config.species[other.species].placement.spacing);
+							const glm::vec2 d = other.local - local;
+							crowded = glm::dot(d, d) < r * r;
+						}
+					if (crowded)
+						continue;
 				}
 				// The trees give way to the rocks (this chunk's and the neighbours' that reach in): out of each footprint
 				// capsule (a fallen log's runs along it - a disc over its length would clear the forest around it).

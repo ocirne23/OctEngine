@@ -31,6 +31,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define MOTION_WORLD_DELTA in_prevWorldDelta
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
+#define SHADOW_LEAF_TRANSMIT // shadows.inc.glsl: the leaves' shadow fades in with the gap to the blocker
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 
@@ -43,6 +44,7 @@ void sunShadowFirstTree(vec3 pos, bool leaf)
 {
 	const vec3 geoN = normalize(in_normalV.xyz);
 	const bool facing = dot(geoN, u_sunDirection.xyz) > 0.0;
+	g_shadowLeafLength = leaf ? u_foliage_leafShadowLength : 0.0; // "Trees/Leaf shadow length (m)"
 	g_sunShadowFirst = leaf || facing ? sunShadowVisibility(pos, facing ? geoN : -geoN) : 0.0;
 }
 

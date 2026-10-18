@@ -3,7 +3,7 @@
 # with one piece where the round bushes need three: Weight 2, so half the climate's bushes are one.
 TreeSpecies DwarfBirch
 	Kind Bush
-	Climate Boreal
+	Climate Boreal BirchWood
 	Weight 2
 	Seed 89
 	Scale 0.8 1.2

@@ -404,7 +404,9 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   it keeps a small tree's blob centred ON the tree whatever the grid's offset; a box-overlap splat put it at the cell
   centre, so every re-bake shifted every blob ("shaking" while flying). The splat ADDS with fixed-point
   `imageAtomicAdd` (crowns overlap → extinction sums). Past 65535 trees the dispatch wraps into y. The colour column
-  takes the tree type's albedo (last writer wins).
+  takes the tree type's albedo (last writer wins); a record's BUSHES add extinction but write no colour
+  (`g_writeColour`: a small dark bush set the colour of the tall crown above it - far birches in their undergrowth's
+  green). Neighbouring trees of two species still take turns at a stand's edge.
 * **WORLD TREE RECORDS** (`RecordSource`, TreeRecordPool "WORLD TREE RECORDS"): while record types are set
   (`setTreeRecordTypes(types, chunkSize, worldSeed, volumeSet)`, from TreeSystem's world spawn), EVERY tree of the
   volume comes from the records, near and far, and the world's DYNAMIC set is never splatted (`recordFarTrees` skips
@@ -526,7 +528,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   float32 error re-rolls every frame — kilometres out it moved the blobs) through this frame's TAA-JITTERED sub-pixel
   position, as every raster pass samples (an unjittered ray had TAA un-jitter content that never was jittered); the
   scene distance from `viewRelFromDepth` at the jittered uv.
-* **The canopy's colour and sky light:** the leaf colour (linear, as `meanLeafAlbedo` decoded it; LINEAR in an RGBA8
+* **The canopy's colour and sky light:** the leaf colour (linear, as `meanLeafAlbedo` decoded it, or the species'
+  `Color Far`, then x its `Billboard FarAlbedoScale` - Procedural Trees.md; LINEAR in an RGBA8
   UNORM image) is mixed toward its Rec. 709 luminance by "Far saturation scale" (0 grey .. 1 as baked .. 2; a
   push-constant word), then x "Far albedo scale". The SKY term is the real sky: pi x the cosine-weighted mean radiance
   of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45° down 4 x 0.15:

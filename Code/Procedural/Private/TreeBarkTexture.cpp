@@ -122,6 +122,26 @@ namespace
 		return s;
 	}
 
+	// Birch LENTICELS: short dark dashes ACROSS the branch (along u). A lattice of LENTICEL_COLUMNS around x
+	// LENTICEL_ROWS along per tile; a cell holds one dash with probability `amount`, its centre jittered so the dash
+	// (at most 0.3 of a cell either side) stays inside it. 0..1, 1 = the dash's core.
+	constexpr int LENTICEL_COLUMNS = 6;
+	constexpr int LENTICEL_ROWS = 24;
+	float lenticel(float u, float v, float amount, uint32 seed)
+	{
+		const float x = u * (float)LENTICEL_COLUMNS, y = v * (float)LENTICEL_ROWS;
+		const int cx = wrap((int)std::floor(x), LENTICEL_COLUMNS), cy = wrap((int)std::floor(y), LENTICEL_ROWS);
+		const uint32 h = latticeHash(cx, cy, seed);
+		if (treeHash01(h) >= amount)
+			return 0.0f;
+		const float centreU = 0.3f + 0.4f * treeHash01(treeHash(h, 1u));
+		const float centreV = 0.25f + 0.5f * treeHash01(treeHash(h, 2u));
+		const float halfLength = 0.12f + 0.18f * treeHash01(treeHash(h, 3u));
+		const float halfThick = 0.08f + 0.06f * treeHash01(treeHash(h, 4u));
+		const float du = (x - std::floor(x) - centreU) / halfLength, dv = (y - std::floor(y) - centreV) / halfThick;
+		return 1.0f - glm::smoothstep(0.5f, 1.0f, du * du + dv * dv);
+	}
+
 	uint8 toByte(float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
 
 	oc::vector<uint8> downsampleAlbedo(const oc::vector<uint8>& src, uint32 srcSize)
@@ -218,6 +238,28 @@ namespace Procedural
 				c = glm::mix(species.barkColor * 0.85f, c, plate);
 				const float lichen = glm::smoothstep(0.58f, 0.72f, fbm(u, v, 3, 2, 3, seed + 37u)) * species.barkLichen;
 				c = glm::mix(c, lichenColor * (0.85f + 0.3f * grain), lichen * plate);
+				// Bark SECTIONS: soft areas, longer along the branch than around, tinted (a birch's older brown bark).
+				if (species.barkSections > 0.0f)
+				{
+					const float edge = 0.5f + (0.5f - species.barkSections) * 0.4f;
+					const float section = glm::smoothstep(edge - 0.06f, edge + 0.06f, fbm(u, v, 3, 2, 3, seed + 47u));
+					c = glm::mix(c, species.sectionColor * (0.8f + 0.2f * f.tone) * (0.8f + 0.4f * grain), 0.85f * section);
+				}
+				// Birch marks: dark PATCHES (wider around than along; rough - the grain deepened) and LENTICELS
+				// (dark dashes across the branch, slightly sunk).
+				if (species.barkPatches > 0.0f)
+				{
+					const float edge = 0.5f + (0.5f - species.barkPatches) * 0.4f; // the fbm's spread is about +-0.2
+					const float patch = glm::smoothstep(edge, edge + 0.03f, fbm(u, v, 2, 4, 4, seed + 41u));
+					c = glm::mix(c, species.markColor * (0.8f + 0.4f * grain), patch);
+					height[i] += patch * (0.4f * (grain - 0.5f) - 0.15f);
+				}
+				if (species.barkLenticels > 0.0f)
+				{
+					const float dash = lenticel(u, v, species.barkLenticels, seed + 43u);
+					c = glm::mix(c, species.markColor, 0.9f * dash);
+					height[i] -= 0.12f * dash;
+				}
 				albedo[i] = c;
 			}
 		}

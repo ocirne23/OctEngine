@@ -86,6 +86,31 @@ namespace
 		return true;
 	}
 
+	// A bush's `Climate` may list several names (space-separated): it grows around the trees of ANY of them (case-
+	// insensitive). A tree's climate is one name.
+	bool bushClimateMatches(const oc::string& bushClimates, const oc::string& treeClimate)
+	{
+		size_t i = 0;
+		while (i < bushClimates.size())
+		{
+			while (i < bushClimates.size() && bushClimates[i] == ' ')
+				++i;
+			size_t end = i;
+			while (end < bushClimates.size() && bushClimates[end] != ' ')
+				++end;
+			if (end - i == treeClimate.size() && end > i)
+			{
+				bool same = true;
+				for (size_t k = 0; k < treeClimate.size() && same; ++k)
+					same = std::tolower((unsigned char)bushClimates[i + k]) == std::tolower((unsigned char)treeClimate[k]);
+				if (same)
+					return true;
+			}
+			i = end;
+		}
+		return false;
+	}
+
 	// The LINEAR mean albedo of an RGBA8 leaf image, alpha-weighted: albedo textures upload as sRGB, so each texel
 	// is decoded before the sum (the far-tree volume's leaf colour must match what the meshes show).
 	glm::vec3 meanLeafAlbedo(const oc::vector<uint8>& rgba, const glm::vec3& fallback)
@@ -599,7 +624,10 @@ namespace Procedural
 					(uint8)(glm::clamp(species.desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
 					(uint8)(glm::clamp(species.desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
 			}
-			species.volumeAlbedo = meanLeafAlbedo(leafImage, species.desc.leafColor);
+			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`.
+			const glm::vec3 far = species.desc.farColor;
+			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : meanLeafAlbedo(leafImage, species.desc.leafColor))
+				* species.desc.farAlbedoScale;
 			if (m_settings.farMode == 0 && species.desc.billboardDistance > 0.0f)
 			{
 				buildBillboards(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
@@ -960,15 +988,6 @@ namespace Procedural
 
 		// Per tree species the bushes of its CLIMATE (`Climate`, case-insensitive), each `Weight` times; a tree whose climate
 		// no bush shares takes every bush.
-		auto sameClimate = [](const oc::string& a, const oc::string& b)
-		{
-			if (a.size() != b.size())
-				return false;
-			for (size_t i = 0; i < a.size(); ++i)
-				if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i]))
-					return false;
-			return true;
-		};
 		oc::vector<const Species*> weightedBushes;
 		for (const Species* bush : bushSpecies)
 			for (int w = 0; w < bush->desc.weight; ++w)
@@ -978,7 +997,7 @@ namespace Procedural
 		{
 			oc::vector<const Species*>& list = bushesFor[tree];
 			for (const Species* bush : weightedBushes)
-				if (sameClimate(bush->desc.climate, tree->desc.climate))
+				if (bushClimateMatches(bush->desc.climate, tree->desc.climate))
 					list.push_back(bush);
 			if (list.empty())
 				list = weightedBushes;
@@ -1169,21 +1188,12 @@ namespace Procedural
 					context->bushRadius = glm::max(context->bushRadius, undergrowth.y);
 			}
 		}
-		auto sameClimate = [](const oc::string& a, const oc::string& b)
-		{
-			if (a.size() != b.size())
-				return false;
-			for (size_t i = 0; i < a.size(); ++i)
-				if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i]))
-					return false;
-			return true;
-		};
 		for (size_t s = 0; s < m_species.size(); ++s)
 		{
 			if (m_species[s].desc.bush)
 				continue;
 			for (uint32 b : bushes)
-				if (sameClimate(m_species[b].desc.climate, m_species[s].desc.climate))
+				if (bushClimateMatches(m_species[b].desc.climate, m_species[s].desc.climate))
 					context->species[s].bushes.push_back(b);
 			if (context->species[s].bushes.empty())
 				context->species[s].bushes = bushes;

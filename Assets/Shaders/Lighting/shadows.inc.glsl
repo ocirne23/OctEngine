@@ -29,18 +29,31 @@ float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 bool g_shadowFoliage = false;
 #endif
 
+#ifdef SHADOW_LEAF_TRANSMIT
+// Tree MESH leaves (the LitTree FS sets it per leaf pixel): the fade length below, 0 = off. The normal bias stays.
+float g_shadowLeafLength = 0.0;
+#endif
+
 // FOLIAGE receivers: light reaches INTO a crown, so the shadow fades in with the gap to the blockers, 1 - exp(-gap /
-// u_foliage_shadowLength (m)). The crossed cards' own shadow then starts at nothing on their crossing axis and deepens
-// into the crown; a blocker far up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker.
+// length (m)). The crossed cards' own shadow then starts at nothing on their crossing axis and deepens into the crown;
+// a blocker far up-sun still shadows fully. `gap` = the normalized depth gap to the average blocker. The length is
+// u_foliage_shadowLength on the billboard cards, g_shadowLeafLength on the tree mesh leaves (a leaf just under its own
+// billboard's top card is barely shaded, one deep under it fully).
 float foliageTransmit(float visibility, float gap, int cascade)
 {
+	float shadowLength = 0.0;
 #ifdef SHADOW_FOLIAGE_BIAS
 	if (g_shadowFoliage)
+		shadowLength = u_foliage_shadowLength;
+#endif
+#ifdef SHADOW_LEAF_TRANSMIT
+	shadowLength = max(shadowLength, g_shadowLeafLength);
+#endif
+	if (shadowLength > 0.0)
 	{
 		const float metres = gap * cascadeDepthRange(cascade); // every blocker found is nearer than p.z: gap > 0
-		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / u_foliage_shadowLength));
+		return 1.0 - (1.0 - visibility) * (1.0 - exp(-metres / shadowLength));
 	}
-#endif
 	return visibility;
 }
 

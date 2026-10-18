@@ -30,7 +30,8 @@ Keys and enum values are case-insensitive.
 ```
 TreeSpecies <name>
 	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush grows around trees, never as one)
-	Climate <name> (a Bush grows around the trees of the same climate only; a tree whose climate no bush shares
+	Climate <name> (a Bush grows around the trees of the same climate only; a bush may list SEVERAL names -
+	        `Climate Boreal BirchWood` - and grows around the trees of any of them; a tree whose climate no bush shares
 	        takes every bush)
 	Weight n (a Bush, 1..8, default 1: how often its climate picks it - it is listed n times in each tree's bush list,
 	        which the CPU and the far volume's GPU mirror both pick from uniformly; a tree's list holds at most
@@ -42,25 +43,71 @@ TreeSpecies <name>
 	        · <shape> · Lobes n (0..12 ridges/buttresses around the trunk; 0 = round) · LobeDepth base top (radius
 	        fractions) · LobeHeight (height fraction over which the ridges fade to the top depth) · Twist (deg over
 	        the height)
-	Crown   Shape Ellipsoid|Cone|Umbrella|Column · Start (fraction of height) · Radius (m reach)
-	        Slots (0..64) · Fill (probability) · Angle bottom top (deg from up) · AngleVar · Leader true|false
+	        Stems min max (1..8, default 1 1: each trunk piece grows that many stems from around one base) · StemLean
+	        (deg from vertical, outward, x 0.8..1.1 per stem; 12) · StemSpread (m from the centre to a stem's base, x
+	        0.6..1; 0.25) · Fork (0..0.9, default 0: > 0 = one trunk up to that fraction of the height, the stems
+	        forking from its top - "THE FORK" below) · Split count depth angle span (count 2..4, default 0 = off; depth
+	        1..5; angle deg; span 0.05..0.8 of the stem height; optional tipCurve -1..2, default 1; optional fill, default
+	        0, 1 = FILL a half sphere: every stem's top splits repeatedly - "THE SPLITS" below) · LeaderLean (0..1,
+	        default 0.3: a fork's first stem leans this x StemLean - a central leader; 1 = no leader)
+	Crown   SplitLimbs count angle length (needs Trunk Split; default 0: per stem `count` side limbs `angle` deg from
+	        up, `length` x the stem height, splitting like its top - "THE SPLITS" below)
+	        Shape Ellipsoid|Cone|Umbrella|Column|Dome (Dome: wide from the bottom up, `sqrt(1 - h^3)` floored at 0.3 -
+	        a broad flat-topped crown) · Start (fraction of height) · Radius (m reach)
+	        Slots (0..128) · Fill (probability) · Angle bottom top (deg from up) · AngleVar · Leader true|false
+	        Top count reach angle (0..16 limbs in a whorl at EVERY stem's / split's tip, from where its point starts,
+	        reach x Radius each x 0.8..1.1, `angle` deg from up +- AngleVar (default 90: level); default 0 - a stem that
+	        ends in a flat sheet, its point hidden. A species with Droop grows its limbs at `Crown Angle`, so set that
+	        to the same angle)
 	        BranchRadius (max module base radius / trunk radius at the slot; caps the module scale)
 	        Tiers count spread (slots grouped into `count` whorls up the crown, each spread over `spread` of
-	        its band; envelope and angle follow the whorl's height - layered crowns; default 1 0.35)
+	        its band; envelope and angle follow the whorl's height - layered crowns; default 1 0.35) · an optional
+	        third value, jitter (0..1, default 0): each whorl's height off the even spacing by up to half a band x
+	        it (the order kept) and its reach x 1 +- 0.35 x it, per stem - sheets at uneven heights and widths
 	Module  Count (1..256) · Length (m, 0 = crown radius) · Radius (base / LENGTH - with Length 0 a fraction of the
 	        crown radius) · <shape>
 	        Level { Count (0..64) · Start · Length · LengthTaper · LengthVar (each child a random 0..this shorter,
 	        0..0.95, default 0) · Angle value var · Rise (0..1: the start direction blended toward world-up -
-	        strands that arch over before they hang; default 0) · Radius · <shape> }  (up to 3)
+	        strands that arch over before they hang; default 0) · Flat (0..1: the child's side direction blended into
+	        the parent's horizontal side - children fan out in a flat sheet; default 0) · Radius · <shape> }  (up to 3)
 	Leaves  Size (m) · Aspect (width/length) · PerBranch (0..128, per average last-level branch; other branches
 	        scale it by their length) · Levels (1..4 deepest tiers that carry leaves; 1 = last level only)
-	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate · ClusterLeaves (Needles: side
+	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate|Mat · ClusterLeaves (Mat: shoots per cell; Needles: side
 	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
-	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafSize (Needles: the needle
+	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafWidth (Leaves: a texture leaf's
+	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · ClusterLeafSize (Needles: the needle
 	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default 0.7: card normals bent away
 	        from the module root, both faces)   (Cluster only, below)
 	        Align (0..1, default 0: cards stick out of the branch facing up; 1 = they lie ALONG the branch,
 	        facing out of it at random turns - a weeping strand's curtain)
+	        Top (0..1, default 0: a card's side direction blended into the branch's nearer HORIZONTAL side, its
+	        direction's slope taken out (x this) and its stem lifted onto the branch's top by its radius + 0.1 card
+	        length, and never under the LIMB (the module root, which curves up past its sub-branches): at least its
+	        height at the card's distance along it + its radius + 0.1 card above -
+	        cards lying LEVEL on the limbs, facing up, in the branch's sheet; blending the direction toward the
+	        top instead stood every card up, and keeping a drooping twig's slope dipped the cards under the branches)
+	        FaceUp (0..1, default 0: the card's FACE blended toward up. With `Align 1` a card lies ALONG its branch and
+	        straddles it - its drawn spray down the middle, over the real twig - so facing up it COVERS the branch from
+	        above; it is raised onto the branch's top (x FaceUp: 1.15 x the radius + 0.05 card), or it cut through the
+	        wood. A card otherwise starts at the branch centre and reaches out to ONE side, so the branch always runs
+	        along its edge and shows between the cards, whatever the twigs do - the cedar's failed tries)
+	        Pad count width height tilt start (Cluster; default 0 = off; tilt default 0.25, the cards' random tilt off
+	        level; start default 0.15: FOLIAGE PADS replace the per-branch leaves - per module
+	        `count` cards of Size scattered through a flat DOME over its limb: centred at a point of the limb from `start`
+	        to its end, denser toward the end (`mix(start, 1, sqrt(r))`: a limb's inner part lies in the shade of the tiers
+	        above - foliage at its END, not along its whole length), area-uniform over a disc `width` x the module length
+	        to either side (x 0.4 along the limb, narrowing to 0.75 toward its tip), at `height` x the module length x (1 - r^2) x 0.6..1 over it; each card
+	        centred on its point, level +- the tilt, its base edge (the texture's twig) toward the limb: pointing out from it
+	        +- 40 degrees about up - and a TWIG MESH to it: a thin arched tube (3 sides, level 1) from the limb to the
+	        card's base edge, as thick as the texture's twig (0.011 card, 1.6x at the limb), so every card hangs on wood
+	        (none within 5 cm of the limb). Not attached to any twig: a tier
+	        reads as a cloud of foliage with the branches inside it - cards that follow the twigs could not. Use it
+	        with `Style Mat` and `Cross true` - one spray per card read as one big leaf at pad sizes, level cards as
+	        thin lines from the side)
+	        Lift a b (default 0 0: cards raised along the module's up, free of their branch - a x the card Size for every
+	        card, plus a DOME of b x the module length: highest along the limb, `1 - (side / 0.45 L)^2` across, faded
+	        out over the limb's last 45 % - sheets that sit ABOVE the branches and taper at the edges; drooping twigs for
+	        the dome left the limbs above the cards)
 	Lod     ErrorScale (x the per-level error; unused while the trees upload level 0 only - "Piece mesh LODs")
 	Bake    Variants (baked whole trees per species, 1..64, default 4)
 	Billboard Distance (m, 0 = none; default 50) · Resolution (px, rounded up to a power of two, 16..2048; 512)
@@ -68,17 +115,26 @@ TreeSpecies <name>
 	          Distance; 10)
 	          AlbedoScale (x the WHOLE-TREE billboards' colour, linear, 0..8; default 1 - applied after the cache, at
 	          load: a change needs no re-bake; the module billboards / branch cards and the far volume keep theirs)
+	          FarAlbedoScale (x the FAR-TREE VOLUME's colour, linear, 0..8; default 1 - with or without `Color Far`)
 	          TopCardHeight (the WHOLE-TREE billboard's horizontal card, a fraction of the tree's height: 0 = bottom,
 	          1 = top; default 0.5 - its bake is orthographic from above, so only the card mesh moves: no re-bake)
 	Bark    Plates lines rows (1..64 fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
-	Color   Bark r g b · Leaf r g b
+	        Lenticels (0..1: birch dashes - the share of a 6 around x 24 along lattice's cells that hold a short dark
+	        dash ACROSS the branch) · Patches (0..1: about that share of the bark dark, rough patches, wider around
+	        than along)
+	        Sections (0..1: about that share of the bark tinted to Color Section, soft areas longer along the branch)
+	Color   Bark r g b · Leaf r g b · Mark r g b (the lenticels' and patches' colour; default 0.09 0.08 0.07)
+	        Section r g b (default 0.45 0.33 0.24) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
+	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`)
 	Placement (WORLD placement, TreeWorld; trees only - absent or Density 0 = never placed in the world)
 	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)
 	        Precipitation min max (mm/yr; the ideal range - 2200 and up is the encoding's top, so a max there is no max)
 	        ClimateWidth (sigma of the falloff OUTSIDE the ideal box, in the normalized climate space, 0.06)
 	        Cluster size coverage (m, 0..1; size 0 = no patches) · MaxSlope (rise/run, 0.6)
 	        Altitude min max (m above the local water level, 1.5 ..)
+	        Spacing (m, 0..30, default 0: no other tree within max(this, its own spacing) of a tree with a higher
+	        priority - "SPACING" in World records)
 
 <shape> (TreeBranchShape, any of): Curve value var (deg, smooth bend) · UpAttract (negative droops - weakly:
         -1 over the length bends a horizontal branch only ~45° down)
@@ -106,8 +162,118 @@ up-attracted sub-branches, flat 0.9 m PINNATE cards on the last two tiers; leafl
 (Cone gave the upper whorl far too little reach), trunk `Taper 0.35` + `BranchRadius 0.7`: the thin upper trunk caps
 the upper modules - the upper layer's size knob; strands that rise, arch over the dome and hang plumb (`Rise`,
 `Droop`), of random length (`LengthVar 0.65`: curtains ending at layered heights), narrow cluster cards along them,
-`Leaves Align 0.8`; ~5x Oak's cards per module).
-Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate. Undergrowth: Oak and Pine 4 bushes
+`Leaves Align 0.8`; ~5x Oak's cards per module), `Birch` (a slender white trunk - `Bark Lenticels` + `Patches` in
+`Color Mark`, brown `Sections` -, a wide, open oval crown (`Radius 4.8`, `Angle 68 38`) of limbs with hanging twigs:
+`Droop` on both levels; no leaves on the limbs themselves and no twigs on their inner 30 % (`Levels 2`, `Start 0.3`),
+so the leaves sit toward the outside), `BirchClump` (the same with `Stems 2 3`: thinner stems that lean apart only a little
+(`StemLean 6`) and turn back up (`UpAttract 0.9`), each its own crown), `Cedar` (Lebanon cedar: a short buttressed trunk
+(`Height 7.5 9.5`: shorter stems - 10.5 13 made them too long, 8.5 10.5 the tree too tall for its width; `Radius 0.65`, `Taper 0.08`) forking at 0.3 (`Fork 0.3`, `Crown Start 0.3`: bare below) into 4-5
+gnarled, BENDING stems leaning apart (`Stems 4 5`, `StemLean 38`, `StemSpread 0.25`; `Curve 22 10`, `Wobble 7`,
+`Elbows 1.8`, `ElbowAngle 22 8`, `UpAttract 0.2`; their heights all random - one full-height stem stood out of the
+crown). Each stem's top 24 % SPLITS three times into two branches fanning out wide and upward (`Split 2 3 44 0.24`), and
+7 flat SPLIT LIMBS (`SplitLimbs 7 84 0.4`, x the `Shape Cone` envelope: long low, short high - a flat cone; even
+lengths made a tall, narrow tree) branch the same way lower down - the ONLY side limbs (`Slots 0`:
+the plain module limbs read as spindly); every final tip curves up into a
+short whorl (`Crown Top 2 0.25`) carrying a round FOLIAGE PAD from its base (`Leaves Pad 22 0.6 0.1 0.3 0.05`,
+`Size 2.2`, `Cross true`, `Style Mat` - 90 shoots; FEW LARGE cards: every card hangs on its own twig mesh, and 55 small
+ones over a wide pad read as a mass of spindly straight twigs; fine needles `ClusterLeafSize 0.035`, a lighter green `Color Leaf
+0.20 0.33 0.15`): level sheets at many heights - clouds of foliage with the branches inside them, as in the photos.
+The whorl limbs on the tips are the only modules (`Crown Radius 5.5` sets their length with `Top`; `Module Radius
+0.009`, one short sub-branch level of 2); every pad card hangs on its own thin arched twig mesh. Tried and dropped: an Ellipsoid (an egg),
+one straight trunk (a fir), each stem its own `Umbrella` crown (an inverted pyramid), rising limbs (a V), `Angle 112`
+from `Start 0.2` (limbs to the ground), many long plain limbs (a wide skirt under narrow splits), long split limbs
+(`SplitLimbs 3 68 0.4`: long bare branches up through the crown), long whorl limbs (`Top 2 0.5` with the pad from 35 %:
+a bare stem sticking out level), a high fork (`Fork 0.4`, `Radius 0.9`: the trunk too large for the crown); cards ON the twigs in every arrangement - out to one side (the branch along every
+card's edge), level (`Leaves Top`), lifted (`Leaves Lift`), drooping or rising-then-drooping twigs, along the branch
+facing up (`Align 1` + `FaceUp`: too much overlap, it read as cut paper); pads of 14 cards (scattered leaves: a ~30
+m^2 pad needs ~5-6 cards deep), pads of one Needles spray per card (each read as a big broad leaf, at any size), level
+uncrossed pad cards (thin lines from the side), long thick falling limbs (`Angle 104 88`, `Radius 10`, `Module Radius
+0.025`: too heavy), steeply rising limbs (`Angle 72 62`: a vase)).
+`Elm` (tuned with blind screenshot tests - a context-free agent naming the species from a neutrally named shot: elm
+first, ahead of oak and willow. One STRAIGHT trunk (`Stems 1`) whose top 65 % is a crown that FILLS a half sphere
+(`Split 4 3 0 0.72 -0.4 1 1.8 2`, 2 leafy shoots on each inner branch; the crown from 28 % of the height, its middle raised 1.8 x - a tall rounded crown, a
+half sphere read as a flat dome; `Crown Radius 7.5`: 64 tips on the dome, snaking with the trunk shape's `Wobble 14`, the
+last round arching out a little), every tip ending in a whorl of 3 leafy limbs rising at 55 degrees (`Top 3 0.5 55`,
+`Crown Angle 55 55`) that arch over a little (`Module Droop 60`); thin leafy limbs (`Module Radius 0.005`, ~2 cm at the base, on ~1.5 cm
+split tips) with `BranchRadius 1.5` (`Module Radius 0.012` + `BranchRadius 6` put ~5 cm limbs on ~5 mm tips: a step in
+thickness); broad OVAL leaves (`ClusterLeafWidth 0.55`, `ClusterLeafSize 0.27`). Tried and dropped: a fork into 2-5
+stems with fanning splits and split limbs (uneven, lumpy, a long trunk or a mass in the middle - the fill replaced it),
+level tip limbs (`Crown Angle 90`: straight horizontal branches), foliage only at the top (bare stems under a cap, read as acacia), narrow or many small leaves a card (read as
+willow), strong drooping limbs (willow), flat split limbs (`SplitLimbs 3 65`) and long tip limbs (`Top 3 0.8`: long thin
+horizontal branches), split limbs low with `Umbrella` (a mass of branches in the vase's middle), dense foliage (`Top 7`,
+`PerBranch 12` on 3 levels: a solid ball, 6.7 M leaf triangles in the library and a GPU device loss)).
+Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate, `Birch` / `BirchClump` BirchWood (the bush-matching name; their placement box is a cool
+band BETWEEN Pine's box and Oak's), `Cedar` Temperate (Oak's warmth, too dry for Oak) - the boxes in "World records".
+
+**THE TRUNK'S TIP** (`generateTrunk`, `appendTube`'s `tip`): every stem's mesh narrows over its last ~6 tip radii
+(`6 x Radius x Taper / height`, 0.03..0.3 of the length) to `TUBE_TIP_RADIUS` (0.12) of the path's radius - a closed
+point, never an open cut. The mesh only: `BranchPath::sample` keeps the linear radius, so the slots and their module
+caps are unchanged. A `Leader` grows from where that narrowing STARTS (the leader and the trunk's point taper together;
+from the very end it stood on an open cut).
+
+**THE FORK** (`Trunk Fork` f > 0, several stems): ONE trunk from the ground to f x the height (the flare, the ridges,
+the sink, rings packed toward the ground; STRAIGHTER than the stems - a third of the trunk shape's curve and wobble,
+no elbows: the stems' bend made it look bent), the stems growing from its top - each `Radius x mix(1, Taper, f) x 1.15
+/ sqrt(stems)` thick (at most 0.85 of the base's top), starting one base radius down inside it, spread by `StemSpread`
+around the fork, leaning out by `StemLean` from the base's direction, `(1 - f) x 0.7..0.95` the height long. The FIRST
+stem instead CONTINUES the lower trunk: from its last ring, as thick, starting along it and bending over its first 30 %
+(`bentPath`) to only 30 % of its lean, 0.85 x as long as it would be (standing near vertical, it topped the crown) - a central
+leader filling the crown's middle (leaning out like the others it
+left a V with an empty centre); the lower trunk ends open with no cut in view (stems that all started inside it left
+its open end showing). The crown's `Start`
+stays a TREE height, and it is ONE crown: the BASE trunk carries limbs too (from `Start` to the fork - the long low
+ones), the slots split between it and the stems by the length of each inside the crown, and every limb's envelope and
+angle (`Shape`, `Angle`) follow its height IN THE WHOLE TREE, not along its own stem (each stem its own small crown made
+the stems' tops an inverted pyramid). Its slots take their angle from WORLD up, not the leaning stem (level sheets).
+Each stem fills its own SECTOR of the circle: centred on its outward direction, 1.2 x its share (2 pi / stems), an
+even golden-ratio fill of it - the stems' limbs fan out around the tree (each stem's own full golden circle put limbs of
+neighbouring stems over each other, shading them). The base trunk keeps the full circle.
+Without a fork (0, the default) the stems stand on the ground, each its own crown.
+
+**THE SPLITS** (`Trunk Split count depth angle span`): each stem grows only `(1 - span)` of its height (as thick at
+its end as the full taper puts it there) and ends OPEN, then splits into `count` branches - at even azimuths about it
+(+-0.3 rad), `angle` x 0.7..1.2 off it, pulled toward up (+0.3 up before normalizing: they follow the upward direction).
+The FIRST CONTINUES it: from its last ring exactly, as thick, with its sides, STARTING along the parent's direction and
+bending to half the angle over its first 35 % (`bentPath`, 9 rings) - the bark carries on into a thinner branch (a
+closing point beside the children read as a branch ending early; starting in the new direction tilted its first ring
+against the parent's last, a wedge-shaped gap). The others start half a
+parent radius inside it, `parent / sqrt(count)` thick (at most 0.75 of it), half the trunk's sides (at least 6). Each
+tapers to 0.45 of its start, 6 rings, no elbows or stubs, ends open where it splits again and closes into a point only
+at a FINAL tip -
+and splits again, `depth` rounds, every round 0.6 x as long (`ROUND_LENGTH`; 0.8 left long bare final rounds; the first round's length makes all
+rounds together about `span` x the stem height). The FINAL round curves: it leaves in its fan direction and bends toward `its direction +
+tipCurve x up` over 80 % of its length (`bentPath`; the 5th `Split` value, default 1: up, the whorl on its tip on top -
+level sheets; negative: out sideways - an elm's arching tips). The continuing and final branches (`bentPath`) take the
+trunk shape's `Wobble` as a random walk after their first bend half (snaking limbs; the first ring still meets the
+parent square).
+**FILL** (the 6th `Split` value 1): the stem stands straight (a third of the shape's curve and wobble, no elbows) and
+its end is the centre of a half sphere of `Crown Radius`; the root cone is 80 degrees about up. Each split divides its
+cone among its children - child half-angle x 0.62 (2) / 0.55 (3+), its centre offset to the parent cone's edge at even
+azimuths (a golden angle per node, +-0.15 rad) - with 3+ children the first keeps the CENTRE direction and the others
+share the ring (all on the ring left the dome's middle empty: a bowl) - at least 8 degrees above level - and each child grows toward the point
+at its cone centre x `Crown Radius` x (rounds done / depth)^0.8 (`bentPath` from its parent's direction, the shape's
+wobble): the final tips land on the dome, every round fills its own share of it, little randomness. A fill branch
+tapers to 0.7 of its start (not the fan's 0.45: with the 1 / sqrt(count) per split three rounds left ~5 mm tips). `angle` is
+unused; `tipCurve` x 0.5 tilts the last round. An optional 8th value adds SHOOTS (0..8, default 0): per inner split branch - not
+the first round's, the innermost - that many short side branches (35..85 % along it, golden-angle sides, out and up,
+0.35 x its length, half its thickness), each ending in a `Crown Top` whorl: leaves inside the crown, not only on the
+dome (the elm: 2). An optional 7th value s raises the dome's MIDDLE: target y x
+`1 + (s - 1) x cone.y^2` - the up-pointing cones rise, the sides stay (default 1: a half sphere; a uniform stretch only
+lifted the whole canopy). **SPLIT LIMBS**
+(`Crown SplitLimbs count angle length`): per stem `count` side limbs from the crown's start to 0.9 of the stem, evenly
+(jittered), at azimuths in the stem's sector (or a golden spiral), `angle` from up (+-8), `length` x the stem height x the crown
+SHAPE's envelope at the limb's height in the whole tree (Cone: long low, short high),
+0.6 x the stem's radius there tapering to 0.6 of that, ending open into one round fewer of the same splits (at least
+one; the first round half the limb's length). Bark and the trunk's wind (bone 0). The `Crown Top` whorl sits at every FINAL tip (instead
+of the stem's end); `Leader` is ignored. Off (count < 2) a stem draws its randomness as before.
+
+**MULTI-STEM TRUNKS** (`Trunk Stems`, `generateTrunk`): a trunk piece of n > 1 stems spaces them evenly around the
+base (a random start azimuth, +-0.4 rad each), each `Radius` thick, leaning out, the first the full height and the
+others 0.7..0.95 of it (with a `Fork` every stem 0.7..0.95: one full-height stem stood out of the crown). `Crown Slots` are split between the stems by their LENGTH (each its own crown, `Tiers` within it; an even split left
+the tallest stem's layers sparse - lopsided cedars), and a slot
+facing into the clump is shortened to 0.5 of its length (facing out: 1) - the crowns share the middle. Each stem gets
+its own `Leader`. All stems are bone 0 (the trunk bend); the piece's `baseRadius` is `Radius + StemSpread`. One stem
+draws its randomness in the original order: a one-stem species is unchanged. Undergrowth: Oak and Pine 4 bushes
 out to 8 m; Acacia 6 out to 12 m (its trees stand far apart).
 
 **The open floor is filled by WIDTH, not count** ("dense" = less open space, not more leaves): a bush's cover grows
@@ -124,6 +290,9 @@ The round bushes, two per climate:
   (knee-high, many thin upright stems with small dense leaf clusters).
 * Savanna: `ThornScrub` (low, wide, umbrella crown, zig-zag grey stems, pinnate pads) and `Bushwillow` (an upright
   vase of stems, dry olive-yellow broadleaf clusters).
+* BirchWood (the birches' own climate name, so they take no Juniper - a needle bush read wrong under birches): `Hazel`
+  (a clump of straight slender stems fanning out, broad round leaves, ~2-3 m) and `Raspberry` (low canes arching over
+  at the tips, broad leaves), both `Weight 2`, plus `Bilberry` and `DwarfBirch` (`Climate Boreal BirchWood`).
 
 A bush is a tree species with a short trunk, slots from the ground (`Crown Start 0`), a large `BranchRadius`
 (the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
@@ -269,7 +438,11 @@ normal map shows as evenly spaced horizontal bands. Every line fades out where i
 the ridges; rare thin horizontal breaks. **Low contrast in the cracks** (albedo 75 % of the bark colour, fine cracks
 85 %; fissure floor at 35 % of the ridge height): dark or deep outlines read as cartoon ink. Rounded ridge crowns
 with V fissures, ridge-scale height/tint from SMOOTH noise (a per-segment hash makes a brightness grid), fine grain,
-along-the-branch fibres and lichen on the ridges. sRGB albedo plus a LINEAR RGB tangent-space normal map from the
+along-the-branch fibres and lichen on the ridges. BIRCH MARKS (`Lenticels`, `Patches`, in `Color Mark`): dark dashes
+ACROSS the branch (`lenticel`: one per lattice cell by chance, an ellipse, slightly sunk) and dark patches (a
+thresholded fbm, 2 cells around x 4 along, the grain deepened in them). SECTIONS (`Sections`, in `Color Section`,
+under the marks): soft areas of another tint (a thresholded fbm, 3 around x 2 along: longer along the branch) - a
+birch's brown older bark. sRGB albedo plus a LINEAR RGB tangent-space normal map from the
 same height field (x along u, y along v — the tube's tangent / bitangent), each with a CPU box-filtered mip chain
 (normals renormalized). Uploaded through `Renderer::createTextureMaterial(..., &normalMips)`, freed with the species.
 
@@ -290,6 +463,11 @@ same height field (x along u, y along v — the tube's tangent / bitangent), eac
   one card then reads as a whole spray, so the tree needs fewer branches and cards), each a main shoot plus
   `ClusterLeaves` side shoots (alternating, short, 24-38° off it - wider reads as a flat fan), all densely set with
   thin tapered needles on both sides and a forward tuft at the tip. `ClusterLeafSize` is the needle length.
+  **`Style Mat`** (foliage pads, `drawNeedleMat`): a lobed PATCH on a twig SKELETON - a main twig in from the cell's
+  base edge (v = 0) to beyond its middle, 4-6 side twigs off it (alternating, 35-80 degrees), and `ClusterLeaves` short
+  needle shoots (0.1..0.2 of the cell) along all of them (picked by twig length, 30-75 degrees off it); the twigs drawn
+  over the shoots, a third of the shoots again over the twigs. `ClusterLeafSize` is the needle length. The outline
+  follows the twigs (shoots scattered over a disc read as round blobs), and the twig gives each blob its branch.
   **`Style Pinnate`** (acacia, `drawPinnateCluster`): `Shoots` BIPINNATE compound leaves fanned from a short woody
   twig (±28°), each a thin greenish rachis with `ClusterLeaves` pairs of LONG pinnae (0.55 × the rachis, forward,
   shorter toward the tip; the first pair close to the twig - a long bare stem reads as a stalk), every pinna a dense
@@ -376,15 +554,33 @@ before its `Enabled` check: it runs with the preview off.
   `Density scale` (so at most one tree per cell: 400 / ha at 5 m); its species is picked by share. **Species that
   share a climate ADD**: a rare species in a dense one's box (Willow in Oak's) takes nothing away from it. (Picking
   by Density x fit let a dense species' tail outnumber a sparse one's core; normalizing by the SUM halved an
-  equal-fit species.) Bushes are not stored. No tree or rock where the river influence is above "Terrain/Rivers/
+  equal-fit species.) **GRASSLANDS** ("Grassland share", 0.25; "Grassland size (m)", 800): a world fbm (3 octaves at
+  that scale, its own seed) below a threshold is open land - every species' density x 0 there, x 1 elsewhere over a
+  narrow edge (+-0.02 of the noise) - so whatever the climate there are open plains, and the forests between them keep
+  their FULL density (lowering the density thinned every forest instead). In the open, "Grassland trees" (t, 0.5)
+  keeps the largest of: COPSES (a second fbm at 1/8 of the size above `0.8 - 0.15 t`: small groves at 0.7 of the
+  forest's density), the FOREST EDGE thinning out (0.4 t at the edge, to 0 over 0.1 of the noise into the open) and
+  LONE TREES (0.05 t everywhere) - the climate still picks their species. The threshold `0.5 + 0.3 x (share - 0.5)`
+  assumes the noise spreads about +-0.15: the share is approximate. In `speciesWeights`, so the rocks' FOREST term sees
+  the plains too. **SPACING** (`Placement Spacing`): every CANDIDATE (the existence roll and the species pick - a pure
+  function of the seed, the chunk and the cell, `candidateAt`) gets a priority (hash 6); a candidate gives way to one
+  of higher priority within max(both spacings). Decided on the candidates, not on the surviving trees, so nothing
+  chains: a chunk evaluates the neighbours' candidates within `ceil(max spacing / cell)` cells of it exactly as they
+  do, and both sides of a border agree. The field and river grids widen their halo to that reach (the same world
+  points: no value inside changes). Placeholders: Elm 11, Cedar 9, Acacia 6, Oak / Willow 5, Pine / Birch 3 m; without
+  any spacing the chunks place what they did before. **FOREST TYPES** ("Forest type size (m)", 600; "Forest minority", 0.15): one species DOMINATES a
+  stand - each species has a large-scale noise (its own seed, 2 octaves at that size); of the species present at a
+  point the highest noise wins, the others x the minority factor (fully once 0.06 of the noise behind the winner: a
+  soft border between stands), then all rescaled to the same total - which trees grow changes, not how many (birch
+  forests among the oaks' and pines' edges, not every species in every wood; 1 = off). Bushes are not stored. No tree or rock where the river influence is above "Terrain/Rivers/
   Vegetation clear" (except rock rules with a River term, below).
   **The existence roll goes FIRST** (exact, the same result): a tree candidate whose roll is above the species'
   summed `Density` x the cell's hectares, or a rock cell whose roll is above its type's bound (every rule's `Density`
   x its largest ground / forest / river / flow multipliers - every fit term is at most 1), skips its field sample and
   fits. The river grid (1 m) covers only what is read: the chunk plus the neighbours' rock reach + 2 m, not the
   terrain halo.
-* **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density / climate
-  tweaks, `Reload species`, a new sampler, a chunk size or bounds change, a rock change (`setRocks`). The generation
+* **A new generation** (everything dropped, every chunk regenerated) on: Enabled / Seed / cell / density / climate /
+  grassland / forest type tweaks, `Reload species`, a new sampler, a chunk size or bounds change, a rock change (`setRocks`). The generation
   counter is monotonic, so a late pump result of an old config never merges.
 * **GPU:** each merged chunk joins an upload queue; `Upload KB per frame` (1024) of records per frame go to the
   renderer's pool (`Renderer::addTreeRecordChunk`, RendererVK "WORLD TREE RECORDS"; `GPU pool (MB)`, 128, fixed - a
@@ -399,8 +595,12 @@ before its `Enabled` check: it runs with the preview off.
   dropped once uploaded; a chunk coming back inside is generated again (same records - nothing re-uploads).
 * `Log stats`: chunks (in flight, queued, to upload), trees, per chunk average / max; CPU and GPU MB; per species of
   the CPU-held records.
-* Placeholder ideal climates: Oak 9..18 C / 900..2200 mm, 90 / ha; Pine -5..5 C / 600..2200 mm, 90 / ha; Acacia
-  20..30 C / 300..900 mm, 12 / ha; Willow 9..18 C / 1000..2200 mm, 1 / ha; all `ClimateWidth` 0.06.
+* Placeholder ideal climates - SEPARATED (overlapping boxes put every species in every temperate wood): Pine -6..3 C /
+  600..2200 mm, 90 / ha; Birch 4..9 C / 600..1800 mm, 60 / ha, BirchClump the same, 30 / ha (the cool band between
+  Pine and Oak); Oak 10..18 C / 900..2200 mm, 90 / ha; Willow 11..18 C / 1300..2200 mm, 1 / ha (the wettest of Oak's);
+  Cedar 9..16 C / 350..850 mm, 10 / ha (Oak's warmth, too dry for it); Elm 9..16 C / 700..1500 mm, 40 / ha (Oak's
+  drier, cooler side - Forest types make elm woods among the oaks); Acacia 20..30 C / 300..900 mm, 12 / ha;
+  `ClimateWidth` 0.04 (Acacia 0.06).
 * **ROCK RECORDS** (`setRocks` - on with "Rocks/Enabled" + "Rocks/World/Enabled", handed over by TreeSystem every
   frame; a change is a new generation): the same 4-byte records in the same chunks. The record TYPES: the `.tree`
   list, then every `.rock` (name-sorted) from `firstRockType()` on - TreeWorld reads the `.rock` `Placement` blocks

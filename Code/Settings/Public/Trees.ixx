@@ -7,7 +7,7 @@ import Core;
 
 // "Trees/Grove type": "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name. The names
 // are fixed here (a tweak enum registers before the species load) - add a new species' name.
-export inline constexpr oc::string_view TREE_GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow" };
+export inline constexpr oc::string_view TREE_GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow", "Birch", "BirchClump", "Cedar", "Elm" };
 
 export struct TreeSettings
 {
@@ -46,6 +46,15 @@ export struct TreeWorldSettings
 	float climateSharpness = 4.0f;  // the species pick by climate fit ^ this (0 = every fitting species alike)
 	float climateFadeStart = 0.10f; // a species' climate fit fades to 0 between these (fractions of its peak): no tail
 	float climateFadeEnd = 0.25f;
+	// GRASSLANDS: open land with no trees, whatever the climate - about this share of the land, in patches of about
+	// grasslandSize (m). The forests between them keep their full density (only a narrow edge thins).
+	float grasslandShare = 0.25f;
+	float grasslandSize = 800.0f;
+	float grasslandTrees = 0.5f; // 0..1: the trees left IN the grasslands - copses, lone trees, a thinning forest edge
+	// FOREST TYPES: stands of about forestTypeSize (m) where one species dominates; the others x forestMinority there.
+	float forestTypeSize = 600.0f;
+	float forestMinority = 0.15f;
+
 	int maxGenJobs = 0;             // concurrent chunk placements (Low pump jobs, preemptible); 0 = one per job worker
 	int poolMB = 128;               // the GPU record pool (MB; fixed - a change drains the GPU and regenerates)
 	int uploadKB = 1024;            // record bytes uploaded per frame

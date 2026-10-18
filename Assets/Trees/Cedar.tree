@@ -1,0 +1,107 @@
+# Cedar of Lebanon: ONE crown over the whole tree's height (Shape Cone: the longest limbs low, ever shorter up the tree). A massive
+# buttressed trunk carries long, thick FALLING limbs (Angle 104 at the crown's bottom: 14 degrees down, from a quarter
+# of the height; their tips curve back up, Module UpAttract 0.18) up to the fork at 45% of its height (Trunk Fork),
+# where it splits into 3-4 gnarled stems leaning a little apart, layered with ever shorter, level limbs (Angle 88 at
+# the top) and each ENDING in a small flat sheet (Crown Top, no leader). Every limb carries a FOLIAGE PAD (Leaves Pad):
+# big, mostly level needle-spray cards scattered through a flat dome over it - the tiers read as clouds of foliage
+# with the branches inside them. Tiers at uneven heights (Crown Tiers with a jitter). Grey, scaly bark. Dry temperate
+# mountains.
+TreeSpecies Cedar
+	Climate Temperate
+	Seed 71
+	Scale 1.1 2.0
+	Trunk
+		Count 6
+		Height 7.5 9.5
+		Radius 0.65
+		Taper 0.08
+		Curve 22 10
+		UpAttract 0.2
+		Wobble 7
+		Elbows 1.8
+		ElbowAngle 22 8
+		ElbowUpBias 0.8
+		ElbowRange 0.2 0.9
+		Stubs 0.5
+		Flare 0.45
+		Lobes 5
+		LobeDepth 0.45 0.06
+		LobeHeight 0.6
+		Twist 20
+		Stems 4 5
+		Split 2 3 44 0.24
+		Fork 0.3
+		StemLean 38
+		StemSpread 0.25
+		Rings 22
+		Sides 24
+	Crown
+		Shape Cone
+		Start 0.3
+		Radius 5.5
+		Slots 0
+		Tiers 3 0.3 0.7
+		Fill 1
+		Angle 93 84
+		AngleVar 6
+		Top 2 0.25
+		SplitLimbs 7 84 0.4
+		BranchRadius 1.0
+	Module
+		Count 16
+		Radius 0.009
+		Curve 8 4
+		UpAttract 0.05
+		Wobble 3
+		Elbows 0.6
+		ElbowAngle 12 5
+		ElbowMinElevation -5
+		Stubs 0.3
+		Rings 8
+		Sides 6
+		Level
+			Count 2
+			Start 0.1
+			Length 0.25
+			LengthTaper 0.5
+			Angle 70 10
+			Flat 0.85
+			Curve 6 4
+			Wobble 4
+			Radius 0.3
+			Rings 4
+			Sides 3
+	Leaves
+		Type Cluster
+		Style Mat
+		Size 2.2
+		Aspect 1.0
+		Pad 22 0.6 0.1 0.3 0.05
+		Cross true
+		ClusterLeaves 90
+		ClusterLeafSize 0.035
+		NormalBend 0.1
+	Bark
+		Plates 14 6
+		Crack 0.05
+		Breakup 0.5
+		Relief 1.3
+		Lichen 0.2
+	Billboard
+		NormalBend 0.0
+		AlbedoScale 1.2
+		TopCardHeight 0.65
+	Color
+		Bark 0.30 0.27 0.25
+		Leaf 0.20 0.33 0.15
+	Undergrowth
+		Bushes 2
+		Radius 12
+	Placement
+		Density 10
+		Temperature 9 16
+		Precipitation 350 850
+		ClimateWidth 0.04
+		Cluster 70 0.5
+		MaxSlope 0.8
+		Spacing 9

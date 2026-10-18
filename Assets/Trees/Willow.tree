@@ -97,8 +97,9 @@ TreeSpecies Willow
 		Leaf 0.42 0.47 0.15
 	Placement
 		Density 1
-		Temperature 9 18
-		Precipitation 1000 2200
-		ClimateWidth 0.06
+		Temperature 11 18
+		Precipitation 1300 2200
+		ClimateWidth 0.04
 		Cluster 60 0.65
 		MaxSlope 0.4
+		Spacing 5

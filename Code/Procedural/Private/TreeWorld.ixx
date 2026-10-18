@@ -173,6 +173,11 @@ export namespace Procedural
 			float fadeStart = 0.10f;     // a species' fit fades to 0 between these fractions of its peak
 			float fadeEnd = 0.25f;
 			float riverClear = 0.1f;     // no tree or rock where the river influence (TerrainPoint::river) is above this
+			float grasslandShare = 0.0f; // ~the share of the land that is open grassland (no trees)
+			float grasslandSize = 800.0f; // m: the grassland patches' noise scale
+			float grasslandTrees = 0.5f;  // 0..1: copses, lone trees and the thinning edge inside the grasslands
+			float forestTypeSize = 600.0f; // m: the dominant-species stands' noise scale
+			float forestMinority = 0.15f;  // the non-dominant species' density factor in a stand (1 = off: all mixed)
 		};
 		struct Request
 		{

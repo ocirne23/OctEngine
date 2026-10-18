@@ -146,18 +146,19 @@ namespace
 			// drawLeaf's profile) fit, with a margin for the mip chain.
 			const glm::vec2 origin = at + dir * 0.01f;
 			const glm::vec2 side(-dir.y, dir.x);
+			const float widthRatio = species.clusterLeafWidth;
 			auto fits = [&](float len)
 			{
 				constexpr float MARGIN = 0.02f;
 				const glm::vec2 mid = origin + dir * (0.6f * len);
-				for (const glm::vec2 p : { origin + dir * len, mid + side * (0.24f * len), mid - side * (0.24f * len) })
+				for (const glm::vec2 p : { origin + dir * len, mid + side * (widthRatio * len), mid - side * (widthRatio * len) })
 					if (p.x < MARGIN || p.x > 1.0f - MARGIN || p.y < MARGIN || p.y > 1.0f - MARGIN)
 						return false;
 				return true;
 			};
 			for (int k = 0; k < 16 && !fits(length); ++k)
 				length *= 0.92f;
-			drawLeaf(cell, origin, dir, length, length * 0.24f, glm::clamp(color, 0.0f, 1.0f));
+			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f));
 		}
 	}
 
@@ -267,6 +268,76 @@ namespace
 			}
 			drawNeedleShoot(cell, base, ctrl, tip, numBranches > 1 ? 0.008f : 0.011f, needleLength, species, rng);
 		}
+	}
+
+	// `Style Mat`: a lobed PATCH of foliage on a twig SKELETON - a main twig in from the cell's base edge (v = 0) to
+	// beyond its middle, 4-6 side twigs off it (alternating, 35-80 degrees, curving), and `ClusterLeaves` short needle
+	// shoots along all of them (the twig picked by its length, 30-75 degrees off it, both sides), the twigs drawn over the
+	// shoots and a third of the shoots again over the twigs (half hidden in the foliage). Its outline follows the twigs:
+	// uneven lobes, not a disc. No single spray outline either: a big card reads as a mass of foliage (`Leaves Pad`), where
+	// one spray per card read as one big leaf.
+	void drawNeedleMat(const Cell& cell, const TreeSpeciesDesc& species, Rng& rng)
+	{
+		const float needleLength = species.clusterLeafSize;
+		const float reach = needleLength * 0.6f + 0.02f;
+		auto fits = [&](glm::vec2 p) { return p.x >= reach && p.x <= 1.0f - reach && p.y >= reach && p.y <= 1.0f - reach; };
+		auto rotate = [](glm::vec2 v, float a) { return glm::vec2(v.x * std::cos(a) - v.y * std::sin(a), v.x * std::sin(a) + v.y * std::cos(a)); };
+
+		struct Twig { glm::vec2 base, ctrl, tip; float radius, length; };
+		oc::small_vector<Twig, 8> twigs;
+		const glm::vec2 mainBase(0.5f + rng.signed1() * 0.08f, 0.03f);
+		const glm::vec2 mainTip(0.5f + rng.signed1() * 0.15f, rng.range(0.62f, 0.8f));
+		const glm::vec2 mainCtrl = (mainBase + mainTip) * 0.5f + glm::vec2(rng.signed1() * 0.1f, 0.0f);
+		twigs.push_back({ mainBase, mainCtrl, mainTip, 0.011f, glm::distance(mainBase, mainTip) });
+		const int sideTwigs = 4 + (int)(rng.next() % 3u);
+		for (int i = 0; i < sideTwigs; ++i)
+		{
+			const float t = 0.3f + 0.65f * ((float)i + 0.5f) / (float)sideTwigs + rng.signed1() * 0.04f;
+			const glm::vec2 at = bezier(mainBase, mainCtrl, mainTip, t);
+			const glm::vec2 tangent = glm::normalize(bezier(mainBase, mainCtrl, mainTip, t + 0.01f) - bezier(mainBase, mainCtrl, mainTip, t - 0.01f));
+			const glm::vec2 dir = rotate(tangent, ((i & 1) ? 1.0f : -1.0f) * glm::radians(rng.range(35.0f, 80.0f)));
+			float length = rng.range(0.18f, 0.36f) * (1.1f - 0.4f * t);
+			for (int k = 0; k < 12 && !fits(at + dir * length); ++k)
+				length *= 0.85f;
+			const glm::vec2 tip = at + dir * length;
+			const glm::vec2 ctrl = at + dir * (length * 0.5f) + glm::vec2(-dir.y, dir.x) * (length * rng.signed1() * 0.2f);
+			twigs.push_back({ at, ctrl, tip, 0.006f, length });
+		}
+
+		float total = 0.0f;
+		for (const Twig& twig : twigs)
+			total += twig.length;
+		const int shoots = glm::max(species.clusterLeaves, 1);
+		auto drawShoot = [&]()
+		{
+			float pick = rng.next01() * total;
+			const Twig* twig = &twigs.back();
+			for (const Twig& candidate : twigs)
+				if ((pick -= candidate.length) < 0.0f) { twig = &candidate; break; }
+			const float t = rng.range(0.15f, 1.0f);
+			const glm::vec2 at = bezier(twig->base, twig->ctrl, twig->tip, t);
+			const glm::vec2 tangent = glm::normalize(bezier(twig->base, twig->ctrl, twig->tip, glm::min(t + 0.01f, 1.0f))
+				- bezier(twig->base, twig->ctrl, twig->tip, glm::max(t - 0.01f, 0.0f)));
+			const glm::vec2 dir = rotate(tangent, (rng.next01() < 0.5f ? -1.0f : 1.0f) * glm::radians(rng.range(30.0f, 75.0f)));
+			float length = rng.range(0.1f, 0.2f);
+			for (int k = 0; k < 12 && !fits(at + dir * length); ++k)
+				length *= 0.85f;
+			const glm::vec2 tip = at + dir * length;
+			const glm::vec2 ctrl = at + dir * (length * 0.5f) + tangent * (length * 0.1f);
+			drawNeedleShoot(cell, at, ctrl, tip, 0.004f, needleLength, species, rng);
+		};
+		for (int i = 0; i < shoots; ++i)
+			drawShoot();
+		constexpr int TWIG_SEGMENTS = 10;
+		for (const Twig& twig : twigs)
+			for (int s = 0; s < TWIG_SEGMENTS; ++s)
+			{
+				const float t0 = (float)s / TWIG_SEGMENTS, t1 = (float)(s + 1) / TWIG_SEGMENTS;
+				drawCapsule(cell, bezier(twig.base, twig.ctrl, twig.tip, t0), bezier(twig.base, twig.ctrl, twig.tip, t1),
+					glm::mix(twig.radius, twig.radius * 0.4f, t0), glm::mix(twig.radius, twig.radius * 0.4f, t1), species.barkColor);
+			}
+		for (int i = 0; i < shoots / 3; ++i)
+			drawShoot();
 	}
 
 	// `Style Pinnate`: one BIPINNATE compound leaf (acacia) along base -> ctrl -> tip - a thin greenish rachis with
@@ -450,6 +521,8 @@ namespace Procedural
 				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx };
 				if (species.clusterStyle == ETreeClusterStyle::Needles)
 					drawNeedleCluster(cell, species, rng);
+				else if (species.clusterStyle == ETreeClusterStyle::Mat)
+					drawNeedleMat(cell, species, rng);
 				else if (species.clusterStyle == ETreeClusterStyle::Pinnate)
 					drawPinnateCluster(cell, species, rng);
 				else
