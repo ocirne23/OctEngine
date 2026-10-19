@@ -88,7 +88,7 @@ TreeSpecies Elm
 		Levels 2
 		ClusterLeaves 11
 		ClusterLeafSize 0.20
-		ClusterLeafWidth 0.60
+		ClusterLeafWidth 0.50
 		NormalBend 0.0
 	Bark
 		Plates 16 10

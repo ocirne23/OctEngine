@@ -274,6 +274,8 @@ namespace Procedural
 			readFloat(*bark, "Relief", out.barkRelief);
 			readFloat(*bark, "Lichen", out.barkLichen);
 			readFloat(*bark, "Lenticels", out.barkLenticels);
+			readFloat(*bark, "LenticelSize", out.barkLenticelSize);
+			readFloat(*bark, "Scars", out.barkScars);
 			readFloat(*bark, "Patches", out.barkPatches);
 			readFloat(*bark, "Sections", out.barkSections);
 		}
@@ -380,6 +382,8 @@ namespace Procedural
 		out.barkCrack = glm::clamp(out.barkCrack, 0.01f, 0.5f);
 		out.barkBreakup = glm::clamp(out.barkBreakup, 0.0f, 1.0f);
 		out.barkLenticels = glm::clamp(out.barkLenticels, 0.0f, 1.0f);
+		out.barkLenticelSize = glm::clamp(out.barkLenticelSize, 0.5f, 4.0f);
+		out.barkScars = glm::clamp(out.barkScars, 0.0f, 1.0f);
 		out.barkPatches = glm::clamp(out.barkPatches, 0.0f, 1.0f);
 		out.barkSections = glm::clamp(out.barkSections, 0.0f, 1.0f);
 		out.lodErrorScale = glm::max(out.lodErrorScale, 0.0f);

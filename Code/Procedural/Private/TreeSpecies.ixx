@@ -207,7 +207,9 @@ export namespace Procedural
 		float barkLichen = 0.3f;    // amount of grey-green lichen patches
 		// Birch-like MARKS in markColor: short dark horizontal dashes (lenticels) and dark rough patches.
 		float barkLenticels = 0.0f; // 0..1: the share of the dash lattice's cells that hold one
+		float barkLenticelSize = 1.0f; // 0.5..4: x the dash size (the lattice that much coarser: fewer, larger dashes)
 		float barkPatches = 0.0f;   // 0..1: about this share of the bark is dark patches
+		float barkScars = 0.0f;     // 0..1: aspen DIAMOND scars (old branch scars, wider than tall) - the share of their lattice's cells that hold one
 		glm::vec3 markColor{ 0.09f, 0.08f, 0.07f };
 		// Bark SECTIONS: about this share of the bark (soft-edged areas, longer along the branch) tinted to sectionColor
 		// (a birch's brown, older bark), under the marks.

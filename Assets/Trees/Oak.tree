@@ -96,9 +96,9 @@ TreeSpecies Oak
 		Radius 8
 	Placement
 		Density 90
-		Temperature 10 18
-		Precipitation 900 2200
+		Temperature 6 18
+		Precipitation 750 2200
 		ClimateWidth 0.04
-		Cluster 60 0.65
+		Cluster 60 0.8
 		MaxSlope 0.55
 		Spacing 5

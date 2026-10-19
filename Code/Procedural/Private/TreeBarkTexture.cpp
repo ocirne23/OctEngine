@@ -123,14 +123,17 @@ namespace
 	}
 
 	// Birch LENTICELS: short dark dashes ACROSS the branch (along u). A lattice of LENTICEL_COLUMNS around x
-	// LENTICEL_ROWS along per tile; a cell holds one dash with probability `amount`, its centre jittered so the dash
-	// (at most 0.3 of a cell either side) stays inside it. 0..1, 1 = the dash's core.
+	// LENTICEL_ROWS along per tile, both / `size` (`Bark LenticelSize`: fewer, larger dashes; whole cells, so it still
+	// tiles); a cell holds one dash with probability `amount`, its centre jittered so the dash (at most 0.3 of a cell
+	// either side) stays inside it. 0..1, 1 = the dash's core.
 	constexpr int LENTICEL_COLUMNS = 6;
 	constexpr int LENTICEL_ROWS = 24;
-	float lenticel(float u, float v, float amount, uint32 seed)
+	float lenticel(float u, float v, float amount, float size, uint32 seed)
 	{
-		const float x = u * (float)LENTICEL_COLUMNS, y = v * (float)LENTICEL_ROWS;
-		const int cx = wrap((int)std::floor(x), LENTICEL_COLUMNS), cy = wrap((int)std::floor(y), LENTICEL_ROWS);
+		const int columns = glm::max((int)std::round((float)LENTICEL_COLUMNS / size), 1);
+		const int rows = glm::max((int)std::round((float)LENTICEL_ROWS / size), 1);
+		const float x = u * (float)columns, y = v * (float)rows;
+		const int cx = wrap((int)std::floor(x), columns), cy = wrap((int)std::floor(y), rows);
 		const uint32 h = latticeHash(cx, cy, seed);
 		if (treeHash01(h) >= amount)
 			return 0.0f;
@@ -140,6 +143,27 @@ namespace
 		const float halfThick = 0.08f + 0.06f * treeHash01(treeHash(h, 4u));
 		const float du = (x - std::floor(x) - centreU) / halfLength, dv = (y - std::floor(y) - centreV) / halfThick;
 		return 1.0f - glm::smoothstep(0.5f, 1.0f, du * du + dv * dv);
+	}
+
+	// Aspen SCARS: dark DIAMONDS where branches fell off, wider around than along. A lattice of SCAR_COLUMNS x SCAR_ROWS
+	// per tile (cells about square on the trunk, as the lenticels'); a cell holds one with probability `amount`, its
+	// centre jittered so it stays inside. The shape is the L1 ball (a diamond), its outline roughened by `rough`.
+	// 0..1, 1 = the scar's core.
+	constexpr int SCAR_COLUMNS = 3;
+	constexpr int SCAR_ROWS = 12;
+	float scar(float u, float v, float amount, float rough, uint32 seed)
+	{
+		const float x = u * (float)SCAR_COLUMNS, y = v * (float)SCAR_ROWS;
+		const int cx = wrap((int)std::floor(x), SCAR_COLUMNS), cy = wrap((int)std::floor(y), SCAR_ROWS);
+		const uint32 h = latticeHash(cx, cy, seed);
+		if (treeHash01(h) >= amount)
+			return 0.0f;
+		const float centreU = 0.4f + 0.2f * treeHash01(treeHash(h, 1u));
+		const float centreV = 0.35f + 0.3f * treeHash01(treeHash(h, 2u));
+		const float halfWidth = 0.2f + 0.15f * treeHash01(treeHash(h, 3u));
+		const float halfHeight = halfWidth * (0.45f + 0.2f * treeHash01(treeHash(h, 4u)));
+		const float du = glm::abs(x - std::floor(x) - centreU) / halfWidth, dv = glm::abs(y - std::floor(y) - centreV) / halfHeight;
+		return 1.0f - glm::smoothstep(0.75f, 1.0f, du + dv + 0.25f * (rough - 0.5f));
 	}
 
 	uint8 toByte(float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); }
@@ -256,9 +280,16 @@ namespace Procedural
 				}
 				if (species.barkLenticels > 0.0f)
 				{
-					const float dash = lenticel(u, v, species.barkLenticels, seed + 43u);
+					const float dash = lenticel(u, v, species.barkLenticels, species.barkLenticelSize, seed + 43u);
 					c = glm::mix(c, species.markColor, 0.9f * dash);
 					height[i] -= 0.12f * dash;
+				}
+				// Aspen scars: dark rough diamonds, slightly sunk.
+				if (species.barkScars > 0.0f)
+				{
+					const float diamond = scar(u, v, species.barkScars, grain, seed + 53u);
+					c = glm::mix(c, species.markColor * (0.8f + 0.4f * grain), 0.95f * diamond);
+					height[i] += diamond * (0.3f * (grain - 0.5f) - 0.15f);
 				}
 				albedo[i] = c;
 			}

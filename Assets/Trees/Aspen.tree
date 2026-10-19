@@ -1,0 +1,110 @@
+# Aspen: a tall, very straight pale trunk (grey-green, Bark Scars: dark diamonds, few large Lenticels) bare for half its height, a NARROW
+# rounded crown of short ascending limbs whose twigs do not hang (low Droop), ROUND leaves (ClusterLeafWidth ~ the
+# length) on long stalks that tremble (Wind Branch > 1). Shares the birches' climate: Forest types make aspen stands.
+TreeSpecies Aspen
+	Climate BirchWood
+	Seed 71
+	Scale 0.95 1.05
+	Trunk
+		Count 4
+		Height 15 20
+		Radius 0.18
+		Taper 0.14
+		Curve 2
+		UpAttract 0.6
+		Wobble 1.0
+		Flare 0.2
+		Rings 16
+		Sides 14
+	Crown
+		Shape Ellipsoid
+		Start 0.45
+		Radius 3.4
+		Slots 30
+		Fill 0.95
+		Angle 50 30
+		AngleVar 10
+		Leader true
+		BranchRadius 0.55
+	Module
+		Count 8
+		Radius 0.02
+		Curve 15 8
+		UpAttract 0.3
+		Wobble 5
+		Elbows 0.4
+		ElbowAngle 12 6
+		Stubs 0.25
+		Rings 8
+		Sides 5
+		Level
+			Count 5
+			Start 0.25
+			Length 0.45
+			LengthTaper 0.4
+			Angle 45 12
+			Curve 10 6
+			Droop 10
+			Wobble 6
+			Radius 0.5
+			Rings 4
+			Sides 3
+		Level
+			Count 3
+			Start 0.1
+			Length 0.5
+			LengthTaper 0.3
+			LengthVar 0.4
+			Angle 40 12
+			Curve 5 5
+			Droop 20
+			Wobble 4
+			Radius 0.5
+			Rings 4
+			Sides 3
+	Leaves
+		Type Cluster
+		Size 1.3
+		Aspect 0.9
+		PerBranch 2
+		Levels 2
+		Align 0.1
+		ClusterLeaves 7
+		ClusterLeafSize 0.26
+		ClusterLeafWidth 0.62
+		NormalBend 0.0
+	Bark
+		Plates 4 12
+		Crack 0.02
+		Breakup 0.9
+		Relief 0.3
+		Lichen 0.1
+		Lenticels 0.35
+		LenticelSize 2
+		Scars 0.6
+		Patches 0.05
+		Sections 0.25
+	Billboard
+		NormalBend 0.0
+		TopCardHeight 0.6
+		AlbedoScale 0.9
+		FarAlbedoScale 1.1
+	Color
+		Bark 0.66 0.68 0.58
+		Twig 0.32 0.27 0.20
+		Leaf 0.44 0.45 0.11
+		Mark 0.12 0.11 0.10
+		Section 0.38 0.36 0.30
+	Wind
+		Branch 1.4
+	Undergrowth
+		Bushes 3
+		Radius 7
+	Placement
+		Density 90
+		Temperature 2 5
+		Precipitation 450 1400
+		ClimateWidth 0.03
+		Cluster 250 5.0
+		MaxSlope 0.6
+		Spacing 2.5

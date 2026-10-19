@@ -262,7 +262,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
 * **Shadow length**: flat cards leave a HARD edge on the crossing axis (half the crown sits behind the crossing card,
   and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` / `pcssBorder`)
   keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the PCSS average blocker
-  (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 3.5, min
+  (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 2, min
   0.05). ~0 on the axis, deepening into the crown; far blockers shadow fully. **The tree MESH leaves** (the LitTree FS,
   `SHADOW_LEAF_TRANSMIT` / `g_shadowLeafLength`, set per leaf pixel; the normal bias stays) take the same fade with
   `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 3, 0 = off): their only caster is their own
@@ -275,18 +275,18 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   tree goes flat.
 * **Interior**: darkens the sun visibility AND the ambient (`computeLitColor`'s `texAO`) by `1 - Foliage interior
   shadow (u_foliage_interiorShadow) x smoothstep(Foliage interior depth start, end, A)` (`u_foliage_interiorStart` /
-  `u_foliage_interiorEnd`, default 0.25 / 0.56), so a fully lit crown is not flat. **On the SUN** (direct and
+  `u_foliage_interiorEnd`, default 0.5 / 1), so a fully lit crown is not flat. **On the SUN** (direct and
   transmitted) that interior FADES OUT as the view lines up with the sun (x `Foliage interior view fade` (1) x |V·L|;
   the ambient keeps it): from the front the leaves seen through the gaps are lit through those same gaps.
-* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (3) x chord)`, the chord from the
+* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (0.7) x chord)`, the chord from the
   visible LEAF along L to where the crown ellipsoid (below) ends, in lateral radii (0 for a leaf outside it). The leaf
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
   map, so without it a crown seen toward the sun is lit everywhere but at its axis. The TRANSMITTED sun takes only
-  `Foliage transmission self shadow` (0.3, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
+  `Foliage transmission self shadow` (0.33, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
   forward through the leaves loses less): at the full share a crown seen toward the sun hides `Foliage transmission`
   entirely. On a whole tree's horizontal card the interior term is raised to `Foliage interior shadow top card scale`
-  (`u_foliage_interiorTopCardScale`, default 0.5; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
+  (`u_foliage_interiorTopCardScale`, default 1.06; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
   plain `V.y` goes negative from below and turns the card black).
 * **Crown normal**: each crossed card's baked normals shade the crown side ITS bake view saw, so the shading splits
   hard where card A gives way to card B on screen. `foliageCrownNormal` blends the shading normal toward the view ray's
@@ -297,7 +297,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   keep a sphere of half the u length). The ellipsoid follows the card's own proportions (a sphere of half the tree
   height points a pine's normals up at its top and down at its bottom). It depends on the ray only, so both cards
   agree. The weight is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage crown normal`
-  (`u_foliage_crownNormal`, default 0.25) at half the LATERAL radius from it, so the outer crown keeps its baked
+  (`u_foliage_crownNormal`, default 0.33) at half the LATERAL radius from it, so the outer crown keeps its baked
   detail. **The baked normal is ROTATED, not replaced**: it turns by the rotation from the card's facing normal to the
   crown normal, x the weight as an angle - both cards agree on the mean direction, the leaf normals keep their
   scatter. Replacing it with the one smooth crown normal lights the axis strip brighter than the rest of the card (a

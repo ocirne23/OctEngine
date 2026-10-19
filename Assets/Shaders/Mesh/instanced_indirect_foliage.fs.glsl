@@ -203,8 +203,8 @@ void main()
 			* (topCard ? u_foliage_edgeFadeTopCardScale : 1.0);
 		const float fadeStart = u_foliage_edgeFadeStart * centreScale;
 		// Not from BELOW: looking up into a crown, the edge-on cards are what fills it. Blends out over the first ~11
-		// degrees below the pixel (V.y = 0 .. -0.2).
-		const float fromBelow = smoothstep(0.0, 0.2, -V.y);
+		// degrees below the pixel (V.y = 0 .. -0.02).
+		const float fromBelow = smoothstep(0.0, 0.5, -V.y);
 		const float visibility = mix(smoothstep(fadeStart, max(u_foliage_edgeFadeEnd * centreScale, fadeStart + 1e-3), facing), 1.0, fromBelow);
 		if (visibility < 1.0)
 		{

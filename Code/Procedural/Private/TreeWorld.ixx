@@ -177,7 +177,7 @@ export namespace Procedural
 			float grasslandSize = 800.0f; // m: the grassland patches' noise scale
 			float grasslandTrees = 0.5f;  // 0..1: copses, lone trees and the thinning edge inside the grasslands
 			float forestTypeSize = 600.0f; // m: the dominant-species stands' noise scale
-			float forestMinority = 0.15f;  // the non-dominant species' density factor in a stand (1 = off: all mixed)
+			float forestMinority = 0.05f;  // the non-dominant species' density factor in a stand (1 = off: all mixed)
 		};
 		struct Request
 		{

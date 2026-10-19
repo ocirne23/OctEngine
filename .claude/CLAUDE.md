@@ -498,7 +498,7 @@ species grow around the trees of their `Climate` (picked by `Weight`); a tree's 
 how far out.
 A trunk may grow several stems (`Trunk Stems`: birch clumps).
 **The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
-`Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
+`Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, `Aspen.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
 Entity, above Procedural). Their generated textures are saved once to `Assets/Local/Trees/Textures/*.png`
 (not in git) and reused (regenerate with `Trees/Regenerate textures`).
 

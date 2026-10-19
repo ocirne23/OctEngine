@@ -86,8 +86,9 @@ TreeSpecies BirchClump
 		Sections 0.15
 	Billboard
 		NormalBend 0.0
-		TopCardHeight 0.65
+		TopCardHeight 0.55
 		AlbedoScale 0.9
+		FarAlbedoScale 1.1
 	Color
 		Bark 0.78 0.76 0.71
 		Twig 0.30 0.20 0.14
@@ -99,7 +100,7 @@ TreeSpecies BirchClump
 		Radius 7
 	Placement
 		Density 50
-		Temperature 4 9
+		Temperature 4 8
 		Precipitation 600 1800
 		ClimateWidth 0.04
 		Cluster 250 5.0

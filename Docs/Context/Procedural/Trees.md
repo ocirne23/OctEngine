@@ -122,8 +122,10 @@ TreeSpecies <name>
 	Bark    Plates lines rows (1..64 fissure lines per family around / horizontal-break rows along, per tile)
 	        Crack (fissure width, ridge fraction) · Breakup (0 continuous lines .. 1 short segments) · Relief · Lichen
 	        Lenticels (0..1: birch dashes - the share of a 6 around x 24 along lattice's cells that hold a short dark
-	        dash ACROSS the branch) · Patches (0..1: about that share of the bark dark, rough patches, wider around
-	        than along)
+	        dash ACROSS the branch) · LenticelSize (0.5..4, default 1: the lattice / this - fewer, larger dashes)
+	        Scars (0..1: aspen DIAMONDS - the share of a 3 around x 12 along lattice's cells that hold a dark, rough,
+	        sunk diamond wider than tall) · Patches (0..1: about that share of the bark dark, rough patches, wider
+	        around than along)
 	        Sections (0..1: about that share of the bark tinted to Color Section, soft areas longer along the branch)
 	Color   Bark r g b · Leaf r g b · Mark r g b (the lenticels' and patches' colour; default 0.09 0.08 0.07)
 	        Section r g b (default 0.45 0.33 0.24) · Twig r g b (the twigs / stems drawn in the LEAF texture; absent =
@@ -204,7 +206,12 @@ level tip limbs (`Crown Angle 90`: straight horizontal branches), foliage only a
 willow), strong drooping limbs (willow), flat split limbs (`SplitLimbs 3 65`) and long tip limbs (`Top 3 0.8`: long thin
 horizontal branches), split limbs low with `Umbrella` (a mass of branches in the vase's middle), dense foliage (`Top 7`,
 `PerBranch 12` on 3 levels: a solid ball, 6.7 M leaf triangles in the library and a GPU device loss)).
-Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate, `Birch` / `BirchClump` BirchWood (the bush-matching name; their placement box is a cool
+`Aspen` (a tall, very straight pale grey-green trunk - `Curve 2`, `UpAttract 0.6`; dark diamond `Bark Scars 0.6`, few
+large dashes `Lenticels 0.35`, `LenticelSize 2` - bare to 45 % of its height, a NARROW rounded crown (`Radius 3.4`,
+`Angle 50 30`) of short ascending limbs whose twigs do not hang (`Droop 10` / `20`), ROUND yellow-green leaves
+(`ClusterLeafWidth 0.62`, `Aspect 0.9`, `Color Leaf 0.44 0.45 0.11`) that tremble: `Wind Branch 1.4`; dense even
+stands - `Scale 0.95 1.05`, `Spacing 2.5`, `Density 90`: a clone grows from one root system).
+Climates: `Oak` Temperate, `Pine` Boreal, `Acacia` Savanna, `Willow` Temperate, `Birch` / `BirchClump` / `Aspen` BirchWood (the bush-matching name; their placement box is a cool
 band BETWEEN Pine's box and Oak's), `Cedar` Temperate (Oak's warmth, too dry for Oak) - the boxes in "World records".
 
 **THE TRUNK'S TIP** (`generateTrunk`, `appendTube`'s `tip`): every stem's mesh narrows over its last ~6 tip radii
@@ -327,7 +334,7 @@ are unused, and RendererVK allocates no hysteresis slots for tree records.
 
 The SHARED pieces — modules AND trunks, and the baked whole-tree variants — get a billboard each (a trunk's +Y is
 world up, so its billboard's "top" card stands vertical: two crossed vertical trunk cards), crossfaded in per placed
-piece beyond its distance × `Trees/Far distance scale` (default 4; `Trees/Force far` shows them all). Two modes,
+piece beyond its distance × `Trees/Far distance scale` (default 3; `Trees/Force far` shows them all). Two modes,
 `Billboards` and `None`; changing the mode reloads. The bakes live in `TreeImpostor.cpp`: a small software rasterizer
 (2×2 supersampled, back faces culled, leaves alpha-tested). Cache files `<species>_<kind>billboard<i>v<views>_<hash>.png`
 (+ `_normal`; kind "" = module, `trunk`, `tree` = baked variant; stale files of the same prefix are removed).
@@ -387,7 +394,7 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   mesh is created without a BLAS (`createMesh(..., raytraced = false)`) - bark / leaves / trunk / branches, the card
   meshes, the module / trunk billboards (the library rows) - and BUSHES never get one. Without billboards (Far mode
   None) the tree species' bark + leaves are raytraced instead.
-* **Branch cards — the MID tier** (GPU path, baked variants; `Trees/Branch card distance`, default 0.4 × each
+* **Branch cards — the MID tier** (GPU path, baked variants; `Trees/Branch card distance`, default 0.3 × each
   species' billboard distance, 0 = off; respawns): every baked variant keeps its composite (`TreePiece::placements`)
   and its bark SPLIT in two (`trunkBark` - the trunk alone - and `branchBark` - the modules'; `bark` stays whole for
   the bakes and the CPU path). `buildBillboards` stacks the module billboards into ONE CARD ATLAS per species (module
@@ -449,7 +456,9 @@ the ridges; rare thin horizontal breaks. **Low contrast in the cracks** (albedo 
 85 %; fissure floor at 35 % of the ridge height): dark or deep outlines read as cartoon ink. Rounded ridge crowns
 with V fissures, ridge-scale height/tint from SMOOTH noise (a per-segment hash makes a brightness grid), fine grain,
 along-the-branch fibres and lichen on the ridges. BIRCH MARKS (`Lenticels`, `Patches`, in `Color Mark`): dark dashes
-ACROSS the branch (`lenticel`: one per lattice cell by chance, an ellipse, slightly sunk) and dark patches (a
+ACROSS the branch (`lenticel`: one per lattice cell by chance, an ellipse, slightly sunk; `LenticelSize` divides the
+lattice in whole cells, so it still tiles), aspen SCARS (`scar`: a diamond - the L1 ball - per cell by chance, its
+outline roughened by the grain) and dark patches (a
 thresholded fbm, 2 cells around x 4 along, the grain deepened in them). SECTIONS (`Sections`, in `Color Section`,
 under the marks): soft areas of another tint (a thresholded fbm, 3 around x 2 along: longer along the branch) - a
 birch's brown older bark. sRGB albedo plus a LINEAR RGB tangent-space normal map from the
@@ -567,7 +576,7 @@ before its `Enabled` check: it runs with the preview off.
   `Density scale` (so at most one tree per cell: 400 / ha at 5 m); its species is picked by share. **Species that
   share a climate ADD**: a rare species in a dense one's box (Willow in Oak's) takes nothing away from it. (Picking
   by Density x fit let a dense species' tail outnumber a sparse one's core; normalizing by the SUM halved an
-  equal-fit species.) **GRASSLANDS** ("Grassland share", 0.25; "Grassland size (m)", 800): a world fbm (3 octaves at
+  equal-fit species.) **GRASSLANDS** ("Grassland share", 0.5; "Grassland size (m)", 800): a world fbm (3 octaves at
   that scale, its own seed) below a threshold is open land - every species' density x 0 there, x 1 elsewhere over a
   narrow edge (+-0.02 of the noise) - so whatever the climate there are open plains, and the forests between them keep
   their FULL density (lowering the density thinned every forest instead). In the open, "Grassland trees" (t, 0.5)
@@ -609,8 +618,11 @@ before its `Enabled` check: it runs with the preview off.
 * `Log stats`: chunks (in flight, queued, to upload), trees, per chunk average / max; CPU and GPU MB; per species of
   the CPU-held records.
 * Placeholder ideal climates - SEPARATED (overlapping boxes put every species in every temperate wood): Pine -6..3 C /
-  600..2200 mm, 90 / ha; Birch 4..9 C / 600..1800 mm, 60 / ha, BirchClump the same, 30 / ha (the cool band between
-  Pine and Oak); Oak 10..18 C / 900..2200 mm, 90 / ha; Willow 11..18 C / 1300..2200 mm, 1 / ha (the wettest of Oak's);
+  600..2200 mm, 90 / ha; Birch 4..8 C / 600..1800 mm, 80 / ha, BirchClump the same, 50 / ha (the cool band between
+  Pine and Oak); Oak 6..18 C / 750..2200 mm, 90 / ha, `Cluster 60 0.8` (it shares 6..8 C with the birches - Forest
+  types split that band into oak and birch stands; birch-only bands were the most common forest); Aspen 2..5 C /
+  450..1400 mm, 90 / ha (the birches' bushes, `BirchWood`; the COLD, DRY side of the birch band: its own 2..4 C next
+  to Pine, aspen and birch stands in 4..5 C, the birches alone in 5..6 C); Willow 11..18 C / 1300..2200 mm, 1 / ha (the wettest of Oak's);
   Cedar 9..16 C / 350..850 mm, 10 / ha (Oak's warmth, too dry for it); Elm 9..16 C / 700..1500 mm, 40 / ha (Oak's
   drier, cooler side - Forest types make elm woods among the oaks); Acacia 20..30 C / 300..900 mm, 12 / ha;
   `ClimateWidth` 0.04 (Acacia 0.06).

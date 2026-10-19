@@ -7,7 +7,7 @@ import Core;
 
 // "Trees/Grove type": "Mixed" alternates every loaded species; the rest select one by its TreeSpecies name. The names
 // are fixed here (a tweak enum registers before the species load) - add a new species' name.
-export inline constexpr oc::string_view TREE_GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow", "Birch", "BirchClump", "Cedar", "Elm" };
+export inline constexpr oc::string_view TREE_GROVE_TYPES[] = { "Mixed", "Oak", "Pine", "Acacia", "Willow", "Birch", "BirchClump", "Cedar", "Elm", "Aspen" };
 
 export struct TreeSettings
 {
@@ -31,8 +31,8 @@ export struct TreeSettings
 	int expandPerFrame = 2;           // expanded chunks added to the set per frame
 	int farMode = 0;                  // 0 = billboards, 1 = none (reloads)
 	int billboardViews = 0;           // 0 = 2 views (back faces show the front through the card), 1 = 4 (reloads)
-	float farDistanceScale = 4.0f;    // x every species' billboard distance; 0 = off
-	float branchCardDistance = 0.4f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
+	float farDistanceScale = 3.0f;    // x every species' billboard distance; 0 = off
+	float branchCardDistance = 0.3f;  // the mid tier (GPU path): branch cards from this x the billboard distance; 0 = off
 	bool forceFar = false;            // debug: every module as its far representation
 	bool gpuExpansion = true;         // G4: pieces expanded on the GPU (one set) instead of a CPU push per node
 };
@@ -48,12 +48,12 @@ export struct TreeWorldSettings
 	float climateFadeEnd = 0.25f;
 	// GRASSLANDS: open land with no trees, whatever the climate - about this share of the land, in patches of about
 	// grasslandSize (m). The forests between them keep their full density (only a narrow edge thins).
-	float grasslandShare = 0.25f;
+	float grasslandShare = 0.5f;
 	float grasslandSize = 800.0f;
 	float grasslandTrees = 0.5f; // 0..1: the trees left IN the grasslands - copses, lone trees, a thinning forest edge
 	// FOREST TYPES: stands of about forestTypeSize (m) where one species dominates; the others x forestMinority there.
 	float forestTypeSize = 600.0f;
-	float forestMinority = 0.15f;
+	float forestMinority = 0.05f;
 
 	int maxGenJobs = 0;             // concurrent chunk placements (Low pump jobs, preemptible); 0 = one per job worker
 	int poolMB = 128;               // the GPU record pool (MB; fixed - a change drains the GPU and regenerates)
