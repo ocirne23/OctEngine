@@ -216,8 +216,8 @@ export struct TerrainSettings
 	int   riverCoarseDomain = 2;     // coarse tiles of margin each coarse tile's network is routed with
 	float riverSeaDepth = 20.0f;     // model m below sea level that seeds the sea (V3's sea-level film is not sea)
 	float riverPetPerC = 64.0f;      // potential evaporation, mm/yr per C above -5 C
-	float riverBudykoW = 5.0f;       // the Budyko (Fu) curve's shape: higher = more of the rain evaporates
-	float riverLakeEvap = 2.5f;      // open-water evaporation, x the potential evaporation
+	float riverBudykoW = 2.0f;       // the Budyko (Fu) curve's shape: higher = more of the rain evaporates
+	float riverLakeEvap = 1.0f;      // open-water evaporation, x the potential evaporation
 	float riverLoss = 0.001f;        // channel loss in dry land, m3/s per km per sqrt(m3/s) per unit of aridity past 1
 	float riverBreachDepth = 110.0f; // model m: a shallower depression is cut through, not a lake
 	int   riverLakeMinCells = 30;    // coarse pixels: a smaller depression is cut through, not a lake
@@ -230,7 +230,7 @@ export struct TerrainSettings
 	int   riverUnitLakeMinCells = 8334; // native px
 	int   riverUnitLakeMaxCells = 20000; // native px: a bigger basin's lake is only its lowest this many (0 = no limit)
 	float riverChannelMinQ = 1.0f;     // m3/s: a channel starts here
-	float riverChannelFadeQ = 2.0f;    // m3/s past the minimum over which a channel grows from nothing to its full size
+	float riverChannelFadeQ = 1.5f;    // m3/s past the minimum over which a channel grows from nothing to its full size
 	float riverPerennialQ = 0.0f;      // m3/s: a channel whose water never reaches this is ephemeral (a dry bed)
 	float riverWidthA = 25.0f;         // hydraulic geometry: width = a * Q^0.5 (model m)
 	float riverDepthC = 1.5f;          //                     depth = c * Q^0.4 (model m)
@@ -269,7 +269,7 @@ export struct TerrainSettings
 	float riverWaterHumiditySpread = 150.0f; // engine m it fades out over
 	float riverWaterHumidityFullQ = 5.0f; // m3/s: a river this big gets it whole, a smaller one less
 	float riverChannelWallSlope = 0.1f;  // the channel's sides (rise / run) down to a flat bed, whatever its depth
-	float riverLakeBedDeepen = 0.0f;      // model m: a lake's bed lowered by this much away from its shore
+	float riverLakeBedDeepen = 1.0f;      // model m: a lake's bed lowered by this much away from its shore
 	float riverLakeBedDeepenReach = 8.0f; // native px from the shore over which the deepening grows in
 	float riverLakeShore = 0.75f;         // native px past a lake's wet pixels its sand (and no grass) fades out over
 	float riverBankHeight = 2.16f;        // the floodplain's outer edge above the water, x the channel depth
