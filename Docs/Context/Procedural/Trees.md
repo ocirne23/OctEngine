@@ -572,11 +572,13 @@ before its `Enabled` check: it runs with the preview off.
   `end` (0.10 / 0.25 of the peak), 0 outside its slope / altitude band. (A box, not an attractor point: a point
   thinned every climate around its peak.)
   Each species' density at the candidate: Density x fit x its cluster fbm x (fit / the BEST fit there) ^
-  `Climate sharpness` (4). The candidate exists with probability (the summed densities) x the cell's hectares x
-  `Density scale` (so at most one tree per cell: 400 / ha at 5 m); its species is picked by share. **Species that
-  share a climate ADD**: a rare species in a dense one's box (Willow in Oak's) takes nothing away from it. (Picking
-  by Density x fit let a dense species' tail outnumber a sparse one's core; normalizing by the SUM halved an
-  equal-fit species.) **GRASSLANDS** ("Grassland share", 0.5; "Grassland size (m)", 800): a world fbm (3 octaves at
+  `Climate sharpness` (4). The candidate exists with probability (the densities' SELF-WEIGHTED MEAN: sum d^2 / sum d)
+  x the cell's hectares x `Density scale` (so at most one tree per cell: 400 / ha at 5 m); its species is picked by
+  share. **OVERLAPS KEEP THE DENSITY**: one species alone keeps its own, two fitting boxes about their mean (an
+  oak-birch band no longer grows ~2x the trees), and a rare species in a dense one's box (Willow, 1 / ha, in Oak's
+  90) takes almost nothing away from it - the dense one's density dominates the mean. (The SUM doubled the trees in
+  every overlap; picking by Density x fit let a dense species' tail outnumber a sparse one's core; normalizing by
+  the sum halved an equal-fit species.) **GRASSLANDS** ("Grassland share", 0.5; "Grassland size (m)", 800): a world fbm (3 octaves at
   that scale, its own seed) below a threshold is open land - every species' density x 0 there, x 1 elsewhere over a
   narrow edge (+-0.02 of the noise) - so whatever the climate there are open plains, and the forests between them keep
   their FULL density (lowering the density thinned every forest instead). In the open, "Grassland trees" (t, 0.5)
@@ -590,11 +592,14 @@ before its `Enabled` check: it runs with the preview off.
   chains: a chunk evaluates the neighbours' candidates within `ceil(max spacing / cell)` cells of it exactly as they
   do, and both sides of a border agree. The field and river grids widen their halo to that reach (the same world
   points: no value inside changes). Placeholders: Elm 11, Cedar 9, Acacia 6, Oak / Willow 5, Pine / Birch 3 m; without
-  any spacing the chunks place what they did before. **FOREST TYPES** ("Forest type size (m)", 600; "Forest minority", 0.15): one species DOMINATES a
-  stand - each species has a large-scale noise (its own seed, 2 octaves at that size); of the species present at a
-  point the highest noise wins, the others x the minority factor (fully once 0.06 of the noise behind the winner: a
-  soft border between stands), then all rescaled to the same total - which trees grow changes, not how many (birch
-  forests among the oaks' and pines' edges, not every species in every wood; 1 = off). Bushes are not stored. No tree or rock where the river influence is above "Terrain/Rivers/
+  any spacing the chunks place what they did before. **FOREST TYPES** ("Forest type size (m)", 600; "Forest minority", 0.05): one species DOMINATES a
+  stand - each species has a large-scale noise (its own seed, 2 octaves at that size); of the COMPETING species at a
+  point (those with at least 0.25 x the densest one's density there) the highest noise wins, the others x the minority
+  factor (fully once 0.06 of the noise behind the winner: a soft border between stands), then the competitors rescaled
+  to their own total - which trees grow changes, not how many (birch forests among the oaks' and pines' edges, not
+  every species in every wood; 1 = off). A RARE species (Willow, 1 / ha, among Oak's 90) does not compete: it keeps its
+  own density everywhere (competing, a won willow stand cut the oaks to the minority, and the rescale made ~1 tree in
+  6 a willow). Bushes are not stored. No tree or rock where the river influence is above "Terrain/Rivers/
   Vegetation clear" (except rock rules with a River term, below).
   **The existence roll goes FIRST** (exact, the same result): a tree candidate whose roll is above the species'
   summed `Density` x the cell's hectares, or a rock cell whose roll is above its type's bound (every rule's `Density`

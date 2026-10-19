@@ -789,8 +789,8 @@ namespace Procedural
 		// start" and "end" (fractions of the peak - no long tail of lone trees far from its forests), 0 where its slope /
 		// altitude gates exclude it - then its own density x its fit x its forest patches, suppressed by its fit RELATIVE
 		// TO THE BEST-FITTING species, sharpened ("Climate sharpness": (fit / best)^k) - a dense species' tail does not
-		// reach into a sparse one's core (pines among the acacias), and species sharing a climate ADD (a rare willow among
-		// the oaks takes no oaks away). The tree pass picks by it; the rocks' FOREST term reads the sum.
+		// reach into a sparse one's core (pines among the acacias); species sharing a climate keep the density (their
+		// self-weighted mean, below). The tree pass picks by it; the rocks' FOREST term reads the total.
 		// GRASSLANDS ("Grassland share" / "size"): a world noise below its threshold is open land, the forests between
 		// keep their density (x 1 past a narrow edge). In the open, "Grassland trees" (t) keeps the most of:
 		// - COPSES: a finer noise (1/8 of the size) above 0.8 - 0.15 t: small groves at 0.7 of the forest's density;
@@ -871,29 +871,56 @@ namespace Procedural
 				weights[s] = density;
 				total += density;
 			}
+			// OVERLAPS keep the density: the species' densities are AVERAGED (each weighted by itself), not summed - one
+			// species alone keeps its own, two fitting boxes their mean (summed, an oak-birch band grew ~2x the trees).
+			// The shares stay.
+			if (total > 0.0f)
+			{
+				float squares = 0.0f;
+				for (size_t s = 0; s < config.species.size(); ++s)
+					squares += weights[s] * weights[s];
+				const float mean = squares / total;
+				for (size_t s = 0; s < config.species.size(); ++s)
+					weights[s] *= mean / total;
+				total = mean;
+			}
 			// FOREST TYPES ("Forest type size", "Forest minority"): one species DOMINATES a stand - each species has a
 			// large-scale noise; of those present here the highest noise wins, the others x the minority factor (fully
 			// once 0.06 of the noise behind the winner: a soft border between stands), then all rescaled to the same total
 			// - which trees grow changes, not how many.
+			// Only the species of COMPARABLE density compete (at least FOREST_TYPE_RIVAL x the densest here): a rare one
+			// (Willow, 1 / ha, among Oak's 90) neither wins stands nor is suppressed - it keeps its own density. (Competing,
+			// a won willow stand cut the oaks to the minority and the rescale made ~1 tree in 6 a willow.)
+			constexpr float FOREST_TYPE_RIVAL = 0.25f;
 			if (config.forestMinority < 1.0f && total > 0.0f)
 			{
-				float bestScore = -1.0f;
+				float densest = 0.0f;
 				for (size_t s = 0; s < config.species.size(); ++s)
-					if (weights[s] > 0.0f)
-					{
-						scores[s] = forestTypeNoise[s].fbm(world.x / config.forestTypeSize, world.y / config.forestTypeSize, 2) * 0.5f + 0.5f;
-						bestScore = glm::max(bestScore, scores[s]);
-					}
+					densest = glm::max(densest, weights[s]);
+				const float rival = densest * FOREST_TYPE_RIVAL;
+				// scores[s] < 0: not a competitor (left as it is).
+				float bestScore = -1.0f, before = 0.0f;
+				for (size_t s = 0; s < config.species.size(); ++s)
+				{
+					scores[s] = -1.0f;
+					if (weights[s] <= 0.0f || weights[s] < rival)
+						continue;
+					scores[s] = forestTypeNoise[s].fbm(world.x / config.forestTypeSize, world.y / config.forestTypeSize, 2) * 0.5f + 0.5f;
+					bestScore = glm::max(bestScore, scores[s]);
+					before += weights[s];
+				}
 				float sum = 0.0f;
 				for (size_t s = 0; s < config.species.size(); ++s)
-					if (weights[s] > 0.0f)
+					if (scores[s] >= 0.0f)
 					{
 						weights[s] *= glm::mix(1.0f, config.forestMinority, glm::clamp((bestScore - scores[s]) / 0.06f, 0.0f, 1.0f));
 						sum += weights[s];
 					}
-				const float rescale = total / glm::max(sum, 1e-6f);
+				// The competitors rescaled to their own total: which of them grows changes, not how many.
+				const float rescale = before / glm::max(sum, 1e-6f);
 				for (size_t s = 0; s < config.species.size(); ++s)
-					weights[s] *= rescale;
+					if (scores[s] >= 0.0f)
+						weights[s] *= rescale;
 			}
 			return total;
 		};

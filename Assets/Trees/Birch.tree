@@ -96,7 +96,7 @@ TreeSpecies Birch
 		Bushes 3
 		Radius 7
 	Placement
-		Density 80
+		Density 90
 		Temperature 4 8
 		Precipitation 600 1800
 		ClimateWidth 0.04

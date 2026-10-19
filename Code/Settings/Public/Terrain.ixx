@@ -282,7 +282,7 @@ export struct TerrainSettings
 	float riverCarveReach = 1500.0f;  // model m: how far the valley wall may run past the floodplain's edge (fades out over it)
 	float riverCarveReachQ = 50.0f;    // m3/s: a river this big gets the whole reach; a smaller one (Q / this)^exponent of it
 	float riverCarveReachQExponent = 0.1f; // higher = a small stream's valley narrower
-	float riverVegetationClear = 0.97f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
+	float riverVegetationClear = 0.4f;  // trees and rocks keep out where the river influence (1 channel .. 0 floodplain edge) is above this
 	bool  riverDebugLines = false;     // draw the units around the camera as debug lines
 	float riverDebugRadius = 3000.0f;  // engine m
 	// "Terrain/Rivers/Surface": the water the RiverSurface pipeline draws (RendererVK EPipelineIndex::River,

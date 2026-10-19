@@ -101,7 +101,7 @@ TreeSpecies Cedar
 		Bushes 2
 		Radius 12
 	Placement
-		Density 10
+		Density 5
 		Temperature 9 16
 		Precipitation 350 850
 		ClimateWidth 0.04

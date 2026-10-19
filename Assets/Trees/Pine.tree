@@ -93,7 +93,7 @@ TreeSpecies Pine
 		Bushes 4
 		Radius 8
 	Placement
-		Density 90
+		Density 95
 		Temperature -6 3
 		Precipitation 600 2200
 		ClimateWidth 0.04

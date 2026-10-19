@@ -99,7 +99,7 @@ TreeSpecies BirchClump
 		Bushes 2
 		Radius 7
 	Placement
-		Density 50
+		Density 60
 		Temperature 4 8
 		Precipitation 600 1800
 		ClimateWidth 0.04

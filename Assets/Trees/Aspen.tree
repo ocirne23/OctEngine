@@ -101,7 +101,7 @@ TreeSpecies Aspen
 		Bushes 3
 		Radius 7
 	Placement
-		Density 90
+		Density 100
 		Temperature 2 5
 		Precipitation 450 1400
 		ClimateWidth 0.03
