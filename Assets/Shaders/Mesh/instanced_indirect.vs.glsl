@@ -86,7 +86,11 @@ void main()
     vec3 windPrevDelta = vec3(0.0);
     uint windPayload;
     if (treeWindPayload(in_tangent.w, windPayload))
-        pos += treeWind(in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windPrevDelta);
+    {
+        // A tree record (the main cull): prevPosScale = (trunk scale, branch scale, 1, 0) - its species' `Wind`.
+        const vec2 windScale = inst.prevPosScale.w <= 0.0 && inst.prevPosScale.z > 0.5 ? inst.prevPosScale.xy : vec2(1.0);
+        pos += treeWind(in_posU.xyz, inst_pos, inst_scale, normal, windPayload, windScale, windPrevDelta);
+    }
 
     out_posU   = vec4(pos, in_posU.w);
     out_normalV = vec4(normal, in_normalV.w);

@@ -87,6 +87,8 @@ TreeSpecies Pine
 	Color
 		Bark 0.28 0.20 0.15
 		Leaf 0.12 0.26 0.13
+	Wind
+		Trunk 0.8
 	Undergrowth
 		Bushes 4
 		Radius 8

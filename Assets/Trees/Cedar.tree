@@ -94,6 +94,9 @@ TreeSpecies Cedar
 	Color
 		Bark 0.30 0.27 0.25
 		Leaf 0.20 0.33 0.15
+	Wind
+		Trunk 0.4
+		Branch 0.7
 	Undergrowth
 		Bushes 2
 		Radius 12

@@ -45,7 +45,7 @@ struct TreeCullType
     float midDistance;             // the mid tier's switch distance (m; x u_present_treeFarScale); 0 = no mid tier
     float midFadeWidth;
     float shadowDistance;          // m from the cascades' centre beyond which it casts no sun shadow; 0 = no limit
-    uint pad0;
+    uint wind;                     // x the trunk bend | x the branch sway << 16, 4.12 fixed point (treeCullWind)
 };
 
 struct TreeCullPiece
@@ -67,6 +67,13 @@ const uint TREE_CULL_ABSENT = 0xFFFFFFFFu;
 bool treeCullIsTree(uint instanceIdx) { return instanceIdx - u_present_treeRangeBase < u_present_treeRangeLength; } // unsigned: below base wraps
 
 TreeCullRecord treeCullNone() { return TreeCullRecord(TREE_CULL_ABSENT, 0u); }
+
+// A type's wind scales (the species' `Wind` block): x = the trunk bend, y = the branch sway.
+vec2 treeCullWind(uint typeIdx)
+{
+    const uint w = in_treeTypes[typeIdx].wind;
+    return vec2(float(w & 0xFFFFu), float(w >> 16)) * (1.0 / 4096.0);
+}
 
 // A thread / slot -> its stream instance, when the first `listed` entries of the tree list take one thread each: the
 // stream below the range, then the listed pieces, then the stream above the range. The LIST (in_treeList, this frame's,

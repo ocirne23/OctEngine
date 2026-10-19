@@ -817,10 +817,15 @@ namespace
 				float az = (float)i * GOLDEN_ANGLE + rng.signed1() * 0.3f;
 				// A forked stem fills its own SECTOR of the clump: centred on its outward direction, 1.2 x its share of the
 				// circle, an even golden-ratio fill of it - the stems' limbs fan out around the tree, not over each other
-				// (each stem's own full golden circle put limbs of neighbouring stems in the same directions).
-				if (fork > 0.0f && glm::dot(outward, outward) > 0.0f)
+				// (each stem's own full golden circle put limbs of neighbouring stems in the same directions). A clump from the
+				// ground (no fork) takes 1.3 x its share, at most 0.65 of the circle: a few limbs past the side of its stem
+				// into the clump's middle (exactly the share left a gap between two stems). Its sector opens to the full circle
+				// over the upper half of its crown: the stems lean apart there and the limbs are small.
+				if (stems > 1 && glm::dot(outward, outward) > 0.0f)
 				{
-					const float sector = TWO_PI / (float)stems * 1.2f;
+					const float share = TWO_PI / (float)stems;
+					const float sector = fork > 0.0f ? share * 1.2f
+						: glm::mix(glm::min(share * 1.3f, TWO_PI * 0.65f), TWO_PI, glm::smoothstep(0.5f, 1.0f, h));
 					const float f = (float)i * 0.618034f;
 					az = std::atan2(outward.z, outward.x) + (f - std::floor(f) - 0.5f) * sector + rng.signed1() * 0.05f;
 				}
@@ -1426,9 +1431,10 @@ namespace Procedural
 		};
 		for (uint32 p = 0; p < (uint32)placements.size(); ++p)
 		{
-			const TreePiecePlacement& placement = placements[p];
+			TreePiecePlacement& placement = placements[p];
 			const TreePiece& piece = placement.trunk ? library.trunks[placement.pieceIdx] : library.modules[placement.pieceIdx];
-			const uint32 windPhase = placement.trunk ? 0u : (treeHash(seed, 7000u + p) & 7u) << TREE_WIND_MODULE_PHASE_SHIFT;
+			placement.windPhase = placement.trunk ? (uint8)0 : (uint8)(treeHash(seed, 7000u + p) & 7u);
+			const uint32 windPhase = (uint32)placement.windPhase << TREE_WIND_MODULE_PHASE_SHIFT;
 			for (uint32 lod = 0; lod < TREE_PIECE_LODS; ++lod)
 			{
 				append(out.bark[lod], piece.bark[lod], placement.local, windPhase);

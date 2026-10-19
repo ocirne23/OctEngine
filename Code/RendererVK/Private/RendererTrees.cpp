@@ -48,7 +48,7 @@ namespace
         float midDistance = 0.0f; // the mid tier from here (m; x the scale); 0 = none
         float midFadeWidth = 1.0f;
         float shadowDistance = 0.0f; // no sun shadow beyond this from the cascades' centre (m); 0 = no limit
-        uint32 pad0 = 0;
+        uint32 wind = 0;             // x the trunk bend | x the branch sway << 16, each 4.12 fixed point (tree_wind.inc.glsl)
     };
     static_assert(sizeof(TreeCullTypeGpu) == 96);
 
@@ -263,6 +263,8 @@ void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanc
         gpu.midDistance = mid ? type.midDistance : 0.0f;
         gpu.midFadeWidth = type.midFadeWidth;
         gpu.shadowDistance = type.shadowDistance;
+        auto fixed = [](float v) { return (uint32)std::round(glm::clamp(v, 0.0f, 15.99f) * 4096.0f); };
+        gpu.wind = fixed(type.windTrunk) | (fixed(type.windBranch) << 16);
     }
 
     // RT-CAPABLE types: their RT representation (tree_cull.inc.glsl treeCullRtPiece: the billboard, else the leaves,

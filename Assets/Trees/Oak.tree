@@ -89,6 +89,8 @@ TreeSpecies Oak
 	Color
 		Bark 0.30 0.23 0.17
 		Leaf 0.20 0.36 0.10
+	Wind
+		Trunk 0.9
 	Undergrowth
 		Bushes 4
 		Radius 8

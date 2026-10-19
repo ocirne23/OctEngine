@@ -87,10 +87,11 @@ bool foliageCrownFrame(vec3 pos, vec3 cardDu, vec3 cardDv, vec2 uv, uint flags, 
 	axis = cardDu / uLen;
 	// The MERGED branch cards (one mesh of many modules' cards per tree): the instance origin is the tree's, not the
 	// card's module, so the card carries its axis instead - |tangent.w| = 3 + the texture v of its module's axis line
-	// (Procedural billboardMesh, RenderMeshData). The crown centre is the card's u centre moved along v onto that line.
+	// (Procedural billboardMesh, RenderMeshData), + 4 x the card's wind (tree_wind.inc.glsl). The crown centre is the
+	// card's u centre moved along v onto that line.
 	const float axisCode = stripCode;
 	if (axisCode >= 3.0) // the axis code (>= 3), not the strip code (2 .. 3)
-		centre = pos + cardDu * (0.5 - uv.x) + cardDv * (axisCode - 3.0 - uv.y);
+		centre = pos + cardDu * (0.5 - uv.x) + cardDv * (mod(axisCode - 3.0, 4.0) - uv.y);
 	else
 		centre = in_instanceOrigin + axis * dot(pos + cardDu * (0.5 - uv.x) - in_instanceOrigin, axis);
 	return true;

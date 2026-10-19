@@ -336,21 +336,31 @@ which mean "tree" too; 1 = no wind). The layers:
 
 * **Trunk** - lean ("Bend" x speed²) + sway, x (local height / "Reference height (m)")², the vertex dropping so the
   tree keeps its length. From the mesh-local height alone, so the mesh, the merged branch cards and the whole-tree
-  billboard bend alike (crossfades stay aligned). The only layer of the cards / billboards and of the shadow pass.
-* **Branch** - meshes only, faded out between "Branch fade start (m)" and "Branch fade end (m)" (40 / 70 m, before
+  billboard bend alike (crossfades stay aligned). The only layer of the whole-tree billboards and of the shadow pass.
+* **Branch** - meshes, faded out between "Branch fade start (m)" and "Branch fade end (m)" (40 / 70 m, before
   the mid tier): the module bends with the placement's phase, the level-1 sub-branch on top with its own (both
-  weights 0 at their root: continuous joints).
+  weights 0 at their root: continuous joints). The mid tier's BRANCH CARDS get the module bend too, NOT faded (they
+  stand beyond the fade; without it the mid tier only leaned with the trunk): |tangent w| = 3 + the axis code (< 1) +
+  4 x (weight | phase << 4) - a 4-bit weight along the card's module (0 at its root) and the module placement's phase
+  (the mesh's own, so card and mesh sway alike), decoded by `treeWindPayload` into the module bits plus
+  `TREE_WIND_CARD_BIT`; the lit FS reads the axis code as `mod(|w| - 3, 4)`.
 * **Leaf** - the leaf cards' tip vertices along the card normal, a phase per card, faded out by "Leaf fade end (m)".
 * **Billboard waves** (instanced_indirect_foliage.fs.glsl, `treeWindBillboardUv`) - a whole-tree billboard (strip
   code: |tangent w| in [2, 3)) cannot bend its branches, so its TEXTURE lookup moves: two crossing waves over the card,
   growing toward the card's top (on the horizontal card toward its rim) from a still base, x the wind and "Billboard
   waves" (0.012 of the card), clamped into the card's own strip. Albedo, alpha (the outline ripples too) and normal use
   the moved coordinate (`texUv`); the card frame's derivatives and the crown math keep `uv`. Not in the shadow pass and
-  not in the motion vectors (a texture-space motion). The branch cards (axis code) keep still.
+  not in the motion vectors (a texture-space motion). The branch cards (axis code) get no texture waves (their vertices bend, above).
+
+**Per species** (`.tree` `Wind Trunk / Branch`): `TreeCullType::wind` holds the two scales (4.12 fixed point each,
+`treeCullWind`). The main cull writes them into a tree record's `prevPosScale` = (trunk, branch, 1, 0) - a tree never
+moves, so w = 0 and xyz were free; the VS takes them when w = 0 and z = 1, else 1. The shadow cull packs the trunk
+scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (the cascade mask is the low 8 bits). Both culls grow the wind
+reach by the larger scale above 1. The billboard waves and the leaf flutter keep the global settings.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's
 offset minus this frame's (`u_foliage_windPrevTime`) to the motion vector. `shadow_depth.vs` applies the trunk layer
-to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`; the cascade mask is the low 15 bits).
+to casters the shadow cull marks as trees (bit 15 of `alphaTexIdxCascadeMask`).
 Both culls grow a tree's bound by `u_foliage_windReach` (the reach at the strongest gust, from the UBO build). Beyond
 "Trunk fade end (m)" (3 km, a 100 m band) nothing. **The TLAS stays static**: RT shadows / GI / reflections see
 unswayed trees.

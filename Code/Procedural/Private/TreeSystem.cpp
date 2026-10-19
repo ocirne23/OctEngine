@@ -808,14 +808,21 @@ namespace Procedural
 				const Transform& t = placement.local;
 				const float block = (float)placement.pieceIdx;
 				const uint32 base = merged.numVertices();
+				// The wind: a weight along the module's +Y (0 at its root, 15 at the cards' top end) and the placement's
+				// phase, as the module mesh's own branch sway (TREE_CARD_WIND_STEP).
+				float top = 1e-3f;
+				for (const glm::vec3& p : src.positions)
+					top = glm::max(top, p.y);
 				for (uint32 k = 0; k < src.numVertices(); ++k)
 				{
+					const uint32 windWeight = (uint32)std::round(glm::clamp(src.positions[k].y / top, 0.0f, 1.0f) * 15.0f);
+					const float wind = TREE_CARD_WIND_STEP * (float)(windWeight | ((uint32)placement.windPhase << 4));
 					merged.positions.push_back(t.transformPoint(src.positions[k]));
 					merged.normals.push_back(t.quat * src.normals[k]); // uniform scale: directions only rotate
 					merged.tangents.push_back(t.quat * src.tangents[k]);
 					merged.bitangents.push_back(t.quat * src.bitangents[k]);
 					const glm::vec3 uv = src.texCoords[k];
-					const float axisZ = uv.z >= 2.0f ? TREE_CARD_AXIS_CODE + (block + (uv.z - TREE_CARD_AXIS_CODE)) * invModules : 0.0f;
+					const float axisZ = uv.z >= 2.0f ? TREE_CARD_AXIS_CODE + (block + (uv.z - TREE_CARD_AXIS_CODE)) * invModules + wind : 0.0f;
 					merged.texCoords.push_back(glm::vec3(uv.x, (block + uv.y) * invModules, axisZ));
 					merged.bones.push_back(0);
 				}
@@ -896,6 +903,8 @@ namespace Procedural
 					}
 					if (species.desc.bush)
 						type.shadowDistance = m_settings.bushShadowDistance;
+					type.windTrunk = species.desc.windTrunk;
+					type.windBranch = species.desc.windBranch;
 					typeOf.emplace(&meshes, (uint32)gpuTypes.size());
 					gpuTypes.push_back(type);
 				}

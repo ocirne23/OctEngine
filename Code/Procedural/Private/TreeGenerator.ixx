@@ -60,6 +60,7 @@ export namespace Procedural
 		uint16 pieceIdx = 0;
 		bool trunk = false;
 		Transform local;
+		uint8 windPhase = 0; // a module's wind phase (0..7, bakeTreeVariant): its mesh and its branch cards sway alike
 	};
 
 	struct TreePiece

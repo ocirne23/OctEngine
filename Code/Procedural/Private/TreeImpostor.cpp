@@ -13,7 +13,7 @@ namespace
 	constexpr uint32 SUPERSAMPLE = 2; // per axis; coverage alpha comes from the 2x2 subsamples
 	// Bump when the bake OR the tree generator's geometry changes: cached billboards re-bake (treeBakeHash names them
 	// by their inputs, not by the geometry).
-	constexpr uint32 BAKE_VERSION = 23;
+	constexpr uint32 BAKE_VERSION = 27;
 
 	glm::vec3 sampleWrap(const TreeBakeImage& image, glm::vec2 uv, float& outAlpha)
 	{

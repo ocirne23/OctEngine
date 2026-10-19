@@ -106,13 +106,15 @@ bool frustumCheck(vec3 pos, float radius)
     return true;
 }
 
-void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree)
+// `treeWind`: a tree's wind scales (treeCullWind; the reach grows with the larger one above 1).
+void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosScale, vec4 quat, uint stateSlot, bool isTree, vec2 treeWind)
 {
     uint meshIdx              = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo = in_meshInfos[meshIdx];
     const vec3 centerOffset   = quat_transform(meshInfo.center * instancePosScale.w, quat);
     const bool isRock         = isTree && (instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_LIT_ROCK; // tree-set rocks: LOD chain, no wind
-    const float radius        = meshInfo.radius * instancePosScale.w + (isTree && !isRock ? u_foliage_windReach : 0.0);
+    const float radius        = meshInfo.radius * instancePosScale.w
+                              + (isTree && !isRock ? u_foliage_windReach * max(max(treeWind.x, treeWind.y), 1.0) : 0.0);
     const vec3 centerPos      = instancePosScale.xyz + centerOffset;
 
     // The ocean mesh is undisplaced: pad by the measured wave displacement. Frustum test only.
@@ -204,7 +206,8 @@ void cullInstance(uint instanceIdx, InMeshInstance instance, vec4 instancePosSca
             }
         }
 
-        vec4 prevPosScale = vec4(0.0); // trees never move
+        // Trees never move: w = 0, and xyz carries the wind scales + a flag (instanced_indirect.vs.glsl).
+        vec4 prevPosScale = isTree ? vec4(treeWind, 1.0, 0.0) : vec4(0.0);
         uvec2 prevQuat = uvec2(0u);
         if (!isTree)
             prevInstanceTransform(instance, prevPosScale, prevQuat);
@@ -232,6 +235,7 @@ void main()
     // One loop for trees and plain instances (k = 0), so cullInstance is inlined once.
     TreeCullPiecePick pick;
     InMeshInstance instance;
+    vec2 treeWind = vec2(1.0);
     if (isTree)
     {
         if ((passBits & PASS_MAIN) == 0u)
@@ -240,6 +244,7 @@ void main()
             return;
         if (!treeCullMainPiece(pieceIdx, pick))
             return;
+        treeWind = treeCullWind(pick.typeIdx);
     }
     else
     {
@@ -261,6 +266,6 @@ void main()
                 continue;
             instance = InMeshInstance(0u, 0u, rec.meshMaterial, rec.pipelineAlpha);
         }
-        cullInstance(instanceIdx + k, instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree);
+        cullInstance(instanceIdx + k, instance, pick.posScale, pick.quat, pick.lodStateBase + k, isTree, treeWind);
     }
 }

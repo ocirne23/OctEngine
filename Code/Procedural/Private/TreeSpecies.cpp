@@ -134,6 +134,13 @@ namespace Procedural
 			readFloat(*undergrowth, "Bushes", out.undergrowthBushes);
 			readFloat(*undergrowth, "Radius", out.undergrowthRadius);
 		}
+		if (const AssetNode* wind = species->find("Wind"))
+		{
+			readFloat(*wind, "Trunk", out.windTrunk);
+			readFloat(*wind, "Branch", out.windBranch);
+			out.windTrunk = glm::clamp(out.windTrunk, 0.0f, 4.0f);
+			out.windBranch = glm::clamp(out.windBranch, 0.0f, 4.0f);
+		}
 
 		if (const AssetNode* trunk = species->find("Trunk"))
 		{

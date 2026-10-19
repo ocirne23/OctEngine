@@ -8,8 +8,9 @@
 //   TRUNK  - the whole tree leans downwind and sways, the offset growing with (height / ref height)^2 and the tree
 //            dropping slightly so it keeps its length. From the mesh-local height alone, so the mesh, the merged branch
 //            cards and the whole-tree billboard bend alike (the crossfades stay aligned).
-//   BRANCH - meshes only: per-vertex weights + phases from the bake (Procedural TreeGenerator), each branch bending as one
-//            unit; faded out before the mid tier's cards ("Branch fade").
+//   BRANCH - meshes: per-vertex weights + phases from the bake (Procedural TreeGenerator), each branch bending as one
+//            unit; faded out before the mid tier's cards ("Branch fade"). The mid tier's branch cards: the module bend
+//            only, with their module's phase, NOT faded (they stand beyond the fade).
 //   LEAF   - leaf cards only: the card's tip flutters along its normal; faded out sooner ("Leaf fade").
 //
 // THE PAYLOAD rides the tangent's w MAGNITUDE (RenderMeshData: texCoords.z), its sign staying the handedness:
@@ -19,11 +20,15 @@
 //                      bits 7..12  the sub-branch weight (0 .. 63 along its level-1 bone)
 //                      bits 13..16 the sub-branch phase, bits 17..19 the module placement's phase
 //                      bit 20      a leaf card's TIP vertex (flutters), bit 21 = TREE_WIND_BIT (always set)
-//   |w| >= 2         the tree billboards' / branch cards' strip and axis codes (lit FS): the trunk bend only
+//   |w| in [2, 3)    the tree billboards' strip code (lit FS): the trunk bend only
+//   |w| >= 3         the merged branch cards: 3 + the axis code (< 1, lit FS) + 4 x (weight | phase << 4) - the 4-bit
+//                    weight along the card's module (0 at its root), the module placement's 3-bit phase (Procedural
+//                    TreeSystem, TREE_CARD_WIND_STEP); decoded into the module weight + phase bits + TREE_WIND_CARD_BIT
 // Requires the UBO and mathutils.inc.glsl (shared.inc.glsl).
 
 #define TREE_WIND_BIT (1u << 21)
 #define TREE_WIND_TIP_BIT (1u << 20)
+#define TREE_WIND_CARD_BIT (1u << 22)
 #define TREE_WIND_TAU 6.2831853
 
 // False for a mesh without wind; payload 0 = the trunk bend only.
@@ -31,6 +36,12 @@ bool treeWindPayload(float tangentW, out uint payload)
 {
     const float m = abs(tangentW);
     payload = 0u;
+    if (m >= 3.0)
+    {
+        const uint card = uint(floor((m - 3.0) * 0.25));
+        payload = ((card & 15u) * 127u + 7u) / 15u | ((card >> 4) & 7u) << 17 | TREE_WIND_BIT | TREE_WIND_CARD_BIT;
+        return true;
+    }
     if (m >= 2.0)
         return true;
     if (m <= 1.0)
@@ -55,8 +66,9 @@ float treeWindTrunkFade(float dist)
 }
 
 // The world-space offset of a tree vertex at `time`. localPos = the mesh-local position (+Y up from the tree's base),
-// worldNormal = the vertex normal in world space (the leaf flutter), dist = the tree's distance from the camera.
-vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, float dist, float time)
+// worldNormal = the vertex normal in world space (the leaf flutter), dist = the tree's distance from the camera,
+// scale = the species' `Wind` (x the trunk lean + sway, y the branch sway; the leaf flutter keeps its own).
+vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, float dist, float time, vec2 scale)
 {
     vec2 dir;
     const float speed = vegetationWind(instPos.xz, time, dir);
@@ -67,7 +79,7 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
     // TRUNK: lean + sway, x (height / ref height)^2; the drop keeps the length (to first order).
     const float height = max(localPos.y, 0.0) * instScale;
     const float t = height * u_foliage_windInvRefHeight;
-    const float lean = u_foliage_windBend * speed * speed;
+    const float lean = u_foliage_windBend * speed * speed * scale.x;
     const float sway = lean * u_foliage_windSway;
     const float swayAngle = time * TREE_WIND_TAU * u_foliage_windSwayHz * (0.85 + 0.3 * treeRand) + phase;
     const float downwind = (lean + sway * sin(swayAngle)) * t * t;
@@ -79,7 +91,8 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
 
     // BRANCH: the module bends with its own phase, the sub-branch on top with its own (continuous at the joint: a
     // sub-branch's base has weight 0 and the module's weight there).
-    const float branchFade = 1.0 - smoothstep(u_foliage_windBranchFadeStart, u_foliage_windBranchFadeEnd, dist);
+    const float branchFade = (payload & TREE_WIND_CARD_BIT) != 0u ? 1.0
+        : 1.0 - smoothstep(u_foliage_windBranchFadeStart, u_foliage_windBranchFadeEnd, dist);
     if (branchFade > 0.0)
     {
         const float rootW = float(payload & 127u) * (1.0 / 127.0);
@@ -91,7 +104,7 @@ vec3 treeWindOffset(vec3 localPos, vec3 instPos, float instScale, vec3 worldNorm
         const float oscBone = sin(branchAngle * 1.7 + bonePhase);
         const float root2 = rootW * rootW;
         const float bone2 = boneW * boneW;
-        const float amplitude = u_foliage_windBranch * speed * instScale * branchFade;
+        const float amplitude = u_foliage_windBranch * speed * instScale * branchFade * scale.y;
         const float push = root2 * (0.6 + 0.4 * oscModule) + bone2 * (0.3 + 0.3 * oscBone);
         const float bob = 0.35 * (root2 * oscModule + bone2 * oscBone);
         const float lateral = 0.3 * root2 * sin(branchAngle * 0.8 + modulePhase + 1.0);
@@ -143,15 +156,15 @@ vec2 treeWindBillboardUv(vec2 uv, float tangentW, vec3 instanceOrigin, vec3 norm
 }
 
 // The whole wind for a vertex: `outPrevDelta` = last frame's offset minus this frame's (the motion vectors).
-vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, out vec3 outPrevDelta)
+vec3 treeWind(vec3 localPos, vec3 instPos, float instScale, vec3 worldNormal, uint payload, vec2 scale, out vec3 outPrevDelta)
 {
     outPrevDelta = vec3(0.0);
     const float dist = distance(instPos, u_views_viewPos[VIEW_CENTER].xyz);
     const float fade = treeWindTrunkFade(dist);
     if (fade <= 0.0)
         return vec3(0.0);
-    const vec3 now = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_timeSeconds) * fade;
-    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_foliage_windPrevTime) * fade - now;
+    const vec3 now = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_timeSeconds, scale) * fade;
+    outPrevDelta = treeWindOffset(localPos, instPos, instScale, worldNormal, payload, dist, u_foliage_windPrevTime, scale) * fade - now;
     return now;
 }
 

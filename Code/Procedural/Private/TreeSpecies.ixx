@@ -96,6 +96,10 @@ export namespace Procedural
 		// to `Radius` m from it. < 0 = "Trees/Bushes per tree" / 0.75 x "Trees/Spacing (m)".
 		float undergrowthBushes = -1.0f;
 		float undergrowthRadius = -1.0f;
+		// `Wind` block: x the trunk bend (`Trunk`: the whole tree's lean and sway, its shadow too) and x the branch sway
+		// (`Branch`: the module bend of the meshes and the branch cards), 0..4. A large tree with heavy limbs: < 1.
+		float windTrunk = 1.0f;
+		float windBranch = 1.0f;
 		TreePlacementDesc placement;
 
 		// Trunks

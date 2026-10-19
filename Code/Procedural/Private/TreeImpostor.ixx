@@ -73,6 +73,9 @@ export namespace Procedural
 	void billboardMesh(const TreeBillboardBox& box, uint32 size, uint32 numViews, bool horizontal, TreeMesh& out, bool axisInZ = false,
 		float topCardHeight = 0.5f);
 	constexpr float TREE_CARD_AXIS_CODE = 3.0f; // keep in step with instanced_indirect_foliage.fs.glsl's foliageCrownFrame
+	// The merged branch cards' WIND on top of the axis code: + this x (weight | phase << 4) - the vertex's 4-bit weight
+	// along its module (0 at the root, 15 at the tip) and its placement's 3-bit phase (tree_wind.inc.glsl treeWindPayload).
+	constexpr float TREE_CARD_WIND_STEP = 4.0f;
 	// Every other card: this + its strip height in texture v (< 1): the FS's crown ellipsoid needs the card's width.
 	constexpr float TREE_CARD_STRIP_CODE = 2.0f;
 

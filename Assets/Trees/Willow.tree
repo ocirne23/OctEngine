@@ -95,6 +95,8 @@ TreeSpecies Willow
 	Color
 		Bark 0.30 0.25 0.19
 		Leaf 0.42 0.47 0.15
+	Wind
+		Trunk 0.7
 	Placement
 		Density 1
 		Temperature 11 18

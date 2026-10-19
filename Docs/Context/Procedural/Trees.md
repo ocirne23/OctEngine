@@ -37,6 +37,7 @@ TreeSpecies <name>
 	        which the CPU and the far volume's GPU mirror both pick from uniformly; a tree's list holds at most
 	        `TREE_RECORD_MAX_BUSHES` = 8 entries in the far volume)
 	Undergrowth { Bushes (per tree, the fraction by chance) · Radius (m: out to this from the tree, at least 1.5) }
+	Wind { Trunk (x the trunk lean + sway, 0..4, default 1) · Branch (x the branch sway, meshes + branch cards) }
 	        (a Tree; absent = "Trees/Bushes per tree" and 0.75 x "Trees/Spacing (m)"; the far volume reads it per
 	        record type)
 	Trunk   Count (1..64) · Height min max · Radius · Taper (tip/base) · Flare · Sink (m below the base, default 0.5)
@@ -271,8 +272,13 @@ of the stem's end); `Leader` is ignored. Off (count < 2) a stem draws its random
 **MULTI-STEM TRUNKS** (`Trunk Stems`, `generateTrunk`): a trunk piece of n > 1 stems spaces them evenly around the
 base (a random start azimuth, +-0.4 rad each), each `Radius` thick, leaning out, the first the full height and the
 others 0.7..0.95 of it (with a `Fork` every stem 0.7..0.95: one full-height stem stood out of the crown). `Crown Slots` are split between the stems by their LENGTH (each its own crown, `Tiers` within it; an even split left
-the tallest stem's layers sparse - lopsided cedars), and a slot
-facing into the clump is shortened to 0.5 of its length (facing out: 1) - the crowns share the middle. Each stem gets
+the tallest stem's layers sparse - lopsided cedars). Each stem's limbs fill a SECTOR centred on its outward direction
+(a golden-ratio fill): 1.2 x its share of the circle with a `Fork`, 1.3 x its share (at most 0.65 of the circle) without one - a few
+limbs past the side of its stem into the clump's middle (a full circle per stem, and 1.6 x the share, crossed the
+limbs of a birch clump there; exactly the share split a two-stem clump in the middle). Without a fork the sector opens to the full circle over
+the upper half of the stem's crown (smoothstep 0.5..1 of the slot height): the stems lean apart there and the limbs
+are small. A slot
+facing into the clump is also shortened to 0.5 of its length (facing out: 1) - the crowns share the middle. Each stem gets
 its own `Leader`. All stems are bone 0 (the trunk bend); the piece's `baseRadius` is `Radius + StemSpread`. One stem
 draws its randomness in the original order: a one-stem species is unchanged. Undergrowth: Oak and Pine 4 bushes
 out to 8 m; Acacia 6 out to 12 m (its trees stand far apart).
@@ -394,7 +400,10 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
   materials, bands in `applyFadeBands`). The cards draw on LitFoliage with the whole-tree billboards' shading and
   "Foliage ..." tweaks, but with `MATERIAL_FLAG_NO_EDGE_FADE`: no edge-on fade. Their crown frame is still per
   MODULE: `billboardMesh(..., axisInZ)` puts each card's axis (its module's +Y line, as a texture v) into
-  texCoords.z = 3 + v (`TREE_CARD_AXIS_CODE`), which rides the tangent's w magnitude to the lit FS. MAIN pass only:
+  texCoords.z = 3 + v (`TREE_CARD_AXIS_CODE`), which rides the tangent's w magnitude to the lit FS. On top of it the
+  card's WIND, + `TREE_CARD_WIND_STEP` (4) x (weight | phase << 4): the vertex's weight along its module's +Y (0 at
+  the root, 15 at the cards' top end) and the placement's `windPhase` (`TreePiecePlacement`, set by
+  `bakeTreeVariant`: the module mesh's phase) - the cards bend per module like the mesh (RendererVK "Tree wind"). MAIN pass only:
   shadows, GI and RT keep the whole billboard. 4 fixed record slots per tree, no pool (RendererVK "BAKED TREE
   RECORDS"). The CPU path (GPU expansion off) has no mid tier.
 * **None**: the meshes only.
@@ -491,7 +500,10 @@ and leaf vertex's `texCoords.z = 1 + payload / 2^22` (`windPayload`): the module
 (a sub-branch's vertices take it at their bone's pivot), the level-1 sub-branch weight along its bone, the bone's phase,
 a leaf card's TIP flag (corners 2 / 3; a diamond's all but the stem) - a card's weights from its STEM, so all four
 corners share one phase. Trunk pieces: the wind bit only (the trunk bend). `bakeTreeVariant` ORs each module
-placement's phase (3 bits) into its vertices. No vertex grows: the magnitude of the tangent's w was free.
+placement's phase (3 bits) into its vertices and keeps it in the placement (`windPhase`: the branch cards' phase). No
+vertex grows: the magnitude of the tangent's w was free. The species' `Wind` scales ride its piece TYPES
+(`TreeInstanceType::windTrunk / windBranch`, RendererVK "Tree wind"): the cedar (large, heavy limbs in the trunk
+piece) `Trunk 0.4`, `Branch 0.7`.
 
 ### GPU expansion
 

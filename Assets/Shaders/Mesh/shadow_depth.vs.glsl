@@ -16,7 +16,8 @@ struct InMeshInstancesData
 {
     vec4 posScale;
     vec4 quat;
-    uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), bit 15 = a tree (wind), low 15 = cascade mask
+    uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), bit 15 = a tree (wind), bits 8..14 its
+                                 // trunk-bend scale x 32, low 8 = cascade mask
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {
@@ -33,7 +34,7 @@ layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragmen
 void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];
-    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x00007FFFu;
+    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x000000FFu;
     out_uv = vec2(in_posU.w, in_v);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
     if ((cascadeMask & (1u << gl_ViewIndex)) == 0u)
@@ -48,7 +49,8 @@ void main()
     if ((inst.alphaTexIdxCascadeMask & 0x00008000u) != 0u)
     {
         vec3 unusedPrevDelta;
-        worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, unusedPrevDelta);
+        const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
+        worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, vec2(windTrunk, 1.0), unusedPrevDelta);
     }
 
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).

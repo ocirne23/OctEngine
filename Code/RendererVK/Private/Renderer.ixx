@@ -319,6 +319,9 @@ public:
         // Beyond this distance (m) from the shadow cascades' centre it casts no sun shadow (small plants: a texel or
         // less in the far cascades). 0 = no limit.
         float shadowDistance = 0.0f;
+        // x the wind's trunk bend / branch sway (tree_wind.inc.glsl), 0..4: a species' stiffness.
+        float windTrunk = 1.0f;
+        float windBranch = 1.0f;
         // The FAR-TREE VOLUME's view of the type (TreeVolumePipeline): its extinction (1/m) over [densityMin,
         // densityMax] in type space, densityRes^3 floats (x fastest); nullptr = the type is not in the volume.
         const float* density = nullptr;
