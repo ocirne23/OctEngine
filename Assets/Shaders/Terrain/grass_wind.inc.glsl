@@ -24,10 +24,12 @@ vec2 grassWind(vec2 xz, float time, float phase)
     return dir * (speed * (u_grass_windBend * (0.85 + 0.15 * sway) + u_grass_rippleBend * ripple * (0.8 + 0.2 * sway)));
 }
 
-// The tip and the control point of a blade of height h: lean + wind sideways (capped at 0.9 h), the rest upward.
+// The tip and the control point of a blade of height h: lean + wind sideways (capped at 0.9 h), the rest upward. The
+// wind's push x h^2 / (h^2 + "Stiff height"^2): a short blade is stiffer (in blade heights it bent as far as a tall one).
 vec3 grassTip(vec3 root, vec2 lean, vec2 wind, float h, out vec3 ctrl)
 {
-    vec2 offset = lean + wind * h;
+    const float h2 = h * h;
+    vec2 offset = lean + wind * (h * h2 / max(h2 + u_grass_stiffHeight2, 1e-6));
     const float len = length(offset);
     if (len > 0.9 * h)
         offset *= 0.9 * h / len;

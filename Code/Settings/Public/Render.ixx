@@ -340,6 +340,8 @@ export struct GrassParams
     float windBend = 0.05f;        // blade heights per m/s
     float rippleBend = 0.08f;      // blade heights per m/s, x the ripple noise
     float rippleSize = 12.0f;      // m
+    // Short blades are stiffer: the wind's push x h^2 / (h^2 + this^2) - half at this height, ~full on tall grass. 0 = off.
+    float stiffHeight = 0.2f;      // m
     float swayFrequency = 0.6f;    // Hz
     // All wind movement eases out between these camera distances (m): small far blades moving read as grain.
     float windFadeStart = 100.0f;

@@ -193,6 +193,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Wind", "Bend (per m/s)", &s.windBend, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Grass/Wind", "Ripple (per m/s)", &s.rippleBend, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Grass/Wind", "Ripple size (m)", &s.rippleSize, 0.5f, 200.0f, 0.1f);
+    Tweak::floatVar("Grass/Wind", "Stiff height (m)", &s.stiffHeight, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Sway frequency (Hz)", &s.swayFrequency, 0.0f, 5.0f, 0.01f);
     Tweak::floatVar("Grass/Wind", "Fade start (m)", &s.windFadeStart, 0.0f, 500.0f, 0.5f);
     Tweak::floatVar("Grass/Wind", "Fade end (m)", &s.windFadeEnd, 0.0f, 500.0f, 0.5f);

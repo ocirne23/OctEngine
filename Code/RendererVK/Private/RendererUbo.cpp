@@ -1370,6 +1370,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_windBend", [&] { return glm::max(g.windBend, 0.0f); }, g.windBend);
         list.add("grass_rippleBend", [&] { return glm::max(g.rippleBend, 0.0f); }, g.rippleBend);
         list.add("grass_invRippleSize", [&] { return 1.0f / glm::max(g.rippleSize, 0.01f); }, g.rippleSize);
+        list.add("grass_stiffHeight2", [&] { return glm::max(g.stiffHeight, 0.0f) * glm::max(g.stiffHeight, 0.0f); }, g.stiffHeight);
         list.add("grass_swayFrequency", g.swayFrequency);
         list.add("grass_windFadeStart", g.windFadeStart);
         list.add("grass_windFadeEnd", [&] { return glm::max(g.windFadeEnd, g.windFadeStart + 0.01f); }, g.windFadeEnd, g.windFadeStart);

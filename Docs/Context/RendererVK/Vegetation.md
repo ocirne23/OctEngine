@@ -319,7 +319,7 @@ TOWARDS, from +X around +Y; default 113), "Gust strength (m/s)" and "Gust size (
 | Reader | How |
 |---|---|
 | Weather particles (rain, snow) | `weatherWindAt` (particle.inc.glsl) + the rain's own "Particles/Wind sheet *" |
-| Trees, grass, flowers | `vegetationWind` (`wind.inc.glsl`; the flower stems through the grass's `grass_wind.inc.glsl`): the mean + a 2D GUST VECTOR, each component two analytic waves travelling downwind (1.2 / 0.46 x the gust size long). The gusts turn the wind rather than cancel it (a signed gust along the mean left many trees still at a low mean). Grass adds its small-scale ripple (value noise moving with the mean wind), both "per m/s" ("Grass/Wind/Bend (per m/s)", "Ripple (per m/s)") |
+| Trees, grass, flowers | `vegetationWind` (`wind.inc.glsl`; the flower stems through the grass's `grass_wind.inc.glsl`): the mean + a 2D GUST VECTOR, each component two analytic waves travelling downwind (1.2 / 0.46 x the gust size long). The gusts turn the wind rather than cancel it (a signed gust along the mean left many trees still at a low mean). Grass adds its small-scale ripple (value noise moving with the mean wind), both "per m/s" ("Grass/Wind/Bend (per m/s)", "Ripple (per m/s)"), in blade heights x h² / (h² + "Stiff height (m)"²) (`grassTip`, 0.2 m: a short blade is stiffer - without it a 5 cm blade bent as flat as a tall one) |
 | Fog | the noise drifts along the direction at the speed (`u_weather_windSpeed`), world - drift: WITH the wind |
 | Clouds | direction, speed x "Sky/Clouds/Wind speed scale" (3.5) |
 | Ocean (Procedural) | `Renderer::getWindParams()`: speed x "Ocean/Waves/Wind speed scale" (2.5) = the U10, the heading + π (the spectrum's convention) |
