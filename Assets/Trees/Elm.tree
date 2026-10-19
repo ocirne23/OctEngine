@@ -45,7 +45,7 @@ TreeSpecies Elm
 		SplitLimbs 0 40 0.4
 		BranchRadius 1.5
 	Module
-		Count 12
+		Count 8
 		Radius 0.005
 		Curve 20 10
 		UpAttract 0.05
@@ -54,10 +54,10 @@ TreeSpecies Elm
 		Elbows 0.5
 		ElbowAngle 15 6
 		Stubs 0.2
-		Rings 8
+		Rings 6
 		Sides 5
 		Level
-			Count 8
+			Count 6
 			Start 0.15
 			Length 0.55
 			LengthTaper 0.4
@@ -66,7 +66,7 @@ TreeSpecies Elm
 			Droop 45
 			Wobble 6
 			Radius 0.5
-			Rings 5
+			Rings 4
 			Sides 3
 		Level
 			Count 1
@@ -82,13 +82,13 @@ TreeSpecies Elm
 			Sides 3
 	Leaves
 		Type Cluster
-		Size 0.95
+		Size 1.1
 		Aspect 0.9
 		PerBranch 5
 		Levels 2
 		ClusterLeaves 11
-		ClusterLeafSize 0.27
-		ClusterLeafWidth 0.55
+		ClusterLeafSize 0.20
+		ClusterLeafWidth 0.60
 		NormalBend 0.0
 	Bark
 		Plates 16 10

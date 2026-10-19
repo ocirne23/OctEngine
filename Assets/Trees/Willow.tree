@@ -37,7 +37,7 @@ TreeSpecies Willow
 		AngleVar 12
 		BranchRadius 0.7
 	Module
-		Count 16
+		Count 12
 		Radius 0.025
 		Curve 25 10
 		Droop 80
@@ -48,7 +48,7 @@ TreeSpecies Willow
 		Rings 14
 		Sides 6
 		Level
-			Count 16
+			Count 12
 			Start 0.1
 			Length 0.35
 			LengthTaper 0.3
@@ -61,7 +61,7 @@ TreeSpecies Willow
 			Rings 8
 			Sides 4
 		Level
-			Count 7
+			Count 6
 			Start 0.05
 			Length 2.6
 			LengthTaper 0.2

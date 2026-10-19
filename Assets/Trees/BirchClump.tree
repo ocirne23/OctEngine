@@ -29,7 +29,7 @@ TreeSpecies BirchClump
 		Leader true
 		BranchRadius 0.65
 	Module
-		Count 12
+		Count 8
 		Radius 0.02
 		Curve 20 10
 		UpAttract 0.15
@@ -40,7 +40,7 @@ TreeSpecies BirchClump
 		Rings 8
 		Sides 5
 		Level
-			Count 13
+			Count 7
 			Start 0.3
 			Length 0.5
 			LengthTaper 0.4
@@ -49,10 +49,10 @@ TreeSpecies BirchClump
 			Droop 25
 			Wobble 6
 			Radius 0.5
-			Rings 5
+			Rings 4
 			Sides 3
 		Level
-			Count 9
+			Count 4
 			Start 0.1
 			Length 0.8
 			LengthTaper 0.3
@@ -62,18 +62,18 @@ TreeSpecies BirchClump
 			Droop 70
 			Wobble 4
 			Radius 0.5
-			Rings 5
+			Rings 4
 			Sides 3
 	Leaves
 		Type Cluster
 		Size 1.35
 		Aspect 0.65
-		PerBranch 2
+		PerBranch 3
 		Levels 2
 		Align 0.1
-		ClusterLeaves 6
-		ClusterLeafSize 0.32
-		ClusterLeafWidth 0.38
+		ClusterLeaves 8
+		ClusterLeafSize 0.26
+		ClusterLeafWidth 0.30
 		NormalBend 0.0
 	Bark
 		Plates 4 12
