@@ -1,0 +1,26 @@
+# Barrel cacti: ribbed globes and short barrels with golden spines, on hot, dry, bare ground - more on stony ground and at
+# the foot of rocks.
+ClutterType BarrelCactus
+	Kind Cactus
+	Form Barrel
+	Seed 131
+	Variants 4
+	Scale 0.25 0.9
+	Range 80
+	Sink 0.04
+	Align 0.2
+	Color 0.30 0.42 0.24
+	Color2 0.85 0.62 0.30
+	Roughness 0.55
+	Girth 0.85
+	Ribs 20 0.12
+	Placement
+		Density 0.012
+		Temperature 20 1000
+		Precipitation 0 300
+		ClimateWidth 0.015
+		Grass 1 0
+		Crag 1 2
+		Rock 1 2
+		Cluster 25 0.4
+		Slope 0.6

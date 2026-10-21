@@ -350,6 +350,17 @@ rules** - a boulder under a sandstone cliff is that sandstone.
   the wetness lie on top unchanged: litter or moss on the top, the contact band, snow. Without a splat set the wood
   still shows. GI and the RT hits sample the same bark texture (at the mesh's uv: its mean colour, roughly).
   **Nothing else in the renderer may read a rock mesh's tangent as a direction** (the GI / RTAO hits read no tangents).
+* **CACTUS** (Procedural `Surface Cactus`: the saguaro). The same wood coordinates in the tangent, its **v** = 3 + the
+  rib count / 100 (the FS: `in_wood.w > 2.5`, the count = round((w - 3) x 100)). The FS replaces the bedrock with
+  `cactusSurface`: the MATERIAL is a 1 x 2 texture - the skin (row 0), the spines (row 1), two `texelFetch`es, no
+  sampling - and `cactusSkin` (`cactus.inc.glsl`, shared with the clutter's cacti) puts an AREOLE on every rib crest:
+  the angle around the part (`cactusAround`: atan of the across coordinates, a seam-safe pixel width) x the rib count
+  finds the crests (Procedural `ribIndent`'s convention: the ribs are the mesh's), along x the rib count spaces them -
+  0.9 rib widths apart, every other rib half a step on. Each a greyish felt pad with a star of 7 pale spines (a spine
+  thinner than a pixel draws a pixel wide, as faint as it is thin); the valleys a little darker, each rib its own shade;
+  the whole pattern fades to its mean past ~1/4 rib per pixel. Roughness 0.55 (waxy), duller on the pads and spines.
+  **No ground cover** (no sand on the crown or in the rib valleys); the contact band, snow and the wetness as on a
+  rock. GI and the RT hits sample the 1 x 2 texture at the mesh's uv (v = 3.x: mostly the skin row).
 
 ## Terrain surface water
 

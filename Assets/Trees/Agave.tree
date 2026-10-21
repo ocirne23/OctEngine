@@ -1,0 +1,67 @@
+# Agave (Parry's agave, a century plant): a ROSETTE of broad, thick, rigid blue-grey leaves (~1.5-3 m across), the outer
+# ones spreading and curving up off the ground, the inner ones upright, each widest near its middle and ending in a
+# point. It grows ON ITS OWN in the hot desert (its Placement block: no tree needed); Climate Desert - no tree's - so it
+# is never a tree's undergrowth.
+# The leaves are the modules: one blade each (`Section`: wide, thin, a gutter on top; `Swell`: widest near the middle;
+# `Tip`: a closed point), no leaf cards. The crown starts above the ground on a short hidden trunk: the outer leaves
+# rise off it.
+TreeSpecies Agave
+	Kind Bush
+	Climate Desert
+	Seed 151
+	Scale 1.0 1.6
+	Wind
+		Trunk 0
+		Branch 0.05
+	Trunk
+		Count 2
+		Height 0.3 0.4
+		Radius 0.1
+		Taper 0.7
+		Flare 0
+		Sink 0.1
+		Curve 2
+		Rings 3
+		Sides 8
+	Crown
+		Shape Cone
+		Start 0.3
+		Radius 0.9
+		Slots 32
+		Fill 1
+		Angle 72 12
+		AngleVar 8
+		BranchRadius 3
+	Module
+		Count 8
+		Radius 0.08
+		Curve 22 8
+		UpAttract 0.3
+		Rings 14
+		Sides 12
+		Section 1.6 0.3 0.5
+		Swell 0.8
+		Tip 0.3
+	Leaves
+		Type Single
+		PerBranch 0
+	Billboard
+		Distance 25
+		Resolution 256
+		FadeWidth 6
+	Bark
+		Plates 8 1
+		Crack 0.03
+		Breakup 0.95
+		Relief 0.15
+		Lichen 0
+	Color
+		Bark 0.52 0.62 0.58
+		Leaf 0.52 0.62 0.58
+	Placement
+		Density 60
+		Temperature 20 1000
+		Precipitation 0 350
+		ClimateWidth 0.02
+		Cluster 50 0.5
+		MaxSlope 0.9

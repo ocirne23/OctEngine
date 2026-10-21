@@ -142,6 +142,7 @@ namespace Procedural
 		m_typeNames.clear();
 		m_floorTypes.clear();
 		m_species.clear();
+		m_bushes.clear();
 		m_rocks.clear();
 		m_firstRockType = 0;
 		m_speciesLoaded = true;
@@ -178,20 +179,21 @@ namespace Procedural
 			const uint8 type = (uint8)m_typeNames.size();
 			m_typeNames.push_back(desc.name);
 			FloorType& floor = m_floorTypes.emplace_back();
-			if (desc.bush || desc.placement.density <= 0.0f)
+			if (desc.placement.density <= 0.0f)
 				continue;
 			const float meanScale = 0.5f * (desc.scale.x + desc.scale.y);
 			floor.kind = 1;
 			floor.crown = desc.crownRadius * meanScale;
 			floor.trunk = desc.trunkRadius * (1.0f + desc.trunkFlare) * meanScale;
-			Species& species = m_species.emplace_back();
+			// A bush with a Placement block grows ON ITS OWN too (the desert's agaves): the bush pass, not the trees'.
+			Species& species = (desc.bush ? m_bushes : m_species).emplace_back();
 			species.name = desc.name;
 			species.type = type;
 			species.placement = desc.placement;
 			species.climateMin = glm::vec2(temperatureTo01(desc.placement.temperature.x), precipTo01(desc.placement.precipitation.x));
 			species.climateMax = glm::vec2(temperatureTo01(desc.placement.temperature.y), precipTo01(desc.placement.precipitation.y));
 		}
-		Log::info(oc::format("Trees/World: {} species with a Placement block", m_species.size()));
+		Log::info(oc::format("Trees/World: {} tree species and {} bush species with a Placement block", m_species.size(), m_bushes.size()));
 
 		// THE ROCK TYPES, after the trees: every .rock, name-sorted (as RockSystem loads them).
 		m_firstRockType = (uint32)m_typeNames.size();
@@ -280,6 +282,7 @@ namespace Procedural
 		auto config = oc::make_shared<GenConfig>();
 		config->maps = maps;
 		config->species = m_species;
+		config->bushes = m_bushes;
 		config->rocks = m_rocks;
 		config->rockRules = m_rockRules;
 		config->rockRules.densityScale = glm::max(m_rockRules.densityScale, 0.0f);
@@ -1145,9 +1148,24 @@ namespace Procedural
 						out.push_back(record);
 				}
 		}
-		if (config.species.empty())
-			return;
 		Globals::jobSystem.preemptionPoint();
+
+		// Inside a placed rock's footprint capsule (this chunk's and the neighbours' that reach in): a fallen log's runs
+		// along it - a disc over its length would clear the forest around it. The trees and the bushes give way.
+		const auto insideRock = [&](glm::vec2 local)
+		{
+			for (const PlacedRock& rock : placedRocks)
+			{
+				const glm::vec2 rel = local - rock.local;
+				const float along = glm::dot(rock.half, rock.half) > 1e-8f ? glm::clamp(glm::dot(rel, rock.half) / glm::dot(rock.half, rock.half), -1.0f, 1.0f) : 0.0f;
+				const glm::vec2 toRock = rel - rock.half * along;
+				const float clear = rock.radius * 0.9f + (rock.half == glm::vec2(0.0f) ? 0.5f : 0.9f);
+				if (glm::dot(toRock, toRock) < clear * clear)
+					return true;
+			}
+			return false;
+		};
+		const size_t firstTree = out.size(); // the rocks' records come first
 
 		const uint32 n = treeCells;
 		const float cell = treeCell;
@@ -1241,26 +1259,98 @@ namespace Procedural
 					if (crowded)
 						continue;
 				}
-				// The trees give way to the rocks (this chunk's and the neighbours' that reach in): out of each footprint
-				// capsule (a fallen log's runs along it - a disc over its length would clear the forest around it).
-				bool inRock = false;
-				for (const PlacedRock& rock : placedRocks)
-				{
-					const glm::vec2 rel = local - rock.local;
-					const float along = glm::dot(rock.half, rock.half) > 1e-8f ? glm::clamp(glm::dot(rel, rock.half) / glm::dot(rock.half, rock.half), -1.0f, 1.0f) : 0.0f;
-					const glm::vec2 toRock = rel - rock.half * along;
-					const float clear = rock.radius * 0.9f + (rock.half == glm::vec2(0.0f) ? 0.5f : 0.9f);
-					if (glm::dot(toRock, toRock) < clear * clear)
-					{
-						inRock = true;
-						break;
-					}
-				}
-				if (inRock)
+				if (insideRock(local))
 					continue;
 				out.push_back(makeTreeRecord(qx, qz, config.species[chosen].type));
 			}
 		}
+
+		// THE BUSHES ON THEIR OWN (a `Kind Bush` species with a Placement block - the desert's agaves and aloes): after the
+		// trees, on their own lattice (BUSH_CELL m, at most one per cell), their densities ADDED - independent ground
+		// covers. Each one's climate fit as a tree's (the box, the Gaussian outside it, the fade), its slope / altitude
+		// band and cluster patches - but none of the trees' grassland mask, sharpening or forest types: a bush needs no
+		// forest. Out of the rocks' footprints and BUSH_TREE_CLEAR from this chunk's trees (a tree's undergrowth is its own).
+		if (config.bushes.empty())
+			return;
+		Globals::jobSystem.preemptionPoint();
+		constexpr float BUSH_CELL = 3.0f;
+		constexpr float BUSH_TREE_CLEAR = 2.0f;
+		const uint32 bushCells = (uint32)glm::max(1.0f, std::round(cs / BUSH_CELL));
+		const float bushCell = cs / (float)bushCells;
+		const float bushArea = bushCell * bushCell * (1.0f / 10000.0f) * config.densityScale;
+		float bushTotal = 0.0f;
+		for (const Species& bush : config.bushes)
+			bushTotal += glm::abs(bush.placement.density);
+		const float bushChance = bushTotal * bushArea;
+		oc::small_vector<NoiseField, 8> bushNoise;
+		for (const Species& bush : config.bushes)
+			bushNoise.push_back(NoiseField(treeHash(config.seed, 1000u + bush.type)));
+		oc::small_vector<float, 8> bushWeights(config.bushes.size(), 0.0f);
+		const size_t endTrees = out.size();
+		const uint32 bushSeed = treeHash(treeHash(treeHash(config.seed, 0xB054u), (uint32)coord.x), (uint32)coord.y);
+		for (uint32 cj = 0; cj < bushCells; ++cj)
+			for (uint32 ci = 0; ci < bushCells; ++ci)
+			{
+				const uint32 h = treeHash(bushSeed, cj * bushCells + ci);
+				const float roll = treeHash01(treeHash(h, 3u));
+				if (roll >= bushChance)
+					continue;
+				const float lx = ((float)ci + treeHash01(treeHash(h, 1u))) * bushCell;
+				const float lz = ((float)cj + treeHash01(treeHash(h, 2u))) * bushCell;
+				const uint32 qx = glm::min((uint32)(lx / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+				const uint32 qz = glm::min((uint32)(lz / cs * (float)TREE_RECORD_STEPS), TREE_RECORD_STEPS - 1);
+				const glm::vec2 local = treeRecordLocal(makeTreeRecord(qx, qz, 0), cs);
+				const FieldSample at = fieldAt(local);
+				if (at.river > config.riverClear)
+					continue;
+				const float slope2 = at.dx * at.dx + at.dz * at.dz;
+				const float altitude = at.height - at.water;
+				const glm::vec2 climate(glm::clamp((at.temperature - TEMPERATURE_MIN_C) / TEMP_RANGE, 0.0f, 1.0f), glm::clamp(at.humidity, 0.0f, 1.0f));
+				const glm::vec2 world((float)(ox + local.x), (float)(oz + local.y));
+				float total = 0.0f;
+				for (size_t b = 0; b < config.bushes.size(); ++b)
+				{
+					const TreePlacementDesc& p = config.bushes[b].placement;
+					bushWeights[b] = 0.0f;
+					if (altitude < p.altitude.x || altitude > p.altitude.y || slope2 > p.maxSlope * p.maxSlope)
+						continue;
+					const glm::vec2 d = glm::max(config.bushes[b].climateMin - climate, glm::vec2(0.0f))
+						+ glm::max(climate - config.bushes[b].climateMax, glm::vec2(0.0f));
+					float fit = std::exp(-glm::dot(d, d) / (2.0f * p.climateWidth * p.climateWidth));
+					fit *= glm::smoothstep(config.fadeStart, config.fadeEnd, fit);
+					float density = p.density * fit;
+					if (density > 0.0f && p.clusterSize > 1.0f)
+					{
+						const float noise = bushNoise[b].fbm(world.x / p.clusterSize, world.y / p.clusterSize, 2) * 0.5f + 0.5f;
+						const float threshold = 1.0f - p.clusterCoverage;
+						density *= glm::smoothstep(threshold - 0.08f, threshold + 0.08f, noise);
+					}
+					bushWeights[b] = density;
+					total += density;
+				}
+				if (roll >= total * bushArea || insideRock(local))
+					continue;
+				bool nearTree = false;
+				for (size_t k = firstTree; k < endTrees && !nearTree; ++k)
+				{
+					const glm::vec2 d = treeRecordLocal(out[k], cs) - local;
+					nearTree = glm::dot(d, d) < BUSH_TREE_CLEAR * BUSH_TREE_CLEAR;
+				}
+				if (nearTree)
+					continue;
+				float pick = treeHash01(treeHash(h, 4u)) * total;
+				size_t chosen = config.bushes.size() - 1;
+				for (size_t b = 0; b < config.bushes.size(); ++b)
+				{
+					pick -= bushWeights[b];
+					if (pick < 0.0f && bushWeights[b] > 0.0f)
+					{
+						chosen = b;
+						break;
+					}
+				}
+				out.push_back(makeTreeRecord(qx, qz, config.bushes[chosen].type));
+			}
 	}
 
 	void TreeWorld::logStats(const Renderer& renderer) const

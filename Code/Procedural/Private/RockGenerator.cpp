@@ -15,6 +15,8 @@ namespace
 {
 	using namespace Procedural;
 
+	constexpr float PI = 3.14159265f;
+
 	float smin(float a, float b, float k)
 	{
 		if (k <= 0.0f)
@@ -130,6 +132,58 @@ namespace
 		return (std::sqrt(x2 * a2 * il2) + y * rr) * il2 - ra;
 	}
 
+	// A limb's frame: its axis (unit, a -> b) and two unit vectors across it - u its `side` made perpendicular to the axis,
+	// or (no side) picked from the axis. The angle around a limb - the wood coordinates' (woodCoords), a cactus's ribs
+	// (ribIndent) - is measured in it.
+	struct LimbFrame
+	{
+		glm::vec3 dir, u, v;
+		float length;
+	};
+	LimbFrame limbFrame(const RockShape::Limb& l)
+	{
+		LimbFrame f;
+		const glm::vec3 axis = l.b - l.a;
+		f.length = glm::length(axis);
+		f.dir = axis / glm::max(f.length, 1e-6f);
+		const glm::vec3 side = l.side - f.dir * glm::dot(l.side, f.dir);
+		f.u = glm::dot(side, side) > 1e-8f ? glm::normalize(side)
+			: glm::normalize(glm::cross(f.dir, glm::abs(f.dir.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)));
+		f.v = glm::cross(f.dir, f.u);
+		return f;
+	}
+
+	// A cactus segment's RIBS: the surface pushed in by up to ribDepth x the segment's radius between two crests - broad
+	// crests, narrow valleys (((1 - cos) / 2)^2 of the angle). The crests lie where cos(ribs x (angle + pi)) = 1, the angle
+	// in the segment's LimbFrame: the shaders find them from woodCoords' coordinates (cactus.inc.glsl). Faded out toward
+	// the axis, so a dome's apex closes.
+	float ribIndent(const RockShape& s, const RockShape::Limb& l, const glm::vec3& p)
+	{
+		const LimbFrame f = limbFrame(l);
+		const float along = glm::dot(p - l.a, f.dir);
+		const glm::vec3 off = p - l.a - f.dir * along;
+		const float r = glm::mix(l.ra, l.rb, glm::clamp(along / glm::max(f.length, 1e-6f), 0.0f, 1.0f));
+		const float valley = 0.5f - 0.5f * std::cos((float)s.ribCount * (std::atan2(glm::dot(off, f.v), glm::dot(off, f.u)) + PI));
+		return s.ribDepth * r * valley * valley * glm::smoothstep(0.15f * r, 0.6f * r, glm::length(off));
+	}
+
+	// THE CACTUS: its segments (the limbs: the stem, each arm's elbow and its upright part) - round cones, ribbed around
+	// their own axes - blended into one body with fillets half a segment's radius wide, cut flat at the ground line. A
+	// segment's ribs only push its surface in, so a segment already past the fillet's reach skips them.
+	float cactusSdf(const RockShape& s, const glm::vec3& p, float e)
+	{
+		float d = 1e9f;
+		for (uint32 i = 0; i < s.limbCount; ++i)
+		{
+			const RockShape::Limb& l = s.limbs[i];
+			float segment = roundConeSdf(p, l.a, l.b, glm::max(l.ra - e, 0.002f), glm::max(l.rb - e, 0.002f));
+			if (s.ribCount > 0 && segment < d + 0.5f * l.ra)
+				segment += ribIndent(s, l, p);
+			d = smin(d, segment, 0.5f * l.ra);
+		}
+		return glm::max(d, s.groundY + e - p.y);
+	}
+
 	// A BROKEN END over the trunk's section (u: the section point / the end's radius): 1 where the wood reaches the end
 	// (a splinter's tip), 0 at the deepest point of the break - long ridged splinters, the break leaning across (`slant`).
 	float splinter(glm::vec2 u, uint32 seed, glm::vec2 slant)
@@ -214,7 +268,8 @@ namespace
 	{
 		const glm::vec3 p = warpPoint(s, pIn);
 		const float e = s.erosion;
-		float d = s.kind == ERockShape::Trunk ? trunkBodySdf(s, p, e) : blocksSdf(s, p, s.blockCount, e);
+		float d = s.kind == ERockShape::Trunk ? trunkBodySdf(s, p, e) : s.kind == ERockShape::Cactus ? cactusSdf(s, p, e)
+			: blocksSdf(s, p, s.blockCount, e);
 		for (uint32 i = 0; i < s.planeCount; ++i)
 			d = smax(d, glm::dot(p, glm::vec3(s.planes[i])) - (s.planes[i].w - e), s.round * 0.5f);
 		if (s.split)
@@ -433,31 +488,36 @@ namespace
 	// A WOOD vertex (RockMesh): the part it lies on - the trunk, the nearest limb, or the root plate (the trunk's frame) -
 	// by the smallest distance; its coordinates along and across that part, and its BARK cover: the outer skin is bark,
 	// anything inside the part's radius (a break, the hollow, a splinter's inner face) bare wood. Along is in units of the
-	// part's base CIRCUMFERENCE - the bark texture's v, as on a tree branch (the shader's u is the angle around). Not a
-	// trunk: the shape frame, all bark.
+	// part's base CIRCUMFERENCE - the bark texture's v, as on a tree branch (the shader's u is the angle around). A
+	// CACTUS: its nearest segment, the same way (no cut faces). Anything else: the shape frame, all bark.
 	void woodCoords(const RockShape& s, const glm::vec3& pIn, glm::vec3& coords, float& bark)
 	{
 		constexpr float TWO_PI = 6.28318531f;
 		const glm::vec3 p = warpPoint(s, pIn);
 		bark = 1.0f;
-		if (s.kind != ERockShape::Trunk)
+		if (s.kind != ERockShape::Trunk && s.kind != ERockShape::Cactus)
 		{
 			coords = glm::vec3(p.y / (TWO_PI * 0.25f), p.x, p.z);
 			return;
 		}
-		const glm::vec3 q = s.blockRot[0] * (p - s.blockCentre[0]);
-		const glm::vec3& half = s.blockHalf[0];
-		float best = pillarSdf(q, half, s.blockProfile[0], s.squareness, 0.0f);
-		const float baseRadius = glm::max(glm::min(half.x, half.z) * s.blockProfile[0][0], 1e-3f);
-		coords = glm::vec3((q.y + half.y) / (TWO_PI * baseRadius), q.x, q.z);
-		float outer = glm::min(half.x, half.z) * profileAt(s.blockProfile[0], (q.y + half.y) / (2.0f * half.y));
-		if (s.plate.w > 0.0f)
+		float best = 1e9f;
+		float outer = 0.0f;
+		if (s.kind == ERockShape::Trunk)
 		{
-			const float plate = superellipsoidSdf(p - glm::vec3(s.plate), glm::vec3(0.5f * s.plateThickness, s.plate.w, s.plate.w), 2.6f);
-			if (plate < best)
+			const glm::vec3 q = s.blockRot[0] * (p - s.blockCentre[0]);
+			const glm::vec3& half = s.blockHalf[0];
+			best = pillarSdf(q, half, s.blockProfile[0], s.squareness, 0.0f);
+			const float baseRadius = glm::max(glm::min(half.x, half.z) * s.blockProfile[0][0], 1e-3f);
+			coords = glm::vec3((q.y + half.y) / (TWO_PI * baseRadius), q.x, q.z);
+			outer = glm::min(half.x, half.z) * profileAt(s.blockProfile[0], (q.y + half.y) / (2.0f * half.y));
+			if (s.plate.w > 0.0f)
 			{
-				best = plate;
-				outer = 0.0f; // the torn root mass: no cut face
+				const float plate = superellipsoidSdf(p - glm::vec3(s.plate), glm::vec3(0.5f * s.plateThickness, s.plate.w, s.plate.w), 2.6f);
+				if (plate < best)
+				{
+					best = plate;
+					outer = 0.0f; // the torn root mass: no cut face
+				}
 			}
 		}
 		for (uint32 i = 0; i < s.limbCount; ++i)
@@ -467,15 +527,11 @@ namespace
 			if (d >= best)
 				continue;
 			best = d;
-			const glm::vec3 axis = l.b - l.a;
-			const float length = glm::length(axis);
-			const glm::vec3 dir = axis / glm::max(length, 1e-6f);
-			const glm::vec3 u = glm::normalize(glm::cross(dir, glm::abs(dir.y) < 0.9f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f)));
-			const glm::vec3 v = glm::cross(dir, u);
-			const float along = glm::dot(p - l.a, dir);
-			const glm::vec3 off = p - l.a - dir * along;
-			coords = glm::vec3(along / (TWO_PI * glm::max(l.ra, 1e-3f)) + 0.37f * (float)(i + 1), glm::dot(off, u), glm::dot(off, v)); // each limb its own stretch of bark
-			outer = glm::mix(l.ra, l.rb, glm::clamp(along / glm::max(length, 1e-6f), 0.0f, 1.0f));
+			const LimbFrame f = limbFrame(l);
+			const float along = glm::dot(p - l.a, f.dir);
+			const glm::vec3 off = p - l.a - f.dir * along;
+			coords = glm::vec3(along / (TWO_PI * glm::max(l.ra, 1e-3f)) + l.along0, glm::dot(off, f.u), glm::dot(off, f.v));
+			outer = s.kind == ERockShape::Cactus ? 0.0f : glm::mix(l.ra, l.rb, glm::clamp(along / glm::max(f.length, 1e-6f), 0.0f, 1.0f));
 		}
 		// Below ~70 % of the radius: a cut. The surface noise moves the skin in and out by a few % - still bark.
 		if (outer > 0.0f)
@@ -483,8 +539,8 @@ namespace
 	}
 
 	// Moves every vertex onto the field's zero set (Newton steps along the gradient), then shades it from the gradient
-	// and takes its cavity (texCoords.x) - and for WOOD its bark cover (texCoords.y) and wood coordinates (the tangent).
-	// In the SHAPE frame.
+	// and takes its cavity (texCoords.x) - and for WOOD its bark cover (texCoords.y) and wood coordinates (the tangent); a
+	// CACTUS skin the same coordinates and texCoords.y = 3 + its rib count / 100. In the SHAPE frame.
 	void projectAndShade(const RockShape& s, RockMesh& m, float cell, uint32 steps)
 	{
 		m.normals.resize(m.positions.size());
@@ -507,7 +563,7 @@ namespace
 			{
 				float bark = 1.0f;
 				woodCoords(s, p, m.tangents[i], bark);
-				m.texCoords[i].y = 1.0f + bark;
+				m.texCoords[i].y = s.cactusSkin ? 3.0f + 0.01f * (float)s.ribCount : 1.0f + bark;
 			}
 		}
 	}
@@ -553,8 +609,11 @@ namespace
 
 		const glm::mat3 toShape = glm::transpose(s.blockRot[0]);
 		const auto addLimb = [&](glm::vec3 a, glm::vec3 b, float ra, float rb) {
-			if (s.limbCount < ROCK_MAX_LIMBS)
-				s.limbs[s.limbCount++] = { toShape * a + s.blockCentre[0], toShape * b + s.blockCentre[0], ra, rb };
+			if (s.limbCount >= ROCK_MAX_LIMBS)
+				return;
+			RockShape::Limb& l = s.limbs[s.limbCount];
+			l = { toShape * a + s.blockCentre[0], toShape * b + s.blockCentre[0], ra, rb };
+			l.along0 = 0.37f * (float)++s.limbCount; // each limb its own stretch of bark
 		};
 		// Roots: out of a standing trunk's base and down into the ground, thick at the trunk.
 		const int roots = s.standing ? type.rootCount : 0;
@@ -587,6 +646,85 @@ namespace
 			s.plateThickness = 1.1f * rBase;
 			s.plate = glm::vec4(toShape * glm::vec3(0.0f, -half.y + 0.3f * s.plateThickness, 0.0f) + s.blockCentre[0]
 				+ glm::vec3(0.0f, -0.25f * plateR, 0.0f), plateR);
+		}
+	}
+
+	// THE CACTUS's random decisions (buildRockShape; before the normalization, in the aspect's units, the ground line at
+	// y = 0). Block 0 is only the stem's box (the bounds, the erosion cap, the ground line). Every part is a CHAIN of limbs
+	// (cactusSdf) sharing one `side` (its ribs line up across the joints) and continuing its along coordinate:
+	//   THE STEM - two segments from below the ground to its domed top, bent a little at mid height, narrower toward the
+	//              top (limbs 0 and 1);
+	//   THE ARMS - armCount.x..y at even angles around the stem, jittered, each leaving it at armHeight: a NECK out of the
+	//              stem's axis, rising 15..40 degrees and thinner where it joins, an ARC of 3 chords turning it upright
+	//              (radius 1.2..2 x its own), then the UPRIGHT part, leaning a little, to its domed top below the stem's.
+	//              ArmSize's reach = how far the upright part stands out from the stem's side.
+	void buildCactus(const RockTypeDesc& type, RockShape& s, auto&& rnd)
+	{
+		constexpr float TWO_PI = 2.0f * PI;
+		const auto rnds = [&](uint32 salt) { return rnd(salt) * 2.0f - 1.0f; };
+		const glm::vec3 Y(0.0f, 1.0f, 0.0f);
+		const float R = s.blockHalf[0].x;
+		const float H = 2.0f * s.blockHalf[0].y;
+		s.blockHalf[0].z = R;
+		s.blockCentre[0] = glm::vec3(0.0f, 0.5f * H, 0.0f);
+		s.standing = true;
+		s.ribCount = (uint32)type.ribCount;
+		s.ribDepth = type.ribDepth;
+		const auto addLimb = [&](const glm::vec3& a, const glm::vec3& b, float ra, float rb, const glm::vec3& side, float& along)
+		{
+			if (s.limbCount >= (uint32)ROCK_MAX_LIMBS)
+				return;
+			s.limbs[s.limbCount++] = { a, b, ra, rb, side, along };
+			along += glm::length(b - a) / (TWO_PI * glm::max(ra, 1e-4f));
+		};
+
+		// The stem: leaning up to ~3 degrees, its upper half bent a little more.
+		const float leanAxis = rnd(60) * TWO_PI;
+		const glm::vec3 leanDir(std::cos(leanAxis), 0.0f, std::sin(leanAxis));
+		const glm::vec3 stemSide(-leanDir.z, 0.0f, leanDir.x);
+		const glm::vec3 up0 = glm::normalize(Y + 0.05f * rnd(50) * leanDir);
+		const glm::vec3 up1 = glm::normalize(up0 + 0.04f * rnds(54) * leanDir + 0.03f * rnds(55) * stemSide);
+		const glm::vec3 foot(0.0f, -R, 0.0f); // the ground line cuts the stem's lower dome off
+		const float rMid = R * (0.96f + 0.04f * rnd(56));
+		const float rTop = R * (0.86f + 0.08f * rnd(51));
+		const glm::vec3 mid = foot + up0 * ((0.55f * H + R) / up0.y);
+		const glm::vec3 top = mid + up1 * ((0.45f * H - rTop) / up1.y);
+		float along = 0.0f;
+		addLimb(foot, mid, R, rMid, stemSide, along);
+		addLimb(mid, top, rMid, rTop, stemSide, along);
+		const auto stemAt = [&](float y) { return y < mid.y ? foot + up0 * ((y - foot.y) / up0.y) : mid + up1 * ((y - mid.y) / up1.y); };
+
+		const int count = glm::min(type.armCount.x + (int)(rnd(52) * (float)(type.armCount.y - type.armCount.x + 1)), type.armCount.y);
+		const float phase = rnd(53) * TWO_PI;
+		for (int i = 0; i < count && s.limbCount + 5 <= (uint32)ROCK_MAX_LIMBS; ++i)
+		{
+			const uint32 k = 1000u + 16u * (uint32)i;
+			const float azimuth = phase + ((float)i + 0.35f * rnds(k)) * TWO_PI / (float)count;
+			const glm::vec3 out(std::cos(azimuth), 0.0f, std::sin(azimuth));
+			const glm::vec3 side(-out.z, 0.0f, out.x); // across the arm's plane (out, up)
+			const float height = H * glm::mix(type.armHeight.x, type.armHeight.y, rnd(k + 1));
+			const float ra = R * type.armThickness * (0.85f + 0.3f * rnd(k + 2));
+			const float rise = glm::radians(15.0f + 25.0f * rnd(k + 3));
+			const float bend = ra * (1.2f + 0.8f * rnd(k + 4)); // the arc's radius
+			// The upright part's distance from the stem's axis = the neck's run + the arc's.
+			const float reach = R + type.armReach * R * (0.7f + 0.6f * rnd(k + 5));
+			const float neck = glm::max((reach - bend * (1.0f - std::sin(rise))) / std::cos(rise), 1.1f * R);
+			float armAlong = 0.37f * (float)(i + 1); // each arm its own stretch of areoles
+			glm::vec3 p = stemAt(height);
+			glm::vec3 q = p + (out * std::cos(rise) + Y * std::sin(rise)) * neck;
+			addLimb(p, q, 0.8f * ra, ra, side, armAlong);
+			for (int j = 0; j < 3; ++j)
+			{
+				const float t0 = glm::mix(rise, 0.5f * PI, (float)j / 3.0f), t1 = glm::mix(rise, 0.5f * PI, (float)(j + 1) / 3.0f);
+				p = q;
+				q = p + bend * (out * (std::sin(t1) - std::sin(t0)) + Y * (std::cos(t0) - std::cos(t1)));
+				addLimb(p, q, ra, ra, side, armAlong);
+			}
+			const float topY = glm::max(height + (H - height) * (0.45f + 0.5f * rnd(k + 6)), q.y + 2.5f * ra);
+			const float rTip = ra * (0.85f + 0.1f * rnd(k + 7));
+			const float rise2 = topY - rTip - q.y;
+			const glm::vec3 tip = q + Y * rise2 + (out * (0.12f * rnds(k + 8)) + side * (0.06f * rnds(k + 9))) * rise2;
+			addLimb(q, tip, ra, rTip, side, armAlong);
 		}
 	}
 }
@@ -634,9 +772,10 @@ namespace Procedural
 		// its own aspect jitter, yaw and tilt, from a random direction (sideways to upward) pushed in until it LEANS into
 		// the blocks before it - sunk ~35 % of its own height into them. A heap, not a column.
 		glm::vec3 aspect = type.aspect * (1.0f + type.aspectVar * glm::vec3(rnds(1), rnds(2), rnds(3)));
-		aspect = glm::max(aspect, glm::vec3(type.shape == ERockShape::Trunk ? 0.005f : 0.05f)); // a log is thin
 		const bool pillar = type.shape == ERockShape::Pillar;
 		const bool trunk = type.shape == ERockShape::Trunk;
+		const bool cactus = type.shape == ERockShape::Cactus;
+		aspect = glm::max(aspect, glm::vec3(trunk || cactus ? 0.005f : 0.05f)); // a log, a cactus stem are thin
 		glm::vec3 half = aspect * 0.5f;
 		s.blockHalf[0] = half;
 		s.blockCentre[0] = glm::vec3(0.0f);
@@ -644,9 +783,11 @@ namespace Procedural
 		// PILLARS: 1..Group of them (the variant's draw), each with its own profile (the type's, jittered, its widest
 		// point 1) and a lean of up to ~9 degrees; a later one is smaller and stands beside an earlier one, their bases
 		// overlapping, on the same floor.
-		s.blockCount = pillar ? 1u + glm::min((uint32)(rnd(5) * (float)type.group), (uint32)type.group - 1u) : trunk ? 1u : (uint32)type.pile;
+		s.blockCount = pillar ? 1u + glm::min((uint32)(rnd(5) * (float)type.group), (uint32)type.group - 1u) : trunk || cactus ? 1u : (uint32)type.pile;
 		if (trunk)
 			buildTrunk(type, s, rnd);
+		if (cactus)
+			buildCactus(type, s, rnd);
 		for (uint32 b = 0; pillar && b < s.blockCount; ++b)
 		{
 			if (b > 0)
@@ -712,7 +853,7 @@ namespace Procedural
 			lo = glm::min(lo, s.blockCentre[b] - e);
 			hi = glm::max(hi, s.blockCentre[b] + e);
 		}
-		// A trunk's limbs and root plate reach past its block.
+		// A trunk's limbs and root plate, a cactus's arms reach past its block.
 		for (uint32 i = 0; i < s.limbCount; ++i)
 		{
 			const RockShape::Limb& l = s.limbs[i];
@@ -735,15 +876,18 @@ namespace Procedural
 		}
 		for (uint32 i = 0; i < s.limbCount; ++i)
 		{
-			RockShape::Limb& l = s.limbs[i];
-			l = { (l.a - centre) * norm, (l.b - centre) * norm, l.ra * norm, l.rb * norm };
+			RockShape::Limb& l = s.limbs[i]; // its side and along0 are scale-free
+			l.a = (l.a - centre) * norm;
+			l.b = (l.b - centre) * norm;
+			l.ra *= norm;
+			l.rb *= norm;
 		}
 		s.plate = glm::vec4((glm::vec3(s.plate) - centre) * norm, s.plate.w * norm);
 		s.plateThickness *= norm;
 		const glm::vec3 boxHalf = size * 0.5f * norm;
 		s.floorY = s.blockCentre[0].y - s.blockHalf[0].y;
-		// A trunk's ground line: a log lies on its underside (the trunk's vertical half: block x), a stump / snag stands
-		// on its flat-cut base.
+		// A trunk's ground line: a log lies on its underside (the trunk's vertical half: block x), a stump / snag / cactus
+		// stands on its flat-cut base.
 		s.groundY = s.standing ? s.blockCentre[0].y - s.blockHalf[0].y : s.blockCentre[0].y - s.blockHalf[0].x;
 		// EROSION shrinks every block by its radius before the field grows back: past the thinnest half-axis the block
 		// turns inside out, its field negative out to the bounds - an OPEN mesh (the clutter's thin pebbles at Erosion
@@ -780,7 +924,8 @@ namespace Procedural
 		// The stretch runs along a lying trunk (its X), else along Y.
 		s.noiseScale = trunk && type.lying ? glm::vec3(1.0f / type.noiseStretch, 1.0f, 1.0f) : glm::vec3(1.0f, 1.0f / type.noiseStretch, 1.0f);
 		s.ridged = type.ridged;
-		s.wood = type.surface == ERockSurface::Wood;
+		s.wood = type.surface == ERockSurface::Wood || type.surface == ERockSurface::Cactus;
+		s.cactusSkin = type.surface == ERockSurface::Cactus;
 
 		// Pits: a sphere sunk into the body's surface from a random, mostly upward direction (the bisection finds the
 		// surface along it on the body alone).
@@ -844,7 +989,8 @@ namespace Procedural
 			minY = glm::min(minY, p.y);
 			maxY = glm::max(maxY, p.y);
 		}
-		const float originY = out.shape.kind == ERockShape::Trunk ? glm::clamp(out.shape.groundY, minY, maxY) : minY;
+		const bool groundLine = out.shape.kind == ERockShape::Trunk || out.shape.kind == ERockShape::Cactus;
+		const float originY = groundLine ? glm::clamp(out.shape.groundY, minY, maxY) : minY;
 		for (glm::vec3& p : full.positions)
 			p.y -= originY;
 		out.shape.originY = originY;

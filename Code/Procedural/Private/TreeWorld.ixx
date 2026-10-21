@@ -115,7 +115,7 @@ export namespace Procedural
 		// ground around it - indexed by the record's type, read by the clutter's floor map bake.
 		struct FloorType
 		{
-			uint8 kind = 0;           // 0 = nothing (not placed), 1 = a tree, 2 = a rock, 3 = dead wood (a rock type of `Surface Wood`)
+			uint8 kind = 0;           // 0 = nothing (not placed), 1 = a tree (or a bush placed on its own), 2 = a rock, 3 = dead wood (a rock type of `Surface Wood`)
 			float crown = 0.0f;       // tree: the crown's radius (m, at the species' mean scale)
 			float trunk = 0.0f;       // tree: the trunk's radius at the ground (m)
 			glm::vec2 rockScale{ 0.0f }; // rock / wood: the type's Scale range (rockRecordScale)
@@ -161,6 +161,7 @@ export namespace Procedural
 		{
 			oc::shared_ptr<const ITerrainSampler> maps;
 			oc::vector<Species> species; // the placed ones (density > 0, trees only)
+			oc::vector<Species> bushes;  // the bushes placed ON THEIR OWN (`Kind Bush` with a Placement block): their own pass
 			oc::vector<RockSpecies> rocks; // the placed rock types
 			RockWorldDesc rockRules;     // sanitized (restart)
 			float seaLevel = 0.0f;      // the rocks' crag fit (the terrain's relief above the macro altitude)
@@ -229,6 +230,7 @@ export namespace Procedural
 		oc::vector<oc::string> m_typeNames;  // every .tree, name-sorted, then every .rock, name-sorted: the record type is the index
 		oc::vector<FloorType> m_floorTypes;  // parallel to m_typeNames
 		oc::vector<Species> m_species;
+		oc::vector<Species> m_bushes;
 		oc::vector<RockSpecies> m_rocks;
 		uint32 m_firstRockType = 0;
 		bool m_rocksEnabled = false;         // setRocks

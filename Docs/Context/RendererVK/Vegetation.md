@@ -226,7 +226,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
 ## Ground clutter (`ClutterPipeline`, "Clutter" tweaks, `ClutterSettings`)
 
 Procedural CONTEXT "Ground clutter" has the types, the `.clutter` grammar and the FOREST FLOOR MAP. Pebbles, fallen
-branches, mushrooms and flowers, placed on the GPU every frame - no CPU memory per object, no CPU work per frame but
+branches, mushrooms, cacti and flowers, placed on the GPU every frame - no CPU memory per object, no CPU work per frame but
 the clutter frame's header. Desktop only (as the grass).
 
 * **THE MODEL** (`clutter_cull.cs.glsl`): a grid of PATCHES ("Patch size (m)", 4 m) around the camera
@@ -276,8 +276,11 @@ the clutter frame's header. Desktop only (as the grass).
   write motion.
 * **THE RIGID MATERIAL** per kind: PEBBLE - the climate's BEDROCK (the splat's rock entries, the top climate pick,
   triplanar at 4 x the rocks' uv scale) x the type's colour; BRANCH - bark with streaks along the wood (part 0), end
-  grain (part 1); MUSHROOM - the cap (part 1) with optional SPOTS, the stem (0) and the gills (2). The vertex AO, and
-  "Contact darkening" over "Contact height (m)" at the foot.
+  grain (part 1); MUSHROOM - the cap (part 1) with optional SPOTS, the stem (0) and the gills (2); CACTUS - the skin
+  (Color) with AREOLES (`cactusSkin`, `cactus.inc.glsl`: felt pads and spines in Color2, as the rocks' cactus - see
+  "The rock material" in [Terrain.md](Terrain.md)) on a ribbed body's crests (part 0: the uv's (cos, sin) around x the
+  rib count in uv.w, along in uv.z) or over a pad (part 1: the uv's lattice). The vertex AO, and "Contact darkening"
+  over "Contact height (m)" at the foot.
 * **THE FLOWERS** (`clutter_flower.vs.glsl`): the STEM is a grass blade - the same Bezier, lean and wind
   (`grass_wind.inc.glsl`), so a flower sways exactly as the grass around it; motion vectors from last frame's time.
   The HEAD sits at the tip in a frame along the stem's upper chord: RADIAL (petals around a centre disc, tilted up by

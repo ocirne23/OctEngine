@@ -624,9 +624,12 @@ namespace Procedural
 					(uint8)(glm::clamp(species.desc.leafColor.y, 0.0f, 1.0f) * 255.0f + 0.5f),
 					(uint8)(glm::clamp(species.desc.leafColor.z, 0.0f, 1.0f) * 255.0f + 0.5f), 255 };
 			}
-			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`.
+			// `Color Far` (sRGB, decoded) overrides the leaf texture's mean; x `Billboard FarAlbedoScale`. A species WITHOUT
+			// leaves (a succulent: bark blades) shows in the volume as its bark (bakeTreeDensity splats it): the bark's mean.
 			const glm::vec3 far = species.desc.farColor;
-			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f)) : meanLeafAlbedo(leafImage, species.desc.leafColor))
+			const bool leafless = species.variants.empty() || species.variants[0].leaves[0].indices.empty();
+			species.volumeAlbedo = (far.x >= 0.0f ? glm::pow(far, glm::vec3(2.2f))
+				: leafless ? meanLeafAlbedo(barkAlbedo, species.desc.barkColor) : meanLeafAlbedo(leafImage, species.desc.leafColor))
 				* species.desc.farAlbedoScale;
 			if (m_settings.farMode == 0 && species.desc.billboardDistance > 0.0f)
 			{
@@ -1149,8 +1152,8 @@ namespace Procedural
 						type.densityMin = variant.densityMin - sink;
 						type.densityMax = variant.densityMax - sink;
 						type.solid = true;
-						type.solidOwnColour = rockType.wood;
-						type.albedo = rockType.woodAlbedo;
+						type.solidOwnColour = rockType.ownColour;
+						type.albedo = rockType.ownAlbedo;
 					}
 					rock.variants.push_back({ (uint32)gpuTypes.size(), variant.centre, variant.radius, variant.height });
 					gpuTypes.push_back(type);
@@ -1207,7 +1210,8 @@ namespace Procedural
 			if (context->species[s].bushes.empty())
 				context->species[s].bushes = bushes;
 		}
-		// The record types are TreeWorld's (its name-sorted .tree list): matched by name.
+		// The record types are TreeWorld's (its name-sorted .tree list): matched by name. A bush's record (a bush placed on
+		// its own) expands to the bush alone: it has no undergrowth.
 		for (uint32 type = 0; type < 256; ++type)
 		{
 			const oc::string_view name = m_world.typeName(type);
@@ -1216,7 +1220,7 @@ namespace Procedural
 			int32 index = -1;
 			if (type < m_world.firstRockType())
 				for (size_t s = 0; s < m_species.size(); ++s)
-					if (!m_species[s].desc.bush && oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
+					if (oc::string_view(m_species[s].desc.name) == name && !m_species[s].variantMeshes.empty())
 						index = (int32)s;
 			context->speciesOfRecordType.push_back(index);
 		}
@@ -1337,7 +1341,7 @@ namespace Procedural
 				TreeRecordTypeGpu& out = recordTypes[t];
 				out.scale = rock.scale;
 				out.sizeVariation = 0.0f;
-				out.albedo = world.wood ? glm::vec4(world.woodAlbedo, 0.5f) : glm::vec4(0.0f); // w: 0.5 a solid in its own colour
+				out.albedo = world.ownColour ? glm::vec4(world.ownAlbedo, 0.5f) : glm::vec4(0.0f); // w: 0.5 a solid in its own colour
 				clipped |= rock.variants.size() > TREE_RECORD_MAX_VARIANTS;
 				out.numVariants = (uint32)glm::min(rock.variants.size(), (size_t)TREE_RECORD_MAX_VARIANTS);
 				const float meanScale = 0.5f * (rock.scale.x + rock.scale.y);

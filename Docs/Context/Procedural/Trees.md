@@ -29,7 +29,8 @@ Keys and enum values are case-insensitive.
 
 ```
 TreeSpecies <name>
-	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush grows around trees, never as one)
+	Seed n · Scale min max · Kind Tree|Bush (default Tree; a Bush grows around trees, never as one - and, with a
+	        Placement block, also ON ITS OWN: "THE BUSHES ON THEIR OWN" in World records)
 	Climate <name> (a Bush grows around the trees of the same climate only; a bush may list SEVERAL names -
 	        `Climate Boreal BirchWood` - and grows around the trees of any of them; a tree whose climate no bush shares
 	        takes every bush)
@@ -131,7 +132,8 @@ TreeSpecies <name>
 	        Section r g b (default 0.45 0.33 0.24) · Twig r g b (the twigs / stems drawn in the LEAF texture; absent =
 	        Bark - a birch's white bark read wrong on its twigs) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
 	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`)
-	Placement (WORLD placement, TreeWorld; trees only - absent or Density 0 = never placed in the world)
+	Placement (WORLD placement, TreeWorld; absent or Density 0 = never placed in the world on its own - a Bush then only
+        grows as a tree's undergrowth; a Bush's block uses Density, the climate box, Cluster, MaxSlope and Altitude)
 	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)
 	        Precipitation min max (mm/yr; the ideal range - 2200 and up is the encoding's top, so a max there is no max)
 	        ClimateWidth (sigma of the falloff OUTSIDE the ideal box, in the normalized climate space, 0.06)
@@ -152,6 +154,12 @@ TreeSpecies <name>
         ElbowMinElevation (deg vs horizontal an elbow may turn down to; default -15; a branch that already
         points lower before the elbow is not lifted) · ElbowRange start end (length fractions; default 0 1)
         Stubs (probability an elbow carries a snapped-off stub) · Rings · Sides
+        Section width thickness [channel] (x the radius, 0.1..4, default 1 1 = round: a flat BLADE - each ring an
+        ellipse, `width` across the module's X and `thickness` along its up side +Z, normals from the deformed grid; a
+        succulent's leaf. `channel` 0..2: the section bent into a GUTTER, its middle that x the radius below its edges -
+        hollow on the up side, keeled below) · Swell (-0.9..3: the radius x (1 + swell x sin(pi x the length fraction))
+        - a blade widest near its middle instead of a linear taper to a needle) · Tip (0..0.8 of the length narrowing to
+        a closed point; default 0 = open end)
 ```
 
 **Elbows** are sharp turns on interior ring nodes, each rounded by replacing the corner with three points of
@@ -310,6 +318,15 @@ The round bushes, two per climate:
 
 A bush is a tree species with a short trunk, slots from the ground (`Crown Start 0`), a large `BranchRadius`
 (the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
+
+The SUCCULENTS - `Climate Desert` (no tree's, so never undergrowth), placed ON THEIR OWN by their `Placement` blocks:
+`Agave` (a rosette ~1.5-3 m across: 32 slots on a short hidden trunk, the crown from 30 % of its height so the outer
+leaves rise off the ground, `Shape Cone` - the outer leaves longest -, `Angle 72 12`; each module ONE broad blue-grey
+blade curving up, `Section 1.6 0.3 0.5` (a gutter on top), `Swell 0.8`, `Tip 0.3`, 14 rings x 12 sides, no leaf cards
+- `Leaves PerBranch 0`; `Wind Trunk 0`; the desert sand box 20 C up / 0..350 mm, 60 / ha) and `Aloe` (narrower,
+thicker, green blades curving strongly up, `Section 1.2 0.5 0.35`, `Swell 0.5`; pale flecks in bands = the bark's
+`Lenticels` in a pale `Color Mark`; 18 C up / 50..400 mm, 40 / ha). Having no leaves, they enter the far-tree volume by their BARK blades (`bakeTreeDensity`) in the
+bark texture's mean colour.
 
 ### Piece mesh LODs
 
@@ -532,9 +549,10 @@ the walk does not carry it (terrain off, or the respawn frame - the new hooks st
 
 Every baked variant also carries its FAR-TREE VOLUME grid (`bakeTreeDensity`, `TREE_DENSITY_RES` = 32³ extinction
 over its billboard box, from the LOD-0 LEAF triangles only; cluster leaves count half opaque. No bark: a trunk's whole
-area in one thin voxel column draws dashed vertical streaks through the far blobs) and the species leaf colour — the
+area in one thin voxel column draws dashed vertical streaks through the far blobs - EXCEPT for a piece with no leaves at
+all (the succulents' bark blades), which splats its bark at a quarter of its surface) and the species leaf colour — the
 leaf texture's alpha-weighted mean, DECODED FROM sRGB (`meanLeafAlbedo`; the albedo textures upload as sRGB, so the
-raw `leafColor` taken as linear reads light yellow-green) — handed to the set as the type's density / albedo
+raw `leafColor` taken as linear reads light yellow-green; a leafless species: its BARK texture's mean) — handed to the set as the type's density / albedo
 (RendererVK "Far-tree volume"). With billboards, the BILLBOARD is the piece's only shadow / GI / RT representation at
 every distance: the mesh draws in the MAIN pass only (both paths). Off, it keeps the CPU path ("The preview": one
 `RenderNode` per piece representation, pushed per frame). The set is destroyed on respawn / reload / disable.
@@ -599,8 +617,16 @@ before its `Enabled` check: it runs with the preview off.
   to their own total - which trees grow changes, not how many (birch forests among the oaks' and pines' edges, not
   every species in every wood; 1 = off). A RARE species (Willow, 1 / ha, among Oak's 90) does not compete: it keeps its
   own density everywhere (competing, a won willow stand cut the oaks to the minority, and the rescale made ~1 tree in
-  6 a willow). Bushes are not stored. No tree or rock where the river influence is above "Terrain/Rivers/
-  Vegetation clear" (except rock rules with a River term, below).
+  6 a willow). A tree's undergrowth bushes are not stored. No tree, bush or rock where the river influence is above
+  "Terrain/Rivers/Vegetation clear" (except rock rules with a River term, below).
+* **THE BUSHES ON THEIR OWN** (a `Kind Bush` species with a `Placement` block - the desert's `Agave` / `Aloe`):
+  records of their own, from a pass AFTER the trees on their own chunk lattice (`BUSH_CELL` 3 m, at most one per cell,
+  hash salt 0xB054), their densities ADDED (independent ground covers; one picked by share). Each one's climate fit is
+  a tree's (the box, the Gaussian outside it, the fade) x its `Cluster` patches, gated by `MaxSlope` and `Altitude` -
+  but NONE of the trees' grassland mask, sharpening or forest types: a bush needs no forest. Out of the rocks'
+  footprints (the trees' test) and `BUSH_TREE_CLEAR` (2 m) from this chunk's trees (a tree's undergrowth is its own).
+  The record expands to the bush alone (`expandChunk`: a bush species has no undergrowth); its floor type is a tree's
+  (kind 1: its crown and trunk radius).
   **The existence roll goes FIRST** (exact, the same result): a tree candidate whose roll is above the species'
   summed `Density` x the cell's hectares, or a rock cell whose roll is above its type's bound (every rule's `Density`
   x its largest ground / forest / river / flow multipliers - every fit term is at most 1), skips its field sample and

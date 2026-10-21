@@ -20,6 +20,9 @@
 // baked in). On the outer skin, BARK, mapped as on a tree branch: u once around the part, v along it in base
 // circumferences. On the cut and broken faces (bark cover 0), END GRAIN: the bark's colour paled and greyed, with
 // growth rings around the part's axis. 2 and 3 lie on top of it as on a rock.
+// A CACTUS (`Surface Cactus`: in_wood.w = 3 + the rib count / 100, the coordinates as dead wood's) replaces 1 with its
+// SKIN - its material's two colours, the areoles on the rib crests (cactus.inc.glsl) - and takes no ground cover (only the
+// contact band at its foot and snow).
 
 #include "shared.inc.glsl"
 
@@ -27,7 +30,7 @@ layout (location = 0) in vec3 in_pos;
 layout (location = 1) in vec3 in_normal; // geometric (interpolated vertex) normal
 layout (location = 2) in vec4 in_rockFields; // VS-evaluated: x = ground height under the vertex (world Y), y = temperature C, z = humidity, w = water level
 layout (location = 3) in float in_cavity;    // the vertex's baked cavity: 1 = open, 0 = deep in a crevice
-layout (location = 4) in vec4 in_wood;       // dead wood: x = along (base circumferences), yz = across (m), w = 1 + the bark cover; 0 = a rock
+layout (location = 4) in vec4 in_wood;       // dead wood: x = along (base circumferences), yz = across (m), w = 1 + the bark cover; a cactus: w = 3 + ribs / 100; 0 = a rock
 layout (location = 5) flat in uint in_material;
 
 #ifdef STEREO
@@ -46,6 +49,7 @@ layout (location = 1) out vec4 out_motion;
 #include "terrain_wetness.inc.glsl"
 // No TERRAIN_SPLAT_RELIEF: linear layer blends, no parallax.
 #include "terrain_splat.inc.glsl"
+#include "cactus.inc.glsl"
 
 // The DEAD WOOD surface at this pixel (in_wood: x along the part in base circumferences, yz across it in metres, the
 // bark cover).
@@ -97,6 +101,28 @@ TerrainSample woodSurface(vec3 geoN)
 	return s;
 }
 
+// A CACTUS's skin at this pixel: its material is a 1 x 2 texture - the skin (row 0), the spines (row 1); sRGB, linear on
+// fetch. The ribs are the mesh's; the angle around the part finds their crests (in_wood.yz, as dead wood's u).
+TerrainSample cactusSurface(vec3 geoN)
+{
+	const uint texIdx = in_materialInfos[in_material].diffuseNormalTexIdx & 0xFFFFu;
+	const vec3 skin = texelFetch(u_textures[nonuniformEXT(texIdx)], ivec2(0, 0), 0).rgb;
+	const vec3 spines = texelFetch(u_textures[nonuniformEXT(texIdx)], ivec2(0, 1), 0).rgb;
+	const float ribs = round((in_wood.w - 3.0) * 100.0);
+	float pixel;
+	// Around and along (base circumferences) x the rib count = rib widths.
+	const vec2 cell = vec2(cactusAround(in_wood.yz, pixel), in_wood.x) * ribs;
+	float cover = 0.0;
+	TerrainSample s;
+	s.albedo = f16vec3(ribs > 0.5 ? cactusSkin(cell, ribs, max(pixel * ribs, fwidth(cell.y)), skin, spines, cover) : skin);
+	s.normal = f16vec3(geoN);
+	s.rough = float16_t(mix(0.55, 0.75, cover)); // a waxy skin, the felt and the spines duller
+	s.metal = float16_t(0.0);
+	s.ao = float16_t(1.0);
+	s.height = float16_t(0.5);
+	return s;
+}
+
 void main()
 {
 #ifdef STEREO
@@ -111,9 +137,11 @@ void main()
 	const float16_t one = float16_t(1.0);
 	const f16vec3 geoNh = f16vec3(geoN);
 	const float cavity = in_cavity; // in [0, 1]: the generator clamps it
-	// Before a splat texture set is registered: plain grey stone. Dead wood needs no splat.
-	const bool wood = in_wood.w > 0.5;
-	TerrainSample surf = wood ? woodSurface(geoN) : TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
+	// Before a splat texture set is registered: plain grey stone. Dead wood and a cactus need no splat.
+	const bool own = in_wood.w > 0.5; // its own material, not the climate's bedrock
+	const bool cactus = in_wood.w > 2.5;
+	TerrainSample surf = cactus ? cactusSurface(geoN) : own ? woodSurface(geoN)
+		: TerrainSample(f16vec3(0.42, 0.40, 0.38), geoNh, float16_t(0.85), float16_t(0.0), one, float16_t(0.5));
 	float16_t contact = float16_t(0.0);
 	if (u_terrain_splatBase >= 0.0 && u_terrain_numRock >= 1.0)
 	{
@@ -146,15 +174,19 @@ void main()
 
 		// THE GROUND COVER: of the up-facing faces, broken into patches by a world noise ("Cover patch size"), and of the
 		// CREVICES ("Cavity cover" x the baked cavity: moss and dust gather where the rock is occluded), on any face
-		// that does not look down.
-		float cover = smoothstep(u_rock_coverStart, u_rock_coverFull, geoN.y);
-		if (cover > 0.0)
-			cover *= smoothstep(-0.25, 0.25, terrainFbm(in_pos.xz * u_rock_invCoverPatchSize));
-		cover = u_rock_coverAmount * max(cover, u_rock_cavityCover * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
+		// that does not look down. Never on a cactus (no sand on its crown, none in its rib valleys).
+		float cover = 0.0;
+		if (!cactus)
+		{
+			cover = smoothstep(u_rock_coverStart, u_rock_coverFull, geoN.y);
+			if (cover > 0.0)
+				cover *= smoothstep(-0.25, 0.25, terrainFbm(in_pos.xz * u_rock_invCoverPatchSize));
+			cover = u_rock_coverAmount * max(cover, u_rock_cavityCover * (1.0 - cavity) * smoothstep(-0.2, 0.3, geoN.y));
+		}
 		const float16_t groundW = numGround > 0 ? max(float16_t(cover), contact * float16_t(u_rock_contactBlend)) : float16_t(0.0);
 
 		// 1. The bedrock - buried under a full ground band or full snow: the placeholder stays, replaced below.
-		if (!wood && snowW < opaque && groundW < opaque)
+		if (!own && snowW < opaque && groundW < opaque)
 		{
 			const ClimatePick r = pickClimate(climate, numGround, numRock, invS2);
 			const float uvScale = u_terrainTex_uvScaleRock * u_rock_uvScale;
@@ -179,8 +211,8 @@ void main()
 				terrainMixInto(surf, ground, groundW);
 		}
 
-		// The macro variation, under the snow as on the terrain (not on dead wood: its bark is no splat material).
-		if (!wood)
+		// The macro variation, under the snow as on the terrain (not on dead wood or a cactus: no splat material).
+		if (!own)
 			terrainApplyMacro(surf, macro);
 
 		// 3. Snow (it lies on up-facing faces only: the world-XZ projection is enough).

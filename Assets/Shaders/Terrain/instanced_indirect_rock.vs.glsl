@@ -8,7 +8,8 @@
 // The procedural rocks' variant of instanced_indirect.vs.glsl (EPipelineIndex::LitRock): the world position, the
 // geometric normal and the baked cavity, plus the terrain-data fields per vertex (the ground height under the vertex
 // for the contact band, and the climate). DEAD WOOD (`Surface Wood`): the mesh's v is 1 + the bark cover and its
-// TANGENT holds the wood coordinates (RockMesh) - both passed on, across in metres - with the instance's material.
+// TANGENT holds the wood coordinates (RockMesh) - both passed on, across in metres - with the instance's material. A
+// CACTUS (`Surface Cactus`) the same, its v = 3 + the rib count / 100.
 
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
@@ -34,7 +35,7 @@ layout (binding = 1, std430) readonly buffer InMeshInstances
 };
 
 layout (location = 0) in vec4 in_posU;    // xyz = position, w = uv.x: a rock has no uv - the u channel is its CAVITY
-layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y: 0 a rock, 1 + the bark cover dead wood
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y: 0 a rock, 1 + the bark cover dead wood, 3 + ribs / 100 a cactus
 layout (location = 2) in vec4 in_tangent; // dead wood: its wood coordinates - x along (base circumferences), yz across (nominal units)
 layout (location = 4) in uint inst_idx;
 
@@ -42,7 +43,7 @@ layout (location = 0) out vec3 out_pos;
 layout (location = 1) out vec3 out_normal;
 layout (location = 2) out vec4 out_rockFields; // x = ground height under the vertex (world Y), y = temperature C, z = humidity, w = water level
 layout (location = 3) out float out_cavity;    // 1 = open, 0 = deep in a crevice (Procedural RockGenerator, from the shape's field)
-layout (location = 4) out vec4 out_wood;       // x = along (base circumferences), yz = across (m), w = 0 a rock, 1 + the bark cover dead wood
+layout (location = 4) out vec4 out_wood;       // x = along (base circumferences), yz = across (m), w = in_normalV.w (0 a rock)
 layout (location = 5) flat out uint out_material;
 
 void main()

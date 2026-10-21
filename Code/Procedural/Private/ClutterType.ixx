@@ -7,7 +7,7 @@ import RendererVK; // RendererVKLayout::EClutterKind / EFlowerHead
 import :RockType;
 
 // One GROUND CLUTTER type, authored as a `.clutter` text asset (Assets/Clutter/; Docs/Context/Procedural/Clutter.md): what it
-// is (the SHAPE - a pebble, a fallen branch, a mushroom, a flower) and where it grows (its Placement blocks: the
+// is (the SHAPE - a pebble, a fallen branch, a mushroom, a flower, a cactus) and where it grows (its Placement blocks: the
 // climate, the terrain, and the FOREST FLOOR - canopy, trunks, rocks). Placement is evaluated on the GPU every frame
 // (clutter_cull.cs.glsl); every Placement block is its own GPU type over the same meshes, so their densities ADD.
 export namespace Procedural
@@ -39,6 +39,13 @@ export namespace Procedural
 		Flat,   // a wide flat cap on a tall stem (parasol)
 		Cone,   // a pointed cap (ink cap, liberty cap)
 		Funnel, // a cap curved up into a funnel (chanterelle)
+	};
+
+	enum class ECactusForm : uint8
+	{
+		Barrel, // one ribbed globe / barrel (barrel cactus, golden barrel)
+		Column, // a cluster of ribbed columns with domed tops (hedgehog cactus, a young organ pipe)
+		Pad,    // flat oval pads growing from each other's rims (prickly pear)
 	};
 
 	// One placement rule. The density (per m^2) x the climate fit x each term mix(a, b, measure 0..1). Default
@@ -78,8 +85,8 @@ export namespace Procedural
 		float range = 60.0f;           // m from the camera (x "Clutter/Range scale")
 		float sink = 0.1f;             // fraction of the height below the ground
 		float align = 1.0f;            // 0 upright .. 1 follows the ground's normal
-		glm::vec3 color{ 1.0f };       // sRGB: pebble = a tint on the climate's bedrock; branch = bark; mushroom = cap; flower = petals
-		glm::vec3 color2{ 0.5f };      // sRGB: branch = end grain; mushroom = stem + gills; flower = its centre
+		glm::vec3 color{ 1.0f };       // sRGB: pebble = a tint on the climate's bedrock; branch = bark; mushroom = cap; flower = petals; cactus = skin
+		glm::vec3 color2{ 0.5f };      // sRGB: branch = end grain; mushroom = stem + gills; flower = its centre; cactus = spines
 		float roughness = 0.8f;
 		int lodTriangles = 160;        // level 0 (pebble, mushroom); each further level about a quarter
 
@@ -93,8 +100,13 @@ export namespace Procedural
 		EMushroomCap cap = EMushroomCap::Dome;
 		glm::vec2 capSize{ 0.45f, 0.3f }; // radius, height (x the mushroom's height)
 		float stemRadius = 0.09f;
-		int group = 1;                 // 1..5 mushrooms per variant, each smaller, around the first
+		int group = 1;                 // 1..5 mushrooms (cactus columns) per variant, each smaller, around the first
 		float spots = 0.0f;            // 0..1: white spots on the cap
+		// Cactus (height 1 = the tallest part): its form, the ribs (`Ribs`: rock.ribCount / ribDepth), its girth (a barrel's
+		// or a column's diameter / a pad's width, x its height / length) and a prickly pear's pad count.
+		ECactusForm cactusForm = ECactusForm::Barrel;
+		float girth = 0.8f;
+		int pads = 5;
 		// Flower (no mesh: built in the vertex shader). A REED head: the petals are long pointed leaves from the root
 		// (PetalWidth x HeadSize wide, Open = their lean out from upright), the head a cattail spike (Color2). A TUFT head:
 		// no stalk, Petals / 2 fine leaves (two slots each: a bend) arching out from one point and drooping (Color).

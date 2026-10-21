@@ -48,6 +48,12 @@ export namespace Procedural
 		float stubs = 0.0f;       // probability that an elbow carries a snapped-off branch stub
 		int rings = 5;             // rings along the length (each elbow adds 2 more to round it)
 		int sides = 5;
+		// A flat BLADE (a succulent's leaf): the cross-section's width (across: the module's X) and thickness (along its
+		// up side, +Z) x the radius. 1 1 = round.
+		glm::vec2 section{ 1.0f, 1.0f };
+		float channel = 0.0f;      // the section bent into a GUTTER: its middle this x the radius below its edges (hollow on top, keeled below)
+		float swell = 0.0f;        // the radius x (1 + this x sin(pi x the length fraction)): a blade widest near its middle
+		float tip = 0.0f;          // the last fraction of the length narrows to a closed point (a blade's tip); 0 = open end
 	};
 
 	// One recursion level of sub-branches inside a branch module (level 1 = children of the module root).

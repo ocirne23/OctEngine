@@ -329,6 +329,7 @@ static oc::string buildLayoutPreamble()
     def("CLUTTER_KIND_BRANCH", (uint32)EClutterKind::Branch, "u");
     def("CLUTTER_KIND_MUSHROOM", (uint32)EClutterKind::Mushroom, "u");
     def("CLUTTER_KIND_FLOWER", (uint32)EClutterKind::Flower, "u");
+    def("CLUTTER_KIND_CACTUS", (uint32)EClutterKind::Cactus, "u");
     def("FLOWER_HEAD_RADIAL", (uint32)EFlowerHead::Radial, "u");
     def("FLOWER_HEAD_SPIKE", (uint32)EFlowerHead::Spike, "u");
     def("FLOWER_HEAD_UMBEL", (uint32)EFlowerHead::Umbel, "u");

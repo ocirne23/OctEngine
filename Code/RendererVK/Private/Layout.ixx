@@ -814,7 +814,7 @@ export namespace RendererVKLayout
     constexpr float RIVER_FLOW_FAST = 2.5f;
 
     // The kinds of clutter (ClutterTypeGpu::info.z): how the cull places it and which draw and material it takes.
-    enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3 };
+    enum class EClutterKind : uint32 { Pebble = 0, Branch = 1, Mushroom = 2, Flower = 3, Cactus = 4 };
     // A flower's head (clutter_flower.vs.glsl).
     enum class EFlowerHead : uint32 { Radial = 0, Spike = 1, Umbel = 2, Bell = 3, Reed = 4, Tuft = 5, Grain = 6, Fern = 7, Rosette = 8, Leafy = 9 };
 
@@ -854,9 +854,12 @@ export namespace RendererVKLayout
     struct ClutterVertexGpu
     {
         glm::vec4 posAo;      // xyz position (scale 1, y up, the lowest point at 0), w ambient occlusion 0..1
-        glm::vec4 normalPart; // xyz normal, w the PART: Branch 0 bark / 1 end grain; Mushroom 0 stem / 1 cap / 2 gills
+        glm::vec4 normalPart; // xyz normal, w the PART: Branch 0 bark / 1 end grain; Mushroom 0 stem / 1 cap / 2 gills;
+                              // Cactus 0 a ribbed body / 1 a pad
         glm::vec4 uv;         // Branch bark: x along the wood, y around it (both m at scale 1); end grain: zw the point
-                              // across the cut (m from its axis). Mushroom: x around (0..1), y up its profile (0..1)
+                              // across the cut (m from its axis). Mushroom: xy (cos, sin) around, z up its profile (0..1).
+                              // Cactus body: xy (cos, sin) around, z along it in base circumferences, w the rib count;
+                              // pad: xy the areole lattice (an areole per whole number)
     };
     static_assert(sizeof(ClutterVertexGpu) == 48);
 

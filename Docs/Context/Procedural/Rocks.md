@@ -11,7 +11,8 @@ stones are the GROUND CLUTTER (see "Ground clutter" ([Clutter.md](Clutter.md)): 
 generator). The type sets the SHAPE only; the colour comes from the climate's terrain bedrock material (RendererVK
 "The rock material", `LitRock`). **DEAD WOOD** is rock types too - `Shape Trunk` + `Surface Wood` ("DEAD WOOD"
 below): fallen logs, stumps and snags through the same records, LOD chains, far volume and placement rules, wearing an
-existing tree species' bark texture (no procedural wood noise).
+existing tree species' bark texture (no procedural wood noise). So is the **CACTUS** - `Shape Cactus` + `Surface
+Cactus` ("CACTUS" below): a ribbed saguaro in the type's own colours.
 
 ### The model: an SDF per variant, meshed into a regular LOD chain
 
@@ -55,18 +56,23 @@ RockType <name>
 	Seed n · Scale min max (m, the longest axis; clamped to 0.1 .. `ROCK_MAX_SIZE` = 22 m - the far volume's layer
 	        height) · Variants n (1..32, default 6) · Sink (0..0.9 of the height below ground, default 0.15; a lying
 	        trunk's height is its thickness)
-	Surface Rock|Wood (default Rock: the climate's bedrock. Wood: a tree species' bark texture - "DEAD WOOD" below)
+	Surface Rock|Wood|Cactus (default Rock: the climate's bedrock - Cactus for `Shape Cactus`. Wood: a tree species'
+	        bark texture - "DEAD WOOD" below. Cactus: the type's skin with areoles - "CACTUS" below)
 	Bark <TreeSpecies> (Wood: whose bark texture it wears; default Oak) · Color r g b (Wood: a tint on that bark,
-	        sRGB 0..1, default 1 1 1)
-	Shape Boulder|Block|Pillar|Trunk (superellipsoid / superellipsoid / a STANDING body with a width profile, on a flat
-	        floor / a dead TREE TRUNK - "DEAD WOOD" below)
+	        default 1 1 1; Cactus: the skin; sRGB 0..1) · Color2 r g b (Cactus: the spines)
+	Shape Boulder|Block|Pillar|Trunk|Cactus (superellipsoid / superellipsoid / a STANDING body with a width profile, on
+	        a flat floor / a dead TREE TRUNK - "DEAD WOOD" below / a columnar CACTUS - "CACTUS" below)
+	CACTUS: Aspect x = the stem's thickness, y = its height · Ribs count depth (0..40 around every segment, the
+	        valleys depth x its radius deep, 0..0.4; also the clutter's cacti) · Arms min max (0..5 per variant) ·
+	        ArmHeight lo hi (where they leave the stem, x its height) · ArmSize thickness reach (x the stem's radius:
+	        0.3..1 thick, the elbow 0.5..5 out from the stem's side) · Resolution ~6 (the ribs need ~3 cells each)
 	TRUNK: Lying 0|1 (1: along X, a fallen log; 0: along Y, a stump or a snag) · Aspect = the trunk's length along its
 	        axis and its thickness across · Profile = its radius base to top · Squareness default 2 (round) ·
 	        Break top base (splinter length x the trunk's radius at that end, 0..8; one value: both; 0 = a worn end; a
 	        standing trunk's base is cut flat into the ground) · RootPlate chance size (lying: an uprooted root plate
 	        across the base, radius x the base radius, 1.5..10) · Stubs count length (broken branch stubs, length x
 	        the nominal size) · Roots count spread (standing: buttress roots, reach x the base radius, 1..6; stubs +
-	        roots at most `ROCK_MAX_LIMBS` = 12) · Hollow chance size (a hollow core, radius x the trunk's, open at the
+	        roots at most `ROCK_MAX_LIMBS` = 28) · Hollow chance size (a hollow core, radius x the trunk's, open at the
 	        broken ends) · Resolution up to 8 (a log is thin: its thickness needs the cells)
 	Profile w0 w1 w2 w3 w4 (Pillar: its width at 5 even heights, base to top, a Catmull-Rom spline through them; the
 	        widest = the Aspect's width. `1 0.8 0.6 0.38 0.1` a spire, `0.5 0.75 1 0.95 0.72` a top-heavy monolith)
@@ -126,7 +132,9 @@ Every length is a fraction of the nominal size 1. Placeholders: `Boulder`, `Bloc
 types: `Pinnacle` (limestone spires, 1-4.5 m, alone or up to 3 merged at the base, vertical flutes; a hot desert,
 flat ground, dense fields; `Align 0`) and `Monolith` (a weathering pillar, 10-22 m: a narrow foot, widest above the
 middle, deep strata, a blocky section; flat-ish ground only, away from rugged ground (`Rugged 0`, `Valley 0`), a few
-together and then none for a long way; `Align 0`, `Resolution 2.5`, `Lod 6000`).
+together and then none for a long way; `Align 0`, `Resolution 2.5`, `Lod 6000`); `Cactus` (a saguaro, 4-12 m, 14
+ribs, 1-4 arms; the hot desert only - the terrain's dune-sand climate box, 20 C up / 0..300 mm, `ClimateWidth 0.015`:
+the default width's Gaussian tail reaches ~300 mm past the box, into the grassland -, flat-ish ground, loose stands; `Align 0`, `Resolution 6`, `Lod 6000`).
 
 **THE PILLAR** (`pillarSdf`, RockGenerator.cpp): in its block's frame a superellipse section whose width follows the
 profile spline over the height; first-order distance (r - width) / |gradient|. It has no bottom: it runs on below its
@@ -171,10 +179,10 @@ breaks, `Break 4 4`, no root plate) and `SnappedTop` (its UPPER HALF - the top h
   `Assets/Local/Trees/Textures/<Bark>_bark.png` + `_bark_normal.png`, the files TreeSystem writes once; when missing,
   generated from `Trees/<Bark>.tree` (`generateBarkImages`, not saved: TreeSystem owns those files) - x the `Color`
   tint, mipped (`buildBarkMips`) and BC1 / BC5-compressed in a Low job per wood type (`loadBark`, job "Rock bark",
-  kicked with the variant jobs in the same counter), uploaded in `finishLoad`. Kept over a remesh, freed in
-  `clearAll`. A rock type's instances use the shared grey material (`m_material`; `WorldType::material` is the bark
-  for a wood type). The far volume takes a wood type as a solid in its own colour (`WorldType::woodAlbedo`: the
-  tinted texture's linear mean).
+  kicked with the variant jobs in the same counter), uploaded in `finishLoad` as the type's `ownMaterial`. Kept over a
+  remesh, freed in `clearAll`. A rock type's instances use the shared grey material (`m_material`;
+  `WorldType::material` is the own material of a wood or cactus type). The far volume takes a wood type as a solid in
+  its own colour (`WorldType::ownColour` / `ownAlbedo`: the tinted texture's linear mean).
 * **THE GROUND IT COVERS** (`rockFootprint(desc)`, from the type - TreeWorld places records without the meshes): a
   CAPSULE along rock-local X (a lying trunk: its half length and thickness; a standing one: its base and roots'
   reach; any other rock: a disc of half its size), x the record's scale, turned by its yaw. The trees keep out of it
@@ -183,6 +191,32 @@ breaks, `Break 4 4`, no root plate) and `SnappedTop` (its UPPER HALF - the top h
   `RockFootprint::flat` (the widest horizontal extent / the longest axis) scales `groundTransform`'s footprint (a
   snag's is its thin base, not its height; Pinnacle's and Monolith's too - they sank too deep on a slope otherwise).
 * **WHERE** (`Forest`, ROCK RECORDS ([Trees.md](Trees.md))): the trees' own expected density at the record.
+
+### CACTUS (`Shape Cactus`, `Surface Cactus`)
+
+* **THE FIELD** (`cactusSdf`, RockGenerator.cpp; the random decisions in `buildCactus`): every part is a CHAIN of LIMBS
+  - round cones - each blended with a fillet half its radius wide, the whole cut flat at the ground line (`groundY`,
+  the mesh's y = 0; `standing`). The STEM is limbs 0 and 1: from below the ground up to its domed top, leaning up to ~3
+  degrees, bent a little more at mid height, narrower toward the top. Each ARM is 5 limbs, from the stem's axis at
+  `ArmHeight`: a NECK rising 15..40 degrees (thinner where it joins the stem), an ARC of 3 chords turning it upright
+  (radius 1.2..2 x its own - no right-angle elbow), and the UPRIGHT part to its own domed top below the stem's, leaning
+  up to ~7 degrees out or in and ~3 to a side. `ArmSize` reach = how far the upright part stands out from the stem's
+  side. The arms stand at even angles around the stem, jittered. 2 + 5 x `ROCK_MAX_ARMS` limbs fit `ROCK_MAX_LIMBS` (28).
+  Block 0 is only the stem's box (the bounds, the erosion cap, the ground line).
+* **THE RIBS** (`ribIndent`): each limb's surface pushed in by up to `depth` x its radius between two crests -
+  ((1 - cos) / 2)^2 of `ribs` x (the angle + pi), broad crests and narrow valleys - the angle in the limb's `LimbFrame`
+  (the same frame `woodCoords` writes), faded out toward the axis so the domes close. A limb past the fillet's reach
+  skips its ribs (they only push in: exact). **The limbs of one chain share their `Limb::side`** (the frame's u: the
+  stem's one horizontal vector, an arm's the normal of its (out, up) plane) and continue their `Limb::along0`, so the
+  ribs and the areole rows run on across the joints and the bend.
+* **THE SKIN DATA**: the WOOD coordinates (`woodCoords`: the nearest limb's along / across, no cut faces) in the
+  TANGENT, and texCoords.y = 3 + the rib count / 100 - the rock shader's cactus path (RendererVK "The rock material",
+  CACTUS) finds the rib crests from the angle around the limb.
+* **THE MATERIAL** (`RockSystem`, the type's `ownMaterial`): a 1 x 2 sRGB texture made in `finishLoad` - the skin
+  (`Color`) in row 0, the spines (`Color2`) in row 1. The far volume takes it as a solid in its own colour
+  (`WorldType::ownAlbedo`: the two mixed 92 / 8, linear).
+* **THE GROUND IT COVERS** (`rockFootprint`): the stem (radius = Aspect x / 2 of the normalized aspect); the arms stand
+  clear. The clutter's floor map counts it as a rock (kind 2).
 
 ### A rock on the ground (`RockSystem::groundTransform`)
 
@@ -197,7 +231,7 @@ rock FOLLOWS THE GROUND, it does not stand upright. Input: the terrain height at
   UP AXIS by `Sink` x its height, plus - for `Align` < 1 - what the part of the slope it does not follow lifts its
   downhill edge: r x tan(the angle left between its up axis and the normal), at most 2 r.
 * The strata, the up-facing pits and a pile's stacking turn with the rock. A type that must stay vertical on a slope
-  sets `Align` below 1 in its file (`Pinnacle`, `Monolith` and `Snag`: `Align 0`; `Stump`: 0.3).
+  sets `Align` below 1 in its file (`Pinnacle`, `Monolith`, `Snag` and `Cactus`: `Align 0`; `Stump`: 0.3).
 
 ### The preview
 

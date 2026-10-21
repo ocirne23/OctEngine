@@ -142,8 +142,8 @@ namespace Procedural
 	{
 		clearMeshes();
 		for (const Type& type : m_types)
-			if (type.woodMaterial != UINT16_MAX)
-				Globals::rendererVK.destroyTextureMaterial(type.woodMaterial);
+			if (type.ownMaterial != UINT16_MAX)
+				Globals::rendererVK.destroyTextureMaterial(type.ownMaterial);
 		m_types.clear();
 	}
 
@@ -295,13 +295,13 @@ namespace Procedural
 				}, { "Rock generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 			}
 			// A wood type's bark texture (writes only the type's bark fields; the variant jobs write their variants).
-			if (m_types[t].desc.surface == ERockSurface::Wood && m_types[t].woodMaterial == UINT16_MAX)
+			if (m_types[t].desc.surface == ERockSurface::Wood && m_types[t].ownMaterial == UINT16_MAX)
 			{
 				m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
 				Globals::jobSystem.submit([this, t]
 				{
 					Type& type = m_types[t];
-					if (!loadBark(type.desc, type.barkAlbedo, type.barkNormal, type.barkSize, type.barkMean))
+					if (!loadBark(type.desc, type.barkAlbedo, type.barkNormal, type.barkSize, type.ownAlbedo))
 						type.barkSize = 0;
 					m_genInFlight.fetch_sub(1, oc::memory_order_release);
 				}, { "Rock bark", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
@@ -320,17 +320,28 @@ namespace Procedural
 		{
 			// DEAD WOOD's material: the bark its job loaded. GI and the RT hits sample the same texture: wood-coloured
 			// bounce light.
-			if (type.woodMaterial == UINT16_MAX && type.barkSize > 0)
+			if (type.ownMaterial == UINT16_MAX && type.barkSize > 0)
 			{
 				oc::vector<oc::span<uint8>> albedoMips, normalMips;
 				for (oc::vector<uint8>& level : type.barkAlbedo)
 					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : type.barkNormal)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				type.woodMaterial = renderer.createTextureMaterial(type.barkSize, type.barkSize, albedoMips, 0.0f,
+				type.ownMaterial = renderer.createTextureMaterial(type.barkSize, type.barkSize, albedoMips, 0.0f,
 					oc::format("Rocks/{}", type.desc.name).c_str(), &normalMips, 0u, Renderer::ETextureEncoding::BC1, Renderer::ETextureEncoding::BC5);
 				type.barkAlbedo = {};
 				type.barkNormal = {};
+			}
+			// A CACTUS's: its two colours as a 1 x 2 texture (sRGB: linear on fetch) - the skin in row 0, the spines in
+			// row 1. The hits sample it at the mesh's v (3 + ribs / 100: the skin, mostly).
+			if (type.ownMaterial == UINT16_MAX && type.desc.surface == ERockSurface::Cactus)
+			{
+				const auto byte = [](float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
+				const glm::vec3 a = type.desc.color, b = type.desc.color2;
+				uint8 texels[8] = { byte(a.x), byte(a.y), byte(a.z), 255, byte(b.x), byte(b.y), byte(b.z), 255 };
+				const oc::vector<oc::span<uint8>> mips{ oc::span<uint8>(texels, 8) };
+				type.ownMaterial = renderer.createTextureMaterial(1, 2, mips, 0.0f, oc::format("Rocks/{}", type.desc.name).c_str());
+				type.ownAlbedo = glm::mix(glm::pow(a, glm::vec3(2.2f)), glm::pow(b, glm::vec3(2.2f)), 0.08f);
 			}
 			size_t triangles[ROCK_MAX_LODS] = {};
 			for (Variant& variant : type.variants)
@@ -365,9 +376,9 @@ namespace Procedural
 			world.sink = type.desc.sink;
 			world.align = type.desc.align;
 			world.footprint = rockFootprint(type.desc).flat;
-			world.wood = type.woodMaterial != UINT16_MAX;
-			world.material = world.wood ? type.woodMaterial : m_material;
-			world.woodAlbedo = type.barkMean; // the far volume's colour
+			world.ownColour = type.ownMaterial != UINT16_MAX;
+			world.material = world.ownColour ? type.ownMaterial : m_material;
+			world.ownAlbedo = type.ownAlbedo; // the far volume's colour
 			for (const Variant& variant : type.variants)
 			{
 				if (!variant.lods[0].isValid())
@@ -405,7 +416,7 @@ namespace Procedural
 		const FileSystem::AllowMainThreadIO groundIo; // explicit user action: enable / respawn
 		auto groundAt = [&](glm::vec2 p) { return maps ? maps->sampleHeight(p.x, p.y) : 0.0f; };
 
-		// LitRock reads only a wood type's material (its bark); a rock's instance still needs one.
+		// LitRock reads only a wood / cactus type's material; a rock's instance still needs one.
 		const RendererVKLayout::EPipelineIndex pipeline = m_settings.previewShading == 0
 			? RendererVKLayout::EPipelineIndex::LitRock : RendererVKLayout::EPipelineIndex::LitOpaque;
 		float rowOffset = 0.0f;
@@ -428,8 +439,8 @@ namespace Procedural
 				const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
 					groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
 				// Level 0: the cull redirects the instance to its LOD through the chain.
-				const bool woodColours = type.woodMaterial != UINT16_MAX && pipeline == RendererVKLayout::EPipelineIndex::LitRock;
-				m_nodes.push_back(renderer.spawnMeshNode(variant.lods[0], woodColours ? type.woodMaterial : m_material, pipeline,
+				const bool ownColours = type.ownMaterial != UINT16_MAX && pipeline == RendererVKLayout::EPipelineIndex::LitRock;
+				m_nodes.push_back(renderer.spawnMeshNode(variant.lods[0], ownColours ? type.ownMaterial : m_material, pipeline,
 					groundTransform(p, ground, r, scale, variant.data.height, type.desc.sink, type.desc.align, yaw)));
 			}
 			rowOffset += cell * 0.5f;

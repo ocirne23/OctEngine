@@ -4,7 +4,7 @@
 
 ## Ground clutter
 
-"Clutter" tweaks (Settings.Clutter): pebbles, fallen branches, mushrooms and flowers. **Nothing per object lives on
+"Clutter" tweaks (Settings.Clutter): pebbles, fallen branches, mushrooms, flowers and small cacti. **Nothing per object lives on
 the CPU**: RendererVK's `ClutterPipeline` places every object on the GPU each frame (RendererVK CONTEXT "Ground
 clutter": a grid of patches, a ranked candidate list per patch and type, kept by the type's density there).
 `ClutterSystem` feeds it two things:
@@ -22,7 +22,7 @@ clutter": a grid of patches, a ranked candidate list per patch and type, kept by
   inside 0.75 x its radius, none past 1.1 x), **G trunk proximity** (1 at the trunk, squared falloff to none at
   max(3 m, 0.8 x the crown)), **B rock proximity** (1 up to 0.85 x the rock's radius, none at 1.6 x + 1.5 m - the
   apron at its foot), **A occupied** (inside a trunk + 0.15 m or 0.85 x a rock's radius: nothing grows there). The
-  record types' meaning comes from `TreeWorld::floorTypes()` (kind 1 tree: crown / trunk radius at its species' MEAN
+  record types' meaning comes from `TreeWorld::floorTypes()` (kind 1 tree - or a bush placed on its own: crown / trunk radius at its species' MEAN
   scale - `.tree` CrownRadius / TrunkRadius x (1 + Flare); kind 2 rock: its footprint CAPSULE from `rockFootprint` x
   `rockRecordScale` along its yaw, as the world places it; kind 3 DEAD WOOD - a `.rock` of `Surface Wood` - counts as
   a trunk: trunk proximity around its capsule, occupied inside it, no rock proximity).
@@ -40,9 +40,9 @@ Keys and enum values are case-insensitive; an unknown enum value takes the first
 
 ```
 ClutterType <name>
-	Kind Pebble|Branch|Mushroom|Flower
+	Kind Pebble|Branch|Mushroom|Flower|Cactus
 	Seed n · Variants n (1..16 meshes; not flowers) · Scale min max (x the nominal size 1: m for a pebble's longest
-	        axis, a branch's length, a mushroom's height; for a flower x its Stem and HeadSize)
+	        axis, a branch's length, a mushroom's or a cactus's height; for a flower x its Stem and HeadSize)
 	Range m (5..500 from the camera; x "Clutter/Range scale"; the patch grid caps it, ~156 m at 4 m patches)
 	Sink f (0..0.9 of the height below the ground) · Align f (0 upright .. 1 follows the ground's normal; flowers: upright)
 	Color r g b · Color2 r g b (sRGB 0..1) · Roughness f · Lod triangles (level 0, 32..4000; a quarter per level)
@@ -52,6 +52,10 @@ ClutterType <name>
 	          Color = bark, Color2 = end grain
 	MUSHROOM: Cap Dome|Flat|Cone|Funnel · CapSize radius height (x its height) · StemRadius · Group n (1..5 per variant,
 	          each smaller, leaning out) · Spots 0..1 (white spots on the cap). Color = cap, Color2 = stem and gills
+	CACTUS:   Form Barrel|Column|Pad · Ribs count depth (the .rock key: 0..40, the valleys depth x the radius) · Girth
+	          (0.1..1.5: a barrel's / a column's diameter, a pad's width, x its height / length) · Group n (Column: 1..5
+	          columns) · Pads n (Pad: 1..12). Color = the skin, Color2 = the spines; the areoles on the rib crests (a
+	          pad: over its faces) are the shader's (cactus.inc.glsl, as the .rock Cactus's)
 	FLOWER:   Head Radial|Spike|Umbel|Bell|Reed|Tuft|Grain|Fern|Rosette|Leafy · Petals n (1..48) · Open degrees
 	          (-80..85; Radial: the petals' tilt up, below 0 swept back) · PetalWidth (x HeadSize) · Stem m · HeadSize m
 	          · PetalShape Round|Notched|Pointed|Fringed|None (Radial: the petal outline texture - poppy / daisy /
@@ -110,7 +114,10 @@ spots, cool forest), `Chanterelle` (groups, damp), `InkCap` (meadows), `FairyRin
 `Gentian` (alpine); by the water `Reed` (cattails at the edge of SLOW water, a few in the shallows), `Sedge` (low
 arching fountains on the banks, `Head Tuft`); grains (`Head Grain`) `WildWheat` (`Ear Dense`), `WildBarley`
 (`Ear Slender`), `WildOat` (`Ear Panicle`); weeds `Nettle` (`Head Leafy`), `Dock` and `Plantain` (`Head Rosette`);
-ferns `Bracken` and `LadyFern` (`Head Fern`).
+ferns `Bracken` and `LadyFern` (`Head Fern`); cacti (the hot desert only - the terrain's dune-sand climate box, 20 C up / 0..300 mm, with `ClimateWidth 0.015`
+and `Grass 1 0`, so none reach the grassland) `BarrelCactus` (`Form Barrel`, 20
+ribs, golden spines; more on bedrock and at rocks), `HedgehogCactus` (`Form Column`, clumps of up to 5; stony ground,
+at rocks), `PricklyPear` (`Form Pad`, 7 pads).
 
 **THE FLOWER TEXTURES** (ClutterTexture.cpp `generateClutterTexture`): a FERN's frond (256^2), a RADIAL head's petal
 (128^2: the `PetalShape` outline, fine veins), a GRAIN's ear (512^2, so the ear keeps ~100 texels across: ONE strip
@@ -136,7 +143,7 @@ ribbons'; 0 off rivers, on lakes and dry beds), NEGATIVE under river or lake wat
 
 Nominal size 1, y up, the lowest point at y = 0, `CLUTTER_LODS` = 3 levels each (`Renderer::ClutterMesh`;
 `RendererVKLayout::ClutterVertexGpu`: position + AO, normal + PART, and a uv - branch bark / end grain coordinates in
-m, a mushroom's around / up its profile):
+m, a mushroom's around / up its profile, a cactus's around / along / rib count or its pad's areole lattice):
 
 * **Pebble** - `generateRockVariant` with the type's rock keys at `Mesh resolution` (20) x its `Resolution` cells: the
   rock chain's levels 0-2, its cavity as the AO. `finishGeneration` CHECKS every pebble mesh level (`countBadEdges`:
@@ -147,3 +154,12 @@ m, a mushroom's around / up its profile):
   own stretch of the bark pattern).
 * **Mushroom** - per group member a lathe (12 / 7 / 5 segments): the stem (part 0, wider at the foot), the cap top
   (part 1; the cap shape's profile, its rim curled down) and the gills underneath (part 2).
+* **Cactus** - `addRibbedLathe` (part 0): a profile around Y, every ring pushed in between the rib crests as a .rock
+  cactus's (`ribIndent`'s rule), 3 / 2 / 1 columns per rib, the first on a crest; normals from the surface's own
+  tangents; uv = (cos, sin) of the angle, the length up the profile in base circumferences, the rib count. A BARREL is
+  an ellipse's arc from where the ground cuts it (the foot ~0.75 of the widest) to the crown (10 / 6 / 4 rings); a
+  COLUMN group (as the mushrooms': the first upright and tallest, the rest shorter, around it, leaning out) a cylinder
+  under a quarter-circle dome. A PAD (part 1, `growPads`): flattened ellipsoids (latitude / longitude 7x12 / 5x8 /
+  3x6), the base pad on its end, each next out of an earlier pad's upper rim - fanning out from its tip, lifted toward
+  the sky, its face turned - a little smaller, none into the ground; uv = the areole lattice over the faces. Scaled to
+  height 1, the lowest point at 0.

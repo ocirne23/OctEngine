@@ -73,7 +73,7 @@ namespace Procedural
 		{
 			const oc::string kind = n->asString();
 			out.kind = iequals(kind, "Branch") ? EClutterKind::Branch : iequals(kind, "Mushroom") ? EClutterKind::Mushroom
-				: iequals(kind, "Flower") ? EClutterKind::Flower : EClutterKind::Pebble;
+				: iequals(kind, "Flower") ? EClutterKind::Flower : iequals(kind, "Cactus") ? EClutterKind::Cactus : EClutterKind::Pebble;
 		}
 		if (const AssetNode* n = type->find("Seed"))
 			out.seed = (uint32)n->asInt(0, (int)out.seed);
@@ -110,6 +110,14 @@ namespace Procedural
 		readFloat(*type, "StemRadius", out.stemRadius);
 		readInt(*type, "Group", out.group);
 		readFloat(*type, "Spots", out.spots);
+		// Cactus (its ribs are the rock key `Ribs`, read above into out.rock).
+		if (const AssetNode* n = type->find("Form"))
+		{
+			const oc::string form = n->asString();
+			out.cactusForm = iequals(form, "Column") ? ECactusForm::Column : iequals(form, "Pad") ? ECactusForm::Pad : ECactusForm::Barrel;
+		}
+		readFloat(*type, "Girth", out.girth);
+		readInt(*type, "Pads", out.pads);
 		// Flower.
 		if (const AssetNode* n = type->find("Head"))
 		{
@@ -197,6 +205,8 @@ namespace Procedural
 		out.stemRadius = glm::clamp(out.stemRadius, 0.01f, 0.5f);
 		out.group = glm::clamp(out.group, 1, 5);
 		out.spots = glm::clamp(out.spots, 0.0f, 1.0f);
+		out.girth = glm::clamp(out.girth, 0.1f, 1.5f);
+		out.pads = glm::clamp(out.pads, 1, 12);
 		out.petals = glm::clamp(out.petals, 1, 48);
 		out.open = glm::clamp(out.open, -80.0f, 85.0f);
 		out.petalWidth = glm::clamp(out.petalWidth, 0.02f, 1.0f);

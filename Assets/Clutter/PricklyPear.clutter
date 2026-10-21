@@ -1,0 +1,23 @@
+# Prickly pears: flat oval pads growing from each other's rims, a bush up to ~1.5 m - in the hot desert only.
+ClutterType PricklyPear
+	Kind Cactus
+	Form Pad
+	Seed 139
+	Variants 6
+	Scale 0.5 1.5
+	Range 100
+	Sink 0.05
+	Align 0
+	Color 0.40 0.52 0.30
+	Color2 0.88 0.84 0.62
+	Roughness 0.55
+	Girth 0.72
+	Pads 7
+	Placement
+		Density 0.008
+		Temperature 20 1000
+		Precipitation 0 300
+		ClimateWidth 0.015
+		Grass 1 0
+		Cluster 30 0.4
+		Slope 0.6

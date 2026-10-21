@@ -10,7 +10,8 @@ import :ClutterType;
 //   PEBBLE   - the rock SDF generator (RockGenerator: the type's rock keys) - its regular LOD chain, its cavity as AO;
 //   BRANCH   - a fallen stick along X (length 1): a bent, tapering tube lying on the ground, its end grain capped, a few
 //              side twigs lying flat;
-//   MUSHROOM - a lathed stem + cap (Dome / Flat / Cone / Funnel) with gills underneath, in a group of up to 5.
+//   MUSHROOM - a lathed stem + cap (Dome / Flat / Cone / Funnel) with gills underneath, in a group of up to 5;
+//   CACTUS   - ribbed lathes (a Barrel, a group of up to 5 domed Columns) or a prickly pear's ellipsoid Pads.
 // Flowers have no mesh (clutter_flower.vs.glsl builds them). Pure; any thread.
 export namespace Procedural
 {

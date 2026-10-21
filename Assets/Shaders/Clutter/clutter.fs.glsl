@@ -10,7 +10,8 @@
 
 // THE RIGID CLUTTER's surface (clutter.vs.glsl): the lit core without RTAO (not in the TLAS, far below the AO's resolution).
 // Per KIND: PEBBLE - the climate's BEDROCK, triplanar at a finer scale, x the type's colour; BRANCH - bark (part 0), end
-// grain (1); MUSHROOM - cap (1, optional spots), stem (0), gills (2). The foot darkens ("Contact darkening").
+// grain (1); MUSHROOM - cap (1, optional spots), stem (0), gills (2); CACTUS - the skin with areoles on the rib crests of a
+// body (0) or over a pad (1) (cactus.inc.glsl). The foot darkens ("Contact darkening").
 
 #include "shared.inc.glsl"
 
@@ -32,6 +33,7 @@ layout (location = 1) out vec4 out_motion; // static: only the NO-AO flag
 #include "terrain_splat.inc.glsl"
 #include "grass.inc.glsl"   // grassNearShadow, grassValueNoise (in_vertices: the lit core's binding 14)
 #include "clutter.inc.glsl"
+#include "cactus.inc.glsl"
 
 // The spots on a mushroom cap: jittered cells in mesh space, a spot near each cell's centre.
 float clutterSpots(vec3 p, float amount)
@@ -141,6 +143,22 @@ void main()
             N = f16vec3(clutterBump(in_relPos, geoN, h * 0.004 * detail)); // fissures ~4 mm deep
             ao *= mix(1.0, mix(0.6, 1.0, h), detail);
         }
+    }
+    else if (kind == CLUTTER_KIND_CACTUS)
+    {
+        // A ribbed body: uv = (cos, sin) around, along in base circumferences, the rib count. A pad: uv.xy = its areole
+        // lattice. albedo1 = the spines.
+        float pixel = 0.0, cover = 0.0;
+        if (part == 0u)
+        {
+            const float ribs = in_uv.w;
+            const vec2 cell = vec2(cactusAround(in_uv.xy, pixel), in_uv.z) * ribs;
+            if (ribs > 0.5)
+                albedo = cactusSkin(cell, ribs, max(pixel * ribs, fwidth(cell.y)), albedo0, albedo1, cover);
+        }
+        else
+            albedo = cactusSkin(in_uv.xy, 0.0, max(fwidth(in_uv.x), fwidth(in_uv.y)), albedo0, albedo1, cover);
+        roughness = mix(roughness, 0.75, cover);
     }
     else // CLUTTER_KIND_MUSHROOM
     {

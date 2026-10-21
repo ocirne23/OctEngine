@@ -74,11 +74,18 @@ namespace Procedural
 		readFloat(*type, "Sink", out.sink);
 		readFloat(*type, "Align", out.align);
 		readRockShapeKeys(*type, out);
+		// A cactus wears its own skin unless the file says otherwise.
+		if (out.shape == ERockShape::Cactus)
+			out.surface = ERockSurface::Cactus;
 		if (const AssetNode* n = type->find("Surface"))
-			out.surface = iequals(n->asString(), "Wood") ? ERockSurface::Wood : ERockSurface::Rock;
+		{
+			const oc::string surface = n->asString();
+			out.surface = iequals(surface, "Wood") ? ERockSurface::Wood : iequals(surface, "Cactus") ? ERockSurface::Cactus : ERockSurface::Rock;
+		}
 		if (const AssetNode* n = type->find("Bark"))
 			out.bark = n->asString();
 		readVec3(*type, "Color", out.color);
+		readVec3(*type, "Color2", out.color2);
 
 		for (const AssetNode* placement : type->findAll("Placement"))
 		{
@@ -131,6 +138,7 @@ namespace Procedural
 		out.sink = glm::clamp(out.sink, 0.0f, 0.9f);
 		out.align = glm::clamp(out.align, 0.0f, 1.0f);
 		out.color = glm::clamp(out.color, glm::vec3(0.0f), glm::vec3(1.0f));
+		out.color2 = glm::clamp(out.color2, glm::vec3(0.0f), glm::vec3(1.0f));
 		if (out.surface == ERockSurface::Wood && out.bark.empty())
 			out.bark = "Oak";
 		clampRockShape(out);
@@ -142,6 +150,13 @@ namespace Procedural
 		const glm::vec3 a = type.aspect / glm::max(type.aspect.x, glm::max(type.aspect.y, type.aspect.z));
 		RockFootprint f;
 		f.flat = glm::max(a.x, a.z);
+		if (type.shape == ERockShape::Cactus)
+		{
+			// The stem (Aspect x its thickness): the arms stand clear of the ground.
+			f.radius = 0.5f * a.x;
+			f.flat = a.x;
+			return f;
+		}
 		if (type.shape != ERockShape::Trunk)
 			return f;
 		float widest = 0.0f;
@@ -167,7 +182,23 @@ namespace Procedural
 		{
 			const oc::string shape = n->asString();
 			out.shape = iequals(shape, "Block") ? ERockShape::Block : iequals(shape, "Pillar") ? ERockShape::Pillar
-				: iequals(shape, "Trunk") ? ERockShape::Trunk : ERockShape::Boulder;
+				: iequals(shape, "Trunk") ? ERockShape::Trunk : iequals(shape, "Cactus") ? ERockShape::Cactus : ERockShape::Boulder;
+		}
+		if (const AssetNode* n = type.find("Ribs"))
+		{
+			out.ribCount = n->asInt(0, out.ribCount);
+			out.ribDepth = n->asFloat(1, out.ribDepth);
+		}
+		if (const AssetNode* n = type.find("Arms"))
+		{
+			out.armCount.x = n->asInt(0, out.armCount.x);
+			out.armCount.y = n->asInt(1, out.armCount.x);
+		}
+		readRange(type, "ArmHeight", out.armHeight);
+		if (const AssetNode* n = type.find("ArmSize"))
+		{
+			out.armThickness = n->asFloat(0, out.armThickness);
+			out.armReach = n->asFloat(1, out.armReach);
 		}
 		if (const AssetNode* n = type.find("Lying"))
 			out.lying = n->asFloat(0, 1.0f) > 0.5f;
@@ -279,6 +310,14 @@ namespace Procedural
 		out.rootSpread = glm::clamp(out.rootSpread, 1.0f, 6.0f);
 		out.hollowChance = glm::clamp(out.hollowChance, 0.0f, 1.0f);
 		out.hollowSize = glm::clamp(out.hollowSize, 0.1f, 0.9f);
+		out.ribCount = glm::clamp(out.ribCount, 0, ROCK_MAX_RIBS);
+		out.ribDepth = glm::clamp(out.ribDepth, 0.0f, 0.4f);
+		out.armCount = glm::clamp(out.armCount, glm::ivec2(0), glm::ivec2(ROCK_MAX_ARMS));
+		out.armCount.y = glm::max(out.armCount.y, out.armCount.x);
+		out.armHeight = glm::clamp(out.armHeight, glm::vec2(0.0f), glm::vec2(0.95f));
+		out.armHeight.y = glm::max(out.armHeight.y, out.armHeight.x);
+		out.armThickness = glm::clamp(out.armThickness, 0.3f, 1.0f);
+		out.armReach = glm::clamp(out.armReach, 0.5f, 5.0f);
 		out.fractureCount = glm::clamp(out.fractureCount, 0, 16);
 		out.fractureDepth = glm::clamp(out.fractureDepth, 0.0f, 0.9f);
 		out.strataSpacing = glm::max(out.strataSpacing, 0.0f);

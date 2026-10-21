@@ -298,10 +298,16 @@ namespace
 	// base backward by that many metres with the base's own cross-section (a trunk sunk into sloped ground).
 	// `tip` (a fraction of the length): over that last part the radius narrows to TUBE_TIP_RADIUS of the path's - a closed
 	// point, not an open cut (the trunk's end). The mesh only: BranchPath::sample keeps the linear radius (slots, children).
+	// `section` != 1 1 (TreeBranchShape::section): a flat BLADE - each ring an ellipse, `section.x` x the radius ACROSS
+	// (cross(tangent, faceUp): the module's X) and `section.y` x it toward `faceUp` (the module's up side, +Z), bent
+	// into a gutter by `channel` (its middle that x the radius away from faceUp: hollow on the up side); its normals from
+	// the deformed grid, as a profile's. `swell`: the radius x (1 + swell sin(pi t)) - widest near the middle.
 	constexpr float TUBE_TIP_RADIUS = 0.12f;
 	void appendTube(TreeMesh& m, const BranchPath& b, int sides, uint8 bone, float flare = 0.0f, bool cap = false,
-		const TubeProfile* profile = nullptr, float extendBase = 0.0f, float tip = 0.0f)
+		const TubeProfile* profile = nullptr, float extendBase = 0.0f, float tip = 0.0f, glm::vec2 section = glm::vec2(1.0f),
+		float channel = 0.0f, float swell = 0.0f, const glm::vec3& faceUp = glm::vec3(0.0f, 0.0f, 1.0f))
 	{
+		const bool blade = section != glm::vec2(1.0f) || channel != 0.0f;
 		const int extra = extendBase > 0.0f ? 1 : 0;
 		const int n = (int)b.points.size() + extra; // rings
 		const uint32 base = m.numVertices();
@@ -329,15 +335,30 @@ namespace
 				const float f = 1.0f - glm::smoothstep(0.0f, 0.15f, t); // eases into the trunk, no step
 				r *= 1.0f + flare * f * f;
 			}
+			if (swell != 0.0f)
+				r *= 1.0f + swell * std::sin(0.5f * TWO_PI * t);
 			if (tip > 0.0f)
 				r *= glm::mix(1.0f, TUBE_TIP_RADIUS, glm::smoothstep(1.0f - tip, 1.0f, t));
+			// A blade's axes: across it and through its face (a branch along faceUp keeps the transported frame). The pair
+			// keeps the round frame's handedness (frameB = tan x frameN): the normals and the winding stay outward.
+			glm::vec3 across = frameN, toFace = frameB;
+			if (blade)
+			{
+				const glm::vec3 w = glm::cross(tan, faceUp);
+				if (glm::dot(w, w) > 1e-8f)
+				{
+					across = glm::normalize(w);
+					toFace = glm::cross(tan, across);
+				}
+			}
 			for (int j = 0; j <= sides; ++j)
 			{
 				const float theta = TWO_PI * (float)j / (float)sides;
 				const float c = std::cos(theta), s = std::sin(theta);
 				const glm::vec3 offset = c * frameN + s * frameB;
 				const float rj = profile ? r * profile->scale(theta, t) : r;
-				m.positions.push_back(centre + offset * rj);
+				// toFace points AWAY from faceUp: + channel lowers the blade's middle (a gutter, hollow on its up side).
+				m.positions.push_back(centre + (blade ? (c * section.x * across + (s * section.y + channel * (1.0f - c * c)) * toFace) * r : offset * rj));
 				m.normals.push_back(offset);
 				m.tangents.push_back(-s * frameN + c * frameB);
 				m.bitangents.push_back(tan);
@@ -347,7 +368,7 @@ namespace
 		}
 		const uint32 stride = (uint32)sides + 1;
 
-		if (profile)
+		if (profile || blade)
 		{
 			// Normals (and the around-tangent) from central differences on the deformed (ring, side) grid.
 			// The seam column (j = 0 and j = sides share a position) uses the wrapped neighbours.
@@ -413,8 +434,11 @@ namespace
 		float flare = 0.0f;
 		bool lobed = false;     // use the plan's TubeProfile
 		float sink = 0.0f;
-		float tip = 0.0f;       // appendTube's closing tip (trunks)
+		float tip = 0.0f;       // appendTube's closing tip (trunks; a blade's point)
 		bool stub = false;      // a snapped-off stub (capped; dropped at the coarse levels)
+		glm::vec2 section{ 1.0f }; // appendTube's blade section (TreeBranchShape::section / channel / swell)
+		float channel = 0.0f;
+		float swell = 0.0f;
 	};
 
 	struct LeafPlan
@@ -623,7 +647,7 @@ namespace
 					continue;
 				const int sides = glm::max(3, (int)std::round((float)tube.sides * spec.sides));
 				appendTube(bark, subsamplePath(tube.path, spec.rings), sides, tube.bone, tube.flare, tube.stub,
-					tube.lobed ? &plan.profile : nullptr, tube.sink, tube.tip);
+					tube.lobed ? &plan.profile : nullptr, tube.sink, tube.tip, tube.section, tube.channel, tube.swell);
 			}
 			for (uint32 v = 0; v < bark.numVertices(); ++v)
 				bark.texCoords[v].z = encodeWind(windPayload(out.bones, bark.positions[v], bark.bones[v], trunk));
@@ -1179,7 +1203,8 @@ namespace
 		oc::vector<Elbow> elbows;
 		growBranch(root.path, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength, r0, r0 * 0.15f,
 			sp.moduleShape, up, rng, &elbows);
-		plan.tubes.push_back({ .path = root.path, .sides = sp.moduleShape.sides, .bone = 0, .level = 0 });
+		plan.tubes.push_back({ .path = root.path, .sides = sp.moduleShape.sides, .bone = 0, .level = 0, .tip = sp.moduleShape.tip,
+			.section = sp.moduleShape.section, .channel = sp.moduleShape.channel, .swell = sp.moduleShape.swell });
 		planStubs(plan, root.path, elbows, sp.moduleShape, 0, 0, rng);
 		out.bones.push_back({ -1, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength });
 		current.push_back(oc::move(root));
@@ -1230,7 +1255,8 @@ namespace
 					elbows.clear();
 					growBranch(child.path, s.pos, dir, length, cr0, cr0 * 0.15f, level.shape, up, rng, &elbows);
 					const int levelNumber = (int)levelIdx + 1;
-					plan.tubes.push_back({ .path = child.path, .sides = level.shape.sides, .bone = child.bone, .level = levelNumber });
+					plan.tubes.push_back({ .path = child.path, .sides = level.shape.sides, .bone = child.bone, .level = levelNumber,
+						.tip = level.shape.tip, .section = level.shape.section, .channel = level.shape.channel, .swell = level.shape.swell });
 					planStubs(plan, child.path, elbows, level.shape, child.bone, levelNumber, rng);
 					next.push_back(oc::move(child));
 				}

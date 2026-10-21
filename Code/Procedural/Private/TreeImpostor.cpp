@@ -406,7 +406,12 @@ namespace Procedural
 		// Leaves only: the bark (0.25 per area before) put a trunk's whole surface into one thin column of voxels - a dense
 		// vertical line per tree, darkened by the volume's self-shadow and interior taps: dashed vertical streaks through
 		// the far blobs. A trunk is far below a pixel at the volume's distances.
-		splat(piece.leaves[0], 0.5f * leafCoverage);
+		// A piece WITHOUT leaves (a succulent: its leaves are bark blades, `Section`) splats its bark instead, at half a
+		// leaf's weight per area: a closed blade's surface is both its faces.
+		if (!piece.leaves[0].indices.empty())
+			splat(piece.leaves[0], 0.5f * leafCoverage);
+		else
+			splat(piece.bark[0], 0.25f * leafCoverage);
 	}
 
 	TreeBillboardBox billboardBox(const TreePiece& piece)

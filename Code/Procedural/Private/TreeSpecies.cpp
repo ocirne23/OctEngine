@@ -52,6 +52,11 @@ namespace
 		readFloat(node, "Stubs", shape.stubs);
 		readInt(node, "Rings", shape.rings);
 		readInt(node, "Sides", shape.sides);
+		readRange(node, "Section", shape.section);
+		if (const AssetNode* n = node.find("Section"))
+			shape.channel = n->asFloat(2, shape.channel);
+		readFloat(node, "Swell", shape.swell);
+		readFloat(node, "Tip", shape.tip);
 	}
 
 	void clampShape(TreeBranchShape& shape, int maxRings, int maxSides)
@@ -63,6 +68,10 @@ namespace
 		shape.elbowRange.x = glm::clamp(shape.elbowRange.x, 0.0f, 1.0f);
 		shape.elbowRange.y = glm::clamp(shape.elbowRange.y, shape.elbowRange.x, 1.0f);
 		shape.stubs = glm::clamp(shape.stubs, 0.0f, 1.0f);
+		shape.section = glm::clamp(shape.section, glm::vec2(0.1f), glm::vec2(4.0f));
+		shape.tip = glm::clamp(shape.tip, 0.0f, 0.8f);
+		shape.channel = glm::clamp(shape.channel, 0.0f, 2.0f);
+		shape.swell = glm::clamp(shape.swell, -0.9f, 3.0f);
 	}
 
 	void readColor(const AssetNode& node, const char* key, glm::vec3& value)

@@ -54,9 +54,9 @@ export namespace Procedural
 			float sink = 0.0f;
 			float align = 0.0f;
 			float footprint = 1.0f;       // RockFootprint::flat: groundTransform's footprint x FOOTPRINT x the scale
-			uint16 material = 0;          // the instances' (a wood type's is its bark texture: the rock shader samples it)
-			bool wood = false;            // `Surface Wood`
-			glm::vec3 woodAlbedo{ 0.0f }; // linear: the far volume's colour of a wood type (its bark texture's mean)
+			uint16 material = 0;          // the instances' (a wood / cactus type's own: the rock shader reads it)
+			bool ownColour = false;       // `Surface Wood` / `Cactus`: its own colours, not the climate's bedrock
+			glm::vec3 ownAlbedo{ 0.0f };  // linear: the far volume's colour of such a type (its bark texture's / skin's mean)
 			oc::vector<WorldVariant> variants;
 		};
 		// Rock records are wanted ("Rocks/Enabled" + "Rocks/World/Enabled"); the meshes may still be generating.
@@ -94,13 +94,15 @@ export namespace Procedural
 			RockTypeDesc desc;
 			uint64 meshHash = 0; // the .rock file's text (MeshCache's key, with the resolution and the variant seed)
 			oc::vector<Variant> variants;
-			// A WOOD type's material: its `Bark` species' bark texture x its tint (BC1 albedo + BC5 normal map), which the
-			// rock shader maps around the wood (RendererVK "The rock material", WOOD). Its job (kickGeneration) fills the
-			// chains, finishLoad uploads and drops them. UINT16_MAX = none (a rock: m_material). Kept over a remesh.
-			uint16 woodMaterial = UINT16_MAX;
+			// The type's OWN material (UINT16_MAX = none: a rock draws on m_material). Kept over a remesh.
+			//   WOOD:   its `Bark` species' bark texture x its tint (BC1 albedo + BC5 normal map), which the rock shader maps
+			//           around the wood (RendererVK "The rock material", DEAD WOOD). Its job (kickGeneration) fills the
+			//           chains, finishLoad uploads and drops them.
+			//   CACTUS: a 1 x 2 texture - the skin (Color), the spines (Color2) - the shader's cactus path fetches.
+			uint16 ownMaterial = UINT16_MAX;
 			oc::vector<oc::vector<uint8>> barkAlbedo, barkNormal;
 			uint32 barkSize = 0;          // 0 = no bark loaded
-			glm::vec3 barkMean{ 0.1f };   // linear: the tinted texture's mean (WorldType::woodAlbedo)
+			glm::vec3 ownAlbedo{ 0.1f };  // linear: the tinted bark's / the skin's mean (WorldType::ownAlbedo)
 		};
 
 		// Reads the .rock files (main) and kicks one generation job per variant (and one per wood type's bark): no

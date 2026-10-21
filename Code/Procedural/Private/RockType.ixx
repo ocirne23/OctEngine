@@ -7,8 +7,8 @@ export import Settings.Rocks; // RockWorldDesc
 
 // One rock type, authored as a `.rock` text asset (Assets/Rocks/). The type sets the SHAPE: a signed distance field
 // built per variant from its seed. A ROCK's colour comes from the climate at the rock (the terrain's bedrock
-// materials), never from the type; DEAD WOOD (`Surface Wood`) takes a tree species' bark texture (`Bark`). See
-// Docs/Context/Procedural/Rocks.md.
+// materials), never from the type; DEAD WOOD (`Surface Wood`) takes a tree species' bark texture (`Bark`), a CACTUS
+// (`Surface Cactus`) the type's two colours. See Docs/Context/Procedural/Rocks.md.
 export namespace Procedural
 {
 	enum class ERockShape : uint8
@@ -17,12 +17,14 @@ export namespace Procedural
 		Block,   // superellipsoid, default squareness 3 (a rounded block)
 		Pillar,  // a STANDING body whose width follows a profile over its height (a spire, a top-heavy monolith), on a flat floor
 		Trunk,   // a dead TREE TRUNK: a fallen log (`Lying`), a stump or a snag - broken ends, stubs, roots, a root plate
+		Cactus,  // a columnar CACTUS (a saguaro): a ribbed stem and elbowed arms
 	};
 
 	enum class ERockSurface : uint8
 	{
-		Rock, // the climate's bedrock (RendererVK LitRock)
-		Wood, // a tree species' bark texture (`Bark`), end grain on the broken faces (LitRock's wood path)
+		Rock,   // the climate's bedrock (RendererVK LitRock)
+		Wood,   // a tree species' bark texture (`Bark`), end grain on the broken faces (LitRock's wood path)
+		Cactus, // the type's skin colour, areoles with spines on the rib crests (LitRock's cactus path)
 	};
 
 	// A rock's largest size (m, its longest axis: `Scale` is clamped to it): the far volume's layer is 22 m high
@@ -30,7 +32,9 @@ export namespace Procedural
 	constexpr float ROCK_MAX_SIZE = 22.0f;
 	constexpr int ROCK_MAX_PILE = 4;       // blocks per pile / pillars per group (RockShape's block arrays)
 	constexpr int ROCK_PROFILE_POINTS = 5; // a Pillar's widths, base to top, evenly spaced
-	constexpr int ROCK_MAX_LIMBS = 12;     // a Trunk's branch stubs + roots (RockShape::limbs)
+	constexpr int ROCK_MAX_LIMBS = 28;     // a Trunk's branch stubs + roots, a Cactus's segments (RockShape::limbs)
+	constexpr int ROCK_MAX_ARMS = 5;       // a Cactus: its stem's 2 segments + 5 per arm fill the limbs
+	constexpr int ROCK_MAX_RIBS = 40;      // a Cactus's ribs (the mesh carries the count: texCoords.y = 3 + ribs / 100)
 
 	// One world placement RULE (Docs/Context/Procedural/Rocks.md): TreeWorld's rock records. A type has any number of them
 	// (`Placement` blocks) and their densities ADD - a rule for everywhere plus one for a climate it is common in, each
@@ -126,11 +130,21 @@ export namespace Procedural
 		float rootSpread = 2.5f;                 // their reach x the trunk's base radius
 		float hollowChance = 0.0f;               // a hollow core, open at the broken end(s)
 		float hollowSize = 0.6f;                 // its radius x the trunk's
+		// Cactus (Aspect x: the stem's thickness, y: its height): the RIBS around every segment (also the clutter's
+		// cacti), and per variant armCount.x..y ARMS out of the stem at armHeight (x the height), each armThickness x the
+		// stem's radius thick, its elbow reaching armReach x that radius out from the stem's side.
+		int ribCount = 0;
+		float ribDepth = 0.08f;                  // the valleys' depth x the segment's radius
+		glm::ivec2 armCount{ 0 };
+		glm::vec2 armHeight{ 0.35f, 0.7f };
+		float armThickness = 0.7f;
+		float armReach = 1.6f;
 
 		// --- Surface ---
 		ERockSurface surface = ERockSurface::Rock;
 		oc::string bark;                         // Wood: the tree species whose bark texture it wears (Assets/Trees/<bark>.tree)
-		glm::vec3 color{ 1.0f };                 // Wood: a tint on that bark (sRGB 0..1; dead wood greys)
+		glm::vec3 color{ 1.0f };                 // Wood: a tint on that bark (sRGB 0..1; dead wood greys). Cactus: the skin
+		glm::vec3 color2{ 0.85f, 0.8f, 0.62f };  // Cactus: the areoles' spines (sRGB 0..1)
 
 		// --- Meshes ---
 		int lodTriangles = 2000;                 // LOD 0's triangle count; each further level a quarter of the one before
@@ -141,7 +155,7 @@ export namespace Procedural
 
 	// The ground a type covers, from its desc (its variants are not generated where it is placed - TreeWorld): a
 	// CAPSULE in rock-local XZ along X, x the record's scale. A round rock: halfLength 0, radius 0.5 (as before); a
-	// lying trunk: its axis' half length and its thickness; a standing one: its base and roots.
+	// lying trunk: its axis' half length and its thickness; a standing one: its base and roots; a cactus: its stem.
 	struct RockFootprint
 	{
 		float halfLength = 0.0f;

@@ -68,13 +68,26 @@ export namespace Procedural
 		glm::vec2 breakSlant[2] = {};          // per end: the break's lean across the section
 		float hollow = 0.0f;                   // the hollow core's radius x the trunk's (0 = solid)
 		bool standing = false;                 // the base is cut flat (it goes into the ground)
-		struct Limb { glm::vec3 a, b; float ra, rb; };
-		uint32 limbCount = 0;                  // branch stubs and roots: round cones, shape frame
+		// `side`: the across direction the angle around it starts from (0 = picked from its axis: limbFrame) - a cactus's
+		// segments of one arm share it, so their ribs line up. `along0`: its wood coordinates' along at `a` (base
+		// circumferences) - a cactus's chain continues it from segment to segment.
+		struct Limb
+		{
+			glm::vec3 a, b;
+			float ra, rb;
+			glm::vec3 side{ 0.0f };
+			float along0 = 0.0f;
+		};
+		uint32 limbCount = 0;                  // branch stubs and roots / a cactus's segments: round cones, shape frame
 		Limb limbs[ROCK_MAX_LIMBS] = {};
 		glm::vec4 plate{ 0.0f };               // the ROOT PLATE: xyz centre (shape frame), w its radius (0 = none)
 		float plateThickness = 0.0f;           // ... along the trunk's axis (shape X: a lying trunk)
-		float groundY = 0.0f;                  // a trunk's ground line (shape frame) - the mesh's y = 0
+		float groundY = 0.0f;                  // a trunk's / a cactus's ground line (shape frame) - the mesh's y = 0
 		bool wood = false;                     // the mesh carries the wood coordinates (projectAndShade)
+		// CACTUS (limb 0: the stem, then each arm's elbow and its upright part; cactusSdf): the ribs around every segment.
+		uint32 ribCount = 0;
+		float ribDepth = 0.0f;                 // x the segment's radius
+		bool cactusSkin = false;               // `Surface Cactus`: texCoords.y = 3 + ribCount / 100 (the shader's cactus path)
 	};
 
 	// Pure; any thread. Deterministic from the type (its seed included) and `seed`.
@@ -90,7 +103,8 @@ export namespace Procedural
 	// the TANGENT is not a direction but the vertex's WOOD COORDINATES: x along the wood part it belongs to (the trunk, a
 	// stub, a root) in units of that part's base circumference (the bark texture's v), yz across it from the part's
 	// axis in nominal units - the rock shader's bark mapping and growth rings (RendererVK "The rock material", WOOD). A
-	// rock: texCoords.y = 0 and a plain tangent.
+	// CACTUS (`Surface Cactus`) carries the same coordinates (its segments' frames: the angle around finds the rib crests)
+	// with texCoords.y = 3 + its rib count / 100. A rock: texCoords.y = 0 and a plain tangent.
 	struct RockMesh
 	{
 		oc::vector<glm::vec3> positions;

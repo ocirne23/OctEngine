@@ -1,0 +1,32 @@
+# A saguaro: a ribbed column with a domed top, standing straight on hot, dry, flat ground, with one to a few arms curving
+# up beside the stem. Format: Docs/Context/Procedural/Rocks.md.
+RockType Cactus
+	Seed 61
+	Scale 4 12
+	Variants 8
+	Sink 0.02
+	Align 0
+	Shape Cactus
+	Aspect 0.11 1 0.11
+	AspectVar 0.15 0.1 0.15
+	Ribs 14 0.09
+	Arms 1 4
+	ArmHeight 0.3 0.6
+	ArmSize 0.85 1.5
+	Erosion 0.001
+	Warp 0.012 1.2
+	Noise 0.0015 25 2
+	Color 0.30 0.42 0.26
+	Color2 0.86 0.80 0.62
+	Lod 6000
+	# 14 ribs around a thin stem: ~3 cells per rib
+	Resolution 6
+	# The hot desert only - the terrain's dune sand box (20 C and up, 0..300 mm), its edge narrow so none reach the grass
+	# (400 mm) - on flat-ish ground, in loose stands.
+	Placement
+		Density 5
+		Temperature 20 1000
+		Precipitation 0 300
+		ClimateWidth 0.015
+		Slope 0 0 0.2 0.5
+		Cluster 150 0.5

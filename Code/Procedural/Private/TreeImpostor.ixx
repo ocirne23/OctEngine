@@ -80,8 +80,9 @@ export namespace Procedural
 	constexpr float TREE_CARD_STRIP_CODE = 2.0f;
 
 	// The FAR-TREE VOLUME's view of a piece (RendererVK TreeVolumePipeline): its EXTINCTION (1/m) over its billboard
-	// box, res^3 voxels (x fastest, then y, then z), from the LOD-0 triangles - a leaf card blocks half its area on
-	// average (x `leafCoverage`, the texture's opaque fraction), the bark a quarter of its surface (a convex body's
-	// mean projected area), each spread over its voxels per unit volume.
+	// box, res^3 voxels (x fastest, then y, then z), from the LOD-0 LEAF triangles - a leaf card blocks half its area on
+	// average (x `leafCoverage`, the texture's opaque fraction) - or, for a piece without leaves (a succulent's bark
+	// blades), its bark: a quarter of its surface (a convex body's mean projected area). Each spread over its voxels per
+	// unit volume.
 	void bakeTreeDensity(const TreePiece& piece, uint32 res, float leafCoverage, oc::vector<float>& out, TreeBillboardBox& outBox);
 }

@@ -495,7 +495,8 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 `TreeSpecies <name>` with `Trunk` / `Crown` / `Module` (+ `Level` children) / `Leaves` / `Color` blocks, in
 `Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree. `Kind Bush`
 species grow around the trees of their `Climate` (picked by `Weight`); a tree's `Undergrowth` block sets how many and
-how far out.
+how far out. A bush with a `Placement` block ALSO grows on its own, no tree needed (the desert succulents `Agave` and
+`Aloe`: `Climate Desert`, leaves as flat module blades - `Section`, `Swell`, `Tip`).
 A trunk may grow several stems (`Trunk Stems`: birch clumps).
 **The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, `Aspen.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in
@@ -507,7 +508,8 @@ Entity, above Procedural). Their generated textures are saved once to `Assets/Lo
 `RockType <name>` in `Assets/Rocks/`: the SHAPE of a rock family as an SDF recipe (`Shape`, `Aspect`, `Squareness`,
 `Erosion`, `Warp`, `Fracture`, `Strata`, `Noise`, `Pits`, `Split`, `Pile`, `Profile`, `Group`, ...); the colour comes from the
 climate, never the type. DEAD WOOD is rock types too: `Shape Trunk` (a fallen log, a stump, a snag: `Lying`, `Break`,
-`RootPlate`, `Stubs`, `Roots`, `Hollow`) with `Surface Wood` (`Bark <TreeSpecies>`: that species' bark texture, x a `Color` tint). Any
+`RootPlate`, `Stubs`, `Roots`, `Hollow`) with `Surface Wood` (`Bark <TreeSpecies>`: that species' bark texture, x a `Color` tint),
+and so is a saguaro: `Shape Cactus` (`Ribs`, `Arms`, `ArmHeight`, `ArmSize`) with `Surface Cactus` (`Color` skin, `Color2` spines). Any
 number of `Placement` blocks say where the world puts it (a climate box, the ground: `Slope`, `Crag`, `Talus`,
 `Plains` / `Rugged` / `Valley`, `Forest`); their densities add. **The grammar is
 in [`Docs/Context/Procedural/Rocks.md`](../Docs/Context/Procedural/Rocks.md)**.
@@ -515,8 +517,8 @@ Loaded by `RockSystem` itself (not `AssetRegistry`).
 
 ## `.clutter` — ground clutter types
 
-`ClutterType <name>` in `Assets/Clutter/`: a pebble, a fallen branch, a mushroom or a flower (`Kind`; the flower path
-also builds reeds, sedges, wild grains, ferns and weeds - `Head Grain|Fern|Rosette|Leafy`, ...), its shape
+`ClutterType <name>` in `Assets/Clutter/`: a pebble, a fallen branch, a mushroom, a cactus (`Form Barrel|Column|Pad`) or a
+flower (`Kind`; the flower path also builds reeds, sedges, wild grains, ferns and weeds - `Head Grain|Fern|Rosette|Leafy`, ...), its shape
 (a pebble takes the `.rock` shape keys; a flower has no mesh: `Head`, `Petals`, `Open`, ...), and any number of
 `Placement` blocks (density per m², a climate box, and `a b` TERMS over the terrain and the FOREST FLOOR - `Grass`,
 `Crag`, `Beach`, `Canopy`, `Trunk`, `Rock`, `Wet` - plus `Cluster` and fairy `Ring`s); their densities add. Placed on the
