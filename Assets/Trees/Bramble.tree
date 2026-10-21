@@ -28,7 +28,7 @@ TreeSpecies Bramble
 		AngleVar 14
 		BranchRadius 4
 	Module
-		Count 8
+		Count 4
 		Radius 0.005
 		Curve 40 12
 		UpAttract 0.2
@@ -69,6 +69,8 @@ TreeSpecies Bramble
 		ClusterLeaves 12
 		ClusterLeafSize 0.3
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 30
 		Resolution 256

@@ -27,7 +27,7 @@ TreeSpecies Hazel
 		AngleVar 10
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Length 2.4
 		Radius 0.012
 		Curve 18 8
@@ -57,6 +57,8 @@ TreeSpecies Hazel
 		ClusterLeafSize 0.3
 		ClusterLeafWidth 0.5
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 30
 		Resolution 256

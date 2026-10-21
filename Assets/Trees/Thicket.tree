@@ -26,7 +26,7 @@ TreeSpecies Thicket
 		AngleVar 12
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Radius 0.03
 		Curve 30 10
 		UpAttract 0.35
@@ -67,6 +67,8 @@ TreeSpecies Thicket
 		ClusterLeaves 10
 		ClusterLeafSize 0.3
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 25
 		Resolution 256

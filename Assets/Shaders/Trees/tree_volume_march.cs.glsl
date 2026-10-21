@@ -405,8 +405,11 @@ void marchAt(ivec2 px)
             const float sigma = hasFloor ? densityAtColumns(p, uv, floorY, smoothFloor) : 0.0;
             if (sigma > 1e-4)
             {
+                // The terrain shadow marches the height MAP, not the tree floor: start at the sample's height above its floor,
+                // put on the MAP's ground there. From `p` itself a crown in a valley started under the map's surface (its
+                // coarse texels interpolate above a concave floor) and lost all sun: black patches along valleys.
                 if (terrainVis < 0.0)
-                    terrainVis = terrainSunVisibility(p, L, 20.0, 8, 0.02, 1.0);
+                    terrainVis = terrainSunVisibility(vec3(p.x, terrainHeightAt(p.xz) + max(h, 0.0), p.z), L, 20.0, 8, 0.02, 1.0);
                 // The cloud shadow per lit step (a ray crosses kilometres of canopy).
                 const float cloudT = cloudSunTransmittanceBilinear(p);
                 const mat2 J = polarJ(rel, r);

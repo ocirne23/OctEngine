@@ -26,7 +26,7 @@ TreeSpecies Bilberry
 		AngleVar 15
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Radius 0.025
 		Curve 20 10
 		UpAttract 0.5
@@ -54,6 +54,8 @@ TreeSpecies Bilberry
 		ClusterLeaves 14
 		ClusterLeafSize 0.18
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 20
 		Resolution 256

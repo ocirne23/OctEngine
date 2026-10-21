@@ -28,7 +28,7 @@ TreeSpecies Brush
 		AngleVar 12
 		BranchRadius 4
 	Module
-		Count 8
+		Count 4
 		Radius 0.005
 		Curve 25 10
 		UpAttract 0.25
@@ -72,6 +72,8 @@ TreeSpecies Brush
 		ClusterLeaves 12
 		ClusterLeafSize 0.28
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 30
 		Resolution 256

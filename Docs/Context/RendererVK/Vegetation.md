@@ -556,7 +556,9 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     on a grid sliding with the camera, and the blobs shimmered), the height gap above the volume's top.
   * Per lit sample: `albedo / π ×` (the sun × "Far sun scale" × the Henyey-Greenstein phase ("Far forward scatter"; a
     rock takes none) × its transmittance through the crown (3 taps out to 14 m, × "Far self shadow") × the terrain's
-    sun visibility (`terrainSunVisibility`, once per ray at the first hit) × the cloud shadow
+    sun visibility (`terrainSunVisibility`, once per ray at the first hit, from the hit's height above its tree floor
+    put on the height MAP's ground there - from the hit itself a crown in a valley started under the map's coarse,
+    concave-overshooting surface and lost all sun: black patches along valleys, changing with "Data map range") × the cloud shadow
     (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
   * "Far normal strength": the sun term toward `max(N·L, 0)` with N = −∇density by forward differences (3 more taps

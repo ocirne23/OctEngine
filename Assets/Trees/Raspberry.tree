@@ -27,7 +27,7 @@ TreeSpecies Raspberry
 		AngleVar 12
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Length 1.5
 		Radius 0.008
 		Curve 20 8
@@ -56,6 +56,8 @@ TreeSpecies Raspberry
 		ClusterLeafSize 0.32
 		ClusterLeafWidth 0.45
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 20
 		Resolution 256

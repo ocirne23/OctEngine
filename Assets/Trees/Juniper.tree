@@ -26,7 +26,7 @@ TreeSpecies Juniper
 		AngleVar 10
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Radius 0.03
 		Curve 20 8
 		UpAttract 0.2
@@ -70,6 +70,8 @@ TreeSpecies Juniper
 		ClusterLeaves 3
 		ClusterLeafSize 0.13
 		NormalBend 0.4
+	Bake
+		Variants 2
 	Billboard
 		Distance 25
 		Resolution 256

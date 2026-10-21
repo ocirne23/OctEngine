@@ -320,7 +320,10 @@ The round bushes, two per climate:
   at the tips, broad leaves), both `Weight 2`, plus `Bilberry` and `DwarfBirch` (`Climate Boreal BirchWood`).
 
 A bush is a tree species with a short trunk, slots from the ground (`Crown Start 0`), a large `BranchRadius`
-(the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
+(the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`. **Billboard texture budget:**
+every bush bakes 2 variants (`Bake Variants 2`) from 4 modules (`Module Count 4`; the succulents 3) - each variant is a
+whole-plant billboard, each module a billboard bake and a row of the card atlas, and small plants that look alike need
+no more.
 
 The SUCCULENTS - `Climate Desert` (no tree's, so never undergrowth), placed ON THEIR OWN by their `Placement` blocks:
 `Agave` (a dense FLOWER-SHAPED rosette: 40 slots on a short hidden trunk, the crown from 30 % of its height so the outer

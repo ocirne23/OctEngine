@@ -26,7 +26,7 @@ TreeSpecies ThornScrub
 		AngleVar 12
 		BranchRadius 3
 	Module
-		Count 8
+		Count 4
 		Radius 0.025
 		Curve 25 10
 		UpAttract 0.3
@@ -72,6 +72,8 @@ TreeSpecies ThornScrub
 		ClusterLeaves 3
 		ClusterLeafSize 0.08
 		NormalBend 0.5
+	Bake
+		Variants 2
 	Billboard
 		Distance 25
 		Resolution 256
