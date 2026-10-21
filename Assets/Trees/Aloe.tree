@@ -26,25 +26,29 @@ TreeSpecies Aloe
 		Shape Cone
 		Start 0.3
 		Radius 0.55
-		Slots 20
+		Slots 17
 		Fill 1
 		Angle 42 15
 		AngleVar 6
 		BranchRadius 3
+	# 3 leaf modules (3 widths, `Section` widthVar): each one is a billboard bake and a row of the card atlas.
 	Module
-		Count 8
+		Count 3
 		Radius 0.07
 		Curve 8 4
 		UpAttract 0.5
 		Cup 25
 		Rings 14
 		Sides 12
-		Section 1.2 0.5 0.35
+		Section 1.2 0.5 0.35 0.25
 		Swell 0.4
 		Tip 0.35
 	Leaves
 		Type Single
 		PerBranch 0
+	# Two baked plants are enough (they look alike): half the billboard textures.
+	Bake
+		Variants 2
 	Billboard
 		Distance 25
 		Resolution 256

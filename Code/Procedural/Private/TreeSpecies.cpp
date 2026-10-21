@@ -54,7 +54,10 @@ namespace
 		readInt(node, "Sides", shape.sides);
 		readRange(node, "Section", shape.section);
 		if (const AssetNode* n = node.find("Section"))
+		{
 			shape.channel = n->asFloat(2, shape.channel);
+			shape.sectionVar = n->asFloat(3, shape.sectionVar);
+		}
 		readFloat(node, "Swell", shape.swell);
 		readFloat(node, "Cup", shape.cup);
 		readFloat(node, "Tip", shape.tip);
@@ -72,6 +75,7 @@ namespace
 		shape.section = glm::clamp(shape.section, glm::vec2(0.1f), glm::vec2(4.0f));
 		shape.tip = glm::clamp(shape.tip, 0.0f, 0.8f);
 		shape.channel = glm::clamp(shape.channel, 0.0f, 2.0f);
+		shape.sectionVar = glm::clamp(shape.sectionVar, 0.0f, 0.8f);
 		shape.swell = glm::clamp(shape.swell, -0.9f, 3.0f);
 		shape.cup = glm::clamp(shape.cup, -180.0f, 180.0f);
 	}

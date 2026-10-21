@@ -154,10 +154,11 @@ TreeSpecies <name>
         ElbowMinElevation (deg vs horizontal an elbow may turn down to; default -15; a branch that already
         points lower before the elbow is not lifted) · ElbowRange start end (length fractions; default 0 1)
         Stubs (probability an elbow carries a snapped-off stub) · Rings · Sides
-        Section width thickness [channel] (x the radius, 0.1..4, default 1 1 = round: a flat BLADE - each ring an
-        ellipse, `width` across the module's X and `thickness` along its up side +Z, normals from the deformed grid; a
+        Section width thickness [channel] [widthVar] (x the radius, 0.1..4, default 1 1 = round: a flat BLADE - each ring
+        an ellipse, `width` across the module's X and `thickness` along its up side +Z, normals from the deformed grid; a
         succulent's leaf. `channel` 0..2: the section bent into a GUTTER, its middle that x the radius below its edges -
-        hollow on the up side, keeled below) · Swell (-0.9..3: the radius x (1 + swell x sin(pi x the length fraction))
+        hollow on the up side, keeled below. `widthVar` 0..0.8: a MODULE ROOT's width x (1 +- it), per module - a hash
+        of the module's seed, so the random stream is unchanged: leaves of mixed widths) · Swell (-0.9..3: the radius x (1 + swell x sin(pi x the length fraction))
         - a blade widest near its middle instead of a linear taper to a needle) · Tip (0..0.8 of the length narrowing to
         a closed point; default 0 = open end) · Cup (deg, -180..180: a bend over the length toward the module's up side,
         +Z - a blade's face: up for an outer leaf, in toward the centre for an inner one - that stops once it points there;
@@ -322,13 +323,15 @@ A bush is a tree species with a short trunk, slots from the ground (`Crown Start
 (the thin trunk would otherwise cap the module scale) and a short `Billboard Distance`.
 
 The SUCCULENTS - `Climate Desert` (no tree's, so never undergrowth), placed ON THEIR OWN by their `Placement` blocks:
-`Agave` (a dense FLOWER-SHAPED rosette: 48 slots on a short hidden trunk, the crown from 30 % of its height so the outer
+`Agave` (a dense FLOWER-SHAPED rosette: 40 slots on a short hidden trunk, the crown from 30 % of its height so the outer
 leaves rise off the ground, `Shape Cone` - the outer leaves longest -, `Angle 70 5`; each module ONE broad, short
-grey-green blade cupped IN like a petal - `Cup 50`, little random `Curve` -, `Section 1.8 0.3 0.6` (a gutter on top),
-`Swell 1.0`, `Tip 0.25`, 14 rings x 12 sides, no leaf cards - `Leaves PerBranch 0`; `Wind Trunk 0`; the desert sand box
-20 C up / 0..350 mm, 60 / ha) and `Aloe` (LONG, narrower, thicker green blades rising and curving UP, not fanning out -
-`Angle 42 15`, `UpAttract 0.5`, `Cup 25`, `Curve 8` -, `Section 1.2 0.5 0.35`, `Swell 0.4`; pale flecks in bands = the
-bark's `Lenticels` in a pale `Color Mark`; 18 C up / 50..400 mm, 40 / ha). Having no leaves, they enter the far-tree volume by their BARK blades (`bakeTreeDensity`) in the
+grey-green blade cupped IN like a petal - `Cup 50`, little random `Curve` -, `Section 1.8 0.3 0.6 0.25` (a gutter on
+top, widths +-25 % per module), `Swell 1.0`, `Tip 0.25`, 14 rings x 12 sides, no leaf cards - `Leaves PerBranch 0`;
+`Wind Trunk 0`; the desert sand box 20 C up / 0..350 mm, 60 / ha) and `Aloe` (17 LONG, narrower, thicker green blades
+rising and curving UP, not fanning out - `Angle 42 15`, `UpAttract 0.5`, `Cup 25`, `Curve 8` -, `Section 1.2 0.5 0.35
+0.25`, `Swell 0.4`; pale flecks in bands = the bark's `Lenticels` in a pale `Color Mark`; 18 C up / 50..400 mm,
+40 / ha). Both bake 2 variants (`Bake Variants 2`: the plants look alike - half the billboard textures) from 3 leaf
+modules (`Module Count 3`: each module is a billboard bake and a row of the card atlas). Having no leaves, they enter the far-tree volume by their BARK blades (`bakeTreeDensity`) in the
 bark texture's mean colour.
 
 ### Piece mesh LODs

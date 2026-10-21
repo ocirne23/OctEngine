@@ -27,25 +27,29 @@ TreeSpecies Agave
 		Shape Cone
 		Start 0.3
 		Radius 0.65
-		Slots 48
+		Slots 40
 		Fill 1
 		Angle 70 5
 		AngleVar 5
 		BranchRadius 3
+	# 3 leaf modules (3 widths, `Section` widthVar): each one is a billboard bake and a row of the card atlas.
 	Module
-		Count 8
+		Count 3
 		Radius 0.11
 		Curve 6 3
 		UpAttract 0.1
 		Cup 50
 		Rings 14
 		Sides 12
-		Section 1.8 0.3 0.6
+		Section 1.8 0.3 0.6 0.25
 		Swell 1.0
 		Tip 0.25
 	Leaves
 		Type Single
 		PerBranch 0
+	# Two baked plants are enough (they look alike): half the billboard textures.
+	Bake
+		Variants 2
 	Billboard
 		Distance 25
 		Resolution 256

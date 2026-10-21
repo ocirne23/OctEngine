@@ -1214,8 +1214,10 @@ namespace
 		oc::vector<Elbow> elbows;
 		growBranch(root.path, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength, r0, r0 * 0.15f,
 			sp.moduleShape, up, rng, &elbows);
+		// The blade's width varies per module (a hash of its seed: the random stream stays the same).
+		const float widthVar = 1.0f + sp.moduleShape.sectionVar * (treeHash01(treeHash(seed, 0x5EC7u)) * 2.0f - 1.0f);
 		plan.tubes.push_back({ .path = root.path, .sides = sp.moduleShape.sides, .bone = 0, .level = 0, .tip = sp.moduleShape.tip,
-			.section = sp.moduleShape.section, .channel = sp.moduleShape.channel, .swell = sp.moduleShape.swell });
+			.section = sp.moduleShape.section * glm::vec2(widthVar, 1.0f), .channel = sp.moduleShape.channel, .swell = sp.moduleShape.swell });
 		planStubs(plan, root.path, elbows, sp.moduleShape, 0, 0, rng);
 		out.bones.push_back({ -1, glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f), nominalLength });
 		current.push_back(oc::move(root));

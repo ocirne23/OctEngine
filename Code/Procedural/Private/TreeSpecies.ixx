@@ -51,6 +51,7 @@ export namespace Procedural
 		// A flat BLADE (a succulent's leaf): the cross-section's width (across: the module's X) and thickness (along its
 		// up side, +Z) x the radius. 1 1 = round.
 		glm::vec2 section{ 1.0f, 1.0f };
+		float sectionVar = 0.0f;   // a module root's blade width x (1 +- this), per module (its seed): leaves of mixed widths
 		float channel = 0.0f;      // the section bent into a GUTTER: its middle this x the radius below its edges (hollow on top, keeled below)
 		float cup = 0.0f;          // degrees bent toward the module's up side (+Z: a leaf's face) over the length - petals curving in
 		float swell = 0.0f;        // the radius x (1 + this x sin(pi x the length fraction)): a blade widest near its middle
