@@ -462,9 +462,9 @@ export namespace RendererVKLayout
     constexpr uint32 SKINNING_THREADS_PER_GROUP = 64;
 
     // Initial mega-buffer sizes; MeshDataManager grows them on demand (GPU copy preserves contents). Sized so the world's
-    // load does not grow them: 1.5 GiB of vertices, 0.5 GiB of indices.
-    constexpr size_t INITIAL_VERTEX_DATA = 16 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
-    constexpr size_t INITIAL_INDEX_DATA = 64 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
+    // load does not grow them:
+    constexpr size_t INITIAL_VERTEX_DATA = 32 * 1024 * 1024 * sizeof(RendererVKLayout::MeshVertex);
+    constexpr size_t INITIAL_INDEX_DATA = 80 * 1024 * 1024 * sizeof(RendererVKLayout::MeshIndex);
     constexpr size_t INITIAL_SKINNING_DATA = 64 * 1024 * sizeof(RendererVKLayout::SkinningVertex);
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)
