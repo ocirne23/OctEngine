@@ -1,6 +1,7 @@
-# Aloe: a rosette of thick, fleshy, green-grey leaves curving strongly up off the ground, flecked with pale spots in
-# bands (~0.8-1.5 m). It grows ON ITS OWN on hot, dry ground - the desert and its dry edges (its Placement block: no
-# tree needed); Climate Desert - no tree's - so it is never a tree's undergrowth.
+# Aloe: a clump of LONG, thick, fleshy, green-grey leaves rising from the ground and curving UP (`Cup`, `UpAttract`), not
+# fanning out, flecked with pale spots in bands (~0.8-1.2 m tall). It grows ON ITS OWN on hot, dry ground - the desert
+# and its dry edges (its Placement block: no tree needed); Climate Desert - no tree's - so it is never a tree's
+# undergrowth.
 # The leaves are the modules: one thick blade each (`Section`: a shallow gutter on top; `Swell`; `Tip`), no leaf cards;
 # the spots are the bark's dashes. The crown starts above the ground on a short hidden trunk.
 TreeSpecies Aloe
@@ -24,21 +25,22 @@ TreeSpecies Aloe
 	Crown
 		Shape Cone
 		Start 0.3
-		Radius 0.65
+		Radius 0.55
 		Slots 20
 		Fill 1
-		Angle 64 12
-		AngleVar 8
+		Angle 42 15
+		AngleVar 6
 		BranchRadius 3
 	Module
 		Count 8
-		Radius 0.09
-		Curve 35 12
-		UpAttract 0.45
+		Radius 0.07
+		Curve 8 4
+		UpAttract 0.5
+		Cup 25
 		Rings 14
 		Sides 12
 		Section 1.2 0.5 0.35
-		Swell 0.5
+		Swell 0.4
 		Tip 0.35
 	Leaves
 		Type Single

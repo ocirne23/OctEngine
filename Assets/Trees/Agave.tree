@@ -1,7 +1,7 @@
-# Agave (Parry's agave, a century plant): a ROSETTE of broad, thick, rigid blue-grey leaves (~1.5-3 m across), the outer
-# ones spreading and curving up off the ground, the inner ones upright, each widest near its middle and ending in a
-# point. It grows ON ITS OWN in the hot desert (its Placement block: no tree needed); Climate Desert - no tree's - so it
-# is never a tree's undergrowth.
+# Agave (Parry's agave): a dense, FLOWER-SHAPED rosette (~1-2 m across) of many broad, short, cupped grey-green leaves
+# in overlapping rings, every leaf curving IN toward the centre like a petal (`Cup`), the outer ones spreading, the inner
+# ones closing into a bud, each widest near its middle and ending in a point. It grows ON ITS OWN in the hot desert (its
+# Placement block: no tree needed); Climate Desert - no tree's - so it is never a tree's undergrowth.
 # The leaves are the modules: one blade each (`Section`: wide, thin, a gutter on top; `Swell`: widest near the middle;
 # `Tip`: a closed point), no leaf cards. The crown starts above the ground on a short hidden trunk: the outer leaves
 # rise off it.
@@ -26,22 +26,23 @@ TreeSpecies Agave
 	Crown
 		Shape Cone
 		Start 0.3
-		Radius 0.9
-		Slots 32
+		Radius 0.65
+		Slots 48
 		Fill 1
-		Angle 72 12
-		AngleVar 8
+		Angle 70 5
+		AngleVar 5
 		BranchRadius 3
 	Module
 		Count 8
-		Radius 0.08
-		Curve 22 8
-		UpAttract 0.3
+		Radius 0.11
+		Curve 6 3
+		UpAttract 0.1
+		Cup 50
 		Rings 14
 		Sides 12
-		Section 1.6 0.3 0.5
-		Swell 0.8
-		Tip 0.3
+		Section 1.8 0.3 0.6
+		Swell 1.0
+		Tip 0.25
 	Leaves
 		Type Single
 		PerBranch 0
@@ -56,8 +57,8 @@ TreeSpecies Agave
 		Relief 0.15
 		Lichen 0
 	Color
-		Bark 0.52 0.62 0.58
-		Leaf 0.52 0.62 0.58
+		Bark 0.46 0.60 0.49
+		Leaf 0.46 0.60 0.49
 	Placement
 		Density 60
 		Temperature 20 1000

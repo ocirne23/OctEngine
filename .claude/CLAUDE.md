@@ -496,7 +496,7 @@ weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, 
 `Assets/Trees/`. A species describes a piece LIBRARY that trees are composited from per seed, not one tree. `Kind Bush`
 species grow around the trees of their `Climate` (picked by `Weight`); a tree's `Undergrowth` block sets how many and
 how far out. A bush with a `Placement` block ALSO grows on its own, no tree needed (the desert succulents `Agave` and
-`Aloe`: `Climate Desert`, leaves as flat module blades - `Section`, `Swell`, `Tip`).
+`Aloe`: `Climate Desert`, leaves as flat module blades - `Section`, `Swell`, `Tip`, `Cup`).
 A trunk may grow several stems (`Trunk Stems`: birch clumps).
 **The grammar is in [`Docs/Context/Procedural/Trees.md`](../Docs/Context/Procedural/Trees.md)**; placeholders
 `Oak.tree`, `Pine.tree`, `Acacia.tree`, `Willow.tree`, `Birch.tree`, `BirchClump.tree`, `Cedar.tree`, `Elm.tree`, `Aspen.tree`, plus bushes per tree `Climate` (a bush may list several climates; the birches' own `BirchWood` has hazel and raspberry). Loaded by `TreeSystem` itself (not `AssetRegistry`, which lives in

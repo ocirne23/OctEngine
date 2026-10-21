@@ -52,6 +52,7 @@ export namespace Procedural
 		// up side, +Z) x the radius. 1 1 = round.
 		glm::vec2 section{ 1.0f, 1.0f };
 		float channel = 0.0f;      // the section bent into a GUTTER: its middle this x the radius below its edges (hollow on top, keeled below)
+		float cup = 0.0f;          // degrees bent toward the module's up side (+Z: a leaf's face) over the length - petals curving in
 		float swell = 0.0f;        // the radius x (1 + this x sin(pi x the length fraction)): a blade widest near its middle
 		float tip = 0.0f;          // the last fraction of the length narrows to a closed point (a blade's tip); 0 = open end
 	};

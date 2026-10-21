@@ -128,6 +128,9 @@ namespace
 		glm::vec3 axis = randomPerpendicular(d, rng);
 		const float wobble = glm::radians(shape.wobble);
 		const float droop = glm::radians(shape.droop);
+		// Cup: a turn toward the module's up side (+Z: a blade's face) that stops there - a rosette's leaves curving in.
+		const float cup = glm::radians(shape.cup);
+		const glm::vec3 FACE(0.0f, 0.0f, 1.0f);
 
 		oc::vector<glm::vec3> raw;
 		oc::vector<glm::vec3> incoming((size_t)n, glm::vec3(0.0f));
@@ -140,6 +143,14 @@ namespace
 			// Per-segment shares of the totals; the wobble is a random walk, so it scales with sqrt(share).
 			const float frac = nodeAt[(size_t)k + 1] - nodeAt[(size_t)k];
 			d = glm::normalize(glm::angleAxis(curveRad * frac, axis) * d + up * (shape.upAttract * frac));
+			if (cup != 0.0f)
+			{
+				const glm::vec3 toFace = glm::cross(d, FACE);
+				const float left = std::acos(glm::clamp(glm::dot(d, FACE), -1.0f, 1.0f));
+				const float turn = cup > 0.0f ? glm::min(cup * frac, left) : cup * frac;
+				if (glm::dot(toFace, toFace) > 1e-10f)
+					d = glm::normalize(glm::angleAxis(turn, glm::normalize(toFace)) * d);
+			}
 			if (wobble > 0.0f)
 				d = glm::normalize(glm::angleAxis(wobble * std::sqrt(frac * (float)(n - 1)) * rng.signed1(), randomPerpendicular(d, rng)) * d);
 			// Droop: a fixed turn per length toward straight down that stops there - the branch arcs over, then hangs.

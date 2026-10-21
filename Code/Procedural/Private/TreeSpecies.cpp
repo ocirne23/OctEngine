@@ -56,6 +56,7 @@ namespace
 		if (const AssetNode* n = node.find("Section"))
 			shape.channel = n->asFloat(2, shape.channel);
 		readFloat(node, "Swell", shape.swell);
+		readFloat(node, "Cup", shape.cup);
 		readFloat(node, "Tip", shape.tip);
 	}
 
@@ -72,6 +73,7 @@ namespace
 		shape.tip = glm::clamp(shape.tip, 0.0f, 0.8f);
 		shape.channel = glm::clamp(shape.channel, 0.0f, 2.0f);
 		shape.swell = glm::clamp(shape.swell, -0.9f, 3.0f);
+		shape.cup = glm::clamp(shape.cup, -180.0f, 180.0f);
 	}
 
 	void readColor(const AssetNode& node, const char* key, glm::vec3& value)
