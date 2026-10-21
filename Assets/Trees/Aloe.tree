@@ -66,7 +66,7 @@ TreeSpecies Aloe
 		Leaf 0.38 0.50 0.34
 		Mark 0.72 0.78 0.64
 	Placement
-		Density 40
+		Density 20
 		Temperature 18 1000
 		Precipitation 50 400
 		ClimateWidth 0.02

@@ -64,9 +64,9 @@ TreeSpecies Agave
 		Bark 0.46 0.60 0.49
 		Leaf 0.46 0.60 0.49
 	Placement
-		Density 60
+		Density 30
 		Temperature 20 1000
-		Precipitation 0 350
+		Precipitation 40 350
 		ClimateWidth 0.02
 		Cluster 50 0.5
 		MaxSlope 0.9
