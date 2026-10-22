@@ -552,9 +552,16 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
 * **March** (`tree_volume_march.cs`, full res, every pixel): from "Far start" (camera distance; at least the ring's
   entry, exact circle roots; a vertical ray never enters) to the scene surface or "Far end", at most "Far max steps".
   * "Far blob shrink" (1/m) comes off the baked extinction first (before "Far density"), so a blob shrinks toward its
-    dense core. Steps of one cell × "Far step scale" (so they grow like the cells), the WHOLE ray shifted by a
+    dense core. Steps of one cell × "Far step scale" (so they grow like the cells) × (r / "Far start") ^ "Far step
+    distance exponent" (`farStepScaleAt`; 0.8 / 0.4 - 0 = off: > 0 makes them finer near the start and coarser far
+    out), each capped so its VERTICAL travel stays <= "Far height" / "Far layer samples" (8: `layerStepT` - a steep ray
+    from high up crossed the 30 m layer in ~1 cell of its length, 0-2 samples hit or missed: bands; a shallow ray never
+    reaches the cap; the max-floor skip and the jump above the layer are not capped, so the empty air stays fast), the WHOLE ray shifted by a
     per-pixel, per-frame fraction of its first step (TAA averages it — jittering only the first sample left the rest
-    on a grid sliding with the camera, and the blobs shimmered), the height gap above the volume's top.
+    on a grid sliding with the camera, and the blobs shimmered) - as the FIRST STEP'S LENGTH: the first sample stays
+    exactly at "Far start" and covers that partial step (skipping it moved the volume's front edge by up to a step per
+    pixel per frame: crowns across the start cut at a random depth - noise, worse with the pixel skip), the height gap
+    above the volume's top.
   * Per lit sample: `albedo / π ×` (the sun × "Far sun scale" × the Henyey-Greenstein phase ("Far forward scatter"; a
     rock takes none) × its transmittance through the crown (3 taps out to 14 m, × "Far self shadow") × the terrain's
     sun visibility (`terrainSunVisibility`, once per ray at the first hit, from the hit's height above its tree floor
@@ -562,6 +569,12 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     concave-overshooting surface and lost all sun: black patches along valleys, changing with "Data map range") × the cloud shadow
     (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
+  * **THE TRANSMISSION** ("Far transmission" 0.75, "Far transmission focus" 0.33): ADDED to that - the sun × a
+    forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
+    the crown at `Foliage transmission self shadow`'s share of the optical depth (sunT ^ that, as the billboards'),
+    × the terrain / cloud shadow and the interior, in the near leaves' deepened colour (`leafTransmitColor`,
+    leaf_look.inc.glsl: "Foliage transmission saturation" / "warmth"); rocks take none. Only crowns between the camera
+    and the sun glow: "Far forward scatter" reshapes the WHOLE sun term, so it also changed the trees beside and behind.
   * "Far normal strength": the sun term toward `max(N·L, 0)` with N = −∇density by forward differences (3 more taps
     per lit step). A crown-scale gradient blended into it was tried and removed: not worth its 3 taps.
   * "Far interior shadow" / "Far interior radius": `exp(−strength × the mean extinction of 6 taps at radius × the
@@ -625,7 +638,11 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   copies - a bare-sky speckle.
   * The march writes into the persistent **latest-march images** (`m_latest` / `m_latestDepth`, bindings 8 / 9: render
     size, not per slot - a skipped pixel was last marched up to 3 frames ago; only while the plain path skips), and
-    COPIES the block's other pixels from them - 1 to 3 frames late under camera motion (no reprojection). A RESTART
+    COPIES the block's other pixels from them - 1 to 3 frames late under camera motion (no reprojection). That lag,
+    with a coarse step, showed as a "rolling shutter" in the first ~100 m past "Far start" while moving; finer steps
+    there ("Far step distance exponent") hide it. Tried and dropped: a reprojected copy (the pixel's trees' distance
+    back through `u_reprojClip`, read from last frame's marched pixel there - it did not remove the effect, two more
+    loads per copied pixel), and marching every pixel of the blocks near the start (dropped for the exponent). A RESTART
     (the first frame, a resize, a mode change, a frame without the plain skip: `m_lastPlainMarchFrame` /
     `m_lastSkipMode`) clears them to "no trees, distance 0", which fails every copy test.
   * **The copy must fit THIS frame's surface** (`copyFits`): the TAA jitter moves silhouettes by up to a pixel per

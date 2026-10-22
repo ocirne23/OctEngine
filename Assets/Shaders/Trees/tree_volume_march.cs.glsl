@@ -18,6 +18,7 @@
 #define TERRAIN_HEIGHT_BINDING 2
 #include "terrain_height.inc.glsl"
 #include "tree_volume.inc.glsl"
+#include "leaf_look.inc.glsl" // leafTransmitColor: the far transmission's colour, as the near leaves'
 #define CLOUD_SHADOW_BINDING 11
 #include "cloud_shadow.inc.glsl"
 
@@ -223,6 +224,14 @@ void storeDistance(ivec2 px, float distance)
 }
 #endif
 
+// The march's step, x the cell size, at radius r from the bake centre: "Far step scale" at "Far start", x (r / start) ^
+// "Far step distance exponent" beyond - fine steps near the start (where a coarse step showed as noise while moving,
+// with the pixel skip's lagging copies), coarser far out, where the cells and the blobs are small on screen anyway.
+float farStepScaleAt(float r)
+{
+    return u_foliage_farStepScale * pow(max(r, 1.0) / max(pc_startDistance, 1.0), u_foliage_farStepExponent);
+}
+
 // The march of one (march-image) pixel.
 void marchAt(ivec2 px)
 {
@@ -308,6 +317,12 @@ void marchAt(ivec2 px)
     const float hgBase = 1.0 + g * g - 2.0 * g * dot(dir, L); // |g| <= 0.95 on the CPU: >= 0.0025
     const float phase = (1.0 - g * g) / (hgBase * sqrt(hgBase)); // ^1.5
     const float sunLeaf = u_foliage_farSunScale * phase;
+    // The TRANSMISSION lobe ("Far transmission" x a forward-only HG of "Far transmission focus"): light THROUGH the
+    // leaves, ADDED to the sun term only when the view looks toward the sun - "Far forward scatter" reshapes the whole
+    // sun term, so it lit or dimmed the trees beside and behind the camera too.
+    const float gT = u_foliage_farTransmissionFocus;
+    const float hgT = 1.0 + gT * gT - 2.0 * gT * dot(dir, L);
+    const float transmitLobe = u_foliage_farTransmission * (1.0 - gT * gT) / (hgT * sqrt(hgT));
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
     const vec3 skyBase = skyMean * (PI * u_foliage_farAmbient);
     const float sliceH = pc_vol_height / float(pc_vol_slices);
@@ -330,8 +345,14 @@ void marchAt(ivec2 px)
     // tvCellSize(r) = r x cellPerR (both cell sides grow linearly with r).
     const float cellPerR = max(tvLogSpan(TV_PUSH_VOL) / float(pc_vol_radialRes), TV_TWO_PI / float(pc_vol_angularRes));
     // The WHOLE ray shifts by a per-pixel, per-frame fraction of its first step (TAA averages the sampling): the steps are
-    // measured from the camera, and jittering only the first sample left the rest on a grid sliding with it.
-    t += jitter * max(length(u_viewPos.xz + dir.xz * t - bakeCentre()) * cellPerR * u_foliage_farStepScale, 0.25);
+    // measured from the camera, and jittering only the first sample left the rest on a grid sliding with it. The shift is
+    // the FIRST step's length, not a skipped stretch: the first sample stays exactly at the start and covers only that
+    // partial step. Skipping it moved the volume's FRONT EDGE by up to a step per pixel per frame - crowns across "Far
+    // start" cut at a random depth: noise there, worse with the pixel skip's mixed frames, smaller with a smaller step.
+    // The longest step along this ray that still keeps "Far layer samples" samples through the layer's height.
+    const float layerStepT = max(pc_vol_height / max(u_foliage_farLayerSamples, 1.0) / max(abs(dir.y), 1e-4), 0.25);
+    const float rStart = length(u_viewPos.xz + dir.xz * t - bakeCentre());
+    const float firstDt = max(jitter * max(rStart * cellPerR * farStepScaleAt(rStart), 0.25), 0.01);
 
     // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs): above its value + the volume's height, a point is above
     // every tree within one block in every direction - at least r x skipReach away (the block's tangential width as a chord,
@@ -379,7 +400,13 @@ void marchAt(ivec2 px)
         // A column WITHOUT a tree floor lies 2+ columns from any density (the splat floors every footprint PLUS one
         // ring): no sample, and at least a whole cell of step. In the step formula, not a branch of its own: that branch
         // cost the march 8 registers.
-        float dt = max(cell * (hasFloor ? u_foliage_farStepScale : max(u_foliage_farStepScale, 1.0)), 0.25);
+        const float stepScale = farStepScaleAt(r);
+        float dt = i == 0u ? firstDt : max(cell * (hasFloor ? stepScale : max(stepScale, 1.0)), 0.25);
+        // A STEEP ray (from high up) crosses the thin layer in a few metres of its length, against steps of a cell (tens of
+        // metres far out): 0-2 samples in it, hit or missed by the step pattern - bands. Its VERTICAL travel per step is
+        // capped at "Far height" / "Far layer samples" (a shallow ray's never reaches it: no cost at ground level). The
+        // jump above the layer below still skips the empty air.
+        dt = min(dt, layerStepT);
         if (!hasFloor)
             floorY = terrainHeightAt(p.xz); // no tree reaches the column: the height map
         const float h = p.y - floorY;
@@ -456,7 +483,12 @@ void marchAt(ivec2 px)
                 }
 
                 const vec3 sunPart = sunRadiance * mix(sunLeaf, u_foliage_farSunScale, rock);
-                const vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + u_ambientColor) * interior;
+                vec3 lit = albedo * (INV_PI * (sunPart * (sunT * terrainVis * cloudT * sunCos) + sky) + u_ambientColor) * interior;
+                // + the TRANSMISSION: no N.L (it lights the far side), through the crown at "Foliage transmission self
+                // shadow"'s share of its optical depth (as the billboards'), in the leaves' deepened colour; no rock.
+                if (transmitLobe > 0.0 && rock < 1.0)
+                    lit += leafTransmitColor(albedo) * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock)
+                        * pow(sunT, u_foliage_transmissionSelfShadow) * terrainVis * cloudT * interior));
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);

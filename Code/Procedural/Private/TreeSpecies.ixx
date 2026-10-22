@@ -204,6 +204,11 @@ export namespace Procedural
 		// Cluster Leaves: how much a texture leaf CUPS in the leaf normal map (0 = flat, 1 = strongly: its sides fold up
 		// about the midrib, its tip curls down, each leaf a random tilt on top) - light and shade across every leaf.
 		float leafCup = 0.5f;
+		// Cluster Leaves: SECONDARY VEINS (0..1, `Leaves Veins`: lighter lines from the midrib toward the tip, sunk grooves
+		// in the normal map, thicker - less sun through) and fine WRINKLES (0..1, `Leaves Wrinkle`: bumps in the normal,
+		// the tone and the thickness) - both break up the leaf's shading and its transmission.
+		float leafVeins = 0.7f;
+		float leafWrinkle = 0.3f;
 		float leafSize = 0.25f;     // length (m)
 		float leafAspect = 0.6f;    // width / length
 		int leavesPerBranch = 8;    // per average last-level branch; longer branches get proportionally more

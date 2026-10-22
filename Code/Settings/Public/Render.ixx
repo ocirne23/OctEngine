@@ -35,15 +35,15 @@ export struct SkyParams
     // Sun
     glm::vec3 sunDirection = glm::normalize(glm::vec3(0.635f, 0.763f, -0.122f));
     glm::vec3 sunColor = glm::vec3(0.9568f, 1.0f, 0.9214f);
-    float sunIntensity = 3.0f;
-    float sunAngularCos = 0.99998f;     // cos of the disc radius (1 = disc off)
+    float sunIntensity = 5.0f;
+    float sunAngularCos = 0.99985f;     // cos of the disc radius (1 = disc off)
     float sunGlow = 1.0f;               // sun halo strength (>= 0.01, ~0.5 subtle, 2 = heavy); HG forward lobe in sky.fs
 
     // Ambient + sky radiance (the non-sun lighting inputs)
     glm::vec3 ambientColor = glm::vec3(1.0f);   // flat non-physical minimum ambient
     float ambientIntensity = 0.001f;
     glm::vec3 skyRadianceColor = glm::vec3(0.55f, 0.65f, 1.0f); // directional sky radiance (moonlight/space light), along up
-    float skyRadianceIntensity = 0.01f;
+    float skyRadianceIntensity = 1.0f;
 
     // Ground plane of the sky sphere (below the horizon): albedo lit by sun + sky. Also tints the
     // ground-bounce fallback in skyRadiance() for downward GI/fog rays. Can stay 0: the GI probe gather
@@ -61,7 +61,7 @@ export struct SkyParams
     // both the visible sky and (through skyRadiance) the majority of the indirect sky lighting.
     float rayleighScatter = 1.0f;
     float mieScatter = 1.0f;
-    float scatterBoost = 4.0f;          // in-scatter multiplier: how much sunlight the atmosphere scatters (more = more indirect light)
+    float scatterBoost = 2.0f;         // in-scatter multiplier: how much sunlight the atmosphere scatters (more = more indirect light)
     float mieG = 0.76f;                 // Mie anisotropy (forward-scatter lobe)
     float rayleighHeight = 8500.0f;     // Rayleigh scale height (m): how fast air density falls off
     float mieHeight = 1200.0f;          // Mie scale height (m): how high the haze layer reaches
@@ -101,7 +101,7 @@ export struct CloudParams
     // Shape
     float bottom = 700.0f;             // shell bottom altitude (m)
     float top = 3000.0f;               // shell top altitude (m)
-    float coverage = 0.3f;            // 0 = clear, 1 = overcast
+    float coverage = 0.15f;           // 0 = clear, 1 = overcast
     float coverageVariation = 1.75f;   // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
@@ -237,11 +237,11 @@ export struct FoliageParams
                                 // sphere around the card's centre (0 = the baked normals only; 1 at the axis
                                 // regardless). The same for both crossed cards, so the shading no longer splits
                                 // at their crossing axis (each card's bake shades its own view's side).
-    float shadowLength = 2.0f;  // the sun shadow fades in over this many metres between the receiver and its
+    float shadowLength = 1.5f;  // the sun shadow fades in over this many metres between the receiver and its
                                 // blockers (>= 0.05): light reaches into a crown, so its own
                                 // crossed cards darken it gradually instead of with a hard edge at the crossing
                                 // axis. Blockers far up-sun (another tree, terrain) still shadow fully.
-    float leafShadowLength = 2.0f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
+    float leafShadowLength = 1.5f; // the same for the tree MESH leaves (0 = off: the billboard's shadow at full
                                    // strength) - a leaf just under its own billboard's top card is barely shaded,
                                    // one deep under it fully
     float interiorShadow = 0.5f; // darkening of the leaves deep INSIDE the crown, by the billboards' BAKED interior
@@ -257,7 +257,7 @@ export struct FoliageParams
     // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
     // side-lit one darker. 0 = off.
     float selfShadow = 1.1f;
-    float transmissionSelfShadow = 0.33f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
+    float transmissionSelfShadow = 0.12f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
                                          // through the leaves: at 1 a crown seen toward the sun hid the transmission)
     float interiorTopCardScale = 1.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
@@ -282,10 +282,19 @@ export struct FoliageParams
     // its diffuse - a blinding spot with bloom.
     float minNoV = 0.25f;
     // THE LEAF LOOK (LitTree's cluster leaves; the transmission colour on LitFoliage too):
-    float leafRoughness = 0.44f;         // the leaves' roughness (a waxy sheen in the sun; was the 0.65 default)
+    float leafNormalStrength = 1.0f;     // x the cluster leaves' normal-map slope (0 = flat cards)
+    // The mesh leaves' SUN SPECULAR from the normal map's slope x this (a more curved leaf: some spot on each meets the
+    // highlight - a glint, not a faint even sheen); the diffuse keeps "Leaf normal strength". 0 = the shading normal.
+    float leafSpecCurve = 3.0f;
+    // The mesh leaves' transmission at the leaf's CENTRE x (1 - this), back to x 1 at its rim - from the leaf normal
+    // map's tilt (the cup is flat at the midrib): a leaf is thicker in its centre. 0 = even.
+    float leafTransmissionCentre = 0.4f;
+    float leafRoughness = 0.44f;        // the leaves' roughness (a waxy sheen in the sun; was the 0.65 default)
     // The transmitted sun's colour: the leaf colour ^ this, back at the leaf colour's luminance - light through a leaf
     // passes its pigment about twice, so it comes out deeper and more yellow-green (1 = the leaf colour itself).
     float transmissionSaturation = 2.0f;
+    // ... shifted toward yellow by this (0 = none, 1 = red x 1.8, blue x 0.45 before the luminance is restored).
+    float transmissionWarmth = 0.5f;
     // PATCHES of leaf colour over the crown (a world-space noise of this size, m): x 1 -+ variation in brightness, and
     // toward yellow / toward a deeper green with it. 0 = off.
     float leafPatchVariation = 0.4f;
@@ -472,26 +481,32 @@ export struct FarTreeParams
     bool enabled = true;
     float startDistance = 600.0f; // the volume / march starts here (m; x the camera height, Renderer::farTreesStart)
     float endDistance = 12000.0f;  // and ends here (m)
-    float overlap = 128.0f;        // the billboards draw to startDistance + this; the volume fades in over it (m)
+    float overlap = 100.0f;        // the billboards draw to startDistance + this; the volume fades in over it (m)
     uint32 angularRes = 3000;      // texels around (cell = r x 2 pi / this).
     uint32 radialRes = 1500;       // texels from start to end (cell = r x ln(end / start) / this)
     uint32 slices = 16;            // height slices
     float height = 30.0f;         // m above the column's tree floor the volume covers
-    float densityScale = 0.3f;    // x the baked extinction
-    float blobShrink = 0.395f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
-    float stepScale = 1.5f;       // march step, x the cell size
+    float densityScale = 0.4f;    // x the baked extinction
+    float blobShrink = 0.463f;    // 1/m off the baked extinction before the scale: blobs shrink toward their cores
+    float stepScale = 0.8f;       // march step, x the cell size, at startDistance
+    float layerSamples = 8.0f;    // a step's vertical travel <= height / this: a steep ray (from high up) samples the thin layer
+    float stepExponent = 0.4f;  // ... x (r / startDistance) ^ this beyond: > 0 = finer near the start, coarser far out
     uint32 maxSteps = 600;
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 0.3f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
-    float normalStrength = 0.66f; // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
+    float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float normalStrength = 0.75f; // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 0.5f; // how much darker the sky light is at the ground than at the volume's top
     float interiorShadow = 6.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
-    float interiorRadius = 0.029f; // the taps' distance, x the cell size
-    float forwardScatter = -0.25f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float interiorRadius = 0.1f;   // the taps' distance, x the cell size
+    float forwardScatter = -0.33f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
+    // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
+    float transmission = 0.75f;
+    float transmissionFocus = 0.33f;
     float albedoScale = 1.0f;    // x the leaf colour
-    float saturationScale = 0.9f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
+    float saturationScale = 0.75f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
     // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per
@@ -501,7 +516,7 @@ export struct FarTreeParams
     bool halfRes = false;
     int pixelSkip = 1;        // 0 = off, 1 = 1 of 2 (checkerboard), 2 = 1 of 4
     bool temporalPath() const { return temporalBlend > 0.0f || halfRes; }
-    float rebakeDistance = 64.0f; // the camera moves this far from the bake centre -> re-bake
+    float rebakeDistance = 256.0f; // the camera moves this far from the bake centre -> re-bake
     // BAKE AHEAD: the bake centres on where the camera will be at the swap (its smoothed velocity x the last bake's real
     // duration), and the re-bake test uses that point too - the lag cancels at a steady speed, at any frame rate.
     bool bakeAhead = true;
@@ -538,7 +553,7 @@ export struct FogParams
     // Non-physical gain on the SUN in-scatter only (froxels + far field): sunlit fog - the light shafts - brightens,
     // shadowed fog (ambient only) and the extinction do not. Strong god rays through thin fog, without fogging up
     // the world.
-    float sunScatter = 1.0f;
+    float sunScatter = 0.5f;
     // SHAFT HAZE: a thin medium for the god rays alone - sunlit in-scatter only (x "Sun scatter"), no extinction, no
     // ambient - reaching up to the clouds (its own scale height from the fog's height base). The fog itself is a
     // height fog, nearly gone a few tens of metres up, so its shafts needed a cranked base density. >= 1e-5.
@@ -612,14 +627,16 @@ export struct FogParams
 export struct PostParams
 {
     float exposureEV = 0.0f; // exposure in stops; manual exposure, or exposure compensation in auto mode
-    int   tonemapper = 3;    // 0 = off (legacy raw clip), 1 = Reinhard, 2 = ACES, 3 = AgX
+    int   tonemapper = 4;    // 0 = off (legacy raw clip), 1 = Reinhard, 2 = ACES, 3 = AgX, 4 = AgX Punchy
+    float agxPunchContrast = 1.3f;    // AgX Punchy: the power on the display-space curve (Blender's look: 1.35)
+    float agxPunchSaturation = 1.0f; // AgX Punchy: the saturation around the luma (Blender's look: 1.4)
     bool  autoExposure = true; // eye adaptation: drive exposure from scene luminance
     float adaptTau = 3.0f;   // adaptation time constant (s); larger = slower eye
     float adaptKey = 0.25f;  // target middle-grey luminance
     float adaptMinLogLum = -3.14f; // histogram log2-luminance range
     float adaptMaxLogLum = 4.0f;
     float adaptMinEV = -6.0f; // auto-exposure clamp (stops)
-    float adaptMaxEV = 0.0f;
+    float adaptMaxEV = 2.0f;
 };
 
 // The GI toggle is baked into the cached GI command buffer (re-record); the master, "RT Sun" and "RT Lights" into

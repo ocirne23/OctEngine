@@ -280,6 +280,8 @@ namespace Procedural
 			readFloat(*leaves, "ClusterLeafSize", out.clusterLeafSize);
 			readFloat(*leaves, "ClusterLeafWidth", out.clusterLeafWidth);
 			readFloat(*leaves, "Cup", out.leafCup);
+			readFloat(*leaves, "Veins", out.leafVeins);
+			readFloat(*leaves, "Wrinkle", out.leafWrinkle);
 		}
 
 		if (const AssetNode* bark = species->find("Bark"))
@@ -424,6 +426,8 @@ namespace Procedural
 		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.02f, 0.6f); // Pinnate leaflets are tiny
 		out.clusterLeafWidth = glm::clamp(out.clusterLeafWidth, 0.1f, 0.6f);
 		out.leafCup = glm::clamp(out.leafCup, 0.0f, 1.0f);
+		out.leafVeins = glm::clamp(out.leafVeins, 0.0f, 1.0f);
+		out.leafWrinkle = glm::clamp(out.leafWrinkle, 0.0f, 1.0f);
 		out.placement.density = glm::max(out.placement.density, 0.0f);
 		out.placement.climateWidth = glm::max(out.placement.climateWidth, 0.01f);
 		out.placement.temperature.y = glm::max(out.placement.temperature.y, out.placement.temperature.x);

@@ -44,13 +44,17 @@ namespace
 		glm::vec2 origin; // pixels
 		float cellPx;     // pixels per cell unit
 		// The LEAF NORMAL MAP (tangent space: x along u, y along v, encoded * 0.5 + 0.5; nullptr = none), blended with
-		// the same coverage as the colour.
+		// the same coverage as the colour, and the RIM map beside it (0 at a leaf's midrib .. 1 at its edge, 0 on twigs:
+		// the normal map's A - the leaf is thicker in its centre, so less sun gets through there).
 		Canvas* normals = nullptr;
+		Canvas* rims = nullptr;
 
-		void blendNormal(int x, int y, glm::vec3 n, float a) const
+		void blendNormal(int x, int y, glm::vec3 n, float a, float rim = 0.0f) const
 		{
 			if (normals)
 				normals->blend(x, y, glm::normalize(n) * 0.5f + 0.5f, a);
+			if (rims)
+				rims->blend(x, y, glm::vec3(rim), a);
 		}
 
 		// Visits every pixel of the cell-local box [lo, hi] (clipped to the cell) with its cell-local centre.
@@ -91,13 +95,41 @@ namespace
 		});
 	}
 
-	// One leaf: origin at the petiole, `dir` along the blade. Pointed ellipse-like profile, lighter midrib,
-	// darker rim, one half slightly shaded (the fold). Its NORMAL (with a normal canvas): `cup` folds the sides up about
-	// the midrib (the normal leans in toward it, more toward the rim) and curls the tip down (leaning toward the tip),
-	// plus `tilt` - the whole leaf's own random lean, so neighbouring leaves catch the sun differently.
-	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const glm::vec3& color,
-		float cup = 0.0f, glm::vec2 tilt = glm::vec2(0.0f))
+	// Smooth value noise in [0, 1], one lattice cell = 1 unit.
+	float valueNoise(glm::vec2 p, uint32 seed)
 	{
+		const glm::vec2 c = glm::floor(p);
+		const glm::vec2 f = p - c;
+		const glm::vec2 s = f * f * (3.0f - 2.0f * f);
+		auto at = [&](int dx, int dy) { return treeHash01(treeHash((uint32)((int)c.x + dx) * 73856093u ^ (uint32)((int)c.y + dy) * 19349663u ^ seed)); };
+		return glm::mix(glm::mix(at(0, 0), at(1, 0), s.x), glm::mix(at(0, 1), at(1, 1), s.x), s.y);
+	}
+
+	// A broad leaf's surface DETAIL (drawCluster; the pinnate leaflets and needles take none).
+	struct LeafDetail
+	{
+		float cup = 0.0f;              // `Leaves Cup`: the smooth cup (normal map)
+		glm::vec2 tilt{ 0.0f };        // the leaf's own random lean (normal map)
+		float veins = 0.0f;            // `Leaves Veins`: secondary veins - lighter, sunk grooves, thicker tissue
+		float wrinkle = 0.0f;          // `Leaves Wrinkle`: fine bumps over the blade - normal, tone and thickness
+		uint32 seed = 0;
+	};
+
+	// One leaf: origin at the petiole, `dir` along the blade. Pointed ellipse-like profile, lighter midrib,
+	// darker rim, one half slightly shaded (the fold). Its NORMAL (with a normal canvas): `cup` curves the sides up in a
+	// smooth cup (the normal leans in toward the midrib, growing toward the rim) and curls the tip down (leaning toward the tip),
+	// plus `tilt` - the whole leaf's own random lean, so neighbouring leaves catch the sun differently. VEINS: secondary
+	// veins leaving the midrib toward the tip and curving out to the edge (lighter, a groove in the normal, thicker - less
+	// sun through them); WRINKLE: fine noise bumps over the blade. Both break up the shading and the transmission.
+	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const glm::vec3& color,
+		const LeafDetail& detail = LeafDetail{})
+	{
+		const float cup = detail.cup;
+		const glm::vec2 tilt = detail.tilt;
+		constexpr float VEIN_PAIRS = 4.0f;   // secondary veins per side along the blade
+		const float spacing = length / VEIN_PAIRS;
+		// In vein spacings, at least ~1.6 texels: thinner veins alias away at the texture's resolution.
+		const float veinWidth = glm::max(0.12f, 1.6f / (cell.cellPx * glm::max(spacing, 1e-5f)));
 		const glm::vec2 side(-dir.y, dir.x);
 		const float px = 1.0f / cell.cellPx;
 		const glm::vec2 tip = origin + dir * length;
@@ -115,6 +147,37 @@ namespace
 			const float alpha = glm::clamp(edge / px + 0.5f, 0.0f, 1.0f);
 			if (alpha <= 0.0f)
 				return;
+			const float across = glm::clamp(r / glm::max(h, 1e-5f), -1.0f, 1.0f);
+			const float sideSign = r >= 0.0f ? 1.0f : -1.0f;
+
+			// SECONDARY VEINS: lines of constant phase - along the blade minus a slope that grows outward (they leave the
+			// midrib at an angle toward the tip and curve on toward the edge). Faded out at the midrib and the rim.
+			float vein = 0.0f;
+			glm::vec2 veinGrad(0.0f);
+			float veinSlope = 0.0f;
+			if (detail.veins > 0.0f && spacing > 1e-5f)
+			{
+				const float ay = glm::abs(r), w = glm::max(halfWidth, 1e-5f);
+				// Wavy: a smooth noise over the leaf shifts the phase, so no vein runs straight (and the two sides differ).
+				const float wave = (valueNoise(q * (5.0f / glm::max(length, 1e-5f)), detail.seed + 3u) - 0.5f) * 0.45f;
+				const float phase = (s * length - 0.9f * ay - 0.6f * ay * ay / w) / spacing + wave;
+				const float f = phase - std::floor(phase) - 0.5f;
+				const float fade = glm::smoothstep(0.06f, 0.18f, glm::abs(across)) * (1.0f - glm::smoothstep(0.8f, 0.97f, glm::abs(across)));
+				vein = std::exp(-(f * f) / (veinWidth * veinWidth)) * fade * detail.veins;
+				// The groove's slope across the vein (d vein / d phase), along the phase gradient.
+				veinSlope = -2.0f * f / (veinWidth * veinWidth) * vein;
+				veinGrad = glm::normalize(dir - side * (sideSign * (0.9f + 1.2f * ay / w)));
+			}
+			// WRINKLE: soft bumps (~8 across a leaf's length), the leaf's own seed. (~20 read as blotches.)
+			glm::vec2 bump(0.0f);
+			float tone = 0.0f;
+			if (detail.wrinkle > 0.0f)
+			{
+				const glm::vec2 np = q * (8.0f / glm::max(length, 1e-5f));
+				bump = glm::vec2(valueNoise(np, detail.seed) - 0.5f, valueNoise(np, detail.seed + 1u) - 0.5f) * detail.wrinkle;
+				tone = (valueNoise(np * 0.6f, detail.seed + 2u) - 0.5f) * detail.wrinkle;
+			}
+
 			float shade = 0.9f + 0.2f * s;
 			if (glm::abs(r) < glm::max(0.07f * h, px * 0.7f))
 				shade *= 1.18f;               // midrib
@@ -122,13 +185,18 @@ namespace
 				shade *= 0.82f;               // rim
 			if (r > 0.0f)
 				shade *= 0.92f;               // fold
+			shade *= (1.0f + 0.14f * vein) * (1.0f + 0.08f * tone);
 			cell.canvas.blend(x, y, glm::clamp(color * shade, 0.0f, 1.0f), alpha);
 			if (cell.normals)
 			{
-				const float across = glm::clamp(r / glm::max(h, 1e-5f), -1.0f, 1.0f);
-				const float fold = cup * (0.6f * across + 0.25f * (across >= 0.0f ? 1.0f : -1.0f));
-				const glm::vec2 lean = side * -fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt;
-				cell.blendNormal(x, y, glm::vec3(lean, 1.0f), alpha);
+				// A smooth CUP: the slope grows linearly from the midrib (a parabolic blade), with only a faint crease
+				// there (a strong step read as a hard fold line through every leaf). The vein grooves and the bumps on top.
+				const float fold = cup * (0.8f * across + 0.05f * sideSign);
+				const glm::vec2 lean = side * -fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt
+					+ veinGrad * (0.035f * veinSlope) + bump * 0.35f;
+				// The RIM (the transmission's thickness): thin toward the edge, thick on the veins, uneven with the bumps.
+				const float rim = glm::clamp(glm::abs(across) * (1.0f - 0.65f * glm::min(vein, 1.0f)) + 0.25f * bump.x, 0.0f, 1.0f);
+				cell.blendNormal(x, y, glm::vec3(lean, 1.0f), alpha, rim);
 			}
 		});
 	}
@@ -190,7 +258,9 @@ namespace
 			};
 			for (int k = 0; k < 16 && !fits(length); ++k)
 				length *= 0.92f;
-			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f), species.leafCup, tilt);
+			const LeafDetail detail{ .cup = species.leafCup, .tilt = tilt, .veins = species.leafVeins, .wrinkle = species.leafWrinkle,
+				.seed = rng.next() };
+			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f), detail);
 		}
 	}
 
@@ -544,18 +614,23 @@ namespace Procedural
 		canvas.size = size;
 		// Transparent texels carry the leaf colour, so filtering at the silhouette never darkens it.
 		canvas.px.assign((size_t)size * size, glm::vec4(species.leafColor, 0.0f));
-		// The normal map: flat (+z) where nothing is drawn.
-		Canvas normals;
+		// The normal map: flat (+z) where nothing is drawn; the rim map: an edge (1) there.
+		Canvas normals, rims;
 		normals.size = size;
+		rims.size = size;
 		if (outNormal)
+		{
 			normals.px.assign((size_t)size * size, glm::vec4(0.5f, 0.5f, 1.0f, 0.0f));
+			rims.px.assign((size_t)size * size, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
+		}
 
 		Rng rng(treeHash(species.seed, 3000u));
 		const float cellPx = (float)size / (float)TREE_LEAF_ATLAS_CELLS;
 		for (uint32 cy = 0; cy < TREE_LEAF_ATLAS_CELLS; ++cy)
 			for (uint32 cx = 0; cx < TREE_LEAF_ATLAS_CELLS; ++cx)
 			{
-				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx, outNormal ? &normals : nullptr };
+				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx, outNormal ? &normals : nullptr,
+					outNormal ? &rims : nullptr };
 				if (species.clusterStyle == ETreeClusterStyle::Needles)
 					drawNeedleCluster(cell, species, rng);
 				else if (species.clusterStyle == ETreeClusterStyle::Mat)
@@ -568,10 +643,10 @@ namespace Procedural
 		outRgba = toRgba8(canvas, 1.0f);
 		if (outNormal)
 		{
-			// A = 255: the normal chain's mips average it (buildNormalMips), and the leaf FS does not read it.
+			// A = the RIM (the normal chain's mips average it, buildNormalMips): the leaf FS's transmission thickness.
 			*outNormal = toRgba8(normals, 0.0f);
-			for (size_t i = 3; i < outNormal->size(); i += 4)
-				(*outNormal)[i] = 255;
+			for (size_t i = 0; i < rims.px.size(); ++i)
+				(*outNormal)[i * 4 + 3] = (uint8)(glm::clamp(rims.px[i].x, 0.0f, 1.0f) * 255.0f + 0.5f);
 		}
 	}
 

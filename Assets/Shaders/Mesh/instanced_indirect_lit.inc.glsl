@@ -218,6 +218,12 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 float g_sunShadowFirst = 0.0;
 #endif
 
+#ifdef LEAF_SPEC_NORMAL
+// The includer's leaf SPECULAR normal (doSunLight), set per pixel; off on everything but leaves.
+bool g_leafSpecOn = false;
+f16vec3 g_leafSpecN = f16vec3(0.0, 0.0, 1.0);
+#endif
+
 vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {
 	const vec3 N = vec3(Nh); // the facing test (and, without SUN_SHADOW_FIRST, the shadow's normal offset)
@@ -242,6 +248,14 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 	// Underwater: caustic focus + Beer-Lambert absorption (underwater_light.inc.glsl).
 	if (depthBelow > 0.0)
 		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
+#ifdef LEAF_SPEC_NORMAL
+	// A LEAF's sun specular from its own, more CURVED normal (g_leafSpecN): the diffuse keeps N, the highlight sweeps a
+	// wider range of directions over each cupped leaf, so some spot on it meets the half vector (a glint) - from N it
+	// was a faint even sheen. Two BRDF calls: specular colour 0 = diffuse only, diffuse colour 0 = specular only.
+	if (g_leafSpecOn)
+		return doLightH(lightRadiance, f16vec3(L), V, Nh, f16vec3(0.0), matColOverPi, float16_t(metalness), roughness)
+		     + doLightH(lightRadiance, f16vec3(L), V, g_leafSpecN, specularCol, f16vec3(0.0), float16_t(metalness), roughness);
+#endif
 	return doLightH(lightRadiance, f16vec3(L), V, Nh, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
 

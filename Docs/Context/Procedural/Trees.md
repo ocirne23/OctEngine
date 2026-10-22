@@ -78,7 +78,13 @@ TreeSpecies <name>
 	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
 	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafWidth (Leaves: a texture leaf's
 	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · Cup (Leaves: 0..1, default 0.5 - the
-	        leaf NORMAL MAP's fold: the sides up about the midrib, the tip curled down, + a random tilt per leaf) · ClusterLeafSize (Needles: the needle
+	        leaf NORMAL MAP's smooth cup: the sides curving up from the midrib (a faint crease only - a strong one read as
+	        a hard fold line), the tip curled down, + a random tilt per leaf; "Trees/Leaf normal strength" scales it in the shader)
+	        · Veins (Leaves: 0..1, default 0.7 - 4 pairs of wavy SECONDARY VEINS leaving the midrib toward the tip and
+	        curving out to the edge, at least ~1.6 texels wide (thinner ones aliased away; 7 pairs were too fine for the
+	        texture): lighter, a sunk groove in the normal map, thicker in the rim map - less sun through them) ·
+	        Wrinkle (Leaves: 0..1, default 0.3 - soft noise bumps, ~8 across a leaf, in the normal, the tone and the rim;
+	        ~20 read as blotches) · ClusterLeafSize (Needles: the needle
 	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default 0.7: card normals bent away
 	        from the module root, both faces)   (Cluster only, below)
 	        Align (0..1, default 0: cards stick out of the branch facing up; 1 = they lie ALONG the branch,
@@ -451,7 +457,8 @@ Generated output under `Assets/Local`, so NOT in git: a fresh checkout generates
 The species textures are generated ONCE and saved as PNG (`File:ImageIO`): `<species>_bark.png`,
 `<species>_bark_normal.png`, `<species>_leaves.png` + `<species>_leaves_normal.png` (cluster species only; the
 leaves' tangent-space normal map - cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage
-as the colour; both are regenerated when either is missing; BC5 on the GPU), plus the billboard bakes. Later loads
+as the colour; A = the leaf's RIM, 0 at the midrib .. 1 at the edge, 0 on twigs - LitTree's transmission thickness;
+both are regenerated when either is missing; BC3 on the GPU for the A), plus the billboard bakes. Later loads
 read them back and only rebuild the mip chains (bark box-filtered, leaves coverage-preserving). **A file that exists
 wins — changing `Bark` / `Color` / cluster parameters does NOT regenerate it**: press `Trees/Regenerate textures`
 (overwrites all) or delete the file. The files are also where authored replacements go: square power of

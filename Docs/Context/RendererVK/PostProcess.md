@@ -198,7 +198,9 @@ exaggerates. The ocean writes no motion vectors, so its waves blur only with the
 
 Everything upstream of composite is **linear HDR**. `EyeAdaptationPipeline` (log-luminance histogram
 auto-exposure) feeds `CompositePipeline` (HDR → display into the swapchain before ImGui; tonemap
-off / Reinhard / ACES / AgX). The histogram bins EVERY viewport pixel (the reduce divides by the area),
+off / Reinhard / ACES / AgX / AgX Punchy - the default). **AgX Punchy** = AgX + Blender's "Punchy" look after the
+sigmoid (display space, before the outset): a power for contrast and a saturation around the luma, "Post/AgX punchy
+contrast" (1.3; Blender's 1.35) / "saturation" (1.0; Blender's 1.4) - plain AgX's very gentle shoulder rarely let a sunlit surface reach white. The histogram bins EVERY viewport pixel (the reduce divides by the area),
 4×4 pixels per thread: a run of equal bins is one shared atomic and only non-empty bins go global (one
 pixel per thread was atomic-bound). `PIXELS_PER_THREAD` in the shader and the dispatch's group size must
 match. A thread's block is 2 x 2 QUADS of 2 x 2 pixels, because each quad is also one texel of bloom level 0

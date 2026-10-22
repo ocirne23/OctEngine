@@ -262,10 +262,10 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
 * **Shadow length**: flat cards leave a HARD edge on the crossing axis (half the crown sits behind the crossing card,
   and the map treats every leaf as opaque). `foliageTransmit` (shadows.inc.glsl, in `pcssCascade` / `pcssBorder`)
   keeps only `1 - exp(-gap / length)` of a foliage receiver's shadow, `gap` = metres to the PCSS average blocker
-  (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 2, min
+  (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 1.5, min
   0.05). ~0 on the axis, deepening into the crown; far blockers shadow fully. **The tree MESH leaves** (the LitTree FS,
   `SHADOW_LEAF_TRANSMIT` / `g_shadowLeafLength`, set per leaf pixel; the normal bias stays) take the same fade with
-  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 2, 0 = off): their only caster is their own
+  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 1.5, 0 = off): their only caster is their own
   billboard, whose top card at `TopCardHeight` put every leaf under it in full shadow and every leaf above it in none -
   now a leaf just under the card is barely shaded, one deep under it fully. Bark keeps the full shadow.
 * **Billboard shadow shift**: `Trees/Billboard shadow shift (m)` (`u_foliage_billboardShadowShift`, default 2; < 0 =
@@ -287,7 +287,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
   map, so without it a crown seen toward the sun is lit everywhere but at its axis. The TRANSMITTED sun takes only
-  `Foliage transmission self shadow` (0.33, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
+  `Foliage transmission self shadow` (0.12, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
   forward through the leaves loses less): at the full share a crown seen toward the sun hides `Foliage transmission`
   entirely. On a whole tree's horizontal card the interior term is raised to `Foliage interior shadow top card scale`
   (`u_foliage_interiorTopCardScale`, default 1; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
@@ -312,18 +312,28 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS
   (defined `FOLIAGE`) adds the instance origin as flat location 5.
 * **The leaf look** (`leaf_look.inc.glsl`, LitTree / LitFoliage leaves): the LitTree leaves take `Trees/Leaf
-  roughness` (0.44, a waxy sheen; the cluster normal map now gives every leaf its own facing) instead of 0.65; both
+  roughness` (0.44, a waxy sheen; the cluster normal map now gives every leaf its own facing, its slope x `Trees/Leaf
+  normal strength` (1; 0 = flat cards)) instead of 0.65; both
   variants tint the leaf colour by world-space PATCHES (`leafPatchTint`: two value noises at `Leaf patch size (m)`, 2 -
   brightness x 1 -+ 0.6 x `Leaf patch variation` (0.4), and toward a yellow-green or a deeper blue-green by it): a crown
   in groups of lighter / yellower and darker / greener leaves. No per-card data reaches the FS, so it is world space.
+  **Leaf specular curve** (`LEAF_SPEC_NORMAL` + `g_leafSpecN` / `g_leafSpecOn` in `doSunLight`, LitTree only,
+  `Trees/Leaf specular curve` 3): a leaf's SUN SPECULAR comes from its own normal - the raw normal map's slope x that,
+  the same edge-on bend - while the diffuse keeps the `Leaf normal strength` normal: two `doLightH` calls (specular
+  colour 0 = diffuse only, diffuse colour 0 = specular only). A more curved leaf sweeps the highlight over a wider
+  range, so some spot on it meets the half vector (a glint); from the shading normal it was a faint even sheen.
   **Leaf sky wrap** (`LEAF_SKY_WRAP` + `g_leafSkyWrap` in `computeLitColor`, `Trees/Leaf sky wrap` 0.5): a leaf whose
   (bent) normal faces DOWN takes the GI irradiance of that normal mirrored toward the sky by that much - a thin leaf
   is lit through from the sky behind it; at its own side only it read the dark ground: dark leaves all through the
   crowns. One lookup still.
 * **Leaf transmission** (`MATERIAL_FLAG_LEAF`, bit 30, **LitTree / LitFoliage only**; LitMasked ignores the flag):
   the FS adds the sun THROUGH the leaf, tinted by its colour DEEPENED (`leafTransmitColor`: the colour ^ `Foliage
-  transmission saturation` (2), back at its own luminance - light through a leaf passes its pigment about twice, so it
-  comes out more saturated and more yellow-green) — `saturate(-N·L)` (lit from behind) +
+  transmission saturation` (2), x a yellow by `Foliage transmission warmth` (0.5: red up to x 1.8, blue down to
+  x 0.45), back at its own luminance - light through a leaf passes its pigment about twice and its red edge lets more
+  red through: a yellow-green glow (the squared colour alone came out a deeper green); on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
+  transmission centre` (0.4) at the midrib, 1 at the rim, from the leaf normal map's A (the RIM, Procedural
+  TreeLeafTexture). Tried: the rim from the normal's tilt - each leaf's own random tilt cancels its cup on one half,
+  which then read as all centre) — `saturate(-N·L)` (lit from behind) +
   `saturate(V·-L)^focus × glow` (the backlit rim looking toward the sun), × `Trees/Foliage transmission`. Its
   visibility = `mix(1, sun shadow, Foliage transmission shadow)` × (LitFoliage) the interior term: a leaf seen from
   the shaded side is in its own crown's shadow, which would leave no glow. `u_foliage_transmission` /

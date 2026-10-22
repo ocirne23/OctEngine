@@ -6,7 +6,7 @@ import Settings.Tweaks;
 
 namespace
 {
-    constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
+    constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX", "AgX Punchy" };
     constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size" };
     constexpr oc::string_view s_cloudDebugNames[] = { "Off", "Step count", "Density only", "History rejection" };
     constexpr oc::string_view s_cloudShadowSplitNames[] = { "All texels per frame", "1/4 per frame", "1/16 per frame", "1/64 per frame" };
@@ -97,7 +97,11 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Foliage transmission shadow", &s.transmissionShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage min N.V", &s.minNoV, 0.0f, 0.9f, 0.01f);
     Tweak::floatVar("Trees", "Leaf roughness", &s.leafRoughness, 0.05f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf normal strength", &s.leafNormalStrength, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf specular curve", &s.leafSpecCurve, 0.0f, 8.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf transmission centre", &s.leafTransmissionCentre, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission saturation", &s.transmissionSaturation, 1.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission warmth", &s.transmissionWarmth, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf patch variation", &s.leafPatchVariation, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Leaf patch size (m)", &s.leafPatchSize, 0.1f, 50.0f, 0.1f);
     Tweak::floatVar("Trees", "Leaf sky wrap", &s.leafSkyWrap, 0.0f, 1.0f, 0.01f);
@@ -137,6 +141,8 @@ void Settings::registerFarTree(FarTreeParams& s)
     Tweak::floatVar("Trees", "Far density", &s.densityScale, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("Trees", "Far blob shrink", &s.blobShrink, 0.0f, 2.0f, 0.001f);
     Tweak::floatVar("Trees", "Far step scale", &s.stepScale, 0.05f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far step distance exponent", &s.stepExponent, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far layer samples", &s.layerSamples, 1.0f, 32.0f, 0.5f);
     Tweak::intVar("Trees", "Far max steps", (int*)&s.maxSteps, 8, 2048, 1.0f);
     Tweak::floatVar("Trees", "Far ambient", &s.ambient, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Far sun scale", &s.sunScale, 0.0f, 4.0f, 0.01f);
@@ -146,12 +152,13 @@ void Settings::registerFarTree(FarTreeParams& s)
     Tweak::floatVar("Trees", "Far interior shadow", &s.interiorShadow, 0.0f, 20.0f, 0.01f);
     Tweak::floatVar("Trees", "Far interior radius", &s.interiorRadius, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Trees", "Far forward scatter", &s.forwardScatter, -0.9f, 0.9f, 0.01f);
+    Tweak::floatVar("Trees", "Far transmission", &s.transmission, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Trees", "Far transmission focus", &s.transmissionFocus, 0.0f, 0.95f, 0.01f);
     Tweak::floatVar("Trees", "Far albedo scale", &s.albedoScale, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Trees", "Far saturation scale", &s.saturationScale, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Trees", "Far temporal blend", &s.temporalBlend, 0.0f, 0.98f, 0.01f);
     Tweak::boolean("Trees", "Far half res", &s.halfRes);
-    Tweak::enumVar("Trees", "Far pixel skip", &s.pixelSkip, s_farTreePixelSkip);
-    Tweak::floatVar("Trees", "Far rebake distance (m)", &s.rebakeDistance, 1.0f, 2000.0f, 1.0f);
+    Tweak::enumVar("Trees", "Far pixel skip", &s.pixelSkip, s_farTreePixelSkip);    Tweak::floatVar("Trees", "Far rebake distance (m)", &s.rebakeDistance, 1.0f, 2000.0f, 1.0f);
     Tweak::boolean("Trees", "Far bake ahead", &s.bakeAhead);
     Tweak::floatVar("Trees", "Far record detail (m)", &s.recordDetail, 0.0f, 40000.0f, 10.0f);
     Tweak::intVar("Trees", "Far bake frames", &s.bakeFrames, 1, 120, 1.0f);
@@ -437,6 +444,8 @@ void Settings::registerPost(PostParams& s)
 {
     Tweak::floatVar("Post", "Exposure (EV)", &s.exposureEV, -8.0f, 8.0f, 0.05f);
     Tweak::enumVar("Post", "Tonemapper", &s.tonemapper, s_tonemapperNames);
+    Tweak::floatVar("Post", "AgX punchy contrast", &s.agxPunchContrast, 0.5f, 3.0f, 0.01f);
+    Tweak::floatVar("Post", "AgX punchy saturation", &s.agxPunchSaturation, 0.0f, 3.0f, 0.01f);
     Tweak::boolean("Post", "Auto Exposure", &s.autoExposure);
     Tweak::floatVar("Post", "Adapt Speed (s)", &s.adaptTau, 0.05f, 5.0f, 0.05f);
     Tweak::floatVar("Post", "Adapt Key", &s.adaptKey, 0.02f, 0.5f, 0.005f);

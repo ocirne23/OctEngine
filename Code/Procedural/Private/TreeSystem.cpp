@@ -618,9 +618,10 @@ namespace Procedural
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : normalChain)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms). The normal map: cupped, tilted leaves.
+				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms). The normal map: cupped, tilted leaves,
+				// BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the transmission's leaf thickness).
 				species.leafMaterial = createTreeMaterial(renderer, m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
-					&normalMips, TextureConvert::EBlockFormat::BC5, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
+					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
 					RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;

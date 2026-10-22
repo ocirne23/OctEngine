@@ -33,6 +33,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define SUN_SHADOW_FIRST
 #define SHADOW_LEAF_TRANSMIT // shadows.inc.glsl: the leaves' shadow fades in with the gap to the blocker
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
+#define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
@@ -92,7 +93,8 @@ void main()
 
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal into the surface -
 	// reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
-	const f16vec3 normalSample = f16vec3(texture(u_textures[normalTexIdx], texUv).xyz);
+	const f16vec4 normalTap = f16vec4(texture(u_textures[normalTexIdx], texUv));
+	const f16vec3 normalSample = normalTap.xyz;
 	f16vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)
 	{
@@ -103,6 +105,14 @@ void main()
 	{
 		tangentNormal = normalize(normalSample * float16_t(2.0) - float16_t(1.0));
 	}
+	// Leaves: the normal map's slope x "Trees/Leaf normal strength" (0 = flat cards; the cupped, tilted leaves of the
+	// cluster texture are subtle at 1). Its A is the leaf's RIM (0 at the midrib .. 1 at the edge, Procedural
+	// TreeLeafTexture): a leaf is thicker in its centre, so less sun gets through there. (From the normal's tilt it was
+	// wrong: each leaf's own random tilt cancels the cup on one half, which then read as all centre.)
+	const float leafRim = float(normalTap.w);
+	const f16vec3 rawTangentNormal = tangentNormal;
+	if (leaf)
+		tangentNormal = normalize(f16vec3(tangentNormal.xy * float16_t(u_foliage_leafNormalStrength), tangentNormal.z));
 
 	const f16vec3 geoN = f16vec3(in_normalV.xyz);
 	const f16vec3 T = f16vec3(in_tangent.xyz);
@@ -121,6 +131,19 @@ void main()
 		if (noV < u_foliage_minNoV)
 			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
 
+		// The SPECULAR normal: the normal map's slope x "Trees/Leaf specular curve" (from the raw map, not x the normal
+		// strength), the same edge-on bend - the sun's highlight from a more curved leaf (doSunLight, LEAF_SPEC_NORMAL).
+		if (u_foliage_leafSpecCurve > 0.0)
+		{
+			const f16vec3 st = normalize(f16vec3(rawTangentNormal.xy * float16_t(u_foliage_leafSpecCurve), rawTangentNormal.z));
+			vec3 sn = normalize(vec3(T * st.x + B * st.y + geoN * st.z));
+			const float snoV = dot(sn, V);
+			if (snoV < u_foliage_minNoV)
+				sn = normalize(sn + V * (u_foliage_minNoV - snoV));
+			g_leafSpecN = f16vec3(sn);
+			g_leafSpecOn = true;
+		}
+
 		// TRANSMISSION: thin leaves let the sun through, tinted by their colour DEEPENED (leafTransmitColor) - a diffuse back term saturate(-N.L)
 		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on the
 		// sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's shadow,
@@ -128,7 +151,8 @@ void main()
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
-		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow);
+		// x the leaf's THICKNESS: 1 - "Leaf transmission centre" at the midrib, 1 at the rim (leafRim).
+		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * mix(1.0 - u_foliage_leafTransmissionCentre, 1.0, leafRim);
 		transmit = f16vec3(leafTransmitColor(vec3(materialColor)) * ((back + glow) * visibility * u_foliage_transmission * INV_PI)); // <= ~11.5 by the tweak ranges
 	}
 

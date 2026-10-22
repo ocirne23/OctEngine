@@ -1470,7 +1470,11 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_transmissionSelfShadow", [&] { return glm::clamp(f.transmissionSelfShadow, 0.0f, 1.0f); }, f.transmissionSelfShadow);
         list.add("foliage_selfShadow", [&] { return glm::max(f.selfShadow, 0.0f); }, f.selfShadow);
         list.add("foliage_minNoV", [&] { return glm::clamp(f.minNoV, 0.0f, 0.9f); }, f.minNoV);
+        list.add("foliage_leafNormalStrength", [&] { return glm::clamp(f.leafNormalStrength, 0.0f, 4.0f); }, f.leafNormalStrength);
+        list.add("foliage_leafSpecCurve", [&] { return glm::clamp(f.leafSpecCurve, 0.0f, 8.0f); }, f.leafSpecCurve);
+        list.add("foliage_leafTransmissionCentre", [&] { return glm::clamp(f.leafTransmissionCentre, 0.0f, 1.0f); }, f.leafTransmissionCentre);
         list.add("foliage_leafRoughness", [&] { return glm::clamp(f.leafRoughness, 0.05f, 1.0f); }, f.leafRoughness);
+        list.add("foliage_transmissionWarmth", [&] { return glm::clamp(f.transmissionWarmth, 0.0f, 1.0f); }, f.transmissionWarmth);
         list.add("foliage_transmissionSaturation", [&] { return glm::clamp(f.transmissionSaturation, 1.0f, 4.0f); }, f.transmissionSaturation);
         list.add("foliage_leafPatchVariation", [&] { return glm::clamp(f.leafPatchVariation, 0.0f, 1.0f); }, f.leafPatchVariation);
         list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
@@ -1491,6 +1495,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_windTrunkFadeEnd", [&] { return glm::max(f.windTrunkFadeEnd, 100.0f); }, f.windTrunkFadeEnd); // the tweak min: the 100 m fade band
         list.add("foliage_windBillboardWaves", [&] { return glm::max(f.windBillboardWaves, 0.0005f); }, f.windBillboardWaves); // the tweak min
         list.add("foliage_farStepScale", [&] { return glm::max(s.stepScale, 0.05f); }, s.stepScale);
+        list.add("foliage_farLayerSamples", [&] { return glm::clamp(s.layerSamples, 1.0f, 32.0f); }, s.layerSamples);
+        list.add("foliage_farStepExponent", [&] { return glm::clamp(s.stepExponent, 0.0f, 2.0f); }, s.stepExponent);
         list.add("foliage_farMaxSteps", [&] { return (float)s.maxSteps; }, s.maxSteps);
         list.add("foliage_farOverlap", [&] { return glm::max(s.overlap, 1.0f); }, s.overlap);
         list.add("foliage_farShrink", [&] { return glm::max(s.blobShrink, 0.0f); }, s.blobShrink);
@@ -1500,6 +1506,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_farNormalStrength", [&] { return glm::clamp(s.normalStrength, 0.01f, 1.0f); }, s.normalStrength); // the tweak range
         list.add("foliage_farGroundDark", s.groundDarkening);
         list.add("foliage_farForwardScatter", [&] { return glm::clamp(s.forwardScatter, -0.95f, 0.95f); }, s.forwardScatter);
+        list.add("foliage_farTransmission", [&] { return glm::max(s.transmission, 0.0f); }, s.transmission);        list.add("foliage_farTransmissionFocus", [&] { return glm::clamp(s.transmissionFocus, 0.0f, 0.95f); }, s.transmissionFocus);
         list.add("foliage_farAlbedoScale", s.albedoScale);
         list.add("foliage_farInteriorShadow", [&] { return glm::max(s.interiorShadow, 0.0f); }, s.interiorShadow);
         list.add("foliage_farInteriorRadius", [&] { return glm::max(s.interiorRadius, 0.0f); }, s.interiorRadius); // 0: the taps sit on the sample
@@ -1634,6 +1641,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("post_dlssOceanBias", m_dlssParams.oceanBias);
         list.add("post_exposure", [&] { return exp2f(p.exposureEV); }, p.exposureEV);
         list.add("post_tonemapper", p.tonemapper);
+        list.add("post_agxPunchContrast", [&] { return glm::clamp(p.agxPunchContrast, 0.5f, 3.0f); }, p.agxPunchContrast);
+        list.add("post_agxPunchSaturation", [&] { return glm::max(p.agxPunchSaturation, 0.0f); }, p.agxPunchSaturation);
         list.add("post_autoExposure", p.autoExposure);
         list.add("post_bloomKeep", [this] { return m_bloomParams.threshold > 0.0f ? 1.0f : 1.0f - bloomMixIntensity(); },
             b.threshold, b.enabled, b.intensity);

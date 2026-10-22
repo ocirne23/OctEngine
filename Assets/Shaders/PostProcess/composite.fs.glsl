@@ -67,7 +67,17 @@ vec3 agxContrast(vec3 x)
            - 0.00232;
 }
 
-vec3 tonemapAgX(vec3 c)
+// AgX "PUNCHY" (Blender's look, in display space after the sigmoid): a CDL power for contrast and a saturation around
+// the luma - "Post/AgX punchy contrast" / "saturation" (1.35 / 1.4 Blender's). Plain AgX keeps a very gentle shoulder:
+// a sunlit surface rarely reached white.
+vec3 agxPunchy(vec3 c)
+{
+    const float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = pow(max(c, vec3(0.0)), vec3(u_post_agxPunchContrast));
+    return luma + u_post_agxPunchSaturation * (c - luma);
+}
+
+vec3 tonemapAgX(vec3 c, bool punchy)
 {
     const mat3 inset = mat3(
         0.842479062253094,  0.0423282422610123, 0.0423756549057051,
@@ -82,6 +92,8 @@ vec3 tonemapAgX(vec3 c)
     c = inset * max(c, vec3(0.0));
     c = clamp((log2(max(c, vec3(1e-10))) - minEv) / (maxEv - minEv), 0.0, 1.0);
     c = agxContrast(c);
+    if (punchy)
+        c = agxPunchy(c);
     return clamp(outset * c, 0.0, 1.0);
 }
 
@@ -118,6 +130,7 @@ void main()
     const int tonemapper = int(u_post_tonemapper);
     if      (tonemapper == 1) color = linearToSrgb(tonemapReinhard(color));
     else if (tonemapper == 2) color = linearToSrgb(tonemapACES(color));
-    else if (tonemapper == 3) color = tonemapAgX(color);
+    else if (tonemapper == 3) color = tonemapAgX(color, false);
+    else if (tonemapper == 4) color = tonemapAgX(color, true);
     out_color = vec4(color, 1.0);
 }
