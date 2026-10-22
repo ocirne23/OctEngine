@@ -224,12 +224,17 @@ void storeDistance(ivec2 px, float distance)
 }
 #endif
 
-// The march's step, x the cell size, at radius r from the bake centre: "Far step scale" at "Far start", x (r / start) ^
-// "Far step distance exponent" beyond - fine steps near the start (where a coarse step showed as noise while moving,
-// with the pixel skip's lagging copies), coarser far out, where the cells and the blobs are small on screen anyway.
-float farStepScaleAt(float r)
+// The march's step, x the cell size, at a point of radial image coordinate `uvY` (log(r / rMin) / log(rMax / rMin)):
+// "Far step scale" at "Far start", x (r / start) ^ "Far step distance exponent" beyond - fine steps near the start (where
+// a coarse step showed as noise while moving, with the pixel skip's lagging copies), coarser far out, where the cells
+// and the blobs are small on screen anyway. log2(r) = log2(rMin) + uvY x log2(rMax / rMin): the step's polar lookup
+// already took the log, so the power is ONE exp2 (none at exponent 0).
+float farStepScaleAt(float uvY)
 {
-    return u_foliage_farStepScale * pow(max(r, 1.0) / max(pc_startDistance, 1.0), u_foliage_farStepExponent);
+    const float e = u_foliage_farStepExponent;
+    if (e <= 0.0)
+        return u_foliage_farStepScale;
+    return u_foliage_farStepScale * exp2(e * (log2(pc_vol_rMin / max(pc_startDistance, 1.0)) + uvY * log2(pc_vol_rMax / pc_vol_rMin)));
 }
 
 // The march of one (march-image) pixel.
@@ -352,7 +357,7 @@ void marchAt(ivec2 px)
     // The longest step along this ray that still keeps "Far layer samples" samples through the layer's height.
     const float layerStepT = max(pc_vol_height / max(u_foliage_farLayerSamples, 1.0) / max(abs(dir.y), 1e-4), 0.25);
     const float rStart = length(u_viewPos.xz + dir.xz * t - bakeCentre());
-    const float firstDt = max(jitter * max(rStart * cellPerR * farStepScaleAt(rStart), 0.25), 0.01);
+    const float firstDt = max(jitter * max(rStart * cellPerR * farStepScaleAt(tvRadialUv(rStart, TV_PUSH_VOL)), 0.25), 0.01);
 
     // THE SKIP over the MAX-FLOOR GRID (tree_volume_floor_max.cs): above its value + the volume's height, a point is above
     // every tree within one block in every direction - at least r x skipReach away (the block's tangential width as a chord,
@@ -400,7 +405,7 @@ void marchAt(ivec2 px)
         // A column WITHOUT a tree floor lies 2+ columns from any density (the splat floors every footprint PLUS one
         // ring): no sample, and at least a whole cell of step. In the step formula, not a branch of its own: that branch
         // cost the march 8 registers.
-        const float stepScale = farStepScaleAt(r);
+        const float stepScale = farStepScaleAt(uv.y);
         float dt = i == 0u ? firstDt : max(cell * (hasFloor ? stepScale : max(stepScale, 1.0)), 0.25);
         // A STEEP ray (from high up) crosses the thin layer in a few metres of its length, against steps of a cell (tens of
         // metres far out): 0-2 samples in it, hit or missed by the step pattern - bands. Its VERTICAL travel per step is
@@ -442,8 +447,9 @@ void marchAt(ivec2 px)
                 const mat2 J = polarJ(rel, r);
                 const float hs = p.y - smoothFloor; // the taps' height
                 // The sun through the crown: three taps out to 14 m (segments 2 / 4 / 8 m), x "Far self shadow".
-                const float sunT = exp(-(densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
-                    + densityTap(uv, J, hs, L * 10.0) * 8.0) * u_foliage_farSelfShadow);
+                const float sunDepth = (densityTap(uv, J, hs, L * 1.0) * 2.0 + densityTap(uv, J, hs, L * 4.0) * 4.0
+                    + densityTap(uv, J, hs, L * 10.0) * 8.0) * u_foliage_farSelfShadow; // the optical depth
+                const float sunT = exp(-sunDepth);
 
                 const vec4 baked = colourAt(uv);
                 const float rock = 1.0 - baked.a; // the column's ROCK fraction (the resolve)
@@ -488,7 +494,7 @@ void marchAt(ivec2 px)
                 // shadow"'s share of its optical depth (as the billboards'), in the leaves' deepened colour; no rock.
                 if (transmitLobe > 0.0 && rock < 1.0)
                     lit += leafTransmitColor(albedo) * (sunRadiance * (INV_PI * transmitLobe * (1.0 - rock)
-                        * pow(sunT, u_foliage_transmissionSelfShadow) * terrainVis * cloudT * interior));
+                        * exp(-sunDepth * u_foliage_transmissionSelfShadow) * terrainVis * cloudT * interior));
                 const float alpha = 1.0 - exp(-sigma * dt);
 #ifdef TREE_TEMPORAL_OUT
                 tFront = min(tFront, tt);

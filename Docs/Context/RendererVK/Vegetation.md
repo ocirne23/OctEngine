@@ -554,7 +554,7 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   * "Far blob shrink" (1/m) comes off the baked extinction first (before "Far density"), so a blob shrinks toward its
     dense core. Steps of one cell × "Far step scale" (so they grow like the cells) × (r / "Far start") ^ "Far step
     distance exponent" (`farStepScaleAt`; 0.8 / 0.4 - 0 = off: > 0 makes them finer near the start and coarser far
-    out), each capped so its VERTICAL travel stays <= "Far height" / "Far layer samples" (8: `layerStepT` - a steep ray
+    out; from the step's radial uv, which already holds log(r): one exp2 per step, none at exponent 0), each capped so its VERTICAL travel stays <= "Far height" / "Far layer samples" (8: `layerStepT` - a steep ray
     from high up crossed the 30 m layer in ~1 cell of its length, 0-2 samples hit or missed: bands; a shallow ray never
     reaches the cap; the max-floor skip and the jump above the layer are not capped, so the empty air stays fast), the WHOLE ray shifted by a
     per-pixel, per-frame fraction of its first step (TAA averages it — jittering only the first sample left the rest
@@ -571,7 +571,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
   * **THE TRANSMISSION** ("Far transmission" 0.75, "Far transmission focus" 0.33): ADDED to that - the sun × a
     forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
-    the crown at `Foliage transmission self shadow`'s share of the optical depth (sunT ^ that, as the billboards'),
+    the crown at `Foliage transmission self shadow`'s share of the optical depth (exp(-depth x that) - the sun taps'
+    depth kept, not pow(sunT, ...): one exp, no log; as the billboards'),
     × the terrain / cloud shadow and the interior, in the near leaves' deepened colour (`leafTransmitColor`,
     leaf_look.inc.glsl: "Foliage transmission saturation" / "warmth"); rocks take none. Only crowns between the camera
     and the sun glow: "Far forward scatter" reshapes the WHOLE sun term, so it also changed the trees beside and behind.
