@@ -35,6 +35,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define SHADOW_FOLIAGE_BIAS // shadows.inc.glsl: the foliage cards' own bias (sunShadowFirstFoliage)
 #define FOLIAGE_NO_RTAO     // instanced_indirect_lit.inc.glsl: g_noRtao
 #define LEAF_SKY_WRAP       // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky (as the mesh leaves)
+#define LIT_EXTRA_LIGHT     // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_wind.inc.glsl" // the billboard waves (treeWindBillboardUv)
 #include "tree_fade.inc.glsl"
@@ -314,21 +315,23 @@ void main()
 	// LEAF TRANSMISSION: thin leaves let the sun through, tinted by their colour deepened (leafTransmitColor) - a diffuse back term saturate(-N.L)
 	// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x u_foliage_transmission. Its visibility leans
 	// on the sun shadow by u_foliage_transmissionShadow only (a leaf seen from the shaded side sits in its own crown's
-	// shadow, which would leave the backlit view no glow), x the crown's own darkening. Formed BEFORE computeLitColor:
-	// its light loop is the register peak, and only this half colour is live across it.
-	f16vec3 transmit = f16vec3(0.0);
+	// shadow, which would leave the backlit view no glow), x the crown's own darkening. Formed BEFORE computeLitColor
+	// and added INSIDE it before its light loop, the register peak (g_litExtraLight, LIT_EXTRA_LIGHT): a transmission
+	// colour kept live across the loop cost 16 B of spill.
 	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
 	{
 		const vec3 L = u_sunDirection.xyz;
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		const float visibility = mix(1.0, sunVisibility, u_foliage_transmissionShadow) * crownTransmit;
-		transmit = f16vec3(leafTransmitColor(vec3(materialColor)) * ((back + glow) * visibility * u_foliage_transmission * INV_PI)); // <= ~11.5 by the tweak ranges
+		const float through = (back + glow) * visibility; // 0 for a sun-facing card seen with the sun behind: no colour pow
+		if (through > 0.0)
+			g_litExtraLight = f16vec3(min(leafTransmitColor(vec3(materialColor)) * (through * u_foliage_transmission * INV_PI)
+				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
 
 	g_leafSkyWrap = float16_t((material.flags & MATERIAL_FLAG_LEAF) != 0u ? u_foliage_leafSkyWrap : 0.0);
-	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
-	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, surfaceAO);
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 	out_motion = motionVector(in_prevWorldDelta);
 }

@@ -224,6 +224,22 @@ vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specu
 	return vec3(F * spec + (f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
 }
 
+// doLightH with TWO normals: the diffuse from Nd, the specular from Ns (a leaf's more curved specular normal,
+// instanced_indirect_lit.inc.glsl LEAF_SPEC_NORMAL). One H, one Fresnel, one GGX - two doLightH calls (one with a zero
+// specular colour, one with a zero diffuse) ran the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing.
+vec3 doLightSplitH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 Nd, f16vec3 Ns, f16vec3 specularCol, f16vec3 matColOverPi, float16_t metalness, float16_t alpha)
+{
+	const f16vec3 H      = normalize(L + V);
+	const float16_t NoLd = max(dot(Nd, L), float16_t(0.0));
+	const float16_t NoLs = max(dot(Ns, L), float16_t(0.0));
+	const float16_t NoVs = max(dot(Ns, V), float16_t(0.0));
+	const float16_t NoHs = max(dot(Ns, H), float16_t(0.0));
+	const f16vec3 F      = FresnelSchlickH(dot(H, V), specularCol);
+	const float16_t spec = min(D_GGX_H(alpha, NoHs, cross(Ns, H)) * (V_SmithGGXCorrelatedFastH(NoVs, NoLs, alpha) * NoLs), float16_t(MEDIUMP_FLT_MAX))
+		* antiLightFade(L, V);
+	return vec3(F * spec + (f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoLd)) * lightRadiance;
+}
+
 // The light types evaluate through the fp16 BRDF: V and N arrive half, and roughness is the half GGX alpha.
 vec3 doPointLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
 {

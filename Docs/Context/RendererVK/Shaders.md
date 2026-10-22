@@ -182,7 +182,8 @@ with the pipeline stats (registers x 4 + local memory per thread); list the fp16
 **`Tools/fp16conv.ps1 <shader>.glsl`** (every OpFConvert by source line - glslang never warns about an implicit
 `float16_t -> float` widening).
 
-**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants), terrain ground FS 64/32,
+**Current numbers** (regs / local B per thread, RelWithDebInfo): lit FS 64/32 (all variants, the tree and foliage FS
+too), tree_volume_march 64/0, grass FS 64/16, grass VS 63/0, terrain ground FS 64/32,
 tessellated ground 64/48, film 64/32, ocean 80/16, river FS 64/32, rock 64/16, sky.fs 56, aerial_lut 73,
 particle_sim 56, particle VS 56, vol_scatter 62/0, vol_apply FS 56/32, cloud_march / cloud_sky 64/0, cloud_shadow
 38/0, cloud_temporal 48/0, gi_sky_map 68/0, gi_probe_trace 96/0, clutter_cull 80/32, decal 55/0. The driver moves its

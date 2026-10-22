@@ -315,12 +315,14 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   roughness` (0.44, a waxy sheen; the cluster normal map now gives every leaf its own facing, its slope x `Trees/Leaf
   normal strength` (1; 0 = flat cards)) instead of 0.65; both
   variants tint the leaf colour by world-space PATCHES (`leafPatchTint`: two value noises at `Leaf patch size (m)`, 2 -
+  ONE lattice, `leafValueNoise2`: each corner hash's low / high 16 bits, 8 hashes, not 16 -
   brightness x 1 -+ 0.6 x `Leaf patch variation` (0.4), and toward a yellow-green or a deeper blue-green by it): a crown
   in groups of lighter / yellower and darker / greener leaves. No per-card data reaches the FS, so it is world space.
   **Leaf specular curve** (`LEAF_SPEC_NORMAL` + `g_leafSpecN` / `g_leafSpecOn` in `doSunLight`, LitTree only,
   `Trees/Leaf specular curve` 3): a leaf's SUN SPECULAR comes from its own normal - the raw normal map's slope x that,
-  the same edge-on bend - while the diffuse keeps the `Leaf normal strength` normal: two `doLightH` calls (specular
-  colour 0 = diffuse only, diffuse colour 0 = specular only). A more curved leaf sweeps the highlight over a wider
+  the same edge-on bend - while the diffuse keeps the `Leaf normal strength` normal: ONE `doLightSplitH`
+  (punctual_lights.inc.glsl: one H, one Fresnel, one GGX, the diffuse N·L from the other normal; two `doLightH` calls ran
+  the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing). A more curved leaf sweeps the highlight over a wider
   range, so some spot on it meets the half vector (a glint); from the shading normal it was a faint even sheen.
   **Leaf sky wrap** (`LEAF_SKY_WRAP` + `g_leafSkyWrap` in `computeLitColor`, `Trees/Leaf sky wrap` 0.5): a leaf whose
   (bent) normal faces DOWN takes the GI irradiance of that normal mirrored toward the sky by that much - a thin leaf
@@ -330,7 +332,8 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   the FS adds the sun THROUGH the leaf, tinted by its colour DEEPENED (`leafTransmitColor`: the colour ^ `Foliage
   transmission saturation` (2), x a yellow by `Foliage transmission warmth` (0.5: red up to x 1.8, blue down to
   x 0.45), back at its own luminance - light through a leaf passes its pigment about twice and its red edge lets more
-  red through: a yellow-green glow (the squared colour alone came out a deeper green); on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
+  red through: a yellow-green glow (the squared colour alone came out a deeper green); formed only where light comes
+  through - a sun-facing leaf seen with the sun behind skips its per-channel pow; on the MESH leaves also x the leaf's THICKNESS: 1 - `Leaf
   transmission centre` (0.4) at the midrib, 1 at the rim, from the leaf normal map's A (the RIM, Procedural
   TreeLeafTexture). Tried: the rim from the normal's tilt - each leaf's own random tilt cancels its cup on one half,
   which then read as all centre) — `saturate(-N·L)` (lit from behind) +
@@ -343,7 +346,10 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   grazing (Fresnel → 1, the Smith term growing) lights one leaf near the sun hundreds of times brighter than its
   diffuse: a blinding spot with bloom.
 * **The leaf terms are formed BEFORE `computeLitColor`** as one half colour: the light loop is the lit FS's register
-  peak, and terms formed after it keep the shadow, the interior term and the surface colour live across it.
+  peak, and terms formed after it keep the shadow, the interior term and the surface colour live across it. The
+  transmitted sun (radiance) then goes IN as `g_litExtraLight` (`LIT_EXTRA_LIGHT`), added to the sum right after the
+  sun, before the GI and the light loop: kept live across the loop and added after it, it cost the tree and foliage FS
+  16 B of spill (64 / 48 -> 64 / 32).
   LitTree's leaf and plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstTree`): two call sites inline
   the shadow search twice. A LEAF pixel's shadow is looked up from its SUN side (the bias normal flipped toward the
   sun) - the facing reject gives every leaf facing away from the sun 0, exactly the ones the back term lights.

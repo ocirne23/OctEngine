@@ -34,6 +34,7 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 #define SHADOW_LEAF_TRANSMIT // shadows.inc.glsl: the leaves' shadow fades in with the gap to the blocker
 #define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #define LEAF_SPEC_NORMAL     // instanced_indirect_lit.inc.glsl: a leaf's sun specular from a more curved normal
+#define LIT_EXTRA_LIGHT      // instanced_indirect_lit.inc.glsl: the leaves' transmitted sun, added inside computeLitColor
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
 #include "leaf_look.inc.glsl"
@@ -119,9 +120,9 @@ void main()
 	const f16vec3 B = cross(geoN, T) * float16_t(in_tangent.w < 0.0 ? -1.0 : 1.0);
 	f16vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
 
-	// The LEAF terms (MATERIAL_FLAG_LEAF). Formed BEFORE computeLitColor: its light loop is the shader's register peak,
-	// and only the half transmission colour is live across it - not the shadow and the surface colour it is made of.
-	f16vec3 transmit = f16vec3(0.0);
+	// The LEAF terms (MATERIAL_FLAG_LEAF). Formed BEFORE computeLitColor: its light loop is the shader's register peak.
+	// The transmitted sun goes in as g_litExtraLight, added to computeLitColor's sum before that loop (LIT_EXTRA_LIGHT):
+	// a transmission colour kept live across the loop and added after it cost 16 B of spill.
 	if (leaf)
 	{
 		// Seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V". The cards' normals are
@@ -133,6 +134,7 @@ void main()
 
 		// The SPECULAR normal: the normal map's slope x "Trees/Leaf specular curve" (from the raw map, not x the normal
 		// strength), the same edge-on bend - the sun's highlight from a more curved leaf (doSunLight, LEAF_SPEC_NORMAL).
+#ifdef LEAF_SPEC_NORMAL
 		if (u_foliage_leafSpecCurve > 0.0)
 		{
 			const f16vec3 st = normalize(f16vec3(rawTangentNormal.xy * float16_t(u_foliage_leafSpecCurve), rawTangentNormal.z));
@@ -143,6 +145,7 @@ void main()
 			g_leafSpecN = f16vec3(sn);
 			g_leafSpecOn = true;
 		}
+#endif
 
 		// TRANSMISSION: thin leaves let the sun through, tinted by their colour DEEPENED (leafTransmitColor) - a diffuse back term saturate(-N.L)
 		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on the
@@ -153,12 +156,16 @@ void main()
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		// x the leaf's THICKNESS: 1 - "Leaf transmission centre" at the midrib, 1 at the rim (leafRim).
 		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow) * mix(1.0 - u_foliage_leafTransmissionCentre, 1.0, leafRim);
-		transmit = f16vec3(leafTransmitColor(vec3(materialColor)) * ((back + glow) * visibility * u_foliage_transmission * INV_PI)); // <= ~11.5 by the tweak ranges
+		const float through = (back + glow) * visibility; // 0 for a sun-facing leaf seen with the sun behind: no colour pow
+		if (through > 0.0)
+			g_litExtraLight = f16vec3(min(leafTransmitColor(vec3(materialColor)) * (through * u_foliage_transmission * INV_PI)
+				* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	}
 
+#ifdef LEAF_SKY_WRAP
 	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
-	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
-	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
+#endif
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 	out_motion = motionVector(in_prevWorldDelta);
 }

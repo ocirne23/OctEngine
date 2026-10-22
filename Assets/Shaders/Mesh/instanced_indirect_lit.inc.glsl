@@ -218,6 +218,11 @@ float sunShadowVisibility(vec3 worldPos, vec3 N)
 float g_sunShadowFirst = 0.0;
 #endif
 
+#ifdef LIT_EXTRA_LIGHT
+// The includer's extra light (radiance, half), added to computeLitColor's sum right after the sun.
+f16vec3 g_litExtraLight = f16vec3(0.0);
+#endif
+
 #ifdef LEAF_SPEC_NORMAL
 // The includer's leaf SPECULAR normal (doSunLight), set per pixel; off on everything but leaves.
 bool g_leafSpecOn = false;
@@ -251,10 +256,9 @@ vec3 doSunLight(vec3 worldPos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16ve
 #ifdef LEAF_SPEC_NORMAL
 	// A LEAF's sun specular from its own, more CURVED normal (g_leafSpecN): the diffuse keeps N, the highlight sweeps a
 	// wider range of directions over each cupped leaf, so some spot on it meets the half vector (a glint) - from N it
-	// was a faint even sheen. Two BRDF calls: specular colour 0 = diffuse only, diffuse colour 0 = specular only.
+	// was a faint even sheen. One BRDF evaluation with both normals (doLightSplitH).
 	if (g_leafSpecOn)
-		return doLightH(lightRadiance, f16vec3(L), V, Nh, f16vec3(0.0), matColOverPi, float16_t(metalness), roughness)
-		     + doLightH(lightRadiance, f16vec3(L), V, g_leafSpecN, specularCol, f16vec3(0.0), float16_t(metalness), roughness);
+		return doLightSplitH(lightRadiance, f16vec3(L), V, Nh, g_leafSpecN, specularCol, matColOverPi, float16_t(metalness), roughness);
 #endif
 	return doLightH(lightRadiance, f16vec3(L), V, Nh, specularCol, matColOverPi, float16_t(metalness), roughness);
 }
@@ -353,6 +357,11 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	// The accumulator is HALF (the scene colour target is RGBA16F); each light's unbounded radiance is clamped to the
 	// half range as it lands.
 	f16vec3 colorH = f16vec3(min(doSunLight(worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH), vec3(MEDIUMP_FLT_MAX)));
+#ifdef LIT_EXTRA_LIGHT
+	// The includer's own light (a leaf's transmitted sun), added HERE - before the GI and the light loop, the register
+	// peak - so it is not a separate value live across them (that cost the tree FS 16 B of spill).
+	colorH += g_litExtraLight;
+#endif
 
 	// The AO, the bent normal and the indirect term are half too (gi_probe.inc.glsl's fp16 read side).
 	float16_t ao = float16_t(1.0);
