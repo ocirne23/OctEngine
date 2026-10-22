@@ -22,7 +22,8 @@ export namespace Procedural
 	};
 
 	// Level 0 of the atlas as RGBA8 - what TreeSystem writes to / reads from Assets/Local/Trees/Textures.
-	void generateLeafClusterImage(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outRgba);
+	// `outNormal` (optional): the matching tangent-space NORMAL MAP (RGB, A = 255) - cupped, tilted leaves, round twigs.
+	void generateLeafClusterImage(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outRgba, oc::vector<uint8>* outNormal = nullptr);
 	// The full chain from a level 0 (generated or loaded from disk), coverage-preserving.
 	void buildLeafClusterMips(oc::span<const uint8> level0, uint32 size, TreeLeafTexture& out);
 }

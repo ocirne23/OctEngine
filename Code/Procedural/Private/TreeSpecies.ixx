@@ -201,6 +201,9 @@ export namespace Procedural
 		int clusterShoots = 1;      // Needles / Pinnate: branches / compound leaves fanned out from the card's base
 		float clusterLeafSize = 0.3f; // Cluster: leaf (Needles: needle) length in the texture, a fraction of the card length
 		float clusterLeafWidth = 0.24f; // Cluster Leaves: a texture leaf's half width / its length (0.24 narrow, 0.45 oval)
+		// Cluster Leaves: how much a texture leaf CUPS in the leaf normal map (0 = flat, 1 = strongly: its sides fold up
+		// about the midrib, its tip curls down, each leaf a random tilt on top) - light and shade across every leaf.
+		float leafCup = 0.5f;
 		float leafSize = 0.25f;     // length (m)
 		float leafAspect = 0.6f;    // width / length
 		int leavesPerBranch = 8;    // per average last-level branch; longer branches get proportionally more
@@ -244,6 +247,12 @@ export namespace Procedural
 		glm::vec3 leafColor{ 0.20f, 0.38f, 0.10f };
 		glm::vec3 twigColor{ -1.0f }; // `Color Twig`: the twigs drawn in the leaf texture (< 0 = barkColor)
 		glm::vec3 leafTwigColor() const { return twigColor.x >= 0.0f ? twigColor : barkColor; }
+		// The cluster leaves' COLOUR SPREAD, per leaf in the texture: `Color LeafVariation` (0..3, 1 = a little toward the
+		// autumn tint and +-~13 % brightness), and `Color Accent r g b` on `Color AccentShare` (0..1) of the leaves - the odd
+		// yellow or red leaf in a green crown.
+		float leafVariation = 1.0f;
+		glm::vec3 accentColor{ 0.62f, 0.30f, 0.10f };
+		float accentShare = 0.0f;
 		// The FAR-TREE VOLUME's colour: `Color Far` (sRGB like Leaf; < 0 = the leaf texture's mean) x farAlbedoScale.
 		glm::vec3 farColor{ -1.0f };
 		float farAlbedoScale = 1.0f;

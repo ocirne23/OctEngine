@@ -316,6 +316,11 @@ vec4 sampleAOBilateral(vec3 pos, float viewDist)
 bool g_noRtao = false;
 #endif
 
+#ifdef LEAF_SKY_WRAP
+// The includer's per-pixel "Trees/Leaf sky wrap" (0 on everything but leaves): see computeLitColor.
+float16_t g_leafSkyWrap = float16_t(0.0);
+#endif
+
 // Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun (with underwater
 // caustics) and the clustered light grid. texAO multiplies only the ambient/indirect term (baked texture AO; 1.0 when
 // the material carries none). The surface arrives HALF (roughness = GGX alpha >= 0.01): the direct-light BRDF and the
@@ -361,6 +366,13 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 	}
 #endif
 
+#ifdef LEAF_SKY_WRAP
+	// THIN LEAVES are lit through from behind too: a leaf facing DOWN read only the dark ground's irradiance (dark
+	// leaves all through the crowns). Its normal is mirrored toward the sky by g_leafSkyWrap (0 = as is, 1 = mirrored)
+	// before the lookup - still one lookup.
+	if (g_leafSkyWrap > float16_t(0.0) && bentN.y < float16_t(0.0))
+		bentN = normalize(mix(bentN, f16vec3(bentN.x, -bentN.y, bentN.z), g_leafSkyWrap));
+#endif
 	// Blends to the virtual sky probe over the probe field's outer band. Volume mode: ~8 filtered fetches, not ~100
 	// probe loads.
 	const f16vec3 indirect = giIndirectOverPiH(worldPos, bentN);

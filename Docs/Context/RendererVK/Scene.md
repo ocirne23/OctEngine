@@ -265,9 +265,13 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   (`cascadeDepthRange`), `length` = `Trees/Foliage shadow length (m)` (`u_foliage_shadowLength`, default 2, min
   0.05). ~0 on the axis, deepening into the crown; far blockers shadow fully. **The tree MESH leaves** (the LitTree FS,
   `SHADOW_LEAF_TRANSMIT` / `g_shadowLeafLength`, set per leaf pixel; the normal bias stays) take the same fade with
-  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 3, 0 = off): their only caster is their own
+  `Trees/Leaf shadow length (m)` (`u_foliage_leafShadowLength`, default 2, 0 = off): their only caster is their own
   billboard, whose top card at `TopCardHeight` put every leaf under it in full shadow and every leaf above it in none -
   now a leaf just under the card is barely shaded, one deep under it fully. Bark keeps the full shadow.
+* **Billboard shadow shift**: `Trees/Billboard shadow shift (m)` (`u_foliage_billboardShadowShift`, default 2; < 0 =
+  away from the sun) moves a tree BILLBOARD's shadow caster along the sun direction in `shadow_depth.vs` (the shadow
+  cull's bit 7: a swaying caster whose material has `MATERIAL_FLAG_BILLBOARD`; its cull radius grows by the shift).
+  The flat cards stand at the crown's middle, so the caster can be moved toward the crown's sun side.
 * **The billboard normal map is the CROWN layout** (Procedural TreeImpostor `bakeBillboards`): RGB = the full
   tangent-space normal, SIGN KEPT (a normal may face away, toward a sun behind the tree), **A = the BAKED INTERIOR**
   (linear: 0 on the crown's surface .. 1 at about the crown's core depth, from the piece's own blurred leaf field -
@@ -278,7 +282,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `u_foliage_interiorEnd`, default 0.5 / 1), so a fully lit crown is not flat. **On the SUN** (direct and
   transmitted) that interior FADES OUT as the view lines up with the sun (x `Foliage interior view fade` (1) x |V·L|;
   the ambient keeps it): from the front the leaves seen through the gaps are lit through those same gaps.
-* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (0.7) x chord)`, the chord from the
+* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (1.1) x chord)`, the chord from the
   visible LEAF along L to where the crown ellipsoid (below) ends, in lateral radii (0 for a leaf outside it). The leaf
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
@@ -286,7 +290,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `Foliage transmission self shadow` (0.33, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
   forward through the leaves loses less): at the full share a crown seen toward the sun hides `Foliage transmission`
   entirely. On a whole tree's horizontal card the interior term is raised to `Foliage interior shadow top card scale`
-  (`u_foliage_interiorTopCardScale`, default 1.06; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
+  (`u_foliage_interiorTopCardScale`, default 1; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
   plain `V.y` goes negative from below and turns the card black).
 * **Crown normal**: each crossed card's baked normals shade the crown side ITS bake view saw, so the shading splits
   hard where card A gives way to card B on screen. `foliageCrownNormal` blends the shading normal toward the view ray's
@@ -297,7 +301,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   keep a sphere of half the u length). The ellipsoid follows the card's own proportions (a sphere of half the tree
   height points a pine's normals up at its top and down at its bottom). It depends on the ray only, so both cards
   agree. The weight is 1 at the axis (where the cards disagree most) and falls to `Trees/Foliage crown normal`
-  (`u_foliage_crownNormal`, default 0.33) at half the LATERAL radius from it, so the outer crown keeps its baked
+  (`u_foliage_crownNormal`, default 0.3) at half the LATERAL radius from it, so the outer crown keeps its baked
   detail. **The baked normal is ROTATED, not replaced**: it turns by the rotation from the card's facing normal to the
   crown normal, x the weight as an angle - both cards agree on the mean direction, the leaf normals keep their
   scatter. Replacing it with the one smooth crown normal lights the axis strip brighter than the rest of the card (a
@@ -307,8 +311,19 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `foliageTopCard`; whole trees stand upright) `foliageCrownFrame` takes the card normal as the axis and the card's
   own point on it as the centre (its u spans at least the height, its v the crown width). The LitFoliage variant's VS
   (defined `FOLIAGE`) adds the instance origin as flat location 5.
+* **The leaf look** (`leaf_look.inc.glsl`, LitTree / LitFoliage leaves): the LitTree leaves take `Trees/Leaf
+  roughness` (0.44, a waxy sheen; the cluster normal map now gives every leaf its own facing) instead of 0.65; both
+  variants tint the leaf colour by world-space PATCHES (`leafPatchTint`: two value noises at `Leaf patch size (m)`, 2 -
+  brightness x 1 -+ 0.6 x `Leaf patch variation` (0.4), and toward a yellow-green or a deeper blue-green by it): a crown
+  in groups of lighter / yellower and darker / greener leaves. No per-card data reaches the FS, so it is world space.
+  **Leaf sky wrap** (`LEAF_SKY_WRAP` + `g_leafSkyWrap` in `computeLitColor`, `Trees/Leaf sky wrap` 0.5): a leaf whose
+  (bent) normal faces DOWN takes the GI irradiance of that normal mirrored toward the sky by that much - a thin leaf
+  is lit through from the sky behind it; at its own side only it read the dark ground: dark leaves all through the
+  crowns. One lookup still.
 * **Leaf transmission** (`MATERIAL_FLAG_LEAF`, bit 30, **LitTree / LitFoliage only**; LitMasked ignores the flag):
-  the FS adds the sun THROUGH the leaf, tinted by its colour — `saturate(-N·L)` (lit from behind) +
+  the FS adds the sun THROUGH the leaf, tinted by its colour DEEPENED (`leafTransmitColor`: the colour ^ `Foliage
+  transmission saturation` (2), back at its own luminance - light through a leaf passes its pigment about twice, so it
+  comes out more saturated and more yellow-green) — `saturate(-N·L)` (lit from behind) +
   `saturate(V·-L)^focus × glow` (the backlit rim looking toward the sun), × `Trees/Foliage transmission`. Its
   visibility = `mix(1, sun shadow, Foliage transmission shadow)` × (LitFoliage) the interior term: a leaf seen from
   the shaded side is in its own crown's shadow, which would leave no glow. `u_foliage_transmission` /

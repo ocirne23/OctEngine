@@ -17,7 +17,7 @@ struct InMeshInstancesData
     vec4 posScale;
     vec4 quat;
     uint alphaTexIdxCascadeMask; // high 16 = alpha-mask tex idx (0xFFFF = opaque), bit 15 = a tree (wind), bits 8..14 its
-                                 // trunk-bend scale x 32, low 8 = cascade mask
+                                 // trunk-bend scale x 32, bit 7 = a tree billboard, low 7 = cascade mask
 };
 layout (binding = 1, std430) readonly buffer InMeshInstances
 {
@@ -34,7 +34,7 @@ layout (location = 1) out flat uint out_alphaTexIdx; // 0xFFFF = opaque (fragmen
 void main()
 {
     const InMeshInstancesData inst = in_instances[inst_idx];
-    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x000000FFu;
+    const uint cascadeMask = inst.alphaTexIdxCascadeMask & 0x0000007Fu;
     out_uv = vec2(in_posU.w, in_v);
     out_alphaTexIdx = inst.alphaTexIdxCascadeMask >> 16;
     if ((cascadeMask & (1u << gl_ViewIndex)) == 0u)
@@ -51,6 +51,10 @@ void main()
         vec3 unusedPrevDelta;
         const float windTrunk = float((inst.alphaTexIdxCascadeMask >> 8) & 127u) * (1.0 / 32.0);
         worldPos += treeWind(in_posU.xyz, inst.posScale.xyz, inst.posScale.w, vec3(0.0), 0u, vec2(windTrunk, 1.0), unusedPrevDelta);
+        // A tree BILLBOARD (bit 7) shifted toward the sun by "Trees/Billboard shadow shift (m)" (< 0: away from it): its
+        // flat cards stand at the crown's middle, so its shadow starts there, not at the crown's sun side.
+        if ((inst.alphaTexIdxCascadeMask & 0x00000080u) != 0u)
+            worldPos += u_sunDirection.xyz * u_foliage_billboardShadowShift;
     }
 
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).

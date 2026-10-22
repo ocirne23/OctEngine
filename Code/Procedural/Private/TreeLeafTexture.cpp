@@ -43,6 +43,15 @@ namespace
 		Canvas& canvas;
 		glm::vec2 origin; // pixels
 		float cellPx;     // pixels per cell unit
+		// The LEAF NORMAL MAP (tangent space: x along u, y along v, encoded * 0.5 + 0.5; nullptr = none), blended with
+		// the same coverage as the colour.
+		Canvas* normals = nullptr;
+
+		void blendNormal(int x, int y, glm::vec3 n, float a) const
+		{
+			if (normals)
+				normals->blend(x, y, glm::normalize(n) * 0.5f + 0.5f, a);
+		}
 
 		// Visits every pixel of the cell-local box [lo, hi] (clipped to the cell) with its cell-local centre.
 		template<typename F>
@@ -68,16 +77,26 @@ namespace
 		cell.forBox(glm::min(a, b) - r - px, glm::max(a, b) + r + px, [&](int x, int y, glm::vec2 p)
 		{
 			const float t = glm::clamp(glm::dot(p - a, ab) / len2, 0.0f, 1.0f);
-			const float edge = glm::mix(ra, rb, t) - glm::distance(p, a + ab * t);
+			const float radius = glm::mix(ra, rb, t);
+			const glm::vec2 off = p - (a + ab * t);
+			const float edge = radius - glm::length(off);
 			const float alpha = glm::clamp(edge / px + 0.5f, 0.0f, 1.0f);
 			if (alpha > 0.0f)
+			{
 				cell.canvas.blend(x, y, color, alpha);
+				// Round across: the normal leans out toward the side the pixel sits on.
+				const glm::vec2 lean = off / glm::max(radius, 1e-5f) * 0.85f;
+				cell.blendNormal(x, y, glm::vec3(lean, std::sqrt(glm::max(1.0f - glm::dot(lean, lean), 0.05f))), alpha);
+			}
 		});
 	}
 
 	// One leaf: origin at the petiole, `dir` along the blade. Pointed ellipse-like profile, lighter midrib,
-	// darker rim, one half slightly shaded (the fold).
-	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const glm::vec3& color)
+	// darker rim, one half slightly shaded (the fold). Its NORMAL (with a normal canvas): `cup` folds the sides up about
+	// the midrib (the normal leans in toward it, more toward the rim) and curls the tip down (leaning toward the tip),
+	// plus `tilt` - the whole leaf's own random lean, so neighbouring leaves catch the sun differently.
+	void drawLeaf(const Cell& cell, glm::vec2 origin, glm::vec2 dir, float length, float halfWidth, const glm::vec3& color,
+		float cup = 0.0f, glm::vec2 tilt = glm::vec2(0.0f))
 	{
 		const glm::vec2 side(-dir.y, dir.x);
 		const float px = 1.0f / cell.cellPx;
@@ -104,6 +123,13 @@ namespace
 			if (r > 0.0f)
 				shade *= 0.92f;               // fold
 			cell.canvas.blend(x, y, glm::clamp(color * shade, 0.0f, 1.0f), alpha);
+			if (cell.normals)
+			{
+				const float across = glm::clamp(r / glm::max(h, 1e-5f), -1.0f, 1.0f);
+				const float fold = cup * (0.6f * across + 0.25f * (across >= 0.0f ? 1.0f : -1.0f));
+				const glm::vec2 lean = side * -fold + dir * (cup * 0.5f * (s - 0.35f)) + tilt;
+				cell.blendNormal(x, y, glm::vec3(lean, 1.0f), alpha);
+			}
 		});
 	}
 
@@ -140,7 +166,13 @@ namespace
 			const float angle = last ? rng.signed1() * 0.15f : sideSign * glm::radians(rng.range(35.0f, 65.0f));
 			const glm::vec2 dir(tangent.x * std::cos(angle) - tangent.y * std::sin(angle), tangent.x * std::sin(angle) + tangent.y * std::cos(angle));
 			float length = species.clusterLeafSize * rng.range(0.75f, 1.15f) * (1.0f - 0.25f * t);
-			const glm::vec3 color = glm::mix(species.leafColor, autumn, rng.next01() * 0.35f) * rng.range(0.85f, 1.12f);
+			// `Color LeafVariation` widens the autumn mix and the brightness; `Color Accent` replaces AccentShare of them.
+			const float variation = species.leafVariation;
+			glm::vec3 color = glm::mix(species.leafColor, autumn, glm::min(rng.next01() * 0.35f * variation, 1.0f))
+				* rng.range(glm::max(1.0f - 0.15f * variation, 0.3f), 1.0f + 0.12f * variation);
+			if (rng.next01() < species.accentShare)
+				color = species.accentColor * rng.range(0.85f, 1.1f);
+			const glm::vec2 tilt(rng.signed1() * 0.35f, rng.signed1() * 0.35f);
 			// Inside the cell: the cell clips the drawing, and a large leaf (the tip leaf above all, which grows on from
 			// v = 0.88) lost its tip. Shrunk until its tip and its widest points (at about 0.6 of its length,
 			// drawLeaf's profile) fit, with a margin for the mip chain.
@@ -158,7 +190,7 @@ namespace
 			};
 			for (int k = 0; k < 16 && !fits(length); ++k)
 				length *= 0.92f;
-			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f));
+			drawLeaf(cell, origin, dir, length, length * widthRatio, glm::clamp(color, 0.0f, 1.0f), species.leafCup, tilt);
 		}
 	}
 
@@ -506,19 +538,24 @@ namespace
 
 namespace Procedural
 {
-	void generateLeafClusterImage(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outRgba)
+	void generateLeafClusterImage(const TreeSpeciesDesc& species, uint32 size, oc::vector<uint8>& outRgba, oc::vector<uint8>* outNormal)
 	{
 		Canvas canvas;
 		canvas.size = size;
 		// Transparent texels carry the leaf colour, so filtering at the silhouette never darkens it.
 		canvas.px.assign((size_t)size * size, glm::vec4(species.leafColor, 0.0f));
+		// The normal map: flat (+z) where nothing is drawn.
+		Canvas normals;
+		normals.size = size;
+		if (outNormal)
+			normals.px.assign((size_t)size * size, glm::vec4(0.5f, 0.5f, 1.0f, 0.0f));
 
 		Rng rng(treeHash(species.seed, 3000u));
 		const float cellPx = (float)size / (float)TREE_LEAF_ATLAS_CELLS;
 		for (uint32 cy = 0; cy < TREE_LEAF_ATLAS_CELLS; ++cy)
 			for (uint32 cx = 0; cx < TREE_LEAF_ATLAS_CELLS; ++cx)
 			{
-				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx };
+				const Cell cell{ canvas, glm::vec2((float)cx, (float)cy) * cellPx, cellPx, outNormal ? &normals : nullptr };
 				if (species.clusterStyle == ETreeClusterStyle::Needles)
 					drawNeedleCluster(cell, species, rng);
 				else if (species.clusterStyle == ETreeClusterStyle::Mat)
@@ -529,6 +566,13 @@ namespace Procedural
 					drawCluster(cell, species, rng);
 			}
 		outRgba = toRgba8(canvas, 1.0f);
+		if (outNormal)
+		{
+			// A = 255: the normal chain's mips average it (buildNormalMips), and the leaf FS does not read it.
+			*outNormal = toRgba8(normals, 0.0f);
+			for (size_t i = 3; i < outNormal->size(); i += 4)
+				(*outNormal)[i] = 255;
+		}
 	}
 
 	void buildLeafClusterMips(oc::span<const uint8> level0, uint32 size, TreeLeafTexture& out)

@@ -32,8 +32,10 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target
 // The sun's shadow at the top of main, before the material is read (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
 #define SHADOW_LEAF_TRANSMIT // shadows.inc.glsl: the leaves' shadow fades in with the gap to the blocker
+#define LEAF_SKY_WRAP        // instanced_indirect_lit.inc.glsl: a downward leaf's ambient mirrored toward the sky
 #include "instanced_indirect_lit.inc.glsl"
 #include "tree_fade.inc.glsl"
+#include "leaf_look.inc.glsl"
 
 // THE SHADOW FIRST (instanced_indirect.fs.glsl's sunShadowFirst), with the LEAVES looked up from their sun side: a thin
 // leaf facing AWAY from the sun is still lit through, and its transmission needs its real shadow (the facing reject
@@ -72,11 +74,12 @@ void main()
 		discard;
 
 	// After the discards: a cut-out pixel pays no shadow.
-	sunShadowFirstTree(pos, (material.flags & MATERIAL_FLAG_LEAF) != 0u);
+	const bool leaf = (material.flags & MATERIAL_FLAG_LEAF) != 0u;
+	sunShadowFirstTree(pos, leaf);
 
 	// The surface is HALF from the texture taps on (computeLitColor takes it half): colour, roughness, metalness and the
-	// normal-map decode + TBN.
-	float16_t roughness = float16_t(0.65);
+	// normal-map decode + TBN. Leaves: "Trees/Leaf roughness" (a waxy sheen) and the crown's colour PATCHES.
+	float16_t roughness = float16_t(leaf ? u_foliage_leafRoughness : 0.65);
 	float16_t metalness = float16_t(0.0);
 	if (metalRoughnessTexIdx != uint16_t(0xFFFF))
 	{
@@ -85,7 +88,7 @@ void main()
 		roughness = metalRoughness.y; // the cook / upload floors G >= 3/255
 	}
 
-	const f16vec3 materialColor = f16vec3(diffuseSample.xyz);
+	const f16vec3 materialColor = f16vec3(leaf ? leafPatchTint(diffuseSample.xyz, pos) : diffuseSample.xyz);
 
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal into the surface -
 	// reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
@@ -109,7 +112,7 @@ void main()
 	// The LEAF terms (MATERIAL_FLAG_LEAF). Formed BEFORE computeLitColor: its light loop is the shader's register peak,
 	// and only the half transmission colour is live across it - not the shadow and the surface colour it is made of.
 	f16vec3 transmit = f16vec3(0.0);
-	if ((material.flags & MATERIAL_FLAG_LEAF) != 0u)
+	if (leaf)
 	{
 		// Seen nearly edge-on: N bent toward the viewer until N.V reaches "Trees/Foliage min N.V". The cards' normals are
 		// bent, so N.V can approach 0 while N.L > 0, and the sun's GGX at grazing lit a leaf hundreds of times brighter
@@ -118,7 +121,7 @@ void main()
 		if (noV < u_foliage_minNoV)
 			N = f16vec3(normalize(vec3(N) + V * (u_foliage_minNoV - noV)));
 
-		// TRANSMISSION: thin leaves let the sun through, tinted by their own colour - a diffuse back term saturate(-N.L)
+		// TRANSMISSION: thin leaves let the sun through, tinted by their colour DEEPENED (leafTransmitColor) - a diffuse back term saturate(-N.L)
 		// plus a forward GLOW saturate(V.-L)^focus x glow (the backlit rim), x "Trees/Foliage transmission". It leans on the
 		// sun shadow only by "Foliage transmission shadow": a leaf seen from the shaded side sits in its own crown's shadow,
 		// which would leave the backlit view no glow.
@@ -126,9 +129,10 @@ void main()
 		const float back = max(-dot(vec3(N), L), 0.0);
 		const float glow = pow(max(-dot(V, L), 0.0), u_foliage_transmissionFocus) * u_foliage_transmissionGlow;
 		const float visibility = mix(1.0, g_sunShadowFirst, u_foliage_transmissionShadow);
-		transmit = materialColor * float16_t((back + glow) * visibility * u_foliage_transmission * INV_PI); // <= ~11.5 by the tweak ranges
+		transmit = f16vec3(leafTransmitColor(vec3(materialColor)) * ((back + glow) * visibility * u_foliage_transmission * INV_PI)); // <= ~11.5 by the tweak ranges
 	}
 
+	g_leafSkyWrap = float16_t(leaf ? u_foliage_leafSkyWrap : 0.0);
 	vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, float16_t(1.0));
 	color += vec3(transmit) * (u_sunTransmittance * u_sunColor.rgb);
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));

@@ -358,7 +358,8 @@ which mean "tree" too; 1 = no wind). The layers:
 **Per species** (`.tree` `Wind Trunk / Branch`): `TreeCullType::wind` holds the two scales (4.12 fixed point each,
 `treeCullWind`). The main cull writes them into a tree record's `prevPosScale` = (trunk, branch, 1, 0) - a tree never
 moves, so w = 0 and xyz were free; the VS takes them when w = 0 and z = 1, else 1. The shadow cull packs the trunk
-scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (the cascade mask is the low 8 bits). Both culls grow the wind
+scale x 32 into bits 8..14 of `alphaTexIdxCascadeMask` (bit 7 = a tree BILLBOARD, for "Trees/Billboard shadow shift
+(m)"; the cascade mask is the low 7 bits). Both culls grow the wind
 reach by the larger scale above 1. The billboard waves and the leaf flutter keep the global settings.
 
 `instanced_indirect.vs` applies it to any vertex whose payload says so (`treeWindPayload`) and adds last frame's

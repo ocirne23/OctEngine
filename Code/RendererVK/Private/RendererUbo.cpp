@@ -1470,6 +1470,12 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("foliage_transmissionSelfShadow", [&] { return glm::clamp(f.transmissionSelfShadow, 0.0f, 1.0f); }, f.transmissionSelfShadow);
         list.add("foliage_selfShadow", [&] { return glm::max(f.selfShadow, 0.0f); }, f.selfShadow);
         list.add("foliage_minNoV", [&] { return glm::clamp(f.minNoV, 0.0f, 0.9f); }, f.minNoV);
+        list.add("foliage_leafRoughness", [&] { return glm::clamp(f.leafRoughness, 0.05f, 1.0f); }, f.leafRoughness);
+        list.add("foliage_transmissionSaturation", [&] { return glm::clamp(f.transmissionSaturation, 1.0f, 4.0f); }, f.transmissionSaturation);
+        list.add("foliage_leafPatchVariation", [&] { return glm::clamp(f.leafPatchVariation, 0.0f, 1.0f); }, f.leafPatchVariation);
+        list.add("foliage_invLeafPatchSize", [&] { return 1.0f / glm::max(f.leafPatchSize, 0.1f); }, f.leafPatchSize);
+        list.add("foliage_leafSkyWrap", [&] { return glm::clamp(f.leafSkyWrap, 0.0f, 1.0f); }, f.leafSkyWrap);
+        list.add("foliage_billboardShadowShift", f.billboardShadowShift);
         list.add("foliage_windBend", [&] { return glm::max(f.windBend, 0.0f); }, f.windBend);
         list.add("foliage_windInvRefHeight", [&] { return 1.0f / glm::max(f.windRefHeight, 0.1f); }, f.windRefHeight);
         list.add("foliage_windSway", [&] { return glm::max(f.windSway, 0.0f); }, f.windSway);

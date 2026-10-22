@@ -595,22 +595,32 @@ namespace Procedural
 			if (species.desc.leafType == ETreeLeafType::Cluster)
 			{
 				const oc::string leavesPath = oc::format("{}/{}_leaves.png", TREE_TEXTURE_DIR, name);
+				const oc::string leavesNormalPath = oc::format("{}/{}_leaves_normal.png", TREE_TEXTURE_DIR, name);
 				uint32& size = leafSize;
 				oc::vector<uint8>& image = leafImage;
-				if (m_settings.regenerateTextures || !loadSquareImage(leavesPath, size, image))
+				oc::vector<uint8> normalImage;
+				uint32 normalSize = 0;
+				// Both or neither: the normal map must match the leaves drawn in the colour image.
+				if (m_settings.regenerateTextures || !loadSquareImage(leavesPath, size, image)
+					|| !loadSquareImage(leavesNormalPath, normalSize, normalImage) || normalSize != size)
 				{
 					size = TREE_TEXTURE_SIZE;
-					generateLeafClusterImage(species.desc, size, image);
+					generateLeafClusterImage(species.desc, size, image, &normalImage);
 					saveImage(leavesPath, size, image);
+					saveImage(leavesNormalPath, size, normalImage);
 				}
 				TreeLeafTexture texture;
 				buildLeafClusterMips(image, size, texture);
-				oc::vector<oc::span<uint8>> mips;
+				oc::vector<oc::vector<uint8>> normalChain;
+				buildNormalMips(normalImage, size, normalChain);
+				oc::vector<oc::span<uint8>> mips, normalMips;
 				for (oc::vector<uint8>& level : texture.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms).
+				for (oc::vector<uint8>& level : normalChain)
+					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
+				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms). The normal map: cupped, tilted leaves.
 				species.leafMaterial = createTreeMaterial(renderer, m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
-					nullptr, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
+					&normalMips, TextureConvert::EBlockFormat::BC5, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
 					RendererVKLayout::MATERIAL_FLAG_LEAF);
 				species.ownsLeafMaterial = true;
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;

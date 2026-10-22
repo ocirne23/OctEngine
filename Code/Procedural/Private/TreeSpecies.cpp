@@ -279,6 +279,7 @@ namespace Procedural
 			}
 			readFloat(*leaves, "ClusterLeafSize", out.clusterLeafSize);
 			readFloat(*leaves, "ClusterLeafWidth", out.clusterLeafWidth);
+			readFloat(*leaves, "Cup", out.leafCup);
 		}
 
 		if (const AssetNode* bark = species->find("Bark"))
@@ -327,6 +328,11 @@ namespace Procedural
 				out.farColor = glm::vec3(0.0f);
 				readColor(*color, "Far", out.farColor);
 			}
+			readFloat(*color, "LeafVariation", out.leafVariation);
+			readColor(*color, "Accent", out.accentColor);
+			readFloat(*color, "AccentShare", out.accentShare);
+			out.leafVariation = glm::clamp(out.leafVariation, 0.0f, 3.0f);
+			out.accentShare = glm::clamp(out.accentShare, 0.0f, 1.0f);
 		}
 
 		if (const AssetNode* placement = species->find("Placement"))
@@ -417,6 +423,7 @@ namespace Procedural
 		out.billboardSize = billboardSize;
 		out.clusterLeafSize = glm::clamp(out.clusterLeafSize, 0.02f, 0.6f); // Pinnate leaflets are tiny
 		out.clusterLeafWidth = glm::clamp(out.clusterLeafWidth, 0.1f, 0.6f);
+		out.leafCup = glm::clamp(out.leafCup, 0.0f, 1.0f);
 		out.placement.density = glm::max(out.placement.density, 0.0f);
 		out.placement.climateWidth = glm::max(out.placement.climateWidth, 0.01f);
 		out.placement.temperature.y = glm::max(out.placement.temperature.y, out.placement.temperature.x);

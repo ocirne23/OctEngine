@@ -96,6 +96,12 @@ void Settings::registerFoliage(FoliageParams& s)
     Tweak::floatVar("Trees", "Foliage transmission glow", &s.transmissionGlow, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage transmission shadow", &s.transmissionShadow, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage min N.V", &s.minNoV, 0.0f, 0.9f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf roughness", &s.leafRoughness, 0.05f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Foliage transmission saturation", &s.transmissionSaturation, 1.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf patch variation", &s.leafPatchVariation, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Leaf patch size (m)", &s.leafPatchSize, 0.1f, 50.0f, 0.1f);
+    Tweak::floatVar("Trees", "Leaf sky wrap", &s.leafSkyWrap, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Trees", "Billboard shadow shift (m)", &s.billboardShadowShift, -20.0f, 20.0f, 0.05f);
     Tweak::floatVar("Trees", "Foliage edge fade start", &s.edgeFadeStart, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade end", &s.edgeFadeEnd, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Trees", "Foliage edge fade centre scale", &s.edgeFadeCentreScale, 0.0f, 4.0f, 0.01f);

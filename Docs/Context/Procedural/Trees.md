@@ -77,7 +77,8 @@ TreeSpecies <name>
 	        Type Single|Cluster · Cross true|false · Style Leaves|Needles|Pinnate|Mat · ClusterLeaves (Mat: shoots per cell; Needles: side
 	        shoots per branch; Pinnate: pinna pairs per compound leaf) · Shoots (Needles / Pinnate: branches /
 	        compound leaves fanned from the card base, 1..5, default 1) · ClusterLeafWidth (Leaves: a texture leaf's
-	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · ClusterLeafSize (Needles: the needle
+	        half width / its length, 0.1..0.6, default 0.24 narrow; 0.45 oval) · Cup (Leaves: 0..1, default 0.5 - the
+	        leaf NORMAL MAP's fold: the sides up about the midrib, the tip curled down, + a random tilt per leaf) · ClusterLeafSize (Needles: the needle
 	        length; Pinnate: the leaflet length; 0.02..0.6) · NormalBend (0..1, default 0.7: card normals bent away
 	        from the module root, both faces)   (Cluster only, below)
 	        Align (0..1, default 0: cards stick out of the branch facing up; 1 = they lie ALONG the branch,
@@ -131,7 +132,10 @@ TreeSpecies <name>
 	Color   Bark r g b · Leaf r g b · Mark r g b (the lenticels' and patches' colour; default 0.09 0.08 0.07)
 	        Section r g b (default 0.45 0.33 0.24) · Twig r g b (the twigs / stems drawn in the LEAF texture; absent =
 	        Bark - a birch's white bark read wrong on its twigs) · Far r g b (sRGB like Leaf: the FAR-TREE VOLUME's colour; absent =
-	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`)
+	        the leaf texture's alpha-weighted mean, `meanLeafAlbedo`) · LeafVariation (0..3, default 1: the Leaves
+	        style's per-leaf spread - toward the autumn tint by up to 0.35 x it, brightness -15 % .. +12 % x it) · Accent
+	        r g b + AccentShare (0..1, default 0: that share of the Leaves style's leaves in the accent colour - the odd
+	        yellow or red leaf)
 	Placement (WORLD placement, TreeWorld; absent or Density 0 = never placed in the world on its own - a Bush then only
         grows as a tree's undergrowth; a Bush's block uses Density, the climate box, Cluster, MaxSlope and Altitude)
 	        Density (per ha in the ideal climate) · Temperature min max (C; the IDEAL range, one value = exactly that)
@@ -445,7 +449,9 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
 
 Generated output under `Assets/Local`, so NOT in git: a fresh checkout generates them on the first load.
 The species textures are generated ONCE and saved as PNG (`File:ImageIO`): `<species>_bark.png`,
-`<species>_bark_normal.png`, `<species>_leaves.png` (cluster species only), plus the billboard bakes. Later loads
+`<species>_bark_normal.png`, `<species>_leaves.png` + `<species>_leaves_normal.png` (cluster species only; the
+leaves' tangent-space normal map - cupped, tilted leaves (`Leaves Cup`) and round twigs, drawn with the same coverage
+as the colour; both are regenerated when either is missing; BC5 on the GPU), plus the billboard bakes. Later loads
 read them back and only rebuild the mip chains (bark box-filtered, leaves coverage-preserving). **A file that exists
 wins — changing `Bark` / `Color` / cluster parameters does NOT regenerate it**: press `Trees/Regenerate textures`
 (overwrites all) or delete the file. The files are also where authored replacements go: square power of
