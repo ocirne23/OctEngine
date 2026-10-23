@@ -497,16 +497,16 @@ export struct FarTreeParams
     float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
     float normalStrength = 0.75f; // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 0.5f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 6.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+    float interiorShadow = 3.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
-    float interiorRadius = 0.1f;   // the taps' distance, x the cell size
+    float interiorRadius = 0.075f; // the taps' distance, x the cell size
     float forwardScatter = -0.33f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
     // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
     // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 0.75f;
+    float transmission = 1.0f;
     float transmissionFocus = 0.33f;
-    float albedoScale = 1.0f;    // x the leaf colour
-    float saturationScale = 0.75f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
+    float albedoScale = 0.75f;   // x the leaf colour
+    float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
     // The march at HALF resolution (each 2x2 block's centre, to its farthest surface; a depth-aware upsample after the
     // temporal pass - half res runs the temporal pass, at weight 0 it only reconstructs) and / or PIXEL SKIPPING: per

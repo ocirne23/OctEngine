@@ -329,7 +329,10 @@ void marchAt(ivec2 px)
     const float hgT = 1.0 + gT * gT - 2.0 * gT * dot(dir, L);
     const float transmitLobe = u_foliage_farTransmission * (1.0 - gT * gT) / (hgT * sqrt(hgT));
     const vec3 skyMean = texelFetch(u_skyMap, SKY_MAP_TREE_SKY_TEXEL, 0).rgb;
-    const vec3 skyBase = skyMean * (PI * u_foliage_farAmbient);
+    // + the SKY RADIANCE delta light from straight up ("Sky/Sky Radiance": moonlight / space light): the sky map holds
+    // only its atmosphere-scattered part; the lit surfaces take the direct part through the GI probes (gi_probe_trace's
+    // projection, ~E x max(N.up, 0)), so on an upward surface its irradiance is u_sky_radiance itself - added as such.
+    const vec3 skyBase = (skyMean * PI + u_sky_radiance) * u_foliage_farAmbient;
     const float sliceH = pc_vol_height / float(pc_vol_slices);
     const float jitter = fract(52.9829189 * fract(dot(vec2(px) + 5.588238 * float(u_frameIndex & 7u), vec2(0.06711056, 0.00583715))));
 

@@ -548,7 +548,10 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   push-constant word), then x "Far albedo scale". The SKY term is the real sky: pi x the cosine-weighted mean radiance
   of GI's sky map (binding 10, layer GI - the clouds included) over 5 taps (the zenith 0.4, a ring 45° down 4 x 0.15:
   one cloud overhead does not set it alone), baked once per frame by the sky-map bake into `SKY_MAP_TREE_SKY_TEXEL`
-  (one `texelFetch` per ray), x "Far ambient" (1 = physical). The sky map is baked in the GI stage, before "Far trees".
+  (one `texelFetch` per ray), + the SKY RADIANCE delta light from straight up (`u_sky_radiance`, "Sky/Sky Radiance":
+  the sky map holds only its atmosphere-scattered part, the lit surfaces take the direct part through the GI probes'
+  projection - on an upward surface its irradiance is `u_sky_radiance` itself), x "Far ambient" (1 = physical). The sky
+  map is baked in the GI stage, before "Far trees".
 * **March** (`tree_volume_march.cs`, full res, every pixel): from "Far start" (camera distance; at least the ring's
   entry, exact circle roots; a vertical ray never enters) to the scene surface or "Far end", at most "Far max steps".
   * "Far blob shrink" (1/m) comes off the baked extinction first (before "Far density"), so a blob shrinks toward its
@@ -569,7 +572,7 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     concave-overshooting surface and lost all sun: black patches along valleys, changing with "Data map range") × the cloud shadow
     (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
-  * **THE TRANSMISSION** ("Far transmission" 0.75, "Far transmission focus" 0.33): ADDED to that - the sun × a
+  * **THE TRANSMISSION** ("Far transmission" 1.0, "Far transmission focus" 0.33): ADDED to that - the sun × a
     forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
     the crown at `Foliage transmission self shadow`'s share of the optical depth (exp(-depth x that) - the sun taps'
     depth kept, not pow(sunT, ...): one exp, no log; as the billboards'),
