@@ -320,7 +320,7 @@ export namespace RendererVKLayout
     constexpr size_t MAX_LIGHTS = USHRT_MAX - 1;
     // Sun shadow cascaded shadow maps.
     constexpr uint32 NUM_SHADOW_CASCADES = 4;
-    constexpr uint32 SHADOW_MAP_RESOLUTION = 2048;
+    constexpr uint32 SHADOW_MAP_RESOLUTION = 4096;
 
     // Per-render-node pass visibility bits (in_nodePassMasks, written at renderNode() push time):
     // the main indirect cull, shadow cull, and TLAS-instance writer each early-out on their bit, so

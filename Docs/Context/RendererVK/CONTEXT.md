@@ -29,7 +29,7 @@ feature you touch BEFORE changing it.**
 | This file | Frame pacing, screenshots, the frame slot fence, the begin-frame job + cull view, **frame order** (no depth prepass, recording vs submitting, ReBAR buffers, barriers and overlap), the feature list, layout under `Private/`, debug names, the graphics-queue mutex, VR |
 | [`FrameUbo.md`](FrameUbo.md) | **The frame UBO (generated GLSL), the tweak locks that bake it into the shaders**, push blocks |
 | [`Scene.md`](Scene.md) | Per-frame instance flow, scene objects (single meshes, THE SKY DRAW, tree records, per-entity tint), texture + mesh streaming, mesh LODs, draw-list compaction |
-| [`Lighting.md`](Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, long-range sun shadows + their cost, aerial perspective |
+| [`Lighting.md`](Lighting.md) | The scene focus, GI (probes, sky map, irradiance volume), RTAO, the sun cycle (time of day / latitude), long-range sun shadows + their cost, aerial perspective |
 | [`Clouds.md`](Clouds.md) | Volumetric clouds |
 | [`Vegetation.md`](Vegetation.md) | Procedural grass, ground clutter, the wind, tree wind, the far-tree volume |
 | [`PostProcess.md`](PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |

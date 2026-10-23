@@ -14,7 +14,7 @@ import Core.glm;
 export struct WindParams
 {
     float speed = 2.0f;         // m/s, the mean wind
-    float angleDeg = 113.0f;    // the direction the wind blows TOWARDS, degrees from +X around +Y (113: the sea's former heading)
+    float angleDeg = 250.0f;    // the direction the wind blows TOWARDS, degrees from +X around +Y
     float gustStrength = 5.0f;  // m/s, the amplitude of the 2D gust vector added to the mean (calm air flurries too)
     float gustSize = 50.0f;     // m, the gusts' feature size
 
@@ -38,6 +38,16 @@ export struct SkyParams
     float sunIntensity = 5.0f;
     float sunAngularCos = 0.99985f;     // cos of the disc radius (1 = disc off)
     float sunGlow = 1.0f;               // sun halo strength (>= 0.01, ~0.5 subtle, 2 = heavy); HG forward lobe in sky.fs
+    // THE SUN CYCLE ("Sky/Sun cycle"): while on, the sun direction follows the time of day (advanced on the SIM clock, so
+    // the pause holds it) at the latitude and day of year - east +X, north -Z - and the Sky Radiance the shaders see is
+    // x 1 by day, x nightSkyRadiance at night (a smooth step over the sun's elevation). The tweaks keep their values.
+    bool  sunCycle = true;
+    bool  sunCyclePaused = false;       // the time of day holds (the sun still follows a dragged time / latitude)
+    float timeOfDay = 5.0f;             // hours, 0..24 (the start: before a sunrise)
+    float sunCycleSpeed = 60.0f;        // game hours per real hour (1 = real time, 60 = a day in 24 minutes)
+    float latitude = -45.0f;            // degrees north (< 0 = south)
+    float dayOfYear = 300.0f;           // 1..365: the sun's declination (172 = the June solstice, 80 = the March equinox)
+    float nightSkyRadiance = 0.1f;      // x the Sky Radiance with the sun down
 
     // Ambient + sky radiance (the non-sun lighting inputs)
     glm::vec3 ambientColor = glm::vec3(1.0f);   // flat non-physical minimum ambient
@@ -138,6 +148,7 @@ export struct CloudParams
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeedScale = 3.5f;       // x "Sky/Wind/Speed" (the layer's wind; its direction is the shared one)
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
+    int   seed = 2836;                 // the cloud LAYOUT: a fixed offset into the noise fields (0 = none); the drifts add to it
     // Lighting
     float dropletSize = 20.0f;         // water droplet diameter (um) of the HG + Draine phase fit (5 .. 50)
     float forwardPeakLimit = 0.95f;    // cap on the fit's HG g (0.995 at 20 um: a ~0.3 degree diffraction lobe that
@@ -153,6 +164,11 @@ export struct CloudParams
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
+    // LOW SUN: the shadows blend to the layer's MEAN transmittance as the sun goes from lowSunStartDeg down to
+    // lowSunEndDeg (degrees above the horizon). A cloud's shadow lies height / tan(elevation) away (~17 km at 5 degrees
+    // for a 1.5 km cloud), so a slowly moving low sun swept the shadows across the world: fast flicker.
+    float shadowLowSunStartDeg = 15.0f;
+    float shadowLowSunEndDeg = 3.0f;
     float shadowNearKm = 1.0f;         // near cascade extent (km)
     float shadowFarKm = 40.0f;       // far cascade extent (km)
     int   shadowNearSteps = 16;        // map march steps per texel, near cascade
@@ -194,11 +210,11 @@ export struct CloudParams
 // "Shadows" category. Consumed per frame by computeSunCascades, so changes apply live.
 export struct ShadowParams
 {
-    float maxDistance = 2500.0f; // farthest distance receiving sun shadows (m), measured from the shadow
-                                // focus (Renderer::setSceneFocus - the player in game mode; the camera when
-                                // unset). Lower = every cascade covers less ground = sharper shadows
+    float maxDistance = 5000.0f; // farthest distance receiving sun shadows (m), measured from the shadow
+                                // focus (Renderer::setSceneFocus - the player in game mode; the ground under
+                                // the camera when unset). Lower = every cascade covers less ground = sharper shadows
                                 // everywhere, at range cost.
-    float splitLambda = 0.80f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
+    float splitLambda = 0.90f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
                                 // bunches up near the camera)
     float casterPad = 4000.0f;   // how far up-sun a caster may sit above a cascade and still be captured
                                 // (m). Must exceed the tallest shadow-casting feature (mountains!); too
@@ -694,7 +710,7 @@ export struct RTAOParams
     float power = 1.5f;
     float intensity = 1.0f;
     float fadeStart = 100.0f;  // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus - the player in game
-                               // mode; the camera when unset) where AO begins to fade out
+                               // mode; the ground under the camera when unset) where AO begins to fade out
     float maxDistance = 120.0f; // focus distance at which AO is fully gone (trace early-out); >= 1
     float normalBias = 0.02f;    // constant ray-origin offset along the surface normal (m)
     float distanceBias = 0.001f; // ray-origin offset toward the camera per meter of view distance: absorbs

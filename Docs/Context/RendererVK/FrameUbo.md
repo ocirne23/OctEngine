@@ -75,7 +75,8 @@ lockable** (`registerUboLocks` calls `TweakRegistry::markLockable` for every sou
 `U` button in front of each such row (a locked row is read-only) and a section toggle on the fold ("Lock" / "Partly
 locked" / "Locked") that sets all of them. A row in a section that feeds nothing baked (a CPU setting, a resource
 size, a define with its own listener) has no button and is never read-only. `ETweakFlags::Runtime` rows have no lock
-(the sun direction / colour, the ambient, the up axis, the wind).
+(the sun direction / colour, the ambient, the up axis, the wind, the "Sky/Sun cycle" tweaks - which keep `sky_radiance`
+live).
 
 * **An entry's SOURCES are addresses** (its `list.add` arguments after the lambda), and every one is a
   `Globals::settings` member: Settings resolves it to the tweak row whose variable holds it

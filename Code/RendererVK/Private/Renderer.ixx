@@ -124,10 +124,19 @@ public:
     void recreateWindowSurface(Window& window); // Call on resize
 
     // -- View settings --
-    // The world point every distance-based falloff measures from (u_sceneFocus). Sun cascades, RTAO fade, GI clipmap window, TLAS range. Cleared = camera pos.
+    // The world point every distance-based falloff measures from (u_sceneFocus). Sun cascades, RTAO fade, GI clipmap window, TLAS range. Cleared = the ground under the camera (setFocusGround).
     void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
     void clearSceneFocus() { m_sceneFocusEnabled = false; }
-    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusFrozen ? m_frozenSceneFocus : m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
+    // The SURFACE height (ground or water) under the camera, from the App each frame (main, before the begin-frame kick):
+    // without a set focus the focus is the camera's x / z at min(its height, this) - from high up the shadow cascades,
+    // GI window, RTAO and TLAS range stay on the terrain below, not in empty sky. Cleared = the camera itself.
+    void setFocusGround(float surfaceHeight) { m_focusGround = surfaceHeight; m_haveFocusGround = true; }
+    void clearFocusGround() { m_haveFocusGround = false; }
+    glm::vec3 defaultSceneFocus() const
+    {
+        return m_haveFocusGround ? glm::vec3(m_cameraPos.x, glm::min(m_cameraPos.y, m_focusGround), m_cameraPos.z) : m_cameraPos;
+    }
+    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusFrozen ? m_frozenSceneFocus : m_sceneFocusEnabled ? m_sceneFocus : defaultSceneFocus(); }
     const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
     const glm::vec3& cameraPos() const { return m_cameraPos; } // Valid after joinBeginFrameJob().
 
@@ -564,6 +573,7 @@ private:
     void checkFrameCapacities();
     void snapshotLodStats(PerFrameData& frameData);
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
+    void advanceSunCycle(); // "Sky/Sun cycle": the time of day on the sim clock -> the sun direction (main, kickBeginFrameJob)
     // The FRAME STATE the live UBO values read (buildFrameUbo runs these, then evaluates the block): what has a side
     // effect, carries over from the last frame, or comes out of one calculation with several results.
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
@@ -968,6 +978,8 @@ private:
 
     glm::vec3 m_sceneFocus = glm::vec3(0.0f); // setSceneFocus
     bool m_sceneFocusEnabled = false;
+    float m_focusGround = 0.0f;               // setFocusGround: the surface height under the camera
+    bool m_haveFocusGround = false;
     glm::vec3 m_frozenSceneFocus = glm::vec3(0.0f); // "Editor/Freeze scene focus": the focus when it was switched on
     bool m_sceneFocusFrozen = false;
     glm::vec3 m_cameraPos = glm::vec3(0.0f);

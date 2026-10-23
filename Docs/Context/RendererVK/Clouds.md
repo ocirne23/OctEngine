@@ -71,7 +71,10 @@ variant (`sky.fs.glsl`) draws NO clouds.
 * **The noise is world-anchored and tiles.** Base repeats "Base repeats" times per weather tile and detail
   "Detail repeats" times per base tile — integers, so `buildUboClouds` wraps (camera − wind) by the
   weather period ONCE, in double, and every texture stays continuous. The wind and the detail's vertical
-  drift ("Evolve speed (m/s)") accumulate in double on the SIM clock. **A new noise lookup must use an integer
+  drift ("Evolve speed (m/s)") accumulate in double on the SIM clock. **"Seed"** (0 = none) adds a fixed offset to
+  both - a hash of it as a fraction of the weather period (x / z; base and detail tile inside it) and of the detail
+  period (the drift), `cloudSeedOffset` - so each seed is another cloud layout at the same settings, at no cost.
+  **A new noise lookup must use an integer
   multiple of these frequencies**, or it seams when the origin wraps.
 * **The noise textures are generated on the GPU** (`cloud_noise.cs.glsl`) at initialize and on every
   shader reload, with a blit mip chain: base 128³, detail 32³, weather 512², curl 128², all RGBA8.
@@ -248,6 +251,11 @@ the scene).
   particles.
 * Past the far cascade the transmittance fades to a rough mean from the coverage
   (`u_clouds_shadowMeanTransmittance`).
+* **LOW SUN** ("Shadows/Low sun average start / end (deg)", 15 / 3): the transmittance also blends to that mean by
+  `u_clouds_shadowLowSunAverage` = 1 - smoothstep over the sun's elevation (live; `cloudShadowLowSunMix`), and fully
+  averaged the map is not read. A cloud's shadow lies height / tan(elevation) away (~17 km at 5 degrees for a 1.5 km
+  cloud), so a slowly moving low sun (the sun cycle) swept the shadows across the world: fast flicker. The clouds' own
+  lighting (`cloud_raymarch`) still reads the map.
 * **Consumers** multiply their sun term by the cloud transmittance (each includer sets
   `CLOUD_SHADOW_BINDING`): the lit core (lit, masked, transparent, terrain; forward set binding 22), the ocean
   (22; `sunTint`, so glint, body, foam and SSS), the terrain wet film, the fog scatter (13 — the shafts through

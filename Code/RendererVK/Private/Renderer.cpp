@@ -661,7 +661,7 @@ void Renderer::beginFrame()
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         if (Globals::settings.renderer.freezeSceneFocus != m_sceneFocusFrozen)
         {
-            m_frozenSceneFocus = m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos;
+            m_frozenSceneFocus = m_sceneFocusEnabled ? m_sceneFocus : defaultSceneFocus();
             m_sceneFocusFrozen = Globals::settings.renderer.freezeSceneFocus;
         }
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
@@ -695,6 +695,7 @@ void Renderer::beginFrame()
 void Renderer::kickBeginFrameJob()
 {
     ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
+    advanceSunCycle(); // main: it writes the sky tweaks (the time, the sun direction) the job's UBO build reads
     applyUboLocks(); // main, quiescent: a lock change rebuilds the shaders before this frame records
     if (Globals::openXR.isEnabled())
     {

@@ -87,13 +87,23 @@ vec2 cloudShadowSample(vec3 rel, bool filtered)
 // Sun transmittance through the clouds at a WORLD position (1 = no cloud, or cloud shadows off). Past the far cascade
 // it fades to the layer's mean transmittance. CLOUD_SHADOWS is baked; u_clouds_shadowRendered is the runtime part (the
 // map was rendered this frame: not suppressed by the game, the sun above the horizon).
+// LOW SUN: the transmittance blends to the layer's mean by u_clouds_shadowLowSunAverage ("Low sun average start / end"):
+// a low sun throws a cloud's shadow kilometres away, and its slow motion swept the shadows across the world - flicker.
+// Fully averaged, the map is not read.
+float cloudShadowLowSunMix(float T)
+{
+    return mix(T, u_clouds_shadowMeanTransmittance, u_clouds_shadowLowSunAverage);
+}
+
 float cloudSunTransmittanceImpl(vec3 worldPos, bool filtered)
 {
 #ifdef CLOUD_SHADOWS
     if (u_clouds_shadowRendered < 0.5)
         return 1.0;
+    if (u_clouds_shadowLowSunAverage >= 1.0)
+        return mix(1.0, u_clouds_shadowMeanTransmittance, u_clouds_shadowStrength);
     const vec2 s = cloudShadowSample(worldPos - u_views_viewPos[VIEW_CENTER].xyz, filtered);
-    const float T = mix(u_clouds_shadowMeanTransmittance, exp(-s.x), s.y);
+    const float T = cloudShadowLowSunMix(mix(u_clouds_shadowMeanTransmittance, exp(-s.x), s.y));
     return mix(1.0, T, u_clouds_shadowStrength);
 #else
     return 1.0;
@@ -120,9 +130,11 @@ float cloudSunTransmittanceSoft(vec3 worldPos)
 #ifdef CLOUD_SHADOWS
     if (u_clouds_shadowRendered < 0.5)
         return 1.0;
+    if (u_clouds_shadowLowSunAverage >= 1.0)
+        return mix(1.0, u_clouds_shadowMeanTransmittance, u_clouds_shadowStrength);
     float w;
     const float od = cloudShadowCascadeOD(1, worldPos - u_views_viewPos[VIEW_CENTER].xyz, w);
-    const float T = mix(u_clouds_shadowMeanTransmittance, exp(-od), w);
+    const float T = cloudShadowLowSunMix(mix(u_clouds_shadowMeanTransmittance, exp(-od), w));
     return mix(1.0, T, u_clouds_shadowStrength);
 #else
     return 1.0;

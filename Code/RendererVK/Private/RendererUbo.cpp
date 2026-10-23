@@ -46,6 +46,28 @@ namespace
     {
         return sunVisibleFraction(skySunDirection(sky), skyMoonDirection(sky), sky.sunAngularCos, skyMoonCos(sky), sky.sunGlow);
     }
+    // THE SUN CYCLE's sun at `hours` (solar time) on `dayOfYear` at `latitudeDeg`: the declination (Cooper's
+    // approximation), the hour angle (15 degrees per hour from noon), then east / up / north - east +X, up +Y, north -Z.
+    glm::vec3 sunCycleDirection(float hours, float dayOfYear, float latitudeDeg)
+    {
+        const float decl = glm::radians(23.44f) * std::sin(glm::two_pi<float>() * (284.0f + dayOfYear) / 365.0f);
+        const float hourAngle = glm::radians(15.0f * (hours - 12.0f));
+        const float lat = glm::radians(latitudeDeg);
+        const float east = -std::cos(decl) * std::sin(hourAngle);
+        const float up = std::sin(lat) * std::sin(decl) + std::cos(lat) * std::cos(decl) * std::cos(hourAngle);
+        const float north = std::cos(lat) * std::sin(decl) - std::sin(lat) * std::cos(decl) * std::cos(hourAngle);
+        return glm::normalize(glm::vec3(east, up, -north));
+    }
+    // The Sky Radiance the shaders see: x 1 by day, x "Night sky radiance" with the sun down (a smooth step over the sun's
+    // height, from just below the horizon to ~15 degrees up) - only while the sun cycle runs.
+    glm::vec3 skyRadianceNow(const SkyParams& sky)
+    {
+        const glm::vec3 radiance = sky.skyRadianceColor * sky.skyRadianceIntensity;
+        if (!sky.sunCycle)
+            return radiance;
+        const float day = glm::smoothstep(-0.1f, 0.25f, skySunDirection(sky).y);
+        return radiance * glm::mix(glm::clamp(sky.nightSkyRadiance, 0.0f, 1.0f), 1.0f, day);
+    }
     // sqrt(1 - cos^2) of a disc's angular radius, floored as the sky shader did (sky.fs.glsl's disc-local uv divides by it).
     float discSin(float cosAngle, float floorSq) { return std::sqrt(glm::max(1.0f - cosAngle * cosAngle, floorSq)); }
 
@@ -53,6 +75,20 @@ namespace
     double cloudWeatherPeriod(const CloudParams& c) { return glm::max((double)c.weatherSizeKm, 1.0) * 1000.0; }
     double cloudBasePeriod(const CloudParams& c) { return cloudWeatherPeriod(c) / glm::max(c.baseRepeats, 1); }
     double cloudDetailPeriod(const CloudParams& c) { return cloudBasePeriod(c) / glm::max(c.detailRepeats, 1); }
+    // "Seed": a fixed offset into the noise fields, [0, 1) of a period per axis (0 = no offset). x / y the noise origin
+    // (in weather periods: the base and detail tile inside it), z the detail drift.
+    glm::dvec3 cloudSeedOffset(const CloudParams& c)
+    {
+        if (c.seed == 0)
+            return glm::dvec3(0.0);
+        auto unit = [](uint32 h)
+        {
+            h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+            return (double)(h >> 8) / 16777216.0;
+        };
+        const uint32 s = (uint32)c.seed * 0x9E3779B1u;
+        return glm::dvec3(unit(s), unit(s ^ 0x68E31DA4u), unit(s ^ 0xB5297A4Du));
+    }
     // The main layer's band, the upper layer's, and the SHELL = their union (what the march, the shadow map and the
     // height-in-shell lighting cover).
     float cloudMainBottom(const CloudParams& c) { return glm::max(c.bottom, 0.0f); }
@@ -139,6 +175,21 @@ float Renderer::grassGridRange() const
 // It runs wherever beginFrame runs (the desktop "Begin frame job" or main in VR), so everything it reads is written only
 // outside that quiescent window. The outputs consumers read directly (m_centerViewProj, m_sunCascadeViewProj, m_views,
 // the returned frustum) are contractually valid once beginFrame's job is joined.
+// "Sky/Sun cycle": the time of day advances on the SIM clock (the pause holds the sun) x the speed, wraps at 24 h, and
+// sets the sun direction - every frame while on, so a dragged time or latitude shows at once even at speed 0.
+void Renderer::advanceSunCycle()
+{
+    SkyParams& s = m_skyParams;
+    if (!s.sunCycle)
+        return;
+    if (!s.sunCyclePaused) // "Paused": the time holds, the direction below still follows it
+    {
+        const float hours = s.timeOfDay + (float)(glm::min(Globals::time.getSimDeltaSec(), 0.25) * s.sunCycleSpeed / 3600.0);
+        s.timeOfDay = hours - 24.0f * std::floor(hours / 24.0f);
+    }
+    s.sunDirection = sunCycleDirection(s.timeOfDay, s.dayOfYear, s.latitude);
+}
+
 void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
 {
     ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
@@ -467,8 +518,10 @@ void Renderer::buildUboSunShadow(const Camera& camera)
     }
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
     const float aspect = (float)viewportSize.x / (float)viewportSize.y;
+    // The ground focus (setFocusGround) is a real focus too: spheres around the terrain under the camera.
+    const glm::vec3 groundFocus = defaultSceneFocus();
     computeSunCascades(camera, aspect, m_skyParams.sunDirection,
-        m_sceneFocusFrozen ? &m_frozenSceneFocus : m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
+        m_sceneFocusFrozen ? &m_frozenSceneFocus : m_sceneFocusEnabled ? &m_sceneFocus : m_haveFocusGround ? &groundFocus : nullptr,
         m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
     m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
     // PCSS penumbra scale per cascade (the shader's former pcssSunSizeTexels): the physical penumbra
@@ -671,7 +724,8 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ambientColor", [&s] { return s.ambientColor * s.ambientIntensity; }, UboLive);
         list.add("sky_betaRayleigh", [&] { return skyBetaRayleigh(s); }, s.rayleighScatter);
         list.add("sky_betaMie", [&] { return skyBetaMie(s); }, s.mieScatter);
-        list.add("sky_radiance", [&] { return s.skyRadianceColor * s.skyRadianceIntensity; }, s.skyRadianceColor, s.skyRadianceIntensity);
+        // Its sources include the Runtime sun-cycle tweaks: live, so the day / night scale reaches the shaders every frame.
+        list.add("sky_radiance", [&] { return skyRadianceNow(s); }, s.skyRadianceColor, s.skyRadianceIntensity, s.sunCycle, s.nightSkyRadiance);
         list.add("sky_sunAngularCos", s.sunAngularCos);
         list.add("sky_sunDiscSin", [&] { return discSin(s.sunAngularCos, 1e-12f); }, s.sunAngularCos);
         list.add("sky_groundAlbedo", [&] { return s.groundColor * s.groundIntensity; }, s.groundColor, s.groundIntensity);
@@ -727,12 +781,18 @@ void Renderer::registerUboValues(UboBlock& list)
         // The ground bounce's albedo: the sky's "Ground Albedo" COLOUR (its hue, not its intensity) x the cloud "Ground albedo".
         list.add("clouds_groundBounceAlbedo", [this, &c] { return m_skyParams.groundColor * c.groundAlbedo; }, UboLive);
         list.add("clouds_giSkyHistory", [&c, skyHistory] { return skyHistory(c.giSkyHistorySec); }, UboLive);
-        // Noise space = world - wind, wrapped by the weather period: the field travels WITH the wind.
+        // Noise space = world - wind (+ the seed's offset), wrapped by the weather period: the field travels WITH the wind.
         list.add("clouds_noiseOrigin", [this, &c]
             {
-                return glm::vec2(glm::mod(glm::dvec2(m_cameraPos.x, m_cameraPos.z) - m_cloudWindOffset, glm::dvec2(cloudWeatherPeriod(c))));
+                const double period = cloudWeatherPeriod(c);
+                const glm::dvec2 seed = glm::dvec2(cloudSeedOffset(c)) * period;
+                return glm::vec2(glm::mod(glm::dvec2(m_cameraPos.x, m_cameraPos.z) - m_cloudWindOffset + seed, glm::dvec2(period)));
             }, UboLive);
-        list.add("clouds_detailDrift", [this] { return (float)m_cloudEvolveOffset; }, UboLive); // the detail's vertical drift (m, wrapped)
+        list.add("clouds_detailDrift", [this, &c] // the detail's vertical drift (m, wrapped) + the seed's offset
+            {
+                const double period = cloudDetailPeriod(c);
+                return (float)std::fmod(m_cloudEvolveOffset + cloudSeedOffset(c).z * period, period);
+            }, UboLive);
         list.add("clouds_shellBottom", [&] { return cloudShellBottom(c); },
             c.bottom, c.upperBottom, c.upperEnabled, UboLive);
         list.add("clouds_shellTop", [&] { return cloudShellTop(c); },
@@ -820,6 +880,14 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("clouds_temporalBlend", [&] { return glm::clamp(c.temporalBlend, 0.0f, 0.98f); }, c.temporalBlend);
         list.add("clouds_invDetailDistance", [&] { return 1.0f / (glm::max(c.detailDistanceKm, 0.5f) * 1000.0f); }, c.detailDistanceKm);
         list.add("clouds_shadowStrength", [&] { return glm::clamp(c.shadowStrength, 0.0f, 1.0f); }, c.shadowStrength);
+        // How much the shadows are replaced by the layer's MEAN (0 = the map, 1 = the mean): 1 - smoothstep over the sun's
+        // elevation from "Low sun average start" down to "end". Reads the sun direction: live.
+        list.add("clouds_shadowLowSunAverage", [&]
+        {
+            const float elev = glm::degrees(std::asin(glm::clamp(skySunDirection(Globals::settings.sky).y, -1.0f, 1.0f)));
+            const float start = glm::max(c.shadowLowSunStartDeg, c.shadowLowSunEndDeg + 0.01f);
+            return 1.0f - glm::smoothstep(c.shadowLowSunEndDeg, start, elev);
+        }, UboLive);
         // Past the cascades: a rough mean transmittance of the layer from its coverage (not measured).
         list.add("clouds_shadowMeanTransmittance", [&] { return glm::mix(1.0f, 0.3f, cloudCoverage(c)); }, c.coverage);
         list.add("clouds_shadowNearSteps", [&] { return (float)glm::max(c.shadowNearSteps, 1); }, c.shadowNearSteps);

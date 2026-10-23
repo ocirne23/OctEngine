@@ -295,6 +295,13 @@ int main(int argc, char* argv[])
             const Rect viewportRect = Globals::ui.getViewportRect();
             if (!resizeHold || heldViewportRect.getSize().x <= 0 || heldViewportRect.getSize().y <= 0)
                 heldViewportRect = viewportRect;
+            // The scene focus without a set one: the camera's x / z on the SURFACE below it (ground or water, the terrain-data
+            // bake's CPU copy) - from high up the shadow cascades, GI, RTAO and TLAS range stay on the terrain.
+            float focusGround = 0.0f;
+            if (Globals::terrain.surfaceHeightAt(camera.position.x, camera.position.z, focusGround))
+                Globals::rendererVK.setFocusGround(focusGround);
+            else
+                Globals::rendererVK.clearFocusGround();
             Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.setFrameView(camera, heldViewportRect));
             Globals::rendererVK.kickBeginFrameJob();
         }

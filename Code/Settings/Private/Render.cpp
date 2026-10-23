@@ -30,6 +30,14 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky", "Ground Horizon", &s.groundHorizon, 0.0f, 0.5f, 0.01f);
     Tweak::floatVar("Sky/Sun", "Sun Angle Cos", &s.sunAngularCos, 0.9995f, 1.0f, 0.000001f);
     Tweak::floatVar("Sky/Sun", "Sun Glow", &s.sunGlow, 0.01f, 5.0f, 0.01f);
+    // The cycle writes the time and the sun direction every frame: Runtime (never baked, editable under the lock).
+    Tweak::boolean("Sky/Sun cycle", "Enabled", &s.sunCycle, {}, ETweakFlags::Runtime);
+    Tweak::boolean("Sky/Sun cycle", "Paused", &s.sunCyclePaused, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Sun cycle", "Time of day (h)", &s.timeOfDay, 0.0f, 24.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Sun cycle", "Speed (x real time)", &s.sunCycleSpeed, 0.0f, 3600.0f, 1.0f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Sun cycle", "Latitude (deg)", &s.latitude, -90.0f, 90.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Sun cycle", "Day of year", &s.dayOfYear, 1.0f, 365.0f, 1.0f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Sun cycle", "Night sky radiance", &s.nightSkyRadiance, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
 
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
     // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
@@ -313,6 +321,7 @@ void Settings::registerClouds(CloudParams& s)
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
     Tweak::floatVar("Sky/Clouds", "Wind speed scale", &s.windSpeedScale, 0.0f, 100.0f, 0.1f); // x "Sky/Wind/Speed"
     Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &s.evolveSpeed, 0.0f, 100.0f);
+    Tweak::intVar("Sky/Clouds", "Seed", &s.seed, 0, 9999, 1.0f);
 
     Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &s.aerialStrength, 0.01f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &s.multiScatter, 0.0f, 0.95f);
@@ -350,6 +359,8 @@ void Settings::registerClouds(CloudParams& s)
 
     Tweak::boolean("Sky/Clouds/Shadows", "Enabled", &s.shadows);
     Tweak::floatVar("Sky/Clouds/Shadows", "Strength", &s.shadowStrength, 0.0f, 1.0f);
+    Tweak::floatVar("Sky/Clouds/Shadows", "Low sun average start (deg)", &s.shadowLowSunStartDeg, 0.0f, 90.0f, 0.1f);
+    Tweak::floatVar("Sky/Clouds/Shadows", "Low sun average end (deg)", &s.shadowLowSunEndDeg, -10.0f, 90.0f, 0.1f);
     Tweak::floatVar("Sky/Clouds/Shadows", "Near cascade (km)", &s.shadowNearKm, 1.0f, 50.0f, 0.1f, [p]() { p->shadowFarKm = oc::max(p->shadowFarKm, p->shadowNearKm * 2.0f); });
     Tweak::floatVar("Sky/Clouds/Shadows", "Far cascade (km)", &s.shadowFarKm, 2.0f, 400.0f, 0.5f, [p]() { p->shadowNearKm = oc::min(p->shadowNearKm, p->shadowFarKm * 0.5f); });
     Tweak::intVar("Sky/Clouds/Shadows", "Near steps", &s.shadowNearSteps, 4, 256);

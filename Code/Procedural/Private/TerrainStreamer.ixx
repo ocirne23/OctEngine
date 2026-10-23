@@ -97,6 +97,10 @@ export namespace Procedural
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
 		// consumers holding the old shared_ptr keep a coherent snapshot.
 		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
+		// The SURFACE height at (x, z) from that CPU copy: max(the ground, the baked water level) - the sea's or a lake's
+		// surface over water - bilinear in the near cascade, else the far one. False without a bake or outside both.
+		// The App's scene focus rides it (Renderer::setFocusGround). Main thread.
+		bool surfaceHeightAt(float x, float z, float& outHeight) const;
 		// The rivers' and lakes' calm water surface world Y round the camera, -FLT_MAX where none (RiverSystem's
 		// sampleWaterHeight): the App folds it into the buoyancy with the ocean's. Worker-safe on the entity pass.
 		float sampleInlandWaterHeight(float x, float z) const { return m_rivers.sampleWaterHeight(x, z); }

@@ -5,9 +5,13 @@
 ## The scene focus
 
 `Renderer::setSceneFocus(worldPos)` / `clearSceneFocus()` set the world point every DISTANCE-BASED
-QUALITY FALLOFF measures from; it reaches the shaders as `u_sceneFocus` (the camera position when
-cleared). The game sets its PLAYER every windowed frame, so the top-down camera hanging in empty sky shapes none of
-these. **"Editor/Freeze scene focus"** holds the focus it had when switched on (captured in `beginFrame` next to
+QUALITY FALLOFF measures from; it reaches the shaders as `u_sceneFocus`. The game sets its PLAYER every windowed
+frame, so the top-down camera hanging in empty sky shapes none of these. **Cleared, it is the GROUND under the
+camera** (`defaultSceneFocus`): the camera's x / z at min(its height, the surface height there) - the App feeds
+`setFocusGround` every frame before the begin-frame kick from `TerrainStreamer::surfaceHeightAt` (max(ground, water
+level) of the terrain-data bake's CPU copy, near cascade else far; `clearFocusGround` without a bake = the camera
+itself). So from high up the sun cascades (a real focus: spheres, not the camera-frustum slices), the GI window, RTAO
+and the TLAS range stay on the terrain below, not in empty sky. **"Editor/Freeze scene focus"** holds the focus it had when switched on (captured in `beginFrame` next to
 `m_cameraPos`), so the camera can fly away and look at the falloffs from outside.
 
 **Anything new that fades or early-outs by distance measures from `u_sceneFocus`, never `u_viewPos`**
@@ -314,6 +318,19 @@ which is a baked define).
   (Gaussian over the traced texels around, `(0, 0, 0, 1)` with none), and skips holes in the blur. The final image
   holds no hole.
 
+## The sun cycle ("Sky/Sun cycle" tweaks)
+
+On by default, starting at 5 h (before a sunrise); "Paused" holds the time (the direction still follows a dragged time /
+latitude). While "Enabled", `Renderer::advanceSunCycle` (main, in `kickBeginFrameJob`, before the begin-frame job
+reads the sky) advances "Time of day (h)" by the SIM delta x "Speed (x real time)" (1 = real time, 60 = a day in 24
+minutes; the pause holds the sun), wraps it at 24 h and WRITES the "Sun Direction" tweak every frame (`sunCycleDirection`:
+the declination from "Day of year", the hour angle 15 degrees per hour from noon, "Latitude (deg)"; east +X, up +Y,
+north -Z) - a hand edit of the direction is overwritten while it runs, a dragged time / latitude shows at once even at
+speed 0. **Sky Radiance** follows the day: `skyRadianceNow` scales the UBO's `sky_radiance` by a smooth step over the
+sun's height (x "Night sky radiance" with the sun down, x 1 from ~15 degrees up); the "Sky Radiance" tweak keeps its
+value. The cycle tweaks are Runtime, and they are `sky_radiance`'s sources: that entry stays a LIVE uniform (never
+baked under the "Sky" lock).
+
 ## Long-range sun shadows
 
 "Shadows/Terrain march start (m) / bias (m) / spread". Past the PCSS "Max distance (m)" and "RT/TLAS Range", distant
@@ -325,7 +342,8 @@ which is also the self-shadow bias. **Deterministic — no jitter, no temporal i
 
 ## Sun shadow draw cost
 
-The cascades are ONE MULTIVIEW pass over ONE caster list (the cull packs each caster's cascade mask; the VS makes the
+The map: `SHADOW_MAP_RESOLUTION` (Layout.ixx) 4096² D32 x `NUM_SHADOW_CASCADES` (4) layers per frame slot - 256 MiB a
+slot, 512 MiB for the two. The cascades are ONE MULTIVIEW pass over ONE caster list (the cull packs each caster's cascade mask; the VS makes the
 triangles of the other cascades degenerate). The pass is nearly all TERRAIN, and it is VERTEX-bound, not
 raster-bound: with every terrain triangle made degenerate it still cost ~70% of its time (sandbox, 1440p).
 

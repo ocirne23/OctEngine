@@ -317,7 +317,7 @@ the clutter frame's header. Desktop only (as the grass).
 ## The wind (`WindParams`, "Sky/Wind", `u_weather`)
 
 ONE wind for everything that moves with it: "Speed (m/s)" (default 2), "Direction (deg)" (the direction the wind blows
-TOWARDS, from +X around +Y; default 113), "Gust strength (m/s)" and "Gust size (m)". Its readers:
+TOWARDS, from +X around +Y; default 250), "Gust strength (m/s)" and "Gust size (m)". Its readers:
 
 | Reader | How |
 |---|---|

@@ -419,6 +419,37 @@ namespace Procedural
 		kickTexBake();  // (likewise gated: a disabled terrain reads no source images)
 	}
 
+	bool TerrainStreamer::surfaceHeightAt(float x, float z, float& outHeight) const
+	{
+		const BakedTerrainData* data = m_terrainMapData.get();
+		if (!data || data->res < 2 || data->texels.empty())
+			return false;
+		const uint32 res = data->res;
+		for (uint32 cascade = 0; cascade < glm::min(data->cascades, 2u); ++cascade)
+		{
+			const float range = cascade == 0 ? data->ranges.x : data->ranges.y;
+			if (range <= 1.0f)
+				continue;
+			const float u = (x - data->center.x) / range + 0.5f;
+			const float v = (z - data->center.y) / range + 0.5f;
+			if (u <= 0.0f || u >= 1.0f || v <= 0.0f || v >= 1.0f)
+				continue;
+			const float tx = glm::clamp(u * (float)res - 0.5f, 0.0f, (float)res - 1.001f);
+			const float tz = glm::clamp(v * (float)res - 0.5f, 0.0f, (float)res - 1.001f);
+			const uint32 x0 = (uint32)tx, z0 = (uint32)tz;
+			const float fx = tx - (float)x0, fz = tz - (float)z0;
+			const size_t base = (size_t)cascade * res * res;
+			auto at = [&](uint32 i, uint32 j) // the RGBA texel's max(terrain height, water level)
+			{
+				const float* t = &data->texels[(base + (size_t)j * res + i) * 4];
+				return glm::max(t[0], t[1]);
+			};
+			outHeight = glm::mix(glm::mix(at(x0, z0), at(x0 + 1, z0), fx), glm::mix(at(x0, z0 + 1), at(x0 + 1, z0 + 1), fx), fz);
+			return true;
+		}
+		return false;
+	}
+
 	// Bake the biome splat textures to the DDS cache in the background (no-op when fresh); chunks
 	// render with the flat-color fallback until updateTerrainTextures registers the finished set.
 	// ONLY while the terrain is enabled - a game whose terrain is off must not touch ~19 source
