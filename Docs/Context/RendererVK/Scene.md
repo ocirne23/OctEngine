@@ -282,7 +282,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `u_foliage_interiorEnd`, default 0.5 / 1), so a fully lit crown is not flat. **On the SUN** (direct and
   transmitted) that interior FADES OUT as the view lines up with the sun (x `Foliage interior view fade` (1) x |V·L|;
   the ambient keeps it): from the front the leaves seen through the gaps are lit through those same gaps.
-* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (1.1) x chord)`, the chord from the
+* **CROWN SELF-SHADOW**: the sun (direct + transmitted) x `exp(-Foliage self shadow (5) x chord)`, the chord from the
   visible LEAF along L to where the crown ellipsoid (below) ends, in lateral radii (0 for a leaf outside it). The leaf
   lies between the view ray's ENTRY on the ellipsoid and the card point (the plane through the centre), at the baked
   interior x (1 - max(V·L, 0)) (from the front: at the entry). The flat cards cannot shade themselves in the shadow
@@ -290,7 +290,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   `Foliage transmission self shadow` (0.12, `u_foliage_transmissionSelfShadow`) of that exponent (light scattered
   forward through the leaves loses less): at the full share a crown seen toward the sun hides `Foliage transmission`
   entirely. On a whole tree's horizontal card the interior term is raised to `Foliage interior shadow top card scale`
-  (`u_foliage_interiorTopCardScale`, default 1; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
+  (`u_foliage_interiorTopCardScale`, default 2; an exponent: > 1 darker), then × `|V.y|` (the view's steepness;
   plain `V.y` goes negative from below and turns the card black).
 * **Crown normal**: each crossed card's baked normals shade the crown side ITS bake view saw, so the shading splits
   hard where card A gives way to card B on screen. `foliageCrownNormal` blends the shading normal toward the view ray's

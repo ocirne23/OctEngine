@@ -572,7 +572,7 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     concave-overshooting surface and lost all sun: black patches along valleys, changing with "Data map range") × the cloud shadow
     (`cloudSunTransmittanceBilinear`, binding 11) × the N·L blend + the SKY term above, darker toward the ground by
     "Far ground darkening") + `u_ambientColor`, × the interior darkening.
-  * **THE TRANSMISSION** ("Far transmission" 1.0, "Far transmission focus" 0.33): ADDED to that - the sun × a
+  * **THE TRANSMISSION** ("Far transmission" 0.4, "Far transmission focus" 0.5): ADDED to that - the sun × a
     forward-only Henyey-Greenstein of g = the focus (per ray) × the strength, no N·L (it lights the far side), through
     the crown at `Foliage transmission self shadow`'s share of the optical depth (exp(-depth x that) - the sun taps'
     depth kept, not pow(sunT, ...): one exp, no log; as the billboards'),

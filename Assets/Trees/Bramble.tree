@@ -2,7 +2,8 @@
 # dark leaf clusters along them (~0.8-1.3 m tall, ~4-6 m across). It fills the open floor between the trees with one
 # piece where the round bushes need three: Weight 2, so half the climate's bushes are one. The canes start at least
 # 22 degrees above level (Angle 68) and pull up (UpAttract 0.35): at 82 degrees with Curve 40 half of them bent
-# into the ground.
+# into the ground. The WIDTH comes from the upper canes' spread (Angle .. 54) and the cane length (Radius 3.1), not from
+# flatter low canes.
 TreeSpecies Bramble
 	Kind Bush
 	Climate Temperate
@@ -23,10 +24,10 @@ TreeSpecies Bramble
 	Crown
 		Shape Ellipsoid
 		Start 0
-		Radius 2.6
+		Radius 3.1
 		Slots 11
 		Fill 0.95
-		Angle 68 42
+		Angle 68 54
 		AngleVar 10
 		BranchRadius 4
 	Module

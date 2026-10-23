@@ -256,10 +256,10 @@ export struct FoliageParams
     // THE CROWN SELF-SHADOW (billboards): the sun x exp(-this x the chord from the view ray's entry on the crown
     // ellipsoid along the sun, in lateral radii) - a crown seen toward the sun is dark as a whole, the far side of a
     // side-lit one darker. 0 = off.
-    float selfShadow = 1.1f;
+    float selfShadow = 5.0f;
     float transmissionSelfShadow = 0.12f; // the share of that self-shadow the TRANSMITTED sun takes (it scatters forward
                                          // through the leaves: at 1 a crown seen toward the sun hid the transmission)
-    float interiorTopCardScale = 1.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
+    float interiorTopCardScale = 2.0f; // on a whole tree's HORIZONTAL card the interior term ^ this: > 1 darker,
                                 // < 1 lighter (an exponent - a strength multiplier saturated at strength 1)
     // EDGE-ON fade: a card fades out (dithered) as |N.V| falls from edgeFadeEnd to edgeFadeStart - a grazing
     // card smears its texture into streaks. Near the crossing axis both thresholds are x edgeFadeCentreScale
@@ -494,17 +494,17 @@ export struct FarTreeParams
     uint32 maxSteps = 600;
     float ambient = 1.0f;        // x the real sky's irradiance on the canopy (GI's sky map, hemisphere mean; 1 = physical)
     float sunScale = 1.0f;        // the direct sun's factor (a leaf's mean cosine toward the sun)
-    float selfShadow = 1.0f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
-    float normalStrength = 0.75f; // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
+    float selfShadow = 1.5f;     // x the sun taps' optical depth: how dark the crowns' insides / shaded sides get
+    float normalStrength = 0.5f;  // 0.01..1: the sun term toward max(N.L, 0), N from the density gradient (3 more taps)
     float groundDarkening = 0.5f; // how much darker the sky light is at the ground than at the volume's top
-    float interiorShadow = 3.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
+    float interiorShadow = 2.0f;// darkening of a blob's CORE: exp(-this x the mean extinction of 6 taps around x
                                   // their distance), on the sun and the sky alike (0 = off; the taps cost only then)
     float interiorRadius = 0.075f; // the taps' distance, x the cell size
-    float forwardScatter = -0.33f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
+    float forwardScatter = -0.35f; // Henyey-Greenstein g of the sun term (> 0: backlit crowns glow)
     // The TRANSMISSION lobe, ADDED to the sun term: x a forward-only Henyey-Greenstein of g = transmissionFocus - only
     // the crowns between the camera and the sun glow (forwardScatter reshapes the whole sun term). 0 = off.
-    float transmission = 1.0f;
-    float transmissionFocus = 0.33f;
+    float transmission = 0.4f;
+    float transmissionFocus = 0.5f;
     float albedoScale = 0.75f;   // x the leaf colour
     float saturationScale = 1.0f; // the leaf colour's saturation: 0 = grey (its luminance), 1 = as baked, > 1 more vivid
     float temporalBlend = 0.0f;  // the history's weight in cloud_temporal's TREE_TEMPORAL pass (0 = off: no pass, no images)
