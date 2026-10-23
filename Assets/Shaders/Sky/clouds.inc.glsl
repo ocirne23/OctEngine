@@ -6,8 +6,9 @@
 //   +2 weather 2D 512^2: r = coverage, g = cloud type, b = density, a = tower height
 //   +3 curl    2D 128^2: rg = curl vector * 0.5 + 0.5
 //
-// THE SHELL: altitudes [u_clouds_shellBottom, u_clouds_shellTop] above world Y 0, on a sphere of ATMOS_R_PLANET whose
-// centre lies straight under the camera. Everything is CAMERA-RELATIVE: a point is `rel` from the camera, and its
+// THE SHELL: altitudes [u_clouds_shellBottom, u_clouds_shellTop] above world Y 0, on a sphere of CLOUD_R (Earth's radius
+// / "Curvature": the flat world's stand-in for a horizon) whose centre lies straight under the camera. Only the shell's
+// geometry uses it; the air around the clouds (cloudAerialScatter, the sun's transmittance) keeps ATMOS_R_PLANET. Everything is CAMERA-RELATIVE: a point is `rel` from the camera, and its
 // noise-space XZ is rel.xz + cloudNoiseOffset(). The CPU wraps (camera - wind) by the weather period in double
 // (Renderer::buildUboClouds); base and detail repeat an INTEGER number of times per weather tile, so that one wrap
 // keeps every texture continuous. The noise height axis is the altitude, so the shapes follow the curved shell.
@@ -20,9 +21,14 @@ layout (binding = CLOUD_NOISE_BINDING + 1) uniform sampler3D u_cloudDetailNoise;
 layout (binding = CLOUD_NOISE_BINDING + 2) uniform sampler2D u_cloudWeather;
 layout (binding = CLOUD_NOISE_BINDING + 3) uniform sampler2D u_cloudCurl;
 
+#define CLOUD_R u_clouds_shellRadius
+
 const float CLOUD_BASE_RES         = 128.0;
 const float CLOUD_DETAIL_RES       = 32.0;
 const float CLOUD_NEAR_DETAIL_MULT = 8.0; // integer: the near octave must tile with the detail texture
+const float CLOUD_DETAIL_MEAN_ERODE = 0.5;   // the detail fBm's mean (either way up); MIRRORED in RendererUbo.cpp (clouds_meanErosion)
+const float CLOUD_DETAIL_FETCH_MIN  = 0.001; // detail weights up to this fetch nothing (the mean erosion alone)
+const float CLOUD_BREAKUP_LOD      = 4.0; // the base breakup's weather mip (32^2 over the weather period: smooth, a gentle stretch)
 
 float cloudRemap(float v, float lo, float hi, float newLo, float newHi)
 {
@@ -37,12 +43,12 @@ vec2 cloudNoiseOffset()
 }
 
 // Altitude of a camera-relative point. h = (r^2 - R^2) / (r + R): no cancellation between two ~6.4e6 values. r + R is
-// taken to first order, 2R + y: the error is about xz^2 / 4R^2 of h (under a metre at 150 km), and it saves a sqrt on
-// every march, sun-march and shadow-map sample.
+// taken to first order, 2R + y: the error is about xz^2 / 4R^2 of h (under a metre at 150 km at Earth's radius; 1.4 %
+// at the "Curvature" max of 10), and it saves a sqrt on every march, sun-march and shadow-map sample.
 float cloudAltitude(vec3 rel, float camAlt)
 {
     const float y = rel.y + camAlt;
-    return (dot(rel.xz, rel.xz) + y * (y + 2.0 * ATMOS_R_PLANET)) / (2.0 * ATMOS_R_PLANET + y);
+    return (dot(rel.xz, rel.xz) + y * (y + 2.0 * CLOUD_R)) / (2.0 * CLOUD_R + y);
 }
 
 // The two roots (near, far) of a ray from a point at altitude originAlt against the sphere at altitude H;
@@ -50,7 +56,7 @@ float cloudAltitude(vec3 rel, float camAlt)
 // c is formed from the altitude difference, and the smaller root is c / q, not a cancelling subtraction.
 vec2 cloudRaySphere(float originAlt, float b, float H)
 {
-    const float c = (originAlt - H) * (2.0 * ATMOS_R_PLANET + originAlt + H);
+    const float c = (originAlt - H) * (2.0 * CLOUD_R + originAlt + H);
     const float disc = b * b - c;
     if (disc < 0.0)
         return vec2(1e30, -1e30);
@@ -64,7 +70,7 @@ vec2 cloudRaySphere(float originAlt, float b, float H)
 // b for a ray from a camera-relative point along dir (the planet centre lies straight under the camera).
 float cloudRayB(vec3 rel, vec3 dir, float camAlt)
 {
-    return dot(rel.xz, dir.xz) + (rel.y + camAlt + ATMOS_R_PLANET) * dir.y;
+    return dot(rel.xz, dir.xz) + (rel.y + camAlt + CLOUD_R) * dir.y;
 }
 
 // The ray's (at most two) intervals inside the band [bottom, top], clamped to [0, tMax], for a ray from a point at
@@ -125,12 +131,25 @@ float cloudTowerSignal(float coverage, float tower, float coreLink)
 }
 
 // A column's coverage: the layer's base coverage plus the weather map's spread ("Coverage variation"). The spread
-// fades in over the first CLOUD_VARIATION_RAMP of the base coverage, so coverage 0 is a clear sky.
+// fades in over the first CLOUD_VARIATION_RAMP of the base coverage, so coverage 0 is a clear sky. Then x the FAR
+// COVERAGE scale ("Sky/Clouds/Far coverage") over the column's horizontal distance from the camera - from nxz, not the
+// sample's camDist: the sun march and the shadow map pass none, and their clouds must be the ones the view sees.
+// MACRO COVERAGE ("Macro size" / "Macro variation"): the weather map's coverage channel over its OWN, much larger period
+// (world - wind wrapped by it on the CPU; u_clouds_macroShift = that origin - the noise origin), at a coarse mip: whole
+// regions clear or overcast. The weather period's features are the clouds' own size, so alone they scattered the clouds
+// evenly everywhere.
 const float CLOUD_VARIATION_RAMP = 0.25;
-float cloudColumnCoverage(float baseCoverage, float weatherR)
+const float CLOUD_MACRO_LOD = 2.0;
+float cloudColumnCoverage(float baseCoverage, float weatherR, vec2 nxz)
 {
-    const float spread = u_clouds_coverageVariation * min(baseCoverage * (1.0 / CLOUD_VARIATION_RAMP), 1.0);
-    return clamp(baseCoverage + (weatherR - 0.5) * spread, 0.0, 1.0);
+    const float ramp = min(baseCoverage * (1.0 / CLOUD_VARIATION_RAMP), 1.0);
+    const vec2 macroUV = (nxz + u_clouds_macroShift) * u_clouds_invMacroPeriod;
+    const float macro = textureLod(u_cloudWeather, vec2(macroUV.y, -macroUV.x) + vec2(0.41, 0.83), CLOUD_MACRO_LOD).r;
+    const vec2 rel = nxz - cloudNoiseOffset(); // camera-relative XZ
+    const float coverage = baseCoverage + ((weatherR - 0.5) * u_clouds_coverageVariation + (macro - 0.5) * u_clouds_macroVariation) * ramp;
+    const vec4 far = u_clouds_farCoverage; // x start (m), y 1 / range, z the far scale
+    const float farScale = mix(1.0, far.z, smoothstep(0.0, 1.0, (length(rel) - far.x) * far.y));
+    return clamp(coverage, 0.0, 1.0) * farScale;
 }
 
 // The height (0..1) within the LAYER a sample belongs to, for the lighting (sky ambient, the sun's bottom / top blend):
@@ -148,7 +167,19 @@ float cloudLayerHeightFraction(float alt)
 // noiseAlt = the altitude the noise is read at, hfCloud = the height within the cloud's own column (0..1).
 float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, float profile, float camDist, float detail, float lodBase, float lodDetail)
 {
-    const vec4 b = textureLod(u_cloudBaseNoise, vec3(nxz.x, noiseAlt, nxz.y) * u_clouds_baseFrequency, lodBase);
+    // BASE BREAKUP ("Base breakup (km)"): the base tile is weather / "Base repeats" wide (a few km), so from altitude the
+    // same shapes stood in rows along X and Z. A smooth warp of the base lookup - the weather map's type channel at a
+    // coarse mip, read twice at different rotations (it tiles with the weather period, so the wrap stays continuous) -
+    // shows each tile a different part of the noise. Only the base: the detail is fine enough not to read as rows.
+    vec2 bxz = nxz;
+    if (u_clouds_baseBreakup > 0.0) // uniform: off (the default) skips the two fetches
+    {
+        const vec2 wuv = nxz * u_clouds_invWeatherPeriod;
+        const vec2 warp = vec2(textureLod(u_cloudWeather, vec2(wuv.y, -wuv.x) + vec2(0.71, 0.29), CLOUD_BREAKUP_LOD).g,
+                               textureLod(u_cloudWeather, -wuv + vec2(0.13, 0.57), CLOUD_BREAKUP_LOD).g) - 0.5;
+        bxz += warp * u_clouds_baseBreakup;
+    }
+    const vec4 b = textureLod(u_cloudBaseNoise, vec3(bxz.x, noiseAlt, bxz.y) * u_clouds_baseFrequency, lodBase);
     const float lowFbm = dot(b.gba, vec3(0.625, 0.25, 0.125));
     // The Perlin-Worley remap lands in [0.5, 1], so the coverage threshold sweeps that range (coverage 0 = nothing passes,
     // 1 = everything). The profile RAISES the threshold: near the top and the base only the strongest noise passes, so
@@ -158,7 +189,12 @@ float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, f
     if (d <= 0.0)
         return 0.0;
 
-    if (detail > 0.0)
+    // detail: the weight of the detail erosion. 0 = none (the cheap shape: the march's empty-space test, which must bound
+    // the full shape, and the sun march's later steps). Up to CLOUD_DETAIL_FETCH_MIN no detail is fetched and the shape
+    // erodes by the detail's MEAN (u_clouds_meanErosion: the remap multiplied out on the CPU - the general remap there
+    // cost the march 64 -> 72 registers): the march's fine samples past "Detail distance" pass that, so a far cloud keeps
+    // the density it has up close - uneroded, the far clouds thinned as the camera came near.
+    if (detail > CLOUD_DETAIL_FETCH_MIN)
     {
         // Curl-distorted detail: stronger toward the base (wispy undersides), rising with the evolve drift.
         const vec2 curl = textureLod(u_cloudCurl, nxz * (u_clouds_baseFrequency * 4.0), 0.0).xy * 2.0 - 1.0;
@@ -171,10 +207,12 @@ float cloudLayerShape(vec2 nxz, float noiseAlt, float hfCloud, float coverage, f
             hfFbm = mix(hfFbm, hfFbm * 0.7 + nearFbm * 0.3, 1.0 - camDist * u_clouds_invNearDetailRadius);
         }
 
-        // Wispy (inverted) at the base, billowy at the top.
-        const float erodeBy = mix(hfFbm, 1.0 - hfFbm, clamp(hfCloud * 5.0, 0.0, 1.0));
-        d = clamp(cloudRemap(d, erodeBy * (u_clouds_erosion * detail), 1.0, 0.0, 1.0), 0.0, 1.0);
+        // Wispy (inverted) at the base, billowy at the top; faded toward the mean as the detail weight falls.
+        const float erodeBy = mix(CLOUD_DETAIL_MEAN_ERODE, mix(hfFbm, 1.0 - hfFbm, clamp(hfCloud * 5.0, 0.0, 1.0)), detail);
+        d = clamp(cloudRemap(d, erodeBy * u_clouds_erosion, 1.0, 0.0, 1.0), 0.0, 1.0);
     }
+    else if (detail > 0.0)
+        d = clamp(d * u_clouds_meanErosion.x - u_clouds_meanErosion.y, 0.0, 1.0);
 
     // EROSION CUTOFF: the erosion leaves a thin rest where the detail fBm is low, which over kilometres of ray reads as
     // haze. Remapped out: under the cutoff = nothing, the cores stay at 1. Monotonic, so the cheap shape (detail 0)
@@ -193,7 +231,7 @@ float cloudUpperDensity(vec2 nxz, float alt, float camDist, float detail, float 
         return 0.0;
 
     const vec4 weather = textureLod(u_cloudWeather, vec2(-nxz.y, nxz.x) * u_clouds_invWeatherPeriod + vec2(0.61, 0.13), 0.0);
-    const float coverage = cloudColumnCoverage(u_clouds_upperCoverage, weather.r);
+    const float coverage = cloudColumnCoverage(u_clouds_upperCoverage, weather.r, nxz);
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_clouds_upperType + (weather.g - 0.5) * (0.5 * u_clouds_typeVariation), 0.0, 1.0);
@@ -229,7 +267,7 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
 
     const vec2 wuv = nxz * u_clouds_invWeatherPeriod;
     const vec4 weather = textureLod(u_cloudWeather, wuv, 0.0);
-    const float coverage = cloudColumnCoverage(u_clouds_coverage, weather.r);
+    const float coverage = cloudColumnCoverage(u_clouds_coverage, weather.r, nxz);
     if (coverage <= 0.001)
         return 0.0;
     const float type = clamp(u_clouds_type + (weather.g - 0.5) * u_clouds_typeVariation, 0.0, 1.0);
@@ -268,7 +306,7 @@ float cloudMainDensity(vec2 nxz, float alt, float camDist, float detail, float l
 
 // Normalized density [0, 1+] at a noise-space XZ and an altitude: the main layer + the upper layer. x
 // u_clouds_extinction = the extinction (1/m). detail = the weight of the detail erosion (0 = the cheap shape: weather +
-// base only, no detail fetches). lodBase / lodDetail = explicit mip levels; camDist fades in the near octave.
+// base only, no erosion; up to CLOUD_DETAIL_FETCH_MIN = the detail's mean erosion, no fetches - cloudLayerShape). lodBase / lodDetail = explicit mip levels; camDist fades in the near octave.
 float cloudDensity(vec2 nxz, float alt, float camDist, float detail, float lodBase, float lodDetail)
 {
     float d = cloudMainDensity(nxz, alt, camDist, detail, lodBase, lodDetail);

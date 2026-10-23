@@ -94,16 +94,17 @@ void ClutterPipeline::initialize(uint32 maxTextures, uint32 numTextureDescriptor
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterInstances");
         m_counts[i].initialize(16, vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eIndirectBuffer
             | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterCounts");
-        m_bucketCounts[i].initialize(CLUTTER_MAX_BUCKETS * sizeof(uint32), vk::BufferUsageFlagBits2::eStorageBuffer
+        // Bucket counts, bases and draws: per bucket, then per bucket's NEAR CASTERS (the near grass cascade's draws).
+        m_bucketCounts[i].initialize(2 * CLUTTER_MAX_BUCKETS * sizeof(uint32), vk::BufferUsageFlagBits2::eStorageBuffer
             | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterBucketCounts");
-        m_bucketBase[i].initialize(CLUTTER_MAX_BUCKETS * sizeof(uint32), vk::BufferUsageFlagBits2::eStorageBuffer,
+        m_bucketBase[i].initialize(2 * CLUTTER_MAX_BUCKETS * sizeof(uint32), vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterBucketBase");
-        m_commands[i].initialize(CLUTTER_MAX_BUCKETS * CLUTTER_COMMAND_SIZE, vk::BufferUsageFlagBits2::eStorageBuffer
+        m_commands[i].initialize(2 * CLUTTER_MAX_BUCKETS * CLUTTER_COMMAND_SIZE, vk::BufferUsageFlagBits2::eStorageBuffer
             | vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ClutterCommands");
         const uint32 zero[4] = {};
         m_counts[i].upload(sizeof(zero), zero);
-        const oc::vector<uint32> noCommands(CLUTTER_MAX_BUCKETS * 5, 0u);
+        const oc::vector<uint32> noCommands(2 * CLUTTER_MAX_BUCKETS * 5, 0u);
         m_commands[i].upload(noCommands.size() * sizeof(uint32), noCommands.data());
     }
     m_types.initialize(CLUTTER_MAX_TYPES * sizeof(ClutterTypeGpu), vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
@@ -287,6 +288,7 @@ void ClutterPipeline::recordClear(vk::CommandBuffer primary, uint32 frameIdx)
     // The slot's last draws read these (its fence was waited): no rigid draws, empty flower draws.
     primary.fillBuffer(m_counts[frameIdx].getBuffer(), 0, 4 * sizeof(uint32), 0u);
     primary.fillBuffer(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_BUCKETS * CLUTTER_COMMAND_SIZE, 0u);
+    primary.fillBuffer(m_commands[frameIdx].getBuffer(), CLUTTER_MAX_BUCKETS * CLUTTER_COMMAND_SIZE, CLUTTER_FLOWER_BUCKETS * CLUTTER_COMMAND_SIZE, 0u);
     const vk::MemoryBarrier2 toDraw{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -302,7 +304,7 @@ void ClutterPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, cons
 
     // The counts restart at 0; the slot's last draws (which read these buffers) retired with its fence.
     cmd.fillBuffer(m_counts[frameIdx].getBuffer(), 0, 4 * sizeof(uint32), 0u);
-    cmd.fillBuffer(m_bucketCounts[frameIdx].getBuffer(), 0, CLUTTER_MAX_BUCKETS * sizeof(uint32), 0u);
+    cmd.fillBuffer(m_bucketCounts[frameIdx].getBuffer(), 0, 2 * CLUTTER_MAX_BUCKETS * sizeof(uint32), 0u);
     const vk::MemoryBarrier2 before{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
         .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
@@ -401,7 +403,8 @@ void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 fram
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_nearShadowPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.bindVertexBuffers(0, { m_vertices.getBuffer(), m_sorted[frameIdx].getBuffer() }, { 0, 0 });
         cmd.bindIndexBuffer(m_indices.getBuffer(), 0, vk::IndexType::eUint32);
-        cmd.drawIndexedIndirectCount(m_commands[frameIdx].getBuffer(), CLUTTER_FLOWER_BUCKETS * CLUTTER_COMMAND_SIZE,
+        // The near casters' draws (the second half of the commands): only the objects in the cascade's reach.
+        cmd.drawIndexedIndirectCount(m_commands[frameIdx].getBuffer(), (CLUTTER_MAX_BUCKETS + CLUTTER_FLOWER_BUCKETS) * CLUTTER_COMMAND_SIZE,
             m_counts[frameIdx].getBuffer(), sizeof(uint32), CLUTTER_MAX_BUCKETS - CLUTTER_FLOWER_BUCKETS, CLUTTER_COMMAND_SIZE);
     }
     if (m_nearShadowFlowerBuilt)
@@ -413,6 +416,6 @@ void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 fram
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_nearShadowFlowerPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
         cmd.bindVertexBuffers(0, { m_sorted[frameIdx].getBuffer() }, { 0 });
         cmd.bindIndexBuffer(m_flowerIndices.getBuffer(), 0, vk::IndexType::eUint32);
-        cmd.drawIndexedIndirect(m_commands[frameIdx].getBuffer(), 0, CLUTTER_FLOWER_BUCKETS, CLUTTER_COMMAND_SIZE);
+        cmd.drawIndexedIndirect(m_commands[frameIdx].getBuffer(), CLUTTER_MAX_BUCKETS * CLUTTER_COMMAND_SIZE, CLUTTER_FLOWER_BUCKETS, CLUTTER_COMMAND_SIZE);
     }
 }

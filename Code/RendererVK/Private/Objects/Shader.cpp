@@ -224,6 +224,7 @@ static oc::string buildLayoutPreamble()
         s += "#define "; s += name; s += " " + oc::to_string(value) + suffix + "\n";
     };
     def("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES);
+    def("GRASS_NEAR_SHADOW_RESOLUTION", GRASS_NEAR_SHADOW_RESOLUTION);
     def("GI_SH_STRIDE", GI_SH_STRIDE);
     // The LIVE grid shape (the "GI" grid settings): baked so the addressing stays constant-folded;
     // a change reloads every shader (the Renderer's listener).

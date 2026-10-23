@@ -37,6 +37,7 @@ layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion;
 // The ground's sun shadow at the top of main, from the geometric normal (see instanced_indirect_lit.inc.glsl).
 #define SUN_SHADOW_FIRST
+#define LIT_EXTRA_LIGHT // the far grass's blade light, added inside computeLitColor before its light loop
 
 #include "instanced_indirect_lit.inc.glsl"
 #include "terrain_common.inc.glsl"
@@ -160,9 +161,11 @@ void main()
 	const TerrainLayers tessLayers = terrainLayers(in_meshPos, coverN, fields);
 	float reliefStrength;
 	const vec3 geoN = terrainTessPixelNormal(coverN, tessLayers, reliefStrength);
-	// THE GRASS CANOPY over this ground: its sun and ambient, plus the far tier's weight, from the same coverages as the
-	// grass placement. Formed here so only these four halves stay live across the splat, not the layers' picks.
-	const f16vec4 grassCanopy = f16vec4(grassGroundCanopy(tessLayers, in_meshPos, coverN));
+	// THE GRASS CANOPY over this ground: its sun and ambient, plus the far tier's weight and stripe scale, from the same
+	// coverages as the grass placement. Formed here so only it stays live across the splat, not the layers' picks - and
+	// PACKED (4 x unorm8, all four in [0, 1]) into ONE register: four halves live across the splat took this FS from 64
+	// to 72 registers.
+	const uint grassCanopyPacked = packUnorm4x8(grassGroundCanopy(tessLayers, in_meshPos, coverN));
 #else
 	const vec3 geoN = coverN;
 	const TerrainLayers layers = terrainLayers(in_pos, coverN, fields);
@@ -177,6 +180,7 @@ void main()
 
 #ifdef TERRAIN_TESS
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, tessLayers);
+	const f16vec4 grassCanopy = f16vec4(unpackUnorm4x8(grassCanopyPacked));
 #else
 	TerrainSample surf = terrainSplatLayers(in_pos, geoN, layers);
 #endif
@@ -294,12 +298,14 @@ void main()
 	// after the lit core), and the ground's own sun gives up that share of the far layer.
 	farBladeSun *= g_sunVisMaterial;
 	g_sunVisMaterial *= one - grassCanopy.z * float16_t(u_grass_farBladeLight);
+	// The far grass's blade light: x the shadow, the albedo and the AO, x the sun's radiance - formed HERE and added inside
+	// computeLitColor before its light loop (g_litExtraLight): added after it, the albedo, the AO and the blade light
+	// stayed live across the loop (the tessellated FS 72 registers).
+	if (farBladeSun > float16_t(0.0))
+		g_litExtraLight = f16vec3(min(vec3(surf.albedo) * (float(farBladeSun) * g_sunShadowFirst * float(surf.ao))
+			* (u_sunTransmittance * u_sunColor.rgb), vec3(MEDIUMP_FLT_MAX)));
 	const vec3 V = normalize(u_viewPos - in_pos);
 	vec3 color = computeLitColor(TERRAIN_LIT_POS, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
-	// The far grass's blade light (above): x the shadow, the albedo and the AO, x the sun's radiance.
-	if (farBladeSun > float16_t(0.0))
-		color += vec3(surf.albedo) * (float(farBladeSun) * float(g_sunShadowFirst) * float(surf.ao))
-			* (u_sunTransmittance * u_sunColor.rgb);
 
 	// THE WET SKY REFLECTION (the lit core has no environment specular, so wet ground read as merely darker): the
 	// mirror sky along R, water Fresnel (F0 0.02), the film's roughness-to-blur rule, the texture AO as the specular

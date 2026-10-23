@@ -247,7 +247,7 @@ vec3 mirrorSkyRadiance(vec3 dir)
 	const float eclipse = u_sunVisible;
 	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
 	vec3 color = atmosphereScatterCheap(dir, u_sunDirection.xyz, up, 12) * u_sunColor.rgb;
-	color = mix(vec3(dot(color, luminosity)), color, 2.0 * (2.0 - eclipse)) * eclipse;
+	color = mix(vec3(dot(color, luminosity)), color, u_sky_saturation * (2.0 - eclipse)) * eclipse;
 	if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
 		color += atmosphereScatterCheap(dir, up, up, 4) * u_sky_radiance;
 	return color;

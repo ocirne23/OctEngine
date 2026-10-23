@@ -321,6 +321,8 @@ export namespace RendererVKLayout
     // Sun shadow cascaded shadow maps.
     constexpr uint32 NUM_SHADOW_CASCADES = 4;
     constexpr uint32 SHADOW_MAP_RESOLUTION = 4096;
+    // The near grass cascade: its own one-layer depth map (u_grassNearShadow), +-"Near shadow range" over it.
+    constexpr uint32 GRASS_NEAR_SHADOW_RESOLUTION = 2048;
 
     // Per-render-node pass visibility bits (in_nodePassMasks, written at renderNode() push time):
     // the main indirect cull, shadow cull, and TLAS-instance writer each early-out on their bit, so
@@ -789,7 +791,8 @@ export namespace RendererVKLayout
     static_assert(CLUTTER_MAX_BUCKETS <= CLUTTER_PREFIX_GROUP);
     constexpr uint32 CLUTTER_MAX_INSTANCES = 131072; // kept objects per frame (a bucket-local index fits 17 bits)
     constexpr uint32 CLUTTER_LOCAL_BITS = 17;
-    static_assert(CLUTTER_MAX_INSTANCES <= (1u << CLUTTER_LOCAL_BITS) && CLUTTER_MAX_BUCKETS < (1u << (32 - CLUTTER_LOCAL_BITS)));
+    // The cull key: the top bit flags a near caster (CLUTTER_KEY_NEAR), then the bucket, then the bucket-local index.
+    static_assert(CLUTTER_MAX_INSTANCES <= (1u << CLUTTER_LOCAL_BITS) && CLUTTER_MAX_BUCKETS < (1u << (31 - CLUTTER_LOCAL_BITS)));
     constexpr uint32 CLUTTER_SCATTER_GROUP = 256;
     // THE FOREST FLOOR MAP (Procedural ClutterSystem, re-baked as the camera moves): rgba8 per texel - canopy, trunk
     // proximity, rock proximity, occupied (inside a trunk or a rock: nothing grows) - over CLUTTER_FLOOR_DIM^2 texels

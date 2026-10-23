@@ -72,6 +72,7 @@ export struct SkyParams
     float rayleighScatter = 1.0f;
     float mieScatter = 1.0f;
     float scatterBoost = 2.0f;         // in-scatter multiplier: how much sunlight the atmosphere scatters (more = more indirect light)
+    float saturation = 2.0f;           // the sun-lit sky's colour saturation (1 = as scattered); x (2 - sun visible) in an eclipse
     float mieG = 0.76f;                 // Mie anisotropy (forward-scatter lobe)
     float rayleighHeight = 8500.0f;     // Rayleigh scale height (m): how fast air density falls off
     float mieHeight = 1200.0f;          // Mie scale height (m): how high the haze layer reaches
@@ -110,9 +111,18 @@ export struct CloudParams
     bool  enabled = true;
     // Shape
     float bottom = 700.0f;             // shell bottom altitude (m)
-    float top = 3000.0f;               // shell top altitude (m)
-    float coverage = 0.15f;           // 0 = clear, 1 = overcast
-    float coverageVariation = 1.75f;   // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
+    float top = 2500.0f;               // shell top altitude (m)
+    float coverage = 0.2f;            // 0 = clear, 1 = overcast
+    float coverageVariation = 2.0f;  // weather-map spread around the coverage (0 = uniform); fades in over coverage 0..0.25, so coverage 0 = clear
+    // MACRO COVERAGE: the weather map's coverage read over a much larger period, added to every column's coverage (both
+    // layers; faded in like the variation): whole regions clear or overcast, instead of one even scatter everywhere.
+    float macroSizeKm = 100.0f;       // the macro field's period (km): its clear / overcast regions are about a sixth of it
+    float macroVariation = 1.0f;       // its spread around the coverage (0 = off)
+    // FAR COVERAGE: every column's coverage (the variation's spread included, both layers) x a scale that goes from 1 at
+    // farCoverageStartKm to farCoverage at farCoverageEndKm (horizontal distance from the camera; smoothstep).
+    float farCoverage = 0.5f;          // 1 = off
+    float farCoverageStartKm = 0.0f;
+    float farCoverageEndKm = 55.0f;
     float cloudType = 1.0f;            // 0 = stratus, 0.5 = cumulus, 1 = cumulonimbus
     float typeVariation = 1.0f;       // weather-map spread around the type
     // Per-column LIFT: whole clouds rise by up to this fraction of the shell height (0 = every base at the shell
@@ -127,7 +137,7 @@ export struct CloudParams
     // SHELVES: stable layers (inversions) at fixed heights of the main layer where the clouds that reach them spread
     // out into flat tiers (stratocumulus cumulogenitus; at the top of a storm, the anvil).
     int   shelfCount = 1;              // 1..3
-    float shelfStrength = 0.55f;       // how far a cloud spreads at a shelf
+    float shelfStrength = 0.25f;      // how far a cloud spreads at a shelf
     float shelfThickness = 0.1f;       // half thickness (fraction of the layer height)
     float shelfSpacing = 0.2f;         // from one shelf to the next (fraction of the layer height); the stack is centred in the layer
     // The UPPER layer: an independent band with its own coverage and type (a stratiform / altocumulus deck over
@@ -135,7 +145,7 @@ export struct CloudParams
     bool  upperEnabled = true;
     float upperBottom = 6000.0f;       // m
     float upperTop = 7500.0f;          // m
-    float upperCoverage = 0.6f;       // x the main layer's coverage
+    float upperCoverage = 0.85f;      // x the main layer's coverage
     float upperType = 0.1f;            // 0 = stratus (thin sheets), 0.5 = cumulus
     float upperHeightVariation = 0.2f; // per-column lift, fraction of the upper band (the column shrinks to 1 - this)
     float upperDensity = 0.1f;        // x the main layer's density ("Density (1/m)" scales both)
@@ -145,6 +155,7 @@ export struct CloudParams
     float curl = 150.0f;               // curl-noise distortion of the detail noise (m): wispy edges
     float weatherSizeKm = 20.0f;       // weather map period (km): the size of cloud clusters and gaps
     int   baseRepeats = 6;             // base noise tiles per weather tile (base period = weather / this)
+    float baseBreakupKm = 0.0f;       // the base lookup's smooth warp (km, peak to peak): breaks the base tile's rows (0 = off)
     int   detailRepeats = 12;          // detail noise tiles per base tile
     float windSpeedScale = 3.5f;       // x "Sky/Wind/Speed" (the layer's wind; its direction is the shared one)
     float evolveSpeed = 0.5f;          // vertical drift of the detail noise (m/s): shapes change, not only move
@@ -161,6 +172,9 @@ export struct CloudParams
     float groundLightDepth = 300.0f;  // m: how far the ground bounce reaches up into a cloud (exponential falloff over the height)
     float powder = 0.0f;              // dark-edge "powder" term strength (0 = off)
     float aerialStrength = 2.0f;      // x the air light added in front of the clouds (1 = physical; the dimming stays); >= 0.01
+    float aerialDimming = 1.0f;      // x the air's optical depth on the cloud's own light, per colour (1 = physical): warmer + darker far out
+    float aerialFade = 1.0f;         // x the air's mean optical depth on the cloud's OPACITY (0 = off): far clouds fade into the sky
+    float curvature = 4.0f;          // x the cloud shell's curvature (1 = Earth's radius): far clouds drop toward the horizon sooner
     // Shadows (the Beer shadow map)
     bool  shadows = true;
     float shadowStrength = 1.0f;       // 0 = the clouds cast no shadow on the scene
@@ -424,7 +438,7 @@ export struct GrassParams
     float fleckContrast = 0.7f;
     float fleckFadeDistance = 40.0f;
     float fleckStretch = 1.0f;     // the flecks stretch along the sun into streaks: x 1 / tan(sun elevation) (0 = round)
-    // THE NEAR GRASS CASCADE: real blade shadows around the camera - an extra sun shadow-map layer (2048^2) over a box
+    // THE NEAR GRASS CASCADE: real blade shadows around the camera - its own shadow map (2048^2) over a box
     // of +-nearShadowRange metres (texel = 2 x range / 2048), the blades only, on the blades and the ground under them.
     // It blends into the canopy over the box's outer part. nearShadowBias: the receiver's shift toward the sun (m).
     bool nearShadows = true;

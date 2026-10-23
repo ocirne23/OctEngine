@@ -6,7 +6,8 @@
 // THE CLUTTER BUCKETS' LAYOUT (after clutter_cull): ONE workgroup, a thread per bucket. An exclusive prefix sum of the counts
 // gives each bucket its range of the sorted records and its indexed draw (instanceCount = its count, firstInstance = its
 // range's start). The flower buckets first (a fixed CLUTTER_FLOWER_BUCKETS draws: (topology, LOD)), then (mesh, LOD): their
-// draw COUNT goes to io_counts[1].
+// draw COUNT goes to io_counts[1]. A bucket's NEAR CASTERS come first in its range: their base and draw (the near grass
+// cascade's) at CLUTTER_MAX_BUCKETS + bucket, the rest's base at bucket.
 
 #define CLUTTER_FRAME_BINDING 0
 #include "clutter.inc.glsl"
@@ -33,7 +34,8 @@ shared uint s_scan[CLUTTER_PREFIX_GROUP];
 void main()
 {
     const uint b = gl_LocalInvocationIndex;
-    const uint count = b < CLUTTER_MAX_BUCKETS ? in_bucketCounts[b] : 0u;
+    const uint nearCount = b < CLUTTER_MAX_BUCKETS ? in_bucketCounts[CLUTTER_MAX_BUCKETS + b] : 0u;
+    const uint count = b < CLUTTER_MAX_BUCKETS ? in_bucketCounts[b] + nearCount : 0u;
     s_scan[b] = count;
     barrier();
 
@@ -48,7 +50,8 @@ void main()
         return;
 
     const uint first = s_scan[b] - count;
-    out_bucketBase[b] = first;
+    out_bucketBase[b] = first + nearCount;
+    out_bucketBase[CLUTTER_MAX_BUCKETS + b] = first;
     DrawIndexedIndirect draw = DrawIndexedIndirect(0u, 0u, 0u, 0, first);
     if (b < CLUTTER_FLOWER_BUCKETS)
         draw = DrawIndexedIndirect(cf_flowerLods[b].y, count, cf_flowerLods[b].x, 0, first);
@@ -63,6 +66,8 @@ void main()
         }
     }
     out_commands[b] = draw;
+    draw.instanceCount = nearCount;
+    out_commands[CLUTTER_MAX_BUCKETS + b] = draw;
 
     if (b == 0u)
         io_counts[1] = cf_numMeshes * CLUTTER_LODS;

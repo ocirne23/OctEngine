@@ -19,7 +19,9 @@ import :Layout;
 // Per frame: CULL (a workgroup per patch: the kept records + their bucket keys + the bucket counts) -> PREFIX (one
 // workgroup: the buckets' ranges + one indexed draw per bucket) -> SCATTER (the records into their buckets' ranges, the
 // draws' instance-rate attributes). The buckets: CLUTTER_FLOWER_BUCKETS for the flowers, one per (topology, LOD) (a
-// fixed draw of that many commands), then one per (mesh, LOD) - their draw count is written by the prefix pass.
+// fixed draw of that many commands), then one per (mesh, LOD) - their draw count is written by the prefix pass. Each
+// bucket's range starts with its NEAR CASTERS (within the near grass cascade's reach): their counts, bases and draws
+// sit at CLUTTER_MAX_BUCKETS + bucket, so the near cascade draws only them.
 //
 // The ASSETS (setAssets: the types, the rigid meshes) live in device-local buffers and change only on a load (GPU idle).
 // The CLUTTER FRAME (ClutterFrameGpu: the patch grid, the counts, the flower index ranges, the FOREST FLOOR MAP) is
@@ -36,7 +38,8 @@ public:
     void initialize(uint32 maxTextures, uint32 numTextureDescriptors);
     void resizeTextureDescriptors(uint32 numTextureDescriptors); // GPU idle (BindlessTextures' capacity change)
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
-    // The near grass cascade's casters: against the sun ShadowMap's extra layer pass.
+    // The near grass cascade's casters (the near casters' draws: the second half of the commands): against its
+    // ShadowMap's pass.
     void initializeNearShadow(vk::RenderPass nearShadowRenderPass);
     void reloadShaders();
 

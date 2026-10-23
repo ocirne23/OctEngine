@@ -22,5 +22,7 @@ void main()
     if (i >= min(in_counts[0], CLUTTER_MAX_INSTANCES))
         return;
     const uint key = in_keys[i];
-    out_sorted[in_bucketBase[key >> CLUTTER_LOCAL_BITS] + (key & ((1u << CLUTTER_LOCAL_BITS) - 1u))] = in_flat[i];
+    const uint bucket = (key & ~CLUTTER_KEY_NEAR) >> CLUTTER_LOCAL_BITS;
+    const uint base = in_bucketBase[(key & CLUTTER_KEY_NEAR) != 0u ? CLUTTER_MAX_BUCKETS + bucket : bucket];
+    out_sorted[base + (key & ((1u << CLUTTER_LOCAL_BITS) - 1u))] = in_flat[i];
 }

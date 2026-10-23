@@ -437,7 +437,11 @@ void main()
     const f16vec3 Nh = f16vec3(N);
     const f16vec3 Vh = f16vec3(V);
     const f16vec3 Lh = f16vec3(L);
-    const f16vec3 Hh = normalize(Lh + Vh);
+    // The half vector in FLOAT, its length floored: looking straight at the sun (V = -L, e.g. a set sun behind the waves)
+    // L + V is ~0, its square underflowed in half and normalize gave NaN - and NaN x a zero sun term is still NaN: a
+    // flickering bright point on the water at the sun's position.
+    const vec3 lv = L + V;
+    const f16vec3 Hh = f16vec3(lv * inversesqrt(max(dot(lv, lv), 1e-12)));
     const float16_t NoV = clamp(dot(Nh, Vh), float16_t(1e-3), float16_t(1.0));
     const float16_t NoL = max(dot(Nh, Lh), float16_t(0.0));
     const float16_t NoH = max(dot(Nh, Hh), float16_t(0.0));

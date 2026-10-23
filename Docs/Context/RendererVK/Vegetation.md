@@ -105,8 +105,9 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   * THE GROUND under them (`instanced_indirect_terrain.fs.glsl`, both paths): `grassGroundCanopy` from the SAME
     `terrainLayers` the splat uses - the sun at the full canopy depth into `g_sunVisMaterial` (the ground's sun only;
     the film keeps its own), and the blades' "Root occlusion" x the canopy's opacity on the ambient. Formed right
-    after the layers, so only four halves stay live across the splat (the sun, the ambient, the far tier's weight and
-    its stripe scale).
+    after the layers. The tessellated path packs the four values (the sun, the ambient, the far tier's weight and its
+    stripe scale) into ONE `packUnorm4x8` uint across the splat: four halves live there took that FS from 64 to 72
+    registers.
   * The shadow map keeps the big casters (trees, terrain); the canopy multiplies them.
 * **THE FAR TIER** ("Grass/Far" tweaks): where the blades thin and fade out, the GROUND takes the grass layer's look, out
   to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (1; 0 = off), "Canopy shadow" (1.5;
@@ -192,16 +193,17 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     `cos(elevation) / pi x ((1 + c) / 2 + Transmission x (1 - c) / 2)`, c = the horizontal cosine between the way to the
     eye and the sun's (+1: the sun behind the view, faces lit in front; -1: ahead, lit THROUGH; the blades' azimuths
     spread). The FS forms it in the far block (one half across the lit core), takes `g_sunVisMaterial` (the canopy, the
-    relief gate) into it and then gives the ground's sun `1 - weight x Blade light`, and after `computeLitColor` adds it
-    x `g_sunShadowFirst` x the albedo x the AO x the sun's radiance. The ambient, sky and specular keep the near-up
+    relief gate) into it and then gives the ground's sun `1 - weight x Blade light`, and adds it x `g_sunShadowFirst` x
+    the albedo x the AO x the sun's radiance through `g_litExtraLight` (`LIT_EXTRA_LIGHT`, added right after the sun
+    term, before the light loop). Added after `computeLitColor` instead, the albedo, AO and blade light stayed live
+    across the light loop. The ambient, sky and specular keep the near-up
     normal.
 * **THE NEAR GRASS CASCADE** ("Grass/Shadows/Near shadows", default ON; never under RT sun shadows): real blade
   shadows around the camera, the canopy beyond.
-  * It is an EXTRA LAYER of the sun shadow array (`ShadowMap::initialize(..., extraLayer)`: layer
-    `NUM_SHADOW_CASCADES`, its own single-view render pass + framebuffer), so the lit shaders read it through the
-    binding they already have (`u_shadowMap`). The cascades' multiview pass transitions the WHOLE array view
-    (UNDEFINED -> read-only), so this layer is drawn right AFTER it in the primary ("Grass near shadow"; its pass's
-    source dependency waits for that pass's depth writes).
+  * Its OWN one-layer `ShadowMap` per frame slot (`grassNearShadowMap`, `GRASS_NEAR_SHADOW_RESOLUTION` = 2048), read
+    through the lit set's binding 23 (`u_grassNearShadow`; the texture array is 24, the set's highest). Drawn in the primary after
+    the cascades' pass ("Grass near shadow"). Tried: an extra layer of the sun array - it took the array's size, so
+    the 4096 cascades made it 4096 too (4x the fill and clear for the blades).
   * Its matrix (`u_grass_shadowViewProj`, `buildUboGrass`): an ortho box of +-"Near shadow range (m)" (8 m: 0.8 cm
     texels) down the sun, the cascades' construction, texel-snapped, a 50 m up-sun slab, centred AHEAD of the camera
     (a centred box spent half its texels behind the view): where the view's bottom-centre ray meets the ground +
@@ -214,7 +216,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     view or not), `grass.vs.glsl` with `GRASS_SHADOW` + `GRASS_NEAR_SHADOW`. `GrassPipeline::recordNearShadow` draws
     the list (the same records and LOD as the main draw: counts [0] main, [1] near casters, [2] records), depth only,
     the shadow pass's depth bias, both faces, its own set (UBO + vertex mega-buffer); `ClutterPipeline::recordNearShadow`
-    adds the clutter in the same secondary.
+    adds the clutter in the same secondary - only the clutter cull's near casters (see Ground clutter).
   * Receivers (`grassNearShadow`, grass.inc.glsl, only where the lit core is included): the blades and the ground
     under them - also bare ground in the box - 4 bilinear PCF taps, the receiver moved toward the sun by "Near shadow
     bias (m)" and off its normal by a texel, x "Near shadow strength"; its weight fades over the box's edge (85-98 %)
@@ -307,8 +309,12 @@ the clutter frame's header. Desktop only (as the grass).
   `CLUTTER_GRAIN_STALK_HALF_WIDTH` x the ear's width at the top - the texture's rachis width - not the flower stem's
   width). The FS samples part 1 only (`textureGrad`, the derivatives outside the branch), discards alpha < 0.5, and
   takes mix(Color, Color2, G) x R (G: a grain's awns, a fern's rachis).
-* **NEAR SHADOWS**: the rigid and flower VS with `CLUTTER_NEAR_SHADOW` into the near grass cascade (the casters within
-  its reach). **Nothing casts into the scene cascades** (the user's choice). No alpha test there: a textured strip
+* **NEAR SHADOWS**: the rigid and flower VS with `CLUTTER_NEAR_SHADOW` into the near grass cascade. The cull keeps the
+  casters within its reach (range x 1.5 + 2 m of its centre, in view or not) at the START of each bucket's range: they
+  count into `bucketCounts[CLUTTER_MAX_BUCKETS + bucket]` and carry `CLUTTER_KEY_NEAR` (the key's top bit); the prefix
+  writes their base and draw at `CLUTTER_MAX_BUCKETS + bucket` (the buffers are doubled), the rest's base after them.
+  The near pass draws only those second-half commands. (Drawing the main commands with a distance reject in the VS ran
+  the VS for every visible object out to the clutter's range.) **Nothing casts into the scene cascades** (the user's choice). No alpha test there: a textured strip
   casts narrowed to about its cover (a frond 0.55 x, an ear 0.6 x, a petal 0.65 x).
 * Off ("Enabled", no types, VR, or no ground table this frame): `recordClear` zeroes the counts and the flower
   commands. `setClutterAssets` (GPU idle, re-record) / `setClutterFloorMap` (each slot takes it in present: the clutter

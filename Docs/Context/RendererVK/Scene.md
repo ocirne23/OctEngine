@@ -349,7 +349,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
   peak, and terms formed after it keep the shadow, the interior term and the surface colour live across it. The
   transmitted sun (radiance) then goes IN as `g_litExtraLight` (`LIT_EXTRA_LIGHT`), added to the sum right after the
   sun, before the GI and the light loop: kept live across the loop and added after it, it cost the tree and foliage FS
-  16 B of spill (64 / 48 -> 64 / 32).
+  16 B of spill (64 / 48 -> 64 / 32). The terrain FS adds its far-grass blade light the same way (Vegetation.md).
   LitTree's leaf and plain shadows share ONE `sunShadowVisibility` call (`sunShadowFirstTree`): two call sites inline
   the shadow search twice. A LEAF pixel's shadow is looked up from its SUN side (the bias normal flipped toward the
   sun) - the facing reject gives every leaf facing away from the sun 0, exactly the ones the back term lights.

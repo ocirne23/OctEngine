@@ -47,6 +47,9 @@ uint clutterFlowerTopology(uint head)
 }
 
 // The flower buckets (one per (textured, topology, LOD): the textured half last) first, then one per (mesh, LOD).
+// Each bucket's range starts with its NEAR CASTERS (the near grass cascade's: their own bucket counts, bases and draws
+// at CLUTTER_MAX_BUCKETS + bucket); their cull keys carry CLUTTER_KEY_NEAR.
+#define CLUTTER_KEY_NEAR 0x80000000u
 uint clutterBucket(uint kind, uint head, bool textured, uint mesh, uint lod)
 {
     return kind == CLUTTER_KIND_FLOWER ? ((textured ? CLUTTER_FLOWER_TOPOLOGIES : 0u) + clutterFlowerTopology(head)) * CLUTTER_FLOWER_LODS + lod

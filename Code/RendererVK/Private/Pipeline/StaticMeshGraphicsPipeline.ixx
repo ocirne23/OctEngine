@@ -54,6 +54,8 @@ public:
 		vk::ImageView shadowMapView;       // sun cascaded shadow map (e2DArray depth)
 		vk::Sampler shadowMapSampler;      // comparison sampler for PCF
 		vk::Sampler shadowMapDepthSampler; // non-comparison sampler for the PCSS blocker search
+		vk::ImageView grassNearShadowView; // the near grass cascade (one-layer e2DArray depth)
+		vk::Sampler grassNearShadowSampler; // its comparison sampler
 
 		vk::ImageView prevDepthView;       // LAST frame's full-res depth (edge weights of the reprojected AO upsample)
 		vk::Sampler prevDepthSampler;
@@ -79,7 +81,7 @@ public:
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors = true);
     void updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler);
     void updateTlasDescriptor(vk::DescriptorSet descriptorSet, vk::AccelerationStructureKHR tlas);
-    // Rewrites one slot of the texture array (binding 22) with a streamed texture's current view.
+    // Rewrites one slot of the texture array (binding 24) with a streamed texture's current view.
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the sky map binding (20) at GI's per-frame sky bake (GENERAL layout).
     void updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler);

@@ -181,7 +181,7 @@ GPU Frame
     → Terrain wetness                      (tick frames only)
     → Grass cull                           (desktop; off: the draw count is cleared instead; see "Procedural grass")
     → Clutter cull                         (desktop: cull + bucket prefix + sort; off: its draws are emptied; see "Ground clutter")
-    → Grass near shadow                    (desktop, the shadow array's extra layer; after the grass cull)
+    → Grass near shadow                    (desktop, its own 2048 map; after the grass and clutter culls)
     → Cloud shadow                         (the cloud shadow map; only the cascades due this frame; see "Volumetric clouds")
     → Cloud sky                            (the clouds of the GI sky map, before GI bakes it)
     → GI                                   (BLAS builds + THIS frame's TLAS, then the probe trace)

@@ -40,6 +40,7 @@ void Settings::registerSky(SkyParams& s)
     Tweak::floatVar("Sky/Sun cycle", "Night sky radiance", &s.nightSkyRadiance, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
 
     Tweak::floatVar("Sky/Atmosphere", "Scatter Boost", &s.scatterBoost, 0.0f, 32.0f);
+    Tweak::floatVar("Sky/Atmosphere", "Saturation", &s.saturation, 0.0f, 3.0f, 0.01f);
     // Air = the gas scattering that colours the sky blue (Rayleigh); Haze = the aerosol scattering round the sun (Mie).
     Tweak::floatVar("Sky/Atmosphere", "Air scattering", &s.rayleighScatter, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Sky/Atmosphere", "Haze scattering", &s.mieScatter, 0.0f, 8.0f, 0.01f);
@@ -242,8 +243,7 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Shadows", "Fleck fade distance (m)", &s.fleckFadeDistance, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Grass/Shadows", "Fleck stretch", &s.fleckStretch, 0.0f, 8.0f, 0.01f);
     Tweak::boolean("Grass/Shadows", "Near shadows", &s.nearShadows);
-    Tweak::floatVar("Grass/Shadows", "Near shadow range (m)", &s.nearShadowRange, 1.0f, 100.0f, 0.1f);
-    Tweak::floatVar("Grass/Shadows", "Near shadow bias (m)", &s.nearShadowBias, 0.0f, 0.5f, 0.001f);
+    Tweak::floatVar("Grass/Shadows", "Near shadow range (m)", &s.nearShadowRange, 1.0f, 100.0f, 0.1f);    Tweak::floatVar("Grass/Shadows", "Near shadow bias (m)", &s.nearShadowBias, 0.0f, 0.5f, 0.001f);
     Tweak::floatVar("Grass/Shadows", "Near shadow strength", &s.nearShadowStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Transmission", &s.transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roundness", &s.roundness, 0.0f, 2.0f, 0.01f);
@@ -317,13 +317,22 @@ void Settings::registerClouds(CloudParams& s)
     // Live under the "Sky/Clouds" lock: the values it feeds (upper coverage, the shadow's mean) are never baked.
     Tweak::floatVar("Sky/Clouds", "Coverage", &s.coverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Coverage variation", &s.coverageVariation, 0.0f, 2.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds", "Macro size (km)", &s.macroSizeKm, 10.0f, 1000.0f, 1.0f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds", "Macro variation", &s.macroVariation, 0.0f, 3.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Far coverage", "Scale", &s.farCoverage, 0.0f, 1.0f, 0.01f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Far coverage", "Start (km)", &s.farCoverageStartKm, 0.0f, 200.0f, 0.1f, {}, ETweakFlags::Runtime);
+    Tweak::floatVar("Sky/Clouds/Far coverage", "End (km)", &s.farCoverageEndKm, 1.0f, 300.0f, 0.1f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Density (1/m)", &s.densityScale, 0.001f, 0.1f, 0.001f);
     Tweak::floatVar("Sky/Clouds", "Weather size (km)", &s.weatherSizeKm, 5.0f, 500.0f, 0.5f);
+    Tweak::floatVar("Sky/Clouds", "Base breakup (km)", &s.baseBreakupKm, 0.0f, 20.0f, 0.01f, {}, ETweakFlags::Runtime);
     Tweak::floatVar("Sky/Clouds", "Wind speed scale", &s.windSpeedScale, 0.0f, 100.0f, 0.1f); // x "Sky/Wind/Speed"
     Tweak::floatVar("Sky/Clouds", "Evolve speed (m/s)", &s.evolveSpeed, 0.0f, 100.0f);
     Tweak::intVar("Sky/Clouds", "Seed", &s.seed, 0, 9999, 1.0f);
+    Tweak::floatVar("Sky/Clouds", "Curvature", &s.curvature, 1.0f, 10.0f, 0.01f);
 
     Tweak::floatVar("Sky/Clouds/Lighting", "Aerial perspective strength", &s.aerialStrength, 0.01f, 5.0f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Aerial dimming", &s.aerialDimming, 0.0f, 5.0f, 0.01f);
+    Tweak::floatVar("Sky/Clouds/Lighting", "Aerial fade", &s.aerialFade, 0.0f, 5.0f, 0.01f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter", &s.multiScatter, 0.0f, 0.95f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Multi-scatter strength", &s.multiScatterStrength, 0.0f, 5.0f);
     Tweak::floatVar("Sky/Clouds/Lighting", "Ambient", &s.ambient, 0.0f, 4.0f);

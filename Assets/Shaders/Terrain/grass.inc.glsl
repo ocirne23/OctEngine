@@ -143,8 +143,8 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL
-// THE NEAR GRASS CASCADE (receivers: the blades, the ground under them): the real blade shadows from the extra layer
-// of the sun shadow array (layer NUM_SHADOW_CASCADES; GrassPipeline's near pass), around the camera. `weight` = how
+// THE NEAR GRASS CASCADE (receivers: the blades, the ground under them): the real blade shadows from its own map
+// (u_grassNearShadow; GrassPipeline's + ClutterPipeline's near pass), around the camera. `weight` = how
 // much of it to use (fading to 0 over the box's outer part, where the canopy takes over). The receiver moves toward
 // the sun by "Near shadow bias" and off its normal by one texel: the blades are thin, two-sided, and self-casting.
 float grassNearShadow(vec3 pos, vec3 N, out float weight)
@@ -169,13 +169,12 @@ float grassNearShadow(vec3 pos, vec3 N, out float weight)
     }
 
     // 4 bilinear PCF taps one texel apart (a 3x3-texel footprint): a blade is a few texels wide.
-    const float layer = float(NUM_SHADOW_CASCADES);
-    const float texel = 1.0 / float(textureSize(u_shadowMap, 0).x);
+    const float texel = 1.0 / float(GRASS_NEAR_SHADOW_RESOLUTION);
     float sum = 0.0;
-    sum += texture(u_shadowMap, vec4(uv + vec2(-0.5, -0.5) * texel, layer, lp.z));
-    sum += texture(u_shadowMap, vec4(uv + vec2( 0.5, -0.5) * texel, layer, lp.z));
-    sum += texture(u_shadowMap, vec4(uv + vec2(-0.5,  0.5) * texel, layer, lp.z));
-    sum += texture(u_shadowMap, vec4(uv + vec2( 0.5,  0.5) * texel, layer, lp.z));
+    sum += texture(u_grassNearShadow, vec4(uv + vec2(-0.5, -0.5) * texel, 0.0, lp.z));
+    sum += texture(u_grassNearShadow, vec4(uv + vec2( 0.5, -0.5) * texel, 0.0, lp.z));
+    sum += texture(u_grassNearShadow, vec4(uv + vec2(-0.5,  0.5) * texel, 0.0, lp.z));
+    sum += texture(u_grassNearShadow, vec4(uv + vec2( 0.5,  0.5) * texel, 0.0, lp.z));
     return mix(1.0, 0.25 * sum, u_grass_nearStrength); // "Near shadow strength"
 }
 #endif

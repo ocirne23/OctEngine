@@ -38,17 +38,6 @@ layout (location = 7) out vec3 out_relPos;
 
 void main()
 {
-#ifdef CLUTTER_NEAR_SHADOW
-    // Only the objects around the near cascade's box (as the blades).
-    const vec2 toNear = in_instPosScale.xz - u_grass_nearCentre;
-    const float nearReach = u_grass_nearRange * 1.5 + 2.0;
-    if (dot(toNear, toNear) > nearReach * nearReach)
-    {
-        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-#endif
-
     const vec4 q = clutterUnpackQuat(in_instData.xy);
     const float scale = in_instPosScale.w;
     const vec3 offset = quat_transform(in_posAo.xyz * scale, q);

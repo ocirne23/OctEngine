@@ -75,6 +75,7 @@ namespace
     double cloudWeatherPeriod(const CloudParams& c) { return glm::max((double)c.weatherSizeKm, 1.0) * 1000.0; }
     double cloudBasePeriod(const CloudParams& c) { return cloudWeatherPeriod(c) / glm::max(c.baseRepeats, 1); }
     double cloudDetailPeriod(const CloudParams& c) { return cloudBasePeriod(c) / glm::max(c.detailRepeats, 1); }
+    double cloudMacroPeriod(const CloudParams& c) { return glm::max((double)c.macroSizeKm, 10.0) * 1000.0; }
     // "Seed": a fixed offset into the noise fields, [0, 1) of a period per axis (0 = no offset). x / y the noise origin
     // (in weather periods: the base and detail tile inside it), z the detail drift.
     glm::dvec3 cloudSeedOffset(const CloudParams& c)
@@ -131,7 +132,11 @@ namespace
         const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
         const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
         const glm::vec3 tau = skyBetaRayleigh(sky) * odR + glm::vec3(skyBetaMie(sky) * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
-        return glm::exp(-tau);
+        // THE HORIZON: the planet hides the sun once its disc has set - the visible share of the disc, a smooth step over
+        // +- its angular radius about the horizon. The Chapman form gives a large but FINITE depth below it: a dim red sun
+        // kept lighting the world after sunset (a glint on the ocean where the sun would be).
+        const float discRadiusSin = std::sqrt(glm::max(1.0f - sky.sunAngularCos * sky.sunAngularCos, 1e-8f));
+        return glm::exp(-tau) * glm::smoothstep(-discRadiusSin, discRadiusSin, cosChi);
     }
 
     glm::vec3 oceanCascadeSizes(const OceanSettings& o) { return glm::max(oceanWorldScaled(o).cascadeSizes, glm::vec3(1.0f)); }
@@ -274,7 +279,7 @@ void Renderer::buildUboGrass(const Camera& camera)
 {
     const GrassParams& g = m_grassParams;
 
-    // THE NEAR GRASS CASCADE (the shadow array's extra layer): an ortho box of +-range looking down the sun - the
+    // THE NEAR GRASS CASCADE (its own map, GRASS_NEAR_SHADOW_RESOLUTION): an ortho box of +-range looking down the sun - the
     // cascades' construction (LightingUtils computeSunCascades: standard Z, the eye up-sun, texel-snapped so the blade
     // shadows hold still while the camera moves). Its slab reaches 50 m up-sun past the box: blades on a slope up-sun
     // are never clipped.
@@ -283,7 +288,7 @@ void Renderer::buildUboGrass(const Camera& camera)
     // goes range - 1 m past that - the receivers' full-weight disc (range around the centre; grass.inc.glsl) then
     // starts 1 m behind the bottom of the frustum. Looking steeply down, d0 goes negative (capped at -range).
     const float nearRange = grassNearShadowActive() ? glm::max(g.nearShadowRange, 1.0f) : 0.0f;
-    const float res = (float)RendererVKLayout::SHADOW_MAP_RESOLUTION;
+    const float res = (float)RendererVKLayout::GRASS_NEAR_SHADOW_RESOLUTION;
     glm::vec3 nearCentre = m_cameraPos;
     if (nearRange > 0.0f)
     {
@@ -737,6 +742,7 @@ void Renderer::registerUboValues(UboBlock& list)
         // Sun glow, moon brightness, star density and nebula intensity: floored at their tweak mins (0.01) - no GPU off-test.
         list.add("sky_sunGlow", [&] { return glm::max(s.sunGlow, 0.01f); }, s.sunGlow);
         list.add("sky_scatterBoost", s.scatterBoost);
+        list.add("sky_saturation", s.saturation);
         list.add("sky_mieG", s.mieG);
         list.add("sky_moonBrightness", [&] { return glm::max(s.moonBrightness, 0.01f); }, s.moonBrightness);
         list.add("sky_starDensity", [&] { return glm::max(s.starDensity, 0.01f); }, s.starDensity);
@@ -788,6 +794,20 @@ void Renderer::registerUboValues(UboBlock& list)
                 const glm::dvec2 seed = glm::dvec2(cloudSeedOffset(c)) * period;
                 return glm::vec2(glm::mod(glm::dvec2(m_cameraPos.x, m_cameraPos.z) - m_cloudWindOffset + seed, glm::dvec2(period)));
             }, UboLive);
+        // THE MACRO COVERAGE: its origin is the same world - wind (+ seed) wrapped by ITS period; the shader gets it as a
+        // SHIFT from the noise origin (nxz + shift = camera-relative + macro origin: one add, the eye offset included).
+        // The seed's offset is taken in macro periods with the axes swapped: a layout of its own, not the weather's.
+        list.add("clouds_macroShift", [this, &c]
+            {
+                const glm::dvec2 world = glm::dvec2(m_cameraPos.x, m_cameraPos.z) - m_cloudWindOffset;
+                const glm::dvec3 s = cloudSeedOffset(c);
+                const double weather = cloudWeatherPeriod(c), macro = cloudMacroPeriod(c);
+                const glm::dvec2 noiseOrigin = glm::mod(world + glm::dvec2(s.x, s.y) * weather, glm::dvec2(weather));
+                const glm::dvec2 macroOrigin = glm::mod(world + glm::dvec2(s.y, s.x) * macro, glm::dvec2(macro));
+                return glm::vec2(macroOrigin - noiseOrigin);
+            }, UboLive);
+        list.add("clouds_invMacroPeriod", [&] { return (float)(1.0 / cloudMacroPeriod(c)); }, UboLive);
+        list.add("clouds_macroVariation", [&] { return glm::max(c.macroVariation, 0.0f); }, UboLive);
         list.add("clouds_detailDrift", [this, &c] // the detail's vertical drift (m, wrapped) + the seed's offset
             {
                 const double period = cloudDetailPeriod(c);
@@ -826,13 +846,27 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("clouds_shelfSpacing", [&] { return glm::max(c.shelfSpacing, 0.0f); }, c.shelfSpacing);
         list.add("clouds_invWeatherPeriod", [&] { return (float)(1.0 / cloudWeatherPeriod(c)); }, c.weatherSizeKm);
         list.add("clouds_baseFrequency", [&] { return (float)(1.0 / cloudBasePeriod(c)); }, c.weatherSizeKm, c.baseRepeats);
+        list.add("clouds_baseBreakup", [&] { return glm::max(c.baseBreakupKm, 0.0f) * 1000.0f; }, UboLive); // m, x (warp - 0.5)
         list.add("clouds_detailFrequency", [&] { return (float)(1.0 / cloudDetailPeriod(c)); }, c.weatherSizeKm, c.baseRepeats, c.detailRepeats);
         list.add("clouds_extinction", c.densityScale);
         list.add("clouds_type", [&] { return glm::clamp(c.cloudType, 0.0f, 1.0f); }, c.cloudType);
         list.add("clouds_typeVariation", c.typeVariation);
         list.add("clouds_erosion", c.erosion);
+        // Past "Detail distance": the detail's MEAN erosion (0.5, clouds.inc.glsl) as d * x - y - cloudRemap(d, e, 1, 0, 1)
+        // with e = 0.5 x "Erosion", multiplied out.
+        list.add("clouds_meanErosion", [&]
+            {
+                const float e = glm::clamp(0.5f * c.erosion, 0.0f, 0.99f);
+                return glm::vec2(1.0f / (1.0f - e), e / (1.0f - e));
+            }, c.erosion);
         list.add("clouds_curl", c.curl);
         list.add("clouds_coverageVariation", [&] { return c.coverageVariation; }, UboLive);
+        // Far coverage: x (start m, 1 / (end - start) m, the far scale); clouds.inc.glsl cloudFarCoverage.
+        list.add("clouds_farCoverage", [&] {
+            const float start = c.farCoverageStartKm * 1000.0f;
+            const float range = glm::max(c.farCoverageEndKm * 1000.0f - start, 1.0f);
+            return glm::vec4(start, 1.0f / range, glm::clamp(c.farCoverage, 0.0f, 1.0f), 0.0f);
+        }, UboLive);
         list.add("clouds_nearDetailRadius", c.nearDetailRadius);
         list.add("clouds_invNearDetailRadius", [&] { return 1.0f / glm::max(c.nearDetailRadius, 1e-3f); }, c.nearDetailRadius);
         list.add("clouds_baseVariation", [&] { return glm::clamp(c.baseVariation, 0.0f, 0.6f); }, c.baseVariation);
@@ -845,6 +879,11 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("clouds_towerCoreLink", [&] { return glm::clamp(c.towerCoreLink, 0.0f, 1.0f); }, c.towerCoreLink);
         list.add("clouds_minStep", [&] { return glm::max(c.minStep, 0.25f); }, c.minStep);
         list.add("clouds_aerialStrength", [&] { return glm::max(c.aerialStrength, 0.01f); }, c.aerialStrength); // the tweak min
+        list.add("clouds_aerialDimming", [&] { return glm::max(c.aerialDimming, 0.0f); }, c.aerialDimming);
+        list.add("clouds_aerialFade", [&] { return glm::max(c.aerialFade, 0.0f); }, c.aerialFade);
+        // The cloud shell's sphere radius (m): Earth's (atmosphere.inc.glsl ATMOS_R_PLANET) / "Curvature" (<= 10:
+        // cloudAltitude's first-order r + R).
+        list.add("clouds_shellRadius", [&] { return 6371e3f / glm::clamp(c.curvature, 1.0f, 10.0f); }, c.curvature);
         list.add("clouds_giSkyObserverRadius", [&] { return glm::max(c.giSkyObserverRadius, 0.0f); }, c.giSkyObserverRadius);
         // The HG + Draine fit to Mie scattering on water droplets (Jendersie & d'Eon 2023, "An Approximate Mie
         // Scattering Function for Fog and Cloud Rendering"), valid for diameters 5 .. 50 um.
@@ -1368,7 +1407,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("grass_shadowViewProj", [this] { return m_grassNear.viewProj; }, UboLive);
         list.add("grass_nearCentre", [this] { return m_grassNear.centre; }, UboLive);
         list.add("grass_nearRange", [this] { return m_grassNear.range; }, UboLive); // its half size (m; 0 = off)
-        list.add("grass_nearTexel", [this] { return 2.0f * m_grassNear.range / (float)SHADOW_MAP_RESOLUTION; }, UboLive); // the receivers' normal offset
+        list.add("grass_nearTexel", [this] { return 2.0f * m_grassNear.range / (float)GRASS_NEAR_SHADOW_RESOLUTION; }, UboLive); // the receivers' normal offset
         // The pixel floor as world width per metre of distance: one pixel spans 2 d / m_mipPixelScale.
         list.add("grass_minWidthPerMetre", [this, &g] { return m_mipPixelScale > 0.0f ? g.minPixelWidth * 2.0f / m_mipPixelScale : 0.0f; }, UboLive);
         // The canopy's base extinction (1/m; grass.inc.glsl): "Canopy shadow" x blades per m^2 x the mean blade width

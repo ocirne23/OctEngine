@@ -38,6 +38,9 @@ calls `reloadShaders()`.
 * **Per-pixel work hoisted to the UBO / per pixel:**
   * `u_sunTransmittance` is the CPU mirror of `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; **keep the
     constants in sync with atmosphere.inc.glsl**) — no shader runs the Chapman function per pixel or per ray for it.
+    It is x the sun disc's VISIBLE share above the horizon (a smooth step over +- the disc radius, "Sun Angle Cos"):
+    the Chapman form gives a large but finite depth below the horizon, and a dim red sun lit the world after sunset
+    (an ocean glint where the sun would be). The clouds' own sun terms do not use it (they still glow after sunset).
   * `u_sunDirection` and `u_skyUp` are normalized on the CPU, so shaders use them raw.
   * PCSS takes `PCSS_BLOCKER_GATHERS` (6) blocker GATHERS (`textureGather`: 2x2 texels each, 24 texels) +
     `PCSS_FILTER_SAMPLES` (12) filter taps. The gathers stay spread over the Vogel disk; the four texels of one gather
@@ -190,6 +193,13 @@ particle_sim 56, particle VS 56, vol_scatter 62/0, vol_apply FS 56/32, cloud_mar
 register/spill split by +-16 B on neutral changes, so re-measure before trusting a 16 B difference.
 
 * **The rules:**
+  * **A half sum that can CANCEL needs a floor before it is normalized**: `normalize(L + V)` at V = -L (looking at the
+    light through the surface) underflows its squared length to 0 and gives inf / NaN, and NaN x a zero light term is
+    still NaN - a bright point at the sun's position on the ocean after sunset. `halfVectorH` (punctual_lights.inc.glsl)
+    floors it at 1e-4 IN HALF (an fp32 sum there moved the grass FS from 64/16 to 56/48) for the SUN's BRDF
+    (`doLightH`, `doLightSplitH`); the ocean takes its fp32 floored form (no register change there). NOT in the area
+    lights' specular (`doAreaLightSpecularH`, the light loop - the register peak): there it took the lit, tree and
+    foliage FS from 64 to 72 registers, and V = -L against an area light is a rare view.
   * A half that is only STORED (math still fp32) gains nothing: it is not packed, it takes a full 32-bit register, and
     the conversions add temporaries. Only whole blocks of fp16 MATH pay.
   * A value must not be live in BOTH precisions across a peak (a ray query, PCSS, the light loop): convert once,

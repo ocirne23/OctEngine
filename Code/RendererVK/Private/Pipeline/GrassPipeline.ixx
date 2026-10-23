@@ -21,8 +21,8 @@ import :Layout;
 // ([0] main, [1] near casters, [2] records). The cull (grass_cull.cs.glsl) is a cached secondary: its dispatch covers
 // every patch slot, and threads past the grid return.
 // The near CASTERS draw here too (recordNearShadow): the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant, depth
-// only, into the shadow map's extra layer (it binds the UBO and the vertex mega-buffer only - its own set). The blades
-// never cast into the scene cascades (the "Cast shadows" path was removed 2026-10-03).
+// only, into the near grass cascade's own map (it binds the UBO and the vertex mega-buffer only - its own set). The
+// blades never cast into the scene cascades.
 export class GrassPipeline final
 {
 public:
@@ -31,7 +31,7 @@ public:
     GrassPipeline(const GrassPipeline&) = delete;
 
     void initialize(uint32 bladesPerPatch);
-    // The near grass cascade's caster pipeline: against the sun ShadowMap's extra layer pass.
+    // The near grass cascade's caster pipeline: against its ShadowMap's pass.
     void initializeNearShadow(vk::RenderPass nearShadowRenderPass);
     void reloadShaders();
     // Rebuilds the blade index buffer (the caller idles the GPU and re-records: the draw binds it).

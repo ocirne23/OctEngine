@@ -251,13 +251,13 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
     cb.end();
 }
 
-// The NEAR GRASS CASCADE: the blades within its box into the sun shadow map's extra layer (its own single-view pass,
-// begun in the primary right after the cascades' pass). Desktop only.
+// The NEAR GRASS CASCADE: the blades and the clutter within its reach into its own one-layer map (its pass begun in the
+// primary after the cascades' pass). Desktop only.
 void Renderer::recordGrassNearShadow(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& shadowMap = frameData.shadowMap;
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getExtraRenderPass() };
+    ShadowMap& shadowMap = frameData.grassNearShadowMap;
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getRenderPass() };
     CommandBuffer& cb = frameData.grassNearShadowCommandBuffer;
     vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
     const float res = (float)shadowMap.getResolution();
@@ -359,6 +359,8 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .shadowMapView = frameData.shadowMap.getSampleView(),
         .shadowMapSampler = frameData.shadowMap.getSampler(),
         .shadowMapDepthSampler = frameData.shadowMap.getDepthSampler(),
+        .grassNearShadowView = frameData.grassNearShadowMap.getSampleView(),
+        .grassNearShadowSampler = frameData.grassNearShadowMap.getSampler(),
         .prevDepthView = m_perFrameData[(frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT].sceneColor.getDepthView(eyeIndex),
         .prevDepthSampler = frameData.sceneColor.getDepthSampler(),
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
@@ -1521,17 +1523,17 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         else
             m_clutterPipeline.recordClear(primary, frameIdx);
     }
-    // The NEAR GRASS CASCADE: the shadow array's extra layer, AFTER the cascades' pass (its layout transition covers this
-    // layer too) and the grass cull. Off, the receivers do not read it (u_grass_nearRange = 0).
+    // The NEAR GRASS CASCADE: its own map, after the grass and clutter culls. Off, the receivers do not read it
+    // (u_grass_nearRange = 0).
     if (shadowCascades && m_sceneViewCount == 1 && grassNearShadowActive())
     {
         m_gpuProfiler.beginScope(primary, "Grass near shadow");
-        ShadowMap& shadowMap = frameData.shadowMap;
+        ShadowMap& shadowMap = frameData.grassNearShadowMap;
         vk::ClearValue shadowClear;
         shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
         const vk::RenderPassBeginInfo nearRpBegin{
-            .renderPass = shadowMap.getExtraRenderPass(),
-            .framebuffer = shadowMap.getExtraFramebuffer(),
+            .renderPass = shadowMap.getRenderPass(),
+            .framebuffer = shadowMap.getFramebuffer(),
             .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } },
             .clearValueCount = 1,
             .pClearValues = &shadowClear,

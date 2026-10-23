@@ -46,9 +46,9 @@ layout (binding = 3, std430) readonly buffer InVertices { MeshVertex in_vertices
 layout (binding = 5, std430) readonly buffer InTypes { ClutterType in_types[]; };
 layout (binding = 6, std430) readonly buffer InMeshes { ClutterMesh in_meshes[]; };
 layout (binding = 7, std430) writeonly buffer OutFlat { ClutterInstance out_flat[]; };
-layout (binding = 8, std430) writeonly buffer OutKeys { uint out_keys[]; }; // bucket << CLUTTER_LOCAL_BITS | local index
+layout (binding = 8, std430) writeonly buffer OutKeys { uint out_keys[]; }; // [CLUTTER_KEY_NEAR |] bucket << CLUTTER_LOCAL_BITS | local index
 layout (binding = 9, std430) buffer Counts { uint io_counts[4]; };          // [0] the kept records
-layout (binding = 10, std430) buffer BucketCounts { uint io_bucketCounts[]; };
+layout (binding = 10, std430) buffer BucketCounts { uint io_bucketCounts[]; }; // per bucket: the rest, then (+ CLUTTER_MAX_BUCKETS) the near casters
 
 // THE TERRAIN'S MEASURES over the patch: a CLUTTER_GRID^2 grid (threads 0..24), bilinear per candidate. 4 corners alone
 // aliased the bedrock's small-scale noise into grid-aligned diamonds.
@@ -391,7 +391,7 @@ void main()
         if (slot >= CLUTTER_MAX_INSTANCES)
             continue;
         const uint bucket = clutterBucket(kind, head, type.terms5.y > 0.0, mesh, lod);
-        const uint local = atomicAdd(io_bucketCounts[bucket], 1u);
+        const uint local = atomicAdd(io_bucketCounts[nearCaster ? CLUTTER_MAX_BUCKETS + bucket : bucket], 1u);
 
         // The colours vary per object (+-12 %), as the grass blades do.
         const float variation = 1.0 + 0.24 * (grassUnit(grassHash(h + 3u)) - 0.5);
@@ -410,6 +410,6 @@ void main()
                           packHalf2x16(kind == CLUTTER_KIND_FLOWER ? type.flower.xy : vec2(height, 0.0)),
                           type.info.w | (petalWidth << 16) | (open << 24));
         out_flat[slot] = inst;
-        out_keys[slot] = (bucket << CLUTTER_LOCAL_BITS) | local;
+        out_keys[slot] = (nearCaster ? CLUTTER_KEY_NEAR : 0u) | (bucket << CLUTTER_LOCAL_BITS) | local;
     }
 }

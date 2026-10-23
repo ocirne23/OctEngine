@@ -10,9 +10,11 @@ variant (`sky.fs.glsl`) draws NO clouds.
 
 ### Shell, layers and shape
 
-* **The shell:** altitudes `[Bottom, Top]` above world Y 0 on a sphere of `ATMOS_R_PLANET` whose centre
-  lies straight under the camera (the terrain is flat; from altitude the deck still curves to the
-  horizon). All cloud math is CAMERA-RELATIVE. **Precision:** `cloudAltitude` forms `(r² - R²) / (r + R)`
+* **The shell:** altitudes `[Bottom, Top]` above world Y 0 on a sphere of `CLOUD_R` = Earth's radius /
+  "Sky/Clouds/Curvature" (`u_clouds_shellRadius`, 1..10; the terrain is flat, so this is the only horizon the far
+  clouds sink under) whose centre lies straight under the camera. Only the shell's geometry uses it; the air
+  (`cloudAerialScatter`, the sun's transmittance) keeps `ATMOS_R_PLANET`. The max of 10 keeps `cloudAltitude`'s
+  first-order `r + R` within 1.4 % at 150 km. All cloud math is CAMERA-RELATIVE. **Precision:** `cloudAltitude` forms `(r² - R²) / (r + R)`
   and `cloudRaySphere` the stable quadratic, because float differences of two ~6.4e6 values are
   metres off.
 * **TWO LAYERS:** `cloudDensity` = the MAIN layer ("Bottom (m)" / "Top (m)", `u_clouds_mainBottom` /
@@ -32,6 +34,17 @@ variant (`sky.fs.glsl`) draws NO clouds.
   (weather.r - 0.5) x "Coverage variation", the variation faded in over the first `CLOUD_VARIATION_RAMP` (0.25)
   of the base coverage. With a constant spread the weather map's peaks stayed clouds at coverage 0. The upper
   layer ramps on its own effective coverage (upper x main).
+* **MACRO COVERAGE** ("Macro size (km)" 100, "Macro variation" 1; `cloudColumnCoverage`): the weather map's
+  coverage channel read over its OWN, much larger period (rotated, mip `CLOUD_MACRO_LOD` 2), added to the column
+  coverage with the variation's ramp: whole regions clear or overcast. The weather period's features are the clouds'
+  own size, so alone they scattered the clouds evenly everywhere. Its origin is world - wind (+ seed, axes swapped)
+  wrapped by the macro period on the CPU, passed as `u_clouds_macroShift` = macro origin - noise origin, so the
+  shader forms `(nxz + shift) / period` with one add (the eye offset included). Taking the origin and the eye offset
+  separately cost the march 64 -> 72 registers.
+* **FAR COVERAGE** ("Sky/Clouds/Far coverage", `u_clouds_farCoverage`): that column coverage (the variation's
+  spread included) x a scale going 1 -> "Scale" over "Start" .. "End" (km, smoothstep) of the column's HORIZONTAL
+  distance from the camera, `length(nxz - cloudNoiseOffset())` - not the sample's `camDist`, which the sun march and
+  the shadow map do not pass, so the shadows and the air's cloud shadow (`cloudAirSunVis`) see the same clouds.
 * **EROSION CUTOFF** ("Quality/Erosion cutoff", `u_clouds_erosionCutoff`): the erosion's remap
   `(d - lo) / (1 - lo)` leaves a thin rest wherever the detail fBm is low, which over kilometres of ray reads as
   haze. `cloudLayerShape` ends with `(d - cut) / (1 - cut)`: the rest goes, the cores stay at 1. Monotonic, so
@@ -74,6 +87,13 @@ variant (`sky.fs.glsl`) draws NO clouds.
   drift ("Evolve speed (m/s)") accumulate in double on the SIM clock. **"Seed"** (0 = none) adds a fixed offset to
   both - a hash of it as a fraction of the weather period (x / z; base and detail tile inside it) and of the detail
   period (the drift), `cloudSeedOffset` - so each seed is another cloud layout at the same settings, at no cost.
+* **BASE BREAKUP** ("Base breakup (km)", `u_clouds_baseBreakup`, peak to peak; `cloudLayerShape`): the base tile is
+  only weather / "Base repeats" wide (3.3 km at the defaults), so from altitude the same shapes stood in rows along X
+  and Z. The base lookup is warped by the weather map's type channel at mip `CLOUD_BREAKUP_LOD` (4), read twice at
+  different rotations: smooth (a gentle stretch), and it tiles with the weather period, so the wrap stays continuous.
+  Each base tile then shows a different part of the noise. The detail is not warped (too fine to read as rows). Two
+  coarse 2D fetches per density sample; the march stays at 64 registers, no spill. Default 0: it moves the clouds but
+  not the gaps (the even scatter is the coverage's scale - the macro coverage handles that).
   **A new noise lookup must use an integer
   multiple of these frequencies**, or it seams when the origin wraps.
 * **The noise textures are generated on the GPU** (`cloud_noise.cs.glsl`) at initialize and on every
@@ -99,8 +119,12 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
   * **Empty-space skipping:** in clear air it takes 3x steps (`CLOUD_COARSE_MULT`) that test only the cheap
     shape (weather + base); the detail only erodes that shape, so a zero there is a zero of the full density. A
     hit backs up and marches finely; `CLOUD_COARSE_AFTER` (4) empty fine steps return it to coarse. **Past
-    "Detail distance (km)"** the detail erosion is off (its weight fades over the last 20 %; `cloudDensity` takes
-    a detail WEIGHT) and the detail fetches are skipped.
+    "Detail distance (km)"** the detail fetches are skipped (the weight fades over the last 20 %; `cloudDensity`
+    takes a detail WEIGHT) and the view samples erode by the detail's MEAN instead (`CLOUD_DETAIL_MEAN_ERODE` 0.5; a
+    weight up to `CLOUD_DETAIL_FETCH_MIN` = the mean alone, as `d * x - y` from `u_clouds_meanErosion`, multiplied out
+    on the CPU). Without it the far clouds were uneroded and thinned as the camera came near. Weight 0 = no erosion:
+    the cheap test (it must bound the full shape) and the sun march (its first step gets the weight only above the
+    fetch threshold). The general remap there, or the mean on the sun march, cost the march 64 -> 72 registers.
   * **The march ends at transmittance 0.02** (`CLOUD_T_END`), and below 0.3 (`CLOUD_T_THICK`) its fine steps
     double. **The final transmittance is remapped `(T - 0.02) / 0.98`**, so the early-out level is fully
     opaque: the composite passes scene x T, and a leftover 2 % let the SUN DISC shine through any cloud.
@@ -141,7 +165,12 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
       multiple-scattering octave under 0.1 %).
   * **The aerial perspective in front of the cloud** (`cloudAerialScatter`): an 8-step single-scatter segment
     from the camera altitude, x "Lighting/Aerial perspective strength" (`u_clouds_aerialStrength`, min 0.01:
-    scales the ADDED air light only; the cloud's dimming through the air stays physical). **Each step is in the
+    scales the ADDED air light only; the dimming has its own tweak below). Two lights, as the
+    terrain's aerial LUT: the sun, and the SKY LIGHT ("Sky Radiance" from the local up, not cloud-shadowed - most of
+    the blue; without it the air in the clouds' shadow added nothing). The air thins with height, so a cloud gets
+    less of it than terrain at the same distance. **"Aerial dimming"** scales the air's optical depth on the
+    cloud's own light (per colour: warmer and darker far out; 1 = physical). **"Aerial fade"** takes the air's MEAN
+    optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them. **Each step is in the
     clouds' shadow** (`cloudAirSunVis`, `cloud_raymarch.inc.glsl`): the shadow map inside it, and PAST it the
     WEATHER MAP - the coverage of the column where the sun ray from the air point crosses the main layer's
     middle, `1 - smoothstep(0.35, 0.75, coverage)`. The steps sit at the ray's per-pixel / per-frame jitter:

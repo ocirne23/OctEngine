@@ -71,7 +71,7 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
         const float mid = u_clouds_mainBottom + 0.5 / u_clouds_mainInvHeight;
         const float tSun = max(mid - cloudAltitude(rel, camAlt), 0.0) * u_clouds_invSunUpAir; // L is the sun
         const vec2 nxz = (rel + L * tSun).xz + cloudNoiseOffset();
-        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r);
+        const float c = cloudColumnCoverage(u_clouds_coverage, textureLod(u_cloudWeather, nxz * u_clouds_invWeatherPeriod, 0.0).r, nxz);
         farT = 1.0 - smoothstep(0.35, 0.75, c);
     }
 
@@ -82,37 +82,56 @@ float cloudAirSunVis(vec3 rel, float camAlt, vec3 L)
 #endif
 }
 
-// Single-scattered atmosphere from a camera-relative origin to origin + dir * tEnd, per unit sun radiance (multiply by
-// the sun colour), and its transmittance: the aerial perspective in front of a cloud. Each step's sun is cloud-shadowed
-// (cloudAirSunVis). The 8 steps sit at the ray's per-pixel / per-frame JITTER, which the temporal pass averages into
-// soft shafts (fixed points stamped the openings' lit air onto the clouds as blobs).
-vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 lightDir, float jitter, out vec3 transmittance)
+// Single-scattered atmosphere from a camera-relative origin to origin + dir * tEnd and its transmittance: the aerial
+// perspective in front of a cloud. Returns the sun part per unit sun radiance (multiply by the sun colour); skyLight =
+// the SKY-LIGHT part (the "Sky Radiance" light from straight up, as aerial_lut.cs.glsl: most of the blue), radiance.
+// Each step's sun is cloud-shadowed (cloudAirSunVis); the sky light is not, as in the LUT. The 8 steps sit at the ray's
+// per-pixel / per-frame JITTER, which the temporal pass averages into soft shafts (fixed points stamped the openings'
+// lit air onto the clouds as blobs).
+vec3 cloudAerialScatter(vec3 origin, float camAlt, vec3 dir, float tEnd, vec3 lightDir, float jitter, out vec3 transmittance, out vec3 skyLight)
 {
     const int steps = 8;
     const vec3 ro = origin + vec3(0.0, camAlt + ATMOS_R_PLANET, 0.0); // planet-centred
     const float mu = dot(dir, lightDir);
     const float pR = phaseRayleigh(mu);
     const float pM = phaseHG(mu, u_sky_mieG);
+    const bool sky = dot(u_sky_radiance, u_sky_radiance) > 0.0; // uniform: a UBO value
     const AtmosRay ray = atmosRayBegin(ro, dir); // the origin's Chapman values once, not per step
     const vec2 densExp2 = -CLOUD_LOG2E / vec2(ATMOS_H_RAY, ATMOS_H_MIE); // exp(-h / H) as exp2(h * densExp2)
     const float dt = tEnd / float(steps);
 
     vec3 sumR = vec3(0.0);
     vec3 sumM = vec3(0.0);
+    vec3 skyR = vec3(0.0);
+    vec3 skyM = vec3(0.0);
     float t = jitter * dt;
     for (int i = 0; i < steps; ++i)
     {
         const vec3 p = ro + dir * t;
         const float h = length(p) - ATMOS_R_PLANET;
         const vec2 dens = exp2(max(h, 0.0) * densExp2) * dt;
-        const vec3 atten = exp(-atmosTau(atmosRayOD(ray, t) + atmosLightOpticalDepth(p, lightDir)))
+        const vec2 viewOD = atmosRayOD(ray, t);
+        const vec3 atten = exp(-atmosTau(viewOD + atmosLightOpticalDepth(p, lightDir)))
                          * cloudAirSunVis(origin + dir * t, camAlt, lightDir);
         sumR += atten * dens.x;
         sumM += atten * dens.y;
+        if (sky)
+        {
+            const vec3 skyAtt = exp(-atmosTau(viewOD + atmosLightOpticalDepth(p, p / length(p))));
+            skyR += skyAtt * dens.x;
+            skyM += skyAtt * dens.y;
+        }
         t += dt;
     }
 
     transmittance = exp(-atmosTau(atmosRayOD(ray, tEnd)));
+    skyLight = vec3(0.0);
+    if (sky)
+    {
+        const float muSky = dir.y;
+        skyLight = (skyR * u_sky_betaRayleigh * phaseRayleigh(muSky) + skyM * vec3(u_sky_betaMie) * phaseHG(muSky, u_sky_mieG))
+                 * u_sky_scatterBoost * u_sky_radiance;
+    }
     return (sumR * u_sky_betaRayleigh * pR + sumM * vec3(u_sky_betaMie) * pM) * u_sky_scatterBoost;
 }
 
@@ -264,7 +283,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
             const float lodBase = logDist + lodBaseBias; // < 0 is fine: the noise sampler's minLod is 0 (CloudPipeline.cpp)
             if (coarse)
             {
-                if (cloudDensity(nxz, alt, ts, 0.0, lodBase, 0.0) > 0.0) // detail 0: no detail fetch, no detail mip
+                if (cloudDensity(nxz, alt, ts, 0.0, lodBase, 0.0) > 0.0) // detail 0: no erosion (bounds the full shape), no fetch
                 {
                     coarse = false; // back up: this interval is marched again, finely
                     emptyRun = 0;
@@ -276,7 +295,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 
             t += dt;
             const float lodDetail = logDist + lodDetailBias;
-            const float detailWeight = clamp(5.0 - 5.0 * ts * detailInvDist, 0.0, 1.0);
+            // Past "Detail distance": the fetch threshold's half - the detail's mean erosion, no fetches (clouds.inc.glsl).
+            const float detailWeight = clamp(5.0 - 5.0 * ts * detailInvDist, 0.5 * CLOUD_DETAIL_FETCH_MIN, 1.0);
             const float dens = cloudDensity(nxz, alt, ts, detailWeight, lodBase, lodDetail);
             if (dens <= 0.0)
             {
@@ -298,7 +318,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
                 if (map.y >= 1.0)
                     od = map.x;
                 else
-                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, alt, L, lodBase, lodDetail, detailWeight, odCut), map.x, map.y);
+                    od = mix(cloudLightOpticalDepth(rel, nxz, camAlt, alt, L, lodBase, lodDetail,
+                        detailWeight > CLOUD_DETAIL_FETCH_MIN ? detailWeight : 0.0, odCut), map.x, map.y); // the sun: no mean erosion
                 const float od2 = od * CLOUD_LOG2E; // the three exp as exp2: one multiply instead of three
                 const float msSum = ms * exp2(-od2 * ms) + msTailScale * exp2(-od2 * msTailExt);
                 const float sunTerm = phase0 * exp2(-od2) + isotropic * (msStrength * msSum);
@@ -341,7 +362,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     // Sun radiance at the cloud: the atmosphere transmittance at the shell bottom and top, along the LOCAL up at the
     // first cloud (at 100 km the local sun elevation differs by ~1 degree: the sunset on distant clouds).
     const vec3 frontRel = origin + dir * r.front;
-    const vec3 localUp = normalize(vec3(frontRel.x, frontRel.y + camAlt + ATMOS_R_PLANET, frontRel.z));
+    const vec3 localUp = normalize(vec3(frontRel.x, frontRel.y + camAlt + CLOUD_R, frontRel.z));
     const vec3 sunColor = u_sunColor * u_sunVisible;
     const vec3 sunBottom = sunColor * atmosTransmittanceToLight(u_clouds_shellBottom, L, localUp);
     const vec3 sunTop = sunColor * atmosTransmittanceToLight(u_clouds_shellTop, L, localUp);
@@ -361,10 +382,16 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
 
     // The air in front lies in the CLOUDS' SHADOW where the sun is behind them; unshadowed, its Mie forward peak drew a
     // sun glow on top of any cloud.
-    vec3 airT;
-    const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, jitter, airT) * sunColor;
-    // u_clouds_aerialStrength scales the added air light only; the cloud's dimming through the air stays physical.
-    r.inScatter = r.inScatter * airT + air * ((1.0 - r.transmittance) * u_clouds_aerialStrength);
+    vec3 airT, airSky;
+    const vec3 air = cloudAerialScatter(origin, camAlt, dir, tAir, L, jitter, airT, airSky) * sunColor + airSky;
+    // u_clouds_aerialStrength scales the added air light; "Aerial dimming" the air's optical depth on the cloud's own light
+    // (per colour: the far cloud warms and darkens). "Aerial fade" takes the air's MEAN optical depth off the cloud's
+    // opacity: the world is flat, so far clouds never sink under a horizon - they fade into the sky behind instead.
+    const vec3 airTau = -log(max(airT, vec3(1e-6)));
+    r.inScatter = r.inScatter * exp(-airTau * u_clouds_aerialDimming) + air * ((1.0 - r.transmittance) * u_clouds_aerialStrength);
+    const float fade = exp(-dot(airTau, vec3(1.0 / 3.0)) * u_clouds_aerialFade);
+    r.inScatter *= fade;
+    r.transmittance = 1.0 - (1.0 - r.transmittance) * fade;
     return r;
 }
 

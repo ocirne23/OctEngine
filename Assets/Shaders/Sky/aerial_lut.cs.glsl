@@ -89,7 +89,7 @@ void main()
     }
 
     vec3 color = (sunR * u_sky_betaRayleigh * pRSun + sunM * vec3(u_sky_betaMie) * pMSun) * (u_sky_scatterBoost) * u_sunColor.rgb;
-    color = max(mix(vec3(dot(color, luminosity)), color, 2.0 * (2.0 - eclipse)), vec3(0.0)) * eclipse; // sky.fs.glsl's curve
+    color = max(mix(vec3(dot(color, luminosity)), color, u_sky_saturation * (2.0 - eclipse)), vec3(0.0)) * eclipse; // sky.fs.glsl's curve
     if (skyLight)
         color += (skyR * u_sky_betaRayleigh * pRSky + skyM * vec3(u_sky_betaMie) * pMSky) * u_sky_scatterBoost * u_sky_radiance;
     const vec3 T = exp(-atmosTau(atmosRayOD(ray, tNext)) * strength);

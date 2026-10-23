@@ -142,7 +142,7 @@ void main()
 		const bool moonCovered = cosM < u_sky_moonCos * 2.00 - cosM;
 
 		color = atmosphereScatter(dir, L, up, VIEW_STEPS, observerHeight, transmittance) * sunSurfaceColor.rgb;
-		color = adjustSaturation(color, 2.0 * (2.0-eclipseFactor)) * eclipseFactor; // saturate during an eclipse: no flat grey haze
+		color = adjustSaturation(color, u_sky_saturation * (2.0 - eclipseFactor)) * eclipseFactor; // "Saturation", more in an eclipse: no flat grey haze
 		sunSurfaceColor *= eclipseFactor;
 
 		// Sky radiance (moonlight / space light) from the up axis: the night glow GI / fog get from skyRadiance().

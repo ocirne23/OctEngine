@@ -573,9 +573,16 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
 
-    // 23 = the set's highest binding number: required for eVariableDescriptorCount.
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_grassNearShadow (the near grass cascade, comparison)
         .binding = 23,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
+
+    // 24 = the set's highest binding number: required for eVariableDescriptorCount.
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+        .binding = 24,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
@@ -585,7 +592,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     // baked terrain height (19), sky map (20) and cloud shadow map (22) bindings are refreshed after the
     // (cached) draw CB is recorded -> UPDATE_AFTER_BIND; the GI volume (21) is written at record only for the
     // live cascades (partially bound; the images change only with the grid, which re-records); the texture
-    // array (23) is variable-count (allocated at the live texture capacity), only partially written, and
+    // array (24) is variable-count (allocated at the live texture capacity), only partially written, and
     // UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
@@ -596,7 +603,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
         else if (descriptorSetBindings[i].binding == 21)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-        else if (descriptorSetBindings[i].binding == 23)
+        else if (descriptorSetBindings[i].binding == 24)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
 }
@@ -722,7 +729,7 @@ void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descr
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
     vk::DescriptorImageInfo imageInfo{ .sampler = m_sampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 23, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 24, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -909,7 +916,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
 {
-    oc::array<DescriptorSetUpdateInfo, 18> graphicsDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 19> graphicsDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo{
             .binding = 0,
@@ -1041,21 +1048,27 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.rtMeshInstancesBuffer.getBuffer(), .range = params.rtMeshInstancesBuffer.getSize() } }
         },
-        DescriptorSetUpdateInfo{ // [15] the texture array
+        DescriptorSetUpdateInfo{ // [15] the near grass cascade
             .binding = 23,
             .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.grassNearShadowSampler, .imageView = params.grassNearShadowView,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } }
         },
-        DescriptorSetUpdateInfo{}, // [16] + [17] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{ // [16] the texture array
+            .binding = 24,
+            .type = vk::DescriptorType::eCombinedImageSampler,
+        },
+        DescriptorSetUpdateInfo{}, // [17] + [18] the GI volume cascades + sky: written only while it exists
         DescriptorSetUpdateInfo{},
     };
     if (!params.giVolume.empty())
-        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[16], graphicsDescriptorSetUpdateInfos[17]);
-    const size_t numUpdates = params.giVolume.empty() ? 16 : 18;
+        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[17], graphicsDescriptorSetUpdateInfos[18]);
+    const size_t numUpdates = params.giVolume.empty() ? 17 : 19;
 
     const size_t numTextures = Globals::textureManager.getNumTextures();
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
     {
-        graphicsDescriptorSetUpdateInfos[15].imageInfos.push_back(
+        graphicsDescriptorSetUpdateInfos[16].imageInfos.push_back(
             vk::DescriptorImageInfo{
                 .sampler = m_sampler.getSampler(),
                 .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback

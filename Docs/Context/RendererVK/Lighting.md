@@ -370,13 +370,14 @@ on the ground, so tinting it turns the near valley mist blue and still never mat
   (the view optical depth is closed-form, `atmosRayOD`), so each lane marches its own slice and a
   `subgroupInclusiveAdd` adds the slices in front. **The workgroup IS one subgroup: `AERIAL_LUT_Z` = 32 = the warp -
   keep it there.** (One thread per column marching every step was latency-bound: too few threads on the whole GPU.)
-* **Matched to sky.fs.glsl:** observer at the camera altitude along `u_skyUp`, the scatter boost, the eclipse
-  saturation curve on the sun part. A level ray far out goes to the horizon sky's own colour. Each step's sun is
+* **Matched to sky.fs.glsl:** observer at the camera altitude along `u_skyUp`, the scatter boost, the "Sky/Atmosphere/
+  Saturation" curve on the sun part (`u_sky_saturation` x (2 - sun visible): more in an eclipse; the mirror sky has
+  it too). A level ray far out goes to the horizon sky's own colour. Each step's sun is
   cloud-shadowed (`cloudSunTransmittanceBilinear`; past the far cascade, the layer's mean). No jitter: no temporal
   pass averages the LUT, and a texel covers many pixels.
 * **Apply** (`vol_apply.fs.glsl` `aerialTo` / `withAerial`, binding 11): the air goes BEHIND the fog (`fog + fog.a x
   air`), on the scene and the far-tree layer. **Not on the sky** (it holds the whole ray) **and not on the clouds**
-  (their march has its own `cloudAerialScatter`; with `sameFog` the cloud folds the scene's fog BEFORE the air is
+  (their march has its own `cloudAerialScatter`, with the same sun + sky-light terms; with `sameFog` the cloud folds the scene's fog BEFORE the air is
   added).
 * **"Strength"** (`u_fog_aerialStrength`, default 1, min 0.05: always on) scales the air density along the VIEW ray
   only (the sun still reaches each point through the unscaled atmosphere, as in the sky). **"Max distance (km)"**

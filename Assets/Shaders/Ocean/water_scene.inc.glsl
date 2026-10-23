@@ -41,7 +41,7 @@ layout (binding = 6, std430) readonly buffer InGridTable
 #include "light_grid.inc.glsl"
 
 layout (binding = 20) uniform sampler2DArray u_skyMap; // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 23) uniform sampler2D u_textures[];  // highest binding in the set: variable descriptor count
+layout (binding = 24) uniform sampler2D u_textures[];  // highest binding in the set: variable descriptor count
 #define CLOUD_SHADOW_BINDING 22
 #include "cloud_shadow.inc.glsl"
 layout (binding = 11) uniform accelerationStructureEXT u_tlas;

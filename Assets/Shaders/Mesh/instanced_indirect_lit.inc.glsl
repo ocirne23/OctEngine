@@ -50,7 +50,7 @@ layout (binding = 6, std430) readonly buffer InGridTable
 };
 
 layout (binding = 20) uniform sampler2DArray u_skyMap; // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 23) uniform sampler2D u_textures[];  // highest binding in the set: variable descriptor count
+layout (binding = 24) uniform sampler2D u_textures[];  // highest binding in the set: variable descriptor count
 #define CLOUD_SHADOW_BINDING 22
 #include "cloud_shadow.inc.glsl"
 #ifdef GI_VOLUME
@@ -60,6 +60,7 @@ layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
 #endif
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap; // comparison sampler (hardware PCF)
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;  // raw depth (PCSS blocker search)
+layout (binding = 23) uniform sampler2DArrayShadow u_grassNearShadow; // the near grass cascade (one layer; grass.inc.glsl)
 layout (binding = 13) uniform sampler2D u_ao;                  // LAST frame's denoised half-res screen-space AO (reprojected bilateral upsample)
 layout (binding = 12) uniform sampler2D u_prevDepth;           // LAST frame's full-res hardware depth (the AO upsample's edge weights)
 

@@ -523,17 +523,6 @@ vec3 flowerVertex(Flower f, uint v, uint lod, vec3 ctrl, vec3 tip, out vec3 norm
 
 void main()
 {
-#ifdef CLUTTER_NEAR_SHADOW
-    // Only the flowers around the near cascade's box (as the blades).
-    const vec2 toNear = in_instPosScale.xz - u_grass_nearCentre;
-    const float nearReach = u_grass_nearRange * 1.5 + 2.0;
-    if (dot(toNear, toNear) > nearReach * nearReach)
-    {
-        gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-#endif
-
     const uint lod = (in_instData.z >> 16) & 0xFFu;
     const uint h = in_instData.w;
     const vec2 stemHead = unpackHalf2x16(in_instLook.z);

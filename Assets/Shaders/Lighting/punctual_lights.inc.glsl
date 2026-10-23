@@ -184,6 +184,16 @@ vec3 doLightDiffuseOnlyH(vec3 lightRadiance, f16vec3 F, f16vec3 matColOverPi, fl
 	return vec3((f16vec3(1.0) - F) * matColOverPi * ((float16_t(1.0) - metalness) * NoL)) * lightRadiance;
 }
 
+// The half vector with its squared length FLOORED (1e-4: a normal half): at V = -L (looking at the light through the
+// surface) L + V is ~0, its square underflowed in half and normalize gave inf / NaN - which no fade multiplies away
+// (NaN x 0 = NaN). Stays half: an fp32 sum here moved the grass FS from 64/16 to 56/48. The SUN's BRDF only
+// (doLightH, doLightSplitH): in the area lights' loop it cost the lit FS 8 registers.
+f16vec3 halfVectorH(f16vec3 L, f16vec3 V)
+{
+	const f16vec3 s = L + V;
+	return s * inversesqrt(max(dot(s, s), float16_t(1e-4)));
+}
+
 // (D * Vis * NoL) is clamped to the half range: Vis * NoL <= 0.5 / alpha, so D * that can overflow at the peak of a
 // very smooth lobe. Vis * NoL is formed first, so NoL = 0 gives 0, never inf * 0.
 vec3 doAreaLightSpecularH(vec3 lightRadiance, f16vec3 Lspec, f16vec3 V, f16vec3 N, f16vec3 specularCol, float lightSize, float distSpec, float16_t alpha)
@@ -191,6 +201,8 @@ vec3 doAreaLightSpecularH(vec3 lightRadiance, f16vec3 Lspec, f16vec3 V, f16vec3 
 	const float16_t alphaPrime = float16_t(clamp(float(alpha) + lightSize / (2.0 * distSpec), 0.0, 1.0));
 	const float16_t normRatio  = alpha / alphaPrime;
 
+	// Plain normalize, NOT halfVectorH: in the light loop (the lit FS's register peak) the floored form cost 8 registers
+	// (64 -> 72 in the lit, tree and foliage FS), and V = -L against an area light is a rare view.
 	const f16vec3 H       = normalize(Lspec + V);
 	const float16_t NoL   = max(dot(N, Lspec), float16_t(0.0));
 	const float16_t NoV   = max(dot(N, V), float16_t(0.0));
@@ -214,7 +226,7 @@ float16_t antiLightFade(f16vec3 L, f16vec3 V)
 
 vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float16_t metalness, float16_t alpha)
 {
-	const f16vec3 H     = normalize(L + V);
+	const f16vec3 H     = halfVectorH(L, V); // no NaN at V = -L
 	const float16_t NoL = max(dot(N, L), float16_t(0.0));
 	const float16_t NoV = max(dot(N, V), float16_t(0.0));
 	const float16_t NoH = max(dot(N, H), float16_t(0.0));
@@ -229,7 +241,7 @@ vec3 doLightH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 N, f16vec3 specu
 // specular colour, one with a zero diffuse) ran the GGX twice, and Fresnel with F0 = 0 is not 0 at grazing.
 vec3 doLightSplitH(vec3 lightRadiance, f16vec3 L, f16vec3 V, f16vec3 Nd, f16vec3 Ns, f16vec3 specularCol, f16vec3 matColOverPi, float16_t metalness, float16_t alpha)
 {
-	const f16vec3 H      = normalize(L + V);
+	const f16vec3 H      = halfVectorH(L, V); // no NaN at V = -L
 	const float16_t NoLd = max(dot(Nd, L), float16_t(0.0));
 	const float16_t NoLs = max(dot(Ns, L), float16_t(0.0));
 	const float16_t NoVs = max(dot(Ns, V), float16_t(0.0));

@@ -905,8 +905,7 @@ private:
     float grassGridRange() const; // capped so the grid fits GRASS_MAX_PATCHES: the grid and u_grass_range
     // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
     // map - the cascades' pass that this layer must follow).
-    bool grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }
-    void uploadGrassFrame(uint32 frameIdx);
+    bool grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }    void uploadGrassFrame(uint32 frameIdx);
     bool m_groundTableValid = false; // this frame's ground table holds chunks (uploadGrassFrame): the clutter's ground
     // GROUND CLUTTER: the cull + buffers (the objects draw in m_staticMeshGraphicsPipeline). The patch grid and the
     // floor map go into the slot's clutter frame in present (uploadClutterFrame).
@@ -1050,6 +1049,7 @@ private:
     {
         SceneColor sceneColor; // colour + scene depth (no prepass: every depth reader samples this one)
         ShadowMap shadowMap;
+        ShadowMap grassNearShadowMap; // the near grass cascade (one layer; GrassPipeline + ClutterPipeline cast into it)
 
         oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet; // Per-eye in VR
         DescriptorSet compositeDescriptorSet;
