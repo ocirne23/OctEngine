@@ -18,7 +18,7 @@ extern "C++"
 export struct WindParams
 {
     float speed = 2.0f;         // m/s, the mean wind
-    float angleDeg = 250.0f;    // the direction the wind blows TOWARDS, degrees from +X around +Y
+    float angleDeg = 75.0f;    // the direction the wind blows TOWARDS, degrees from +X around +Y
     float gustStrength = 5.0f;  // m/s, the amplitude of the 2D gust vector added to the mean (calm air flurries too)
     float gustSize = 50.0f;     // m, the gusts' feature size
 
@@ -47,7 +47,7 @@ export struct SkyParams
     // x 1 by day, x nightSkyRadiance at night (a smooth step over the sun's elevation). The tweaks keep their values.
     bool  sunCycle = true;
     bool  sunCyclePaused = false;       // the time of day holds (the sun still follows a dragged time / latitude)
-    float timeOfDay = 5.0f;             // hours, 0..24 (the start: before a sunrise)
+    float timeOfDay = 5.40f;             // hours, 0..24 (the start: before a sunrise)
     float sunCycleSpeed = 60.0f;        // game hours per real hour (1 = real time, 60 = a day in 24 minutes)
     float latitude = -45.0f;            // degrees north (< 0 = south)
     float dayOfYear = 300.0f;           // 1..365: the sun's declination (172 = the June solstice, 80 = the March equinox)
