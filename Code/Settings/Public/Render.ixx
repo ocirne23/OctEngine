@@ -3,6 +3,10 @@ export module Settings.Render;
 import Core;
 import Core.glm;
 
+// The types are attached to the GLOBAL module, so Settings.fwd's forward declarations name the same entities.
+extern "C++"
+{
+
 // The renderer's settings (RendererVK reads them from Globals::settings; the UBO build feeds most of them to the
 // shaders). Plain data: the registration (Private/Render.cpp) knows nothing of the renderer, which attaches its
 // reactions (shader reloads, re-records, resizes) as Tweak::onChange listeners in Renderer::attachSettingsListeners.
@@ -1038,6 +1042,8 @@ export struct RendererSettings
     bool decals = true;              // "Decals/Enabled"
     bool terrainWetDiffusion = true; // "Terrain/Water/Diffusion on": the WET_DIFFUSION define of the wetness compute (reload + re-record)
 };
+
+} // extern "C++"
 
 // The registration, one function per struct. Run them in this order (the TweakPanel lists a category in
 // registration order): Sky, Wind, Shadow, Foliage, FarTree, Rock, Grass, Fog, Clouds, RT, RTAO, TAA, Dlss,

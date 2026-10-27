@@ -15,7 +15,6 @@ import :Sampler;
 import :Layout;
 import :UboBlock;
 import :PushBlock;
-import Settings;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
 // nested toroidal probe grids (centred on the SCENE FOCUS - u_sceneFocus: the game's player, else the camera -
@@ -161,20 +160,10 @@ public:
     // delta, so the field converges in the same WALL time at any frame rate. Per frame and uncorrected, 0.01
     // is a 1.7 s time constant at 60 fps but 0.4 s at 240 fps, and the blend's noise wanders 4x faster - it
     // reads as flicker. The delta is clamped so a hitch frame cannot replace the history.
-    glm::vec4 getTraceParams0(float wallDeltaSec) const
-    {
-        const GiSettings& gi = Globals::settings.gi;
-        const float frames60 = 60.0f * glm::clamp(wallDeltaSec, 0.001f, 0.1f);
-        const float frameAlpha = 1.0f - powf(1.0f - glm::clamp(gi.temporalAlpha, 0.0f, 1.0f), frames60);
-        return glm::vec4((float)oc::max(gi.raysPerProbe, 1), frameAlpha, gi.maxRayDist, oc::max(gi.updateIntervalMult, 1.0f));
-    }
-    float getTlasRange() const { return Globals::settings.gi.tlasRange; }
+    glm::vec4 getTraceParams0(float wallDeltaSec) const;
+    float getTlasRange() const;
     // u_rt_giPriorityDist / Falloff / FrustumWeight: x = nominal-rate distance from the focus (m), y = distance falloff exponent, z = frustum weight.
-    glm::vec3 getPriorityParams() const
-    {
-        const GiSettings& gi = Globals::settings.gi;
-        return glm::vec3(oc::max(gi.priorityDist, 1.0f), oc::max(gi.priorityFalloff, 0.0f), oc::max(gi.priorityFrustumWeight, 1.0f));
-    }
+    glm::vec3 getPriorityParams() const;
 
     // Debug visualization: a sphere impostor at every clipmap probe, drawn into the main color pass - the SH
     // evaluated per pixel (x "GI/Strength") in the irradiance mode, a shaded flat colour in the other modes.
@@ -188,18 +177,14 @@ public:
     // after cycleDebugMode).
     void registerDebugPushFields();
     PushBlock& debugPushBlock() { return m_debugBlock; }
-    bool isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
-    void toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
-    void cycleDebugMode() // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
-    {
-        Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5;
-        Tweak::notifyChanged(Globals::settings.gi.debugMode);
-    }
+    bool isDebugEnabled() const;
+    void toggleDebug();
+    void cycleDebugMode(); // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
 
     Buffer& getTlasInstanceBuffer(uint32 frameIdx) { return m_tlasInstanceBuffer[frameIdx]; }
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
     Buffer& getGiGridDataBuffer() { return m_giGridData; }
-    float getStrength() const { return Globals::settings.gi.strength; }
+    float getStrength() const;
     // The u_rt_gi* entries (Renderer::registerUboValues, inside its rt block): its tweaks are private. rtEnabled /
     // giEnabled are long-lived RTParams members: the lambdas keep the references.
     void registerUboFields(UboBlock& list, const bool& rtEnabled, const bool& giEnabled) const;
@@ -209,17 +194,7 @@ public:
     // or a Chebyshev knob changed - the bake is otherwise partial (only voxels whose probes the trace visits),
     // and a far probe can go hundreds of frames without a visit. bakeRuns = this frame records the bake (RT and
     // GI on): the request is held until such a frame, so a knob moved while GI is off still lands.
-    glm::vec4 takeVisibilityParams(bool bakeRuns)
-    {
-        const GiSettings& gi = Globals::settings.gi;
-        const glm::vec3 knobs(gi.visVarianceFloor, gi.visWeightFloor, gi.visMeanScale);
-        m_volumeFullBake = m_volumeFullBake || knobs != m_lastVisKnobs;
-        m_lastVisKnobs = knobs;
-        const bool fullBake = m_volumeFullBake && bakeRuns;
-        if (bakeRuns)
-            m_volumeFullBake = false;
-        return glm::vec4(knobs.x, fullBake ? 1.0f : 0.0f, knobs.y, knobs.z);
-    }
+    glm::vec4 takeVisibilityParams(bool bakeRuns);
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);

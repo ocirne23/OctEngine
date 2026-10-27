@@ -8,6 +8,76 @@ import Settings.Tweaks;
 import :VK;
 import :Layout;
 
+static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS, "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.Render cannot import :Layout)");
+static_assert(GrassParams::MAX_BLADES == (int)RendererVKLayout::GRASS_MAX_BLADES, "GrassParams::MAX_BLADES (the \"Blades per patch\" range) must match GRASS_MAX_BLADES");
+
+Renderer::Renderer()
+    : m_farTreeParams(Globals::settings.farTree)
+    , m_grassParams(Globals::settings.grass)
+    , m_rockParams(Globals::settings.rock)
+    , m_clutterParams(Globals::settings.clutter)
+    , m_skyParams(Globals::settings.sky)
+    , m_windParams(Globals::settings.wind)
+    , m_shadowParams(Globals::settings.shadow)
+    , m_foliageParams(Globals::settings.foliage)
+    , m_fogParams(Globals::settings.fog)
+    , m_cloudParams(Globals::settings.clouds)
+    , m_postParams(Globals::settings.post)
+    , m_rtParams(Globals::settings.rt)
+    , m_rtaoParams(Globals::settings.rtao)
+    , m_lightGridParams(Globals::settings.lightGrid)
+    , m_taaParams(Globals::settings.taa)
+    , m_dlssParams(Globals::settings.dlss)
+    , m_motionBlurParams(Globals::settings.motionBlur)
+    , m_bloomParams(Globals::settings.bloom)
+    , m_lodParams(Globals::settings.lod)
+{
+}
+
+float Renderer::getOceanWorldScale() const { return oceanWorldScaled(Globals::settings.ocean).s; }
+float Renderer::getOceanSwashAmp() const { return glm::clamp(Globals::settings.ocean.swashAmp, 0.04f, 4.0f); } // the tweak min: the reach is >= 0.01
+float Renderer::getOceanBubbleDepth() const { return glm::max(oceanWorldScaled(Globals::settings.ocean).bubbleDepth, 0.0f); }
+float Renderer::getOceanBubbleBrightness() const { return glm::max(Globals::settings.ocean.bubbleBrightness, 0.0f); }
+
+void Renderer::setAmbientLight(const glm::vec3& color, float intensity) { m_skyParams.ambientColor = color; m_skyParams.ambientIntensity = intensity; }
+void Renderer::setSkyRadiance(const glm::vec3& color, float intensity) { m_skyParams.skyRadianceColor = color; m_skyParams.skyRadianceIntensity = intensity; m_uboLocksDirty = true; }
+void Renderer::setSkyParams(const SkyParams& sky) { m_skyParams = sky; m_uboLocksDirty = true; }
+void Renderer::setFogParams(const FogParams& fog) { m_fogParams = fog; m_uboLocksDirty = true; }
+void Renderer::setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); m_uboLocksDirty = true; }
+void Renderer::setShadowParams(const ShadowParams& params) { m_shadowParams = params; m_uboLocksDirty = true; }
+bool Renderer::isVSyncEnabled() const { return Globals::settings.renderer.vsync; }
+
+float Renderer::grassRange() const { return grassActive() ? m_grassParams.range : 0.0f; }
+bool Renderer::grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; }
+bool Renderer::grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }
+bool Renderer::clutterActive() const { return m_clutterParams.enabled && m_sceneViewCount == 1 && m_clutterPipeline.numTypes() > 0; }
+float Renderer::clutterPatchSize() const { return glm::clamp(m_clutterParams.patchSize, 1.0f, 16.0f); }
+bool Renderer::cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
+bool Renderer::taaActive() const { return m_taaParams.taaEnabled && !dlssActive(); }
+bool Renderer::motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1 && !upscaling(); }
+bool Renderer::bloomEnabled() const { return m_bloomParams.enabled && m_sceneViewCount == 1; }
+float Renderer::bloomMixIntensity() const { return bloomEnabled() ? glm::max(m_bloomParams.intensity, 0.005f) : 0.0f; }
+float Renderer::dlssMipBias() const { return dlssActive() && m_dlssParams.mipBias && upscaling() ? glm::log2(m_renderScale.y) : 0.0f; }
+
+bool Renderer::syncCloudDefines()
+{
+    const RendererVKLayout::CloudShaderConfig config{ .clouds = m_cloudParams.enabled, .shadows = m_cloudParams.shadows,
+        .selfShadowFromMap = m_cloudParams.selfShadowFromMap, .powder = m_cloudParams.powder > 0.0f,
+        .checkerboard = m_cloudParams.checkerboard, .debugMode = m_cloudParams.debugMode };
+    if (config == RendererVKLayout::g_cloudShaders)
+        return false;
+    RendererVKLayout::g_cloudShaders = config;
+    return true;
+}
+
+uint32 Renderer::addMeshLodGroup(const MeshLodGroup& group)
+{
+    const uint8 rtLevel = (uint8)oc::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
+    for (uint8 k = 0; k < group.numLods; ++k)
+        m_rt.accel().setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
+    return m_meshLods.addGroup(group);
+}
+
 // The settings are registered (Settings::register*) before the Renderer exists as a device, so a Saved or --tweak
 // value is already in Globals::settings here: the baked state the pipelines are created with is handed over below,
 // up front. EVERY reload listener returns while !m_initialized (a later loadSaved / override may fire it before the

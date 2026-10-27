@@ -6,10 +6,7 @@ import Core.Frustum;
 import Settings;
 import :Types;
 
-// Synthetic load harness for the SpatialIndex, driven entirely from the Spatial/Stress
-// tweaks (Globals::settings.spatial.stress): spawn/clear N entries with log-uniform radii, random-walk
-// a fraction of them per frame (exercising the same-cell fast path vs cross-cell moves), and time a
-// sphere query around the camera. Entries live on layer bit 1 so gameplay/render queries (bit 0) never see them.
+// Synthetic load harness driven from the Spatial/Stress tweaks; its entries are on SpatialLayer_Stress.
 export class SpatialStressTest final
 {
 public:

@@ -8,11 +8,7 @@ import :StealDeque;
 
 export class JobMutex;
 
-// A job executes on a fiber, so it can wait() mid-execution without blocking its worker thread:
-// the fiber parks on the counter's wait list, the worker switches back to its scheduler loop and
-// runs other jobs, and when the counter hits zero the fiber is pushed to the resume queue and
-// continues on whichever worker picks it up (possibly a different thread - hence /GT fiber-safe
-// TLS in the root CMakeLists; job code must not cache thread_local addresses across a wait).
+// A job runs on a fiber: a wait() parks it, and it may resume on another worker (/GT fiber-safe TLS).
 struct Fiber
 {
     enum class EState : uint32 { Idle, Running, Parked, Yielded, Finished }; // Yielded: see JobSystem::yieldToResumed
@@ -20,17 +16,13 @@ struct Fiber
     void* handle = nullptr;      // Win32 fiber
     void* returnFiber = nullptr; // scheduler fiber of the worker currently running us
     Job* job = nullptr;          // the job this fiber was started for
-    Job* currentJob = nullptr;   // the INNERMOST job executing on it: `job`, or a higher-priority job
-                                 // nested inside it by a pre-emption point (see JobSystem::preemptionPoint)
+    Job* currentJob = nullptr;   // the innermost job on it: `job`, or one nested by a pre-emption point
     EState state = EState::Idle;
     oc::atomic<uint32> switchDone = 0;  // parked fiber has fully switched out; resumers spin on this
-    oc::atomic<uint32> debugRunning = 0; // debug-only tripwire: a fiber must never run on two workers
+    oc::atomic<uint32> debugRunning = 0; // debug-only: a fiber must never run on two workers
 
-    // Open profile scopes travel WITH the fiber across a park (saved on the parking thread before
-    // the switch-out, replayed by runFiber on whichever thread resumes it - see
-    // Profiler::suspendScopes/resumeScopes). profileBase is the resuming thread's own open depth
-    // at fiber entry: a later suspend strips only the scopes above it, leaving e.g. the main
-    // helper's outer scopes intact. Publication rides the existing switchDone protocol.
+    // Open profile scopes travel with the fiber across a park (Profiler::suspendScopes / resumeScopes).
+    // profileBase: the resuming thread's own open depth at fiber entry.
     ProfileScopeStack profileScopes;
     uint32 profileBase = 0;
 };
@@ -42,62 +34,36 @@ struct alignas(64) WorkerContext
     void* schedulerFiber = nullptr;
     uint32 index = 0;
     uint32 stealSeed = 0;
-    uint32 idleStreak = 0;          // consecutive getWork misses; past a few, idle() sleeps even if a ring "looks" non-empty
+    uint32 idleStreak = 0;          // consecutive getWork misses; past a few, idle() sleeps anyway
     bool isWorker = false;          // false for the registered main thread (helps in wait, never parks)
+
     uint64 numExecuted = 0;
     uint64 numStolen = 0;
     uint64 numParked = 0;
     uint64 numResumed = 0;
     uint64 numSleeps = 0;
-    uint64 numPreempted = 0; // higher-priority jobs this context ran inline at a pre-emption point
+    uint64 numPreempted = 0; // higher-priority jobs run inline at a pre-emption point
     uint64 busyNs = 0; // summed measured job time (timed jobs only)
 };
 
-// Fiber-based work-stealing job scheduler. All memory is allocated in initialize(); the
-// steady-state hot paths are lock-free (Chase-Lev deque per worker, Vyukov MPMC rings for the
-// priority queues / fiber freelist / resume queue / job pool) and workers sleep on an eventcount
-// (oc::atomic wait -> WaitOnAddress) when idle. Priorities order the shared queues; a worker's
-// own continuations always run LIFO from its local deque first, which is what makes fork/join
-// fast. Delayed jobs sit in a min-heap serviced by a dedicated timer thread. initialize() must
-// be called on the main thread: it registers the caller as a helper context so wait() on the
-// main thread runs jobs instead of blocking.
+// Fiber-based work-stealing job scheduler. initialize() on the main thread (registers it as a helper context).
 export class JobSystem final
 {
 public:
 
+    // -- Lifetime --
     void initialize(const JobSystemDesc& desc = {});
-    void shutdown(); // idempotent; joins workers, drops leftovers. Runs from ~JobSystem via init_seg ordering
-    ~JobSystem() { shutdown(); } // atexit runs on the main thread, so the helper-context teardown is valid
+    void shutdown(); // idempotent; joins workers, drops leftovers
+    ~JobSystem() { shutdown(); }
 
     uint32 getNumWorkers() const { return m_numWorkers; }
-
-    // THE FRAME'S PHYSICS STEP, published by main at the frame top before any kick
-    // (PhysicsWorld::willStep): the solver's fork/join tasks land on the workers that frame.
-    // Optional work that can wait a frame (the World's periodic selection) asks
-    // deferFromPhysicsFrame() and moves to a step-free frame, so the workers never carry both in
-    // one frame. Below the step rate physics steps EVERY frame (the previous frame stepped too):
-    // waiting gains nothing, so it reads false and the work runs as scheduled.
-    void setFrameHasPhysicsStep(bool step) { m_prevFramePhysicsStep = m_framePhysicsStep; m_framePhysicsStep = step; }
-    bool frameHasPhysicsStep() const { return m_framePhysicsStep; }
-    bool prevFrameHadPhysicsStep() const { return m_prevFramePhysicsStep; } // true on every frame below the step rate
-    bool deferFromPhysicsFrame() const { return m_framePhysicsStep && !m_prevFramePhysicsStep; }
+    uint32 getNumContexts() const { return m_numContexts; } // sizes PerWorker arrays
+    // 0 = main thread, 1..getNumWorkers() = workers. Never cache it across a wait().
+    uint32 getWorkerIndex() const;
     JobSystemStats getStats() const;
 
-    // Index of the calling thread's scheduler context: 0 = the registered main thread,
-    // 1..getNumWorkers() = workers. Only valid on registered threads and inside jobs. NEVER cache
-    // it across a wait() - the fiber may resume on a different worker (same reason as /GT).
-    uint32 getWorkerIndex() const;
-    uint32 getNumContexts() const { return m_numContexts; } // sizes PerWorker arrays
-
-    // Manually decrement a counter, resuming waiters at zero - the building block for JobEvent
-    // and external completion sources. Pair every signal with a preceding add().
-    void signal(JobCounter& counter) { signalCounter(counter); }
-
-    // Fire-and-forget or counter-tracked async execution. The callable must fit Job::StorageSize.
-    // counter (optional) is incremented now and decremented when the job finishes: submit
-    // everything, then wait once. `profile` is REQUIRED: execute() opens that scope around the
-    // job's body, so nothing a worker runs is ever invisible on the profiler (a job body may still
-    // open finer scopes of its own inside it).
+    // -- Submitting --
+    // The callable must fit Job::StorageSize. `profile` is required: execute() scopes the body with it.
     template<typename Func>
     void submit(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr, uint8 flags = 0)
     {
@@ -114,13 +80,13 @@ public:
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
-        job->flags |= flags; // EJobFlag_ForeignWait when the body waits on a counter it did not create
+        job->flags |= flags;
         job->name = profile.name;
         job->profileCategory = profile.category;
         if (counter)
         {
             counter->add(1);
-            counter->label = profile.name; // names the wait scope (see JobCounter::label)
+            counter->label = profile.name;
             job->signal = counter;
         }
         submitReady(job);
@@ -153,25 +119,12 @@ public:
         queueTimed(job, delaySec);
     }
 
-    // POST-UPDATE JOBS: queued now, KICKED at a fixed point of the frame instead of running
-    // immediately. The main loop kicks the batch right BEFORE Renderer::present() and JOINS IT AT
-    // THE TOP OF THE NEXT FRAME (kickPostUpdateJobs / joinPostUpdateJobs) - the UI widget pass's
-    // pipelining: the batch runs during present, the frame mark and the fence/vsync wait, where the
-    // workers are otherwise idle, so it costs nothing on the frame's critical path.
-    // WHAT THAT COSTS THE CALLER: the job OVERLAPS present() and everything after it, so it must not
-    // touch state present() reads or the next frame mutates - it is "somewhere in the present
-    // window", not "before present". It IS guaranteed complete before the next frame does any work,
-    // so anything the next frame consumes is safe. Queue from ANY thread (a worker inside the entity
-    // pass, the window thread, main); one submit = one run, at the next kick; a job queued after the
-    // kick simply rides the next frame's batch.
-    // TWO BATCHES, kicked together, JOINED AT DIFFERENT POINTS of the next frame - a job picks the
-    // one matching what it touches:
-    //  - Frame: joined FIRST thing in the next frame (the UI widget pass - the ImGui context must
-    //    be quiescent before the main-thread flush and the input pump).
-    //  - Sim: joined just before the frame's ENTITY-CHANGE DRAINS (the first main-thread point that
-    //    destroys entities or mutates rosters), so a job that only reads world/roster state and
-    //    writes its own sim outputs (Nav field steps, the game's nav feed and ambient wander) runs
-    //    through the whole input/camera stretch as well.
+    // Decrements a counter, resuming waiters at zero. Pair every signal with a preceding add().
+    void signal(JobCounter& counter) { signalCounter(counter); }
+
+    // -- Post-update jobs --
+    // Kicked before present, joined in the next frame. The job overlaps present() and what follows it.
+    // Frame: joined first thing in the next frame. Sim: joined before the entity-change drains.
     enum class EPostUpdateBatch : uint8 { Frame, Sim, Count };
     template<typename Func>
     void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, uint8 flags = 0,
@@ -179,77 +132,13 @@ public:
     {
         submitPostUpdateImpl(oc::forward<Func>(func), profile, priority, flags, batch);
     }
-
-    // Main loop only. The kick submits everything queued since the last one (both batches) and
-    // returns (no wait); nothing queued costs one queue pop per batch. join(Frame) runs first thing
-    // in the next frame, join(Sim) before its entity-change drains, and both once more after the
-    // loop so the final batches are done before anything they captured goes down. A queue that is
-    // never kicked just fills up, so headless kicks at the same point (it has no present()).
+    // Main loop only.
     void kickPostUpdateJobs();
     void joinPostUpdateJobs(EPostUpdateBatch batch = EPostUpdateBatch::Frame);
 
-    // Waits until the counter reaches zero. On a job fiber this parks the fiber (the worker keeps
-    // running other jobs); on the main thread it runs jobs while waiting; on any other thread it
-    // blocks on the atomic.
-    void wait(JobCounter& counter);
-
-    // Registered non-worker threads (main) can pump one ready job manually, e.g. to burn a stall.
-    bool tryRunOneJob();
-
-    // PRE-EMPTION POINT. Call from inside a long Normal/Low job body at a spot where nothing is
-    // half-done: every job of a STRICTLY HIGHER priority waiting in the shared rings runs to
-    // completion right here, on the caller's fiber/stack, before this returns - the calling job
-    // is interrupted for exactly that long. Returns true when at least one job ran. Fibers cannot
-    // be interrupted asynchronously (no safe point to switch a stack out from under it), so
-    // pre-emption is COOPERATIVE: a job that never reaches a point is never interrupted. A
-    // Normal/Low parallelFor reaches one BETWEEN CHUNKS automatically; a hand-written loop calls
-    // this itself, e.g. once per outer iteration. A High job returns false at once.
-    // Rules, the same as for a job run inline by wait():
-    //  * no ThreadLocalScope may be alive (the nested body would run on the pinned TLS) - asserted;
-    //  * do not call while holding a JobMutex the nested job could take (it would park this fiber
-    //    behind the very job that holds the lock);
-    //  * EJobFlag_ForeignWait jobs are never run here (they go back to the ring): their wait could
-    //    be for exactly the job suspended beneath them on this stack.
-    // The cheap path - no higher-priority work queued - is one relaxed load per higher ring.
-    bool preemptionPoint();
-
-    // ThreadLocalScope's per-thread pin count (see the class below): +1 / -1 on the calling
-    // thread. A no-op in non-debug.
-    static void debugThreadLocalPin(int delta);
-
-    // The window thread's integration (see Core.Window): claims the reserved external helper
-    // context so PerWorker::local()/profiling work there. Call once, on that thread.
-    void registerExternalHelper();
-    // High-priority ring ONLY - the window thread must never pick up a job that can run long
-    // (Normal/Low carry the multi-second ones: V3 tiles, nav builds, the UI widget pass), or the
-    // next frame's event pump stalls behind it. High jobs are short by convention (physics tasks,
-    // spatial chunks, panel prepares).
-    bool tryRunOneHighJob();
-    // The external helper's sleep: parks until a HIGH job is submitted (submitReady pings it via
-    // m_helperSleeping - only High submits pay the check) or wakeExternalHelper() fires (the
-    // window's requestPump wires this so a pump request always outranks the nap). Deliberately NOT
-    // the workers' eventcount: the helper waking for a job it cannot take (Normal/Low) would eat a
-    // wake a real worker needed.
-    // wakeNow(user) is the CALLER'S wake condition (the window's "pump requested"), re-checked
-    // AFTER the sleep is announced: a wakeExternalHelper() that lands between the caller's own
-    // check and the epoch load here would otherwise bump an epoch nobody had read yet - a lost
-    // wake, and main busy-waits on the pump forever. Pass nullptr when there is no such condition.
-    void externalHelperWait(bool (*wakeNow)(const void*), const void* user);
-    void wakeExternalHelper();
-
-    // Splits [begin, end) into grainSize chunks pulled from a shared atomic cursor by
-    // getNumWorkers() helper jobs plus the calling thread. func(chunkBegin, chunkEnd) must be
-    // safe to run concurrently with itself. Returns when the whole range is done. `profile` is
-    // REQUIRED and covers each participant's WHOLE run (helper jobs through execute(), the calling
-    // thread wrapped here) - one span per participant, not per chunk.
-    //
-    // OWNER-SLICED STAGING: chunk k covers [begin + k*grain, begin + (k+1)*grain) clipped to end,
-    // so func can index a per-chunk slot by (chunkBegin - begin) / grainSize, and numChunks() says
-    // how many slots a pass needs - memory that scales with the WORK, not with the scheduler's
-    // context count the way a PerWorker slot does. Slots are exclusively the chunk's (no TLS, so
-    // a wait inside func cannot mix them up) and a serial phase drains exactly numChunks of them.
-    // The single-call paths (count <= grain, no workers) run chunk 0 alone; a zero count runs
-    // nothing, and numChunks() then reads 0.
+    // -- parallelFor --
+    // Chunk k is [begin + k*grain, begin + (k+1)*grain) clipped to end: index per-chunk staging by
+    // (chunkBegin - begin) / grainSize, numChunks() slots. func must be safe to run concurrently with itself.
     static constexpr uint32 numChunks(uint32 count, uint32 grainSize)
     {
         grainSize = grainSize > 1 ? grainSize : 1;
@@ -260,9 +149,7 @@ public:
     {
         parallelForImpl(begin, end, grainSize, nullptr, profile, oc::forward<Func>(func), priority);
     }
-
-    // Auto-grain: the chunk size is derived from the tracker's measured ns/item to hit
-    // JobSystemDesc::parallelForTargetChunkNs, and this run's timings feed back into it.
+    // Auto-grain from the measured ns/item (JobSystemDesc::parallelForTargetChunkNs).
     template<typename Func>
     void parallelFor(uint32 begin, uint32 end, JobCost& cost, JobProfile profile, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
@@ -270,14 +157,65 @@ public:
         parallelForImpl(begin, end, uint32(oc::min<uint64>(grain, UINT32_MAX)), &cost, profile, oc::forward<Func>(func), priority);
     }
 
-    // Scheduler plumbing shared with JobGraph - not for gameplay code.
-    Job* allocatePooledJob();
-    void submitReady(Job* job);                        // job->pending must already be zero
-    void submitReadyBatch(oc::span<Job* const> jobs); // fan-out path: straight to the shared queues
+    // -- Waiting --
+    // A job fiber parks; the main thread runs jobs meanwhile; any other thread blocks.
+    void wait(JobCounter& counter);
+    // Registered non-worker threads (main) can pump one ready job manually.
+    bool tryRunOneJob();
+    // PRE-EMPTION POINT (cooperative): runs every queued job of a strictly higher priority inline, then
+    // returns. No ThreadLocalScope alive, no JobMutex held that the nested job could take.
+    bool preemptionPoint();
+
+    // -- The external helper (the window thread, Core.Window) --
+    // Claims the reserved external helper context. Once, on that thread.
+    void registerExternalHelper();
+    // High-priority ring only: the window thread must never pick up a long job.
+    bool tryRunOneHighJob();
+    // Parks until a High job is submitted or wakeExternalHelper() fires. wakeNow(user) is the caller's own
+    // wake condition, re-checked after the sleep is announced (else a lost wake); nullptr = none.
+    void externalHelperWait(bool (*wakeNow)(const void*), const void* user);
+    void wakeExternalHelper();
+
+    // -- The frame's physics step --
+    // Published by main before any kick. Work that can wait a frame asks deferFromPhysicsFrame() (false
+    // below the step rate, where every frame steps).
+    void setFrameHasPhysicsStep(bool step) { m_prevFramePhysicsStep = m_framePhysicsStep; m_framePhysicsStep = step; }
+    bool frameHasPhysicsStep() const { return m_framePhysicsStep; }
+    bool prevFrameHadPhysicsStep() const { return m_prevFramePhysicsStep; }
+    bool deferFromPhysicsFrame() const { return m_framePhysicsStep && !m_prevFramePhysicsStep; }
+
+    // -- Debug --
+    // ThreadLocalScope's per-thread pin count. A no-op in non-debug.
+    static void debugThreadLocalPin(int delta);
 
 private:
-    bool m_framePhysicsStep = false;     // see setFrameHasPhysicsStep
-    bool m_prevFramePhysicsStep = false;
+
+    friend class JobGraph;
+    friend class JobMutex;
+
+    struct TimedJob
+    {
+        Clock::time_point due;
+        Job* job;
+    };
+    struct TimedJobLater
+    {
+        bool operator()(const TimedJob& a, const TimedJob& b) const { return a.due > b.due; }
+    };
+    struct PostUpdateBatch
+    {
+        MPMCQueue<Job*> queue;
+        JobCounter counter;
+    };
+
+    // -- Submit plumbing (JobGraph too) --
+    Job* allocatePooledJob();
+    void releasePooledJob(Job* job);
+    void submitReady(Job* job);                        // job->pending must already be zero
+    void submitReadyBatch(oc::span<Job* const> jobs);
+    void pushReadyJob(Job* job);
+    void queueTimed(Job* job, double delaySec);
+    void dropJob(Job* job); // shutdown path
 
     template<typename Func>
     void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority, uint8 flags, EPostUpdateBatch batch)
@@ -295,12 +233,12 @@ private:
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
-        job->flags |= flags; // EJobFlag_ForeignWait when the body waits on a counter it did not create
+        job->flags |= flags;
         job->name = profile.name;
         job->profileCategory = profile.category;
         if (!m_postUpdate[uint32(batch)].queue.push(job))
         {
-            // full: nothing will ever kick this one, so run it OUT OF PHASE rather than lose it
+            // full: run it out of phase rather than lose it
             m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             assert(false && "post-update queue full - raise JobSystemDesc::postUpdateQueueCapacity");
             execute(*job);
@@ -347,9 +285,7 @@ private:
                 const uint32 chunkEnd = uint32(oc::min(chunkBegin + shared.grain, shared.end));
                 (*shared.func)(uint32(chunkBegin), chunkEnd);
                 numItems += chunkEnd - uint32(chunkBegin);
-                // PRE-EMPTION POINT between chunks (see preemptionPoint): a Normal/Low loop lets
-                // the higher-priority jobs queued meanwhile run on this participant before it takes
-                // its next chunk. That time is not this loop's cost, so it leaves the JobCost sample.
+                // Pre-emption point between chunks; its time is left out of the JobCost sample.
                 if (shared.priority != EJobPriority::High && hasHigherPriorityReady(shared.priority))
                 {
                     const Clock::time_point preemptStart = shared.cost ? Clock::now() : Clock::time_point{};
@@ -357,82 +293,57 @@ private:
                         preemptedNs += uint64(std::chrono::nanoseconds(Clock::now() - preemptStart).count());
                 }
             }
-            if (shared.cost && numItems) // includes the cursor overhead: overhead-dominated loops drive the grain up
+            if (shared.cost && numItems)
                 shared.cost->addSample(uint64(std::chrono::nanoseconds(Clock::now() - start).count()) - preemptedNs, numItems);
         };
         const uint32 chunks = numChunks(count, grainSize);
         const uint32 numHelpers = oc::min(m_numWorkers, chunks - 1);
         JobCounter counter;
         {
-            // The calling thread's span covers the helper submits (+ wakes) AND its own share, so
-            // a parallelFor has no unscoped head on the caller's track; the join that follows
-            // carries wait()'s own "Job wait" scope as a sibling.
             ProfileScope scope(profile.name, profile.category);
             for (uint32 i = 0; i < numHelpers; ++i)
-                submit(runner, profile, priority, &counter); // helpers scoped by execute()
+                submit(runner, profile, priority, &counter);
             runner();
         }
         wait(counter);
     }
 
-    friend class JobGraph;
-    friend class JobMutex;
-    void lockJobMutexSlow(JobMutex& mutex);
-    void unlockJobMutexSlow(JobMutex& mutex);
-
+    // -- Workers and fibers --
     static void __stdcall fiberEntry(void* param);
-
     void workerMain(uint32 contextIndex);
     void timerMain();
     void fiberMain(Fiber& fiber);
     void runFiber(WorkerContext& ctx, Fiber* fiber);
     void execute(Job& job);
-    // Pre-emption plumbing (see preemptionPoint): the cheap ring check, then the inline run of
-    // every ready job above `mine`. Both take the priority explicitly so the parallelFor runner
-    // can use the loop's priority on the calling thread too, where no job may be current.
+    void yieldToResumed(WorkerContext& ctx);
+
+    // -- Finding work --
+    Job* getWork(WorkerContext& ctx);
+    Job* getHelpWork(WorkerContext& ctx); // never a Low job
+    Job* trySteal(WorkerContext& ctx);
     bool hasHigherPriorityReady(EJobPriority mine) const;
     bool runHigherPriorityJobs(EJobPriority mine);
-    void yieldToResumed(WorkerContext& ctx);
-    Job* getWork(WorkerContext& ctx);
-    Job* getHelpWork(WorkerContext& ctx); // helpWait's pick: never a Low job
-    Job* trySteal(WorkerContext& ctx);
-    void pushReadyJob(Job* job);
-    void idle(WorkerContext& ctx, bool forceSleep); // forceSleep: ignore the "looks non-empty" checks (see the definition)
+
+    // -- Sleep and wake --
+    void idle(WorkerContext& ctx, bool forceSleep);
     bool anyWorkForWorker() const;
     void wakeMany(uint32 count);
     void wakeOne() { wakeMany(1); }
+
+    // -- Waits --
     void signalCounter(JobCounter& counter);
     void fiberWait(JobCounter& counter, WorkerContext& ctx);
     void helpWait(JobCounter& counter, WorkerContext& ctx);
-    void releasePooledJob(Job* job);
-    void queueTimed(Job* job, double delaySec);
-    void dropJob(Job* job); // shutdown path: destroy the capture, release counters/pool slot
+    void lockJobMutexSlow(JobMutex& mutex);
+    void unlockJobMutexSlow(JobMutex& mutex);
 
-    struct TimedJob
-    {
-        Clock::time_point due;
-        Job* job;
-    };
-    struct TimedJobLater
-    {
-        bool operator()(const TimedJob& a, const TimedJob& b) const { return a.due > b.due; }
-    };
-
+    // -- Pools and contexts --
     oc::unique_ptr<Job[]> m_jobPool;
     oc::unique_ptr<Fiber[]> m_fibers;
     oc::unique_ptr<WorkerContext[]> m_contexts; // [0] = main thread, [1..numWorkers] = workers
     oc::vector<std::thread> m_threads;
     TaggedIndexStack m_freeJobs;
     TaggedIndexStack m_freeFibers;
-    MPMCQueue<Fiber*> m_resumeQueue;
-    MPMCQueue<Fiber*> m_yieldQueue; // fibers that stepped aside at a pre-emption point; after the resumes, before new work
-    MPMCQueue<Job*> m_readyQueues[NumJobPriorities];
-    struct PostUpdateBatch
-    {
-        MPMCQueue<Job*> queue; // jobs parked until the frame's post-update kick
-        JobCounter counter;    // the in-flight batch, joined at its point of the next frame
-    };
-    PostUpdateBatch m_postUpdate[uint32(EPostUpdateBatch::Count)];
     uint32 m_numWorkers = 0;
     uint32 m_numContexts = 0;
     uint32 m_numFibers = 0;
@@ -442,36 +353,37 @@ private:
     oc::atomic<uint64> m_numInlineFallbacks = 0;
     oc::atomic<int32> m_pooledInFlight = 0;
 
+    // -- Queues --
+    MPMCQueue<Fiber*> m_resumeQueue;
+    MPMCQueue<Fiber*> m_yieldQueue; // fibers that stepped aside at a pre-emption point
+    MPMCQueue<Job*> m_readyQueues[NumJobPriorities];
+    PostUpdateBatch m_postUpdate[uint32(EPostUpdateBatch::Count)];
+
+    // -- Sleep and wake --
     alignas(64) oc::atomic<uint32> m_wakeEpoch = 0;
     oc::atomic<uint32> m_numSleepers = 0;
     oc::atomic<uint32> m_helperEpoch = 0;    // external helper (window thread) eventcount
-    oc::atomic<uint32> m_helperSleeping = 0; // announce/recheck pattern, like the worker sleep
+    oc::atomic<uint32> m_helperSleeping = 0;
 
+    // -- Delayed jobs --
     std::thread m_timerThread;
     std::mutex m_timedMutex;
     std::condition_variable m_timedCv;
     oc::priority_queue<TimedJob, oc::vector<TimedJob>, TimedJobLater> m_timedJobs;
+
+    // -- The frame's physics step --
+    bool m_framePhysicsStep = false;
+    bool m_prevFramePhysicsStep = false;
 };
 
 export namespace Globals
 {
-// Teardown ordering lives in InitSeg.h. Every EntityPtr holder destructs BEFORE this: destroying an
-// entity reaches PerWorker::local(), which needs the main thread's live worker context. ~JobSystem
-// then joins the workers before the renderer and the plain-seg globals they might touch go down.
 OC_INIT_SEG(OC_SEG_JOB_SYSTEM)
     JobSystem jobSystem;
 }
 
-// DEBUG TRIPWIRE for thread-local state in job code - a `thread_local` scratch buffer, a
-// `PerWorker::local()` slot, a `getWorkerIndex()`. Declare one right where such state is taken
-// and keep it alive for as long as the state is used: it PINS the current thread's TLS to that
-// code. While a pin is held on a thread, every path that would let the TLS change hands asserts:
-//   * a fiber PARK (wait / parallelFor / JobMutex inside a job) - the fiber would resume on some
-//     other thread's TLS, and this thread would run another job on ours;
-//   * an INLINE job (main or the window thread executing a job inside wait, tryRunOneJob,
-//     tryRunOneHighJob, or a JobMutex spin; ANY context at a pre-emption point - preemptionPoint
-//     or the between-chunk point of a Normal/Low parallelFor) - that job body runs on the pinned TLS.
-// Nests (a job's own inner scopes stack) and compiles to two no-ops in non-debug builds.
+// Debug pin on the current thread's TLS (a thread_local, a PerWorker::local() slot, getWorkerIndex()):
+// while alive, a fiber park or an inline job on this thread asserts. Nests; no-op in non-debug.
 export class ThreadLocalScope final
 {
 public:

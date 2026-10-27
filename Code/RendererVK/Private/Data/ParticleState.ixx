@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 import :Layout;
 import :RenderParams;
-import Settings;
+import Settings.fwd;
 import :SlotTable;
 
 // The CPU side of the GPU particle system and the weather volume it shelters: the emitter slot table,
@@ -31,8 +31,8 @@ public:
     };
 
     void initialize() { m_emitters.initialize(RendererVKLayout::MAX_PARTICLE_EMITTERS); }
-    const ParticleParams& getParams() const { return Globals::settings.particles; }
-    bool isEnabled() const { return Globals::settings.particles.enabled; }
+    const ParticleParams& getParams() const;
+    bool isEnabled() const;
 
     // ---- Emitters + spawns (spawn path, lock-free: RecycledSlotTable) ----
     uint32 createEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)

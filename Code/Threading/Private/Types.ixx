@@ -5,9 +5,9 @@ import Core;
 export class JobSystem;
 struct Fiber;
 
-// REQUIRED on every submit/submitDelayed/parallelFor: the scheduler opens a ProfileScope with this
-// name and category around the job's execution, so a worker can never run something that does not
-// show up on the profiler's tracks. `name` must be a string LITERAL (records store it by pointer).
+// -- Submit parameters --
+
+// Required on every submit: the scheduler scopes the job with it. `name` must be a string literal.
 export struct JobProfile
 {
     const char* name = nullptr;
@@ -22,26 +22,27 @@ export enum class EJobPriority : uint8
 };
 export constexpr uint32 NumJobPriorities = 3;
 
-// Intrusive wait-list node. Lives on the waiting fiber's stack, so it stays valid exactly as long
-// as the fiber is parked; the signaler must read `next` before making `fiber` resumable.
+export enum EJobFlags : uint8
+{
+    EJobFlag_Pooled = 1,  // owned by the JobSystem's ad-hoc pool, recycled after execution
+    EJobFlag_Untimed = 2, // no wall-time measurement: only for nanosecond-scale jobs
+    // REQUIRED when the body waits on a counter it did not create: a non-fiber stack never runs it
+    // inline inside another job (deadlock). See "ForeignWait" in Threading CONTEXT.md.
+    EJobFlag_ForeignWait = 4,
+};
+
+// -- Completion --
+
+// On the waiting fiber's stack: the signaler must read `next` before making `fiber` resumable.
 export struct FiberWaitNode
 {
     Fiber* fiber = nullptr;
     FiberWaitNode* next = nullptr;
 };
 
-// Completion counter jobs decrement when they finish. The decrement hot path is a single
-// fetch_sub. A waiter may free the counter the instant it observes completion, so the whole
-// design revolves around the zero transition never touching counter memory after the value
-// observably reaches zero: parked-fiber registrations live in the HIGH BITS of the count atomic
-// (the zero transition sees them in the same fetch_sub, and outstanding registrations keep the
-// full value nonzero until their owner - the transition or a backing-out waiter - removes them),
-// isDone() is "the FULL value is zero", the wait list is a lock-free push stack whose head the
-// transition claims with ONE exchange (a taken sentinel tells late waiters to back out), and the
-// only post-zero operation is an address-only notify (WaitOnAddress keys, no deref). Must
-// outlive every job signaling it and every wait on it (stack lifetime is fine when the owner
-// waits before returning, e.g. parallelFor); re-add() only after the previous batch's waits
-// returned.
+// Completion counter. A waiter may free it the moment it reads zero, so the zero transition never
+// touches its memory after that (the invariants: "JobCounter" in Threading CONTEXT.md). Must outlive
+// every job signaling it and every wait on it; re-add() only after the previous batch's waits returned.
 export class alignas(64) JobCounter final
 {
 public:
@@ -70,10 +71,7 @@ public:
     bool isDone() const { return m_count.load(oc::memory_order_acquire) == 0; }
     uint32 pending() const { return m_count.load(oc::memory_order_relaxed) & CountMask; }
 
-    // The profile name of the LAST job submitted against this counter (a literal, so permanent):
-    // wait() names its stall scope after it, so the profiler says WHICH job a wait was for
-    // instead of a bare "Job wait". A counter shared by differently named jobs shows the last.
-    const char* label = nullptr;
+    const char* label = nullptr; // the last submitted job's profile name: wait() names its stall scope after it
 
 private:
 
@@ -88,31 +86,11 @@ private:
     oc::atomic<FiberWaitNode*> m_waiterHead = nullptr;
 };
 
+// -- Jobs --
+
 export using JobFunc = void(*)(void*);
 
-export enum EJobFlags : uint8
-{
-    EJobFlag_Pooled = 1,  // owned by the JobSystem's ad-hoc pool, recycled after execution
-    EJobFlag_Untimed = 2, // OPT-OUT of wall-time measurement (costEmaUs + worker busy-time stats).
-                          // Timing is on by default; clear it only for nanosecond-scale spam jobs
-                          // where two clock reads (~40-60ns) would dominate the job itself
-    EJobFlag_ForeignWait = 4, // the body waits on a counter OTHER than ones its own execution
-                          // creates (UI::updateJob -> the UI prepare counter; the renderer's begin-
-                          // frame job -> the GPU-collect counter). Inline helping on a NON-FIBER
-                          // stack (main, the window-thread helper) refuses these once a job frame
-                          // is already open (t_helpDepth >= 1): the foreign counter's job can be
-                          // exactly the frame SUSPENDED below on that stack, and waiting on it
-                          // there deadlocks the thread (hit in practice: the window thread ran a
-                          // UI prepare job, its parallelFor wait helped into UI::updateJob, which
-                          // waits on the prepare counter). Fiber contexts park instead and never
-                          // need this; jobs that only wait on their own parallelFor children are
-                          // always safe unflagged. REQUIRED on any job whose body waits on a
-                          // counter it did not create.
-};
-
-// One schedulable unit: two cache lines, callable stored inline (no heap). Graph jobs live in
-// their JobGraph and carry successor edges + a reset value for the dependency counter; ad-hoc
-// jobs come from the JobSystem pool with no edges.
+// Two cache lines, callable stored inline. Graph jobs carry successor edges; pooled jobs have none.
 export struct alignas(64) Job
 {
     JobFunc invoke = nullptr;
@@ -149,9 +127,9 @@ void setJobCallable(Job& job, F&& func)
         job.destroy = [](void* storage) { static_cast<Func*>(storage)->~Func(); };
 }
 
-// Identity of a piece of data jobs declare read/write access on. Just a process-unique id;
-// what it refers to is by convention (a system, a buffer, a component array). Create once at
-// init next to the data it names and keep it alive (non-copyable, like the Tweak pattern).
+// -- Graph resources and cost estimates --
+
+// A process-unique id for data that graph jobs declare read/write access on. Create once, keep alive.
 export class JobResource final
 {
 public:
@@ -170,11 +148,7 @@ private:
     const char* m_name;
 };
 
-// Live per-item cost estimate for a parallelFor call site. Create one next to the loop it
-// measures (static/member, like a Tweak registration) and pass it instead of a grain size: the
-// chunk size is derived from the measured ns/item to hit JobSystemDesc::parallelForTargetChunkNs,
-// and every run's runner timings feed back into the estimate. initialNsPerItem seeds the first
-// run. Lossy racy EMA on purpose - it is a heuristic, not a measurement.
+// Per-item cost estimate of one parallelFor call site, passed instead of a grain size. A racy EMA on purpose.
 export class JobCost final
 {
 public:
@@ -202,6 +176,8 @@ private:
     const char* m_name;
 };
 
+// -- Setup and stats --
+
 export struct JobSystemDesc
 {
     uint32 numWorkers = 0;                  // 0 = PHYSICAL cores - 2 (main + headroom), min 1
@@ -226,6 +202,6 @@ export struct JobSystemStats
     uint64 numResumed = 0;
     uint64 numSleeps = 0;    // workers going through a kernel wait
     uint64 numInlineFallbacks = 0; // pool/queue exhaustion made a submit run on the calling thread
-    uint64 numPreempted = 0; // higher-priority jobs run inline at a pre-emption point (see JobSystem::preemptionPoint)
+    uint64 numPreempted = 0; // higher-priority jobs run inline at a pre-emption point
     uint64 busyNs = 0;       // summed measured job wall time across contexts (timed jobs)
 };

@@ -12,6 +12,7 @@ import :StagingManager;
 import :TextureManager;
 import :Texture;
 import :Layout;
+import Settings;
 
 // StreamRequest carries an owned, null-terminated copy of the source path (unique_ptr<const char[]>)
 // instead of referencing the meta's oc::string across the worker thread.
@@ -21,6 +22,15 @@ static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
     memcpy(buffer.get(), path.c_str(), path.size() + 1);
     return buffer;
 }
+
+TextureStreamer::TextureStreamer()
+    : m_settings(Globals::settings.textureStreaming)
+{
+}
+
+bool TextureStreamer::isStreamingEnabled() const { return m_settings.enabled; }
+uint32 TextureStreamer::tailMaxDim() const { return (uint32)m_settings.tailMaxDim; }
+bool TextureStreamer::debugRewriteAllSlots() const { return m_settings.debugRewriteAllSlots; }
 
 bool TextureStreamer::initialize()
 {

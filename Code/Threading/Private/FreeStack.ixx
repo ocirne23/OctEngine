@@ -2,12 +2,8 @@ export module Threading:FreeStack;
 
 import Core;
 
-// Lock-free LIFO freelist over a fixed index range (Treiber stack, 32-bit ABA tag in the head).
-// Chosen over a FIFO ring for the recycling pools because a preempted thread mid-operation can
-// never make it LOOK empty to others (a ring has claimed-but-unpublished cells that stall the
-// cursor behind them): pop fails only when the freelist is truly empty, and LIFO hands back the
-// cache-hottest slot. Index links live in an internal array, payload types stay untouched; the
-// racy link read of a concurrently repopped node is benign - the tag makes its CAS fail.
+// Lock-free LIFO freelist over a fixed index range (Treiber stack, ABA tag in the head). Not a ring:
+// a pre-empted thread can never make it look empty.
 export class TaggedIndexStack final
 {
 public:

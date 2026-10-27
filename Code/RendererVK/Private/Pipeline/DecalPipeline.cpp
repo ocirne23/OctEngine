@@ -10,8 +10,11 @@ import :Device;
 import :Sampler;
 import :Layout;
 import :GIProbePipeline;
+import Settings;
 
 using namespace RendererVKLayout;
+
+bool DecalPipeline::isEnabled() const { return Globals::settings.renderer.decals; }
 
 static vk::DescriptorBufferInfo decalBufInfo(const Buffer& buffer)
 {

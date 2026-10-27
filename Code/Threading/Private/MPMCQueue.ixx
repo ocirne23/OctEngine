@@ -2,10 +2,7 @@ export module Threading:MPMCQueue;
 
 import Core;
 
-// Dmitry Vyukov's bounded MPMC queue: each cell carries a sequence number that encodes whether
-// it is ready to be written (seq == pos) or read (seq == pos + 1); producers and consumers claim
-// positions with a CAS on their own counter and never contend with the other side except through
-// the cell sequences. One CAS per operation, no spurious failure modes, FIFO per producer.
+// Vyukov's bounded MPMC queue: a per-cell sequence number says writable (seq == pos) or readable (pos + 1).
 export template<typename T>
 class MPMCQueue final
 {

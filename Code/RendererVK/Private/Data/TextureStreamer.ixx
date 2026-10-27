@@ -4,7 +4,7 @@ import Core;
 import :VK;
 import :Layout;
 import :Allocator;
-import Settings;
+import Settings.fwd;
 
 // One mip level's byte range in the source .dds file plus its dimensions.
 export struct TextureMipRange
@@ -52,6 +52,7 @@ export class TextureStreamer final
 {
 public:
 
+    TextureStreamer();
     bool initialize();
     ~TextureStreamer();
     // Stops the disk worker and destroys any images still awaiting retirement (waits the GPU if needed).
@@ -71,8 +72,8 @@ public:
     void unregisterTexture(uint16 texIdx, uint64 allocatedBytes);
 
     // Whether new DDS textures should load tail-only and stream up (checked at Texture load time).
-    bool isStreamingEnabled() const { return m_settings.enabled; }
-    uint32 tailMaxDim() const { return (uint32)m_settings.tailMaxDim; }
+    bool isStreamingEnabled() const;
+    uint32 tailMaxDim() const;
 
     // Priority pass: a rendered instance using texIdx reports how many texels it can display this frame
     // (log2 of its projected screen size in pixels). Folds into a per-texture "wanted top mip" via an
@@ -92,7 +93,7 @@ public:
     void queueDescriptorWrite(uint16 texIdx);
     oc::span<const uint16> getPendingDescriptorWrites(uint32 frameIdx) const { return m_pendingDescriptorWrites[frameIdx]; }
     void clearPendingDescriptorWrites(uint32 frameIdx) { m_pendingDescriptorWrites[frameIdx].clear(); }
-    bool debugRewriteAllSlots() const { return m_settings.debugRewriteAllSlots; }
+    bool debugRewriteAllSlots() const;
 
     struct StreamerStats
     {
@@ -208,7 +209,7 @@ private:
     uint32 m_numStreamable = 0;
     uint32 m_frameCounter = 0;         // incremented once per update()
 
-    const TextureStreamingSettings& m_settings = Globals::settings.textureStreaming; // "Texture Streaming"
+    const TextureStreamingSettings& m_settings; // "Texture Streaming" (Globals::settings.textureStreaming)
 };
 
 export namespace Globals

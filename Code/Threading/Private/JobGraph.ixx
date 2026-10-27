@@ -11,11 +11,8 @@ export struct JobId
     uint32 index = UINT32_MAX;
 };
 
-// Returned by JobGraph::addJob to declare the job's data access and explicit ordering. Hazard
-// edges are derived immediately, render-graph style, from declaration order: a reader depends on
-// the resource's last writer; a writer depends on every reader since the last write (or the
-// writer itself when there were none). Reads of the same resource run in parallel; no locks are
-// ever taken - the schedule itself is the synchronization.
+// Declares a job's data access; hazard edges follow from declaration order (readers after the last
+// writer, a writer after every reader since).
 export class JobGraphBuilder final
 {
 public:
@@ -34,11 +31,7 @@ private:
     uint32 m_index;
 };
 
-// A reusable DAG of jobs. Declare jobs + accesses once, compile() once, then run()/wait() every
-// frame: run() only resets the per-job atomic dependency counters and pushes the roots, so a
-// steady-state graph costs zero allocations and no rebuild. Edges always point from an earlier
-// declared job to a later one, so the graph is acyclic by construction. Callables are invoked
-// once per run and must be re-invocable.
+// A reusable DAG: declare + compile() once, run()/wait() every frame. Callables must be re-invocable.
 export class JobGraph final
 {
 public:
@@ -73,9 +66,7 @@ public:
         return JobGraphBuilder(*this, m_numJobs - 1);
     }
 
-    // A node whose body fans out into a parallelFor over [0, countFunc()) - the range is
-    // re-evaluated every run (live entity/item counts). The node's fiber parks at the internal
-    // join, so budget one fiber per such node running concurrently (JobSystemDesc::numFibers).
+    // A parallelFor over [0, countFunc()), re-evaluated every run. Holds a fiber while it runs.
     template<typename CountFunc, typename Func>
     JobGraphBuilder addParallelJob(const char* name, CountFunc&& countFunc, uint32 grainSize, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
@@ -99,8 +90,7 @@ public:
     uint32 getNumJobs() const { return m_numJobs; }
     uint32 getNumEdges() const { return uint32(m_edges.size()); }
 
-    // Measured cost EMA / critical-path rank of a node after at least one run (min 1us each) -
-    // free per-node profiling for the frame graph.
+    // Measured cost EMA / critical-path rank, after at least one run.
     uint32 getJobCostUs(JobId id) const { return jobAt(id.index).costEmaUs; }
     uint32 getJobRankUs(JobId id) const { return jobAt(id.index).rankUs; }
 

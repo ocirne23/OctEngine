@@ -8,6 +8,7 @@ import :Allocator;
 import :CommandBuffer;
 import :TreeVolumePipeline;
 import :PushBlock;
+import Settings;
 
 namespace
 {
@@ -195,7 +196,7 @@ void TreeVolumePipeline::registerPushFields(const FarTreeParams& s)
 
 const FarTreeParams& TreeVolumePipeline::marchSettings() const
 {
-    return m_job.active && m_job.stage == EBakeStage::Copy && !m_job.crossFade ? m_job.settings : m_bakedSettings;
+    return m_job.active && m_job.stage == EBakeStage::Copy && !m_job.crossFade ? *m_job.settings : *m_bakedSettings;
 }
 
 // floorPass: 0 = the splat, 1 = the floor's coverage pass, 2 = the floor pass (TREE_FLOOR_PASS). records: the trees
@@ -651,6 +652,12 @@ void TreeVolumePipeline::recreateImages(uint32 width, uint32 height)
         createTemporalImages(m_temporalScale); // at the new size (no history)
 }
 
+TreeVolumePipeline::TreeVolumePipeline()
+    : m_bakedSettings(oc::make_unique<FarTreeParams>())
+{
+    m_job.settings = oc::make_unique<FarTreeParams>();
+}
+
 TreeVolumePipeline::~TreeVolumePipeline()
 {
     if (m_accumFloatView)
@@ -850,7 +857,7 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
     job.startFrame = frameNumber;
     job.startSec = Globals::time.getElapsedSec();
     job.centre = centre;
-    job.settings = s;
+    *job.settings = s;
     job.sources.assign(params.sources.begin(), params.sources.end());
     job.records = params.records;
     job.records.chunksCpu = {};
@@ -889,7 +896,7 @@ void TreeVolumePipeline::startBake(const RecordParams& params, uint32 frameNumbe
 void TreeVolumePipeline::snapshotRecords(const RecordParams& params, const oc::function<void(Buffer&, const void*, size_t, const char*)>& upload)
 {
     BakeJob& job = m_job;
-    const FarTreeParams& s = job.settings;
+    const FarTreeParams& s = *job.settings;
     upload(m_bakeTable, params.records.chunksCpu.data(), params.records.chunksCpu.size_bytes(), "TreeVolume.bakeTable");
     upload(m_bakeMap, params.records.mapCpu.data(), params.records.mapCpu.size_bytes(), "TreeVolume.bakeMap");
     job.records.chunks = m_bakeTable.getDeviceAddress();
@@ -923,7 +930,7 @@ void TreeVolumePipeline::snapshotRecords(const RecordParams& params, const oc::f
 void TreeVolumePipeline::setBakeBudgets()
 {
     BakeJob& job = m_job;
-    const uint32 frames = (uint32)oc::max(job.settings.bakeFrames, 1);
+    const uint32 frames = (uint32)oc::max(job.settings->bakeFrames, 1);
     auto share = [&](uint32 total, uint32 stageFrames) { return oc::max(1u, (total + stageFrames - 1u) / stageFrames); };
     // The clear, the resolve and the copy walk the accumulation's texel layers (two slices each).
     job.clearPerFrame = share(m_accumDepth, oc::max(1u, frames / 8u));
@@ -967,7 +974,7 @@ glm::vec2 TreeVolumePipeline::bakeLead(const FarTreeParams& s) const
 // The cross-fade's progress at this frame's real time (Time's unpaused clock: a pause must not hold a hand-over).
 float TreeVolumePipeline::handoverFade() const
 {
-    const float swapTime = m_job.settings.swapTime;
+    const float swapTime = m_job.settings->swapTime;
     if (swapTime <= 0.0f)
         return 1.0f;
     return glm::clamp((float)(Globals::time.getElapsedSec() - m_job.handoverStartSec) / swapTime, 0.0f, 1.0f);
@@ -1350,7 +1357,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
         // hand-over variant from the next frame on. Without a cross-fade - the first bake (nothing to hand over), or a
         // volume geometry change (the march reads both bakes through the SHOWN bake's ring and layer) - straight to a
         // copy in ONE frame, then the swap: a one-off cost on a setting change, never a frame showing a half copy.
-        job.crossFade = m_baked && sameGeometry(job.settings, m_bakedSettings);
+        job.crossFade = m_baked && sameGeometry(*job.settings, *m_bakedSettings);
         if (!job.crossFade)
         {
             job.copyPerFrame = m_accumDepth;
@@ -1406,7 +1413,7 @@ void TreeVolumePipeline::stepBake(vk::CommandBuffer cmd, uint32 frameIdx, const 
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &copyToMarch }); // copy -> march
     m_front = back;
     m_centre = job.centre;
-    m_bakedSettings = job.settings;
+    *m_bakedSettings = *job.settings;
     m_baked = true;
     m_bakeStartFrame = params.frameNumber + RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     m_bakeDurationSec = Globals::time.getElapsedSec() - job.startSec;
@@ -1428,7 +1435,7 @@ bool TreeVolumePipeline::updateBake(const RecordParams& params)
     // front - the new back - may still be read until then).
     const glm::vec2 camera(params.cameraPos.x, params.cameraPos.z);
     trackCamera(camera);
-    if (m_job.active && !sameBake(s, m_job.settings) && !handingOver())
+    if (m_job.active && !sameBake(s, *m_job.settings) && !handingOver())
     {
         m_job.active = false; // a hand-over finishes: the march already shows part of it
         m_jobDropped = true;
@@ -1440,7 +1447,7 @@ bool TreeVolumePipeline::updateBake(const RecordParams& params)
     }
     // BAKE AHEAD: the test and the new centre take where the camera will be when a bake started now swaps.
     const glm::vec2 ahead = camera + bakeLead(s);
-    const bool due = m_dirty || !m_baked || !sameBake(s, m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
+    const bool due = m_dirty || !m_baked || !sameBake(s, *m_bakedSettings) || glm::distance(ahead, m_centre) > oc::max(s.rebakeDistance, 1.0f);
     if (!m_job.active && due && params.frameNumber >= m_bakeStartFrame)
         startBake(params, params.frameNumber, ahead);
     return m_job.active;

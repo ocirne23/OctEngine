@@ -11,6 +11,7 @@ import :DescriptorSet;
 import :GridClaim;
 import :Layout;
 import :RenderParams;
+import Settings.fwd;
 
 // The clustered light grid. The BUILD is split three ways, none of it on the main thread:
 //  1. addLight, INLINE on whatever thread adds the light (the entity pass, the force update, ...):
@@ -122,9 +123,19 @@ private:
 	uint32 m_workgroupCapacity = 16384;
 	uint32 m_lightListCapacity = 65536;
 
-	// The frame's addLight inputs (beginFrame snapshots; only read while lights are being added).
+	// The frame's addLight inputs (beginFrame snapshots; only read while lights are being added): the
+	// LightGridParams fields the walk reads, copied so this interface needs only Settings.fwd.
+	struct LodParams
+	{
+		float lodStart = 0.0f;
+		float lodStep = 1.0f;
+		float lodPower = 1.0f;
+		int   minCellLog2 = 0;
+		int   maxCellLog2 = 0;
+		int   cellBudget = 1;
+	};
 	uint32 m_frameIdx = 0;
-	LightGridParams m_params;
+	LodParams m_params;
 	glm::vec3 m_viewPos{ 0.0f };
 
 	// The lock-free claim state (payload = the grid's cell size) + per-slot candidate counts.

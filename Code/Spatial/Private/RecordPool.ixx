@@ -6,38 +6,25 @@ import :Types;
 
 constexpr uint32 NumSpatialPasses = uint32(ESpatialPass::Count);
 
-// One entry's stamp generation per pass, together: a pass mask is one 16-byte load (one cache line)
-// instead of a read per pass array, and SpatialIndex::getPassMask compares all passes at once.
+// One entry's stamps, together: a pass mask is one 16-byte load.
 struct alignas(16) PassStamps
 {
     SpatialStamp pass[NumSpatialPasses];
 };
 static_assert(sizeof(PassStamps) == 16, "getPassMask loads the stamps as one __m128i");
 
-// Module-internal SoA storage for every registered entry. Positions are stored relative to the owning
-// cell's min corner (bounded by the cell size, so float keeps full precision at planet-scale
-// coordinates). The pool copy is the authoritative one (getPosition, the same-cell compare in
-// updateEntry, the Link op); the cell's CellBlock lane carries the copy queries read. Nothing here is
-// exported.
-//
-// LOCK-FREE ACQUIRE (parallel entity spawning): every row is a VirtualArray - reserved for MAX_ENTRIES up
-// front, committed as the pool grows - so a growth never moves a row under a concurrent register, unregister
-// or query, and a row access stays a plain base + index. A slot comes from a tagged free stack (the head's
-// high 32 bits bump on every push and pop: ABA) or, when that is empty, a bump of the high-water mark.
-// release() runs at commit only.
-
 enum ERecordFlag : uint8
 {
-    RecordFlag_Alive       = 1,
-    RecordFlag_Unlinked    = 2, // registered but not yet linked into its cell (pre-commit)
-    RecordFlag_PendingFree   = 4,  // unregistered, unlink + slot release happen at commit
-    RecordFlag_PendingMove   = 8,  // a queued Move op holds newer data than the in-place SoA fields
-    RecordFlag_NoSpawnGuard  = 64, // registerEntry(spawnVisible = false): the entry is NEVER treated as
-                                   // visible before its first real stamp - streamed terrain wants this
-                                   // (chunks materialize off-screen constantly; the guard pinned them in
-                                   // the main pass until first entering the frustum, forever with Freeze)
+    RecordFlag_Alive        = 1,
+    RecordFlag_Unlinked     = 2,  // registered but not yet linked into its cell (pre-commit)
+    RecordFlag_PendingFree  = 4,  // unregistered, unlink + slot release happen at commit
+    RecordFlag_PendingMove  = 8,  // a queued Move op holds newer data than the in-place SoA fields
+    RecordFlag_NoSpawnGuard = 64, // registerEntry(spawnVisible = false)
 };
 
+// SoA storage for every registered entry; the authoritative copy (queries read the CellBlock lane).
+// Positions are cell-relative floats. Rows are VirtualArrays (reserved up front, never move), so
+// acquire is lock-free: a tagged free stack, else a bump of the high-water mark. release() at commit only.
 class RecordPool final
 {
 public:
@@ -63,8 +50,7 @@ public:
             if (m_freeHead.compare_exchange_weak(head, popped, oc::memory_order_acquire, oc::memory_order_acquire))
                 return idx;
         }
-        // Commit BEFORE the bump: the high-water mark never passes the committed rows, so everything below
-        // capacity() is readable (the stamp sweep walks it while spawns register).
+        // Commit before the bump: everything below capacity() stays readable.
         uint32 idx = m_count.load(oc::memory_order_relaxed);
         do
         {
@@ -120,8 +106,7 @@ private:
         fn(posX); fn(posY); fn(posZ); fn(radius); fn(cellKey); fn(userData); fn(layerMask);
         fn(gen); fn(stamps); fn(storeIdx); fn(level); fn(flags);
     }
-    // Doubles the committed prefix past `needed` (each row commits under its own mutex; m_committed is
-    // published after every row covers it).
+    // Doubles the committed prefix past `needed`; m_committed is published after every row covers it.
     void commitRows(uint32 needed)
     {
         const std::lock_guard lock(m_commitMutex);

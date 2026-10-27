@@ -3,13 +3,8 @@ export module Threading:StealDeque;
 import Core;
 import :Types;
 
-// Chase-Lev work-stealing deque (memory orderings per Le et al., "Correct and Efficient
-// Work-Stealing for Weak Memory Models"). The owning worker pushes/pops LIFO at the bottom
-// (cache-hot continuations); thieves steal FIFO from the top. Fixed capacity instead of the
-// paper's growable buffer: a full deque overflows to the global queues, which keeps memory
-// bounded and sidesteps buffer-reclamation. The no-overwrite argument still holds: push refuses
-// when bottom - top >= capacity, so a slot a pending steal may read is never rewritten while its
-// top CAS can still succeed.
+// Chase-Lev work-stealing deque (orderings per Le et al. 2013), fixed capacity: a full push overflows to
+// the shared queues. push refuses at bottom - top >= capacity, so a slot a pending steal reads is never rewritten.
 export class StealDeque final
 {
 public:

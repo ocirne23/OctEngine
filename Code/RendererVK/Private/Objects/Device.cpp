@@ -7,8 +7,11 @@ import :Instance;
 import :Allocator;
 import :OpenXRSession;
 import :Streamline;
+import Settings;
 
 Device::Device() {}
+
+bool Device::capturePipelineStatistics() const { return Globals::settings.renderer.logPipelineStats && m_pfnGetPipelineExecutableStatistics; }
 Device::~Device()
 {
     destroy();

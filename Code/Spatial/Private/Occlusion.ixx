@@ -6,11 +6,8 @@ import Core.Transform;
 import Settings;
 import :Types;
 
-// CPU software occlusion: occluder triangles (the largest triangles of static mesh colliders)
-// are rasterized camera-relative into a small depth buffer each frame; hierarchical max-depth
-// blocks then answer IOcclusionTester cell queries for the main-view visibility set. Everything
-// is conservative toward "visible": pixel-center coverage under-rasterizes occluders, the block
-// mip keeps the farthest depth, and any near-plane crossing reports visible.
+// CPU software occlusion: the largest static-collider triangles rasterized into a small depth buffer;
+// max-depth blocks answer IOcclusionTester. Conservative toward visible.
 
 export struct OccluderData // triangle list (3 verts per triangle), container-local space
 {
@@ -39,7 +36,7 @@ public:
     }
     ~SpatialOccluder() { reset(); }
 
-    void reset(); // removes from Globals::occlusionBuffer, defined in Occlusion.cpp
+    void reset();
     bool isValid() const { return m_handle.isValid(); }
 
 private:
@@ -51,7 +48,7 @@ export class OcclusionBuffer final : public IOcclusionTester
 {
 public:
 
-    void initialize(); // the depth buffers (the Spatial/Occlusion tweaks are Globals::settings.spatial.occlusion)
+    void initialize();
 
     // The largest maxTriangles triangles by area of an indexed mesh (degenerates dropped).
     static oc::shared_ptr<const OccluderData> extractOccluders(oc::span<const glm::vec3> vertices,
@@ -63,8 +60,7 @@ public:
     bool isEnabled() const { return m_settings.enabled; }
     int getMaxTriangles() const { return m_settings.maxTriangles; }
 
-    // Rasterize all occluders for this frame's camera; isVisible() answers against the result
-    // until the next render(). viewProjRelCamera maps camera-relative world positions to clip space.
+    // isVisible() answers against the result until the next render(). viewProjRelCamera: camera-relative.
     void render(const glm::mat4& viewProjRelCamera, const glm::dvec3& cameraPos);
 
     bool isVisible(const glm::vec3& centerRelCamera, const glm::vec3& halfExtent) override;
@@ -88,8 +84,7 @@ private:
         bool used = false;
     };
 
-    // Parallel entity spawning: addOccluder/removeOccluder run concurrently from spawn jobs
-    // (PhysicsComponent spawn/resume); render() runs in the cull window where no spawn is legal.
+    // addOccluder/removeOccluder run concurrently from spawn jobs; render() runs where no spawn is legal.
     std::mutex m_occluderMutex;
     oc::vector<Occluder> m_occluders;
     oc::vector<uint32> m_freeOccluders;
@@ -98,8 +93,7 @@ private:
     glm::mat4 m_viewProjRel = glm::mat4(1.0f);
     bool m_rendered = false; // valid depth data for the current frame
     SpatialOcclusionSettings& m_settings = Globals::settings.spatial.occlusion;
-    // isVisible runs concurrently from the parallel markVisible* tasks, so it counts atomically;
-    // the plain int setting mirrors it once per render() for the tweak panel (which binds a raw int*).
+    // Counted atomically (isVisible runs concurrently); mirrored into the int stat once per render().
     oc::atomic<int> m_statHiddenCells = 0;
 };
 

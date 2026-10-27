@@ -14,6 +14,7 @@ import :Layout;
 import :RenderParams;
 import :TreeRecordPool;
 import :PushBlock;
+import Settings.fwd;
 
 // FAR TREES as a marched volume (Docs/Context/Procedural/Trees.md, prototype P1). Three stages:
 //   bake  : the GPU tree sets' trees splatted into ONE camera-centred POLAR volume of extinction (1/m): angle x
@@ -175,7 +176,7 @@ struct UpsamplePush
 export class TreeVolumePipeline final
 {
 public:
-    TreeVolumePipeline() = default;
+    TreeVolumePipeline();
     ~TreeVolumePipeline();
     TreeVolumePipeline(const TreeVolumePipeline&) = delete;
 
@@ -479,7 +480,8 @@ private:
     bool m_dirty = true;
     bool m_baked = false;
     glm::vec2 m_centre{ 0.0f };
-    FarTreeParams m_bakedSettings;
+    // The FarTreeParams copies (this one and BakeJob::settings) are boxed so this interface needs only Settings.fwd.
+    oc::unique_ptr<FarTreeParams> m_bakedSettings;
 
     // The running bake (the BACK).
     // Resolve: in place, slice ranges (a column pass first). FloorMax: the max-floor grid, then the hand-over (an earlier
@@ -508,7 +510,7 @@ private:
         uint32 startFrame = 0;
         double startSec = 0.0;    // real time (the next bake's lead: this one's duration)
         glm::vec2 centre{ 0.0f };
-        FarTreeParams settings;
+        oc::unique_ptr<FarTreeParams> settings;
         oc::vector<Source> sources; // the static sets
         RecordSource records;       // with the snapshot buffers' addresses
         uint32 detailRecords = 0;

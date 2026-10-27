@@ -10,6 +10,7 @@ import :DescriptorSet;
 import :Sampler;
 import :Layout;
 import :RenderParams;
+import Settings.fwd;
 
 // Screen-space ray-traced ambient occlusion with a temporal-reprojection + spatial denoise.
 // Three half-resolution compute passes per frame, all R16F (images kept in GENERAL, no layout churn):

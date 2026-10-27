@@ -5,6 +5,7 @@ import Core.glm;
 import File;
 import :Allocator;
 import :Layout;
+import Settings;
 
 namespace
 {
@@ -26,7 +27,7 @@ namespace
     }
 
     // Distance LOD: level = pow(max(dist - start, 0) / step, power), cellSize = clamp(minCell << level, minCell, maxCell).
-    uint32 lodCellSize(const glm::ivec3& gridPos, const glm::vec3& viewPos, const LightGridParams& params)
+    uint32 lodCellSize(const glm::ivec3& gridPos, const glm::vec3& viewPos, const auto& params) // LightGridComputePipeline::LodParams
     {
         const float viewDist = glm::distance(glm::vec3(gridPos) * float(GRID_SIZE) + float(GRID_SIZE / 2), viewPos);
         const float t = glm::max(viewDist - glm::max(params.lodStart, 0.0f), 0.0f) / glm::max(params.lodStep, 0.01f);
@@ -215,7 +216,8 @@ void LightGridComputePipeline::buildComputeLayout(ComputePipelineLayout& compute
 void LightGridComputePipeline::beginFrame(uint32 frameIdx, const LightGridParams& params, const glm::vec3& viewPos)
 {
     m_frameIdx = frameIdx;
-    m_params = params;
+    m_params = LodParams{ .lodStart = params.lodStart, .lodStep = params.lodStep, .lodPower = params.lodPower,
+        .minCellLog2 = params.minCellLog2, .maxCellLog2 = params.maxCellLog2, .cellBudget = params.cellBudget };
     m_viewPos = viewPos;
     m_claim.beginFrame();
     m_touches.beginFrame();

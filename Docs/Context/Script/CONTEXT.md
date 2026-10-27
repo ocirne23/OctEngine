@@ -72,7 +72,7 @@ Intermediates (`.obj` / `.lib` / `.exp` / the compiler PDB) are cleared; the bui
 
 ### The cooked build (`SCRIPTS_STATIC`, on by default)
 
-`Code/AppScripts` generates ONE aggregate TU that `#include`s **every `Assets/Scripts/*.dsl`** into
+`Code/Tools/AppScripts` generates ONE aggregate TU that `#include`s **every `Assets/Scripts/*.dsl`** into
 its own namespace and compiles it into the engine, linking every engine library like App.
 
 * **`.scr` is NOT cooked.** Leftover `.scr` assets are inert reference files, and one with stale
@@ -325,7 +325,7 @@ and the next save normalizes it.
 DslCompiler <input> [output.dsl] [--compile]
 ```
 
-`Code/DslCompiler`, a console exe, and **THE way Claude authors `.dsl` files** — see
+`Code/Tools/DslCompiler`, a console exe, and **THE way Claude authors `.dsl` files** — see
 [`Docs/Context/DslCompiler/CONTEXT.md`](../DslCompiler/CONTEXT.md) for usage and the full language reference.
 
 Write only the DSL text; the tool validates it with the same loader and binding vocabulary the editor

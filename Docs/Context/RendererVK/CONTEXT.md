@@ -363,8 +363,8 @@ Each feature's details are in its topic file (see [The documentation files](#the
 | `UboDeclaration.cpp` | `buildUboDeclaration`: the UBO's GLSL text from the block's entries, each baked value as a `const`. |
 | `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks" ([FrameUbo.md](FrameUbo.md)). |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
-| `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and the GPU allocation report types; `export import`s **`Settings.Render`** (Code/Settings), which holds every renderer settings type (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...). The VALUES live in `Globals::settings` (Renderer.ixx binds reference members to them); Settings.Render cannot import `:Layout`, so Renderer.ixx static_asserts `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS` and `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`. |
-| `RendererSettings.cpp` | `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
+| `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and the GPU allocation report types. The renderer settings types (`SkyParams`, `FogParams`, `ParticleParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...) are **`Settings.Render`**'s (Code/Settings) and are NOT re-exported: an importer of RendererVK that touches their fields imports Settings itself. See "No `.ixx` imports Settings" below. |
+| `RendererSettings.cpp` | The `Renderer` constructor (binds the settings reference members to `Globals::settings`), the small settings-reading members (`grassActive`, `taaActive`, `syncCloudDefines`, the setters, ...), the static_asserts Settings.Render cannot hold (it cannot import `:Layout`: `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS`, `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`), and `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
 | `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `Aftermath` / `Streamline` (the runtime-loaded DLLs), `GridClaim` (the light/force hash grid's CPU side), `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
 | `Renderer.ixx` | The whole class. One interface, **seven implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
 | `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` runs `attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`; per frame `waitFrameSlot` → `setFrameView` → `beginFrame` (+ its job kick/join) → `present`. |
@@ -373,6 +373,23 @@ Each feature's details are in its topic file (see [The documentation files](#the
 | `RendererTrees.cpp` | The tree instance sets and tree records (see [Scene.md](Scene.md)) and the far-tree volume's recording. |
 | `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the primaries (desktop / VR / present). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only. |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
+
+## No `.ixx` imports Settings
+
+**A RendererVK interface (`.ixx`) imports `Settings.fwd`, NEVER `Settings` / `Settings.<Domain>`** (`Settings.Tweaks` is
+allowed: it holds no defaults). Every `.cpp` here is `module RendererVK;`, which imports the whole RendererVK interface,
+so one `.ixx` on that import graph that imports Settings makes a settings DEFAULT change rebuild the whole library. With
+the rule, only the `.cpp` files that `import Settings;` rebuild. So, in an interface:
+
+* a settings type is named only as a reference, a pointer or a parameter (`Settings.fwd` lists them);
+* a reference member to `Globals::settings.x` is bound in the class's constructor in a `.cpp` (`Renderer`,
+  `MeshStreamer`, `TextureStreamer`);
+* a body that reads a settings field or `Globals::settings` goes to a `.cpp` (`grassActive`, `isEnabled`, ...);
+* a COPY of a settings struct is an `oc::unique_ptr` made in the constructor (`ForceFieldState::m_params`,
+  `TreeVolumePipeline::m_bakedSettings` / `BakeJob::settings`), or a local struct of the fields it needs
+  (`LightGridComputePipeline::LodParams`).
+
+A `.cpp` that reads settings fields adds `import Settings;` itself (nothing leaks it through the partitions any more).
 
 ## Debug names and labels (Nsight / RenderDoc)
 

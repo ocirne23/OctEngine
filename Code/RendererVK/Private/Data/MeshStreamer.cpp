@@ -11,6 +11,7 @@ import :MeshStreamer;
 import :MeshDataManager;
 import :Renderer;
 import :Layout;
+import Settings;
 
 // StreamInRequest carries an owned, null-terminated copy of the cache path (unique_ptr<const char[]>)
 // instead of referencing m_files' oc::string across the worker thread.
@@ -19,6 +20,11 @@ static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
     oc::unique_ptr<char[]> buffer = oc::make_unique<char[]>(path.size() + 1);
     memcpy(buffer.get(), path.c_str(), path.size() + 1);
     return buffer;
+}
+
+MeshStreamer::MeshStreamer()
+    : m_settings(Globals::settings.meshStreaming)
+{
 }
 
 bool MeshStreamer::initialize()

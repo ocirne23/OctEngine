@@ -2,7 +2,6 @@ export module RendererVK:Device;
 
 import Core;
 import :VK;
-import Settings;
 
 export class Device final
 {
@@ -57,7 +56,7 @@ public:
     // CAPTURE_STATISTICS, and logPipelineStatistics writes one line per stage to the log and to
     // Local/pipeline_stats.txt (appended since startup; a reload appends a new block). (Internal
     // representations: the NVIDIA driver returns none - tried 2026-09-22 - so there is no SASS dump here.)
-    bool capturePipelineStatistics() const { return Globals::settings.renderer.logPipelineStats && m_pfnGetPipelineExecutableStatistics; }
+    bool capturePipelineStatistics() const;
     // defines = the variant's shader defines (Shader::defineList), the line's last column: variants of one file
     // share the name.
     void logPipelineStatistics(vk::Pipeline pipeline, const char* name, const oc::string& defines);

@@ -9,6 +9,7 @@ import :DescriptorSet;
 import :Layout;
 import :RenderParams;
 import :PushBlock;
+import Settings.fwd;
 
 // Automatic exposure ("eye adaptation"). Two compute passes per frame over the TAA-resolved scene colour:
 //   1. histogram : 256-bin log-luminance histogram of the viewport region (eyeadapt_histogram.cs.glsl);

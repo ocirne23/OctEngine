@@ -299,6 +299,9 @@ See [Threading](Context/Threading/CONTEXT.md).
 See [Core](Context/Core/CONTEXT.md).
 
 * The `oc::` container rule is not compiler-enforced.
+* A settings default change still rebuilds every library above RendererVK: the interfaces of Physics, Spatial, Nav,
+  Particle, Force, Entity, UI, Input, Procedural, Game and App still import Settings. The fix is the RendererVK one
+  ("Forward declarations" in [Settings](Context/Settings/CONTEXT.md)).
 * The EASTL aligned hook asserts on a non-zero `alignOffset`.
 * Units, scripts and force emitters have no profile scope (ring lapping).
 * Unregistered threads (startup pools, miniaudio) have no profiler track.

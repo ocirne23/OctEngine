@@ -10,6 +10,7 @@ import :Buffer;
 import :Layout;
 import :InstanceStream;
 import :TextureManager; // the rock materials' textures (the far volume)
+import Settings;
 
 // The BAKED TREE RECORDS' CPU side (tree_cull.inc.glsl): sets of placed pieces uploaded ONCE to device-local
 // memory. The culls build each piece's four records from the camera distance inside a range of the frame's instance

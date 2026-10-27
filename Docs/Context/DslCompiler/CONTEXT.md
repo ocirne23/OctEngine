@@ -27,7 +27,7 @@ then compiles and hot-reloads that `.dsl` like any script (F6, or Save in the Sc
 DslCompiler <input> [output.dsl] [--compile]
 ```
 
-* Built to `Build/Code/DslCompiler/<Config>/DslCompiler.exe`. Build with `cmake --build Build --config Debug --target DslCompiler`.
+* Built to `Build/Code/Tools/DslCompiler/<Config>/DslCompiler.exe`. Build with `cmake --build Build --config Debug --target DslCompiler`.
 * Relative paths resolve against `Assets/` (`FileSystem::initialize` runs, same as the engine).
 * `output` defaults to the input path with its extension replaced by `.dsl`.
 * Input is either RAW DSL text (below) or an existing `.dsl` (detected by its `//@@dsl` line) — the latter

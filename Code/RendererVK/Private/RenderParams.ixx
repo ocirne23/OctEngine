@@ -2,8 +2,6 @@ export module RendererVK:RenderParams;
 
 import Core;
 import Core.glm;
-// Every renderer settings type (FogParams, SkyParams, ...): re-exported, so RendererVK's importers keep seeing them.
-export import Settings.Render;
 
 // The pushed / reported parameter blocks that are not settings: OceanParams (Procedural::OceanGenerator builds it
 // every frame) and the GPU allocation report types.

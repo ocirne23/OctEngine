@@ -4,13 +4,7 @@ import Core;
 import :Types;
 import :JobSystem;
 
-// Fiber-parking mutex: contended lock() inside a job parks the fiber (the worker keeps running
-// other jobs) instead of blocking the thread; the registered main thread helps run jobs while
-// waiting; unregistered threads block on the state atomic. Barging (no FIFO handoff): unlock
-// wakes one waiter which re-races fresh lockers - simpler and higher throughput; don't use it
-// where fairness matters. Standard mutex lifetime contract: never destroy while anyone can be
-// locking or waiting. For long exclusive sections (V3 tile inference) this is what keeps pooled
-// workers from starving - the ~seconds-long waits hold a fiber, not a worker thread.
+// Fiber-parking mutex: a contended lock() in a job parks the fiber, not the worker. Barging, not fair.
 export class JobMutex final
 {
 public:
@@ -68,9 +62,7 @@ private:
     FiberWaitNode* m_waiters = nullptr;          // guarded by m_listLock
 };
 
-// Manual-reset event over a JobCounter: signal() releases all current and future waiters until
-// reset(). Idempotent signal; reset() only when no waits/signals are in flight. Waiting inside a
-// job parks the fiber. The building block for "wait for that tile/bake/upload to exist" handoffs.
+// Manual-reset event: signal() releases every waiter until reset().
 export class JobEvent final
 {
 public:
@@ -104,10 +96,7 @@ private:
     oc::atomic<bool> m_signaled = false;
 };
 
-// One cacheline-aligned T per scheduler context (main helper + workers): the substrate for
-// per-worker command queues, dirty lists, and scratch. Each slot is single-writer within a
-// parallel phase; a downstream serial node drains them with forEach. Re-read local() after any
-// wait() - fibers migrate workers.
+// One cacheline-aligned T per scheduler context, drained serially with forEach. Re-read local() after any wait().
 export template<typename T>
 class PerWorker final
 {

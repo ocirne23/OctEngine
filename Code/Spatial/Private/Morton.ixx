@@ -3,13 +3,10 @@ export module Spatial:Morton;
 import Core;
 import Core.glm;
 
-// Coordinate system of the SpatialIndex. World positions (double) quantize onto a
-// 21-bit-per-axis lattice of "fine" cells; every level above quadruples the cell size, so a
-// level-L cell key is the fine Morton key shifted right by 6*L, a cell's parent is key >> 6,
-// and the low 6 bits of a key select one of the parent's 4x4x4 children.
+// A 21-bit-per-axis lattice of fine cells; each level quadruples the cell size. Parent = key >> 6;
+// the low 6 bits select one of the parent's 4x4x4 children.
 
-// 8 m: at game density unit-sized entries then share cells ~10 to one. 2 m cells put them one per
-// cell, so a traversal tested ~2 cells per hit and the 8-lane static blocks ran 2 lanes full.
+// 8 m: tried 2 m, dropped because one unit per cell left the 8-lane blocks 2 lanes full.
 #ifndef SPATIAL_FINEST_CELL_SIZE
 #define SPATIAL_FINEST_CELL_SIZE 8.0
 #endif

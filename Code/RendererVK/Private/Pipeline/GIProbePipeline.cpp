@@ -81,6 +81,45 @@ void GIProbePipeline::registerUboFields(UboBlock& list,const bool& rtEnabled, co
     list.add("rt_giPriorityFrustumWeight", [this] { return getPriorityParams().z; }, gi.priorityFrustumWeight);
 }
 
+glm::vec4 GIProbePipeline::getTraceParams0(float wallDeltaSec) const
+{
+    const GiSettings& gi = Globals::settings.gi;
+    const float frames60 = 60.0f * glm::clamp(wallDeltaSec, 0.001f, 0.1f);
+    const float frameAlpha = 1.0f - powf(1.0f - glm::clamp(gi.temporalAlpha, 0.0f, 1.0f), frames60);
+    return glm::vec4((float)oc::max(gi.raysPerProbe, 1), frameAlpha, gi.maxRayDist, oc::max(gi.updateIntervalMult, 1.0f));
+}
+
+float GIProbePipeline::getTlasRange() const { return Globals::settings.gi.tlasRange; }
+
+glm::vec3 GIProbePipeline::getPriorityParams() const
+{
+    const GiSettings& gi = Globals::settings.gi;
+    return glm::vec3(oc::max(gi.priorityDist, 1.0f), oc::max(gi.priorityFalloff, 0.0f), oc::max(gi.priorityFrustumWeight, 1.0f));
+}
+
+bool GIProbePipeline::isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
+void GIProbePipeline::toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
+
+void GIProbePipeline::cycleDebugMode()
+{
+    Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5;
+    Tweak::notifyChanged(Globals::settings.gi.debugMode);
+}
+
+float GIProbePipeline::getStrength() const { return Globals::settings.gi.strength; }
+
+glm::vec4 GIProbePipeline::takeVisibilityParams(bool bakeRuns)
+{
+    const GiSettings& gi = Globals::settings.gi;
+    const glm::vec3 knobs(gi.visVarianceFloor, gi.visWeightFloor, gi.visMeanScale);
+    m_volumeFullBake = m_volumeFullBake || knobs != m_lastVisKnobs;
+    m_lastVisKnobs = knobs;
+    const bool fullBake = m_volumeFullBake && bakeRuns;
+    if (bakeRuns)
+        m_volumeFullBake = false;
+    return glm::vec4(knobs.x, fullBake ? 1.0f : 0.0f, knobs.y, knobs.z);
+}
+
 void GIProbePipeline::resizeGrid()
 {
     const GiGridConfig& grid = Globals::settings.gi.grid;

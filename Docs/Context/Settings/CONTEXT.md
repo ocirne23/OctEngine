@@ -8,6 +8,7 @@ above them has it (most also link it directly).
 | `Settings.Tweaks` | [Tweaks.ixx](../../../Code/Settings/Public/Tweaks.ixx) | `TweakRegistry` (the rows, groups, flags, Saved / Synced, overrides, locks, listeners) + the `Tweak::` helpers |
 | `Settings` (umbrella) | [Settings.ixx](../../../Code/Settings/Public/Settings.ixx), [Settings.cpp](../../../Code/Settings/Private/Settings.cpp) | `EngineSettings` + `Globals::settings` + `Settings::registerAll()` |
 | `Settings.<Domain>` | `Public/<Domain>.ixx` + `Private/<Domain>.cpp` | one domain's plain-data types and its `Settings::register<X>(X&)` |
+| `Settings.fwd` | [Settings.fwd.ixx](../../../Code/Settings/Public/Settings.fwd.ixx) | forward declarations of the Render, Clutter and Threading types, for interfaces (see "Forward declarations") |
 
 Domains: Time, Render, World, Physics, Audio, Spatial, Network, Nav, Threading, Terrain, Clutter, Trees, Rocks, Ocean,
 Force, ParticleSystem, Hud, Input, App, Game.
@@ -47,6 +48,22 @@ Force, ParticleSystem, Hud, Input, App, Game.
 
 A field in the domain's struct (with its default) + one `Tweak::` line in its `register<X>`. A new domain = a module
 pair, a member in `EngineSettings`, an `export import` and a `register<X>` call in `registerAll`.
+
+## Forward declarations (`Settings.fwd`)
+
+A default is a member initializer, so a default change rebuilds every importer of its domain module, and of the
+`Settings` umbrella. **A library INTERFACE that only names a settings type (a reference, a pointer, a parameter)
+imports `Settings.fwd` instead**, and its `.cpp` files import `Settings`: then a default change rebuilds those `.cpp`
+files only, not the library. RendererVK follows this rule;
+see "No `.ixx` imports Settings" in [`Docs/Context/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md).
+
+**The structs of a forward-declared domain sit in an `extern "C++" { ... }` block** (Render, Clutter, Threading): they
+attach to the global module, so the forward declaration and the definition are ONE type. MSVC mangles a
+module-attached type with its module's name (`ForceFieldParams[Settings.Render]`); a forward declaration of it is
+another type, and a call between a TU that sees only the forward declaration and one that sees the module does not
+link. The `Settings::register<X>` declarations stay outside the block (their definitions in `Private/<X>.cpp` are
+module-attached). To forward-declare another domain's types: wrap its structs the same way, then list them in
+`Settings.fwd`.
 
 ---
 

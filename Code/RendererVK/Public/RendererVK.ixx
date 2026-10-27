@@ -8,5 +8,5 @@ export import :ObjectContainer;
 export import :RenderNode;
 export import :RenderMesh;
 export import :Light;
-export import :RenderParams; // OceanParams + the re-exported Settings.Render types
+export import :RenderParams; // OceanParams + the GPU allocation report types
 export import :TreeRecordPool; // TreeRecordTypeGpu: Procedural's world trees hand the far volume their record types

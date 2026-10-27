@@ -7,6 +7,7 @@ import :Allocator;
 import :CommandBuffer;
 import :TextureManager;
 import :Texture;
+import Settings;
 
 namespace
 {

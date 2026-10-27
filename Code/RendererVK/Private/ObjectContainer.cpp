@@ -11,6 +11,7 @@ import Core.Log;
 
 import Animation;
 import File;
+import Settings;
 
 import :Renderer;
 import :MeshDataManager;

@@ -61,7 +61,7 @@ import :GraphicsPipeline;
 import :Light;
 import :GpuCrashTracker;
 import :RenderParams;
-import Settings;
+import Settings.fwd; // NOT Settings: a settings default change must not rebuild every importer of :Renderer
 import :RenderNode;
 import :RenderMesh;
 import :SlotTable;
@@ -86,7 +86,7 @@ export class Renderer final
 {
 public:
 
-    Renderer() {}
+    Renderer();
     ~Renderer();
 
     // -- Main API --
@@ -162,10 +162,10 @@ public:
     // "Ocean/World scale" (s): the spray emitter's lengths / speeds / accelerations ride it.
     // From the "Ocean" settings (the same values the pushed OceanParams carry): the UBO's lockable ocean values and the
     // live work both read these.
-    float getOceanWorldScale() const { return oceanWorldScaled(Globals::settings.ocean).s; }
-    float getOceanSwashAmp() const { return glm::clamp(Globals::settings.ocean.swashAmp, 0.04f, 4.0f); } // the tweak min: the reach is >= 0.01
-    float getOceanBubbleDepth() const { return glm::max(oceanWorldScaled(Globals::settings.ocean).bubbleDepth, 0.0f); }
-    float getOceanBubbleBrightness() const { return glm::max(Globals::settings.ocean.bubbleBrightness, 0.0f); }
+    float getOceanWorldScale() const;
+    float getOceanSwashAmp() const;
+    float getOceanBubbleDepth() const;
+    float getOceanBubbleBrightness() const;
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
     uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
 
@@ -184,17 +184,17 @@ public:
 
     // -- Global rendering parameters --
     void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
-    void setAmbientLight(const glm::vec3& color, float intensity) { m_skyParams.ambientColor = color; m_skyParams.ambientIntensity = intensity; }
+    void setAmbientLight(const glm::vec3& color, float intensity);
     // A code write into a lockable setting re-bakes (m_uboLocksDirty), like a tweak change.
-    void setSkyRadiance(const glm::vec3& color, float intensity) { m_skyParams.skyRadianceColor = color; m_skyParams.skyRadianceIntensity = intensity; m_uboLocksDirty = true; }
-    void setSkyParams(const SkyParams& sky) { m_skyParams = sky; m_uboLocksDirty = true; }
+    void setSkyRadiance(const glm::vec3& color, float intensity);
+    void setSkyParams(const SkyParams& sky);
     const SkyParams& getSkyParams() const { return m_skyParams; }
     // THE wind ("Sky/Wind"): the ocean reads it (x its own speed scale) - everything renderer-side through the UBO.
     const WindParams& getWindParams() const { return m_windParams; }
-    void setFogParams(const FogParams& fog) { m_fogParams = fog; m_uboLocksDirty = true; }
-    void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); m_uboLocksDirty = true; }
+    void setFogParams(const FogParams& fog);
+    void setPostParams(const PostParams& post);
     const ShadowParams& shadowParams() const { return m_shadowParams; }
-    void setShadowParams(const ShadowParams& params) { m_shadowParams = params; m_uboLocksDirty = true; }
+    void setShadowParams(const ShadowParams& params);
     // The game turns the volumetric clouds off without touching the user's "Sky/Clouds/Enabled" tweak.
     void setCloudsSuppressed(bool suppressed) { m_cloudsSuppressed = suppressed; }
 
@@ -252,7 +252,7 @@ public:
 
     // -- VR --
     bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
-    bool isVSyncEnabled() const { return Globals::settings.renderer.vsync; } // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
+    bool isVSyncEnabled() const; // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
     bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
     IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
 
@@ -424,7 +424,7 @@ public:
     // The terrain height right under the camera (world Y; NaN = unknown), per frame (Procedural TerrainStreamer::update):
     // the near grass cascade's placement (where the bottom of the view meets the ground).
     void setCameraGround(float groundY) { m_cameraGround = groundY; }
-    float grassRange() const { return grassActive() ? m_grassParams.range : 0.0f; } // m; 0 = no grass
+    float grassRange() const; // m; 0 = no grass
     // The range the ground chunks must cover (setGrassGround): the grass's and the ground clutter's.
     float groundRange() const { return glm::max(grassRange(), clutterRange()); }
 
@@ -516,33 +516,24 @@ private:
     void recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordCloudApply(uint32 frameIdx);
     void recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    bool cloudsEnabled() const { return m_cloudParams.enabled && !m_cloudsSuppressed; }
+    bool cloudsEnabled() const;
     // DLSS (desktop only) REPLACES TAA: it writes TAA's resolved image, so the post chain reads the same image.
     bool dlssActive() const { return m_dlssMode != Streamline::DlssMode::Off && m_sceneViewCount == 1 && Streamline::dlssAvailable(); }
-    bool taaActive() const { return m_taaParams.taaEnabled && !dlssActive(); }
+    bool taaActive() const;
     bool resolveActive() const { return taaActive() || dlssActive(); } // false: the post chain reads the scene colour directly
     // The scene renders below the output resolution (a DLSS mode other than DLAA).
     bool upscaling() const { return m_renderScale != glm::vec2(1.0f); }
     // Desktop only (a blur the head did not make is uncomfortable in VR); off = the pass is not recorded at all.
     // Not while upscaling: its velocity and gather assume one resolution for the depth and the resolved colour.
-    bool motionBlurEnabled() const { return m_motionBlurParams.enabled && m_motionBlurParams.shutter > 0.0f && m_sceneViewCount == 1 && !upscaling(); }
+    bool motionBlurEnabled() const;
     // Desktop only (level 0 comes from the left eye's histogram in VR); off = no chain, no level-0 writes.
-    bool bloomEnabled() const { return m_bloomParams.enabled && m_sceneViewCount == 1; }
+    bool bloomEnabled() const;
     // The bloom's share in the composite mix (u_post_bloomKeep / bloomScale): 0 while bloom is off. Floored at the
     // tweak min (0.005).
-    float bloomMixIntensity() const { return bloomEnabled() ? glm::max(m_bloomParams.intensity, 0.005f) : 0.0f; }
+    float bloomMixIntensity() const;
     // CloudParams toggles -> the baked shader defines (buildLayoutPreamble). Returns whether they changed, so a
     // strength slider that only crosses 0 at the ends (Powder) reloads the shaders only when its define flips.
-    bool syncCloudDefines()
-    {
-        const RendererVKLayout::CloudShaderConfig config{ .clouds = m_cloudParams.enabled, .shadows = m_cloudParams.shadows,
-            .selfShadowFromMap = m_cloudParams.selfShadowFromMap, .powder = m_cloudParams.powder > 0.0f,
-            .checkerboard = m_cloudParams.checkerboard, .debugMode = m_cloudParams.debugMode };
-        if (config == RendererVKLayout::g_cloudShaders)
-            return false;
-        RendererVKLayout::g_cloudShaders = config;
-        return true;
-    }
+    bool syncCloudDefines();
     void recordTaa(uint32 frameIdx);
     void recordDlss(uint32 frameIdx);                                  // cached: the motion vector pass
     void recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary); // per frame, in the primary: mvec pass + the upscale
@@ -564,7 +555,7 @@ private:
     void updateRenderRect();       // m_renderRect from m_viewportRect; a change resets the DLSS history
     void recreateRenderTargets();  // GPU idle: every render-size image at m_renderExtent
     void applyRenderResolution();  // "Post/DLSS" Mode / Mip bias: GPU idle + the three above + the texture LOD bias
-    float dlssMipBias() const { return dlssActive() && m_dlssParams.mipBias && upscaling() ? glm::log2(m_renderScale.y) : 0.0f; }
+    float dlssMipBias() const;
     vk::Extent2D renderExtent() const { return vk::Extent2D{ m_renderExtent.x, m_renderExtent.y }; }
 
     glm::mat4 computeCenterProjection(const Camera& camera) const; // pure, reversed-Z, unjittered (VR: both eyes)
@@ -716,13 +707,7 @@ private:
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_rt.accel().getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
-    uint32 addMeshLodGroup(const MeshLodGroup& group)
-    {
-        const uint8 rtLevel = (uint8)oc::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
-        for (uint8 k = 0; k < group.numLods; ++k)
-            m_rt.accel().setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
-        return m_meshLods.addGroup(group);
-    }
+    uint32 addMeshLodGroup(const MeshLodGroup& group);
     void freeMeshLodGroup(uint32 groupIdx) { const std::lock_guard lock(m_spawnMutex); m_meshLods.freeGroup(groupIdx); } // see freeMeshInfoRange
     uint32 allocateLodStateRange(uint32 count) { return m_meshLods.allocateStateRange(count); } // lock-free
 
@@ -879,7 +864,7 @@ private:
     float m_treeRecordChunkSize = 256.0f;
     uint32 m_treeRecordSeed = 1;
     uint32 m_treeRecordSet = UINT32_MAX; // the set whose volume types the record types' variants name
-    FarTreeParams& m_farTreeParams = Globals::settings.farTree;
+    FarTreeParams& m_farTreeParams;
     float m_farTreeCameraGround = std::numeric_limits<float>::quiet_NaN(); // setFarTreeCameraGround
     bool farTreesActive() const; // enabled, desktop, and a tree set with volume data
     float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)
@@ -894,23 +879,24 @@ private:
     // PROCEDURAL GRASS: the patch cull + buffers (the blades draw in m_staticMeshGraphicsPipeline). The ground chunks
     // arrive per frame (setGrassGround) and go into the slot's ground table in present (uploadGrassFrame).
     GrassPipeline m_grassPipeline;
-    GrassParams& m_grassParams = Globals::settings.grass;
-    RockParams& m_rockParams = Globals::settings.rock; // the rock material (EPipelineIndex::LitRock): UBO-driven, "Rocks/Material"
+    GrassParams& m_grassParams;
+    RockParams& m_rockParams; // the rock material (EPipelineIndex::LitRock): UBO-driven, "Rocks/Material"
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
     uint32 m_grassGroundStride = 1; // setGrassGround: the terrain node meshes' row stride (vertices)
     float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
-    bool grassActive() const { return m_grassParams.enabled && m_sceneViewCount == 1; } // desktop only
+    bool grassActive() const; // desktop only
     float grassPatchSize() const; // the patch grid (uploadGrassFrame) and u_grass_patchSize
     float grassGridRange() const; // capped so the grid fits GRASS_MAX_PATCHES: the grid and u_grass_range
     // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
     // map - the cascades' pass that this layer must follow).
-    bool grassNearShadowActive() const { return grassActive() && m_grassParams.nearShadows && !m_rtParams.effectiveSunShadow(); }    void uploadGrassFrame(uint32 frameIdx);
+    bool grassNearShadowActive() const;
+    void uploadGrassFrame(uint32 frameIdx);
     bool m_groundTableValid = false; // this frame's ground table holds chunks (uploadGrassFrame): the clutter's ground
     // GROUND CLUTTER: the cull + buffers (the objects draw in m_staticMeshGraphicsPipeline). The patch grid and the
     // floor map go into the slot's clutter frame in present (uploadClutterFrame).
     ClutterPipeline m_clutterPipeline;
-    ClutterSettings& m_clutterParams = Globals::settings.clutter;
+    ClutterSettings& m_clutterParams;
     float m_clutterMaxRange = 0.0f;                    // the types' largest `Range` (setClutterAssets)
     oc::vector<uint32> m_clutterFloor;                 // the floor map's texels (setClutterFloorMap)
     glm::vec2 m_clutterFloorCentre{ 0.0f };
@@ -930,8 +916,8 @@ private:
     oc::array<RendererVKLayout::RiverMistSourcesGpu*, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedRiverMist{};
     uint32 m_riverMistEmitter = UINT32_MAX;
     void uploadRiverMist(uint32 frameIdx);
-    bool clutterActive() const { return m_clutterParams.enabled && m_sceneViewCount == 1 && m_clutterPipeline.numTypes() > 0; } // desktop only
-    float clutterPatchSize() const { return glm::clamp(m_clutterParams.patchSize, 1.0f, 16.0f); }
+    bool clutterActive() const; // desktop only
+    float clutterPatchSize() const;
     void uploadClutterFrame(uint32 frameIdx);
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
@@ -941,13 +927,14 @@ private:
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, drained into the mapped buffer in present()
 
     // The settings the renderer reads (Globals::settings: registered by Settings, written by the TweakPanel and the
-    // setters above). References, so the many reads stay short; nothing here holds a copy.
-    SkyParams& m_skyParams = Globals::settings.sky;
-    WindParams& m_windParams = Globals::settings.wind;
-    ShadowParams& m_shadowParams = Globals::settings.shadow;
-    FoliageParams& m_foliageParams = Globals::settings.foliage;
-    FogParams& m_fogParams = Globals::settings.fog;
-    CloudParams& m_cloudParams = Globals::settings.clouds;
+    // setters above). References, so the many reads stay short; nothing here holds a copy. Bound in the constructor
+    // (RendererSettings.cpp): this interface sees only Settings.fwd.
+    SkyParams& m_skyParams;
+    WindParams& m_windParams;
+    ShadowParams& m_shadowParams;
+    FoliageParams& m_foliageParams;
+    FogParams& m_fogParams;
+    CloudParams& m_cloudParams;
     bool m_cloudsSuppressed = false;
     glm::dvec2 m_cloudWindOffset = glm::dvec2(0.0); // accumulated wind (m), wrapped by the weather period
     double m_cloudEvolveOffset = 0.0;              // accumulated detail drift (m), wrapped by the detail period
@@ -963,15 +950,15 @@ private:
     glm::vec4 m_terrainStitch{ 0.0f };      // setTerrainStitch: x = chunk size (0 = off), yz = the draw camera in chunks
     glm::vec4 m_terrainStitchBands{ 0.0f }; // x = full-res distance, y = LOD step, z = max LOD (chunks)
     float m_riverNearCovered = 0.0f;        // setRiverNearCovered
-    PostParams& m_postParams = Globals::settings.post;
-    RTParams& m_rtParams = Globals::settings.rt;
-    RTAOParams& m_rtaoParams = Globals::settings.rtao;
-    LightGridParams& m_lightGridParams = Globals::settings.lightGrid;
-    TAAParams& m_taaParams = Globals::settings.taa;
-    DlssParams& m_dlssParams = Globals::settings.dlss;
-    MotionBlurParams& m_motionBlurParams = Globals::settings.motionBlur;
-    BloomParams& m_bloomParams = Globals::settings.bloom;
-    MeshLodParams& m_lodParams = Globals::settings.lod;
+    PostParams& m_postParams;
+    RTParams& m_rtParams;
+    RTAOParams& m_rtaoParams;
+    LightGridParams& m_lightGridParams;
+    TAAParams& m_taaParams;
+    DlssParams& m_dlssParams;
+    MotionBlurParams& m_motionBlurParams;
+    BloomParams& m_bloomParams;
+    MeshLodParams& m_lodParams;
 
     Frustum m_centerFrustum;     // the centre view's (buildUboViews); VR's spatial cull takes last frame's
 
@@ -1113,6 +1100,3 @@ export namespace Globals
 OC_INIT_SEG(OC_SEG_VK_RENDERER)
     Renderer rendererVK;
 } // namespace Globals
-
-static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS, "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.Render cannot import :Layout)");
-static_assert(GrassParams::MAX_BLADES == (int)RendererVKLayout::GRASS_MAX_BLADES, "GrassParams::MAX_BLADES (the \"Blades per patch\" range) must match GRASS_MAX_BLADES");

@@ -1,6 +1,6 @@
 # NetFuzz
 
-> Documentation for `Code/NetFuzz`.
+> Documentation for `Code/Tools/NetFuzz`.
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
 A console executable (Core + Network only; VS target `run-netfuzz`). The protocol fuzzer, and **the
@@ -69,7 +69,7 @@ are reachable at all, then fuzzed game messages across 4 channels, half reliable
 > [NetworkManager.cpp:14](../../../Code/Entity/Private/NetworkManager.cpp#L14):** `GameProtocolId`
 > (`0x4F43534B`) and `GameNetVersion` (15). Bumping either — which any wire change must do — is
 > exactly the signal to re-run this mode, and to update
-> [NetFuzz/main.cpp:389](../../../Code/NetFuzz/main.cpp#L389) and [main.cpp:408](../../../Code/NetFuzz/main.cpp#L408).
+> [NetFuzz/main.cpp:389](../../../Code/Tools/NetFuzz/main.cpp#L389) and [main.cpp:408](../../../Code/Tools/NetFuzz/main.cpp#L408).
 
 ## Harness constraints
 

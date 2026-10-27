@@ -3,7 +3,8 @@
 > Library documentation for `Code/Threading`.
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
-Fiber-based work-stealing job scheduler. Links Core and Settings (the stress tweaks only).
+Fiber-based work-stealing job scheduler. Links Core and Settings (the stress tweaks only, in `Stress.cpp`): no
+Threading interface imports Settings, so a settings default change does not rebuild every importer of Threading.
 
 **Jobs run ON Win32 fibers.** A `wait()` inside a job PARKS the fiber and frees the worker thread;
 the fiber resumes later on **whichever worker picks it up**, which may be a different thread.
@@ -401,11 +402,11 @@ Each of these guards a race that was actually hit.
 
 ## Stress harness
 
-`Globals::jobSystemStress`, Threading/Stress tweaks (`ThreadingSettings` = `Globals::settings.threading`,
-`Settings.Threading`). One measured batch per frame in the selected mode: empty-job throughput,
-`parallelFor`, a 128-job hazard-checked graph, or fiber park/resume. Timings and scheduler rates publish
-under Threading/Stats. **Nothing calls its `update()`** — the tweaks show in the panel but do nothing
-until the App drives it.
+`JobSystemStress` + `Globals::jobSystemStress`, entirely inside `Private/Stress.cpp` (NOT in Threading's interface),
+Threading/Stress tweaks (`ThreadingSettings` = `Globals::settings.threading`, `Settings.Threading`). One measured batch
+per frame in the selected mode: empty-job throughput, `parallelFor`, a 128-job hazard-checked graph, or fiber
+park/resume. Timings and scheduler rates publish under Threading/Stats. **Nothing calls its `update()`** — the tweaks
+show in the panel but do nothing; to drive it, export an entry point from Threading.
 
 "Run self test" fires a one-shot correctness pass into the log: submit/wait sums, parallelFor
 coverage, read/write hazard ordering, fiber waits, delayed jobs, pre-emption. The graph mode validates

@@ -2,6 +2,10 @@ export module Settings.Threading;
 
 import Core;
 
+// The types are attached to the GLOBAL module, so Settings.fwd's forward declarations name the same entities.
+extern "C++"
+{
+
 // "Threading/Stress": the JobSystemStress harness - controls plus its readouts.
 export struct JobStressSettings
 {
@@ -33,6 +37,8 @@ export struct ThreadingSettings
     JobStressSettings stress;
     JobStatsSettings stats;
 };
+
+} // extern "C++"
 
 export namespace Settings
 {

@@ -6,6 +6,9 @@ import :Device;
 import :Allocator;
 import :CommandBuffer;
 import :Layout;
+import Settings;
+
+const OceanSprayParams& OceanSimulationPipeline::getSprayParams() const { return Globals::settings.oceanSpray; }
 
 namespace
 {

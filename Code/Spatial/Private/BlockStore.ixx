@@ -2,16 +2,8 @@ export module Spatial:BlockStore;
 
 import Core;
 
-// Module-internal per-level storage for every LINKED entry: 8-wide SoA BLOCKS chained per cell
-// (CellRecord.head), so the 8-wide SIMD testers get transpose-free loads straight from a block
-// and every mutation is local to one cell. A same-cell position/radius update writes its lane
-// in place (from any job, like the pool SoA); a cell change retires the lane and appends into
-// the new cell's head block (a new head when it is full) at commit; unregistering tombstones the
-// lane (negative radius - fails every test, including the unused lanes past `count`). A block
-// whose owned-lane count reaches zero is freed at once, and a cell whose dead lanes would fill a
-// whole block compacts itself. The cost of a change is the size of its cell, never the level.
-// Cache-line aligned (256 bytes): every 32-byte lane row sits inside one line, so no test8 load
-// splits. The hot rows (position, radius, layer) come first; poolIdx is read only on a hit.
+// Per-level storage of the linked entries: 8-wide SoA blocks chained per cell (see "Cell blocks" in
+// Spatial CONTEXT.md). 256 bytes, cache-line aligned: no 32-byte lane row splits a line.
 struct alignas(64) CellBlock
 {
     static constexpr uint32 Lanes = 8;
@@ -23,11 +15,8 @@ struct alignas(64) CellBlock
     uint32 poolIdx[Lanes];                        // owning RecordPool slot (visibility stamps, userData)
     uint32 next;                                  // next block in the cell's chain, UINT32_MAX = end
     uint32 count;                                 // lanes handed out (owned + retired)
-    uint32 live;                                  // lanes the pool still OWNS (retireLane settles them; a
-                                                  // tombstone from unregisterEntry alone keeps its lane owned)
-    uint32 chainBlocks;                           // HEAD block only: blocks in the cell's chain (the
-                                                  // compaction test; sits in the alignment padding, so
-                                                  // CellRecord stays 16 bytes)
+    uint32 live;                                  // lanes the pool still owns
+    uint32 chainBlocks;                           // head block only: blocks in the cell's chain
 };
 static_assert(sizeof(CellBlock) == 256);
 

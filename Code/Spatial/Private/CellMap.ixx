@@ -3,10 +3,7 @@ export module Spatial:CellMap;
 import Core;
 import :Morton;
 
-// Module-internal flat hash map holding one record per occupied grid cell of one level. Open
-// addressing over a plain key array (8 keys per cache line), power-of-two capacity, linear
-// probing, backward-shift deletion instead of tombstones (erases only happen in the
-// single-threaded commit phase). Nothing here is exported.
+// One record per occupied cell of one level: open addressing, linear probing, backward-shift deletion.
 
 struct CellRecord
 {

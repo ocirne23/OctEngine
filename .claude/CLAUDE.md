@@ -367,7 +367,8 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
                   (+ EASTL, vulkan, SDL3, imgui, Windows libs — all PRIVATE wrappers)
 ```
 
-Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Entity + Script + File).
+Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Entity + Script + File). They and
+`AppScripts` (the cooked build's static scripts) live in `Code/Tools/`.
 
 ## Where each library documents itself
 

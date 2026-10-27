@@ -2,7 +2,7 @@ export module RendererVK:MeshStreamer;
 
 import Core;
 import :Layout;
-import Settings;
+import Settings.fwd;
 
 // Mesh data streaming (counterpart of the TextureStreamer): cooked scenes register each source mesh
 // (plus its generated LOD levels - they share the vertex range) as a "mesh set" with the byte ranges
@@ -37,6 +37,7 @@ public:
         LevelDesc levels[RendererVKLayout::MAX_MESH_LODS];
     };
 
+    MeshStreamer();
     bool initialize(); // starts the disk worker; called from Renderer::initialize
     ~MeshStreamer();
     void shutdown();  // stops the worker; from Renderer teardown (after its waitIdle)
@@ -160,7 +161,7 @@ private:
     oc::deque<StreamInCompletion> m_completionScratch; // drainCompletions swaps the queue into this (kept)
     oc::vector<uint32> m_evictCandidates;              // solveEvictions scratch (kept)
 
-    const MeshStreamingSettings& m_settings = Globals::settings.meshStreaming; // "Mesh Streaming"
+    const MeshStreamingSettings& m_settings; // "Mesh Streaming" (Globals::settings.meshStreaming)
 };
 
 export namespace Globals

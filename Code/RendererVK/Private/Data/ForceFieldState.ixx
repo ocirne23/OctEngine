@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Frustum;
 import :Layout;
 import :RenderParams;
+import Settings.fwd;
 import :SlotTable;
 import :ForceFieldPipeline;
 
@@ -21,6 +22,9 @@ import :ForceFieldPipeline;
 export class ForceFieldState final
 {
 public:
+    ForceFieldState();
+    ~ForceFieldState();
+
     // onGpuIdle runs before the grid buffers are re-created, onInvalidate re-records afterwards.
     void initialize(oc::function<void()> onGpuIdle, oc::function<void()> onInvalidate)
     {
@@ -31,9 +35,9 @@ public:
     }
 
     // ---- Params (pushed per frame; all UBO-driven, so all live) ----
-    void setParams(const ForceFieldParams& params) { m_params = params; }
-    const ForceFieldParams& getParams() const { return m_params; }
-    bool isEnabled() const { return m_params.enabled; }
+    void setParams(const ForceFieldParams& params);
+    const ForceFieldParams& getParams() const { return *m_params; }
+    bool isEnabled() const;
 
     // ---- Emitters. A destroyed slot keeps FORCE_FLAG_ACTIVE cleared until the in-flight frames drain. ----
     uint32 createEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
@@ -109,7 +113,7 @@ public:
     void applyGridGrowth(ForceFieldPipeline& pipeline, uint32 frameIdx);
 
 private:
-    ForceFieldParams m_params;
+    oc::unique_ptr<ForceFieldParams> m_params; // a copy; boxed so this interface needs only Settings.fwd
     RecycledSlotTable<RendererVKLayout::ForceEmitterGpu> m_emitters;
     RecycledSlotTable<RendererVKLayout::ForceQueryGpu> m_queries;
 

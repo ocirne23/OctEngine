@@ -2,6 +2,10 @@ export module Settings.Clutter;
 
 import Core;
 
+// The types are attached to the GLOBAL module, so Settings.fwd's forward declarations name the same entities.
+extern "C++"
+{
+
 // "Clutter": GROUND CLUTTER (Docs/Context/Procedural/Clutter.md) - pebbles, fallen branches, mushrooms and flowers. Procedural's
 // ClutterSystem loads the Assets/Clutter/*.clutter types, generates their meshes and bakes the FOREST FLOOR MAP;
 // RendererVK's ClutterPipeline places every object on the GPU each frame (clutter_cull.cs.glsl) and draws it. The
@@ -30,6 +34,8 @@ export struct ClutterSettings
 	float floorRebakeDistance = 40.0f;
 	int meshResolution = 20;         // pebble SDF cells along the longest axis (regenerates the meshes)
 };
+
+} // extern "C++"
 
 export namespace Settings
 {
