@@ -221,8 +221,6 @@ namespace
 	// thread pool and the stop token is checked between files (app shutdown mid-first-bake).
 	void bakeTerrainTexCache(const oc::atomic<bool>& stopRequested)
 	{
-		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
-
 		// THREE textures per material (one texture fetch fewer per splat layer than the sources' four; the fetch
 		// latency is the Static meshes range's top stall): the ARM source is split over the other two.
 		//   diffr = albedo (sRGB) + ROUGHNESS in the alpha (the ARM's G), BC3
@@ -244,7 +242,8 @@ namespace
 				tasks.push_back({ &src, 2 });
 		}
 		if (tasks.empty())
-			return;
+			return; // every bake is fresh (on disk or in a mounted pack): no folder to make
+		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
 
 		const auto bakeStart = std::chrono::steady_clock::now();
 		// grain 1: each conversion is a whole image load + BC compress, seconds apart in cost

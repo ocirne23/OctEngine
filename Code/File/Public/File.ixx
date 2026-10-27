@@ -9,4 +9,5 @@ export import :INodeData;
 export import :ISceneData;
 export import :ITextureData;
 export import :ObjectDescription;
+export import :PackBuilder;
 export import :TextureConvert;

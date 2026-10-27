@@ -97,7 +97,11 @@ Parsed by `parseCommandLine` (Session.ixx); an unknown argument logs a warning.
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
 | `--camera x y z dx dy dz` | The free-fly camera's start position and look direction (the window title's `pos` / `dir`), instead of `Session::START_POS` / `START_DIR`. With `Tools/screenshot.ps1` it is Claude's visual repro loop for a view the user reports. |
 | `--fullscreen` | A borderless window at the desktop size (`Window::initialize`'s `fullscreen`) and the editor's docked panels hidden (`UI::setEditorPanels(false)` - the escape menu's "Debug panels"): GPU profiling at the display's full resolution (`Tools/profile.ps1 -Fullscreen`). Read in `main` itself, before the window exists. |
+| `--pack <path>[@priority]` / `--packs` / `--pack-only` / `--disk-priority N` | Mounts a `.dat` pack (repeatable; without `@`, the priority it was built with), mounts every `.dat` next to App.exe (what a run without `Assets/` does by itself), turns the loose files off, or moves the disk in the order. Applied by `mountCommandLinePacks` (App.Tools) right after `FileSystem::initialize`, before the saved tweaks load. See Packs in [`Docs/Context/File/CONTEXT.md`](../File/CONTEXT.md). |
 | `--test-path-trie` | A one-shot tool (below): `Core.BitPathTrieTest` on its generated set plus every file under `Assets/`. |
+| `--pack-build [out.dat]` (+ `--pack-config <file>`, `--pack-name <name>`, `--pack-source <dir>`, `--pack-full`, `--pack-zstd [level]`, `--pack-rehash`, `--pack-exclude <prefix>`) | One-shot: builds or updates packs (`PackBuilder::build`). Without a path: every `Pack` of `Assets/dat.cfg` (or only `--pack-name`); with a path: one pack of `--pack-source` (default `Assets/`). The switches apply on top of either. It unmounts every pack first. |
+| `--pack-verify <pack>` / `--pack-list <pack>` | One-shot: re-hashes every file / prints every file with its size, stored size and compression. |
+| `--pack-check <pack>` (+ `--pack-mount <folder>`) | One-shot: mounts the pack alone (disk off) and reads every file back through `FileSystem` (whole, `FileReader` ranges, the queries, the recursive listing). The routing test. |
 
 **UNATTENDED RUN** = `--profile-after`, `--quit-after` or `--screenshot-after`. It installs
 `App.UnattendedRun`'s failure handling: no modal dialogs (assert / abort / OS fault box — the run FAILS

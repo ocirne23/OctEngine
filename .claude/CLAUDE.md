@@ -76,6 +76,8 @@ CMake (min 3.14), the Visual Studio 18 2026 generator, build dir `Build/`.
   `FileSystem::initialize()` walks up to find `Assets/` and makes it the working directory, so all
   asset paths are relative to `Assets/`.
 * VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`.
+  `packs`: BUILDING it runs `App.exe --pack-build` (the `.dat` packs of `Assets/dat.cfg`, next to App.exe, in the
+  target's configuration); as the Startup Project, F5 runs App on them (`--packs`).
   `SCRIPTS_STATIC` is ON by default (scripts compiled into App, see Script). In a tree configured with
   `SCRIPTS_STATIC=OFF`, the `cooked` custom target configures and builds a sibling `Build-Cooked/` tree with it ON.
 * **Unattended performance measurement:** `Tools/profile.ps1` (see Profiling in
@@ -354,7 +356,7 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
    Spatial        Threading
    Nav            Threading     (flow fields — knows nothing about entities; Game feeds it, units read it)
    Physics        Threading     (box3d's solver fork/join runs as jobs)   (+ box3d)
-   File           Animation                                      (+ assimp, zlib, meshoptimizer)
+   File           Animation                                      (+ assimp, zlib, meshoptimizer, zstd)
    ------------------------------------------------------------------------------------------------
    Audio          -                                              (+ Steam Audio, miniaudio)
    Threading      -
@@ -413,7 +415,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | [NetFuzz](../Docs/Context/NetFuzz/CONTEXT.md) | The protocol fuzzer — **the regression gate for wire changes** |
 | [Audio](../Docs/Context/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources, AudioComponent |
 | [Animation](../Docs/Context/Animation/CONTEXT.md) | Skeletons, clips, AnimationPlayer, the state machine, retargeting |
-| [File](../Docs/Context/File/CONTEXT.md) | `FileSystem` (**THE disk seam**, main-thread IO assert), AssetParser, the cooked scene cache + GC, TextureConvert |
+| [File](../Docs/Context/File/CONTEXT.md) | `FileSystem` (**THE disk seam**, main-thread IO assert), `FileReader`, **`.dat` packs** (layout, mount priority / disk fallback, build + in-place update), AssetParser, the cooked scene cache + GC, TextureConvert |
 | [UI](../Docs/Context/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job + draw-data snapshot, the prepare/render split, panels, game layout, HUD overlay, gizmo split |
 | [Input](../Docs/Context/Input/CONTEXT.md) | The window thread (`Core.Window`), the ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
 | [Game](../Docs/Context/Game/CONTEXT.md) | The game: the architecture rule, partitions, the frame (the three ticks), the world, determinism, save / load. **Read it first; the topic files below hold the rest** |
@@ -533,6 +535,16 @@ A dual-purpose file: **generated C++ on top, the `//@`-commented DSL block below
 `//@@dsl 1` and `//@@end`. Author them through DslCompiler — see
 [`Docs/Context/DslCompiler/CONTEXT.md`](../Docs/Context/DslCompiler/CONTEXT.md).
 
+## `.dat` — packs
+
+A binary folder tree (default: `Assets/` minus the per-machine `Local/` caches) in one file, mounted into `FileSystem`
+by priority next to the loose files (`--packs`, `--pack <path>[@priority]`, `--pack-only`), so no caller changes.
+**`Assets/dat.cfg` lists the packs** (`Pack <name>` blocks: output, include / exclude, compression, mount priority;
+grammar in its header). Built and updated IN PLACE by `--pack-build` (only new and changed files are written), NEXT
+TO App.exe; `--packs` mounts them, and a run with no `Assets/` folder mounts them by itself. Paths are looked up through two
+baked `Core.BitPathTrie` tries. **Layout, mount rules and the update in
+[`Docs/Context/File/CONTEXT.md`](../Docs/Context/File/CONTEXT.md) (Packs).**
+
 ## `.scr` — legacy
 
 The removed node editor's format: generated C++ plus `//@graph` metadata. Legacy reference only — it
@@ -557,5 +569,6 @@ Generated output — **never hand-edit.** SPIR-V plus shader dumps, the SPIR-V c
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `Trees/Textures/` (the
 generated tree textures and far bakes), `Trees/Meshes/` / `Rocks/Meshes/` / `Clutter/Meshes/` (the generated meshes -
 "The generated-mesh cache" in [`Docs/Context/Procedural/CONTEXT.md`](../Docs/Context/Procedural/CONTEXT.md)), `TerrainTex/`
-splats, the `Diffusion/<seed>/` tile cache, `imgui.ini` (the editor layout),
-`gamesave.txt` and `profile.txt`.
+splats, the `Diffusion/<seed>/` tile cache, `gamesave.txt` and `profile.txt`. **No `imgui.ini` and no Streamline log
+are written** (the dock layout is rebuilt in code; SL logs through its callback), and a folder is made only when
+something is written into it.

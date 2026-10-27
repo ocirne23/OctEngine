@@ -1,30 +1,14 @@
-module;
-
-#include <cstdio> // fopen_s / fread for the single-blob cache read (macros don't cross header units)
-
 module File;
-
-// File IS the filesystem library: its readers stream binary ranges directly (Core no longer
-// exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
-import <filesystem>;
-import <fstream>;
 
 import Core;
 import Core.glm;
 import Core.AABB;
 import Core.Log;
 
+import :FileSystem;
 import :CookedSceneData;
 
 using namespace SceneCache;
-
-namespace
-{
-    uint64 fileMTimeTicks(const std::filesystem::path& path, std::error_code& ec)
-    {
-        return (uint64)std::filesystem::last_write_time(path, ec).time_since_epoch().count();
-    }
-}
 
 AABB CookedMeshData::getAABB() const
 {
@@ -144,24 +128,13 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
 {
     // Cooked scenes load at SPAWN (main thread, cached afterwards) and on the terrain/mesh-stream
     // jobs - both intended, so the main-thread policy is satisfied explicitly here.
-    FileSystem::assertIoThread(/*allowMainThread*/ true);
-    FILE* pFile = nullptr;
-    fopen_s(&pFile, cachePath.c_str(), "rb");
-    if (!pFile)
-        return false;
-    oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
-
-    std::error_code ec;
-    const uint64 fileSize = std::filesystem::file_size(std::filesystem::path(oc::toStd(cachePath)), ec);
-    if (ec || fileSize < sizeof(CookedHeader))
-        return false;
-    m_blob.resize(fileSize);
-    if (fread(m_blob.data(), 1, fileSize, file.get()) != fileSize)
+    // Through FileSystem, so a cache inside a mounted .dat pack is served too.
+    if (!FileSystem::readFileBytes(cachePath, m_blob, /*allowMainThread*/ true) || m_blob.size() < sizeof(CookedHeader))
     {
         m_blob.clear();
         return false;
     }
-    file.reset();
+    const uint64 fileSize = m_blob.size();
 
     const CookedHeader& header = *reinterpret_cast<const CookedHeader*>(m_blob.data());
     auto sectionValid = [&](uint64 offset, uint64 count, uint64 elemSize)
@@ -192,11 +165,11 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
     {
         const char* sourceTexPath = reinterpret_cast<const char*>(m_blob.data() + header.stringsOffset + stamps[i].sourcePathOffset);
         const char* cookedTexPath = reinterpret_cast<const char*>(m_blob.data() + header.stringsOffset + stamps[i].cookedPathOffset);
-        bool valid = std::filesystem::exists(cookedTexPath, ec);
+        bool valid = FileSystem::exists(cookedTexPath, true);
         if (valid && !sourceMissing)
         {
-            const uint64 texSize = std::filesystem::file_size(sourceTexPath, ec);
-            valid = !ec && texSize == stamps[i].size && fileMTimeTicks(sourceTexPath, ec) == stamps[i].mtime && !ec;
+            FileSystem::FileStat stat;
+            valid = FileSystem::stat(sourceTexPath, stat, true) && stat.size == stamps[i].size && (uint64)stat.mtimeTicks == stamps[i].mtime;
         }
         if (!valid)
         {

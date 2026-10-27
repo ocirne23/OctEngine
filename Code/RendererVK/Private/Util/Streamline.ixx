@@ -22,7 +22,8 @@ export namespace Streamline
     // "Post/DLSS/Mode" order.
     enum class DlssMode : int { Off, DLAA, Quality, Balanced, Performance, UltraPerformance };
 
-    // logDir: absolute folder for SL's log file (sl.log, plus what NGX writes); empty = console only.
+    // logDir: absolute folder for SL's log file (sl.log, plus what NGX writes); empty = no file (the Renderer passes
+    // empty: messages go through the log callback only).
     // verbose: SL's verbose log level (read once, at slInit).
     bool load(const oc::string& logDir, bool verbose);
     bool loaded();

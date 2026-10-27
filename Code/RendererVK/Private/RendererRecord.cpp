@@ -921,7 +921,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
     else if (!m_dlssFailed)
     {
         m_dlssFailed = true;
-        Log::error("Renderer: DLSS evaluate failed (see Assets/Local/Streamline/sl.log); the output keeps its last image");
+        Log::error("Renderer: DLSS evaluate failed (see Streamline's messages above in the log); the output keeps its last image");
     }
     TaaPipeline::endExternalWrite(primary);
     m_gpuProfiler.endScope(primary);

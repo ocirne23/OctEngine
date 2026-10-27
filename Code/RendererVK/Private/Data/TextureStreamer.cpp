@@ -1,10 +1,7 @@
-module;
-
-#include <cstdio> // fopen_s/_fseeki64/SEEK_SET for the disk worker
-
 module RendererVK;
 
 import Core;
+import File;
 import :TextureStreamer;
 import :Device;
 import :Allocator;
@@ -98,14 +95,9 @@ void TextureStreamer::workerRun(std::stop_token stopToken)
         completion.byteCount = request.byteCount;
         completion.data = oc::unique_ptr<uint8[]>(new uint8[request.byteCount]);
 
-        FILE* pFile = nullptr;
-        fopen_s(&pFile, request.filePath.get(), "rb");
-        if (pFile)
-        {
-            completion.ok = _fseeki64(pFile, (int64)request.fileOffset, SEEK_SET) == 0
-                && fread(completion.data.get(), 1, request.byteCount, pFile) == request.byteCount;
-            fclose(pFile);
-        }
+        FileReader file; // the .dds on disk or in a mounted .dat pack
+        if (file.open(request.filePath.get()))
+            completion.ok = file.read(request.fileOffset, completion.data.get(), request.byteCount);
 
         {
             std::scoped_lock lock(m_completionMutex);

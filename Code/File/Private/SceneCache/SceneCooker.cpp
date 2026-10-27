@@ -997,14 +997,11 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
     optionsHash = fnv1a(options.lodReduction, optionsHash);
     optionsHash = fnv1a(options.lodMinIndices, optionsHash);
 
-    std::error_code ec;
-    const uint64 sourceSize = std::filesystem::file_size(filePath, ec);
-    uint64 sourceMTime = 0;
-    if (!ec)
-        sourceMTime = fileMTimeTicks(filePath, ec);
-    const bool sourceMissing = (bool)ec;
-    if (sourceMissing)
-        sourceMTime = 0;
+    // Through FileSystem: a source or cache inside a mounted .dat pack counts as present.
+    FileSystem::FileStat sourceStat;
+    const bool sourceMissing = !FileSystem::stat(filePath, sourceStat, true) || sourceStat.isDirectory;
+    const uint64 sourceSize = sourceMissing ? 0 : sourceStat.size;
+    const uint64 sourceMTime = sourceMissing ? 0 : (uint64)sourceStat.mtimeTicks;
     const bool cacheUsable = options.enableCache && !sourceMissing;
 
     oc::string stem = oc::fromStd(toPath(filePath).stem().string());
@@ -1029,7 +1026,7 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
     // suffix. Size/mtime 0 tells the reader there is nothing to validate against.
     if (sourceMissing && options.enableCache)
     {
-        const auto isHash = [](const std::string& s, size_t from)
+        const auto isHash = [](const oc::string& s, size_t from)
         {
             if (s.size() != from + 8)
                 return false;
@@ -1038,19 +1035,20 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
                     return false;
             return true;
         };
-        const std::string prefix = oc::toStd(stem) + "_";
-        std::filesystem::path bestPath;
-        for (const auto& entry : std::filesystem::directory_iterator("Local/Cooked", ec))
+        const oc::string prefix = stem + "_";
+        oc::vector<FileSystem::DirEntry> cookedFiles;
+        FileSystem::listDirectory("Local/Cooked", cookedFiles, true);
+        for (const FileSystem::DirEntry& entry : cookedFiles)
         {
-            if (!entry.is_regular_file(ec) || entry.path().extension() != ".vsc")
+            if (entry.isDirectory || entry.extension != ".vsc")
                 continue;
-            const std::string name = entry.path().stem().string();
-            if (name.compare(0, prefix.size(), prefix) != 0 || !isHash(name, prefix.size()))
+            const oc::string name = FileSystem::stem(entry.name);
+            if (!oc::startsWith(name, prefix) || !isHash(name, prefix.size()))
                 continue;
             auto cooked = oc::make_unique<CookedSceneData>();
-            if (cooked->load(oc::fromStd(entry.path().generic_string()), filePath, 0, 0, 0))
+            if (cooked->load(entry.path, filePath, 0, 0, 0))
             {
-                Log::info(oc::format("SceneCache: source '{}' missing, served from '{}'", filePath, entry.path().string()));
+                Log::info(oc::format("SceneCache: source '{}' missing, served from '{}'", filePath, entry.path));
                 return cooked;
             }
         }

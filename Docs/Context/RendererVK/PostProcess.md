@@ -102,8 +102,9 @@ too: its UBO was built for the old size). A rebuild per frame of the drag would 
   `slSetTagForFrame`. `sl.common` always loads `NvLowLatencyVk.dll` (Reflex), so it ships too. Its warnings
   "Hook sl.common:Vulkan:CmdBindPipeline / CmdBindDescriptorSets / BeginCommandBuffer is NOT supported" are
   expected: they are command-buffer state-tracking hooks, which manual hooking does not use.
-* **The SL log file** (and NGX's, when it writes one) is in `Assets/Local/Streamline/`; the console gets only
-  SL's warnings and errors. "Verbose log (restart)" (saved) sets SL's verbose level, read once at slInit.
+* **No SL log file** (`pathToLogsAndData` null, no `sl.log`): SL's messages reach the engine log through the log
+  callback only, and the console gets only its warnings and errors. "Verbose log (restart)" (saved) sets SL's verbose
+  level, read once at slInit.
 * **The OUTPUT must start at (0, 0)**: SL never sets NGX's `DLSS.Enable.Output.Subrects`, and NGX fails the
   evaluate (0xbad00005, "the output subrect base must be set to 0 ...") for any other output offset. So a viewport
   at the origin (the game) is written straight into TAA's resolved image; any other (the editor panel) goes to

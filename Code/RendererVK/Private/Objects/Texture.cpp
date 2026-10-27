@@ -1,8 +1,4 @@
-﻿module;
-
-#include <cstdio> // fopen_s/_fseeki64/SEEK_SET for the narrowed DDS mip-range read
-
-module RendererVK;
+﻿module RendererVK;
 
 import Core;
 import File;
@@ -155,22 +151,20 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 
     if (extension == ".dds")
     {
-        FILE* pFile;
-        fopen_s(&pFile, filePath, "rb");
-        oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { if (p) fclose(p); });
-        if (!file)
+        // Texture loads run on the streaming/loader threads; the assert catches a main-thread slip.
+        FileReader file; // on disk or in a mounted .dat pack
+        if (!file.open(filePath))
         {
             assert(false && "Failed to open file");
             return false;
         }
-        // Texture loads run on the streaming/loader threads; the assert catches a main-thread slip.
-        const size_t size = (size_t)FileSystem::fileSize(filePath);
+        const size_t size = (size_t)file.size();
 
         // Header first: it lays out the whole mip chain, so the pixel read below can be narrowed to
         // just the mips this image will actually contain.
         const size_t headerSize = oc::min(size, sizeof(dds::Header));
         fileData.resize(headerSize);
-        if (fread(fileData.data(), 1, headerSize, file.get()) != headerSize)
+        if (!file.read(0, fileData.data(), headerSize))
         {
             assert(false && "Failed to read file");
             return false;
@@ -224,8 +218,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
         const uint64 dataSize = header.mip_offset(numMipLevels - 1) + header.mip_size(numMipLevels - 1) - dataOffset;
         assert(dataOffset + dataSize <= size && "DDS mip chain exceeds file size");
         fileData.resize(dataSize);
-        if (_fseeki64(file.get(), (int64)dataOffset, SEEK_SET) != 0
-            || fread(fileData.data(), 1, dataSize, file.get()) != dataSize)
+        if (!file.read(dataOffset, fileData.data(), dataSize))
         {
             assert(false && "Failed to read file");
             return false;

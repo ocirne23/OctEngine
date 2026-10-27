@@ -1,12 +1,9 @@
-module;
-
-#include <cstdio> // fopen_s/_fseeki64 on the disk worker (macros don't cross header units)
-
 module RendererVK;
 
 import Core;
 import Core.glm;
 import Core.Log;
+import File;
 import :MeshStreamer;
 import :MeshDataManager;
 import :Renderer;
@@ -159,26 +156,23 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
         StreamInCompletion completion;
         completion.setIdx = request.setIdx;
 
-        FILE* pFile = nullptr;
-        fopen_s(&pFile, request.filePath.get(), "rb");
-        if (pFile)
+        FileReader file; // the cooked cache on disk or in a mounted .dat pack
+        if (file.open(request.filePath.get()))
         {
             bool ok = true;
             const uint32 numVertices = request.numVertices;
             for (uint32 a = 0; a < 5 && ok; ++a)
             {
                 attributes[a].resize(numVertices);
-                ok = _fseeki64(pFile, (int64)request.srcAttributeOffsets[a], SEEK_SET) == 0
-                    && fread(attributes[a].data(), sizeof(glm::vec3), numVertices, pFile) == numVertices;
+                ok = file.read(request.srcAttributeOffsets[a], attributes[a].data(), (uint64)numVertices * sizeof(glm::vec3));
             }
             for (uint32 k = 0; k < request.numLevels && ok; ++k)
             {
                 const size_t byteSize = (size_t)request.levels[k].indexCount * sizeof(uint32);
                 completion.indexData[k] = oc::unique_ptr<uint8[]>(new uint8[byteSize]);
-                ok = _fseeki64(pFile, (int64)request.levels[k].srcIndicesOffset, SEEK_SET) == 0
-                    && fread(completion.indexData[k].get(), 1, byteSize, pFile) == byteSize;
+                ok = file.read(request.levels[k].srcIndicesOffset, completion.indexData[k].get(), byteSize);
             }
-            fclose(pFile);
+            file.close();
 
             if (ok)
             {

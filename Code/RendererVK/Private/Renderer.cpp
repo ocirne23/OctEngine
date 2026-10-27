@@ -97,13 +97,9 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
 
     // Streamline (DLSS) BEFORE the instance: slInit, then the instance and device take its requirements. Desktop
     // only - DLSS does not run in VR, and without SL nothing changes (no DLLs, no NVIDIA GPU).
-    // Its log file (and NGX's) goes to Assets/Local/Streamline/.
+    // No log file (no sl.log): its messages go to the engine log through the log callback only.
     if (vr != EVr::ENABLED)
-    {
-        const oc::string logDir = "Local/Streamline";
-        const bool haveLogDir = FileSystem::createDirectories(logDir, true);
-        Streamline::load(haveLogDir ? FileSystem::absolutePath(logDir, true) : oc::string(), m_dlssParams.verboseLog);
-    }
+        Streamline::load(oc::string(), m_dlssParams.verboseLog);
 
     Globals::instance.initialize(window, enableValidationLayers);
     Globals::instance.setBreakOnValidationLayerError(enableValidationLayers);
@@ -1258,10 +1254,9 @@ void Renderer::initImgui(Window& window)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
-    // Layout persists in Assets/Local (the cwd is Assets/, see FileSystem::initialize), not next to
-    // the checked-in assets. ImGui fopen()s this path itself on its own save timer.
-    FileSystem::createDirectories("Local", /*allowMainThread*/ true);
-    io.IniFilename = "Local/imgui.ini";
+    // No imgui.ini: the dock layout is rebuilt in code every run (UI.cpp), and ImGui would fopen() the file
+    // itself, past FileSystem (and past any mounted pack).
+    io.IniFilename = nullptr;
 
     // Creates the SDL system cursors among other window-affine work: on the window thread.
     window.runOnWindowThread([&] { ImGui_ImplSDL3_InitForVulkan((SDL_Window*)window.getWindowHandle()); }, /*wait*/ true);

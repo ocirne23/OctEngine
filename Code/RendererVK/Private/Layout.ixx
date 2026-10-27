@@ -541,6 +541,9 @@ export namespace RendererVKLayout
     // THE declaration every shader compile includes (Shader.cpp's includer serves it as "ubo.generated.glsl");
     // Renderer::applyUboLocks rebuilds it (buildUboDeclaration, UboBlock.ixx). Main thread, like every shader compile.
     inline oc::string g_uboDeclaration;
+    // Its readable copy, Local/Shaders/ubo.generated.glsl, is written by the first shader that really COMPILES after
+    // the declaration changed (a SPIR-V cache miss), so a run served from the cache writes nothing.
+    inline bool g_uboDeclarationCopyStale = true;
 
     struct alignas(16) RenderNodeTransform : Transform {};
     struct alignas(16) MeshInstanceOffset {

@@ -103,9 +103,8 @@ void Renderer::registerPushFields()
 void Renderer::setUboDeclaration()
 {
     RendererVKLayout::g_uboDeclaration = RendererVKLayout::buildUboDeclaration(m_ubo, m_uboBakedValues.data(), m_uboBaked);
-    // A copy for reading (the includer serves the string itself).
-    FileSystem::createDirectories("Local/Shaders", true);
-    FileSystem::writeFileStr("Local/Shaders/ubo.generated.glsl", RendererVKLayout::g_uboDeclaration, true);
+    // The readable copy follows with the next real compile (Shader.cpp), not here.
+    RendererVKLayout::g_uboDeclarationCopyStale = true;
 }
 
 // Each entry's lock from its sources: locked while every source row is locked (or no lock covers it).

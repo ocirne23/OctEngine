@@ -761,7 +761,7 @@ export struct DlssParams
     // DLSS's current-colour bias on ocean pixels (no motion vectors on the waves): 1 = no history there. The
     // default matches TAA's "Ocean feedback" 0.2 history weight.
     float oceanBias = 0.8f;
-    // Streamline's verbose log (Assets/Local/Streamline/); SL reads it at slInit, so it applies at the next start.
+    // Streamline's verbose log level (into the engine log, no file); SL reads it at slInit, so it applies at the next start.
     bool verboseLog = false;
 };
 

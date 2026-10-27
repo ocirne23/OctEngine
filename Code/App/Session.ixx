@@ -91,6 +91,8 @@ export LaunchOptions parseCommandLine(int argc, char* argv[])
         else if (arg == "--coop")                         o.coopMode = true;
         else if (arg == "--sandbox")                      o.sandbox = true;
         else if (arg == "--fullscreen")                   {} // main reads it itself, before the window exists
+        else if ((arg == "--pack" || arg == "--disk-priority") && i + 1 < argc) ++i; // mountCommandLinePacks
+        else if (arg == "--pack-only" || arg == "--packs") {}
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + oc::string(arg));
     }

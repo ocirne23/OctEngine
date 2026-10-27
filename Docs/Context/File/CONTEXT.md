@@ -4,8 +4,8 @@
 > Read [`.claude/CLAUDE.md`](../../../.claude/CLAUDE.md) first — rules, building, style, dependency
 > direction. The asset TEXT formats are listed there under **Asset files**.
 
-Asset import plus **the engine's only disk seam**. Links Animation (+ assimp, zlib, meshoptimizer
-PRIVATE).
+Asset import plus **the engine's only disk seam**, with `.dat` packs mounted into it. Links Animation
+(+ assimp, zlib, meshoptimizer, zstd PRIVATE).
 
 ## `FileSystem` — THE disk seam
 
@@ -21,8 +21,8 @@ nature.
 
 | Group | API |
 |---|---|
-| Reads / writes | `readFileStr`, `readFileBytes`, `writeFileStr`, `writeFileBytes` |
-| Queries | `exists`, `isDirectory`, `isRegularFile`, `fileSize` (0 when missing), `lastWriteTimeSec` |
+| Reads / writes | `readFileStr`, `readFileBytes`, `writeFileStr`, `writeFileBytes`; byte ranges through `FileReader` (below) |
+| Queries | `exists`, `isDirectory`, `isRegularFile`, `fileSize` (0 when missing), `lastWriteTimeSec`, `lastWriteTimeTicks` (file clock ticks, what the cooked caches stamp), `stat` (existence + size + mtime in one lookup) |
 | Mutations | `createDirectories`, `remove`, `removeAll`, `rename`, `copyFile`, `copyLastWriteTime` |
 | Listing | `listDirectory`, `listDirectoryRecursive` → `DirEntry{path, name, extension, isDirectory, size}`. **Unsorted**; false when the directory cannot be read; `out` is cleared either way. |
 | Working dir / resolution | `currentPath`, `setCurrentPath`, `absolutePath`, `canonicalPath` (requires the path to exist), `weaklyCanonicalPath`, `relativePath` |
@@ -63,9 +63,16 @@ or per call with the trailing `allowMainThread` flag where a scope would be nois
 `isMainThread()` is public so a caller can BRANCH — queue the work to a job instead of blocking —
 rather than just silencing the assert.
 
-`assertIoThread(allow)` is the same check exposed for File's OWN internals: `CookedSceneData` and the
-mesh streamer stream binary ranges through `FILE*`/`ifstream` directly (seeks, byte ranges), which no
-read-it-all API can express, so they call it at their IO entry points and stay inside the policy.
+`assertIoThread(allow)` is the same check exposed for File's OWN internals (the pack builder, the scene cooker's
+writes) and for `FileReader::open`.
+
+### `FileReader` — byte ranges
+
+`open(path)` through the mounts, then `read(offset, dst, bytes)` from any thread (positional: `ReadFile` with an
+offset on the disk, the mapping in a pack, nothing shared), `readAll`, and `view()` — the whole file without a copy
+when it is packed (empty for a disk file). **The texture streamer, the mesh streamer and the DDS load
+(`Texture::initialize`) read through it**, so their mip ranges and attribute arrays come out of a pack the same way.
+A packed reader holds its pack (`shared_ptr`) until it closes, even across an unmount.
 
 **Already declared main-thread-by-design:** main()'s whole INIT phase — ONE scope (`startupIo`),
 released right before the frame loop, so anything the FRAME LOOP does trips the assert — plus
@@ -78,6 +85,105 @@ Every FileSystem IO function carries a marker named after it (`"FileSystem::read
 the File category, through a local `IoScope` and **NOT a plain `ProfileScope`**: IO runs on threads
 the profiler deliberately leaves unregistered — the transient startup texture-bake pool — where
 `ProfileScope` would dereference a null track. `IoScope` no-ops when `threadTrack()` is null.
+
+## Packs (`.dat`)
+
+One file that holds a folder tree (by default `Assets/`) and mounts into `FileSystem`, so every caller reads from it
+with no change. Sources in `Code/File/Private/Pack/`: `NativeFile` (Win32 positional IO + mapping), `PackFormat`
+(the layout), `PackFile` (a mounted pack), `PackBuilder` (build / update / verify / list, exported).
+
+### Layout
+
+`[header page] [file data] [dead data] [TOC]`. Raw little-endian structs, no compatibility: a layout change bumps
+`Pack::VERSION`, and so does a change of `Core.BitPathTrie`'s node size or key mode (both are in the header) — an
+old pack refuses to mount, rebuild it.
+
+* **The TOC is two baked `Core.BitPathTrie` tries** — the file paths, and every folder that holds a file — plus one
+  48-byte `Pack::Entry` per file (offset, stored size, size, source mtime in file-clock ticks, content hash, flags),
+  **indexed by the file trie's key**. The trie storage spans point straight into the mapping: mounting reads the
+  header, checks the TOC hash and the entry bounds, and copies nothing.
+* Paths are relative to the packed folder and case-insensitive, like Windows; the stored case comes back in listings
+  and `canonicalPath`. A path with characters outside the trie's 64-symbol alphabet (non-ASCII, `\`, ...) or 512+
+  characters cannot be packed: the builder leaves it out with a warning.
+* File data is 16-byte aligned, files of 64 KiB and up page aligned. Files are written in key order, so a folder's
+  files sit together.
+
+### Reads
+
+The whole pack is memory mapped read-only. A read of under 64 KiB is a `memcpy` from the mapping; a larger one is
+ONE positional `ReadFile` on the pack's handle (one IO request instead of a page fault per page). Compressed entries
+(zstd, optional) decompress on read; a range of one decompresses the whole file, which is why the builder never
+compresses `.dds` / `.vsc` (the streamers read those in ranges).
+
+### Mounting and priority
+
+`mountPack(path, priority, mountPoint)`; both optional — left out, the pack's own (the header stores the `Priority` /
+`MountPoint` it was built with). `mountPacksIn(dir)` mounts every `.dat` in a folder that way, in name order. The disk
+is a mount too (`DISK_PRIORITY_DEFAULT` 0); packs default to 100.
+
+**Packs live next to the executable** (`dat.cfg`'s `Output $(ExeDir)/...`; `executableDir()`). `--packs` mounts them.
+`initialize()` looks for `Assets/` above the working directory, then above the executable; **when there is none (a
+shipped build) the executable's folder becomes the root and working directory and its packs mount by themselves** —
+it fails only when there are none either. With `Assets/` present nothing mounts on its own, so a development run never
+reads a stale pack over edited loose files.
+**A lookup walks the mounts highest priority first and the first that has the file serves it**; ties go to the later
+mount. So:
+
+| Setup | Effect |
+|---|---|
+| pack 100, disk 0 | pack first, loose files fill the gaps (the default) |
+| pack -10, disk 0 (or `setDiskPriority`) | loose files first, the pack is the fallback (development over a shipped pack) |
+| `setDiskEnabled(false)` | pack only |
+| two packs, 100 and 200 | the 200 pack patches the 100 one |
+
+* A disk mount with packs BELOW it costs one `exists` per lookup; one with none below costs nothing (the disk call
+  itself reports the miss). With no pack mounted at all, every call is the plain disk path after one atomic load.
+* Only paths under `Assets/` reach the packs (relative, or absolute below it). Anything else is disk only, also with
+  the disk disabled. `mountPoint` places the pack's root at an `Assets/`-relative folder.
+* **Writes always go to the disk.** A path this process wrote, removed, renamed or copied onto while packs are
+  mounted is OVERRIDDEN: served from the disk from then on (a removed one then reads as missing), so a stale packed
+  copy never comes back. `rename` / `copyFile` from a packed file copy it out. Listings merge every mount, each path
+  once, the highest priority mount's entry winning; overridden packed entries are skipped.
+* Reads hold a shared lock on the mount table for the lookup and the pack read; mount / unmount take it exclusively.
+* `mounts()` and `sourceOf(path)` say what is mounted and who serves a path.
+
+**Not covered — these read by path themselves and need the loose file:** the Assimp import (and so cooking, and
+skinned scenes), the onnxruntime model loads, the script DLLs (`LoadLibrary`), and the scene
+cooker's writes and `gcStaleCaches` (disk only). The cooked cache READ (`CookedSceneData::load`, `loadCached`'s
+source stamp and its "source missing" scan) goes through `FileSystem`, so a pack holding `Local/Cooked/` serves cooked
+scenes without their source models.
+
+### Building and updating
+
+`PackBuilder::build(PackBuildOptions)` (App: `--pack-build`). **Default: UPDATE in place.**
+
+**The pack config `Assets/dat.cfg`** lists the packs to build: one `Pack <name>` block each (`AssetParser` text, the
+grammar is in the file's header) with `Output`, `Source`, `Include` / `Exclude` prefixes, extension filters,
+`Compression`, the update knobs, and the `Priority` / `MountPoint` stored in the pack. `$(ExeDir)` at the start of
+`Output` / `Source` is the running executable's folder. `PackBuilder::loadConfig` turns it into `PackConfig`s; an
+unknown key is an error, so a typo never packs the wrong set. The checked-in config splits the assets in two:
+`Content` (everything authored minus `Models/`, `Project/`, `Scenarios/`, `TerrainDiffusion/`, `Textures/boat/`,
+`Textures/Terrain/`; zstd) and `Generated` (the `Local/` caches that ship: cooked scenes, SPIR-V, procedural meshes /
+textures, and the diffusion tile cache `Local/Diffusion/` - terrain without the ONNX models; priority 110, a patch
+over Content), both next to the executable.
+
+1. Scan the source folder (include prefixes, exclude prefixes / extensions, include extensions, a filter callback;
+   a folder that no include prefix lies in or below is not walked). **No exclude is built in**: the config lists every
+   one. The only file always skipped is the pack being written (and its `.tmp`).
+2. A file whose size and mtime match its old entry is kept **without being read**. One whose stamp changed is read
+   and hashed: same content = only its stamp changes ("touched").
+3. Nothing changed, no case rename = the pack is not touched at all.
+4. Otherwise the new and changed files are appended behind the old TOC, then the new TOC, then the header page is
+   rewritten — **the header write is the commit**; everything before it is flushed first, so a crash leaves the old
+   version. File data is never overwritten, so a process that has the pack mounted keeps reading the version it
+   mounted (remount to see the update).
+5. When the dead bytes (replaced and removed files, old TOCs) would pass `compactThreshold` (25%) of the data, or with
+   `incremental = false`, the pack is **rewritten whole** into `<pack>.tmp`, unchanged files copied from the old pack
+   as stored (no re-read, no recompression), and the temp file replaces the pack. That rename fails while a process
+   has the pack mapped: unmount first.
+
+Loads, hashing and compression run on `threads` plain threads (File cannot link Threading) in windows of 256 MB.
+An unreadable file keeps its packed version; an unreadable NEW file fails the build.
 
 ## `ImageIO` (`File:ImageIO`)
 

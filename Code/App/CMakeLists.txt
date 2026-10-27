@@ -86,6 +86,22 @@ set_target_properties(run-scenario PROPERTIES
 	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --server --scenario Scenarios/march-64-units.txt --tweaks Scenarios/cpu-profile.tweaks" 
 	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
 
+# Builds / updates the .dat packs of Assets/dat.cfg next to App.exe: right-click `packs` -> Build (it builds App
+# first, then runs its --pack-build tool; a failed pack build fails the target). As the Startup Project, F5 runs App
+# on those packs (--packs).
+add_custom_target(packs
+	COMMAND "$<TARGET_FILE:App>" --pack-build
+	WORKING_DIRECTORY "${ROOT_DIR}"
+	COMMENT "Building the .dat packs of Assets/dat.cfg"
+	VERBATIM)
+add_dependencies(packs App)
+set_target_properties(packs PROPERTIES
+	FOLDER Apps
+	EXCLUDE_FROM_ALL TRUE
+	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
+	VS_DEBUGGER_COMMAND_ARGUMENTS "--packs"
+	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
+
 add_custom_target(run-coopserver COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
 add_dependencies(run-coopserver App)
 set_target_properties(run-coopserver PROPERTIES

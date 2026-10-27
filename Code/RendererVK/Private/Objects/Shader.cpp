@@ -532,6 +532,15 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
             return true;
     }
 
+    // A real compile: refresh the readable copy of the UBO declaration it may include (the includer serves the
+    // string itself), once per declaration change.
+    if (RendererVKLayout::g_uboDeclarationCopyStale)
+    {
+        RendererVKLayout::g_uboDeclarationCopyStale = false;
+        FileSystem::createDirectories("Local/Shaders", true);
+        FileSystem::writeFileStr("Local/Shaders/ubo.generated.glsl", RendererVKLayout::g_uboDeclaration, true);
+    }
+
     const oc::string spvBinPath = "Local/" + debugFilePath + ".spv";
     const oc::string spvBinFolder = FileSystem::parentPath(spvBinPath);
     if (!FileSystem::exists(spvBinFolder, /*allowMainThread*/ true))

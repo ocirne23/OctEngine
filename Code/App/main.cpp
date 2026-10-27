@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
     FileSystem::initialize();
     oc::optional<FileSystem::AllowMainThreadIO> startupIo;
     startupIo.emplace();
+    mountCommandLinePacks(argc, argv);
     installFileHooks();
     // Every tweak, before any system initializes (their Tweak::onChange listeners need the rows); the saved values
     // apply as each row registers.

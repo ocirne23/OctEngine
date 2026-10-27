@@ -47,8 +47,9 @@ and its place stay: neither says live or lockable.
   struct member - so ONE value can be a constant while its neighbours stay block reads. Every member carries its byte
   offset as an explicit `layout(offset = N)`; there is no struct type at all. `buildUboDeclaration`
   (`UboDeclaration.cpp`) makes the GLSL from the block's entries; the shader includer serves that text as
-  **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes, and a copy for reading is written to
-  `Assets/Local/Shaders/ubo.generated.glsl`.
+  **`ubo.generated.glsl`** (no file), which `ubo.inc.glsl` includes. A copy for reading,
+  `Assets/Local/Shaders/ubo.generated.glsl`, is written only by the first shader that really compiles after the
+  declaration changed (a SPIR-V cache miss; `g_uboDeclarationCopyStale`), so a run served from the cache writes none.
 * **THE CPU GUARANTEES VALID VALUES; SHADERS DO NOT RE-GUARD THEM.** A lambda (or a push fill / lockable) returns unit
   directions (`u_sunDirection`, `u_skyUp`, the wind), floors and clamps (also the ones a tweak range already implies:
   the panel can type past a range), ordered start/end pairs, and DERIVED values for a guarded form (`<subject>_inv<X>`

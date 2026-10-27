@@ -8,7 +8,8 @@ add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FIL
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/Public")
 
-target_link_libraries(${PROJECT_NAME} PUBLIC Core Animation assimp-vc143-mt$<$<CONFIG:Debug>:d> zlibstatic$<$<CONFIG:Debug>:d> meshoptimizer$<$<CONFIG:Debug>:d>)
+target_link_libraries(${PROJECT_NAME} PUBLIC Core Animation assimp-vc143-mt$<$<CONFIG:Debug>:d> zlibstatic$<$<CONFIG:Debug>:d> meshoptimizer$<$<CONFIG:Debug>:d>
+    PRIVATE zstd$<$<CONFIG:Debug>:d>) # the .dat packs' optional compression
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 
