@@ -544,6 +544,9 @@ export namespace RendererVKLayout
     // Its readable copy, Local/Shaders/ubo.generated.glsl, is written by the first shader that really COMPILES after
     // the declaration changed (a SPIR-V cache miss), so a run served from the cache writes nothing.
     inline bool g_uboDeclarationCopyStale = true;
+    // Per entry name: a hash of what the declaration says about it (offset, type, baked + value). A shader depends only
+    // on the entries its text names (Shader.cpp), so a lock change rebuilds only the pipelines that read the value.
+    inline oc::unordered_map<oc::string, uint64> g_uboEntryStates;
 
     struct alignas(16) RenderNodeTransform : Transform {};
     struct alignas(16) MeshInstanceOffset {

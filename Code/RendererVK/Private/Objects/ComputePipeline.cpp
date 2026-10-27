@@ -71,27 +71,42 @@ bool ComputePipeline::initialize(const ComputePipelineLayout& layout)
     m_pipelineCache = pipelineCacheResult.value;
     Globals::device.setDebugName(m_pipelineCache, debugName.c_str());
 
-    return createPipeline(layout, m_pipeline, true);
+    return createPipeline(layout, m_pipeline, m_stamp, true);
+}
+
+bool ComputePipeline::isCurrent(const ComputePipelineLayout& layout) const
+{
+    return m_pipeline && m_capturedStatistics == Globals::device.capturePipelineStatistics()
+        && Shader::isCurrent(m_stamp, vk::ShaderStageFlagBits::eCompute, layout.computeShaderText, layout.computeShaderDebugFilePath, layout.defines, layout.pushDeclaration);
 }
 
 bool ComputePipeline::reloadShaders(const ComputePipelineLayout& layout)
 {
+    if (Shader::s_uboOnlyReload && isCurrent(layout))
+    {
+        ++Shader::s_pipelinesKept;
+        return true;
+    }
     vk::Pipeline newPipeline;
-    if (!createPipeline(layout, newPipeline, false))
+    ShaderStamp newStamp;
+    if (!createPipeline(layout, newPipeline, newStamp, false))
         return false;
 
     if (m_pipeline)
         Globals::device.getDevice().destroyPipeline(m_pipeline);
     m_pipeline = newPipeline;
+    m_stamp = oc::move(newStamp);
+    ++Shader::s_pipelinesRebuilt;
     return true;
 }
 
-bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pipeline& outPipeline, bool assertOnFailure)
+bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pipeline& outPipeline, ShaderStamp& outStamp, bool assertOnFailure)
 {
     vk::Device vkDevice = Globals::device.getDevice();
 
     Shader computeShader;
-    if (!computeShader.initialize(vk::ShaderStageFlagBits::eCompute, layout.computeShaderText, layout.computeShaderDebugFilePath, layout.defines, assertOnFailure, layout.pushDeclaration))
+    if (!computeShader.initialize(vk::ShaderStageFlagBits::eCompute, layout.computeShaderText, layout.computeShaderDebugFilePath, layout.defines, assertOnFailure,
+        layout.pushDeclaration, &outStamp))
         return false;
 
     vk::SpecializationInfo specializationInfo
@@ -130,5 +145,6 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
         Shader::appendDefineList(defines, layout.defines);
         Globals::device.logPipelineStatistics(outPipeline, debugName.c_str(), defines);
     }
+    m_capturedStatistics = Globals::device.capturePipelineStatistics();
     return true;
 }

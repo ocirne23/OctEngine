@@ -10,6 +10,7 @@ import :Layout;
 import :UboBlock;
 import :PushBlock;
 import :Device;
+import :Shader;
 
 // Renderer: the TWEAK LOCKS. Every lockable UBO value (an entry of m_ubo, registerUboValues at the end of
 // RendererUbo.cpp) is a GLSL const of its value in every shader while every tweak it is computed from is locked, so
@@ -103,6 +104,7 @@ void Renderer::registerPushFields()
 void Renderer::setUboDeclaration()
 {
     RendererVKLayout::g_uboDeclaration = RendererVKLayout::buildUboDeclaration(m_ubo, m_uboBakedValues.data(), m_uboBaked);
+    RendererVKLayout::buildUboEntryStates(m_ubo, m_uboBakedValues.data(), m_uboBaked);
     // The readable copy follows with the next real compile (Shader.cpp), not here.
     RendererVKLayout::g_uboDeclarationCopyStale = true;
 }
@@ -189,7 +191,14 @@ void Renderer::applyUboLocks()
     const FileSystem::AllowMainThreadIO allowIo;
     if (uboChanged)
     {
+        // Nothing on disk changed: a pipeline whose shaders name none of the changed values keeps its vk::Pipeline,
+        // and a stage that names none of them is served from the SPIR-V cache.
+        Shader::s_uboOnlyReload = true;
+        Shader::s_pipelinesKept = 0;
+        Shader::s_pipelinesRebuilt = 0;
         reloadShaders();
+        Shader::s_uboOnlyReload = false;
+        printf("UBO locks: rebuilt %u pipelines, kept %u\n", Shader::s_pipelinesRebuilt, Shader::s_pipelinesKept);
         return;
     }
     (void)Globals::device.graphicsQueueWaitIdle();

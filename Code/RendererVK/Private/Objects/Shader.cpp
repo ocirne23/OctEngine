@@ -28,10 +28,10 @@ bool Shader::initializeFromFile(vk::ShaderStageFlagBits stage, const oc::string&
 }
 
 bool Shader::initialize(vk::ShaderStageFlagBits stage, const oc::string& shaderStr, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines,
-    bool assertOnFailure, const oc::string& pushDeclaration)
+    bool assertOnFailure, const oc::string& pushDeclaration, ShaderStamp* stamp)
 {
     oc::vector<unsigned int> spirv;
-    if (!GLSLtoSPV(stage, shaderStr, spirv, debugFilePath, defines, pushDeclaration))
+    if (!GLSLtoSPV(stage, shaderStr, spirv, debugFilePath, defines, pushDeclaration, stamp))
     {
         assert((!assertOnFailure) && "Failed to compile shader SPIRV");
         return false;
@@ -94,16 +94,77 @@ EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
     }
 }
 
-static uint64 hashText(oc::string_view text)
+constexpr uint64 FNV_BASIS = 0xcbf29ce484222325ull; // FNV-1a 64
+
+uint64 Shader::hashBytes(uint64 hash, const void* data, size_t size)
 {
-    uint64 hash = 0xcbf29ce484222325ull; // FNV-1a 64
-    for (const char c : text)
+    const uint8* bytes = static_cast<const uint8*>(data);
+    for (size_t i = 0; i < size; ++i)
     {
-        hash ^= (uint8)c;
+        hash ^= bytes[i];
         hash *= 0x100000001b3ull;
     }
     return hash;
 }
+
+static uint64 hashText(oc::string_view text)
+{
+    return Shader::hashBytes(FNV_BASIS, text.data(), text.size());
+}
+
+static bool isIdentChar(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+// The frame UBO entries a text names: every u_<name> / UBO_LIVE_<name> token whose name is a registered entry
+// (g_uboEntryStates). Comments and macro bodies count too - a superset only rebuilds more.
+static void collectUboRefs(oc::string_view text, oc::vector<oc::string>& refs)
+{
+    const oc::unordered_map<oc::string, uint64>& states = RendererVKLayout::g_uboEntryStates;
+    const size_t n = text.size();
+    size_t i = 0;
+    while (i < n)
+    {
+        if (!isIdentChar(text[i]))
+        {
+            ++i;
+            continue;
+        }
+        const size_t start = i;
+        while (i < n && isIdentChar(text[i]))
+            ++i;
+        const oc::string_view token = text.substr(start, i - start);
+        size_t prefix = 0;
+        if (token.size() > 2 && token[0] == 'u' && token[1] == '_')
+            prefix = 2;
+        else if (token.size() > 9 && token.substr(0, 9) == "UBO_LIVE_")
+            prefix = 9;
+        else
+            continue;
+        oc::string name(token.data() + prefix, token.size() - prefix);
+        if (states.find(name) != states.end())
+            refs.push_back(oc::move(name));
+    }
+}
+
+// The declaration state of the named entries: what a shader that reads only them depends on. A name that is no entry
+// any more hashes differently from every state.
+static uint64 uboRefsHash(const oc::vector<oc::string>& refs)
+{
+    const oc::unordered_map<oc::string, uint64>& states = RendererVKLayout::g_uboEntryStates;
+    uint64 hash = FNV_BASIS;
+    for (const oc::string& name : refs)
+    {
+        hash = Shader::hashBytes(hash, name.data(), name.size());
+        const auto it = states.find(name);
+        hash = Shader::hashValue(hash, it != states.end() ? it->second : ~0ull);
+    }
+    return hash;
+}
+
+constexpr const char* UBO_DECLARATION_HEADER = "ubo.generated.glsl";
+constexpr const char* PUSH_DECLARATION_HEADER = "push.generated.glsl";
 
 // One include the compile resolved: the SPIR-V cache re-resolves it the same way and compares.
 struct ShaderIncludeDep
@@ -124,6 +185,14 @@ public:
     }
 
     const oc::vector<ShaderIncludeDep>& getDeps() const { return m_deps; }
+
+    // The UBO entries every resolved FILE names (the generated declarations are not scanned: they name everything).
+    void collectFileUboRefs(oc::vector<oc::string>& refs) const
+    {
+        for (size_t i = 0; i < m_deps.size(); ++i)
+            if (m_deps[i].header != UBO_DECLARATION_HEADER && m_deps[i].header != PUSH_DECLARATION_HEADER)
+                collectUboRefs(*m_contents[i], refs);
+    }
 
     // True when the include still resolves to the same file with the same content.
     bool isUnchanged(const ShaderIncludeDep& dep)
@@ -150,10 +219,10 @@ private:
     IncludeResult* resolve(const char* headerName, const char* includerName)
     {
         // The frame UBO's declaration is not a file: it is generated (RendererVKLayout::g_uboDeclaration).
-        if (std::strcmp(headerName, "ubo.generated.glsl") == 0)
+        if (std::strcmp(headerName, UBO_DECLARATION_HEADER) == 0)
             return store(headerName, includerName, headerName, oc::string(RendererVKLayout::g_uboDeclaration));
         // The compiling pipeline's push block (PushBlock::declaration): per compile, never a file either.
-        if (std::strcmp(headerName, "push.generated.glsl") == 0)
+        if (std::strcmp(headerName, PUSH_DECLARATION_HEADER) == 0)
         {
             assert(!m_pushDeclaration.empty() && "push.generated.glsl included, but the pipeline layout has no pushDeclaration");
             return store(headerName, includerName, headerName, oc::string(m_pushDeclaration));
@@ -398,9 +467,12 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
 // stored whole and compared, the hash only names the file. The FILES - the root source and every resolved include -
 // are checked by content hash, the includes re-resolved the way the compile resolved them. A changed file
 // overwrites its entry; only a new define set adds one.
+// The generated UBO declaration is checked through the entries the shader's files NAME (uboRefs): a lock change
+// misses only the shaders that read the value. A hit then carries the old declaration's text for the other entries
+// in its debug info - those lines are unread, so the code is the same.
 
 constexpr uint32 SPV_CACHE_MAGIC = 0x4350534F; // "OSPC"
-constexpr uint32 SPV_CACHE_VERSION = 1; // bump when the compile options (SpvOptions, env) or this format change
+constexpr uint32 SPV_CACHE_VERSION = 2; // bump when the compile options (SpvOptions, env), this format or buildUboDeclaration's form change
 
 class SpvCacheWriter
 {
@@ -456,13 +528,20 @@ private:
     bool m_ok = true;
 };
 
-static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, ShaderIncluder& includer, oc::vector<unsigned int>& spirv)
+static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, ShaderIncluder& includer, oc::vector<unsigned int>& spirv,
+    oc::vector<oc::string>& uboRefs)
 {
     oc::vector<uint8> bytes;
     if (!FileSystem::readFileBytes(path, bytes, /*allowMainThread*/ true))
         return false;
     SpvCacheReader reader(bytes);
     if (reader.u32() != SPV_CACHE_MAGIC || reader.u32() != SPV_CACHE_VERSION || reader.str() != key || reader.u64() != sourceHash)
+        return false;
+    const uint32 numRefs = reader.u32();
+    uboRefs.clear();
+    for (uint32 i = 0; i < numRefs && reader.ok(); ++i)
+        uboRefs.push_back(reader.str());
+    if (!reader.ok())
         return false;
     const uint32 numDeps = reader.u32();
     for (uint32 i = 0; i < numDeps && reader.ok(); ++i)
@@ -472,7 +551,10 @@ static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 s
         dep.includer = reader.str();
         dep.resolved = reader.str();
         dep.contentHash = reader.u64();
-        if (!reader.ok() || !includer.isUnchanged(dep))
+        if (!reader.ok())
+            return false;
+        const bool unchanged = dep.header == UBO_DECLARATION_HEADER ? dep.contentHash == uboRefsHash(uboRefs) : includer.isUnchanged(dep);
+        if (!unchanged)
             return false;
     }
     const uint32 numWords = reader.u32();
@@ -484,20 +566,24 @@ static bool readSpvCache(const oc::string& path, const oc::string& key, uint64 s
 }
 
 static void writeSpvCache(const oc::string& path, const oc::string& key, uint64 sourceHash, const oc::vector<ShaderIncludeDep>& deps,
-    const oc::vector<unsigned int>& spirv)
+    const oc::vector<oc::string>& uboRefs, const oc::vector<unsigned int>& spirv)
 {
     SpvCacheWriter writer;
     writer.u32(SPV_CACHE_MAGIC);
     writer.u32(SPV_CACHE_VERSION);
     writer.str(key);
     writer.u64(sourceHash);
+    writer.u32((uint32)uboRefs.size());
+    for (const oc::string& name : uboRefs)
+        writer.str(name);
+    const uint64 uboHash = uboRefsHash(uboRefs);
     writer.u32((uint32)deps.size());
     for (const ShaderIncludeDep& dep : deps)
     {
         writer.str(dep.header);
         writer.str(dep.includer);
         writer.str(dep.resolved);
-        writer.u64(dep.contentHash);
+        writer.u64(dep.header == UBO_DECLARATION_HEADER ? uboHash : dep.contentHash);
     }
     writer.u32((uint32)spirv.size());
     writer.raw(spirv.data(), spirv.size() * sizeof(unsigned int));
@@ -511,25 +597,59 @@ static void writeSpvCache(const oc::string& path, const oc::string& key, uint64 
         FileSystem::rename(tempPath, path, /*allowMainThread*/ true);
 }
 
-bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath,
-    const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration)
+static oc::string buildCacheKey(vk::ShaderStageFlagBits type, const oc::string& debugFilePath, const oc::string& preamble, const oc::string& pushDeclaration)
 {
-    // The preamble's #extension may precede the file's #version: glslang scans the version from the
-    // shader strings alone. The string must outlive parse().
-    const oc::string preamble = buildPreamble(defines);
-
     const glslang::Version glslangVersion = glslang::GetVersion();
     oc::string cacheKey = oc::format("{} {}.{}.{} {} {}\n", SPV_CACHE_VERSION, glslangVersion.major, glslangVersion.minor, glslangVersion.patch,
         (uint32)type, debugFilePath);
     cacheKey += preamble;
     cacheKey += '\n';
     cacheKey += pushDeclaration;
-    const oc::string cachePath = oc::format("Local/ShaderCache/{}.{:016x}.spvc", debugFilePath, hashText(cacheKey));
+    return cacheKey;
+}
+
+static uint64 stampKeyHash(uint64 cacheKeyHash, uint64 sourceHash)
+{
+    return Shader::hashValue(Shader::hashValue(FNV_BASIS, cacheKeyHash), sourceHash);
+}
+
+static void fillStamp(ShaderStamp* stamp, uint64 cacheKeyHash, uint64 sourceHash, oc::vector<oc::string>&& uboRefs)
+{
+    if (stamp == nullptr)
+        return;
+    stamp->keyHash = stampKeyHash(cacheKeyHash, sourceHash);
+    stamp->uboHash = uboRefsHash(uboRefs);
+    stamp->uboRefs = oc::move(uboRefs);
+}
+
+bool Shader::isCurrent(const ShaderStamp& stamp, vk::ShaderStageFlagBits type, const oc::string& source, const oc::string& debugFilePath,
+    const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration)
+{
+    if (stamp.uboHash != uboRefsHash(stamp.uboRefs))
+        return false;
+    const oc::string cacheKey = buildCacheKey(type, debugFilePath, buildPreamble(defines), pushDeclaration);
+    return stamp.keyHash == stampKeyHash(hashText(cacheKey), hashText(source));
+}
+
+bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath,
+    const oc::vector<ShaderDefine>& defines, const oc::string& pushDeclaration, ShaderStamp* stamp)
+{
+    // The preamble's #extension may precede the file's #version: glslang scans the version from the
+    // shader strings alone. The string must outlive parse().
+    const oc::string preamble = buildPreamble(defines);
+
+    const oc::string cacheKey = buildCacheKey(type, debugFilePath, preamble, pushDeclaration);
+    const uint64 cacheKeyHash = hashText(cacheKey);
+    const oc::string cachePath = oc::format("Local/ShaderCache/{}.{:016x}.spvc", debugFilePath, cacheKeyHash);
     const uint64 sourceHash = hashText(source);
     {
         ShaderIncluder checkIncluder(debugFilePath, pushDeclaration);
-        if (readSpvCache(cachePath, cacheKey, sourceHash, checkIncluder, spirv))
+        oc::vector<oc::string> uboRefs;
+        if (readSpvCache(cachePath, cacheKey, sourceHash, checkIncluder, spirv, uboRefs))
+        {
+            fillStamp(stamp, cacheKeyHash, sourceHash, oc::move(uboRefs));
             return true;
+        }
     }
 
     // A real compile: refresh the readable copy of the UBO declaration it may include (the includer serves the
@@ -606,7 +726,14 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
 
     glslang::OutputSpvBin(spirvStd, spvBinPath.c_str());
     spirv = oc::fromStd(spirvStd);
-    writeSpvCache(cachePath, cacheKey, sourceHash, includer.getDeps(), spirv);
+
+    oc::vector<oc::string> uboRefs;
+    collectUboRefs(source, uboRefs);
+    includer.collectFileUboRefs(uboRefs);
+    oc::sort(uboRefs.begin(), uboRefs.end());
+    uboRefs.erase(oc::unique(uboRefs.begin(), uboRefs.end()), uboRefs.end());
+    writeSpvCache(cachePath, cacheKey, sourceHash, includer.getDeps(), uboRefs, spirv);
+    fillStamp(stamp, cacheKeyHash, sourceHash, oc::move(uboRefs));
 
     return true;
 }

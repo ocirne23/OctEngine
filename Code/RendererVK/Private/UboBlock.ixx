@@ -204,6 +204,8 @@ namespace RendererVKLayout
     // UBO_LIVE_ defines and the consts. baked[i] (parallel to the entries): entry i is a const of its value in
     // `bakedValues` (the block's bytes) instead of a block member (the member keeps its slot as u_<name>Baked).
     export oc::string buildUboDeclaration(const UboBlock& block, const uint8* bakedValues, oc::span<const uint8> baked);
+    // g_uboEntryStates from the same inputs: one hash per entry of everything its declaration lines say.
+    export void buildUboEntryStates(const UboBlock& block, const uint8* bakedValues, oc::span<const uint8> baked);
     // False when a value is not finite (a const cannot spell it: the entry then stays live).
     export bool isUboValueFinite(EUboType type, const uint8* bytes);
 }

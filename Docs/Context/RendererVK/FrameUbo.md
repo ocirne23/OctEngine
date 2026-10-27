@@ -90,8 +90,8 @@ live).
   logs a warning and counts as locked.
 * **Baked = the value is a GLSL `const`** in every shader (the block keeps its slot as `u_<name>Baked`, unread), so
   the compiler folds it: dead branches go, loops over constant counts unroll (`ao_spatial`'s radius, the composite's
-  gather samples, the march steps), a single tonemapper path stays. Unbaked = the block member again. Any change
-  rebuilds every shader (`reloadShaders`).
+  gather samples, the march steps), a single tonemapper path stays. Unbaked = the block member again. A change
+  rebuilds ONLY the pipelines whose shaders name a changed entry (below).
 * **EVENT-DRIVEN, nothing is polled.** `registerUboLocks` (before `initPipelines`) registers the locks, the
   fields, and bakes ONCE, so the first compile is already baked. After that two events set `m_uboLocksDirty`:
   * a lock click (the lock's `onChange`; it also sets `m_uboResolveDirty`, so the entries re-resolve);
@@ -102,6 +102,16 @@ live).
   re-resolve if asked, evaluate the list, write the consts (`bakeUboValues`), and `reloadShaders` only when the
   generated declaration changed. A slider drag over a LOCKED row therefore rebuilds per changed frame; unlock the
   row to tune it live.
+* **THE RELOAD IS PER SHADER.** `g_uboEntryStates` (Layout.ixx, `buildUboEntryStates`) holds one hash per entry of
+  what its declaration lines say (offset, type, baked + value). A compile records the entries its FILES name (every
+  `u_<name>` / `UBO_LIVE_<name>` token, comments and macro bodies included - a superset only rebuilds more; the
+  generated texts are not scanned), and depends on those entries' states only: in the SPIR-V cache (the
+  `ubo.generated.glsl` dep) and in the `ShaderStamp` every `ComputePipeline` / `GraphicsPipeline` keeps per stage.
+  `applyUboLocks` runs `reloadShaders` with `Shader::s_uboOnlyReload`: a pipeline whose stamps are all current (cache
+  key, root source, named entries) and whose fixed-function state is the same keeps its `vk::Pipeline`; the log line
+  `UBO locks: rebuilt N pipelines, kept M` counts them. The include FILES are not re-checked in that mode, so a shader
+  edit still needs F5. **A shader that reads a UBO value through a pasted name (`##`) would be missed - spell every
+  `u_` name out.**
 * A value that is not finite keeps the entry live (a const cannot spell it).
 * **`UBO_LIVE_<name>`** (generated for every entry: the block member under either name) reads ONE value from the
   block even while it is baked - for a site where the constant costs more than it saves (pipeline stats, every lock

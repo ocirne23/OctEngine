@@ -140,9 +140,14 @@ public:
 
 private:
 
-    bool createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, bool assertOnFailure);
+    bool createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, oc::vector<ShaderStamp>& outStamps,
+        bool assertOnFailure);
+    bool isCurrent(vk::RenderPass renderPass, const GraphicsPipelineLayout& layout) const;
 
     oc::vector<vk::Pipeline> m_pipelines;
+    // What m_pipelines were built from: a stamp per compiled stage (in compile order) and the fixed-function state.
+    oc::vector<ShaderStamp> m_stamps;
+    uint64 m_stateHash = 0;
     vk::PipelineCache m_pipelineCache;
     vk::PipelineLayout m_pipelineLayout;
     vk::DescriptorSetLayout m_descriptorSetLayout;

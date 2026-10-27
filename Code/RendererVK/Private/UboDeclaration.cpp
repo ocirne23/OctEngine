@@ -118,6 +118,30 @@ namespace RendererVKLayout
         return out;
     }
 
+    void buildUboEntryStates(const UboBlock& block, const uint8* bakedValues, oc::span<const uint8> baked)
+    {
+        const oc::vector<UboBlock::Entry>& entries = block.entries();
+        g_uboEntryStates.clear();
+        for (size_t i = 0; i < entries.size(); ++i)
+        {
+            const UboBlock::Entry& e = entries[i];
+            // Bump SPV_CACHE_VERSION (Shader.cpp) when buildUboDeclaration writes an entry differently.
+            oc::string state = oc::format("{} {} {} {} {}", e.offset, (uint32)e.type, e.count, e.live ? 1 : 0, baked[i] != 0 ? 1 : 0);
+            if (baked[i] != 0)
+            {
+                state += ' ';
+                appendValue(state, e.type, bakedValues + e.offset);
+            }
+            uint64 hash = 0xcbf29ce484222325ull; // FNV-1a 64
+            for (const char c : state)
+            {
+                hash ^= (uint8)c;
+                hash *= 0x100000001b3ull;
+            }
+            g_uboEntryStates[e.name] = hash;
+        }
+    }
+
     bool isUboValueFinite(EUboType type, const uint8* bytes)
     {
         if (type == EUboType::Uint || type == EUboType::Uvec4)

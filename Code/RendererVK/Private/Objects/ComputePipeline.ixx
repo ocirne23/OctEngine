@@ -31,9 +31,12 @@ public:
 
 private:
 
-    bool createPipeline(const ComputePipelineLayout& layout, vk::Pipeline& outPipeline, bool assertOnFailure);
+    bool createPipeline(const ComputePipelineLayout& layout, vk::Pipeline& outPipeline, ShaderStamp& outStamp, bool assertOnFailure);
+    bool isCurrent(const ComputePipelineLayout& layout) const;
 
     vk::Pipeline m_pipeline;
+    ShaderStamp m_stamp;
+    bool m_capturedStatistics = false;
     vk::PipelineCache m_pipelineCache;
     vk::PipelineLayout m_pipelineLayout;
     vk::DescriptorSetLayout m_descriptorSetLayout;

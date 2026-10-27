@@ -26,6 +26,78 @@ static oc::string pipelineDebugName(const ShaderSource& vs, const ShaderSource& 
     return Shader::debugName(fs.text.empty() ? vs.debugFilePath : fs.debugFilePath);
 }
 
+// The stages createPipelines compiles, in its order, and whether it hands each its push block (the variant overrides
+// get none).
+template<typename F>
+static void forEachStage(const GraphicsPipelineLayout& layout, F&& fn)
+{
+    const bool hasTess = !layout.tessControlShader.text.empty() && !layout.tessEvalShader.text.empty();
+    const bool hasFS = !layout.depthOnly || !layout.fragmentShader.text.empty();
+    fn(vk::ShaderStageFlagBits::eVertex, layout.vertexShader, true);
+    if (hasFS)
+        fn(vk::ShaderStageFlagBits::eFragment, layout.fragmentShader, true);
+    if (hasTess)
+    {
+        fn(vk::ShaderStageFlagBits::eTessellationControl, layout.tessControlShader, true);
+        fn(vk::ShaderStageFlagBits::eTessellationEvaluation, layout.tessEvalShader, true);
+    }
+    for (const PipelineVariant& v : layout.additionalVariants)
+    {
+        if (!v.vertexShader.text.empty())
+            fn(vk::ShaderStageFlagBits::eVertex, v.vertexShader, false);
+        if (!v.fragmentShader.text.empty())
+            fn(vk::ShaderStageFlagBits::eFragment, v.fragmentShader, false);
+        if (hasTess && !v.tessEvalShader.text.empty())
+            fn(vk::ShaderStageFlagBits::eTessellationEvaluation, v.tessEvalShader, false);
+    }
+}
+
+// Everything createPipelines reads besides the shaders (the set and pipeline layouts are made once, in initialize).
+static uint64 fixedStateHash(vk::RenderPass renderPass, const GraphicsPipelineLayout& layout)
+{
+    uint64 h = Shader::hashValue(0xcbf29ce484222325ull, renderPass);
+    h = Shader::hashValue(h, Globals::device.capturePipelineStatistics());
+    h = Shader::hashValue(h, layout.vertexLayoutInfo.bindingDescriptions.size());
+    for (const vk::VertexInputBindingDescription& b : layout.vertexLayoutInfo.bindingDescriptions)
+        h = Shader::hashValue(h, b);
+    h = Shader::hashValue(h, layout.vertexLayoutInfo.attributeDescriptions.size());
+    for (const vk::VertexInputAttributeDescription& a : layout.vertexLayoutInfo.attributeDescriptions)
+        h = Shader::hashValue(h, a);
+    h = Shader::hashValue(h, layout.patchControlPoints);
+    h = Shader::hashValue(h, layout.indirectBindable);
+    h = Shader::hashValue(h, layout.depthOnly);
+    h = Shader::hashValue(h, layout.depthBiasEnable);
+    h = Shader::hashValue(h, layout.depthBiasConstantFactor);
+    h = Shader::hashValue(h, layout.depthBiasSlopeFactor);
+    h = Shader::hashValue(h, layout.cullMode);
+    h = Shader::hashValue(h, layout.polygonMode);
+    h = Shader::hashValue(h, layout.topology);
+    h = Shader::hashValue(h, layout.blendEnable);
+    h = Shader::hashValue(h, layout.srcColorBlendFactor);
+    h = Shader::hashValue(h, layout.dstColorBlendFactor);
+    h = Shader::hashValue(h, layout.colorBlendOp);
+    h = Shader::hashValue(h, layout.colorWriteAlpha);
+    h = Shader::hashValue(h, layout.motionTarget);
+    h = Shader::hashValue(h, layout.writeMotion);
+    h = Shader::hashValue(h, layout.depthTestEnable);
+    h = Shader::hashValue(h, layout.depthWriteEnable);
+    h = Shader::hashValue(h, layout.depthCompareOp);
+    h = Shader::hashValue(h, layout.additionalVariants.size());
+    for (const PipelineVariant& v : layout.additionalVariants)
+    {
+        h = Shader::hashValue(h, v.blendEnable);
+        h = Shader::hashValue(h, v.dualSourceBlend);
+        h = Shader::hashValue(h, v.dualSourceAlpha);
+        h = Shader::hashValue(h, v.depthWrite);
+        h = Shader::hashValue(h, v.depthTest);
+        h = Shader::hashValue(h, v.depthGreaterOrEqual);
+        h = Shader::hashValue(h, v.writeMotion);
+        h = Shader::hashValue(h, v.polygonMode);
+        h = Shader::hashValue(h, v.cullMode);
+    }
+    return h;
+}
+
 GraphicsPipeline::GraphicsPipeline() {}
 GraphicsPipeline::~GraphicsPipeline()
 {
@@ -103,15 +175,39 @@ bool GraphicsPipeline::initialize(vk::RenderPass renderPass, GraphicsPipelineLay
     m_pipelineCache = createPipelineCacheResult.value;
     Globals::device.setDebugName(m_pipelineCache, debugName.c_str());
 
-    return createPipelines(renderPass, layout, m_pipelines, true);
+    if (!createPipelines(renderPass, layout, m_pipelines, m_stamps, true))
+        return false;
+    m_stateHash = fixedStateHash(renderPass, layout);
+    return true;
+}
+
+bool GraphicsPipeline::isCurrent(vk::RenderPass renderPass, const GraphicsPipelineLayout& layout) const
+{
+    if (m_pipelines.empty() || m_stateHash != fixedStateHash(renderPass, layout))
+        return false;
+    size_t i = 0;
+    bool current = true;
+    forEachStage(layout, [&](vk::ShaderStageFlagBits stage, const ShaderSource& s, bool withPush)
+    {
+        current = current && i < m_stamps.size()
+            && Shader::isCurrent(m_stamps[i], stage, s.text, s.debugFilePath, s.defines, withPush ? s.pushDeclaration : oc::string());
+        ++i;
+    });
+    return current && i == m_stamps.size();
 }
 
 bool GraphicsPipeline::reloadShaders(vk::RenderPass renderPass, GraphicsPipelineLayout& layout)
 {
+    if (Shader::s_uboOnlyReload && isCurrent(renderPass, layout))
+    {
+        ++Shader::s_pipelinesKept;
+        return true;
+    }
     vk::Device vkDevice = Globals::device.getDevice();
 
     oc::vector<vk::Pipeline> newPipelines;
-    if (!createPipelines(renderPass, layout, newPipelines, false))
+    oc::vector<ShaderStamp> newStamps;
+    if (!createPipelines(renderPass, layout, newPipelines, newStamps, false))
     {
         for (vk::Pipeline pipeline : newPipelines)
             if (pipeline)
@@ -122,11 +218,17 @@ bool GraphicsPipeline::reloadShaders(vk::RenderPass renderPass, GraphicsPipeline
     for (vk::Pipeline pipeline : m_pipelines)
         vkDevice.destroyPipeline(pipeline);
     m_pipelines = oc::move(newPipelines);
+    m_stamps = oc::move(newStamps);
+    m_stateHash = fixedStateHash(renderPass, layout);
+    ++Shader::s_pipelinesRebuilt;
     return true;
 }
 
-bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, bool assertOnFailure)
+bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, oc::vector<ShaderStamp>& outStamps,
+    bool assertOnFailure)
 {
+    // A stamp per compiled stage, in forEachStage's order.
+    const auto nextStamp = [&outStamps]() { return &outStamps.emplace_back(); };
     vk::Device vkDevice = Globals::device.getDevice();
     const bool hasTess = !layout.tessControlShader.text.empty() && !layout.tessEvalShader.text.empty();
 
@@ -283,19 +385,19 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
 
     Shader defaultVS, defaultFS, tessControl, tessEval;
     if (!defaultVS.initialize(vk::ShaderStageFlagBits::eVertex, layout.vertexShader.text, layout.vertexShader.debugFilePath, layout.vertexShader.defines, assertOnFailure,
-        layout.vertexShader.pushDeclaration))
+        layout.vertexShader.pushDeclaration, nextStamp()))
         return false;
     if (hasFS &&
         !defaultFS.initialize(vk::ShaderStageFlagBits::eFragment, layout.fragmentShader.text, layout.fragmentShader.debugFilePath, layout.fragmentShader.defines, assertOnFailure,
-            layout.fragmentShader.pushDeclaration))
+            layout.fragmentShader.pushDeclaration, nextStamp()))
         return false;
     if (hasTess)
     {
         if (!tessControl.initialize(vk::ShaderStageFlagBits::eTessellationControl, layout.tessControlShader.text, layout.tessControlShader.debugFilePath, layout.tessControlShader.defines,
-            assertOnFailure, layout.tessControlShader.pushDeclaration))
+            assertOnFailure, layout.tessControlShader.pushDeclaration, nextStamp()))
             return false;
         if (!tessEval.initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, layout.tessEvalShader.text, layout.tessEvalShader.debugFilePath, layout.tessEvalShader.defines,
-            assertOnFailure, layout.tessEvalShader.pushDeclaration))
+            assertOnFailure, layout.tessEvalShader.pushDeclaration, nextStamp()))
             return false;
         pipelineShaderStageCreateInfos[1].module = tessControl.getModule();
         pipelineShaderStageCreateInfos[2].module = tessEval.getModule();
@@ -310,13 +412,16 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     {
         const PipelineVariant& v = layout.additionalVariants[i];
         if (!v.vertexShader.text.empty())
-            if (!overrideVS[i].initialize(vk::ShaderStageFlagBits::eVertex, v.vertexShader.text, v.vertexShader.debugFilePath, v.vertexShader.defines, assertOnFailure))
+            if (!overrideVS[i].initialize(vk::ShaderStageFlagBits::eVertex, v.vertexShader.text, v.vertexShader.debugFilePath, v.vertexShader.defines, assertOnFailure, {},
+                nextStamp()))
                 return false;
         if (!v.fragmentShader.text.empty())
-            if (!overrideFS[i].initialize(vk::ShaderStageFlagBits::eFragment, v.fragmentShader.text, v.fragmentShader.debugFilePath, v.fragmentShader.defines, assertOnFailure))
+            if (!overrideFS[i].initialize(vk::ShaderStageFlagBits::eFragment, v.fragmentShader.text, v.fragmentShader.debugFilePath, v.fragmentShader.defines, assertOnFailure, {},
+                nextStamp()))
                 return false;
         if (hasTess && !v.tessEvalShader.text.empty())
-            if (!overrideTES[i].initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, v.tessEvalShader.text, v.tessEvalShader.debugFilePath, v.tessEvalShader.defines, assertOnFailure))
+            if (!overrideTES[i].initialize(vk::ShaderStageFlagBits::eTessellationEvaluation, v.tessEvalShader.text, v.tessEvalShader.debugFilePath, v.tessEvalShader.defines,
+                assertOnFailure, {}, nextStamp()))
                 return false;
     }
 

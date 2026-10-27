@@ -31,9 +31,12 @@ calls `reloadShaders()`.
   version, the stage, the file path, the whole preamble (the layout constants, the live settings baked into it, the
   variant's defines, `SHADER_STATS` in Debug) and the push block. It is stored in full and compared; its hash only
   names the file. The FILES are checked by content hash: the root source, and every include the compile resolved,
-  re-resolved through the same includer (so a new file that shadows an include also misses). A changed file
+  re-resolved through the same includer (so a new file that shadows an include also misses). The generated
+  `ubo.generated.glsl` is checked through the UBO entries the shader's files name only (the per-shader reload in
+  [FrameUbo.md](FrameUbo.md)), so a hit may embed an older declaration text in its debug info for entries it never
+  reads. A changed file
   overwrites its entry; only a new define set adds a file. **Bump `SPV_CACHE_VERSION` when the `SpvOptions`, the
-  target env or the entry format change.** A cache hit writes no `Local/Shaders/*.spv` dump. Delete
+  target env, the entry format or the form `buildUboDeclaration` writes an entry in change.** A cache hit writes no `Local/Shaders/*.spv` dump. Delete
   `Local/ShaderCache/` to force a full recompile.
 * **Per-pixel work hoisted to the UBO / per pixel:**
   * `u_sunTransmittance` is the CPU mirror of `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; **keep the
