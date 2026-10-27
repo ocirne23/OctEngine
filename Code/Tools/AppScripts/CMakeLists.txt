@@ -49,7 +49,7 @@ if(SCRIPTS_STATIC)
 		Core Animation RendererVK UI Entity File Input Script Physics Network Audio Spatial Threading Procedural Particle Force)
 
 	apply_compile_settings(${PROJECT_NAME})
-	set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
+	set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Tools)
 else()
 	# Static scripts off: nothing to compile. An INTERFACE library links cleanly with no source, so App can name
 	# AppScripts unconditionally without a stub .cpp.

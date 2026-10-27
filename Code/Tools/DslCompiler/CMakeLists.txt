@@ -4,7 +4,7 @@ file(GLOB_RECURSE PROJECT_PRIVATE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.h" "${CMA
 
 add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 
-set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER _Build)
+set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Tools)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 
 # Entity is what carries registerScriptDslBindings (the whole DSL vocabulary), and its public link surface

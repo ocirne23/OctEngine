@@ -4,7 +4,7 @@ file(GLOB_RECURSE PROJECT_PRIVATE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/*.h" "${CMA
 
 add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 
-set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER _Build)
+set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Tools)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 
 # Core + Network only: the point is a headless target that stands up the protocol stack in seconds.
@@ -18,7 +18,7 @@ apply_compile_settings(${PROJECT_NAME})
 add_custom_target(run-netfuzz COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
 add_dependencies(run-netfuzz NetFuzz)
 set_target_properties(run-netfuzz PROPERTIES
-	FOLDER _Build
+	FOLDER Tools
 	EXCLUDE_FROM_ALL TRUE
 	VS_DEBUGGER_COMMAND "$<TARGET_FILE:NetFuzz>"
 	VS_DEBUGGER_COMMAND_ARGUMENTS "all"
