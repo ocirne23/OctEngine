@@ -364,15 +364,45 @@ Each feature's details are in its topic file (see [The documentation files](#the
 | `PushBlock.ixx` / `.cpp` | `PushBlock`: a registered push block (self-binding `PushValue` handles, lockable values, the generated `push.generated.glsl`), `PushData` (one dispatch's bytes). See "Push blocks" ([FrameUbo.md](FrameUbo.md)). |
 | `RendererUboBake.cpp` | **The tweak locks**: `registerUboLocks`, `applyUboLocks` (bake / unbake / re-bake, then reload every shader). |
 | `RenderParams.ixx` | `OceanParams` (pushed by Procedural every frame) and the GPU allocation report types. The renderer settings types (`SkyParams`, `FogParams`, `ParticleParams`, `ForceFieldParams`, `GiSettings`, LOD, RT, ...) are **`Settings.Render`**'s (Code/Settings) and are NOT re-exported: an importer of RendererVK that touches their fields imports Settings itself. See "No `.ixx` imports Settings" below. |
-| `RendererSettings.cpp` | The `Renderer` constructor (binds the settings reference members to `Globals::settings`), the small settings-reading members (`grassActive`, `taaActive`, `syncCloudDefines`, the setters, ...), the static_asserts Settings.Render cannot hold (it cannot import `:Layout`: `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS`, `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`), and `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
+| `RendererSettings.cpp` | The `RendererState` constructor (binds the settings reference members to `Globals::settings`), the small settings-reading members (`grassActive`, `taaActive`, `syncCloudDefines`, the setters, ...), the static_asserts Settings.Render cannot hold (it cannot import `:Layout`: `ForceFieldParams::teamColors` vs `MAX_FORCE_TEAMS`, `GrassParams::MAX_BLADES` vs `GRASS_MAX_BLADES`), and `Renderer::attachSettingsListeners`: every settings reaction (lit shader reload, full reload, re-record, render resolution, swapchain, GI grid / volume) as a `Tweak::onChange` listener, plus the hand-over of the baked state (debug modes, RT shadow flags, cloud defines). Called from `initialize()`, before `registerUboLocks`. |
 | `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `Aftermath` / `Streamline` (the runtime-loaded DLLs), `GridClaim` (the light/force hash grid's CPU side), `SlotTable` (`RecycledSlotTable<T>` — the lock-free deferred-recycle slot table every emitter/query registry uses) and `SlotAlloc` (the lock-free slot primitives: `SlotStack`, `PagedArray`, `SlotRangeAllocator`). |
-| `Renderer.ixx` | The whole class. One interface, **seven implementation units** below — they all say `module RendererVK;` and are one class, so a member may move between them freely. |
+| `Public/` | **The API files** (see "The public API split" below), beside `RendererVKModule.ixx` (the primary interface, `export module RendererVK;`): `Renderer.ixx`, `RenderNode.ixx`, `RenderMesh.ixx` (+ `RenderMeshData`), `RenderMaterial.ixx` / `RenderTexture.ixx` (the material and texture handles), `RenderTreeSet.ixx` (a set of procedural tree pieces + its value types), `RenderParticleEmitter.ixx` / `RenderForceEmitter.ixx` / `RenderForceQuery.ixx` (the GPU emitter and query slots), `ObjectContainer.ixx` (+ `NodeSpawnIdx`, `ContainerMaterialOverrides` = `ObjectContainer::MaterialOverrides`), `Light.ixx` (the light shapes: plain structs, no state of their own), `TreeRecords.ixx` (the world tree records' API types; the pool itself is `Data/TreeRecordPool`), `RendererVK.fwd.ixx`. |
+| `RendererState.ixx` | `RendererState`: every data member and every private helper, all `protected`, plus the friends (ObjectContainer + ObjectContainerState, RenderNode, RenderMesh, AnimatorComponent, MeshStreamer, and every handle below). |
+| `RenderNodeState.ixx` / `RenderMeshState.ixx` / `RenderMaterialState.ixx` / `RenderTextureState.ixx` / `RenderTreeSetState.ixx` / `RenderParticleEmitterState.ixx` / `RenderForceEmitterState.ixx` / `RenderForceQueryState.ixx` / `ObjectContainerState.ixx` | The other classes' state (and RenderNode's `TransformSlots` + `Globals::renderNodeTransforms`; ObjectContainer's load steps `initializeMeshes` / `Materials` / `Nodes`), all `protected`, plus their friends. |
+| `RendererTypes.ixx` | `RendererTypes` (the API's value types, named `Renderer::X` outside: the terrain splat aliases, `GrassGroundChunk`, `ClutterMesh`; the tree piece types are `RenderTreeSet`'s). A base of `RendererState`, because the state and the helpers use the types too. `EValidation` / `EVr` (namespace scope, `initialize`'s) are in `Renderer.ixx`, opaque-declared in `RendererState.ixx`. |
+| The `.cpp` files | **Seven implementation units** below — they all say `module RendererVK;`, so a member may move between them freely. An API member is defined `Renderer::x`, a state member `RendererState::x`. |
 | `Renderer.cpp` | Construction and the frame loop. **`kickGridBuilds` / `joinGridBuilds`** are the between-frames window: two jobs on one counter (the light grid merge and the force compaction + grid build), each a one-line call into the object that owns that state, with the rare exact-fit growth applied at the join. Construction: `initialize()` runs `attachSettingsListeners` + `registerUboLocks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`; per frame `waitFrameSlot` → `setFrameView` → `beginFrame` (+ its job kick/join) → `present`. |
 | `RendererUbo.cpp` | **The frame UBO**: `buildFrameUbo`, the `buildUbo*` frame-state steps (the views, the camera velocity, GI's one-frame flags, the cloud wind + shadow recentre, the sun cascades, the force bake box, the wetness tick, the grass cascade), `registerUboValues` (every value, live and lockable, by subject). Pure CPU math over the param blocks and the `Data/` registries — it records nothing and touches no device object. Runs wherever `beginFrame` runs; `m_views` keeps last frame's mvps (the reprojection). Compiled with `/bigobj` (RendererVK CMakeLists): one lambda per UBO value passes the COFF section limit in Debug. |
-| `RendererScene.cpp` | The scene the outside owns, in two halves. **Residency**: container add/remove, `renderNode` (the push), the spawn-path entry points, the bindless descriptor upkeep, and the cross-cutting work a capacity growth needs (`onUniqueMeshCapacityGrown`). **Submission** (bottom of the file, mostly called from jobs): lights / fog volumes / decals and the emitter + query registries, each a thin delegate into the `Data/` object that owns the contract. |
+| `RendererScene.cpp` | The scene the outside owns, in two halves. **Residency**: container add/remove, `renderNode` (the push), the spawn-path entry points, the bindless descriptor upkeep, and the cross-cutting work a capacity growth needs (`onUniqueMeshCapacityGrown`). **Submission** (bottom of the file, mostly called from jobs): lights / fog volumes / decals and the bodies of the emitter + query handles, each a thin delegate into the `Data/` object that owns the contract. |
 | `RendererTrees.cpp` | The tree instance sets and tree records (see [Scene.md](Scene.md)) and the far-tree volume's recording. |
 | `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the primaries (desktop / VR / present). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only. |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
+
+## The public API split
+
+Every class used outside the library (`Renderer`, `RenderNode`, `RenderMesh`, `RenderMaterial`, `RenderTexture`, `RenderTreeSet`,
+`RenderParticleEmitter`, `RenderForceEmitter`, `RenderForceQuery`, `ObjectContainer`) is split in two: an API file in `Public/` that holds only
+the public members, and its base `<Class>State` in `Private/` with every data member and private helper, all `protected` (single, non-virtual
+inheritance: the same layout and calls as one class, no vtable). A class keeps its partition name (`:RenderNode`), so no import changes; the state is a
+partition of its own (`:RenderNodeState`). Multi-line bodies of API members go below the class as `inline` definitions; the class holds declarations and
+one-line accessors. A friend goes on the State class (a friend of the base reaches its protected members through the derived object). **A State partition
+declares every class it friends before the friend line** (`export class RenderNode;`): `RendererVK.fwd` declares `Renderer`, `ObjectContainer` and
+`RenderNode` in `extern "C++"`, and a friend line that first introduces the name made MSVC mangle one importer's `oc::vector<RenderNode>` against the
+unattached class (an LNK2019 on `VectorBase<RenderNode>`).
+
+**The resource handles** (`RenderMesh`, `RenderMaterial`, `RenderTexture`, `RenderTreeSet`, `RenderParticleEmitter`,
+`RenderForceEmitter`, `RenderForceQuery`) are move-only RAII: a static `create`, `isValid`, `destroy` (the destructor). Their bodies call protected
+`RendererState` helpers through `Globals::rendererVK` (the State friends each handle), so the Renderer API names none of them. Declaration order sets the
+destruction order (a tree set after its meshes, a derived material after its source), and **a global that holds handles must destruct before the
+renderer** (InitSeg.h: the Procedural systems, `OC_SEG_GPU_EFFECTS` for Particle's and Force's systems). The emitter and query handles are safe to create
+and destroy on a worker (lock-free slot tables).
+
+`Renderer.ixx` reads as the API at a glance; everything else is in its base `RendererState`. A `RendererState` helper cannot call the API by itself
+(the base does not know the derived class), so **a helper calls an API member through `self()`**: `this` as the
+`Renderer` (a `static_cast`, defined in Renderer.cpp; `Renderer` is `final` and the only derived class), e.g.
+`self().sceneFocusOrCamera()`. Members stay plain `m_x`. Tried C++23 deducing `this` (`this Renderer& self`) instead,
+dropped because every member access in such a function must be `self.m_x` and every caller needs a `Renderer` too. A
+class that friends the renderer friends `Renderer` (for an API body), `RendererState` (for a helper), or both.
 
 ## No `.ixx` imports Settings
 
@@ -382,7 +412,7 @@ so one `.ixx` on that import graph that imports Settings makes a settings DEFAUL
 the rule, only the `.cpp` files that `import Settings;` rebuild. So, in an interface:
 
 * a settings type is named only as a reference, a pointer or a parameter (`Settings.fwd` lists them);
-* a reference member to `Globals::settings.x` is bound in the class's constructor in a `.cpp` (`Renderer`,
+* a reference member to `Globals::settings.x` is bound in the class's constructor in a `.cpp` (`RendererState`,
   `MeshStreamer`, `TextureStreamer`);
 * a body that reads a settings field or `Globals::settings` goes to a `.cpp` (`grassActive`, `isEnabled`, ...);
 * a COPY of a settings struct is an `oc::unique_ptr` made in the constructor (`ForceFieldState::m_params`,

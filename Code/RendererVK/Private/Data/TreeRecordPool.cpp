@@ -56,10 +56,10 @@ void TreeRecordPool::reset(uint64 bytes, uint64 frame, uint32 ringRadius)
 
 uint32 TreeRecordPool::add(glm::ivec2 coord, oc::span<const uint32> ground, oc::span<const uint32> records)
 {
-    assert(ground.size() == TREE_RECORD_HEIGHT_WORDS);
-    if (m_numBlocks == 0 || ground.size() != TREE_RECORD_HEIGHT_WORDS)
+    assert(ground.size() == TREE_RECORD_GROUND_WORDS);
+    if (m_numBlocks == 0 || ground.size() != TREE_RECORD_GROUND_WORDS)
         return UINT32_MAX;
-    const uint32 blocks = ((uint32)(TREE_RECORD_HEIGHT_WORDS + records.size()) + BLOCK_RECORDS - 1) / BLOCK_RECORDS;
+    const uint32 blocks = ((uint32)(TREE_RECORD_GROUND_WORDS + records.size()) + BLOCK_RECORDS - 1) / BLOCK_RECORDS;
     uint32 firstBlock = m_freeBlocks.allocate(blocks);
     if (firstBlock == UINT32_MAX)
     {
@@ -75,7 +75,7 @@ uint32 TreeRecordPool::add(glm::ivec2 coord, oc::span<const uint32> ground, oc::
     const uint32 base = firstBlock * BLOCK_RECORDS;
     m_records.upload(ground.size_bytes(), ground.data(), (vk::DeviceSize)base * sizeof(uint32));
     if (!records.empty())
-        m_records.upload(records.size_bytes(), records.data(), (vk::DeviceSize)(base + TREE_RECORD_HEIGHT_WORDS) * sizeof(uint32));
+        m_records.upload(records.size_bytes(), records.data(), (vk::DeviceSize)(base + TREE_RECORD_GROUND_WORDS) * sizeof(uint32));
 
     uint32 handle;
     if (!m_freeHandles.empty())
@@ -89,7 +89,7 @@ uint32 TreeRecordPool::add(glm::ivec2 coord, oc::span<const uint32> ground, oc::
         m_chunks.emplace_back();
     }
     Chunk& chunk = m_chunks[handle];
-    chunk.gpu = { coord, base + TREE_RECORD_HEIGHT_WORDS, (uint32)records.size() };
+    chunk.gpu = { coord, base + TREE_RECORD_GROUND_WORDS, (uint32)records.size() };
     chunk.firstBlock = firstBlock;
     chunk.blocks = blocks;
     m_mapMirror[mapIndex(coord)] = TreeRecordMapGpu{ coord, base };

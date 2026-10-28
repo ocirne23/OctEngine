@@ -27,7 +27,7 @@ import :Shader;
 // The same two events mark the PUSH blocks (PushBlock, m_pushBlocks) dirty: applyUboLocks re-bakes the ones with an
 // onRebake and reloads only their passes; the far-tree volume re-bakes its own in TreeVolumePipeline::prepare.
 
-void Renderer::registerUboLocks()
+void RendererState::registerUboLocks()
 {
     const auto onLockClick = [this]()
     {
@@ -78,7 +78,7 @@ void Renderer::registerUboLocks()
 }
 
 // Every push block's lockable values. A block the Renderer re-bakes (applyUboLocks) names the reload that follows.
-void Renderer::registerPushFields()
+void RendererState::registerPushFields()
 {
     m_eyeAdaptationPipeline.registerPushFields();
     m_pushBlocks.push_back(PushBlockOwner{ &m_eyeAdaptationPipeline.pushBlock(), [this]
@@ -101,7 +101,7 @@ void Renderer::registerPushFields()
         m_pushBlocks.push_back(PushBlockOwner{ block, {} });
 }
 
-void Renderer::setUboDeclaration()
+void RendererState::setUboDeclaration()
 {
     RendererVKLayout::g_uboDeclaration = RendererVKLayout::buildUboDeclaration(m_ubo, m_uboBakedValues.data(), m_uboBaked);
     RendererVKLayout::buildUboEntryStates(m_ubo, m_uboBakedValues.data(), m_uboBaked);
@@ -110,7 +110,7 @@ void Renderer::setUboDeclaration()
 }
 
 // Each entry's lock from its sources: locked while every source row is locked (or no lock covers it).
-void Renderer::resolveUboLocks()
+void RendererState::resolveUboLocks()
 {
     ProfileScope scope("UBO lock resolve", EProfileCategory::Renderer);
     const TweakRegistry& tweaks = TweakRegistry::get();
@@ -131,7 +131,7 @@ void Renderer::resolveUboLocks()
 
 // The consts from the block's evaluated values: an entry is one while it is locked and its value is finite (a const
 // cannot spell a NaN). Returns whether any const appeared, went or changed its value.
-bool Renderer::bakeUboValues()
+bool RendererState::bakeUboValues()
 {
     const oc::vector<UboBlock::Entry>& entries = m_ubo.entries();
     bool changed = false;
@@ -157,7 +157,7 @@ bool Renderer::bakeUboValues()
     return changed;
 }
 
-void Renderer::applyUboLocks()
+void RendererState::applyUboLocks()
 {
     if (!m_initialized)
         return;
@@ -196,7 +196,7 @@ void Renderer::applyUboLocks()
         Shader::s_uboOnlyReload = true;
         Shader::s_pipelinesKept = 0;
         Shader::s_pipelinesRebuilt = 0;
-        reloadShaders();
+        self().reloadShaders();
         Shader::s_uboOnlyReload = false;
         printf("UBO locks: rebuilt %u pipelines, kept %u\n", Shader::s_pipelinesRebuilt, Shader::s_pipelinesKept);
         return;

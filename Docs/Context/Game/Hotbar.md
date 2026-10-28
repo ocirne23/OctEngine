@@ -69,7 +69,7 @@ when it is false — so the cancel chain keeps first claim.**
   clients as GLt, plus a muzzle FLASH.
   > **BEAMS AND FLASHES** (`NpcSystem`): a beam has a kind — `Turret` (the lightning) or `MeleeHit`
   > (a unit's swing, see Targets ([Units.md](Units.md))). **The muzzle FLASH is not a separate record:** `drawBeams`
-  > pushes one point light at every live Turret beam's `from` (`addPointLight`, a per-frame
+  > pushes one point light at every live Turret beam's `from` (`addLightInfo` with a `PointLight`, a per-frame
   > record) with the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash
   > intensity" — so it lives and dies with the bolt. GLt carries the kind byte; melee hit beams
   > are relayed at most `c_maxHitBroadcast` 64 per service, turret strikes always.

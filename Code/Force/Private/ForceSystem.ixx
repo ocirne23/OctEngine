@@ -93,7 +93,7 @@ public:
         float output, float reach, float focus = 0.5f, float distribution = 0.5f, float width = 1.0f);
     ForceQuery createQuery(const glm::vec3& pos);
 
-    // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ------------------------------------
+    // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ----
     // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ chunks from the
     // live emitters'/groups' support boxes, the GPU evaluates 16x16 samples per chunk at "Sample
     // height" (force_bake.cs), and update() republishes the paired readback copy - so ANY number
@@ -151,7 +151,7 @@ private:
     struct EmitterInstance
     {
         uint32 generation = 0; // 0 = free slot
-        uint32 rendererSlot = UINT32_MAX; // ONLY while active: minted/retired by update(), never at create
+        RenderForceEmitter rendererSlot; // ONLY while active: minted/retired by update(), never at create
         uint32 team = 0;
         bool active = true; // see ForceEmitter::setActive
         bool analyticReadback = false; // see ForceEmitter::setAnalyticReadback
@@ -214,7 +214,7 @@ private:
     struct MergeGroup
     {
         uint32 generation = 0; // 0 = free slot
-        uint32 rendererSlot = UINT32_MAX;
+        RenderForceEmitter rendererSlot;
         uint32 team = 0;
         oc::vector<uint32> members; // emitter indices; pruned lazily (destroyed / re-created slots)
         glm::vec3 targetCenter{ 0.0f };
@@ -234,7 +234,7 @@ private:
     struct QueryInstance
     {
         uint32 generation = 0; // 0 = free slot
-        uint32 rendererSlot = UINT32_MAX;
+        RenderForceQuery rendererSlot;
         glm::vec3 pos{ 0.0f };
         ForceQuery::Result result;
     };
@@ -353,7 +353,7 @@ private:
     JobCounter m_mergeCounter; // the in-flight merge job (update kicks -> joinMerge joins next frame)
     bool m_mergeKicked = false;
     float m_mergeDeltaSec = 0.0f;
-    oc::vector<uint32> m_retiredGroupSlots; // dissolved on the job; destroyed on main in update()
+    oc::vector<RenderForceEmitter> m_retiredGroupSlots; // dissolved on the job; destroyed on main in update()
     uint32 m_numLiveEmitters = 0;
     uint32 m_numSlottedEmitters = 0; // of those, the ACTIVE ones holding a renderer slot
     uint32 m_generationCounter = 1;
@@ -403,5 +403,6 @@ private:
 
 export namespace Globals
 {
+OC_INIT_SEG(OC_SEG_GPU_EFFECTS)
     ForceSystem forceSystem;
 }

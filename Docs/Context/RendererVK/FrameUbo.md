@@ -162,6 +162,6 @@ temporal / upsample). The others are still hand-written blocks with mirrored C++
     bake's, or in the frame a bake without a cross-fade swaps, the new one's (its copy and swap run in that frame's
     `recordBake`, before the march; FloorMax's end marks the blocks dirty). The density scale is live;
   * all in `TreeVolumePipeline::prepare` (before any recording; GPU idle), `reloadBakePasses` / `reloadMarchPasses`.
-* Code that writes a lockable push value calls `Tweak::notifyChanged` (`GIProbePipeline::cycleDebugMode`).
+* Code that writes a lockable push value calls `Tweak::notifyChanged`.
 * Not lockable yet: the eye adaptation's `GpuParams` (a mapped per-frame UBO: "Post/Adapt *"), the bloom chain's
   per-level weights, the cloud shadow split - values that also depend on runtime state.

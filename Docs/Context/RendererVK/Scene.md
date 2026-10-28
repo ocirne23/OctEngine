@@ -11,8 +11,7 @@
 > CAS-min records it, `present()` clamps (`clampInstanceCountToOverflow`), and capacity regrows at the
 > next `beginFrame` (`checkFrameCapacities`). **NEVER roll a bump cursor back.**
 
-`addLightInfo` / `addFogVolume` / `addPointLight` / `addAreaLight` / `addSpotLight` / `addDecal` are
-lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
+`addLightInfo` (a `PointLight` / `SpotLight` / `AreaLight` / `TubeLight`) / `addFogVolume` / `addDecal` are lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
 `DebugLinePipeline::upload`, which copies each worker list straight into the slot's mapped vertex
 buffer (one memcpy per list, no merged CPU copy) and clears it.
 
@@ -84,7 +83,7 @@ is BEST-FIT so small requests do not shred the large holes.**
   So a static spawn takes NO lock after warm-up, and a despawn none at all. **Still under `m_spawnMutex`:**
   `spawnSkinnedNode` (the bundle acquire / build and the instance fill only), the shared tables, LOD groups.
 * **Every shared-table RELEASE takes `m_spawnMutex`**, like the adds (`freeMeshInfoRange`,
-  `removeObjectContainer`, `releaseMaterial`, `freeMeshLodGroup`): an unlocked release races a spawning job's
+  `removeObjectContainer`, a `RenderMaterial`'s free, `freeMeshLodGroup`): an unlocked release races a spawning job's
   add on the free-list vector.
 * `~ObjectContainer` frees ALL renderer resources (`Renderer::removeObjectContainer`).
 * The container keeps its own copy of the source `Skeleton`, **so animators can retarget against it at
@@ -98,9 +97,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 
 * `RenderMeshData::build(MeshGeometryDesc)` — pure, from any job: the final `MeshVertex` array (the
   container's tangent-handedness formula and null-attribute defaults), the indices, the bounds.
-* `createMeshMaterial(pipeline, rayTraced)` — one permanent material per SYSTEM (fallback textures,
-  opaque, `MATERIAL_FLAG_OCEAN` / `_TERRAIN` by pipeline, `NO_RAYTRACING` unless ray traced, BC5 flag
-  from the fallback normal's format — exactly what a container override produces).
+* `RenderMaterial::createForMesh(pipeline, rayTraced)` (below): one material per SYSTEM, shared by its meshes
+  (fallback textures, opaque, `MATERIAL_FLAG_OCEAN` / `_TERRAIN` by pipeline, `NO_RAYTRACING` unless ray traced, BC5 flag
+  from the fallback normal's format — exactly what a container override produces). Declare it before the nodes that draw it.
 * `createMesh(data, raytraced = true)` → a move-only RAII `RenderMesh`: the vertex/index uploads and ONE `MeshInfo`
   (through `addMeshInfos`, so the BLAS registers like any mesh). No LOD chain, no stream set. Offsets
   and counts are stored as 32-bit element units. `raytraced` false builds NO BLAS (`RayTracingScene`'s
@@ -115,10 +114,11 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
 * `spawnMeshNode(mesh, material, pipeline, transform)` → a plain `RenderNode` with one instance on a
   shared identity instance offset (`m_identityInstanceOffsetIdx`, created at the first spawn). The
   instance's alpha mode is the MATERIAL's (the TLAS writer's opacity flag reads it).
-* **WORLD TREE RECORDS** (`TreeRecordPool`, Data/; `resetTreeRecords` / `addTreeRecordChunk` / `removeTreeRecordChunk` /
+* **WORLD TREE RECORDS** (`TreeRecordPool`, Data/; the API types - `TreeRecordTypeGpu`, the ground layout, `TreeRecordStats` - in
+  `Public/TreeRecords.ixx`; `resetTreeRecords` / `addTreeRecordChunk` / `removeTreeRecordChunk` /
   `updateTreeRecords`, main thread after beginFrame; Procedural TreeWorld): every
-  terrain chunk's 4-byte tree records - right after its GROUND (`TREE_RECORD_HEIGHT_RES`² = 17² heights over the chunk,
-  16-bit above its minimum, `TREE_RECORD_HEIGHT_WORDS`; every chunk has one, trees or not) - in ONE fixed-size
+  terrain chunk's 4-byte tree records - right after its GROUND (`TREE_RECORD_GROUND_RES`² = 17² heights over the chunk,
+  16-bit above its minimum, `TREE_RECORD_GROUND_WORDS`; every chunk has one, trees or not) - in ONE fixed-size
   HOST-VISIBLE sequential-write pool (ReBAR when the device has it; `Trees/World/GPU pool (MB)`, 128; 64-record
   blocks, best-fit `IndexRangeFreeList` + a bump top) and a TABLE of the resident chunks (`TreeRecordChunkGpu`: coord,
   first, count; host-visible per frame slot, rewritten for the current slot when changed). **The pool never grows**: a
@@ -133,8 +133,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   diameter; `resetTreeRecords(bytes, ringRadius)`), indexed by the chunk coordinate & (mapSize - 1), holding the
   coordinate (checked) and its ground's pool word: any position -> its ground (`treeRecordGround`,
   tree_record.inc.glsl).
-* **BAKED TREE RECORDS** (`createTreeInstanceSet` / `renderTreeInstanceSet` / `destroyTreeInstanceSet`,
-  RendererTrees.cpp + `tree_cull.inc.glsl`): a SET of placed procedural tree pieces sharing a table of piece
+* **BAKED TREE RECORDS** (the `RenderTreeSet` handle - Public, move-only RAII; `create` / `render` / destroy, its bodies the
+  RendererState helpers `createTreeSet` / `renderTreeSet` / `destroyTreeSet` in RendererTrees.cpp - + `tree_cull.inc.glsl`;
+  its value types are nested: `Rep`, `Type`, `Piece`, `Range`, `ChunkDraw`): a SET of placed procedural tree pieces sharing a table of piece
   TYPES (bark / bark-fade / leaves / leaves-fade / billboard representations + the crossfade band), uploaded
   ONCE to DEVICE-LOCAL buffers (`TreeCullPieceGpu` 64 B: transform + band centre/radius + type;
   `TreeCullTypeGpu` 96 B, with the mid tier's records + distance / band and a `shadowDistance`: beyond it from
@@ -142,17 +143,17 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   bushes, a texel or less in the far cascades). Trees do not move, so nothing about them is written per frame: no render
   nodes, no stream entries, no pass of their own (**do not rewrite tree records into the host-visible stream per
   frame**: an expand pass that did cost ~7.5 ms of GPU). **A set is split into CHUNKS**
-  (`TreeInstanceChunk`: contiguous piece ranges - Procedural: one per terrain chunk).
-  * **DYNAMIC sets** (`createDynamicTreeInstanceSet(types, capacity)` / `addTreeInstanceChunk` /
-    `removeTreeInstanceChunk`, main after beginFrame; Procedural's world mode): the types fixed, a FIXED capacity of
+  (`RenderTreeSet::Range`: contiguous piece ranges - Procedural: one per terrain chunk).
+  * **DYNAMIC sets** (`RenderTreeSet::createDynamic(types, capacity)` / `addChunk` / `removeChunk`, main after beginFrame;
+    Procedural's world mode): the types fixed, a FIXED capacity of
     piece slots in blocks of 64 (no growth, no drain; a full set refuses the chunk), each chunk written once through
     the staging ring (`writeTreeChunk`: RT-capable first, bucket sizes, the volume's pieces); a removed chunk's slots
     are reused NUM_FRAMES_IN_FLIGHT frames later (its volume pieces go to the SENTINEL type at once - the volume types
     end with a res-0 one), its index from the next frame on. `m_treeSetMutex` covers the chunk table: main adds /
-    removes while the terrain walk lists (`renderTreeInstanceSet`). The far volume never splats a dynamic set: the
+    removes while the terrain walk lists (`render`). The far volume never splats a dynamic set: the
     world's trees reach it through their records (WORLD TREE RECORDS above).
-  * `bindTreeInstanceSet` (main, every frame) picks the set the recorded culls bind (a change re-records).
-    `renderTreeInstanceSet(set, chunks, scale, forceFar)` - **ANY THREAD**, once per frame between beginFrame and
+  * `bind()` (main, every frame) picks the set the recorded culls bind (a change re-records).
+    `render(chunks, scale, forceFar)` - **ANY THREAD**, once per frame between beginFrame and
     present (Procedural calls it from the terrain's render walk) - takes the frame's drawn chunks with their PASS bits,
     writes the frame slot's host-visible LIST (`piece | passMask << 28` per listed piece, binding 22 / 15 / 11 in the
     main cull / shadow culls / TLAS writer), claims ONE instance range (4 FIXED records per LISTED piece -
@@ -206,9 +207,9 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
   * **In the TLAS** (GI, RTAO, RT shadows, the ocean / film reflections): the TLAS slots are the stream outside the
     tree range + ONE per tree of the list's **RT SECTION** (`treeCullTlasInstance`, the section length a push
     constant; `u_present_giTlasNumInstances` = stream + section, and the TLAS capacity grows by that demand,
-    `m_giTlasDemand`). `createTreeInstanceSet` puts each chunk's RT-CAPABLE pieces first (a type whose RT
+    `m_giTlasDemand`). `writeTreeChunk` puts each chunk's RT-CAPABLE pieces first (a type whose RT
     representation has a BLAS - `RayTracingScene::hasStaticBlas`; bushes have none) with a sphere around them;
-    `renderTreeInstanceSet` lists those of the GI / shadow chunks whose sphere reaches into `Trees/RT range (m)`
+    `render` lists those of the GI / shadow chunks whose sphere reaches into `Trees/RT range (m)`
     FIRST, then everything else, which takes no TLAS slot. `gi_tlas_instances` (bindings 9 / 10 / 11) builds a tree's
     instance from the same static data with `treeCullRtPiece` - the billboard (a type without one: its leaves only),
     off beyond **`Trees/RT range (m)`** (default 600 m, `u_foliage_rtRange`, 0 = only "RT/TLAS Range") from the scene
@@ -219,23 +220,36 @@ path map per mesh. `RendererVK:RenderMesh` is the lean path (main thread):
     from the custom index when bit 23 is set (`rt_shadow.inc`, `gi_probe_trace`, `rtao`, `ocean.fs`,
     `terrain_film.fs`) - no extra binding anywhere. The geometry comes from the sbt-offset RT mesh index as for any
     instance; the billboards keep RTAO's mask 0x02.
-  * Destroying a set drains the GPU (rare: respawn / reload). Texture / mesh streaming notes are skipped: tree
-    textures are pinned and `RenderMesh`es never stream.
-* `createMeshLodChain(levels, errors)` — a GPU LOD chain (`addMeshLodGroup`) over `createMesh`'d meshes,
-  level 0 first, errors in mesh-local units (0 for level 0; nonzero → the screen-space-error selector).
-  `spawnMeshNode` on a chain's level 0 allocates the node's hysteresis slot itself, and the cull redirects
-  each instance like a container chain. `freeMeshLodChain` BEFORE destroying the meshes.
-* `createTextureMaterial(w, h, mips, alphaCutoff, name)` — a material with its OWN generated sRGB RGBA8
-  diffuse from a caller-built mip chain (`TextureManager::uploadRgba8Mips`; no blit-generated mips, so the
-  caller can keep alpha-test coverage per level). Its textures are named `<name>/albedo` and `<name>/normal`: the
-  VRAM view splits names on '/', so name a material `<group>/<item>` for one box per item. `ETextureEncoding` albedo /
-  normal (default Rgba8): BC1 / BC3 / BC5 when the caller compressed the levels itself (Procedural's trees,
-  `TextureManager::uploadMips`); a BC5 normal sets MATERIAL_FLAG_BC5_NORMAL. `alphaCutoff > 0` → `EAlphaMode::Mask`
-  with the cutoff in `opacity` (the Mask discard's threshold); draw it on `LitMasked`. An optional `normalMips` chain
-  uploads a LINEAR RGB tangent-space normal map (x along U, y along V); `extraFlags` adds material flags.
-  `deriveMaterial(src, flags)` copies a material sharing its textures (free with `releaseMaterial`, the slot only);
-  `get/setMaterialFlags` rewrite flags in place (no re-record). `destroyTextureMaterial` queues the textures' free and
-  releases the material slot. Used by the procedural tree leaf cards and bark.
+  * Destroying a set drains the GPU (rare: respawn / reload), so it must die before the meshes and materials its types
+    name. Texture / mesh streaming notes are skipped: tree textures are pinned and `RenderMesh`es never stream.
+  * `setTreeRecordTypes` takes the world set as a `const RenderTreeSet&` (a friend of its state reads the id).
+* **A `RenderMesh` with LOD levels:** `createMesh(levels, errors, raytraced)` - level 0 first, at most MAX_MESH_LODS (the
+  levels end at the first empty one), errors in mesh-local units (0 for level 0; nonzero → the screen-space-error selector).
+  Every level goes into ONE vertex range and ONE index range, with one MeshInfo per level at its own offsets (level k is
+  `m_meshIdx + k`); 2+ levels also register the GPU LOD chain (`addMeshLodGroup`, `m_lodGroup`). The one-level `createMesh`
+  is the same call with one level. `spawnMeshNode` places level 0 and allocates the node's hysteresis slot for a mesh with a
+  chain; the cull redirects each instance like a container chain. `destroy` frees the chain first, then the ranges and the
+  MeshInfos (Procedural's rocks: `Variant::mesh`).
+  * Each raytraced level gets its own BLAS, and `addMeshLodGroup` aliases every level to the "RT/BLAS LOD level" one,
+    as for a container chain: the other levels' BLASes are built and unused.
+* **Materials and bare textures are their own API, not the Renderer's: `RenderMaterial` / `RenderTexture`** (Public,
+  move-only RAII like `RenderMesh`; the bodies are RendererState helpers, `addMeshMaterial` / `addTextureMaterial` / ...).
+  * `RenderMaterial::createTextured(TextureDesc)` — a material with its OWN generated sRGB diffuse from a caller-built mip
+    chain (`TextureManager::uploadMips`; no blit-generated mips, so the caller can keep alpha-test coverage per level).
+    `TextureDesc` names every input: `width` / `height`, `albedoMips`, the optional `normalMips` (a LINEAR RGB
+    tangent-space normal map, x along U, y along V), `albedoEncoding` / `normalEncoding` (`ETextureEncoding`, default Rgba8:
+    BC1 / BC3 / BC5 when the caller compressed the levels itself - Procedural's trees; a BC5 normal sets
+    MATERIAL_FLAG_BC5_NORMAL), `alphaCutoff` (> 0 → `EAlphaMode::Mask` with the cutoff in `opacity`; draw it on
+    `LitMasked`), `extraFlags`, `debugName` (its textures are `<name>/albedo` and `<name>/normal`: the VRAM view splits
+    names on '/', so name a material `<group>/<item>` for one box per item).
+  * `RenderMaterial::derive(srcIndex, flags)` copies a material (any index: the solid-colour tint too) sharing its textures
+    (the procedural tree leaf cards and bark fades).
+  * `RenderTexture::create(w, h, mips, name)` — a bare bindless texture (sRGB RGBA8).
+  * `index()` is what `spawnMeshNode`, `RenderTreeSet::Rep` and the GPU structs take. Destroying a material frees its slot,
+    and a textured one also queues its textures' free (retired once the GPU has drained); a mesh or derived material frees
+    the slot only. So **a derived material dies before its source** (declare it after), and every node drawing a material
+    before it. `getFlags` / `setFlags` rewrite the flags in place (no re-record). `RenderMaterial::getOrCreateSolidColor`
+    is a plain index: cached, shared, never freed.
 * `~RenderMesh` frees the ranges and neutralizes the `MeshInfo` slot (`freeMeshInfoRange`), like
   `removeObjectContainer` for an unstreamed mesh. **Destroy its nodes first** (owners declare the
   mesh before the node).
@@ -374,7 +388,7 @@ step.** All foliage values live in `Globals::settings.foliage` (`FoliageParams`,
 
 ### Per-entity tint
 
-`getOrCreateSolidColorMaterial(color)` mints a material whose diffuse is a 1×1 solid-colour texture,
+`RenderMaterial::getOrCreateSolidColor(color)` mints a material whose diffuse is a 1×1 solid-colour texture,
 **cached per quantized colour so repeat calls are free.** Pass the index to
 `RenderNode::setMaterialOverride`.
 

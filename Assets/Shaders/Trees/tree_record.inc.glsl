@@ -33,12 +33,12 @@ uint treeRecordSeed(uint worldSeed, ivec2 chunk, uint record)
 }
 
 #ifdef TREE_RECORD_GROUND
-// THE GROUND the records' trees stand on (they carry no height): each chunk's TREE_RECORD_HEIGHT_RES^2 heights, corners
-// included, right before its records in the pool, found through the CHUNK MAP. MIRRORS TreeRecordPool.ixx (TreeRecordMapGpu,
-// the height encoding). The includer enables GL_EXT_buffer_reference and GL_EXT_scalar_block_layout.
+// THE GROUND the records' trees stand on (they carry no height): each chunk's TREE_RECORD_GROUND_RES^2 heights, corners
+// included, right before its records in the pool, found through the CHUNK MAP. MIRRORS TreeRecordPool.ixx (TreeRecordMapGpu)
+// and TreeRecords.ixx (the ground encoding). The includer enables GL_EXT_buffer_reference and GL_EXT_scalar_block_layout.
 // Pool layout per chunk ground: word 0 = min height, word 1 = height step (both float bits), then the heights as 16-bit steps,
 // two per word (low half = the even index).
-#define TREE_RECORD_HEIGHT_RES 17u
+#define TREE_RECORD_GROUND_RES 17u
 
 struct TreeRecordMapEntry
 {
@@ -50,7 +50,7 @@ layout (buffer_reference, scalar, buffer_reference_align = 4) readonly buffer Tr
 
 float treeRecordGridHeight(TreeRecordWords words, uint base, uvec2 g, float minH, float step)
 {
-    const uint k = g.x + g.y * TREE_RECORD_HEIGHT_RES;
+    const uint k = g.x + g.y * TREE_RECORD_GROUND_RES;
     const uint word = words.w[base + 2u + k / 2u];
     return minH + float((k & 1u) != 0u ? word >> 16u : word & 0xFFFFu) * step;
 }
@@ -67,7 +67,7 @@ bool treeRecordGround(TreeRecordWords words, TreeRecordMap map, uint mapSize, fl
     if (entry.coord != chunk)
         return false;
 
-    const float last = float(TREE_RECORD_HEIGHT_RES - 1u);
+    const float last = float(TREE_RECORD_GROUND_RES - 1u);
     const vec2 g = clamp((xz - vec2(chunk) * chunkSize) / chunkSize * last, vec2(0.0), vec2(last - 1e-3));
     const uvec2 i0 = uvec2(g);
     const vec2 f = g - vec2(i0);

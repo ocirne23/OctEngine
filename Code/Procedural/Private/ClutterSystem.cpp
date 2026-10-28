@@ -99,11 +99,6 @@ namespace Procedural
 	{
 		Globals::jobSystem.wait(m_genCounter);
 		Globals::jobSystem.wait(m_floorCounter);
-		for (const Type& type : m_types)
-			if (type.texture != UINT16_MAX)
-				Globals::rendererVK.releaseTexture(type.texture);
-		for (uint16 texture : m_retiredTextures)
-			Globals::rendererVK.releaseTexture(texture);
 	}
 
 	void ClutterSystem::initialize()
@@ -131,9 +126,9 @@ namespace Procedural
 			m_settings.reload = false;
 			m_remesh = false;
 			Globals::jobSystem.wait(m_genCounter); // the jobs write into m_types
-			for (const Type& type : m_types)
-				if (type.texture != UINT16_MAX)
-					m_retiredTextures.push_back(type.texture);
+			for (Type& type : m_types)
+				if (type.texture.isValid())
+					m_retiredTextures.push_back(oc::move(type.texture));
 			m_types.clear();
 			loadTypes();
 			kickGeneration();
@@ -216,7 +211,7 @@ namespace Procedural
 				// The flower's texture (a frond, a petal, an ear): once per load (the mesh resolution does not change it).
 				uint32 size = 0;
 				oc::vector<uint8> level0;
-				if (type.texture == UINT16_MAX && generateClutterTexture(type.desc, size, level0))
+				if (!type.texture.isValid() && generateClutterTexture(type.desc, size, level0))
 					buildLeafClusterMips(level0, size, type.image);
 				m_genInFlight.fetch_sub(1, oc::memory_order_release);
 			}, { "Clutter generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
@@ -263,7 +258,7 @@ namespace Procedural
 				oc::vector<oc::span<uint8>> mips;
 				for (oc::vector<uint8>& level : type.image.mips)
 					mips.push_back(oc::span<uint8>(level.data(), level.size()));
-				type.texture = renderer.createTexture(type.image.size, type.image.size, mips, oc::format("Clutter/{}", type.desc.name).c_str());
+				type.texture = RenderTexture::create(type.image.size, type.image.size, mips, oc::format("Clutter/{}", type.desc.name).c_str());
 				type.image = {};
 			}
 			for (const ClutterPlacementDesc& placement : type.desc.placements)
@@ -273,14 +268,12 @@ namespace Procedural
 					Log::warning(oc::format("Clutter: more than {} placement blocks - '{}' is cut short", CLUTTER_MAX_TYPES, type.desc.name));
 					break;
 				}
-				types.push_back(gpuType(type.desc, placement, firstMesh, numMeshes, type.texture));
+				types.push_back(gpuType(type.desc, placement, firstMesh, numMeshes, type.texture.index()));
 			}
 			flowers += flower ? 1 : 0;
 		}
 		renderer.setClutterAssets(types, meshes);
-		for (uint16 texture : m_retiredTextures)
-			renderer.releaseTexture(texture);
-		m_retiredTextures.clear();
+		m_retiredTextures.clear(); // the GPU types no longer name them
 		Log::info(oc::format("Clutter: {} types ({} flowers), {} placement rules, {} meshes", m_types.size(), flowers, types.size(), meshes.size()));
 	}
 

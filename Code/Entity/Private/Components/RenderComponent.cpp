@@ -19,7 +19,7 @@ void RenderComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfo
     else
         node = info.container->spawnNodeForIdx(info.nodeIdx, world);
     if (node.isValid() && info.color.x >= 0.0f) // authored tint: flat solid-color material override
-        node.setMaterialOverride(Globals::rendererVK.getOrCreateSolidColorMaterial(info.color));
+        node.setMaterialOverride(RenderMaterial::getOrCreateSolidColor(info.color));
     // The spatial registration is the ENTITY's (Entity::create, after every component spawned).
 }
 

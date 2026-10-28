@@ -204,9 +204,7 @@ namespace ocstl = std;
 
 export namespace oc
 {
-    // ---- allocation ------------------------------------------------------------------------
-    // Global new/delete already route through Globals::allocator, so the default allocator is
-    // tracked and attributed by the MemoryTracker like everything else.
+    // ---- allocation (global new/delete route through Globals::allocator: the default allocator is tracked by the MemoryTracker) ----
 #ifdef OC_EASTL
     // EASTL never rebinds an allocator: one object serves all of a container's blocks (its nodes, a
     // hash table's bucket array) in raw bytes. This one is element-typed anyway, so EVERY block of a
@@ -274,7 +272,7 @@ export namespace oc
 #endif
     }
 
-    // ---- comparators, hashing, traits ------------------------------------------------------
+    // ---- comparators, hashing, traits ----
     template<typename T = void> using less = ocstl::less<T>;
     template<typename T = void> using greater = ocstl::greater<T>;
     template<typename T = void> using equal_to = ocstl::equal_to<T>;
@@ -285,7 +283,7 @@ export namespace oc
     // parameter), and this one is a trait over raw char buffers -- it does not care who owns them.
     template<typename T> using char_traits = std::char_traits<T>;
 
-    // ---- value types -----------------------------------------------------------------------
+    // ---- value types ----
     template<typename T1, typename T2> using pair = ocstl::pair<T1, T2>;
     template<typename... Ts> using tuple = ocstl::tuple<Ts...>;
     template<typename T> using optional = ocstl::optional<T>;
@@ -301,7 +299,7 @@ export namespace oc
     using ocstl::make_tuple;
     using ocstl::tie;
 
-    // ---- strings ---------------------------------------------------------------------------
+    // ---- strings ----
     using string = ocstl::string;
     using wstring = ocstl::wstring;
     using u8string = ocstl::u8string;
@@ -309,7 +307,7 @@ export namespace oc
     using ocstl::to_wstring;
     using ocstl::getline; // std::getline, or the eastl shim above
 
-    // ---- views (non-owning, never allocate) ------------------------------------------------
+    // ---- views (non-owning, never allocate) ----
     using string_view = ocstl::string_view;
     using wstring_view = ocstl::wstring_view;
     using u8string_view = ocstl::u8string_view;
@@ -330,20 +328,20 @@ export namespace oc
         return span<const std::byte>(reinterpret_cast<const std::byte*>(source.data()), source.size() * sizeof(T));
     }
 
-    // ---- sequence containers ---------------------------------------------------------------
+    // ---- sequence containers ----
     template<typename T, typename Alloc = allocator<T>> using vector = ocstl::vector<T, Alloc>;
     template<typename T, size_t N> using array = ocstl::array<T, N>;
     template<typename T, typename Alloc = allocator<T>> using deque = ocstl::deque<T, Alloc>;
     template<typename T, typename Alloc = allocator<T>> using list = ocstl::list<T, Alloc>;
     template<size_t N> using bitset = ocstl::bitset<N>;
 
-    // ---- container adaptors ----------------------------------------------------------------
+    // ---- container adaptors ----
     template<typename T, typename Container = deque<T>> using queue = ocstl::queue<T, Container>;
     template<typename T, typename Container = deque<T>> using stack = ocstl::stack<T, Container>;
     template<typename T, typename Container = vector<T>, typename Compare = less<typename Container::value_type>>
     using priority_queue = ocstl::priority_queue<T, Container, Compare>;
 
-    // ---- associative containers ------------------------------------------------------------
+    // ---- associative containers ----
     template<typename K, typename V, typename Compare = less<K>, typename Alloc = allocator<pair<const K, V>>>
     using map = ocstl::map<K, V, Compare, Alloc>;
     template<typename K, typename V, typename Compare = less<K>, typename Alloc = allocator<pair<const K, V>>>
@@ -363,7 +361,7 @@ export namespace oc
     template<typename K, typename Hash = hash<K>, typename Eq = equal_to<K>, typename Alloc = allocator<K>>
     using unordered_multiset = ocstl::unordered_multiset<K, Hash, Eq, Alloc>;
 
-    // ---- smart pointers --------------------------------------------------------------------
+    // ---- smart pointers ----
     template<typename T> using default_delete = ocstl::default_delete<T>;
     template<typename T, typename Deleter = default_delete<T>> using unique_ptr = ocstl::unique_ptr<T, Deleter>;
     template<typename T> using shared_ptr = ocstl::shared_ptr<T>;
@@ -402,14 +400,14 @@ export namespace oc
     using ocstl::const_pointer_cast;
     using ocstl::addressof;
 
-    // ---- callables -------------------------------------------------------------------------
+    // ---- callables ----
     template<typename Sig> using function = ocstl::function<Sig>;
     template<typename T> using reference_wrapper = ocstl::reference_wrapper<T>;
     using ocstl::ref;
     using ocstl::cref;
     using ocstl::invoke;
 
-    // ---- atomics ---------------------------------------------------------------------------
+    // ---- atomics ----
     // std in BOTH backings, deliberately. An atomic is not a container: it allocates nothing and is
     // a thin wrapper over compiler intrinsics, so there is nothing to swap. EASTL's atomic is also a
     // strict subset -- no atomic_ref, no C++20 wait/notify (the JobSystem's eventcount and JobMutex
@@ -428,7 +426,7 @@ export namespace oc
     using std::atomic_thread_fence;
     using std::atomic_signal_fence;
 
-    // ---- utilities -------------------------------------------------------------------------
+    // ---- utilities ----
     using ocstl::move;
     using ocstl::forward;
     using ocstl::swap;
@@ -449,7 +447,7 @@ export namespace oc
     using ocstl::size;
     using ocstl::data;
 
-    // ---- algorithms ------------------------------------------------------------------------
+    // ---- algorithms ----
     using ocstl::sort;
     using ocstl::stable_sort;
     using ocstl::partial_sort;
@@ -503,7 +501,7 @@ export namespace oc
         return text.size() >= suffix.size() && string_view(text.data() + text.size() - suffix.size(), suffix.size()) == suffix;
     }
 
-    // ---- std interop -----------------------------------------------------------------------
+    // ---- std interop ----
     // Under the EASTL backing oc::string stops BEING std::string, but the std facilities the engine
     // kept (iostreams, format) and every third-party API that speaks std::string still have to be
     // fed. These two are the sanctioned crossing; they are a no-op copy under the std backing, so

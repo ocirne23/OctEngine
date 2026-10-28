@@ -323,7 +323,7 @@ void GameMatch::spawnWorld()
                   "is crawling with scattered enemies to clear as you expand");
 }
 
-// ---- the frame ---------------------------------------------------------------------------------
+// ---- the frame ----
 
 // Pre-physics, before the spatial/begin-frame kicks - ONLY the player body writes (see Match.ixx).
 void GameMatch::updatePlayer(float deltaSec)
@@ -552,7 +552,7 @@ void GameMatch::update(float deltaSec)
     submitWorldLabels(deltaSec); // the tick's mutations are done: the labels job may read the structures now
 }
 
-// ---- the nav feed ------------------------------------------------------------------------------
+// ---- the nav feed ----
 
 // The nav feed rides the post-update batch: everything it reads is stable once the entity pass is
 // done (rosters change only on main during the tick, positions are the pass's output), and the
@@ -693,7 +693,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     }
 }
 
-// ---- the player ticks --------------------------------------------------------------------------
+// ---- the player ticks ----
 
 void GameMatch::tickPlayerMelee(float deltaSec)
 {
@@ -780,7 +780,7 @@ void GameMatch::tickMedicHealing(float deltaSec)
     // query per powered station, banked into the unit's heal inbox. Nothing to do here.)
 }
 
-// ---- the HUD and the windowed frame ------------------------------------------------------------
+// ---- the HUD and the windowed frame ----
 
 void GameMatch::updateHud()
 {

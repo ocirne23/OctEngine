@@ -128,7 +128,7 @@ void GameMatch::loadGame(oc::string_view path)
     }
 }
 
-// ---- the profiling scenario --------------------------------------------------------------------
+// ---- the profiling scenario ----
 
 bool GameMatch::runScenario(oc::string_view savePath)
 {

@@ -237,8 +237,8 @@ rock FOLLOWS THE GROUND, it does not stand upright. Input: the terrain height at
 
 `Rocks/Enabled` (default on) loads every type (name-sorted) and generates its variants - one Low job each, in the
 BACKGROUND (`m_genInFlight` polled per frame: a synchronous generation stalls main for seconds in Debug) - then, once
-all are done, uploads every level and registers each variant's GPU LOD chain (`Renderer::createMeshLodChain`, when it
-has 2+ levels; freed before its meshes). Disabling frees everything (an enable re-reads the files).
+all are done, uploads each variant as ONE `RenderMesh` with its levels (`Variant::mesh`; with 2+
+levels its GPU LOD chain too). Disabling frees everything (an enable re-reads the files).
 
 `Show preview` (default off) spawns one ROW per type in front of the camera, one rock per variant (random scale in
 the type's range, random yaw, on the ground by `groundTransform`; `Seed`, `Spacing`), as plain `RenderNode`s on the

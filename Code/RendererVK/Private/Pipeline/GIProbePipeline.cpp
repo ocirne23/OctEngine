@@ -98,13 +98,6 @@ glm::vec3 GIProbePipeline::getPriorityParams() const
 }
 
 bool GIProbePipeline::isDebugEnabled() const { return Globals::settings.gi.debugEnabled; }
-void GIProbePipeline::toggleDebug() { Globals::settings.gi.debugEnabled = !Globals::settings.gi.debugEnabled; }
-
-void GIProbePipeline::cycleDebugMode()
-{
-    Globals::settings.gi.debugMode = (Globals::settings.gi.debugMode + 1) % 5;
-    Tweak::notifyChanged(Globals::settings.gi.debugMode);
-}
 
 float GIProbePipeline::getStrength() const { return Globals::settings.gi.strength; }
 

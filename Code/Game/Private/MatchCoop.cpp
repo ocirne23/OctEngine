@@ -12,9 +12,7 @@ import :Match;
 import :Structures;
 import :Npc;
 
-// ---- CO-OP director -------------------------------------------------------------------------
-// Waves, the spawn trickle, the ambient scatter and its wander - authority only (clients never
-// spawn). See the Match.ixx CO-OP section for the state.
+// ---- CO-OP director: waves, the spawn trickle, the ambient scatter and its wander - authority only (the state: Match.ixx CO-OP) ----
 
 // Wave ARCHETYPES: every wave rolls ONE recipe - a named mix of up to 4 unit types - gated by the
 // wave index so early waves stay simple and the heavy stuff unlocks over time. Single-type rushes
@@ -441,7 +439,7 @@ void GameMatch::tickAmbientWander(float deltaSec)
     }
 }
 
-// ---- the trickle's save state --------------------------------------------------------------
+// ---- the trickle's save state ----
 
 // The PENDING TRICKLE: a wave is sized in points at queueWave and the bodies materialize over the
 // following frames (tickCoopSpawns, "Spawns per frame"). Saving mid-wave used to drop everything

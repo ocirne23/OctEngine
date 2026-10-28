@@ -63,7 +63,7 @@ public:
     // IO entry points so the policy still covers them.
     static void assertIoThread(bool allowMainThread = false);
 
-    // ---- reads / writes -----------------------------------------------------------------------
+    // ---- reads / writes ----
 
     static oc::string readFileStr(const oc::string& path, bool allowMainThread = false);
     static bool readFileBytes(const oc::string& path, oc::vector<uint8>& out, bool allowMainThread = false);
@@ -71,7 +71,7 @@ public:
     static bool writeFileStr(const oc::string& path, const oc::string& content, bool allowMainThread = false);
     static bool writeFileBytes(const oc::string& path, oc::span<const uint8> data, bool allowMainThread = false);
 
-    // ---- queries + mutations (all touch the disk) ---------------------------------------------
+    // ---- queries + mutations (all touch the disk) ----
 
     static bool exists(const oc::string& path, bool allowMainThread = false);
     static bool isDirectory(const oc::string& path, bool allowMainThread = false);
@@ -120,7 +120,7 @@ public:
     static oc::string relativePath(const oc::string& path, const oc::string& base = oc::string(),
         bool allowMainThread = false);
 
-    // ---- pure PATH math (no disk access, callable anywhere) -----------------------------------
+    // ---- pure PATH math (no disk access, callable anywhere) ----
 
     static oc::string join(oc::string_view a, oc::string_view b);
     static oc::string parentPath(oc::string_view path);
@@ -136,7 +136,7 @@ public:
     static bool isAbsolute(oc::string_view path);
     static bool pathEquals(oc::string_view a, oc::string_view b); // separator- and case-insensitive (Windows)
 
-    // ---- packs --------------------------------------------------------------------------------
+    // ---- packs ----
 
     // Mounts a .dat pack. A higher priority wins; the disk has DISK_PRIORITY_DEFAULT, so the default puts the pack
     // above the loose files, and a negative one makes it the fallback below them. Equal priorities: the later

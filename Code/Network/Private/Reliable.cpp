@@ -369,7 +369,7 @@ uint32 NetHost::getQueuedReliable(NetPeerId id, uint8 channel) const
     return channel < peer.sendChannels.size() ? uint32(peer.sendChannels[channel].window.size()) : 0;
 }
 
-// ---- handshake ----------------------------------------------------------------------------------
+// ---- handshake ----
 
 uint64 NetHost::challengeSaltFor(const NetAddress& address, uint64 clientSalt, uint8 flags) const
 {
@@ -668,7 +668,7 @@ void NetHost::handlePacket(const NetAddress& from, oc::span<const uint8> bytes)
     }
 }
 
-// ---- payload ------------------------------------------------------------------------------------
+// ---- payload ----
 
 void NetHost::handlePayload(NetPeer& peer, NetPeerId id, oc::span<const uint8> bytes)
 {
@@ -1031,7 +1031,7 @@ void NetHost::flushPeer(NetPeer& peer)
         sendPacket(); // empty payload = ack/keepalive
 }
 
-// ---- plumbing -----------------------------------------------------------------------------------
+// ---- plumbing ----
 
 void NetHost::sendRaw(const NetAddress& to, oc::span<const uint8> bytes, bool bypassSim)
 {

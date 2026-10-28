@@ -154,13 +154,13 @@ namespace
     float terrainFilmFlowMinSlopeRad(const TerrainSettings& w) { return glm::radians(glm::clamp(w.wetFilmFlowMinSlope, 0.0f, 80.0f)); }
 }
 
-float Renderer::grassPatchSize() const
+float RendererState::grassPatchSize() const
 {
     return glm::clamp(m_grassParams.patchSize, 1.0f, 16.0f);
 }
 
 // Capped so the patch grid fits GRASS_MAX_PATCHES.
-float Renderer::grassGridRange() const
+float RendererState::grassGridRange() const
 {
     const uint32 maxHalf = (uint32)std::sqrt((float)RendererVKLayout::GRASS_MAX_PATCHES) / 2u - 1u; // (2 half + 1)^2 patches
     return glm::min(m_grassParams.range, grassPatchSize() * (float)maxHalf);
@@ -182,7 +182,7 @@ float Renderer::grassGridRange() const
 // the returned frustum) are contractually valid once beginFrame's job is joined.
 // "Sky/Sun cycle": the time of day advances on the SIM clock (the pause holds the sun) x the speed, wraps at 24 h, and
 // sets the sun direction - every frame while on, so a dragged time or latitude shows at once even at speed 0.
-void Renderer::advanceSunCycle()
+void RendererState::advanceSunCycle()
 {
     SkyParams& s = m_skyParams;
     if (!s.sunCycle)
@@ -195,7 +195,7 @@ void Renderer::advanceSunCycle()
     s.sunDirection = sunCycleDirection(s.timeOfDay, s.dayOfYear, s.latitude);
 }
 
-void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
+void RendererState::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
 {
     ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
     m_uboFrameIndex = m_frameCounter;
@@ -226,7 +226,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
 // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the weather volumes'
 // streaks are motion blur relative to the eye. A teleport (first frame, scene load) reads as zero rather than one huge
 // streak.
-void Renderer::buildUboWeather(const Camera& camera)
+void RendererState::buildUboWeather(const Camera& camera)
 {
     const float dt = (float)Globals::time.getDeltaSec();
     m_cameraVelocity = glm::vec3(0.0f);
@@ -246,7 +246,7 @@ void Renderer::buildUboWeather(const Camera& camera)
 // volume still shelters it; the XZ footprint is padded 25 % over the box (one-frame lag behind the camera-following
 // emitter). Standard Z, plain bottom row: the ray-query pass (RainOcclusionPipeline, through its inverse) and the
 // particle sim's shelter test both read it verbatim. Off without RT (no TLAS to trace).
-Renderer::RainOcclusionView Renderer::rainOcclusionView() const
+RendererState::RainOcclusionView RendererState::rainOcclusionView() const
 {
     const ParticleParams& particles = m_particles.getParams();
     const ParticleState::RainVolume& v = m_particles.getRainVolume();
@@ -265,17 +265,17 @@ Renderer::RainOcclusionView Renderer::rainOcclusionView() const
 // GI's per-frame state: the full-bake flag is a one-frame request (takeVisibilityParams), and the previous focus
 // advances only while GI traces, so probes that scrolled in during a GI-off spell still read as fresh (full replace) on
 // the first traced frame.
-void Renderer::buildUboRayTracing()
+void RendererState::buildUboRayTracing()
 {
     const bool giOn = m_rtParams.enabled && m_rtParams.giEnabled;
     m_giFullBake = m_giProbePipeline.takeVisibilityParams(giOn).y;
     m_giUboPrevFocus = m_giPrevFocusPos;
     if (giOn)
-        m_giPrevFocusPos = sceneFocusOrCamera();
+        m_giPrevFocusPos = self().sceneFocusOrCamera();
 }
 
 // THE NEAR GRASS CASCADE's frame state (m_grassNear): its matrix, centre and range come out of one calculation.
-void Renderer::buildUboGrass(const Camera& camera)
+void RendererState::buildUboGrass(const Camera& camera)
 {
     const GrassParams& g = m_grassParams;
 
@@ -365,7 +365,7 @@ void Renderer::buildUboGrass(const Camera& camera)
 
 // View matrices, frustum, and TAA jitter: the center (culling) view and the VR eye views (m_views, which keep last
 // frame's mvps for the reprojection). Sets m_centerViewProj + m_centerFrustum + m_taaJitter.
-void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
+void RendererState::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
 {
     // The jitter is one RENDER pixel (the scene renders through m_renderRect; == m_viewportRect unless upscaling).
     const glm::ivec2 renderSize = m_renderRect.getSize();
@@ -442,7 +442,7 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
 // integer number of times per weather tile, so ONE wrap of (camera + wind) by the weather period keeps
 // every texture continuous and the shader's noise coordinates small at any camera position. The wind
 // and the detail drift accumulate here in double on the SIM clock (they stop with the global pause).
-void Renderer::buildUboClouds(const Camera& camera)
+void RendererState::buildUboClouds(const Camera& camera)
 {
     const CloudParams& c = m_cloudParams;
 
@@ -513,7 +513,7 @@ void Renderer::buildUboClouds(const Camera& camera)
 
 // Sun shadow route: the PCSS cascade matrices (also consumed CPU-side via getSunCascadeViewProj) unless RT sun
 // shadows replace them (then the last ones stay), and their penumbra scale.
-void Renderer::buildUboSunShadow(const Camera& camera)
+void RendererState::buildUboSunShadow(const Camera& camera)
 {
     // Use the effective flag: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
     if (rtSunShadowActive(m_rtParams))
@@ -557,7 +557,7 @@ void Renderer::buildUboSunShadow(const Camera& camera)
 
 // The force fields' SAMPLED SHELL TIER bake box (m_forceBakeMin / InvSize: one fit, two results) and the bake's
 // on / off (ForceFieldState::setShellBakeActive).
-void Renderer::buildUboForce()
+void RendererState::buildUboForce()
 {
     const ForceFieldParams& force = m_force.getParams();
 
@@ -589,9 +589,9 @@ void Renderer::buildUboForce()
     // resolution. Outside the clipped fit the volume reads border black, but that boundary lies
     // outside the view by construction. A ray that misses the band (camera looking up: the
     // free-fly editor camera) leaves the union unclipped.
-    if (bakeLo.x <= bakeHi.x && force.shellVolumeViewMargin > 0.0f && !isVrEnabled())
+    if (bakeLo.x <= bakeHi.x && force.shellVolumeViewMargin > 0.0f && !self().isVrEnabled())
     {
-        const glm::mat4 invViewProj = glm::inverse(getCenterViewProj());
+        const glm::mat4 invViewProj = glm::inverse(self().getCenterViewProj());
         glm::vec2 footLo(FLT_MAX), footHi(-FLT_MAX);
         bool valid = true;
         for (int c = 0; c < 4 && valid; ++c)
@@ -646,7 +646,7 @@ void Renderer::buildUboForce()
 }
 
 // The terrain wetness clipmap's tick (m_wetTick), and the splat textures reported to the mip streamer.
-void Renderer::buildUboTerrain()
+void RendererState::buildUboTerrain()
 {
     // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
     // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
@@ -659,7 +659,7 @@ void Renderer::buildUboTerrain()
     // the R16F image's representable step at high fps and rounded away, so wetness depended on the
     // framerate. Between ticks the pass is skipped and the reader keeps the last tick's layer + origin.
     // SIM delta (frozen by the global pause, like the particles), capped so a hitch cannot dry the map.
-    m_wetTick = m_terrain.advanceWetness(oc::min((float)Globals::time.getSimDeltaSec(), 0.25f), sceneFocusOrCamera());
+    m_wetTick = m_terrain.advanceWetness(oc::min((float)Globals::time.getSimDeltaSec(), 0.25f), self().sceneFocusOrCamera());
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
     // never sees them - report them here instead: terrain tiles them across the whole view, so they can
     // always display roughly a screen's worth of texels.
@@ -678,7 +678,7 @@ void Renderer::buildUboTerrain()
 // oceanWorldScaled), so they cannot drift. The live values' frame state is the buildUbo* steps' (buildFrameUbo).
 // Registered once (registerUboLocks); the lambdas run every build and capture references to Globals::settings members or
 // `this`.
-void Renderer::registerUboValues(UboBlock& list)
+void RendererState::registerUboValues(UboBlock& list)
 {
     using namespace RendererVKLayout;
     // Live values several sections derive from: the swash run-up reach (from the wave-amplitude readback) and the
@@ -709,7 +709,7 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("frameIndex", [this] { return m_uboFrameIndex; }, UboLive);    // monotonic (RNG / temporal rotation)
         list.add("timeSeconds", [this] { return m_frameTime; }, UboLive);       // SIM time (s): stops with the global pause
         list.add("mipPixelScale", [this] { return m_mipPixelScale; }, UboLive); // px per (size / distance): the LOD metric
-        list.add("sceneFocus", [this] { return sceneFocusOrCamera(); }, UboLive); // every distance-based quality falloff measures from it
+        list.add("sceneFocus", [this] { return self().sceneFocusOrCamera(); }, UboLive); // every distance-based quality falloff measures from it
     }
     {
         // ---- Sky ("Sky")
@@ -1004,8 +1004,8 @@ void Renderer::registerUboValues(UboBlock& list)
         // "Underwater wave offset" x the deepest live wave trough, down: a higher sea needs a lower boundary.
         list.add("fog_boundaryOffset", [this, &f] { return -glm::max(f.underwaterWaveOffset, 0.0f) * m_oceanSimPipeline.getWaveTrough(); }, UboLive);
         // The underwater metres ride "Ocean/World scale": lengths x s, the per-metre depth fade / s.
-        list.add("fog_causticDepthFade", [this, &f] { return glm::max(f.causticDepthFade, 0.0f) / getOceanWorldScale(); }, UboLive);
-        list.add("fog_causticShoreFade", [this, &f] { return glm::max(f.causticShoreFade, 0.01f) * getOceanWorldScale(); }, UboLive); // the tweak min
+        list.add("fog_causticDepthFade", [this, &f] { return glm::max(f.causticDepthFade, 0.0f) / self().getOceanWorldScale(); }, UboLive);
+        list.add("fog_causticShoreFade", [this, &f] { return glm::max(f.causticShoreFade, 0.01f) * self().getOceanWorldScale(); }, UboLive); // the tweak min
         // The underwater sun path (underwater_light.inc.glsl): xy = the sun's XZ per metre of depth, z = 1 / its elevation,
         // floored at 0.08 (a grazing sun caps the path-length blow-up).
         list.add("fog_causticSunStep", []
@@ -1169,14 +1169,14 @@ void Renderer::registerUboValues(UboBlock& list)
         list.add("ocean_foamDetail", [&] { return glm::max(o.foamDetail, 0.0f); }, o.foamDetail);
         list.add("ocean_foamFineWaves", [&] { return glm::clamp(o.foamFineWaves, 0.0f, 1.0f); }, o.foamFineWaves);
         list.add("ocean_bubbleBlur", [ws] { return glm::max(ws().bubbleBlur, 0.0f); }, o.bubbleBlur, o.worldScale);
-        list.add("ocean_sprayRate", [this, &spray] { const float s = getOceanWorldScale(); return glm::max(spray.rate, 0.0f) / (s * s); }, spray.rate, o.worldScale);
-        list.add("ocean_sprayRadius", [this, &spray] { return glm::max(spray.radius * getOceanWorldScale(), 1.0f); }, spray.radius, o.worldScale);
+        list.add("ocean_sprayRate", [this, &spray] { const float s = self().getOceanWorldScale(); return glm::max(spray.rate, 0.0f) / (s * s); }, spray.rate, o.worldScale);
+        list.add("ocean_sprayRadius", [this, &spray] { return glm::max(spray.radius * self().getOceanWorldScale(), 1.0f); }, spray.radius, o.worldScale);
         list.add("ocean_sprayThreshold", [&] { return glm::clamp(spray.threshold, 0.0f, 0.99f); }, spray.threshold);
-        list.add("ocean_sprayKick", [this, &spray] { return glm::max(spray.kick, 0.0f) * getOceanWorldScale(); }, spray.kick, o.worldScale);
-        list.add("ocean_spraySpeed", [this, &spray] { return glm::max(spray.speed, 0.0f) * getOceanWorldScale(); }, spray.speed, o.worldScale);
-        list.add("ocean_sprayForward", [this, &spray] { return spray.forward * getOceanWorldScale(); }, spray.forward, o.worldScale);
-        list.add("ocean_sprayHeight", [this, &spray] { return spray.height * getOceanWorldScale(); }, spray.height, o.worldScale);
-        list.add("ocean_worldScale", [this] { return getOceanWorldScale(); }, o.worldScale);
+        list.add("ocean_sprayKick", [this, &spray] { return glm::max(spray.kick, 0.0f) * self().getOceanWorldScale(); }, spray.kick, o.worldScale);
+        list.add("ocean_spraySpeed", [this, &spray] { return glm::max(spray.speed, 0.0f) * self().getOceanWorldScale(); }, spray.speed, o.worldScale);
+        list.add("ocean_sprayForward", [this, &spray] { return spray.forward * self().getOceanWorldScale(); }, spray.forward, o.worldScale);
+        list.add("ocean_sprayHeight", [this, &spray] { return spray.height * self().getOceanWorldScale(); }, spray.height, o.worldScale);
+        list.add("ocean_worldScale", [this] { return self().getOceanWorldScale(); }, o.worldScale);
     }
     {
         // ---- Terrain (all live): the streamer, the baked height map, the splat material set, the wetness tick (m_wetTick)

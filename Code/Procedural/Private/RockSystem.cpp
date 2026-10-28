@@ -26,10 +26,10 @@ namespace
 	using namespace Procedural;
 
 	// Raytraced: the LOD chain shares ONE BLAS (RendererVK "RT/BLAS LOD level"), so RT shadows, GI and RTAO see the rock.
-	RenderMesh uploadRockMesh(Renderer& renderer, const RockMesh& mesh, const char* name)
+	void buildRockMeshData(const RockMesh& mesh, const char* name, RenderMeshData& out)
 	{
 		if (mesh.indices.empty())
-			return {};
+			return; // an empty level: createMesh's levels end here
 		MeshGeometryDesc geometry;
 		geometry.positions = mesh.positions.data();
 		geometry.normals = mesh.normals.data();
@@ -40,9 +40,7 @@ namespace
 		geometry.indices = mesh.indices.data();
 		geometry.numIndices = (uint32)mesh.indices.size();
 		geometry.name = name;
-		RenderMeshData data;
-		data.build(geometry);
-		return renderer.createMesh(data, true);
+		out.build(geometry);
 	}
 
 	constexpr uint32 BARK_TEXTURE_SIZE = 1024; // TreeSystem's generated textures
@@ -141,10 +139,7 @@ namespace Procedural
 	void RockSystem::clearAll()
 	{
 		clearMeshes();
-		for (const Type& type : m_types)
-			if (type.ownMaterial != UINT16_MAX)
-				Globals::rendererVK.destroyTextureMaterial(type.ownMaterial);
-		m_types.clear();
+		m_types.clear(); // their own materials too
 	}
 
 	void RockSystem::clearMeshes()
@@ -162,9 +157,6 @@ namespace Procedural
 		m_nodes.clear();
 		for (Type& type : m_types)
 		{
-			for (const Variant& variant : type.variants)
-				if (variant.chain != UINT32_MAX)
-					Globals::rendererVK.freeMeshLodChain(variant.chain); // before its meshes
 			const size_t count = type.variants.size();
 			type.variants.clear(); // the meshes
 			type.variants.resize(count);
@@ -295,7 +287,7 @@ namespace Procedural
 				}, { "Rock generate", EProfileCategory::Procedural }, EJobPriority::Low, &m_genCounter);
 			}
 			// A wood type's bark texture (writes only the type's bark fields; the variant jobs write their variants).
-			if (m_types[t].desc.surface == ERockSurface::Wood && m_types[t].ownMaterial == UINT16_MAX)
+			if (m_types[t].desc.surface == ERockSurface::Wood && !m_types[t].ownMaterial.isValid())
 			{
 				m_genInFlight.fetch_add(1, oc::memory_order_relaxed);
 				Globals::jobSystem.submit([this, t]
@@ -315,51 +307,62 @@ namespace Procedural
 		Globals::jobSystem.wait(m_genCounter); // every job has decremented; this only retires the counter
 		m_generating = false;
 
-		m_material = renderer.getOrCreateSolidColorMaterial(glm::vec3(0.42f, 0.40f, 0.38f));
+		m_material = RenderMaterial::getOrCreateSolidColor(glm::vec3(0.42f, 0.40f, 0.38f));
 		for (Type& type : m_types)
 		{
 			// DEAD WOOD's material: the bark its job loaded. GI and the RT hits sample the same texture: wood-coloured
 			// bounce light.
-			if (type.ownMaterial == UINT16_MAX && type.barkSize > 0)
+			if (!type.ownMaterial.isValid() && type.barkSize > 0)
 			{
 				oc::vector<oc::span<uint8>> albedoMips, normalMips;
 				for (oc::vector<uint8>& level : type.barkAlbedo)
 					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : type.barkNormal)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				type.ownMaterial = renderer.createTextureMaterial(type.barkSize, type.barkSize, albedoMips, 0.0f,
-					oc::format("Rocks/{}", type.desc.name).c_str(), &normalMips, 0u, Renderer::ETextureEncoding::BC1, Renderer::ETextureEncoding::BC5);
+				const oc::string name = oc::format("Rocks/{}", type.desc.name);
+				RenderMaterial::TextureDesc desc;
+				desc.width = desc.height = type.barkSize;
+				desc.albedoMips = &albedoMips;
+				desc.normalMips = &normalMips;
+				desc.albedoEncoding = RenderMaterial::ETextureEncoding::BC1;
+				desc.normalEncoding = RenderMaterial::ETextureEncoding::BC5;
+				desc.debugName = name.c_str();
+				type.ownMaterial = RenderMaterial::createTextured(desc);
 				type.barkAlbedo = {};
 				type.barkNormal = {};
 			}
 			// A CACTUS's: its two colours as a 1 x 2 texture (sRGB: linear on fetch) - the skin in row 0, the spines in
 			// row 1. The hits sample it at the mesh's v (3 + ribs / 100: the skin, mostly).
-			if (type.ownMaterial == UINT16_MAX && type.desc.surface == ERockSurface::Cactus)
+			if (!type.ownMaterial.isValid() && type.desc.surface == ERockSurface::Cactus)
 			{
 				const auto byte = [](float v) { return (uint8)(glm::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
 				const glm::vec3 a = type.desc.color, b = type.desc.color2;
 				uint8 texels[8] = { byte(a.x), byte(a.y), byte(a.z), 255, byte(b.x), byte(b.y), byte(b.z), 255 };
 				const oc::vector<oc::span<uint8>> mips{ oc::span<uint8>(texels, 8) };
-				type.ownMaterial = renderer.createTextureMaterial(1, 2, mips, 0.0f, oc::format("Rocks/{}", type.desc.name).c_str());
+				const oc::string name = oc::format("Rocks/{}", type.desc.name);
+				RenderMaterial::TextureDesc desc;
+				desc.width = 1;
+				desc.height = 2;
+				desc.albedoMips = &mips;
+				desc.debugName = name.c_str();
+				type.ownMaterial = RenderMaterial::createTextured(desc);
 				type.ownAlbedo = glm::mix(glm::pow(a, glm::vec3(2.2f)), glm::pow(b, glm::vec3(2.2f)), 0.08f);
 			}
 			size_t triangles[ROCK_MAX_LODS] = {};
 			for (Variant& variant : type.variants)
 			{
-				const RenderMesh* levels[ROCK_MAX_LODS] = {};
+				RenderMeshData data[ROCK_MAX_LODS];
+				const RenderMeshData* levels[ROCK_MAX_LODS] = {};
 				uint32 numLevels = 0;
-				for (uint32 k = 0; k < variant.data.lodCount; ++k)
+				for (uint32 k = 0; k < variant.data.lodCount && !variant.data.lods[k].indices.empty(); ++k)
 				{
-					variant.lods[k] = uploadRockMesh(renderer, variant.data.lods[k], "Rock");
-					if (!variant.lods[k].isValid())
-						break;
-					levels[numLevels++] = &variant.lods[k];
+					buildRockMeshData(variant.data.lods[k], "Rock", data[k]);
+					levels[numLevels++] = &data[k];
 					triangles[k] += variant.data.lods[k].indices.size() / 3;
 				}
-				// The GPU LOD chain (the cull picks each instance's level by its screen-space error).
-				if (numLevels >= 2)
-					variant.chain = renderer.createMeshLodChain(oc::span<const RenderMesh* const>(levels, numLevels),
-						oc::span<const float>(variant.data.lodError, numLevels));
+				// With 2+ levels the GPU LOD chain too (the cull picks each instance's level by its screen-space error).
+				variant.mesh = renderer.createMesh(oc::span<const RenderMeshData* const>(levels, numLevels),
+					oc::span<const float>(variant.data.lodError, numLevels), true);
 			}
 			const size_t n = glm::max(type.variants.size(), (size_t)1);
 			Log::info(oc::format("Rocks: '{}' - {} variants, triangles per variant per LOD: {} / {} / {} / {}",
@@ -376,12 +379,12 @@ namespace Procedural
 			world.sink = type.desc.sink;
 			world.align = type.desc.align;
 			world.footprint = rockFootprint(type.desc).flat;
-			world.ownColour = type.ownMaterial != UINT16_MAX;
-			world.material = world.ownColour ? type.ownMaterial : m_material;
+			world.ownColour = type.ownMaterial.isValid();
+			world.material = world.ownColour ? type.ownMaterial.index() : m_material;
 			world.ownAlbedo = type.ownAlbedo; // the far volume's colour
 			for (const Variant& variant : type.variants)
 			{
-				if (!variant.lods[0].isValid())
+				if (!variant.mesh.isValid())
 					continue;
 				glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
 				for (const glm::vec3& p : variant.data.lods[0].positions)
@@ -389,7 +392,7 @@ namespace Procedural
 					lo = glm::min(lo, p);
 					hi = glm::max(hi, p);
 				}
-				world.variants.push_back({ &variant.lods[0], (lo + hi) * 0.5f, glm::length(hi - lo) * 0.5f, variant.data.height,
+				world.variants.push_back({ &variant.mesh,(lo + hi) * 0.5f, glm::length(hi - lo) * 0.5f, variant.data.height,
 					variant.data.density.empty() ? nullptr : variant.data.density.data(), variant.data.densityMin, variant.data.densityMax });
 			}
 			if (!world.variants.empty())
@@ -429,7 +432,7 @@ namespace Procedural
 			for (uint32 v = 0; v < (uint32)type.variants.size(); ++v)
 			{
 				const Variant& variant = type.variants[v];
-				if (!variant.lods[0].isValid())
+				if (!variant.mesh.isValid())
 					continue;
 				const uint32 seed = treeHash(treeHash((uint32)m_settings.seed, t), v);
 				const float scale = glm::mix(type.desc.scale.x, type.desc.scale.y, treeHash01(treeHash(seed, 1u)));
@@ -439,8 +442,8 @@ namespace Procedural
 				const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
 					groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
 				// Level 0: the cull redirects the instance to its LOD through the chain.
-				const bool ownColours = type.ownMaterial != UINT16_MAX && pipeline == RendererVKLayout::EPipelineIndex::LitRock;
-				m_nodes.push_back(renderer.spawnMeshNode(variant.lods[0], ownColours ? type.ownMaterial : m_material, pipeline,
+				const bool ownColours = type.ownMaterial.isValid() && pipeline == RendererVKLayout::EPipelineIndex::LitRock;
+				m_nodes.push_back(renderer.spawnMeshNode(variant.mesh,ownColours ? type.ownMaterial.index() : m_material, pipeline,
 					groundTransform(p, ground, r, scale, variant.data.height, type.desc.sink, type.desc.align, yaw)));
 			}
 			rowOffset += cell * 0.5f;

@@ -50,7 +50,7 @@ export namespace Procedural
 			// A flower's texture (ClutterTexture: a fern's frond, a radial petal, a grain's ear): the chain from the job,
 			// uploaded and freed in finishGeneration.
 			TreeLeafTexture image;
-			uint16 texture = UINT16_MAX; // the renderer's u_textures index
+			RenderTexture texture; // its index() is the renderer's u_textures index
 		};
 		// What a floor map bake reads: a copy of the records under the map and what their types mean.
 		struct FloorRecords
@@ -81,7 +81,7 @@ export namespace Procedural
 		oc::vector<Type> m_types;
 		// The textures of the types a reload dropped: the renderer's GPU types still use them until the next
 		// setClutterAssets, so they are freed after it.
-		oc::vector<uint16> m_retiredTextures;
+		oc::vector<RenderTexture> m_retiredTextures;
 		oc::atomic<int32> m_genInFlight{ 0 };
 		JobCounter m_genCounter;
 

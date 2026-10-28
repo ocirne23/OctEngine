@@ -221,7 +221,7 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
 
 Procedural's `RiverSystem` ([Rivers.md](../Procedural/Rivers.md)) builds ONE `RenderMesh` per river unit - a ribbon per
 perennial segment at the carved water surface and a quad per lake row run at the lake's level - on the River
-pipeline's one material (`createMeshMaterial(River, false)`: not in the TLAS), main pass only (`PASS_MAIN`), pushed
+pipeline's one material (`RenderMaterial::createForMesh(River, false)`: not in the TLAS), main pass only (`PASS_MAIN`), pushed
 every frame like the ocean sectors. **The ocean is NOT extended for inland water** (a user decision): the river has its
 own shaders, `River/river.vs.glsl` + `river.fs.glsl`, whose shading follows `ocean.fs.glsl` without the waves. **The
 scene side is SHARED** through `Ocean/water_scene.inc.glsl` (the common bindings, the BRDF terms, the sky lookups,
@@ -332,7 +332,7 @@ rules** - a boulder under a sandstone cliff is that sandstone.
   set is registered: plain grey stone.
 * **The pipeline**: a variant like the terrain's (opaque, back-face culled, static: the motion target stays masked).
   `isLitCoreFragment` in `buildPipelineLayout` gives it the lit core's baked defines (`LIT_RT_*`, the debug modes).
-* **Meshes**: a regular LOD chain per shape (`createMeshLodChain`; the culls pick the level per instance), raytraced
+* **Meshes**: a regular LOD chain per shape (a `RenderMesh` with LOD levels; the culls pick the level per instance), raytraced
   through the chain's one BLAS. **No tessellation** (a user decision).
 * **In the tree instance set** (the world's rocks): see "BAKED TREE RECORDS" ([Scene.md](Scene.md)) - a rock record
   gets the LOD pick and no wind.

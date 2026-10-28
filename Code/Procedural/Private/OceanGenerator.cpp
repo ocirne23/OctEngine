@@ -68,8 +68,8 @@ namespace Procedural
 
 		m_gridDirty = false;
 		retireGrid(); // release the previous grid first (nodes before their meshes); its memory waits
-		if (m_material == UINT16_MAX)
-			m_material = Globals::rendererVK.createMeshMaterial(RendererVKLayout::EPipelineIndex::Ocean, false); // the animated surface isn't in the TLAS
+		if (!m_material.isValid())
+			m_material = RenderMaterial::createForMesh(RendererVKLayout::EPipelineIndex::Ocean, false); // the animated surface isn't in the TLAS
 
 		// Geometry clipmap: ring 0 is a full NxN-cell grid at m_settings.ringCell; each outer ring is a square
 		// annulus at double the cell size whose hole is the previous ring's coverage. Per vertex, the
@@ -120,7 +120,7 @@ namespace Procedural
 			{
 				Sector& s = m_sectors.emplace_back();
 				s.mesh = oc::move(mesh);
-				s.node = Globals::rendererVK.spawnMeshNode(s.mesh, m_material, RendererVKLayout::EPipelineIndex::Ocean,
+				s.node = Globals::rendererVK.spawnMeshNode(s.mesh, m_material.index(), RendererVKLayout::EPipelineIndex::Ocean,
 					Transform(glm::vec3(0.0f, m_seaLevel, 0.0f), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
 				s.node.setPassMask(RendererVKLayout::PASS_MAIN);
 				const Sphere& bounds = s.mesh.getBounds(); // the AABB's centre + half diagonal

@@ -220,14 +220,14 @@ public:
 		return *this;
 	}
 
-	// ---- Iteration --------------------------------------------------------------------------
+	// ---- Iteration ----
 
 	iterator begin() { return iterator(m_slots.data(), endSlot()); }
 	iterator end()   { return iterator(endSlot(), endSlot()); }
 	const_iterator begin() const { return const_iterator(m_slots.data(), endSlot()); }
 	const_iterator end()   const { return const_iterator(endSlot(), endSlot()); }
 
-	// ---- Capacity ---------------------------------------------------------------------------
+	// ---- Capacity ----
 
 	bool empty() const { return m_size == 0; }
 	size_t size() const { return m_size; }
@@ -244,7 +244,7 @@ public:
 			rehash(newCapacity);
 	}
 
-	// ---- Modifiers --------------------------------------------------------------------------
+	// ---- Modifiers ----
 
 	void clear()
 	{
@@ -364,7 +364,7 @@ public:
 		oc::swap(m_tombstones, other.m_tombstones);
 	}
 
-	// ---- Lookup -----------------------------------------------------------------------------
+	// ---- Lookup ----
 
 	// Returns the first entry matching 'key' encountered along its probe sequence, or end() if
 	// there is no match. If duplicate keys are present, use equalRange() to reach the others.

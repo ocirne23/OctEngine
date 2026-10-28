@@ -121,7 +121,7 @@ export namespace Procedural
 	{
 		RockShape shape;
 		// The mesh LOD chain, level 0 first; lodError = each level's deviation from the full surface in rock-local
-		// units (0 for level 0) - RendererVK's screen-space-error selector (Renderer::createMeshLodChain).
+		// units (0 for level 0) - RendererVK's screen-space-error selector (Renderer::createMesh with levels).
 		RockMesh lods[ROCK_MAX_LODS];
 		float lodError[ROCK_MAX_LODS] = {};
 		uint32 lodCount = 0;

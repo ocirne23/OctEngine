@@ -637,7 +637,7 @@ namespace
 	}
 
 	// The LOD levels meshPiece builds: LEVEL 0 ONLY - the trees switch through their own tiers (mid tier, billboard, far
-	// volume) and upload no mesh LOD chains (TreeSystem uploadLodChain). Levels 1.. stay empty; PIECE_LODS keeps their
+	// volume) and upload no mesh LOD chains (TreeSystem uploadLevelZero). Levels 1.. stay empty; PIECE_LODS keeps their
 	// specs should mesh LODs come back.
 	constexpr uint32 MESHED_LODS = 1;
 

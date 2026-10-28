@@ -206,7 +206,7 @@ public:
 		m_snapshots[slot] = readValue(stored); // taken AFTER the override/saved apply: not a "change", so nothing saves back
 	}
 
-	// ---- Listeners (see TweakListener) ------------------------------------------------------
+	// ---- Listeners (see TweakListener) ----
 	// Attaches fn to the row whose variable holds `address` (the data, or a Color3's intensity). Main thread. Returns
 	// false when no registered row holds it.
 	bool addListener(const void* address, const void* owner, oc::function<void()> fn)
@@ -257,7 +257,7 @@ public:
 		return nullptr;
 	}
 
-	// ---- Locks (see TweakLock) ------------------------------------------------------------
+	// ---- Locks (see TweakLock) ----
 	static constexpr uint32 c_noLock = UINT32_MAX;
 
 	// Returns the lock's id; it starts in lockedByDefault. Re-registering a name replaces its categories and callback
@@ -532,7 +532,7 @@ public:
 	ETweakFlags defaultFlags() const { return m_defaultFlags; }
 	void setDefaultFlags(ETweakFlags flags) { m_defaultFlags = flags; }
 
-	// ---- Saved --------------------------------------------------------------------------
+	// ---- Saved ----
 	// Core sits BELOW the File library, so it cannot touch the disk itself: main() installs these
 	// two hooks (FileSystem::readFileStr / writeFileStr) before loadSaved(). Without them the
 	// Saved flag is simply inert - the registry keeps working in-memory.
@@ -608,7 +608,7 @@ public:
 			saveFile();
 	}
 
-	// ---- Synced (transport-agnostic; NetworkManager is the consumer) ----------------------
+	// ---- Synced (transport-agnostic; NetworkManager is the consumer) ----
 	uint32 syncGeneration() const { return m_syncGeneration; }
 
 	// Every Synced var as self-contained records, split into chunks that each fit one network
@@ -904,7 +904,7 @@ private:
 	WriteFileFn m_writeFile;
 };
 
-// ---- Convenience registration helpers --------------------------------------------------
+// ---- Convenience registration helpers ----
 // Pass a string range of "0-inf" by using FLT_MAX as the max (renders as a drag instead of a slider).
 // Every helper takes optional flags LAST (after onChange - pass {} for onChange when only flags are
 // wanted); to flag a whole registerTweaks() block, put one Tweak::ScopedFlags at its top instead.

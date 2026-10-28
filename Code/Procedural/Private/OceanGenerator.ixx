@@ -180,6 +180,7 @@ export namespace Procedural
 			                     // which held until "Choppiness" pushed vertices further sideways than the
 			                     // spare diagonal, and sectors started dropping with their crests on screen.
 		};
+		RenderMaterial m_material; // shared by every sector (created at the first grid); declared before the sectors that draw it
 		oc::vector<Sector> m_sectors;
 		bool sectorDry(const Sector& s, float px, float pz, glm::vec2 camXZ, float meshRadius, float wetNeed) const;
 		// A replaced / released grid: nodes, meshes and culling entries released at once, the vector (so
@@ -187,7 +188,6 @@ export namespace Procedural
 		struct RetiredGrid { uint32 generation; oc::vector<Sector> sectors; };
 		oc::vector<RetiredGrid> m_retiredGrids;
 		void retireGrid();
-		uint16 m_material = UINT16_MAX;  // shared by every sector (created at the first grid)
 
 		// The render job (see render / joinRender). Its outputs (the wave extents, m_dispTile,
 		// m_cameraSurfaceY) are stored to the renderer in joinRender.

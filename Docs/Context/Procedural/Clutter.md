@@ -131,7 +131,7 @@ smaller spikelets, three long, nearly parallel awns each - a silky brush), `Pani
 arching pedicels, one spikelet hanging from each end; Awns 0, PetalWidth x 5 = its width per HeadSize). R = shading,
 G = a mask toward Color2 (the awns, a fern's rachis), A = cover. Made on the type's generation job with
 TreeLeafTexture's coverage-preserving mips (`buildLeafClusterMips`), uploaded in `finishGeneration`
-(`Renderer::createTexture`), released after the next `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
+(`RenderTexture::create`), released after the next `setClutterAssets` on a reload. Reed, Tuft, Rosette and Leafy
 have none; `PetalShape None` turns a Radial / Umbel / Spike / Bell texture off.
 
 **THE RIVER DATA ON THE GROUND** (TerrainGenerator; the terrain vertex's UV, which the terrain does not use as UV):

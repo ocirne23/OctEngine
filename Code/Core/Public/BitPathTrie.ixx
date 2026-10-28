@@ -264,7 +264,7 @@ export namespace oc
         bool m_hasUpper = false;                                    // any inserted path has uppercase; otherwise no case stream is written
     };
 
-    // ---- Implementation: pathTrieDetail ----------------------------------------------------------------------------
+    // ---- Implementation: pathTrieDetail ----
 
     namespace pathTrieDetail
     {
@@ -504,7 +504,7 @@ export namespace oc
         }
     }
 
-    // ---- Implementation: BitmapPathTrieView ------------------------------------------------------------------------
+    // ---- Implementation: BitmapPathTrieView ----
 
     inline BitmapPathTrieView::BitmapPathTrieView(const BitmapPathTrieStorage& source)
         : m_storage(source)
@@ -1138,7 +1138,7 @@ export namespace oc
             collectStats(childIndex, depth + 1, oc::tzcnt(mask) == 0, out);
     }
 
-    // ---- Implementation: BitmapPathTrie ----------------------------------------------------------------------------
+    // ---- Implementation: BitmapPathTrie ----
 
     inline bool BitmapPathTrie::insert(oc::string_view path, uint32 id)
     {

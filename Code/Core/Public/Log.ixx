@@ -20,7 +20,7 @@ export namespace Log
 
 	constexpr uint32 MaxMessages = 4096;
 
-	// ---- storage ------------------------------------------------------------
+	// ---- storage ----
 
 	namespace detail
 	{
@@ -29,7 +29,7 @@ export namespace Log
 		inline uint32                  g_revision = 0;   // incremented on every add
 	}
 
-	// ---- write API ----------------------------------------------------------
+	// ---- write API ----
 
 	inline void log(Level level, oc::string_view text)
 	{
@@ -47,7 +47,7 @@ export namespace Log
 	inline void warning(oc::string_view text) { log(Level::Warning, text); }
 	inline void error  (oc::string_view text) { log(Level::Error,   text); }
 
-	// ---- read API (call from UI thread only) --------------------------------
+	// ---- read API (call from UI thread only) ----
 
 	// Returns a snapshot copy and the current revision number.
 	inline uint32 getRevision()

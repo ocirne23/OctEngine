@@ -51,15 +51,12 @@ namespace
 
 	size_t numTriangles(const TreeMesh& mesh) { return mesh.indices.size() / 3; }
 
-	// Uploads LEVEL 0 only, no GPU LOD chain: trees switch representation through their own tiers (mid tier, billboard,
-	// far volume), and the mesh LOD steps underneath popped visibly (fewer, larger leaf cards per level, no crossfade).
-	// The generator still builds every level (the bakes read level 0); outMeshes[1..] stay empty, outChain none.
-	void uploadLodChain(Renderer& renderer, const TreeMesh (&levels)[TREE_PIECE_LODS], const float (&errors)[TREE_PIECE_LODS],
-		RenderMesh (&outMeshes)[TREE_PIECE_LODS], uint32& outChain, bool raytraced)
+	// Uploads LEVEL 0 only, no GPU LOD chain (a one-level RenderMesh): trees switch representation through their own tiers
+	// (mid tier, billboard, far volume), and the mesh LOD steps underneath popped visibly (fewer, larger leaf cards per
+	// level, no crossfade). The generator still builds every level (the bakes read level 0); outMeshes[1..] stay empty.
+	void uploadLevelZero(Renderer& renderer, const TreeMesh (&levels)[TREE_PIECE_LODS], RenderMesh (&outMeshes)[TREE_PIECE_LODS], bool raytraced)
 	{
-		(void)errors;
 		outMeshes[0] = uploadTreeMesh(renderer, levels[0], raytraced);
-		outChain = UINT32_MAX;
 	}
 
 	// Species textures are generated ONCE into Assets/Local/Trees/Textures (<species>_bark.png, _bark_normal.png,
@@ -164,28 +161,39 @@ namespace
 			out.spans.push_back(oc::span<uint8>(level.data(), level.size()));
 	}
 
-	// createTextureMaterial with the chains BC-compressed when `compress` (the albedo / normal format each), else RGBA8.
-	uint16 createTreeMaterial(Renderer& renderer, bool compress, uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& albedo,
+	// RenderMaterial::createTextured with the chains BC-compressed when `compress` (the albedo / normal format each), else RGBA8.
+	RenderMaterial createTreeMaterial(bool compress, uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& albedo,
 		TextureConvert::EBlockFormat albedoFormat, const oc::vector<oc::span<uint8>>* normal, TextureConvert::EBlockFormat normalFormat,
 		float alphaCutoff, const char* debugName, uint32 extraFlags)
 	{
+		RenderMaterial::TextureDesc desc;
+		desc.width = width;
+		desc.height = height;
+		desc.albedoMips = &albedo;
+		desc.normalMips = normal;
+		desc.alphaCutoff = alphaCutoff;
+		desc.extraFlags = extraFlags;
+		desc.debugName = debugName;
 		if (!compress)
-			return renderer.createTextureMaterial(width, height, albedo, alphaCutoff, debugName, normal, extraFlags);
+			return RenderMaterial::createTextured(desc);
 		auto encoding = [](TextureConvert::EBlockFormat format)
 		{
 			switch (format)
 			{
-			case TextureConvert::EBlockFormat::BC1: return Renderer::ETextureEncoding::BC1;
-			case TextureConvert::EBlockFormat::BC3: return Renderer::ETextureEncoding::BC3;
-			default:                                return Renderer::ETextureEncoding::BC5;
+			case TextureConvert::EBlockFormat::BC1: return RenderMaterial::ETextureEncoding::BC1;
+			case TextureConvert::EBlockFormat::BC3: return RenderMaterial::ETextureEncoding::BC3;
+			default:                                return RenderMaterial::ETextureEncoding::BC5;
 			}
 		};
 		EncodedChain albedoBc, normalBc;
 		encodeChain(albedo, width, height, albedoFormat, albedoBc);
 		if (normal)
 			encodeChain(*normal, width, height, normalFormat, normalBc);
-		return renderer.createTextureMaterial(width, height, albedoBc.spans, alphaCutoff, debugName, normal ? &normalBc.spans : nullptr,
-			extraFlags, encoding(albedoFormat), encoding(normalFormat));
+		desc.albedoMips = &albedoBc.spans;
+		desc.normalMips = normal ? &normalBc.spans : nullptr;
+		desc.albedoEncoding = encoding(albedoFormat);
+		desc.normalEncoding = encoding(normalFormat);
+		return RenderMaterial::createTextured(desc);
 	}
 
 	void saveImage(const oc::string& path, uint32 size, const oc::vector<uint8>& rgba)
@@ -223,33 +231,7 @@ namespace Procedural
 	{
 		destroyTreeSet();
 		m_pieces.clear();
-		for (const Species& species : m_species)
-		{
-			for (const oc::vector<PieceMeshes>* pieces : { &species.trunkMeshes, &species.moduleMeshes, &species.variantMeshes })
-				for (const PieceMeshes& meshes : *pieces)
-				{
-					for (uint32 chain : { meshes.barkChain, meshes.leafChain, meshes.trunkChain, meshes.branchChain })
-						if (chain != UINT32_MAX)
-							Globals::rendererVK.freeMeshLodChain(chain);
-					if (meshes.billboardMaterial != UINT16_MAX)
-						Globals::rendererVK.destroyTextureMaterial(meshes.billboardMaterial);
-				}
-			if (species.barkFadeMaterial != UINT16_MAX)
-				Globals::rendererVK.releaseMaterial(species.barkFadeMaterial); // derived: textures stay with the source
-			if (species.leafFadeMaterial != UINT16_MAX)
-				Globals::rendererVK.releaseMaterial(species.leafFadeMaterial);
-			// The mid tier's derived materials first (the card ones share the atlas' textures), then the atlas.
-			for (uint16 mid : { species.leafMidFadeMaterial, species.branchMidFadeMaterial, species.cardInMaterial, species.cardOutMaterial })
-				if (mid != UINT16_MAX)
-					Globals::rendererVK.releaseMaterial(mid);
-			if (species.cardAtlasMaterial != UINT16_MAX)
-				Globals::rendererVK.destroyTextureMaterial(species.cardAtlasMaterial);
-			if (species.ownsLeafMaterial)
-				Globals::rendererVK.destroyTextureMaterial(species.leafMaterial);
-			if (species.ownsBarkMaterial)
-				Globals::rendererVK.destroyTextureMaterial(species.barkMaterial);
-		}
-		m_species.clear();
+		m_species.clear(); // the meshes and the materials (Species: the derived ones before their sources)
 	}
 
 	void TreeSystem::destroyTreeSet()
@@ -261,7 +243,7 @@ namespace Procedural
 		if (m_recordTypesSet)
 		{
 			m_world.joinPool(); // the pool job writes the same record pool
-			Globals::rendererVK.setTreeRecordTypes({}, 256.0f, 1, UINT32_MAX);
+			Globals::rendererVK.setTreeRecordTypes({}, 256.0f, 1, RenderTreeSet());
 		}
 		m_recordTypesSet = false;
 		// Unhook from the terrain first: setVegetation joins its walk, the last caller of the sink.
@@ -270,9 +252,7 @@ namespace Procedural
 		m_vegHooked = false;
 		m_vegChunkOf.clear();
 		m_vegNumChunks = 0;
-		if (m_treeSet != UINT32_MAX)
-			Globals::rendererVK.destroyTreeInstanceSet(m_treeSet);
-		m_treeSet = UINT32_MAX;
+		m_treeSet.destroy();
 		m_setHasRocks = false;
 	}
 
@@ -282,31 +262,31 @@ namespace Procedural
 			| RendererVKLayout::MATERIAL_FLAG_FADE_IN;
 		for (Species& species : m_species)
 		{
-			if (species.barkFadeMaterial == UINT16_MAX)
+			if (!species.barkFadeMaterial.isValid())
 				continue;
+			// Sets a material's fade band, keeping its other flags; an invalid material (none) is skipped.
+			auto setFade = [&](RenderMaterial& material, uint32 fade)
+			{
+				if (material.isValid())
+					material.setFlags((material.getFlags() & ~FADE_BITS) | fade);
+			};
 			const float width = species.desc.billboardFadeWidth;
 			const float start = glm::max(species.desc.billboardDistance * m_settings.farDistanceScale - width * 0.5f, 0.0f);
 			const uint32 fadeOut = RendererVKLayout::makeDistanceFadeFlags(start, width, false);
 			const uint32 fadeIn = RendererVKLayout::makeDistanceFadeFlags(start, width, true);
-			for (uint16 material : { species.barkFadeMaterial, species.leafFadeMaterial })
-				renderer.setMaterialFlags(material, (renderer.getMaterialFlags(material) & ~FADE_BITS) | fadeOut);
+			setFade(species.barkFadeMaterial, fadeOut);
+			setFade(species.leafFadeMaterial, fadeOut);
 			// Force far draws the billboards at every distance: no fade-in then, or they would vanish nearby.
 			const uint32 billboardFade = m_settings.forceFar ? 0u : fadeIn;
-			for (const oc::vector<PieceMeshes>* pieces : { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes })
-				for (const PieceMeshes& meshes : *pieces)
-					if (meshes.billboardMaterial != UINT16_MAX)
-						renderer.setMaterialFlags(meshes.billboardMaterial, (renderer.getMaterialFlags(meshes.billboardMaterial) & ~FADE_BITS) | billboardFade);
+			for (oc::vector<PieceMeshes>* pieces : { &species.moduleMeshes, &species.trunkMeshes, &species.variantMeshes })
+				for (PieceMeshes& meshes : *pieces)
+					setFade(meshes.billboardMaterial, billboardFade);
 			// The MID tier: the leaves and the branch bark fade OUT and the card mesh IN over the mid band; the card mesh
 			// fades OUT over the far band with the trunk (barkFadeMaterial) while the billboard fades in
 			// (tree_cull.inc.glsl picks the side per tree).
-			if (species.leafMidFadeMaterial == UINT16_MAX)
+			if (!species.leafMidFadeMaterial.isValid())
 				continue;
 			const float midStart = glm::max(midDistance(species) * m_settings.farDistanceScale - width * 0.5f, 0.0f);
-			auto setFade = [&](uint16 material, uint32 fade)
-			{
-				if (material != UINT16_MAX)
-					renderer.setMaterialFlags(material, (renderer.getMaterialFlags(material) & ~FADE_BITS) | fade);
-			};
 			setFade(species.leafMidFadeMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, false));
 			setFade(species.branchMidFadeMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, false));
 			setFade(species.cardInMaterial, RendererVKLayout::makeDistanceFadeFlags(midStart, width, true));
@@ -406,9 +386,9 @@ namespace Procedural
 		// the chunks (the sink, spawnPreview); without it - terrain off, or no walk this frame - every chunk draws.
 		m_sinkDistanceScale.store(m_settings.farDistanceScale, oc::memory_order_relaxed);
 		m_sinkForceFar.store(m_settings.forceFar, oc::memory_order_relaxed);
-		if (m_treeSet != UINT32_MAX)
+		if (m_treeSet.isValid())
 		{
-			renderer.bindTreeInstanceSet(m_treeSet);
+			m_treeSet.bind();
 			if (!m_vegHooked || !Globals::terrain.vegetationRouted() || respawned)
 			{
 				// Every chunk of the set (a dynamic set: the live ones).
@@ -419,16 +399,9 @@ namespace Procedural
 				else
 					for (uint32 c = 0; c < glm::max(m_vegNumChunks, 1u); ++c)
 						m_vegFallback.push_back({ c, RendererVKLayout::PASS_ALL });
-				renderer.renderTreeInstanceSet(m_treeSet, m_vegFallback, m_settings.farDistanceScale, m_settings.forceFar);
+				m_treeSet.render(m_vegFallback, m_settings.farDistanceScale, m_settings.forceFar);
 			}
 		}
-		// The far-tree volume lays its cells out by the camera's height above the ground under it.
-		if (maps)
-		{
-			const FileSystem::AllowMainThreadIO cameraGroundIo; // the tile under the camera (TerrainStreamer read it already)
-			renderer.setFarTreeCameraGround(maps->sampleHeight(camera.position.x, camera.position.z));
-		}
-
 		// The CPU path (GPU expansion off): per piece, its billboard crossfade (see PlacedPiece); without a far
 		// representation (Far mode None) the meshes alone.
 		constexpr uint32 SHADOW_AND_GI = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
@@ -538,12 +511,12 @@ namespace Procedural
 				out.resize(pieces.size());
 				for (size_t i = 0; i < pieces.size(); ++i)
 				{
-					uploadLodChain(renderer, pieces[i].bark, pieces[i].lodError, out[i].bark, out[i].barkChain, meshesRaytraced);
-					uploadLodChain(renderer, pieces[i].leaves, pieces[i].lodError, out[i].leaves, out[i].leafChain, meshesRaytraced);
+					uploadLevelZero(renderer, pieces[i].bark, out[i].bark, meshesRaytraced);
+					uploadLevelZero(renderer, pieces[i].leaves, out[i].leaves, meshesRaytraced);
 					// Baked variants: the bark split as well (the mid tier's trunk / branches, main pass only); empty
 					// elsewhere - no meshes.
-					uploadLodChain(renderer, pieces[i].trunkBark, pieces[i].lodError, out[i].trunkBark, out[i].trunkChain, false);
-					uploadLodChain(renderer, pieces[i].branchBark, pieces[i].lodError, out[i].branchBark, out[i].branchChain, false);
+					uploadLevelZero(renderer, pieces[i].trunkBark, out[i].trunkBark, false);
+					uploadLevelZero(renderer, pieces[i].branchBark, out[i].branchBark, false);
 					for (uint32 k = 0; k < TREE_PIECE_LODS; ++k)
 					{
 						barkTris[k] += numTriangles(pieces[i].bark[k]);
@@ -588,9 +561,9 @@ namespace Procedural
 					albedoMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				for (oc::vector<uint8>& level : bark.normalMips)
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
-				species.barkMaterial = createTreeMaterial(renderer, m_settings.compressTextures, bark.size, bark.size, albedoMips, TextureConvert::EBlockFormat::BC1,
+				species.ownBarkMaterial = createTreeMaterial(m_settings.compressTextures, bark.size, bark.size, albedoMips, TextureConvert::EBlockFormat::BC1,
 					&normalMips, TextureConvert::EBlockFormat::BC5, 0.0f, oc::format("TreeBark/{}", name).c_str(), 0u);
-				species.ownsBarkMaterial = true;
+				species.barkMaterial = species.ownBarkMaterial.index();
 			}
 			if (species.desc.leafType == ETreeLeafType::Cluster)
 			{
@@ -620,15 +593,15 @@ namespace Procedural
 					normalMips.push_back(oc::span<uint8>(level.data(), level.size()));
 				// LEAF: the sun shines through the cluster cards (LitTree's leaf terms). The normal map: cupped, tilted leaves,
 				// BC3 for its A - the RIM (0 at the midrib .. 1 at the edge: the transmission's leaf thickness).
-				species.leafMaterial = createTreeMaterial(renderer, m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
+				species.ownLeafMaterial = createTreeMaterial(m_settings.compressTextures, texture.size, texture.size, mips, TextureConvert::EBlockFormat::BC3,
 					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF, oc::format("TreeLeafCluster/{}", name).c_str(),
 					RendererVKLayout::MATERIAL_FLAG_LEAF);
-				species.ownsLeafMaterial = true;
+				species.leafMaterial = species.ownLeafMaterial.index();
 				species.leafPipeline = RendererVKLayout::EPipelineIndex::LitTree;
 			}
 			else
 			{
-				species.leafMaterial = renderer.getOrCreateSolidColorMaterial(species.desc.leafColor);
+				species.leafMaterial = RenderMaterial::getOrCreateSolidColor(species.desc.leafColor);
 				// Single leaves are solid-coloured: the bake samples a 1x1 opaque image of that colour.
 				leafSize = 1;
 				leafImage = { (uint8)(glm::clamp(species.desc.leafColor.x, 0.0f, 1.0f) * 255.0f + 0.5f),
@@ -646,16 +619,16 @@ namespace Procedural
 			{
 				buildBillboards(renderer, species, name, barkAlbedo, barkSize, leafImage, leafSize);
 				// The crossfade's fade-out copies of the module mesh materials (bands set by applyFadeBands).
-				species.barkFadeMaterial = renderer.deriveMaterial(species.barkMaterial, 0);
-				species.leafFadeMaterial = renderer.deriveMaterial(species.leafMaterial, 0);
+				species.barkFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
+				species.leafFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
 				// The MID tier's (bands set by applyFadeBands): the leaves and the branch bark fading out over the mid band,
 				// the card mesh fading in over it (from the atlas buildBillboards made) and out over the far band.
-				species.leafMidFadeMaterial = renderer.deriveMaterial(species.leafMaterial, 0);
-				species.branchMidFadeMaterial = renderer.deriveMaterial(species.barkMaterial, 0);
-				if (species.cardAtlasMaterial != UINT16_MAX)
+				species.leafMidFadeMaterial = RenderMaterial::derive(species.leafMaterial, 0);
+				species.branchMidFadeMaterial = RenderMaterial::derive(species.barkMaterial, 0);
+				if (species.cardAtlasMaterial.isValid())
 				{
-					species.cardInMaterial = renderer.deriveMaterial(species.cardAtlasMaterial, 0);
-					species.cardOutMaterial = renderer.deriveMaterial(species.cardAtlasMaterial, 0);
+					species.cardInMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
+					species.cardOutMaterial = RenderMaterial::derive(species.cardAtlasMaterial.index(), 0);
 				}
 			}
 			Log::info(oc::format("Trees: '{}' - {} trunks, {} modules, library triangles bark/leaf per LOD: {}/{} {}/{} {}/{} {}/{}",
@@ -761,7 +734,7 @@ namespace Procedural
 				// FOLIAGE: the sun shadow is not rejected by the flat card normal (see instanced_indirect_foliage.fs.glsl).
 				// "TreeBillboard/<piece>": one box per billboard in the VRAM view. BC3 normal: RGB the full normal (sign
 				// kept), A the baked interior - no two-channel format holds both.
-				meshes.billboardMaterial = createTreeMaterial(renderer, m_settings.compressTextures, size, size, albedoMips, TextureConvert::EBlockFormat::BC3,
+				meshes.billboardMaterial = createTreeMaterial(m_settings.compressTextures, size, size, albedoMips, TextureConvert::EBlockFormat::BC3,
 					&normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
 					oc::format("TreeBillboard/{}_{}{}", name, PIECE_KINDS[set], i).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD | RendererVKLayout::MATERIAL_FLAG_LEAF
 					| (horizontal ? RendererVKLayout::MATERIAL_FLAG_BILLBOARD_TOP_CARD : 0u));
@@ -805,7 +778,7 @@ namespace Procedural
 			normalMips.push_back(oc::span<uint8>(atlasNormal[k].data(), atlasNormal[k].size()));
 		}
 		// Foliage cards like the whole-tree billboards (LitFoliage: the same shading and tweaks), but no edge-on fade.
-		species.cardAtlasMaterial = createTreeMaterial(renderer, m_settings.compressTextures, size, size * (uint32)numModules, albedoMips,
+		species.cardAtlasMaterial = createTreeMaterial(m_settings.compressTextures, size, size * (uint32)numModules, albedoMips,
 			TextureConvert::EBlockFormat::BC3, &normalMips, TextureConvert::EBlockFormat::BC3, TREE_LEAF_ALPHA_CUTOFF,
 			oc::format("TreeCardAtlas/{}", name).c_str(), RendererVKLayout::MATERIAL_FLAG_BILLBOARD
 			| RendererVKLayout::MATERIAL_FLAG_LEAF | RendererVKLayout::MATERIAL_FLAG_NO_EDGE_FADE);
@@ -857,27 +830,27 @@ namespace Procedural
 			piece.leaves = renderer.spawnMeshNode(meshes.leaves[0], species.leafMaterial, species.leafPipeline, transform);
 		if (meshes.billboard.isValid())
 		{
-			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage, transform);
+			piece.far = renderer.spawnMeshNode(meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage, transform);
 			piece.farDistance = species.desc.billboardDistance;
 			piece.fadeWidth = species.desc.billboardFadeWidth;
 			piece.radius = meshes.farRadius * transform.scale;
 			// The crossfade copies: the same LOD-chain meshes on LitTree (the dither discards) with the fade-out
 			// materials. Drawn only inside the band, so the bark keeps LitOpaque's early depth elsewhere.
 			if (meshes.bark[0].isValid())
-				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree, transform);
+				piece.barkFade = renderer.spawnMeshNode(meshes.bark[0], species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree, transform);
 			if (meshes.leaves[0].isValid())
-				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree, transform);
+				piece.leavesFade = renderer.spawnMeshNode(meshes.leaves[0], species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree, transform);
 		}
 		piece.centre = transform.transformPoint(meshes.farCentre);
 	}
 
-	void TreeSystem::buildGpuTypes(oc::vector<Renderer::TreeInstanceType>& gpuTypes, oc::unordered_map<const PieceMeshes*, uint32>& typeOf) const
+	void TreeSystem::buildGpuTypes(oc::vector<RenderTreeSet::Type>& gpuTypes, oc::unordered_map<const PieceMeshes*, uint32>& typeOf) const
 	{
 		for (const Species& species : m_species)
 			for (const oc::vector<PieceMeshes>* set : { &species.trunkMeshes, &species.moduleMeshes, &species.variantMeshes })
 				for (const PieceMeshes& meshes : *set)
 				{
-					Renderer::TreeInstanceType type;
+					RenderTreeSet::Type type;
 					const RenderMesh* bark = meshes.bark[0].isValid() ? &meshes.bark[0] : nullptr;
 					const RenderMesh* leaves = meshes.leaves[0].isValid() ? &meshes.leaves[0] : nullptr;
 					type.bark = { bark, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
@@ -892,25 +865,25 @@ namespace Procedural
 					}
 					if (meshes.billboard.isValid())
 					{
-						type.billboard = { &meshes.billboard, meshes.billboardMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-						type.barkFade = { bark, species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
-						type.leavesFade = { leaves, species.leafFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
+						type.billboard = { &meshes.billboard, meshes.billboardMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
+						type.barkFade = { bark, species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
+						type.leavesFade = { leaves, species.leafFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 						type.farDistance = species.desc.billboardDistance;
 						type.fadeWidth = species.desc.billboardFadeWidth;
 						// The MID tier of a baked variant: the TRUNK on its own (its own mesh, fading only in the far band),
 						// the BRANCH bark and the leaves fading out over the mid band while the CARD mesh (every module
 						// placement's billboard, merged; the species' atlas) fades in - and out over the far band.
 						if (set == &species.variantMeshes && midDistance(species) > 0.0f && meshes.cards.isValid()
-							&& meshes.trunkBark[0].isValid() && species.cardInMaterial != UINT16_MAX)
+							&& meshes.trunkBark[0].isValid() && species.cardInMaterial.isValid())
 						{
 							const RenderMesh* branches = meshes.branchBark[0].isValid() ? &meshes.branchBark[0] : nullptr;
 							type.trunk = { &meshes.trunkBark[0], species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
+							type.trunkFade = { &meshes.trunkBark[0], species.barkFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
 							type.bark = { branches, species.barkMaterial, RendererVKLayout::EPipelineIndex::LitOpaque };
-							type.barkFade = { branches, species.branchMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
-							type.leavesFade = { leaves, species.leafMidFadeMaterial, RendererVKLayout::EPipelineIndex::LitTree };
-							type.cardsIn = { &meshes.cards, species.cardInMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
-							type.cardsOut = { &meshes.cards, species.cardOutMaterial, RendererVKLayout::EPipelineIndex::LitFoliage };
+							type.barkFade = { branches, species.branchMidFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
+							type.leavesFade = { leaves, species.leafMidFadeMaterial.index(), RendererVKLayout::EPipelineIndex::LitTree };
+							type.cardsIn = { &meshes.cards, species.cardInMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
+							type.cardsOut = { &meshes.cards, species.cardOutMaterial.index(), RendererVKLayout::EPipelineIndex::LitFoliage };
 							type.midDistance = midDistance(species);
 							type.midFadeWidth = species.desc.billboardFadeWidth;
 						}
@@ -934,9 +907,8 @@ namespace Procedural
 		// On the terrain's walk job (between beginFrame and present): the band settings through atomics.
 		auto sink = [this](oc::span<const TerrainStreamer::VegetationDraw> draws)
 		{
-			static_assert(sizeof(TerrainStreamer::VegetationDraw) == sizeof(Renderer::TreeChunkDraw));
-			Globals::rendererVK.renderTreeInstanceSet(m_treeSet,
-				oc::span<const Renderer::TreeChunkDraw>((const Renderer::TreeChunkDraw*)draws.data(), draws.size()),
+			static_assert(sizeof(TerrainStreamer::VegetationDraw) == sizeof(RenderTreeSet::ChunkDraw));
+			m_treeSet.render(oc::span<const RenderTreeSet::ChunkDraw>((const RenderTreeSet::ChunkDraw*)draws.data(), draws.size()),
 				m_sinkDistanceScale.load(oc::memory_order_relaxed), m_sinkForceFar.load(oc::memory_order_relaxed));
 		};
 		Globals::terrain.setVegetation(lookup, sink, numChunks);
@@ -973,9 +945,9 @@ namespace Procedural
 		// G4: on the GPU path every placed piece goes into ONE baked set (RendererVK tree_cull.inc.glsl): a
 		// piece TYPE per library piece, then per frame one call instead of a renderNode per piece node.
 		const bool gpu = m_settings.gpuExpansion;
-		oc::vector<Renderer::TreeInstanceType> gpuTypes;
+		oc::vector<RenderTreeSet::Type> gpuTypes;
 		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
-		oc::vector<Renderer::TreeInstancePiece> gpuPieces;
+		oc::vector<RenderTreeSet::Piece> gpuPieces;
 		if (gpu)
 			buildGpuTypes(gpuTypes, typeOf);
 		auto place =[&](const Species& species, const PieceMeshes& meshes, const Transform& transform)
@@ -985,7 +957,7 @@ namespace Procedural
 				spawnPiece(renderer, species, meshes, transform);
 				return;
 			}
-			Renderer::TreeInstancePiece& piece = gpuPieces.emplace_back();
+			RenderTreeSet::Piece& piece = gpuPieces.emplace_back();
 			piece.transform = transform;
 			piece.centre = transform.transformPoint(meshes.farCentre);
 			piece.radius = meshes.farRadius * transform.scale;
@@ -1093,7 +1065,7 @@ namespace Procedural
 		// to the renderer (the sink below): the culls see only the plants of the visible and the shadow / GI chunks.
 		m_vegChunkSize = Globals::terrain.chunkSize();
 		const float chunkSize = (float)m_vegChunkSize;
-		auto chunkKey = [&](const Renderer::TreeInstancePiece& piece)
+		auto chunkKey = [&](const RenderTreeSet::Piece& piece)
 		{
 			const int32 x = (int32)std::floor(piece.transform.pos.x / chunkSize);
 			const int32 z = (int32)std::floor(piece.transform.pos.z / chunkSize);
@@ -1103,8 +1075,8 @@ namespace Procedural
 		for (uint32 i = 0; i < (uint32)gpuPieces.size(); ++i)
 			order[i] = { chunkKey(gpuPieces[i]), i };
 		oc::sort(order.begin(), order.end());
-		oc::vector<Renderer::TreeInstancePiece> sorted(gpuPieces.size());
-		oc::vector<Renderer::TreeInstanceChunk> chunks;
+		oc::vector<RenderTreeSet::Piece> sorted(gpuPieces.size());
+		oc::vector<RenderTreeSet::Range> chunks;
 		m_vegChunkOf.clear();
 		for (uint32 i = 0; i < (uint32)order.size(); ++i)
 		{
@@ -1116,8 +1088,8 @@ namespace Procedural
 			}
 			++chunks.back().count;
 		}
-		m_treeSet = renderer.createTreeInstanceSet(gpuTypes, sorted, chunks);
-		renderer.bindTreeInstanceSet(m_treeSet);
+		m_treeSet = RenderTreeSet::create(gpuTypes, sorted, chunks);
+		m_treeSet.bind();
 		hookTerrain((uint32)chunks.size());
 	}
 
@@ -1129,7 +1101,7 @@ namespace Procedural
 		m_worldFullLogged = false;
 		if (m_species.empty())
 			return;
-		oc::vector<Renderer::TreeInstanceType> gpuTypes;
+		oc::vector<RenderTreeSet::Type> gpuTypes;
 		oc::unordered_map<const PieceMeshes*, uint32> typeOf;
 		buildGpuTypes(gpuTypes, typeOf);
 
@@ -1150,7 +1122,7 @@ namespace Procedural
 				context->rockReach = glm::max(context->rockReach, 0.5f * rockType.scale.y);
 				for (const RockSystem::WorldVariant& variant : rockType.variants)
 				{
-					Renderer::TreeInstanceType type;
+					RenderTreeSet::Type type;
 					type.bark = { variant.mesh, rockType.material, RendererVKLayout::EPipelineIndex::LitRock };
 					if (variant.density)
 					{
@@ -1237,7 +1209,7 @@ namespace Procedural
 		}
 		m_expandContext = context;
 
-		m_treeSet = renderer.createDynamicTreeInstanceSet(gpuTypes, (uint32)glm::max(m_settings.worldCapacity, 1));
+		m_treeSet = RenderTreeSet::createDynamic(gpuTypes,(uint32)glm::max(m_settings.worldCapacity, 1));
 
 		// The far volume's view of the RECORDS (RendererVK TreeRecordTypeGpu), per record type (TreeWorld's name-sorted
 		// species, bushes too): how a record EXPANDS - the same rules as expandChunk (its variants as this set's types,
@@ -1412,7 +1384,7 @@ namespace Procedural
 		m_world.joinPool(); // the pool job writes the same record pool
 		renderer.setTreeRecordTypes(recordTypes, context->chunkSize, context->worldSeed, m_treeSet);
 		m_recordTypesSet = true;
-		renderer.bindTreeInstanceSet(m_treeSet);
+		m_treeSet.bind();
 		m_vegChunkSize = Globals::terrain.chunkSize();
 		// The set's chunk indices are recycled: at most the near square (+1 of hysteresis) plus one frame of removals.
 		const uint32 side = 2u * (uint32)m_settings.nearRadius + 3u;
@@ -1423,7 +1395,7 @@ namespace Procedural
 	// ones inside it that TreeWorld holds records for, and add up to "Expand per frame" finished ones to the set.
 	void TreeSystem::updateWorld(Renderer& renderer, const Camera& camera)
 	{
-		if (!m_expandContext || m_treeSet == UINT32_MAX)
+		if (!m_expandContext || !m_treeSet.isValid())
 			return;
 		const float chunkSize = m_expandContext->chunkSize;
 		const glm::ivec2 cam((int32)std::floor(camera.position.x / chunkSize), (int32)std::floor(camera.position.z / chunkSize));
@@ -1440,7 +1412,7 @@ namespace Procedural
 			}
 			if (it->second.setChunk != UINT32_MAX)
 			{
-				renderer.removeTreeInstanceChunk(m_treeSet, it->second.setChunk);
+				m_treeSet.removeChunk(it->second.setChunk);
 				m_vegChunkOf.erase(it->first);
 				Globals::terrain.restampVegetation(coord);
 			}
@@ -1462,7 +1434,7 @@ namespace Procedural
 			if (result.generation != m_expandGeneration || it == m_near.end() || !it->second.pending)
 				continue;
 			it->second.pending = false;
-			const uint32 setChunk = renderer.addTreeInstanceChunk(m_treeSet, result.pieces);
+			const uint32 setChunk = m_treeSet.addChunk(result.pieces);
 			if (setChunk == UINT32_MAX)
 			{
 				if (!m_worldFullLogged)
@@ -1519,7 +1491,7 @@ namespace Procedural
 	// plus the bushes' reach. MIRRORED on the GPU by the far volume (tree_volume_splat.cs's TREE_SPLAT_RECORDS,
 	// tree_volume_records.cs) - keep the hashes and the order of the choices in step.
 	void TreeSystem::expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
-		oc::vector<Renderer::TreeInstancePiece>& out)
+		oc::vector<RenderTreeSet::Piece>& out)
 	{
 		out.clear();
 		if (records.empty() || !context.maps)
@@ -1559,7 +1531,7 @@ namespace Procedural
 			const float scale = glm::mix(species.scale.x, species.scale.y, treeHash01(treeHash(seed, 103u)))
 				* std::exp2(context.sizeVariation * (treeHash01(treeHash(seed, 105u)) * 2.0f - 1.0f));
 			const glm::quat yaw = glm::angleAxis(treeHash01(treeHash(seed, 104u)) * 6.28318531f, glm::vec3(0.0f, 1.0f, 0.0f));
-			Renderer::TreeInstancePiece& piece = out.emplace_back();
+			RenderTreeSet::Piece& piece = out.emplace_back();
 			piece.transform = Transform(glm::vec3(p.x, groundAt(p) - 0.05f, p.y), scale, yaw);
 			piece.centre = piece.transform.transformPoint(variant.farCentre);
 			piece.radius = variant.farRadius * scale;
@@ -1579,7 +1551,7 @@ namespace Procedural
 			const float r = RockSystem::FOOTPRINT * scale * rock.footprint;
 			const float ground[5] = { groundAt(p), groundAt(p - glm::vec2(r, 0.0f)), groundAt(p + glm::vec2(r, 0.0f)),
 				groundAt(p - glm::vec2(0.0f, r)), groundAt(p + glm::vec2(0.0f, r)) };
-			Renderer::TreeInstancePiece& piece = out.emplace_back();
+			RenderTreeSet::Piece& piece = out.emplace_back();
 			piece.transform = RockSystem::groundTransform(p, ground, r, scale, variant.height, rock.sink, rock.align, yaw);
 			piece.centre = piece.transform.transformPoint(variant.centre);
 			piece.radius = variant.radius * scale;

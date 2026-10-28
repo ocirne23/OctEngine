@@ -208,7 +208,7 @@ Exclusively C++20 modules (`.ixx`), no headers.
 
 * Most libraries use module partitions: `export module RendererVK:Renderer;` in the interface `.ixx`,
   `module RendererVK;` in the implementation `.cpp`. The public surface is re-exported from
-  `Public/<Lib>.ixx`.
+  `Public/<Lib>.ixx` (RendererVK: `Public/RendererVKModule.ixx`, beside the `Public/Renderer.ixx` API).
 * `Core` and `Settings` use dotted module names (`Core.Time`, `Settings.Render`, one module per `.ixx`). UI uses partitions
   (`UI:Scene`, `UI:ProfilerPanel`) except `UI.Gizmo` / `UI.fwd`.
 * `Public/` `.ixx`s are importable from outside the library; `Private/` is internal.
@@ -270,6 +270,9 @@ any boundary that meets an `oc::` type, not just a convention. Crossing delibera
 
 * No new/delete, only memory-safe types. Raw pointers are non-owning.
 * Minimal comments — only where intent is genuinely hard to communicate.
+* **Comments wrap at 160 characters.** A section separator is `// ---- Title ----` (four dashes each side, no padding). A short
+  note about the whole section goes into the title when the line still fits (`// ---- Terrain (setTerrainSplatMaterials) ----`);
+  a longer one goes on comment lines below it. See `RendererVK/Public/Renderer.ixx`.
 * **Tweak names say what the knob does, never whose name the model carries** ("Evaporation curve", not "Budyko w";
   "Haze scattering", not "Mie"). The scientist's name may go in a code comment. Exception: "Fresnel".
 * Prioritize performance.
@@ -296,6 +299,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | `XCA3` | `Globals::settings` (every tweak value; up before any library global reads it) |
 | plain `XCU` | input, audio, spatialIndex, entityAllocator, scriptContext, scriptHost, assetRegistry, time, gameHud, Procedural's `g_diffusionRuntime` (destructs after terrain has joined its chunk pumps), ... |
 | `XCU1..XCU4` | VK instance → device + gpuAllocator → rendererVK + openXR → the data managers |
+| `XCU45` | particleSystem, forceSystem (their RAII slot handles free into the renderer) |
 | `XCU5` | **jobSystem** |
 | `XCU51` | physics |
 | `XCU6` | networkManager |
@@ -306,7 +310,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | `XCUB` | navSystem |
 
 So **destruction** runs: nav → procedural → ui → world → scriptEvents → networkManager → physics →
-jobSystem → renderer globals → plain XCU → settings → memoryTracker → profiler → allocator.
+jobSystem → particle + force systems → renderer globals → plain XCU → settings → memoryTracker → profiler → allocator.
 
 The constraints that shape it:
 

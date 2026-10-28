@@ -471,7 +471,7 @@ export namespace RendererVKLayout
     constexpr uint32 INITIAL_SKINNING_PALETTE = 1024; // mat4 palette entries across all skinned instances
     constexpr uint32 INITIAL_SKINNING_JOBS = 64;      // skinned mesh instances (SkinningJob SSBO entries)
 
-    // ---- THE FRAME UBO ------------------------------------------------------------------------------------------
+    // ---- THE FRAME UBO ----
     // ONE uniform buffer per frame slot, built by Renderer::buildFrameUbo (RendererUbo.cpp), read by every pass at
     // its UBO_BINDING. Its layout is REGISTERED, no C++ struct mirrors it (UboBlock.ixx): every value one line with its
     // sources, live or lockable, grouped by subject (Renderer::registerUboValues).

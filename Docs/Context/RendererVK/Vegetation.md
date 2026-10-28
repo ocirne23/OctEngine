@@ -300,7 +300,7 @@ the clutter frame's header. Desktop only (as the grass).
     face, bent, not tied to the winding - a gl_FrontFacing flip left cards facing away, N.V = 0, and the sun's GGX lit
     them very bright), then bent toward V up to the foliage's min N.V (`u_foliage_minNoV`), as the edge-on leaves.
 * **TEXTURED FLOWERS** (ferns, radial petals, grain ears, umbel / spike / bell florets): a flower type's texture is a
-  bindless `u_textures` slot (`Renderer::createTexture` / `releaseTexture`: RGBA8 sRGB with the caller's mip chain, no
+  bindless `u_textures` slot (`RenderTexture::create`: RGBA8 sRGB with the caller's mip chain, no
   material). Its index + 1 rides `ClutterTypeGpu::terms5.y` (0 = none); the cull copies it into the record's `data.x`
   (a flower has no quaternion) and picks a textured bucket. The textured part (part 1) becomes a strip of the part's
   full width, u across it (`out_flower.z`), v along: a FERN frond (4 / 3 / 2 quads), a RADIAL petal or an UMBEL /
@@ -416,8 +416,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
     floor made the shading jump at every column edge).
 * **Storage:** R16F extinction (1/m; packed in `accum`, below) + an RGBA8 colour map + the floors.
 * **Bake** (`tree_volume_splat.cs` → `tree_volume_resolve.cs`): one workgroup per tree of every GPU tree set
-  (`createTreeInstanceSet` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types' float
-  extinction mip chains — `TreeInstanceType::density`, box-filtered to 1³ on upload). Every texel the tree's box
+  (`RenderTreeSet::create` uploads `TreeVolumePieceGpu` per piece + `TreeVolumeTypeGpu` per type + the types' float
+  extinction mip chains — `RenderTreeSet::Type::density`, box-filtered to 1³ on upload). Every texel the tree's box
   touches (+ one texel each way) samples the type volume at the mip matching the texel footprint, at the texel centre
   clamped into the box, × the tree's TENT weight horizontally (per polar axis, one cell wide each way, `tentWeight`)
   and the slice's box overlap vertically, and ADDS it. **The tent is load-bearing:** with the trilinear reconstruction
@@ -459,7 +459,7 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
       else the first type with mass.
   * Record table changes re-bake (at most every 30 frames). `farTreesActive` is true with record types alone.
 * **ROCKS** (Procedural's world rocks): rock records are record types like trees' and go through the same passes. A
-  rock type is a **SOLID** (`TreeInstanceType::solid` -> the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w`
+  rock type is a **SOLID** (`RenderTreeSet::Type::solid` -> the volume type's `albedo.w` = 0; `TreeRecordTypeGpu::albedo.w`
   = 0): its grid is OCCUPANCY (0..1), and its extinction is **"Far rock extinction (1/m)"** (a rebake setting - before
   "Far density" and the blob shrink) at ANY size - a crown's extinction thins with its scale (`/ scale`: its leaves
   spread over a larger volume), a rock's does not. So the far mass of a rock record is its occupied volume x scale^3 x
@@ -538,8 +538,8 @@ Desktop only, on by default (defaults in `FarTreeParams`). The FAR trees — bey
   centre: the camera may move a rebake distance before the next bake, and the ring must still hold every tree past the
   hand-over.
 * **The hand-over follows the camera's HEIGHT** (`Renderer::farTreesStart`): `sqrt(start² + h²)`, h = the camera's
-  height above the ground under it (`setFarTreeCameraGround`, fed by TreeSystem from the terrain sampler; the baked sea
-  level until set) — the 3D distance of a ground tree at horizontal `start`. The tree cull's volume start
+  height above the ground under it (`setCameraGround`, fed by TerrainStreamer from the terrain sampler; the baked sea
+  level while unset) — the 3D distance of a ground tree at horizontal `start`. The tree cull's volume start
   (`u_present_treeVolumeStart`, + overlap) and the march's start both use it, so from the air the hand-over stays at
   horizontal "Far start", where the ring begins (with the 3D `start` alone, the billboards vanished under a high camera
   with no volume there). **Tried and dropped:** shrinking the RING with the height instead (`sqrt(start² − h²)`) - it

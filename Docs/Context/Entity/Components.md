@@ -217,7 +217,7 @@ body to; there is no per-unit multiplier. A body already over the cap only takes
   `destroy` (both worker-side in the batch paths), so the game's "units alive" is a load, never a
   walk.
 * **THE HURT LIGHT** (`tickHurtLight`, at the top of `update` on every role, before the client gate): a health
-  drop since the last tick pushes a point light over the collider's top (`addPointLight`, a per-frame record) at
+  drop since the last tick pushes a point light over the collider's top (`addLightInfo` with a `PointLight`, a per-frame record) at
   full brightness, decaying over `params.hurtLightDecay` after the last drop, off whatever wrote `health` (the sim
   or the blob). **Its colour is the ATTACKER's team** (the Force team colours): `damage(amount, sourceTeam)` tags
   the victim (melee, shells, the turret, the player aura pass their team), field exposure tags the burning field's
@@ -238,7 +238,7 @@ body to; there is no per-unit multiplier. A body already over the cap only takes
   too. A unit that stands still writes nothing. The model's authored rotation is replaced by the yaw.
 * **COLOUR:** `Component GameUnit` `Color r g b` is the unit's colour on EVERY render node of its subtree (the
   shared model has none): `spawn` applies it (Scene, bit 0, has spawned the model by then;
-  `getOrCreateSolidColorMaterial` is safe on workers) and `applyTeamTint` mixes the friendly green onto it, over
+  `RenderMaterial::getOrCreateSolidColor` is safe on workers) and `applyTeamTint` mixes the friendly green onto it, over
   the whole subtree (`tintSubtree`). With no `Color`, each node keeps its own authored Render `Color`.
 * **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, `bubbleRadius`, atomic
   `damage()` / `addLoad()` intake, the three float stores (the game's cable transport moves whole cells in and out

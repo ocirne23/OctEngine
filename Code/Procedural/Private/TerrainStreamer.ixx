@@ -295,6 +295,7 @@ export namespace Procedural
 		RiverSystem             m_rivers;
 
 		// --- Main-thread residency state ---
+		RenderMaterial                      m_material; // shared by every chunk (created at first upload); declared before the chunks that draw it
 		oc::unordered_map<uint64, oc::unique_ptr<Resident>> m_residents;
 		oc::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
 		// Residents that left m_residents: node, mesh and culling entry released at once, the MEMORY
@@ -303,7 +304,6 @@ export namespace Procedural
 		struct RetiredResident { uint32 generation; oc::unique_ptr<Resident> resident; };
 		oc::vector<RetiredResident>         m_retired;
 		void retireResident(oc::unique_ptr<Resident> resident);
-		uint16                              m_material = UINT16_MAX; // shared by every chunk (created at first upload)
 		// The wanted leaves of m_ring (rebuilt when it moves; ~100-200 nodes) and the ring itself. Every per-frame decision
 		// below walks these and the residents directly, on main: the node counts are small.
 		Ring                                m_ring;

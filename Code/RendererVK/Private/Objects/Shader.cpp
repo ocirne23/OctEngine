@@ -461,7 +461,7 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
     return preamble;
 }
 
-// ---- The SPIR-V cache: Local/ShaderCache/<debugFilePath>.<key hash>.spvc ----------------------------
+// ---- The SPIR-V cache: Local/ShaderCache/<debugFilePath>.<key hash>.spvc ----
 // The KEY is everything the compile reads that is not a file: the cache version, glslang's version, the stage,
 // the file name, the preamble (layout constants, live settings, the variant's defines) and the push block. It is
 // stored whole and compared, the hash only names the file. The FILES - the root source and every resolved include -

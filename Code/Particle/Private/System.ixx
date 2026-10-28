@@ -47,17 +47,6 @@ private:
 export class ParticleSystem final
 {
 public:
-    // The weather effect handles are DETACHED here, not destroyed: Globals::particleSystem is a plain
-    // XCU global, so it destructs after the renderer (InitSeg order), and a handle destroy would call
-    // into the dead renderer. The GPU state is gone with it anyway.
-    ~ParticleSystem()
-    {
-        for (BuiltinEffect& b : m_builtins)
-            b.effect.m_id = 0;
-        m_oceanSprayEffect.m_id = 0;
-        m_riverMistEffect.m_id = 0;
-    }
-
     void initialize() {}
     // Advances rate accumulators/bursts into renderer spawn requests, re-uploads emitter GPU state,
     // ages + submits decals. Call once per frame from the main loop, after world.update.
@@ -87,7 +76,7 @@ private:
 
     struct EmitterInstance
     {
-        uint32 rendererSlot = UINT32_MAX;
+        RenderParticleEmitter rendererSlot;
         uint16 textureIdx = 0xFFFF; // PARTICLE_TEX_NONE or resolved bindless index
         float rateAccum = 0.0f;
         uint32 volumeFillSpawned = 0; // weather volumes: particles of desc.count spawned so far (fills over frames)
@@ -155,5 +144,6 @@ private:
 
 export namespace Globals
 {
+OC_INIT_SEG(OC_SEG_GPU_EFFECTS)
     ParticleSystem particleSystem;
 }

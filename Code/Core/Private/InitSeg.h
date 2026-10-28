@@ -32,6 +32,10 @@
 #define OC_SEG_VK_RENDERER ".CRT$XCU3" // rendererVK, openXR
 #define OC_SEG_VK_DATA     ".CRT$XCU4" // meshDataManager, meshStreamer, stagingManager, textureManager, textureStreamer
 
+// -- The GPU effect systems: their emitter / query handles (RenderParticleEmitter, RenderForceEmitter, RenderForceQuery) free renderer slots, so they
+// destruct BEFORE the renderer - and after ~World (XCU8), whose components destroy their effects and emitters into them.
+#define OC_SEG_GPU_EFFECTS ".CRT$XCU45" // particleSystem, forceSystem
+
 // -- Teardown-ordered engine globals, destructing BEFORE all of the above (reverse order: ui first).
 // Every EntityPtr holder must sit above jobSystem here: destroying an entity reaches
 // PerWorker::local(), which needs the main thread's live worker context (~JobSystem nulls it).

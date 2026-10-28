@@ -1,4 +1,4 @@
-﻿export module RendererVK:Renderer;
+export module RendererVK:RendererState;
 
 import Core;
 import Core.glm;
@@ -64,6 +64,12 @@ import :RenderParams;
 import Settings.fwd; // NOT Settings: a settings default change must not rebuild every importer of :Renderer
 import :RenderNode;
 import :RenderMesh;
+import :RenderMaterial;
+import :RenderTexture;
+import :RenderTreeSet;
+import :RenderParticleEmitter;
+import :RenderForceEmitter;
+import :RenderForceQuery;
 import :SlotTable;
 import :MeshLodRegistry;
 import :SkinnedMeshRegistry;
@@ -76,392 +82,36 @@ import :ForceFieldState;
 import :BindlessTextures;
 import :ParticleState;
 import :RayTracingScene;
+import :RendererTypes;
 
 import Core.fwd;
 
-export enum class EValidation { ENABLED, DISABLED };
-export enum class EVr { ENABLED, DISABLED };
+export class Renderer;
+export class MeshStreamer;     // declared before their friend lines
+export class RenderMaterial;
+export class RenderTexture;
+export class RenderTreeSet;
+export class RenderParticleEmitter;
+export class RenderForceEmitter;
+export class RenderForceQuery;
+export enum class EValidation; // Renderer.ixx (opaque: a scoped enum's underlying type is int)
+export enum class EVr;         // Renderer.ixx
 
-export class Renderer final
+// Everything of the Renderer but its public API (Renderer.ixx): the state and the private helpers. A helper reaches
+// the API through self().
+export class RendererState : public RendererTypes
 {
-public:
-
-    Renderer();
-    ~Renderer();
-
-    // -- Main API --
-    bool initialize(Window& window, EValidation validation, EVr vr = EVr::DISABLED);
-    bool isInitialized() const { return m_initialized; }  // false in headless server mode; anything that may run headless must gate on it.
-
-    bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX); // VSync/GPU throttle of the whole loop. used by Time::beginFrame for frame pacing
-    CullView setFrameView(const Camera& camera, const Rect& viewportRect); // returns the spatial cull's view of of this frame, call before kickBeginFrameJob().
-    void kickBeginFrameJob(); // The frame's setup pass, as a job. VR defers instead: the join runs it on main, because xrWaitFrame owns VR pacing and would pin a worker.
-    void joinBeginFrameJob();
-
-    // Skips an empty or destroyed node and a 0 mask. The one-argument form pushes the node's own mask.
-    void renderNode(const RenderNode& node, uint32 passMask);                                          // [Concurrency: LOCK-FREE]
-    void renderNode(const RenderNode& node) { renderNode(node, node.m_passMask); }                     // [Concurrency: LOCK-FREE]
-    void addLightInfo(const RendererVKLayout::LightInfo& light);                           // [Concurrency: LOCK-FREE]
-    void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);                   // [Concurrency: LOCK-FREE]
-    void addPointLight(const PointLight& light);                                           // [Concurrency: LOCK-FREE]
-    void addAreaLight(const AreaLight& areaLight);                                         // [Concurrency: LOCK-FREE]
-    void addSpotLight(const SpotLight& spotLight);                                         // [Concurrency: LOCK-FREE]
-
-    void kickGridBuilds(); // Call after the frame's LAST light add and the force update.
-    void present();
-    // Main thread. The NEXT presented frame is written to `path` (PNG, the whole swapchain image: scene + UI) before it
-    // is presented - independent of the window being in front, covered or on another monitor. Stalls that frame (a
-    // queue idle). See "Screenshots" in the CONTEXT.
-    void requestScreenshot(oc::string path) { m_screenshotPath = oc::move(path); }
-
-    void reloadShaders();
-    void setWindowMinimized(bool minimized);
-    // RESIZE HOLD (App, while the left mouse button is down - a window-border or ImGui-splitter drag): an out-of-date
-    // swapchain does not rebuild per frame of the drag; the frame is skipped and the ONE rebuild runs when the hold
-    // ends (a rebuild per frame recreated the DLSS feature every frame and broke it). The App holds the viewport rect
-    // and the window-resize event the same way.
-    void setResizeHold(bool hold) { m_resizeHold = hold; }
-    void recreateWindowSurface(Window& window); // Call on resize
-
-    // -- View settings --
-    // The world point every distance-based falloff measures from (u_sceneFocus). Sun cascades, RTAO fade, GI clipmap window, TLAS range. Cleared = the ground under the camera (setFocusGround).
-    void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
-    void clearSceneFocus() { m_sceneFocusEnabled = false; }
-    // The SURFACE height (ground or water) under the camera, from the App each frame (main, before the begin-frame kick):
-    // without a set focus the focus is the camera's x / z at min(its height, this) - from high up the shadow cascades,
-    // GI window, RTAO and TLAS range stay on the terrain below, not in empty sky. Cleared = the camera itself.
-    void setFocusGround(float surfaceHeight) { m_focusGround = surfaceHeight; m_haveFocusGround = true; }
-    void clearFocusGround() { m_haveFocusGround = false; }
-    glm::vec3 defaultSceneFocus() const
-    {
-        return m_haveFocusGround ? glm::vec3(m_cameraPos.x, glm::min(m_cameraPos.y, m_focusGround), m_cameraPos.z) : m_cameraPos;
-    }
-    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusFrozen ? m_frozenSceneFocus : m_sceneFocusEnabled ? m_sceneFocus : defaultSceneFocus(); }
-    const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
-    const glm::vec3& cameraPos() const { return m_cameraPos; } // Valid after joinBeginFrameJob().
-
-    // -- Metrics --
-    uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
-    uint32 getNumMeshTypes() const { return m_meshInfos.count(); }
-    uint32 getNumMaterials() const { return m_materials.count(); }
-    // The Memory panel's VRAM view: every live GPU allocation by debug name, plus the heap totals.
-    void forEachGpuAllocation(GpuAllocationVisit visit, void* ctx) const { Globals::gpuAllocator.forEachAllocation(visit, ctx); }
-    GpuAllocator::MemoryUsage getGpuMemoryUsage() const { return Globals::gpuAllocator.getMemoryUsage(); }
-    static void gpuEnumName(GpuEnum kind, uint64 value, char* out, size_t outSize) { GpuAllocator::enumName(kind, value, out, outSize); }
-
-    // -- GPU particles + projected decals (driven by the Particle library) --
-    uint32 createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc); // [Concurrency: LOCKING]
-    void updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc);
-    void emitParticles(uint32 slot, uint32 count);
-    void destroyParticleEmitter(uint32 slot); // [Concurrency: LOCKING]
-    void resetParticles() { m_particles.requestReset(); }
-    void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
-    void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
-    // The river mist producer's emitter slot (the Particle system's Effects/river_mist.pfx; UINT32_MAX = off).
-    void setRiverMistEmitter(uint32 slot) { m_riverMistEmitter = slot; }
-    // "Ocean/World scale" (s): the spray emitter's lengths / speeds / accelerations ride it.
-    // From the "Ocean" settings (the same values the pushed OceanParams carry): the UBO's lockable ocean values and the
-    // live work both read these.
-    float getOceanWorldScale() const;
-    float getOceanSwashAmp() const;
-    float getOceanBubbleDepth() const;
-    float getOceanBubbleBrightness() const;
-    void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
-    uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
-
-    // -- Forcefield bubbles (driven by the Force library) --
-    uint32 createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc); // [Concurrency: LOCKING]
-    void updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc);
-    void destroyForceEmitter(uint32 slot); // [Concurrency: LOCKING]
-    uint32 createForceQuerySlot(); // [Concurrency: LOCKING]
-    void setForceQuery(uint32 slot, const glm::vec3& pos);
-    void setForceBakeChunks(oc::span<const glm::ivec4> chunks, float sampleY) { m_force.setBakeChunks(chunks, sampleY); }
-    RendererVKLayout::ForceBakeReadback getForceBakeReadback() const;
-    void destroyForceQuerySlot(uint32 slot); // [Concurrency: LOCKING]
-    glm::vec4 getForceEmitterReadback(uint32 slot) const; // ~2 frames old, between beginFrame and present. xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
-    RendererVKLayout::ForceQueryResult getForceQueryReadback(uint32 slot) const;
-    void setForceFieldParams(const ForceFieldParams& params);
-
-    // -- Global rendering parameters --
-    void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
-    void setAmbientLight(const glm::vec3& color, float intensity);
-    // A code write into a lockable setting re-bakes (m_uboLocksDirty), like a tweak change.
-    void setSkyRadiance(const glm::vec3& color, float intensity);
-    void setSkyParams(const SkyParams& sky);
-    const SkyParams& getSkyParams() const { return m_skyParams; }
-    // THE wind ("Sky/Wind"): the ocean reads it (x its own speed scale) - everything renderer-side through the UBO.
-    const WindParams& getWindParams() const { return m_windParams; }
-    void setFogParams(const FogParams& fog);
-    void setPostParams(const PostParams& post);
-    const ShadowParams& shadowParams() const { return m_shadowParams; }
-    void setShadowParams(const ShadowParams& params);
-    // The game turns the volumetric clouds off without touching the user's "Sky/Clouds/Enabled" tweak.
-    void setCloudsSuppressed(bool suppressed) { m_cloudsSuppressed = suppressed; }
-
-	// -- Terrain parameters --
-    void setTerrainParams(float meshRadius, float seaLevel, float temperatureLapseRate = 0.0f) { m_terrain.setParams(meshRadius, temperatureLapseRate, seaLevel); }
-    float getTerrainMeshRadius() const { return m_terrain.getMeshRadius(); }
-    // The terrain VS's EDGE STITCHING (Procedural TerrainStreamer: its draw camera and ring bands; chunkSize 0 = off).
-    // Main thread, read by the next frame's UBO.
-    void setTerrainStitch(float chunkSize, const glm::vec2& drawCamChunks, float fullRes, float lodStep, uint32 maxLod)
-    {
-        m_terrainStitch = glm::vec4(chunkSize, drawCamChunks, 0.0f);
-        m_terrainStitchBands = glm::vec4(fullRes, lodStep, (float)maxLod, 0.0f);
-    }
-    // The river water's NEAR COVERAGE (Procedural RiverSystem): engine m around the centre view inside which every dense
-    // near cell is built - the light ribbons discard their fragments there (river.fs.glsl), so the dense waves are the
-    // only surface. 0 = none. Main thread, read by the next frame's UBO.
-    void setRiverNearCovered(float distance) { m_riverNearCovered = distance; }
-    // THE INLAND WATER MAP (RendererVKLayout::RiverWaterMapGpu; Procedural RiverSystem): RIVER_WATER_MAP_DIM^2 water
-    // surface heights (world Y, RIVER_WATER_NONE = no inland water) of RIVER_WATER_MAP_TEXEL m from `origin` (texel
-    // (0, 0)'s min corner); empty = none. The volumetric fog's underwater boundary over rivers and lakes. Main thread;
-    // each frame slot takes it in present.
-    void setRiverWaterMap(glm::vec2 origin, oc::span<const float> heights);
-    // THE RIVER MIST SOURCES (RendererVKLayout::RiverMistSourceGpu; Procedural RiverSystem): the whitewater stretches near
-    // the camera, at most MAX_RIVER_MIST_SOURCES (the rest are dropped). The particle sim pass's head producer
-    // (river_mist.cs.glsl) spawns mist over them. Main thread; each frame slot takes them in present.
-    void setRiverMistSources(oc::span<const RendererVKLayout::RiverMistSourceGpu> sources);
-    using TerrainSplatMaterial = ::TerrainSplatMaterial;
-    using TerrainSplatCounts = ::TerrainSplatCounts;
-    void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts); // See TerrainStreamer::registerTerrainTextures for docs
-    // V3's world scale (the loaded model's native resolution - not a tweak): the crag thresholds and the crag wander
-    // ("Terrain/Textures") are metres at the model's true scale. A change re-bakes the UBO values that read it.
-    void setTerrainCragScale(float scale);
-    // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first: R = terrain height, G = water surface level, B = regional fog thickness [0,1], A = spare.
-    // Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water depth/level read it. Staged ping-pong: live next frame, no GPU sync and no re-record.
-    void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
-    void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // fog reverts to the flat height base
-    float giTlasRange() const { return m_giProbePipeline.getTlasRange(); } // Metres from sceneFocusOrCamera, for TerrainStreamer
-
-    // -- Ocean generator -> sim piping --
-    void setOceanWaveTrough(float meters) { m_oceanSimPipeline.setWaveTrough(meters); }
-    void setOceanDisplacementExtent(float meters) { m_oceanSimPipeline.setDisplacementExtent(meters); }
-    void setCameraWaterSurface(float worldY) { m_oceanSimPipeline.setCameraWaterSurface(worldY); }
-    void clearCameraWaterSurface() { m_oceanSimPipeline.clearCameraWaterSurface(); }
-    void setOceanParams(const OceanParams& ocean);
-    // RGBA16F (Dx, h, Dz, dDxz), outRes^2 per cascade, cascades packed consecutively. Copy between beginFrame and present, the slot resubmits after that. ~2 frames old.
-    oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
-    {
-        outRes = OceanSimulationPipeline::READBACK_RES;
-        return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
-    }
-
-    // -- UI --
-    void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
-    void updateImGuiTextures(); // MAIN THREAD, between the widget pass's join and the next UI::update. Uploads the queued font-atlas changes, which present() would otherwise do while the widget pass mutates the atlas.
-
-    // -- VR --
-    bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
-    bool isVSyncEnabled() const; // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
-    bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
-    IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
-
-    // -- Mesh streaming. -- A streamed-out mesh keeps its bounds but draws zero indices, so the cull's DGC draws, the shadow pass and the TLAS-instance writer all no-op for it.
-    void setMeshStreamedOut(uint16 meshInfoIdx);
-    void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
-    const MeshLodParams& getLodParams() const { return m_lodParams; }
-
-    // -- Single meshes (no ObjectContainer; see RenderMesh) -- MAIN THREAD.
-    // A material for createMesh'd geometry: the fallback textures, opaque, onto `pipeline` (Ocean /
-    // TerrainLit add their material flag, like an ObjectContainer override). Permanent: create one per
-    // system and share it between its meshes.
-    uint16 createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
-    // A material with its own generated sRGB RGBA8 diffuse, from a caller-built mip chain (level 0 first,
-    // each level half the previous). alphaCutoff > 0 makes it alpha-tested (EAlphaMode::Mask, the cutoff
-    // rides `opacity`): draw it on LitMasked. `normalMips` (optional, same size): a LINEAR RGB tangent-space
-    // normal map (x along U, y along V, z out). Free with destroyTextureMaterial (textures + material slot).
-    // `extraFlags`: RendererVKLayout::MATERIAL_FLAG_* to add (e.g. MATERIAL_FLAG_BILLBOARD).
-    // The encodings say what the mip bytes ARE: RGBA8, or BC blocks the caller compressed (File TextureConvert::
-    // compressBlockRows) - the albedo sRGB, the normal linear. A BC5 normal sets MATERIAL_FLAG_BC5_NORMAL (Z rebuilt).
-    enum class ETextureEncoding : uint8 { Rgba8, BC1, BC3, BC5 };
-    uint16 createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-        const oc::vector<oc::span<uint8>>* normalMips = nullptr, uint32 extraFlags = 0,
-        ETextureEncoding albedoEncoding = ETextureEncoding::Rgba8, ETextureEncoding normalEncoding = ETextureEncoding::Rgba8);
-    void destroyTextureMaterial(uint16 materialIdx);
-    // A bare bindless texture (sRGB RGBA8 from a caller-built mip chain, level 0 first): its index in the shaders'
-    // u_textures (the ground clutter's fern fronds). Free with releaseTexture (retired once the GPU has drained).
-    uint16 createTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
-    void releaseTexture(uint16 texIdx);
-    // A copy of `source` with `extraFlags` added, SHARING its textures: free it with releaseMaterial (the slot
-    // only), never destroyTextureMaterial.
-    uint16 deriveMaterial(uint16 source, uint32 extraFlags);
-    void releaseMaterial(uint16 materialIdx);
-    // Rewrites a material's flags in place (e.g. a distance-fade band). No re-record: a contents upload.
-    uint32 getMaterialFlags(uint16 materialIdx);
-    void setMaterialFlags(uint16 materialIdx, uint32 flags);
-    // Uploads + one MeshInfo (and its BLAS); invalid when empty. `raytraced` false: NO BLAS - any instance of it is
-    // inactive in the TLAS (no RT shadows / GI / RTAO / reflections hit it); for meshes RT never needs to see.
-    RenderMesh createMesh(const RenderMeshData& data, bool raytraced = true);
-    // A GPU LOD chain over createMesh'd meshes (level 0 first, at most MAX_MESH_LODS), `errors` = each level's
-    // geometric deviation in mesh-local units (0 for level 0; the screen-space-error selector). Spawn nodes on
-    // LEVEL 0: the cull picks the level per instance. freeMeshLodChain BEFORE destroying the meshes.
-    uint32 createMeshLodChain(oc::span<const RenderMesh* const> levels, oc::span<const float> errors);
-    void freeMeshLodChain(uint32 groupIdx) { freeMeshLodGroup(groupIdx); }
-    // One node drawing `mesh` with `materialIdx` on `pipeline`, placed by `transform` (a shared identity
-    // instance offset: the mesh is its own root).
-    RenderNode spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform);
-
-    // -- Procedural tree pieces, BAKED on the GPU (tree_cull.inc.glsl; RendererTrees.cpp) -- MAIN THREAD.
-    // A SET is a grove of placed pieces sharing a table of piece types, uploaded once to device-local memory. Per
-    // frame, renderTreeInstanceSet costs one instance claim and one count per distinct mesh - nothing per piece on
-    // the CPU, and no pass of its own on the GPU: the culls build the records. ONE set draws per frame.
-    struct TreeInstanceRep // one representation; mesh nullptr = none. Spawned-on mesh = a chain's LEVEL 0.
-    {
-        const RenderMesh* mesh = nullptr;
-        uint16 material = 0;
-        RendererVKLayout::EPipelineIndex pipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
-    };
-    struct TreeInstanceType
-    {
-        // barkFade / leavesFade: the same meshes on LitMasked with fade-OUT materials (the crossfade band). With a
-        // mid tier, both fade out over the MID band instead (the card mesh takes over from them there).
-        TreeInstanceRep bark, barkFade, leaves, leavesFade, billboard;
-        float farDistance = 0.0f; // billboard switch distance (m); 0 = always the mesh
-        float fadeWidth = 1.0f;   // crossfade band (m), centred on farDistance
-        // The MID tier (main pass only; shadows keep the billboard), from midDistance (0 = none) over a band of
-        // midFadeWidth: `bark` is then the BRANCH bark only and gives way with the leaves to the CARD mesh (cardsIn:
-        // fades in over the mid band; cardsOut: out over the far band); `trunk` stands through both, fading out only
-        // in the far band (trunkFade). Needs a billboard, the card mesh and the trunk.
-        TreeInstanceRep trunk, trunkFade, cardsIn, cardsOut;
-        float midDistance = 0.0f;
-        float midFadeWidth = 1.0f;
-        // Beyond this distance (m) from the shadow cascades' centre it casts no sun shadow (small plants: a texel or
-        // less in the far cascades). 0 = no limit.
-        float shadowDistance = 0.0f;
-        // x the wind's trunk bend / branch sway (tree_wind.inc.glsl), 0..4: a species' stiffness.
-        float windTrunk = 1.0f;
-        float windBranch = 1.0f;
-        // The FAR-TREE VOLUME's view of the type (TreeVolumePipeline): its extinction (1/m) over [densityMin,
-        // densityMax] in type space, densityRes^3 floats (x fastest); nullptr = the type is not in the volume.
-        const float* density = nullptr;
-        uint32 densityRes = 0;
-        glm::vec3 densityMin{ 0.0f };
-        glm::vec3 densityMax{ 0.0f };
-        glm::vec3 albedo{ 0.1f, 0.16f, 0.07f }; // the leaf colour of its volume
-        // A SOLID (a rock, Procedural's world rocks): `density` is its OCCUPANCY (0..1), and the volume gives it
-        // "Trees/Far rock extinction" at any size (a crown's extinction thins with its scale; a rock's does not). Its
-        // colour is the climate's bedrock - or, with solidOwnColour (dead wood), `albedo`.
-        bool solid = false;
-        bool solidOwnColour = false;
-    };
-    struct TreeInstancePiece
-    {
-        Transform transform;      // the piece's node transform (static)
-        glm::vec3 centre{ 0.0f }; // world centre + radius of the far representation (the band test)
-        float radius = 0.0f;
-        uint32 type = 0;
-    };
-    // A CHUNK of the set: a contiguous range of its pieces (the caller sorts them - Procedural: per terrain chunk).
-    struct TreeInstanceChunk { uint32 first = 0; uint32 count = 0; };
-    uint32 createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
-        oc::span<const TreeInstanceChunk> chunks);
-    // A DYNAMIC set (Procedural's world trees): the types fixed, CHUNKS added and removed at run time into a fixed capacity
-    // of piece slots (no growth; no GPU drain). MAIN THREAD, after beginFrame.
-    uint32 createDynamicTreeInstanceSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity);
-    // The new chunk's index (TreeChunkDraw::chunk), or UINT32_MAX when the set has no room.
-    uint32 addTreeInstanceChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces);
-    // Its piece slots are reused NUM_FRAMES_IN_FLIGHT frames later, its index from the next frame on (this frame's
-    // terrain walk may still name it).
-    void removeTreeInstanceChunk(uint32 setId, uint32 chunk);
-    // Drains the GPU first (rare: a respawn / reload).
-    void destroyTreeInstanceSet(uint32 setId);
-    // MAIN THREAD, every frame the set draws (before its renderTreeInstanceSet): the culls bind its buffers (a change
-    // re-records).
-    void bindTreeInstanceSet(uint32 setId);
-    // This frame's DRAWN chunks, each with the passes it draws in (PASS_*: the main cull, the shadow culls, the TLAS):
-    // the claim covers only their pieces. ANY THREAD, once per frame between beginFrame and present (Procedural: from
-    // the terrain's render walk). distanceScale x every type's farDistance.
-    struct TreeChunkDraw { uint32 chunk; uint32 passMask; };
-    void renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar);
-    // The terrain height right under the camera (world Y), per frame: the far-tree volume's cell layout follows the
-    // camera's height above it. Unset (NaN): the baked sea level.
-    void setFarTreeCameraGround(float groundY) { m_farTreeCameraGround = groundY; }
-
-    // -- WORLD TREE RECORDS (TreeRecordPool; Procedural TreeWorld). One thread at a time, after beginFrame and before
-    // present: TreeWorld's "TreeWorld pool" job (joined before present), or main. --
-    // (Re)sizes the pool and drops every chunk (a size change drains the GPU). ringRadius (chunks) sizes the chunk map.
-    void resetTreeRecords(uint64 poolBytes, uint32 ringRadius)
-    {
-        m_treeVolume.invalidate(); // a running bake reads the old chunks
-        m_treeRecords.reset(poolBytes, m_frameCounter, ringRadius);
-    }
-    // A chunk's ground (TREE_RECORD_HEIGHT_WORDS) and 4-byte records; the handle, or UINT32_MAX (no room). The far
-    // volume re-bakes (throttled).
-    uint32 addTreeRecordChunk(glm::ivec2 coord, oc::span<const uint32> ground, oc::span<const uint32> records)
-    {
-        m_treeSetsChanged = true;
-        return m_treeRecords.add(coord, ground, records);
-    }
-    void removeTreeRecordChunk(uint32 handle)
-    {
-        m_treeSetsChanged = true;
-        m_treeRecords.remove(handle, m_frameCounter);
-    }
-    // The record types (indexed by the record's type; empty: the volume ignores the records) and what expanding a record
-    // needs: the chunk size, the world seed, and the tree set whose volume types the variants name (Procedural's world
-    // set). The far volume then takes EVERY tree from the records and none from that set. Drains the GPU.
-    void setTreeRecordTypes(oc::span<const TreeRecordTypeGpu> types, float chunkSize, uint32 worldSeed, uint32 volumeSet)
-    {
-        m_treeVolume.invalidate(); // a running bake reads the old types
-        m_treeRecords.setTypes(types);
-        m_treeRecordChunkSize = chunkSize;
-        m_treeRecordSeed = worldSeed;
-        m_treeRecordSet = volumeSet;
-    }
-    // Once per frame: the deferred frees, and the current frame slot's chunk table.
-    void updateTreeRecords() { m_treeRecords.update(m_swapChain.getCurrentFrameIndex(), m_frameCounter, m_treeVolume.bakeHoldSince()); }
-    TreeRecordStats treeRecordStats() const { return m_treeRecords.stats(); }
-
-    // -- Procedural grass (GrassPipeline, grass.inc.glsl; "Grass" tweaks) --
-    // The blades stand on the terrain MESH: their roots are read from the chunks' own vertices. One entry per BASE chunk
-    // coordinate (the finest drawn terrain node over it), all within grassRange() of the camera: its first vertex and
-    // its cells per side, inside a node mesh whose rows are `vertexStride` vertices apart (a base chunk inside a
-    // bigger quadtree node is a sub-grid of it).
-    struct GrassGroundChunk { glm::ivec2 coord; uint32 firstVertex = 0; uint32 res = 0; };
-    // MAIN THREAD, every frame before present (Procedural TerrainStreamer::update). Valid for ONE frame: a frame
-    // without a call draws no grass (a disabled terrain, or freed chunks, can never be read).
-    void setGrassGround(float chunkSize, uint32 vertexStride, oc::span<const GrassGroundChunk> chunks);
-    // The terrain height right under the camera (world Y; NaN = unknown), per frame (Procedural TerrainStreamer::update):
-    // the near grass cascade's placement (where the bottom of the view meets the ground).
-    void setCameraGround(float groundY) { m_cameraGround = groundY; }
-    float grassRange() const; // m; 0 = no grass
-    // The range the ground chunks must cover (setGrassGround): the grass's and the ground clutter's.
-    float groundRange() const { return glm::max(grassRange(), clutterRange()); }
-
-    // -- Ground clutter (ClutterPipeline, clutter_cull.cs.glsl; Procedural ClutterSystem; "Clutter" tweaks) --
-    // One rigid variant mesh: its LOD levels (level 0 first; an empty level = none), y up, the lowest point at 0.
-    struct ClutterMesh
-    {
-        oc::vector<RendererVKLayout::ClutterVertexGpu> vertices[RendererVKLayout::CLUTTER_LODS];
-        oc::vector<uint32> indices[RendererVKLayout::CLUTTER_LODS];
-    };
-    // The clutter types and their meshes (a type's info.x / .y name its first mesh and its count; flowers have none).
-    // MAIN THREAD; idles the GPU and re-records. Empty = no clutter.
-    void setClutterAssets(oc::span<const RendererVKLayout::ClutterTypeGpu> types, oc::span<const ClutterMesh> meshes);
-    // THE FOREST FLOOR MAP: CLUTTER_FLOOR_DIM^2 rgba8 texels (canopy, trunk, rock, occupied) of CLUTTER_FLOOR_TEXEL m
-    // centred on `centre` (empty = none). MAIN THREAD; each frame slot takes it in present.
-    void setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texels);
-    float clutterRange() const; // m: the farthest type's range x "Range scale", capped by the patch grid; 0 = no clutter
-
-    // -- Debug rendering --
-    uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
-    void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color) // [Concurrency:LOCK - FREE - per - worker staging, merged in present]
-    {
-        oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
-        const ThreadLocalScope tlsPin;
-        verts.push_back({ a, color });
-        verts.push_back({ b, color });
-    }
-    void toggleGiProbeDebug() { m_giProbePipeline.toggleDebug(); }
-    void cycleGiProbeDebugMode() { m_giProbePipeline.cycleDebugMode(); setHaveToRecordCommandBuffers(); }
-
-private:
+protected:
     struct PerFrameData;
 
-    Renderer(const Renderer&) = delete;
-    Renderer(const Renderer&&) = delete;
-    Renderer& operator=(const Renderer&) = delete;
-    Renderer& operator=(const Renderer&&) = delete;
+    RendererState(); // binds the settings references (RendererSettings.cpp)
+    ~RendererState();
+    RendererState(const RendererState&) = delete;
+    RendererState(const RendererState&&) = delete;
+    RendererState& operator=(const RendererState&) = delete;
+    RendererState& operator=(const RendererState&&) = delete;
+
+    Renderer& self(); // this, as the Renderer (the only class derived from this one)
 
     uint32 getCurrentFrameIndex() const { return m_swapChain.getCurrentFrameIndex(); }
 
@@ -558,6 +208,11 @@ private:
     float dlssMipBias() const;
     vk::Extent2D renderExtent() const { return vk::Extent2D{ m_renderExtent.x, m_renderExtent.y }; }
 
+    // The focus without a set one (setSceneFocus): the camera's x / z at min(its height, the focus ground), or the camera itself without a focus ground.
+    glm::vec3 defaultSceneFocus() const
+    {
+        return m_haveFocusGround ? glm::vec3(m_cameraPos.x, glm::min(m_cameraPos.y, m_focusGround), m_cameraPos.z) : m_cameraPos;
+    }
     glm::mat4 computeCenterProjection(const Camera& camera) const; // pure, reversed-Z, unjittered (VR: both eyes)
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: both eyes) * view
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
@@ -642,6 +297,10 @@ private:
     float m_terrainCragScale = 1.0f; // setTerrainCragScale
     void registerUboLocks();   // + the bake every pipeline is first built with
     void registerUboValues(UboBlock& block); // every UBO value (live and lockable) by subject, RendererUbo.cpp
+    // The "Ocean" settings the UBO's ocean values read (RendererSettings.cpp; Renderer::getOceanWorldScale is the API's).
+    float getOceanSwashAmp() const;
+    float getOceanBubbleDepth() const;
+    float getOceanBubbleBrightness() const;
     void resolveUboLocks();
     bool bakeUboValues();      // true when a const changed
     void applyUboLocks();      // main, before the begin-frame build: only after a lock click or a bakeable change
@@ -667,8 +326,8 @@ private:
         bool enabled;       // this frame's gate: desktop executes it, VR records it inline
         bool gateRecording; // Debug lines only: its vertex buffers may not exist yet.
         CommandBuffer* cb;  // the cached secondary (desktop)
-        void (Renderer::*recordCached)(uint32);                         // fills cb
-        void (Renderer::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
+        void (RendererState::*recordCached)(uint32);                         // fills cb
+        void (RendererState::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
     };
     static constexpr uint32 NUM_SCENE_STAGES = 10;
     oc::array<SceneStage, NUM_SCENE_STAGES> buildSceneStages(uint32 frameIdx);
@@ -689,18 +348,39 @@ private:
     void initSharedBuffers();
 
     friend class ObjectContainer;
+    friend class ObjectContainerState; // its load steps register the meshes, materials and LOD groups
     void addObjectContainer(ObjectContainer* pObjectContainer);
     void removeObjectContainer(ObjectContainer* pObjectContainer);
     void freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count);
 
     friend class RenderMesh;
     void destroyMesh(RenderMesh& mesh);
+
+    // The material and texture handles' creates, frees and flags (RenderMaterial / RenderTexture: their API).
+    friend class RenderMaterial;
+    friend class RenderTexture;
+    uint16 addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced);
+    uint16 addTextureMaterial(const RenderMaterial::TextureDesc& desc);
+    uint16 addDerivedMaterial(uint16 source, uint32 extraFlags);
+    uint16 getOrCreateSolidColorMaterial(const glm::vec3& color);
+    uint16 addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName);
+    void destroyTextureMaterial(uint16 materialIdx); // the slot and its textures
+    void releaseMaterial(uint16 materialIdx);        // the slot only: a mesh or derived material
+    uint32 getMaterialFlags(uint16 materialIdx);
+    void setMaterialFlags(uint16 materialIdx, uint32 flags);
+    void releaseTexture(uint16 texIdx);
     uint32 m_identityInstanceOffsetIdx = UINT32_MAX; // spawnMeshNode's shared identity offset (first spawn)
 
     friend class RenderNode;
     uint32 addRenderNodeTransform(const Transform& transform);
     inline Transform& getRenderNodeTransform(uint32 idx) { return m_instances.getTransform(idx); }
     void freeRenderNode(RenderNode& node);
+
+    // MESH STREAMING (MeshStreamer): a streamed-out mesh keeps its bounds but draws zero indices, so the cull's DGC draws, the shadow pass and the
+    // TLAS-instance writer all no-op for it.
+    friend class MeshStreamer;
+    void setMeshStreamedOut(uint16 meshInfoIdx);
+    void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
 
     uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false,
         bool raytraced = true);
@@ -717,7 +397,7 @@ private:
     void waitForGpuAndFlushStaging();
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes); // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.
 
-    // -- Skinning resources -- 
+    // -- Skinning resources --
     friend class AnimatorComponent;
     using SkinnedInstanceBundle = SkinnedMeshRegistry::Bundle;
     uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources) { return m_skinned.addSources(sources); }
@@ -734,8 +414,6 @@ private:
     {
         m_skinned.setInstance(jobIdx, baseVertexOffset, skinVertexOffset, outVertexOffset, vertexCount, paletteHandle, meshIdx, firstIndex, indexCount);
     }
-
-private:
 
     Instance m_instance;
     Device m_device;
@@ -782,10 +460,16 @@ private:
     DebugLinePipeline m_debugLinePipeline;
     ParticlePipeline m_particlePipeline;
     // BAKED TREE RECORDS (RendererTrees.cpp, tree_cull.inc.glsl): the live sets (dead ones recycled by id). The culls
-    // bind ONE set's static buffers (m_treeCullSet, bindTreeInstanceSet; a change re-records them) and build the
+    // bind ONE set's static buffers (m_treeCullSet, bindTreeSet; a change re-records them) and build the
     // records of this frame's LISTED pieces (the drawn chunks' pieces, each with its pass bits) from the camera
-    // distance in the range renderTreeInstanceSet claims (m_treeCullBase / Count, reset per frame in beginFrame,
+    // distance in the range renderTreeSet claims (m_treeCullBase / Count, reset per frame in beginFrame,
     // into the UBO's u_present_tree*).
+    friend class RenderTreeSet;
+    using TreeInstanceRep = RenderTreeSet::Rep;
+    using TreeInstanceType = RenderTreeSet::Type;
+    using TreeInstancePiece = RenderTreeSet::Piece;
+    using TreeInstanceChunk = RenderTreeSet::Range;
+    using TreeChunkDraw = RenderTreeSet::ChunkDraw;
     struct TreeInstanceSet
     {
         Buffer pieces;  // TreeCullPieceGpu per piece slot (device-local)
@@ -808,7 +492,7 @@ private:
         // pair - a piece draws the normal OR the fade material of a mesh) for the bucket sizes.
         oc::vector<uint8> typeRtCapable;
         oc::vector<oc::small_vector<uint16, 5>> typeMeshes;
-        // A DYNAMIC set (createDynamicTreeInstanceSet): a fixed capacity of piece slots in blocks of TREE_SET_BLOCK, a
+        // A DYNAMIC set (createDynamicTreeSet): a fixed capacity of piece slots in blocks of TREE_SET_BLOCK, a
         // removed chunk's blocks reused NUM_FRAMES_IN_FLIGHT frames later, its index the frame after.
         bool dynamic = false;
         uint32 numBlocks = 0;
@@ -832,7 +516,7 @@ private:
     static constexpr uint32 TREE_SET_BLOCK = 64; // a dynamic set's piece-slot allocation unit
     oc::vector<TreeInstanceSet> m_treeSets;
     // A dynamic set's chunks change on MAIN (add / remove) while the terrain walk lists them on a worker
-    // (renderTreeInstanceSet).
+    // (renderTreeSet).
     std::mutex m_treeSetMutex;
     bool m_treeSetsChanged = false;    // a dynamic set changed: the far volume re-bakes (throttled, recordFarTrees)
     uint32 m_treeVolumeMarkFrame = 0;
@@ -841,14 +525,22 @@ private:
     void initTreeSetPieces(TreeInstanceSet& set, uint32 capacity);
     // Writes a chunk's pieces (RT-capable first) into the set's slots [first, first + pieces.size()).
     void writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first);
-    Buffer m_treeCullDummy;              // bound to both tree bindings while no set is
+    // The tree set handle's calls (RenderTreeSet: their API).
+    uint32 createTreeSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces, oc::span<const TreeInstanceChunk> chunks);
+    uint32 createDynamicTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity);
+    uint32 addTreeSetChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces);
+    void removeTreeSetChunk(uint32 setId, uint32 index);
+    void destroyTreeSet(uint32 setId);
+    void bindTreeSet(uint32 setId);
+    void renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar);
+    Buffer m_treeCullDummy;             // bound to both tree bindings while no set is
     uint32 m_treeCullSet = UINT32_MAX;   // the set whose buffers the recorded culls bind
     uint32 m_treeCullBase = 0;           // this frame's claimed range (0 / 0 = none)
     uint32 m_treeCullCount = 0;
     uint32 m_treeCullPieces = 0;         // the trees in it (TREE_RECORDS_PER_PIECE records each)
     uint32 m_treeCullRtPieces = 0;       // the list's first ones: the RT-capable trees of the GI / shadow chunks in RT range (TLAS slots)
     uint32 m_giTlasDemand = 0;           // last present()'s TLAS slot count before the capacity clamp (the growth check)
-    oc::atomic<bool> m_treeCullTaken{ false }; // renderTreeInstanceSet ran this frame (any thread; reset in beginFrame)
+    oc::atomic<bool> m_treeCullTaken{ false }; // renderTreeSet ran this frame (any thread; reset in beginFrame)
     float m_treeCullDistanceScale = 1.0f;
     bool m_treeCullForceFar = false;
     Buffer& treeCullPieces();
@@ -865,7 +557,6 @@ private:
     uint32 m_treeRecordSeed = 1;
     uint32 m_treeRecordSet = UINT32_MAX; // the set whose volume types the record types' variants name
     FarTreeParams& m_farTreeParams;
-    float m_farTreeCameraGround = std::numeric_limits<float>::quiet_NaN(); // setFarTreeCameraGround
     bool farTreesActive() const; // enabled, desktop, and a tree set with volume data
     float farTreesStart() const; // "Far start" scaled with the camera's height (the hand-over + the march's start)
     // The far-tree volume's bake when due, then `march` with this frame's record params (the march's phases run in the
@@ -884,8 +575,9 @@ private:
     oc::vector<GrassGroundChunk> m_grassGround;
     float m_grassChunkSize = 0.0f;
     uint32 m_grassGroundStride = 1; // setGrassGround: the terrain node meshes' row stride (vertices)
-    float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround
+    float m_cameraGround = std::numeric_limits<float>::quiet_NaN(); // setCameraGround: the near grass cascade and the far-tree volume (NaN: the baked sea level)
     bool grassActive() const; // desktop only
+    float grassRange() const; // m; 0 = no grass
     float grassPatchSize() const; // the patch grid (uploadGrassFrame) and u_grass_patchSize
     float grassGridRange() const; // capped so the grid fits GRASS_MAX_PATCHES: the grid and u_grass_range
     // The near grass cascade is drawn (and read): grass, its toggle, and the PCSS sun (RT sun shadows skip the shadow
@@ -917,18 +609,26 @@ private:
     uint32 m_riverMistEmitter = UINT32_MAX;
     void uploadRiverMist(uint32 frameIdx);
     bool clutterActive() const; // desktop only
+    float clutterRange() const; // m: the farthest type's range x "Range scale", capped by the patch grid; 0 = no clutter
     float clutterPatchSize() const;
     void uploadClutterFrame(uint32 frameIdx);
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
     ParticleState m_particles;
     ForceFieldState m_force;
+    // The emitter and query handles' calls (RenderParticleEmitter / RenderForceEmitter / RenderForceQuery: their API). The slot tables are lock-free
+    // (parallel entity spawning); the slot contracts (the KILL flag drain, retirement) live in ParticleState and ForceFieldState.
+    friend class RenderParticleEmitter;
+    friend class RenderForceEmitter;
+    friend class RenderForceQuery;
+    glm::vec4 getForceEmitterReadback(uint32 slot) const;
+    RendererVKLayout::ForceQueryResult getForceQueryReadback(uint32 slot) const;
     BindlessTextures m_textures;
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, drained into the mapped buffer in present()
 
     // The settings the renderer reads (Globals::settings: registered by Settings, written by the TweakPanel and the
-    // setters above). References, so the many reads stay short; nothing here holds a copy. Bound in the constructor
-    // (RendererSettings.cpp): this interface sees only Settings.fwd.
+    // setters of the API). References, so the many reads stay short; nothing here holds a copy. Bound in the
+    // constructor (RendererSettings.cpp): this interface sees only Settings.fwd.
     SkyParams& m_skyParams;
     WindParams& m_windParams;
     ShadowParams& m_shadowParams;
@@ -1000,7 +700,7 @@ private:
     bool m_resizeHold = false;      // setResizeHold
     bool m_swapchainStale = false;  // out of date during a hold: rebuild when it ends
     glm::vec2 m_prevTaaJitter{ 0.0f };
-    
+
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
     VrEyeTargets m_vrEyes;       // VR: the per-eye LDR composite targets
 
@@ -1094,9 +794,3 @@ private:
     };
     oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };
-
-export namespace Globals
-{
-OC_INIT_SEG(OC_SEG_VK_RENDERER)
-    Renderer rendererVK;
-} // namespace Globals

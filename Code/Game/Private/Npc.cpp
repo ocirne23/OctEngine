@@ -178,7 +178,7 @@ void NpcSystem::drawBeams(float deltaSec)
             continue;
         }
         if (fade > 0.0f)
-            Globals::rendererVK.addPointLight(PointLight(b.from, c_muzzleRange, muzzleColor,
+            Globals::rendererVK.addLightInfo(PointLight(b.from, c_muzzleRange, muzzleColor,
                 c_muzzleIntensity * Globals::settings.game.npc.flashIntensity * fade));
         const glm::vec3 axis = b.to - b.from;
         glm::vec3 side = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));

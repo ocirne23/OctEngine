@@ -118,7 +118,7 @@ void GameMatch::onClientLeft(uint32 clientId)
     }
 }
 
-// ---- the server's broadcasts -------------------------------------------------------------------
+// ---- the server's broadcasts ----
 
 void GameMatch::sendStructurePlaced(int index)
 {
@@ -253,8 +253,7 @@ void GameMatch::sendStats()
     }
 }
 
-// ---- the request seams (local queue on the authority, Gq* events from a client) ---------------
-// The SAME validation runs server-side either way.
+// ---- the request seams (local queue on the authority, Gq* events from a client; the SAME server-side validation either way) ----
 
 void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing)
 {
@@ -321,7 +320,7 @@ void GameMatch::requestSetRoute(uint32 id, oc::span<const glm::vec3> points)
     Globals::networkManager.fireNetworkEvent("GqW", writer.data());
 }
 
-// ---- the shared pause --------------------------------------------------------------------------
+// ---- the shared pause ----
 
 void GameMatch::applyPause(bool paused)
 {
@@ -352,7 +351,7 @@ void GameMatch::requestPause(bool paused)
     }
 }
 
-// ---- the event dispatch ------------------------------------------------------------------------
+// ---- the event dispatch ----
 
 void GameMatch::handleNetEvent(oc::string_view name)
 {

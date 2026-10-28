@@ -142,10 +142,10 @@ export namespace Procedural
 		uint32 m_walk = 0;           // drawChunks' counter (the walk's own)
 
 		oc::shared_ptr<const RiverTerrain> m_terrain;
+		RenderMaterial m_material; // the River pipeline's one material (RenderMaterial::createForMesh); declared before the tiles that draw it
 		oc::unordered_map<uint64, Resident> m_units;
 		oc::shared_ptr<Job> m_job;
 		JobCounter m_counter;
-		uint16 m_material = UINT16_MAX; // the River pipeline's one material (createMeshMaterial)
 		bool m_surfaceWas = false;      // a "Surface" toggle re-pulls the units (they need their meshes)
 
 		oc::unordered_map<uint64, NearCell> m_nearCells;

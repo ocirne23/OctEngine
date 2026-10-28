@@ -169,13 +169,13 @@ ParticleEffect ParticleSystem::createEffectInstance(oc::shared_ptr<const Particl
     {
         EmitterInstance emitter;
         emitter.textureIdx = getTexture(e.texturePath, e.textureSRGB);
-        emitter.rendererSlot = Globals::rendererVK.createParticleEmitter(e.toGpu(emitter.textureIdx));
-        if (emitter.rendererSlot == UINT32_MAX)
+        emitter.rendererSlot = RenderParticleEmitter::create(e.toGpu(emitter.textureIdx));
+        if (!emitter.rendererSlot.isValid())
         {
             printf("ParticleSystem: out of emitter slots for effect '%s'\n", inst.desc->name.c_str());
             continue;
         }
-        inst.emitters.push_back(emitter);
+        inst.emitters.push_back(oc::move(emitter));
     }
     if (inst.emitters.empty())
         return ParticleEffect();
@@ -195,8 +195,8 @@ ParticleSystem::EffectInstance* ParticleSystem::findEffect(uint64 id)
 
 void ParticleSystem::destroyEffect(uint64 id)
 {
-    // Take the instance OUT under the lock; its renderer slots retire (renderer lock) and its
-    // desc/emitter storage frees after the unlock (parallel entity destruction).
+    // Take the instance OUT under the lock; its renderer slots retire and its desc/emitter storage
+    // frees when `removed` goes out of scope, after the unlock (parallel entity destruction).
     EffectInstance removed;
     {
         const std::lock_guard lock(m_effectMutex);
@@ -209,8 +209,6 @@ void ParticleSystem::destroyEffect(uint64 id)
         removed = oc::move(m_effects[i]);
         m_effects.erase(m_effects.begin() + i);
     }
-    for (const EmitterInstance& emitter : removed.emitters)
-        Globals::rendererVK.destroyParticleEmitter(emitter.rendererSlot);
 }
 
 void ParticleSystem::update(Renderer& renderer, float deltaSec)
@@ -235,7 +233,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         uint32 slot = UINT32_MAX;
         if (const EffectInstance* inst = findEffect(m_oceanSprayEffect.m_id))
             if (!inst->emitters.empty())
-                slot = inst->emitters[0].rendererSlot;
+                slot = inst->emitters[0].rendererSlot.slot();
         renderer.setOceanSprayEmitter(slot);
     }
     // River mist: the same, for the renderer's river mist producer.
@@ -244,7 +242,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         uint32 slot = UINT32_MAX;
         if (const EffectInstance* inst = findEffect(m_riverMistEffect.m_id))
             if (!inst->emitters.empty())
-                slot = inst->emitters[0].rendererSlot;
+                slot = inst->emitters[0].rendererSlot.slot();
         renderer.setRiverMistEmitter(slot);
     }
 
@@ -317,7 +315,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
                 gpu.cullParams.x = 1.0f - (float)fillCount / (float)emitter.volumeFillSpawned;
                 emitter.volumeFillSpawned = fillCount;
             }
-            renderer.updateParticleEmitter(emitter.rendererSlot, gpu);
+            emitter.rendererSlot.update(gpu);
 
             if (desc.isVolume() && desc.occlude)
             {
@@ -344,7 +342,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
                 spawnCount += fill;
             }
             if (spawnCount > 0)
-                renderer.emitParticles(emitter.rendererSlot, spawnCount);
+                emitter.rendererSlot.emit(spawnCount);
         }
         inst.pendingBurst = false;
     }

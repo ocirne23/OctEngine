@@ -389,8 +389,6 @@ All share ONE spawn template (a lone Light component); the values live on the co
 
 | Key | Action |
 |---|---|
-| P | Toggle the GI probe debug cubes (also the "GI/Debug probes" tweak) |
-| O | Cycle its colour mode: irradiance → cascade / LOD colour → update priority → relocation / backface → visibility (also "GI/Debug probe colour") |
 | L | Aim the sun down the camera forward |
 
 ## Player control

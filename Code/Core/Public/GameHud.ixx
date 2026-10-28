@@ -89,7 +89,7 @@ public:
 
 	static constexpr int NumSlots = 12;
 
-	// ---- writes (any thread) ------------------------------------------------
+	// ---- writes (any thread) ----
 
 	// Grid shape + the key label drawn in each slot's corner. columns <= 0 = one row. Labels past
 	// the given span keep their defaults (1..9,0,-,=).
@@ -258,7 +258,7 @@ public:
 		m_selectedSlot = 0;
 	}
 
-	// ---- reads --------------------------------------------------------------
+	// ---- reads ----
 
 	int getSelectedSlot() const
 	{

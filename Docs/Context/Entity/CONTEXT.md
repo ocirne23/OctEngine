@@ -425,7 +425,7 @@ renderer state.** It fires, for each side:
   `prefabWouldCycle` guards recursion.
 * **Per-entity tint:** `Component Render` takes `Color r g b`. `RenderComponent::spawn` overrides
   every mesh instance's material through `RenderNode::setMaterialOverride` plus
-  `Renderer::getOrCreateSolidColorMaterial`, cached per RGB8 — a 1×1 texture and a MaterialInfo minted once
+  `RenderMaterial::getOrCreateSolidColor`, cached per RGB8 — a 1×1 texture and a MaterialInfo minted once
   per colour. Instances carry `materialIdx` per record, **so there are no shader or layout changes.**
   All Game prefabs author unique colours this way.
 

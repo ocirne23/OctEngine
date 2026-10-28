@@ -150,7 +150,7 @@ vec3 doLight(vec3 lightRadiance, vec3 L, vec3 V, vec3 N, f16vec3 specularCol, f1
 	return specular + doLightDiffuseOnly(lightRadiance, F, matColOverPi, metalness, NdotL);
 }
 
-// ---- fp16 BRDF ------------------------------------------------------------------------------------------
+// ---- fp16 BRDF ----
 // The BRDF above in HALF math end to end (vectors, dots, GGX, visibility, Fresnel, colour). Positions, distances and
 // the HDR radiance stay 32-bit; each light's BRDF factor widens ONCE, at the multiply with its radiance. `alpha` is
 // the GGX alpha, >= 0.01 at every caller (smaller underflows (NoH * alpha)^2).
@@ -321,7 +321,7 @@ vec3 doAreaLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	if (dot(pos - center, quadNormal) <= 0.0)
 		return vec3(0.0);
 
-	// ---- Diffuse -------------------------------------------------------------
+	// ---- Diffuse ----
 	vec3 closest     = closestPointOnRect(pos, center, right, up, halfWidth, halfHeight);
 	vec3 LdiffVec    = closest - pos;
 	float distDiff   = length(LdiffVec);
@@ -338,7 +338,7 @@ vec3 doAreaLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	f16vec3 Fdiff     = FresnelSchlickH(dot(Hdiff, V), specularCol);
 	vec3 diffuse      = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
-	// ---- Specular (representative point) -------------------------------------
+	// ---- Specular (representative point) ----
 	// The mirror ray's hit on the quad plane, clamped to the rectangle, shaded with its own distance and facing (not
 	// for rough surfaces: the lobe is broad).
 	vec3 Lspec;
@@ -386,8 +386,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	vec3 pa   = light.pos - axis * halfLen;
 	vec3 pb   = light.pos + axis * halfLen;
 
-	// ---- Diffuse -------------------------------------------------------------
-	// The closest point on the core segment drives the falloff and the horizon fade.
+	// ---- Diffuse: the closest point on the core segment drives the falloff and the horizon fade ----
 	vec3 closest   = closestPointOnSegment(pos, pa, pb);
 	vec3 LdiffVec  = closest - pos;
 	float coreDist = length(LdiffVec);
@@ -404,7 +403,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, f16vec3 V, f16vec3 N, f16vec3 specul
 	f16vec3 Fdiff = FresnelSchlickH(dot(Hdiff, V), specularCol);
 	vec3 diffuse = doLightDiffuseOnlyH(diffRadiance, Fdiff, matColOverPi, float16_t(metalness), float16_t(horizonVis));
 
-	// ---- Specular (representative point) -------------------------------------
+	// ---- Specular (representative point) ----
 	// The point on the tube surface most aligned with the mirror ray, shaded as a punctual light FROM that point with a
 	// size-widened lobe.
 	vec3  Lspec;

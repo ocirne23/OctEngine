@@ -32,7 +32,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     m_numCascades = numCascades;
     const uint32 numLayers = numCascades;
 
-    // ---- Depth array image -------------------------------------------------
+    // ---- Depth array image ----
     vk::ImageCreateInfo imageInfo{
         .imageType = vk::ImageType::e2D,
         .format = SHADOW_DEPTH_FORMAT,
@@ -47,7 +47,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     };
     if (!Globals::gpuAllocator.createImage(imageInfo, m_image, m_imageMemory, debugName)) { assert(false && "shadow image"); return false; }
 
-    // ---- Views -------------------------------------------------------------
+    // ---- Views ----
     vk::ImageViewCreateInfo sampleViewInfo{
         .image = m_image,
         .viewType = vk::ImageViewType::e2DArray,
@@ -59,7 +59,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     m_sampleView = sampleViewResult.value;
     Globals::device.setDebugName(m_sampleView, debugName);
 
-    // ---- Depth-only multiview render pass (one view per cascade) ----------
+    // ---- Depth-only multiview render pass (one view per cascade) ----
     vk::AttachmentDescription2 depthAttachment{
         .format = SHADOW_DEPTH_FORMAT,
         .samples = vk::SampleCountFlagBits::e1,
@@ -126,7 +126,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     m_framebuffer = fbResult.value;
     Globals::device.setDebugName(m_framebuffer, debugName);
 
-    // ---- Comparison sampler (hardware PCF) --------------------------------
+    // ---- Comparison sampler (hardware PCF) ----
     vk::SamplerCreateInfo samplerInfo{
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
@@ -147,7 +147,7 @@ bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numC
     m_sampler = samplerResult.value;
     Globals::device.setDebugName(m_sampler, oc::format("{}.compare", debugName).c_str());
 
-    // ---- Non-comparison sampler (raw depth reads for the PCSS blocker search) ----------
+    // ---- Non-comparison sampler (raw depth reads for the PCSS blocker search) ----
     vk::SamplerCreateInfo depthSamplerInfo{
         .magFilter = vk::Filter::eNearest,
         .minFilter = vk::Filter::eNearest,

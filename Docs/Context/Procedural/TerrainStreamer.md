@@ -27,7 +27,7 @@
   and would park on that lock behind the very job holding it, so a point under the lock deadlocks.
   A cold-tile inference itself is never interrupted; it parks the fiber anyway.
 * **A node is ONE `RenderMesh` + its `RenderNode`, no `ObjectContainer`** (see RendererVK "Single
-  meshes"): no per-node material (every node shares `m_material`, `createMeshMaterial(TerrainLit)`),
+  meshes"): no per-node material (every node shares `m_material`, `RenderMaterial::createForMesh(TerrainLit)`),
   names or node tables, and no LOD chain (the quadtree IS the LOD). A `Resident` declares its `mesh`
   FIRST so it is destroyed AFTER the `node` that draws it; a retired node frees its mega-buffer
   ranges and MeshInfo slot, **so residency stays bounded across a session.**

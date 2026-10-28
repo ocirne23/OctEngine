@@ -88,7 +88,7 @@ static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
         constexpr float c_tintStrength = 0.55f;
         if (friendly)
             color = glm::mix(color, c_friendlyGreen, c_tintStrength);
-        renderNode.setMaterialOverride(Globals::rendererVK.getOrCreateSolidColorMaterial(color));
+        renderNode.setMaterialOverride(RenderMaterial::getOrCreateSolidColor(color));
     };
     if (RenderComponent* rc = getComponent<RenderComponent>(node))
         tint(rc->node, getRenderSpawnInfo(node));
@@ -198,7 +198,7 @@ void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
     glm::vec3 color(1.0f, 0.35f, 0.2f); // neutral red; else the attacker's team colour
     if (m_hurtTeam != 0xFF)
         color = glm::mix(Globals::forceSystem.getParams().teamColors[glm::min<uint32>(m_hurtTeam, 7u)], glm::vec3(1.0f), 0.3f);
-    Globals::rendererVK.addPointLight(PointLight(pos, range, color,
+    Globals::rendererVK.addLightInfo(PointLight(pos, range, color,
         params.hurtLightIntensity * (0.5f + 0.5f * bodyRadius) * m_hurtGlow));
 }
 

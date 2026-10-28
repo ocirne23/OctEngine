@@ -19,6 +19,9 @@ GPU particles plus projected decals.
   present.** It advances rate accumulators and bursts into renderer spawn requests, **re-uploads
   every emitter's GPU config** — which is why a live `.pfx` edit applies retroactively — and ages and
   submits decals. It is the ONLY place renderer emitter state is written.
+* Each emitter of an instance owns a `RenderParticleEmitter` (RendererVK's RAII slot handle): destroying the instance
+  retires its slots. So the global sits in `OC_SEG_GPU_EFFECTS` (InitSeg.h): it destructs after `~World` and before the
+  renderer.
 
 ### Threading
 
@@ -192,8 +195,7 @@ applied on top of the `.pfx` every frame. The values live in `Globals::settings.
 (`ParticleSystemSettings`, registered by `Settings::registerParticleSystem` in `Settings.ParticleSystem`). Count scales the rate and the volume FILL COUNT, live in both
 directions: up by spawning the deficit over the next frames, down through `ParticleEmitterGpu::cullParams`
 - a one-frame fraction the sim uses to recycle a random subset of that emitter's live particles, because
-a volume never ages out and has nothing else to remove. The handles are DETACHED, not destroyed, in
-`~ParticleSystem` - the plain-XCU particle system outlives the renderer.
+a volume never ages out and has nothing else to remove.
 
 ## `.pfx` effects
 

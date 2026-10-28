@@ -77,7 +77,7 @@ vec2 treeCullWind(uint typeIdx)
 
 // A thread / slot -> its stream instance, when the first `listed` entries of the tree list take one thread each: the
 // stream below the range, then the listed pieces, then the stream above the range. The LIST (in_treeList, this frame's,
-// from renderTreeInstanceSet) holds piece | passMask << 28, the PASS_* bits of the piece's terrain chunk. Returns the
+// from RenderTreeSet::render) holds piece | passMask << 28, the PASS_* bits of the piece's terrain chunk. Returns the
 // stream instance index (for a tree, its FIRST record) and the pass bits (all of them for a stream thread).
 uint treeCullListedInstance(uint gid, uint listed, out bool isTree, out uint pieceIdx, out uint passBits)
 {

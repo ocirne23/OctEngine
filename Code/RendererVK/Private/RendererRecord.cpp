@@ -31,16 +31,16 @@ import :ObjectContainer;
 import :LightingUtils;
 
 // Renderer: COMMAND BUFFER RECORDING. The cached secondaries (one record*() per pass), THE scene
-// stage table (buildSceneStages - see Renderer.ixx) and the two primaries that execute them, desktop
+// stage table (buildSceneStages - see RendererState.ixx) and the two primaries that execute them, desktop
 // and VR. recordCommandBuffers is the per-frame entry point.
 
-vk::CommandBuffer Renderer::beginComputeSecondary(CommandBuffer& cb)
+vk::CommandBuffer RendererState::beginComputeSecondary(CommandBuffer& cb)
 {
     vk::CommandBufferInheritanceInfo inheritance;
     return cb.begin(false, &inheritance);
 }
 
-vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb, bool opaque)
+vk::CommandBuffer RendererState::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb, bool opaque)
 {
     // The depth-writing stages execute in the opaque family (+ the motion target), the layered ones not.
     const SceneColor& sceneColor = m_perFrameData[frameIdx].sceneColor;
@@ -49,7 +49,7 @@ vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuff
 }
 
 // The scene passes: the render rect in the render-size targets.
-void Renderer::setFullViewport(vk::CommandBuffer vkCb) const
+void RendererState::setFullViewport(vk::CommandBuffer vkCb) const
 {
     const glm::ivec2 vpSize = m_renderRect.getSize();
     const vk::Viewport viewport{ .x = (float)m_renderRect.min.x, .y = (float)m_renderRect.max.y,
@@ -59,7 +59,7 @@ void Renderer::setFullViewport(vk::CommandBuffer vkCb) const
     vkCb.setScissor(0, { scissor });
 }
 
-void Renderer::recordIndirectCull(uint32 frameIdx)
+void RendererState::recordIndirectCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -92,7 +92,7 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
 }
 
 
-void Renderer::recordSkinning(uint32 frameIdx)
+void RendererState::recordSkinning(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.skinningCommandBuffer;
@@ -106,7 +106,7 @@ void Renderer::recordSkinning(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordOceanSim(uint32 frameIdx)
+void RendererState::recordOceanSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.oceanSimCommandBuffer;
@@ -121,7 +121,7 @@ void Renderer::recordOceanSim(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordTerrainWetness(uint32 frameIdx)
+void RendererState::recordTerrainWetness(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.terrainWetnessCommandBuffer;
@@ -138,7 +138,7 @@ void Renderer::recordTerrainWetness(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordGrassCull(uint32 frameIdx)
+void RendererState::recordGrassCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.grassCullCommandBuffer;
@@ -155,7 +155,7 @@ void Renderer::recordGrassCull(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordClutterCull(uint32 frameIdx)
+void RendererState::recordClutterCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.clutterCullCommandBuffer;
@@ -171,7 +171,7 @@ void Renderer::recordClutterCull(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordLightGrid(uint32 frameIdx)
+void RendererState::recordLightGrid(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
@@ -187,7 +187,7 @@ void Renderer::recordLightGrid(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordShadowCull(uint32 frameIdx)
+void RendererState::recordShadowCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -219,7 +219,7 @@ void Renderer::recordShadowCull(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordShadowDraw(uint32 frameIdx)
+void RendererState::recordShadowDraw(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     ShadowMap& shadowMap = frameData.shadowMap;
@@ -253,7 +253,7 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
 
 // The NEAR GRASS CASCADE: the blades and the clutter within its reach into its own one-layer map (its pass begun in the
 // primary after the cascades' pass). Desktop only.
-void Renderer::recordGrassNearShadow(uint32 frameIdx)
+void RendererState::recordGrassNearShadow(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     ShadowMap& shadowMap = frameData.grassNearShadowMap;
@@ -272,7 +272,7 @@ void Renderer::recordGrassNearShadow(uint32 frameIdx)
 // After the GI step (this frame's TLAS is built and visible to compute), both primaries: the weather volume's rain
 // occlusion trace - only while the UBO this frame was built with asks for it (buildUboRainOcclusion), so the trace
 // and the sim's shelter test always agree - then the particle sim, which reads THIS frame's map.
-void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx)
+void RendererState::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameIdx)
 {
     if (!m_particles.isEnabled())
         return;
@@ -286,7 +286,7 @@ void Renderer::recordRainAndParticleSim(vk::CommandBuffer primary, uint32 frameI
     executeScoped(primary, "Particle sim", m_perFrameData[frameIdx].particleSimCommandBuffer.getCommandBuffer());
 }
 
-void Renderer::recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex)
+void RendererState::recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor& sceneColor, uint32 eyeIndex)
 {
     // The depth-writing scene stages are done: flush their writes and park the depth in its sampled /
     // read-only-attachment layout for the rest of the frame (AO, force march, the later scene stages,
@@ -318,7 +318,7 @@ void Renderer::recordSceneOpaqueToSampled(vk::CommandBuffer cb, const SceneColor
     cb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 2, .pImageMemoryBarriers = barriers });
 }
 
-void Renderer::recordStaticMesh(uint32 frameIdx)
+void RendererState::recordStaticMesh(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].staticMeshCommandBuffer;
     beginScenePassSecondary(frameIdx, cb, true);
@@ -326,7 +326,7 @@ void Renderer::recordStaticMesh(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -375,7 +375,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
 
 // AO trace+denoise for one eye (compute, no render pass); reads that eye's scene depth - so it runs
 // AFTER the depth-writing scene stages - and writes that eye's AO, which NEXT frame's forward pass reads.
-void Renderer::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -400,7 +400,7 @@ void Renderer::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 }
 
 // Fog apply draw for one eye, inside the eye's scene-colour render pass (viewport set by the caller).
-void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCb = cb.getCommandBuffer();
@@ -430,7 +430,7 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
 
 // Cloud march + temporal for one eye (compute, no render pass): reads this frame's scene depth, so it runs
 // after the depth-writing stages; its result is composited by the "Cloud apply" scene stage.
-void Renderer::recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CloudPipeline::RecordParams params{
@@ -444,7 +444,7 @@ void Renderer::recordCloudsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
 }
 
 // Desktop: the march and the temporal pass as two cached secondaries (recordPostSceneCompute interleaves them).
-void Renderer::recordClouds(uint32 frameIdx)
+void RendererState::recordClouds(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const CloudPipeline::RecordParams params{
@@ -465,7 +465,7 @@ void Renderer::recordClouds(uint32 frameIdx)
 }
 
 // Cloud apply draw for one eye, inside the eye's scene-colour render pass (the fog apply's viewport setup).
-void Renderer::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCb = cb.getCommandBuffer();
@@ -485,7 +485,7 @@ void Renderer::recordCloudApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     m_cloudPipeline.recordApply(cb, frameIdx, eyeIndex, params);
 }
 
-void Renderer::recordCloudApply(uint32 frameIdx)
+void RendererState::recordCloudApply(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].cloudApplyCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -494,7 +494,7 @@ void Renderer::recordCloudApply(uint32 frameIdx)
 }
 
 // TAA resolve for one eye (compute, no render pass); reads that eye's scene colour + depth, writes its history.
-void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
@@ -513,7 +513,7 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
     m_taaPipeline.record(cb, frameIdx, eyeIndex, taaParams);
 }
 
-void Renderer::recordGiProbeDebug(uint32 frameIdx)
+void RendererState::recordGiProbeDebug(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.giProbeDebugCommandBuffer;
@@ -522,7 +522,7 @@ void Renderer::recordGiProbeDebug(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordDebugLines(uint32 frameIdx)
+void RendererState::recordDebugLines(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.debugLineCommandBuffer;
@@ -534,7 +534,7 @@ void Renderer::recordDebugLines(uint32 frameIdx)
 // Particle GPU sim (begin/emit/simulate compute chain), its own secondary outside any render pass;
 // executed right after the GI step (the TLAS build) and the rain occlusion trace. Reads LAST frame's scene depth for
 // depth collision.
-void Renderer::recordParticleSim(uint32 frameIdx)
+void RendererState::recordParticleSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.particleSimCommandBuffer;
@@ -558,7 +558,7 @@ void Renderer::recordParticleSim(uint32 frameIdx)
 
 // Particle billboard draw for one eye, inside the eye's scene-colour render pass (after the opaque
 // forward + decal draws, before fog apply).
-void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
@@ -581,7 +581,7 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
     m_particlePipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
 
-void Renderer::recordParticles(uint32 frameIdx)
+void RendererState::recordParticles(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].particleCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -591,7 +591,7 @@ void Renderer::recordParticles(uint32 frameIdx)
 
 // Projected decal draw for one eye, inside the eye's scene-colour render pass right after the opaque
 // forward draw (so particles/fog layer on top).
-void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+void RendererState::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     setFullViewport(cb.getCommandBuffer());
@@ -608,7 +608,7 @@ void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
     m_decalPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
 
-void Renderer::recordDecals(uint32 frameIdx)
+void RendererState::recordDecals(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].decalCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -619,7 +619,7 @@ void Renderer::recordDecals(uint32 frameIdx)
 // Forcefield shell draw for one eye, inside the eye's scene-colour render pass after the debug
 // overlays (so particles/fog layer on top of the bubbles). part splits the proxy draw and the
 // union march into their own scene stages on desktop (see recordForceField); VR records Both.
-void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
+void RendererState::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
     ForceFieldPipeline::EDrawPart part)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -633,7 +633,7 @@ void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams, part);
 }
 
-void Renderer::recordForceShells(uint32 frameIdx)
+void RendererState::recordForceShells(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].forceFieldCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -641,7 +641,7 @@ void Renderer::recordForceShells(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordForceUnion(uint32 frameIdx)
+void RendererState::recordForceUnion(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].forceUnionCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -651,7 +651,7 @@ void Renderer::recordForceUnion(uint32 frameIdx)
 
 // Force grid build + per-emitter force / point-query dispatches (outside any render pass, after the
 // light grid). All dispatches ride mapped indirect buffers, so emitter/query changes never re-record.
-void Renderer::recordForceCompute(uint32 frameIdx)
+void RendererState::recordForceCompute(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.forceComputeCommandBuffer;
@@ -670,7 +670,7 @@ void Renderer::recordForceCompute(uint32 frameIdx)
 // half-res toggle and the resizes already force a re-record, and the draws are indirect.
 // Viewport/scissor are HALVED to match the targets (the FS maps uv back with x2). The march samples
 // THIS frame's scene depth, so both passes run after the depth-writing scene stages.
-void Renderer::recordForceMarch(uint32 frameIdx)
+void RendererState::recordForceMarch(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const bool halfRes = m_forceFieldPipeline.getUnionHalfRes();
@@ -697,7 +697,7 @@ void Renderer::recordForceMarch(uint32 frameIdx)
     }
 }
 
-void Renderer::recordAO(uint32 frameIdx)
+void RendererState::recordAO(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -729,7 +729,7 @@ void Renderer::recordAO(uint32 frameIdx)
         cb.end();
 }
 
-void Renderer::recordVolumetricFog(uint32 frameIdx)
+void RendererState::recordVolumetricFog(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     FrameSubmission::FrameSlot& submission = m_submission.slot(frameIdx);
@@ -760,7 +760,7 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordFogApply(uint32 frameIdx)
+void RendererState::recordFogApply(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.fogApplyCommandBuffer;
@@ -793,7 +793,7 @@ void Renderer::recordFogApply(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordTaa(uint32 frameIdx)
+void RendererState::recordTaa(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
@@ -817,7 +817,7 @@ void Renderer::recordTaa(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordDlss(uint32 frameIdx)
+void RendererState::recordDlss(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.dlssCommandBuffer;
@@ -842,7 +842,7 @@ void Renderer::recordDlss(uint32 frameIdx)
 // The DLSS resolve, in the primary (Streamline records straight into it, every frame: the constants and the
 // frame token are per frame): the motion vectors, then the upscale into TAA's resolved image, which the post
 // chain reads as if TAA had written it.
-void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
+void RendererState::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const SceneColor& sceneColor = frameData.sceneColor;
@@ -929,7 +929,7 @@ void Renderer::recordDlssEvaluate(uint32 frameIdx, vk::CommandBuffer primary)
 
 // Motion blur's own small passes: TAA wrote the velocity + sub-tiles (with TAA off, the velocity pass here does);
 // the neighbour max; the composite gathers.
-void Renderer::recordMotionBlur(uint32 frameIdx)
+void RendererState::recordMotionBlur(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
@@ -945,7 +945,7 @@ void Renderer::recordMotionBlur(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordEyeAdaptation(uint32 frameIdx)
+void RendererState::recordEyeAdaptation(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.eyeAdaptCommandBuffer;
@@ -967,7 +967,7 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
 }
 
 // The bloom chain (level 0 was written by the eye-adaptation histogram); the composite mixes level 0 in.
-void Renderer::recordBloom(uint32 frameIdx)
+void RendererState::recordBloom(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].bloomCommandBuffer;
     beginComputeSecondary(cb);
@@ -975,7 +975,7 @@ void Renderer::recordBloom(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::recordComposite(uint32 frameIdx)
+void RendererState::recordComposite(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBufferInheritanceInfo inheritance { .renderPass = m_renderPass.getRenderPass(), };
@@ -1014,7 +1014,7 @@ void Renderer::recordComposite(uint32 frameIdx)
 // from this frame's deformed vertices, the TLAS over this frame's live instance count, and the one-time
 // probe-volume clear. Executed by the primary right before the cached GI secondary (recordGlobalIllum),
 // which traces.
-void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
+void RendererState::recordGlobalIllumPrep(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& prepCommandBuffer = frameData.giPrepCommandBuffer;
@@ -1131,7 +1131,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 // per-frame rides the UBO (u_rt_gi*, u_gi, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
 // buffers are stable per slot between invalidations (ensureTlasCapacity / the instance-capacity growth
 // both invalidate), and the RT / GI toggles re-record through their tweak callbacks.
-void Renderer::recordGlobalIllum(uint32 frameIdx)
+void RendererState::recordGlobalIllum(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
@@ -1235,7 +1235,7 @@ namespace
     }
 }
 
-void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary)
+void RendererState::executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary)
 {
     m_gpuProfiler.beginScope(primary, scope);
     primary.executeCommands(1, &secondary);
@@ -1251,7 +1251,7 @@ void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::C
 //   mid - a phase's storage writes -> the next phase's reads;
 //   out - the results -> the scene stages' applies (fragment) and next frame's history reads (compute).
 // "Renderer/Overlap compute" off: the same barriers around each pass alone, each in its own GPU scope (per-pass timing).
-void Renderer::recordPostSceneCompute(uint32 frameIdx, vk::CommandBuffer primary)
+void RendererState::recordPostSceneCompute(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     const auto group = [&](const TreeVolumePipeline::RecordParams* treeParams)
@@ -1358,33 +1358,33 @@ void Renderer::recordPostSceneCompute(uint32 frameIdx, vk::CommandBuffer primary
 }
 
 // Every cached secondary, on invalidation frames only (setHaveToRecordCommandBuffers).
-// THE scene stage table (see Renderer.ixx): name, gate, cached secondary and per-eye inline recorder.
+// THE scene stage table (see RendererState.ixx): name, gate, cached secondary and per-eye inline recorder.
 // Table order is draw order - the opaque group first (it writes the depth), then the layered group.
 // The GI probe impostors WRITE depth (they sort among themselves through gl_FragDepth), so they run
 // with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
-oc::array<Renderer::SceneStage, Renderer::NUM_SCENE_STAGES> Renderer::buildSceneStages(uint32 frameIdx)
+oc::array<RendererState::SceneStage, RendererState::NUM_SCENE_STAGES> RendererState::buildSceneStages(uint32 frameIdx)
 {
     PerFrameData& f = m_perFrameData[frameIdx];
     const bool force = m_force.isEnabled();
     return {
-        SceneStage{ "Static meshes",     true,  true,                             false, &f.staticMeshCommandBuffer,   &Renderer::recordStaticMesh,   &Renderer::recordStaticMeshInto },
-        SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &Renderer::recordGiProbeDebug, nullptr },
-        SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &Renderer::recordDecals,       &Renderer::recordDecalsInto },
-        SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &Renderer::recordDebugLines,   nullptr },
-        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &Renderer::recordForceShells,  &Renderer::recordForceFieldBothInto },
-        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &Renderer::recordForceUnion,   nullptr },
-        SceneStage{ "Particles",         false, m_particles.isEnabled(),         false, &f.particleCommandBuffer,     &Renderer::recordParticles,    &Renderer::recordParticlesInto },
+        SceneStage{ "Static meshes",     true,  true,                             false, &f.staticMeshCommandBuffer,   &RendererState::recordStaticMesh,   &RendererState::recordStaticMeshInto },
+        SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &RendererState::recordGiProbeDebug, nullptr },
+        SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &RendererState::recordDecals,       &RendererState::recordDecalsInto },
+        SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &RendererState::recordDebugLines,   nullptr },
+        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &RendererState::recordForceShells,  &RendererState::recordForceFieldBothInto },
+        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &RendererState::recordForceUnion,   nullptr },
+        SceneStage{ "Particles",         false, m_particles.isEnabled(),         false, &f.particleCommandBuffer,     &RendererState::recordParticles,    &RendererState::recordParticlesInto },
         // The far-tree volume (TreeVolumePipeline; desktop only). With the fog on, the fog apply composites it
         // itself at its own distance (like the clouds); this stage is the fog-off path.
         // Fog off: with the clouds on, the cloud apply composites the trees itself (ordered by distance).
-        SceneStage{ "Far trees apply",   false, farTreesActive() && !m_fogParams.enabled && !cloudsEnabled(), false, &f.farTreesApplyCommandBuffer, &Renderer::recordFarTreesApply, nullptr },
+        SceneStage{ "Far trees apply",   false, farTreesActive() && !m_fogParams.enabled && !cloudsEnabled(), false, &f.farTreesApplyCommandBuffer, &RendererState::recordFarTreesApply, nullptr },
         // With the fog on, the fog apply composites the clouds itself (inside the fog); this stage is the fog-off path.
-        SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &Renderer::recordCloudApply,   &Renderer::recordCloudApplyInto },
-        SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &Renderer::recordFogApply,     &Renderer::recordFogApplyInto },
+        SceneStage{ "Cloud apply",       false, cloudsEnabled() && !m_fogParams.enabled,                false, &f.cloudApplyCommandBuffer,   &RendererState::recordCloudApply,   &RendererState::recordCloudApplyInto },
+        SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &RendererState::recordFogApply,     &RendererState::recordFogApplyInto },
     };
 }
 
-void Renderer::recordSceneSecondaries(uint32 frameIdx)
+void RendererState::recordSceneSecondaries(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     // Recorded even with no jobs: the dispatch is indirect (CPU-written dims per frame), so skinned
@@ -1447,7 +1447,7 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
 // grid, force + particle compute, terrain wetness, the sun shadow cascades. Enable toggles are tested
 // here (the primary is re-recorded every frame) so they take effect at once; the cached secondaries
 // then just go unexecuted.
-void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
+void RendererState::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     // Skin first: deforms skinned meshes into their output vertex regions, which the cull / forward /
@@ -1551,7 +1551,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
 // each eye's scene/AO/TAA then runs against its own images, then eye adaptation and the per-eye LDR
 // composites. Two scene render-pass instances per eye, the same split as the desktop path: the static
 // meshes WRITE the depth, then it turns read-only + sampled for the AO trace and the layered stages.
-void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
+void RendererState::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
@@ -1673,7 +1673,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
 // THERE IS NO DEPTH PREPASS. The opaque scene stages write THE scene depth; one barrier then parks it
 // read-only, and everything that reads this frame's depth runs after that point: the AO trace (whose
 // result the NEXT frame's forward pass reads), the force march, the layered scene stages and TAA.
-void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommandBuffer)
+void RendererState::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommandBuffer)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
@@ -1805,7 +1805,7 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
         executeScoped(vkCommandBuffer, "Bloom", frameData.bloomCommandBuffer.getCommandBuffer());
 }
 
-void Renderer::recordCommandBuffers()
+void RendererState::recordCommandBuffers()
 {
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -1951,7 +1951,7 @@ void Renderer::recordCommandBuffers()
 // starts at once; this one, recorded after the acquire (it names the image's framebuffer), waits alone. The composite
 // reads what the work batch wrote through the work batch's own barriers: a barrier's second scope reaches every command
 // later in submission order, the next batch included.
-void Renderer::recordPresentCommandBuffer()
+void RendererState::recordPresentCommandBuffer()
 {
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -1982,7 +1982,7 @@ void Renderer::recordPresentCommandBuffer()
     commandBuffer.end();
 }
 
-void Renderer::setHaveToRecordCommandBuffers()
+void RendererState::setHaveToRecordCommandBuffers()
 {
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.updated = false;

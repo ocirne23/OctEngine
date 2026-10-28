@@ -20,7 +20,7 @@ namespace
     constexpr float TwoPi = 6.28318530718f;
 }
 
-// ---- SceneAnimRig: authoring -----------------------------------------------------------------------
+// ---- SceneAnimRig: authoring ----
 
 uint32 SceneAnimRig::addLayer(const Layer& layer)
 {
@@ -134,7 +134,7 @@ int32 SceneAnimRig::findLayer(oc::string_view name) const
     return -1;
 }
 
-// ---- SceneAnimatorComponent ------------------------------------------------------------------------
+// ---- SceneAnimatorComponent ----
 
 void SceneAnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {

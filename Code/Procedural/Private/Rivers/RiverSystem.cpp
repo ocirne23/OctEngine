@@ -654,7 +654,7 @@ namespace Procedural
 		tile->mesh = renderer.createMesh(data, false);
 		if (!tile->mesh.isValid())
 			return nullptr;
-		tile->node = renderer.spawnMeshNode(tile->mesh, m_material, RendererVKLayout::EPipelineIndex::River,
+		tile->node = renderer.spawnMeshNode(tile->mesh, m_material.index(), RendererVKLayout::EPipelineIndex::River,
 			Transform(origin, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
 		tile->node.setPassMask(RendererVKLayout::PASS_MAIN); // no shadow, no GI: a thin surface
 		tile->chunk = chunk;
@@ -756,7 +756,7 @@ namespace Procedural
 				NearCell& cell = m_nearCells[cellKey(job->cx, job->cz)];
 				dropTile(oc::move(cell.tile));
 				cell.generation = job->generation;
-				if (job->hasMesh && m_material != UINT16_MAX)
+				if (job->hasMesh && m_material.isValid())
 				{
 					const glm::vec3 origin((float)job->cx * c_nearCell, m_terrain->base().config().seaLevel, (float)job->cz * c_nearCell);
 					// Its base chunk: the one under its centre (a cell never crosses one while "Chunk size" is a multiple of it).
@@ -793,7 +793,7 @@ namespace Procedural
 		}
 
 		// Build the nearest missing (then stale) cell.
-		if (!m_nearJob && m_material != UINT16_MAX)
+		if (!m_nearJob && m_material.isValid())
 		{
 			const int32 c0x = (int32)std::floor((camera.x - keep) / c_nearCell), c1x = (int32)std::floor((camera.x + keep) / c_nearCell);
 			const int32 c0z = (int32)std::floor((camera.y - keep) / c_nearCell), c1z = (int32)std::floor((camera.y + keep) / c_nearCell);
@@ -1004,8 +1004,8 @@ namespace Procedural
 				++m_unitGeneration; // the near cells may cross its rivers: rebuild them
 				if (!job->meshes.empty())
 				{
-					if (m_material == UINT16_MAX)
-						m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::River, false); // not in the TLAS
+					if (!m_material.isValid())
+						m_material = RenderMaterial::createForMesh(RendererVKLayout::EPipelineIndex::River, false); // not in the TLAS
 					const glm::vec3 origin = unitOrigin(job->ui, job->uj);
 					for (const TileMesh& t : job->meshes)
 						if (oc::unique_ptr<WaterTile> tile = spawnTile(renderer, t.mesh, origin, t.chunk))

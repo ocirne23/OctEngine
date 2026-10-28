@@ -530,7 +530,7 @@ private:
     glm::vec3 m_enemyBasePos{ 55.0f, 0.0f, 0.0f };    // team 1's Base; clients spawn beside it
 };
 
-// ---- Shared by the Match*.cpp implementation units (module linkage, NOT exported) --------------
+// ---- Shared by the Match*.cpp implementation units (module linkage, NOT exported) ----
 // GameMatch's bodies are split by topic:
 //   Match.cpp        construction, spawnWorld, the three frame entry points, the nav feed, the
 //                    player ticks (melee, healing), the HUD

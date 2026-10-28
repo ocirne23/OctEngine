@@ -42,24 +42,19 @@ export namespace Procedural
 		void joinWorldPool() { m_world.joinPool(); }
 
 	private:
-		// Every LOD level uploaded; nodes spawn on level 0 and the GPU picks the level per instance through
-		// the chains (UINT32_MAX = no chain). Chains are freed before the meshes (clearAll).
+		// LEVEL 0 of each piece mesh (uploadLevelZero: no GPU LOD chains, the levels above stay empty).
 		struct PieceMeshes
 		{
 			RenderMesh bark[TREE_PIECE_LODS];
 			RenderMesh leaves[TREE_PIECE_LODS];
-			uint32 barkChain = UINT32_MAX;
-			uint32 leafChain = UINT32_MAX;
 			// Modules only, Far mode Billboards: the billboard cards (LitFoliage) with their own baked material (owned).
 			RenderMesh billboard;
-			uint16 billboardMaterial = UINT16_MAX;
-			// Baked variants with billboards (the GPU MID tier): the bark split into the trunk's and the branches'
-			// (LOD chains), and the BRANCH CARD mesh - every module placement's billboard cards merged into one mesh,
+			RenderMaterial billboardMaterial;
+			// Baked variants with billboards (the GPU MID tier): the bark split into the trunk's and the branches',
+			// and the BRANCH CARD mesh - every module placement's billboard cards merged into one mesh,
 			// UVs into the species' card atlas (Species::cardAtlasMaterial), each card's axis in its tangent w.
 			RenderMesh trunkBark[TREE_PIECE_LODS];
 			RenderMesh branchBark[TREE_PIECE_LODS];
-			uint32 trunkChain = UINT32_MAX;
-			uint32 branchChain = UINT32_MAX;
 			RenderMesh cards;
 			glm::vec3 farCentre{ 0.0f }; // piece-local centre of the far representation (switch distance)
 			float farRadius = 0.0f;      // piece-local radius around it (the crossfade band test)
@@ -97,23 +92,25 @@ export namespace Procedural
 			// Baked whole-tree variants (bakeTreeVariant): what the grove places. One "piece" each.
 			oc::vector<TreePiece> variants;
 			oc::vector<PieceMeshes> variantMeshes;
+			// The materials the pieces draw with: ownBarkMaterial's / ownLeafMaterial's, or a shared one (the solid leaf colour).
 			uint16 barkMaterial = 0;
 			uint16 leafMaterial = 0;
-			bool ownsLeafMaterial = false; // a cluster texture material (freed with the species)
-			bool ownsBarkMaterial = false; // the procedural bark texture material (freed with the species)
+			RenderMaterial ownBarkMaterial; // the procedural bark texture material
+			RenderMaterial ownLeafMaterial; // a cluster texture material
 			RendererVKLayout::EPipelineIndex leafPipeline = RendererVKLayout::EPipelineIndex::LitOpaque;
-			// Billboard crossfade: bark / leaf materials derived with a distance fade-OUT (shared textures,
-			// released with the species). UINT16_MAX without billboards.
-			uint16 barkFadeMaterial = UINT16_MAX;
-			uint16 leafFadeMaterial = UINT16_MAX;
-			// The MID tier (GPU path): the module billboards stacked into ONE atlas (owned; LitFoliage, no edge fade) and
-			// its derived fade-IN (the mid band) / fade-OUT (the far band) copies for the variants' card meshes; the
-			// leaves' and the branch bark's fade-OUT over the mid band. The trunk keeps barkMaterial / barkFadeMaterial.
-			uint16 cardAtlasMaterial = UINT16_MAX;
-			uint16 cardInMaterial = UINT16_MAX;
-			uint16 cardOutMaterial = UINT16_MAX;
-			uint16 leafMidFadeMaterial = UINT16_MAX;
-			uint16 branchMidFadeMaterial = UINT16_MAX;
+			// The MID tier (GPU path): the module billboards stacked into ONE atlas (owned; LitFoliage, no edge fade). Declared
+			// before the materials derived from it below, so they are destroyed first.
+			RenderMaterial cardAtlasMaterial;
+			// Billboard crossfade: bark / leaf materials derived with a distance fade-OUT (shared textures). Invalid without
+			// billboards.
+			RenderMaterial barkFadeMaterial;
+			RenderMaterial leafFadeMaterial;
+			// The MID tier's derived fade-IN (the mid band) / fade-OUT (the far band) copies of the atlas for the variants' card
+			// meshes; the leaves' and the branch bark's fade-OUT over the mid band. The trunk keeps barkMaterial / barkFadeMaterial.
+			RenderMaterial cardInMaterial;
+			RenderMaterial cardOutMaterial;
+			RenderMaterial leafMidFadeMaterial;
+			RenderMaterial branchMidFadeMaterial;
 			glm::vec3 volumeAlbedo{ 0.05f, 0.1f, 0.03f }; // the far-tree volume's leaf colour: the leaf texture's linear mean
 		};
 
@@ -130,7 +127,7 @@ export namespace Procedural
 		void spawnPreview(Renderer& renderer, const Camera& camera, const ITerrainSampler* maps);
 		void spawnPiece(Renderer& renderer, const Species& species, const PieceMeshes& meshes, const Transform& transform);
 		// The GPU set's piece TYPES: one per library piece (trunks, modules, baked variants) of every species.
-		void buildGpuTypes(oc::vector<Renderer::TreeInstanceType>& outTypes, oc::unordered_map<const PieceMeshes*, uint32>& outTypeOf) const;
+		void buildGpuTypes(oc::vector<RenderTreeSet::Type>& outTypes, oc::unordered_map<const PieceMeshes*, uint32>& outTypeOf) const;
 		// Hooks a set into the terrain chunks: the walk lists the drawn chunks (m_vegChunkOf: coordinate -> set chunk).
 		void hookTerrain(uint32 numChunks);
 
@@ -188,7 +185,7 @@ export namespace Procedural
 		{
 			glm::ivec2 coord{ 0 };
 			uint32 generation = 0;
-			oc::vector<Renderer::TreeInstancePiece> pieces;
+			oc::vector<RenderTreeSet::Piece> pieces;
 		};
 		struct NearChunk
 		{
@@ -199,11 +196,11 @@ export namespace Procedural
 		void updateWorld(Renderer& renderer, const Camera& camera);
 		void stopExpansion(); // joins the jobs, drops their results
 		static void expandChunk(const ExpandContext& context, glm::ivec2 coord, const oc::vector<TreeRecord>& records,
-			oc::vector<Renderer::TreeInstancePiece>& out);
+			oc::vector<RenderTreeSet::Piece>& out);
 
 		TreeSettings& m_settings = Globals::settings.trees; // "Trees" (the buttons are cleared here)
 		bool m_fadeBandsDirty = false;        // the distance scale changed: rewrite the materials' fade bands
-		uint32 m_treeSet = UINT32_MAX;        // the grove's GPU expansion set (Renderer::createTreeInstanceSet)
+		RenderTreeSet m_treeSet;              // the grove's GPU expansion set; destroyed before the meshes (destroyTreeSet)
 		// The set's chunks are the TERRAIN's (spawnPreview: Globals::terrain.setVegetation): terrain chunk coordinate ->
 		// set chunk, at the chunk size they were sorted with. The sink reads the band settings through the atomics (it
 		// runs on the terrain's walk job). m_vegFallback: every chunk, when no walk lists them.
@@ -211,7 +208,7 @@ export namespace Procedural
 		int m_vegChunkSize = 0;
 		uint32 m_vegNumChunks = 0;
 		bool m_vegHooked = false;
-		oc::vector<Renderer::TreeChunkDraw> m_vegFallback;
+		oc::vector<RenderTreeSet::ChunkDraw> m_vegFallback;
 		oc::atomic<float> m_sinkDistanceScale{ 4.0f };
 		oc::atomic<bool> m_sinkForceFar{ false };
 

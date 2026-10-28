@@ -631,7 +631,7 @@ void GameMatch::drawCoopBarrier()
     }
 }
 
-// ---- the per-team Base anchors ------------------------------------------------------------------
+// ---- the per-team Base anchors ----
 
 glm::vec3 GameMatch::baseGroundPos(uint8 team) const
 {

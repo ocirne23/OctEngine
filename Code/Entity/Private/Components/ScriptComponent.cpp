@@ -21,7 +21,7 @@ import :ScriptContext;
 import :ScriptEventManager;
 import Script;
 
-// ---- SEH fault containment -------------------------------------------------------------------------------
+// ---- SEH fault containment ----
 // A script is generated C++, but it runs author logic: an integer divide by zero, INT_MIN / -1, or a stale
 // pointer held across frames raises a hardware exception that would kill the whole engine. Every entry-point
 // call goes through the invokers below instead: the fault is caught with STRUCTURED exception handling (no

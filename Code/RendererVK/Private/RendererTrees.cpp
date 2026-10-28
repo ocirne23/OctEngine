@@ -69,46 +69,46 @@ namespace
 }
 
 // The baked tree records' UBO words (u_present_tree*, tree_cull.inc.glsl): the claimed range, the band scale, forceFar,
-// and the far-tree volume's start. Evaluated in present(): the UBO uploads in beginFrame, BEFORE renderTreeInstanceSet
+// and the far-tree volume's start. Evaluated in present(): the UBO uploads in beginFrame, BEFORE RenderTreeSet::render
 // claims the range - left at that upload's values, the culls read the range's never-written stream entries as
 // instances (garbage mesh indices, out-of-bounds bucket writes).
 // The culls' THREAD count (their dispatch, IndirectCullComputePipeline::update): one per stream instance outside the
 // range, one per PIECE inside it - tree_cull.inc.glsl's treeCullThreadInstance.
-uint32 Renderer::treeCullThreads() const
+uint32 RendererState::treeCullThreads() const
 {
     return m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullPieces);
 }
 
 // The TLAS-instance writer's live count (u_present_giTlasNumInstances): present()'s demand, clamped to the capacity.
-uint32 Renderer::giTlasLiveCount() const
+uint32 RendererState::giTlasLiveCount() const
 {
     return oc::min(m_giTlasDemand, m_rt.getMaxTlasInstances());
 }
 
 // 0 = no volume; the billboards draw through its fade-in band - an overlap, not a seam.
-float Renderer::treeCullVolumeStart() const
+float RendererState::treeCullVolumeStart() const
 {
     const bool treeVolume = m_treeCullPieces > 0 && m_treeCullSet < (uint32)m_treeSets.size() && farTreesActive()
         && m_treeSets[m_treeCullSet].hasVolume;
     return treeVolume ? oc::max(farTreesStart() + m_farTreeParams.overlap, 1.0f) : 0.0f;
 }
 
-Buffer& Renderer::treeCullPieces()
+Buffer& RendererState::treeCullPieces()
 {
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].pieces : m_treeCullDummy;
 }
 
-Buffer& Renderer::treeCullTypes()
+Buffer& RendererState::treeCullTypes()
 {
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].types : m_treeCullDummy;
 }
 
-Buffer& Renderer::treeCullList(uint32 frameIdx)
+Buffer& RendererState::treeCullList(uint32 frameIdx)
 {
     return m_treeCullSet < (uint32)m_treeSets.size() && m_treeSets[m_treeCullSet].alive ? m_treeSets[m_treeCullSet].lists[frameIdx] : m_treeCullDummy;
 }
 
-uint32 Renderer::allocTreeSet()
+uint32 RendererState::allocTreeSet()
 {
     uint32 setId = 0;
     while (setId < (uint32)m_treeSets.size() && m_treeSets[setId].alive)
@@ -119,7 +119,49 @@ uint32 Renderer::allocTreeSet()
     return setId;
 }
 
-uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
+RenderTreeSet RenderTreeSet::create(oc::span<const Type> types, oc::span<const Piece> pieces, oc::span<const Range> chunks)
+{
+    RenderTreeSet set;
+    set.m_setId = Globals::rendererVK.createTreeSet(types, pieces, chunks);
+    return set;
+}
+
+RenderTreeSet RenderTreeSet::createDynamic(oc::span<const Type> types, uint32 pieceCapacity)
+{
+    RenderTreeSet set;
+    set.m_setId = Globals::rendererVK.createDynamicTreeSet(types, pieceCapacity);
+    return set;
+}
+
+void RenderTreeSet::destroy()
+{
+    if (m_setId == UINT32_MAX)
+        return;
+    Globals::rendererVK.destroyTreeSet(m_setId);
+    m_setId = UINT32_MAX;
+}
+
+uint32 RenderTreeSet::addChunk(oc::span<const Piece> pieces)
+{
+    return Globals::rendererVK.addTreeSetChunk(m_setId, pieces);
+}
+
+void RenderTreeSet::removeChunk(uint32 chunk)
+{
+    Globals::rendererVK.removeTreeSetChunk(m_setId, chunk);
+}
+
+void RenderTreeSet::bind() const
+{
+    Globals::rendererVK.bindTreeSet(m_setId);
+}
+
+void RenderTreeSet::render(oc::span<const ChunkDraw> chunks, float distanceScale, bool forceFar) const
+{
+    Globals::rendererVK.renderTreeSet(m_setId, chunks, distanceScale, forceFar);
+}
+
+uint32 RendererState::createTreeSet(oc::span<const TreeInstanceType> types, oc::span<const TreeInstancePiece> pieces,
     oc::span<const TreeInstanceChunk> chunks)
 {
     const uint32 setId = allocTreeSet();
@@ -140,7 +182,7 @@ uint32 Renderer::createTreeInstanceSet(oc::span<const TreeInstanceType> types, o
     return setId;
 }
 
-uint32 Renderer::createDynamicTreeInstanceSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
+uint32 RendererState::createDynamicTreeSet(oc::span<const TreeInstanceType> types, uint32 pieceCapacity)
 {
     const uint32 setId = allocTreeSet();
     TreeInstanceSet& set = m_treeSets[setId];
@@ -153,7 +195,7 @@ uint32 Renderer::createDynamicTreeInstanceSet(oc::span<const TreeInstanceType> t
     return setId;
 }
 
-uint32 Renderer::addTreeInstanceChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces)
+uint32 RendererState::addTreeSetChunk(uint32 setId, oc::span<const TreeInstancePiece> pieces)
 {
     if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
         return UINT32_MAX;
@@ -216,7 +258,7 @@ uint32 Renderer::addTreeInstanceChunk(uint32 setId, oc::span<const TreeInstanceP
     return index; // (no re-bake: the far volume never splats a dynamic set - recordFarTrees)
 }
 
-void Renderer::removeTreeInstanceChunk(uint32 setId, uint32 index)
+void RendererState::removeTreeSetChunk(uint32 setId, uint32 index)
 {
     if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || !m_treeSets[setId].dynamic)
         return;
@@ -238,7 +280,7 @@ void Renderer::removeTreeInstanceChunk(uint32 setId, uint32 index)
     set.pendingChunks.push_back({ index, m_frameCounter });
 }
 
-void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanceType> types)
+void RendererState::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanceType> types)
 {
     auto record = [&](const TreeInstanceRep& rep)
     {
@@ -358,7 +400,7 @@ void Renderer::initTreeSetTypes(TreeInstanceSet& set, oc::span<const TreeInstanc
 
 // The piece slots: the culls' pieces (device-local, written per chunk through the staging ring), the volume's pieces
 // (host-visible, every slot on the sentinel type until a chunk writes it) and the per-frame lists (at most every slot).
-void Renderer::initTreeSetPieces(TreeInstanceSet& set, uint32 capacity)
+void RendererState::initTreeSetPieces(TreeInstanceSet& set, uint32 capacity)
 {
     set.pieces.initialize(oc::max<size_t>((size_t)capacity * sizeof(TreeCullPieceGpu), 16),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "TreeCullPieces");
@@ -381,9 +423,9 @@ void Renderer::initTreeSetPieces(TreeInstanceSet& set, uint32 capacity)
 }
 
 // Within the chunk the RT-capable pieces FIRST (a stable partition - the caller does not address single pieces):
-// renderTreeInstanceSet lists them ahead of every other piece, and the TLAS takes slots for those only. The sphere
+// renderTreeSet lists them ahead of every other piece, and the TLAS takes slots for those only. The sphere
 // around them is the CPU's RT range test.
-void Renderer::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first)
+void RendererState::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chunk, oc::span<const TreeInstancePiece> pieces, uint32 first)
 {
     oc::vector<uint32> order(pieces.size());
     for (uint32 i = 0; i < (uint32)order.size(); ++i)
@@ -438,14 +480,14 @@ void Renderer::writeTreeChunk(TreeInstanceSet& set, TreeInstanceSet::Chunk& chun
 // of a ground tree at HORIZONTAL distance start. The billboards hand over (tree_cull) and the march starts there,
 // so from the air the hand-over stays at horizontal "Far start" - where the volume's fixed ring begins - instead of
 // moving in under the camera (the billboards vanished below it with nothing in their place).
-float Renderer::farTreesStart() const
+float RendererState::farTreesStart() const
 {
-    const float ground = std::isnan(m_farTreeCameraGround) ? m_terrain.getHeightMap().getUserParam() : m_farTreeCameraGround;
+    const float ground = std::isnan(m_cameraGround) ? m_terrain.getHeightMap().getUserParam() : m_cameraGround;
     const float h = oc::max(m_cameraPos.y - ground, 0.0f);
     return std::sqrt(m_farTreeParams.startDistance * m_farTreeParams.startDistance + h * h);
 }
 
-bool Renderer::farTreesActive() const
+bool RendererState::farTreesActive() const
 {
     if (!m_farTreeParams.enabled || m_sceneViewCount != 1)
         return false;
@@ -457,7 +499,7 @@ bool Renderer::farTreesActive() const
     return false;
 }
 
-void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const oc::function<void(const TreeVolumePipeline::RecordParams*)>& march)
+void RendererState::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const oc::function<void(const TreeVolumePipeline::RecordParams*)>& march)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     // The record chunks changed (they stream in and out while the camera moves): re-bake at most every 30 frames.
@@ -538,7 +580,7 @@ void Renderer::recordFarTrees(uint32 frameIdx, vk::CommandBuffer primary, const 
     march(m_treeVolume.ready(m_farTreeParams) ? &params : nullptr);
 }
 
-void Renderer::recordFarTreesApply(uint32 frameIdx)
+void RendererState::recordFarTreesApply(uint32 frameIdx)
 {
     CommandBuffer& cb = m_perFrameData[frameIdx].farTreesApplyCommandBuffer;
     beginScenePassSecondary(frameIdx, cb);
@@ -552,7 +594,7 @@ void Renderer::recordFarTreesApply(uint32 frameIdx)
     cb.end();
 }
 
-void Renderer::destroyTreeInstanceSet(uint32 setId)
+void RendererState::destroyTreeSet(uint32 setId)
 {
     if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive)
         return;
@@ -598,7 +640,7 @@ void Renderer::destroyTreeInstanceSet(uint32 setId)
     set.alive = false;
 }
 
-void Renderer::bindTreeInstanceSet(uint32 setId)
+void RendererState::bindTreeSet(uint32 setId)
 {
     if (setId >= (uint32)m_treeSets.size() || !m_treeSets[setId].alive || m_treeCullSet == setId)
         return;
@@ -606,9 +648,9 @@ void Renderer::bindTreeInstanceSet(uint32 setId)
     setHaveToRecordCommandBuffers();
 }
 
-void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar)
+void RendererState::renderTreeSet(uint32 setId, oc::span<const TreeChunkDraw> chunks, float distanceScale, bool forceFar)
 {
-    // The culls carry the BOUND set's records (bindTreeInstanceSet, main), one set per frame. The distance test runs
+    // The culls carry the BOUND set's records (bindTreeSet, main), one set per frame. The distance test runs
     // from the main view: the culls' camera.
     if (setId != m_treeCullSet || setId >= (uint32)m_treeSets.size())
         return;
@@ -617,7 +659,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
         return;
     if (m_treeCullTaken.exchange(true, oc::memory_order_relaxed))
     {
-        assert(false && "renderTreeInstanceSet: one call per frame");
+        assert(false && "RenderTreeSet::render: one call per frame");
         return;
     }
     std::lock_guard<std::mutex> lock(m_treeSetMutex); // a dynamic set's chunks change on main meanwhile
@@ -629,7 +671,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     oc::span<uint32> list = set.mappedLists[frameIdx];
     const float rtRange = m_foliageParams.rtRange;
-    const glm::vec3 focus = sceneFocusOrCamera();
+    const glm::vec3 focus = self().sceneFocusOrCamera();
     auto inRtSection = [&](const TreeChunkDraw& draw)
     {
         const TreeInstanceSet::Chunk& rt = set.chunks[draw.chunk];
@@ -643,7 +685,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
             continue;
         const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
         const uint32 rtCount = chunk.rtCount;
-        assert(numListed + rtCount <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
+        assert(numListed + rtCount <= list.size() && "RenderTreeSet::render: a chunk listed twice");
         const uint32 bits = draw.passMask << 28;
         for (uint32 i = 0; i < rtCount; ++i)
             list[numListed + i] = (chunk.first + i) | bits;
@@ -656,7 +698,7 @@ void Renderer::renderTreeInstanceSet(uint32 setId, oc::span<const TreeChunkDraw>
             continue;
         const TreeInstanceSet::Chunk& chunk = set.chunks[draw.chunk];
         const uint32 skip = inRtSection(draw) ? chunk.rtCount : 0u; // listed above
-        assert(numListed + chunk.count - skip <= list.size() && "renderTreeInstanceSet: a chunk listed twice");
+        assert(numListed + chunk.count - skip <= list.size() && "RenderTreeSet::render: a chunk listed twice");
         const uint32 bits = draw.passMask << 28;
         for (uint32 i = skip; i < chunk.count; ++i)
             list[numListed + i - skip] = (chunk.first + i) | bits;

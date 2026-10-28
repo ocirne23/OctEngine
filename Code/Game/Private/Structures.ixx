@@ -353,7 +353,7 @@ public:
     }
     float placeRange() const { return m_settings.placeRange; }
 
-    // ---- GRID PLACEMENT --------------------------------------------------------------------
+    // ---- GRID PLACEMENT ----
     static constexpr float GridCellSize = 2.0f;
     static constexpr int footprintCellsOf(EStructureType t)
     {
@@ -415,7 +415,7 @@ public:
     // probe refuses rock cells too). GameMatch rebuilds the list with the map.
     void setTerrainBlocked(oc::vector<glm::vec4> rects) { m_terrainBlocked = oc::move(rects); }
 
-    // ---- CONSTRUCTION (server) -------------------------------------------------------------
+    // ---- CONSTRUCTION (server) ----
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
     float fundNearbyBlueprint(const glm::vec3& pos, float radius, uint8 team, float amount,
         bool includeRepairs = false);
@@ -477,7 +477,7 @@ private:
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
 
-    // ---- CELL OCCUPANCY + DERIVED LINKS ----------------------------------------------------
+    // ---- CELL OCCUPANCY + DERIVED LINKS ----
     // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a
     // Crossing's MIDDLE cell - the perpendicular cable passing under it.
     struct CellEntry
@@ -519,7 +519,7 @@ private:
     void rebuildNetworks();
     void updateArms(const Ref& s); // enable the arm children pointing at connected neighbours
 
-    // ---- THE CABLE TRANSPORT (Transport.cpp) ----------------------------------------------
+    // ---- THE CABLE TRANSPORT (Transport.cpp) ----
     // Resources move over the cables as WHOLE CELLS. Every built cable segment and conducting
     // crossing is a NODE with an integer fill and an out-rate; a built building that holds a
     // medium is a JUNCTION node (its port: every segment touching it is a neighbour, so a line

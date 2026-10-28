@@ -5,7 +5,7 @@ import Core.Transform;
 import :VK;
 import :Buffer;
 import :Layout;
-import :RenderNode; // Globals::renderNodeTransforms
+import :RenderNodeState; // Globals::renderNodeTransforms
 
 // THE per-frame instance stream: the host-visible, mapped buffers the entity pass writes straight into
 // during Renderer::renderNode, one set per frame slot, plus the CPU state that addresses them.

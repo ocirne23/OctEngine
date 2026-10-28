@@ -1,6 +1,6 @@
 #pragma once
 
-// ---- parameter-pair expansion ----------------------------------------------------------------------------
+// ---- parameter-pair expansion ----
 // Each SCRIPT_CTX_FUNCS row below lists its parameters ONCE, as (type, name) pairs, instead of a typed
 // declaration list and a same-named bare-argument list side by side. SCRIPT_CTX_PARAMS/SCRIPT_CTX_ARGS expand
 // that one list into "type name, type name, ..." (the declaration -- SCRIPT_CTX_PTR/DECL/METHOD all need this)

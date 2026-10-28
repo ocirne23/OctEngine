@@ -81,7 +81,7 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         noteLodChainUse(node, startIdx, instances); // benign races: same-value stamp + thread-safe noteUse
 }
 
-void Renderer::noteTextureUse(const RenderNode& node, uint32 passMask)
+void RendererState::noteTextureUse(const RenderNode& node, uint32 passMask)
 {
     if (!Globals::textureStreamer.isStreamingEnabled())
         return;
@@ -103,7 +103,7 @@ void Renderer::noteTextureUse(const RenderNode& node, uint32 passMask)
     }
 }
 
-void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances)
+void RendererState::noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances)
 {
     // The GPU cull picks each instance's level, so every level of a referenced chain must stay warm in
     // the mesh streamer. Only AUTHORED chains (no error data) need this: their levels are independent
@@ -129,7 +129,7 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, Instance
 
 
 
-uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
+uint16 RendererState::getOrCreateSolidColorMaterial(const glm::vec3& color)
 {
     const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
     const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
@@ -195,7 +195,7 @@ uint16 Renderer::getOrCreateSolidColorMaterial(const glm::vec3& color)
     return materialIdx;
 }
 
-uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced)
+uint16 RendererState::addMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced)
 {
     // What ObjectContainer builds for a textureless procedural scene with a pipeline override.
     RendererVKLayout::MaterialInfo material{};
@@ -217,9 +217,9 @@ uint16 Renderer::createMeshMaterial(RendererVKLayout::EPipelineIndex pipeline, b
     return (uint16)addMaterialInfos({ material });
 }
 
-uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, float alphaCutoff, const char* debugName,
-    const oc::vector<oc::span<uint8>>* normalMips, uint32 extraFlags, ETextureEncoding albedoEncoding, ETextureEncoding normalEncoding)
+uint16 RendererState::addTextureMaterial(const RenderMaterial::TextureDesc& desc)
 {
+    using ETextureEncoding = RenderMaterial::ETextureEncoding;
     auto toFormat = [](ETextureEncoding encoding, bool sRGB)
     {
         switch (encoding)
@@ -230,21 +230,23 @@ uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::ve
         default:                    return sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
         }
     };
+    assert(desc.albedoMips && "RenderMaterial::TextureDesc needs albedoMips");
     // "<debugName>/albedo" and "/normal": the VRAM view (MemoryPanel) splits a name on '/', so each material is a
     // folder of its textures - and a caller that names materials "<group>/<item>" gets one box per item.
-    const uint16 texIdx = Globals::textureManager.uploadMips(width, height, toFormat(albedoEncoding, true), mips,
-        oc::format("{}/albedo", debugName).c_str());
+    const uint16 texIdx = Globals::textureManager.uploadMips(desc.width, desc.height, toFormat(desc.albedoEncoding, true), *desc.albedoMips,
+        oc::format("{}/albedo", desc.debugName).c_str());
     RendererVKLayout::MaterialInfo material{};
-    material.flags = extraFlags;
+    material.flags = desc.extraFlags;
     material.diffuseTexIdx = texIdx;
-    material.normalTexIdx = normalMips
-        ? Globals::textureManager.uploadMips(width, height, toFormat(normalEncoding, false), *normalMips, oc::format("{}/normal", debugName).c_str())
+    material.normalTexIdx = desc.normalMips
+        ? Globals::textureManager.uploadMips(desc.width, desc.height, toFormat(desc.normalEncoding, false), *desc.normalMips,
+            oc::format("{}/normal", desc.debugName).c_str())
         : RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
     material.metalRoughnessTexIdx = UINT16_MAX;
-    if (alphaCutoff > 0.0f)
+    if (desc.alphaCutoff > 0.0f)
     {
         material.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Mask;
-        material.opacity = alphaCutoff; // the Mask discard compares against opacity
+        material.opacity = desc.alphaCutoff; // the Mask discard compares against opacity
     }
     else
     {
@@ -258,18 +260,18 @@ uint16 Renderer::createTextureMaterial(uint32 width, uint32 height, const oc::ve
     return (uint16)addMaterialInfos({ material });
 }
 
-uint16 Renderer::createTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+uint16 RendererState::addTexture(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
 {
-    // No re-record: the upload queued its bindless write (as createTextureMaterial's).
+    // No re-record: the upload queued its bindless write (as addTextureMaterial's).
     return Globals::textureManager.uploadMips(width, height, vk::Format::eR8G8B8A8Srgb, mips, debugName);
 }
 
-void Renderer::releaseTexture(uint16 texIdx)
+void RendererState::releaseTexture(uint16 texIdx)
 {
     m_textures.queueFree(oc::span<const uint16>(&texIdx, 1));
 }
 
-void Renderer::destroyTextureMaterial(uint16 materialIdx)
+void RendererState::destroyTextureMaterial(uint16 materialIdx)
 {
     // Like removeObjectContainer: the image retires once the GPU has drained, the slot recycles.
     const RendererVKLayout::MaterialInfo& material = m_materials.items()[materialIdx];
@@ -280,25 +282,25 @@ void Renderer::destroyTextureMaterial(uint16 materialIdx)
     m_materials.release(materialIdx, 1);
 }
 
-uint16 Renderer::deriveMaterial(uint16 source, uint32 extraFlags)
+uint16 RendererState::addDerivedMaterial(uint16 source, uint32 extraFlags)
 {
     RendererVKLayout::MaterialInfo material = m_materials.items()[source];
     material.flags |= extraFlags;
     return (uint16)addMaterialInfos({ material });
 }
 
-void Renderer::releaseMaterial(uint16 materialIdx)
+void RendererState::releaseMaterial(uint16 materialIdx)
 {
     const std::lock_guard lock(m_spawnMutex); // see freeMeshInfoRange
     m_materials.release(materialIdx, 1);
 }
 
-uint32 Renderer::getMaterialFlags(uint16 materialIdx)
+uint32 RendererState::getMaterialFlags(uint16 materialIdx)
 {
     return m_materials.items()[materialIdx].flags;
 }
 
-void Renderer::setMaterialFlags(uint16 materialIdx, uint32 flags)
+void RendererState::setMaterialFlags(uint16 materialIdx, uint32 flags)
 {
     m_materials.items()[materialIdx].flags = flags;
     m_materials.upload(materialIdx, 1);
@@ -306,42 +308,81 @@ void Renderer::setMaterialFlags(uint16 materialIdx, uint32 flags)
 
 RenderMesh Renderer::createMesh(const RenderMeshData& data, bool raytraced)
 {
-    RenderMesh mesh;
-    if (data.vertices.empty() || data.indices.empty())
-        return mesh;
-    MeshDataManager& meshDataManager = Globals::meshDataManager;
-    mesh.m_numVertices = (uint32)data.vertices.size();
-    mesh.m_numIndices = (uint32)data.indices.size();
-    mesh.m_firstVertex = (uint32)(meshDataManager.uploadVertexData(data.vertices.data(), size_t(mesh.m_numVertices) * sizeof(RendererVKLayout::MeshVertex))
-        / sizeof(RendererVKLayout::MeshVertex));
-    mesh.m_firstIndex = (uint32)(meshDataManager.uploadIndexData(data.indices.data(), size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex))
-        / sizeof(RendererVKLayout::MeshIndex));
-    mesh.m_bounds = data.bounds;
-
-    RendererVKLayout::MeshInfo info{};
-    info.center = data.bounds.pos;
-    info.radius = data.bounds.radius;
-    info.indexCount = mesh.m_numIndices;
-    info.firstIndex = mesh.m_firstIndex;
-    info.vertexOffset = (int32)mesh.m_firstVertex;
-    info.prevVertexDelta = 0;
-    mesh.m_meshIdx = (uint16)addMeshInfos({ info }, oc::span<const uint32>(&mesh.m_numVertices, 1), false, raytraced);
-    return mesh;
+    const RenderMeshData* level = &data;
+    return createMesh(oc::span<const RenderMeshData* const>(&level, 1), {}, raytraced);
 }
 
-uint32 Renderer::createMeshLodChain(oc::span<const RenderMesh* const> levels, oc::span<const float> errors)
+RenderMesh Renderer::createMesh(oc::span<const RenderMeshData* const> levels, oc::span<const float> errors, bool raytraced)
 {
-    assert(levels.size() >= 2 && levels.size() <= RendererVKLayout::MAX_MESH_LODS && errors.size() == levels.size());
-    MeshLodGroup group;
-    group.numLods = (uint8)levels.size();
-    for (uint8 k = 0; k < group.numLods; ++k)
+    assert(levels.size() <= RendererVKLayout::MAX_MESH_LODS && (levels.size() <= 1 || errors.size() >= levels.size()));
+    RenderMesh mesh;
+    uint32 numLevels = 0; // up to the first empty level
+    uint32 numVertices = 0, numIndices = 0;
+    for (; numLevels < (uint32)levels.size() && !levels[numLevels]->vertices.empty() && !levels[numLevels]->indices.empty(); ++numLevels)
     {
-        group.meshIdx[k] = levels[k]->m_meshIdx;
-        group.errors[k] = k == 0 ? 0.0f : oc::max(errors[k], 1e-7f); // nonzero: selects by error, not projected size
+        numVertices += (uint32)levels[numLevels]->vertices.size();
+        numIndices += (uint32)levels[numLevels]->indices.size();
     }
-    group.center = levels[0]->m_bounds.pos;
-    group.radius = levels[0]->m_bounds.radius;
-    return addMeshLodGroup(group);
+    if (numLevels == 0)
+        return mesh;
+
+    // ONE vertex range and ONE index range for every level (each level's MeshInfo at its own offsets): a single level uploads straight from its data.
+    oc::vector<RendererVKLayout::MeshVertex> packedVertices;
+    oc::vector<RendererVKLayout::MeshIndex> packedIndices;
+    if (numLevels > 1)
+    {
+        packedVertices.reserve(numVertices);
+        packedIndices.reserve(numIndices);
+        for (uint32 k = 0; k < numLevels; ++k)
+        {
+            packedVertices.insert(packedVertices.end(), levels[k]->vertices.begin(), levels[k]->vertices.end());
+            packedIndices.insert(packedIndices.end(), levels[k]->indices.begin(), levels[k]->indices.end());
+        }
+    }
+    const RenderMeshData& base = *levels[0];
+    MeshDataManager& meshDataManager = Globals::meshDataManager;
+    mesh.m_numVertices = numVertices;
+    mesh.m_numIndices = numIndices;
+    mesh.m_firstVertex = (uint32)(meshDataManager.uploadVertexData(numLevels > 1 ? packedVertices.data() : base.vertices.data(),
+        size_t(numVertices) * sizeof(RendererVKLayout::MeshVertex)) / sizeof(RendererVKLayout::MeshVertex));
+    mesh.m_firstIndex = (uint32)(meshDataManager.uploadIndexData(numLevels > 1 ? packedIndices.data() : base.indices.data(),
+        size_t(numIndices) * sizeof(RendererVKLayout::MeshIndex)) / sizeof(RendererVKLayout::MeshIndex));
+    mesh.m_bounds = base.bounds;
+    mesh.m_numLevels = (uint8)numLevels;
+
+    oc::vector<RendererVKLayout::MeshInfo> infos(numLevels);
+    uint32 vertexCounts[RendererVKLayout::MAX_MESH_LODS];
+    uint32 firstVertex = mesh.m_firstVertex, firstIndex = mesh.m_firstIndex;
+    for (uint32 k = 0; k < numLevels; ++k)
+    {
+        const RenderMeshData& level = *levels[k];
+        RendererVKLayout::MeshInfo& info = infos[k];
+        info.center = level.bounds.pos;
+        info.radius = level.bounds.radius;
+        info.indexCount = (uint32)level.indices.size();
+        info.firstIndex = firstIndex;
+        info.vertexOffset = (int32)firstVertex;
+        info.prevVertexDelta = 0;
+        vertexCounts[k] = (uint32)level.vertices.size();
+        firstVertex += vertexCounts[k];
+        firstIndex += info.indexCount;
+    }
+    mesh.m_meshIdx = (uint16)addMeshInfos(infos, oc::span<const uint32>(vertexCounts, numLevels), false, raytraced);
+
+    if (numLevels >= 2)
+    {
+        MeshLodGroup group;
+        group.numLods = (uint8)numLevels;
+        for (uint32 k = 0; k < numLevels; ++k)
+        {
+            group.meshIdx[k] = (uint16)(mesh.m_meshIdx + k);
+            group.errors[k] = k == 0 ? 0.0f : oc::max(errors[k], 1e-7f); // nonzero: selects by error, not projected size
+        }
+        group.center = base.bounds.pos;
+        group.radius = base.bounds.radius;
+        mesh.m_lodGroup = addMeshLodGroup(group);
+    }
+    return mesh;
 }
 
 RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, RendererVKLayout::EPipelineIndex pipeline, const Transform& transform)
@@ -360,8 +401,8 @@ RenderNode Renderer::spawnMeshNode(const RenderMesh& mesh, uint16 materialIdx, R
     instance.materialIdx = materialIdx;
     instance.pipelineIndex = (uint16)pipeline;
     instance.alphaMode = m_materials.items()[materialIdx].alphaMode; // the TLAS writer's opacity flag reads it
-    if (m_meshLods.getGroupIdxForMesh(mesh.m_meshIdx) != UINT32_MAX)
-        node.m_lodStateBase = allocateLodStateRange(1); // GPU hysteresis slot (createMeshLodChain level 0)
+    if (mesh.m_lodGroup != UINT32_MAX)
+        node.m_lodStateBase = allocateLodStateRange(1); // GPU hysteresis slot (a mesh with LOD levels)
     return node;
 }
 
@@ -371,15 +412,73 @@ void RenderMesh::destroy()
         Globals::rendererVK.destroyMesh(*this);
 }
 
-void Renderer::destroyMesh(RenderMesh& mesh)
+RenderMaterial RenderMaterial::createForMesh(RendererVKLayout::EPipelineIndex pipeline, bool rayTraced)
 {
-    // The same free as removeObjectContainer's for an unstreamed mesh: the data ranges, then the
-    // neutralized MeshInfo slot (its BLAS and side tables go with it).
+    RenderMaterial material;
+    material.m_index = Globals::rendererVK.addMeshMaterial(pipeline, rayTraced);
+    return material;
+}
+
+RenderMaterial RenderMaterial::createTextured(const TextureDesc& desc)
+{
+    RenderMaterial material;
+    material.m_index = Globals::rendererVK.addTextureMaterial(desc);
+    material.m_ownsTextures = true;
+    return material;
+}
+
+RenderMaterial RenderMaterial::derive(uint16 source, uint32 extraFlags)
+{
+    RenderMaterial material;
+    material.m_index = Globals::rendererVK.addDerivedMaterial(source, extraFlags);
+    return material;
+}
+
+uint16 RenderMaterial::getOrCreateSolidColor(const glm::vec3& color) { return Globals::rendererVK.getOrCreateSolidColorMaterial(color); }
+
+void RenderMaterial::destroy()
+{
+    if (m_index == UINT16_MAX)
+        return;
+    if (m_ownsTextures)
+        Globals::rendererVK.destroyTextureMaterial(m_index);
+    else
+        Globals::rendererVK.releaseMaterial(m_index);
+    m_index = UINT16_MAX;
+}
+
+uint32 RenderMaterial::getFlags() const { return Globals::rendererVK.getMaterialFlags(m_index); }
+void RenderMaterial::setFlags(uint32 flags) { Globals::rendererVK.setMaterialFlags(m_index, flags); }
+
+RenderTexture RenderTexture::create(uint32 width, uint32 height, const oc::vector<oc::span<uint8>>& mips, const char* debugName)
+{
+    RenderTexture texture;
+    texture.m_index = Globals::rendererVK.addTexture(width, height, mips, debugName);
+    return texture;
+}
+
+void RenderTexture::destroy()
+{
+    if (m_index == UINT16_MAX)
+        return;
+    Globals::rendererVK.releaseTexture(m_index);
+    m_index = UINT16_MAX;
+}
+
+void RendererState::destroyMesh(RenderMesh& mesh)
+{
+    // The same free as removeObjectContainer's for an unstreamed mesh: the LOD chain (detaches the levels from the GPU
+    // LOD selection), the data ranges, then the neutralized MeshInfo slots (their BLASes and side tables go with them).
+    if (mesh.m_lodGroup != UINT32_MAX)
+    {
+        freeMeshLodGroup(mesh.m_lodGroup);
+        mesh.m_lodGroup = UINT32_MAX;
+    }
     Globals::meshDataManager.freeVertexData(size_t(mesh.m_firstVertex) * sizeof(RendererVKLayout::MeshVertex),
         size_t(mesh.m_numVertices) * sizeof(RendererVKLayout::MeshVertex));
     Globals::meshDataManager.freeIndexData(size_t(mesh.m_firstIndex) * sizeof(RendererVKLayout::MeshIndex),
         size_t(mesh.m_numIndices) * sizeof(RendererVKLayout::MeshIndex));
-    freeMeshInfoRange(mesh.m_meshIdx, 1);
+    freeMeshInfoRange(mesh.m_meshIdx, mesh.m_numLevels);
     mesh.m_meshIdx = UINT16_MAX;
 }
 
@@ -393,7 +492,7 @@ uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)
 }
 
 
-uint32 Renderer::addRenderNodeTransform(const Transform& transform)
+uint32 RendererState::addRenderNodeTransform(const Transform& transform)
 {
     return m_instances.allocateTransform(transform); // lock-free (TransformSlots)
 }
@@ -409,7 +508,7 @@ void RenderNode::destroy()
 // re-uploaded into per-frame buffers every frame, transforms upload sparsely on change (dirty on
 // slot reuse), so frames still in flight read their own copies and frames recorded from here on
 // simply never reference the freed slots.
-void Renderer::freeRenderNode(RenderNode& node)
+void RendererState::freeRenderNode(RenderNode& node)
 {
     if (node.m_transformIdx != UINT32_MAX)
     {
@@ -441,7 +540,7 @@ namespace
     }
 }
 
-void Renderer::waitForGpuAndFlushStaging()
+void RendererState::waitForGpuAndFlushStaging()
 {
     // Drain first: some buffers being grown here (e.g. m_instanceOffsets.getBuffer()) aren't per-frame-in-flight,
     // so an already-submitted draw/dispatch may still be reading one while a queued staging copy is about
@@ -461,7 +560,7 @@ void Renderer::waitForGpuAndFlushStaging()
     m_textures.processPendingFrees();
 }
 
-void Renderer::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
+void RendererState::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
 {
     m_instances.onUniqueMeshCapacityGrown(maxUniqueMeshes);
     m_meshLods.onUniqueMeshCapacityGrown(maxUniqueMeshes);
@@ -474,7 +573,7 @@ void Renderer::onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes)
     printf("Renderer: grew unique mesh capacity to %u\n", maxUniqueMeshes);
 }
 
-void Renderer::setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette)
+void RendererState::setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette)
 {
     assert(node.isSkinned());
     m_skinned.setPalette(node.m_skinnedBundleHandle, palette);
@@ -482,7 +581,7 @@ void Renderer::setSkinningPalette(const RenderNode& node, oc::span<const glm::ma
 
 
 // The consumers of the bindless arrays; BindlessTextures decides WHEN, this decides WHAT.
-void Renderer::initBindlessTextures()
+void RendererState::initBindlessTextures()
 {
     m_textures.initialize(
         [this](uint32 count)
@@ -514,12 +613,12 @@ void Renderer::initBindlessTextures()
         });
 }
 
-void Renderer::addObjectContainer(ObjectContainer* pObjectContainer)
+void RendererState::addObjectContainer(ObjectContainer* pObjectContainer)
 {
     m_objectContainers.push_back(pObjectContainer);
 }
 
-void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
+void RendererState::removeObjectContainer(ObjectContainer* pObjectContainer)
 {
     oc::erase(m_objectContainers, pObjectContainer);
     ObjectContainer& container = *pObjectContainer;
@@ -578,7 +677,7 @@ void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
     // drains the GPU itself before queuing, so no extra synchronization is needed here for that.
 }
 
-void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
+void RendererState::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
 {
     if (count == 0)
         return;
@@ -600,7 +699,7 @@ void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
 // The Renderer's half of a bundle teardown: the MeshInfo range, the output vertex data, the RT job
 // slots and the LOD groups are all its own. SkinnedMeshRegistry::recycleBundle then releases the
 // registry's own slots and clears the entry.
-void Renderer::destroySkinnedBundle(uint32 bundleHandle)
+void RendererState::destroySkinnedBundle(uint32 bundleHandle)
 {
     const SkinnedInstanceBundle& bundle = m_skinned.getBundle(bundleHandle);
     uint32 numMeshInfos = bundle.numMeshes; // level 0s + the LOD levels appended after them
@@ -622,7 +721,7 @@ void Renderer::destroySkinnedBundle(uint32 bundleHandle)
     m_skinned.recycleBundle(bundleHandle);
 }
 
-void Renderer::setMeshStreamedOut(uint16 meshInfoIdx)
+void RendererState::setMeshStreamedOut(uint16 meshInfoIdx)
 {
     m_meshInfos.items()[meshInfoIdx].indexCount = 0;
     m_meshInfos.upload(meshInfoIdx, 1);
@@ -631,7 +730,7 @@ void Renderer::setMeshStreamedOut(uint16 meshInfoIdx)
     m_rt.onMeshEvicted(meshInfoIdx);
 }
 
-void Renderer::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount)
+void RendererState::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount)
 {
     RendererVKLayout::MeshInfo& info = m_meshInfos.items()[meshInfoIdx];
     info.vertexOffset = vertexOffset;
@@ -644,7 +743,7 @@ void Renderer::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 
 // SharedTable does the slot claim, the mirror write, the upload and any capacity growth (holes are
 // never compacted, so a range a destroyed container freed is reused first). The callback is the
 // Renderer's own per-slot bookkeeping: the parallel CPU side tables and the BLAS build queue.
-uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs,
+uint32 RendererState::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs,
     bool raytraced)
 {
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
@@ -678,7 +777,7 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
     return baseMeshInfoIdx;
 }
 
-uint32 Renderer::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos)
+uint32 RendererState::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos)
 {
     if (materialInfos.empty())
         return m_materials.count();
@@ -688,7 +787,7 @@ uint32 Renderer::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInf
     return m_materials.add(materialInfos);
 }
 
-uint32 Renderer::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets)
+uint32 RendererState::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets)
 {
     if (meshInstanceOffsets.empty())
         return m_instanceOffsets.count();
@@ -734,36 +833,35 @@ void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolumeIn)
     m_submission.addFogVolume(m_swapChain.getCurrentFrameIndex(), fogVolume);
 }
 
-void Renderer::addPointLight(const PointLight& light)   { addLightInfo(light); }
-void Renderer::addAreaLight(const AreaLight& areaLight) { addLightInfo(areaLight); }
-void Renderer::addSpotLight(const SpotLight& spotLight) { addLightInfo(spotLight); }
-
 void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
 {
     if (const uint32 idx = m_submission.claimDecal(); idx != UINT32_MAX)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
 }
 
-// The emitter slot contract (KILL flag drain, retirement) lives in ParticleState; the slot table is
-// lock-free (parallel entity spawning).
-uint32 Renderer::createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
+RenderParticleEmitter RenderParticleEmitter::create(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
-    return m_particles.createEmitter(desc);
+    RenderParticleEmitter emitter;
+    emitter.m_slot = Globals::rendererVK.m_particles.createEmitter(desc);
+    return emitter;
 }
 
-void Renderer::updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc)
+void RenderParticleEmitter::destroy()
 {
-    m_particles.updateEmitter(slot, desc);
+    if (m_slot == UINT32_MAX)
+        return;
+    Globals::rendererVK.m_particles.destroyEmitter(m_slot, Globals::rendererVK.m_frameCounter);
+    m_slot = UINT32_MAX;
 }
 
-void Renderer::emitParticles(uint32 slot, uint32 count)
+void RenderParticleEmitter::update(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
-    m_particles.emit(slot, count);
+    Globals::rendererVK.m_particles.updateEmitter(m_slot, desc);
 }
 
-void Renderer::destroyParticleEmitter(uint32 slot)
+void RenderParticleEmitter::emit(uint32 count)
 {
-    m_particles.destroyEmitter(slot, m_frameCounter);
+    Globals::rendererVK.m_particles.emit(m_slot, count);
 }
 
 void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents)
@@ -771,39 +869,57 @@ void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& 
     m_particles.requestRainVolume(center, halfExtents);
 }
 
-// The force slot tables are lock-free (parallel entity spawning); the slot bookkeeping and the
-// retirement contract live in ForceFieldState.
-uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
+RenderForceEmitter RenderForceEmitter::create(const RendererVKLayout::ForceEmitterGpu& desc)
 {
-    return m_force.createEmitter(desc);
+    RenderForceEmitter emitter;
+    emitter.m_slot = Globals::rendererVK.m_force.createEmitter(desc);
+    return emitter;
 }
 
-void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc)
+void RenderForceEmitter::destroy()
 {
-    m_force.updateEmitter(slot, desc);
+    if (m_slot == UINT32_MAX)
+        return;
+    Globals::rendererVK.m_force.destroyEmitter(m_slot, Globals::rendererVK.m_frameCounter);
+    m_slot = UINT32_MAX;
 }
 
-void Renderer::destroyForceEmitter(uint32 slot)
+void RenderForceEmitter::update(const RendererVKLayout::ForceEmitterGpu& desc)
 {
-    m_force.destroyEmitter(slot, m_frameCounter);
+    Globals::rendererVK.m_force.updateEmitter(m_slot, desc);
 }
 
-uint32 Renderer::createForceQuerySlot()
+glm::vec4 RenderForceEmitter::readback() const
 {
-    return m_force.createQuery();
+    return Globals::rendererVK.getForceEmitterReadback(m_slot);
 }
 
-void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
+RenderForceQuery RenderForceQuery::create()
 {
-    m_force.setQuery(slot, pos);
+    RenderForceQuery query;
+    query.m_slot = Globals::rendererVK.m_force.createQuery();
+    return query;
 }
 
-void Renderer::destroyForceQuerySlot(uint32 slot)
+void RenderForceQuery::destroy()
 {
-    m_force.destroyQuery(slot, m_frameCounter);
+    if (m_slot == UINT32_MAX)
+        return;
+    Globals::rendererVK.m_force.destroyQuery(m_slot, Globals::rendererVK.m_frameCounter);
+    m_slot = UINT32_MAX;
 }
 
-glm::vec4 Renderer::getForceEmitterReadback(uint32 slot) const
+void RenderForceQuery::setPosition(const glm::vec3& pos)
+{
+    Globals::rendererVK.m_force.setQuery(m_slot, pos);
+}
+
+RendererVKLayout::ForceQueryResult RenderForceQuery::readback() const
+{
+    return Globals::rendererVK.getForceQueryReadback(m_slot);
+}
+
+glm::vec4 RendererState::getForceEmitterReadback(uint32 slot) const
 {
     const oc::span<const glm::vec4> forces = m_forceFieldPipeline.getForceReadback(m_swapChain.getCurrentFrameIndex());
     return slot < forces.size() ? forces[slot] : glm::vec4(0.0f);
@@ -814,7 +930,7 @@ RendererVKLayout::ForceBakeReadback Renderer::getForceBakeReadback() const
     return m_forceFieldPipeline.getBakeReadback(m_swapChain.getCurrentFrameIndex());
 }
 
-RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) const
+RendererVKLayout::ForceQueryResult RendererState::getForceQueryReadback(uint32 slot) const
 {
     const oc::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
     return slot < results.size() ? results[slot] : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u };
@@ -871,7 +987,7 @@ void Renderer::setGrassGround(float chunkSize, uint32 vertexStride, oc::span<con
 // This slot's ground table (its fence was waited): the patch grid around the camera, from the patch size and the
 // capped range (grassPatchSize / grassGridRange: u_grass_patchSize / u_grass_range), and the terrain chunks under it - the finest per cell. Then the frame's chunk list is
 // spent: the next frame draws grass only if the terrain hands it over again.
-void Renderer::uploadGrassFrame(uint32 frameIdx)
+void RendererState::uploadGrassFrame(uint32 frameIdx)
 {
     using RendererVKLayout::GRASS_TABLE_DIM;
     RendererVKLayout::GrassFrameGpu& frame = m_grassPipeline.frame(frameIdx);
@@ -891,7 +1007,7 @@ void Renderer::uploadGrassFrame(uint32 frameIdx)
             frame.patchSize = patchSize;
         }
 
-        const float range = groundRange() + 16.0f; // + the largest patch: a patch grid reaches past its range by up to one
+        const float range = self().groundRange() + 16.0f; // + the largest patch: a patch grid reaches past its range by up to one
         const glm::vec2 camXZ(m_cameraPos.x, m_cameraPos.z);
         const glm::ivec2 tableMin(glm::floor((camXZ - range) / m_grassChunkSize));
         const glm::ivec2 tableMax(glm::floor((camXZ + range) / m_grassChunkSize));
@@ -973,7 +1089,7 @@ void Renderer::setRiverWaterMap(glm::vec2 origin, oc::span<const float> heights)
 }
 
 // This slot's inland water map (its fence was waited), when this slot has not taken the current one.
-void Renderer::uploadRiverWaterMap(uint32 frameIdx)
+void RendererState::uploadRiverWaterMap(uint32 frameIdx)
 {
     using namespace RendererVKLayout;
     if (!m_riverWaterDirty[frameIdx] || !m_mappedRiverWaterMaps[frameIdx])
@@ -996,7 +1112,7 @@ void Renderer::setRiverMistSources(oc::span<const RendererVKLayout::RiverMistSou
 }
 
 // This slot's river mist sources (its fence was waited), when this slot has not taken the current ones.
-void Renderer::uploadRiverMist(uint32 frameIdx)
+void RendererState::uploadRiverMist(uint32 frameIdx)
 {
     using namespace RendererVKLayout;
     if (!m_riverMistDirty[frameIdx] || !m_mappedRiverMist[frameIdx])
@@ -1020,7 +1136,7 @@ void Renderer::setClutterFloorMap(glm::vec2 centre, oc::span<const uint32> texel
     m_clutterFloorDirty.fill(true);
 }
 
-float Renderer::clutterRange() const
+float RendererState::clutterRange() const
 {
     if (!clutterActive())
         return 0.0f;
@@ -1030,7 +1146,7 @@ float Renderer::clutterRange() const
 
 // This slot's clutter frame (its fence was waited): the patch grid around the camera, the counts the cull and the
 // prefix read, the flower draws' index ranges - and the floor map, when this slot has not taken the current one.
-void Renderer::uploadClutterFrame(uint32 frameIdx)
+void RendererState::uploadClutterFrame(uint32 frameIdx)
 {
     using namespace RendererVKLayout;
     ClutterFrameGpu& frame = m_clutterPipeline.frame(frameIdx);

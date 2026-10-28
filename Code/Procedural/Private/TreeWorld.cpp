@@ -761,10 +761,10 @@ namespace Procedural
 			return s;
 		};
 
-		// THE GROUND for the far volume (TreeRecordPool's encoding): TREE_RECORD_HEIGHT_RES^2 heights over the chunk,
+		// THE GROUND for the far volume (TreeRecordPool's encoding): TREE_RECORD_GROUND_RES^2 heights over the chunk,
 		// corners included, bilinear in the grid, as 16-bit steps above the chunk's minimum.
 		{
-			constexpr uint32 N = TREE_RECORD_HEIGHT_RES;
+			constexpr uint32 N = TREE_RECORD_GROUND_RES;
 			float heights[N * N];
 			float lo = FLT_MAX, hi = -FLT_MAX;
 			for (uint32 j = 0; j < N; ++j)
@@ -776,7 +776,7 @@ namespace Procedural
 					hi = glm::max(hi, h);
 				}
 			const float unit = glm::max(hi - lo, 1e-3f) / 65535.0f;
-			outGround.assign(TREE_RECORD_HEIGHT_WORDS, 0u);
+			outGround.assign(TREE_RECORD_GROUND_WORDS, 0u);
 			outGround[0] = oc::bitCast<uint32>(lo);
 			outGround[1] = oc::bitCast<uint32>(unit);
 			for (uint32 k = 0; k < N * N; ++k)

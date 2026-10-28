@@ -50,7 +50,7 @@ A FLAT "Horizon band" ring extends to the far plane so the sea always meets the 
 
 The clipmap splits terrain-node style: ring 0 whole, each outer ring as 8 rectangular blocks around
 its hole, the horizon band as its 4 sides. **Each is ONE `RenderMesh` + node (no `ObjectContainer`;
-every sector shares `m_material`, `createMeshMaterial(Ocean, rayTraced = false)`, no LOD chain — the
+every sector shares `m_material`, `RenderMaterial::createForMesh(Ocean, rayTraced = false)`, no LOD chain — the
 clipmap is its own LOD) with its own SpatialIndex entry** (`SpatialLayer_Terrain`, userData =
 `&sector.node | SpatialTerrainTag_Ocean`, `spawnVisible = false`), so the CPU visibility gate and the
 GPU per-instance frustum cull drop off-screen water **instead of vertex-shading the whole multi-km

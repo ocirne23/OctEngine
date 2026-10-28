@@ -191,7 +191,7 @@ export namespace Procedural
 			uint32 generation = 0;
 			bool dropped = false; // out of the ring when its pump got to it
 			oc::vector<TreeRecord> records;
-			oc::vector<uint32> ground; // TREE_RECORD_HEIGHT_WORDS (RendererVK TreeRecordPool): the far volume's ground
+			oc::vector<uint32> ground; // TREE_RECORD_GROUND_WORDS (RendererVK TreeRecords): the far volume's ground
 		};
 
 		struct Chunk

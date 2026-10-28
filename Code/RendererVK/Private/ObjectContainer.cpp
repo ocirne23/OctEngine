@@ -48,7 +48,7 @@ static bool parseLodName(oc::string_view name, uint32& outLevel, oc::string_view
     return true;
 }
 
-struct ObjectContainer::TempInitData
+struct ObjectContainerState::TempInitData
 {
 	oc::vector<oc::pair<RendererVKLayout::EPipelineIndex, RendererVKLayout::EAlphaMode>> pipelineAlphaForMaterialIdx;
     oc::vector<uint16> materialIdxForMeshIdx;
@@ -79,7 +79,7 @@ ObjectContainer::~ObjectContainer()
     Globals::rendererVK.removeObjectContainer(this);
 }
 
-void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData& temp, const MaterialOverrides* pOverrides)
+void ObjectContainerState::initializeMeshes(const ISceneData& sceneData, TempInitData& temp, const ContainerMaterialOverrides* pOverrides)
 {
     const size_t numMeshes = sceneData.getNumMeshes();
 
@@ -452,7 +452,7 @@ union MaterialFlags
     uint32 flags;
 };
 
-void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitData& temp, const MaterialOverrides* pOverrides)
+void ObjectContainerState::initializeMaterials(const ISceneData& sceneData, TempInitData& temp, const ContainerMaterialOverrides* pOverrides)
 {
     const size_t numMaterials = sceneData.getNumMaterials();
     oc::vector<RendererVKLayout::MaterialInfo> materialInfos;
@@ -585,7 +585,7 @@ void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitD
     m_baseMaterialInfoIdx = (uint16)Globals::rendererVK.addMaterialInfos(materialInfos);
 }
 
-void ObjectContainer::initializeNodes(const ISceneData& sceneData, TempInitData& temp)
+void ObjectContainerState::initializeNodes(const ISceneData& sceneData, TempInitData& temp)
 {
     oc::list<oc::pair<oc::unique_ptr<INodeData>, int>> nodeDataParentIdxStack;
     oc::vector<Transform> localSpaceNodes;

@@ -228,7 +228,7 @@ toggling "Surface/Enabled" re-pulls the units.
     LARGEST arriving branch is only eased, never cut** (it is the main river's continuation; cutting both of two similar
     streams leaves the junction's upstream side dry).
 * Main uploads each tile (`createMesh`, no BLAS) and spawns its node at the unit's origin at sea level, `PASS_MAIN` (0
-  while the tile is past "Radius"). Material `createMeshMaterial(River, false)`: not in the TLAS. Drawn by RendererVK's
+  while the tile is past "Radius"). Material `RenderMaterial::createForMesh(River, false)`: not in the TLAS. Drawn by RendererVK's
   River variant (RendererVK "River and lake water").
 * **IT RIDES THE TERRAIN'S CULLING** - no spatial entry of its own (one multi-km mesh per unit is never culled). The
   tiles are listed per base chunk (`m_tilesByChunk`); TerrainStreamer's hand-over walk lists every node it drew in the

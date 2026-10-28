@@ -568,9 +568,7 @@ bool PhysicsWorld::getContactPoint(int64 contactId, glm::vec3& outPoint, glm::ve
     return true;
 }
 
-// ---- Collider wireframe debug draw ----------------------------------------------------------------
-// Everything below decomposes box3d's debug-draw callbacks into world-space line segments pushed
-// through the caller's DebugLineFn, so no renderer types leak into Physics.
+// ---- Collider wireframe debug draw: box3d's debug-draw callbacks as world-space lines through the caller's DebugLineFn (no renderer types in Physics) ----
 
 namespace
 {

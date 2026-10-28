@@ -10,7 +10,7 @@
 import Core;
 import Network;
 
-// ---- deterministic RNG (never time-seeded: a finding must reproduce) ----------------------------
+// ---- deterministic RNG (never time-seeded: a finding must reproduce) ----
 
 struct Rng
 {
@@ -47,7 +47,7 @@ static void fillFuzzed(Rng& rng, oc::vector<uint8>& out, size_t size)
     }
 }
 
-// ---- mode: NetReader primitives -----------------------------------------------------------------
+// ---- mode: NetReader primitives ----
 
 static int fuzzReader(uint32 iterations, uint64 seed)
 {
@@ -115,9 +115,7 @@ static int fuzzReader(uint32 iterations, uint64 seed)
     return 0;
 }
 
-// ---- transport packet construction --------------------------------------------------------------
-// Mirrors Reliable.cpp's private constants on purpose: sharing the sender's helpers could only ever
-// produce well-formed packets.
+// ---- transport packet construction (Reliable.cpp's private constants, mirrored on purpose: the sender's helpers only make well-formed packets) ----
 
 namespace Pkt
 {
@@ -217,7 +215,7 @@ static void sendPayload(UdpSocket& socket, const NetAddress& to, uint16 seq, oc:
         socket.sendTo(to, writer.data());
 }
 
-// ---- mode: raw packets at an in-process NetHost --------------------------------------------------
+// ---- mode: raw packets at an in-process NetHost ----
 
 static int fuzzHost(uint32 iterations, uint64 seed)
 {
@@ -367,7 +365,7 @@ static int fuzzHost(uint32 iterations, uint64 seed)
     return 0;
 }
 
-// ---- mode: hostile client vs a live game server --------------------------------------------------
+// ---- mode: hostile client vs a live game server ----
 
 static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
 {

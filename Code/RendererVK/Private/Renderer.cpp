@@ -31,7 +31,9 @@ import :ObjectContainer;
 import :LightingUtils;
 
 
-Renderer::~Renderer()
+Renderer& RendererState::self() { return static_cast<Renderer&>(*this); }
+
+RendererState::~RendererState()
 {
     auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
@@ -77,7 +79,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     return true;
 }
 
-bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr)
+bool RendererState::initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr)
 {
     Globals::meshStreamer.initialize();
 
@@ -138,7 +140,7 @@ bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EV
     return true;
 }
 
-void Renderer::initPipelines()
+void RendererState::initPipelines()
 {
     const vk::Extent2D ext = m_swapChain.getLayout().extent; // the post chain (after the TAA / DLSS resolve)
     const vk::Extent2D renderExt = renderExtent();          // the scene's render-size targets
@@ -230,7 +232,7 @@ void Renderer::initPipelines()
     m_rainOcclusionPipeline.initialize();
 }
 
-void Renderer::initPerFrameResources()
+void RendererState::initPerFrameResources()
 {
     for (PerFrameData& perFrame : m_perFrameData)
     {
@@ -305,7 +307,7 @@ void Renderer::initPerFrameResources()
     }
 }
 
-void Renderer::initSharedBuffers()
+void RendererState::initSharedBuffers()
 {
     m_meshLods.initialize(m_meshInfos.capacity(),
         [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
@@ -337,7 +339,7 @@ void Renderer::initSharedBuffers()
     }
 }
 
-void Renderer::recreateVrEyeTargets()
+void RendererState::recreateVrEyeTargets()
 {
     if (m_sceneViewCount <= 1)
         return;
@@ -379,7 +381,7 @@ void Renderer::recreateWindowSurface(Window& window)
     }
 }
 
-void Renderer::recreateSwapchain()
+void RendererState::recreateSwapchain()
 {
     auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
@@ -533,7 +535,7 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
     return true;
 }
 
-glm::mat4 Renderer::computeCenterProjection(const Camera& camera) const
+glm::mat4 RendererState::computeCenterProjection(const Camera& camera) const
 {
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
     // In VR the "centre view" (used for culling, GI region, shadow cascade fit, and the shared screen-space
@@ -547,12 +549,12 @@ glm::mat4 Renderer::computeCenterProjection(const Camera& camera) const
 
 // THE one place the centre view-projection is built. Its two callers - setFrameView before the frame
 // and buildUboViews inside it - must agree bit-exactly, or the spatial cull and the GPU cull disagree.
-glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
+glm::mat4 RendererState::computeCenterViewProj(const Camera& camera) const
 {
     return computeCenterProjection(camera) * camera.viewMatrix;
 }
 
-void Renderer::updateRenderExtent()
+void RendererState::updateRenderExtent()
 {
     m_dlssMode = (Streamline::DlssMode)m_dlssParams.mode; // see m_dlssMode: applied here, with the sizes
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
@@ -566,7 +568,7 @@ void Renderer::updateRenderExtent()
     m_renderScale = glm::vec2(render) / glm::vec2(display);
 }
 
-void Renderer::updateRenderRect()
+void RendererState::updateRenderRect()
 {
     const glm::ivec2 extent(m_renderExtent);
     Rect rect;
@@ -584,7 +586,7 @@ void Renderer::updateRenderRect()
     }
 }
 
-void Renderer::recreateRenderTargets()
+void RendererState::recreateRenderTargets()
 {
     const vk::Extent2D renderExt = renderExtent();
     m_rtaoPipeline.recreateImages(renderExt.width, renderExt.height);
@@ -599,7 +601,7 @@ void Renderer::recreateRenderTargets()
     setHaveToRecordCommandBuffers();
 }
 
-void Renderer::applyRenderResolution()
+void RendererState::applyRenderResolution()
 {
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
@@ -620,7 +622,7 @@ void Renderer::applyRenderResolution()
     setHaveToRecordCommandBuffers();
 }
 
-void Renderer::beginFrame()
+void RendererState::beginFrame()
 {
     ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
     assert(m_frameViewSet && "Renderer::setFrameView() must run before the frame's begin-frame work");
@@ -628,7 +630,7 @@ void Renderer::beginFrame()
     // The slot's fence is waited at the loop top (waitFrameSlot); anything that reached here without
     // it is a main-loop ordering bug - but never run unsynchronized, so wait now (asserting).
     assert(m_frameSlotWaited && "Renderer::waitFrameSlot() must run at the top of the frame, before any per-slot writes");
-    waitFrameSlot();
+    self().waitFrameSlot();
 
     // This slot's fence is waited, so its previous submission's GPU timestamps have landed. The
     // readback (two driver calls + the track pushes) needs nothing from this frame, so it runs as a
@@ -651,7 +653,7 @@ void Renderer::beginFrame()
     {
         ProfileScope resetScope("Counters + LOD stats", EProfileCategory::Renderer);
         m_instances.beginFrame();
-        m_treeCullBase = 0; // this frame's baked tree range is claimed by renderTreeInstanceSet
+        m_treeCullBase = 0; // this frame's baked tree range is claimed by RenderTreeSet::render
         m_treeCullCount = 0;
         m_treeCullPieces = 0;
         m_treeCullRtPieces = 0;
@@ -729,9 +731,9 @@ void Renderer::kickGridBuilds()
         { "Force grid job", EProfileCategory::Force }, EJobPriority::High, &m_gridJobCounter); // waits only on its own parallelFor: no ForeignWait
 }
 
-void Renderer::joinGridBuilds(uint32 frameIdx, PerFrameData& frameData)
+void RendererState::joinGridBuilds(uint32 frameIdx, PerFrameData& frameData)
 {
-    kickGridBuilds(); // no-op when the App loop kicked
+    self().kickGridBuilds(); // no-op when the App loop kicked
     {
         ProfileScope profileScope("Grid builds join", EProfileCategory::Wait);
         Globals::jobSystem.wait(m_gridJobCounter);
@@ -786,7 +788,7 @@ CullView Renderer::setFrameView(const Camera& camera, const Rect& viewportRect)
 // VR: poll OpenXR + begin the XR frame, then swap the camera's view for the tracked head pose.
 // vrBaseOrientation (play-space anchor derived from the incoming camera) also feeds the per-eye
 // views in buildUboViews. No-op on desktop.
-void Renderer::applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation)
+void RendererState::applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation)
 {
     if (!Globals::openXR.isEnabled())
         return;
@@ -806,7 +808,7 @@ void Renderer::applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat
 
 // Reacts to LAST frame's overflows/generation bumps before this frame writes anything: capacity
 // grows, descriptor sizing, and re-record triggers.
-void Renderer::checkFrameCapacities()
+void RendererState::checkFrameCapacities()
 {
     ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
@@ -828,7 +830,7 @@ void Renderer::checkFrameCapacities()
 
 // This slot's fence was waited at the loop top, so its last submitted cull's LOD stats have landed:
 // snapshot them for getStats (the mapped buffer is zeroed here for the frame about to record).
-void Renderer::snapshotLodStats(PerFrameData& frameData)
+void RendererState::snapshotLodStats(PerFrameData& frameData)
 {
     for (uint32 i = 0; i < RendererVKLayout::MAX_MESH_LODS; ++i)
         m_lodInstanceCounts[i] = frameData.mappedLodStats[i];
@@ -926,7 +928,7 @@ void Renderer::present()
     // the list's RT section only - not its TREE_RECORDS_PER_PIECE record slots, nor the trees no ray can see (the
     // bushes, without a BLAS; the chunks out of RT range), which were inactive slots the build still walked.
     m_giTlasDemand = m_instances.getInstanceCount() - (m_treeCullCount - m_treeCullRtPieces);
-    m_ubo.evaluatePresent(); // + the tree range: renderTreeInstanceSet claims it after beginFrame
+    m_ubo.evaluatePresent(); // + the tree range: RenderTreeSet::render claims it after beginFrame
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), m_ubo.presentSize(), m_ubo.data() + m_ubo.presentBegin(), m_ubo.presentBegin());
     uploadGrassFrame(frameIdx);   // this frame's ground table (setGrassGround ran after beginFrame)
     uploadClutterFrame(frameIdx); // the clutter's patch grid on it, and the floor map when it changed
@@ -1168,7 +1170,7 @@ void Renderer::present()
 // THE SCREENSHOT: the frame is submitted but not yet presented, so the swapchain image is still ours. A one-shot copy on
 // the graphics queue (after the frame's submission: the barrier's first scope covers it) into a host buffer, a queue
 // idle, then a PNG. Alpha is forced opaque (the scene writes TAA flags there).
-void Renderer::captureScreenshot(const oc::string& path)
+void RendererState::captureScreenshot(const oc::string& path)
 {
     ProfileScope profileScope("Screenshot", EProfileCategory::Renderer);
     const vk::Extent2D extent = m_swapChain.getLayout().extent;
@@ -1247,7 +1249,7 @@ void Renderer::captureScreenshot(const oc::string& path)
         Log::warning("Screenshot: could not write " + path);
 }
 
-void Renderer::initImgui(Window& window)
+void RendererState::initImgui(Window& window)
 {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();

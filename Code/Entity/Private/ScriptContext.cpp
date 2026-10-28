@@ -720,7 +720,7 @@ void registerScriptDslBindings()
     bindings.registerEntryPoint({ "OnPhysicsEvent",  { { "begin", T::Int }, { "sensor", T::Int } }, ", Entity* other, int begin, int sensor, long long contactId, ScriptData* scriptData", "REGISTER_ON_PHYSICS_EVENT()" });
 }
 
-// ---- engine-owned script arrays (the DSL's `T[]`, see OcArray in ScriptAPI.h) ----------------------------
+// ---- engine-owned script arrays (the DSL's `T[]`, see OcArray in ScriptAPI.h) ----
 // Storage lives HERE, not in the script's ScriptData block, which holds only the handle. That's what makes a
 // hot-reload free: the block survives (same layout id), so the handles survive, so the contents survive with
 // nothing to copy. It's also what keeps a script from ever owning heap memory across a DLL swap.
@@ -1031,7 +1031,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         }
     }
 
-    // ---- context thunks -----------------------------------------------------
+    // ---- context thunks ----
     void thunk_log(const char* message) { Log::info(message ? message : ""); }
     void thunk_logf(const char* message, ...) 
     {
@@ -1068,7 +1068,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     {
         if (!Globals::rendererVK.isInitialized()) // headless server: no mapped light buffers to write
             return;
-        Globals::rendererVK.addPointLight(PointLight(position, range, color, intensity));
+        Globals::rendererVK.addLightInfo(PointLight(position, range, color, intensity));
     }
 
     void thunk_setSun(glm::vec3 direction, glm::vec3 color, float intensity)

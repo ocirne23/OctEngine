@@ -360,8 +360,8 @@ it (`PIECE_LODS` table in TreeGenerator.cpp):
 | 2 | 40 % / 45 % | deepest dropped (never below level 1) | 4 | no | 0.0025 |
 | 3 | 25 % / 34 % | two deepest dropped (never below level 1) | 8 | no | 0.005 |
 
-**The GPU uses LEVEL 0 ONLY: no `createMeshLodChain` for tree pieces** (`uploadLodChain` uploads level 0 and leaves
-the chain empty). The trees switch through their own tiers (mid tier, billboard, far volume); mesh LOD steps
+**The GPU uses LEVEL 0 ONLY: no LOD levels for tree pieces** (`uploadLevelZero` uploads level 0 only, as a
+one-level `RenderMesh`, and leaves the array's levels above empty). The trees switch through their own tiers (mid tier, billboard, far volume); mesh LOD steps
 underneath popped visibly (fewer, larger leaf cards per level, no crossfade). The generator meshes level 0 only
 (`MESHED_LODS` = 1 in TreeGenerator.cpp; the table stays for a return of mesh LODs); `lodError` / `Lod ErrorScale`
 are unused, and RendererVK allocates no hysteresis slots for tree records.
@@ -420,7 +420,7 @@ geometry must bump `BAKE_VERSION`** (TreeImpostor.cpp), or press `Trees/Regenera
 * **Crossfade** (billboards only): a band `FadeWidth` wide, centred on the billboard distance × `Far distance
   scale`. Inside it (centre distance ± the piece radius) the piece draws its mesh as `barkFade` / `leavesFade`
   — the same meshes on `LitTree` with species materials DERIVED with a distance fade-OUT
-  (`Renderer::deriveMaterial`, shared textures) — plus the billboard, whose material fades IN over the same
+  (`RenderMaterial::derive`, shared textures) — plus the billboard, whose material fades IN over the same
   band. The tree FSs' dither (tree_fade.inc.glsl, RendererVK `MATERIAL_FLAG_DISTANCE_FADE`) gives each pixel to
   exactly one of them; TAA blends the per-frame dither. Outside the band only one side draws, the mesh on its
   normal (early-depth) materials. `applyFadeBands` writes the bands into the material flags (at reload and when the
@@ -502,7 +502,7 @@ thresholded fbm, 2 cells around x 4 along, the grain deepened in them). SECTIONS
 under the marks): soft areas of another tint (a thresholded fbm, 3 around x 2 along: longer along the branch) - a
 birch's brown older bark. sRGB albedo plus a LINEAR RGB tangent-space normal map from the
 same height field (x along u, y along v — the tube's tangent / bitangent), each with a CPU box-filtered mip chain
-(normals renormalized). Uploaded through `Renderer::createTextureMaterial(..., &normalMips)`, freed with the species.
+(normals renormalized). Uploaded through `RenderMaterial::createTextured` (with `normalMips`), freed with the species.
 
 ### Leaf types
 
@@ -514,7 +514,7 @@ same height field (x along u, y along v — the tube's tangent / bitangent), eac
   atlas of cluster variants (stem at v = 0, each card picks a cell), sRGB colours from `Color Leaf` / `Bark`,
   and its OWN mip chain — every level's alpha is rescaled (binary search) so the fraction of texels passing
   `TREE_LEAF_ALPHA_CUTOFF` (0.5) matches level 0, otherwise the crown thins with distance. Uploaded through
-  `Renderer::createTextureMaterial`, freed with the species (`TreeSystem::clearAll`). Every leaf / needle / shoot /
+  `RenderMaterial::createTextured`, freed with the species (its `RenderMaterial`s, `TreeSystem::clearAll`). Every leaf / needle / shoot /
   pinna is shortened until it fits inside its cell (the cell clips the drawing).
   **`Style Needles`** (conifers, `drawNeedleCluster`): each cell is a conifer SPRAY instead of a leafy twig - `Shoots`
   needle branches fanned from the stem (the middle one along v, the others over up to ±18° and a little shorter;
@@ -550,22 +550,22 @@ a leaf card's TIP flag (corners 2 / 3; a diamond's all but the stem) - a card's 
 corners share one phase. Trunk pieces: the wind bit only (the trunk bend). `bakeTreeVariant` ORs each module
 placement's phase (3 bits) into its vertices and keeps it in the placement (`windPhase`: the branch cards' phase). No
 vertex grows: the magnitude of the tangent's w was free. The species' `Wind` scales ride its piece TYPES
-(`TreeInstanceType::windTrunk / windBranch`, RendererVK "Tree wind"): the cedar (large, heavy limbs in the trunk
+(`RenderTreeSet::Type::windTrunk / windBranch`, RendererVK "Tree wind"): the cedar (large, heavy limbs in the trunk
 piece) `Trunk 0.4`, `Branch 0.7`.
 
 ### GPU expansion
 
 With `Trees/GPU expansion` (default on), `spawnPreview` builds ONE RendererVK tree instance set
-(`createTreeInstanceSet`): a piece TYPE per library piece (its bark, leaves, the derived fade-out materials and the
+(`RenderTreeSet::create`, held in `m_treeSet`; `destroyTreeSet` destroys it before the species' meshes): a piece TYPE per library piece (its bark, leaves, the derived fade-out materials and the
 billboard, plus the band), then every placed piece (transform, far centre + radius, type). The set is uploaded once to
 device-local memory, and the culls make the per-piece decision and build the records themselves, and the TLAS writer
 their RT instances (see RendererVK "BAKED TREE RECORDS"). **The pieces live in the TERRAIN CHUNKS:** `spawnPreview`
 sorts them by the terrain chunk under their base (`Globals::terrain.chunkSize()`; a chunk-size change respawns), one
 set chunk per terrain chunk, and hooks the set into the terrain (`TerrainStreamer::setVegetation`,
 [TerrainStreamer.md](TerrainStreamer.md)): the terrain's render walk lists the chunks it draws with their passes, and
-its sink calls `renderTreeInstanceSet` with that list - so the culls only see the plants of the visible chunks (all
+its sink calls `m_treeSet.render` with that list - so the culls only see the plants of the visible chunks (all
 passes) and of the shadow / GI sphere's chunks (shadow + GI). **The sink runs on the walk's worker: it reads the band
-settings through atomics.** `update` binds the set (`bindTreeInstanceSet`, main) and submits EVERY chunk itself when
+settings through atomics.** `update` binds the set (`bind`, main) and submits EVERY chunk itself when
 the walk does not carry it (terrain off, or the respawn frame - the new hooks start with the next walk). Unhooking
 (`destroyTreeSet`) joins the walk.
 
@@ -660,7 +660,7 @@ before its `Enabled` check: it runs with the preview off.
 * **GPU:** each merged chunk joins an upload queue; `Upload KB per frame` (1024) of records per frame go to the
   renderer's pool (`Renderer::addTreeRecordChunk`, RendererVK "WORLD TREE RECORDS"; `GPU pool (MB)`, 128, fixed - a
   full pool refuses chunks and warns once; a change drains the GPU and regenerates), each with its GROUND:
-  `placeChunk` also writes the chunk's `TREE_RECORD_HEIGHT_RES`² = 17² heights (16 m at 256 m chunks, bilinear in its
+  `placeChunk` also writes the chunk's `TREE_RECORD_GROUND_RES`² = 17² heights (16 m at 256 m chunks, bilinear in its
   Full 8 m grid, 16-bit above the minimum - TreeRecordPool's encoding), the ground the far volume stands the records'
   trees on (the camera-centred height map's far cascade is too coarse: it buried them on every peak). Every chunk
   uploads, trees or not. An evicted chunk's GPU range is freed (deferred reuse). Disabling frees the pool; a ring
@@ -742,7 +742,7 @@ before its `Enabled` check: it runs with the preview off.
 `Trees/Enabled` + `Trees/World/Enabled` + `GPU expansion` (+ terrain): the trees are TreeWorld's records, not the
 preview grove. Switching it, or a TreeWorld restart (its `generation()`), respawns.
 
-* **One DYNAMIC set** (RendererVK `createDynamicTreeInstanceSet`: every piece type, a fixed `Trees/World/Set
+* **One DYNAMIC set** (RendererVK `RenderTreeSet::createDynamic`: every piece type, a fixed `Trees/World/Set
   capacity (pieces)` of slots, 600 k; no growth, a full set refuses chunks and warns once), hooked into the terrain
   like the preview (`hookTerrain`; chunk index capacity (2 x near + 3)² x 2).
 * **`Trees/World/Near radius (chunks)`** (3, Chebyshev): every chunk inside it that TreeWorld holds CPU records for
@@ -755,9 +755,9 @@ preview grove. Switching it, or a TreeWorld restart (its `generation()`), respaw
   river bed past "Terrain/Rivers/Vegetation clear"; the far volume's GPU mirror has no water data and keeps them).
   **The job reads only an immutable `ExpandContext`** (types, scales, far centre / radius per variant, the record-type
   -> species map by name, the sampler) and a copy of the records.
-* `Expand per frame` (2) finished chunks join the set per frame (`addTreeInstanceChunk`), the coordinate is mapped
+* `Expand per frame` (2) finished chunks join the set per frame (`addChunk`), the coordinate is mapped
   (`m_vegChunkOf`) and re-stamped in the terrain (`restampVegetation`). A chunk past near + 1 is removed
-  (`removeTreeInstanceChunk`, deferred reuse) and re-stamped; a pending one's result is dropped.
+  (`removeChunk`, deferred reuse) and re-stamped; a pending one's result is dropped.
 * A respawn joins the jobs (`stopExpansion`: the generation bumps, the results are cleared).
 * **THE WORLD'S ROCKS**: `spawnWorld` appends RockSystem's loaded types (`Globals::rocks.worldTypes()`) to the set - a
   GPU type per variant: ONE mesh, the LOD chain's level 0 in the `bark` slot on `LitRock`, no billboard (RendererVK:
@@ -801,7 +801,7 @@ off, the module / trunk billboards are not uploaded). In world mode the world's 
   (1.5 m .. 0.75 × spacing out, area-uniform, a bush species by `Weight`, the same variant / scale / yaw rules) -
   unless the tree's species has an `Undergrowth` block, which replaces both.
 * `Bush shadow distance (m)` (default 100, 0 = no limit; GPU path): bushes farther than this from the shadow
-  cascades' centre cast no sun shadow (`TreeInstanceType::shadowDistance`).
+  cascades' centre cast no sun shadow (`RenderTreeSet::Type::shadowDistance`).
 * `Grove type`: Mixed (the TREE species alternate) or one species by its `TreeSpecies` name (default Oak) — the names
   are a fixed list in Settings.Trees (`TREE_GROVE_TYPES`; a tweak enum registers before the species load), so a new
   species needs its name added there; a missing one falls back to mixed with a warning.

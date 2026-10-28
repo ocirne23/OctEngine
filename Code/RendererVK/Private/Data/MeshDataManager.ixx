@@ -60,8 +60,10 @@ public:
 private:
 
     friend class ObjectContainer;
+    friend class ObjectContainerState; // initializeMeshes uploads
     friend class MeshStreamer;
-    friend class Renderer; // container teardown frees ranges recorded by the container/its skinned bundles
+    friend class Renderer;      // createMesh uploads
+    friend class RendererState; // container teardown frees ranges recorded by the container/its skinned bundles
     size_t uploadVertexData(const void* pData, size_t size);
     size_t uploadIndexData(const void* pData, size_t size);
     size_t uploadSkinningData(const void* pData, size_t size);

@@ -81,25 +81,23 @@ export namespace Procedural
 		static Transform groundTransform(glm::vec2 p, const float ground[5], float r, float scale, float height, float sink, float align, const glm::quat& yaw);
 
 	private:
-		// The uploaded LOD chain: nodes spawn on level 0 and the cull redirects each instance (UINT32_MAX = one level
-		// only, no chain). The chain is freed before its meshes (clearAll).
+		// The uploaded mesh with its LOD levels: nodes spawn on level 0 and the cull redirects each instance.
 		struct Variant
 		{
 			RockVariant data;
-			RenderMesh lods[ROCK_MAX_LODS];
-			uint32 chain = UINT32_MAX;
+			RenderMesh mesh;
 		};
 		struct Type
 		{
 			RockTypeDesc desc;
 			uint64 meshHash = 0; // the .rock file's text (MeshCache's key, with the resolution and the variant seed)
 			oc::vector<Variant> variants;
-			// The type's OWN material (UINT16_MAX = none: a rock draws on m_material). Kept over a remesh.
+			// The type's OWN material (invalid = none: a rock draws on m_material). Kept over a remesh.
 			//   WOOD:   its `Bark` species' bark texture x its tint (BC1 albedo + BC5 normal map), which the rock shader maps
 			//           around the wood (RendererVK "The rock material", DEAD WOOD). Its job (kickGeneration) fills the
 			//           chains, finishLoad uploads and drops them.
 			//   CACTUS: a 1 x 2 texture - the skin (Color), the spines (Color2) - the shader's cactus path fetches.
-			uint16 ownMaterial = UINT16_MAX;
+			RenderMaterial ownMaterial;
 			oc::vector<oc::vector<uint8>> barkAlbedo, barkNormal;
 			uint32 barkSize = 0;          // 0 = no bark loaded
 			glm::vec3 ownAlbedo{ 0.1f };  // linear: the tinted bark's / the skin's mean (WorldType::ownAlbedo)

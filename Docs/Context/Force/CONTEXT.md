@@ -68,6 +68,9 @@ ForceSystem.ixx. `ForceQuery` stays in ForceSystem.ixx.
   and `numTeams`.
 * **`update(renderer, dt)` runs main-thread after `world.update`** ([main.cpp:332](../../../Code/App/main.cpp#L332))
   and is the ONLY place renderer force state is written.
+* The GPU slots are RendererVK's RAII handles: `RenderForceEmitter` (an active emitter, a merge group) and `RenderForceQuery`
+  (a query). `destroyEmitter` / `destroyQuery` move the handle out under `m_createMutex` and let it retire the slot after the
+  unlock. So the global sits in `OC_SEG_GPU_EFFECTS` (InitSeg.h): it destructs after `~World` and before the renderer.
 * `joinMerge()` at the main-loop top ([main.cpp:248](../../../Code/App/main.cpp#L248)) — see Merging.
 
 ### Handles
@@ -440,8 +443,8 @@ the emitters. That is centimetres at unit speeds, inside the cover margin, and e
 has hysteresis.
 
 **The job NEVER touches the renderer** (`present()` reads the force slot vector in that window):
-`createGroup` leaves `rendererSlot` UINT32_MAX and `update()` mints it on main; `dissolveGroup` pushes
-the slot to `m_retiredGroupSlots`, which `update()` destroys.
+`createGroup` leaves `rendererSlot` (a `RenderForceEmitter` handle) invalid and `update()` mints it on main;
+`dissolveGroup` moves the handle into `m_retiredGroupSlots`, which `update()` clears.
 
 ### The passes
 
@@ -533,7 +536,7 @@ every size), colour = the team shell colour mixed toward white by "Bubble light 
   fade-out keeps playing at the last lit centre/radius after the bubble is gone (a starved emitter,
   a collapsed shield); a SIM-LOD-gated emitter is dark once its ramp reaches 0. A reused group slot
   starts dark.
-* Pushed from the upload jobs as per-frame light records (`addPointLight`, lock-free) —
+* Pushed from the upload jobs as per-frame light records (`addLightInfo` with a `PointLight`, lock-free) —
   `EmitterInstance::light` / `MergeGroup::light` hold the fade state.
 
 **No light count budget is needed: merging already collapses an overlapping crowd into one bubble.**

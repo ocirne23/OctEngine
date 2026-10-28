@@ -130,7 +130,7 @@ void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 
         glm::ivec2(StructureSystem::footprintCellsOf(type)));
 }
 
-// ---- aiming ------------------------------------------------------------------------------------
+// ---- aiming ----
 
 GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) const
 {
@@ -188,7 +188,7 @@ int GameMatch::hoveredStructure(const Camera& camera) const
     return m_structures.findConnectableNear(aimPos, 4.0f);
 }
 
-// ---- the hotbar and the modes ------------------------------------------------------------------
+// ---- the hotbar and the modes ----
 
 // The hotbar page for the current state: ROOT (Select/Delete: categories + Delete on X) or the
 // picked category's items (+ Back on V). Called every windowed frame - counts stay live and the
@@ -390,7 +390,7 @@ void GameMatch::disarmBuild()
     refreshBuildHotbar(); // the slot highlight follows in the same frame
 }
 
-// ---- placement ---------------------------------------------------------------------------------
+// ---- placement ----
 
 // The Crossing's axis rotation for a ±X/±Z facing - the SAME formula placeStructure applies to
 // the request's facing, so a client-side cellsFree probes exactly the cells it will cover.
@@ -695,7 +695,7 @@ void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool rm
     updateUnitSelection(camera);
 }
 
-// ---- selection and orders ----------------------------------------------------------------------
+// ---- selection and orders ----
 
 // BOX SELECTION of own-team units (Select mode): LMB drag draws the box on the ground; on
 // release every visible own unit whose screen position falls inside it is selected (SHIFT adds).

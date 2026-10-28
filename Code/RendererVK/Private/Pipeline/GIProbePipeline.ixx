@@ -171,15 +171,13 @@ public:
     void initializeDebug(vk::RenderPass renderPass);
     void reloadDebugShaders(vk::RenderPass renderPass);
     void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
-    // The "GI/Debug probe*" settings. Enabled is a per-frame stage flag; the colour mode and the radius are
-    // lockable push values (debugPushBlock) in the CACHED debug secondary, so a change re-records (the Renderer's
-    // listener) and, while locked, re-bakes. The testbed's P / O keys drive the same settings (the caller re-records
-    // after cycleDebugMode).
+    // The "GI/Debug probe*" settings. Enabled is a per-frame stage flag; the colour mode (0 = irradiance, 1 = cascade/LOD,
+    // 2 = update priority, 3 = relocation / backface, 4 = visibility) and the radius are lockable push values
+    // (debugPushBlock) in the CACHED debug secondary, so a change re-records (the Renderer's listener) and, while locked,
+    // re-bakes.
     void registerDebugPushFields();
     PushBlock& debugPushBlock() { return m_debugBlock; }
     bool isDebugEnabled() const;
-    void toggleDebug();
-    void cycleDebugMode(); // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
 
     Buffer& getTlasInstanceBuffer(uint32 frameIdx) { return m_tlasInstanceBuffer[frameIdx]; }
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).

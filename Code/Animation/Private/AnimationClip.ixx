@@ -109,7 +109,7 @@ public:
     // state machine for exit-time transitions.
     float getNormalizedTime() const;
 
-    // ---- Programmatic bone posing -------------------------------------------------------------------
+    // ---- Programmatic bone posing ----
     // Bones are addressed by name (resolved against the Skeleton) or index. Modifiers are sticky: they
     // apply every tick until cleared, and take effect on the next tick() (which the app calls per frame,
     // even while paused). All transforms are the bone's LOCAL (parent-relative) space.

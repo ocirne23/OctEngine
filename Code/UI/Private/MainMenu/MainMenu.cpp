@@ -11,9 +11,7 @@ import :TweakPanel; // drawTweakVar - the settings page draws the same widget ro
 
 namespace
 {
-	// ---- The lobby's world-preview texture ---------------------------------------------------
-	// One ImGui-managed texture (ImTextureData: the backend creates the image and uploads the pixels
-	// through Renderer::updateImGuiTextures, the same path the font atlas takes - no renderer API).
+	// ---- The lobby's world-preview texture: ONE ImGui-managed texture (ImTextureData), uploaded like the font atlas - no renderer API ----
 	// A NAMESPACE-SCOPE plain global, deliberately NOT a MainMenu member: ImGui_ImplVulkan_Shutdown
 	// (the renderer's dtor) walks ImGui::GetPlatformIO().Textures and destroys every entry with
 	// RefCount 1, so the object must still exist then - and UI (XCU9) is the first engine global to
@@ -26,7 +24,7 @@ namespace
 	};
 	PreviewTexture g_previewTexture;
 
-	// ---- Settings curation -----------------------------------------------------------------
+	// ---- Settings curation ----
 	// The settings page is BUILT FROM THE TWEAK REGISTRY: each section lists top-level category
 	// prefixes (a prefix pulls the whole subtree - "Ocean" includes "Ocean/Waves"), and dev-only
 	// branches are filtered below. A tweak that is not registered yet (e.g. Game/* before a game

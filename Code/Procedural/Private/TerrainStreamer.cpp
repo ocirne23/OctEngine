@@ -1407,8 +1407,9 @@ namespace Procedural
 			lapsePerWorldM = maps->lapseRatePerMetre() / glm::max(vertScale, 1e-4f);
 		}
 		renderer.setTerrainParams((float)R * chunkSize, m_settings.seaLevel, lapsePerWorldM);
-		// The ground under the camera (the near grass shadow cascade's placement). The sample may read the tile under the
-		// camera from the disk cache once (a cold start or a jump): one tile, which the chunks there need anyway.
+		// The ground under the camera (the near grass shadow cascade's placement, the far-tree volume's cell layout). The sample
+		// may read the tile under the camera from the disk cache once (a cold start or a jump): one tile, which the chunks
+		// there need anyway.
 		{
 			const FileSystem::AllowMainThreadIO cameraGroundIo;
 			renderer.setCameraGround(maps ? maps->sampleHeight(camera.position.x, camera.position.z) : std::numeric_limits<float>::quiet_NaN());
@@ -1508,15 +1509,15 @@ namespace Procedural
                 // ONE mesh per node (no ObjectContainer: no per-node material, names or node tables) on the
                 // terrain pipeline variant (procedural height/slope albedo), with the material every node
                 // shares. No LOD chain: the quadtree IS the LOD.
-                if (m_material == UINT16_MAX)
-                    m_material = renderer.createMeshMaterial(RendererVKLayout::EPipelineIndex::TerrainLit, true);
+                if (!m_material.isValid())
+                    m_material = RenderMaterial::createForMesh(RendererVKLayout::EPipelineIndex::TerrainLit, true);
                 auto resident = oc::make_unique<Resident>();
                 resident->mesh = oc::move(upload.mesh);
                 const float nodeSize = chunkSize * (float)(1 << res.lod);
                 const Transform transform(
                     glm::vec3((float)res.coord.x * nodeSize, 0.0f, (float)res.coord.y * nodeSize),
                     1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-                resident->node = renderer.spawnMeshNode(resident->mesh, m_material, RendererVKLayout::EPipelineIndex::TerrainLit, transform);
+                resident->node = renderer.spawnMeshNode(resident->mesh, m_material.index(), RendererVKLayout::EPipelineIndex::TerrainLit, transform);
                 resident->coord = res.coord;
                 resident->lod = res.lod;
                 stampVegetation(*resident);
