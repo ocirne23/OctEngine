@@ -296,16 +296,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
 
 const NetworkComponent::SpawnInfo* getNetworkSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<NetworkComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Network); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const NetworkComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<NetworkComponent>(entity);
 }
 
 void writeNetworkSpawnInfo(const NetworkComponent::SpawnInfo& info, AssetNode& out)

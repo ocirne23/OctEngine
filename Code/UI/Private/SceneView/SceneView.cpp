@@ -8,12 +8,12 @@ import :SceneView;
 
 static const char* fallbackLabel(Entity* entity)
 {
-    if (entity->spawnTemplate)
+    if (const EntitySpawnTemplate* tmpl = entity->getSpawnTemplate())
     {
-        if (!entity->spawnTemplate->displayName.empty())
-            return entity->spawnTemplate->displayName.c_str();
-        if (!entity->spawnTemplate->prefabName.empty())
-            return entity->spawnTemplate->prefabName.c_str();
+        if (!tmpl->displayName.empty())
+            return tmpl->displayName.c_str();
+        if (!tmpl->prefabName.empty())
+            return tmpl->prefabName.c_str();
     }
 	return "Entity";
 }
@@ -225,7 +225,7 @@ void SceneView::renderContextMenu(Entity* entity, bool locked)
 
 	// An entity can be edited as a whole (renamed/deleted) unless it's an internal part of a locked
 	// prefab instance - i.e. only when its parent isn't itself locked.
-	const bool canEdit = (entity->parent == nullptr) || !entity->parent->isPrefabLocked();
+	const bool canEdit = (entity->getParent() == nullptr) || !entity->getParent()->isPrefabLocked();
 
 	if (locked)
 	{
@@ -259,8 +259,8 @@ void SceneView::pruneSelection(const oc::vector<EntityPtr>& rootEntities)
 	if (!m_selected)
 		return;
 	const Entity* root = m_selected.get();
-	while (root->parent)
-		root = root->parent;
+	while (root->getParent())
+		root = root->getParent();
 	const bool inWorld = oc::any_of(rootEntities.begin(), rootEntities.end(),
 		[root](const EntityPtr& e) { return e.get() == root; });
 	if (!inWorld)
@@ -274,14 +274,14 @@ void SceneView::applyPendingMutations()
 		if (m_selected.get() == m_pendingDelete)  m_selected.release();
 		if (m_renamingEntity == m_pendingDelete)  m_renamingEntity = nullptr;
 		m_changes.push_back({ EntityChange::Delete{ EntityPtr(m_pendingDelete) } }); // own it until polled, before detachFromOwner drops the scene-graph ref
-		detachFromOwner(m_pendingDelete);
+		m_pendingDelete->detachFromOwner();
 		m_pendingDelete = nullptr;
 	}
 	if (m_hasPendingReparent)
 	{
 		Entity* child     = m_pendingReparentChild;
 		Entity* target    = m_pendingReparentTarget; // nullptr → top level (root)
-		Entity* oldParent = child->parent;
+		Entity* oldParent = child->getParent();
 
 		if (oldParent != target)
 			m_changes.push_back({ EntityChange::Reparent{ EntityPtr(child), EntityPtr(target) } });
@@ -309,7 +309,7 @@ void SceneView::render(const oc::vector<EntityPtr>& rootEntities)
 	ImGui::BeginChild("##sv_tree", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None);
 
 	for (Entity* entity : rootEntities)
-		if (entity->parent == nullptr)
+		if (entity->getParent() == nullptr)
 			renderEntityNode(entity, false);
 
 	const float remainingH = ImGui::GetContentRegionAvail().y;
@@ -330,7 +330,7 @@ void SceneView::render(const oc::vector<EntityPtr>& rootEntities)
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SV_ENTITY"))
 		{
 			Entity* dragged = *static_cast<Entity**>(payload->Data);
-			if (dragged->parent != nullptr)
+			if (dragged->getParent() != nullptr)
 			{
 				m_hasPendingReparent    = true;
 				m_pendingReparentChild  = dragged;

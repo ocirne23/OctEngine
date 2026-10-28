@@ -6,6 +6,7 @@ module Entity;
 
 import Core;
 import Core.Allocator;
+import :Allocator;
 
 static constexpr uint32 alignUp(uint32 value, uint32 alignment)
 {

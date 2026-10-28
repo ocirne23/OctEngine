@@ -9,6 +9,10 @@ import Network;
 import Physics;
 import Spatial;
 
+import :EntityState;
+import :NetworkManagerState;
+import :NetworkManager;
+
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
@@ -232,7 +236,7 @@ void NetworkManager::initialize()
     applyLinkSim();
 }
 
-void NetworkManager::applyLinkSim()
+void NetworkManagerState::applyLinkSim()
 {
     const NetworkSettings& settings = Globals::settings.network;
     NetHostConfig& config = m_host.config();
@@ -464,7 +468,7 @@ void NetworkManager::receive(double deltaSec)
     }
 }
 
-void NetworkManager::sendHello()
+void NetworkManagerState::sendHello()
 {
     uint8 buffer[8];
     NetWriter writer(buffer);
@@ -474,7 +478,7 @@ void NetworkManager::sendHello()
     m_host.send(m_serverPeer, writer.data(), ENetDelivery::Reliable, ChannelSession);
 }
 
-void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uint8 msgType)
+void NetworkManagerState::handleSessionMessage(NetPeerId peer, NetReader& reader, uint8 msgType)
 {
     switch (ENetMsg(msgType))
     {
@@ -631,7 +635,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
     }
 }
 
-void NetworkManager::handleSpawnMessage(NetReader& reader)
+void NetworkManagerState::handleSpawnMessage(NetReader& reader)
 {
     const uint16 count = reader.read<uint16>();
     if (reader.overflowed())
@@ -643,7 +647,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
             break;
 }
 
-bool NetworkManager::spawnReplicatedRecord(NetReader& reader)
+bool NetworkManagerState::spawnReplicatedRecord(NetReader& reader)
 {
     const uint32 baseId = uint32(reader.readVarUInt());
     const uint32 count = uint32(reader.readVarUInt());
@@ -714,7 +718,7 @@ bool NetworkManager::spawnReplicatedRecord(NetReader& reader)
     return true;
 }
 
-void NetworkManager::handleDespawnMessage(NetReader& reader)
+void NetworkManagerState::handleDespawnMessage(NetReader& reader)
 {
     const uint16 count = reader.read<uint16>();
     if (reader.overflowed())
@@ -823,7 +827,7 @@ static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
         fc->emitter.setOutput(glm::max(blob[2] / 255.0f * GameBlobOutputRange, 0.01f));
 }
 
-void NetworkManager::sendClaims()
+void NetworkManagerState::sendClaims()
 {
     // every packet carries the ring's full recent history: a claim only vanishes if ClaimRedundancy
     // consecutive packets drop, without any reliable-channel head-of-line stall
@@ -923,7 +927,7 @@ void NetworkManager::sendClaims()
     }
 }
 
-void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
+void NetworkManagerState::handleClaimMessage(NetPeerId peer, NetReader& reader)
 {
     const auto peerIt = m_peerClients.find(peer);
     if (peerIt == m_peerClients.end())
@@ -1153,7 +1157,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
     comp->state->server.lastClaimSeq = glm::max(comp->state->server.lastClaimSeq, newestSeq);
 }
 
-void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uint32 newOwnerClientId)
+void NetworkManagerState::transferOwnership(uint32 netId, NetworkComponent* comp, uint32 newOwnerClientId)
 {
     comp->ownerClientId = newOwnerClientId;
     comp->state->transferredOwnership = newOwnerClientId != 0;
@@ -1185,11 +1189,6 @@ void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uin
         m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
 }
 
-void NetworkManager::setOwnershipTransfers(bool enabled)
-{
-    s_transferEnabled = enabled; // writes the setting - the panel shows it
-}
-
 void NetworkManager::setServerPrimary(Entity& entity, bool primary)
 {
     if (m_role != ENetRole::Server)
@@ -1203,13 +1202,13 @@ void NetworkManager::setServerPrimary(Entity& entity, bool primary)
     }
 }
 
-void NetworkManager::trackPrimary(uint32 netId)
+void NetworkManagerState::trackPrimary(uint32 netId)
 {
     if (netId != 0 && oc::find(m_primaryIds.begin(), m_primaryIds.end(), netId) == m_primaryIds.end())
         m_primaryIds.push_back(netId);
 }
 
-void NetworkManager::untrackId(oc::vector<uint32>& list, uint32 netId)
+void NetworkManagerState::untrackId(oc::vector<uint32>& list, uint32 netId)
 {
     if (const auto it = oc::find(list.begin(), list.end(), netId); it != list.end())
     {
@@ -1218,7 +1217,7 @@ void NetworkManager::untrackId(oc::vector<uint32>& list, uint32 netId)
     }
 }
 
-void NetworkManager::updateOwnershipTransfers(double deltaSec)
+void NetworkManagerState::updateOwnershipTransfers(double deltaSec)
 {
     if (!s_transferEnabled)
         return;
@@ -1377,7 +1376,7 @@ void NetworkManager::stealOwnershipOnContact(Entity& object, uint32 byClientId)
     transferOwnership(comp->netId, comp, byClientId);
 }
 
-void NetworkManager::handleOwnerChangeMessage(NetReader& reader)
+void NetworkManagerState::handleOwnerChangeMessage(NetReader& reader)
 {
     const uint32 netId = uint32(reader.readVarUInt());
     const uint32 newOwnerClientId = uint32(reader.readVarUInt());
@@ -1404,7 +1403,7 @@ void NetworkManager::handleOwnerChangeMessage(NetReader& reader)
     }
 }
 
-size_t NetworkManager::encodeSpawnRecord(const DynamicSpawn& record, oc::span<uint8> out,
+size_t NetworkManagerState::encodeSpawnRecord(const DynamicSpawn& record, oc::span<uint8> out,
     oc::vector<oc::pair<uint32, uint32>>& transferred)
 {
     // transform refreshed from the live ROOT when the base id is still registered, so a late joiner
@@ -1459,7 +1458,7 @@ size_t NetworkManager::encodeSpawnRecord(const DynamicSpawn& record, oc::span<ui
     return writer.size();
 }
 
-void NetworkManager::drainSpawnStreams()
+void NetworkManagerState::drainSpawnStreams()
 {
     // one message = one reliable window slot, so each is packed to the single-packet size: the
     // queue target then bounds bytes in flight as well as slots
@@ -1552,7 +1551,7 @@ void NetworkManager::drainSpawnStreams()
     }
 }
 
-void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes)
+void NetworkManagerState::handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes)
 {
     // a transport-connected peer that never completed Hello/Welcome is not a player: ungated, anyone
     // who can open a connection fires arbitrary script events and gets them relayed to every client
@@ -1610,16 +1609,7 @@ void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> by
 
 // The netId comes off the wire, so it is a CLAIM. Resolving it without the ownership check would let
 // a client pin its events on any entity it likes, including another player's.
-Entity* NetworkManager::findEntity(uint32 netId) const
-{
-    if (netId == 0)
-        return nullptr;
-    const std::lock_guard<std::mutex> lock(m_entityMutex);
-    const auto it = m_entities.find(netId);
-    return it != m_entities.end() ? it->second.entity : nullptr;
-}
-
-Entity* NetworkManager::findOwnedEntity(uint32 netId, uint32 clientId) const
+Entity* NetworkManagerState::findOwnedEntity(uint32 netId, uint32 clientId) const
 {
     if (netId == 0 || clientId == 0)
         return nullptr;
@@ -1632,7 +1622,7 @@ Entity* NetworkManager::findOwnedEntity(uint32 netId, uint32 clientId) const
 
 // Fires a named event with `senderClientId` readable for its duration (scripts query it through
 // ctx->networkEventSender). Dispatch is synchronous, so a plain scoped set is enough.
-void NetworkManager::fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data)
+void NetworkManagerState::fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data)
 {
     if (name == TweakSyncEventName)
     {
@@ -1654,7 +1644,7 @@ void NetworkManager::fireEventAttributed(oc::string_view name, uint32 senderClie
     m_currentEventData = previousData;
 }
 
-void NetworkManager::handleSnapshot(NetReader& reader)
+void NetworkManagerState::handleSnapshot(NetReader& reader)
 {
     const uint32 tick = uint32(reader.readVarUInt());
     const uint8 flags = reader.read<uint8>();
@@ -1882,7 +1872,7 @@ void NetworkManager::send(double deltaSec)
 // OBSERVE (once per tick, every entity, m_entityMutex held): sample the record as it would go on
 // the wire and stamp changedTick when it differs from the last observation. Also rebuilds the flat
 // entity array the per-peer round robins index, and the players' positions (the relevance foci).
-void NetworkManager::observeSnapshotTick()
+void NetworkManagerState::observeSnapshotTick()
 {
     const float posEpsilonSq = s_sendPosEpsilon * s_sendPosEpsilon;
     m_tickEntities.clear();
@@ -2011,7 +2001,7 @@ void NetworkManager::observeSnapshotTick()
     }
 }
 
-void NetworkManager::sendSnapshotTick()
+void NetworkManagerState::sendSnapshotTick()
 {
     const std::lock_guard<std::mutex> lock(m_entityMutex);
     if (m_entities.empty() || m_readyPeers.empty())
@@ -2027,7 +2017,7 @@ void NetworkManager::sendSnapshotTick()
 // walked round-robin from the peer's cursor: an entity is due when it changed since this peer
 // last received it and its tier's cadence tick is up, or on its keyframe rotation (slowest for a
 // sleeping body). Near first under the peer's budget; far additionally capped.
-void NetworkManager::sendSnapshotTo(NetPeerId peer, PeerStream& stream)
+void NetworkManagerState::sendSnapshotTo(NetPeerId peer, PeerStream& stream)
 {
     uint8 buffer[1400];
     const size_t capacity = size_t(glm::clamp(s_snapshotMaxBytes, 128, 1400));
@@ -2198,7 +2188,7 @@ void NetworkManager::fireNetworkEvent(oc::string_view name, oc::span<const uint8
 // The CLIENT id is server->client only: a client's identity is implied by its connection, and an
 // ignored client-writable identity field is a refactor away from being trusted. The NET id names the
 // firing entity, which no connection implies, so it travels both ways - and is checked for ownership.
-void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId,
+void NetworkManagerState::sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId,
     uint32 senderNetId, oc::span<const uint8> data)
 {
     uint8 buffer[MaxEventMessageBytes];
@@ -2218,7 +2208,7 @@ void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 se
     m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelEvent);
 }
 
-uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
+uint32 NetworkManagerState::registerEntity(Entity& entity, NetworkComponent* comp)
 {
     // LOCAL-INERT before the lock (single player, client-local content), or every networked spawn would take it.
     // m_role changes only at host / connect / disconnect, and m_incomingSpawnCount only on main around a
@@ -2287,7 +2277,7 @@ uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
     return netId;
 }
 
-void NetworkManager::unregisterEntity(uint32 netId, const NetworkComponent* comp)
+void NetworkManagerState::unregisterEntity(uint32 netId, const NetworkComponent* comp)
 {
     if (netId == 0)
         return; // local-inert component, was never registered

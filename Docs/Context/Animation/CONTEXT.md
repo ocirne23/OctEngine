@@ -13,7 +13,7 @@ uploads it.
 |---|---|---|
 | Import a rig into a `Skeleton`, and clips into an `AnimationSet` | **File** (Assimp) | `ISceneData::loadAnimations` — [ISceneData.ixx:80](../../../Code/File/Private/ISceneData.ixx#L80) |
 | Keep the rig's own skeleton copy | **RendererVK** | `ObjectContainer::m_skeleton` — [ObjectContainer.ixx:149](../../../Code/RendererVK/Private/ObjectContainer.ixx#L149) |
-| Cache clip libraries per skeleton + animator | **Entity** | `World::getOrBuildClipSet` — [World.ixx:230](../../../Code/Entity/Private/World.ixx#L230) |
+| Cache clip libraries per skeleton + animator | **Entity** | `WorldState::getOrBuildClipSet` — [WorldState.ixx](../../../Code/Entity/Private/WorldState.ixx) |
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
 

@@ -183,16 +183,7 @@ void HumanoidAnimatorComponent::addRestBounds(const Transform& toEntity, Sphere&
 
 const HumanoidAnimatorComponent::SpawnInfo* getHumanoidAnimatorSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<HumanoidAnimatorComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_HumanoidAnimator); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<HumanoidAnimatorComponent>(entity);
 }
 
 void writeHumanoidAnimatorSpawnInfo(const HumanoidAnimatorComponent::SpawnInfo& info, AssetNode& out)

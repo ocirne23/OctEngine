@@ -292,7 +292,7 @@ pulsing.** A teleport outside the visit also re-places the spatial entry (`Entit
 
 ## Transfer, steal and arbitration ("Network/Ownership")
 
-`Transfer enabled` is the kill switch, mirrored by `setOwnershipTransfers`.
+`Transfer enabled` is the kill switch (the tweak only; there is no code setter).
 
 * Awake server-owned dynamics within `Transfer radius` (2.5) of a client's PRIMARY hand over through a
   per-entity reliable OwnerChange; the server resets that entity's claim and validation state. They

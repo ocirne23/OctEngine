@@ -222,16 +222,7 @@ void LightComponent::update(Entity& entity, Renderer& renderer, const Transform&
 
 const LightComponent::SpawnInfo* getLightSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<LightComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Light); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const LightComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<LightComponent>(entity);
 }
 
 void writeLightSpawnInfo(const LightComponent::SpawnInfo& info, AssetNode& out)

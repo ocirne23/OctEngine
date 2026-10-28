@@ -7,7 +7,9 @@ import Core.glm;
 import Core.Sphere;
 import Core.Transform;
 import File;
+import :EntityState;
 import :Component;
+import :ComponentLayout;
 import :Allocator;
 import :EntityNames;
 import :NetworkManager;
@@ -69,7 +71,7 @@ const Entity* Entity::getCullOwner() const
 // an ancestor still in its spawn registers only after its children.
 static bool hasRootOnlyAncestor(const Entity* parent)
 {
-    for (const Entity* p = parent; p; p = p->parent)
+    for (const Entity* p = parent; p; p = p->getParent())
         if (p->getCullMode() == EEntityCullMode::RootOnly)
             return true;
     return false;
@@ -99,13 +101,13 @@ static void gatherTreeCullBounds(Entity* entity, const Transform& toRoot, Sphere
             gatherTreeCullBounds(child.get(), composeTransform(toRoot, Transform(child->pos, child->scale, child->rot)), bounds, any);
 }
 
-void Entity::refreshTreeCullBounds()
+void EntityState::refreshTreeCullBounds()
 {
     if (!spawnTemplate || spawnTemplate->cullMode != EEntityCullMode::RootOnly)
         return;
     Sphere bounds{ glm::vec3(0.0f), 0.0f };
     bool any = false;
-    gatherTreeCullBounds(this, Transform(), bounds, any);
+    gatherTreeCullBounds(&self(), Transform(), bounds, any);
     spawnTemplate->treeCullBounds = bounds;
     oc::atomic_ref<uint32>(spawnTemplate->treeCullBoundsState).store(any ? 2u : 1u);
 }
@@ -117,11 +119,11 @@ static Sphere placeTreeCullBounds(const EntitySpawnTemplate& tmpl, const Transfo
     return Sphere(world.quat * (local.pos * world.scale) + world.pos, local.radius * world.scale);
 }
 
-void Entity::placeSpatialEntry()
+void EntityState::placeSpatialEntry()
 {
     if (!spatialEntry.isValid())
         return;
-    if (getCullMode() == EEntityCullMode::RootOnly)
+    if (self().getCullMode() == EEntityCullMode::RootOnly)
     {
         const Sphere bounds = placeTreeCullBounds(*spawnTemplate, Transform(pos, scale, rot));
         Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), bounds.radius);
@@ -151,17 +153,17 @@ static uint32 spatialRenderPassMask(SpatialHandle handle)
     return 0;
 }
 
-void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
+void EntityState::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
 {
     // ProfileScope profileScope("Entity::updateSelf", EProfileCategory::Entity);
     const ComponentOffsets offsets = getComponentOffsets(typeBits);
 
     SceneComponent* sc = getComponent<SceneComponent>(this, offsets);
-    if (!isEnabled())
+    if (!self().isEnabled())
     {
         if (!isPhysicsSuspended())
         {
-            suspendPhysicsTree(*this, sc);
+            suspendPhysicsTree(self(), sc);
             setPhysicsSuspended(true);
         }
         return;
@@ -169,34 +171,34 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     if (isPhysicsSuspended())
         setPhysicsSuspended(false);
 
-    const bool frozen = isFrozen() || Globals::time.isPaused();
+    const bool frozen = self().isFrozen() || Globals::time.isPaused();
     const bool simStep = !frozen && deltaSeconds > 0.0f;
     if (!frozen)
     {
         if (simStep)
         {
             if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this, offsets))
-                gameUnit->update(*this, deltaSeconds);
+                gameUnit->update(self(), deltaSeconds);
             if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this, offsets))
-                gameStructure->update(*this, deltaSeconds);
+                gameStructure->update(self(), deltaSeconds);
             if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this, offsets))
-                gameProjectile->update(*this, deltaSeconds);
+                gameProjectile->update(self(), deltaSeconds);
 
             if (ScriptComponent* script = getComponent<ScriptComponent>(this, offsets))
-                script->update(*this, deltaSeconds);
+                script->update(self(), deltaSeconds);
         }
 
         if (NetworkComponent* network = getComponent<NetworkComponent>(this, offsets))
-            network->update(*this, deltaSeconds);
+            network->update(self(), deltaSeconds);
 
         if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this, offsets); animator && simStep)
-            animator->update(*this, renderer, deltaSeconds);
+            animator->update(self(), renderer, deltaSeconds);
 
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this, offsets))
-            physics->update(*this, parentWorld);
+            physics->update(self(), parentWorld);
 
         if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets); humanoid && simStep)
-            humanoid->update(*this, deltaSeconds);
+            humanoid->update(self(), deltaSeconds);
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
@@ -206,7 +208,7 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     if (render)
         render->place(world);
 
-    const EEntityCullMode cullMode = getCullMode();
+    const EEntityCullMode cullMode = self().getCullMode();
     uint32 passMask = RendererVKLayout::PASS_ALL;
     uint32 childCullPassMask = cullPassMask;
     if (spatialEntry.isValid())
@@ -238,24 +240,29 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
         humanoid->place(renderer, world, passMask);
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
-        audio->update(*this, world);
+        audio->update(self(), world);
 
     if (ParticleComponent* particle = getComponent<ParticleComponent>(this, offsets))
         if (!frozen)
-            particle->update(*this, world, deltaSeconds);
+            particle->update(self(), world, deltaSeconds);
 
     if (ForceComponent* force = getComponent<ForceComponent>(this, offsets))
-        force->update(*this, world);
+        force->update(self(), world);
 
     if (LightComponent* light = getComponent<LightComponent>(this, offsets))
-        light->update(*this, renderer, world);
+        light->update(self(), renderer, world);
 
     if (sc)
         for (const EntityPtr& child : sc->children)
             outChildren.push_back({ child.get(), world, childCullPassMask });
 }
 
-void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask)
+void Entity::updateDetached(Renderer& renderer, float deltaSeconds)
+{
+    update(renderer, deltaSeconds);
+}
+
+void EntityState::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask)
 {
     oc::vector<EntityUpdateNode> children;
     updateSelf(renderer, deltaSeconds, parentWorld, cullPassMask, children);
@@ -319,13 +326,13 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
         Globals::networkManager.beginTreeRegistration();
     if (tmpl.global)
         initialFlags |= EEntityFlag_Global; // root only: the recursion below never passes it to children
-    EntityPtr root = create(tmpl, transform, initialFlags | EEntityFlag_RootAllocation, treeCursor, nullptr);
+    EntityPtr root = EntityState::create(tmpl, transform, initialFlags | EEntityFlag_RootAllocation, treeCursor, nullptr);
     if (lockNetIds)
         Globals::networkManager.endTreeRegistration();
     return root;
 }
 
-EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags, uint8*& treeCursor, Entity* parent)
+EntityPtr EntityState::create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags, uint8*& treeCursor, Entity* parent)
 {
     void* buffer = treeCursor;
     treeCursor += tmpl.archetype.allocSize; // per-entity sizes are 16-aligned, so a straight bump stays aligned
@@ -397,7 +404,7 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
     return EntityPtr(entity);
 }
 
-void Entity::destroy(Entity* entity)
+void EntityState::destroy(Entity* entity)
 {
     constexpr uint8 rootContiguous = EEntityFlag_RootAllocation | EEntityFlag_ContiguousAllocation;
 
@@ -436,7 +443,7 @@ void Entity::destroy(Entity* entity)
         Globals::entityAllocator.deallocate(entity, size);
 }
 
-void Entity::createComponent(EComponentID id, uint16 componentOffset, const void* info, const Transform& base, uint8*& treeCursor)
+void EntityState::createComponent(EComponentID id, uint16 componentOffset, const void* info, const Transform& base, uint8*& treeCursor)
 {
     switch (id)
     {
@@ -444,98 +451,98 @@ void Entity::createComponent(EComponentID id, uint16 componentOffset, const void
     {
         SceneComponent* sc = reinterpret_cast<SceneComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (sc) SceneComponent();
-        sc->spawn(*this, *static_cast<const SceneComponent::SpawnInfo*>(info), base, treeCursor);
+        sc->spawn(self(), *static_cast<const SceneComponent::SpawnInfo*>(info), base, treeCursor);
         break;
     }
     case EComponentID_Render:
     {
         RenderComponent* rc = reinterpret_cast<RenderComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (rc) RenderComponent();
-        rc->spawn(*this, *static_cast<const RenderComponent::SpawnInfo*>(info), base);
+        rc->spawn(self(), *static_cast<const RenderComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Animator:
     {
         AnimatorComponent* ac = reinterpret_cast<AnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (ac) AnimatorComponent();
-        ac->spawn(*this, *static_cast<const AnimatorComponent::SpawnInfo*>(info), base);
+        ac->spawn(self(), *static_cast<const AnimatorComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Physics:
     {
         PhysicsComponent* pc = reinterpret_cast<PhysicsComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (pc) PhysicsComponent();
-        pc->spawn(*this, *static_cast<const PhysicsComponent::SpawnInfo*>(info), base);
+        pc->spawn(self(), *static_cast<const PhysicsComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Audio:
     {
         AudioComponent* ac = reinterpret_cast<AudioComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (ac) AudioComponent();
-        ac->spawn(*this, *static_cast<const AudioComponent::SpawnInfo*>(info), base);
+        ac->spawn(self(), *static_cast<const AudioComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Particle:
     {
         ParticleComponent* pc = reinterpret_cast<ParticleComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (pc) ParticleComponent();
-        pc->spawn(*this, *static_cast<const ParticleComponent::SpawnInfo*>(info), base);
+        pc->spawn(self(), *static_cast<const ParticleComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Force:
     {
         ForceComponent* fc = reinterpret_cast<ForceComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (fc) ForceComponent();
-        fc->spawn(*this, *static_cast<const ForceComponent::SpawnInfo*>(info), base);
+        fc->spawn(self(), *static_cast<const ForceComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Light:
     {
         LightComponent* lc = reinterpret_cast<LightComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (lc) LightComponent();
-        lc->spawn(*this, *static_cast<const LightComponent::SpawnInfo*>(info), base);
+        lc->spawn(self(), *static_cast<const LightComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Network:
     {
         NetworkComponent* nc = reinterpret_cast<NetworkComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (nc) NetworkComponent();
-        nc->spawn(*this, *static_cast<const NetworkComponent::SpawnInfo*>(info), base);
+        nc->spawn(self(), *static_cast<const NetworkComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_GameUnit:
     {
         GameUnitComponent* gu = reinterpret_cast<GameUnitComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (gu) GameUnitComponent();
-        gu->spawn(*this, *static_cast<const GameUnitComponent::SpawnInfo*>(info), base);
+        gu->spawn(self(), *static_cast<const GameUnitComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_GameStructure:
     {
         GameStructureComponent* gs = reinterpret_cast<GameStructureComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (gs) GameStructureComponent();
-        gs->spawn(*this, *static_cast<const GameStructureComponent::SpawnInfo*>(info), base);
+        gs->spawn(self(), *static_cast<const GameStructureComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_GameProjectile:
     {
         GameProjectileComponent* gp = reinterpret_cast<GameProjectileComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (gp) GameProjectileComponent();
-        gp->spawn(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info), base);
+        gp->spawn(self(), *static_cast<const GameProjectileComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_HumanoidAnimator:
     {
         HumanoidAnimatorComponent* ha = reinterpret_cast<HumanoidAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (ha) HumanoidAnimatorComponent();
-        ha->spawn(*this, *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info), base);
+        ha->spawn(self(), *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Script:
     {
         ScriptComponent* scr = reinterpret_cast<ScriptComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         new (scr) ScriptComponent();
-        scr->spawn(*this, *static_cast<const ScriptComponent::SpawnInfo*>(info), base);
+        scr->spawn(self(), *static_cast<const ScriptComponent::SpawnInfo*>(info), base);
         break;
     }
     default:
@@ -543,105 +550,105 @@ void Entity::createComponent(EComponentID id, uint16 componentOffset, const void
     }
 }
 
-void Entity::destroyComponent(EComponentID id, uint16 componentOffset, const void* info)
+void EntityState::destroyComponent(EComponentID id, uint16 componentOffset, const void* info)
 {
     switch (id)
     {
     case EComponentID_Scene:
     {
         SceneComponent* sc = reinterpret_cast<SceneComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        sc->destroy(*this, *static_cast<const SceneComponent::SpawnInfo*>(info));
+        sc->destroy(self(), *static_cast<const SceneComponent::SpawnInfo*>(info));
         sc->~SceneComponent();
         break;
     }
     case EComponentID_Render:
     {
         RenderComponent* rc = reinterpret_cast<RenderComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        rc->destroy(*this, *static_cast<const RenderComponent::SpawnInfo*>(info));
+        rc->destroy(self(), *static_cast<const RenderComponent::SpawnInfo*>(info));
         rc->~RenderComponent();
         break;
     }
     case EComponentID_Animator:
     {
         AnimatorComponent* ac = reinterpret_cast<AnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        ac->destroy(*this, *static_cast<const AnimatorComponent::SpawnInfo*>(info));
+        ac->destroy(self(), *static_cast<const AnimatorComponent::SpawnInfo*>(info));
         ac->~AnimatorComponent();
         break;
     }
     case EComponentID_Physics:
     {
         PhysicsComponent* pc = reinterpret_cast<PhysicsComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        pc->destroy(*this, *static_cast<const PhysicsComponent::SpawnInfo*>(info));
+        pc->destroy(self(), *static_cast<const PhysicsComponent::SpawnInfo*>(info));
         pc->~PhysicsComponent();
         break;
     }
     case EComponentID_Audio:
     {
         AudioComponent* ac = reinterpret_cast<AudioComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        ac->destroy(*this, *static_cast<const AudioComponent::SpawnInfo*>(info));
+        ac->destroy(self(), *static_cast<const AudioComponent::SpawnInfo*>(info));
         ac->~AudioComponent();
         break;
     }
     case EComponentID_Particle:
     {
         ParticleComponent* pc = reinterpret_cast<ParticleComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        pc->destroy(*this, *static_cast<const ParticleComponent::SpawnInfo*>(info));
+        pc->destroy(self(), *static_cast<const ParticleComponent::SpawnInfo*>(info));
         pc->~ParticleComponent();
         break;
     }
     case EComponentID_Force:
     {
         ForceComponent* fc = reinterpret_cast<ForceComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        fc->destroy(*this, *static_cast<const ForceComponent::SpawnInfo*>(info));
+        fc->destroy(self(), *static_cast<const ForceComponent::SpawnInfo*>(info));
         fc->~ForceComponent();
         break;
     }
     case EComponentID_Light:
     {
         LightComponent* lc = reinterpret_cast<LightComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        lc->destroy(*this, *static_cast<const LightComponent::SpawnInfo*>(info));
+        lc->destroy(self(), *static_cast<const LightComponent::SpawnInfo*>(info));
         lc->~LightComponent();
         break;
     }
     case EComponentID_Network:
     {
         NetworkComponent* nc = reinterpret_cast<NetworkComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        nc->destroy(*this, *static_cast<const NetworkComponent::SpawnInfo*>(info));
+        nc->destroy(self(), *static_cast<const NetworkComponent::SpawnInfo*>(info));
         nc->~NetworkComponent();
         break;
     }
     case EComponentID_GameUnit:
     {
         GameUnitComponent* gu = reinterpret_cast<GameUnitComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        gu->destroy(*this, *static_cast<const GameUnitComponent::SpawnInfo*>(info));
+        gu->destroy(self(), *static_cast<const GameUnitComponent::SpawnInfo*>(info));
         gu->~GameUnitComponent();
         break;
     }
     case EComponentID_GameStructure:
     {
         GameStructureComponent* gs = reinterpret_cast<GameStructureComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        gs->destroy(*this, *static_cast<const GameStructureComponent::SpawnInfo*>(info));
+        gs->destroy(self(), *static_cast<const GameStructureComponent::SpawnInfo*>(info));
         gs->~GameStructureComponent();
         break;
     }
     case EComponentID_GameProjectile:
     {
         GameProjectileComponent* gp = reinterpret_cast<GameProjectileComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        gp->destroy(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info));
+        gp->destroy(self(), *static_cast<const GameProjectileComponent::SpawnInfo*>(info));
         gp->~GameProjectileComponent();
         break;
     }
     case EComponentID_HumanoidAnimator:
     {
         HumanoidAnimatorComponent* ha = reinterpret_cast<HumanoidAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        ha->destroy(*this, *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info));
+        ha->destroy(self(), *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info));
         ha->~HumanoidAnimatorComponent();
         break;
     }
     case EComponentID_Script:
     {
         ScriptComponent* scr = reinterpret_cast<ScriptComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        scr->destroy(*this, *static_cast<const ScriptComponent::SpawnInfo*>(info));
+        scr->destroy(self(), *static_cast<const ScriptComponent::SpawnInfo*>(info));
         scr->~ScriptComponent();
         break;
     }
@@ -652,7 +659,7 @@ void Entity::destroyComponent(EComponentID id, uint16 componentOffset, const voi
 
 static bool isSelfOrDescendant(Entity* node, Entity* ancestor)
 {
-    for (Entity* p = node; p; p = p->parent)
+    for (Entity* p = node; p; p = p->getParent())
         if (p == ancestor)
             return true;
     return false;

@@ -10,9 +10,13 @@ import Core.Transform;
 import Threading;
 
 import RendererVK;
+import :EntityState;
 import :Entity;
 import :EntityNames;
 import :Component;
+import :ComponentLayout;
+import :WorldState;
+import :World;
 import File;
 
 import :AssetRegistry;
@@ -60,7 +64,7 @@ void World::setSimLodZones(const glm::vec4* spheres, uint32 count)
 // radius + margin and tier 2 over the band beyond, never tier 0. Each ball is queried at its
 // outer tier radius + the query margin, so an entity LEAVING the outer tier is still visited
 // once with no tier stamp (= dormant) and takes its dormancy edge.
-void World::buildSelectSpheres(oc::vector<SelectSphere>& out) const
+void WorldState::buildSelectSpheres(oc::vector<SelectSphere>& out) const
 {
     out.clear();
     for (uint32 i = 0; i < m_simLodFocusCount; ++i)
@@ -97,7 +101,7 @@ bool World::simLodSelected(const Entity& entity) const
 // stamp (overlapping balls, several hits under one root), into submit-ready nodes, so update()
 // only checks liveness and slices them to the workers. Runs between commits (post-update) - see
 // the kick in update() for what makes the root walk and the stamps safe.
-void World::computeSelection(SelectResult& out)
+void WorldState::computeSelection(SelectResult& out)
 {
     ProfileScope scope("Update selection query", EProfileCategory::Entity);
     out.nodes.clear();
@@ -137,7 +141,7 @@ void World::computeSelection(SelectResult& out)
 // ONCE: the atomic stampCurrentOnce on `rootPass` makes exactly one caller win a shared root. A
 // Global ancestor is visited from the global list anyway; a Global root is skipped, which is
 // what makes the merge with m_globalRoots dedupe-free.
-void World::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Entity*>& roots)
+void WorldState::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Entity*>& roots)
 {
     Entity* e = hit;
     while (Entity* p = e->parent)
@@ -164,7 +168,7 @@ void World::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Enti
 // tier" for an in-view entity (a rate floor for what the player can see), dormant stays dormant.
 // NOT placed: the entry carries no real tier stamp - the spawn-frame visit from the pending list
 // (unlinked, the mask is only the spawn GUARD saying "in every pass"), so the tier is unknown.
-World::SimLodTiers World::simLodTiers(const Entity& entity) const
+WorldState::SimLodTiers WorldState::simLodTiers(const Entity& entity) const
 {
     const SpatialIndex& spatialIndex = Globals::spatialIndex;
     const SpatialHandle handle = entity.spatialEntry.handle();
@@ -179,7 +183,7 @@ World::SimLodTiers World::simLodTiers(const Entity& entity) const
         else if (mask & SpatialPassBit_UpdateTier2) t.dist = 2;
     }
     else
-        t.dist = uint8(simLodDistanceTier(entity.pos)); // fresh (unlinked, or linked since the last job): the same tier, by distance
+        t.dist = uint8(self().simLodDistanceTier(entity.pos)); // fresh (unlinked, or linked since the last job): the same tier, by distance
     t.tick = t.dist;
     if (t.tick != 3 && t.tick > uint8(m_simLod.visibleMaxTier) && (spatialIndex.getPassMask(handle) & SpatialPassBit_Main))
         t.tick = uint8(glm::clamp(m_simLod.visibleMaxTier, 0, 2));
@@ -190,7 +194,7 @@ World::SimLodTiers World::simLodTiers(const Entity& entity) const
 // on at its last steering velocity for as long as nothing ticks it - park it (disabled or
 // asleep, per the tweak). WAKE (also the FIRST stamped visit of a fresh entity - schedTier
 // starts at 3): unpark, no catch-up over the stretch.
-void World::simLodTransition(Entity& entity, uint8 tier)
+void WorldState::simLodTransition(Entity& entity, uint8 tier)
 {
     const uint8 prevTier = entity.schedTier;
     if (tier == prevTier)
@@ -218,7 +222,7 @@ void World::simLodTransition(Entity& entity, uint8 tier)
 // of the last tick (schedSkipped + 1 passes back) is the covered stretch. Returns the delta for
 // this visit: the frame delta (tier 0), the covered stretch capped by "Max catch-up" (a tick),
 // 0 (skipped frame) or < 0 (dormant: not visited).
-float World::simLodCadence(Entity& entity, uint8 tier)
+float WorldState::simLodCadence(Entity& entity, uint8 tier)
 {
     const uint32 now = schedTickNow();
     if (tier == 0)
@@ -283,7 +287,7 @@ int World::simLodDistanceTier(const glm::vec3& pos) const
 // with its buoyancy off, and this is the one place that switches either - on for an entity the
 // LOD does not apply to, by distance tier otherwise - so a bubble never holds a GPU slot and a
 // body never runs its probe math before its entity has a tier.
-float World::simLodDelta(Entity& entity)
+float WorldState::simLodDelta(Entity& entity)
 {
     ForceComponent* force = getComponent<ForceComponent>(&entity);
     PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity);
@@ -518,7 +522,7 @@ void World::joinSelection()
 // exhaustion - an inline child batch reuses that same staging slot, so nothing may read `nodes`
 // once the first submit goes out. Called from the main thread for the roots and from batch jobs
 // for their children.
-bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, const EntityUpdateNode** inlineNodes, uint32* inlineCount)
+bool WorldState::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, const EntityUpdateNode** inlineNodes, uint32* inlineCount)
 {
     static_assert(std::is_trivially_copyable_v<EntityUpdateNode>);
     if (count == 0)
@@ -546,7 +550,7 @@ bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, con
     // second predicate pass, and the arena is sized from last frame's claims anyway.
     uint32 out = 0;
     for (uint32 i = 0; i < count; ++i)
-        if (simLodSelected(*nodes[i].entity))
+        if (self().simLodSelected(*nodes[i].entity))
             dst[out++] = nodes[i];
     count = out;
 
@@ -585,7 +589,7 @@ bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, con
 // start while the rest of the list is still being sliced. `nodes` must stay valid and unchanged
 // for the whole pass: main's m_updateLevel and the selection result both are (the next selection
 // job is kicked only after the pass's wait). Below one slice it is an inline call.
-void World::submitRootSlices(const EntityUpdateNode* nodes, uint32 count)
+void WorldState::submitRootSlices(const EntityUpdateNode* nodes, uint32 count)
 {
     if (count <= rootSliceSize)
     {
@@ -607,7 +611,7 @@ void World::submitRootSlices(const EntityUpdateNode* nodes, uint32 count)
 // safe by construction: the ancestor stamps are pure stores of one generation, the root dedupe is
 // stampCurrentOnce's atomic exchange, and nothing links or unlinks entries during the pass. The
 // slots are sized on main BEFORE any job goes out (a resize would move them).
-void World::submitVisibleRootSlices()
+void WorldState::submitVisibleRootSlices()
 {
     const oc::vector<SpatialHandle>& handles = Globals::spatialIndex.visibleHandles();
     const uint32 count = uint32(handles.size());
@@ -645,7 +649,7 @@ void World::submitVisibleRootSlices()
     }
 }
 
-void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
+void WorldState::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
 {
     // Safe because updateSelf never fiber-waits (and neither does this job - submits don't wait):
     // everything it touches is the audited thread-safe inline set, and the per-worker staging slot
@@ -750,7 +754,7 @@ static oc::unique_ptr<ISceneData> loadSceneData(const ObjectContainerDesc& desc)
     return sceneData;
 }
 
-ObjectContainer* World::loadContainer(const ObjectContainerDesc& desc, bool captureCollisionSource)
+ObjectContainer* WorldState::loadContainer(const ObjectContainerDesc& desc, bool captureCollisionSource)
 {
     if (auto it = m_containers.find(desc.name); it != m_containers.end())
         return it->second.get();
@@ -863,7 +867,7 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
     if (addRoots)
         for (const EntityPtr& e : results)
             if (e)
-                addRootEntity(e);
+                self().addRootEntity(e);
     return results;
 }
 
@@ -885,7 +889,7 @@ void World::releaseBatch(oc::vector<EntityPtr>&& entities)
     entities.clear();
 }
 
-void World::reloadPrefabs()
+void WorldState::reloadPrefabs()
 {
     for (auto& [name, tmpl] : m_templates)
         m_retiredTemplates.push_back(oc::move(tmpl));
@@ -893,7 +897,7 @@ void World::reloadPrefabs()
     ++m_templateGeneration;
 }
 
-void World::invalidatePrefab(const oc::string& name)
+void WorldState::invalidatePrefab(const oc::string& name)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
     {
@@ -994,7 +998,7 @@ void writeRenderSpawnInfo(const RenderComponent::SpawnInfo& info, AssetNode& out
     if (info.color.x >= 0.0f)              out.set("Color", info.color);
 }
 
-const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc)
+const AnimationSet* WorldState::getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc)
 {
     const oc::string key = oc::to_string(reinterpret_cast<uintptr_t>(skel)) + "/" + desc.name;
     if (auto it = m_clipSets.find(key); it != m_clipSets.end())
@@ -1098,7 +1102,7 @@ oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const
 
 // `Bone <name>` blocks, DFS so a parent is before its children: Position / Rotation / Scale like an
 // entity, an optional `Component Render`, and nested `Bone`s. Both bone-model animators author them.
-void World::appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelRig& rig, const oc::string& ownerName)
+void WorldState::appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelRig& rig, const oc::string& ownerName)
 {
     for (const AssetNode* boneNode : node.findAll("Bone"))
     {
@@ -1109,7 +1113,7 @@ void World::appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelR
         bone.bind = readNodeTransform(*boneNode);
         if (const AssetNode* renderNode = findComponentNode(*boneNode, "Render"))
         {
-            bone.render = buildRenderSpawnInfo(*renderNode, ownerName + "/" + bone.name);
+            bone.render = self().buildRenderSpawnInfo(*renderNode, ownerName + "/" + bone.name);
             if (bone.render && bone.render->skinned)
                 Log::warning("Scene: entity '" + ownerName + "' bone '" + bone.name + "' asks for a SkinnedMesh; a bone renders a static node");
         }
@@ -1127,7 +1131,7 @@ void World::appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelR
 //   Walk  (LegAngle / ArmAngle / LeftLeg / RightLeg / LeftArm / RightArm / BobBone / BobHeight)
 //   Swing <bone> <angleDeg> [phase] [harmonic 1|2]  (child Axis)
 //   Bob <bone> <height> [phase] [harmonic 1|2]      (child Direction)
-oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
+oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> WorldState::buildSceneAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
 {
     auto rig = oc::make_shared<SceneAnimRig>();
     appendSceneAnimBones(node, -1, *rig, ownerName);
@@ -1192,7 +1196,7 @@ oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawn
 // Component HumanoidAnimator: `Bone <name>` blocks + the four-limb Z walk. Angles in degrees.
 //   Stride / FullSpeed (the entity's local units), Fade <sec>, LegAngle / ArmAngle (at most 90)
 //   LeftLeg / RightLeg / LeftArm / RightArm <bone name>  (default = the key)
-oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> World::buildHumanoidAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
+oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> WorldState::buildHumanoidAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
 {
     auto rig = oc::make_shared<HumanoidRig>();
     appendSceneAnimBones(node, -1, *rig, ownerName);
@@ -1218,7 +1222,7 @@ oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> World::buildHumanoidAnimato
     return info;
 }
 
-oc::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const AssetNode& sceneNode)
+oc::shared_ptr<SceneComponent::SpawnInfo> WorldState::buildSceneSpawnInfo(const AssetNode& sceneNode)
 {
     auto info = oc::make_shared<SceneComponent::SpawnInfo>();
 
@@ -1247,7 +1251,7 @@ oc::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const Asset
 // The cache normally gets its snapshot for free while the render container loads. This is the fallback
 // for the other order: the container was already loaded (or isn't loaded at all) when a Hull/Mesh shape
 // asked for geometry, so the source file is imported once more and handed to the cache.
-bool World::ensureCollisionSource(const oc::string& containerName)
+bool WorldState::ensureCollisionSource(const oc::string& containerName)
 {
     if (m_collision.hasSource(containerName))
         return true;
@@ -1351,7 +1355,7 @@ oc::shared_ptr<PhysicsComponent::SpawnInfo> World::buildPhysicsSpawnInfo(const A
     return info;
 }
 
-oc::shared_ptr<AudioBuffer> World::getOrLoadAudioBuffer(const oc::string& path)
+oc::shared_ptr<AudioBuffer> WorldState::getOrLoadAudioBuffer(const oc::string& path)
 {
     if (auto it = m_audioBuffers.find(path); it != m_audioBuffers.end())
         return it->second;
@@ -1403,7 +1407,7 @@ oc::shared_ptr<AudioComponent::SpawnInfo> World::buildAudioSpawnInfo(const Asset
     return info;
 }
 
-void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
+void WorldState::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
 {
     tmpl.defaultTransform = readNodeTransform(node); // the declaration's authored placement
     const AssetNode* nameNode = node.find("Name");
@@ -1451,7 +1455,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
                 renderNodePath = renderNode->find("Node") ? renderNode->find("Node")->asString() : oc::string();
             }
         }
-        else if (oc::shared_ptr<RenderComponent::SpawnInfo> info = buildRenderSpawnInfo(*renderNode, tmpl.displayName, wantsCollisionGeometry))
+        else if (oc::shared_ptr<RenderComponent::SpawnInfo> info = self().buildRenderSpawnInfo(*renderNode, tmpl.displayName, wantsCollisionGeometry))
         {
             renderContainerName = info->containerName;
             renderNodePath = info->nodePath;
@@ -1461,7 +1465,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     }
 
     if (const AssetNode* animatorNode = findComponentNode(node, "Animator"); animatorNode && !m_headless)
-        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
+        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = self().buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_Animator);
             tmpl.spawnInfos.emplace_back(oc::move(info));
@@ -1470,14 +1474,14 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     if (physicsNode) // found above, before the render container load
     {
         typeBits |= uint16(1 << EComponentID_Physics);
-        tmpl.spawnInfos.emplace_back(buildPhysicsSpawnInfo(*physicsNode, renderContainerName, renderNodePath, tmpl.displayName));
+        tmpl.spawnInfos.emplace_back(self().buildPhysicsSpawnInfo(*physicsNode, renderContainerName, renderNodePath, tmpl.displayName));
     }
 
     // Headless drops everything below except Network/Script: Audio would load buffers on an
     // uninitialized device, Particle/Force/Light create renderer emitter slots / push to mapped
     // buffers. Scripts reaching an absent component no-op through the null-handle ABI contract.
     if (const AssetNode* audioNode = findComponentNode(node, "Audio"); audioNode && !m_headless)
-        if (oc::shared_ptr<AudioComponent::SpawnInfo> info = buildAudioSpawnInfo(*audioNode, tmpl.displayName))
+        if (oc::shared_ptr<AudioComponent::SpawnInfo> info = self().buildAudioSpawnInfo(*audioNode, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_Audio);
             tmpl.spawnInfos.emplace_back(oc::move(info));
@@ -1646,7 +1650,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     tmpl.archetype = makeEntityArchetype(typeBits);
 }
 
-oc::shared_ptr<const EntitySpawnTemplate> World::cacheTemplate(const oc::string& name, const oc::string& sourceFile, const AssetNode& node)
+oc::shared_ptr<const EntitySpawnTemplate> WorldState::cacheTemplate(const oc::string& name, const oc::string& sourceFile, const AssetNode& node)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
         return it->second;
@@ -1662,14 +1666,14 @@ oc::shared_ptr<const EntitySpawnTemplate> World::cacheTemplate(const oc::string&
     return tmpl;
 }
 
-oc::shared_ptr<const EntitySpawnTemplate> World::buildInlineTemplate(const AssetNode& node)
+oc::shared_ptr<const EntitySpawnTemplate> WorldState::buildInlineTemplate(const AssetNode& node)
 {
     auto tmpl = oc::make_shared<EntitySpawnTemplate>();
     buildTemplate(node, *tmpl);
     return tmpl;
 }
 
-oc::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const oc::string& path)
+oc::shared_ptr<const EntitySpawnTemplate> WorldState::buildFileTemplate(const oc::string& path)
 {
     // A template build is the one-time cost behind a first spawn: the asset parse plus every
     // container / clip / audio import it pulls in. Named by the file so the memory panel shows
@@ -1691,7 +1695,7 @@ oc::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const oc::str
     return nullptr;
 }
 
-oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const oc::string& name)
+oc::shared_ptr<const EntitySpawnTemplate> WorldState::getOrBuildPrefabTemplate(const oc::string& name)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
         return it->second; // cache hit: no asset file touched
@@ -1771,21 +1775,21 @@ EntityPtr World::createEmptyEntity(const oc::string& name)
     return entity;
 }
 
-void World::handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect)
+void WorldState::handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect)
 {
     ProfileScope profileScope("Entity change", EProfileCategory::Entity);
     if (auto* cv = oc::get_if<EntityChange::CreateViewport>(&change.type))
     {
         const glm::vec3 worldPos = camera.screenToWorld(viewportRect, cv->screenPos);
-        addRootEntity(spawnAssetFile(cv->path, Transform(worldPos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
+        self().addRootEntity(self().spawnAssetFile(cv->path, Transform(worldPos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
     }
     else if (auto* ch = oc::get_if<EntityChange::CreateHierarchy>(&change.type))
     {
-        EntityPtr e = spawnAssetFile(ch->path, Transform(), false);
+        EntityPtr e = self().spawnAssetFile(ch->path, Transform(), false);
         if (ch->parent && hasComponent<SceneComponent>(ch->parent))
             e->reparentEntity(ch->parent);   // parent's SceneComponent takes ownership
         else
-            addRootEntity(oc::move(e));
+            self().addRootEntity(oc::move(e));
     }
     else if (auto* se = oc::get_if<EntityChange::SetEnabled>(&change.type))
     {
@@ -1793,19 +1797,19 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
             se->entity->setEnabled(se->enabled);
     }
     else if (auto* sap = oc::get_if<EntityChange::SpawnAtPosition>(&change.type))
-        addRootEntity(spawnAssetFile(sap->path, Transform(sap->position, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
+        self().addRootEntity(self().spawnAssetFile(sap->path, Transform(sap->position, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
     else if (auto* as = oc::get_if<EntityChange::AddSceneEntity>(&change.type))
     {
-        EntityPtr e = createEmptyEntity(as->displayName);
+        EntityPtr e = self().createEmptyEntity(as->displayName);
         if (as->parent && hasComponent<SceneComponent>(as->parent))
             e->reparentEntity(as->parent);
         else
-            addRootEntity(oc::move(e));
+            self().addRootEntity(oc::move(e));
     }
     else if (auto* del = oc::get_if<EntityChange::Delete>(&change.type))
-        removeRootEntity(del->entity.get());
+        self().removeRootEntity(del->entity.get());
     else if (auto* rep = oc::get_if<EntityChange::Reparent>(&change.type))
-        rep->newParent ? removeRootEntity(rep->entity.get()) : addRootEntity(oc::move(rep->entity));
+        rep->newParent ? self().removeRootEntity(rep->entity.get()) : self().addRootEntity(oc::move(rep->entity));
     else if (auto* sp = oc::get_if<EntityChange::SavePrefab>(&change.type))
     {
         if (savePrefab(sp->root.get(), sp->path, sp->text))
@@ -1813,19 +1817,19 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
     }
     else if (auto* op = oc::get_if<EntityChange::OpenPrefabForEdit>(&change.type))
     {
-        EntityPtr e = spawnAssetFile(op->path, Transform(), false);
+        EntityPtr e = self().spawnAssetFile(op->path, Transform(), false);
         if (e)
         {
             e->setPrefabInstance(false); // unpack: the Entity Editor edits it freely
-            addRootEntity(e);
+            self().addRootEntity(e);
             if (m_onPrefabOpened)
                 m_onPrefabOpened(e, op->path);
         }
     }
     else if (auto* np = oc::get_if<EntityChange::NewPrefab>(&change.type))
     {
-        EntityPtr e = createEmptyEntity(np->displayName);
-        addRootEntity(e);
+        EntityPtr e = self().createEmptyEntity(np->displayName);
+        self().addRootEntity(e);
         if (m_onPrefabOpened)
             m_onPrefabOpened(e, "");
     }
@@ -1834,7 +1838,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         // Entity::create() only stores a raw, non-owning pointer to the template - keep it alive for
         // as long as the entity might reference it (World's own template caches do the same for
         // prefabs; this one is ad-hoc, so nothing else would hold onto it).
-        keepTemplateAlive(rs->tmpl);
+        self().keepTemplateAlive(rs->tmpl);
 
         Transform t(rs->oldEntity->pos, rs->oldEntity->scale, rs->oldEntity->rot);
         // Pre-set the frozen flag so component spawn already sees it - the respawn attaches to its parent
@@ -1861,7 +1865,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         else
         {
             oc::erase_if(m_rootEntities, [&](const EntityPtr& e) { return e.get() == rs->oldEntity.get(); });
-            addRootEntity(newEntity);
+            self().addRootEntity(newEntity);
         }
 
         if (m_onEntityRespawned)

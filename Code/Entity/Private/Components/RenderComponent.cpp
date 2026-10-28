@@ -35,14 +35,5 @@ void RenderComponent::place(const Transform& world)
 
 const RenderComponent::SpawnInfo* getRenderSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<RenderComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Render); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const RenderComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<RenderComponent>(entity);
 }

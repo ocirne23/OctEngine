@@ -177,7 +177,7 @@ void ScriptComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfo
 
         // Logged once here; the refusal itself is requirementsMet(), re-checked at every entry point. Latching
         // it would outlive the edit that fixes it -- a hot-reload never re-runs spawn.
-        if (const uint32 missing = loaded->requiredComponents & ~uint32(entity.typeBits))
+        if (const uint32 missing = loaded->requiredComponents & ~uint32(entity.getTypeBits()))
         {
             oc::string names;
             for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
@@ -325,7 +325,7 @@ bool ScriptComponent::requirementsMet(const Entity& entity) const
     // every entry point at once -- OnDestroy included, since its data may be half-written -- until a
     // successful recompile clears the flag.
     return scriptModule == nullptr
-        || (!scriptModule->faulted && (scriptModule->requiredComponents & ~uint32(entity.typeBits)) == 0);
+        || (!scriptModule->faulted && (scriptModule->requiredComponents & ~uint32(entity.getTypeBits())) == 0);
 }
 
 void ScriptComponent::update(Entity& entity, float deltaSeconds)
@@ -420,14 +420,5 @@ ScriptComponent::~ScriptComponent()
 
 const ScriptComponent::SpawnInfo* getScriptSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<ScriptComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Script); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const ScriptComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<ScriptComponent>(entity);
 }

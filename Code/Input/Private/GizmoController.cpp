@@ -55,7 +55,7 @@ namespace
     Transform worldTransform(Entity* entity)
     {
         Transform t(entity->pos, entity->scale, entity->rot);
-        for (Entity* p = entity->parent; p; p = p->parent)
+        for (Entity* p = entity->getParent(); p; p = p->getParent())
             t = composeTransform(Transform(p->pos, p->scale, p->rot), t);
         return t;
     }
@@ -293,7 +293,7 @@ void GizmoController::beginDrag(Handle handle, const Ray& ray)
 {
     m_activeHandle = handle;
     m_dragOrigin = worldTransform(m_selected).pos;
-    m_dragParentWorld = m_selected->parent ? worldTransform(m_selected->parent) : Transform();
+    m_dragParentWorld = m_selected->getParent() ? worldTransform(m_selected->getParent()) : Transform();
 
     switch (handle)
     {

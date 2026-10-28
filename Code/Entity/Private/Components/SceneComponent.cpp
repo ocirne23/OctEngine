@@ -17,7 +17,7 @@ void SceneComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
     {
         if (!child.tmpl)
             continue;
-        EntityPtr childEntity = Entity::create(*child.tmpl, child.localTransform, 0, treeCursor, &entity); // carve from the tree's single allocation
+        EntityPtr childEntity = EntityState::create(*child.tmpl, child.localTransform, 0, treeCursor, &entity); // carve from the tree's single allocation
         if (!child.name.empty())
             childEntity->setName(child.name);
         if (!child.enabled)

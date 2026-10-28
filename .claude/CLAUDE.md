@@ -396,7 +396,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | ↳ [PostProcess](../Docs/Context/RendererVK/PostProcess.md) | Motion vectors, TAA bypass, DLSS, motion blur, colour, bloom |
 | ↳ [Terrain](../Docs/Context/RendererVK/Terrain.md) | Terrain and ocean integration, river and lake water, the rock material, terrain surface water, the rain occlusion map |
 | ↳ [Shaders](../Docs/Context/RendererVK/Shaders.md) | GLSL in `Assets/Shaders/`: folders, includes, compile, hoisted work, pipeline statistics (register counts), **half floats (fp16)** |
-| [Entity](../Docs/Context/Entity/CONTEXT.md) | The ECS: entity layout + flags, contiguous tree allocation, CullMode, the parallel update pass, parallel spawning/destruction, World, assets + tint, script glue. **Read it first; the topic files below hold the rest** |
+| [Entity](../Docs/Context/Entity/CONTEXT.md) | The ECS: the source layout (public API split + its MSVC rules), entity layout + flags, contiguous tree allocation, CullMode, the parallel update pass, parallel spawning/destruction, World, assets + tint, script glue. **Read it first; the topic files below hold the rest** |
 | ↳ [SimLod](../Docs/Context/Entity/SimLod.md) | **SIM LOD**: focus, the visit set, tiers, the delta, dormant / wake edges |
 | ↳ [Components](../Docs/Context/Entity/Components.md) | The components: the bone-model animators (HumanoidAnimator grammar), Light, the Game components |
 | ↳ [Multiplayer](../Docs/Context/Entity/Multiplayer.md) | **Multiplayer**: ownership, roles, the wire protocol, snapshots, the spawn stream, claims, validation, correction, ownership transfer, events, session |

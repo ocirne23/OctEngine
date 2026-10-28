@@ -7,6 +7,8 @@ module Entity;
 import Core.Time;
 import Script;
 import :ScriptComponent; // invokeScriptOnEvent (module-linkage, declared next to the component)
+import :ScriptEventManagerState;
+import :ScriptEventManager;
 
 void ScriptEventManager::fireEvent(EventKey key)
 {
@@ -50,14 +52,14 @@ void ScriptEventManager::fireEvent(EventKey key)
 			continue;
 		// This path calls the script's OnEvent DIRECTLY, bypassing ScriptComponent's own entry points,
 		// so it has to honour //@@require and the fault gate itself (see ScriptComponent::requirementsMet).
-		if (d.script->faulted || (d.script->requiredComponents & ~uint32(d.entity->typeBits)))
+		if (d.script->faulted || (d.script->requiredComponents & ~uint32(d.entity->getTypeBits())))
 			continue;
 		invokeScriptOnEvent(d.script, *d.entity, d.eventIdx, d.scriptData);
 	}
 	m_dispatching.fetch_sub(1, oc::memory_order_acq_rel);
 }
 
-void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)
+void ScriptEventManagerState::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)
 {
 	// Parallel entity spawning: a spawn job's getOrLoad miss lands here while other jobs fire
 	// events / register listeners.
@@ -82,7 +84,7 @@ void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, cons
 	{
 		if (oc::find(oldNames.begin(), oldNames.end(), newName) != oldNames.end())
 			continue; // already registered from the previous load
-		m_listenersByEvent[getEventKeyForName(newName)].push_back(script);
+		m_listenersByEvent[self().getEventKeyForName(newName)].push_back(script);
 	}
 
 	// Rebuild the script's own EventKey -> local OnEvent index map from scratch: a reload can reorder or
@@ -90,5 +92,5 @@ void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, cons
 	// fired EventKey into the eventIdx the script's compiled OnEvent switch expects.
 	script->eventKeyToIndex.clear();
 	for (int i = 0; i < (int)newNames.size(); ++i)
-		script->eventKeyToIndex[getEventKeyForName(newNames[i])] = i;
+		script->eventKeyToIndex[self().getEventKeyForName(newNames[i])] = i;
 }

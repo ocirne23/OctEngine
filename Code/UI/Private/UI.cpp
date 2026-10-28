@@ -37,7 +37,7 @@ void UI::drawGizmoEntity(Renderer& renderer, float deltaSec)
 {
     ProfileScope profileScope("Gizmo entity", EProfileCategory::UI);
     if (m_gizmo && m_gizmo->isVisible())
-        m_gizmo->getGizmoEntity()->update(renderer, deltaSec);
+        m_gizmo->getGizmoEntity()->updateDetached(renderer, deltaSec);
 }
 
 void UI::prepare()

@@ -4,6 +4,7 @@ import Core;
 import Core.Log;
 import File;
 
+import :AssetRegistryState;
 import :AssetRegistry;
 import :AnimationDescription;
 
@@ -42,7 +43,7 @@ static oc::string fileKey(const oc::string& path)
     return toLower(FileSystem::normalize(path));
 }
 
-void AssetRegistry::clear()
+void AssetRegistryState::clear()
 {
     m_objectContainers.clear();
     m_clips.clear();
@@ -51,7 +52,7 @@ void AssetRegistry::clear()
     m_fileRoot.clear();
 }
 
-void AssetRegistry::scanDirectory(const oc::string& rootDir)
+void AssetRegistryState::scanDirectory(const oc::string& rootDir)
 {
     ProfileScope scope("AssetRegistry::scanDirectory", EProfileCategory::Entity);
     clear();
@@ -74,7 +75,7 @@ void AssetRegistry::scanDirectory(const oc::string& rootDir)
     }
 }
 
-void AssetRegistry::registerFile(const oc::string& path)
+void AssetRegistryState::registerFile(const oc::string& path)
 {
     AssetNode root;
     oc::string error;
@@ -159,13 +160,13 @@ const ObjectContainerDesc* AssetRegistry::findObjectContainer(const oc::string& 
     return it != m_objectContainers.end() ? &it->second : nullptr;
 }
 
-const AnimationClipDesc* AssetRegistry::findClip(const oc::string& name) const
+const AnimationClipDesc* AssetRegistryState::findClip(const oc::string& name) const
 {
     const auto it = m_clips.find(name);
     return it != m_clips.end() ? &it->second : nullptr;
 }
 
-const AnimatorDesc* AssetRegistry::findAnimator(const oc::string& name) const
+const AnimatorDesc* AssetRegistryState::findAnimator(const oc::string& name) const
 {
     const auto it = m_animators.find(name);
     return it != m_animators.end() ? &it->second : nullptr;
@@ -182,7 +183,7 @@ void AssetRegistry::addPrefab(const oc::string& name, const oc::string& path)
     m_prefabs.insert_or_assign(name, path);
 }
 
-const oc::string* AssetRegistry::findRootForFile(const oc::string& fileName) const
+const oc::string* AssetRegistryState::findRootForFile(const oc::string& fileName) const
 {
     const auto it = m_fileRoot.find(fileKey(fileName));
     return it != m_fileRoot.end() ? &it->second : nullptr;

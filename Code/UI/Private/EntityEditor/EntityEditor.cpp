@@ -323,7 +323,7 @@ void EntityEditor::removeChild(Entity* child)
 	if (!child)
 		return;
 	EntityPtr keepAlive(child); // own it until this frame's changes are drained, before detachFromOwner drops the scene-graph ref
-	detachFromOwner(child);
+	child->detachFromOwner();
 	if (m_selected.get() == child)
 		selectEntity(m_editRoot);
 	m_changes.push_back({ EntityChange::Delete{ keepAlive } });
@@ -601,7 +601,7 @@ void EntityEditor::renderTreeNode(Entity* node)
 	SceneComponent* sc = sceneComponentOf(node);
 	const bool isLocked = node->isPrefabInstance(); // a "Prefab <name>" reference - edit the source file instead
 	const bool hasChildren = !isLocked && sc && !sc->children.empty();
-	const bool isRoot = (node->parent == nullptr);
+	const bool isRoot = (node->getParent() == nullptr);
 
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
 	if (!hasChildren) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;

@@ -260,7 +260,7 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
 static Transform parentWorldOf(const Entity& entity)
 {
     Transform world;
-    for (const Entity* p = entity.parent; p; p = p->parent)
+    for (const Entity* p = entity.getParent(); p; p = p->getParent())
         world = composeTransform(Transform(p->pos, p->scale, p->rot), world);
     return world;
 }
@@ -311,22 +311,13 @@ void suspendPhysicsTree(Entity& entity, SceneComponent* sc)
 
 const PhysicsComponent::SpawnInfo* getPhysicsSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<PhysicsComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Physics); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const PhysicsComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<PhysicsComponent>(entity);
 }
 
 float getPhysicsShapeScale(const Entity* entity)
 {
     float scale = 1.0f;
-    for (const Entity* e = entity; e; e = e->parent)
+    for (const Entity* e = entity; e; e = e->getParent())
         scale *= e->scale;
     return scale;
 }

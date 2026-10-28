@@ -374,9 +374,9 @@ void NpcSystem::service(StructureSystem& structures)
                     // (never stamped) one inside the balls by distance. NOT the Main (on-screen)
                     // stamp: a visible unit beyond the outer radius is walked but dormant there,
                     // so skipping on it froze every far unit the camera could see.
-                    if (!e->spatialEntry.isValid())
+                    if (!e->getSpatialEntry().isValid())
                         continue;
-                    const SpatialHandle handle = e->spatialEntry.handle();
+                    const SpatialHandle handle = e->getSpatialEntry().handle();
                     if (Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers)
                         continue;
                     if (!Globals::spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2)

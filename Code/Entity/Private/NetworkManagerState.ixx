@@ -1,0 +1,257 @@
+export module Entity:NetworkManagerState;
+
+import Core;
+import Core.glm;
+import Network;
+import Settings;
+import :EntityState;
+import :Entity;
+import :NetworkComponent; // NetInputState in the claim ring; no cycle - the component never imports the manager
+
+export class NetworkManager; // declared before their friend lines
+export struct NetworkComponent;
+
+export enum class ENetRole : uint8; // NetworkManager.ixx
+
+// Everything of NetworkManager but its public API (NetworkManager.ixx): the session, the wire protocol, the registry and the component-facing calls.
+//
+// OWNERSHIP MODEL: every networked entity is SERVER-OWNED and the server mints every netId. A component registering on the server (scene load or runtime
+// alike) gets an id plus a spawn record replicated to clients - late joiners get all live records replayed after their Welcome, which is how the networked
+// world arrives. A client registering OUTSIDE an incoming Spawn stays LOCAL-INERT (netId 0, never synced), so client-only and server-only entities are just
+// entities the other side doesn't have, the two scenes can differ arbitrarily, and id conflicts are structurally impossible. Only STATE is networked:
+// static scenery that never moves needs no NetworkComponent.
+//
+// Threading: every NetHost call is main-thread (receive() before the entity/physics updates, send() after world.update). Snapshot decode writes component
+// target state on the main thread too, so NetworkComponent::update only ever reads it from workers.
+//
+// Wire protocol (GameProtocolId bumps on ANY format change - the transport handshake denies mismatched ids, which is the version gate):
+//   ch0 Unreliable:  Snapshot - PER PEER: records chosen by the entity's distance to THAT peer's player (see sendSnapshotTick). [u8][varuint serverTick]
+//                    [u8 flags bit0=quantized][f32 maxVel][f32 maxAngVel (quantized only - the velocity quantization ranges are live tweaks, so the decoder
+//                    must be told per message)][u16 count] + records
+//                    record: [varuint netId][u8 recFlags (NetRecFlag bits)][pos 3xf32][rot u32 smallest-three | 4xf32]
+//                    + when NetRecFlag_Physics: [linVel][angVel], each 3xu16 quantized over ±range | 3xf32.
+//                    Physics records carry the BODY's world pose; non-physics records the entity's LOCAL pos/rot. Chunked under "Snapshot max bytes";
+//                    every chunk repeats the tick, staleness is dropped PER ENTITY (record tick <= last applied), so chunk reordering is harmless
+//                    (UnreliableSequenced would drop sibling chunks instead).
+//   ch1 Reliable:    Event [u8][varuint senderClientId (server->client ONLY)][varuint senderNetId][string name][varuint dataLen][data] - a client sends no
+//                    CLIENT id: its identity is the connection, and an ignored client-writable one is a refactor away from being trusted. The NET id names
+//                    the entity that fired it and travels both ways; being client-supplied, the server resolves it only after an ownership check.
+//   ch2 Reliable:    Hello (client->server) [u8][u16 version]
+//                    Welcome (server->client) [u8][u16 version][varuint serverTick][f32 snapshotHz][varuint yourClientId]
+//                    Deny [u8][string reason]
+//                    Spawn (server->client) [u8][u16 count] + count records, each [varuint baseId][varuint componentCount][varuint ownerClientId]
+//                    [string path][pos 3xf32][rot 4xf32][f32 scale][linVel 3xf32][angVel 3xf32]. BATCHED and FLOW-CONTROLLED: the server owes every ready
+//                    peer a per-peer queue of spawn/despawn ids (the join replay + each frame's announces), drained in send() only while the peer's session
+//                    channel holds fewer than "Queue target" reliable messages and at most "Records per frame" records - so a 20k-unit world never trips
+//                    the transport's queued-reliable disconnect, and the client spawns at a bounded rate.
+//                    Despawn (server->client) [u8][u16 count][varuint baseId x count]
+//   ch3 Unreliable:  Claim (owner->server) [u8][varuint netId][varuint newestSeq][u8 count][u8 flags bit0=quantized][f32 maxVel][f32 maxAngVel (quantized
+//                    only - the owner's live ranges, so the server decodes with what was encoded)] + count records oldest->newest, each [u32 buttons]
+//                    [move 3xf32][pos 3xf32][rot u32 smallest-three | 4xf32][linVel + angVel 3xu16 over ±range | 3xf32] + ONE trailing [look 3xf32]
+//                    applied to every record (it barely changes across the window). The last "Claim redundancy" claims ride in EVERY packet (redundancy
+//                    beats a reliable channel under loss: no head-of-line stall), the server dedups by seq. The server VALIDATES each claim
+//                    (Network/Validation tweaks: a wall-clock movement token bucket refilled at max speed, velocity cap, trajectory raycast, hard teleport
+//                    cap) - accepted claims overwrite its twin and flow to the other clients as normal snapshots; rejections bump `violations` and arm
+//                    NetRecFlag_Forced on the owner's records so the owner gets dragged back.
+// Spawn/Despawn ride the session channel so they order after Welcome; a late joiner gets every live spawn record replayed right after its Welcome - that
+// replay IS how the networked world arrives.
+export class NetworkManagerState
+{
+protected:
+
+    friend class Entity;             // Entity::create: begin/endTreeRegistration
+    friend struct NetworkComponent;  // registration, the sync params and the client-side playback inputs
+
+    template<typename N = NetworkManager> N& self() { return static_cast<N&>(*this); }
+
+    // ---- The component-facing calls ----
+
+    const NetSyncParams& params() const { return Globals::settings.network.correction; }
+    // Client: this frame's positions of locally-owned dynamic bodies, rebuilt in receive() (main thread, before the entity pass) - NetworkComponent::update
+    // reads them on job workers to arm the interaction grace. Same publish-then-read-only contract as the snapshot targets.
+    oc::span<const glm::vec3> localOwnedBodyPositions() const { return m_localOwnedBodyPositions; }
+    // Client: the server's snapshot rate from the Welcome (falls back to our own tweak) - the remote-interpolation playback clock advances in the SERVER's
+    // tick units.
+    float serverSnapshotHz() const { return m_serverSnapshotHz; }
+
+    // PARALLEL ENTITY SPAWNING: registration is callable from spawn jobs. A replicated tree's ids must stay CONTIGUOUS from the base (the client adopts
+    // base + cursor in DFS order), so a server-side tree spawn that carries NetworkComponents holds m_registerMutex ACROSS the whole tree via
+    // begin/endTreeRegistration (Entity::create's root overload) - registerEntity re-locks recursively from inside it. Client id ADOPTION stays
+    // main-thread-sequential by contract (replicated Spawns execute inside receive()).
+    void beginTreeRegistration() { m_registerMutex.lock(); }
+    void endTreeRegistration() { m_registerMutex.unlock(); }
+    // Returns the assigned netId, or 0 = LOCAL-INERT for any registration that isn't the server minting one or a client adopting one from a replicated Spawn.
+    // An occupied id is REPLACED with a warning - the Entity Editor respawns before destroying, so a collision there is the stale twin; unregister erases
+    // only when the component pointer still matches, or that stale twin's destroy would take the new registration down with it. Unregistering a BASE id
+    // queues the Despawn; despawn is all-or-nothing at the root.
+    uint32 registerEntity(Entity& entity, NetworkComponent* comp);
+    void unregisterEntity(uint32 netId, const NetworkComponent* comp);
+
+    // ---- The session and the wire ----
+
+    struct DynamicSpawn; // defined below with the registry members
+
+    void sendHello();
+    void handleSessionMessage(NetPeerId peer, NetReader& reader, uint8 msgType);
+    void handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes);
+    void handleSnapshot(NetReader& reader);
+    void handleSpawnMessage(NetReader& reader);   // client: execute a replicated spawn with forced ids
+    void handleDespawnMessage(NetReader& reader); // client: destroy the replicated root
+    void handleClaimMessage(NetPeerId peer, NetReader& reader); // server: validate + apply an owner's claims
+    void handleOwnerChangeMessage(NetReader& reader);           // client: adopt a per-entity ownership change
+    void sendClaims();                            // client: stream claims for locally-owned entities
+    // Server: per-entity ownership handover - resets the claim/validation state (the next claim re-seeds against the twin) and broadcasts OwnerChange; 0
+    // reverts to server-owned.
+    void transferOwnership(uint32 netId, NetworkComponent* comp, uint32 newOwnerClientId);
+    // Server, per frame: server-owned dynamics near a client's PRIMARY owned body transfer to that client; transferred ones revert after "Release delay"
+    // outside "Release radius". Primaries only as sources - chained transfer through a pushed cube would deadlock release on piles (the client-side
+    // interaction grace covers second-order contact instead).
+    void updateOwnershipTransfers(double deltaSec);
+    void sendSnapshotTick();
+    void sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId, uint32 senderNetId, oc::span<const uint8> data);
+    void fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data);
+    Entity* findOwnedEntity(uint32 netId, uint32 clientId) const; // null unless clientId really owns it
+    // Server: encode one spawn record into `out` (transform refreshed from the live entity when possible). Returns the encoded size, 0 when the record
+    // cannot be sent (path too long). `transferred` collects (netId, owner) pairs of the tree's entities whose ownership diverged from the record (proximity
+    // transfers) - sent as OwnerChange right after the batch.
+    size_t encodeSpawnRecord(const DynamicSpawn& rec, oc::span<uint8> out, oc::vector<oc::pair<uint32, uint32>>& transferred);
+    bool spawnReplicatedRecord(NetReader& reader); // client: one record of a Spawn batch; false = reader exhausted
+    void drainSpawnStreams();                      // server: flow-controlled per-peer spawn/despawn delivery
+
+    struct Replicated
+    {
+        Entity* entity = nullptr;
+        NetworkComponent* comp = nullptr;
+    };
+
+    ENetRole m_role = ENetRole(0); // ENetRole::None
+    NetHost m_host;
+    NetPeerId m_serverPeer = InvalidNetPeerId; // client role: the one outgoing connection
+    NetAddress m_serverAddress;                // client role: kept for auto-reconnect
+    oc::vector<NetPeerId> m_readyPeers;       // server role: peers past Hello (ids recycle - cleared on Disconnected)
+
+    oc::map<uint32, Replicated> m_entities;   // ordered: deterministic round-robin cursor
+    mutable std::mutex m_entityMutex;
+    // Parallel entity spawning: serializes id minting + the spawn-record maps across concurrent register/unregister calls; held tree-wide by
+    // begin/endTreeRegistration for id contiguity. Lock order: m_registerMutex BEFORE m_entityMutex (registerEntity takes both).
+    std::recursive_mutex m_registerMutex;
+
+    uint32 m_sentTweakGeneration = 0; // server: last TweakRegistry sync generation broadcast
+    // Client: events that arrived before the Welcome was processed (events ride ch1, the Welcome ch2 - no cross-channel ordering), replayed in order once
+    // welcomed. Bounded; cleared on disconnect with the rest of the session state.
+    oc::vector<oc::vector<uint8>> m_preWelcomeEvents;
+
+    // Server: one record per live replicated spawn - scene load and runtime alike (announced to clients, replayed to late joiners; that replay is how the
+    // networked world arrives at connect). Component ids are baseId..baseId+componentCount-1, contiguous because a tree spawn registers synchronously on the
+    // main thread with nothing interleaving.
+    struct DynamicSpawn
+    {
+        uint32 baseId = 0;
+        uint32 componentCount = 0;
+        uint32 ownerClientId = 0; // whole-tree ownership, applied by the client to every component of the spawn
+        oc::string path;      // what the client spawns (template sourceFile, prefab name fallback)
+        glm::vec3 spawnPos = glm::vec3(0.0f);
+        glm::quat spawnRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        float spawnScale = 1.0f;
+    };
+    oc::map<uint32, DynamicSpawn> m_dynamicSpawns;              // by baseId (server)
+    oc::unordered_map<const Entity*, uint32> m_dynamicRootIds;  // root -> baseId, grouping WITHIN one spawn call; purged every send() (entity pointers may recycle)
+    oc::vector<uint32> m_pendingSpawnAnnounce;                  // announced by send(); client duplicate-guard makes replay+announce overlap harmless
+    oc::vector<uint32> m_pendingDespawn;
+    uint32 m_nextNetId = 1;    // server-minted, the only id authority; 0 = local-inert (never registered)
+    // Server: what each ready peer is still OWED, drained by drainSpawnStreams() under flow control. Ids only (never recycled): a spawn whose record is gone
+    // by drain time was despawned before it was ever sent and is skipped; the despawn of a never-sent spawn is harmless client-side. Also the peer's SNAPSHOT
+    // stream state: its slot into NetEntityState::ServerState::sentTick and the round-robin cursors of its three distance tiers (see sendSnapshotTick).
+    struct PeerStream
+    {
+        oc::deque<uint32> owedSpawns;   // baseIds, in announce order (join replay first)
+        oc::deque<uint32> owedDespawns;
+        uint32 clientId = 0;
+        uint8 slot = 0;
+        uint32 tierCursor[3] = {};      // indices into m_tickEntities
+    };
+    oc::unordered_map<NetPeerId, PeerStream> m_peerStreams; // erased on Disconnected (peer ids recycle)
+    uint32 m_peerSlotMask = 0;                              // taken slots (bit = slot)
+    oc::vector<oc::pair<uint32, uint32>> m_spawnTransferScratch;
+    // Snapshot tick scratch (server): the entity set as a flat array for indexed round robins, the players' positions by clientId (0 = the server's own),
+    // and each entity's tier for one peer.
+    struct TickEntity { uint32 netId; Entity* entity; NetworkComponent* comp; };
+    oc::vector<TickEntity> m_tickEntities;
+    oc::vector<oc::pair<uint32, glm::vec3>> m_playerFocus;
+    oc::vector<glm::vec3> m_peerFocus;
+    oc::vector<uint8> m_tierScratch;
+    void observeSnapshotTick();                            // per entity: sample the record, stamp changedTick
+    void sendSnapshotTo(NetPeerId peer, PeerStream& stream); // per peer: relevance-thinned records under a budget
+
+    // Client: id assignment scope while executing one replicated Spawn (main thread, synchronous)
+    uint32 m_incomingSpawnBase = 0;
+    uint32 m_incomingSpawnCount = 0;
+    uint32 m_incomingSpawnCursor = 0;
+    uint32 m_incomingSpawnOwner = 0;
+
+    // clientIds: stable per connection, minted by the server at Hello (peer ids recycle, clientIds don't)
+    uint32 m_localClientId = 0; // client: from the Welcome; always 0 on the server
+    uint32 m_currentEventSender = 0; // see currentEventSender()
+    oc::span<const uint8> m_currentEventData;
+    using EventFilterFn = oc::function<bool(uint32 clientId, oc::string_view name, oc::span<const uint8> data, Entity* sender)>;
+    EventFilterFn m_eventFilter; // server, see setEventFilter
+    oc::function<void(oc::string_view)> m_onGameEvent; // see setOnGameEvent
+    uint32 m_nextClientId = 1;  // server
+    oc::unordered_map<NetPeerId, uint32> m_peerClients; // server: ready peer -> clientId (erased on Disconnected)
+    oc::function<void(uint32 clientId)> m_onClientJoined; // server, main thread
+    oc::function<void(uint32 clientId)> m_onClientLeft;
+    oc::function<void()> m_onServerLost; // client, main thread, see setOnServerLost
+
+    // Client: recent claim payloads per locally-owned entity - every Claim packet carries the whole ring, so a claim only vanishes if ClaimRedundancy
+    // consecutive packets drop
+    struct ClaimRecord
+    {
+        NetInputState input;
+        glm::vec3 pos;
+        glm::quat rot;
+        glm::vec3 linVel;
+        glm::vec3 angVel;
+    };
+    static constexpr uint32 ClaimRedundancy = 8;
+    struct ClaimRing
+    {
+        ClaimRecord records[ClaimRedundancy]; // indexed seq % ClaimRedundancy
+        uint32 newestSeq = 0;
+        // valid consecutive records ending at newestSeq - the packet's record count comes from THIS, never from the (monotonic, episode-spanning) claim
+        // sequence: a re-acquired entity's first packet must not replay the previous episode's stale positions (the server's dedup is reset on ownership
+        // change, so it would apply them - teleporting the twin to where the object WAS)
+        uint32 validCount = 0;
+    };
+    oc::unordered_map<uint32, ClaimRing> m_claimRings; // by netId, created on demand for owned entities
+    uint32 m_lastClaimStep = 0; // claims are phase-locked to the physics step; see send()
+    oc::vector<glm::vec3> m_localOwnedBodyPositions;   // see localOwnedBodyPositions()
+    float m_serverSnapshotHz = 20.0f;                   // see serverSnapshotHz()
+    // remote-owned entities' snapshot history for interpolation playback: unique_ptr values keep the rings' addresses stable (components hold raw pointers
+    // across map growth)
+    oc::map<uint32, oc::unique_ptr<NetSnapshotRing>> m_remoteBuffers;
+    oc::vector<oc::pair<uint32, glm::vec3>> m_transferSources; // server scan scratch: clientId + primary body position
+    // The proximity transfer NEVER walks m_entities: the few entities it can act on are tracked. m_primaryIds = every netId setOwner / setServerPrimary
+    // touched (the transfer SOURCES, filtered to live dynamic bodies at use); m_transferredIds = objects a client currently holds through transfer (reclaim /
+    // release candidates). Hand-over candidates come from a SpatialIndex sphere query around each client primary. Both lists are pruned by unregisterEntity.
+    oc::vector<uint32> m_primaryIds;
+    oc::vector<uint32> m_transferredIds;
+    oc::vector<uint32> m_transferredScratch; // iteration copy: transferOwnership edits the list
+    oc::vector<uint64> m_transferQuery;      // spatial query scratch
+    void trackPrimary(uint32 netId);
+    void untrackId(oc::vector<uint32>& list, uint32 netId);
+
+    // netId, not Entity*: the sender may be destroyed between the queueing thread and the drain
+    struct PendingEvent { oc::string name; oc::vector<uint8> data; uint32 senderNetId = 0; };
+    oc::vector<PendingEvent> m_pendingOutgoingEvents; // filled from any thread, drained by send()
+    std::mutex m_eventMutex;
+
+    void applyLinkSim(); // Globals::settings.network's link simulation -> m_host's config
+    bool m_initialized = false;
+    double m_snapshotAccum = 0.0;
+    double m_netTime = 0.0; // seconds since start, advanced in receive() - the WALL CLOCK the claim displacement budget is measured against (sequence numbers
+                            // are attacker-controlled, so they can only ever narrow the budget)
+    uint32 m_serverTick = 0;
+    bool m_warnedUnknownRecFlags = false;
+    // no unknown-id warning list: an unknown snapshot id is always a Spawn in flight or a Despawn that already landed - expected transients, the reliable
+    // spawn stream is the source of truth
+};

@@ -54,7 +54,7 @@ EAudioSelect audioSelectFromToken(oc::string_view token)
 static glm::vec3 worldPositionOf(const Entity& entity)
 {
     Transform world(entity.pos, entity.scale, entity.rot);
-    for (const Entity* p = entity.parent; p; p = p->parent)
+    for (const Entity* p = entity.getParent(); p; p = p->getParent())
         world = composeTransform(Transform(p->pos, p->scale, p->rot), world);
     return world.pos;
 }
@@ -157,16 +157,7 @@ void AudioComponent::update(Entity& entity, const Transform& world)
 
 const AudioComponent::SpawnInfo* getAudioSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<AudioComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Audio); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const AudioComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<AudioComponent>(entity);
 }
 
 void writeAudioSpawnInfo(const AudioComponent::SpawnInfo& info, AssetNode& out)

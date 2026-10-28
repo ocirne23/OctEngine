@@ -1056,15 +1056,7 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 
 const GameUnitComponent::SpawnInfo* getGameUnitSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<GameUnitComponent>(entity))
-        return nullptr;
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_GameUnit); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const GameUnitComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<GameUnitComponent>(entity);
 }
 
 void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode& out)

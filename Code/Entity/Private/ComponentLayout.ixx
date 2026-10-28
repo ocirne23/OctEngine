@@ -1,47 +1,25 @@
-export module Entity:Component;
+export module Entity:ComponentLayout;
 
-// The component system's shared machinery: the inline layout table over all component types, the
-// component accessors built on it, and the entity-tree/allocation helpers. Each component type itself
-// lives in its own partition under Private/Components; they are re-exported here so importing
-// :Component still yields the whole set.
-export import :SceneComponent;
-export import :RenderComponent;
-export import :AnimatorComponent;
-export import :PhysicsComponent;
-export import :AudioComponent;
-export import :ParticleComponent;
-export import :ForceComponent;
-export import :LightComponent;
-export import :NetworkComponent;
-export import :GameUnitComponent;
-export import :GameStructureComponent;
-export import :GameProjectileComponent;
-export import :BoneModel; // not a component: what the two bone-model animators below share
-export import :SceneAnimatorComponent; // PARKED: compiled and kept, but it has NO component id / type bit - see its .ixx
-export import :HumanoidAnimatorComponent;
-export import :ScriptComponent;
-
-import :Entity;
 import Core;
-import Core.Transform;
 
-export int componentIdFromName(oc::string_view name);
-export void detachFromOwner(Entity* entity);          // deletion path: breaks the entity's tree allocation (conservative)
-export void detachKeepAllocation(Entity* entity);     // reparentEntity only: break decision already made by the caller
+import :EntityState;
+import :Entity;
+import :SceneComponent;
+import :RenderComponent;
+import :AnimatorComponent;
+import :PhysicsComponent;
+import :AudioComponent;
+import :ParticleComponent;
+import :ForceComponent;
+import :LightComponent;
+import :NetworkComponent;
+import :GameUnitComponent;
+import :GameStructureComponent;
+import :GameProjectileComponent;
+import :HumanoidAnimatorComponent;
+import :ScriptComponent;
 
-// Tree-allocation contiguity (see EEntityFlag_RootAllocation/ContiguousAllocation):
-// Nearest allocation root reachable through an unbroken contiguous parent chain (self included); null if broken.
-export Entity* findAllocationRoot(Entity* entity);
-// Splits the member's allocation before it departs: path ancestors revert to per-entity freeing, every
-// off-path subtree (and the member itself) is promoted to its own RootAllocation and keeps one-chunk
-// freeing for its contiguous DFS range. No-op for broken members and allocation roots.
-export void breakContiguousAllocation(Entity* member);
-// Same split entered at the allocation root itself (Entity::destroy's solely-owned fallback): the root
-// reverts to its own slice, each child subtree becomes an independent allocation.
-export void breakContiguousAllocationFromRoot(Entity* root);
-// True if every contiguous member below `entity` is owned solely by its parent's children list
-// (refcount 1) - i.e. destroying the tree is guaranteed to destroy all of them.
-export bool contiguousTreeSolelyOwned(Entity* entity);
+// The inline component layout: every component type's aligned size, and the byte offsets an entity's typeBits give them. getComponent (Component.ixx) reads it.
 
 export constexpr uint16 MaxInlineComponentTypes = 14;
 export constexpr uint16 ComponentAlignment = 16;
@@ -104,17 +82,18 @@ export namespace EntityComponentDetail
     static_assert(EComponentID_GameProjectile == 11);
     static_assert(EComponentID_HumanoidAnimator == 12);
     static_assert(EComponentID_Script == 13);
+    static_assert(MaxInlineComponentTypes == 14); // EntityState.ixx spells the offsets array out
 
     inline constexpr uint16 entityBaseOffset = alignUp(uint16(sizeof(Entity)), ComponentAlignment);
-}
 
-inline constexpr uint16 getComponentByteOffset(uint16 typeBits, EComponentID id)
-{
-    uint16 offset = EntityComponentDetail::entityBaseOffset;
-    for (uint16 i = 0; i < uint16(id) && i < MaxInlineComponentTypes; ++i)
-        if (typeBits & (1 << i))
-            offset += EntityComponentDetail::inlineSizes[i];
-    return offset;
+    constexpr uint16 componentByteOffset(uint16 typeBits, EComponentID id)
+    {
+        uint16 offset = entityBaseOffset;
+        for (uint16 i = 0; i < uint16(id) && i < MaxInlineComponentTypes; ++i)
+            if (typeBits & (1 << i))
+                offset += inlineSizes[i];
+        return offset;
+    }
 }
 
 export constexpr uint16 getEntityAllocSize(uint16 typeBits)
@@ -145,25 +124,10 @@ export constexpr ComponentOffsets getComponentOffsets(uint16 typeBits)
     return offsets;
 }
 
+// With the offsets of the entity's typeBits computed once (the per-entity visit): no offset walk per component.
 export template <typename T>
-bool hasComponent(const Entity* entity)
-{
-    return (entity->typeBits & (1 << T::getId())) != 0;
-}
-
-export template <typename T>
-T* getComponent(Entity* entity, const ComponentOffsets& offsets)
+T* getComponent(EntityState* entity, const ComponentOffsets& offsets)
 {
     const uint16 offset = offsets[T::getId()];
     return offset != 0 ? reinterpret_cast<T*>(reinterpret_cast<uint8*>(entity) + offset) : nullptr;
-}
-
-export template <typename T>
-T* getComponent(Entity* entity)
-{
-    constexpr EComponentID id = T::getId();
-    static_assert(uint16(id) < MaxInlineComponentTypes, "Only inline components are supported");
-    if (!(entity->typeBits & (1 << id)))
-        return nullptr;
-    return reinterpret_cast<T*>(reinterpret_cast<uint8*>(entity) + getComponentByteOffset(entity->typeBits, id));
 }

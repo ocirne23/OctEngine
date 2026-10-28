@@ -45,16 +45,7 @@ void ForceComponent::update(Entity& entity, const Transform& world)
 
 const ForceComponent::SpawnInfo* getForceSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<ForceComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Force); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const ForceComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<ForceComponent>(entity);
 }
 
 void writeForceSpawnInfo(const ForceComponent::SpawnInfo& info, AssetNode& out)

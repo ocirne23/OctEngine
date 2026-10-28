@@ -97,15 +97,7 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
 
 const GameProjectileComponent::SpawnInfo* getGameProjectileSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<GameProjectileComponent>(entity))
-        return nullptr;
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_GameProjectile); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const GameProjectileComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<GameProjectileComponent>(entity);
 }
 
 void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info, AssetNode& out)

@@ -22,8 +22,10 @@ import Force;
 import Spatial;
 import Script;
 import Threading; // ThreadLocalScope on the per-thread query ring
+import :EntityState;
 import :Entity;
 import :Component;
+import :ComponentLayout; // entityOfRender walks the inline layout
 import :ScriptComponent; // releaseScriptArrays (module-linkage, declared next to the component)
 import :World;
 
@@ -1410,7 +1412,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         SceneComponent* sc = asScene(p);
         if (!child) return;
         Entity* parent = sc->getEntity();
-        if (child->parent != parent) return;
+        if (child->getParent() != parent) return;
         Globals::scriptEvents.addReparentRequest(EntityPtr(child), EntityPtr(parent));
     }
 
@@ -1419,7 +1421,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         SceneComponent* sc = asScene(p);
         if (!child) return;
         Entity* parent = sc->getEntity();
-        if (child->parent != parent) return;
+        if (child->getParent() != parent) return;
         Globals::scriptEvents.addReparentRequest(EntityPtr(child), EntityPtr(nullptr));
     }
 
@@ -1595,7 +1597,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         const uint8* p = reinterpret_cast<const uint8*>(rc);
         const Entity* noScene = reinterpret_cast<const Entity*>(p - EntityComponentDetail::entityBaseOffset);
         constexpr uint16 renderBit = 1 << EComponentID_Render, sceneBit = 1 << EComponentID_Scene;
-        if ((noScene->typeBits & (renderBit | sceneBit)) == renderBit)
+        if ((noScene->getTypeBits() & (renderBit | sceneBit)) == renderBit)
             return noScene;
         return reinterpret_cast<const Entity*>(p - EntityComponentDetail::entityBaseOffset - EntityComponentDetail::inlineSizes[EComponentID_Scene]);
     }
@@ -1606,7 +1608,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         const Entity* cullOwner = entity->getCullOwner(); // CullMode RootOnly: the covering root's entry
         if (!cullOwner)
             return entity->getCullMode() == EEntityCullMode::None ? 1 : 0; // None is never culled
-        return Globals::spatialIndex.isVisible(cullOwner->spatialEntry.handle()) ? 1 : 0;
+        return Globals::spatialIndex.isVisible(cullOwner->getSpatialEntry().handle()) ? 1 : 0;
     }
 
     int thunk_renderIsSkinned(void* p)
@@ -1877,6 +1879,11 @@ EngineScriptContext::EngineScriptContext()
         .networkEventSender = &thunk_networkEventSender, // hand-declared (zero-arg), see ScriptAPI.h
     }
 {
+    // Here, not at namespace scope: `parent` is EntityState-protected, and this class is its friend.
+    static_assert(offsetof(Entity, pos) == 0, "ScriptAPI.h Entity mirror out of sync: pos");
+    static_assert(offsetof(Entity, scale) == 12, "ScriptAPI.h Entity mirror out of sync: scale");
+    static_assert(offsetof(Entity, rot) == 16, "ScriptAPI.h Entity mirror out of sync: rot");
+    static_assert(offsetof(Entity, parent) == 32, "ScriptAPI.h Entity mirror out of sync: parent");
 }
 
 void EngineScriptContext::update(const Camera& camera, float newDeltaSeconds, float newElapsedSeconds)
@@ -1894,8 +1901,3 @@ void EngineScriptContext::update(const Camera& camera, float newDeltaSeconds, fl
     cameraNear = camera.near;
     cameraFar = camera.far;
 }
-
-static_assert(offsetof(Entity, pos) == 0, "ScriptAPI.h Entity mirror out of sync: pos");
-static_assert(offsetof(Entity, scale) == 12, "ScriptAPI.h Entity mirror out of sync: scale");
-static_assert(offsetof(Entity, rot) == 16, "ScriptAPI.h Entity mirror out of sync: rot");
-static_assert(offsetof(Entity, parent) == 32, "ScriptAPI.h Entity mirror out of sync: parent");

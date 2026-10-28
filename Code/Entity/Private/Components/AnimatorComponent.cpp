@@ -158,16 +158,7 @@ AnimatorComponent::~AnimatorComponent()
 
 const AnimatorComponent::SpawnInfo* getAnimatorSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<AnimatorComponent>(entity))
-        return nullptr;
-
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_Animator); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const AnimatorComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<AnimatorComponent>(entity);
 }
 
 void writeAnimatorSpawnInfo(const AnimatorComponent::SpawnInfo& info, AssetNode& out)

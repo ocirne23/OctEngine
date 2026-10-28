@@ -134,7 +134,7 @@ Demo: `Entities/Debug/CubeGuy.pre` — the body of every game unit.
 > create / destroy case, no `update` / `place` call in `updateSelf`, no RootOnly bounds, no prefab write, no Entity
 > Editor pass-through, no natvis entry, no SIM LOD kind, and `GameUnitComponent` (tint, `tickModel`) handles the
 > Humanoid only. A `.pre` that authors `Component SceneAnimator` gets a warning and no component. **The code is
-> kept compiling so it does not rot** (`Component.ixx` still imports the partition;
+> kept compiling so it does not rot** (`Public/Component.ixx` still imports the partition;
 > `World::buildSceneAnimatorSpawnInfo` still exists, with no caller). To bring it back, follow the list in the
 > comment above the struct in `SceneAnimatorComponent.ixx` — the "Adding a component type"
 > ([CONTEXT.md](CONTEXT.md)) checklist plus the bone-model call sites.

@@ -32,7 +32,7 @@ static void writeEntityBody(Entity* entity, AssetNode& node, const oc::string& t
 
     for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
     {
-        if (!(entity->typeBits & (1 << i)))
+        if (!(entity->getTypeBits() & (1 << i)))
             continue;
         const EComponentID id = EComponentID(i);
 

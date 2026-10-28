@@ -24,12 +24,41 @@ Particle, Force, Spatial, Threading, Network and Nav.
 3. **The entity only ever sees the delta it is handed.** All scheduling — SIM LOD tiers, catch-up,
    dormancy — is decided in World; `updateSelf` just gets a float.
 
+## Source layout: the public API split
+
+The same split as RendererVK's ("The public API split" in [RendererVK CONTEXT](../RendererVK/CONTEXT.md)): each class used outside the
+library is an API file in `Public/` over a `<Class>State` base in `Private/` with every data member and private helper, all `protected`.
+The primary interface `Public/EntityModule.ixx` exports `:Entity`, `:Component`, `:World`, `:NetworkManager`, `:AssetRegistry`,
+`:ScriptEventManager`, `:ScriptContext`, `:Prefab` - NOT `:EntityNames` / `:Allocator` (internal).
+
+| API (`Public/`) | State (`Private/`) | Friends of the state |
+|---|---|---|
+| `Entity.ixx`: `Entity`, `EntityPtr`, `EntitySpawnTemplate`, `EntityChange`, `EComponentID`, `EEntityCullMode` | `EntityState.ixx`: the fields, `EEntityFlags`, `EntityUpdateNode`, the per-entity visit, the tree-allocation helpers | World(State), NetworkManager(State), EntityPtr, SceneComponent, Animator / Physics / GameUnit / GameStructure components, EngineScriptContext |
+| `Component.ixx`: the component re-exports, `hasComponent` / `getComponent` / `getSpawnInfo<T>` | `ComponentLayout.ixx`: the inline layout (`inlineSizes`, offsets, `componentTypeName`) | - |
+| `World.ixx` | `WorldState.ixx`: the caches, the template builders, the update pass, the SIM LOD selection | NetworkManager |
+| `NetworkManager.ixx` (+ `ENetRole`) | `NetworkManagerState.ixx`: the session, the wire protocol (described there), the registry, the component-facing calls | Entity, NetworkComponent |
+| `AssetRegistry.ixx` | `AssetRegistryState.ixx`: the tables, the scan, the World-only lookups | World(State) |
+| `ScriptEventManager.ixx` | `ScriptEventManagerState.ixx`: the keys, the listener registry, the change queue | ScriptComponent |
+| `ScriptContext.ixx`, `Prefab.ixx` | (no state) | |
+
+Rules this library adds to the RendererVK ones (each was an MSVC failure):
+
+* **A State member is never DEFINED in another partition.** `self()` is a member TEMPLATE in the state partition itself
+  (`template<typename E = Entity> E& self()`, dependent, so it compiles where the derived class is complete); defining it in the API
+  partition made every importer hit an internal compiler error on the IFC import ("base class undefined").
+* **An API inline body that takes a `Renderer&` goes in a `.cpp`**: `Renderer` is the unattached `RendererVK.fwd` declaration in the
+  Entity partitions, so an inline body there mangles against a different `Renderer` than its callers (an LNK2019 - `updateDetached`).
+* A public enum the state needs is opaque-declared there (`export enum EComponentID : uint16;`, `ENetRole`) and defined in the API file.
+* `getComponent` / `hasComponent` take `EntityState*` (so the state's own members pass `this`) and read the bits through
+  `Entity::getTypeBits()` - no friend templates.
+
 ## `Entity`
 
-[Entity.ixx:89](../../../Code/Entity/Private/Entity.ixx#L89) (the partition `Entity:Entity`; the module's barrel is
-`Public/EntityP.ixx`). Fields: `pos` / `scale` / `rot`, `parent`,
-`spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits),
-`schedTick` (14 bits).
+[Entity.ixx](../../../Code/Entity/Public/Entity.ixx). Fields (in `EntityState`): `pos` / `scale` / `rot` (the only public data), `parent`,
+`spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits), `schedTick` (14 bits). Outside the
+library they are read through `getParent()`, `getSpawnTemplate()`, `getTypeBits()`, `getSpatialEntry()`. A tree not in the World (the
+gizmo entity) is updated by its owner with `updateDetached(renderer, dt)`; `detachFromOwner()` takes an entity out of its parent's
+children (the deletion path).
 
 ### Names
 
@@ -67,8 +96,9 @@ Network(8) GameUnit(9) GameStructure(10) GameProjectile(11) HumanoidAnimator(12)
 `MaxInlineComponentTypes` is 14 and `ComponentAlignment` 16.
 
 Each type is a partition under `Private/Components/` — struct plus `get*SpawnInfo` /
-`write*SpawnInfo` in the `.ixx`, bodies in the same-named `.cpp`. `Component.ixx` re-exports them all
-and holds the shared machinery.
+`write*SpawnInfo` in the `.ixx`, bodies in the same-named `.cpp`. `Public/Component.ixx` re-exports them all
+and holds the accessors; the layout is `Private/ComponentLayout.ixx`. Every `get*SpawnInfo` is `getSpawnInfo<T>(entity)`: the
+template's `spawnInfos` run in component-bit order, so T's recipe is at the popcount of the bits below it.
 
 > Per-component `.ixx`s must NOT import `:Component` (cycle). Cross-component code goes in the `.cpp`
 > implementation units.
@@ -76,8 +106,8 @@ and holds the shared machinery.
 #### Adding a component type
 
 1. New `.ixx`/`.cpp` pair with a `getId()` struct.
-2. `export import` from Component.ixx.
-3. Entries in `EComponentID`, `inlineSizes`, `componentTypeName`.
+2. `export import` from `Public/Component.ixx`, and an `import` in `Private/ComponentLayout.ixx`.
+3. Entries in `EComponentID` (Entity.ixx), `inlineSizes` and `componentTypeName` (ComponentLayout.ixx).
 4. Create/destroy switches in Entity.cpp.
 5. Parse branch in `World::buildTemplate`.
 6. Write branch in Prefab.cpp.

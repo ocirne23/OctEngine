@@ -148,15 +148,7 @@ void GameStructureComponent::addLoad(float energyPerSec)
 
 const GameStructureComponent::SpawnInfo* getGameStructureSpawnInfo(const Entity* entity)
 {
-    if (!entity->spawnTemplate || !hasComponent<GameStructureComponent>(entity))
-        return nullptr;
-    size_t idx = 0;
-    for (uint16 i = 0; i < uint16(EComponentID_GameStructure); ++i)
-        if (entity->typeBits & (1 << i))
-            ++idx;
-    if (idx >= entity->spawnTemplate->spawnInfos.size())
-        return nullptr;
-    return static_cast<const GameStructureComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+    return getSpawnInfo<GameStructureComponent>(entity);
 }
 
 void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, AssetNode& out)

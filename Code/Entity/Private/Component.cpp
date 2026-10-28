@@ -3,7 +3,9 @@ module Entity;
 import Core;
 import Core.glm;
 import Core.Transform;
+import :EntityState;
 import :Entity;
+import :ComponentLayout;
 
 static void detachFromParent(Entity* parent, Entity* child)
 {
@@ -11,23 +13,23 @@ static void detachFromParent(Entity* parent, Entity* child)
         psc->removeChild(child);
 }
 
-void detachFromOwner(Entity* child)
+void Entity::detachFromOwner()
 {
-    if (!child->parent)
+    if (!parent)
         return;
     // Deletion path: the child leaves the tree while the allocation lives on (external refs may even
     // keep it alive past the root), so the whole allocation reverts to per-entity freeing.
-    breakContiguousAllocation(child);
-    detachFromParent(child->parent, child);
+    breakContiguousAllocation(this);
+    detachFromParent(parent, this);
 }
 
-void detachKeepAllocation(Entity* child)
+void EntityState::detachKeepAllocation(Entity* child)
 {
     if (child->parent)
         detachFromParent(child->parent, child);
 }
 
-Entity* findAllocationRoot(Entity* entity)
+Entity* EntityState::findAllocationRoot(Entity* entity)
 {
     for (Entity* p = entity; p; p = p->parent)
     {
@@ -42,7 +44,8 @@ Entity* findAllocationRoot(Entity* entity)
 // Every intact contiguous non-root child of `parent` (except `skip`) becomes the root of its own
 // allocation: subtrees are contiguous DFS ranges within the block, and each member's template caches
 // its exact subtree size, so a promoted root frees its range in one deallocate when it dies intact.
-static void promoteChildSubtrees(Entity* parent, const Entity* skip)
+// (Through EntityState: a free function cannot reach the flags, a static member can.)
+void EntityState::promoteChildSubtrees(Entity* parent, const Entity* skip)
 {
     SceneComponent* sc = getComponent<SceneComponent>(parent);
     if (!sc)
@@ -56,7 +59,7 @@ static void promoteChildSubtrees(Entity* parent, const Entity* skip)
     }
 }
 
-void breakContiguousAllocation(Entity* member)
+void EntityState::breakContiguousAllocation(Entity* member)
 {
     if (!((member->flags & EEntityFlag_ContiguousAllocation) && !(member->flags & EEntityFlag_RootAllocation)))
         return; // standalone/broken, or an allocation root - moving a whole allocation never breaks it
@@ -81,7 +84,7 @@ void breakContiguousAllocation(Entity* member)
     member->flags |= EEntityFlag_RootAllocation;
 }
 
-void breakContiguousAllocationFromRoot(Entity* root)
+void EntityState::breakContiguousAllocationFromRoot(Entity* root)
 {
     assert(root->flags & EEntityFlag_RootAllocation);
     // Destroy-time fallback: the root reverts to freeing its own slice, each child subtree becomes its
@@ -91,7 +94,7 @@ void breakContiguousAllocationFromRoot(Entity* root)
     root->flags &= uint8(~(EEntityFlag_ContiguousAllocation | EEntityFlag_RootAllocation));
 }
 
-bool contiguousTreeSolelyOwned(Entity* entity)
+bool EntityState::contiguousTreeSolelyOwned(Entity* entity)
 {
     SceneComponent* sc = getComponent<SceneComponent>(entity);
     if (!sc)
@@ -107,14 +110,6 @@ bool contiguousTreeSolelyOwned(Entity* entity)
             return false;
     }
     return true;
-}
-
-int componentIdFromName(oc::string_view name)
-{
-    for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
-        if (name == componentTypeName(EComponentID(i)))
-            return int(i);
-    return -1;
 }
 
 namespace

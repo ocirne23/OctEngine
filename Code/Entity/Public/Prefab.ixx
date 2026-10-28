@@ -1,4 +1,4 @@
-﻿export module Entity:Prefab;
+export module Entity:Prefab;
 
 import Core;
 import :Entity;
