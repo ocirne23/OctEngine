@@ -36,21 +36,16 @@ public:
 
     bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);                     // the VSync / GPU throttle of the whole loop (Time::beginFrame)
     CullView setFrameView(const Camera& camera, const Rect& viewportRect); // the spatial cull's view of this frame; before kickBeginFrameJob
-
     void kickBeginFrameJob(); // The frame's setup pass, as a job. VR defers instead: the join runs it on main
     void joinBeginFrameJob();
     void kickGridBuilds(); // after the frame's LAST light add and the force update
     void present();
-
-    // Main thread. The NEXT presented frame is written to `path` (PNG, the whole swapchain image: scene + UI) before it is presented - independent of the
-    // window being in front, covered or on another monitor. Stalls that frame (a queue idle). See "Screenshots" in the CONTEXT.
-    void requestScreenshot(oc::string path) { m_screenshotPath = oc::move(path); }
+    void requestScreenshot(oc::string path) { m_screenshotPath = oc::move(path); } // Main thread. The NEXT frame is written to path as .png
 
     // ---- Per-frame submission [Concurrency: LOCK-FREE]: from any job, between beginFrame and present. ----
 
     void renderNode(const RenderNode& node, uint32 passMask);
     void renderNode(const RenderNode& node) { renderNode(node, node.getPassMask()); }
-
     void addLightInfo(const RendererVKLayout::LightInfo& light); // a PointLight / SpotLight / AreaLight / TubeLight (Light.ixx)
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume);
     void addDecal(const RendererVKLayout::DecalInfo& decal);
@@ -64,7 +59,6 @@ public:
     // The SURFACE height (ground or water) under the camera, set each frame
     void setFocusGround(float surfaceHeight) { m_focusGround = surfaceHeight; m_haveFocusGround = true; }
     void clearFocusGround() { m_haveFocusGround = false; }
-
     glm::vec3 sceneFocusOrCamera() const;
     const glm::vec3& cameraPos() const { return m_cameraPos; }              // valid after joinBeginFrameJob
     const glm::mat4& getCenterViewProj() const { return m_centerViewProj; } // what the GPU cull used (VR: the two-eye union), for CPU occlusion rasterization
