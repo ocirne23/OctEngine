@@ -10,10 +10,9 @@ Threading interface imports Settings, so a settings default change does not rebu
 the fiber resumes later on **whichever worker picks it up**, which may be a different thread.
 
 > Everything else in this file follows from that one fact. It is also why the whole build is `/GT`:
-> **never cache a `thread_local` address — `PerWorker::local()` or `getWorkerIndex()` included —
-> across a wait.**
+> **never cache a `thread_local` address — `PerWorker::local()` included — across a wait.**
 >
-> **`ThreadLocalScope` is the runtime tripwire for that rule** ([JobSystem.ixx](../../../Code/Threading/Private/JobSystem.ixx),
+> **`ThreadLocalScope` is the runtime tripwire for that rule** ([JobSync.ixx](../../../Code/Threading/Public/JobSync.ixx),
 > debug only): declare one where thread-local state is taken and keep it alive while the state is
 > used. While one is alive on a thread, a fiber park (`fiberWait`, a `JobMutex` park, a yield at a
 > pre-emption point) or an inline job on that thread (`helpWait`, `tryRunOneJob`, `tryRunOneHighJob`,
@@ -23,9 +22,30 @@ the fiber resumes later on **whichever worker picks it up**, which may be a diff
 All memory is allocated in `initialize()`. The steady-state hot paths are lock-free and allocate
 nothing.
 
+## Source layout: the public API split
+
+The same split as RendererVK's ("The public API split" in [RendererVK CONTEXT](../RendererVK/CONTEXT.md)): each class used
+outside the library is an API file in `Public/` with only its public members, over a `<Class>State` base in `Private/` with
+every data member and private helper, all `protected` (single, non-virtual inheritance; the friends go on the State class, and
+a State partition declares every class it friends before the friend line). Multi-line bodies go below the class.
+
+| File | Holds |
+|---|---|
+| `Public/ThreadingModule.ixx` | The primary interface: exports `:JobTypes`, `:JobSystem`, `:JobSync` only. |
+| `Public/JobTypes.ixx` / `Private/JobTypesState.ixx` | `JobProfile`, `EJobPriority`, `EJobFlag_ForeignWait`, `EPostUpdateBatch`, `JobCounter`, `JobCost`, `JobSystemDesc`, `JobSystemStats`; the state: `FiberWaitNode`, `JobCounterState`, `JobCostState`. |
+| `Public/JobSystem.ixx` / `Private/JobSystemState.ixx` | `JobSystem` + `Globals::jobSystem`; the state: `Fiber`, `WorkerContext`, every member and helper (`buildJob`, `parallelForImpl`, the waits, the JobMutex slow paths, `tryRunOneJob`, `signalCounter`, `getWorkerIndex`, ...). |
+| `Public/JobSync.ixx` / `Private/JobSyncState.ixx` | `JobMutex`, `JobEvent`, `PerWorker<T>`, `ThreadLocalScope`. |
+| `Private/Job.ixx` | The job record: `Job`, `JobFunc`, `setJobCallable`, `EJobFlag_Pooled`. |
+| `Private/MPMCQueue.ixx`, `FreeStack.ixx`, `StealDeque.ixx` | The scheduler's queues (not exported). |
+| `Private/JobGraph.ixx` | `JobGraph`, `JobGraphBuilder`, `JobId`, `JobResource` (not exported: only the stress harness uses them). |
+
+**Every submit goes through `buildJob`** (State): it allocates the pooled job, fills it and attaches the counter, or - pool
+exhausted - runs the callable on the spot and returns nullptr. `submit`, `submitDelayed`, `submitPostUpdate` and the
+`parallelFor` helpers differ only in where the job goes next.
+
 ## `Globals::jobSystem`
 
-[JobSystem.ixx:64](../../../Code/Threading/Private/JobSystem.ixx#L64).
+[JobSystem.ixx](../../../Code/Threading/Public/JobSystem.ixx).
 
 ### Worker sizing
 
@@ -34,7 +54,7 @@ contexts of their own — main helps inside `wait()`, the window thread runs Hig
 pumps — so *workers + main + window* exactly covers the machine.
 
 **Which core count `cores` means flips with machine size**, at `c_logicalWorkerCoreMax` = 16
-**physical** cores ([JobSystem.cpp:77](../../../Code/Threading/Private/JobSystem.cpp#L77)):
+**physical** cores ([JobSystem.cpp:81](../../../Code/Threading/Private/JobSystem.cpp#L81)):
 
 | Physical cores | `cores` | Why |
 |---|---|---|
@@ -78,7 +98,6 @@ submit(callable, JobProfile, priority = Normal, JobCounter* = nullptr, uint8 fla
 submitDelayed(delaySec, callable, JobProfile, priority, counter)   // dedicated timer thread, min-heap
 parallelFor(begin, end, grainSize, JobProfile, fn, priority)
 parallelFor(begin, end, JobCost&, JobProfile, fn, priority)        // auto-grain
-signal(JobCounter&)                                                // manual decrement, for external completion
 ```
 
 Priorities are `High` / `Normal` / `Low`, one shared ring each. A higher priority also interrupts a
@@ -94,7 +113,7 @@ job's own name.
 For `parallelFor` the scope covers **each participant's WHOLE run, not each chunk**. The caller's
 span starts BEFORE it submits the helpers, so the fan-out has no unscoped head; the join that
 follows carries `wait()`'s own scope (named after the job, `Wait` category) as a sibling
-([JobSystem.ixx:367](../../../Code/Threading/Private/JobSystem.ixx#L367)).
+(`parallelForImpl`, [JobSystemState.ixx](../../../Code/Threading/Private/JobSystemState.ixx)).
 
 ### Callables store inline
 
@@ -200,7 +219,7 @@ What IS guaranteed is completion before its join point.
 
 Users: the UI widget pass ([UI.cpp:72](../../../Code/UI/Private/UI.cpp#L72)) on Frame; Nav's field steps
 ([Nav/System.cpp:435](../../../Code/Nav/Private/System.cpp#L435)), the game's nav feed and ambient wander on
-Sim. The wait scope of a join is named after the batch's last-queued job (`JobCounter::label`).
+Sim. The wait scope of a join is named after the batch's last-queued job (the counter's `m_label`).
 
 **Mechanics.** The kick **snapshots the queue first**, then adds the whole batch to a persistent
 `JobCounter` and submits. Only the main-thread kick ever `add()`s, and always after the join emptied
@@ -221,12 +240,12 @@ one run. A full queue runs the job inline, out of phase.
 
 The fast path — an already-done counter — returns without opening a scope at all. Both waiting paths
 open a scope in the `Wait` category **named after the job the counter last counted**
-(`JobCounter::label`, set by every submit that takes a counter — so the profiler says WHICH job a
+(the counter's `m_label`, set by every submit that takes a counter — so the profiler says WHICH job a
 wait was for; a counter that never had a job reads `"Job wait"`); on a fiber it migrates with the
 park, so the span is the true dependency time wherever the fiber resumes.
 
-`tryRunOneJob()` lets a registered non-worker thread pump one ready job manually, e.g. to burn a
-stall. Unlike `helpWait` it uses `getWork`, so it CAN take a Low job.
+`tryRunOneJob()` (State) pumps one ready job on a registered non-worker thread: the `JobMutex` slow path burns a held lock
+with it. Unlike `helpWait` it uses `getWork`, so it CAN take a Low job.
 
 ### `EJobFlag_ForeignWait` — required, and easy to miss
 
@@ -268,7 +287,7 @@ jobs are short by convention: physics tasks, spatial chunks, panel prepares.
 **Its own eventcount, deliberately.** `m_helperEpoch` / `m_helperSleeping` are separate from the
 workers' `m_wakeEpoch`. On the workers' eventcount the helper would wake for a Normal or Low job it
 cannot take and eat a wake a real worker needed. Only **High** submits pay the extra check
-([JobSystem.cpp:507](../../../Code/Threading/Private/JobSystem.cpp#L507)).
+([JobSystem.cpp:506](../../../Code/Threading/Private/JobSystem.cpp#L506)).
 
 ## The frame's physics step flag
 
@@ -322,7 +341,7 @@ Recycling freelists (`Threading:FreeStack`, `TaggedIndexStack`) are **LIFO Treib
 the ring look empty to everyone else, which exhausted the job pool in practice. LIFO also hands back
 the cache-hottest slot.
 
-## `Threading:JobSync`
+## `JobSync.ixx`
 
 | Type | Notes |
 |---|---|
@@ -333,7 +352,7 @@ the cache-hottest slot.
 Both `JobMutex` and `JobEvent` are used by `Procedural`'s V3 generator — see
 [GeneratorV3.cpp:699](../../../Code/Procedural/Private/Diffusion/GeneratorV3.cpp#L699).
 
-## `JobGraph` + `JobResource` (`Threading:JobGraph`)
+## `JobGraph` + `JobResource` (`Private/JobGraph.ixx`, not exported)
 
 A reusable declared-access DAG. `addJob(name, fn).reads(a).writes(b).after(id).priority(p)`.
 
@@ -366,8 +385,7 @@ sorted by rank descending.
 
 ## Cost measurement
 
-* **Job wall time** is measured by default; opt out with `EJobFlag_Untimed`, and only for
-  nanosecond-scale spam jobs where two clock reads (~40–60 ns) would dominate. `costEmaUs` is a 3/4
+* **Every job's wall time** is measured (two clock reads, ~40–60 ns). `costEmaUs` is a 3/4
   EMA with a 1 µs floor. **Parked waits count** — they occupy dependency time on the critical path.
   The same graph node never runs concurrently with itself, so a plain EMA is race-free.
 * **`JobCost`** is a live per-item estimate for one `parallelFor` call site. Create it next to the

@@ -1,14 +1,36 @@
 export module Threading:JobGraph;
 
 import Core;
-import :Types;
+import :JobTypes;
+import :Job;
 import :JobSystem;
+
+// A reusable declared-access job DAG. Inside Threading only (the stress harness); nothing outside uses it.
 
 export class JobGraph;
 
 export struct JobId
 {
     uint32 index = UINT32_MAX;
+};
+
+// A process-unique id for data that graph jobs declare read/write access on. Create once, keep alive.
+export class JobResource final
+{
+public:
+
+    explicit JobResource(const char* name = nullptr) : m_id(s_nextId.fetch_add(1, oc::memory_order_relaxed)), m_name(name) {}
+    JobResource(const JobResource&) = delete;
+    JobResource& operator=(const JobResource&) = delete;
+
+    uint32 id() const { return m_id; }
+    const char* name() const { return m_name; }
+
+private:
+
+    static inline oc::atomic<uint32> s_nextId = 0;
+    uint32 m_id;
+    const char* m_name;
 };
 
 // Declares a job's data access; hazard edges follow from declaration order (readers after the last

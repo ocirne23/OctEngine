@@ -22,5 +22,4 @@ export extern "C++"
 	class RefCheckable;
 	template <typename T> concept IsRefCheckable = std::is_base_of<RefCheckable, T>::value;
 	template<IsRefCheckable T> class CheckedPtr;
-	class Job;
 }

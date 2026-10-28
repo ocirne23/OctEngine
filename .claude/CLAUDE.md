@@ -123,7 +123,7 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 >
 > Jobs run on FIBERS: **any wait — `jobSystem.wait`, a nested `parallelFor`, a JobCounter join —
 > can park the job and resume it on ANOTHER worker thread.** A `thread_local` (or a
-> `PerWorker::local()` / `getWorkerIndex()`) taken before the wait then points at the wrong
+> `PerWorker::local()`) taken before the wait then points at the wrong
 > thread's slot: two jobs sharing one scratch buffer, or a write landing in a slot another job
 > is reading.
 >
@@ -406,7 +406,7 @@ All docs live in `Docs/Context/<Lib>/`, NOT next to the code.
 | [Force](../Docs/Context/Force/CONTEXT.md) | Forcefield bubbles: the analytic field, live team count, the baked pressure field, shell tiers / union march, emitter merging, ForceComponent |
 | [Spatial](../Docs/Context/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
 | [Nav](../Docs/Context/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
-| [Threading](../Docs/Context/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
+| [Threading](../Docs/Context/Threading/CONTEXT.md) | The fiber job system: the source layout (public API split), worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
 | [Procedural](../Docs/Context/Procedural/CONTEXT.md) | The six globals, parking, `ITerrainSampler` (+ climate encoding), the terrain collider, the generated-mesh cache. **Read it first; the topic files below hold the systems** |
 | ↳ [Generator](../Docs/Context/Procedural/Generator.md) | `TerrainGenV3` (the diffusion generator), world origin, `TerrainPreview`, generated bounds, `TerrainSeeder`, world scale |
 | ↳ [Rivers](../Docs/Context/Procedural/Rivers.md) | Rivers: the coarse network, the units, the sampler |

@@ -1,7 +1,7 @@
 export module Threading:StealDeque;
 
 import Core;
-import :Types;
+import :Job;
 
 // Chase-Lev work-stealing deque (orderings per Le et al. 2013), fixed capacity: a full push overflows to
 // the shared queues. push refuses at bottom - top >= capacity, so a slot a pending steal reads is never rewritten.

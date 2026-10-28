@@ -327,7 +327,7 @@ export namespace Procedural
 		// The render push runs on workers (see render / joinRender): the hand-over walk fans out over a
 		// parallelFor, the sphere query runs beside it as a job of its own.
 		JobCounter                          m_renderCounter;
-		JobCost                             m_renderPushCost{ 250, "terrainRenderPushChunk" };
+		JobCost                             m_renderPushCost{ 250 };
 		bool                                m_renderReady = false; // update() ran enabled: render() pushes chunks
 		// The vegetation (setVegetation): the owner's hooks, and the walk's per-frame merge (a mask per vegetation chunk,
 		// the chunks touched, the list handed to the sink) - only the walk's jobs touch them between kick and join.

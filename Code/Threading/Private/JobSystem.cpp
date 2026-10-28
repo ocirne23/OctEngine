@@ -9,6 +9,10 @@ import Core;
 import Core.Log;
 import Core.Windows;
 
+import :Job;
+import :MPMCQueue;
+import :JobSystemState;
+
 // FIBER_FLAG_FLOAT_SWITCH: a macro in winbase.h, doesn't cross the header-unit boundary.
 static constexpr DWORD FiberFlagFloatSwitch = 0x1;
 
@@ -50,7 +54,7 @@ static void assertNotThreadLocalPinned()
     assert(t_tlsPinDepth == 0 && "a ThreadLocalScope is alive across a fiber park or an inline job: thread-local state would change hands");
 }
 
-void JobSystem::debugThreadLocalPin(int delta)
+void JobSystemState::debugThreadLocalPin(int delta)
 {
 #ifndef NDEBUG
     assert(delta > 0 || t_tlsPinDepth > 0);
@@ -184,7 +188,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     Log::info(buf);
 }
 
-void JobSystem::shutdown()
+void JobSystemState::shutdown()
 {
     ProfileScope scope("JobSystem::shutdown", EProfileCategory::Threading);
 
@@ -232,9 +236,9 @@ void JobSystem::shutdown()
     Log::info("JobSystem: shut down");
 }
 
-JobSystemStats JobSystem::getStats() const
+JobSystemStats JobSystemState::collectStats() const
 {
-    ProfileScope scope("JobSystem::getStats", EProfileCategory::Threading);
+    ProfileScope scope("JobSystem stats", EProfileCategory::Threading);
 
     JobSystemStats stats;
     stats.numWorkers = m_numWorkers;
@@ -255,12 +259,12 @@ JobSystemStats JobSystem::getStats() const
     return stats;
 }
 
-void __stdcall JobSystem::fiberEntry(void* param)
+void __stdcall JobSystemState::fiberEntry(void* param)
 {
     Globals::jobSystem.fiberMain(*static_cast<Fiber*>(param));
 }
 
-void JobSystem::fiberMain(Fiber& fiber)
+void JobSystemState::fiberMain(Fiber& fiber)
 {
     for (;;)
     {
@@ -271,7 +275,7 @@ void JobSystem::fiberMain(Fiber& fiber)
     }
 }
 
-void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
+void JobSystemState::runFiber(WorkerContext& ctx, Fiber* fiber)
 {
     assert(fiber->debugRunning.exchange(1, oc::memory_order_acq_rel) == 0 && "fiber running on two workers");
     fiber->returnFiber = ctx.schedulerFiber;
@@ -314,7 +318,7 @@ void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
     }
 }
 
-void JobSystem::workerMain(uint32 contextIndex)
+void JobSystemState::workerMain(uint32 contextIndex)
 {
     WorkerContext& ctx = m_contexts[contextIndex];
     t_worker = &ctx;
@@ -370,14 +374,13 @@ void JobSystem::workerMain(uint32 contextIndex)
     t_worker = nullptr;
 }
 
-void JobSystem::execute(Job& job)
+void JobSystemState::execute(Job& job)
 {
     // pooled jobs never use their dependency counter - repurpose it as a double-run tripwire
     assert(!(job.flags & EJobFlag_Pooled) || job.pending.fetch_add(1, oc::memory_order_acq_rel) == 0);
     if (WorkerContext* ctx = t_worker)
         ctx->numExecuted++;
-    const bool timed = (job.flags & EJobFlag_Untimed) == 0;
-    const Clock::time_point timedStart = timed ? Clock::now() : Clock::time_point{};
+    const Clock::time_point timedStart = Clock::now();
     // publish this job as the current one (preemptionPoint reads its priority); nested inline
     // runs (helpWait, a pre-emption point) stack, so the outer one is put back afterwards
     Job* const outerJob = *currentJobSlot();
@@ -390,18 +393,14 @@ void JobSystem::execute(Job& job)
     else
         job.invoke(job.storage);
     *currentJobSlot() = outerJob; // re-resolved: a fiber slot follows the fiber to whichever thread resumed it
-    if (timed)
-    {
-        // wall time, min 1us: parked waits inside the job count (they occupy dependency-time on
-        // the critical path), and all-cheap graphs degrade to chain-depth ranking. The same graph
-        // node never runs concurrently with itself, so a plain EMA is race-free.
-        const uint64 elapsedNs = uint64(std::chrono::nanoseconds(Clock::now() - timedStart).count());
-        const uint64 us = oc::max<uint64>(1, elapsedNs / 1000);
-        const uint32 old = job.costEmaUs;
-        job.costEmaUs = old ? uint32(oc::min<uint64>((uint64(old) * 3 + us) / 4, UINT32_MAX)) : uint32(oc::min<uint64>(us, UINT32_MAX));
-        if (WorkerContext* ctx = t_worker) // re-read: the job may have parked and migrated
-            ctx->busyNs += elapsedNs;
-    }
+    // wall time, min 1us: parked waits inside the job count (they occupy dependency-time on the critical path), and all-cheap graphs degrade to
+    // chain-depth ranking. The same graph node never runs concurrently with itself, so a plain EMA is race-free.
+    const uint64 elapsedNs = uint64(std::chrono::nanoseconds(Clock::now() - timedStart).count());
+    const uint64 us = oc::max<uint64>(1, elapsedNs / 1000);
+    const uint32 old = job.costEmaUs;
+    job.costEmaUs = old ? uint32(oc::min<uint64>((uint64(old) * 3 + us) / 4, UINT32_MAX)) : uint32(oc::min<uint64>(us, UINT32_MAX));
+    if (WorkerContext* ctx = t_worker) // re-read: the job may have parked and migrated
+        ctx->busyNs += elapsedNs;
     Job* const* successors = job.successors;
     const uint32 numSuccessors = job.numSuccessors;
     JobCounter* signal = job.signal;
@@ -431,7 +430,7 @@ void JobSystem::execute(Job& job)
         signalCounter(*signal);
 }
 
-Job* JobSystem::getWork(WorkerContext& ctx)
+Job* JobSystemState::getWork(WorkerContext& ctx)
 {
     if (Job* job = ctx.deque.pop())
         return job;
@@ -446,7 +445,7 @@ Job* JobSystem::getWork(WorkerContext& ctx)
 // inference, the terrain pumps, the collider tile builds). One of those taken inside a short join
 // held the frame for its whole run, so a helping thread takes High and Normal only and leaves Low
 // to the workers.
-Job* JobSystem::getHelpWork(WorkerContext& ctx)
+Job* JobSystemState::getHelpWork(WorkerContext& ctx)
 {
     Job* job;
     for (uint32 p = 0; p < uint32(EJobPriority::Low); ++p)
@@ -461,7 +460,7 @@ Job* JobSystem::getHelpWork(WorkerContext& ctx)
     return job;
 }
 
-Job* JobSystem::trySteal(WorkerContext& ctx)
+Job* JobSystemState::trySteal(WorkerContext& ctx)
 {
     uint32 seed = ctx.stealSeed;
     seed ^= seed << 13;
@@ -484,7 +483,7 @@ Job* JobSystem::trySteal(WorkerContext& ctx)
     return nullptr;
 }
 
-void JobSystem::pushReadyJob(Job* job)
+void JobSystemState::pushReadyJob(Job* job)
 {
     WorkerContext* ctx = t_worker;
     if (ctx && ctx->isWorker && ctx->deque.push(job))
@@ -496,7 +495,7 @@ void JobSystem::pushReadyJob(Job* job)
     execute(*job);
 }
 
-void JobSystem::submitReady(Job* job)
+void JobSystemState::submitReady(Job* job)
 {
     assert(m_numContexts != 0 && "JobSystem used before initialize()");
     pushReadyJob(job);
@@ -505,7 +504,18 @@ void JobSystem::submitReady(Job* job)
     // Normal/Low submits skip the check entirely). wakeOne's seq_cst fence already ran, pairing
     // with the helper's announce+recheck.
     if (job->effectivePriority == EJobPriority::High && m_helperSleeping.load(oc::memory_order_relaxed))
-        wakeExternalHelper();
+        wakeHelper();
+}
+
+void JobSystemState::queuePostUpdate(Job* job, EPostUpdateBatch batch)
+{
+    if (!m_postUpdate[uint32(batch)].queue.push(job))
+    {
+        // full: run it out of phase rather than lose it
+        m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
+        assert(false && "post-update queue full - raise JobSystemDesc::postUpdateQueueCapacity");
+        execute(*job);
+    }
 }
 
 void JobSystem::kickPostUpdateJobs()
@@ -526,7 +536,7 @@ void JobSystem::kickPostUpdateJobs()
         ProfileScope scope("Post-update kick", EProfileCategory::Threading);
         assert(b.counter.isDone() && "kicked twice without a joinPostUpdateJobs() between");
         b.counter.add(uint32(batch.size())); // whole batch up front: a job may finish before the last push
-        b.counter.label = batch.back()->name; // the wait scope names the batch's last-queued job
+        b.counter.m_label = batch.back()->name; // the wait scope names the batch's last-queued job
         for (Job* batchJob : batch)
             batchJob->signal = &b.counter;
         submitReadyBatch(oc::span<Job* const>(batch.data(), batch.size()));
@@ -546,7 +556,7 @@ void JobSystem::joinPostUpdateJobs(EPostUpdateBatch batch)
     wait(counter); // main helps, so a batch still running gets finished here
 }
 
-void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
+void JobSystemState::submitReadyBatch(oc::span<Job* const> jobs)
 {
     assert(m_numContexts != 0 && "JobSystem used before initialize()");
     for (Job* job : jobs)
@@ -562,17 +572,17 @@ void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
     wakeMany(uint32(jobs.size()));
     if (!jobs.empty() && jobs[0]->effectivePriority == EJobPriority::High
         && m_helperSleeping.load(oc::memory_order_relaxed))
-        wakeExternalHelper(); // batches share one priority; see submitReady
+        wakeHelper(); // batches share one priority; see submitReady
 }
 
-Job* JobSystem::allocatePooledJob()
+Job* JobSystemState::allocatePooledJob()
 {
     uint32 index;
     if (!m_freeJobs.pop(index))
     {
         char buf[160];
         sprintf_s(buf, "JobSystem: pool exhausted, inFlight=%d executed=%llu",
-            m_pooledInFlight.load(oc::memory_order_relaxed), getStats().numExecuted);
+            m_pooledInFlight.load(oc::memory_order_relaxed), collectStats().numExecuted);
         Log::error(buf);
         return nullptr;
     }
@@ -595,13 +605,13 @@ Job* JobSystem::allocatePooledJob()
     return job;
 }
 
-void JobSystem::releasePooledJob(Job* job)
+void JobSystemState::releasePooledJob(Job* job)
 {
     m_pooledInFlight.fetch_sub(1, oc::memory_order_relaxed);
     m_freeJobs.push(uint32(job - m_jobPool.get()));
 }
 
-void JobSystem::dropJob(Job* job)
+void JobSystemState::dropJob(Job* job)
 {
     JobCounter* signal = job->signal;
     if (job->flags & EJobFlag_Pooled)
@@ -614,7 +624,7 @@ void JobSystem::dropJob(Job* job)
         signalCounter(*signal);
 }
 
-void JobSystem::idle(WorkerContext& ctx, bool forceSleep)
+void JobSystemState::idle(WorkerContext& ctx, bool forceSleep)
 {
     // brief spin: catch work landing within ~a microsecond without a kernel round-trip
     if (!forceSleep)
@@ -652,7 +662,7 @@ void JobSystem::idle(WorkerContext& ctx, bool forceSleep)
     m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
 }
 
-bool JobSystem::anyWorkForWorker() const
+bool JobSystemState::anyWorkForWorker() const
 {
     if (!m_running.load(oc::memory_order_relaxed))
         return true; // wake to exit
@@ -668,7 +678,7 @@ bool JobSystem::anyWorkForWorker() const
     return !m_freeFibers.wasEmpty(); // jobs without a free fiber can't start; the fiber release wakes us
 }
 
-void JobSystem::wakeMany(uint32 count)
+void JobSystemState::wakeMany(uint32 count)
 {
     // pairs with the sleeper's seq_cst announce + recheck: at least one side sees the other
     oc::atomic_thread_fence(oc::memory_order_seq_cst);
@@ -685,14 +695,14 @@ void JobSystem::wakeMany(uint32 count)
             m_wakeEpoch.notify_one();
 }
 
-void JobSystem::wait(JobCounter& counter)
+void JobSystemState::waitCounter(JobCounter& counter)
 {
     if (counter.isDone()) // fast path stays marker-free: most waits return immediately
         return;
     WorkerContext* ctx = t_worker;
-    // The scope is named after the job the counter last counted (JobCounter::label) - the
+    // The scope is named after the job the counter last counted (JobCounter's m_label) - the
     // profiler then says WHAT was waited for; a counter that never had a job keeps "Job wait".
-    const char* waitName = counter.label ? counter.label : "Job wait";
+    const char* waitName = counter.m_label ? counter.m_label : "Job wait";
     if (ctx && ctx->currentFiber)
     {
         // Migrates with the fiber across the park (suspendScopes/resumeScopes), so the span is the
@@ -751,7 +761,7 @@ void JobSystem::externalHelperWait(bool (*wakeNow)(const void*), const void* use
     m_helperSleeping.store(0, oc::memory_order_relaxed);
 }
 
-void JobSystem::wakeExternalHelper()
+void JobSystemState::wakeHelper()
 {
     ProfileScope scope("Helper wake", EProfileCategory::Threading); // kernel call, see wakeMany
     m_helperEpoch.fetch_add(1, oc::memory_order_release);
@@ -777,7 +787,7 @@ bool JobSystem::tryRunOneHighJob()
     return true;
 }
 
-bool JobSystem::tryRunOneJob()
+bool JobSystemState::tryRunOneJob()
 {
     WorkerContext* ctx = t_worker;
     if (!ctx || ctx->currentFiber)
@@ -806,7 +816,7 @@ bool JobSystem::preemptionPoint()
     return runHigherPriorityJobs(mine);
 }
 
-bool JobSystem::hasHigherPriorityReady(EJobPriority mine) const
+bool JobSystemState::hasHigherPriorityReady(EJobPriority mine) const
 {
     // the shared rings only: the deques hold continuations of mixed priority, and a job sitting
     // in some other worker's deque is that worker's next pop anyway. Plus a RESUMED fiber: only a
@@ -819,7 +829,7 @@ bool JobSystem::hasHigherPriorityReady(EJobPriority mine) const
     return false;
 }
 
-bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
+bool JobSystemState::runHigherPriorityJobs(EJobPriority mine)
 {
     // Runs each ready job above `mine` INLINE, nested inside the current job, and returns once the
     // higher rings are empty. Nesting is bounded by the priority count (a nested Normal job can only
@@ -869,7 +879,7 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
             {
                 wakeOne();
                 if (job->effectivePriority == EJobPriority::High && m_helperSleeping.load(oc::memory_order_relaxed))
-                    wakeExternalHelper();
+                    wakeHelper();
             }
             return ran;
         }
@@ -894,7 +904,7 @@ bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
 // aside instead: it parks itself as Yielded, its worker's scheduler pops the resume queue first, and the yielded fiber
 // waits in m_yieldQueue (after the resumes, before new work - it holds a fiber). Only real resumes trigger a yield, never
 // a yielded fiber, so two Low jobs never ping-pong. The same rules as any park: no ThreadLocalScope, no JobMutex held.
-void JobSystem::yieldToResumed(WorkerContext& ctx)
+void JobSystemState::yieldToResumed(WorkerContext& ctx)
 {
     Fiber* fiber = ctx.currentFiber;
     fiber->state = Fiber::EState::Yielded;
@@ -903,7 +913,7 @@ void JobSystem::yieldToResumed(WorkerContext& ctx)
     SwitchToFiber(fiber->returnFiber);
 }
 
-void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
+void JobSystemState::helpWait(JobCounter& counter, WorkerContext& ctx)
 {
     const bool mayExecute = t_helpDepth < MaxHelpDepth;
     // With a job frame already OPEN on this non-fiber stack (depth >= 1), a ForeignWait job may
@@ -946,7 +956,7 @@ void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
     }
 }
 
-void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
+void JobSystemState::fiberWait(JobCounter& counter, WorkerContext& ctx)
 {
     assertNotThreadLocalPinned(); // the park may resume this fiber on another thread's TLS
     // announce the waiter inside the same atomic as the count: the zero transition either sees
@@ -992,7 +1002,7 @@ void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
     // resumed - possibly on a different worker thread - after the counter reached zero
 }
 
-void JobSystem::signalCounter(JobCounter& counter)
+void JobSystemState::signalCounter(JobCounter& counter)
 {
     const uint32 old = counter.m_count.fetch_sub(1, oc::memory_order_acq_rel);
     assert((old & JobCounter::CountMask) != 0);
@@ -1032,13 +1042,13 @@ void JobSystem::signalCounter(JobCounter& counter)
         wakeMany(numResumed);
 }
 
-uint32 JobSystem::getWorkerIndex() const
+uint32 JobSystemState::getWorkerIndex() const
 {
     assert(t_worker && "getWorkerIndex on an unregistered thread");
     return t_worker ? t_worker->index : 0;
 }
 
-void JobSystem::lockJobMutexSlow(JobMutex& mutex)
+void JobSystemState::lockJobMutexSlow(JobMutex& mutex)
 {
     for (;;)
     {
@@ -1091,7 +1101,7 @@ void JobSystem::lockJobMutexSlow(JobMutex& mutex)
     }
 }
 
-void JobSystem::unlockJobMutexSlow(JobMutex& mutex)
+void JobSystemState::unlockJobMutexSlow(JobMutex& mutex)
 {
     // pop ONE parked fiber and resume it; it re-races fresh lockers (barging)
     while (mutex.m_listLock.exchange(1, oc::memory_order_acquire) != 0)
@@ -1114,7 +1124,7 @@ void JobSystem::unlockJobMutexSlow(JobMutex& mutex)
     }
 }
 
-void JobSystem::queueTimed(Job* job, double delaySec)
+void JobSystemState::queueTimed(Job* job, double delaySec)
 {
     const Clock::time_point due = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(oc::max(delaySec, 0.0)));
     {
@@ -1124,7 +1134,7 @@ void JobSystem::queueTimed(Job* job, double delaySec)
     m_timedCv.notify_one();
 }
 
-void JobSystem::timerMain()
+void JobSystemState::timerMain()
 {
     Globals::profiler.registerThread("JobTimer", Profiler::SORT_KEY_BACKGROUND + 3);
     std::unique_lock lock(m_timedMutex);

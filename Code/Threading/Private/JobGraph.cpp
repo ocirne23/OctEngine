@@ -2,6 +2,9 @@ module Threading;
 
 import Core;
 
+import :Job;
+import :JobGraph;
+
 JobGraphBuilder& JobGraphBuilder::reads(const JobResource& resource)
 {
     m_graph->declareRead(m_index, resource.id());

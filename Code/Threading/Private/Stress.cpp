@@ -4,6 +4,8 @@ import Core;
 import Core.Log;
 import Settings;
 
+import :JobGraph;
+
 // Benchmark + correctness harness for the JobSystem, driven from the Threading/Stress tweaks
 // (Globals::settings.threading): pick a mode and it runs one measured batch per frame (empty-job
 // throughput, parallelFor, a 128-job hazard-checked graph, or fiber park/resume), publishing timings
@@ -261,7 +263,7 @@ void JobSystemStress::selfTest()
     }
 
     { // JobCost auto-grain: coverage stays exact across runs while the estimate converges
-        JobCost cost(10, "testAutoGrain");
+        JobCost cost(10);
         oc::vector<uint32> values(200000, 0);
         uint32* data = values.data();
         for (uint32 run = 0; run < 8; ++run)
