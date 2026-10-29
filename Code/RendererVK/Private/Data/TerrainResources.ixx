@@ -55,8 +55,9 @@ public:
 
     // ---- The terrain NOISE texture (u_terrain_noiseTex): tileable RGBA8, NOISE_SIZE^2, made once at startup ----
     // R, G: two independent gradient fBms (NOISE_MACRO_CELLS lattice cells across the tile, 4 octaves, stretched to
-    // 0..1) - the macro variation. B: a value fBm (NOISE_CRAG_CELLS cells, 3 octaves, 0..1) - the crag wander. A: 1.
-    static constexpr uint32 NOISE_SIZE = 512;
+    // 0..1) - the macro variation. B: a value fBm (NOISE_CRAG_CELLS cells, 3 octaves, 0..1) - the crag wander. A: the
+    // GRASS VALUE NOISE's lattice, one value per texel (grass.inc.glsl grassValueNoise: one bilinear tap, NOISE_SIZE cells).
+    static constexpr uint32 NOISE_SIZE = RendererVKLayout::TERRAIN_NOISE_SIZE;
     static constexpr uint32 NOISE_MACRO_CELLS = 8;
     static constexpr uint32 NOISE_CRAG_CELLS = 16;
     void createNoiseTexture();

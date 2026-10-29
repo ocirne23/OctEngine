@@ -383,8 +383,8 @@ export struct GrassParams
     float heightVariation = 0.6f;  // 0..1: the shortest blade is (1 - this) x the height
     float bladeWidth = 0.04f;     // m at the root
     float rootSink = 0.05f;        // m below the mesh (+ half the tessellated relief, so no root floats over a hollow)
-    float thinStart = 25.0f;      // m: all blades inside it; past it (start / d)^exponent of them
-    float thinExponent = 1.5f;
+    float thinStart = 20.0f;      // m: all blades inside it; past it (start / d)^exponent of them
+    float thinExponent = 2.0f;
     float widthCompensation = 0.5f; // the kept blades get (1 / kept fraction)^this wider: 1 = the same coverage
     float maxWidthScale = 2.0f;
     float lod1Distance = 10.0f;    // m: 8 segments per blade inside it, 4 to LOD 2, 2 to LOD 3, then 1 (a triangle)
@@ -451,6 +451,8 @@ export struct GrassParams
     float nearShadowStrength = 0.9f; // 0..1: how dark the near blade shadows get (match it to the canopy at the hand-over)
     float transmission = 0.9f; // the sun through a blade from behind
     float roundness = 0.1f;        // the normal's tilt toward the blade's edges
+    float viewTurn = 0.4f;        // 0..1: how far a blade seen edge-on turns its face toward the view (1 = always face-on)
+    float viewTurnBand = 0.15f;    // the edge-on share of the view (|side . view perpendicular|) over which the turn fades in
     // THE FAR TIER (terrain FS, grass.inc.glsl grassGroundCanopy): where the blades fade out, the ground takes the grass
     // layer's look by how much of the view the layer covers: x farThickness on its optical depth (blades per m^2 x the
     // mean blade width x the cover x the height / N.V; 0 = off). Its own look, apart from the blades': the canopy's sun

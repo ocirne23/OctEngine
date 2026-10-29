@@ -116,8 +116,8 @@ void ClutterPipeline::initialize(uint32 maxTextures, uint32 numTextureDescriptor
 }
 
 // The near grass cascade's casters: the rigid / flower VS with CLUTTER_NEAR_SHADOW (the cascade's matrix, a single-view
-// pass), depth only, the shadow pass's depth state, both faces. Its set: the UBO, and the vertex mega-buffer at 14 (the
-// flower VS includes grass.inc.glsl, which reads the ground mesh through it).
+// pass), depth only, the shadow pass's depth state, both faces. Its set: the UBO, and for the flowers the vertex mega-buffer
+// at 14 and the terrain noise texture alone at 24 (the flower VS includes grass.inc.glsl: the ground mesh, the value noise).
 void ClutterPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout, bool flowers)
 {
     layout.vertexShader.debugFilePath = flowers ? "Shaders/Clutter/clutter_flower.vs.glsl" : "Shaders/Clutter/clutter.vs.glsl";
@@ -147,8 +147,12 @@ void ClutterPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout, bool
     layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
         .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     if (flowers)
+    {
         layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
             .binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+        layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
+            .binding = 24, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    }
 }
 
 void ClutterPipeline::initializeNearShadow(vk::RenderPass nearShadowRenderPass)
@@ -389,7 +393,7 @@ void ClutterPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, cons
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &after });
 }
 
-void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer)
+void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer, vk::ImageView noiseView)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     const DescriptorSetUpdateInfo uboUpdate{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
@@ -409,7 +413,9 @@ void ClutterPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 fram
     }
     if (m_nearShadowFlowerBuilt)
     {
-        oc::array<DescriptorSetUpdateInfo, 2> updates{ uboUpdate, storage(14, vertexBuffer) };
+        oc::array<DescriptorSetUpdateInfo, 3> updates{ uboUpdate, storage(14, vertexBuffer),
+            DescriptorSetUpdateInfo{ .binding = 24, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = noiseView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } } };
         vk::DescriptorSet set = m_nearShadowFlowerSets[frameIdx].getDescriptorSet();
         commandBuffer.cmdUpdateDescriptorSets(m_nearShadowFlowerPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, set, updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_nearShadowFlowerPipeline.getPipeline());

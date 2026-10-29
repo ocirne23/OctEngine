@@ -34,6 +34,22 @@ namespace
                         glm::mix(latticeHash(x0, y1, seed), latticeHash(x1, y1, seed), u.x), u.y);
     }
 
+    // grass.inc.glsl grassHash / grassHash2 -> grassUnit: the grass value noise's lattice values (the A channel).
+    uint32 grassHash(uint32 x)
+    {
+        x ^= x >> 16;
+        x *= 0x7feb352du;
+        x ^= x >> 15;
+        x *= 0x846ca68bu;
+        x ^= x >> 16;
+        return x;
+    }
+
+    float grassLattice(uint32 x, uint32 y)
+    {
+        return (float)(grassHash(x * 1597334673u ^ grassHash(y * 3812015801u)) >> 8) * (1.0f / 16777216.0f);
+    }
+
     // The gradient noise's 16 directions: (cos, sin) of k * 22.5 deg.
     constexpr uint32 GRAD_DIRS = 16;
     constexpr float GRAD_DIR[GRAD_DIRS][2] = {
@@ -102,7 +118,7 @@ void TerrainResources::createNoiseTexture()
         px[0] = (uint8)(glm::clamp(m.x, 0.0f, 1.0f) * 255.0f + 0.5f);
         px[1] = (uint8)(glm::clamp(m.y, 0.0f, 1.0f) * 255.0f + 0.5f);
         px[2] = (uint8)(glm::clamp(values[i].z, 0.0f, 1.0f) * 255.0f + 0.5f);
-        px[3] = 255;
+        px[3] = (uint8)(grassLattice(i % N, i / N) * 255.0f + 0.5f);
     }
     // 2x2 box mips down to 1x1 (smooth noise: a box is enough).
     for (uint32 size = N / 2; size >= 1; size /= 2)

@@ -14,6 +14,7 @@ void Settings::registerClutter(ClutterSettings& s)
 	Tweak::floatVar("Clutter", "Patch size (m)", &s.patchSize, 1.0f, 16.0f, 0.1f);
 	Tweak::floatVar("Clutter", "Grow band", &s.growBand, 0.01f, 1.0f, 0.005f);
 	Tweak::floatVar("Clutter", "Range fade", &s.rangeFade, 0.01f, 1.0f, 0.005f);
+	Tweak::floatVar("Clutter", "Position jitter", &s.jitter, 0.0f, 4.0f, 0.01f);
 	Tweak::floatVar("Clutter/LOD", "LOD 1 size", &s.lod1Size, 0.0f, 0.2f, 0.0005f);
 	Tweak::floatVar("Clutter/LOD", "LOD 2 size", &s.lod2Size, 0.0f, 0.2f, 0.0005f);
 	Tweak::floatVar("Clutter/LOD", "Flower LOD 1 distance (m)", &s.flowerLod1Distance, 0.0f, 200.0f, 0.5f);

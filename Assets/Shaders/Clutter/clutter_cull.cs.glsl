@@ -255,8 +255,13 @@ void main()
 
         const uint typeSeed = (t + 1u) * 0x9E3779B9u;
         const uint listHash = grassHash(patchHash ^ typeSeed);
+        const uint h = grassHash(listHash ^ (k * 0x85EBCA6Bu));
         const vec2 r2Offset = vec2(grassUnit(listHash), grassUnit(grassHash(listHash + 1u)));
-        const vec2 uv = fract(r2Offset + float(k) * vec2(0.7548776662, 0.5698402910));
+        // The R2 point, JITTERED by "Position jitter" x the points' spacing at the type's densest (1 / sqrt(its largest
+        // count) of the patch): the bare R2 points read as planted rows.
+        const float spacing = inversesqrt(max(type.bound.x * countScale, 1.0));
+        const vec2 jitter = (grassUnit2(grassHash(h + 4u)) - 0.5) * (u_clutter_jitter * spacing);
+        const vec2 uv = fract(r2Offset + float(k) * vec2(0.7548776662, 0.5698402910) + jitter);
         const vec2 xz = origin + uv * P;
 
         const float range = min(type.shape.z * u_clutter_rangeScale, cf_range);
@@ -322,7 +327,6 @@ void main()
             continue;
 
         const float grow = clamp((keep - rank) / (u_clutter_growBand * keep), 0.0, 1.0);
-        const uint h = grassHash(listHash ^ (k * 0x85EBCA6Bu));
         const uint kind = type.info.z;
         // A rigid type has >= 1 variant (ClutterSystem skips one with no mesh); a flower's 0 is never used.
         const uint variant = kind == CLUTTER_KIND_FLOWER ? 0u : h % type.info.y;

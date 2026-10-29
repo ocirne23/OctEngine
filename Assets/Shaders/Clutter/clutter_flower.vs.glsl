@@ -4,6 +4,7 @@
 #extension GL_EXT_shader_16bit_storage : enable
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_EXT_nonuniform_qualifier : enable // u_textures (unsized)
 
 // THE FLOWERS (with CLUTTER_NEAR_SHADOW: the near grass cascade's casters). No vertex buffer: one indexed draw per LOD over
 // a fixed topology (ClutterPipeline::buildFlowerIndices: the stem's strip, CLUTTER_FLOWER_PETALS quads, a centre quad), the
@@ -18,6 +19,14 @@
 #include "shared.inc.glsl"
 #include "mesh_vertex.inc.glsl"
 layout (binding = 14, std430) readonly buffer InVertices { MeshVertex in_vertices[]; }; // grass.inc.glsl's ground (unused here)
+// grass.inc.glsl's value noise (the stem's wind ripple): the terrain noise texture - in the main set's bindless array, alone
+// in the near casters' set.
+#ifdef CLUTTER_NEAR_SHADOW
+layout (binding = 24) uniform sampler2D u_grassNoise;
+#define GRASS_NOISE_SAMPLER u_grassNoise
+#else
+layout (binding = 24) uniform sampler2D u_textures[];
+#endif
 #include "grass.inc.glsl"
 #include "wind.inc.glsl"
 #include "grass_wind.inc.glsl"

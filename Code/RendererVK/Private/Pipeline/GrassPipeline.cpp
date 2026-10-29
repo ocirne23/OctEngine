@@ -64,7 +64,8 @@ void GrassPipeline::initialize(uint32 bladesPerPatch)
 // The near grass cascade's casters: the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant (its own matrix, a
 // single-view pass), depth only (no fragment shader), the shadow pass's depth state (standard Z, its slope-scaled bias),
 // both faces. Its set: the UBO (the matrix, the grass params) and the vertex mega-buffer (the roots) at the main set's
-// binding numbers, so the VS source is the same.
+// binding numbers, so the VS source is the same, plus the terrain noise texture alone at 24 (the value noise's lattice;
+// the main set's bindless array there).
 void GrassPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/Terrain/grass.vs.glsl";
@@ -88,6 +89,8 @@ void GrassPipeline::buildNearShadowLayout(GraphicsPipelineLayout& layout)
         .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
         .binding = 14, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{
+        .binding = 24, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
 }
 
 void GrassPipeline::initializeNearShadow(vk::RenderPass nearShadowRenderPass)
@@ -116,16 +119,18 @@ void GrassPipeline::reloadShaders()
         printf("GrassPipeline: near shadow shader reload failed, keeping previous pipeline\n");
 }
 
-void GrassPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer)
+void GrassPipeline::recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer, vk::ImageView noiseView)
 {
     GraphicsPipeline& pipeline = m_nearShadowPipeline;
     if (!m_nearShadowBuilt)
         return;
-    oc::array<DescriptorSetUpdateInfo, 2> updates{
+    oc::array<DescriptorSetUpdateInfo, 3> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = RendererVKLayout::UBO_RANGE } } },
         DescriptorSetUpdateInfo{ .binding = 14, .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = vertexBuffer.getBuffer(), .range = vertexBuffer.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 24, .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_noiseSampler.getSampler(), .imageView = noiseView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
     };
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     vk::DescriptorSet set = m_nearShadowSets[frameIdx].getDescriptorSet();

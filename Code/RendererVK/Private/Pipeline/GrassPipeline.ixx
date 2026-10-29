@@ -21,7 +21,7 @@ import :Layout;
 // ([0] main, [1] near casters, [2] records). The cull (grass_cull.cs.glsl) is a cached secondary: its dispatch covers
 // every patch slot, and threads past the grid return.
 // The near CASTERS draw here too (recordNearShadow): the blade VS's GRASS_SHADOW + GRASS_NEAR_SHADOW variant, depth
-// only, into the near grass cascade's own map (it binds the UBO and the vertex mega-buffer only - its own set). The
+// only, into the near grass cascade's own map (it binds the UBO, the vertex mega-buffer and the noise only - its own set). The
 // blades never cast into the scene cascades.
 export class GrassPipeline final
 {
@@ -45,14 +45,15 @@ public:
         vk::Sampler terrainSampler;
         Buffer* vertexBuffer = nullptr; // the vertex mega-buffer (the terrain chunks' vertices)
         Buffer* clutterFrame = nullptr; // that frame slot's ClutterFrameGpu (the forest floor map: "Canopy thinning")
-        vk::ImageView noiseView;        // the terrain noise texture (TerrainResources): the splat's crag wander
+        vk::ImageView noiseView;        // the terrain noise texture (TerrainResources): the splat's crag wander, the grass value noise
     };
     // The cull: count reset, dispatch, and the barrier to the draw (indirect + vertex attribute + index reads).
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params);
     // A frame without the cull: no draws (the recorded draws read the counts).
     void recordClear(vk::CommandBuffer primary, uint32 frameIdx);
     // The near grass cascade's casters into its extra-layer pass (inside its secondary; the viewport is set).
-    void recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer);
+    // noiseView: the terrain noise texture (the grass value noise).
+    void recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer, vk::ImageView noiseView);
     // Points the terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image.
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 

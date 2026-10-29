@@ -27,18 +27,36 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
   `grass.vs.glsl` builds the blade: a quadratic Bezier from the root (control point above the root at the tip's
   height, tip pushed by a random lean + THE wind - see "The wind": its direction, speed and gusts x "Bend (per m/s)"
   with a sway, plus a value-noise ripple moving with it), its width narrowing to a one-vertex tip. The wind code is
-  `grass_wind.inc.glsl` (`grassBezier` / `grassWind` / `grassTip`), shared with the clutter flowers.
+  `grass_wind.inc.glsl` (`grassBezier` / `grassWind` / `grassTip`), shared with the clutter flowers. The blade's random
+  values come two per hash (`grassUnit2`: the 16-bit halves). Its outputs are 11 interpolated components (position +
+  t, normal + canopy depth, last frame's offset); what is constant per blade is FLAT (albedo factor, dryness, ground
+  blend, canopy extinction, ground normal).
+* **VALUE NOISE** (`grassValueNoise`: the clumps, the dry spots, the wind ripple, the canopy's sun path and flecks, the
+  far tier's ripple, the clutter's placement and textures) is ONE bilinear tap: the lattice is the terrain noise
+  texture's A channel ([Terrain](Terrain.md)), sampled at the smoothstepped fraction, so the hardware's blend is the
+  noise's own. The cell wraps in the shader (`TERRAIN_NOISE_SIZE`), so the sampler never sees large UVs. Every includer
+  of `grass.inc.glsl` needs the texture (`GRASS_NOISE_SAMPLER`, default `u_textures[u_terrain_noiseTex]`): the main
+  set's bindless array is visible to the VERTEX stage for the grass and flower VS, and the grass cull and both
+  near-shadow caster sets (grass, flowers) bind the texture alone (the cull at 9, the casters at 24).
 * **GEOMORPH:** over the last "LOD morph band" (fraction, 0.3) before the next LOD's distance, the rows the coarser
   LOD drops (the odd rows) move - positions, last frame's positions and normals - onto the midpoint of their
   neighbours, by the blade's OWN distance; at the switch the blade is the coarser one exactly. The patch's LOD comes
   from the nearest point of its box (with slack below the corners), so no blade of a coarser patch is nearer than the
-  switch.
+  switch. On the quadratic Bezier that midpoint is exactly `B(t) + h^2 (root - 2 ctrl + tip)` (the width is linear in
+  t), and the LINEAR normal's midpoint is itself: only the curve normal evaluates its neighbours.
 * **Two shading normals:** NEAR, the curve's own normal + the full edge tilt; it eases (per blade) between "LOD 2
   distance" and "LOD 3 distance" into a normal LINEAR in t (root normal -> the upper-half chord's normal, edge tilt x
   (1 - t)), which every LOD interpolates the same. The curve normal spread over the single-triangle LOD made a
-  brightness step at its switch. The CURVE normal (`grassBladeNormal`) is `cross(tangent, side)`, and the tangent at
+  brightness step at its switch. The CURVE normal (`grassBladeCurveNormal`, only while the blend is below 1) is `cross(tangent, side)`, and the tangent at
   the TIP is the horizontal lean + wind offset: an upright blade, or one bending along its width, makes it ~0 (noise or
   NaN). Where `|across| / |tangent|` is small (0.05-0.25) it blends to the root's normal `cross(up, side)`.
+* **THE TURN TO THE VIEW** ("Grass/Look/Turn to view", 0.4; "Turn band", 0.15): a blade seen edge-on is a line, so
+  its width axis turns toward the view, per blade at the root (the camera's horizontal direction to it). Its share
+  across the view `|a|` becomes `mix(|a|, 1, turn x smoothstep(0, band, |a|))`; the depth part keeps its sign and the
+  axis stays unit, so the blade keeps its width and the normals turn with it. The band is there because the turn MUST
+  pass through zero width where `a` changes sign (a continuous map of the blade's axis angle hits every angle): the
+  band only makes that region narrow. The near grass cascade's casters turn the same (the same camera). The motion
+  vectors do not see the turn from camera motion (the previous position uses this frame's axis).
 * Motion vectors: the same blade at LAST frame's time (`u_grass_prevTime`). The wind (not the lean) eases out between
   "Wind/Fade start (m)" and "Fade end (m)" (100 / 200 m): far blades moving read as grain.
 * **Roots ON THE TERRAIN MESH:** the blades read the chunk's own vertices from the vertex mega-buffer (binding 14) and
@@ -100,6 +118,12 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     "Fleck contrast"; the mean stays about T), STRETCHED along the sun's horizontal direction into streaks (x 1 +
     "Fleck stretch" / tan(sun elevation), capped at 16), shared by every point of that path (a fleck lights a blade
     and the soil under it), faded out from half "Fleck fade distance (m)" to it.
+  * **THE FLECK FRAME IS HELD** (`GrassFleckFrame`, `buildUboGrass`; `grassFleck`): the stretch is a linear map that turns
+    and scales with the sun, and around the WORLD origin a point km away moved many flecks per frame while the sun cycle
+    ran - whole spots flashing. The frame (its origin near the camera, the streak axis, the stretch) stays fixed until
+    the camera is "Fleck fade distance" from its origin or the sun has moved enough to show (axis error x (1 - 1 /
+    stretch) + the stretch error > 0.05); then the old frame crossfades out over 1 s (two fleck evaluations only then).
+    Between steps the pattern is world-fixed; only the path's entry point drifts with the sun.
   * The BLADES: the VS passes depth + extinction (location 5; the depth is linear along the blade), the FS multiplies
     the sun visibility (direct + transmission).
   * THE GROUND under them (`instanced_indirect_terrain.fs.glsl`, both paths): `grassGroundCanopy` from the SAME
@@ -235,7 +259,8 @@ the clutter frame's header. Desktop only (as the grass).
   (`uploadClutterFrame`: capped to `CLUTTER_MAX_PATCHES` = 80^2, so the range is at most ~156 m at 4 m), ONE WORKGROUP
   PER PATCH, ONE THREAD PER RANK (`CLUTTER_CANDIDATES` = 256: at most 16 / m^2 per type at 4 m patches; 128 capped the
   dense flowers). Per clutter TYPE (a `.clutter` Placement block), rank k stands at the k-th point of an R2 sequence
-  over the patch (offset per patch and type) and is KEPT where `k + 0.5 < density x Density scale x patch area x range
+  over the patch (offset per patch and type), JITTERED by "Position jitter" (1) x the point spacing at the type's
+  densest (`1 / sqrt(bound x patch area)`; the bare R2 points read as planted rows), and is KEPT where `k + 0.5 < density x Density scale x patch area x range
   fade` - the grass's ranked prefix: a thinning density removes objects evenly, and one near the threshold shrinks
   into the ground over "Grow band" (no pops). Types are INDEPENDENT lists (no type swaps for another as the camera
   moves; two can overlap). A rank past the type's bound (`ClutterTypeGpu::bound.x`: every term at its largest) never

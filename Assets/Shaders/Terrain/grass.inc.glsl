@@ -7,9 +7,15 @@
 // Blades stand on the terrain MESH: their roots are interpolated from the chunk's own vertices (two triangles per
 // cell, as TerrainGenerator.cpp splits them) - the baked height map (8 m texels) is far too coarse.
 // Needs shared.inc.glsl and the includer's `in_vertices` (the vertex mega-buffer) first. GRASS_* come from Layout.ixx.
+// GRASS_NOISE_SAMPLER: the terrain noise texture (its A channel is the value noise's lattice); default its slot of the
+// includer's u_textures[] - the grass cull and the near-shadow casters (no bindless array) bind it alone.
 
 #ifndef GRASS_INC_GLSL
 #define GRASS_INC_GLSL
+
+#ifndef GRASS_NOISE_SAMPLER
+#define GRASS_NOISE_SAMPLER u_textures[u_terrain_noiseTex]
+#endif
 
 #include "mesh_vertex.inc.glsl" // meshVertexUV (the ground's river data)
 
@@ -53,24 +59,31 @@ float grassUnit(uint h)
     return float(h >> 8) * (1.0 / 16777216.0);
 }
 
-// Smooth value noise in [0, 1] (clumps, bare patches, dry spots, gusts).
+// Two values in [0, 1) from one hash: its 16-bit halves.
+vec2 grassUnit2(uint h)
+{
+    return vec2(float(h & 0xFFFFu), float(h >> 16)) * (1.0 / 65536.0);
+}
+
+// Smooth value noise in [0, 1] (clumps, bare patches, dry spots, gusts): ONE bilinear tap of the lattice (the terrain
+// noise texture's A: grassUnit(grassHash2(cell)) per texel, TERRAIN_NOISE_SIZE cells, repeating) at the smoothstepped
+// fraction - the hardware blend is the value noise's own. The cell wraps in the shader: the sampler never sees large UVs.
 float grassValueNoise(vec2 p)
 {
+    const float size = float(TERRAIN_NOISE_SIZE);
     const vec2 i = floor(p);
     vec2 f = p - i;
     f = f * f * (3.0 - 2.0 * f);
-    const ivec2 c = ivec2(i);
-    const float a = grassUnit(grassHash2(c));
-    const float b = grassUnit(grassHash2(c + ivec2(1, 0)));
-    const float d = grassUnit(grassHash2(c + ivec2(0, 1)));
-    const float e = grassUnit(grassHash2(c + ivec2(1, 1)));
-    return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+    const vec2 cell = i - size * floor(i * (1.0 / size));
+    return textureLod(GRASS_NOISE_SAMPLER, (cell + f + 0.5) * (1.0 / size), 0.0).a;
 }
 
 // The clumps and bare spots [0, 1] (x the cover = the blade density), and the blade size by the cover ("Size by
 // cover"): shared by the blades (grass.vs.glsl) and the canopy shading of the ground under them.
 float grassClump(vec2 xz)
 {
+    if (u_grass_patchiness <= 0.0)
+        return 1.0;
     // "Bare fraction" (u_grass_bareFraction) is the noise threshold: about that share of the ground is bare / thin.
     const float bare = u_grass_bareFraction;
     return mix(1.0, smoothstep(bare - 0.2, bare + 0.2, grassValueNoise(xz * u_grass_invClumpSize)), u_grass_patchiness);
@@ -110,6 +123,20 @@ float grassRangeFade(float dist)
     return 1.0 - smoothstep(u_grass_range - u_grass_rangeFade, u_grass_range, dist);
 }
 
+// One sun fleck value at the sun path's entry into the canopy, in one HELD frame (frame: xy = its origin, zw = the
+// streak axis; RendererUbo's fleck frame - fixed between steps, so the pattern does not swim while the sun moves).
+// STREAKS, not round spots: upright blades cast lines away from the sun, longer as it sinks (h / tan(elevation)). The
+// noise is stretched along the sun's horizontal direction by that ratio x "Fleck stretch" (capped at 16).
+float grassFleck(vec2 entryPos, vec4 frame, float invStretch, float T)
+{
+    const vec2 rel = entryPos - frame.xy;
+    const vec2 along = frame.zw;
+    const vec2 entry = vec2(dot(rel, along) * invStretch, dot(rel, vec2(-along.y, along.x))) * u_grass_invFleckSize;
+    float n = 0.65 * grassValueNoise(entry) + 0.35 * grassValueNoise(entry * 2.7 + 5.1);
+    n = clamp((n - 0.5) * 1.8 + 0.5, 0.0, 1.0); // value noise bunches at 0.5: stretched toward an even spread
+    return smoothstep(n - 0.1, n + 0.1, T);
+}
+
 // The sun reaching pos, `depth` metres below the canopy top, along the sun's path up through it:
 // - the CLUMPS at 4 points along that path (not at pos): a clump shadows the bare ground beside it, away from the sun;
 // - SUN FLECKS: what gets through arrives in bright and dark spots, not an even gray - a noise at the path's ENTRY into
@@ -132,14 +159,13 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
     if (contrast <= 0.0)
         return mix(1.0, T, rangeFade);
 
-    // STREAKS, not round spots: upright blades cast lines away from the sun, longer as it sinks (h / tan(elevation)).
-    // The noise is stretched along the sun's horizontal direction by that ratio x "Fleck stretch" (capped at 16).
+    // The flecks in the new frame, crossfading from the old one after a step (a uniform branch: one frame most of the time).
     const vec2 entryPos = pos.xz + toSun * depth;
-    const vec2 along = u_grass_fleckAlong;
-    const vec2 entry = vec2(dot(entryPos, along) * u_grass_fleckInvStretch, dot(entryPos, vec2(-along.y, along.x))) * u_grass_invFleckSize;
-    float n = 0.65 * grassValueNoise(entry) + 0.35 * grassValueNoise(entry * 2.7 + 5.1);
-    n = clamp((n - 0.5) * 1.8 + 0.5, 0.0, 1.0); // value noise bunches at 0.5: stretched toward an even spread
-    return mix(1.0, mix(T, smoothstep(n - 0.1, n + 0.1, T), contrast), rangeFade);
+    const vec4 frame = u_grass_fleckFrame; // x = 1 / the new stretch, y = 1 / the old one, z = the blend
+    float fleck = grassFleck(entryPos, u_grass_fleckNew, frame.x, T);
+    if (frame.z < 1.0)
+        fleck = mix(grassFleck(entryPos, u_grass_fleckOld, frame.y, T), fleck, frame.z);
+    return mix(1.0, mix(T, fleck, contrast), rangeFade);
 }
 
 #ifdef INSTANCED_INDIRECT_LIT_INC_GLSL
@@ -150,18 +176,19 @@ float grassCanopySun(vec3 pos, float depth, float extinction, float dist)
 float grassNearShadow(vec3 pos, vec3 N, out float weight)
 {
     weight = 0.0;
-    if (u_grass_nearRange <= 0.0)
+    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (ahead of the camera; gone at 1.3 x
+    // the range): the box is square in LIGHT space, so on the ground it reaches range / sin(sun elevation) - far past
+    // the casters (drawn within range x 1.5 + 2 m only), where the empty map left a bright gap before the canopy.
+    // The centre's fade first: most points are past it, and skip the light-space transform.
+    const float range = u_grass_nearRange;
+    const float centreDist = distance(pos.xz, u_grass_nearCentre);
+    if (range <= 0.0 || centreDist >= 1.3 * range)
         return 1.0;
 
     const vec4 lp = u_grass_shadowViewProj * vec4(pos + u_sunDirection.xyz * u_grass_nearBias + N * u_grass_nearTexel, 1.0);
     const vec2 uv = lp.xy * 0.5 + 0.5;
     const vec2 edge = abs(uv - 0.5) * 2.0;
-    // Fades by the box's edge AND by the horizontal distance from the box's CENTRE (ahead of the camera; gone at 1.3 x
-    // the range): the box is square in LIGHT space, so on the ground it reaches range / sin(sun elevation) - far past
-    // the casters (drawn within range x 1.5 + 2 m only), where the empty map left a bright gap before the canopy.
-    const float range = u_grass_nearRange;
-    weight = (1.0 - smoothstep(0.85, 0.98, max(edge.x, edge.y)))
-           * (1.0 - smoothstep(range, 1.3 * range, distance(pos.xz, u_grass_nearCentre)));
+    weight = (1.0 - smoothstep(0.85, 0.98, max(edge.x, edge.y))) * (1.0 - smoothstep(range, 1.3 * range, centreDist));
     if (weight <= 0.0 || lp.z >= 1.0)
     {
         weight = 0.0;

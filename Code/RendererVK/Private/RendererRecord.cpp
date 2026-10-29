@@ -263,9 +263,10 @@ void RendererState::recordGrassNearShadow(uint32 frameIdx)
     const float res = (float)shadowMap.getResolution();
     vkCb.setViewport(0, { vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f } });
     vkCb.setScissor(0, { vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } } });
-    m_grassPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer());
+    const vk::ImageView noiseView = Globals::textureManager.getViewForDescriptor(m_terrain.getNoiseTexture());
+    m_grassPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer(), noiseView);
     // The ground clutter in the same cascade (its draws are empty while it is off: recordClear).
-    m_clutterPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer());
+    m_clutterPipeline.recordNearShadow(cb, frameIdx, frameData.ubo, Globals::meshDataManager.getVertexBuffer(), noiseView);
     cb.end();
 }
 

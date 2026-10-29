@@ -19,6 +19,7 @@ export struct ClutterSettings
 	float patchSize = 4.0f;         // m: the candidate patches (CLUTTER_CANDIDATES ranked points each)
 	float growBand = 0.3f;          // an object shrinks into the ground over this fraction of its keep range (no pops)
 	float rangeFade = 0.25f;        // the last fraction of a type's range over which its density fades to none
+	float jitter = 1.0f;            // the positions' random offset, in R2 point spacings at the type's densest (0 = the even R2 points)
 	// LOD: the projected size (the object's radius / its distance) at which a mesh switches to level 1 / 2.
 	float lod1Size = 0.015f;
 	float lod2Size = 0.005f;

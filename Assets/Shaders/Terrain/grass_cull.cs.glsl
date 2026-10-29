@@ -20,6 +20,7 @@
 #include "mesh_vertex.inc.glsl"
 layout (binding = 9) uniform sampler2D u_terrainNoise; // the terrain noise texture (the crag wander): no bindless array here
 #define TERRAIN_NOISE_SAMPLER u_terrainNoise
+#define GRASS_NOISE_SAMPLER u_terrainNoise // grass.inc.glsl's value noise (its A)
 #define TERRAIN_SPLAT_HEIGHT_ONLY // the coverages only: no material texture taps
 #include "terrain_splat.inc.glsl"
 

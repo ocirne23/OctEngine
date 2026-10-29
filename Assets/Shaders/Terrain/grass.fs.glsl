@@ -14,12 +14,12 @@
 
 #include "shared.inc.glsl"
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 1) in vec3 in_normal;
-layout (location = 2) flat in vec3 in_groundNormal; // unit, one per blade
-layout (location = 3) in vec4 in_blade; // x = along the blade, y = albedo factor (variation x cold), z = dryness, w = ground normal blend
+layout (location = 0) in vec4 in_posAlong;    // xyz = the position, w = along the blade (0 root .. 1 tip)
+layout (location = 1) in vec4 in_normalDepth;  // xyz = the blade's normal, w = the depth below the canopy top (m)
+layout (location = 2) flat in vec3 in_groundNormal; // unit
+layout (location = 3) flat in vec4 in_blade;   // x = albedo factor (variation x cold), y = dryness, z = ground normal blend,
+                                               // w = the canopy's extinction (1/m)
 layout (location = 4) in vec3 in_prevWorldDelta;
-layout (location = 5) in vec2 in_canopy; // x = depth below the canopy top (m), y = the canopy's extinction (1/m)
 
 layout (location = 0) out vec4 out_color;
 layout (location = 1) out vec4 out_motion; // the scene's motion target (the opaque family)
@@ -35,10 +35,12 @@ layout (location = 1) out vec4 out_motion; // the scene's motion target (the opa
 
 void main()
 {
-    const vec3 pos = in_pos;
-    const vec3 V = normalize(u_viewPos - pos);
+    const vec3 pos = in_posAlong.xyz;
+    const vec3 toEye = u_viewPos - pos;
+    const float dist = length(toEye);
+    const vec3 V = toEye / dist;
     const vec3 L = u_sunDirection.xyz;
-    vec3 bladeN = normalize(in_normal);
+    vec3 bladeN = normalize(in_normalDepth.xyz);
     if (!gl_FrontFacing)
         bladeN = -bladeN;
 
@@ -46,22 +48,23 @@ void main()
     // away still needs its real shadow for the transmission. The lookup moves TOWARD THE SUN by "Shadow bias (m)", full
     // at the root and none at the tip: the root sinks below the terrain mesh, into the ground's own shadow-map surface
     // (a dark band at the bottom of every blade).
-    const vec3 shadowPos = pos + L * (u_grass_shadowBias * (1.0 - in_blade.x));
-    g_sunShadowFirst = sunShadowVisibility(shadowPos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN);
+    const float t = in_posAlong.w;
+    const vec3 sunSideN = dot(bladeN, L) >= 0.0 ? bladeN : -bladeN;
+    const vec3 shadowPos = pos + L * (u_grass_shadowBias * (1.0 - t));
+    g_sunShadowFirst = sunShadowVisibility(shadowPos, sunSideN);
     // THE CANOPY's shadow: the blades above this point along the sun, as a volume - the self-shadowing a shadow map
     // cannot resolve. On the direct sun and the transmission alike. Near the camera the near grass cascade takes over.
     float nearWeight;
-    const float nearSun = grassNearShadow(pos, dot(bladeN, L) >= 0.0 ? bladeN : -bladeN, nearWeight);
-    const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, in_canopy.x, in_canopy.y, distance(pos, u_viewPos)) : 1.0;
+    const float nearSun = grassNearShadow(pos, sunSideN, nearWeight);
+    const float canopySun = nearWeight < 1.0 ? grassCanopySun(pos, in_normalDepth.w, in_blade.w, dist) : 1.0;
     g_sunShadowFirst *= mix(canopySun, nearSun, nearWeight);
 
-    const float t = in_blade.x;
     vec3 albedo = mix(u_grass_rootAlbedo, u_grass_tipAlbedo, t);
-    albedo = mix(albedo, u_grass_dryAlbedo * mix(0.75, 1.0, t), in_blade.z);
-    albedo *= in_blade.y; // the per-blade variation and the cold darkening (grass.vs.glsl)
+    albedo = mix(albedo, u_grass_dryAlbedo * mix(0.75, 1.0, t), in_blade.y);
+    albedo *= in_blade.x; // the per-blade variation and the cold darkening (grass.vs.glsl)
     const float ao = mix(1.0 - u_grass_rootOcclusion, 1.0, smoothstep(0.0, 1.0, t));
 
-    const vec3 N = normalize(mix(bladeN, in_groundNormal, in_blade.w));
+    const vec3 N = normalize(mix(bladeN, in_groundNormal, in_blade.z));
     // Lit from behind: the sun through the blade, tinted by it. Formed before computeLitColor (its light loop is the
     // register peak): only this half colour is live across it.
     const float back = max(-dot(N, L), 0.0);

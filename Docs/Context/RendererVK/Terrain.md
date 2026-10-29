@@ -48,7 +48,8 @@ Procedural pushes the world-scale params in; the terrain state lives in `Terrain
   (uvY) alone, so on a steep face the AO is the top projection's, stretched (it multiplies only the ambient term).
 * **The terrain NOISE texture** (`TerrainResources::createNoiseTexture`, made once in `initSharedBuffers`;
   `u_terrain_noiseTex`): 512² RGBA8, tileable, box mips. R, G = two gradient fBms (8 lattice cells per tile, 4 octaves,
-  stretched to 0..1); B = a value fBm (16 cells, 3 octaves, 0..1).
+  stretched to 0..1); B = a value fBm (16 cells, 3 octaves, 0..1); A = THE GRASS VALUE NOISE's lattice (`grassUnit(grassHash2(cell))`
+  per texel, so the noise repeats every 512 cells - see "Value noise" in [Vegetation](Vegetation.md)).
   * **The crag wander reads B** (`textureLod` 0, `u_terrainTex_cragWanderUvScale` = one wavelength per cell), from
     every `terrainLayers` caller (the TES and the culls too). **The grass cull has no bindless array**, so it binds
     the texture alone (`TERRAIN_NOISE_SAMPLER`) - its coverages must match the ground's, or grass grows on the rock

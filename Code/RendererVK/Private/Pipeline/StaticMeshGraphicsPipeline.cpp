@@ -586,6 +586,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eTessellationEvaluation
+            | vk::ShaderStageFlagBits::eVertex // the grass and flower VS: grass.inc.glsl's value noise (the terrain noise texture)
     });
 
     // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18),

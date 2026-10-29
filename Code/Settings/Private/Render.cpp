@@ -247,6 +247,8 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Shadows", "Near shadow strength", &s.nearShadowStrength, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Transmission", &s.transmission, 0.0f, 4.0f, 0.01f);
     Tweak::floatVar("Grass/Look", "Roundness", &s.roundness, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Turn to view", &s.viewTurn, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Grass/Look", "Turn band", &s.viewTurnBand, 0.01f, 1.0f, 0.005f);
     Tweak::floatVar("Grass/Look", "Ground normal blend", &s.groundBlend, 0.0f, 1.0f, 0.01f);    Tweak::floatVar("Grass/Far", "Thickness", &s.farThickness, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Canopy shadow", &s.farCanopyShadow, 0.0f, 4.0f, 0.005f);
     Tweak::floatVar("Grass/Far", "Brightness", &s.farBrightness, 0.0f, 4.0f, 0.01f);

@@ -361,6 +361,48 @@ void RendererState::buildUboGrass(const Camera& camera)
         a.now = m_cameraPos;
         a.blend = 0.0f;
     }
+
+    // THE SUN FLECKS' FRAME: the fleck noise is stretched along the sun's horizontal direction, a linear map that turns and
+    // scales with the sun. Around the world origin a point km away then moved many flecks per frame while the sun cycle ran:
+    // whole spots flashing. So the frame is HELD: its origin sits near the camera (small coordinates) and the axis and the
+    // stretch stay fixed until the camera is "Fleck fade distance" from the origin, or the sun has moved enough to show
+    // (the axis error x how stretched the flecks are, plus the stretch error, > 0.05); then the old frame crossfades out
+    // over FLECK_FADE_SEC. Between steps the pattern is world-fixed; only the sun path's entry point drifts with the sun.
+    constexpr float FLECK_FADE_SEC = 1.0f;
+    const glm::vec3 L = skySunDirection(Globals::settings.sky);
+    const glm::vec2 sunH(L.x, L.z);
+    const float sunHLen = glm::length(sunH);
+    const glm::vec2 along = sunHLen > 1e-4f ? sunH / sunHLen : glm::vec2(1.0f, 0.0f);
+    const float invStretch = 1.0f / glm::clamp(1.0f + glm::max(g.fleckStretch, 0.0f) * sunHLen / glm::max(L.y, 0.1f), 1.0f, 16.0f);
+    const glm::vec2 cameraXZ(m_cameraPos.x, m_cameraPos.z);
+    GrassFleckFrame& f = m_grassFleckFrame;
+    const auto take = [&](glm::vec4& frame, float& frameInvStretch) {
+        frame = glm::vec4(cameraXZ, along);
+        frameInvStretch = invStretch;
+    };
+    if (!f.valid)
+    {
+        take(f.now, f.invStretchNow);
+        f.old = f.now;
+        f.invStretchOld = f.invStretchNow;
+        f.blend = 1.0f;
+        f.valid = true;
+    }
+    if (f.blend < 1.0f)
+        f.blend = glm::min(f.blend + (float)Globals::time.getDeltaSec() / FLECK_FADE_SEC, 1.0f);
+    else
+    {
+        const float axisError = glm::length(glm::vec2(f.now.z, f.now.w) - along) * (1.0f - invStretch);
+        const float stretchError = glm::abs(f.invStretchNow - invStretch);
+        const float travelled = glm::distance(cameraXZ, glm::vec2(f.now.x, f.now.y));
+        if (axisError + stretchError > 0.05f || travelled > glm::max(g.fleckFadeDistance, 1.0f))
+        {
+            f.old = f.now;
+            f.invStretchOld = f.invStretchNow;
+            take(f.now, f.invStretchNow);
+            f.blend = 0.0f;
+        }
+    }
 }
 
 // View matrices, frustum, and TAA jitter: the center (culling) view and the VR eye views (m_views, which keep last
@@ -1491,6 +1533,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_rootOcclusion", g.rootOcclusion);
         list.add("grass_transmission", g.transmission);
         list.add("grass_roundness", g.roundness);
+        list.add("grass_viewTurn", [&] { return glm::clamp(g.viewTurn, 0.0f, 1.0f); }, g.viewTurn);
+        list.add("grass_viewTurnBand", [&] { return glm::max(g.viewTurnBand, 0.01f); }, g.viewTurnBand);
         list.add("grass_coldTemperature", g.coldTemperature);
         list.add("grass_warmTemperature", [&] { return glm::max(g.warmTemperature, g.coldTemperature + 0.01f); }, g.warmTemperature, g.coldTemperature);
         list.add("grass_coldDarkening", [&] { return glm::clamp(g.coldDarkening, 0.0f, 1.0f); }, g.coldDarkening);
@@ -1500,22 +1544,19 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_fleckFadeDistance", [&] { return glm::max(g.fleckFadeDistance, 1.0f); }, g.fleckFadeDistance);
         list.add("grass_fleckStretch", [&] { return glm::max(g.fleckStretch, 0.0f); }, g.fleckStretch);
         // The canopy's sun path (grass.inc.glsl grassCanopySun; live: the sun). The sun's elevation floored at 0.1:
-        // sunToXZ = XZ per metre of height along the sun, invSunY = 1 / the floored elevation; the flecks' streak axis
-        // (the sun's horizontal direction, +X straight overhead) and 1 / their stretch along it (capped at 16).
+        // sunToXZ = XZ per metre of height along the sun, invSunY = 1 / the floored elevation. The flecks' HELD frames (the
+        // new and the old: origin, streak axis, 1 / stretch) and their blend - see the update above.
         const SkyParams& sky = Globals::settings.sky;
         const auto sunY = [&sky] { return glm::max(skySunDirection(sky).y, 0.1f); };
         const auto sunHorizontal = [&sky] { const glm::vec3 L = skySunDirection(sky); return glm::vec2(L.x, L.z); };
         list.add("grass_sunToXZ", [sunY, sunHorizontal] { return sunHorizontal() / sunY(); }, UboLive);
         list.add("grass_invSunY", [sunY] { return 1.0f / sunY(); }, UboLive);
-        list.add("grass_fleckAlong", [sunHorizontal]
+        list.add("grass_fleckNew", [this] { return m_grassFleckFrame.now; }, UboLive);  // xy = the origin, zw = the streak axis
+        list.add("grass_fleckOld", [this] { return m_grassFleckFrame.old; }, UboLive);
+        list.add("grass_fleckFrame", [this]  // x = 1 / the new stretch, y = 1 / the old one, z = the blend (0 old .. 1 new)
             {
-                const glm::vec2 h = sunHorizontal();
-                const float len = glm::length(h);
-                return len > 1e-4f ? h / len : glm::vec2(1.0f, 0.0f);
-            }, UboLive);
-        list.add("grass_fleckInvStretch", [sunY, sunHorizontal, &g]
-            {
-                return 1.0f / glm::clamp(1.0f + glm::max(g.fleckStretch, 0.0f) * glm::length(sunHorizontal()) / sunY(), 1.0f, 16.0f);
+                const GrassFleckFrame& f = m_grassFleckFrame;
+                return glm::vec4(f.invStretchNow, f.invStretchOld, f.blend, 0.0f);
             }, UboLive);
         list.add("grass_nearStrength", [&] { return glm::clamp(g.nearShadowStrength, 0.0f, 1.0f); }, g.nearShadowStrength);
         list.add("grass_nearBias", [&] { return glm::max(g.nearShadowBias, 0.0f); }, g.nearShadowBias);
@@ -1528,6 +1569,7 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("clutter_rangeScale", [&] { return glm::max(c.rangeScale, 0.0f); }, c.rangeScale);
         list.add("clutter_growBand", [&] { return glm::max(c.growBand, 0.01f); }, c.growBand);
         list.add("clutter_rangeFade", [&] { return glm::clamp(c.rangeFade, 0.01f, 1.0f); }, c.rangeFade);
+        list.add("clutter_jitter", [&] { return glm::max(c.jitter, 0.0f); }, c.jitter);
         list.add("clutter_lod1Size", c.lod1Size);
         list.add("clutter_lod2Size", [&] { return glm::min(c.lod2Size, c.lod1Size); }, c.lod2Size, c.lod1Size);
         list.add("clutter_flowerLod1Distance", c.flowerLod1Distance);

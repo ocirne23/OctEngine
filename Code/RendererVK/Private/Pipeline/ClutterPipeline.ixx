@@ -65,7 +65,8 @@ public:
     // A frame without the cull: no draws (the recorded draws read the counts and the flower commands).
     void recordClear(vk::CommandBuffer primary, uint32 frameIdx);
     // The near grass cascade's casters into its extra-layer pass (inside its secondary; the viewport is set).
-    void recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer);
+    // noiseView: the terrain noise texture (the flower stems' wind ripple: grass.inc.glsl's value noise).
+    void recordNearShadow(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, Buffer& vertexBuffer, vk::ImageView noiseView);
     // Points the terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image.
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 

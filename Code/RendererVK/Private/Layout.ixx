@@ -749,6 +749,8 @@ export namespace RendererVKLayout
     // grass.inc.glsl grassLodSegments. Each LOD HALVES the one before (they nest): grass.vs.glsl geomorphs the dropped rows.
     constexpr uint32 GRASS_LOD_SEGMENTS[GRASS_LODS] = { 8, 4, 2, 1 };
     constexpr uint32 GRASS_CULL_GROUP = 64;
+    // TerrainResources' noise texture, texels per side: also the grass value noise's lattice period (its A channel).
+    constexpr uint32 TERRAIN_NOISE_SIZE = 512;
 
     // One visible patch: the cull's output, read by the grass VS as INSTANCE-RATE attributes (firstInstance = slot).
     struct GrassPatchGpu
