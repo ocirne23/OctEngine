@@ -12,6 +12,8 @@
 // surface normal, so it is NOT baked - the price of the volume (more leaking through geometry thinner than a voxel). L0
 // is stored PREMULTIPLIED by the summed weight W (and W itself), so the trilinear fetch is a weight-correct blend
 // (sum A / sum W) in which an all-dead voxel contributes nothing instead of black; L1 is stored as ratios to L0.
+// The probes hold NORMALIZED light (the sun / sky rescale, gi_probe.inc.glsl); the voxels hold ABSOLUTE light at the
+// reference levels of the trace's sky slot, so the volume's readers know nothing of the rescale.
 
 #include "shared.inc.glsl"
 
@@ -65,8 +67,10 @@ void main()
     // this frame (the trace's OWN stamp) or the probe is fresh (giProbeFresh; the stencil's two corners cover all 8
     // probes). A voxel that scrolled in always has a fresh probe, so the scroll needs no test of its own.
     // u_gi_fullBake > 0.5 = bake everything (the CPU sets it for one frame when the images are new or the Chebyshev knobs
-    // moved: a far probe may not be visited for hundreds of frames).
-    if (u_gi_fullBake < 0.5)
+    // moved: a far probe may not be visited for hundreds of frames). So does the trace when it moved the sun / sky
+    // rescale's reference levels (ref.z): every voxel holds absolute light at those levels.
+    const vec4 ref = GI_GRID_DATA_NAME[GI_SKY_REF_V4];
+    if (u_gi_fullBake < 0.5 && ref.z < 0.5)
     {
         bool changed = giProbeFresh(cascade, base) || giProbeFresh(cascade, base + 1);
         // The stencil spans base..base+1: per axis one wave, or two where it crosses a 4-probe block edge.
@@ -106,12 +110,14 @@ void main()
         if (len > 1e-4)
             w *= giVisibilityWeight(cellBase, -toProbe / len, len, s);
 
+        // Back to absolute light at the reference levels (giProbeRescale: the SH scale and the sun part's DC).
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);
-        a0 += w * c0; a1 += w * c1; a2 += w * c2; a3 += w * c3;
-        const vec2 sunVis = GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].xy;
-        aSun += w * sunVis.x;
-        aVis += w * sunVis.y;
+        float sunAbs;
+        const float wf = w * giProbeRescale(cellBase, c0, ref.xy, sunAbs);
+        a0 += wf * c0; a1 += wf * c1; a2 += wf * c2; a3 += wf * c3;
+        aSun += w * sunAbs;
+        aVis += w * giUnpackSkyVis(GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].y).x;
         W += w;
     }
 

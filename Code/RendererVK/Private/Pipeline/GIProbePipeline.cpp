@@ -75,6 +75,7 @@ void GIProbePipeline::registerUboFields(UboBlock& list,const bool& rtEnabled, co
     // getTraceParams0's x / z / w (its y, the temporal alpha, rides the wall delta: live).
     list.add("rt_giRaysPerProbe", [this] { return getTraceParams0(0.0f).x; }, gi.raysPerProbe);
     list.add("rt_giMaxRayDistance", gi.maxRayDist);
+    list.add("rt_giRescaleStep", gi.rescaleStep);
     list.add("rt_giIntervalMult", [this] { return getTraceParams0(0.0f).w; }, gi.updateIntervalMult);
     list.add("rt_giPriorityDist", [this] { return getPriorityParams().x; }, gi.priorityDist);
     list.add("rt_giPriorityFalloff", [this] { return getPriorityParams().y; }, gi.priorityFalloff);
@@ -116,7 +117,7 @@ glm::vec4 GIProbePipeline::takeVisibilityParams(bool bakeRuns)
 void GIProbePipeline::resizeGrid()
 {
     const GiGridConfig& grid = Globals::settings.gi.grid;
-    const size_t gridDataBytes = ((size_t)grid.probesTotal() * RendererVKLayout::GI_PROBE_STRIDE + RendererVKLayout::GI_SH_STRIDE) * sizeof(uint32);
+    const size_t gridDataBytes = ((size_t)grid.probesTotal() * RendererVKLayout::GI_PROBE_STRIDE + RendererVKLayout::GI_SKY_SLOT_STRIDE) * sizeof(uint32);
     m_giGridData.initialize(gridDataBytes,
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.probes");
     // One uint per wave (the probe count is a multiple of 64). Zeroed with the probes; a stale stamp can

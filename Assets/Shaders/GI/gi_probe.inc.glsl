@@ -17,26 +17,44 @@
 // GI_SH_STRIDE, GI_NUM_CASCADES, GI_PROBE_DIM_X/Y/Z, GI_FOCUS_Y_OFFSET and GI_CASCADE_BASE_SPACING are injected from
 // RendererVKLayout (Layout.ixx, the live g_giGrid - the "GI" grid tweaks reload every shader).
 // Per-probe layout, in VEC4s (28 floats = 7 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
-//   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance
+//   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance, NORMALIZED (see below)
 //   [3] = SH-L1 mean depth   [4] = SH-L1 mean depth^2
 //   [5] = (embedded fraction: the backface-hit fraction weighted by the enclosure - see GI_ENCLOSED_SHARE_MIN in
 //         the trace, relocation offset xyz)
 //   [6] = (sun DC luminance, sky visibility, fast visit-luma mean, visit-luma second moment):
 //         x - the part of luma(c0) that came from the SUN (the direct sun at gather hits + its multi-bounce),
-//             traced WITHOUT the cloud shadow. The lookup turns it into the sun's share at the normal (giSunShare:
+//             traced WITHOUT the cloud shadow, normalized (see below). The lookup turns it into the sun's share at the normal (giSunShare:
 //             modelled as light from the lower hemisphere) and dims that share by the cloud transmittance at the
 //             shaded point (giIrradiance), so a moving cloud shadow changes the GI at once instead of after each
 //             probe's update interval.
-//         y - the cosine-weighted share of the upper hemisphere (about u_skyUp) whose rays miss: open sky. Baked
-//             into the volume for giSkyVisibility (sky-reflection occlusion).
+//         y - TWO HALVES (packHalf2x16, giUnpackSkyVis / giPackSkyVis):
+//             .x the cosine-weighted share of the upper hemisphere (about u_skyUp) whose rays miss: open sky. Baked
+//                into the volume for giSkyVisibility (sky-reflection occlusion).
+//             .y the part of luma(c0) that came from the SKY (misses + the sky-radiance light), normalized (see below).
+//             Never arithmetic on the packed float: only bit casts.
 //         z, w - trace-only history of the visits' DC luminance: a fast mean and a slow second moment, for the
 //             trace's variance clamp and change detection (gi_probe_trace.cs.glsl).
+//
+// SUN / SKY RESCALE. A probe's sun part ([6].x) and sky part (the high half of [6].y) are stored DIVIDED by the light
+// levels of the visit that traced them (giSunLevel, giSkyLevel), and the SH is scaled to match, so visits from
+// different times of day blend consistently. The rest of the light (the grid lights, the bounce's non-sun part) stays
+// absolute. giRescale turns a stored probe back into absolute light at given levels: the volume bake at the REFERENCE
+// levels of the last full bake (GI_SKY_REF_V4, the trace decides when they move), the probe-loop lookups at the
+// CURRENT ones (GI_SKY_LEVELS_V4). One scalar per probe: the brightness follows at once, the colour and direction of
+// the sun / sky change still need the probe's own updates. The bounce's sky part counts as "rest": a lookup cannot split
+// it from the grid lights, and rescaling a lamp's bounce by the sky level would flash it at dawn.
 #define GI_PROBE_STRIDE_V4 ((uint(GI_SH_STRIDE) + 16u) / 4u)
 #define GI_DEPTH_V4   3u
 #define GI_DEPTH2_V4  4u
 #define GI_MISC_V4    5u
 #define GI_SUN_V4     6u
 #define GI_LUMA_W     vec3(0.2126, 0.7152, 0.0722)
+#define GI_LEVEL_MIN  1e-6 // a light level at or below this normalizes nothing: the trace keeps that part absolute
+
+// GI_SUN_V4.y: (sky visibility, normalized sky part) as two halves. The sky part is a ratio near 1 (the probe's sky light
+// over the sky's own), so half precision holds it; the clamp keeps an fp16 inf out of the bits.
+vec2 giUnpackSkyVis(float packed) { return unpackHalf2x16(floatBitsToUint(packed)); }
+float giPackSkyVis(float skyVis, float skyN) { return uintBitsToFloat(packHalf2x16(vec2(skyVis, min(skyN, 65000.0)))); }
 
 #ifndef GI_NORMAL_BIAS
 #define GI_NORMAL_BIAS 1.5 // push the sample point along the normal (world units) to limit self-leak
@@ -262,8 +280,8 @@ vec3 giEvalSHLinear(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec4 Yk)
     return c0 * Yk.x + c1 * Yk.y + c2 * Yk.z + c3 * Yk.w;
 }
 
-// THE SUN'S SHARE OF THE IRRADIANCE AT n, from the sun's DC luminance coefficient sunDC (GI_SUN_V4.x, or its weighted
-// sum) and the irradiance eLin it belongs to (the same weights). A probe stores only the sun's DC, so its DIRECTION is
+// THE SUN'S SHARE OF THE IRRADIANCE AT n, from the sun's ABSOLUTE DC luminance coefficient sunDC (GI_SUN_V4.x x the sun
+// level, or its weighted sum) and the irradiance eLin it belongs to (the same weights). A probe stores only the sun's DC, so its DIRECTION is
 // modelled: the sun part is the sunlit ground at the gather hits, i.e. light from the LOWER hemisphere, whose L1
 // irradiance is its DC term x (1 - n.up); Yk.x (A0 Y0) turns the coefficient into that DC term. One DC fraction for every
 // normal would dim the SKY light on up-facing ground under a cloud (darker than the sky SH past the field).
@@ -278,18 +296,57 @@ vec3 giEvalSH(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 n)
     return max(giEvalSHLinear(c0, c1, c2, c3, giIrradianceBasis(n)), vec3(0.0));
 }
 
-vec3 giEvalCell(uint cellBase, vec3 n)
-{
-    vec3 c0, c1, c2, c3;
-    giReadSH(cellBase, c0, c1, c2, c3);
-    return giEvalSH(c0, c1, c2, c3, n);
-}
-
 // Virtual sky probe: the trace projects skyRadiance (sky + analytic sunlit ground) into one extra SH-L1 slot after the
 // last probe. Out-of-field surfaces evaluate it like a real probe with no geometry hits, so leaving the probe field hands
 // over to the same integral the probes converge to in open space (a single sky sample along the normal misses the
 // bright horizon in-scatter band the probes gather, at low sun angles). Returns E(n), like evalProbeCoverage.
 #define GI_SKY_SH_BASE (uint(GI_NUM_CASCADES) * uint(GI_CASCADE_PROBES) * GI_PROBE_STRIDE_V4) // vec4 index; 3 vec4s of SH
+// The rest of the sky slot (RendererVKLayout::GI_SKY_SLOT_STRIDE), both written by the trace's sky workgroup:
+#define GI_SKY_LEVELS_V4 (GI_SKY_SH_BASE + 3u) // (sun level, sky level, -, -) of this frame: the probe-loop lookups' levels
+#define GI_SKY_REF_V4    (GI_SKY_SH_BASE + 4u) // (sun level, sky level, full bake 0/1, -): the levels the volume is baked at
+
+// ---- Sun / sky rescale (see the probe layout above) ----
+// The sun's level: the luminance of the direct sun the gather hits receive (giGatherDirect, before N.L and shadow).
+float giSunLevel()
+{
+    return dot(u_sunTransmittance * u_sunColor.rgb, GI_LUMA_W) * u_sunVisible;
+}
+
+// The sky's level: the sky SH's DC luminance minus its sun part, the sunlit ground (u_sky_groundSun G below the horizon,
+// "Ground Horizon" w x G above - projectSkySH in the trace): DC = Y0 (2 pi G + 2 pi w G).
+float giSkyLevel(vec3 skyC0)
+{
+    const float groundSunDC = 0.282095 * 2.0 * PI * (1.0 + u_sky_groundHorizon) * dot(u_sky_groundSun, GI_LUMA_W);
+    return max(dot(skyC0, GI_LUMA_W) - groundSunDC, 0.0);
+}
+
+// The factor that turns a stored (normalized) SH into absolute light at the levels (sun, sky); luma = luma(stored c0),
+// sunN / skyN = the stored parts. The inverse of the trace's normalization at the same levels.
+float giRescale(float luma, float sunN, float skyN, vec2 levels)
+{
+    return luma > 1e-8 ? (max(luma - sunN - skyN, 0.0) + sunN * levels.x + skyN * levels.y) / luma : 1.0;
+}
+
+// giRescale for one probe, plus its ABSOLUTE sun DC (sunAbs, for giSunShare).
+float giProbeRescale(uint cellBase, vec3 c0, vec2 levels, out float sunAbs)
+{
+    const vec2  sunSky = GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].xy;
+    const float sunN = sunSky.x;
+    const float skyN = giUnpackSkyVis(sunSky.y).y;
+    sunAbs = sunN * levels.x;
+    return giRescale(dot(c0, GI_LUMA_W), sunN, skyN, levels);
+}
+
+vec2 giCurrentLevels() { return GI_GRID_DATA_NAME[GI_SKY_LEVELS_V4].xy; }
+
+// One probe's absolute irradiance at n, at the current levels (the debug view).
+vec3 giEvalCell(uint cellBase, vec3 n)
+{
+    vec3 c0, c1, c2, c3;
+    giReadSH(cellBase, c0, c1, c2, c3);
+    float sunAbs;
+    return giEvalSH(c0, c1, c2, c3, n) * giProbeRescale(cellBase, c0, giCurrentLevels(), sunAbs);
+}
 #ifdef GI_VOLUME_TEXTURES_NAME
 // Volume mode: the bake's copy of the same 3 vec4s (GI_VOLUME_SKY_IMAGE), so a volume consumer reads nothing from the
 // probe buffer.
@@ -303,8 +360,10 @@ void giReadSkySH(out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3)
     c2 = vec3(p1.zw, p2.x);
     c3 = p2.yzw;
 }
+vec3 giSkyC0() { return texelFetch(GI_VOLUME_TEXTURES_NAME[GI_VOLUME_SKY_IMAGE], ivec3(0, 0, 0), 0).xyz; }
 #else
 void giReadSkySH(out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3) { giReadSH(GI_SKY_SH_BASE, c0, c1, c2, c3); }
+vec3 giSkyC0() { return GI_GRID_DATA_NAME[GI_SKY_SH_BASE].xyz; }
 #endif
 
 vec3 giEvalSkySH(vec3 n)
@@ -395,6 +454,7 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
     eLin = vec3(0.0);
     totalW = 0.0;
     float sunW = 0.0;
+    const vec2 levels = giCurrentLevels();
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -431,9 +491,11 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
 
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);
-        eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
+        float sunAbs;
+        const float f = giProbeRescale(cellBase, c0, levels, sunAbs);
+        eLin += (w * f) * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
-        sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
+        sunW  += w * sunAbs;
     }
 
     sun = giSunShare(sunW, eLin, n, Yk); // both weighted sums: the weights cancel
@@ -557,7 +619,7 @@ float giLookupCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
     return giVolumeCascade(c, p, n, Yk, eLin, sun);
 }
 
-// SKY VISIBILITY at a surface: the probes' cosine-weighted open share of the upper hemisphere (GI_SUN_V4.y), 1 = open
+// SKY VISIBILITY at a surface: the probes' cosine-weighted open share of the upper hemisphere (GI_SUN_V4.y's low half), 1 = open
 // sky, 0 = covered - an occlusion term for sky reflections / sky ambient (the diffuse GI already carries it, a mirror
 // lookup of the sky map does not). ONE tail fetch (W, visibility x W) from the lookup's cascade, or the next one where
 // every probe of it is dead; no cross-cascade blend (the term is soft), faded to open sky over the outermost cascade's
@@ -716,6 +778,7 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
     eLin = vec3(0.0);
     float totalW = 0.0;
     float sunW = 0.0;
+    const vec2 levels = giCurrentLevels();
     for (int i = 0; i < 8; ++i)
     {
         ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
@@ -737,9 +800,11 @@ float giBounceCascade(int c, vec3 p, vec3 n, vec4 Yk, out vec3 eLin, out float s
             continue;
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);
-        eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
+        float sunAbs;
+        const float f = giProbeRescale(cellBase, c0, levels, sunAbs);
+        eLin += (w * f) * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
-        sunW  += w * GI_GRID_DATA_NAME[cellBase + GI_SUN_V4].x;
+        sunW  += w * sunAbs;
     }
 
     sun = giSunShare(sunW, eLin, n, Yk);

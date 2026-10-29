@@ -110,6 +110,14 @@ void main()
     }
 
     vec4 color = vec4(r.inScatter, r.transmittance);
+    // A SKY pixel holds the sun disc and halo, and the composite passes scene x transmittance: the opacity "Aerial fade"
+    // took off let the disc shine through any cloud at any density. There the cloud stays opaque and fades into the
+    // clear sky instead (the mirror cache: no disc, seen from the ground).
+    if (limit >= maxDist)
+    {
+        color.rgb += r.fadeOpacity * textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR_CACHE), 0.0).rgb;
+        color.a -= r.fadeOpacity;
+    }
 #if CLOUD_DEBUG_MODE == 1
     color = vec4(stepHeat(float(r.steps) / u_clouds_maxSteps), 0.0);
 #endif

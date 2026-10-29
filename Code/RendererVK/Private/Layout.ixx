@@ -343,11 +343,12 @@ export namespace RendererVKLayout
     // #defines: the grid shape is a compile-time constant in the shaders (no per-sample uniform math),
     // and the "GI" grid settings (Globals::settings.gi.grid, GiGridConfig in Settings.Render) change it through the
     // Renderer's listener - GPU idle, the SH buffer re-allocated (resizeGrid), every shader reloaded, the clipmap
-    // cleared. The probe buffer holds probesTotal() probes of GI_PROBE_STRIDE + one extra SH-L1 slot after the last
-    // probe: the "virtual sky probe" (skyRadiance projected by the trace pass), evaluated as the out-of-field
-    // fallback so it matches the probes by construction.
+    // cleared. The probe buffer holds probesTotal() probes of GI_PROBE_STRIDE + the GI_SKY_SLOT_STRIDE sky slot after the
+    // last probe: the "virtual sky probe" (skyRadiance projected by the trace pass, evaluated as the out-of-field fallback
+    // so it matches the probes by construction) and the light levels of the sun / sky rescale (gi_probe.inc.glsl).
     constexpr uint32 GI_SH_STRIDE = 12;                                                  // SH-L1 RGB floats per probe
-    constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 16;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz + sun DC luminance (+3 spare)
+    constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 16;                                 // SH + SH-L1 depth + depth^2 + misc + sun / sky stats (layout in gi_probe.inc.glsl)
+    constexpr uint32 GI_SKY_SLOT_STRIDE = GI_SH_STRIDE + 8;                               // the sky SH + the current light levels + the bake's reference levels
     constexpr uint32 GI_CASCADE_BASE_SPACING = 2;                                        // finest cascade probe spacing, world units (power of two)
     // Irradiance volume images per cascade, 20 B per voxel (gi_volume_bake.cs.glsl writes, giVolumeCascade reads):
     //   [0] B10G11R11_UFLOAT  L0 x W: the DC term, PREMULTIPLIED by the summed weight (a weight-correct trilinear

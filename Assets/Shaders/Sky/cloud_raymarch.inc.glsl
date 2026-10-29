@@ -141,6 +141,7 @@ struct CloudMarchResult
     float transmittance;
     float front;         // distance of the first cloud sample (< 0 = no cloud)
     float weighted;      // transmittance-weighted cloud distance
+    float fadeOpacity;   // the opacity "Aerial fade" took off (already in transmittance)
     int steps;
 };
 
@@ -154,6 +155,7 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     r.transmittance = 1.0;
     r.front = -1.0;
     r.weighted = 0.0;
+    r.fadeOpacity = 0.0;
     r.steps = 0;
 
     const float camAlt = u_viewPos.y;
@@ -391,7 +393,8 @@ CloudMarchResult cloudRaymarch(vec3 origin, vec3 dir, vec2 seg0, vec2 seg1, int 
     r.inScatter = r.inScatter * exp(-airTau * u_clouds_aerialDimming) + air * ((1.0 - r.transmittance) * u_clouds_aerialStrength);
     const float fade = exp(-dot(airTau, vec3(1.0 / 3.0)) * u_clouds_aerialFade);
     r.inScatter *= fade;
-    r.transmittance = 1.0 - (1.0 - r.transmittance) * fade;
+    r.fadeOpacity = (1.0 - r.transmittance) * (1.0 - fade);
+    r.transmittance += r.fadeOpacity;
     return r;
 }
 

@@ -148,7 +148,29 @@ which is a baked define).
   blends that visit unclamped at `GI_CHANGE_ALPHA`. The moments are never clamped, so sigma widens while a change
   passes; a replace restarts them with `GI_SIGMA_INIT_REL` as sigma. Boosted visits (relocation, just escaped) skip
   both, and a CLEARED (all-zero) slot is replaced like a fresh one.
-* **Sky visibility** (`GI_SUN_V4.y`): the cosine-weighted share of the upper hemisphere (about `u_skyUp`) whose rays
+* **SUN / SKY RESCALE (dawn, dusk): the probes store NORMALIZED light.** A visit's sun part (`GI_SUN_V4.x`: the direct
+  sun at hits, the sunlit ground on misses, the sun share of the bounce) and sky part (the high fp16 half of `GI_SUN_V4.y`: the rest of the
+  misses + the sky-radiance light) are DC luminances divided by the visit's levels — `giSunLevel()` (luma of
+  `u_sunTransmittance × u_sunColor × u_sunVisible`) and `giSkyLevel(sky SH c0)` (its DC minus the sunlit-ground DC) —
+  and the SH is scaled to match. Everything after that in the trace (the visit clamp, the change detection, the blend)
+  sees the normalized visit, so a global dimming is neither clamped nor a "change". `giRescale` is the inverse at given
+  levels: **the volume bake writes ABSOLUTE light at the REFERENCE levels** (`GI_SKY_REF_V4`), and the probe-loop
+  lookups (`giSampleCascade`, `giEvalBounce`, the debug view) rescale at this frame's (`GI_SKY_LEVELS_V4`). Both live
+  in the sky slot after the sky SH (`GI_SKY_SLOT_STRIDE`), written by the trace's sky workgroup. The reference moves,
+  with a full bake, when this frame's levels are more than **"GI/Light rescale step"** (default 0.02) of their sum away,
+  so every voxel is always baked at one set of levels (a partial bake leaves no seam). So the BRIGHTNESS follows the
+  sun / sky at every distance at once; the colour and direction change still waits for each probe's updates.
+  * **The volume has no sky channel, so the bounce's non-sun part stays absolute** ("rest", with the grid lights): a
+    lookup cannot split the sky's bounce from a lamp's, and rescaling a lamp's bounce by the sky level would flash it
+    at dawn. Only that second-order term lags as before.
+  * The levels the trace normalizes with are this frame's sun and the sky SH its misses read (last frame's copy in
+    volume mode); the one-frame difference is far below the step.
+  * **A part normalizes only against a level that can hold it** (level > `GI_LEVEL_MIN` and part <= `GI_PART_MAX` (4) x
+    level); otherwise it stays absolute in the rest. The volume's sky SH copy is ZERO before the first bake while the
+    sky-radiance light is not: a part divided by a near-zero level made white GI at start-up that the far probes kept
+    for minutes.
+* **Sky visibility** (the low fp16 half of `GI_SUN_V4.y`, packed with the sky part by `giPackSkyVis` — only bit casts
+  on that float, never arithmetic): the cosine-weighted share of the upper hemisphere (about `u_skyUp`) whose rays
   miss, blended at the plain alpha, baked × W into the volume tail's `.a`. `giSkyVisibility(pos, n)` reads it (one
   tail fetch, the next cascade where the first is dead, open sky past the field; 1 without the volume). It occludes
   the sky reflections the diffuse GI does not carry: the terrain's wet sky reflection and the film overlay's sky mirror
@@ -244,7 +266,7 @@ which is a baked define).
     when it is small) and the sun fraction × W (the cloud dimming, see "GI under cloud shadows" ([Clouds.md](Clouds.md))).
     Low precision is safe because the volume is never accumulated — every bake writes a finished value from the fp32
     probe history. The price: the ratios filter unweighted, so where L0 changes fast the direction is slightly off,
-    and a dead voxel's zero ratio pulls its neighbours' L1 a little toward 0. Default grid: 4 × 64³ voxels, ~21 MB.
+    and a dead voxel's zero ratio pulls its neighbours' L1 a little toward 0. Default grid: 8 × 32³ voxels, ~5 MB.
   * `createVolume` asserts storage + linear-filter support for the formats; B10G11R11 storage needs
     `shaderStorageImageExtendedFormats`, which `Device` enables with every other supported core feature.
   * **The price of the volume: the half-Lambert probe-direction weight needs the surface normal and is NOT baked, and
@@ -274,7 +296,8 @@ which is a baked define).
     dead-probe skip, so dead waves re-bake more often than they trace (harmless). **A new trace skip condition before
     the stamp must keep the stamp exact; a fresh-probe change goes through `giProbeFresh`.** `u_gi_fullBake` = one full
     bake: `takeVisibilityParams` sets it after `createVolume` and when a Chebyshev knob moves (the baked value depends
-    on them), held until a frame with RT + GI on.
+    on them), held until a frame with RT + GI on. **The trace forces a full bake too** (`GI_SKY_REF_V4.z`) when it moves
+    the sun / sky rescale's reference levels (below).
   * **The two volume tweaks reload through their own listener** (`resizeVolume` + reload): they never re-allocate
     the probe buffer, so the traced history survives a volume toggle.
 * **ONE shading lookup, `evalProbeCoverage`**, for the probe and the volume path alike (`giLookupCascade` picks the

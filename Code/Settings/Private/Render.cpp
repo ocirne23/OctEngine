@@ -539,6 +539,7 @@ void Settings::registerGi(GiSettings& s)
     Tweak::floatVar("GI", "Priority Frustum Weight", &s.priorityFrustumWeight, 1.0f, 8.0f, 0.1f);
     Tweak::floatVar("GI", "Temporal Alpha", &s.temporalAlpha, 0.0f, 0.05f, 0.001f);
     Tweak::floatVar("GI", "Max Ray Distance", &s.maxRayDist, 0.0f, 128.0f);
+    Tweak::floatVar("GI", "Light rescale step", &s.rescaleStep, 0.0f, 0.25f, 0.005f);
     Tweak::floatVar("GI", "Strength", &s.strength, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("RT", "TLAS Range", &s.tlasRange, 16.0f, 8192.0f, 16.0f);
     Tweak::floatVar("GI", "Vis Variance Floor", &s.visVarianceFloor, 0.0f, 1.0f, 0.01f);

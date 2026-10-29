@@ -938,8 +938,8 @@ export struct ForceFieldParams
 // Renderer's listener wait for the GPU, re-allocate the SH buffer (or only the volume) and reload every shader.
 export struct GiGridConfig
 {
-    int numCascades = 4;                    // nested clipmap levels (1..8)
-    int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
+    int numCascades = 8;                    // nested clipmap levels (1..8)
+    int dimLog2X = 4, dimLog2Y = 4, dimLog2Z = 4;// probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
     float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
     // The IRRADIANCE VOLUME (GIProbePipeline::recordVolumeBake, gi_volume_bake.cs.glsl): per frame, the probe
     // field is baked into one set of 3D textures per cascade, visibility-weighted at every voxel centre, and
@@ -970,6 +970,10 @@ export struct GiSettings
                                      // so it is the interval AT "GI/Priority Distance" and close blocks cancel it (fresh probes always trace)
     float temporalAlpha = 0.025f;    // blend toward freshly traced irradiance per frame AT 60 FPS (rescaled by the wall delta, see getTraceParams0)
     float maxRayDist = 8.0f;         // gather ray max distance (world units)
+    // SUN / SKY RESCALE: probes store their sun and sky parts divided by the light levels of each visit, and the volume bake
+    // multiplies them by the levels again, so a global brightness change (dawn, dusk) reaches every probe at once. The
+    // bake re-bakes EVERY voxel when the levels moved more than this fraction of their sum since the last full bake.
+    float rescaleStep = 0.02f;
     float strength = 1.0f;           // multiplier on the sampled probe irradiance at shading time
     float tlasRange = 4096.0f;       // TLAS instance range bound around the camera (origin distance) - "RT/TLAS Range"
 

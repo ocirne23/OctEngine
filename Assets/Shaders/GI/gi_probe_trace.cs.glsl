@@ -89,6 +89,7 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_CHANGE_SIGMA 2.0        // the fast mean this many sigma off the stored luminance ...
 #define GI_CHANGE_CONFIRM_SIGMA 1.0 // ... and the previous fast mean this many, on the same side = a real change
 #define GI_CHANGE_ALPHA 0.3        // the blend of a visit in a real change (unclamped)
+#define GI_PART_MAX 4.0            // the largest normalized sun / sky part a visit stores (the rescale, see main)
 
 // Alpha-mask-aware shadow rays: sun visibility at gather-ray hits, and the grid lights' shadows there
 // (GI_LIGHT_RT_SHADOWS - lighting.inc.glsl needs rtShadowVisibility in scope, so this comes first).
@@ -135,16 +136,19 @@ vec3 skyMiss(vec3 d) { return skyMapGISample(u_skyMap, d, int(SKY_MAP_LAYER_GI))
 // its L1 form (negative toward the zenith for w < 0.2): the probe keeps only the sun's DC, and the two have the same DC.
 // Volume mode reads LAST frame's sky SH (the bake's copy); probe mode reads the slot this dispatch's last workgroup
 // rewrites - a frame-to-frame change only.
-// skyOpen = the miss's weight in the sky visibility (its cosine to up, 0 below the horizon).
+// skyOpen = the miss's weight in the sky visibility (its cosine to up, 0 below the horizon). skyLuma = the luminance of
+// the rest: the SKY part (the sun / sky rescale, see gi_probe.inc.glsl).
 // Everything from the UBO is derived HERE, per miss, not hoisted into main: a value held across the ray loop is a
 // register through the whole ray query (96 -> 128 registers with the sun direction, ground sun, up and sky sums held).
-vec3 traceMiss(vec3 d, out float sunLuma, out float skyOpen)
+vec3 traceMiss(vec3 d, out float sunLuma, out float skyLuma, out float skyOpen)
 {
     const vec3  up    = u_skyUp;
     const float cosUp = dot(d, up);
     skyOpen = max(cosUp, 0.0);
     sunLuma = dot(skyGroundSun(up), GI_LUMA_W) * (cosUp < 0.0 ? 1.0 : u_sky_groundHorizon);
-    return giSkySHRadiance(d);
+    const vec3 radiance = giSkySHRadiance(d);
+    skyLuma = max(dot(radiance, GI_LUMA_W) - sunLuma, 0.0);
+    return radiance;
 }
 
 // View-independent sun visibility (1 lit, 0 occluded): one shadow ray via the TLAS, so off-screen gather hits are
@@ -155,20 +159,23 @@ float sunVisibility(vec3 origin)
 }
 
 // sunLuma = the luminance of the returned radiance's SUN part (the direct sun + its share of the multi-bounce), traced
-// WITHOUT the cloud shadow - see GI_SUN_V4 in gi_probe.inc.glsl. skyOpen = a miss's sky-visibility weight, 0 on a hit.
-vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out float backface, out float sunLuma, out float skyOpen)
+// WITHOUT the cloud shadow - see GI_SUN_V4 in gi_probe.inc.glsl. skyLuma = a miss's sky part (0 on a hit: the bounce's
+// non-sun part stays unscaled, see the rescale in gi_probe.inc.glsl). skyOpen = a miss's sky-visibility weight, 0 on a hit.
+vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out float backface, out float sunLuma, out float skyLuma,
+                   out float skyOpen)
 {
     const float rayMax = GI_MAX_RAY_DIST * (cascade + 1);
     hitDist = rayMax; // misses (and out-of-bounds hits) count as open space at the gather range
     backface = 0.0;   // 1 when the committed hit faces away (ray started inside/behind the geometry)
     sunLuma = 0.0;
+    skyLuma = 0.0;
     skyOpen = 0.0;
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsOpaqueEXT, 0xFFu, origin, 0.05, dir, rayMax);
     while (rayQueryProceedEXT(rq)) {}
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
-        return traceMiss(dir, sunLuma, skyOpen);
+        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
 
     // Bound every post-hit buffer access: a bad meshIdx / triBase / vertex index would read out of bounds and MMU-fault.
     // An out-of-range hit counts as a miss.
@@ -176,25 +183,25 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     // Bit 23 = a baked TREE (gi_tlas_instances.cs.glsl): the custom index holds its material, it has no stream entry.
     const bool tree = (instanceIdx & 0x800000) != 0;
     if (!tree && uint(instanceIdx) >= in_instances.length())
-        return traceMiss(dir, sunLuma, skyOpen);
+        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
 
     // Geometry comes from the RT meshIdx packed into the instance's sbtOffset (a LOD chain traces one shared BLAS, which
     // may differ from the raster level the instance references); the material still comes from the instance.
     const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
     const uint materialIdx = tree ? uint(instanceIdx) & 0xFFFFu : in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
     if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
-        return traceMiss(dir, sunLuma, skyOpen);
+        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
     const InMeshInfo mi    = in_meshInfos[meshIdx];
 
     const int  prim    = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
     const uint triBase = mi.firstIndex + uint(prim) * 3u;
     if (triBase + 2u >= in_indices.length())
-        return traceMiss(dir, sunLuma, skyOpen);
+        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
     const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
     const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
     const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
     if (max(max(v0, v1), v2) >= in_vertices.length())
-        return traceMiss(dir, sunLuma, skyOpen);
+        return traceMiss(dir, sunLuma, skyLuma, skyOpen);
 
     const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
     const float t    = rayQueryGetIntersectionTEXT(rq, true);
@@ -234,7 +241,8 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     vec3 prevE = giEvalBounce(worldPos, worldN, giCov, prevSun);
 #endif
     // Faded with coverage so traced hits near the field's edge don't step; the vec3(-1) "no data" result always comes
-    // with coverage 0.
+    // with coverage 0. prevE is absolute light (the volume at the bake's reference levels, the probe loop at the current
+    // ones), like the direct light here.
     const vec3 bounce = albedo * prevE * (giCov * INV_PI);
     sunLuma = dot(g_gatherSunRadiance + bounce * prevSun, GI_LUMA_W);
     return radiance + bounce;
@@ -290,6 +298,17 @@ void projectSkySH(uint lane)
             c3 += u_sky_radiance * Ysky.w;
         }
         giStoreCell(GI_SKY_SH_BASE, c0, c1, c2, c3);
+
+        // The sun / sky rescale's levels (gi_probe.inc.glsl): this frame's for the probe-loop lookups, and the volume's
+        // REFERENCE levels, moved (with a full bake) only when this frame's are more than "GI/Light rescale step" of
+        // their sum away - every voxel is baked at the same levels, so a partial bake never leaves a seam. A cleared
+        // buffer (reference 0) bakes everything at once.
+        const vec2 levels = vec2(giSunLevel(), giSkyLevel(c0));
+        gi_gridData[GI_SKY_LEVELS_V4] = vec4(levels, 0.0, 0.0);
+        const vec2 ref = gi_gridData[GI_SKY_REF_V4].xy;
+        const vec2 d   = abs(levels - ref);
+        const bool rebake = d.x + d.y > u_rt_giRescaleStep * max(ref.x + ref.y, levels.x + levels.y);
+        gi_gridData[GI_SKY_REF_V4] = rebake ? vec4(levels, 1.0, 0.0) : vec4(ref, 0.0, 0.0);
     }
 }
 
@@ -382,6 +401,7 @@ void main()
     float backfaceSum = 0.0;
     float frontSum = 0.0; // front-face hits within the depth cap (the enclosure test; depthCap is live in the loop anyway)
     float sunSum = 0.0;   // sun luminance over the rays: the sun part of luma(c0) after the Y.x * wsh below
+    float skySum = 0.0;   // the same for the sky part (misses)
     // The cosine-weighted open share of the upper hemisphere: the misses' cosines to up over the whole hemisphere's,
     // which is N / 4 in expectation for sphere-uniform rays - ONE accumulator through the loop.
     float skyOpenSum = 0.0;
@@ -390,11 +410,12 @@ void main()
     for (uint i = 0u; i < N; ++i)
     {
         const vec3 dir = sampleSphere(i, N, jitter);
-        float hitDist, backface, sunLuma, skyOpen;
-        const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface, sunLuma, skyOpen);
+        float hitDist, backface, sunLuma, skyLuma, skyOpen;
+        const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface, sunLuma, skyLuma, skyOpen);
         backfaceSum += backface;
         frontSum += hitDist < depthCap && backface < 0.5 ? 1.0 : 0.0;
         sunSum += sunLuma;
+        skySum += skyLuma;
         skyOpenSum += skyOpen;
         if (backface > 0.5 && hitDist < closestBack)
         {
@@ -423,6 +444,8 @@ void main()
     // projected straight into the probe SH (the eval's cosine convolution then gives ~E * max(dot(n, up), 0)).
     // Visibility is a single ray from the probe toward up (toggleable) - a soft gate the temporal blend smooths further.
     // Bounces arrive through the multi-bounce.
+    float sunDC = sunSum * (0.282095 * wsh); // the sun / sky parts of luma(c0)
+    float skyDC = skySum * (0.282095 * wsh);
     if (dot(u_sky_radiance, u_sky_radiance) > 0.0)
     {
         const vec3 up = u_skyUp;
@@ -433,6 +456,38 @@ void main()
         c1 += cd * Ysky.y;
         c2 += cd * Ysky.z;
         c3 += cd * Ysky.w;
+        skyDC += dot(cd, GI_LUMA_W) * Ysky.x;
+    }
+
+    // SUN / SKY NORMALIZATION (gi_probe.inc.glsl): the visit's sun and sky parts divided by this frame's levels, the SH
+    // scaled to match - the inverse of giRescale. Everything below (the clamp, the change detection, the blend) works on
+    // the normalized visit, so a global dimming at dusk is neither clamped nor a "change".
+    // A part normalizes only against a level that can hold it (at most GI_PART_MAX x the level; a probe's sun or sky part
+    // is about the level or less); otherwise it stays absolute, in the rest. The levels come partly from other data than
+    // the part (the volume's sky SH copy is last frame's and all ZERO before the first bake, the sky-radiance light is
+    // this frame's): a part divided by a near-zero level was a huge normalized value that the lookup multiplied back
+    // by the real level - white GI at start-up that the far probes kept for minutes.
+    {
+        const float sunLevel = giSunLevel();
+        const float skyLevel = giSkyLevel(giSkyC0());
+        const float rawLuma  = dot(c0, GI_LUMA_W);
+        float rest = max(rawLuma - sunDC - skyDC, 0.0);
+        if (sunLevel > GI_LEVEL_MIN && sunDC <= GI_PART_MAX * sunLevel)
+            sunDC /= sunLevel;
+        else
+        {
+            rest += sunDC;
+            sunDC = 0.0;
+        }
+        if (skyLevel > GI_LEVEL_MIN && skyDC <= GI_PART_MAX * skyLevel)
+            skyDC /= skyLevel;
+        else
+        {
+            rest += skyDC;
+            skyDC = 0.0;
+        }
+        const float norm = rawLuma > 1e-8 ? (rest + sunDC + skyDC) / rawLuma : 1.0;
+        c0 *= norm; c1 *= norm; c2 *= norm; c3 *= norm;
     }
 
     // The embedded fraction: the backface fraction, weighted by the enclosure (see GI_ENCLOSED_SHARE_MIN). It drives the
@@ -509,8 +564,10 @@ void main()
 
     giBlendCell(cellBase, c0 * visitScale, c1 * visitScale, c2 * visitScale, c3 * visitScale, shAlpha);
     const float skyVis = min(skyOpenSum * (4.0 / float(N)), 1.0);
-    giStoreSunStats(cellBase, vec4(mix(prevStats.x, sunSum * (0.282095 * wsh) * visitScale, shAlpha),
-                                   mix(prevStats.y, skyVis, alpha), fastMean, secondMoment));
+    const vec2 prevVisSky = giUnpackSkyVis(prevStats.y); // fresh: 0 bits = (0, 0)
+    giStoreSunStats(cellBase, vec4(mix(prevStats.x, sunDC * visitScale, shAlpha),
+                                   giPackSkyVis(mix(prevVisSky.x, skyVis, alpha), mix(prevVisSky.y, skyDC * visitScale, shAlpha)),
+                                   fastMean, secondMoment));
 
     // An escape visit pins the stored fraction to exactly DEAD_MAX: still dead at lookup and still triggering the
     // just-escaped flush (>=), but not skipped by the dead-probe interval (>), so the probe traces from its new position

@@ -170,7 +170,10 @@ parallax at every depth, so a 1-in-16 update would smear), the temporal accumula
     the blue; without it the air in the clouds' shadow added nothing). The air thins with height, so a cloud gets
     less of it than terrain at the same distance. **"Aerial dimming"** scales the air's optical depth on the
     cloud's own light (per colour: warmer and darker far out; 1 = physical). **"Aerial fade"** takes the air's MEAN
-    optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them. **Each step is in the
+    optical depth off the cloud's opacity (in-scatter and alpha together): far clouds fade into the sky behind them.
+    **On a SKY pixel** (march limit = "Max distance", `cloud_march.cs.glsl`) the faded opacity (`fadeOpacity`) goes
+    back into alpha and becomes the CLEAR sky's colour instead (the mirror cache layer, no disc): the sky pixel holds the
+    SUN DISC and halo, and the raised transmittance let them through any cloud at any density. **Each step is in the
     clouds' shadow** (`cloudAirSunVis`, `cloud_raymarch.inc.glsl`): the shadow map inside it, and PAST it the
     WEATHER MAP - the coverage of the column where the sun ray from the air point crosses the main layer's
     middle, `1 - smoothstep(0.35, 0.75, coverage)`. The steps sit at the ray's per-pixel / per-frame jitter:
