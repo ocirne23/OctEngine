@@ -1485,6 +1485,8 @@ void RendererState::registerUboValues(UboBlock& list)
         list.add("grass_farRippleLean", [&g] { return g.farRippleLean; }, g.farRippleLean);
         list.add("grass_farBladeLight", [&g] { return glm::clamp(g.farBladeLight, 0.0f, 1.0f); }, g.farBladeLight);
         list.add("grass_farTransmission", [&g] { return glm::max(g.farTransmission, 0.0f); }, g.farTransmission);
+        list.add("grass_farTransmissionFocus", [&g] { return glm::max(g.farTransmissionFocus, 1.0f); }, g.farTransmissionFocus);
+        list.add("grass_farTransmissionGlow", [&g] { return glm::max(g.farTransmissionGlow, 0.0f); }, g.farTransmissionGlow);
         list.add("grass_farStripes", [&g] { return glm::clamp(g.farStripes, 0.0f, 1.0f); }, g.farStripes);
         list.add("grass_farStripeLength", [&g] { return glm::max(g.farStripeLength, 0.005f) * g.bladeHeight; }, g.farStripeLength, g.bladeHeight); // m
         list.add("grass_farStripeWidth", [&g] { return glm::max(g.farStripeWidth, 0.1f) * glm::max(g.bladeWidth, 0.002f); }, g.farStripeWidth, g.bladeWidth); // m

@@ -306,49 +306,71 @@ vec4 grassGroundCanopy(TerrainLayers L, vec3 pos, vec3 N)
 //   finer one, and a slot offset changed its pattern there - a ring at that distance.
 // - ALONG: the ground a blade hides behind it, "Stripe length" x its height x cot(the view's angle to the GROUND's
 //   normal) - long at a grazing view, down to the stripe width (a dot) looking straight down, right on slopes and
-//   hills too; in log(distance), so the scale follows r.
+//   hills too. The coordinate is log(r) x 2^j (a cell r / 2^j long), j = log2(r / that length), two WHOLE levels
+//   crossfaded as the counts are: the length only sets the weights, so the pattern itself is a function of r alone. A
+//   coordinate scaled by the length directly (log(r) x r / length) moved by hundreds of cells when the normal's angle
+//   to a grazing view changed a little (a gentle slope): blotches of squeezed, bent stripes.
+// - Each COLUMN (one stripe across) has its own along offset and stretch (0.75 .. 1.25), so the stripes start and end at
+//   different distances - a plain lattice ends a whole row of them at one r: blocks.
+float grassStripeColumn(int x, float y, int period)
+{
+    const uint column = grassHash(uint(x) * 0x9E3779B9u ^ uint(period) * 0x85EBCA6Bu);
+    const vec2 o = grassUnit2(column);
+    y = y * (0.75 + 0.5 * o.x) + o.y;
+    const float i = floor(y);
+    float f = y - i;
+    f = f * f * (3.0 - 2.0 * f);
+    const uint row = uint(int(i)) * 0xC2B2AE35u;
+    return mix(grassUnit(grassHash(column ^ row)), grassUnit(grassHash(column ^ (row + 0xC2B2AE35u))), f);
+}
+
 float grassStripeNoise(vec2 p, int period)
 {
-    const vec2 i = floor(p);
-    vec2 f = p - i;
+    const float i = floor(p.x);
+    float f = p.x - i;
     f = f * f * (3.0 - 2.0 * f);
-    const int x0 = int(uint(int(i.x) + 2 * period) % uint(period)); // never % of a negative (undefined)
+    const int x0 = int(uint(int(i) + 2 * period) % uint(period)); // never % of a negative (undefined)
     const int x1 = x0 + 1 == period ? 0 : x0 + 1;
-    const int y = int(i.y);
-    const float a = grassUnit(grassHash2(ivec2(x0, y))), b = grassUnit(grassHash2(ivec2(x1, y)));
-    const float c = grassUnit(grassHash2(ivec2(x0, y + 1))), d = grassUnit(grassHash2(ivec2(x1, y + 1)));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+    return mix(grassStripeColumn(x0, p.y, period), grassStripeColumn(x1, p.y, period), f);
+}
+
+// The four levels (two counts across x two along) of grassStripeNoise, weights w, the variance re-normalized. Each level's
+// offset follows its ABSOLUTE indices (k0, j0), never its slot.
+float grassStripeLevels(float x0, int count0, float along0, float k0, float j0, vec4 w, float scale, float offset)
+{
+    const float a0 = along0 * scale + 29.0 * j0 + offset, a1 = 2.0 * along0 * scale + 29.0 * (j0 + 1.0) + offset;
+    const float n = w.x * grassStripeNoise(vec2(x0, a0 + 17.0 * k0), count0)
+        + w.y * grassStripeNoise(vec2(2.0 * x0, a0 + 17.0 * (k0 + 1.0)), 2 * count0)
+        + w.z * grassStripeNoise(vec2(x0, a1 + 17.0 * k0), count0)
+        + w.w * grassStripeNoise(vec2(2.0 * x0, a1 + 17.0 * (k0 + 1.0)), 2 * count0);
+    return (n - 0.5) * inversesqrt(dot(w, w)) + 0.5;
 }
 
 // The stripe value [-1, 1] at pos (N: its smooth ground normal) seen from `anchor`; `width` (m). `fine` (out, 0..1):
 // the same noise 4x finer across and 3x along (the single blades of "Far/Ripple glint"; 0.5 without it).
 float grassStripeAt(vec3 pos, vec3 N, vec3 anchor, float width, out float fine)
 {
-    // Along: the hidden ground's length - from the ANCHOR's view angle - at least the width.
+    // Along: the hidden ground's length - from the ANCHOR's view angle - at least the width; two whole levels j0, j0 + 1.
     const vec3 fromAnchor3 = pos - anchor;
     const float NoV = clamp(-dot(N, fromAnchor3) / length(fromAnchor3), 0.02, 1.0);
     const float stripeLength = max(u_grass_farStripeLength * sqrt(1.0 - NoV * NoV) / NoV, width);
     const vec2 fromAnchor = fromAnchor3.xz;
     const float r = max(length(fromAnchor), 1.0);
-    const float along = log(r) * (r / stripeLength);
-    // Across: the azimuth (0..1) x two power-of-two stripe counts around the circle; each count's along offset follows its
-    // absolute index (no ring at a whole k).
+    const float j = log2(r / stripeLength);
+    const float j0 = floor(j);
+    const float along0 = log(r) * exp2(j0);
+    const float s = j - j0;
+    // Across: the azimuth (0..1) x two power-of-two stripe counts around the circle.
     const float azimuth = atan(fromAnchor.y, fromAnchor.x) * (1.0 / 6.28318531) + 0.5;
     const float k = log2(max(6.28318531 * r / (8.0 * width), 1.0));
     const float k0 = floor(k);
     const int count0 = 8 << int(k0);
-    const float n0 = grassStripeNoise(vec2(azimuth * float(count0), along + 17.0 * k0), count0);
-    const float n1 = grassStripeNoise(vec2(azimuth * float(2 * count0), along + 17.0 * (k0 + 1.0)), 2 * count0);
     const float t = k - k0;
-    const float norm = inversesqrt(t * t + (1.0 - t) * (1.0 - t));
+    const vec4 w = vec4((1.0 - t) * (1.0 - s), t * (1.0 - s), (1.0 - t) * s, t * s);
     fine = 0.5;
     if (u_grass_farRippleGlint > 0.0)
-    {
-        const float f0 = grassStripeNoise(vec2(azimuth * float(4 * count0), along * 3.0 + 17.0 * k0 + 53.0), 4 * count0);
-        const float f1 = grassStripeNoise(vec2(azimuth * float(8 * count0), along * 3.0 + 17.0 * (k0 + 1.0) + 53.0), 8 * count0);
-        fine = (mix(f0, f1, t) - 0.5) * norm + 0.5;
-    }
-    const float n = (mix(n0, n1, t) - 0.5) * norm + 0.5;
+        fine = grassStripeLevels(azimuth * float(4 * count0), 4 * count0, along0, k0, j0, w, 3.0, 53.0);
+    const float n = grassStripeLevels(azimuth * float(count0), count0, along0, k0, j0, w, 1.0, 0.0);
     return smoothstep(0.2, 0.8, n) * 2.0 - 1.0;
 }
 
@@ -442,17 +464,27 @@ vec3 grassFarNormal(vec3 pos, vec3 N, float stripe, float fine, out float glint)
 // takes the sun at about cos(its elevation) - a low sun nearly face-on, where flat ground gets sin(elevation) - LIT in
 // front with the sun behind the view and THROUGH ("Far/Transmission", the blades' term) with it ahead: c = the
 // horizontal cosine between the way to the eye and the sun's, front = (1 + c) / 2, back = (1 - c) / 2 (the blades'
-// azimuths spread, so a sun from the side lights about half of each).
-float grassFarBladeSun(vec3 pos)
+// azimuths spread, so a sun from the side lights about half of each). The FOCUS lobe ("Far/Transmission glow" x
+// (-V.L)^"Far/Transmission focus", as the leaves' glow) adds the forward scatter: a glow under the sun that follows it -
+// the broad back term alone left the grass below the sun barely brighter than beside it.
+// THE STRIPES' LEANS (grassFarNormal's, `stripe` -1..1) turn the faces to or from the sun, so the whole blade light (front,
+// through and the glow) x 1 + stripe x ("Normal variation" x the sun's sideways cosine across the view + "Diffuse
+// variation"): the change of the faces' sun cosine relative to cos(elevation). A sideways lean moves it only with the sun
+// to the side; the lean toward the sun always.
+float grassFarBladeSun(vec3 pos, float stripe)
 {
     const vec2 sunH = u_sunDirection.xz;
     const float cosElevation = length(sunH);
-    const vec2 toEye = u_viewPos.xz - pos.xz;
-    const float lenEye = length(toEye);
-    if (cosElevation < 1e-3 || lenEye < 1e-3)
+    const vec3 toEye = u_viewPos - pos;
+    const float lenEyeH = length(toEye.xz);
+    if (cosElevation < 1e-3 || lenEyeH < 1e-3)
         return 0.0;
-    const float c = dot(toEye, sunH) / (lenEye * cosElevation);
-    return cosElevation * INV_PI * (0.5 + 0.5 * c + u_grass_farTransmission * (0.5 - 0.5 * c));
+    const vec2 sunDirH = sunH / cosElevation, eyeDirH = toEye.xz / lenEyeH;
+    const float c = dot(eyeDirH, sunDirH);
+    const float side = dot(vec2(eyeDirH.y, -eyeDirH.x), sunDirH); // grassFarNormal's cross(N, Vt) on flat ground
+    const float lean = max(1.0 + stripe * (u_grass_farNormalVariation * side + u_grass_farDiffuseVariation), 0.0);
+    const float glow = u_grass_farTransmissionGlow * pow(max(-dot(toEye, u_sunDirection.xyz) / length(toEye), 0.0), u_grass_farTransmissionFocus);
+    return cosElevation * INV_PI * lean * (0.5 + 0.5 * c + u_grass_farTransmission * (0.5 - 0.5 * c) + glow);
 }
 #endif
 #endif

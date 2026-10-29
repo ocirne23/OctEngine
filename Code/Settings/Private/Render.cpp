@@ -261,6 +261,8 @@ void Settings::registerGrass(GrassParams& s)
     Tweak::floatVar("Grass/Far", "Ripple lean", &s.farRippleLean, -2.0f, 2.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Blade light", &s.farBladeLight, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Transmission", &s.farTransmission, 0.0f, 4.0f, 0.01f);
+    Tweak::floatVar("Grass/Far", "Transmission focus", &s.farTransmissionFocus, 1.0f, 64.0f, 0.1f);
+    Tweak::floatVar("Grass/Far", "Transmission glow", &s.farTransmissionGlow, 0.0f, 8.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Blade stripes", &s.farStripes, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Stripe width", &s.farStripeWidth, 0.1f, 8.0f, 0.01f);
     Tweak::floatVar("Grass/Far", "Stripe length", &s.farStripeLength, 0.005f, 1.0f, 0.001f);

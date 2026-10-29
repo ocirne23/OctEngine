@@ -200,7 +200,7 @@ void main()
 		// "Ripple glint"'s blades are sharper than the layer: 0.3 x its roughness.
 		surf.rough = mix(surf.rough, float16_t(u_grass_farRoughness * (1.0 - 0.7 * glint)), grassCanopy.z);
 		surf.normal = normalize(mix(surf.normal, f16vec3(farN), grassCanopy.z));
-		farBladeSun = float16_t(float(grassCanopy.z) * u_grass_farBladeLight * grassFarBladeSun(in_pos));
+		farBladeSun = float16_t(float(grassCanopy.z) * u_grass_farBladeLight * grassFarBladeSun(in_pos, stripe));
 	}
 
 	// THE GROUND'S WET LOOK: one darkening and one roughness drop, on the wetness field alone (no instantaneous "under

@@ -134,10 +134,11 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     registers.
   * The shadow map keeps the big casters (trees, terrain); the canopy multiplies them.
 * **THE FAR TIER** ("Grass/Far" tweaks): where the blades thin and fade out, the GROUND takes the grass layer's look, out
-  to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (1; 0 = off), "Canopy shadow" (1.5;
+  to the horizon. Its look is its OWN, apart from the blades' tweaks: "Thickness" (1; 0 = off), "Canopy shadow" (1;
   `u_grass_farSunExtinction`, built as the blades' `u_grass_canopyExtinction`), "Brightness" (0.67), "Roughness" (0.5),
-  "Upright normal" (0.1) + "Normal variation" (1) + "Diffuse variation" (0.3) + "Sun glint" (0.4) + "Ripple
-  lean" (1.5) + "Ripple glint" (0.3), "Blade light" (0.5) + "Transmission" (2), the
+  "Upright normal" (0.1) + "Normal variation" (1) + "Diffuse variation" (0.3) + "Sun glint" (0.25) + "Ripple
+  lean" (1.5) + "Ripple glint" (0.3), "Blade light" (0.5) + "Transmission" (2) + "Transmission focus" (25) +
+  "Transmission glow" (2), the
   stripes below. All lockable but the two extinctions (live: the blade count). (A tuft-scale colour grain, growing with
   the distance, was tried and removed: the stripes carry the pattern. A weight cap, a root-to-tip colour pick and a
   root occlusion on the dark stripes were removed: Thickness, Brightness + Canopy shadow and the stripes did the same.
@@ -160,7 +161,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     tilting it by its value: "Normal variation" SIDEWAYS - across the view, along the ground; it follows the view, so
     mostly the specular (with the sun behind the view that tilt is about perpendicular to the sun: N.L hardly moves) -
     and "Diffuse variation" TOWARD / AWAY FROM THE SUN along the ground (N.L moves with it: light and dark stripes in
-    the diffuse, most with a low sun). Last, "Sun glint" (0.4) is the share of the blades turned to MIRROR the sun:
+    the diffuse, most with a low sun). Last, "Sun glint" (0.25) is the share of the blades turned to MIRROR the sun:
     the normal mixes to the half vector (the specular's peak) by `smoothstep(e, e + 0.25, stripe)`, `e = 1 - 2 x share`
     - the brightest stripes first. Without stripes (stripe 0) it is none up to 0.5 and all from 0.625. "Ripple
     lean" (1.5; -2..2, negative = the other way) tilts the normal along the mean wind by `wave` x its value, before the
@@ -172,7 +173,7 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     0.04 edge) mirrors the sun too, and the FS takes those pixels to 0.3 x "Roughness": a sharp, bright peak. Denser up
     the ripple, half with no wind; needs the stripes ("Blade stripes" > 0). All in the normal and the roughness, so the
     lit core does the light and no value lives across it.
-  * THE BLADES as STRIPES ("Blade stripes", 0.4; "Stripe width", 3 x the blade width; "Stripe length", 0.12 x the
+  * THE BLADES as STRIPES ("Blade stripes", 0.2; "Stripe width", 1 x the blade width; "Stripe length", 0.07 x the
     blade height), x (1 + Blade stripes x stripe) on the albedo: thin streaks VERTICAL ON SCREEN (a world noise
     compresses into horizontal streaks at a grazing view), sized as blades are. The stripe value is x
     `grassGroundCanopy`'s w, `smoothstep(0.05, 0.6, cover x clump)`: a grazing view saturates the weight over a few
@@ -197,8 +198,14 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
       **A count's noise offset follows its ABSOLUTE index, never its slot**: at a whole k the coarser count becomes the
       finer one, and an offset per slot changed its pattern there - rings around the camera.
     * Along = the ground a blade hides behind it: the length x cot(the view's angle to the GROUND normal) (long at a
-      grazing view, down to the width - a dot - looking straight down; right on slopes and on hills above the camera),
-      in log(distance).
+      grazing view, down to the width - a dot - looking straight down; right on slopes and on hills above the camera).
+      The coordinate is `log(r) x 2^j` (a cell `r / 2^j` long), `j = log2(r / length)`: two WHOLE levels crossfade by
+      the fraction of j, as the counts do (`grassStripeLevels`: 2 x 2 levels, the variance re-normalized), so the length
+      only sets the weights and the pattern is a function of r alone. **Do not scale the coordinate by the length
+      directly** (`log(r) x r / length`): at a grazing view a gentle slope changes the length a lot, and the coordinate
+      moved by hundreds of cells - blotches of squeezed, bent stripes.
+    * Each COLUMN (one stripe across) has its own along offset and stretch (0.75 .. 1.25, `grassStripeColumn`), so the
+      stripes start and end at different distances; a plain lattice ends a whole row of them at one r (blocks).
   * THE LIGHT is the blades', AT THE DEPTH THE VIEW REACHES, in the sun and ambient values the call already returns,
     blended by the weight. The layer's visible share at depth d is `kv e^(-kv d) / (1 - e^(-tauV))`, so a view from
     above sees the shaded roots and a grazing one the lit tops: the sun = the canopy's `exp(-ks d)` under it (ks = the
@@ -214,9 +221,14 @@ Desktop only (no VR). Blades near the camera ("Range (m)", default 150 m, "Range
     blades facing the viewer instead of as flat ground - a blade's face takes a low sun about face-on (cos(elevation)),
     flat ground only sin(elevation), so with a single near-up normal the far grass went dark and flat exactly when the
     blades glow (and a transmission on that normal, -N.L, stayed ~0 with the sun ahead). `grassFarBladeSun`:
-    `cos(elevation) / pi x ((1 + c) / 2 + Transmission x (1 - c) / 2)`, c = the horizontal cosine between the way to the
-    eye and the sun's (+1: the sun behind the view, faces lit in front; -1: ahead, lit THROUGH; the blades' azimuths
-    spread). The FS forms it in the far block (one half across the lit core), takes `g_sunVisMaterial` (the canopy, the
+    `cos(elevation) / pi x ((1 + c) / 2 + Transmission x (1 - c) / 2 + Transmission glow x (-V.L)^Transmission focus)`,
+    c = the horizontal cosine between the way to the eye and the sun's (+1: the sun behind the view, faces lit in front;
+    -1: ahead, lit THROUGH; the blades' azimuths spread). The FOCUS lobe ("Transmission glow", 2; "Transmission focus",
+    25; as the leaves' glow) is the forward scatter: a glow under the sun that follows it - the broad back term alone
+    left the grass below the sun barely brighter than beside it. The stripes' LEANS turn the faces to or from the sun:
+    the whole of it x `max(1 + stripe x (Normal variation x side + Diffuse variation), 0)`, side = the sun's horizontal
+    cosine ACROSS the view (grassFarNormal's sideways axis) - the change of the faces' sun cosine relative to
+    cos(elevation), so the stripes also show in the back light. The FS forms it in the far block (one half across the lit core), takes `g_sunVisMaterial` (the canopy, the
     relief gate) into it and then gives the ground's sun `1 - weight x Blade light`, and adds it x `g_sunShadowFirst` x
     the albedo x the AO x the sun's radiance through `g_litExtraLight` (`LIT_EXTRA_LIGHT`, added right after the sun
     term, before the light loop). Added after `computeLitColor` instead, the albedo, AO and blade light stayed live

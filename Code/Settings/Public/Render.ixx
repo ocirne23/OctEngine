@@ -460,21 +460,21 @@ export struct GrassParams
     // upright blades' sides turned to the view (farUpright: the tilt from the ground normal toward the viewer, by how
     // grazing the view is) and the blades' lean (farNormalVariation: a sideways tilt per blade stripe).
     float farThickness = 1.0f;
-    float farCanopyShadow = 1.5f;
+    float farCanopyShadow = 1.0f;
     float farBrightness = 0.67f;
     float farRoughness = 0.5f;
     float farUpright = 0.1f;
     float farNormalVariation = 1.0f;
     float farDiffuseVariation = 0.3f; // the blades' lean toward / away from the SUN per stripe: diffuse light and dark stripes
-    float farSunGlint = 0.4f; // the fraction of the blades (the bright stripes first) turned to MIRROR the sun: specular glints
+    float farSunGlint = 0.25f; // the fraction of the blades (the bright stripes first) turned to MIRROR the sun: specular glints
     float farRippleGlint = 0.3f; // small, sparse GLINTS on single blades (sharper than farRoughness), denser up the ripple
     float farRippleLean = 1.5f; // the normal's tilt along the wind by that ripple (-1..1), as the near blades bend in it
     // THE BLADES as STRIPES (grassFarAlbedo): thin streaks, vertical on screen, of farStripes contrast (0 = off),
     // farStripeWidth blade widths wide in the world and farStripeLength x the ground a blade hides behind it (its height
     // over the view's slope to the ground) long.
-    float farStripes = 0.4f;
-    float farStripeWidth = 3.0f;   // x the blade width
-    float farStripeLength = 0.12f; // x the blade height
+    float farStripes = 0.2f;
+    float farStripeWidth = 1.0f;   // x the blade width
+    float farStripeLength = 0.07f; // x the blade height
     // The stripes are built around an ANCHOR, not the camera (a pattern following the camera slid under DLSS / TAA's
     // reprojection: flicker in motion): it steps to the camera once the camera is farStripeAnchorStep metres away,
     // crossfading old -> new over farStripeAnchorFade real seconds (faster when the camera moves fast: within one step of
@@ -484,8 +484,11 @@ export struct GrassParams
     // THE BLADE LIGHT: farBladeLight of the far layer's SUN lit as UPRIGHT blades facing the viewer - their faces take a
     // low sun about face-on (cos(elevation)), lit in front with the sun behind the view, through from behind
     // (farTransmission, the blades' "Transmission") with the sun ahead - instead of as flat ground (sin(elevation)).
+    // Plus a forward-scatter lobe: farTransmissionGlow x (-V.L)^farTransmissionFocus, a glow under the sun (0 = off).
     float farBladeLight = 0.5f;
     float farTransmission = 2.0f;
+    float farTransmissionFocus = 25.0f;
+    float farTransmissionGlow = 2.0f;
 };
 
 // THE ROCK MATERIAL (EPipelineIndex::LitRock, instanced_indirect_rock.fs.glsl; "Rocks/Material" tweaks). A rock has no
